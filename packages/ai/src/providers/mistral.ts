@@ -3,35 +3,33 @@ import { HTTPClient, type Fetcher } from "@mistralai/mistralai/lib/http";
 import type {
   ChatCompletionStreamRequest,
   ChatCompletionStreamRequestMessage,
-  CompletionEvent,
   ContentChunk,
   FunctionTool,
+  ReasoningEffort,
 } from "@mistralai/mistralai/models/components";
+import { ReasoningEffort$inboundSchema } from "@mistralai/mistralai/models/components/reasoningeffort.js";
 import { Chat } from "@mistralai/mistralai/sdk/chat";
+import { omitNullRequestHeaders } from "@openclaw/llm-core";
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
-import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
+import { isImageWithMediaPayload } from "../media-payload.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
-// Mistral provider adapts Mistral streams and tool calls to the runtime.
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import {
   assignTransportErrorDetails,
   finalizeTerminalToolCallArguments,
+  finalizeTransportStream,
+  mergeTransportHeaders,
   notifyProviderHttpResponse,
-  transportAbortError,
 } from "../transports/transport-stream-shared.js";
 import type {
-  AssistantMessage,
-  Context,
   Message,
-  Model,
   SimpleStreamOptions,
   StreamFunction,
   StreamOptions,
   TextContent,
   ThinkingContent,
-  Tool,
   ToolCall,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -43,8 +41,9 @@ import {
 } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
+import { requireApiKey } from "../utils/required-api-key.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
-import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
+import { boundResponseBody } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import { buildBaseOptions, clampMaxTokensToModel } from "./simple-options.js";
@@ -52,73 +51,25 @@ import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
   formatToolResultText,
-  isImageWithMediaPayload,
 } from "./tool-result-text.js";
+import { getPublishedRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
 
 const MISTRAL_TOOL_CALL_ID_LENGTH = 9;
 
-// 16 MiB cap on Mistral streaming success bodies, matching the
-// `PROVIDER_TEXT_RESPONSE_MAX_BYTES` / `PROVIDER_JSON_RESPONSE_MAX_BYTES`
-// 16 MiB cap used elsewhere. A hostile or malfunctioning Mistral-compatible
-// endpoint cannot exhaust memory by streaming an unbounded SSE body;
-// `createSseByteGuard` cancels the upstream reader and throws once the
-// accumulated byte count exceeds this cap.
+// Bound compatible endpoints as well as the first-party streaming API.
 const MISTRAL_STREAM_BODY_MAX_BYTES = 16 * 1024 * 1024;
 
-/**
- * Builds a `Fetcher` that wraps the default `fetch` with a 16 MiB byte cap
- * on streamed response bodies. The wrapped `Response.body` exposes a
- * `ReadableStream` whose chunks flow through `createSseByteGuard`, so the
- * SDK's internal SSE parser (`EventStream` in
- * `@mistralai/mistralai/lib/event-streams.ts`) reads exactly as it would on
- * an unbounded body — but bounded.
- *
- * Bodyless responses (no `body` or no `getReader`) are returned unchanged so
- * the SDK's error-path `res.arrayBuffer()` call still works.
- */
-export function createBoundedMistralFetcher(
-  maxBytes: number = MISTRAL_STREAM_BODY_MAX_BYTES,
-  upstreamFetch: Fetcher = fetch,
-): Fetcher {
+/** Cap the SDK's response reader while preserving bodyless error responses. */
+export function createBoundedMistralFetcher(upstreamFetch: Fetcher): Fetcher {
   return async (input, init) => {
     const response = init == null ? await upstreamFetch(input) : await upstreamFetch(input, init);
-    if (!response.body || typeof response.body.getReader !== "function") {
-      return response;
-    }
-    const reader = response.body.getReader();
-    const guard = createSseByteGuard(reader, {
-      maxBytes,
+    return boundResponseBody(response, {
+      maxBytes: MISTRAL_STREAM_BODY_MAX_BYTES,
       onOverflow: ({ size, maxBytes: cap }) =>
         new Error(`mistral: stream body exceeds ${cap} bytes (got ${size})`),
     });
-    // Re-shape the response body so the SDK's `responseBody.getReader()`
-    // call inside `EventStream` resolves to a stream whose `read()` is
-    // routed through `guard.read()`. Cancellation is also forwarded.
-    const guardedStream = new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        const { done, value } = await guard.read();
-        if (done) {
-          controller.close();
-          return;
-        }
-        controller.enqueue(value);
-      },
-      async cancel(reason) {
-        await guard.cancel(reason);
-      },
-    });
-    return new Response(guardedStream, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
-    });
   };
 }
-
-/**
- * Provider-specific options for the Mistral API.
- */
-type MistralReasoningEffort = "none" | "high";
 
 interface MistralOptions extends StreamOptions {
   toolChoice?:
@@ -128,16 +79,13 @@ interface MistralOptions extends StreamOptions {
     | "required"
     | { type: "function"; function: { name: string } };
   promptMode?: "reasoning";
-  reasoningEffort?: MistralReasoningEffort;
+  reasoningEffort?: ReasoningEffort;
 }
 
-/**
- * Stream responses from Mistral using `chat.stream`.
- */
 export const streamMistral: StreamFunction<"mistral-conversations", MistralOptions> = (
-  model: Model<"mistral-conversations">,
-  context: Context,
-  options?: MistralOptions,
+  model,
+  context,
+  options,
 ) => {
   const stream = new AssistantMessageEventStream();
 
@@ -145,13 +93,9 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
     const output = createAssistantOutput(model);
 
     try {
-      const apiKey = options?.apiKey || getEnvApiKey(model.provider);
-      if (!apiKey) {
-        throw new Error(`No API key for provider: ${model.provider}`);
-      }
+      const apiKey = requireApiKey(model.provider, options?.apiKey);
 
       const boundedFetcher = createBoundedMistralFetcher(
-        MISTRAL_STREAM_BODY_MAX_BYTES,
         getAiTransportHost().buildModelFetch(model) ?? fetch,
       );
       let mistralResponse: Response | undefined;
@@ -175,23 +119,94 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       });
 
       const normalizeMistralToolCallId = createMistralToolCallIdNormalizer();
-      const transformedMessages = transformMessages(context.messages, model, (id) =>
-        normalizeMistralToolCallId(id),
+      const transformedMessages = transformMessages(
+        context.messages,
+        model,
+        normalizeMistralToolCallId,
       );
 
-      let payload = buildChatPayload(model, context, transformedMessages, options);
+      let payload: ChatCompletionStreamRequest = {
+        model: model.id,
+        stream: true,
+        messages: toChatMessages(transformedMessages, model.input.includes("image")),
+      };
+      let convertedToolNames: Set<string> | undefined;
+
+      if (context.tools?.length) {
+        const toolsToConvert = context.tools;
+        const mutablePayload = Boolean(options?.onPayload);
+        const converted = toolsToConvert.map((tool) => {
+          const name = tool.name;
+          const description = tool.description;
+          const parameters = tool.parameters;
+          const value = {
+            type: "function",
+            function: {
+              name,
+              description,
+              parameters:
+                !mutablePayload && getPublishedRuntimeToolInputSchema(parameters)
+                  ? parameters
+                  : structuredClone(parameters),
+              strict: false,
+            },
+          } satisfies FunctionTool & { type: "function" };
+          return { name, description, value };
+        });
+        const tools = sortPromptCacheToolsByName(converted).map(({ value }) => value);
+        convertedToolNames = new Set(tools.map((tool) => tool.function.name));
+        payload.tools = tools;
+      }
+      if (options?.temperature !== undefined) {
+        payload.temperature = options.temperature;
+      }
+      if (options?.maxTokens !== undefined) {
+        payload.maxTokens = options.maxTokens;
+      }
+      if (options?.stop !== undefined && options.stop.length > 0) {
+        payload.stop = options.stop;
+      }
+      if (options?.toolChoice) {
+        const toolChoice = mapToolChoice(options.toolChoice, convertedToolNames);
+        if (toolChoice) {
+          payload.toolChoice = toolChoice;
+        }
+      }
+      if (options?.promptMode) {
+        payload.promptMode = options.promptMode;
+      }
+      if (options?.reasoningEffort) {
+        payload.reasoningEffort = options.reasoningEffort;
+      }
+      const promptCacheKey = resolveMistralPromptCacheKey(options);
+      if (promptCacheKey) {
+        payload.promptCacheKey = promptCacheKey;
+      }
+
+      if (context.systemPrompt) {
+        payload.messages.unshift({
+          role: "system",
+          content: sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt)),
+        });
+      }
       const nextPayload = await options?.onPayload?.(payload, model);
       if (nextPayload !== undefined) {
         payload = nextPayload as ChatCompletionStreamRequest;
       }
-      const headers = { ...model.headers, ...options?.headers };
+      const headers = mergeTransportHeaders(model.headers, options?.headers) ?? {};
       // Mistral infrastructure uses `x-affinity` for KV-cache reuse (prefix caching).
       // Respect explicit caller-provided header values.
       if (resolveMistralPromptCacheKey(options) && options?.sessionId) {
-        headers["x-affinity"] ||= options.sessionId;
+        const affinityHeader = Object.keys(headers).find(
+          (name) => name.toLowerCase() === "x-affinity",
+        );
+        // Null suppresses affinity; an empty string keeps the existing session default.
+        if (!affinityHeader || headers[affinityHeader] === "") {
+          headers[affinityHeader ?? "x-affinity"] = options.sessionId;
+        }
       }
       const mistralStream = await chat.stream(payload, {
-        headers,
+        headers: omitNullRequestHeaders(headers),
         signal: options?.signal,
       });
       if (mistralResponse && mistralResponse !== reportedResponse) {
@@ -203,18 +218,327 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
         });
       }
       stream.push({ type: "start", partial: output });
-      await consumeChatStream(model, output, stream, mistralStream, options?.signal);
+      const signal = options?.signal;
+      let currentBlock: TextContent | ThinkingContent | null = null;
+      let terminalFinishReason: string | undefined;
+      const blocks = output.content;
+      const blockIndex = () => blocks.length - 1;
+      type ToolBlock = {
+        block: ToolCall;
+        contentIndex: number;
+        preview: ToolArgumentPreviewSchedule;
+        explicitIds: Set<string>;
+        functionNames: Set<string>;
+        indexes: Set<number>;
+      };
+      // Persist every identity fact across chunks. The SDK defaults omitted indexes
+      // to zero, so only a unique compatible candidate may receive later arguments.
+      const toolBlocks: ToolBlock[] = [];
+      const normalizeMissingToolCallId = createMistralToolCallIdNormalizer();
+      // Some Mistral-compatible endpoints omit tool-call ids. Their streamed index
+      // is only response-local, so namespace the fallback before strict-9 hashing.
+      const missingToolCallIdScope = randomUUID();
+      const createMissingToolCallId = (contentIndex: number) =>
+        normalizeMissingToolCallId(`${missingToolCallIdScope}:toolcall:${contentIndex}`);
 
-      if (options?.signal?.aborted) {
-        throw transportAbortError(options.signal);
+      const requireSingleCandidate = (candidates: ToolBlock[]): ToolBlock | undefined => {
+        if (candidates.length > 1) {
+          throw new Error(
+            "Mistral streamed tool-call continuation is ambiguous; refusing to merge arguments",
+          );
+        }
+        return candidates[0];
+      };
+
+      const resolveToolBlock = (params: {
+        explicitId?: string;
+        functionName?: string;
+        index?: number;
+        usedContentIndexes: ReadonlySet<number>;
+      }): ToolBlock | undefined => {
+        const explicitId = params.explicitId;
+        const functionName = params.functionName;
+        const toolCallIndex = params.index;
+        const available = toolBlocks.filter(
+          (identity) => !params.usedContentIndexes.has(identity.contentIndex),
+        );
+        const idCandidates = explicitId
+          ? available.filter((identity) => identity.explicitIds.has(explicitId))
+          : [];
+        const nameCandidates = functionName
+          ? available.filter((identity) => identity.functionNames.has(functionName))
+          : [];
+        if (idCandidates.length > 0) {
+          let candidates = idCandidates;
+          if (nameCandidates.length > 0) {
+            candidates = candidates.filter((identity) => nameCandidates.includes(identity));
+          }
+          const candidate = requireSingleCandidate(candidates);
+          if (!candidate) {
+            throw new Error(
+              "Mistral streamed tool-call identities conflict; refusing to merge arguments",
+            );
+          }
+          return candidate;
+        }
+
+        if (nameCandidates.length > 0) {
+          const idCompatibleCandidates = nameCandidates.filter(
+            (identity) => !explicitId || identity.explicitIds.size === 0,
+          );
+          if (
+            idCompatibleCandidates.length <= 1 &&
+            (toolCallIndex === undefined || toolCallIndex === 0)
+          ) {
+            // A unique persistent name is stronger than the SDK's default index
+            // zero. Preserve nonzero indices, which unambiguously start or resume a
+            // different call even when the provider repeats a function name.
+            return requireSingleCandidate(idCompatibleCandidates);
+          }
+          const indexCompatibleCandidates = idCompatibleCandidates.filter(
+            (identity) =>
+              toolCallIndex === undefined ||
+              identity.indexes.size === 0 ||
+              identity.indexes.has(toolCallIndex),
+          );
+          return requireSingleCandidate(indexCompatibleCandidates);
+        }
+
+        const indexCandidates =
+          toolCallIndex === undefined
+            ? []
+            : available.filter((identity) => identity.indexes.has(toolCallIndex));
+
+        // Adopt newly supplied identity only into a block that still lacks it.
+        // Index alone must remain unambiguous even when the SDK defaults it to zero.
+        return requireSingleCandidate(
+          indexCandidates.filter(
+            (identity) =>
+              (!functionName || identity.functionNames.size === 0) &&
+              (!explicitId || identity.explicitIds.size === 0),
+          ),
+        );
+      };
+
+      const finishCurrentBlock = () => {
+        if (!currentBlock) {
+          return;
+        }
+        stream.push({
+          type: currentBlock.type === "text" ? "text_end" : "thinking_end",
+          contentIndex: blockIndex(),
+          content: currentBlock.type === "text" ? currentBlock.text : currentBlock.thinking,
+          partial: output,
+        });
+      };
+
+      const appendContentDelta = (type: "text" | "thinking", text: string) => {
+        const delta = sanitizeSurrogates(text);
+        if (type === "thinking" && !delta) {
+          return;
+        }
+        if (!currentBlock || currentBlock.type !== type) {
+          finishCurrentBlock();
+          currentBlock = type === "text" ? { type, text: "" } : { type, thinking: "" };
+          output.content.push(currentBlock);
+          stream.push({ type: `${type}_start`, contentIndex: blockIndex(), partial: output });
+        }
+        if (currentBlock.type === "text") {
+          currentBlock.text += delta;
+        } else {
+          appendAssistantThinking(currentBlock, delta);
+        }
+        stream.push({
+          type: `${type}_delta`,
+          contentIndex: blockIndex(),
+          delta,
+          partial: output,
+        });
+      };
+
+      for await (const event of mistralStream) {
+        notifyLlmRequestActivity(signal);
+        const chunk = event.data;
+        // Mistral's streamed CompletionChunk carries an id field. Keep the first non-empty one,
+        // mirroring how OpenAI-style streaming exposes a stable response identifier per stream.
+        output.responseId ||= chunk.id;
+        // Retain the provider-returned model when it differs from the requested id so
+        // routed responses are not misattributed, matching the OpenAI sibling stream.
+        if (typeof chunk.model === "string" && chunk.model.length > 0 && chunk.model !== model.id) {
+          output.responseModel ||= chunk.model;
+        }
+
+        if (chunk.usage) {
+          const usageOutput = output.usage;
+          const usage = chunk.usage;
+          const terminal = Boolean(terminalFinishReason || chunk.choices[0]?.finishReason);
+          const promptTokens = usage.promptTokens || 0;
+          // SAFETY: SDK usage permits extra cache fields; only finite numeric counts are accepted below.
+          const record = usage as {
+            promptTokensDetails?: { cachedTokens?: unknown } | null;
+            prompt_tokens_details?: { cached_tokens?: unknown } | null;
+            cachedTokens?: unknown;
+            cached_tokens?: unknown;
+          };
+          const rawCachedTokens =
+            record.promptTokensDetails?.cachedTokens ??
+            record.prompt_tokens_details?.cached_tokens ??
+            record.cachedTokens ??
+            record.cached_tokens;
+          const cachedTokens =
+            typeof rawCachedTokens === "number" && Number.isFinite(rawCachedTokens)
+              ? rawCachedTokens
+              : 0;
+          const cacheRead = Math.min(promptTokens, Math.max(0, cachedTokens));
+          usageOutput.input = Math.max(0, promptTokens - cacheRead);
+          usageOutput.output = usage.completionTokens || 0;
+          usageOutput.cacheRead = cacheRead;
+          usageOutput.cacheWrite = 0;
+          usageOutput.totalTokens =
+            usage.totalTokens || usageOutput.input + usageOutput.output + cacheRead;
+          usageOutput.usageReport = { state: terminal ? "available" : "unavailable" };
+          calculateCost(model, usageOutput);
+        }
+
+        const choice = chunk.choices[0];
+        if (!choice) {
+          continue;
+        }
+
+        if (choice.finishReason) {
+          terminalFinishReason = choice.finishReason;
+          const { stopReason, errorMessage } = mapOpenAIStopReason(
+            choice.finishReason === "model_length" ? "length" : choice.finishReason,
+          );
+          output.stopReason = stopReason;
+          if (errorMessage) {
+            output.errorMessage = errorMessage;
+          }
+        }
+
+        const delta = choice.delta;
+        if (delta.content !== null && delta.content !== undefined) {
+          const contentItems = typeof delta.content === "string" ? [delta.content] : delta.content;
+          for (const item of contentItems) {
+            if (typeof item === "string") {
+              appendContentDelta("text", item);
+              continue;
+            }
+
+            if (item.type === "thinking") {
+              appendContentDelta(
+                "thinking",
+                item.thinking.map((part) => ("text" in part ? part.text : "")).join(""),
+              );
+            } else if (item.type === "text") {
+              appendContentDelta("text", item.text);
+            }
+          }
+        }
+
+        const toolCalls = delta.toolCalls || [];
+        // One streamed delta carries at most one fragment per logical call. Reusing
+        // a block here would collapse parallel siblings before persistent identity
+        // candidates can distinguish their later continuations.
+        const usedToolBlockIndexes = new Set<number>();
+        for (const toolCall of toolCalls) {
+          if (currentBlock) {
+            finishCurrentBlock();
+            currentBlock = null;
+          }
+          const toolCallIndex =
+            typeof toolCall.index === "number" && Number.isInteger(toolCall.index)
+              ? toolCall.index
+              : undefined;
+          const providedCallId = toolCall.id && toolCall.id !== "null" ? toolCall.id : undefined;
+          const functionName = toolCall.function.name.trim() || undefined;
+          let identity = resolveToolBlock({
+            explicitId: providedCallId,
+            functionName,
+            index: toolCallIndex,
+            usedContentIndexes: usedToolBlockIndexes,
+          });
+          if (!identity) {
+            const contentIndex = output.content.length;
+            const block: ToolBlock["block"] = {
+              type: "toolCall",
+              id: providedCallId ?? createMissingToolCallId(contentIndex),
+              name: functionName ?? "",
+              arguments: {},
+              partialJson: "",
+            };
+            output.content.push(block);
+            identity = {
+              block,
+              contentIndex,
+              preview: createToolArgumentPreviewSchedule(),
+              explicitIds: new Set(),
+              functionNames: new Set(),
+              indexes: new Set(),
+            };
+            toolBlocks.push(identity);
+            stream.push({ type: "toolcall_start", contentIndex, partial: output });
+          }
+          const { block, contentIndex } = identity;
+          usedToolBlockIndexes.add(contentIndex);
+          if (providedCallId) {
+            block.id = providedCallId;
+            identity.explicitIds.add(providedCallId);
+          }
+          if (functionName) {
+            if (identity.functionNames.size > 0 && !identity.functionNames.has(functionName)) {
+              throw new Error(
+                "Mistral streamed tool-call continuation changed function name; refusing to merge arguments",
+              );
+            }
+            block.name = functionName;
+            identity.functionNames.add(functionName);
+          }
+          if (toolCallIndex !== undefined) {
+            identity.indexes.add(toolCallIndex);
+          }
+
+          const argsDelta =
+            typeof toolCall.function.arguments === "string"
+              ? toolCall.function.arguments
+              : JSON.stringify(toolCall.function.arguments || {});
+          block.partialJson = (block.partialJson || "") + argsDelta;
+          // Preview refresh is scheduled geometrically; the terminal strict parse
+          // below re-reads the full buffer authoritatively either way.
+          if (identity.preview(block.partialJson.length)) {
+            block.arguments = parseStreamingJson(block.partialJson);
+          }
+          stream.push({
+            type: "toolcall_delta",
+            contentIndex,
+            delta: argsDelta,
+            partial: output,
+          });
+        }
       }
 
-      if (output.stopReason === "aborted" || output.stopReason === "error") {
-        throw new Error(output.errorMessage ?? "An unknown error occurred");
+      finishCurrentBlock();
+      // Only an authoritative tool terminal can make strictly parsed arguments executable.
+      if (!terminalFinishReason || output.stopReason !== "toolUse") {
+        blocks.splice(0, blocks.length, ...blocks.filter((block) => block.type !== "toolCall"));
+        if (!terminalFinishReason) {
+          throw new Error("Mistral stream ended without a terminal finish reason");
+        }
+      } else {
+        finalizeTerminalToolCallArguments(
+          toolBlocks.map(({ block }) => block),
+          (block) => block.partialJson ?? "",
+          "Mistral completed tool call has invalid JSON arguments",
+        );
+        for (const { block, contentIndex } of toolBlocks) {
+          // Finalize in-place and strip the scratch buffer so replay only
+          // carries parsed arguments.
+          delete block.partialJson;
+          stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
+        }
       }
 
-      stream.push({ type: "done", reason: output.stopReason, message: output });
-      stream.end();
+      finalizeTransportStream({ stream, output, signal: options?.signal });
     } catch (error) {
       const terminal = assignTransportErrorDetails(output, error, options?.signal);
       // Failed or canceled generations must never retain partially repaired tool calls.
@@ -227,18 +551,12 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
   return stream;
 };
 
-/**
- * Maps provider-agnostic `SimpleStreamOptions` to Mistral options.
- */
 export const streamSimpleMistral: StreamFunction<"mistral-conversations", SimpleStreamOptions> = (
-  model: Model<"mistral-conversations">,
-  context: Context,
-  options?: SimpleStreamOptions,
+  model,
+  context,
+  options,
 ) => {
-  const apiKey = options?.apiKey || getEnvApiKey(model.provider);
-  if (!apiKey) {
-    throw new Error(`No API key for provider: ${model.provider}`);
-  }
+  const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const base = {
     ...buildBaseOptions(model, options, apiKey),
@@ -249,13 +567,19 @@ export const streamSimpleMistral: StreamFunction<"mistral-conversations", Simple
     : undefined;
   const reasoning = clampedReasoning === "off" ? undefined : clampedReasoning;
   const shouldUseReasoning = model.reasoning && reasoning !== undefined;
+  const supportsReasoningEffort =
+    model.id === "mistral-small-2603" ||
+    model.id === "mistral-small-latest" ||
+    model.id === "mistral-medium-3-5";
 
   return streamMistral(model, context, {
     ...base,
-    promptMode: shouldUseReasoning && usesPromptModeReasoning(model) ? "reasoning" : undefined,
+    promptMode: shouldUseReasoning && !supportsReasoningEffort ? "reasoning" : undefined,
     reasoningEffort:
-      shouldUseReasoning && usesReasoningEffort(model)
-        ? mapReasoningEffort(model, reasoning)
+      shouldUseReasoning && supportsReasoningEffort
+        ? ReasoningEffort$inboundSchema.parse(
+            model.thinkingLevelMap?.[reasoning] ?? (reasoning === "minimal" ? "none" : "high"),
+          )
         : undefined,
   } satisfies MistralOptions);
 };
@@ -297,543 +621,11 @@ function deriveMistralToolCallId(id: string, attempt: number): string {
     .slice(0, MISTRAL_TOOL_CALL_ID_LENGTH);
 }
 
-function buildChatPayload(
-  model: Model<"mistral-conversations">,
-  context: Context,
-  messages: Message[],
-  options?: MistralOptions,
-): ChatCompletionStreamRequest {
-  const payload: ChatCompletionStreamRequest = {
-    model: model.id,
-    stream: true,
-    messages: toChatMessages(messages, model.input.includes("image")),
-  };
-  let convertedToolNames: Set<string> | undefined;
-
-  if (context.tools?.length) {
-    const tools = toFunctionTools(context.tools);
-    convertedToolNames = new Set(tools.map((tool) => tool.function.name));
-    if (tools.length > 0) {
-      payload.tools = tools;
-    }
-  }
-  if (options?.temperature !== undefined) {
-    payload.temperature = options.temperature;
-  }
-  if (options?.maxTokens !== undefined) {
-    payload.maxTokens = options.maxTokens;
-  }
-  if (options?.stop !== undefined && options.stop.length > 0) {
-    payload.stop = options.stop;
-  }
-  if (options?.toolChoice) {
-    const toolChoice = mapToolChoice(options.toolChoice, convertedToolNames);
-    if (toolChoice) {
-      payload.toolChoice = toolChoice;
-    }
-  }
-  if (options?.promptMode) {
-    payload.promptMode = options.promptMode;
-  }
-  if (options?.reasoningEffort) {
-    payload.reasoningEffort = options.reasoningEffort;
-  }
-  const promptCacheKey = resolveMistralPromptCacheKey(options);
-  if (promptCacheKey) {
-    payload.promptCacheKey = promptCacheKey;
-  }
-
-  if (context.systemPrompt) {
-    payload.messages.unshift({
-      role: "system",
-      content: sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt)),
-    });
-  }
-
-  return payload;
-}
-
 function resolveMistralPromptCacheKey(options?: MistralOptions): string | undefined {
   if (options?.cacheRetention === "none") {
     return undefined;
   }
   return options?.promptCacheKey?.trim() || options?.sessionId?.trim() || undefined;
-}
-
-function readMistralCachedPromptTokens(usage: unknown, promptTokens: number): number {
-  const record = usage as {
-    promptTokensDetails?: { cachedTokens?: unknown } | null;
-    prompt_tokens_details?: { cached_tokens?: unknown } | null;
-    cachedTokens?: unknown;
-    cached_tokens?: unknown;
-  };
-  const rawCachedTokens =
-    record.promptTokensDetails?.cachedTokens ??
-    record.prompt_tokens_details?.cached_tokens ??
-    record.cachedTokens ??
-    record.cached_tokens;
-  const cachedTokens =
-    typeof rawCachedTokens === "number" && Number.isFinite(rawCachedTokens) ? rawCachedTokens : 0;
-  return Math.min(promptTokens, Math.max(0, cachedTokens));
-}
-
-async function consumeChatStream(
-  model: Model<"mistral-conversations">,
-  output: AssistantMessage,
-  stream: AssistantMessageEventStream,
-  mistralStream: AsyncIterable<CompletionEvent>,
-  signal?: AbortSignal,
-): Promise<void> {
-  let currentBlock: TextContent | ThinkingContent | null = null;
-  let terminalFinishReason: string | undefined;
-  const blocks = output.content;
-  const blockIndex = () => blocks.length - 1;
-  type ToolBlockIdentity = {
-    explicitIds: Set<string>;
-    functionNames: Set<string>;
-    indexes: Set<number>;
-  };
-  // Persist every identity fact across chunks. The SDK defaults omitted indexes
-  // to zero, so only a unique compatible candidate may receive later arguments.
-  const toolBlockIdentities = new Map<number, ToolBlockIdentity>();
-  // Preview schedules are per active tool call; WeakMap keys die with the block.
-  const toolArgumentPreviewSchedules = new WeakMap<
-    ToolCall & { partialArgs?: string },
-    ToolArgumentPreviewSchedule
-  >();
-  const normalizeMissingToolCallId = createMistralToolCallIdNormalizer();
-  // Some Mistral-compatible endpoints omit tool-call ids. Their streamed index
-  // is only response-local, so namespace the fallback before strict-9 hashing.
-  const missingToolCallIdScope = randomUUID();
-  const createMissingToolCallId = (contentIndex: number) =>
-    normalizeMissingToolCallId(`${missingToolCallIdScope}:toolcall:${contentIndex}`);
-
-  const findIdentityCandidates = (
-    matches: (identity: ToolBlockIdentity) => boolean,
-    excludedContentIndexes?: ReadonlySet<number>,
-  ): Set<number> => {
-    const candidates = new Set<number>();
-    for (const [contentIndex, identity] of toolBlockIdentities) {
-      if (!excludedContentIndexes?.has(contentIndex) && matches(identity)) {
-        candidates.add(contentIndex);
-      }
-    }
-    return candidates;
-  };
-
-  const intersectCandidates = (left: Set<number>, right: Set<number>): Set<number> =>
-    new Set([...left].filter((contentIndex) => right.has(contentIndex)));
-
-  const requireSingleCandidate = (candidates: Set<number>): number | undefined => {
-    if (candidates.size > 1) {
-      throw new Error(
-        "Mistral streamed tool-call continuation is ambiguous; refusing to merge arguments",
-      );
-    }
-    return candidates.values().next().value;
-  };
-
-  const requireExistingCandidate = (candidates: Set<number>): number => {
-    const candidate = requireSingleCandidate(candidates);
-    if (candidate === undefined) {
-      throw new Error(
-        "Mistral streamed tool-call identities conflict; refusing to merge arguments",
-      );
-    }
-    return candidate;
-  };
-
-  const resolveToolBlockIndex = (params: {
-    explicitId?: string;
-    functionName?: string;
-    index?: number;
-    usedContentIndexes: ReadonlySet<number>;
-  }): number | undefined => {
-    const explicitId = params.explicitId;
-    const functionName = params.functionName;
-    const toolCallIndex = params.index;
-    const idCandidates = explicitId
-      ? findIdentityCandidates(
-          (identity) => identity.explicitIds.has(explicitId),
-          params.usedContentIndexes,
-        )
-      : new Set<number>();
-    const nameCandidates = functionName
-      ? findIdentityCandidates(
-          (identity) => identity.functionNames.has(functionName),
-          params.usedContentIndexes,
-        )
-      : new Set<number>();
-    if (idCandidates.size > 0) {
-      let candidates = idCandidates;
-      if (nameCandidates.size > 0) {
-        candidates = intersectCandidates(candidates, nameCandidates);
-      }
-      return requireExistingCandidate(candidates);
-    }
-
-    if (nameCandidates.size > 0) {
-      const idCompatibleCandidates = new Set(
-        [...nameCandidates].filter((contentIndex) => {
-          const identity = toolBlockIdentities.get(contentIndex);
-          if (!identity) {
-            return false;
-          }
-          return !explicitId || identity.explicitIds.size === 0;
-        }),
-      );
-      if (
-        idCompatibleCandidates.size <= 1 &&
-        (toolCallIndex === undefined || toolCallIndex === 0)
-      ) {
-        // A unique persistent name is stronger than the SDK's default index
-        // zero. Preserve nonzero indices, which unambiguously start or resume a
-        // different call even when the provider repeats a function name.
-        return requireSingleCandidate(idCompatibleCandidates);
-      }
-      const indexCompatibleCandidates = new Set(
-        [...idCompatibleCandidates].filter((contentIndex) => {
-          const identity = toolBlockIdentities.get(contentIndex);
-          if (!identity) {
-            return false;
-          }
-          return (
-            toolCallIndex === undefined ||
-            identity.indexes.size === 0 ||
-            identity.indexes.has(toolCallIndex)
-          );
-        }),
-      );
-      if (indexCompatibleCandidates.size === 0) {
-        return undefined;
-      }
-      return requireSingleCandidate(indexCompatibleCandidates);
-    }
-
-    const indexCandidates =
-      toolCallIndex === undefined
-        ? new Set<number>()
-        : findIdentityCandidates(
-            (identity) => identity.indexes.has(toolCallIndex),
-            params.usedContentIndexes,
-          );
-
-    if (functionName) {
-      // A new name normally starts a sibling call even when the SDK's omitted
-      // index default aliases an earlier block. It is a continuation only when
-      // one nameless block can safely adopt the name.
-      const namelessCandidates = new Set(
-        [...indexCandidates].filter((contentIndex) => {
-          const identity = toolBlockIdentities.get(contentIndex);
-          return (
-            identity?.functionNames.size === 0 && (!explicitId || identity.explicitIds.size === 0)
-          );
-        }),
-      );
-      return requireSingleCandidate(namelessCandidates);
-    }
-
-    if (explicitId) {
-      // A provider id may arrive after an idless opening fragment. Adopt it
-      // only when one indexed block still lacks an explicit id.
-      const idlessCandidates = new Set(
-        [...indexCandidates].filter(
-          (contentIndex) => toolBlockIdentities.get(contentIndex)?.explicitIds.size === 0,
-        ),
-      );
-      return requireSingleCandidate(idlessCandidates);
-    }
-
-    // With neither id nor name, index is the only remaining identity. Never
-    // guess when the SDK's default index aliases multiple open tool calls.
-    return requireSingleCandidate(indexCandidates);
-  };
-
-  const finishCurrentBlock = (block?: typeof currentBlock) => {
-    if (!block) {
-      return;
-    }
-    if (block.type === "text") {
-      stream.push({
-        type: "text_end",
-        contentIndex: blockIndex(),
-        content: block.text,
-        partial: output,
-      });
-      return;
-    }
-    if (block.type === "thinking") {
-      stream.push({
-        type: "thinking_end",
-        contentIndex: blockIndex(),
-        content: block.thinking,
-        partial: output,
-      });
-    }
-  };
-
-  for await (const event of mistralStream) {
-    notifyLlmRequestActivity(signal);
-    const chunk = event.data;
-    // Mistral's streamed CompletionChunk carries an id field. Keep the first non-empty one,
-    // mirroring how OpenAI-style streaming exposes a stable response identifier per stream.
-    output.responseId ||= chunk.id;
-    // Retain the provider-returned model when it differs from the requested id so
-    // routed responses are not misattributed, matching the OpenAI sibling stream.
-    if (typeof chunk.model === "string" && chunk.model.length > 0 && chunk.model !== model.id) {
-      output.responseModel ||= chunk.model;
-    }
-
-    if (chunk.usage) {
-      const promptTokens = chunk.usage.promptTokens || 0;
-      const cachedPromptTokens = readMistralCachedPromptTokens(chunk.usage, promptTokens);
-      output.usage.input = Math.max(0, promptTokens - cachedPromptTokens);
-      output.usage.output = chunk.usage.completionTokens || 0;
-      output.usage.cacheRead = cachedPromptTokens;
-      output.usage.cacheWrite = 0;
-      output.usage.totalTokens =
-        chunk.usage.totalTokens ||
-        output.usage.input + output.usage.output + output.usage.cacheRead;
-      calculateCost(model, output.usage);
-    }
-
-    const choice = chunk.choices[0];
-    if (!choice) {
-      continue;
-    }
-
-    if (choice.finishReason) {
-      terminalFinishReason = choice.finishReason;
-      const { stopReason, errorMessage } = mapOpenAIStopReason(
-        choice.finishReason === "model_length" ? "length" : choice.finishReason,
-      );
-      output.stopReason = stopReason;
-      if (errorMessage) {
-        output.errorMessage = errorMessage;
-      }
-    }
-
-    const delta = choice.delta;
-    if (delta.content !== null && delta.content !== undefined) {
-      const contentItems = typeof delta.content === "string" ? [delta.content] : delta.content;
-      for (const item of contentItems) {
-        if (typeof item === "string") {
-          const textDelta = sanitizeSurrogates(item);
-          if (!currentBlock || currentBlock.type !== "text") {
-            finishCurrentBlock(currentBlock);
-            currentBlock = { type: "text", text: "" };
-            output.content.push(currentBlock);
-            stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
-          }
-          currentBlock.text += textDelta;
-          stream.push({
-            type: "text_delta",
-            contentIndex: blockIndex(),
-            delta: textDelta,
-            partial: output,
-          });
-          continue;
-        }
-
-        if (item.type === "thinking") {
-          const deltaText = item.thinking.map((part) => ("text" in part ? part.text : "")).join("");
-          const thinkingDelta = sanitizeSurrogates(deltaText);
-          if (!thinkingDelta) {
-            continue;
-          }
-          if (!currentBlock || currentBlock.type !== "thinking") {
-            finishCurrentBlock(currentBlock);
-            currentBlock = { type: "thinking", thinking: "" };
-            output.content.push(currentBlock);
-            stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
-          }
-          appendAssistantThinking(currentBlock, thinkingDelta);
-          stream.push({
-            type: "thinking_delta",
-            contentIndex: blockIndex(),
-            delta: thinkingDelta,
-            partial: output,
-          });
-          continue;
-        }
-
-        if (item.type === "text") {
-          const textDelta = sanitizeSurrogates(item.text);
-          if (!currentBlock || currentBlock.type !== "text") {
-            finishCurrentBlock(currentBlock);
-            currentBlock = { type: "text", text: "" };
-            output.content.push(currentBlock);
-            stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
-          }
-          currentBlock.text += textDelta;
-          stream.push({
-            type: "text_delta",
-            contentIndex: blockIndex(),
-            delta: textDelta,
-            partial: output,
-          });
-        }
-      }
-    }
-
-    const toolCalls = delta.toolCalls || [];
-    // One streamed delta carries at most one fragment per logical call. Reusing
-    // a block here would collapse parallel siblings before persistent identity
-    // candidates can distinguish their later continuations.
-    const usedToolBlockIndexes = new Set<number>();
-    for (const toolCall of toolCalls) {
-      if (currentBlock) {
-        finishCurrentBlock(currentBlock);
-        currentBlock = null;
-      }
-      const toolCallIndex =
-        typeof toolCall.index === "number" && Number.isInteger(toolCall.index)
-          ? toolCall.index
-          : undefined;
-      const providedCallId = toolCall.id && toolCall.id !== "null" ? toolCall.id : undefined;
-      const functionName = toolCall.function.name.trim() || undefined;
-      const existingIndex = resolveToolBlockIndex({
-        explicitId: providedCallId,
-        functionName,
-        index: toolCallIndex,
-        usedContentIndexes: usedToolBlockIndexes,
-      });
-      let block: (ToolCall & { partialArgs?: string }) | undefined;
-
-      if (existingIndex !== undefined) {
-        const existing = output.content[existingIndex];
-        if (existing?.type === "toolCall") {
-          block = existing as ToolCall & { partialArgs?: string };
-        }
-      }
-      if (!block) {
-        const contentIndex = output.content.length;
-        block = {
-          type: "toolCall",
-          id: providedCallId ?? createMissingToolCallId(contentIndex),
-          name: functionName ?? "",
-          arguments: {},
-          partialArgs: "",
-        };
-        output.content.push(block);
-        toolArgumentPreviewSchedules.set(block, createToolArgumentPreviewSchedule());
-        toolBlockIdentities.set(contentIndex, {
-          explicitIds: new Set(providedCallId ? [providedCallId] : []),
-          functionNames: new Set(functionName ? [functionName] : []),
-          indexes: new Set(toolCallIndex === undefined ? [] : [toolCallIndex]),
-        });
-        stream.push({
-          type: "toolcall_start",
-          contentIndex,
-          partial: output,
-        });
-      }
-      const contentIndex = output.content.indexOf(block);
-      const identity = toolBlockIdentities.get(contentIndex);
-      if (!identity) {
-        throw new Error("Mistral streamed tool-call identity is missing");
-      }
-      usedToolBlockIndexes.add(contentIndex);
-      if (providedCallId) {
-        block.id = providedCallId;
-        identity.explicitIds.add(providedCallId);
-      }
-      if (functionName) {
-        if (identity.functionNames.size > 0 && !identity.functionNames.has(functionName)) {
-          throw new Error(
-            "Mistral streamed tool-call continuation changed function name; refusing to merge arguments",
-          );
-        }
-        block.name = functionName;
-        identity.functionNames.add(functionName);
-      }
-      if (toolCallIndex !== undefined) {
-        identity.indexes.add(toolCallIndex);
-      }
-
-      const argsDelta =
-        typeof toolCall.function.arguments === "string"
-          ? toolCall.function.arguments
-          : JSON.stringify(toolCall.function.arguments || {});
-      block.partialArgs = (block.partialArgs || "") + argsDelta;
-      // Preview refresh is scheduled geometrically; the terminal strict parse
-      // below re-reads the full buffer authoritatively either way.
-      if (toolArgumentPreviewSchedules.get(block)?.(block.partialArgs.length)) {
-        block.arguments = parseStreamingJson(block.partialArgs);
-      }
-      stream.push({
-        type: "toolcall_delta",
-        contentIndex,
-        delta: argsDelta,
-        partial: output,
-      });
-    }
-  }
-
-  finishCurrentBlock(currentBlock);
-  // Only an authoritative tool terminal can make strictly parsed arguments executable.
-  if (!terminalFinishReason || output.stopReason !== "toolUse") {
-    blocks.splice(0, blocks.length, ...blocks.filter((block) => block.type !== "toolCall"));
-    if (!terminalFinishReason) {
-      throw new Error("Mistral stream ended without a terminal finish reason");
-    }
-    return;
-  }
-  const completedToolCalls = [...toolBlockIdentities.keys()].flatMap((contentIndex) => {
-    const block = blocks[contentIndex];
-    return block?.type === "toolCall"
-      ? [{ block: block as ToolCall & { partialArgs?: string }, contentIndex }]
-      : [];
-  });
-  finalizeTerminalToolCallArguments(
-    completedToolCalls.map(({ block }) => block),
-    (block) => block.partialArgs ?? "",
-    "Mistral completed tool call has invalid JSON arguments",
-  );
-  for (const { block, contentIndex } of completedToolCalls) {
-    // Finalize in-place and strip the scratch buffer so replay only
-    // carries parsed arguments.
-    delete block.partialArgs;
-    stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
-  }
-}
-
-function toFunctionTools(tools: Tool[]): Array<FunctionTool & { type: "function" }> {
-  const converted = tools.flatMap((tool) => {
-    try {
-      const name = tool.name;
-      const description = tool.description;
-      const value = {
-        type: "function",
-        function: {
-          name,
-          description,
-          parameters: stripSymbolKeys(tool.parameters) as Record<string, unknown>,
-          strict: false,
-        },
-      } satisfies FunctionTool & { type: "function" };
-      return { name, description, value };
-    } catch {
-      return [];
-    }
-  });
-  return sortPromptCacheToolsByName(converted).map(({ value }) => value);
-}
-
-function stripSymbolKeys(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((item) => stripSymbolKeys(item));
-  }
-
-  if (value && typeof value === "object") {
-    const result: Record<string, unknown> = {};
-    for (const [key, entry] of Object.entries(value)) {
-      result[key] = stripSymbolKeys(entry);
-    }
-    return result;
-  }
-
-  return value;
 }
 
 function toChatMessages(
@@ -876,18 +668,13 @@ function toChatMessages(
       }> = [];
 
       for (const block of msg.content) {
-        if (block.type === "text") {
-          if (block.text.trim().length > 0) {
-            contentParts.push({ type: "text", text: sanitizeSurrogates(block.text) });
-          }
-          continue;
-        }
-        if (block.type === "thinking") {
-          if (block.thinking.trim().length > 0) {
-            contentParts.push({
-              type: "thinking",
-              thinking: [{ type: "text", text: sanitizeSurrogates(block.thinking) }],
-            });
+        if (block.type === "text" || block.type === "thinking") {
+          const text = block.type === "text" ? block.text : block.thinking;
+          if (text.trim().length > 0) {
+            const part = { type: "text" as const, text: sanitizeSurrogates(text) };
+            contentParts.push(
+              block.type === "text" ? part : { type: "thinking", thinking: [part] },
+            );
           }
           continue;
         }
@@ -953,43 +740,12 @@ function toChatMessages(
   return result;
 }
 
-function usesReasoningEffort(model: Model<"mistral-conversations">): boolean {
-  return (
-    model.id === "mistral-small-2603" ||
-    model.id === "mistral-small-latest" ||
-    model.id === "mistral-medium-3-5"
-  );
-}
-
-function usesPromptModeReasoning(model: Model<"mistral-conversations">): boolean {
-  return model.reasoning && !usesReasoningEffort(model);
-}
-
-function mapReasoningEffort(
-  model: Model<"mistral-conversations">,
-  level: Exclude<SimpleStreamOptions["reasoning"], undefined>,
-): MistralReasoningEffort {
-  return (model.thinkingLevelMap?.[level] ?? "high") as MistralReasoningEffort;
-}
-
 function mapToolChoice(
   choice: MistralOptions["toolChoice"],
   convertedToolNames?: ReadonlySet<string>,
-):
-  | "auto"
-  | "none"
-  | "any"
-  | "required"
-  | { type: "function"; function: { name: string } }
-  | undefined {
+): MistralOptions["toolChoice"] {
   if (!choice) {
     return undefined;
-  }
-  if (convertedToolNames && convertedToolNames.size === 0) {
-    if (choice === "none" || choice === "auto") {
-      return choice === "none" ? "none" : undefined;
-    }
-    throw new Error("Mistral tool_choice requires a tool, but no tools survived schema conversion");
   }
   if (choice === "auto" || choice === "none" || choice === "any" || choice === "required") {
     return choice;
@@ -1005,5 +761,3 @@ function mapToolChoice(
     function: { name: toolName },
   };
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

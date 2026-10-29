@@ -1,9 +1,9 @@
-// Covers channel-specific outbound adapter behavior for message sends,
-// structured payloads, and channel capability interactions.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-client/src/protocol-request.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { pinRuntimePaths } from "../../config/paths.js";
+import { GatewayTransportError } from "../../gateway/transport-error.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -12,15 +12,26 @@ import {
 import { withEnvAsync } from "../../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { drainPendingDeliveriesCore } from "./delivery-queue-recovery.js";
+import type { OutboundMessageGatewayOptionsInput } from "./message-gateway-options.js";
 
-const setRegistry = (registry: ReturnType<typeof createTestRegistry>) => {
-  setActivePluginRegistry(registry);
-};
+function registerPlugin(
+  id: string,
+  outbound: ChannelOutboundAdapter,
+  aliases: string[] = [],
+  options: Omit<Parameters<typeof createChannelTestPluginBase>[0], "id"> = {},
+) {
+  const base = createChannelTestPluginBase({ id, ...options });
+  const plugin: ChannelPlugin = { ...base, meta: { ...base.meta, aliases }, outbound };
+  setActivePluginRegistry(createTestRegistry([{ pluginId: id, source: "test", plugin }]));
+}
 
 const callGatewayMock = vi.fn();
-vi.mock("../../gateway/call.js", () => ({
+// mock-isolation: Captures Gateway RPCs; the real transport-error guard classifies timeouts.
+vi.mock("../../gateway/call.js", async () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
   callGatewayLeastPrivilege: (...args: unknown[]) => callGatewayMock(...args),
+  isGatewayTransportError: (await import("../../gateway/transport-error.js"))
+    .isGatewayTransportError,
   randomIdempotencyKey: () => "idem-1",
 }));
 
@@ -34,19 +45,14 @@ beforeAll(async () => {
 
 beforeEach(() => {
   callGatewayMock.mockClear();
-  setRegistry(emptyRegistry);
+  setActivePluginRegistry(emptyRegistry);
 });
 
 afterEach(() => {
-  setRegistry(emptyRegistry);
+  setActivePluginRegistry(emptyRegistry);
 });
 
-function gatewayCall(): {
-  url?: string;
-  token?: string;
-  timeoutMs?: number;
-  params?: Record<string, unknown>;
-} {
+function gatewayCall() {
   const [call] = callGatewayMock.mock.calls;
   if (!call) {
     throw new Error("expected gateway call");
@@ -63,231 +69,139 @@ function gatewayCall(): {
   };
 }
 
-describe("sendMessage live-only delivery", () => {
-  it("keeps ephemeral-authority sends out of recovery after revocation", async () => {
-    const stateDir = tempDirs.make("openclaw-live-only-delivery-");
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        pinRuntimePaths();
-        let authorityActive = true;
-        const sendText = vi.fn(async (ctx: { onPlatformSendDispatch?: () => Promise<void> }) => {
-          await ctx.onPlatformSendDispatch?.();
-          return { channel: "threadchat", messageId: "live-only-1" };
-        });
-        const plugin: ChannelPlugin = {
-          ...createChannelTestPluginBase({ id: "threadchat" }),
-          outbound: { deliveryMode: "direct", sendText },
-        };
-        setRegistry(createTestRegistry([{ pluginId: "threadchat", source: "test", plugin }]));
-        const onDeliveryIntent = vi.fn(() => {
-          throw new Error("simulated crash after queue persistence");
-        });
-
-        await sendMessage({
-          cfg: {},
-          to: "channel:town-square",
-          content: "live only",
-          channel: "threadchat",
-          skipQueue: true,
-          onDeliveryIntent,
-          onPlatformSendDispatch: async () => {
-            if (!authorityActive) {
-              throw new Error("delivery authority revoked");
-            }
-          },
-        });
-        expect(onDeliveryIntent).not.toHaveBeenCalled();
-        expect(sendText).toHaveBeenCalledOnce();
-
-        authorityActive = false;
-        const recoveredDelivery = vi.fn(async () => []);
-        await drainPendingDeliveriesCore({
-          drainKey: `live-only-${stateDir}`,
-          logLabel: "Live-only delivery test",
-          cfg: {},
-          stateDir,
-          deliver: recoveredDelivery,
-          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-          selectEntry: () => ({ match: true, bypassBackoff: true }),
-        });
-        expect(recoveredDelivery).not.toHaveBeenCalled();
-      });
-    } finally {
-      pinRuntimePaths();
-    }
+function sendThreadMessage(params: Partial<Parameters<typeof sendMessage>[0]> = {}) {
+  return sendMessage({
+    cfg: {},
+    to: "channel:town-square",
+    channel: "threadchat",
+    content: "hi",
+    ...params,
   });
+}
+
+function sendDemoPoll(params: Partial<Parameters<typeof sendPoll>[0]> = {}) {
+  return sendPoll({
+    cfg: {},
+    to: "conversation:demo-target",
+    channel: "Workspace-Chat",
+    question: "Lunch?",
+    options: ["Pizza", "Sushi"],
+    ...params,
+  });
+}
+
+it("keeps ephemeral-authority sends out of recovery after revocation", async () => {
+  const stateDir = tempDirs.make("openclaw-live-only-delivery-");
+  try {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      pinRuntimePaths();
+      let authorityActive = true;
+      const sendText = vi.fn(async (ctx: { onPlatformSendDispatch?: () => Promise<void> }) => {
+        await ctx.onPlatformSendDispatch?.();
+        return { channel: "threadchat", messageId: "live-only-1" };
+      });
+      registerPlugin("threadchat", { deliveryMode: "direct", sendText });
+      const onDeliveryIntent = vi.fn(() => {
+        throw new Error("simulated crash after queue persistence");
+      });
+
+      await sendThreadMessage({
+        content: "live only",
+        skipQueue: true,
+        onDeliveryIntent,
+        onPlatformSendDispatch: async () => {
+          if (!authorityActive) {
+            throw new Error("delivery authority revoked");
+          }
+        },
+      });
+      expect(onDeliveryIntent).not.toHaveBeenCalled();
+      expect(sendText).toHaveBeenCalledOnce();
+
+      authorityActive = false;
+      const recoveredDelivery = vi.fn(async () => []);
+      await drainPendingDeliveriesCore({
+        drainKey: `live-only-${stateDir}`,
+        logLabel: "Live-only delivery test",
+        cfg: {},
+        stateDir,
+        deliver: recoveredDelivery,
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        selectEntry: () => ({ match: true, bypassBackoff: true }),
+      });
+      expect(recoveredDelivery).not.toHaveBeenCalled();
+    });
+  } finally {
+    pinRuntimePaths();
+  }
 });
 
-describe("sendMessage channel normalization", () => {
-  it("threads resolved cfg through alias + target normalization in outbound dispatch", async () => {
-    const resolvedCfg = {
-      __resolvedCfgMarker: "cfg-from-secret-resolution",
-      channels: {},
-    } as Record<string, unknown>;
-    const seen: {
-      resolveCfg?: unknown;
-      sendCfg?: unknown;
-      to?: string;
-    } = {};
-    const localChatAliasPlugin: ChannelPlugin = {
-      id: "localchat",
-      meta: {
-        id: "localchat",
-        label: "LocalChat",
-        selectionLabel: "LocalChat",
-        docsPath: "/channels/localchat",
-        blurb: "LocalChat test stub.",
-        aliases: ["localmsg"],
+it("threads resolved cfg through alias + target normalization in outbound dispatch", async () => {
+  const resolvedCfg = {
+    __resolvedCfgMarker: "cfg-from-secret-resolution",
+    channels: {},
+  } as Record<string, unknown>;
+  const seen: {
+    resolveCfg?: unknown;
+    sendCfg?: unknown;
+    to?: string;
+  } = {};
+  registerPlugin(
+    "localchat",
+    {
+      deliveryMode: "direct",
+      resolveTarget: ({ to, cfg }) => {
+        seen.resolveCfg = cfg;
+        const normalized = (to ?? "").trim().replace(/^localchat:/i, "");
+        return { ok: true, to: normalized };
       },
-      capabilities: { chatTypes: ["direct"] },
-      config: {
-        listAccountIds: () => [],
-        resolveAccount: () => ({}),
+      sendText: async ({ cfg, to }) => {
+        seen.sendCfg = cfg;
+        seen.to = to;
+        return { channel: "localchat", messageId: "local-resolved" };
       },
-      outbound: {
-        deliveryMode: "direct",
-        resolveTarget: ({ to, cfg }) => {
-          seen.resolveCfg = cfg;
-          const normalized = (to ?? "").trim().replace(/^localchat:/i, "");
-          return { ok: true, to: normalized };
-        },
-        sendText: async ({ cfg, to }) => {
-          seen.sendCfg = cfg;
-          seen.to = to;
-          return { channel: "localchat", messageId: "local-resolved" };
-        },
-        sendMedia: async ({ cfg, to }) => {
-          seen.sendCfg = cfg;
-          seen.to = to;
-          return { channel: "localchat", messageId: "local-resolved-media" };
-        },
-      },
-    };
+    },
+    ["localmsg"],
+    { label: "LocalChat", config: { listAccountIds: () => [] } },
+  );
 
-    setRegistry(
-      createTestRegistry([
-        {
-          pluginId: "localchat",
-          source: "test",
-          plugin: localChatAliasPlugin,
-        },
-      ]),
-    );
-
-    const result = await sendMessage({
-      cfg: resolvedCfg,
-      to: " localchat:+15551234567 ",
-      content: "hi",
-      channel: "localmsg",
-    });
-
-    expect(result.channel).toBe("localchat");
-    expect(seen.resolveCfg).toBe(resolvedCfg);
-    expect(seen.sendCfg).toBe(resolvedCfg);
-    expect(seen.to).toBe("+15551234567");
+  const result = await sendMessage({
+    cfg: resolvedCfg,
+    to: " localchat:+15551234567 ",
+    content: "hi",
+    channel: "localmsg",
   });
 
-  it.each([
-    {
-      name: "normalizes plugin aliases",
-      registry: createTestRegistry([
-        {
-          pluginId: "demo-alias-channel",
-          source: "test",
-          plugin: createDemoAliasPlugin({
-            outbound: createDemoAliasOutbound(),
-            aliases: ["workspace-chat"],
-          }),
-        },
-      ]),
-      params: {
-        to: "conversation:demo-target",
-        channel: "workspace-chat",
-        deps: {
-          "demo-alias-channel": vi.fn(async () => ({
-            messageId: "m1",
-            conversationId: "c1",
-          })),
-        },
-      },
-      assertDeps: (deps: { "demo-alias-channel"?: ReturnType<typeof vi.fn> }) => {
-        expect(deps["demo-alias-channel"]).toHaveBeenCalledWith("conversation:demo-target", "hi");
-      },
-      expectedChannel: "demo-alias-channel",
-    },
-    {
-      name: "normalizes direct local aliases",
-      registry: createTestRegistry([
-        {
-          pluginId: "localchat",
-          source: "test",
-          plugin: createLocalChatAliasPlugin(),
-        },
-      ]),
-      params: {
-        to: "someone@example.com",
-        channel: "localmsg",
-        deps: {
-          localchat: vi.fn(async () => ({ messageId: "local1" })),
-        },
-      },
-      assertDeps: (deps: { localchat?: ReturnType<typeof vi.fn> }) => {
-        expect(deps.localchat).toHaveBeenCalledTimes(1);
-        const [to, text, options] = deps.localchat?.mock.calls[0] ?? [];
-        expect(to).toBe("someone@example.com");
-        expect(text).toBe("hi");
-        expect(typeof options).toBe("object");
-      },
-      expectedChannel: "localchat",
-    },
-  ])("$name", async ({ registry, params, assertDeps, expectedChannel }) => {
-    setRegistry(registry);
-
-    const result = await sendMessage({
-      cfg: {},
-      content: "hi",
-      ...params,
-    });
-
-    assertDeps(params.deps);
-    expect(result.channel).toBe(expectedChannel);
-  });
+  expect(result.channel).toBe("localchat");
+  expect(seen.resolveCfg).toBe(resolvedCfg);
+  expect(seen.sendCfg).toBe(resolvedCfg);
+  expect(seen.to).toBe("+15551234567");
 });
 
 describe("sendMessage replyToId threading", () => {
   const setupThreadChatCapture = () => {
-    const capturedCtx: Record<string, unknown>[] = [];
-    const plugin = createThreadChatLikePlugin({
-      onSendText: (ctx) => {
-        capturedCtx.push(ctx);
+    const capturedCtx: Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0][] = [];
+    registerPlugin(
+      "threadchat",
+      {
+        deliveryMode: "direct",
+        sendText: async (ctx) => {
+          capturedCtx.push(ctx);
+          return { channel: "threadchat", messageId: "m1" };
+        },
       },
-    });
-    setRegistry(createTestRegistry([{ pluginId: "threadchat", source: "test", plugin }]));
+      [],
+      { label: "ThreadChat", capabilities: { chatTypes: ["direct", "channel"] } },
+    );
     return capturedCtx;
   };
 
   it.each([
-    {
-      name: "passes replyToId through to the outbound adapter",
-      params: { content: "thread reply", replyToId: "post123" },
-      field: "replyToId",
-      expected: "post123",
-    },
-    {
-      name: "passes threadId through to the outbound adapter",
-      params: { content: "topic reply", threadId: "topic456" },
-      field: "threadId",
-      expected: "topic456",
-    },
-  ])("$name", async ({ params, field, expected }) => {
+    ["replyToId", "post123", "thread reply"],
+    ["threadId", "topic456", "topic reply"],
+  ] as const)("passes %s through to the outbound adapter", async (field, expected, content) => {
     const capturedCtx = setupThreadChatCapture();
-
-    await sendMessage({
-      cfg: {},
-      to: "channel:town-square",
-      channel: "threadchat",
-      ...params,
-    });
+    await sendThreadMessage({ content, [field]: expected });
 
     expect(capturedCtx).toHaveLength(1);
     expect(capturedCtx[0]?.[field]).toBe(expected);
@@ -295,31 +209,141 @@ describe("sendMessage replyToId threading", () => {
 });
 
 function setDemoPollRegistry(outboundOptions: Parameters<typeof createDemoAliasOutbound>[0] = {}) {
-  setRegistry(
-    createTestRegistry([
-      {
-        pluginId: "demo-alias-channel",
-        source: "test",
-        plugin: createDemoAliasPlugin({
-          aliases: ["workspace-chat"],
-          outbound: createDemoAliasOutbound({ includePoll: true, ...outboundOptions }),
-        }),
-      },
-    ]),
+  registerPlugin(
+    "demo-alias-channel",
+    createDemoAliasOutbound(outboundOptions),
+    ["workspace-chat"],
+    {
+      label: "Demo Alias Channel",
+      config: { listAccountIds: () => [], resolveAccount: () => ({}) },
+    },
   );
 }
 
 describe("sendPoll channel normalization", () => {
+  it.each(["send", "poll"] as const)(
+    "keeps hosted %s delivery on its bound Gateway",
+    async (method) => {
+      setDemoPollRegistry({ deliveryMode: "gateway" });
+      const resolveAgentRuntimeIdentityToken = vi.fn();
+      const gateway: OutboundMessageGatewayOptionsInput = {
+        request: async () => {
+          throw new Error("unexpected unconfigured Gateway request");
+        },
+        resolveAgentRuntimeIdentityToken,
+      };
+      const request = vi.spyOn(gateway, "request").mockResolvedValue({ messageId: "owned-1" });
+      const common = {
+        cfg: {},
+        to: "conversation:demo-target",
+        channel: "workspace-chat",
+        idempotencyKey: "owned-delivery",
+        gateway,
+      };
+      const result =
+        method === "send"
+          ? await sendMessage({ ...common, content: "hello" })
+          : await sendPoll({ ...common, question: "Lunch?", options: ["Pizza", "Sushi"] });
+
+      expect(request).toHaveBeenCalledOnce();
+      expect(request).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method,
+          params: expect.objectContaining({
+            channel: "demo-alias-channel",
+            idempotencyKey: "owned-delivery",
+          }),
+        }),
+      );
+      expect(result.result).toMatchObject({ messageId: "owned-1" });
+      expect(callGatewayMock).not.toHaveBeenCalled();
+      expect(resolveAgentRuntimeIdentityToken).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reattaches a send whose Gateway request timed out after dispatch", async () => {
+    setDemoPollRegistry({ deliveryMode: "gateway" });
+    const gateway: OutboundMessageGatewayOptionsInput = {
+      request: async () => {
+        throw new Error("unexpected unconfigured Gateway request");
+      },
+    };
+    const request = vi
+      .spyOn(gateway, "request")
+      // The upload outlives the caller's timer, but the Gateway keeps sending.
+      .mockRejectedValueOnce(
+        new GatewayProtocolRequestTimeoutError({
+          method: "send",
+          timeoutMs: 30_000,
+          requestSent: true,
+        }),
+      )
+      .mockResolvedValueOnce({ messageId: "late-media" });
+
+    const result = await sendMessage({
+      cfg: {},
+      to: "conversation:demo-target",
+      channel: "workspace-chat",
+      content: "photo",
+      idempotencyKey: "slow-upload",
+      gateway,
+    });
+
+    expect(result.result).toMatchObject({ messageId: "late-media" });
+    expect(request).toHaveBeenCalledTimes(2);
+    for (const attempt of [1, 2]) {
+      expect(request).toHaveBeenNthCalledWith(
+        attempt,
+        expect.objectContaining({
+          method: "send",
+          params: expect.objectContaining({ idempotencyKey: "slow-upload" }),
+        }),
+      );
+    }
+  });
+
+  it.each([true, false])(
+    "reattaches a transport-timed-out send only when it was dispatched (%s)",
+    async (requestDispatched) => {
+      setDemoPollRegistry({ deliveryMode: "gateway" });
+      const timeout = new GatewayTransportError({
+        kind: "timeout",
+        message: "gateway timeout after 30000ms",
+        connectionDetails: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+          message: "",
+        },
+        requestDispatched,
+      });
+      callGatewayMock.mockRejectedValueOnce(timeout);
+      if (requestDispatched) {
+        callGatewayMock.mockResolvedValueOnce({ messageId: "late" });
+      }
+
+      const sending = sendMessage({
+        cfg: {},
+        to: "conversation:demo-target",
+        channel: "workspace-chat",
+        content: "photo",
+        idempotencyKey: "slow-upload",
+      });
+
+      // A send that never reached the Gateway cannot be joined; retrying would deliver anew.
+      if (requestDispatched) {
+        await expect(sending).resolves.toMatchObject({ result: { messageId: "late" } });
+      } else {
+        await expect(sending).rejects.toBe(timeout);
+      }
+      expect(callGatewayMock).toHaveBeenCalledTimes(requestDispatched ? 2 : 1);
+    },
+  );
+
   it("normalizes plugin aliases for gateway polls", async () => {
     callGatewayMock.mockResolvedValueOnce({ messageId: "p1", channelId: "channel-1" });
     setDemoPollRegistry({ deliveryMode: "gateway" });
 
-    const result = await sendPoll({
-      cfg: {},
-      to: "conversation:demo-target",
-      question: "Lunch?",
-      options: ["Pizza", "Sushi"],
-      channel: "Workspace-Chat",
+    const result = await sendDemoPoll({
       idempotencyKey: "stable-poll-key",
     });
 
@@ -338,12 +362,8 @@ describe("sendPoll channel normalization", () => {
     const sendPollMock = vi.fn(async () => ({ messageId: "p1", conversationId: "conv-1" }));
     setDemoPollRegistry({ supportsAnonymousPolls: true, sendPoll: sendPollMock });
 
-    const result = await sendPoll({
+    const result = await sendDemoPoll({
       cfg,
-      to: "conversation:demo-target",
-      question: "Lunch?",
-      options: ["Pizza", "Sushi"],
-      channel: "Workspace-Chat",
       accountId: "acct-1",
       threadId: "thread-1",
       silent: true,
@@ -376,50 +396,26 @@ describe("sendPoll channel normalization", () => {
   });
 
   it.each([
-    {
-      name: "durationSeconds",
-      params: { durationSeconds: 300 },
-      message: "durationSeconds is not supported for demo-alias-channel polls",
-    },
-    {
-      name: "isAnonymous",
-      params: { isAnonymous: false },
-      message: "isAnonymous is not supported for demo-alias-channel polls",
-    },
-  ])("rejects unsupported direct poll option $name", async ({ params, message }) => {
+    ["durationSeconds", { durationSeconds: 300 }],
+    ["isAnonymous", { isAnonymous: false }],
+  ] as const)("rejects unsupported direct poll option %s", async (name, params) => {
     const sendPollMock = vi.fn(async () => ({ messageId: "p1" }));
     setDemoPollRegistry({ sendPoll: sendPollMock });
 
-    await expect(
-      sendPoll({
-        cfg: {},
-        to: "conversation:demo-target",
-        question: "Lunch?",
-        options: ["Pizza", "Sushi"],
-        channel: "Workspace-Chat",
-        ...params,
-      }),
-    ).rejects.toThrow(message);
+    await expect(sendDemoPoll(params)).rejects.toThrow(
+      `${name} is not supported for demo-alias-channel polls`,
+    );
 
     expect(callGatewayMock).not.toHaveBeenCalled();
     expect(sendPollMock).not.toHaveBeenCalled();
   });
 });
 
-const setThreadChatGatewayRegistry = () => {
-  setRegistry(
-    createTestRegistry([
-      {
-        pluginId: "threadchat",
-        source: "test",
-        plugin: {
-          ...createThreadChatLikePlugin({ onSendText: () => {} }),
-          outbound: { deliveryMode: "gateway" },
-        },
-      },
-    ]),
-  );
-};
+const setThreadChatGatewayRegistry = () =>
+  registerPlugin("threadchat", { deliveryMode: "gateway" }, [], {
+    label: "ThreadChat",
+    capabilities: { chatTypes: ["direct", "channel"] },
+  });
 
 describe("gateway url override hardening", () => {
   const sendThreadChatGatewayMessage = async (
@@ -429,17 +425,30 @@ describe("gateway url override hardening", () => {
     callGatewayMock.mockResolvedValueOnce({
       messageId: params.agentId ? "m-agent" : "m1",
     });
-    await sendMessage({
-      cfg: {},
-      to: "channel:town-square",
-      content: "hi",
-      channel: "threadchat",
-      ...params,
-    });
+    await sendThreadMessage(params);
     return gatewayCall();
   };
 
   it.each([
+    {
+      name: "preserves the prepared local connection for a hosted Gateway send",
+      params: {
+        gateway: {
+          config: { gateway: { mode: "remote" as const, port: 18789 } },
+          localPortOverride: 18789,
+          ignoreEnvUrlOverride: true,
+          tlsFingerprint: "fixture-fingerprint",
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+        },
+      },
+      expected: {
+        config: { gateway: { mode: "remote", port: 18789 } },
+        localPortOverride: 18789,
+        ignoreEnvUrlOverride: true,
+        tlsFingerprint: "fixture-fingerprint",
+      },
+    },
     {
       name: "drops gateway url overrides in backend mode (SSRF hardening)",
       params: {
@@ -458,88 +467,44 @@ describe("gateway url override hardening", () => {
         timeoutMs: 5000,
       },
     },
+  ])("$name", async ({ params, expected }) => {
+    const result = await sendThreadChatGatewayMessage(params);
+    for (const [key, value] of Object.entries(expected)) {
+      expect((result as Record<string, unknown>)[key]).toEqual(value);
+    }
+  });
+
+  it.each([
+    { name: "agentId", params: { agentId: "work" } },
+    { name: "replyToId", params: { replyToId: "wamid.42" } },
     {
-      name: "forwards explicit agentId in gateway send params",
-      params: {
-        agentId: "work",
-      },
-      expected: {
-        params: {
-          agentId: "work",
-        },
-      },
-    },
-    {
-      name: "forwards replyToId in gateway send params",
-      params: {
-        replyToId: "wamid.42",
-      },
-      expected: {
-        params: {
-          replyToId: "wamid.42",
-        },
-      },
-    },
-    {
-      name: "forwards gateway delivery options in send params",
+      name: "delivery options",
       params: {
         threadId: "topic456",
         forceDocument: true,
         silent: true,
         parseMode: "HTML" as const,
       },
-      expected: {
-        params: {
-          threadId: "topic456",
-          forceDocument: true,
-          silent: true,
-          parseMode: "HTML",
-        },
-      },
     },
-    {
-      name: "preserves an explicit send idempotency key",
-      params: {
-        idempotencyKey: "stable-send-key",
-      },
-      expected: {
-        params: {
-          idempotencyKey: "stable-send-key",
-        },
-      },
-    },
-  ])("$name", async ({ params, expected }) => {
+    { name: "idempotency key", params: { idempotencyKey: "stable-send-key" } },
+  ])("forwards $name in gateway send params", async ({ params }) => {
     const result = await sendThreadChatGatewayMessage(params);
-    for (const [key, value] of Object.entries(expected)) {
-      if (value && typeof value === "object" && !Array.isArray(value)) {
-        for (const [nestedKey, nestedValue] of Object.entries(value)) {
-          expect(
-            ((result as Record<string, unknown>)[key] as Record<string, unknown>)[nestedKey],
-          ).toEqual(nestedValue);
-        }
-        continue;
-      }
-      expect((result as Record<string, unknown>)[key]).toEqual(value);
-    }
+    expect(result.params).toMatchObject(params);
   });
 
   it("forwards buffer metadata for gateway delivery-mode sends", async () => {
-    const buffer = Buffer.from("gateway delivery bytes").toString("base64");
+    const media = {
+      mediaUrl: "buffer://message-send/attachment",
+      mediaUrls: ["buffer://message-send/attachment"],
+      buffer: Buffer.from("gateway delivery bytes").toString("base64"),
+      filename: "delivery.txt",
+      contentType: "text/plain",
+    };
     const result = await sendThreadChatGatewayMessage({
-      mediaUrl: "buffer://message-send/attachment",
-      mediaUrls: ["buffer://message-send/attachment"],
-      buffer,
-      filename: "delivery.txt",
-      contentType: "text/plain",
+      ...media,
+      mediaUrls: [...media.mediaUrls],
     });
-
-    expect(result.params).toMatchObject({
-      mediaUrl: "buffer://message-send/attachment",
-      mediaUrls: ["buffer://message-send/attachment"],
-      buffer,
-      filename: "delivery.txt",
-      contentType: "text/plain",
-    });
+    expect(result.params).toMatchObject(media);
   });
 
   it("rejects revoked authority before a gateway send RPC", async () => {
@@ -549,11 +514,7 @@ describe("gateway url override hardening", () => {
     });
 
     await expect(
-      sendMessage({
-        cfg: {},
-        to: "channel:town-square",
-        content: "hi",
-        channel: "threadchat",
+      sendThreadMessage({
         onPlatformSendDispatch,
       }),
     ).rejects.toThrow("delivery authority revoked");
@@ -577,11 +538,8 @@ describe("gateway url override hardening", () => {
     });
 
     await expect(
-      sendMessage({
-        cfg: {},
-        to: "channel:town-square",
+      sendThreadMessage({
         content: "must not escape",
-        channel: "threadchat",
         gateway: {
           clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
           mode: GATEWAY_CLIENT_MODES.BACKEND,
@@ -616,64 +574,14 @@ describe("gateway url override hardening", () => {
 
 const emptyRegistry = createTestRegistry([]);
 
-const createDemoAliasPlugin = (params?: {
-  aliases?: string[];
-  outbound?: ChannelOutboundAdapter;
-}): ChannelPlugin => {
-  const base = createChannelTestPluginBase({
-    id: "demo-alias-channel",
-    label: "Demo Alias Channel",
-    docsPath: "/channels/demo-alias-channel",
-    config: { listAccountIds: () => [], resolveAccount: () => ({}) },
-  });
-  return {
-    ...base,
-    meta: {
-      ...base.meta,
-      ...(params?.aliases ? { aliases: params.aliases } : {}),
-    },
-    ...(params?.outbound ? { outbound: params.outbound } : {}),
-  };
-};
-
-const createLocalChatAliasPlugin = (): ChannelPlugin => ({
-  id: "localchat",
-  meta: {
-    id: "localchat",
-    label: "LocalChat",
-    selectionLabel: "LocalChat (localmsg)",
-    docsPath: "/channels/localchat",
-    blurb: "LocalChat test stub.",
-    aliases: ["localmsg"],
-  },
-  capabilities: { chatTypes: ["direct", "group"], media: true },
-  config: {
-    listAccountIds: () => [],
-    resolveAccount: () => ({}),
-  },
-  outbound: {
-    deliveryMode: "direct",
-    sendText: async ({ deps, to, text }) => {
-      const send = deps?.localchat as
-        | ((to: string, text: string, opts?: unknown) => Promise<{ messageId: string }>)
-        | undefined;
-      if (!send) {
-        throw new Error("localchat missing");
-      }
-      const result = await send(to, text, {});
-      return { channel: "localchat", ...result };
-    },
-  },
-});
-
-const createDemoAliasOutbound = (opts?: {
-  deliveryMode?: ChannelOutboundAdapter["deliveryMode"];
-  includePoll?: boolean;
-  supportsAnonymousPolls?: boolean;
-  supportsPollDurationSeconds?: boolean;
-  sendPoll?: NonNullable<ChannelOutboundAdapter["sendPoll"]>;
-}): ChannelOutboundAdapter => ({
-  deliveryMode: opts?.deliveryMode ?? "direct",
+const createDemoAliasOutbound = (
+  opts: {
+    deliveryMode?: ChannelOutboundAdapter["deliveryMode"];
+    supportsAnonymousPolls?: boolean;
+    sendPoll?: NonNullable<ChannelOutboundAdapter["sendPoll"]>;
+  } = {},
+): ChannelOutboundAdapter => ({
+  deliveryMode: opts.deliveryMode ?? "direct",
   sendText: async ({ deps, to, text }) => {
     const send = deps?.["demo-alias-channel"] as
       | ((to: string, text: string, opts?: unknown) => Promise<{ messageId: string }>)
@@ -684,48 +592,7 @@ const createDemoAliasOutbound = (opts?: {
     const result = await send(to, text);
     return { channel: "demo-alias-channel", ...result };
   },
-  sendMedia: async ({ deps, to, text, mediaUrl }) => {
-    const send = deps?.["demo-alias-channel"] as
-      | ((to: string, text: string, opts?: unknown) => Promise<{ messageId: string }>)
-      | undefined;
-    if (!send) {
-      throw new Error("demo-alias-channel missing");
-    }
-    const result = await send(to, text, { mediaUrl });
-    return { channel: "demo-alias-channel", ...result };
-  },
-  ...(opts?.includePoll
-    ? {
-        pollMaxOptions: 12,
-        ...(opts.supportsAnonymousPolls ? { supportsAnonymousPolls: true } : {}),
-        ...(opts.supportsPollDurationSeconds ? { supportsPollDurationSeconds: true } : {}),
-        sendPoll: opts.sendPoll ?? (async () => ({ messageId: "p1" })),
-      }
-    : {}),
-});
-
-const createThreadChatLikePlugin = (opts: {
-  onSendText: (ctx: Record<string, unknown>) => void;
-}): ChannelPlugin => ({
-  id: "threadchat",
-  meta: {
-    id: "threadchat",
-    label: "ThreadChat",
-    selectionLabel: "ThreadChat",
-    docsPath: "/channels/threadchat",
-    blurb: "ThreadChat test stub.",
-  },
-  capabilities: { chatTypes: ["direct", "channel"] },
-  config: {
-    listAccountIds: () => ["default"],
-    resolveAccount: () => ({}),
-  },
-  outbound: {
-    deliveryMode: "direct",
-    sendText: async (ctx) => {
-      opts.onSendText(ctx as unknown as Record<string, unknown>);
-      return { channel: "threadchat", messageId: "m1" };
-    },
-    sendMedia: async () => ({ channel: "threadchat", messageId: "m2" }),
-  },
+  pollMaxOptions: 12,
+  ...(opts.supportsAnonymousPolls ? { supportsAnonymousPolls: true } : {}),
+  sendPoll: opts.sendPoll ?? (async () => ({ messageId: "p1" })),
 });

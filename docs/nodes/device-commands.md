@@ -26,8 +26,6 @@ Notes:
 - The agent-facing path is [`show_widget`](/tools/show-widget) with
   `presentation.target: "node_panel"`; use the CLI helpers for direct operator
   control.
-- A2UI renders on [session dashboards](/web/dashboards), not through node
-  Canvas commands.
 
 ## Photos + videos (node camera)
 
@@ -67,6 +65,7 @@ Notes:
 
 - `screen.record` availability depends on node platform.
 - The `nodes` agent tool caps requested `durationMs` at 300000 (5 minutes); the node may enforce a tighter limit to bound the returned payload.
+- On macOS, recordings that would not fit the Gateway's 25 MiB result frame (about 18.75 MiB of MP4) fail with `UNAVAILABLE: screen.record payload too large; reduce durationMs or fps` and the node stays connected.
 - `--no-audio` disables microphone capture on supported platforms.
 - Use `--screen <index>` to select a display when multiple screens are available (0 = primary).
 
@@ -134,6 +133,10 @@ Available families:
 - `reminders.list` — iOS, Android (read-only default); `reminders.add` is dangerous and needs `gateway.nodes.commands.allow`.
 - `callLog.search` — Android only.
 - `motion.activity`, `motion.pedometer` — iOS, Android; capability-gated by available sensors.
+
+The `nodes` agent tool's `invoke` action accepts `invokeTimeoutMs` for the node
+invocation. Unless `timeoutMs` is explicitly set, Gateway transport receives that
+budget plus 30 seconds for forwarding and the response.
 
 Example invokes:
 

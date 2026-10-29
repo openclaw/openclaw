@@ -18,6 +18,7 @@ spec.loader.exec_module(client)
 
 # Independent constants from the verified installation and official SDK docs.
 VERIFIED_HASH = "759030a682c31ae71878ab71f1bf1560957ff89308c9de621d1b9bee4b9fcd80"
+VERIFIED_2702_HASH = "aa112c4e83bb63ae4fe88ef3fbc76aeba643cb7e1fcd3acdc12f00b4ac3d45b3"
 PRIVILEGED = b"531582ac-3dce-446f-8c26-dd7e3384dcf4"
 CURRENT_USER = b"4a5533a7-31c6-4d7a-a400-1f330dc57a9d"
 
@@ -29,10 +30,11 @@ class ExecReplaced(BaseException):
 class FakeSdk:
     """Enforce live-handle ownership at the external C API boundary."""
 
-    def __init__(self, exit_code=0, failure=None, stream=False):
+    def __init__(self, exit_code=0, failure=None, stream=False, lookup_outcomes=()):
         self.exit_code = exit_code
         self.failure = failure
         self.stream = stream
+        self.lookup_outcomes = lookup_outcomes
         self.now = 100.0
         self.handles = {}
         self.freed = []
@@ -50,10 +52,13 @@ class FakeSdk:
             self.functions[name] = function
         return self.functions[name]
 
-    def create(self, kind, operation=None):
+    def create(self, kind, operation=None, lookup_outcome=None):
         handle = self.next_handle
         self.next_handle += 1
-        self.handles[handle] = {"kind": kind, "operation": operation, "waited": False}
+        self.handles[handle] = {
+            "kind": kind, "operation": operation, "waited": False,
+            "lookup_outcome": lookup_outcome or {},
+        }
         return handle
 
     def live(self, handle, kind=None):
@@ -64,9 +69,12 @@ class FakeSdk:
             assert value["kind"] == kind, (value, kind)
         return value
 
-    def output(self, pointer, kind, operation=None):
-        pointer._obj.value = self.create(kind, operation)
+    def output(self, pointer, kind, operation=None, lookup_outcome=None):
+        pointer._obj.value = self.create(kind, operation, lookup_outcome)
         return 0
+
+    def lookup_code(self, handle, stage):
+        return self.live(handle)["lookup_outcome"].get(stage, 0)
 
     def completed(self, handle):
         job = self.live(handle, "job")
@@ -103,8 +111,10 @@ class FakeSdk:
             return self.create("job", "host-login")
         if name == "PrlSrv_GetVmConfig":
             self.live(args[0], "server")
-            assert args[2] == 0x1800, "must search UUID then name"
-            return self.create("job", "vm")
+            assert args[2] in (0x1800, 0x1000), "must search UUID/name or name only"
+            index = len(self.calls(name)) - 1
+            outcome = self.lookup_outcomes[index] if index < len(self.lookup_outcomes) else None
+            return self.create("job", "vm", outcome)
         if name == "PrlVm_TerminalConnect":
             self.live(args[0], "vm")
             return self.create("job", "terminal")
@@ -132,21 +142,27 @@ class FakeSdk:
             self.now += 0.25
             if self.failure == "wait-" + job["operation"]:
                 return 1
+            if code := self.lookup_code(args[0], "wait"):
+                return code
             job["waited"] = True
             return 0
         if name == "PrlJob_GetRetCode":
             operation = self.completed(args[0])
-            args[1]._obj.value = int(self.failure == operation)
-            return 0
+            args[1]._obj.value = self.lookup_code(args[0], "job") or int(self.failure == operation)
+            return self.lookup_code(args[0], "retcode")
         if name == "PrlJob_GetResult":
             operation = self.completed(args[0])
             if self.failure == "result-" + operation:
                 return 1
-            return self.output(args[1], "result", operation)
+            if code := self.lookup_code(args[0], "result"):
+                return code
+            return self.output(args[1], "result", operation, self.handles[args[0]]["lookup_outcome"])
         if name == "PrlResult_GetParam":
             result = self.live(args[0], "result")
             if self.failure == "param-" + result["operation"]:
                 return 1
+            if code := self.lookup_code(args[0], "param"):
+                return code
             return self.output(args[1], result["operation"])
         if name == "PrlJob_GetEvent":
             assert self.completed(args[0]) == "run"
@@ -217,16 +233,81 @@ class ParallelsExecTests(unittest.TestCase):
         self.assertEqual(names[-1], "PrlApi_Deinit")
 
     def test_root_current_user_and_name_uuid_lookup(self):
-        for vm in ["Synthetic VM", "{11111111-2222-3333-4444-555555555555}"]:
+        cases = [
+            ("Synthetic VM", "Synthetic VM"),
+            ("{11111111-2222-3333-4444-555555555555}", "{11111111-2222-3333-4444-555555555555}"),
+            ("12345678-abcd-1234-abcd-123456789abc", "{12345678-abcd-1234-abcd-123456789abc}"),
+            ("12345678-aBcD-1234-AbCd-123456789aBc", "{12345678-aBcD-1234-AbCd-123456789aBc}"),
+        ]
+        for vm, lookup in cases:
             for current in [False, True]:
                 with self.subTest(vm=vm, current=current):
                     fake = FakeSdk()
                     args = ["--", "exec", vm, *(["--current-user"] if current else []), "whoami"]
                     self.assertEqual(self.invoke(fake, args), (0, ""))
-                    self.assertEqual(fake.calls("PrlSrv_GetVmConfig")[0][1:], (vm.encode(), 0x1800))
+                    self.assertEqual([args[1:] for args in fake.calls("PrlSrv_GetVmConfig")], [(lookup.encode(), 0x1800)])
                     self.assertEqual(fake.calls("PrlVm_LoginInGuest")[0][1], CURRENT_USER if current else PRIVILEGED)
                     self.assertEqual(fake.calls("PrlVmGuest_RunProgram")[0][4], 0x2b808 if current else 0xb808)
                     fake.assert_released(self)
+
+    def test_uuid_shaped_vm_name_fallback_follows_confirmed_lookup_miss_once(self):
+        vm = "12345678-abcd-1234-abcd-123456789abc"
+        for second_result in [0, -105]:
+            with self.subTest(second_result=second_result):
+                fake = FakeSdk(lookup_outcomes=[{"job": -105}, {"job": second_result}])
+                code, error = self.invoke(fake, ["--", "exec", vm, "/bin/true"])
+                self.assertEqual(code, 0 if second_result == 0 else 125)
+                self.assertEqual([args[1:] for args in fake.calls("PrlSrv_GetVmConfig")], [
+                    (("{" + vm + "}").encode(), 0x1800),
+                    (vm.encode(), 0x1000),
+                ])
+                first_job = next(handle for handle, value in fake.handles.items() if value["operation"] == "vm")
+                confirmed = next(index for index, (name, args) in enumerate(fake.events)
+                                 if name == "PrlJob_GetRetCode" and args[0] == first_job)
+                lookups = [index for index, (name, _) in enumerate(fake.events) if name == "PrlSrv_GetVmConfig"]
+                self.assertLess(confirmed, lookups[1])
+                self.assertEqual(len(fake.calls("PrlVmGuest_RunProgram")), int(second_result == 0))
+                if second_result:
+                    self.assertIn("SDK error 0xffffff97", error)
+                else:
+                    self.assertEqual(error, "")
+                fake.assert_released(self)
+
+    def test_lookup_api_errors_and_other_job_errors_do_not_retry(self):
+        cases = [
+            {"wait": -105},
+            {"retcode": -105, "job": -105},
+            {"result": -105},
+            {"param": -105},
+            {"job": 1},
+        ]
+        for outcome in cases:
+            with self.subTest(outcome=outcome):
+                fake = FakeSdk(lookup_outcomes=[outcome])
+                code, error = self.invoke(fake, ["--", "exec", "12345678-abcd-1234-abcd-123456789abc", "/bin/true"])
+                self.assertEqual(code, 125)
+                self.assertIn("SDK error", error)
+                self.assertEqual(len(fake.calls("PrlSrv_GetVmConfig")), 1)
+                self.assertEqual(fake.calls("PrlVm_TerminalConnect"), [])
+                self.assertEqual(fake.calls("PrlVmGuest_RunProgram"), [])
+                fake.assert_released(self)
+
+    def test_names_braced_ids_and_nonexact_uuid_shapes_are_not_rewritten_or_retried(self):
+        for vm in [
+            "Synthetic VM",
+            "{12345678-abcd-1234-abcd-123456789abc}",
+            "12345678-abcd-1234-abcd-123456789abc\n",
+            "g2345678-abcd-1234-abcd-123456789abc",
+            "12345678abcd1234abcd123456789abc",
+        ]:
+            with self.subTest(vm=vm):
+                fake = FakeSdk(lookup_outcomes=[{"job": -105}])
+                code, error = self.invoke(fake, ["--", "exec", vm, "/bin/true"])
+                self.assertEqual(code, 125)
+                self.assertIn("SDK error 0xffffff97", error)
+                self.assertEqual([args[1:] for args in fake.calls("PrlSrv_GetVmConfig")], [(vm.encode(), 0x1800)])
+                self.assertEqual(fake.calls("PrlVmGuest_RunProgram"), [])
+                fake.assert_released(self)
 
     def test_preserves_prlctl_raw_shell_argument_semantics(self):
         cases = [
@@ -288,16 +369,17 @@ with fixture['boundaries'](fake, ['--', 'exec', 'Synthetic VM', '/bin/cat']):
                 self.assertEqual(fake.events, [])
 
     def test_selected_default_cli_or_wrapper_can_use_verified_sdk(self):
-        for executable in ["prlctl", "parallels_wrapper"]:
-            with self.subTest(executable=executable):
-                resolved = f"/Applications/Parallels Desktop.app/Contents/MacOS/{executable}"
-                fake = FakeSdk()
-                with boundaries(fake, ["--", "exec", "VM", "true"], resolved=resolved):
-                    self.assertEqual(client.main(), 0)
-                    client.shutil.which.assert_called_once_with("prlctl")
-                    Path.resolve.assert_called_once_with(strict=True)
-                    client.os.execvp.assert_not_called()
-                fake.assert_released(self)
+        for digest in [VERIFIED_HASH, VERIFIED_2702_HASH]:
+            for executable in ["prlctl", "parallels_wrapper"]:
+                with self.subTest(digest=digest, executable=executable):
+                    resolved = f"/Applications/Parallels Desktop.app/Contents/MacOS/{executable}"
+                    fake = FakeSdk()
+                    with boundaries(fake, ["--", "exec", "VM", "true"], digest=digest, resolved=resolved):
+                        self.assertEqual(client.main(), 0)
+                        client.shutil.which.assert_called_once_with("prlctl")
+                        Path.resolve.assert_called_once_with(strict=True)
+                        client.os.execvp.assert_not_called()
+                    fake.assert_released(self)
 
     def test_missing_cli_uses_prlctl_before_sdk(self):
         fake = FakeSdk()

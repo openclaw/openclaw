@@ -1,46 +1,106 @@
-/** Clears reset-related queues and system events for session keys. */
+import { clearPreparedEmbeddedAgentSettings } from "../../agents/agent-project-settings.js";
+import { clearPromptCacheObservations } from "../../agents/embedded-agent-runner/prompt-cache-observability.js";
 import { clearEmbeddedSessionPromptStates } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { killSessionSubagentRuns } from "../../agents/subagents/registry/subagent-control-kill.js";
-import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { retainPreparedSessionGenerationFacts } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { projectSessionSharingEntry } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import { withSessionEntriesFromStoreInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { selectAgentSystemEvents } from "../../infra/system-event-ownership.js";
+import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
   peekSystemEventEntries,
 } from "../../infra/system-events.js";
-import { clearSessionQueues, type ClearSessionQueueResult } from "./queue/cleanup.js";
-import { clearReplyRunForResetBySessionId } from "./reply-run-registry.js";
+import {
+  agentSessionKeysMatchByRequestKey,
+  normalizeAgentId,
+  normalizeOptionalAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
+import {
+  getSessionControllerOperation,
+  stopReplyOperationForRestart,
+} from "../../sessions/session-controller.js";
+import {
+  captureSessionTarget,
+  type SessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
+import { isReplyOperationPreBackendPhase } from "../../sessions/session-controller.state.js";
+import { clearSessionQueues } from "./queue/cleanup.js";
 
 export class SessionResetCleanupError extends Error {}
 
-/** Bind runtime cleanup to the parent incarnation accepted before asynchronous work. */
-export function createSessionResetCleanupGuard(params: {
+/** Prepare parent facts once; cleanup observes the entry writer's in-process receipts. */
+export async function prepareSessionResetCleanupGuard(params: {
+  agentId: string;
   storePath: string;
   sessionKey: string;
   expectedSession: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined;
   assertCurrent?: () => void;
-}): () => void {
-  const sessionId = params.expectedSession?.sessionId;
-  const lifecycleRevision = params.expectedSession?.lifecycleRevision;
-  return () => {
+}): Promise<{ assertCurrent: () => void; release: () => void }> {
+  const memory = captureSessionEntryMetadataRead(params, () => {});
+  const assertEntry = (
+    current: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | null | undefined,
+  ) => {
     params.assertCurrent?.();
-    const current = loadExactSessionEntryReadOnly({
-      storePath: params.storePath,
-      sessionKey: params.sessionKey,
-      clone: false,
-    })?.entry;
-    if (current?.sessionId !== sessionId || current?.lifecycleRevision !== lifecycleRevision) {
+    if (
+      current?.sessionId !== params.expectedSession?.sessionId ||
+      current?.lifecycleRevision !== params.expectedSession?.lifecycleRevision
+    ) {
       throw new SessionResetCleanupError(
         "Reset did not complete because the session changed before cleanup. Retry /reset.",
       );
     }
   };
+  if (memory) {
+    return {
+      assertCurrent: () => assertEntry(memory.readCurrent()),
+      release() {},
+    };
+  }
+  return withSessionEntriesFromStoreInWorker(
+    {
+      agentId: params.agentId,
+      storePath: params.storePath,
+      sessionKeys: [params.sessionKey],
+      snapshotFields: [],
+    },
+    async ({ result }) => {
+      const entry = result.entries.find((row) => row.sessionKey === params.sessionKey)?.entry;
+      assertEntry(entry);
+      const identity = result.databaseIdentity?.identity;
+      if (!identity) {
+        return { assertCurrent: () => params.assertCurrent?.(), release() {} };
+      }
+      const retained = retainPreparedSessionGenerationFacts({
+        databaseIdentity: `file:${identity}`,
+        sessionKey: params.sessionKey,
+        entry: entry ? projectSessionSharingEntry(entry) : undefined,
+      });
+      return {
+        assertCurrent: () => {
+          const current = retained.readCurrent();
+          if (current === undefined) {
+            throw new SessionResetCleanupError(
+              "Reset did not complete because the session changed before cleanup. Retry /reset.",
+            );
+          }
+          assertEntry(current);
+        },
+        release: retained.release,
+      };
+    },
+  );
 }
 
 /** Reset must report unfinished child cleanup before committing a fresh conversation. */
 export async function stopSessionResetSubagents(
-  params: Parameters<typeof killSessionSubagentRuns>[0] & { assertCurrent: () => void },
-): Promise<void> {
+  params: Parameters<typeof killSessionSubagentRuns>[0] & {
+    assertCurrent: () => void;
+    beforeKill?: () => boolean | Promise<boolean>;
+  },
+): Promise<{ stopped: number; failed: number }> {
   try {
     // Hooks and child finalizers can yield after reset accepted its parent. Fence
     // that incarnation before selection and at every child cancellation boundary.
@@ -50,6 +110,7 @@ export async function stopSessionResetSubagents(
     if (result.status === "error") {
       throw new Error(result.error);
     }
+    return { stopped: result.killed, failed: 0 };
   } catch (cause) {
     if (cause instanceof SessionResetCleanupError) {
       throw cause;
@@ -61,36 +122,82 @@ export async function stopSessionResetSubagents(
   }
 }
 
-/** Runtime cleanup result for reset-related queues and system events. */
-type ClearSessionResetRuntimeStateResult = ClearSessionQueueResult & {
-  systemEventsCleared: number;
-};
+export function clearCommittedSessionResetRuntimeState(params: {
+  previousSessionEntry: Pick<SessionEntry, "sessionId"> | undefined;
+  storePath: string;
+  agentId: string;
+  sessionKey: string;
+  signal?: AbortSignal;
+  onError: (error: unknown) => void;
+}): void {
+  if (!params.previousSessionEntry) {
+    return;
+  }
+  try {
+    clearSessionResetRuntimeState([params.sessionKey, params.previousSessionEntry.sessionId], {
+      activeReplySessionId: params.previousSessionEntry.sessionId,
+      controllerTarget: captureSessionTarget({
+        storeScope: params.storePath,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        incarnation: params.previousSessionEntry.sessionId,
+      }),
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      assertCurrent: () => params.signal?.throwIfAborted(),
+    });
+  } catch (error) {
+    params.onError(error);
+  }
+}
 
 /** Clears queued follow-ups and pending system events visible to the resetting agent. */
 export function clearSessionResetRuntimeState(
   keys: Array<string | undefined>,
-  opts: { agentId: string; activeReplySessionId?: string },
-): ClearSessionResetRuntimeStateResult {
-  clearEmbeddedSessionPromptStates(keys);
-  const cleared = clearSessionQueues(keys);
-  let systemEventsCleared = 0;
-
-  for (const key of cleared.keys) {
-    // Global session rows may share one transient queue across agents. An
-    // agent-scoped reset must not discard another agent's pending work.
-    const removed = consumeSelectedSystemEventEntries(
-      key,
-      selectAgentSystemEvents(peekSystemEventEntries(key), opts.agentId),
-    );
-    systemEventsCleared += removed.length;
+  opts: {
+    agentId: string;
+    controllerTarget?: SessionTarget;
+    sessionKey: string;
+    activeReplySessionId?: string;
+    assertCurrent: () => void;
+  },
+): void {
+  opts.assertCurrent();
+  clearEmbeddedSessionPromptStates([opts.activeReplySessionId]);
+  clearPreparedEmbeddedAgentSettings([opts.activeReplySessionId]);
+  if (opts.activeReplySessionId) {
+    clearPromptCacheObservations(opts.activeReplySessionId);
+  }
+  const cleared = clearSessionQueues(keys, opts.controllerTarget, undefined, opts.assertCurrent);
+  for (const key of cleared) {
+    opts.assertCurrent();
+    const owner = parseAgentSessionKey(key)?.agentId;
+    if (owner && owner !== normalizeAgentId(opts.agentId)) {
+      continue;
+    }
+    const queueKey = resolveSystemEventQueueKey(key, opts.agentId);
+    consumeSelectedSystemEventEntries(queueKey, peekSystemEventEntries(queueKey));
   }
 
   if (opts.activeReplySessionId) {
-    clearReplyRunForResetBySessionId(opts.activeReplySessionId);
+    opts.assertCurrent();
+    const operation = getSessionControllerOperation(opts.sessionKey, opts.controllerTarget);
+    const ownerAgentId =
+      normalizeOptionalAgentId(operation?.agentId) ?? parseAgentSessionKey(operation?.key)?.agentId;
+    if (
+      operation &&
+      ownerAgentId === normalizeAgentId(opts.agentId) &&
+      operation.sessionId === opts.activeReplySessionId &&
+      cleared.some(
+        (key) =>
+          key !== opts.activeReplySessionId &&
+          agentSessionKeysMatchByRequestKey(operation.key, key),
+      )
+    ) {
+      if (!isReplyOperationPreBackendPhase(operation.phase)) {
+        opts.assertCurrent();
+        stopReplyOperationForRestart(operation);
+      }
+    }
   }
-
-  return {
-    ...cleared,
-    systemEventsCleared,
-  };
 }

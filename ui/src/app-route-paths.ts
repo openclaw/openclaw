@@ -10,15 +10,22 @@ import {
 } from "@openclaw/uirouter";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
+import {
+  pluginCatalogIdFromRouteSuffix,
+  pluginCatalogRouteSuffix,
+} from "../../packages/plugin-package-contract/src/catalog-route.ts";
 import { DEFAULT_AGENT_PANEL, isAgentsPanel, type AgentsPanel } from "./lib/agents/panels.ts";
 import type { BoardFace } from "./lib/board/settings.ts";
 import { takeGraphemes } from "./lib/graphemes.ts";
 
 export const INTERNAL_AGENT_PATH_PARAM = "__openclawAgentPath";
 export const INTERNAL_ACTIVITY_PATH_PARAM = "__openclawActivityPath";
+export const INTERNAL_TERMINAL_PATH_PARAM = "__openclawTerminalPath";
 export const INTERNAL_SESSION_PATH_PARAM = "__openclawSessionPath";
 export const INTERNAL_MEMORY_PATH_PARAM = "__openclawMemoryPath";
 export const INTERNAL_PLUGINS_PATH_PARAM = "__openclawPluginsPath";
+export const INTERNAL_PLUGIN_SETTINGS_PATH_PARAM = "__openclawPluginSettingsPath";
+export const INTERNAL_TEMPLATES_PATH_PARAM = "__openclawTemplatesPath";
 export const INTERNAL_WORKBOARD_PATH_PARAM = "__openclawWorkboardPath";
 export const CONTROL_UI_DOCUMENT_ROUTE_PATHS = {
   approval: "/approve",
@@ -26,7 +33,6 @@ export const CONTROL_UI_DOCUMENT_ROUTE_PATHS = {
 } as const;
 
 export type MemoryRouteTab = "overview" | "memories" | "dreams" | "settings";
-export type PluginsHubRouteTab = "installed" | "discover";
 
 type AgentRoutePath = {
   agentId: string;
@@ -38,6 +44,7 @@ type AgentRoutePath = {
 const APP_ROUTE_DEFINITIONS = {
   settings: { path: "/settings" },
   chat: { path: "/chat" },
+  terminal: { path: "/terminal" },
   dashboard: { path: "/dashboard" },
   dashboards: { path: "/dashboards" },
   custodian: { path: "/custodian" },
@@ -46,7 +53,8 @@ const APP_ROUTE_DEFINITIONS = {
   meetings: { path: "/meetings" },
   apps: { path: "/apps" },
   portals: { path: "/portals" },
-  agents: { path: "/settings/agents", aliases: ["/agents"] },
+  templates: { path: "/templates" },
+  agents: { path: "/settings/agents" },
   channels: { path: "/settings/channels", aliases: ["/channels"] },
   connection: { path: "/settings/connection" },
   config: { path: "/settings/general", aliases: ["/config"] },
@@ -64,6 +72,7 @@ const APP_ROUTE_DEFINITIONS = {
   automation: { path: "/settings/automation", aliases: ["/automation"] },
   mcp: { path: "/settings/mcp", aliases: ["/mcp"] },
   memory: { path: "/settings/memory" },
+  search: { path: "/settings/search" },
   talk: { path: "/settings/talk" },
   infrastructure: { path: "/settings/infrastructure", aliases: ["/infrastructure"] },
   labs: { path: "/settings/labs" },
@@ -78,16 +87,18 @@ const APP_ROUTE_DEFINITIONS = {
   workboard: { path: "/workboard" },
   worktrees: { path: "/worktrees", aliases: ["/settings/worktrees"] },
   sessions: { path: "/sessions", aliases: ["/settings/sessions"] },
+  systems: { path: "/systems" },
   usage: { path: "/usage" },
   debug: { path: "/debug" },
   logs: { path: "/logs" },
   "skill-workshop": { path: "/skills/workshop" },
   skills: { path: "/skills" },
-  plugins: { path: "/settings/plugins" },
+  "skill-settings": { path: "/settings/skills" },
+  plugins: { path: "/plugins" },
+  "plugin-settings": { path: "/settings/plugins" },
   // Automations is the product name; /cron stays as a legacy alias for
   // pre-rename bookmarks and deep links.
   cron: { path: "/automations", aliases: ["/cron"] },
-  tasks: { path: "/tasks" },
   devices: { path: "/settings/devices", aliases: ["/nodes"] },
   "cloud-workers": { path: "/settings/cloud-workers" },
   plugin: { path: "/plugin" },
@@ -96,7 +107,7 @@ const APP_ROUTE_DEFINITIONS = {
 export type RouteId = keyof typeof APP_ROUTE_DEFINITIONS;
 // SAFETY: Object.keys returns only the own keys of this closed route catalog.
 export const APP_ROUTE_IDS = Object.keys(APP_ROUTE_DEFINITIONS) as RouteId[];
-const APP_ROUTE_PATHS: string[] = [];
+export const APP_ROUTE_PATHS: string[] = [];
 const ROUTE_ID_BY_PATH = new Map<string, RouteId>();
 // Static paths and aliases share one prepared index; earlier declarations keep priority.
 for (const routeId of APP_ROUTE_IDS) {
@@ -253,21 +264,14 @@ export function activityPersonLocation(
 
 export function activityPersonFromPath(pathname: string, basePath = ""): string | null {
   const reference = routePathSuffix(pathname, "activity", basePath);
-  if (!reference || reference.includes("/")) {
+  const personId = decodeRouteSegment(reference);
+  if (!personId?.trim() || personId === "." || personId === "..") {
     return null;
   }
-  try {
-    const personId = decodeURIComponent(reference);
-    if (!personId.trim() || personId === "." || personId === "..") {
-      return null;
-    }
-    // A full UUID is an exact identifier; its final group is not a short prefix.
-    return isProfileUuid(personId)
-      ? personId
-      : (reference.match(ACTIVITY_PERSON_SHORT_REF_RE)?.[1] ?? personId);
-  } catch {
-    return null;
-  }
+  // A full UUID is an exact identifier; its final group is not a short prefix.
+  return isProfileUuid(personId)
+    ? personId
+    : (reference?.match(ACTIVITY_PERSON_SHORT_REF_RE)?.[1] ?? personId);
 }
 
 export function pathForWorkboardBoard(boardId: string, basePath = ""): string {
@@ -300,12 +304,7 @@ export function agentRouteFromPath(pathname: string, basePath = ""): AgentRouteP
   if (segments.length > 2 || !segments[0]) {
     return null;
   }
-  let agentId: string;
-  try {
-    agentId = decodeURIComponent(segments[0]);
-  } catch {
-    return null;
-  }
+  const agentId = decodeRouteSegment(segments[0]);
   if (!agentId || agentId.includes("/") || agentId === "." || agentId === "..") {
     return null;
   }
@@ -332,14 +331,65 @@ export function memoryTabFromPath(pathname: string, basePath = ""): MemoryRouteT
   return segment === "memories" || segment === "dreams" || segment === "settings" ? segment : null;
 }
 
-export function pathForPluginsHubTab(tab: PluginsHubRouteTab, basePath = ""): string {
-  const pluginsPath = pathForRoute("plugins", basePath);
-  return tab === "installed" ? pluginsPath : `${pluginsPath}/discover`;
+function isLegacyPluginsDiscoveryPath(pathname: string, basePath = ""): boolean {
+  const normalizedPath = normalizePath(pathname);
+  return normalizedPath === `${pathForRoute("plugin-settings", basePath)}/discover`;
 }
 
-export function pluginsHubTabFromPath(pathname: string, basePath = ""): PluginsHubRouteTab | null {
-  const segment = routePathSuffix(pathname, "plugins", basePath);
-  return segment === "" ? "installed" : segment === "discover" ? "discover" : null;
+function isPluginCatalogId(id: string): boolean {
+  return /^[A-Za-z0-9_-]+$/u.test(id);
+}
+
+export function pathForPluginCatalogEntry(id: string, basePath = ""): string {
+  if (!isPluginCatalogId(id)) {
+    throw new Error("Invalid plugin catalog id for a route path.");
+  }
+  return `${pathForRoute("plugins", basePath)}/${pluginCatalogRouteSuffix(id)}`;
+}
+
+export function pluginCatalogIdFromPath(pathname: string, basePath = ""): string | null {
+  const id = routePathSuffix(pathname, "plugins", basePath);
+  return id ? pluginCatalogIdFromRouteSuffix(id) : null;
+}
+
+export function pathForTemplateCatalogEntry(packageName: string, basePath = ""): string {
+  if (!isClawCatalogPackageName(packageName)) {
+    throw new Error("Invalid Template package name for a route path.");
+  }
+  return `${pathForRoute("templates", basePath)}/packages/${encodeURIComponent(packageName)}`;
+}
+
+function isClawCatalogPackageName(value: string): boolean {
+  return /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(value);
+}
+
+export function templateCatalogPackageNameFromPath(pathname: string, basePath = ""): string | null {
+  const slug = routePathSuffix(pathname, "templates", basePath);
+  if (slug?.startsWith("packages/")) {
+    const packageName = decodeRouteSegment(slug.slice("packages/".length));
+    return packageName && isClawCatalogPackageName(packageName) ? packageName : null;
+  }
+  // Preserve the original official-only detail links.
+  return slug && /^[a-z0-9][a-z0-9._-]*$/u.test(slug) ? `@openclaw/${slug}` : null;
+}
+
+export function pathForPluginSettings(pluginId: string, basePath = ""): string {
+  if (!pluginId || pluginId === "." || pluginId === "..") {
+    throw new Error("Invalid plugin id for a route path.");
+  }
+  const encodedPluginId =
+    pluginId === "discover" ? "%64iscover" : encodeURIComponent(pluginId).replaceAll(".", "%2E");
+  return `${pathForRoute("plugin-settings", basePath)}/${encodedPluginId}`;
+}
+
+export function pluginSettingsIdFromPath(pathname: string, basePath = ""): string | null {
+  const encodedPluginId = routePathSuffix(pathname, "plugin-settings", basePath);
+  // This exact retired discovery route belongs to the Plugins workspace.
+  if (encodedPluginId === "discover") {
+    return null;
+  }
+  const pluginId = decodeRouteSegment(encodedPluginId);
+  return pluginId && pluginId !== "." && pluginId !== ".." ? pluginId : null;
 }
 
 export function isSessionRouteId(routeId: string | null | undefined): routeId is BoardFace {
@@ -371,39 +421,88 @@ export function sessionRouteNamespaceFromPath(pathname: string, basePath = ""): 
   return catalogShare ? "chat" : null;
 }
 
-export function workboardBoardIdFromPath(pathname: string, basePath = ""): string | null {
-  const encodedBoardId = routePathSuffix(pathname, "workboard", basePath);
-  if (!encodedBoardId || encodedBoardId.includes("/")) {
+export function pathForTerminalSession(sessionId: string, basePath = ""): string {
+  return `${pathForRoute("terminal", basePath)}/${encodeURIComponent(sessionId)}`;
+}
+
+function decodeRouteSegment(encoded: string | null): string | null {
+  if (!encoded || encoded.includes("/")) {
     return null;
   }
   try {
-    const boardId = decodeURIComponent(encodedBoardId);
-    return isValidWorkboardBoardId(boardId) ? boardId : null;
+    return decodeURIComponent(encoded);
   } catch {
     return null;
   }
 }
 
-function dynamicRouteIdFromPath(pathname: string, basePath = ""): RouteId | null {
-  if (pluginTabSlugFromPath(pathname, basePath)) {
-    return "plugin";
+export function terminalSessionIdFromPath(pathname: string, basePath = ""): string | null {
+  return decodeRouteSegment(routePathSuffix(pathname, "terminal", basePath))?.trim() || null;
+}
+
+export function workboardBoardIdFromPath(pathname: string, basePath = ""): string | null {
+  const boardId = decodeRouteSegment(routePathSuffix(pathname, "workboard", basePath));
+  return isValidWorkboardBoardId(boardId) ? boardId : null;
+}
+
+const DYNAMIC_ROUTE_PATH_PARAMS = {
+  terminal: INTERNAL_TERMINAL_PATH_PARAM,
+  plugin: INTERNAL_PLUGIN_PATH_PARAM,
+  agents: INTERNAL_AGENT_PATH_PARAM,
+  activity: INTERNAL_ACTIVITY_PATH_PARAM,
+  workboard: INTERNAL_WORKBOARD_PATH_PARAM,
+  memory: INTERNAL_MEMORY_PATH_PARAM,
+  plugins: INTERNAL_PLUGINS_PATH_PARAM,
+  templates: INTERNAL_TEMPLATES_PATH_PARAM,
+  "plugin-settings": INTERNAL_PLUGIN_SETTINGS_PATH_PARAM,
+  chat: INTERNAL_SESSION_PATH_PARAM,
+  dashboard: INTERNAL_SESSION_PATH_PARAM,
+} as const;
+
+// These namespaces belong to app documents. /plugins and /plugin also own Gateway
+// HTTP routes (plugin tabs use /<slug> or /plugin?…), so offline admission there
+// stays limited to the exact roots.
+const GATEWAY_SHARED_ROUTE_IDS: ReadonlySet<RouteId> = new Set(["plugins", "plugin"]);
+export const APP_ROUTE_OFFLINE_PREFIXES = APP_ROUTE_IDS.filter(
+  (routeId) =>
+    !GATEWAY_SHARED_ROUTE_IDS.has(routeId) && Object.hasOwn(DYNAMIC_ROUTE_PATH_PARAMS, routeId),
+).map((routeId) => `${pathForRoute(routeId)}/`);
+
+const DYNAMIC_ROUTE_MATCHERS = [
+  ["terminal", terminalSessionIdFromPath],
+  ["plugin", pluginTabSlugFromPath],
+  ["agents", agentRouteFromPath],
+  ["activity", activityPersonFromPath],
+  ["workboard", workboardBoardIdFromPath],
+  ["memory", memoryTabFromPath],
+  ["plugins", pluginCatalogIdFromPath],
+  ["plugins", isLegacyPluginsDiscoveryPath],
+  ["plugin-settings", pluginSettingsIdFromPath],
+] as const;
+
+function dynamicRouteIdFromPath(
+  pathname: string,
+  basePath = "",
+): keyof typeof DYNAMIC_ROUTE_PATH_PARAMS | null {
+  if (templateCatalogPackageNameFromPath(pathname, basePath)) {
+    return "templates";
   }
-  if (agentRouteFromPath(pathname, basePath)) {
-    return "agents";
-  }
-  if (activityPersonFromPath(pathname, basePath)) {
-    return "activity";
-  }
-  if (workboardBoardIdFromPath(pathname, basePath)) {
-    return "workboard";
-  }
-  if (memoryTabFromPath(pathname, basePath)) {
-    return "memory";
-  }
-  if (pluginsHubTabFromPath(pathname, basePath)) {
-    return "plugins";
-  }
-  return sessionRouteNamespaceFromPath(pathname, basePath);
+  return (
+    DYNAMIC_ROUTE_MATCHERS.find(([, matches]) => matches(pathname, basePath))?.[0] ??
+    sessionRouteNamespaceFromPath(pathname, basePath)
+  );
+}
+
+export function dynamicRouteFromPath(pathname: string, basePath: string) {
+  const routeId = pluginCatalogIdFromPath(pathname, basePath)
+    ? "plugins"
+    : templateCatalogPackageNameFromPath(pathname, basePath)
+      ? "templates"
+      : dynamicRouteIdFromPath(pathname, basePath);
+  // The overview is a static route; only its subpages need the pathname bridge.
+  return routeId && !(routeId === "memory" && memoryTabFromPath(pathname, basePath) === "overview")
+    ? ([routeId, DYNAMIC_ROUTE_PATH_PARAMS[routeId], pathname] as const)
+    : null;
 }
 
 export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null {
@@ -419,6 +518,12 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
   const routePath = normalizedBasePath
     ? normalizedPath.slice(normalizedBasePath.length) || "/"
     : normalizedPath;
+  if (pluginCatalogIdFromPath(normalizedPath, normalizedBasePath)) {
+    return "plugins";
+  }
+  if (templateCatalogPackageNameFromPath(normalizedPath, normalizedBasePath)) {
+    return "templates";
+  }
   // uirouter matches static paths case-insensitively (pathKey lowercases), so
   // this pre-gate must too — otherwise /Usage is rewritten to /chat before the
   // router, which would have matched it, ever starts.
@@ -440,14 +545,8 @@ function isRouteOwnedBasePath(basePath: string): boolean {
   if (APP_ROUTE_PATHS.includes(basePath)) {
     return true;
   }
-  const segments = basePath.split("/").filter(Boolean);
-  for (let count = 1; count <= segments.length; count += 1) {
-    const ancestor = `/${segments.slice(0, count).join("/")}`;
-    if (APP_ROUTE_PATHS.some((path) => path.startsWith(`${ancestor}/`))) {
-      return true;
-    }
-  }
-  return false;
+  const namespace = basePath.split("/").find(Boolean);
+  return APP_ROUTE_PATHS.some((path) => path.startsWith(`/${namespace}/`));
 }
 
 export function inferBasePathFromPathname(pathname: string): string {
@@ -515,4 +614,15 @@ export function restoreBridgedRouteLocation(
     search: search ? `?${search}` : "",
     hash: location.hash,
   };
+}
+
+export function sameRouteLocation(
+  left: RouteLocation | undefined,
+  right: RouteLocation | undefined,
+): boolean {
+  return (
+    left?.pathname === right?.pathname &&
+    left?.search === right?.search &&
+    left?.hash === right?.hash
+  );
 }

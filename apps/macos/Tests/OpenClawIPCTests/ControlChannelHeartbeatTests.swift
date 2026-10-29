@@ -11,7 +11,7 @@ extension GatewayConnectionControlTests {
         try await self.withHeartbeatFixture { fixture in
             let initial = try await fixture.start()
             fixture.push(initial, timestamp: 2000)
-            try await fixture.waitUntil { fixture.control.lastHeartbeatEvent?.ts == 2000 }
+            try await TestWait.state("pushed heartbeat") { fixture.control.lastHeartbeatEvent?.ts == 2000 }
 
             fixture.reply(initial, timestamp: 1000)
             _ = try await fixture.gateway.request(method: "health", params: nil, retryTransportFailures: false)
@@ -32,7 +32,7 @@ extension GatewayConnectionControlTests {
         try await self.withHeartbeatFixture { fixture in
             let first = try await fixture.start()
             fixture.reply(first, timestamp: 1000)
-            try await fixture.waitUntil { fixture.control.lastHeartbeatEvent?.ts == 1000 }
+            try await TestWait.state("initial heartbeat") { fixture.control.lastHeartbeatEvent?.ts == 1000 }
 
             fixture.revision.setValue(2)
             #expect(fixture.control.lastHeartbeatEvent == nil)
@@ -44,7 +44,7 @@ extension GatewayConnectionControlTests {
                 let timestamp: Int? = replacement == "existing" ? 3000 : nil
                 fixture.reply(second, timestamp: timestamp)
                 if timestamp != nil {
-                    try await fixture.waitUntil { fixture.control.lastHeartbeatEvent?.ts == 3000 }
+                    try await TestWait.state("replacement heartbeat") { fixture.control.lastHeartbeatEvent?.ts == 3000 }
                 }
                 _ = try await fixture.gateway.request(method: "health", params: nil, retryTransportFailures: false)
                 #expect(fixture.control.lastHeartbeatEvent?.ts == timestamp.map(Double.init))
@@ -60,16 +60,18 @@ extension GatewayConnectionControlTests {
         try await self.withHeartbeatFixture { fixture in
             let first = try await fixture.start()
             fixture.reply(first, timestamp: 1000)
-            try await fixture.waitUntil { fixture.control.lastHeartbeatEvent?.ts == 1000 }
+            try await TestWait.state("initial heartbeat") { fixture.control.lastHeartbeatEvent?.ts == 1000 }
             let lease = try #require(await fixture.gateway.captureServerLease())
             first.socket.emitReceiveFailure()
-            try await fixture.waitUntil { !fixture.gateway.serverLeaseMatchesCurrentState(lease) }
+            try await TestWait.state("retired heartbeat server lease") {
+                !fixture.gateway.serverLeaseMatchesCurrentState(lease)
+            }
             #expect(fixture.control.lastHeartbeatEvent?.ts == 1000)
 
             let second = try await fixture.waitForRead(index: 1)
             #expect(fixture.control.lastHeartbeatEvent?.ts == 1000)
             fixture.reply(second, timestamp: nil)
-            try await fixture.waitUntil { fixture.control.lastHeartbeatEvent == nil }
+            try await TestWait.state("empty heartbeat") { fixture.control.lastHeartbeatEvent == nil }
             #expect(fixture.reads.value.count == 2)
         }
     }
@@ -85,7 +87,7 @@ extension GatewayConnectionControlTests {
             let second = try await fixture.waitForRead(index: 1)
             fixture.reply(first, timestamp: 1000)
             fixture.reply(second, timestamp: 3000)
-            try await fixture.waitUntil { fixture.control.lastHeartbeatEvent?.ts == 3000 }
+            try await TestWait.state("replacement heartbeat") { fixture.control.lastHeartbeatEvent?.ts == 3000 }
             #expect(fixture.reads.value.count == 2)
         }
     }
@@ -114,6 +116,7 @@ private final class HeartbeatGatewayFixture {
 
     let revision = LockIsolated<UInt64>(1)
     let reads = LockIsolated<[Read]>([])
+    private let readRecorded = AsyncTestSignal()
     let gateway: GatewayConnection
     let control: ControlChannel
     private let previousMode = AppStateStore.shared.connectionMode
@@ -124,6 +127,7 @@ private final class HeartbeatGatewayFixture {
         AppStateStore.shared.connectionMode = .unconfigured
         let revision = self.revision
         let reads = self.reads
+        let readRecorded = self.readRecorded
         let session = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
                 guard sendIndex > 0,
@@ -133,6 +137,7 @@ private final class HeartbeatGatewayFixture {
                 else { return }
                 if frame["method"] as? String == "last-heartbeat" {
                     reads.withValue { $0.append(Read(id: id, socket: socket)) }
+                    readRecorded.notify()
                 } else {
                     socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
                 }
@@ -151,9 +156,9 @@ private final class HeartbeatGatewayFixture {
         self.control = ControlChannel(gateway: self.gateway, endpointRevision: { revision.value })
     }
 
-    func start() async throws -> Read {
+    func start(sourceLocation: SourceLocation = #_sourceLocation) async throws -> Read {
         _ = try await self.gateway.request(method: "health", params: nil, retryTransportFailures: false)
-        return try await self.waitForRead(index: 0)
+        return try await self.waitForRead(index: 0, sourceLocation: sourceLocation)
     }
 
     func stop() async {
@@ -164,17 +169,11 @@ private final class HeartbeatGatewayFixture {
         WorkActivityStore.shared.setMainSessionKey(self.previousMainKey)
     }
 
-    func waitForRead(index: Int) async throws -> Read {
-        try await self.waitUntil { self.reads.value.count > index }
-        return self.reads.value[index]
-    }
-
-    func waitUntil(_ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(2)
-        while !condition(), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(2))
+    func waitForRead(index: Int, sourceLocation: SourceLocation = #_sourceLocation) async throws -> Read {
+        try await self.readRecorded.wait("heartbeat read \(index + 1)", sourceLocation: sourceLocation) {
+            self.reads.value.count > index
         }
-        try #require(condition())
+        return self.reads.value[index]
     }
 
     func reply(_ read: Read, timestamp: Int?) {

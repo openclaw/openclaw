@@ -17,6 +17,7 @@ import { createTuiRefreshCoalescer } from "./coalesced-refresh.js";
 import { QuestionPrompt } from "./components/question-prompt.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { matchesOwnedTuiSession } from "./tui-session-events.js";
+import { TuiSnapshotJournal } from "./tui-snapshot-journal.js";
 
 type TuiQuestionControllerDeps = {
   client: Pick<TuiBackend, "listQuestions" | "getQuestion" | "resolveQuestion">;
@@ -24,11 +25,18 @@ type TuiQuestionControllerDeps = {
   getAgentId: () => string;
   getSessionKey: () => string;
   openOverlay: TUI["showOverlay"];
-  closeOverlay: (handle?: OverlayHandle) => void;
+  closeOverlay: (handle: OverlayHandle) => void;
   requestRender: () => void;
   onPendingChange: (text: string) => void;
 };
-type QuestionMutation = { version: number; question: QuestionRecord | null };
+type QuestionState = {
+  record?: QuestionRecord;
+  collapsed?: boolean;
+  prompt?: QuestionPrompt;
+  resolving?: boolean;
+  unconfirmed?: QuestionRecord;
+  recovery?: Promise<"pending" | "terminal" | "unknown">;
+};
 
 function isSecretStoreRefreshFailure(record: QuestionRecord, error: unknown): boolean {
   return (
@@ -40,19 +48,13 @@ function isSecretStoreRefreshFailure(record: QuestionRecord, error: unknown): bo
 }
 
 export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
-  const pending = new Map<string, QuestionRecord>();
-  const collapsed = new Set<string>();
-  const drafts = new Map<string, QuestionPrompt>();
-  const resolving = new Set<string>();
-  const unconfirmed = new Map<string, QuestionRecord>();
-  const checking = new Map<string, Promise<"pending" | "terminal" | "unknown">>();
-  const mutations = new Map<string, QuestionMutation>();
-  let mutationVersion = 0;
+  const questions = new Map<string, QuestionState>();
   let active: { id: string; handle: OverlayHandle } | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
   let pendingText = "";
   const refreshRunner = createTuiRefreshCoalescer(refreshOnce, () => mutations.clear());
+  const mutations = new TuiSnapshotJournal<QuestionRecord>(refreshRunner.isRunning);
 
   const matchesSession = (record: QuestionRecord) =>
     matchesOwnedTuiSession(deps.getSessionKey(), deps.getAgentId(), record);
@@ -65,34 +67,43 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
     }
   }
 
-  function remember(id: string, question: QuestionRecord | null) {
-    if (refreshRunner.isRunning()) {
-      mutations.set(id, { version: ++mutationVersion, question });
+  const questionRecords = (field: "record" | "unconfirmed" = "record") =>
+    [...questions.values()].flatMap((state) => {
+      const record = state[field];
+      return record ? [record] : [];
+    });
+
+  function update(id: string, patch: QuestionState) {
+    const state = { ...questions.get(id), ...patch };
+    // Resolved events can precede RPC completion; keep its admission/recovery locks.
+    if (!disposed && (state.record || state.resolving || state.recovery)) {
+      questions.set(id, state);
+    } else {
+      questions.delete(id);
     }
   }
 
   function remove(id: string) {
-    pending.delete(id);
-    unconfirmed.delete(id);
-    collapsed.delete(id);
-    drafts.get(id)?.dispose();
-    drafts.delete(id);
-    remember(id, null);
+    const state = questions.get(id);
+    state?.prompt?.dispose();
+    questions.delete(id);
+    update(id, { resolving: state?.resolving, recovery: state?.recovery });
+    mutations.record(id, null);
     if (active?.id === id) {
       closeActive();
     }
+    return state?.record;
   }
 
   function finish(id: string, status: Exclude<QuestionStatus, "pending">) {
-    const record = pending.get(id);
-    remove(id);
+    const record = remove(id);
     if (record && matchesSession(record)) {
       deps.chatLog.addSystem(`Question: ${status === "cancelled" ? "skipped" : status}.`);
     }
   }
 
   function abandon(record: QuestionRecord) {
-    if (!pending.has(record.id)) {
+    if (!questions.get(record.id)?.record) {
       return;
     }
     remove(record.id);
@@ -104,7 +115,7 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
   }
 
   async function recoverOnce(record: QuestionRecord): Promise<"pending" | "terminal" | "unknown"> {
-    if (disposed || !unconfirmed.has(record.id)) {
+    if (disposed || !questions.get(record.id)?.unconfirmed) {
       return "terminal";
     }
     if (record.expiresAtMs <= Date.now()) {
@@ -116,7 +127,7 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
     }
     try {
       const result = await deps.client.getQuestion(record.id);
-      if (disposed || !unconfirmed.has(record.id)) {
+      if (disposed || !questions.get(record.id)?.unconfirmed) {
         return "terminal";
       }
       if (!Value.Check(QuestionGetResultSchema, result) || result.question.id !== record.id) {
@@ -126,12 +137,11 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
         finish(record.id, result.question.status);
         return "terminal";
       }
-      unconfirmed.delete(record.id);
-      pending.set(record.id, result.question);
-      remember(record.id, result.question);
+      update(record.id, { record: result.question, unconfirmed: undefined });
+      mutations.record(record.id, result.question);
       return "pending";
     } catch (error) {
-      if (disposed || !unconfirmed.has(record.id)) {
+      if (disposed || !questions.get(record.id)?.unconfirmed) {
         return "terminal";
       }
       const errorRecord = asOptionalObjectRecord(error);
@@ -145,31 +155,16 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
   }
 
   async function recover(record: QuestionRecord) {
-    const current = checking.get(record.id);
+    const current = questions.get(record.id)?.recovery;
     if (current) {
       return current;
     }
     const recovery = recoverOnce(record);
-    checking.set(record.id, recovery);
+    update(record.id, { recovery });
     try {
       return await recovery;
     } finally {
-      if (checking.get(record.id) === recovery) {
-        checking.delete(record.id);
-      }
-    }
-  }
-
-  function updatePendingText(records: QuestionRecord[]) {
-    const record = records[0];
-    const text = records.some((question) => unconfirmed.has(question.id))
-      ? "Answer confirmation unavailable · /question to check"
-      : record
-        ? `Question pending${records.length > 1 ? ` (${records.length})` : ""} · ${Math.max(0, Math.ceil((record.expiresAtMs - Date.now()) / 1_000))}s · /question to open`
-        : "";
-    if (text !== pendingText) {
-      pendingText = text;
-      deps.onPendingChange(text);
+      update(record.id, { recovery: undefined });
     }
   }
 
@@ -180,28 +175,29 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
     clearTimeout(timer);
     timer = undefined;
     const now = Date.now();
-    for (const record of pending.values()) {
+    for (const record of questionRecords()) {
       if (record.expiresAtMs <= now) {
-        if (unconfirmed.has(record.id)) {
+        if (questions.get(record.id)?.unconfirmed) {
           abandon(record);
-        } else if (!resolving.has(record.id)) {
+        } else if (!questions.get(record.id)?.resolving) {
           finish(record.id, "expired");
         }
       }
     }
-    const records = [...pending.values()]
+    const records = questionRecords()
       .filter(matchesSession)
       .toSorted((a, b) => a.createdAtMs - b.createdAtMs || a.id.localeCompare(b.id));
     if (active && !records.some((record) => record.id === active?.id)) {
       closeActive();
     }
-    const record = records.find(
-      (entry) => !collapsed.has(entry.id) && !resolving.has(entry.id) && !unconfirmed.has(entry.id),
-    );
+    const record = records.find(({ id }) => {
+      const state = questions.get(id);
+      return !state?.collapsed && !state?.resolving && !state?.unconfirmed;
+    });
     if (!active && record) {
-      let prompt = drafts.get(record.id);
-      if (!prompt) {
-        prompt = new QuestionPrompt(record, {
+      const prompt =
+        questions.get(record.id)?.prompt ??
+        new QuestionPrompt(record, {
           onSubmit: (answers) =>
             void resolve(record, { id: record.id, answers, resolutionId: randomUUID() }),
           onSkip: () => void resolve(record, { id: record.id, cancel: true }),
@@ -209,9 +205,9 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
             if (active?.id !== record.id) {
               return;
             }
-            for (const question of pending.values()) {
+            for (const question of questionRecords()) {
               if (matchesSession(question)) {
-                collapsed.add(question.id);
+                update(question.id, { collapsed: true });
               }
             }
             closeActive();
@@ -219,12 +215,20 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
           },
           requestRender: deps.requestRender,
         });
-        drafts.set(record.id, prompt);
-      }
+      update(record.id, { prompt });
       active = { id: record.id, handle: deps.openOverlay(prompt, { width: "100%" }) };
     }
-    updatePendingText(records);
-    const expiring = [...pending.values()].filter((entry) => !resolving.has(entry.id));
+    const firstRecord = records[0];
+    const text = records.some((question) => questions.get(question.id)?.unconfirmed)
+      ? "Answer confirmation unavailable · /question to check"
+      : firstRecord
+        ? `Question pending${records.length > 1 ? ` (${records.length})` : ""} · ${Math.max(0, Math.ceil((firstRecord.expiresAtMs - Date.now()) / 1_000))}s · /question to open`
+        : "";
+    if (text !== pendingText) {
+      pendingText = text;
+      deps.onPendingChange(text);
+    }
+    const expiring = questionRecords().filter((entry) => !questions.get(entry.id)?.resolving);
     if (expiring.length > 0) {
       const expiry = Math.min(...expiring.map((entry) => entry.expiresAtMs));
       timer = setTimeout(present, Math.max(1, Math.min(1_000, expiry - now)));
@@ -234,7 +238,7 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
   }
 
   async function resolve(record: QuestionRecord, params: QuestionResolveParams) {
-    if (disposed || active?.id !== record.id || resolving.has(record.id)) {
+    if (disposed || active?.id !== record.id || questions.get(record.id)?.resolving) {
       return;
     }
     if (record.expiresAtMs <= Date.now()) {
@@ -242,10 +246,10 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
       present();
       return;
     }
-    resolving.add(record.id);
+    update(record.id, { resolving: true });
     closeActive();
-    drafts.get(record.id)?.dispose();
-    drafts.delete(record.id);
+    questions.get(record.id)?.prompt?.dispose();
+    update(record.id, { prompt: undefined });
     present();
     try {
       if (!deps.client.resolveQuestion) {
@@ -271,11 +275,10 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
         return;
       }
       // RPC errors may include submitted values. Never copy them into the terminal or chat.
-      if (!disposed && pending.has(record.id)) {
-        collapsed.add(record.id);
-        unconfirmed.set(record.id, record);
+      if (!disposed && questions.get(record.id)?.record) {
+        update(record.id, { collapsed: true, unconfirmed: record });
         const outcome = await recover(record);
-        if (!disposed && pending.has(record.id) && matchesSession(record)) {
+        if (!disposed && questions.get(record.id)?.record && matchesSession(record)) {
           if (outcome === "pending") {
             deps.chatLog.addSystem("Question is still pending. Use /question to retry.");
           } else if (outcome === "unknown") {
@@ -286,7 +289,7 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
         }
       }
     } finally {
-      resolving.delete(record.id);
+      update(record.id, { resolving: undefined });
       present();
     }
   }
@@ -295,8 +298,8 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
     if (disposed) {
       return;
     }
-    const startedAtVersion = mutationVersion;
-    await Promise.all([...unconfirmed.values()].map(recover));
+    const startedAtVersion = mutations.version;
+    await Promise.all(questionRecords("unconfirmed").map(recover));
     if (disposed || !deps.client.listQuestions) {
       present();
       return;
@@ -308,36 +311,23 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
     if (!Value.Check(QuestionListResultSchema, result)) {
       throw new Error("invalid question list");
     }
-    const next = new Map(
-      result.questions
-        .filter((question) => question.status === "pending")
-        .map((question) => [question.id, question]),
+    const next = mutations.replay(
+      result.questions.filter((question) => question.status === "pending"),
+      startedAtVersion,
     );
-    // The list snapshot predates any events received during its request.
-    for (const [id, mutation] of mutations) {
-      if (mutation.version > startedAtVersion) {
-        if (mutation.question) {
-          next.set(id, mutation.question);
-        } else {
-          next.delete(id);
-        }
-      }
-    }
-    for (const id of pending.keys()) {
-      if (!next.has(id) && !unconfirmed.has(id) && !resolving.has(id)) {
+    for (const { id } of questionRecords()) {
+      if (!next.has(id) && !questions.get(id)?.unconfirmed && !questions.get(id)?.resolving) {
         remove(id);
       }
     }
     for (const [id, question] of next) {
-      pending.set(id, question);
+      update(id, { record: question });
     }
     present();
   }
 
   async function refresh(): Promise<void> {
-    if (!disposed) {
-      await refreshRunner.run();
-    }
+    return disposed ? undefined : await refreshRunner.run();
   }
 
   return {
@@ -347,8 +337,8 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
       }
       if (event === "question.requested" && Value.Check(QuestionRecordSchema, payload)) {
         if (payload.status === "pending") {
-          pending.set(payload.id, payload);
-          remember(payload.id, payload);
+          update(payload.id, { record: payload });
+          mutations.record(payload.id, payload);
           present();
         }
       } else if (
@@ -369,13 +359,13 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
         return;
       }
       await refresh();
-      for (const record of pending.values()) {
-        if (matchesSession(record) && !unconfirmed.has(record.id)) {
-          collapsed.delete(record.id);
+      for (const record of questionRecords()) {
+        if (matchesSession(record) && !questions.get(record.id)?.unconfirmed) {
+          update(record.id, { collapsed: undefined });
         }
       }
       present();
-      if (!disposed && ![...pending.values()].some(matchesSession)) {
+      if (!disposed && !questionRecords().some(matchesSession)) {
         deps.chatLog.addSystem("No pending question for this session.");
         deps.requestRender();
       }
@@ -387,15 +377,10 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
       disposed = true;
       clearTimeout(timer);
       closeActive();
-      for (const prompt of drafts.values()) {
-        prompt.dispose();
+      for (const { prompt } of questions.values()) {
+        prompt?.dispose();
       }
-      drafts.clear();
-      pending.clear();
-      collapsed.clear();
-      resolving.clear();
-      unconfirmed.clear();
-      checking.clear();
+      questions.clear();
       mutations.clear();
       deps.onPendingChange("");
       deps.requestRender();

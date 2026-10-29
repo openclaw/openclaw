@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements child output behavior.
 import { StringDecoder } from "node:string_decoder";
 
 export const QA_CHILD_STDOUT_MAX_BYTES = 1024 * 1024;
@@ -8,7 +7,6 @@ type QaChildOutputCapture = {
   chunks: Buffer[];
   bytes: number;
   exceeded: boolean;
-  maxBytes: number;
 };
 
 type QaChildOutputTail = {
@@ -35,12 +33,11 @@ function decodeUtf8Tail(buffer: Buffer, truncated: boolean): string {
   return buffer.subarray(start).toString("utf8");
 }
 
-export function createQaChildOutputCapture(maxBytes = QA_CHILD_STDOUT_MAX_BYTES) {
+export function createQaChildOutputCapture() {
   return {
     chunks: [],
     bytes: 0,
     exceeded: false,
-    maxBytes,
   } satisfies QaChildOutputCapture;
 }
 
@@ -49,12 +46,12 @@ export function appendQaChildOutput(capture: QaChildOutputCapture, chunk: unknow
     return;
   }
   const buffer = toBuffer(chunk);
-  const remainingBytes = capture.maxBytes - capture.bytes;
+  const remainingBytes = QA_CHILD_STDOUT_MAX_BYTES - capture.bytes;
   if (buffer.byteLength > remainingBytes) {
     if (remainingBytes > 0) {
       capture.chunks.push(Buffer.from(buffer.subarray(0, remainingBytes)));
     }
-    capture.bytes = capture.maxBytes;
+    capture.bytes = QA_CHILD_STDOUT_MAX_BYTES;
     capture.exceeded = true;
     return;
   }

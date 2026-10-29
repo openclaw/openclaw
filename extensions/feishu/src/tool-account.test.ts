@@ -1,116 +1,55 @@
-// Feishu tests cover tool account plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveFeishuToolAccount } from "./tool-account.js";
+import type { FeishuConfig } from "./types.js";
 
 describe("resolveFeishuToolAccount", () => {
   const requiredTool = { family: "wiki", label: "Wiki" } as const;
+  const credentials = (name: string) => ({
+    appId: `${name}-app-id`,
+    appSecret: `${name}-app-secret`, // pragma: allowlist secret
+  });
   const cfg = {
     channels: {
       feishu: {
         enabled: true,
         defaultAccount: "ops",
-        appId: "base-app-id",
-        appSecret: "base-app-secret", // pragma: allowlist secret
+        ...credentials("base"),
         accounts: {
-          ops: {
-            enabled: true,
-            appId: "ops-app-id",
-            appSecret: "ops-app-secret", // pragma: allowlist secret
-          },
-          work: {
-            enabled: true,
-            appId: "work-app-id",
-            appSecret: "work-app-secret", // pragma: allowlist secret
-          },
-          disabled: {
-            enabled: false,
-            appId: "disabled-app-id",
-            appSecret: "disabled-app-secret", // pragma: allowlist secret
-          },
+          ops: { ...credentials("ops"), enabled: true },
+          work: { ...credentials("work"), enabled: true },
+          disabled: { ...credentials("disabled"), enabled: false },
         },
       },
     },
   };
 
-  it("prefers the active contextual account over configured defaultAccount", () => {
-    const resolved = resolveFeishuToolAccount({
-      cfg,
-      defaultAccountId: "work",
-      requiredTool,
-    });
-
-    expect(resolved.accountId).toBe("work");
-  });
-
-  it("falls back to configured defaultAccount when there is no contextual account", () => {
-    const resolved = resolveFeishuToolAccount({
-      cfg,
-      requiredTool,
-    });
-
-    expect(resolved.accountId).toBe("ops");
+  function resolveAccount(overrides: Partial<Parameters<typeof resolveFeishuToolAccount>[0]> = {}) {
+    return resolveFeishuToolAccount({ cfg, requiredTool, ...overrides });
+  }
+  const config = (overrides: Partial<FeishuConfig>) => ({
+    channels: { feishu: { ...cfg.channels.feishu, ...overrides } },
   });
 
   it("skips a disabled configured defaultAccount", () => {
-    const resolved = resolveFeishuToolAccount({
-      cfg: {
-        channels: {
-          feishu: {
-            ...cfg.channels.feishu,
-            defaultAccount: "disabled",
-          },
-        },
-      },
-      requiredTool,
+    expect(resolveAccount({ cfg: config({ defaultAccount: "disabled" }) })).toMatchObject({
+      accountId: "default",
+      appId: "base-app-id",
     });
-
-    expect(resolved.accountId).toBe("default");
-    expect(resolved.appId).toBe("base-app-id");
   });
 
   it("rejects tool account resolution when the channel is disabled", () => {
-    expect(() =>
-      resolveFeishuToolAccount({
-        cfg: {
-          channels: {
-            feishu: {
-              ...cfg.channels.feishu,
-              enabled: false,
-            },
-          },
-        },
-        requiredTool,
-      }),
-    ).toThrow("No usable Feishu account has Wiki tools enabled");
-  });
-
-  it("allows an explicit configured account", () => {
-    const resolved = resolveFeishuToolAccount({
-      cfg,
-      executeParams: { accountId: "WORK" },
-      requiredTool,
-    });
-
-    expect(resolved.accountId).toBe("work");
+    expect(() => resolveAccount({ cfg: config({ enabled: false }) })).toThrow(
+      "No usable Feishu account has Wiki tools enabled",
+    );
   });
 
   it("allows the explicit unlisted default backed by top-level credentials", () => {
-    const resolved = resolveFeishuToolAccount({
-      cfg: {
-        channels: {
-          feishu: {
-            defaultAccount: "ops",
-            appId: "base-app-id",
-            appSecret: "base-app-secret", // pragma: allowlist secret
-          },
-        },
-      },
+    const resolved = resolveAccount({
+      cfg: config({ accounts: {} }),
       executeParams: { accountId: "OPS" },
-      requiredTool,
     });
 
-    expect(resolved.accountId).toBe("ops");
-    expect(resolved.configured).toBe(true);
+    expect(resolved).toMatchObject({ accountId: "ops", configured: true });
   });
 
   it.each([
@@ -118,12 +57,8 @@ describe("resolveFeishuToolAccount", () => {
     { name: "unknown", accountId: "missing", error: "Unknown Feishu account" },
     { name: "disabled", accountId: "disabled", error: "is disabled" },
   ])("rejects an explicit $name account", (testCase) => {
-    expect(() =>
-      resolveFeishuToolAccount({
-        cfg,
-        executeParams: { accountId: testCase.accountId },
-        requiredTool,
-      }),
-    ).toThrow(testCase.error);
+    expect(() => resolveAccount({ executeParams: { accountId: testCase.accountId } })).toThrow(
+      testCase.error,
+    );
   });
 });

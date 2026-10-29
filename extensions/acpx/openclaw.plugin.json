@@ -1,5 +1,6 @@
 {
   "id": "acpx",
+  "categories": ["agent-runtimes"],
   "backupResources": [
     {
       "disposition": "regenerable",
@@ -15,7 +16,6 @@
   "doctorContract": {
     "configRepair": true,
     "stateMigrations": [
-      { "id": "acpx-runtime-state-to-plugin-state" },
       {
         "id": "acpx-session-owner-resources",
         "doctorOnly": true,
@@ -24,12 +24,48 @@
     ]
   },
   "activation": {
-    "onStartup": true
+    "onStartup": true,
+    "onAgentHarnesses": ["acp-opencode", "acp-qwen", "acp-pi", "acp-kilocode", "acp-copilot"]
   },
   "enabledByDefault": true,
   "name": "ACPX Runtime",
   "description": "OpenClaw ACP runtime backend with plugin-owned session and transport management.",
   "skills": ["./skills"],
+  "configGroups": [
+    {
+      "id": "agent-runtime",
+      "title": "Agent runtime",
+      "order": 10,
+      "properties": [
+        "cwd",
+        "stateDir",
+        "probeAgent",
+        "agents",
+        "timeoutSeconds",
+        "nativeAgents",
+        "agentProcessEnvAllow",
+        "agentProcessEnvBlock"
+      ]
+    },
+    {
+      "id": "permissions",
+      "title": "Permissions",
+      "order": 20,
+      "properties": ["permissionMode", "nonInteractivePermissions"]
+    },
+    {
+      "id": "tools-and-mcp-servers",
+      "title": "Tools and MCP servers",
+      "order": 30,
+      "properties": ["pluginToolsMcpBridge", "openClawToolsMcpBridge", "mcpServers"]
+    },
+    {
+      "id": "pi-sessions",
+      "title": "Pi sessions",
+      "order": 40,
+      "properties": ["piSessionCatalog"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -65,6 +101,14 @@
         "minimum": 0.001,
         "default": 120
       },
+      "agentProcessEnvAllow": {
+        "type": "array",
+        "items": { "type": "string", "pattern": "^[^=\\s]+$" }
+      },
+      "agentProcessEnvBlock": {
+        "type": "array",
+        "items": { "type": "string", "pattern": "^[^=\\s]+$" }
+      },
       "piSessionCatalog": {
         "type": "object",
         "additionalProperties": false,
@@ -97,6 +141,17 @@
             }
           },
           "required": ["command"]
+        }
+      },
+      "nativeAgents": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "opencode": { "type": "boolean" },
+          "qwen": { "type": "boolean" },
+          "pi": { "type": "boolean" },
+          "kilocode": { "type": "boolean" },
+          "copilot": { "type": "boolean" }
         }
       },
       "agents": {
@@ -151,19 +206,33 @@
       "help": "Timeout for embedded ACP runtime startup and control operations. ACP turns use OpenClaw agent/run timeouts.",
       "advanced": true
     },
+    "agentProcessEnvAllow": {
+      "label": "Agent Environment Allowlist",
+      "help": "Default unset (agents inherit the Gateway environment). When set, ACP agents, their command probes, and terminals inherit only process essentials (PATH, HOME, locale, temp, XDG_*), these names, and ACPX_AUTH_* grants.",
+      "advanced": true
+    },
+    "agentProcessEnvBlock": {
+      "label": "Agent Environment Blocklist",
+      "help": "Default unset. Gateway environment variable names that ACP agents, their command probes, and terminals do not inherit, for example OPENCLAW_GATEWAY_TOKEN. Applied after the allowlist; explicit grants such as ACPX_AUTH_* still apply.",
+      "advanced": true
+    },
     "piSessionCatalog.enabled": {
       "label": "Pi Session Catalog",
       "help": "Auto-detect Pi sessions on the Gateway and paired nodes, then show them in the sessions sidebar."
     },
     "probeAgent": {
-      "label": "Health Probe Agent",
-      "help": "Agent id used for the embedded ACP runtime health probe. Defaults to the first `acp.allowedAgents` entry when that allowlist is set, otherwise to the runtime built-in probe agent (codex). Set this explicitly (for example `opencode` or `claude`) when the default probe agent is not installed or not authenticated, so the whole embedded ACP backend does not get marked unavailable.",
+      "label": "Health Check Agent",
+      "help": "Agent id used for the embedded ACP runtime health check. Defaults to the first `acp.allowedAgents` entry when that allowlist is set, otherwise to the runtime built-in check agent (codex). Set this explicitly (for example `opencode` or `claude`) when the default check agent is not installed or not authenticated, so the whole embedded ACP backend does not get marked unavailable.",
       "advanced": true
     },
     "mcpServers": {
       "label": "MCP Servers",
       "help": "Named MCP server definitions to inject into embedded ACP session bootstrap. Each entry needs a command and can include args and env.",
       "advanced": true
+    },
+    "nativeAgents": {
+      "label": "Native agents",
+      "help": "Choose which installed agents can be used for new chat turns. Missing flags are enabled. Running turns and classic ACP sessions are unchanged."
     },
     "agents": {
       "label": "Agent Commands",

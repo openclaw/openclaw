@@ -7,9 +7,14 @@ import * as minimaxVlm from "../agents/minimax-vlm.js";
 import * as modelAuth from "../agents/model-auth.js";
 import { acquireReadOnlyPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
+import { closeEphemeralPreparedModelRuntimeResources } from "../agents/prepared-model-runtime.resources.js";
+import * as providerStream from "../agents/provider-stream.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerContextEngineInRegistry } from "../context-engine/registry.js";
+import { getModelLlmRuntime } from "../llm/model-runtime-binding.js";
+import * as llmStream from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
+import { writeFixtureJson } from "../plugins/loader-fixture-builders.test-support.js";
 import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -18,6 +23,7 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { cleanupNativeFixture, nativeFixtureEnv } from "../plugins/native-resource.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -26,6 +32,10 @@ import {
   getPluginRuntimeGenerationRegistry,
   withPluginRuntimeGenerationScope,
 } from "../plugins/runtime/generation-scope.js";
+import {
+  createColdPluginFixture,
+  isColdPluginRuntimeLoaded,
+} from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -176,14 +186,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   });
 }};`,
   });
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      providers: [id],
-      configSchema: { type: "object", properties: {}, additionalProperties: false },
-    }),
-  );
+  writeFixtureJson(dir, "openclaw.plugin.json", {
+    id,
+    providers: [id],
+    configSchema: { type: "object", properties: {}, additionalProperties: false },
+  });
   const config: OpenClawConfig = {
     models: {
       providers: {
@@ -226,26 +233,14 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       timeoutMs: 1000,
     },
     environment: <T>(run: () => Promise<T>) =>
-      withEnvAsync(
-        {
-          OPENCLAW_HOME: dir,
-          OPENCLAW_STATE_DIR: path.join(dir, "state"),
-          OPENCLAW_CONFIG_PATH: path.join(dir, "config.json"),
-        },
-        run,
-      ),
+      withEnvAsync(nativeFixtureEnv(dir, path.join(dir, "state")), run),
     cleanup() {
       state.finish.resolve();
       state.resumeSetup.resolve();
       state.finishCleanup.resolve();
       state.finishWork.resolve();
       state.finishSetupTail.resolve();
-      for (const connection of connections) {
-        if (connection.database.isOpen) {
-          connection.database.close();
-        }
-      }
-      Reflect.deleteProperty(globalThis, stateKey);
+      cleanupNativeFixture(stateKey, connections);
     },
   };
 }
@@ -261,8 +256,7 @@ function acquireFixtureRuntime(fixture: ReturnType<typeof nativeImageFixture>, m
       skipCredentials: true,
       runtimePluginSelections: [{ provider: fixture.id, modelId }],
     },
-    undefined,
-    "static",
+    { catalogMode: "static" },
   );
 }
 
@@ -272,6 +266,105 @@ afterEach(async () => {
   resetPluginLoaderTestStateForTest();
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
+
+it("describes images without evaluating configured memory or context plugins", async () => {
+  const fixture = nativeImageFixture();
+  const agentOwners = ["memory", "context"].map((kind) => {
+    const rootDir = path.join(fixture.dir, kind);
+    fs.mkdirSync(rootDir);
+    return createColdPluginFixture({
+      rootDir,
+      pluginId: `expensive-${kind}`,
+      manifest: kind === "memory" ? { kind: "memory" } : {},
+      runtimeMessage: "Image descriptions must not evaluate agent-owned plugins",
+    });
+  });
+  const cfg: OpenClawConfig = {
+    ...fixture.config,
+    plugins: {
+      allow: [fixture.id, ...agentOwners.map((plugin) => plugin.pluginId)],
+      load: {
+        paths: [
+          ...(fixture.config.plugins?.load?.paths ?? []),
+          ...agentOwners.map((plugin) => plugin.rootDir),
+        ],
+      },
+      slots: { memory: "expensive-memory", contextEngine: "expensive-context" },
+      entries: Object.fromEntries(
+        agentOwners.map((plugin) => [plugin.pluginId, { enabled: true }]),
+      ),
+    },
+  };
+  try {
+    await fixture.environment(async () => {
+      useNoBundledPlugins();
+      fixture.state.finish.resolve();
+      expect(
+        await describeImageWithModelCore({ ...fixture.request, cfg, timeoutMs: 30_000 }),
+      ).toMatchObject({
+        text: "native image 42",
+      });
+      for (const owner of agentOwners) {
+        expect(isColdPluginRuntimeLoaded(owner)).toBe(false);
+      }
+    });
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+it("does not dispatch an image completion retired during transport initialization", async () => {
+  const fixture = nativeImageFixture();
+  try {
+    await fixture.environment(async () => {
+      useNoBundledPlugins();
+      const lease = await acquireFixtureRuntime(fixture, "image-model");
+      vi.useFakeTimers();
+      const dispatch = vi.fn(() => {
+        throw new Error("Unexpected retired image provider dispatch");
+      });
+      const register = vi
+        .spyOn(providerStream, "registerProviderStreamForModel")
+        .mockImplementationOnce(({ model }) => {
+          const runtime = getModelLlmRuntime(model);
+          expect(runtime).toBeDefined();
+          runtime?.registry.registerApiProvider({
+            api: model.api,
+            stream: dispatch,
+            streamSimple: dispatch,
+          });
+          return undefined;
+        });
+      const complete = llmStream.complete;
+      let retirement: Promise<void> | undefined;
+      const facade = vi.spyOn(llmStream, "complete").mockImplementationOnce((...args) => {
+        const completion = complete(...args);
+        retirement = closeEphemeralPreparedModelRuntimeResources();
+        expect(args[2]?.signal?.aborted).toBe(false);
+        return completion;
+      });
+      try {
+        await expect(
+          describeImageWithModelCore({
+            ...fixture.request,
+            preparedModelRuntime: lease.snapshot,
+          }),
+        ).rejects.toThrow("Prepared plugin registry resources have been released");
+        expect(facade).toHaveBeenCalledOnce();
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        facade.mockRestore();
+        register.mockRestore();
+        await lease[Symbol.asyncDispose]();
+        await retirement;
+      }
+      expect(fixture.state.connections[0]?.disposals).toBe(1);
+      expect(fixture.state.connections[0]?.database.isOpen).toBe(false);
+    });
+  } finally {
+    fixture.cleanup();
+  }
+});
 
 it.each(["timeout", "cancellation", "late-rejection"] as const)(
   "retains the supplied generation and adopted donor after %s reports",
@@ -340,7 +433,7 @@ it.each(["timeout", "cancellation", "late-rejection"] as const)(
                   : "synthetic image cancellation",
             }),
           );
-          acquired.release();
+          await acquired[Symbol.asyncDispose]();
           await donor.release();
           closing = closePreparedModelRuntimeSnapshots();
           await vi.advanceTimersByTimeAsync(0);
@@ -374,7 +467,7 @@ it.each(["timeout", "cancellation", "late-rejection"] as const)(
           fixture.state.finish.resolve();
           await outcome;
           await parent.drain();
-          lease?.release();
+          await lease?.[Symbol.asyncDispose]();
           await donor.release();
           await closing;
           vi.useRealTimers();
@@ -403,7 +496,7 @@ it("releases only its borrow while the supplying generation remains open", async
         expect(fixture.state.connections[0]!.database.isOpen).toBe(true);
         expect(fixture.state.connections[0]!.disposals).toBe(0);
       } finally {
-        lease.release();
+        await lease[Symbol.asyncDispose]();
         await closePreparedModelRuntimeSnapshots();
       }
       expect(fixture.state.connections[0]!.disposals).toBe(1);
@@ -430,7 +523,7 @@ it("leaves a raw supplied registry with its caller", async () => {
         expect(fixture.state.connections[0]!.disposals).toBe(0);
         expect(fixture.state.connections[0]!.database.isOpen).toBe(true);
       } finally {
-        lease.release();
+        await lease[Symbol.asyncDispose]();
         await closePreparedModelRuntimeSnapshots();
       }
     });
@@ -463,7 +556,7 @@ it.each(["setup", "retry"] as const)(
               throw new Error("Image request settled before the held phase");
             }),
           ]);
-          lease.release();
+          await lease[Symbol.asyncDispose]();
           closing = closePreparedModelRuntimeSnapshots();
           expect(fixture.state.connections[0]!.database.isOpen).toBe(true);
           fixture.state.resumeSetup.resolve();
@@ -482,7 +575,7 @@ it.each(["setup", "retry"] as const)(
           fixture.state.resumeSetup.resolve();
           fixture.state.finish.resolve();
           await outcome;
-          lease.release();
+          await lease[Symbol.asyncDispose]();
           await closing;
           await closePreparedModelRuntimeSnapshots();
         }
@@ -547,7 +640,7 @@ it.each(["parent", "normal", "admitted-tail"] as const)(
             fixture.state.cancellation.signal?.reason,
           );
           expect(fixture.state.cancellation.registry).toBe(lease.snapshot.pluginRegistry);
-          lease.release();
+          await lease[Symbol.asyncDispose]();
           closing = closePreparedModelRuntimeSnapshots();
           expect(fixture.state.connections[0]!.database.isOpen).toBe(true);
           fixture.state.finish.resolve();
@@ -565,7 +658,7 @@ it.each(["parent", "normal", "admitted-tail"] as const)(
           fixture.state.finishCleanup.resolve();
           await result;
           await parent.drain();
-          lease.release();
+          await lease[Symbol.asyncDispose]();
           await closing;
           await closePreparedModelRuntimeSnapshots();
         }
@@ -627,7 +720,7 @@ it.each(["success", "failure", "timeout"] as const)(
           await vi.advanceTimersByTimeAsync(0);
           expect(fixture.state.setupReads).toBe(1);
           expect(fixture.state.calls).toBe(mode === "success" ? 1 : 0);
-          lease.release();
+          await lease[Symbol.asyncDispose]();
           closing = closePreparedModelRuntimeSnapshots();
           await vi.advanceTimersByTimeAsync(0);
           expect(fixture.state.connections[0]!.database.isOpen).toBe(true);
@@ -651,7 +744,7 @@ it.each(["success", "failure", "timeout"] as const)(
           fixture.state.finishSetupTail.resolve();
           await outcome;
           await parent.drain();
-          lease.release();
+          await lease[Symbol.asyncDispose]();
           await closing;
           vi.useRealTimers();
         }
@@ -720,7 +813,7 @@ it.each(["open", "resolved", "fallback"] as const)(
                 throw new Error("MiniMax did not enter the held boundary");
               }),
             ]);
-            lease.release();
+            await lease[Symbol.asyncDispose]();
             closing = closePreparedModelRuntimeSnapshots();
             expect(read()).toBe(42);
             resume.resolve();
@@ -736,7 +829,7 @@ it.each(["open", "resolved", "fallback"] as const)(
           }
           expect(request).toHaveBeenCalledTimes(mode === "open" ? 2 : mode === "resolved" ? 1 : 0);
           await parent.drain();
-          lease.release();
+          await lease[Symbol.asyncDispose]();
           await closing;
           await closePreparedModelRuntimeSnapshots();
           expect(fixture.state.connections[0]!.disposals).toBe(1);
@@ -752,7 +845,7 @@ it.each(["open", "resolved", "fallback"] as const)(
           resume.resolve();
           await outcome;
           await parent.drain();
-          lease.release();
+          await lease[Symbol.asyncDispose]();
           await closing;
           request.mockRestore();
           auth?.mockRestore();

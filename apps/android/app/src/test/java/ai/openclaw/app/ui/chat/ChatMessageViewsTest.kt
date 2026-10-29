@@ -2,36 +2,60 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.ChatOutboxAttachment
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.parseChatMessageContent
+import ai.openclaw.app.gateway.GatewayLoadedImage
 import ai.openclaw.app.ui.design.ClawDesignTheme
+import ai.openclaw.app.ui.design.ClawTheme
+import android.content.Intent
 import android.graphics.Rect
+import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
 import android.view.inspector.WindowInspector
 import android.widget.TextView
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -39,13 +63,232 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import java.io.ByteArrayOutputStream
 
 @RunWith(RobolectricTestRunner::class)
 class ChatMessageViewsTest {
   @get:Rule
   val composeRule = createComposeRule()
+
+  @Test
+  fun sentPhotoAndVoiceNoteKeepTheirRowsWhenTranscriptionArrives() {
+    val photo = ChatMessageContent(type = "image", mimeType = "image/jpeg", fileName = "photo.jpg", url = "media://inbound/photo.jpg")
+    val voice = ChatMessageContent(type = "audio", fileName = "voice-note-b9526ed8-69ef-44d1-ad36-0123456789ab.m4a", durationMs = 5_000)
+    val content = mutableStateOf(listOf(photo, ChatMessageContent(type = "text", text = "See attached."), voice))
+    composeRule.setContent {
+      ClawDesignTheme {
+        GeometryTranscriptBubble(messageId = "media-message", role = "user", text = "", content = content.value)
+      }
+    }
+    composeRule.onNodeWithText("See attached.").assertDoesNotExist()
+    composeRule.onNodeWithText("Voice note").assertExists()
+    composeRule.onNodeWithText("0:05").assertExists()
+    composeRule.onNodeWithText("Image unavailable · Tap to retry").assertExists()
+
+    composeRule.runOnIdle {
+      content.value = listOf(photo, ChatMessageContent(type = "text", text = "See attached.\n📝 \"A synthetic voice note.\""), voice.copy(transcribed = true))
+    }
+    composeRule.onNodeWithText("See attached.", substring = true).assertDoesNotExist()
+    composeRule.onNodeWithText("Voice note").assertExists()
+    composeRule.onNodeWithText("Image unavailable · Tap to retry").assertExists()
+    composeRule.onNodeWithTag("chat-voice-transcript", useUnmergedTree = true).assertExists()
+    composeRule.onNodeWithText("A synthetic voice note.", substring = true).assertExists()
+  }
+
+  @Test
+  fun inboundImageRetriesWhenControlUiBasePathArrives() {
+    val basePath = mutableStateOf<String?>(null)
+    var inboundAttempts = 0
+    var managedAttempts = 0
+    composeRule.setContent {
+      ClawDesignTheme {
+        Column {
+          ChatManagedImage(
+            artifactId = "media://inbound/photo.jpg",
+            label = "Inbound photo",
+            resolverReady = true,
+            inboundMediaBasePath = basePath.value,
+            loadImage = {
+              inboundAttempts += 1
+              null
+            },
+          )
+          ChatManagedImage(
+            artifactId = "managed-photo",
+            label = "Managed photo",
+            resolverReady = true,
+            inboundMediaBasePath = basePath.value,
+            loadImage = {
+              managedAttempts += 1
+              null
+            },
+          )
+        }
+      }
+    }
+
+    composeRule.waitForIdle()
+    assertEquals(1, inboundAttempts)
+    assertEquals(1, managedAttempts)
+
+    composeRule.runOnIdle { basePath.value = "/ui" }
+    composeRule.waitForIdle()
+    assertEquals(2, inboundAttempts)
+    assertEquals(1, managedAttempts)
+  }
+
+  @Test
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun staleInboundLoadCannotReplaceImageFromResolvedControlUiPath() {
+    val bitmap = android.graphics.Bitmap.createBitmap(2, 2, android.graphics.Bitmap.Config.ARGB_8888)
+    val png =
+      ByteArrayOutputStream()
+        .also { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        .toByteArray()
+    bitmap.recycle()
+    val releaseOldLoad = CompletableDeferred<Unit>()
+    val basePath = mutableStateOf<String?>(null)
+    var attempts = 0
+    composeRule.setContent {
+      CompositionLocalProvider(LocalChatImageDecodeDispatcher provides Dispatchers.Unconfined) {
+        ClawDesignTheme {
+          ChatManagedImage(
+            artifactId = "media://inbound/photo.jpg",
+            label = "Resolved inbound photo",
+            resolverReady = true,
+            inboundMediaBasePath = basePath.value,
+            loadImage = {
+              attempts += 1
+              if (basePath.value == null) {
+                withContext(NonCancellable) { releaseOldLoad.await() }
+                null
+              } else {
+                GatewayLoadedImage(png, "image/png")
+              }
+            },
+          )
+        }
+      }
+    }
+
+    composeRule.waitForIdle()
+    assertEquals(1, attempts)
+    composeRule.runOnIdle { basePath.value = "/ui" }
+    composeRule.waitForIdle()
+    assertEquals(2, attempts)
+    composeRule.onNodeWithContentDescription("Resolved inbound photo").assertExists()
+
+    releaseOldLoad.complete(Unit)
+    composeRule.waitForIdle()
+    composeRule.onNodeWithContentDescription("Resolved inbound photo").assertExists()
+  }
+
+  @Test
+  fun markdownListsPreserveNumberingAndNestedBulletIndentation() {
+    composeRule.setContent {
+      ClawDesignTheme {
+        ChatMarkdown("3. outer\n   - nested\n4. next\n\n- bullet", textColor = ClawTheme.colors.text)
+      }
+    }
+
+    listOf("3.", "4.", "outer", "nested", "next", "bullet").forEach {
+      composeRule.onNodeWithText(it).assertIsDisplayed()
+    }
+    composeRule.onAllNodesWithText("•").assertCountEquals(2)
+    val outer = composeRule.onNodeWithText("outer").fetchSemanticsNode().boundsInRoot
+    val nested = composeRule.onNodeWithText("nested").fetchSemanticsNode().boundsInRoot
+    assertTrue(nested.left > outer.left)
+    assertTrue(nested.top > outer.top)
+  }
+
+  @Test
+  fun representedFirstLinkSuppressesOnlyItsOriginalGenericPreview() {
+    val represented = setOf("https://example.com/guide", "https://example.org/guide")
+    composeRule.setContent {
+      ClawDesignTheme {
+        Column {
+          ChatMessageLinkPreview(
+            messageId = "across-blocks",
+            role = "assistant",
+            excludedUrls = represented,
+            content =
+              listOf(
+                ChatMessageContent(text = "[source](https://example.com/guide#section)"),
+                ChatMessageContent(text = "[session](https://gateway.example/chat/main/research)"),
+              ),
+          )
+          ChatMessageLinkPreview(
+            messageId = "same-block",
+            role = "assistant",
+            excludedUrls = represented,
+            content = listOf(ChatMessageContent(text = "[redirected source](https://example.org/guide#section) [session](https://gateway.example/chat/main/research)")),
+          )
+          ChatMessageLinkPreview(
+            messageId = "unrepresented-first",
+            role = "assistant",
+            excludedUrls = represented,
+            content = listOf(ChatMessageContent(text = "[issue](https://github.com/openclaw/openclaw/issues/123) [source](https://example.com/guide)")),
+          )
+          ChatMessageLinkPreview(
+            messageId = "user-link",
+            role = "user",
+            content = listOf(ChatMessageContent(text = "[article](https://reader.example/article)")),
+          )
+        }
+      }
+    }
+    composeRule.onAllNodesWithText("Preview · example.com").assertCountEquals(0)
+    composeRule.onAllNodesWithText("Preview · example.org").assertCountEquals(0)
+    composeRule.onAllNodesWithText("Preview · gateway.example").assertCountEquals(0)
+    composeRule.onNodeWithText("Preview · github.com").assertIsDisplayed()
+    composeRule.onNodeWithText("Preview · reader.example").assertIsDisplayed()
+  }
+
+  @Test
+  fun linkPreviewExpandsAndCollapsesWithoutOpeningUri() {
+    val application = RuntimeEnvironment.getApplication()
+    val shadowApp = org.robolectric.Shadows.shadowOf(application)
+    shadowApp.clearNextStartedActivities()
+
+    composeRule.setContent {
+      ClawDesignTheme {
+        ChatMessageLinkPreview(
+          messageId = "expandable-link",
+          role = "assistant",
+          content = listOf(ChatMessageContent(text = "[issue](https://github.com/openclaw/openclaw/issues/123)")),
+        )
+      }
+    }
+
+    composeRule.onNodeWithText("Preview · github.com").assertIsDisplayed()
+    composeRule.onNode(hasContentDescription("Expand link preview")).assertIsDisplayed()
+    composeRule.onAllNodesWithText("github.com").assertCountEquals(0)
+
+    composeRule.onNode(hasContentDescription("Expand link preview")).performClick()
+
+    composeRule.onNodeWithText("github.com").assertIsDisplayed()
+    composeRule.onNode(hasContentDescription("Collapse link preview")).assertIsDisplayed()
+    org.junit.Assert.assertNull("Expanding preview must not launch browser activity", shadowApp.nextStartedActivity)
+
+    // Verify collapsing preview returns to compact state without launching browser activity
+    composeRule.onNode(hasContentDescription("Collapse link preview")).performClick()
+
+    composeRule.onNodeWithText("Preview · github.com").assertIsDisplayed()
+    composeRule.onNode(hasContentDescription("Expand link preview")).assertIsDisplayed()
+    composeRule.onAllNodesWithText("github.com").assertCountEquals(0)
+    org.junit.Assert.assertNull("Collapsing preview must not launch browser activity", shadowApp.nextStartedActivity)
+
+    // Verify re-expanding and tapping card body launches external browser activity with URL
+    composeRule.onNode(hasContentDescription("Expand link preview")).performClick()
+    composeRule.onNodeWithText("github.com").performClick()
+    val launchedIntent = shadowApp.nextStartedActivity
+    org.junit.Assert.assertNotNull("Card body click must launch browser activity", launchedIntent)
+    assertEquals(android.content.Intent.ACTION_VIEW, launchedIntent.action)
+    assertEquals("https://github.com/openclaw/openclaw/issues/123", launchedIntent.dataString)
+  }
 
   @Test
   fun transcriptBubblesExposeSpeakerWithoutReplacingMessageText() {
@@ -190,7 +433,8 @@ class ChatMessageViewsTest {
         composeRule.onNode(hasText(label) and hasClickAction()).assertExists()
       }
       listOf("Copy", "Select text", "Share", "Reply", "Listen").forEach { label ->
-        composeRule.onAllNodesWithText(label).assertCountEquals(0)
+        // File-card actions are independent of the empty-text message menu.
+        composeRule.onAllNodes(hasText(label) and hasAnyAncestor(isPopup())).assertCountEquals(0)
       }
       composeRule.onNodeWithText(selectedAction).performClick()
     }
@@ -207,7 +451,7 @@ class ChatMessageViewsTest {
     val message = ChatMessage("user-disclosure", "user", listOf(ChatMessageContent(text = text)), null)
     composeRule.setContent {
       ClawDesignTheme {
-        val timeline = buildChatTimeline(listOf(message), 0, emptyList(), null)
+        val timeline = prepareChatHistory(listOf(message), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(0, emptyList(), null)
         val reader = rememberChatReaderScrollController("user-disclosure-owner", timeline, historyLoading = false)
         CompositionLocalProvider(LocalChatReaderNavigation provides reader.navigation) {
           LazyColumn(
@@ -267,6 +511,187 @@ class ChatMessageViewsTest {
     repeatCurrentAction("Close")
     composeRule.onNodeWithText("Close").assertDoesNotExist()
     composeRule.onNodeWithText("View all").assertExists()
+  }
+
+  @Test
+  @Config(sdk = [36], qualifiers = "en-rUS-w360dp-h800dp-420dpi")
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun outboxDeliveryStatesKeepConfirmedUserBubbleGeometry() {
+    val text = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph."
+    val attachment = ChatOutboxAttachment("document", "file", "application/pdf", "notes.pdf", null, 12L)
+    val queued =
+      ChatOutboxItem(
+        id = "geometry-outbox",
+        sessionKey = "main",
+        text = text,
+        thinkingLevel = "low",
+        createdAtMs = 0L,
+        status = ChatOutboxStatus.Queued,
+        retryCount = 0,
+        lastError = null,
+        ownerAgentId = "main",
+        attachments = listOf(attachment),
+      )
+    val pending = mutableStateOf<ChatOutboxItem?>(queued)
+    val retryEnabled = mutableStateOf(true)
+    var retries = 0
+    var deletes = 0
+    var userSurface = Color.Unspecified
+    var canvas = Color.Unspecified
+    composeRule.setContent {
+      ClawDesignTheme {
+        userSurface = ClawTheme.colors.userMessageSurface
+        canvas = ClawTheme.colors.canvas
+        Column(Modifier.size(360.dp, 800.dp).background(ClawTheme.colors.canvas)) {
+          Box(Modifier.testTag("confirmed-reference")) {
+            GeometryTranscriptBubble("reference", "user", text)
+          }
+          Box(Modifier.testTag("delivery")) {
+            val item = pending.value
+            if (item == null) {
+              GeometryTranscriptBubble("delivered", "user", text)
+            } else {
+              ChatOutboxBubble(item, retryEnabled.value, onRetry = { retries += 1 }, onDelete = { deletes += 1 })
+            }
+          }
+        }
+      }
+    }
+    val reference = composeRule.onNode(hasContentDescription("You") and hasAnyAncestor(hasTestTag("confirmed-reference")))
+    val expectedBounds = reference.fetchSemanticsNode().boundsInRoot
+    val rowBounds = composeRule.onNodeWithTag("confirmed-reference").fetchSemanticsNode().boundsInRoot
+    assertTrue("Short text does not force a full-width bubble", expectedBounds.width < rowBounds.width * 0.78f)
+    assertEquals(rowBounds.right, expectedBounds.right, 1f)
+    val expectedPixels = reference.captureToImage().toPixelMap()
+    val topBand = with(composeRule.density) { 6.dp.roundToPx() }
+    assertEquals(userSurface.toArgb(), expectedPixels[expectedPixels.width / 2, topBand / 2].toArgb())
+    val cornerX = with(composeRule.density) { 5.dp.roundToPx() }
+    val cornerY = with(composeRule.density) { 4.dp.roundToPx() }
+    assertEquals("The 24dp corner leaves this point outside the bubble", canvas.toArgb(), expectedPixels[cornerX, cornerY].toArgb())
+
+    val states =
+      listOf(
+        queued to "Queued — sends when reconnected",
+        queued.copy(status = ChatOutboxStatus.Sending) to "Sending…",
+        queued.copy(status = ChatOutboxStatus.Accepted) to "Sent — confirming delivery…",
+        queued.copy(status = ChatOutboxStatus.Failed, lastError = "Synthetic delivery failure") to "Failed — Synthetic delivery failure",
+      )
+    // The last failed pass is a recovery row: its delete action survives, but retry is suppressed.
+    (states + states.last() + (null to null)).forEachIndexed { index, (item, status) ->
+      composeRule.runOnIdle {
+        pending.value = item
+        retryEnabled.value = index != states.size
+      }
+      val actual = composeRule.onNode(hasContentDescription("You") and hasAnyAncestor(hasTestTag("delivery")))
+      val bounds = actual.assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+      assertTrue("$status: keeps the same maximum text budget", bounds.width <= rowBounds.width * 0.78f + 1f)
+      assertTrue("$status: preserves the leading gutter", bounds.left >= rowBounds.right - rowBounds.width * 0.78f - 1f)
+      assertEquals("$status: trailing edge", expectedBounds.right, bounds.right, 1f)
+      val pixels = actual.captureToImage().toPixelMap()
+      // Above the text: compare the painted corners, fill, and top border, not a style helper.
+      val cornerBand = with(composeRule.density) { 24.dp.roundToPx() }
+      for (y in 0 until topBand) {
+        for (x in 0 until cornerBand) {
+          assertEquals("$status: leading corner $x,$y", expectedPixels[x, y], pixels[x, y])
+          assertEquals("$status: trailing corner $x,$y", expectedPixels[expectedPixels.width - 1 - x, y], pixels[pixels.width - 1 - x, y])
+        }
+        assertEquals("$status: fill", expectedPixels[expectedPixels.width / 2, y], pixels[pixels.width / 2, y])
+      }
+      val sideY = with(composeRule.density) { 30.dp.roundToPx() }
+      assertEquals("$status: no leading border", userSurface.toArgb(), pixels[0, sideY].toArgb())
+      assertEquals("$status: no trailing border", userSurface.toArgb(), pixels[pixels.width - 1, sideY].toArgb())
+      if (status != null) {
+        composeRule.onNodeWithText(status).assertIsDisplayed()
+        composeRule.onNodeWithText("📎 notes.pdf", useUnmergedTree = true).assertIsDisplayed()
+      }
+      if (item?.status == ChatOutboxStatus.Failed && retryEnabled.value) {
+        composeRule.onNodeWithText("Retry").performClick()
+      } else {
+        composeRule.onNodeWithText("Retry").assertDoesNotExist()
+      }
+      if (item?.status == ChatOutboxStatus.Queued || item?.status == ChatOutboxStatus.Failed) {
+        composeRule.onNodeWithText("Delete").performClick()
+      } else {
+        composeRule.onNodeWithText("Delete").assertDoesNotExist()
+      }
+    }
+    assertEquals(1, retries)
+    assertEquals(3, deletes)
+  }
+
+  @Test
+  @Config(sdk = [36], qualifiers = "en-rUS-w360dp-h800dp-420dpi")
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun typingStreamingAndConfirmedAssistantKeepInsetTransparentGeometry() {
+    val resolver = RuntimeEnvironment.getApplication().contentResolver
+    val originalScale = Settings.Global.getString(resolver, Settings.Global.ANIMATOR_DURATION_SCALE)
+    Settings.Global.putFloat(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
+    val phase = mutableStateOf(0)
+    var canvas = Color.Unspecified
+    try {
+      composeRule.setContent {
+        ClawDesignTheme {
+          canvas = ClawTheme.colors.canvas
+          Column(Modifier.size(360.dp, 800.dp).background(canvas)) {
+            Box(Modifier.testTag("assistant-row")) {
+              if (phase.value == 0) {
+                ChatTypingIndicatorBubble("geometry-run", observedAtElapsedMs = 0L)
+              } else {
+                GeometryTranscriptBubble("assistant", "assistant", "Assistant reply", live = phase.value == 1)
+              }
+            }
+          }
+        }
+      }
+      for (nextPhase in 0..2) {
+        composeRule.runOnIdle { phase.value = nextPhase }
+        val row = composeRule.onNodeWithTag("assistant-row").fetchSemanticsNode().boundsInRoot
+        val bubble = composeRule.onNode(hasContentDescription("OpenClaw"))
+        val bounds = bubble.assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        assertTrue("Phase $nextPhase: content fits the transcript", bounds.width <= row.width)
+        assertEquals("Phase $nextPhase: leading edge", row.left, bounds.left, 1f)
+        val pixels = bubble.captureToImage().toPixelMap()
+        // The top padding and trailing edge must expose the canvas, not a raised panel or border.
+        assertEquals(canvas.toArgb(), pixels[pixels.width / 2, 0].toArgb())
+        assertEquals(canvas.toArgb(), pixels[pixels.width - 1, pixels.height / 2].toArgb())
+        if (nextPhase == 0) {
+          composeRule.onNode(hasContentDescription("Working"), useUnmergedTree = true).assertIsDisplayed()
+        } else {
+          composeRule.onNodeWithText("Assistant reply", useUnmergedTree = true).assertIsDisplayed()
+        }
+      }
+    } finally {
+      Settings.Global.putString(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, originalScale)
+    }
+  }
+
+  @Composable
+  private fun GeometryTranscriptBubble(
+    messageId: String,
+    role: String,
+    text: String,
+    live: Boolean = false,
+    content: List<ChatMessageContent> = listOf(ChatMessageContent(type = "text", text = text)),
+  ) {
+    ChatBubble(
+      messageId = messageId,
+      entryId = null,
+      role = role,
+      live = live,
+      content = content,
+      timestampMs = null,
+      onReplyMessage = {},
+      sessionActionsEnabled = false,
+      onRewindMessage = {},
+      onForkMessage = {},
+      speechState = null,
+      onToggleListen = { _, _ -> },
+      inlineMediaPlaybackBlocked = false,
+      inlineWidgetResolverReady = false,
+      resolveInlineWidgetResource = { _, _ -> null },
+      loadImageArtifact = { null },
+      loadMediaArtifact = { _, _, _ -> null },
+    )
   }
 
   @Test
@@ -434,7 +859,9 @@ class ChatMessageViewsTest {
     composeRule.onNode(hasContentDescription("OpenClaw") and hasText("Attachment")).assertIsDisplayed()
     (1..4).forEach { index -> composeRule.onNodeWithText("redacted-$index.png").assertIsDisplayed() }
     composeRule.onAllNodesWithText("redacted-5.png").assertCountEquals(0)
-    composeRule.onNodeWithText("Additional images hidden: 1").assertIsDisplayed()
+    composeRule.onNodeWithText("Next images").assertIsDisplayed().performClick()
+    composeRule.onNodeWithText("redacted-5.png").assertIsDisplayed()
+    (1..4).forEach { index -> composeRule.onAllNodesWithText("redacted-$index.png").assertCountEquals(0) }
     assertEquals(0, artifactRequests)
   }
 
@@ -525,5 +952,138 @@ class ChatMessageViewsTest {
       .filterIsInstance<TextView>()
       .filter { it.isTextSelectable && !it.onCheckIsTextEditor() }
       .toList()
+  }
+
+  private fun queuedPhotoAndVoiceNote(): ChatOutboxItem =
+    ChatOutboxItem(
+      id = "outbox-media",
+      sessionKey = "main",
+      text = "See attached.",
+      thinkingLevel = "low",
+      createdAtMs = 0L,
+      status = ChatOutboxStatus.Queued,
+      retryCount = 0,
+      lastError = null,
+      ownerAgentId = "main",
+      attachments =
+        listOf(
+          ChatOutboxAttachment("photo-1", "image", "image/jpeg", "1000186721.jpg", null, 91_525L),
+          ChatOutboxAttachment("voice-1", "audio", "audio/mp4", "voice-note-b9526ed8-69ef-44d1-ad36-0123456789ab.m4a", 5_000L, 40_000L),
+        ),
+    )
+
+  @Test
+  fun queuedPhotoAndVoiceNoteRenderAsTypedRowsWithoutPlaceholderOrRawNames() {
+    composeRule.setContent {
+      ClawDesignTheme {
+        ChatOutboxBubble(queuedPhotoAndVoiceNote(), onRetry = {}, onDelete = {})
+      }
+    }
+
+    composeRule.onNodeWithText("Photo", useUnmergedTree = true).assertIsDisplayed()
+    composeRule.onNodeWithText("Voice note", useUnmergedTree = true).assertIsDisplayed()
+    composeRule.onNodeWithText("0:05", useUnmergedTree = true).assertIsDisplayed()
+    composeRule.onNodeWithText("Queued — sends when reconnected", useUnmergedTree = true).assertIsDisplayed()
+    composeRule.onAllNodesWithText("See attached.", substring = true, useUnmergedTree = true).assertCountEquals(0)
+    composeRule.onAllNodesWithText("voice-note-", substring = true, useUnmergedTree = true).assertCountEquals(0)
+    composeRule.onAllNodesWithText("📎", substring = true, useUnmergedTree = true).assertCountEquals(0)
+    val photoTop =
+      composeRule
+        .onNodeWithText("Photo", useUnmergedTree = true)
+        .fetchSemanticsNode()
+        .boundsInRoot.top
+    val voiceTop =
+      composeRule
+        .onNodeWithText("Voice note", useUnmergedTree = true)
+        .fetchSemanticsNode()
+        .boundsInRoot.top
+    assertTrue("photo row sits above the voice row", photoTop < voiceTop)
+  }
+
+  @Test
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun queuedPhotoShowsAThumbnailFromStoredBytes() {
+    val bitmap = android.graphics.Bitmap.createBitmap(32, 24, android.graphics.Bitmap.Config.ARGB_8888)
+    bitmap.eraseColor(android.graphics.Color.RED)
+    val jpeg =
+      java.io
+        .ByteArrayOutputStream()
+        .also { bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, it) }
+        .toByteArray()
+    val requested = mutableListOf<String>()
+    composeRule.setContent {
+      ClawDesignTheme {
+        ChatOutboxBubble(
+          queuedPhotoAndVoiceNote(),
+          loadImagePreview = { attachment ->
+            requested += attachment.id
+            jpeg
+          },
+          onRetry = {},
+          onDelete = {},
+        )
+      }
+    }
+
+    composeRule.waitUntil(5_000) { composeRule.onAllNodesWithText("Photo", useUnmergedTree = true).fetchSemanticsNodes().isEmpty() }
+    composeRule.onNode(hasContentDescription("Photo"), useUnmergedTree = true).assertExists()
+    composeRule.onNodeWithText("Voice note", useUnmergedTree = true).assertIsDisplayed()
+    assertEquals(listOf("photo-1"), requested)
+  }
+
+  @Test
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun queuedPhotoReassemblyRunsOnTheDecodeDispatcher() {
+    // Fails on 9a45be72: the stored-chunk loader ran on Main and only the decode moved off it.
+    val bitmap = android.graphics.Bitmap.createBitmap(8, 8, android.graphics.Bitmap.Config.ARGB_8888)
+    val jpeg =
+      java.io
+        .ByteArrayOutputStream()
+        .also { bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, it) }
+        .toByteArray()
+    val decodeDispatcher =
+      java.util.concurrent.Executors
+        .newSingleThreadExecutor { Thread(it, "outbox-decode-test") }
+        .asCoroutineDispatcher()
+    val loaderThreads = java.util.Collections.synchronizedList(mutableListOf<String>())
+    try {
+      composeRule.setContent {
+        CompositionLocalProvider(LocalChatImageDecodeDispatcher provides decodeDispatcher) {
+          ClawDesignTheme {
+            ChatOutboxBubble(
+              queuedPhotoAndVoiceNote(),
+              loadImagePreview = {
+                loaderThreads += Thread.currentThread().name.substringBefore(" @")
+                jpeg
+              },
+              onRetry = {},
+              onDelete = {},
+            )
+          }
+        }
+      }
+
+      composeRule.waitUntil(5_000) { loaderThreads.isNotEmpty() }
+      assertEquals(listOf("outbox-decode-test"), loaderThreads.toList())
+    } finally {
+      decodeDispatcher.close()
+    }
+  }
+
+  @Test
+  fun queuedUserNamedAudioKeepsItsFileName() {
+    val item =
+      queuedPhotoAndVoiceNote().copy(
+        attachments = listOf(ChatOutboxAttachment("voice-2", "audio", "audio/x-m4a", "site-visit.m4a", 7_000L, 100_000L)),
+      )
+    composeRule.setContent {
+      ClawDesignTheme {
+        ChatOutboxBubble(item, onRetry = {}, onDelete = {})
+      }
+    }
+
+    composeRule.onNodeWithText("site-visit.m4a", useUnmergedTree = true).assertIsDisplayed()
+    composeRule.onNodeWithText("0:07", useUnmergedTree = true).assertIsDisplayed()
+    composeRule.onAllNodesWithText("See attached.", substring = true, useUnmergedTree = true).assertCountEquals(0)
   }
 }

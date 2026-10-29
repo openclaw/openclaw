@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeBoundedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionCatalogTranscriptItem } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 
 /** Keep a host's publication owned until its callback finishes, even after a fail-soft list. */
 export function publishSessionCatalogHost<T>(
@@ -58,11 +59,14 @@ function encodeSessionCatalogCursor(offset: number): string {
   return Buffer.from(JSON.stringify({ offset }), "utf8").toString("base64url");
 }
 
-function optionalSessionCatalogCursor(value: unknown): string | undefined {
+function optionalSessionCatalogCursor(
+  value: unknown,
+  maxLength = MAX_CURSOR_LENGTH,
+): string | undefined {
   if (value === undefined) {
     return undefined;
   }
-  if (typeof value !== "string" || value.length === 0 || value.length > MAX_CURSOR_LENGTH) {
+  if (typeof value !== "string" || value.length === 0 || value.length > maxLength) {
     throw new Error("cursor is invalid");
   }
   return value;
@@ -104,6 +108,7 @@ function parseSessionCatalogReadParams(
   options: {
     threadIdMaxLength: number;
     threadIdPattern: RegExp;
+    cursorMaxLength?: number;
     messages: SessionCatalogParameterMessages;
   },
 ): SessionCatalogReadParams {
@@ -118,7 +123,7 @@ function parseSessionCatalogReadParams(
   if (!threadId || !options.threadIdPattern.test(threadId)) {
     throw new Error(options.messages.invalidThreadId);
   }
-  const cursor = optionalSessionCatalogCursor(value.cursor);
+  const cursor = optionalSessionCatalogCursor(value.cursor, options.cursorMaxLength);
   return {
     threadId,
     limit: boundedSessionCatalogLimit(value.limit),
@@ -166,18 +171,7 @@ function truncateUtf8(text: string, maxBytes: number): string {
   if (Buffer.byteLength(text, "utf8") <= maxBytes) {
     return text;
   }
-  let low = 0;
-  let high = text.length;
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    if (Buffer.byteLength(text.slice(0, middle), "utf8") <= maxBytes - 3) {
-      low = middle;
-    } else {
-      high = middle - 1;
-    }
-  }
-  const end = low > 0 && /[\uD800-\uDBFF]/u.test(text.charAt(low - 1)) ? low - 1 : low;
-  return `${text.slice(0, end)}…`;
+  return `${truncateUtf8Prefix(text, maxBytes - 3)}…`;
 }
 
 /** Page chronological source items newest-first, bounding per-item and per-page byte budgets. */

@@ -1,127 +1,111 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createProgressDraftDiffStatTracker } from "./progress-draft-diffstat.js";
 
-type DiffStatTracker = ReturnType<typeof createProgressDraftDiffStatTracker>;
-
-function stageMutation(
-  tracker: DiffStatTracker,
-  toolCallId: string,
-  name: string,
-  args: Record<string, unknown>,
-  phase = "start",
-) {
-  tracker.stageToolEvent({ toolCallId, name, phase, args });
+function createTracker() {
+  const tracker = createProgressDraftDiffStatTracker({ canStage: () => true });
+  return {
+    ...tracker,
+    stage: (toolCallId: string, name: string, args: Record<string, unknown>, phase = "start") =>
+      tracker.stageToolEvent({ toolCallId, name, phase, args }),
+    write: (toolCallId: string, content = "line", path = "src/example.ts", phase = "start") =>
+      tracker.stageToolEvent({ toolCallId, name: "write", phase, args: { path, content } }),
+    complete: (toolCallId: string, status = "completed") =>
+      tracker.commitItemEvent({ toolCallId, phase: "end", status }),
+    expectStat: (files: number, added: number, removed: number) =>
+      expect(tracker.resolve()).toEqual({ files, added, removed }),
+  };
 }
 
-function completeMutation(tracker: DiffStatTracker, toolCallId: string, status = "completed") {
-  tracker.commitItemEvent({ toolCallId, phase: "end", status });
-}
+it.each([
+  ["", 0],
+  ["one", 1],
+  ["one\n", 2],
+  ["one\r", 2],
+  ["one\r\n", 2],
+  ["one\rtwo\nthree\r\nfour", 4],
+])("preserves completed write and edit line counts for %j", (content, lineCount) => {
+  const tracker = createTracker();
+  tracker.write("write", content, "example.txt");
+  tracker.complete("write");
+  tracker.expectStat(1, lineCount, 0);
 
-describe("createProgressDraftDiffStatTracker", () => {
-  it("stages starts and commits successful terminal items additively", () => {
-    const tracker = createProgressDraftDiffStatTracker({ canStage: () => true });
+  tracker.stage("edit", "edit", { path: "example.txt", oldText: content, newText: content });
+  tracker.complete("edit");
+  tracker.expectStat(1, lineCount * 2, lineCount);
+});
 
-    stageMutation(tracker, "write-1", "write", {
-      path: "src/example.ts",
-      content: "one\ntwo",
-    });
-    expect(tracker.resolve()).toBeUndefined();
-    stageMutation(
-      tracker,
-      "write-1",
-      "write",
-      { path: "src/example.ts", content: "ignored\npartial\nargs" },
-      "update",
-    );
-    expect(tracker.resolve()).toBeUndefined();
+it("stages starts and commits successful terminal items additively", () => {
+  const tracker = createTracker();
 
-    completeMutation(tracker, "write-1");
-    expect(tracker.resolve()).toEqual({ files: 1, added: 2, removed: 0 });
+  tracker.write("write-1", "one\ntwo");
+  expect(tracker.resolve()).toBeUndefined();
+  tracker.write("write-1", "ignored\npartial\nargs", "src/example.ts", "update");
+  expect(tracker.resolve()).toBeUndefined();
 
-    stageMutation(tracker, "edit-1", "edit", {
-      path: "src/example.ts",
-      edits: [{ oldText: "one\ntwo", newText: "three" }],
-    });
-    completeMutation(tracker, "edit-1");
-    expect(tracker.resolve()).toEqual({ files: 1, added: 3, removed: 2 });
+  tracker.complete("write-1");
+  tracker.expectStat(1, 2, 0);
 
-    for (const status of ["failed", "error"]) {
-      const toolCallId = `failed-${status}`;
-      stageMutation(tracker, toolCallId, "write", {
-        path: `src/${toolCallId}.ts`,
-        content: "ignored",
-      });
-      completeMutation(tracker, toolCallId, status);
-    }
-    expect(tracker.resolve()).toEqual({ files: 1, added: 3, removed: 2 });
-
-    stageMutation(tracker, "patch-1", "apply_patch", {
-      input: [
-        "*** Begin Patch",
-        "*** Update File: src/example.ts",
-        "@@",
-        "-three",
-        "+four",
-        "+five",
-        "*** Add File: src/new.ts",
-        "+new",
-        "+line",
-        "*** End Patch",
-      ].join("\n"),
-    });
-    completeMutation(tracker, "patch-1");
-    expect(tracker.resolve()).toEqual({ files: 2, added: 7, removed: 3 });
-
-    stageMutation(tracker, "codex-patch-1", "apply_patch", {
-      changes: [
-        { path: "src/example.ts", stat: { added: 7, removed: 3 } },
-        { path: "src/third.ts", stat: { added: 5, removed: 2 } },
-      ],
-    });
-    completeMutation(tracker, "codex-patch-1");
-    expect(tracker.resolve()).toEqual({ files: 3, added: 19, removed: 8 });
-
-    stageMutation(tracker, "pending-reset", "write", {
-      path: "src/pending-reset.ts",
-      content: "pending",
-    });
-    tracker.reset();
-    expect(tracker.resolve()).toBeUndefined();
-    completeMutation(tracker, "pending-reset");
-    expect(tracker.resolve()).toBeUndefined();
+  tracker.stage("edit-1", "edit", {
+    path: "src/example.ts",
+    edits: [{ oldText: "one\ntwo", newText: "three" }],
   });
+  tracker.complete("edit-1");
+  tracker.expectStat(1, 3, 2);
 
-  it("bounds pending staging and distinct committed file tracking", () => {
-    const tracker = createProgressDraftDiffStatTracker({ canStage: () => true });
+  for (const status of ["failed", "error", "blocked", "unknown", ""]) {
+    const toolCallId = `failed-${status}`;
+    tracker.write(toolCallId, "ignored", `src/${toolCallId}.ts`);
+    tracker.complete(toolCallId, status);
+  }
+  tracker.expectStat(1, 3, 2);
 
-    for (let index = 0; index < 65; index += 1) {
-      stageMutation(tracker, `write-${index}`, "write", {
-        path: `src/file-${index}.ts`,
-        content: "line",
-      });
-    }
-    expect(tracker.resolve()).toBeUndefined();
-    for (let index = 0; index < 65; index += 1) {
-      completeMutation(tracker, `write-${index}`);
-    }
-    expect(tracker.resolve()).toEqual({ files: 64, added: 64, removed: 0 });
-
-    for (let index = 64; index < 257; index += 1) {
-      const toolCallId = `restaged-write-${index}`;
-      stageMutation(tracker, toolCallId, "write", {
-        path: `src/file-${index}.ts`,
-        content: "line",
-      });
-      completeMutation(tracker, toolCallId);
-    }
-    expect(tracker.resolve()).toEqual({ files: 257, added: 257, removed: 0 });
-
-    stageMutation(tracker, "edit-known", "edit", {
-      path: "src/file-0.ts",
-      oldText: "one\ntwo",
-      newText: "one\ntwo\nthree",
-    });
-    completeMutation(tracker, "edit-known");
-    expect(tracker.resolve()).toEqual({ files: 257, added: 260, removed: 2 });
+  tracker.stage("patch-1", "apply_patch", {
+    input:
+      "*** Begin Patch\n*** Update File: src/example.ts\n@@\n-three\n+four\n+five\n*** Add File: src/new.ts\n+new\n+line\n*** End Patch",
   });
+  tracker.complete("patch-1");
+  tracker.expectStat(2, 7, 3);
+
+  tracker.stage("codex-patch-1", "apply_patch", {
+    changes: [
+      { path: "src/example.ts", stat: { added: 7, removed: 3 } },
+      { path: "src/third.ts", stat: { added: 5, removed: 2 } },
+    ],
+  });
+  tracker.complete("codex-patch-1");
+  tracker.expectStat(3, 19, 8);
+
+  tracker.write("pending-reset", "pending", "src/pending-reset.ts");
+  tracker.reset();
+  expect(tracker.resolve()).toBeUndefined();
+  tracker.complete("pending-reset");
+  expect(tracker.resolve()).toBeUndefined();
+});
+
+it("bounds pending staging and distinct committed file tracking", () => {
+  const tracker = createTracker();
+
+  for (let index = 0; index < 65; index += 1) {
+    tracker.write(`write-${index}`, "line", `src/file-${index}.ts`);
+  }
+  expect(tracker.resolve()).toBeUndefined();
+  for (let index = 0; index < 65; index += 1) {
+    tracker.complete(`write-${index}`);
+  }
+  tracker.expectStat(64, 64, 0);
+
+  for (let index = 64; index < 257; index += 1) {
+    const toolCallId = `restaged-write-${index}`;
+    tracker.write(toolCallId, "line", `src/file-${index}.ts`);
+    tracker.complete(toolCallId);
+  }
+  tracker.expectStat(257, 257, 0);
+
+  tracker.stage("edit-known", "edit", {
+    path: "src/file-0.ts",
+    oldText: "one\ntwo",
+    newText: "one\ntwo\nthree",
+  });
+  tracker.complete("edit-known");
+  tracker.expectStat(257, 260, 2);
 });

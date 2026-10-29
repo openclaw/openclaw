@@ -1,5 +1,6 @@
 {
   "id": "mistral",
+  "categories": ["models"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
@@ -28,6 +29,7 @@
         "baseUrl": "https://api.mistral.ai/v1",
         "api": "openai-completions",
         "defaultModel": "mistral-large-latest",
+        "family": "mistral",
         "models": [
           {
             "id": "codestral-latest",

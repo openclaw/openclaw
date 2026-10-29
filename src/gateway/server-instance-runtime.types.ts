@@ -1,15 +1,34 @@
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
+import type { ReplyExpectation } from "../agents/reply-completion.js";
 import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagents/announce/subagent-announce-handoff.js";
+import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
+import type { SessionControllerInput } from "../sessions/session-controller.contracts.js";
 import type {
   AgentTurnStartOwner,
   InternalAgentTurnFacadeFactory,
 } from "./agent-turn/internal-facade.types.js";
 import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
+import type { GatewayClient } from "./server-methods/client-types.js";
 
 export type GatewayInstanceAgentDispatchOptions = {
+  /** Host-issued source authority for independently accepted native work. */
+  operatorRunAuthority?: AdmittedRunOperatorAuthority;
+  agentToolCaller?: NonNullable<GatewayClient["internal"]>["agentToolCaller"];
+  /** Exact process-local source reserved by a durable lifecycle owner. */
+  controllerInput?: SessionControllerInput;
+  /** Host-owned input semantics, never supplied by wire request parameters. */
+  replyExpectation?: ReplyExpectation;
+
+  assertAdmissionCurrent?: () => void;
+  /** Live source permission retained by accepted execution, independently of its admission claim. */
+  executionSource?: SessionSourceAssertion;
+  /** Refresh source facts immediately before dispatch; the accepted turn owns execution. */
+  prepareDispatchCurrent?: () => Promise<void>;
   allowModelOverride?: boolean;
   allowSyntheticModelOverride?: boolean;
   allowSyntheticCronRunContinuation?: boolean;
@@ -17,9 +36,9 @@ export type GatewayInstanceAgentDispatchOptions = {
   expectFinal?: boolean;
   /** Instance-owned dispatch always uses a synthetic client. */
   forceSyntheticClient?: boolean;
-  internalDeliveryMediaUrls?: string[];
   runtimeContextFragments?: RuntimeContextFragment[];
-  internalDeliverySuppressText?: boolean;
+  /** Keep runtime error payloads (timeouts, provider failures) out of the delivered reply. */
+  internalDeliverySuppressErrors?: boolean;
   onAccepted?: (payload: unknown) => void;
   onStartOwner?: (owner: AgentTurnStartOwner) => void;
   onExecutionStarted?: () => void;
@@ -30,26 +49,53 @@ export type GatewayInstanceAgentDispatchOptions = {
 };
 
 export type GatewayApprovalEventPublisher = {
+  /** @deprecated Use publishRequestedAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
   publishRequested: (kind: ChannelApprovalKind, request: unknown) => number;
+  publishRequestedAsync?: (kind: ChannelApprovalKind, request: unknown) => Promise<number>;
   publishResolved: (kind: ChannelApprovalKind, resolved: unknown) => void;
 };
 
-export type GatewayRecoveryRuntime = {
+type GatewayApprovalEventPublisherV2 = GatewayApprovalEventPublisher & {
+  publishRequestedAsync: (kind: ChannelApprovalKind, request: unknown) => Promise<number>;
+};
+
+export type GatewayLifecycleSessionMethod = "chat.history" | "chat.abort" | "sessions.delete";
+
+export type GatewayLifecycleTypingParams = {
+  agentId?: string;
+  runId: string;
+  channel: string;
+  to: string;
+  accountId?: string;
+  threadId?: string | number;
+  isCurrent: (cfg: OpenClawConfig) => boolean;
+};
+
+export type GatewayLifecycleRuntime = {
+  dispatchSessionMethod: <T = unknown>(
+    method: GatewayLifecycleSessionMethod,
+    params: unknown,
+    options?: { timeoutMs?: number; signal?: AbortSignal; assertCurrent?: () => void },
+  ) => Promise<T>;
+  startTyping?: (params: GatewayLifecycleTypingParams) => () => void;
   dispatchAgent: <T = unknown>(
     params: AgentRunRequest,
     timeoutMs?: number,
     options?: GatewayInstanceAgentDispatchOptions,
   ) => Promise<T>;
-  waitForAgent: <T = unknown>(params: AgentWaitParams, timeoutMs?: number) => Promise<T>;
-  sendRecoveryNotice: (params: {
+  waitForAgent: <T = unknown>(
+    params: AgentWaitParams,
+    timeoutMs?: number,
+    signal?: AbortSignal,
+  ) => Promise<T>;
+  sendNotice: (params: {
     channel: string;
     to: string;
     accountId?: string;
     threadId?: string | number;
     text: string;
     idempotencyKey: string;
-    /** Revalidated after lazy runtime loading and immediately before outbound dispatch. */
-    isCurrent?: () => boolean;
+    isCurrent?: (cfg: OpenClawConfig) => boolean;
   }) => Promise<{
     /** True when delivery produced zero platform results (policy/channel suppression). */
     suppressed: boolean;
@@ -58,9 +104,9 @@ export type GatewayRecoveryRuntime = {
 
 export type GatewayInstanceRuntime = {
   createAgentTurnFacade: InternalAgentTurnFacadeFactory;
-  approvalEvents: GatewayApprovalEventPublisher;
+  approvalEvents: GatewayApprovalEventPublisherV2;
   nativeApprovals: GatewayNativeApprovalRuntime;
-  recovery: GatewayRecoveryRuntime;
+  lifecycle: GatewayLifecycleRuntime;
   isAvailable: () => boolean;
   close: () => void;
 };

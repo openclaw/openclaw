@@ -1,4 +1,3 @@
-// Defines user-facing config field help text for docs and UI surfaces.
 import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_HELP } from "./schema.node-capabilities.js";
 
@@ -6,15 +5,15 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   browser:
     "Browser runtime controls for local or remote CDP attachment, profile routing, and screenshot/snapshot behavior. Keep defaults unless your automation workflow requires custom browser transport settings.",
   "browser.enabled":
-    "Enables browser capability wiring in the gateway so browser tools and CDP-driven workflows can run. Disable when browser automation is not needed to reduce surface area and startup work.",
+    "Enables browser capability wiring in the gateway so browser tools and CDP-driven workflows can run. Disable when browser automation is not needed to reduce available capabilities and startup work.",
   "browser.allowSystemProfileImport":
     "Allows macOS hosts to import cookies from a local Chrome-family system profile into a managed OpenClaw browser profile. Disable this to prevent browser profile cookie import and its macOS Keychain consent prompt.",
   "browser.cdpUrl":
     "CDP/DevTools endpoint URL used to attach to an externally managed browser instance. Use this for centralized browser hosts, tunnels, or existing-session attachment, and keep URL access restricted to trusted network paths.",
   "browser.executablePath":
-    "Explicit browser executable path when auto-discovery is insufficient for your host environment. Use an absolute stable path, or a path starting with ~ for your OS home directory, so launch behavior stays deterministic across restarts.",
+    "Explicit browser executable path when auto-discovery is insufficient for your host environment. Use an absolute stable path, or a path starting with ~ for your OS home directory, so launch behavior stays predictable across restarts.",
   "browser.headless":
-    "Forces browser launch in headless mode when the local launcher starts browser instances. Keep headless enabled for server environments and disable only when visible UI debugging is required.",
+    "Local managed browsers run headless by default. Set false for a visible browser window. Existing-session, extension, remote, and attach-only browsers keep their externally selected mode.",
   "browser.noSandbox":
     "Disables Chromium sandbox isolation flags for environments where sandboxing fails at runtime. Keep this off whenever possible because process isolation protections are reduced.",
   "browser.attachOnly":
@@ -23,6 +22,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Default browser profile name selected when callers do not explicitly choose a profile. Use a stable low-privilege profile as the default to reduce accidental cross-context state use.",
   "browser.profiles":
     "Named browser profile connection map used for explicit routing to CDP ports or URLs with optional metadata. Keep profile names consistent and avoid overlapping endpoint definitions.",
+  "browser.profiles.*.engine":
+    'Browser engine capability preset: "chromium" (default) or experimental "lightpanda" for semantic DOM browsing. Lightpanda requires an explicit ws/wss cdpUrl dedicated to one profile and attachOnly: true, never launches a local browser, and does not support visual screenshots or other Chromium-only features.',
   "browser.profiles.*.cdpPort":
     "Per-profile local CDP port used when connecting to browser instances by port instead of URL. Use unique ports per profile to avoid connection collisions.",
   "browser.profiles.*.cdpUrl":
@@ -97,18 +98,28 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.github.gitAuthor.email": "Optional process-local Git author and committer email.",
   "agents.entries.*.tools.github":
     "Complete managed GitHub CLI identity and Git author override for this agent. Omit it to inherit the system identity.",
+  "agents.entries.*.tools.github.allowInSandbox":
+    "Allows this agent's managed GitHub credentials and Git author inside its own Docker or Podman sandbox (default: false). Shared scope refuses identity injection; other backends reject provisioning. Security audit warns while enabled.",
   "tools.exec.host":
     'Selects execution target strategy for shell commands. Use "auto" for runtime-aware behavior (sandbox when available, otherwise gateway), or pin sandbox/gateway/node explicitly when you need a fixed surface.',
   "tools.exec.mode":
-    'Normalized exec policy selector. Use "auto" for classifier-reviewed approval misses, "ask" for human-reviewed misses, "allowlist" for deterministic safe commands only, or "full" for trusted local operation.',
+    'Normalized exec policy selector. Use "auto" for classifier-reviewed approval misses, "ask" for human-reviewed misses, "allowlist" for commands approved by fixed rules, or "full" for trusted local operation.',
   "tools.exec.reviewer":
     "Model-backed exec reviewer used by auto mode before human approval fallback. Configure a narrow model override here when you want exec review isolated from the main agent model.",
   "tools.exec.reviewer.model":
     "Optional provider/model override for the exec reviewer agent. Omit to reuse the configured primary model for the target agent.",
+  "tools.exec.reviewer.thinking":
+    "Optional reasoning effort for OpenClaw model-backed approval reviews: minimal, low, medium, high, xhigh, or max. Omit to preserve provider defaults. Supported levels are normalized for the selected model. Does not configure native Codex Guardian.",
+  "tools.exec.reviewer.fastMode":
+    "Optional Fast mode for OpenClaw approval reviews: true requests priority processing on supported OpenAI Responses and ChatGPT/OAuth routes; false requests standard processing. Omit to preserve provider defaults. Fast mode may cost more and is subject to provider availability. Does not configure native Codex Guardian.",
   "tools.exec.reviewer.timeoutMs":
     "Per-stage exec reviewer timeout in milliseconds for model preparation and completion before falling back to human approval (default: 30000).",
   "tools.exec.node":
     "Node binding configuration for exec tooling when command execution is delegated through connected nodes. Use explicit node binding only when multi-node routing is required.",
+  "agents.entries.*.tools.agentToAgent":
+    "Outbound-only agent messaging policy. Explicit send destinations do not grant session reads or status access, and remain bounded by global agent-to-agent participation and sandbox restrictions.",
+  "agents.entries.*.tools.agentToAgent.send":
+    "Agent ids or * patterns this agent may contact with sessions_send, even with narrow tools.sessions.visibility. Omitted inherits visibility; [] denies ordinary cross-agent sends. Global tools.agentToAgent and sandbox limits still apply. Does not grant list, history, search, status, or watch access; replies belong only to the sent turn. Requester-owned child session access is unchanged.",
   "tools.agentToAgent":
     "Policy for cross-agent session tool calls: sends, list, history, search, and status reads (default: enabled). Use allow to restrict agent pairs; enabled=false blocks ordinary cross-agent access. Requester-owned native subagent and ACP child sessions stay reachable under tree or all visibility. For strict separation, set tools.sessions.visibility to agent or self (tree still admits requester-owned native/ACP children), or use separate gateways.",
   "tools.agentToAgent.enabled":
@@ -118,35 +129,45 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.updatePlan":
     "Unified `progress_card` status tool for durable plans and narrative notes in parent sessions. Enabled by default; set false to opt out. Always unavailable to subagents.",
   "tools.toolSearch":
-    "Compact large OpenClaw, MCP, and client tool catalogs. Supported local runtimes use structured Tool Search automatically when unset. Set false to disable it, true for the code bridge, or use the object form to choose a mode.",
+    "Compact large OpenClaw, MCP, and client tool catalogs. OpenClaw runtimes use structured Tool Search automatically when unset; engaged Code Mode takes precedence and Codex uses its native search. Set false to disable it, true for structured search, or use the object form to choose a mode.",
   "tools.toolSearch.enabled":
-    "Enables Tool Search. When on, OpenClaw hides large tool catalogs behind `tool_search_code` or structured search/describe/call tools during embedded runtime runs.",
+    "Enables Tool Search. When on, OpenClaw hides large tool catalogs behind structured search/describe/call tools during embedded runtime runs.",
   "tools.toolSearch.mode":
-    'Choose the model-facing surface: "code" exposes `tool_search_code`; "tools" exposes structured search/describe/call fallback tools; "directory" keeps a bounded tool directory visible, exposes a bounded set of likely or required schemas, and defers the rest behind search/describe/call.',
-  "tools.toolSearch.codeTimeoutMs":
-    "Maximum milliseconds for one `tool_search_code` execution. Runtime clamps values to the supported 1s..60s range.",
+    'Choose the model-facing surface: "tools" (default) exposes structured search/describe/call tools; "directory" keeps a bounded tool directory visible, exposes a bounded set of likely or required schemas, and defers the rest behind search/describe/call.',
+  "tools.toolSearch.include":
+    "Presentation selectors for catalog-eligible, policy-approved tools. Omitted selects all eligible tools; [] selects none. Fields within a selector are ANDed; selectors are ORed. Unselected tools remain directly callable. Does not affect independent Code Mode or Codex-native search.",
+  "tools.toolSearch.include[].source":
+    'Tool origin: "openclaw" for core and non-MCP plugins, "mcp" for registered MCP tools, or "client" for client-supplied tools. Qualify names with a source to avoid matching lookalikes.',
+  "tools.toolSearch.include[].name":
+    "Registered tool name or * glob, using tool-policy normalization (including aliases). Name-only selectors match across sources. No regex support or tool-group expansion.",
+  "tools.toolSearch.exclude":
+    "Tools to keep directly visible instead of cataloging. Uses the same selectors as include; exclusion wins. Omitted or [] excludes nothing. Does not grant permissions or override direct-only and runtime-required tools.",
+  "tools.toolSearch.exclude[].source":
+    'Origin to exclude from cataloging: "openclaw", "mcp", or "client". ANDed with name when both are present.',
+  "tools.toolSearch.exclude[].name":
+    "Registered tool name or * glob to keep direct, using tool-policy normalization. Name-only selectors match across sources; use source qualification to avoid unintended matches.",
   "tools.toolSearch.searchDefaultLimit":
     "Default number of Tool Search results returned when the model omits a limit. Runtime clamps this to `maxSearchLimit`.",
   "tools.toolSearch.maxSearchLimit":
     "Maximum number of Tool Search results a model can request. Runtime clamps values to the supported 1..50 range.",
   "tools.codeMode":
-    "Generic OpenClaw code mode. When enabled, agent runs expose only `exec` and `wait` to the model and hide normal tools behind a QuickJS-WASI catalog bridge.",
+    'Generic OpenClaw Code Mode. When omitted globally, defaults to `"auto"`; an authored object without `enabled` remains off. Engaged agent runs expose only `exec` and `wait` to the model and access normal tools through the catalog bridge.',
   "tools.codeMode.enabled":
-    'Global OpenClaw Code Mode default. Off when omitted, including objects without `enabled`. `"auto"` engages catalog-preferred models; `true` engages tool-capable runs. Agent and model activation overrides take precedence. An engaged run fails closed if the runtime is unavailable instead of exposing the full tool list.',
-  "tools.codeMode.runtime": 'Guest JavaScript runtime. Only "quickjs-wasi" is supported.',
+    'Global OpenClaw Code Mode activation. A completely absent global setting defaults to `"auto"`; an authored object without `enabled` remains off. `"auto"` engages catalog-preferred models, while `true` engages tool-capable runs. Agent and model activation overrides take precedence. An engaged run is blocked if the runtime is unavailable instead of exposing the full tool list.',
+  "tools.codeMode.executor":
+    'JavaScript executor: "node" (default) uses Node vm for trusted code and is not a security sandbox; "quickjs" uses the bundled QuickJS WASM plugin for hardened guest execution. Tool permissions apply to both. Code Mode cannot run if the selected executor is unavailable.',
   "tools.codeMode.mode":
     'Model-facing surface. Only "only" is supported: expose code-mode `exec` and `wait` and hide normal tools.',
-  "tools.codeMode.languages":
-    'Accepted source languages for `exec`. Supported values are "javascript" and "typescript".',
   "tools.codeMode.timeoutMs": "Maximum milliseconds for one code-mode `exec` or `wait` call.",
-  "tools.codeMode.memoryLimitBytes": "QuickJS heap limit for one code-mode VM.",
+  "tools.codeMode.memoryLimitBytes":
+    "QuickJS guest heap limit or best-effort Node worker V8 heap budget in bytes. Node runtime overhead and minimum engine allocations affect the effective budget; external buffers and process RSS are excluded. This is not a security guarantee.",
   "tools.codeMode.maxOutputBytes": "Maximum serialized bytes returned through code-mode output.",
   "tools.codeMode.maxSnapshotBytes":
     "Maximum serialized bytes retained for one suspended QuickJS snapshot.",
   "tools.codeMode.maxPendingToolCalls":
     "Maximum concurrent nested tool calls a code-mode VM can start before it must resume later.",
   "tools.codeMode.snapshotTtlSeconds":
-    "How long suspended code-mode snapshots can be resumed with `wait` before they expire.",
+    "How long suspended Code Mode runs can be resumed with `wait` before they expire.",
   "tools.codeMode.searchDefaultLimit":
     "Default number of hidden catalog search results returned by `catalog.search` inside code mode.",
   "tools.codeMode.maxSearchLimit":
@@ -155,7 +176,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Collector-mode subagent orchestration. Enabled by default; set false to opt out. Tool permissions still apply to agents_wait and swarm spawn options.",
   "tools.swarm.enabled":
     "Enables collector-mode subagents and agents_wait. Default is on; set false to opt out.",
-  "tools.swarm.maxConcurrent": "Maximum concurrently running collector children per swarm group.",
+  "tools.swarm.maxConcurrent":
+    "Maximum running collector children in each swarm group's separate execution lane (default: 32), independent of ordinary subagent concurrency. Each running child uses one model stream and one Code Mode worker isolate. Group admission limits still apply.",
   "tools.swarm.maxChildrenPerGroup": "Maximum live collector children per swarm group.",
   "tools.swarm.maxTotalPerGroup": "Maximum lifetime collector spawns per swarm group.",
   "tools.swarm.waitTimeoutSecondsMax": "Maximum timeout accepted by agents_wait, in seconds.",
@@ -201,9 +223,13 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.root":
     "Optional filesystem root for Control UI assets (defaults to dist/control-ui).",
   "gateway.controlUi.experimental":
-    "Opt-in Control UI experiments. These capabilities may change between releases and remain disabled unless explicitly enabled.",
+    "Control UI experiments and retained advanced overrides. Experiments are disabled by default unless their setting documents otherwise.",
   "gateway.controlUi.experimental.customPlugins":
-    "Allow user-installed plugins to execute native JavaScript in the Control UI (default: false). Bundled plugin views remain available. Custom UI shares the signed-in operator's Gateway permissions; enable only for trusted plugins. Restart the Gateway and reload open Control UI pages after changing this setting.",
+    "Allow enabled user-installed plugins to execute native JavaScript in the Control UI (default: true). Retained as an advanced config-only opt-out; existing false values remain off. Bundled plugin views are unaffected. Native UI shares the signed-in operator's Gateway permissions; install only trusted plugins. Changes apply without a Gateway restart. After disabling, reload open Control UI pages to clear previously loaded plugin code.",
+  "gateway.controlUi.experimental.templates":
+    "Enable ClawHub discovery and one-way Add through the Control UI and Gateway (default: false). Existing agents keep running while this is off.",
+  "gateway.controlUi.experimental.chatBubbles":
+    "Enable experimental speech bubbles in the Control UI (default: false). Home defaults to bubbles while enabled; browser-local per-session choices take precedence. Changes apply without a Gateway restart.",
   "gateway.controlUi.environment":
     "Optional public environment identity shown in the Control UI stripe, agent avatar, label pills, browser title, and favicon. Omit it to preserve the default appearance.",
   "gateway.controlUi.environment.label":
@@ -211,23 +237,34 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.environment.color":
     "Named environment color ramp: teal, amber, purple, coral, pink, blue, green, red, or gray.",
   "gateway.controlUi.communityInvite":
-    "Show the Discord community invitation in the Control UI served by this Gateway (default on). Set false to hide it for every browser using this UI deployment. Changes apply after browser refresh or reconnect; re-enabling preserves browser-local dismissals.",
+    "Show a dismissible Community card in the Control UI sidebar (default on), with Discord, Reddit, and X links. Set false to hide it for every browser using this UI deployment. Changes apply after browser refresh or reconnect. Existing browser-local dismissals remain honored.",
+  "gateway.controlUi.newSessionModelDefaults":
+    'Choose "configured" to start fresh Control UI drafts with the selected agent’s configured model, runtime and reasoning defaults instead of remembered selections. Default: "last-used". Explicit draft and conversation choices remain editable; Fast Mode and placement preferences are unchanged. Applies after browser refresh or reconnect.',
+  "gateway.controlUi.github.host":
+    "Host this service credential may access. Omit for github.com; set to gateway.github.host for Enterprise project discovery and account metadata.",
   "gateway.controlUi.github.token":
-    "SecretRef-backed service credential for Control UI project discovery and GitHub hover previews without a managed identity. Hover previews prefer the selected agent's configured GitHub identity, inheriting the system identity when there is no override. Prefer explicit configuration for clear service ownership. Omit it to retain the GH_TOKEN/GITHUB_TOKEN fallback from the shared Gateway process environment. An explicitly configured but unavailable credential fails closed.",
+    "SecretRef-backed service credential for Control UI project discovery and GitHub hover previews without a managed identity. Set gateway.controlUi.github.host for Enterprise; an omitted host means github.com. Hover previews prefer the selected agent's configured GitHub identity. GH_TOKEN/GITHUB_TOKEN fallback applies only to github.com. Requests using a mismatched or unavailable credential are rejected.",
   "gateway.controlUi.sessionObserver":
     "Produce live session status digests for subscribed Control UI clients with each agent's utility model (default on). Set false to disable observer model calls gateway-wide; setting agents.defaults.utilityModel to an empty string disables utility-model observation for agents that do not override it.",
   "gateway.controlUi.embedSandbox":
     'Iframe sandbox policy for hosted Control UI embeds. "strict" disables scripts, "scripts" allows interactive embeds while keeping origin isolation (default), and "trusted" adds `allow-same-origin` for same-site documents that intentionally need stronger privileges.',
   "gateway.controlUi.allowExternalEmbedUrls":
-    "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
+    "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas documents do not need it.",
   "gateway.controlUi.automaticallyFetchFavicons":
-    "Fetch link favicons through the Gateway (default on). The Gateway requests only HTTPS /favicon.ico from public destinations, applies strict SSRF checks to every DNS result and redirect, and validates bounded image bytes. Set false to prevent all favicon route requests and destination fetches.",
+    "Fetch link favicons and browser-tab social previews through the Gateway (default on). Browser-tab cards load public page metadata and declared images without browser cookies or site credentials. All requests use strict SSRF checks and bounded HTML/image processing. Set false to disable both automatic favicon and page-preview fetches; live browser screenshots are unaffected.",
   "gateway.controlUi.allowedOrigins":
-    'Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
+    'Allowed browser origins for Control UI/WebChat connections (full origins only, e.g. https://control.example.com). When omitted, defaults to gateway.publicOrigin if configured. An explicit list, including [], overrides that default; existing local/private-origin rules still apply. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback":
     "DANGEROUS toggle that enables Host-header based origin fallback for Control UI/WebChat websocket checks. This mode is supported when your deployment intentionally relies on Host-header origin policy; explicit gateway.controlUi.allowedOrigins remains the recommended hardened default.",
+  "gateway.portals": "Portal publication and private ingress settings.",
+  "gateway.portals.ingress":
+    "Optional operator-managed private HTTPS wildcard reverse proxy. Forward original Host, paths, and WebSocket upgrades to the dedicated loopback listener. Portal bearer authentication remains required. Requires Gateway restart.",
+  "gateway.portals.ingress.domain":
+    "Bare DNS domain for random portal subdomains (for example previews.example.net). Configure wildcard DNS and HTTPS privately; do not share the Gateway or Control UI hostname namespace.",
+  "gateway.portals.ingress.port":
+    "Dedicated loopback HTTP port receiving the private wildcard HTTPS proxy. Must differ from the Gateway port. This is the backend port, not the public HTTPS port.",
   "gateway.publicOrigin":
-    "Externally reachable HTTPS origin of the Gateway. HTTP is allowed only for localhost, 127.0.0.1, or [::1]. Per-requester MCP OAuth uses it to build the callback URL at /oauth/mcp/callback; channel session links and plugin-generated viewer links use it to reach the Control UI and Gateway routes.",
+    "Externally reachable HTTPS origin of the Gateway. Also the default browser origin when gateway.controlUi.allowedOrigins is omitted. HTTP is allowed only for localhost, 127.0.0.1, or [::1]. Per-requester MCP OAuth uses it to build the callback URL at /oauth/mcp/callback; channel session links and plugin-generated viewer links use it to reach the Control UI and Gateway routes.",
   "mcp.apps":
     "MCP Apps UI support. When enabled, configured MCP servers may provide interactive HTML views for their tool results.",
   "mcp.apps.enabled":
@@ -265,7 +302,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.reload.mode":
     'Controls how config edits are applied: "off" ignores live edits and "hybrid" applies hot-safe changes then restarts when required.',
   "gateway.nodes.browser.mode":
-    'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
+    'Node browser routing ("auto" = prefer the host browser, use a single connected browser node when local capability is unavailable; "manual" = require an explicit node selection or configured pin; "off" = disable node routing).',
   "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",
   "gateway.nodes.pairing":
     "Node pairing policy settings. SSH-verified auto-approval is enabled by default; CIDR auto-approval stays disabled unless explicit trusted CIDR/IP allowlists are configured.",
@@ -282,6 +319,10 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Node command names to block even if present in node claims or default allowlist (exact command-name matching only, e.g. `system.run`; does not inspect shell text inside that command).",
   nodeHost:
     "Node host controls for features exposed from this gateway node to other nodes or clients. Keep defaults unless you intentionally proxy local capabilities across your node network.",
+  "nodeHost.autoUpdate":
+    "Controls automatic updates of the separate runtime for packaged headless node hosts. Checks hourly and waits for all node work to finish before restarting; automatic restarts are at least 12 hours apart.",
+  "nodeHost.autoUpdate.enabled":
+    "Enable automatic stable or beta updates for long-running packaged headless nodes (default: true). Set false to opt out. Also disabled by update.checkOnStart=false or OPENCLAW_NO_AUTO_UPDATE=1; source checkouts, native apps, private workers, dev, and extended-stable do not auto-apply.",
   "nodeHost.agentRuns":
     "Opt in to approval-gated native agent turns on this headless node host. Disabled by default.",
   "nodeHost.agentRuns.claude":
@@ -292,12 +333,14 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Opt in to full OpenClaw worker session hosting from Gateway-managed bundles. Disabled by default.",
   "nodeHost.workerRuns.enabled":
     "Allow this paired node to host sessions from exact bundles installed by its Gateway (default: false).",
+  "nodeHost.workerRuns.folders":
+    "Optional directory roots restricting in-place sessions to those roots and their subdirectories. Unset allows any existing directory except filesystem roots and private worker storage; [] disables device-folder sessions. Use absolute or ~/ paths. Existing files stay on the device; session deletion never removes these folders. Requires workerRuns.enabled.",
   "nodeHost.workerRuns.capacity":
     "Maximum concurrent worker sessions hosted by this node (default: the number of available CPU cores). Must be an integer from 1 through 1024.",
   "nodeHost.workerRuns.isolation":
     'Select the worker-session process boundary: "none" runs directly on the node host (default); "container" requires a working Docker-compatible engine and never falls back to host execution.',
   "nodeHost.workerRuns.containerImage":
-    'Optional Node 24.16+ or 26.1+ image for container-isolated workers (default: "node:24.19.0-slim"). Use a digest-pinned, private-registry, or preloaded image when needed; missing images are pulled on first use.',
+    'Optional Node 24.22.1+ or 26.12.1+ image for container-isolated workers (default: "node:24.22.1-slim"). Use a digest-pinned, private-registry, or preloaded image when needed; missing images are pulled on first use.',
   "nodeHost.browserProxy":
     "Groups browser-proxy settings for exposing local browser control through node routing. Enable only when remote node workflows need your local browser profiles.",
   "nodeHost.browserProxy.enabled":
@@ -355,11 +398,19 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "bindings[].acp.backend":
     "ACP backend override for this binding (falls back to agent runtime ACP backend, then global acp.backend).",
   broadcast:
-    "Broadcast routing map for sending the same outbound message to multiple peer IDs per source conversation. Keep this minimal and audited because one source can fan out to many destinations.",
+    "Use agent group threads to run several configured agents on one inbound conversation, each in its own session. Channel-qualified entries support bounded follow-up rounds; legacy WhatsApp peer arrays retain single-pass behavior.",
   "broadcast.strategy":
-    'Delivery order for broadcast fan-out: "parallel" sends to all targets concurrently, while "sequential" sends one-by-one. Use "parallel" for speed and "sequential" for stricter ordering/backpressure control.',
+    'Participant execution order: "parallel" (default) runs agents concurrently, while "sequential" runs them in configured order. Each round completes before the next begins.',
   "broadcast.*":
-    "Per-source broadcast destination list where each key is a source peer ID and the value is an array of destination peer IDs. Keep lists intentional to avoid accidental message amplification.",
+    'Use a channel-qualified peer ID (for example "telegram:-100123") to configure an array of agent IDs or a strict object with agents, mentionGating, maxRounds, and maxTurns. Qualified entries take precedence over legacy WhatsApp peer keys and allow at most 16 agents.',
+  "broadcast.*.agents":
+    "Participant agent IDs from agents.entries (maximum: 16). Each participant uses its own session for this channel, account, conversation, and thread.",
+  "broadcast.*.mentionGating":
+    "Select only explicitly @mentioned participants when any match; otherwise run all participants (default: true). Bare names or emoji do not select participants. Channel allowlists and admission rules still apply.",
+  "broadcast.*.maxRounds":
+    "Maximum rounds per inbound message, including the initial round (integer: 1–4, default: 1). Follow-up rounds share bounded, attributed sibling replies and stop when every participant passes.",
+  "broadcast.*.maxTurns":
+    "Maximum participant turns per inbound message across all rounds (integer: 1–32, default: agents.length). Slots are reserved before parallel dispatch; this bounds agent turns, not physical message chunks or tool sends. Budgets do not resume after restart.",
   "diagnostics.flags":
     'Enable targeted diagnostics logs by flag (e.g. ["telegram.http"]). Supports wildcards like "telegram.*" or "*".',
   "diagnostics.enabled":
@@ -401,13 +452,13 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.exec.applyPatch.enabled":
     "Enable or disable apply_patch for OpenAI and OpenAI Codex models when allowed by tool policy (default: true).",
   "tools.exec.applyPatch.workspaceOnly":
-    "Restrict apply_patch paths to the workspace directory (default: true). Set false to allow writing outside the workspace (dangerous).",
+    "Restrict host apply_patch paths to the workspace directory (default: false). Set true for workspace-only access; required roots and session restrictions still apply.",
   "tools.exec.applyPatch.allowModels":
     'Optional allowlist of model ids (e.g. "gpt-5.4" or "openai/gpt-5.4").',
   "tools.loopDetection.enabled":
-    "Enable repetitive tool-call loop detection and backoff safety checks (default: false).",
+    "Controls rolling-history tool-loop detection and the post-compaction guard. Omit to keep rolling detection off and post-compaction protection on. Set true to enable both, or false to disable both.",
   "tools.exec.notifyOnExit":
-    "When true (default), backgrounded exec sessions on exit and node exec lifecycle events enqueue a system event and request a heartbeat.",
+    "When true (default), backgrounded exec sessions on exit and node exec lifecycle events enqueue a follow-up for the originating session.",
   "tools.exec.notifyOnExitEmptySuccess":
     "When true, successful backgrounded exec exits with empty output still enqueue a completion system event (default: false).",
   "tools.exec.pathPrepend": "Directories to prepend to PATH for exec runs (gateway/sandbox).",
@@ -440,9 +491,9 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "agents.entries.*.tools.byProvider":
     "Per-agent provider-specific tool policy overrides for channel-scoped capability control. Use this when a single agent needs tighter restrictions on one provider than others.",
   "agents.entries.*.tools.message.crossContext.allowWithinProvider":
-    "Per-agent message guard for sending to other conversations on the same provider. Set false for current-conversation-only public agents.",
+    "Per-agent message guard for sending to other conversations on the same provider. Set both this and allowAcrossProviders to false for current-conversation-only public agents.",
   "agents.entries.*.tools.message.crossContext.allowAcrossProviders":
-    "Per-agent message guard for sending across providers. Keep false for public or sandboxed agents.",
+    "Per-agent override for sending across providers. Inherits the global setting (default: true). Set false to block cross-provider messaging for this agent.",
   "agents.entries.*.tools.message.actions.allow":
     'Per-agent message action allowlist for the message tool. Set to a minimal list such as ["send"] for public sandbox agents so read, edit, delete, reaction, and other provider-specific message actions stay hidden and blocked.',
   "tools.exec.approvalRunningNoticeMs":
@@ -458,7 +509,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.links.scope":
     "Controls when link understanding runs relative to conversation context and message type. Keep scope conservative to avoid unnecessary fetches on messages where links are not actionable.",
   "tools.media.models":
-    "Canonical media-understanding model list. Use image, audio, or video capability tags on every entry so each pipeline selects only compatible fallbacks.",
+    "Media-understanding model list. Use image, audio, or video capability tags on every entry so each pipeline selects only compatible fallbacks.",
   "tools.media.concurrency":
     "Maximum number of concurrent media understanding operations per turn across image, audio, and video tasks. Lower this in resource-constrained deployments to prevent CPU/network saturation.",
   "tools.media.image.enabled":
@@ -470,7 +521,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.media.image.maxChars":
     "Default maximum image description length. Use a lower value for compact context or a higher value for detailed OCR and scene analysis.",
   "tools.media.image.prompt":
-    "Default image-understanding prompt when an entry does not override it. Keep this deterministic when consumers rely on stable descriptions.",
+    "Default image-understanding prompt when an entry does not override it. Use a fixed prompt when consumers rely on stable descriptions.",
   "tools.media.image.timeoutSeconds":
     "Default timeout for image-understanding requests. Increase it for large images or slower local vision models.",
   "tools.media.image.scope":
@@ -487,7 +538,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.media.video.maxChars":
     "Default maximum video description length. Use a lower value for compact context or a higher value for detailed scene summaries.",
   "tools.media.video.prompt":
-    "Default video-understanding prompt when an entry does not override it. Keep this deterministic when consumers rely on stable summaries.",
+    "Default video-understanding prompt when an entry does not override it. Use a fixed prompt when consumers rely on stable summaries.",
   "tools.media.video.timeoutSeconds":
     "Default timeout for video-understanding requests. Increase it for longer clips or slower local analysis models.",
   "tools.media.video.scope":
@@ -499,9 +550,11 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "skills.load.allowSymlinkTargets":
     "Trusted real target roots that skill symlinks may resolve into when they sit outside their configured source root. Keep this narrow, such as a sibling repo skills directory.",
   "skills.load.watch":
-    "Enable filesystem watching for skill-definition changes so updates can be applied without full process restart. Keep enabled in development workflows and disable in immutable production images.",
+    "Enable filesystem-triggered skill discovery with a safety rescan every 30 minutes for missed events. Disabling this leaves explicit OpenClaw skill changes, relevant configuration changes, and Gateway startup refreshing skills immediately. Existing sessions use changed snapshots on their next agent turn.",
   "skills.workshop.autonomous.mode":
-    'Controls background learning: "off" keeps only the suggestion nudge, "propose" creates pending proposals, and "auto" applies captured proposals and runs weekly review of Workshop-owned skills using ordinary file edits. Default: "auto".',
+    'Controls background learning: "auto" lets agents save and update Workshop skills after substantial work, and archives learned skills unused for 30 days. Every change is recorded and undoable. "propose" saves what background reviews would change as drafts instead; review them with /learn drafts. "off" disables background learning. Default: "auto".',
+  "skills.workshop.autonomous.channelNotices":
+    'Post background review notices to channel conversations, except Slack, with an Undo button (default: false); the Control UI shows that message as plain text. When disabled, notices appear only as the Learned row in the Control UI chat. Saying "undo" works either way.',
   approvals:
     "Approval routing controls for forwarding exec and plugin approval requests to chat destinations outside the originating session. Keep these disabled unless operators need explicit out-of-band approval visibility.",
   "approvals.exec":
@@ -511,7 +564,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "approvals.exec.mode":
     'Controls where approval prompts are sent: "session" uses origin chat, "targets" uses configured targets, and "both" sends to both paths. Use "session" as baseline and expand only when operational workflow requires redundancy.',
   "approvals.exec.agentFilter":
-    'Optional allowlist of agent IDs eligible for forwarded approvals, for example `["primary", "ops-agent"]`. Use this to limit forwarding blast radius and avoid notifying channels for unrelated agents.',
+    'Optional allowlist of agent IDs eligible for forwarded approvals, for example `["primary", "ops-agent"]`. Use this to avoid notifying channels for unrelated agents.',
   "approvals.exec.sessionFilter":
     'Optional session-key filters matched as substring or regex-style patterns, for example `["discord:", "^agent:ops:"]`. Use narrow patterns so only intended approval contexts are forwarded to shared destinations.',
   "approvals.exec.targets":
@@ -531,7 +584,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "approvals.plugin.mode":
     'Controls where plugin approval prompts are sent: "session" uses origin chat, "targets" uses configured targets, and "both" sends to both paths.',
   "approvals.plugin.agentFilter":
-    'Optional allowlist of agent IDs eligible for forwarded plugin approvals, for example `["primary", "ops-agent"]`. Use this to limit forwarding blast radius.',
+    'Optional allowlist of agent IDs eligible for forwarded plugin approvals, for example `["primary", "ops-agent"]`. Use this to select which agents\' approval requests are forwarded.',
   "approvals.plugin.sessionFilter":
     'Optional session-key filters matched as substring or regex-style patterns, for example `["discord:", "^agent:ops:"]`. Use narrow patterns so only intended approval contexts are forwarded.',
   "approvals.plugin.targets":
@@ -544,14 +597,22 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Optional account selector for multi-account channel setups when plugin approvals must route through a specific account context.",
   "approvals.plugin.targets[].threadId":
     "Optional thread/topic target for channels that support threaded delivery of forwarded plugin approvals.",
+  "approvals.plugin.slack":
+    "Slack reviewer policy for plugin approvals. Omit the default approvers list to retain account allowFrom/defaultTo authorization; set it to [] to deny Slack decisions by default.",
+  "approvals.plugin.slack.approvers":
+    "Default Slack plugin reviewers as raw U/W user IDs within the selected Slack account, or workspace-qualified team:<team-id>:user:<user-id> values. Plugin and tool lists override this list for their own requests.",
+  "approvals.plugin.slack.plugins":
+    "Reviewer overrides keyed by the selected native tool plugin ID. Tool keys encode the raw tool name.",
   "tools.fs.workspaceOnly":
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
   "tools.sessions.visibility":
-    'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_search/sessions_send/session_status. ("all" default = any session on the Gateway, including other agents and users; "agent" = any session in the current agent id; "self" = only current; "tree" = current session + spawned subagent sessions). Cross-agent access is on by default and scoped by tools.agentToAgent; use narrower visibility to restrict access.',
+    'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_search/sessions_send/session_status. ("all" default = any session on the Gateway, including other agents and users; "agent" = any session in the current agent id; "self" = only current; "tree" = current session + spawned subagent sessions). Cross-agent access is on by default and scoped by tools.agentToAgent; use narrower visibility to restrict reads and ordinary sends. Explicit agents.entries.<id>.tools.agentToAgent.send destinations can permit sends without widening reads.',
+  "tools.sessions.allowThreadTargets":
+    "Allow sessions_send to target thread- or topic-scoped chat sessions such as Telegram forum topics or Slack/Discord threads (default: false). The target runs in that session; anything it sends with the message tool lands in the human-facing thread.",
   "tools.message.crossContext.allowWithinProvider":
     "Allow sends to other channels within the same provider (default: true).",
   "tools.message.crossContext.allowAcrossProviders":
-    "Allow sends across different providers (default: false).",
+    "Allow sends across different providers (default: true). Set false to block cross-provider messaging.",
   "tools.message.crossContext.marker.enabled":
     "Add a visible origin marker when sending cross-context (default: true).",
   "tools.message.crossContext.marker.prefix":

@@ -34,7 +34,7 @@ topic. The triage ladder stays on this page; open the page that matches your que
     ```bash
     openclaw status
     ```
-    Fast local summary: OS + update, gateway/service reachability, agents/sessions, provider config + runtime issues (when the gateway is reachable).
+    Fast local summary: OS + update, Gateway/service reachability, agents/sessions, provider config + runtime issues (when the Gateway is reachable).
   </Step>
   <Step title="Pasteable report (safe to share)">
     ```bash
@@ -46,13 +46,15 @@ topic. The triage ladder stays on this page; open the page that matches your que
     ```bash
     openclaw gateway status
     ```
-    Shows supervisor runtime vs RPC reachability, the probe target URL, and which config the service likely used.
+    Shows supervisor runtime vs RPC reachability, the check target URL, and which config the service likely used.
   </Step>
-  <Step title="Deep probes">
+  <a id="deep-probes" />
+
+  <Step title="Deep checks">
     ```bash
     openclaw status --deep
     ```
-    Live gateway health probe, including channel probes when supported (requires a reachable gateway). See [Health](/gateway/health).
+    Live Gateway health check, including channel checks when supported (requires a reachable Gateway). See [Health](/gateway/health).
   </Step>
   <Step title="Tail the latest log">
     ```bash
@@ -77,7 +79,7 @@ topic. The triage ladder stays on this page; open the page that matches your que
     openclaw health --json
     openclaw health --verbose   # shows the target URL + config path on errors
     ```
-    Asks the running gateway for a full snapshot. See [Health](/gateway/health).
+    Asks the running Gateway for a full snapshot. See [Health](/gateway/health).
   </Step>
 </Steps>
 
@@ -99,7 +101,7 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
 
 ---
 
-Still stuck? Ask in [Discord](https://discord.com/invite/clawd) or use the [GitHub issue chooser](https://github.com/openclaw/openclaw/issues/new/choose).
+Still stuck? For official OpenClaw support, visit [community.openclaw.ai](https://community.openclaw.ai/). For reproducible product or documentation bugs, use the [GitHub issue chooser](https://github.com/openclaw/openclaw/issues/new/choose). Report security vulnerabilities privately through the [security policy](https://github.com/openclaw/openclaw/blob/main/SECURITY.md).
 
 ## Where each section moved
 
@@ -195,7 +197,7 @@ resolves. Each entry points at the page that now holds the answer.
 - <a id="can-i-run-multiple-bots-or-chats-at-the-same-time-slack-and-how-should-i-set-that-up" />[Can I run multiple bots or chats at the same time (Slack), and how should I set that up?](/help/faq/sessions-and-chats#can-i-run-multiple-bots-or-chats-at-the-same-time-slack-and-how-should-i-set-that-up)
 - <a id="gateway%3A-ports%2C-%22already-running%22%2C-and-remote-mode" /><a id="gateway-ports-already-running-and-remote-mode" />[Gateway: ports, "already running", and remote mode](/help/faq/gateway-ports-and-remote-mode#gateway-ports-already-running-and-remote-mode)
 - <a id="what-port-does-the-gateway-use" />[What port does the Gateway use?](/help/faq/gateway-ports-and-remote-mode#what-port-does-the-gateway-use)
-- <a id="why-does-openclaw-gateway-status-say-runtime-running-but-connectivity-probe-failed" />[Why does openclaw gateway status say "Runtime: running" but "Connectivity probe: failed"?](/help/faq/gateway-ports-and-remote-mode#why-does-openclaw-gateway-status-say-runtime-running-but-connectivity-probe-failed)
+- <a id="why-does-openclaw-gateway-status-say-runtime-running-but-connectivity-probe-failed" />[Why does openclaw gateway status report a running process but a failed connection?](/help/faq/gateway-ports-and-remote-mode#why-does-openclaw-gateway-status-say-runtime-running-but-connectivity-probe-failed)
 - <a id="why-does-openclaw-gateway-status-show-config-cli-and-config-service-different" />[Why does openclaw gateway status show "Config (cli)" and "Config (service)" different?](/help/faq/gateway-ports-and-remote-mode#why-does-openclaw-gateway-status-show-config-cli-and-config-service-different)
 - <a id="what-does-another-gateway-instance-is-already-listening-mean" />[What does "another gateway instance is already listening" mean?](/help/faq/gateway-ports-and-remote-mode#what-does-another-gateway-instance-is-already-listening-mean)
 - <a id="how-do-i-run-openclaw-in-remote-mode-client-connects-to-a-gateway-elsewhere" />[How do I run OpenClaw in remote mode (client connects to a Gateway elsewhere)?](/help/faq/gateway-ports-and-remote-mode#how-do-i-run-openclaw-in-remote-mode-client-connects-to-a-gateway-elsewhere)

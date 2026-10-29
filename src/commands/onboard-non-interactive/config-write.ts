@@ -8,7 +8,7 @@ export async function commitNonInteractiveOnboardConfig(params: {
   reset?: boolean;
 }): Promise<OpenClawConfig> {
   const { writeWizardConfigFile } = await import("../../wizard/setup.shared.js");
-  // Ordinary onboard reruns must preserve existing agents.list / bindings.
+  // Ordinary onboard reruns must preserve existing agents.entries / bindings.
   // Only explicit --reset may allow a config size drop; see openclaw#84692.
   return (
     await writeWizardConfigFile(params.nextConfig, {

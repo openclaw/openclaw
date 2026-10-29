@@ -5,6 +5,7 @@ const PROTOCOL_FLAGS = new Set([
   "--print",
   "--verbose",
   "--include-partial-messages",
+  "--replay-user-messages",
   "--dangerously-skip-permissions",
   "--allow-dangerously-skip-permissions",
 ]);
@@ -81,7 +82,7 @@ export function prepareClaudeCliTransportArgs(context: CliBackendExecuteContext)
   }
   let approvedTools = [...new Set(allowedTools)];
   if (context.toolAvailability) {
-    tools = [...context.toolAvailability.native];
+    tools = [...context.toolAvailability.native, ...(context.toolAvailability.discovery ?? [])];
     approvedTools = context.toolAvailability.openClaw
       .map((name) => `mcp__openclaw__${name}`)
       .filter((name) => allowedTools.includes(name) || allowedTools.includes("mcp__openclaw__*"));
@@ -94,6 +95,7 @@ export function prepareClaudeCliTransportArgs(context: CliBackendExecuteContext)
     "stream-json",
     "--verbose",
     "--include-partial-messages",
+    "--replay-user-messages",
     "--permission-prompt-tool",
     "stdio",
     "--permission-mode",

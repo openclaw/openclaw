@@ -55,7 +55,7 @@ Maintenance changes 3,009 to 3,760 of 6,016. See [Maintainer and Internal Change
 - Let beta release checks finish before parent timeout [#117463](https://github.com/openclaw/openclaw/pull/117463)
 - Deduplicate plugin TypeScript project boundaries [#117474](https://github.com/openclaw/openclaw/pull/117474)
 - Deduplicate Codex prompt snapshot fixtures [#117476](https://github.com/openclaw/openclaw/pull/117476)
-- fix(ci): bound trufflehog installer download timeouts [#117480](https://github.com/openclaw/openclaw/pull/117480)
+- fix(ci): bound credential scanner installer download timeouts [#117480](https://github.com/openclaw/openclaw/pull/117480)
 - Consolidate agent compaction and context-engine ownership [#117482](https://github.com/openclaw/openclaw/pull/117482)
 - Clarify bundled-plugin memory attribution in Kova reports [#117500](https://github.com/openclaw/openclaw/pull/117500)
 - Deduplicate secrets runtime-state test fixtures [#117502](https://github.com/openclaw/openclaw/pull/117502)

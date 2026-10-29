@@ -3,10 +3,6 @@ import { relative } from "node:path";
 import { listTrackedTestFiles } from "./list-test-files.mts";
 import { assignWeightedTestFiles } from "./weighted-test-shards.mts";
 
-function listContractTestFiles(rootDir = "src/channels/plugins/contracts") {
-  return listTrackedTestFiles(rootDir);
-}
-
 const CONTRACT_FILE_WEIGHTS = new Map([
   ["channel-import-guardrails.test.ts", 18],
   ["outbound-payload.contract.test.ts", 18],
@@ -46,7 +42,7 @@ export function createChannelContractTestShards() {
 
   const coreFiles = new Array<string>();
   const registryFiles = new Array<string>();
-  for (const file of listContractTestFiles(rootDir)) {
+  for (const file of listTrackedTestFiles(rootDir)) {
     const name = relative(rootDir, file).replaceAll("\\", "/");
     (name.startsWith("plugins-core.") || name.startsWith("plugin.")
       ? coreFiles

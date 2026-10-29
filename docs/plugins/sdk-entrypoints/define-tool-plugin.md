@@ -21,8 +21,8 @@ the OpenClaw tool-result format, and exposes static metadata that
 `configSchema`).
 
 ```typescript
-import { Type } from "typebox";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
+import { Type } from "typebox";
 
 export default defineToolPlugin({
   id: "stock-quotes",
@@ -67,3 +67,48 @@ export default defineToolPlugin({
 - Runtime loading stays strict: installed plugins still need
   `openclaw.plugin.json` and `package.json` `openclaw.extensions`. OpenClaw
   never executes plugin code to infer missing manifest data.
+
+## Dictionary schemas and preparation validation
+
+The same `openclaw/plugin-sdk/tool-plugin` entry point exports:
+
+- `openRecord(description)`: an explicitly open dictionary schema that preserves
+  arbitrary JSON keys through native OpenAI compatibility normalization.
+- `ToolArgumentValidationError`: throw from a concrete tool's `prepareArguments`
+  to report an argument-validation rejection instead of a generic preparation failure.
+
+See [Provider-portable dictionaries and validation](/plugins/tool-plugins#provider-portable-dictionaries-and-validation)
+for provider differences, diagnostic surfaces, and examples.
+
+## Input-dependent output schemas
+
+The existing `outputSchema` field supports action-specific Code Mode results
+through the versioned `x-openclaw-input-discriminator` JSON Schema annotation.
+Construct the union and mapping from the same local variants using standard
+TypeBox APIs:
+
+```typescript
+const variants = Object.entries({
+  list: Type.Object({ items: Type.Array(Type.String()) }),
+  status: Type.Object({ ready: Type.Boolean() }),
+});
+const outputSchema = Type.Union(
+  variants.map(([, schema]) => schema),
+  {
+    "x-openclaw-input-discriminator": {
+      version: 1,
+      inputProperty: "action",
+      mapping: Object.fromEntries(variants.map(([value], index) => [value, index])),
+    },
+  },
+);
+```
+
+Use the result as `outputSchema` in `defineToolPlugin` or `api.registerTool`.
+Include success and non-throwing failure outcomes in each variant. Static metadata
+preserves the annotation. Code Mode infers the selected return type; Tool Search
+validates the actual and originally advertised operation results. Missing or
+broad selectors retain a sound union. Reference-bearing schemas and declarations
+that exceed existing bounds use the conservative umbrella contract. See
+[Input-dependent outputs](/tools/code-mode/output#input-dependent-outputs) for
+version, hook, and validation behavior.

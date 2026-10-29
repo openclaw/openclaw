@@ -1,7 +1,8 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type { RealtimeVoiceCloseDisposition } from "openclaw/plugin-sdk/realtime-voice";
 import type { RawData } from "ws";
-import type { OpenAIQuicksilverSocket } from "./realtime-quicksilver-sideband.js";
+import type { OpenAIQuicksilverSocket } from "./realtime-quicksilver-socket.shared.js";
 
 const REALTIME_CLEANUP_RETRY_DELAYS_MS = [1_000, 5_000];
 
@@ -9,7 +10,7 @@ export type OpenAIRealtimeSession = {
   closing?: Promise<void>;
   initialRetirement?: Promise<void>;
   detach?: () => void;
-  retire?: (error?: Error) => void;
+  retire?: (error?: Error) => void | Promise<void>;
   dispose?: () => Promise<void> | void;
   retryTimer?: NodeJS.Timeout;
   retryIndex?: number;
@@ -19,29 +20,11 @@ export type OpenAIRealtimeSession = {
   token: string;
 };
 
-type SessionLease = {
-  activeSessions: ReadonlyMap<string, OpenAIRealtimeSession>;
-  retiringSessions: ReadonlyMap<string, OpenAIRealtimeSession>;
-  adopt: (token: string, wire: Omit<OpenAIRealtimeSession, "token">) => OpenAIRealtimeSession;
-  close: (
-    session: OpenAIRealtimeSession,
-    disposition?: RealtimeVoiceCloseDisposition,
-    error?: Error,
-    retry?: boolean,
-  ) => Promise<void>;
-  expireIn: (session: OpenAIRealtimeSession, ttlMs: number) => void;
-  deliverAnswer: (
-    session: OpenAIRealtimeSession,
-    signal: AbortSignal,
-    deliver: () => Promise<boolean>,
-  ) => Promise<void>;
-};
-
 export function createOpenAIRealtimeSessionLease(params: {
   logger: Pick<PluginLogger, "warn">;
   releaseReservation: (token: string) => void;
   onSettled: () => void;
-}): SessionLease {
+}) {
   const activeSessions = new Map<string, OpenAIRealtimeSession>();
   const retiringSessions = new Map<string, OpenAIRealtimeSession>();
   const activeSessionLease = {
@@ -70,27 +53,10 @@ export function createOpenAIRealtimeSessionLease(params: {
         session.retryIndex = 0;
       }
       clearTimeout(session.timer);
-      let resolve!: () => void;
-      let reject!: (error: unknown) => void;
-      const closing = new Promise<void>((accept, fail) => {
-        resolve = accept;
-        reject = fail;
-      });
+      const { promise: closing, resolve, reject } = createDeferred<void>();
       // Retirement removes admission before callbacks; the cleanup capability and
       // reservation remain owned until the remote operation actually settles.
       session.closing = closing;
-      if (activeSessions.delete(session.token)) {
-        session.initialRetirement = closing;
-        retiringSessions.set(session.token, session);
-        try {
-          if (disposition === "detach") {
-            session.detach?.();
-          }
-          session.retire?.(error);
-        } catch {
-          params.logger.warn("OpenAI realtime local retirement failed; attempting remote cleanup");
-        }
-      }
       const complete = () => {
         retiringSessions.delete(session.token);
         params.releaseReservation(session.token);
@@ -116,16 +82,23 @@ export function createOpenAIRealtimeSessionLease(params: {
         }
         reject(failure);
       };
-      try {
-        const disposal = session.dispose?.();
-        if (disposal) {
-          void Promise.resolve(disposal).then(complete, failed);
-        } else {
-          complete();
+      void (async () => {
+        if (activeSessions.delete(session.token)) {
+          session.initialRetirement = closing;
+          retiringSessions.set(session.token, session);
+          try {
+            if (disposition === "detach") {
+              session.detach?.();
+            }
+            await session.retire?.(error);
+          } catch {
+            params.logger.warn(
+              "OpenAI realtime local retirement failed; attempting remote cleanup",
+            );
+          }
         }
-      } catch (failure) {
-        failed(failure);
-      }
+        await session.dispose?.();
+      })().then(complete, failed);
       return closing;
     },
     expireIn: (session: OpenAIRealtimeSession, ttlMs: number) => {
@@ -147,5 +120,11 @@ export function createOpenAIRealtimeSessionLease(params: {
       }
     },
   };
-  return { ...activeSessionLease, activeSessions, retiringSessions };
+  const activeSessionsView: ReadonlyMap<string, OpenAIRealtimeSession> = activeSessions;
+  const retiringSessionsView: ReadonlyMap<string, OpenAIRealtimeSession> = retiringSessions;
+  return {
+    ...activeSessionLease,
+    activeSessions: activeSessionsView,
+    retiringSessions: retiringSessionsView,
+  };
 }

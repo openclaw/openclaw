@@ -1,8 +1,7 @@
-// Shared Gateway HTTP helpers handle small JSON/text responses, SSE headers,
-// body-size errors, and client disconnect aborts.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { z } from "zod";
 import { buildMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/index.js";
+import { sendJson } from "../infra/http-json.js";
 import {
   clearHttpResponseRepresentationHeaders,
   sendHttpRequestRejection,
@@ -11,6 +10,8 @@ import {
   logRejectedLargePayload,
   parseContentLengthHeader,
 } from "../logging/diagnostic-payload.js";
+import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
+import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
 import type { GatewayAuthResult } from "./auth.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
 import { readJsonBody } from "./hooks.js";
@@ -20,7 +21,7 @@ import { PROXY_ATTRIBUTION_REQUIRED_REASON } from "./ingress-attribution.js";
  * Apply baseline security headers that are safe for all response types (API JSON,
  * HTML pages, static assets, SSE streams). Headers that restrict framing or set a
  * Content-Security-Policy are intentionally omitted here because some handlers
- * (canvas host, A2UI) serve content that may be loaded inside frames.
+ * (canvas host) serve content that may be loaded inside frames.
  */
 export function setDefaultSecurityHeaders(
   res: ServerResponse,
@@ -38,28 +39,52 @@ export function setDefaultSecurityHeaders(
   }
 }
 
+/** Prepare an unsent error response; committed responses can only be closed. */
+export function prepareGatewayHttpErrorResponse(
+  res: ServerResponse,
+  statusMessage: string,
+): boolean {
+  if (res.destroyed || res.writableEnded) {
+    return false;
+  }
+  if (res.headersSent) {
+    // Ending would frame a partial chunked body as a complete successful response.
+    res.destroy();
+    return false;
+  }
+  clearHttpResponseRepresentationHeaders(res);
+  res.removeHeader("Content-Length");
+  res.setHeader("Cache-Control", "no-store");
+  res.statusMessage = statusMessage;
+  return true;
+}
+
 /** Finish a failed request without rewriting committed headers or orphaning its transport. */
 export function finishFailedGatewayHttpResponse(res: ServerResponse): void {
-  if (res.destroyed || res.writableEnded) {
-    return;
-  }
-  if (!res.headersSent) {
-    clearHttpResponseRepresentationHeaders(res);
-    res.setHeader("Cache-Control", "no-store");
-    res.statusMessage = "Internal Server Error";
+  if (prepareGatewayHttpErrorResponse(res, "Internal Server Error")) {
     respondPlainText(res, 500, res.statusMessage);
-    return;
   }
-
-  // Ending would frame a partial chunked body as a complete successful response.
-  res.destroy();
 }
 
-export function sendJson(res: ServerResponse, status: number, body: unknown) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(body));
+/** The listener can serve requests before background agent preparation finishes. */
+export function finishGatewayHttpDatabaseAdmissionError(
+  res: ServerResponse,
+  error: unknown,
+): boolean {
+  if (
+    !(error instanceof AgentDatabaseAdmissionError) ||
+    error.refusal.code !== "agent-database-inspection-pending"
+  ) {
+    return false;
+  }
+  if (prepareGatewayHttpErrorResponse(res, "Service Unavailable")) {
+    res.setHeader("Retry-After", "1");
+    respondPlainText(res, 503, "Agent database is starting. Please retry.");
+  }
+  return true;
 }
+
+export { sendJson };
 
 export function sendMethodNotAllowed(res: ServerResponse, allow = "POST") {
   res.setHeader("Allow", allow);
@@ -67,6 +92,10 @@ export function sendMethodNotAllowed(res: ServerResponse, allow = "POST") {
 }
 
 export function sendUnauthorized(res: ServerResponse) {
+  if (!prepareGatewayHttpErrorResponse(res, "Unauthorized")) {
+    return;
+  }
+  res.removeHeader("Set-Cookie");
   sendJson(res, 401, {
     error: { message: "Unauthorized", type: "unauthorized" },
   });
@@ -125,41 +154,40 @@ export function parseGatewayJsonRequest<T extends z.ZodType>(
   return undefined;
 }
 
-function buildMissingScopeForbiddenBody(
-  missingScope: string | undefined,
-  requiredScopes?: readonly string[],
-) {
+export function sendMissingScopeForbidden(res: ServerResponse, missingScope: string | undefined) {
   const details =
     typeof missingScope === "string" && missingScope.length > 0
       ? buildMissingScopeErrorDetails({
           missingScope,
-          requiredScopes: requiredScopes ?? [missingScope],
+          requiredScopes: [missingScope],
         })
       : undefined;
-  return {
+  sendJson(res, 403, {
     ok: false,
     error: {
       type: "forbidden",
       message: `missing scope: ${missingScope}`,
       ...(details ? { details } : {}),
     },
-  };
+  });
 }
 
-export function sendMissingScopeForbidden(
-  res: ServerResponse,
-  missingScope: string | undefined,
-  requiredScopes?: readonly string[],
-) {
-  sendJson(res, 403, buildMissingScopeForbiddenBody(missingScope, requiredScopes));
+/** The session exists but is not visible to the authenticated profile. */
+export function sendSessionReadForbidden(res: ServerResponse) {
+  res.setHeader("cache-control", "no-store");
+  sendJson(res, 403, {
+    ok: false,
+    error: { type: "forbidden", message: "session access required" },
+  });
 }
 
 export async function readJsonBodyOrError(
   req: IncomingMessage,
   res: ServerResponse,
   maxBytes: number,
+  timeoutMs?: number,
 ): Promise<unknown> {
-  const body = await readJsonBody(req, maxBytes);
+  const body = await readJsonBody(req, maxBytes, timeoutMs);
   if (!body.ok) {
     if (body.error === "payload too large") {
       const contentLength = parseContentLengthHeader(req.headers?.["content-length"]);
@@ -206,10 +234,27 @@ export function setSseHeaders(res: ServerResponse) {
   res.flushHeaders?.();
 }
 
+/** Deferred delivery retains request admission independently of agent settlement. */
+export function retainGatewayHttpResponseWork(res: ServerResponse): () => void {
+  const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
+  const release = () => {
+    res.off("finish", release);
+    res.off("close", release);
+    releaseRootWork?.();
+  };
+  res.once("finish", release);
+  res.once("close", release);
+  // Input preparation can outlive a response that already closed or finished.
+  if (res.destroyed || res.writableFinished) {
+    release();
+  }
+  return release;
+}
+
 /** Abort reason used when the HTTP client disconnects before delivery. */
 class ClientDisconnectError extends Error {
-  constructor(message = "HTTP client disconnected") {
-    super(message);
+  constructor() {
+    super("HTTP client disconnected");
     this.name = "ClientDisconnectError";
   }
 }
@@ -227,9 +272,6 @@ export function watchClientDisconnect(
       ),
     ),
   );
-  if (sockets.length === 0) {
-    return () => {};
-  }
   const stopWatchingDisconnect = () => {
     for (const socket of sockets) {
       socket.off("close", handleClose);
@@ -239,19 +281,21 @@ export function watchClientDisconnect(
   const handleClose = () => {
     stopWatchingDisconnect();
     onDisconnect?.();
-    if (!abortController.signal.aborted) {
-      abortController.abort(new ClientDisconnectError());
-    }
+    abortController.abort(new ClientDisconnectError());
   };
-  const stopWatchingResponseErrors = () => {
-    stopWatchingDisconnect();
+  const handleResponseClose = () => {
     res.off("error", handleClose);
-    res.off("close", stopWatchingResponseErrors);
+    if (!res.writableFinished) {
+      handleClose();
+      return;
+    }
+    stopWatchingDisconnect();
   };
   // Completed responses release socket watchers; keep response errors handled
-  // until close so a failed flush cannot become process-fatal.
+  // until close so a failed flush cannot become process-fatal. Some compatible
+  // runtimes publish only the response close when a client disconnects.
   res.on("error", handleClose);
-  res.once("close", stopWatchingResponseErrors);
+  res.once("close", handleResponseClose);
   res.once("finish", stopWatchingDisconnect);
   if (res.destroyed || sockets.some((socket) => socket.destroyed)) {
     handleClose();
@@ -261,4 +305,18 @@ export function watchClientDisconnect(
     socket.on("close", handleClose);
   }
   return stopWatchingDisconnect;
+}
+
+export function isWebSocketUpgradeRequest(req: IncomingMessage): boolean {
+  const headerContains = (value: string | readonly string[] | undefined, token: string) =>
+    (typeof value === "string" ? [value] : (value ?? [])).some((entry) =>
+      entry
+        .toLowerCase()
+        .split(",")
+        .some((part) => part.trim() === token),
+    );
+  return (
+    headerContains(req.headers.upgrade, "websocket") &&
+    headerContains(req.headers.connection, "upgrade")
+  );
 }

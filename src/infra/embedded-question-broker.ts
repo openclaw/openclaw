@@ -20,13 +20,14 @@ import {
   QuestionManagerError,
   QuestionManagerErrorCodes,
 } from "../gateway/question-manager.js";
-import { notifyListeners } from "../shared/listeners.js";
+import { questionShapeError } from "../gateway/question-validation.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import {
   getActiveAgentRunDelegatedAuthority,
   registerAgentRunDelegatedAuthorityClosedHandler,
   validateAgentRunDelegatedAuthority,
 } from "./agent-run-registry.js";
+import type { GatewayScheduler } from "./gateway-scheduler.js";
 
 const EMBEDDED_SECRET_STORE_REQUEST_BLOCKER =
   "Secret store requests need a running Gateway; ask the operator to run `openclaw secrets store` or use the Control UI.";
@@ -43,18 +44,25 @@ function invalidRequest(message: string): GatewayClientRequestError {
 
 /** Serves the question RPC contract for one embedded backend lifetime. */
 export class EmbeddedQuestionBroker {
-  private readonly manager = new QuestionManager();
-  private readonly listeners = new Set<(event: QuestionEvent) => void>();
+  private readonly manager: QuestionManager;
   private stopped = false;
   private readonly removeAuthorityListener = registerAgentRunDelegatedAuthorityClosedHandler(() => {
     this.manager.cancelClosedAuthorities();
   });
 
-  subscribe(listener: (event: QuestionEvent) => void): () => void {
-    this.listeners.add(listener);
-    return () => {
-      this.listeners.delete(listener);
-    };
+  constructor(
+    scheduler: GatewayScheduler,
+    private readonly onEvent?: (event: QuestionEvent) => void,
+  ) {
+    this.manager = new QuestionManager(scheduler);
+  }
+
+  private notify(event: QuestionEvent): void {
+    try {
+      this.onEvent?.(event);
+    } catch {
+      // Presentation cannot interrupt question settlement.
+    }
   }
 
   request(params: unknown, signal?: AbortSignal): QuestionRequestResult {
@@ -70,25 +78,12 @@ export class EmbeddedQuestionBroker {
       // A local prompt must not collect a value it cannot safely commit there.
       throw invalidRequest(EMBEDDED_SECRET_STORE_REQUEST_BLOCKER);
     }
-    const ids = new Set<string>();
-    for (const question of params.questions) {
-      if (ids.has(question.questionId)) {
-        throw invalidRequest(`duplicate question id '${question.questionId}'`);
-      }
-      ids.add(question.questionId);
-      if (question.options.length === 1) {
-        throw invalidRequest(
-          `question '${question.questionId}' must have either no options or 2 to 4 options`,
-        );
-      }
-      const labels = new Set<string>();
-      for (const option of question.options) {
-        const label = option.label.trim().toLowerCase();
-        if (labels.has(label)) {
-          throw invalidRequest(`question '${question.questionId}' has duplicate option labels`);
-        }
-        labels.add(label);
-      }
+    const error = questionShapeError(params.questions, {
+      allowPlainSecretQuestions: true,
+      validateUrls: false,
+    });
+    if (error) {
+      throw invalidRequest(error);
     }
     const caller = getGatewayToolCallerIdentity();
     const authority =
@@ -131,11 +126,11 @@ export class EmbeddedQuestionBroker {
         : undefined,
       onResolved: (event) => {
         signal?.removeEventListener("abort", abort);
-        this.emit({ event: "question.resolved", payload: event });
+        this.notify({ event: "question.resolved", payload: event });
       },
     });
     signal?.addEventListener("abort", abort, { once: true });
-    this.emit({ event: "question.requested", payload: record });
+    this.notify({ event: "question.requested", payload: record });
     return { id: record.id, expiresAtMs: record.expiresAtMs };
   }
 
@@ -226,11 +221,6 @@ export class EmbeddedQuestionBroker {
       this.manager.cancel(question.id, "tui:embedded:stopped");
     }
     this.manager.close();
-    this.listeners.clear();
-  }
-
-  private emit(event: QuestionEvent): void {
-    notifyListeners(this.listeners, event);
   }
 }
 

@@ -1,88 +1,61 @@
+import { resolveAgentEntry } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { resolveEffectiveAgentSkillsLimits } from "../discovery/agent-filter.js";
-import { filterPromptVisibleSkillEntries } from "../discovery/skill-index.js";
+import { projectSkillSnapshot } from "../runtime/refresh.js";
 import type { SkillEligibilityContext, SkillEntry, SkillSnapshot } from "../types.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import { hasUnavailableSkillSecretOwners, isSkillSecretOwnerUnavailable } from "./config.js";
 import { resolveSkillKey } from "./frontmatter.js";
-import { compactSkillsPromptForContext, escapeSkillXml, type Skill } from "./skill-contract.js";
-import { compactPromptSkills } from "./skill-paths.js";
-import { prepareSkillsForPrompt } from "./skill-prompt-limits.js";
+import { compactSkillsPromptForContext, escapeSkillXml } from "./skill-contract.js";
 import { resolveWorkspaceSkillPromptEntries } from "./workspace-skill-loader.js";
 
 const skillsLogger = createSubsystemLogger("skills");
 
-type WorkspaceSkillBuildOptions = {
-  executionWorkspaceDir?: string;
-  librarySelections?: SkillSnapshot["librarySelections"];
-  config?: OpenClawConfig;
-  managedSkillsDir?: string;
-  bundledSkillsDir?: string;
-  entries?: SkillEntry[];
-  agentId?: string;
-  skillFilter?: string[];
-  skillOverrides?: Record<string, boolean>;
-  eligibility?: SkillEligibilityContext;
+type WorkspaceSkillBuildOptions = NonNullable<
+  Parameters<typeof resolveWorkspaceSkillPromptEntries>[1]
+> & {
   preserveEntryOrder?: boolean;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
-function resolveWorkspaceSkillPromptState(
-  workspaceDir: string,
-  opts?: WorkspaceSkillBuildOptions,
-): { eligible: SkillEntry[]; prompt: string; resolvedSkills: Skill[]; skillFilter?: string[] } {
-  const { eligible, skillFilter } = resolveWorkspaceSkillPromptEntries(workspaceDir, opts);
-  const promptEntries = filterPromptVisibleSkillEntries(eligible);
-  const remoteNote = opts?.eligibility?.remote?.note?.trim();
-  const resolvedSkills = promptEntries.map((entry) => entry.skill);
-  const limits = opts?.config?.skills?.limits;
-  const agentLimits = resolveEffectiveAgentSkillsLimits(opts?.config, opts?.agentId);
-  const prepared = prepareSkillsForPrompt({
-    skills: compactPromptSkills(resolvedSkills, {
-      config: opts?.config,
-      agentId: opts?.agentId,
-    }),
-    maxSkillsInPrompt: limits?.maxSkillsInPrompt,
-    maxSkillsPromptChars: agentLimits?.maxSkillsPromptChars ?? limits?.maxSkillsPromptChars,
-    remoteNote,
-    preserveOrder: opts?.preserveEntryOrder,
-  });
-  const byName = new Map(resolvedSkills.map((skill) => [skill.name, skill]));
-  return {
-    eligible,
-    prompt: prepared.prompt,
-    resolvedSkills: prepared.skills.map((skill) => byName.get(skill.name)!),
-    skillFilter,
-  };
-}
-
-export function buildSkillSnapshot(
+export async function buildSkillSnapshot(
   workspaceDir: string,
   opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
-): SkillSnapshot {
-  const { eligible, prompt, resolvedSkills, skillFilter } = resolveWorkspaceSkillPromptState(
+): Promise<SkillSnapshot> {
+  const { eligible, skillFilter } = await resolveWorkspaceSkillPromptEntries(workspaceDir, opts);
+  const agent =
+    opts?.config && opts.agentId ? resolveAgentEntry(opts.config, opts.agentId) : undefined;
+  const snapshot = await projectSkillSnapshot({
     workspaceDir,
-    opts,
-  );
-  return {
-    prompt,
-    skills: eligible.map((entry) => ({
-      name: entry.skill.name,
-      skillKey: resolveSkillKey(entry.skill, entry),
-      primaryEnv: entry.metadata?.primaryEnv,
-      requiredEnv: entry.metadata?.requires?.env?.slice(),
-    })),
-    ...(skillFilter === undefined ? {} : { skillFilter }),
-    ...(opts?.skillOverrides ? { skillOverrides: opts.skillOverrides } : {}),
-    ...(opts?.eligibility?.nodeSkills
-      ? { nodeSkillsEligibility: opts.eligibility.nodeSkills }
-      : {}),
-    resolvedSkills,
-    version: opts?.snapshotVersion,
-    promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
-  };
+    eligible,
+    skillFilter,
+    // Eligibility is already selected. Rendering needs no channel, provider, or plugin config.
+    config: opts?.config
+      ? {
+          skills: { limits: opts.config.skills?.limits },
+          ...(agent
+            ? {
+                agents: {
+                  entries: {
+                    [agent.id]: { agentDir: agent.agentDir, skillsLimits: agent.skillsLimits },
+                  },
+                },
+              }
+            : {}),
+        }
+      : undefined,
+    agentId: opts?.agentId,
+    skillOverrides: opts?.skillOverrides,
+    eligibility: opts?.eligibility
+      ? {
+          nodeSkills: opts.eligibility.nodeSkills,
+          remote: opts.eligibility.remote ? { note: opts.eligibility.remote.note } : undefined,
+        }
+      : undefined,
+    preserveEntryOrder: opts?.preserveEntryOrder,
+    snapshotVersion: opts?.snapshotVersion,
+  });
+  opts?.assertCurrent?.();
+  return snapshot;
 }
 
 type ResolveSkillsPromptParams = {
@@ -93,43 +66,41 @@ type ResolveSkillsPromptParams = {
   workspaceDir: string;
   agentId?: string;
   eligibility?: SkillEligibilityContext;
-  loadEntries?: () => SkillEntry[];
+  loadEntries?: () => SkillEntry[] | Promise<SkillEntry[]>;
   preserveEntryOrder?: boolean;
+  assertCurrent?: () => void;
 };
 
-function buildSkillsPromptFromEntries(
+async function buildSkillsPromptFromEntries(
   params: ResolveSkillsPromptParams,
   entries: SkillEntry[] | undefined,
-): string {
+): Promise<string> {
   if (!entries || entries.length === 0) {
     return "";
   }
-  const prompt = buildSkillSnapshot(params.workspaceDir, {
+  const { prompt } = await buildSkillSnapshot(params.workspaceDir, {
+    ...params,
     entries,
-    config: params.config,
-    agentId: params.agentId,
-    eligibility: params.eligibility,
-    preserveEntryOrder: params.preserveEntryOrder,
-  }).prompt;
+  });
   return prompt.trim() ? prompt : "";
 }
 
-function rebuildAfterUnsafeSnapshot(
+async function rebuildAfterUnsafeSnapshot(
   params: ResolveSkillsPromptParams,
   reason: "unsupported-prompt-format" | "legacy-skill-identity" | "invalid-catalog-structure",
-): string {
+): Promise<string> {
   skillsLogger.warn(
     "Cached skills prompt could not be safely filtered; rebuilding from current skill entries.",
     { reason },
   );
-  const sourceEntries = params.entries ?? params.loadEntries?.();
+  const sourceEntries = params.entries ?? (await params.loadEntries?.());
   const entries = sourceEntries?.filter(
-    (entry) => !isSkillSecretOwnerUnavailable(resolveSkillKey(entry.skill, entry)),
+    (entry) => !isSkillSecretOwnerUnavailable(resolveSkillKey(entry)),
   );
   return buildSkillsPromptFromEntries(params, entries);
 }
 
-function resolveSkillsPromptCatalog(params: ResolveSkillsPromptParams): string {
+async function resolveSkillsPromptCatalog(params: ResolveSkillsPromptParams): Promise<string> {
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
   if (params.skillsSnapshot && !snapshotPrompt) {
     return "";
@@ -201,9 +172,9 @@ function resolveSkillsPromptCatalog(params: ResolveSkillsPromptParams): string {
   return buildSkillsPromptFromEntries(params, params.entries);
 }
 
-export function resolveSkillsPrompt(params: ResolveSkillsPromptParams): string {
+export async function resolveSkillsPrompt(params: ResolveSkillsPromptParams): Promise<string> {
   return compactSkillsPromptForContext(
-    resolveSkillsPromptCatalog(params),
+    await resolveSkillsPromptCatalog(params),
     params.contextTokenBudget,
   );
 }

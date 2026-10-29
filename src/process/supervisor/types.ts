@@ -1,15 +1,21 @@
-// Process supervisor types describe supervised runs and termination reasons.
+import type { WindowsJobExtinction } from "../../../scripts/lib/managed-windows-job.mts";
+import type { SpawnInitiation } from "../spawn-initiation.js";
+
+export type ProcessExtinctionResult = void | WindowsJobExtinction;
 
 export type TerminationReason =
   | "manual-cancel"
   | "overall-timeout"
   | "no-output-timeout"
+  | "memory-limit"
   | "spawn-error"
   | "signal"
   | "exit";
 
 /** Producer-owned activity; a settled result does not establish descendant extinction. */
 export type ProcessRunActivity = {
+  /** Absolute deadline accepted when the supervisor armed the overall timeout. */
+  readonly deadlineAtMs?: number;
   readonly resultSettled: boolean;
   readonly lastOutputAtMs: number;
 };
@@ -33,8 +39,8 @@ export type ManagedRun = {
   startedAtMs: number;
   stdin?: ManagedRunStdin;
   wait: () => Promise<RunExit>;
-  /** Join the adapter's native ownership boundary; deliberately detached outsiders are excluded. */
-  waitForExtinction?: () => Promise<void>;
+  /** Join cleanup; unavailable Windows Job certification resolves with an uncertain outcome. */
+  waitForExtinction?: () => Promise<ProcessExtinctionResult>;
   cancel: (reason?: TerminationReason) => void;
   /** Stop every decoded, raw, captured, and output-clock update for this run. */
   detachOutput?: () => void;
@@ -57,13 +63,32 @@ export type SpawnSecretInput = {
 
 export type ProcessAdapterConstruction = {
   assertCurrent?: () => void;
+  initiateSpawn?: SpawnInitiation;
+  /** Synchronous launch admission; never recheck after the target command starts. */
+  beforeSpawn?: () => void;
   abortSignal?: AbortSignal;
   /** Publish resource cleanup before readiness or private-input delivery can fail. */
-  onSpawnCleanup?: (cleanup: Promise<void>) => void;
+  onSpawnCleanup?: (cleanup: Promise<ProcessExtinctionResult>) => void;
+};
+
+export type AwaitedStdoutConsumer = {
+  /** Subscribe once; EOF, decoder flush, and every accepted chunk settle before resolution. */
+  consumeStdout: (listener: (chunk: string) => void | Promise<void>) => Promise<void>;
+};
+
+export type ProcessCleanupResult = {
+  readonly reason: "forced-relay-exit";
+  readonly signalRequested: "SIGKILL";
+  readonly signalError?: Error;
+  readonly exit: { readonly code: number | null; readonly signal: NodeJS.Signals | null };
+  readonly durationMs: number;
+  readonly escalationAfterMs: number;
 };
 
 export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
   pid?: number;
+  /** Retained tree root, including descendants adopted after the command exits. */
+  memoryRootPid?: number;
   stdin?: ManagedRunStdin;
   oomScoreWrapperSelected?: boolean;
   /** Both output subscriptions observe bytes separately from decoded text. */
@@ -75,16 +100,28 @@ export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
     listener: (error: Error, source: "process" | "stdin" | "stdout" | "stderr") => void,
   ) => void;
   wait: () => Promise<{ code: number | null; signal: WaitSignal }>;
-  waitForExtinction?: () => Promise<void>;
+  waitForExtinction?: () => Promise<ProcessExtinctionResult>;
+  readonly cleanupResult?: ProcessCleanupResult;
   kill: (signal?: NodeJS.Signals) => void;
   dispose: () => void;
 };
 
+/** Observe output before joining startup and private-input delivery. */
+export type ProcessAdapterStartup<Adapter extends SpawnProcessAdapter> = {
+  adapter: Adapter;
+  ready: Promise<void>;
+};
+
 type SpawnBaseInput = {
+  initiateSpawn?: SpawnInitiation;
   /** The local subprocess transports execution owned outside its local process tree. */
   cleanupOwnership?: "external";
   /** Revalidate the caller at deferred spawn and private-input delivery boundaries. */
   assertCurrent?: () => void;
+  /** Prepare async launch authority after queued scope admission and before replacing a live run. */
+  prepareSpawn?: () => void | Promise<void>;
+  /** Revalidate launch policy at admission and immediately before each native launch attempt. */
+  beforeSpawn?: () => void;
   runId?: string;
   scopeKey?: string;
   replaceExistingScope?: boolean;
@@ -92,6 +129,8 @@ type SpawnBaseInput = {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
   noOutputTimeoutMs?: number;
+  /** Internal host-exec policy; sandbox transports keep their backend's limits. */
+  memoryLimitBytes?: number;
   /**
    * When false, stdout/stderr are streamed via callbacks only and not retained in RunExit payload.
    */
@@ -103,36 +142,37 @@ type SpawnBaseInput = {
   maxCapturedOutputChars?: number;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
+  /** Revoke caller-owned capabilities when cancellation starts, before native termination. */
+  onCancel?: (reason: TerminationReason) => void;
 };
 
-type SpawnChildInput = SpawnBaseInput & {
-  mode: "child";
-  argv: string[];
-  /** Append invocation arguments after queued scope admission, immediately before child construction. */
-  resolveArgs?: () => string[];
-  /** Preserve a distinct invocation name while executing argv[0]. */
-  argv0?: string;
-  /** Preserve a caller-prepared environment without environment-mutating spawn wrappers. */
-  exactEnv?: true;
-  windowsVerbatimArguments?: boolean;
-  input?: string;
-  stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
-  secretInput?: SpawnSecretInput;
-  onStdoutRaw?: (chunk: Buffer) => void;
-  onStderrRaw?: (chunk: Buffer) => void;
-};
-
-type SpawnPtyInput = SpawnBaseInput & {
-  mode: "pty";
-  argv: string[];
-};
-
-type SpawnAnchoredShellInput = SpawnBaseInput & {
-  mode: "anchored-shell";
-  command: string;
-};
-
-export type SpawnInput = SpawnChildInput | SpawnPtyInput | SpawnAnchoredShellInput;
+export type SpawnInput =
+  | (SpawnBaseInput & {
+      mode: "child";
+      argv: string[];
+      /** Append invocation arguments after queued scope admission, immediately before child construction. */
+      resolveArgs?: () => string[];
+      /** Preserve a distinct invocation name while executing argv[0]. */
+      argv0?: string;
+      /** Preserve a caller-prepared environment without environment-mutating spawn wrappers. */
+      exactEnv?: true;
+      windowsVerbatimArguments?: boolean;
+      input?: string;
+      /** Prepare input authority at the adapter's stdin delivery boundary. */
+      prepareInput?: () => void | Promise<void>;
+      stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
+      secretInput?: SpawnSecretInput;
+      onStdoutRaw?: (chunk: Buffer) => void;
+      onStderrRaw?: (chunk: Buffer) => void;
+    })
+  | (SpawnBaseInput & {
+      mode: "pty";
+      argv: string[];
+    })
+  | (SpawnBaseInput & {
+      mode: "anchored-shell";
+      command: string;
+    });
 
 /**
  * required-all includes external execution; owned-only leaves explicit backend

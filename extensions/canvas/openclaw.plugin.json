@@ -1,5 +1,6 @@
 {
   "id": "canvas",
+  "categories": ["documents-files"],
   "doctorContract": {
     "configRepair": true,
     "stateMigrations": [{ "id": "canvas-custom-root-documents-to-core" }]
@@ -23,7 +24,7 @@
   "uiHints": {
     "host": {
       "label": "Widget Presenter",
-      "help": "Controls hosted widget document and renderer routes.",
+      "help": "Controls hosted widget documents and node-panel presentation.",
       "advanced": true
     },
     "host.enabled": {
@@ -31,6 +32,14 @@
       "advanced": true
     }
   },
+  "configGroups": [
+    {
+      "id": "canvas-hosting",
+      "title": "Canvas hosting",
+      "order": 10,
+      "properties": ["host"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

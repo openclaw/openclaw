@@ -1,226 +1,283 @@
-// Covers plugin doctor state-migration registry behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
-import {
-  getRegistryJitiMocks,
-  resetRegistryJitiMocks,
-} from "./test-helpers/registry-jiti-mocks.js";
+import { describe, expect, it, vi } from "vitest";
+import { useDoctorContractRegistryHarness } from "./doctor-contract-registry.test-harness.js";
 
-const tempDirs: string[] = [];
-const mocks = getRegistryJitiMocks();
-const doctorContractWarnMock = vi.hoisted(() => vi.fn());
-vi.mock("../logging/subsystem.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
-  return {
-    ...actual,
-    createSubsystemLogger: (subsystem: string) => ({
-      ...actual.createSubsystemLogger(subsystem),
-      warn: doctorContractWarnMock,
-    }),
-  };
-});
+const harness = useDoctorContractRegistryHarness({ legacySetup: true, waitForRetirement: true });
+const { mocks, warn: doctorContractWarnMock, makeTempDir } = harness;
 
-let clearPluginDoctorContractRegistryCache: typeof import("./doctor-contract-registry.test-fixtures.js").clearPluginDoctorContractRegistryCache;
-let listPluginDoctorLegacyConfigRules: typeof import("./doctor-contract-registry.js").listPluginDoctorLegacyConfigRules;
-let listPluginDoctorStateMigrationEntries: typeof import("./doctor-contract-registry.js").listPluginDoctorStateMigrationEntries;
-let resolveLivePluginDoctorStateMigrationInventory: typeof import("./doctor-contract-registry.js").resolveLivePluginDoctorStateMigrationInventory;
-let setPluginDoctorContractRegistryModuleLoaderFactoryForTest:
-  | typeof import("./doctor-contract-registry.test-fixtures.js").setPluginDoctorContractRegistryModuleLoaderFactoryForTest
-  | undefined;
-
-function makeTempDir(): string {
-  return makeTrackedTempDir("openclaw-doctor-contract-state-migrations", tempDirs);
+function mockDoctorPlugins(...plugins: Record<string, unknown>[]): void {
+  mocks.loadPluginManifestRegistry.mockReturnValue({ plugins, diagnostics: [] });
 }
 
-afterEach(() => {
-  setPluginDoctorContractRegistryModuleLoaderFactoryForTest?.(undefined);
-  cleanupTrackedTempDirs(tempDirs);
-});
+const workspaceActivation = [
+  { name: "inactive workspace", config: {}, allowed: false },
+  { name: "allowlisted workspace", config: { plugins: { allow: ["alpha"] } }, allowed: true },
+  {
+    name: "enabled workspace",
+    config: { plugins: { entries: { alpha: { enabled: true } } } },
+    allowed: true,
+  },
+];
 
-describe("doctor-contract-registry state migrations", () => {
-  beforeAll(async () => {
-    vi.resetModules();
-    ({
-      listPluginDoctorLegacyConfigRules,
-      listPluginDoctorStateMigrationEntries,
-      resolveLivePluginDoctorStateMigrationInventory,
-    } = await import("./doctor-contract-registry.js"));
-    ({
-      clearPluginDoctorContractRegistryCache,
-      setPluginDoctorContractRegistryModuleLoaderFactoryForTest,
-    } = await import("./doctor-contract-registry.test-fixtures.js"));
+function pluginRecord(rootDir: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id: "alpha",
+    origin: "bundled",
+    rootDir,
+    channels: [],
+    providers: [],
+    doctorContract: { stateMigrations: true },
+    ...overrides,
+  };
+}
+
+function migrationEntries(
+  options: Parameters<typeof harness.registry.listPluginDoctorStateMigrationEntries>[0] = {},
+) {
+  return harness.registry.listPluginDoctorStateMigrationEntries({
+    config: {},
+    env: {},
+    ...options,
   });
+}
 
-  beforeEach(() => {
-    resetRegistryJitiMocks();
-    doctorContractWarnMock.mockReset();
-    // Loaded once in beforeAll; afterEach guards the same binding optionally because it
-    // can fire when that import never completed. Fail loudly here instead of silently
-    // running a case against the real module loader.
-    if (!setPluginDoctorContractRegistryModuleLoaderFactoryForTest) {
-      throw new Error("doctor contract registry test fixtures were not loaded");
-    }
-    setPluginDoctorContractRegistryModuleLoaderFactoryForTest(mocks.createJiti);
-    clearPluginDoctorContractRegistryCache();
-  });
+function migrationIds(options: Parameters<typeof migrationEntries>[0] = {}) {
+  return migrationEntries(options).map((entry) => entry.migration.id);
+}
 
-  it("freezes dynamic and declared live actions in selected registry order", () => {
-    const pluginRoot = makeTempDir();
-    fs.writeFileSync(
-      path.join(pluginRoot, "doctor-contract-api.cjs"),
-      `module.exports = {
-  stateMigrations: [{
-    id: "dynamic-action",
-    label: "Dynamic action",
+const directDetector = `module.exports = {
+  kind: "bundled-channel-setup-entry",
+  features: { legacyStateMigrations: true },
+  loadSetupPlugin() { record("activation"); throw new Error("setup plugin activated"); },
+  loadLegacyStateMigrationDetector() { record("detector"); return () => []; },
+};`;
+
+function writeMigrations(root: string, ...ids: string[]) {
+  fs.writeFileSync(
+    path.join(root, "doctor-contract-api.cjs"),
+    `module.exports = { stateMigrations: [${ids
+      .map(
+        (id) => `{
+    id: ${JSON.stringify(id)}, label: ${JSON.stringify(id)},
     detectLegacyState: () => null,
     migrateLegacyState: () => ({ changes: [], warnings: [] }),
-  }],
-};\n`,
-    );
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "dynamic-owner",
-          origin: "bundled",
-          rootDir: pluginRoot,
-          channels: [],
-          providers: [],
-          doctorContract: { stateMigrations: true },
-        },
-        {
-          id: "declared-owner",
-          origin: "bundled",
-          rootDir: pluginRoot,
-          channels: [],
-          providers: [],
-          doctorContract: { stateMigrations: [{ id: "declared-action" }] },
-        },
-      ],
-      diagnostics: [],
-    });
+  }`,
+      )
+      .join(",")} ] };\n`,
+  );
+}
 
-    expect(
-      resolveLivePluginDoctorStateMigrationInventory({ config: {}, env: {} }).descriptors,
-    ).toEqual([
+function detectionInput(stateDir: string, oauthDir = stateDir) {
+  return {
+    config: {},
+    env: {},
+    stateDir,
+    oauthDir,
+    context: {
+      openPluginStateKeyedStore: () => {
+        throw new Error("legacy detection must not open plugin state");
+      },
+    },
+  };
+}
+
+function legacyFixture(
+  source: string,
+  overrides: Record<string, unknown> = {},
+  extension: "cjs" | "ts" = "cjs",
+) {
+  const pluginRoot = makeTempDir();
+  const setupSource = path.join(pluginRoot, `setup-entry.${extension}`);
+  const eventsPath = path.join(pluginRoot, "legacy-setup-events.log");
+  fs.writeFileSync(
+    setupSource,
+    [
+      extension === "ts"
+        ? 'import { appendFileSync } from "node:fs";'
+        : 'const { appendFileSync } = require("node:fs");',
+      `const record = (event) => appendFileSync(${JSON.stringify(eventsPath)}, event + "\\n");`,
+      'record("module");',
+      source,
+    ].join("\n"),
+  );
+  mockDoctorPlugins(
+    pluginRecord(pluginRoot, {
+      id: "legacy-channel",
+      origin: "global",
+      setupSource,
+      channels: ["legacy-channel"],
+      doctorContract: undefined,
+      ...overrides,
+    }),
+  );
+  return {
+    pluginRoot,
+    events: () =>
+      fs.existsSync(eventsPath) ? fs.readFileSync(eventsPath, "utf8").trim().split("\n") : [],
+  };
+}
+
+function mockModernPlugin(overrides: Record<string, unknown>, configRepair = false) {
+  const root = makeTempDir();
+  const detectLegacyState = vi.fn(() => ({ preview: ["alpha state"] }));
+  const migrateLegacyState = vi.fn(() => ({
+    changes: configRepair ? ["migrated alpha state"] : [],
+    warnings: [],
+  }));
+  fs.writeFileSync(path.join(root, "doctor-contract-api.ts"), "export {};\n", "utf8");
+  mocks.createJiti.mockImplementation(() => () => ({
+    legacyConfigRules: configRepair
+      ? [{ path: ["channels", "alpha", "legacy"], message: "repair disabled alpha" }]
+      : [],
+    stateMigrations: [
+      {
+        id: "alpha-state",
+        label: "Alpha state",
+        detectLegacyState,
+        migrateLegacyState,
+      },
+    ],
+  }));
+  mockDoctorPlugins(pluginRecord(root, overrides));
+  return { detectLegacyState, migrateLegacyState };
+}
+
+function modernLegacyFixture(source = directDetector) {
+  return legacyFixture(source, {
+    id: "alpha",
+    channels: ["alpha"],
+    doctorContract: { stateMigrations: true },
+    packageManifest: { setupFeatures: { legacyStateMigrations: true } },
+  });
+}
+
+describe("doctor-contract-registry state migrations", () => {
+  it("orders dynamic and declared owners while preserving each owner's action order", () => {
+    const acpxRoot = makeTempDir();
+    const codexRoot = makeTempDir();
+    const dynamicRoot = makeTempDir();
+    writeMigrations(acpxRoot, "z-prepare", "a-finalize");
+    writeMigrations(codexRoot, "codex-only");
+    writeMigrations(dynamicRoot, "dynamic-action");
+    const dynamicRecord = pluginRecord(dynamicRoot, { id: "dynamic-owner" });
+    const codexRecord = pluginRecord(codexRoot, {
+      id: "codex",
+      origin: "config",
+      doctorContract: { stateMigrations: [{ id: "codex-only" }] },
+    });
+    const acpxRecord = pluginRecord(acpxRoot, {
+      id: "acpx",
+      doctorContract: {
+        stateMigrations: [{ id: "z-prepare" }, { id: "a-finalize" }],
+      },
+    });
+    let discoveryOrder = [dynamicRecord, codexRecord, acpxRecord];
+    mocks.loadPluginManifestRegistry.mockImplementation(() => ({
+      plugins: discoveryOrder,
+      diagnostics: [],
+    }));
+    const expected = [
+      { pluginId: "acpx", id: "z-prepare" },
+      { pluginId: "acpx", id: "a-finalize" },
+      { pluginId: "codex", id: "codex-only" },
       { pluginId: "dynamic-owner", id: "dynamic-action" },
-      { pluginId: "declared-owner", id: "declared-action" },
-    ]);
+    ];
+    expect(
+      harness.registry.resolveLivePluginDoctorStateMigrationInventory({ config: {}, env: {} })
+        .descriptors,
+    ).toEqual(expected);
+
+    discoveryOrder = [acpxRecord, codexRecord, dynamicRecord];
+    expect(
+      migrationEntries().map(({ pluginId, migration }) => ({
+        pluginId,
+        id: migration.id,
+      })),
+    ).toEqual(expected);
   });
 
   it("loads a direct legacy detector without package or entry feature hints", async () => {
-    const pluginRoot = makeTempDir();
-    const setupSource = path.join(pluginRoot, "setup-entry.ts");
-    fs.writeFileSync(setupSource, "export {};\n", "utf-8");
-    const detector = vi.fn(() => [
-      {
-        kind: "move" as const,
-        label: "Legacy credentials",
-        sourcePath: "/oauth/legacy.json",
-        targetPath: "/oauth/demo/legacy.json",
-      },
-    ]);
-    const loadSetupPlugin = vi.fn(() => {
-      throw new Error("direct legacy discovery activated the setup plugin");
-    });
-    mocks.createJiti.mockImplementation(() => () => ({
-      default: {
-        kind: "bundled-channel-setup-entry",
-        loadSetupPlugin,
-        loadLegacyStateMigrationDetector: () => detector,
-      },
-    }));
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "legacy-channel",
-          origin: "global",
-          rootDir: pluginRoot,
-          setupSource,
-          channels: ["legacy-channel"],
-          providers: [],
-        },
-      ],
-      diagnostics: [],
-    });
+    const { events } = legacyFixture(
+      `export default {
+  kind: "bundled-channel-setup-entry",
+  loadSetupPlugin() { record("activation"); throw new Error("setup plugin activated"); },
+  loadLegacyStateMigrationDetector() {
+    record("detector");
+    return ({ oauthDir }: { oauthDir: string }) => {
+      record("detect");
+      return [{ kind: "move", label: "Legacy credentials",
+        sourcePath: oauthDir + "/legacy.json", targetPath: oauthDir + "/demo/legacy.json" }];
+    };
+  },
+};`,
+      {},
+      "ts",
+    );
 
     expect(
-      listPluginDoctorStateMigrationEntries({
+      migrationEntries({
         config: { channels: { "legacy-channel": { enabled: false } } },
-        env: {},
         pluginIds: ["legacy-channel"],
       }),
     ).toEqual([]);
-    expect(mocks.createJiti).not.toHaveBeenCalled();
+    expect(events()).toEqual([]);
 
-    const entries = listPluginDoctorStateMigrationEntries({
-      config: {},
-      env: {},
-      pluginIds: ["legacy-channel"],
-    });
+    const entries = migrationEntries({ pluginIds: ["legacy-channel"] });
 
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.pluginId).toBe("legacy-channel");
+    expect(entries).toMatchObject([{ pluginId: "legacy-channel" }]);
     await expect(
-      entries[0]?.migration.detectLegacyState({
-        config: {},
-        env: {},
-        stateDir: "/state",
-        oauthDir: "/oauth",
-        context: { openPluginStateKeyedStore: vi.fn() } as never,
-      }),
+      entries[0]?.migration.detectLegacyState(detectionInput("/state", "/oauth")),
     ).resolves.toEqual({
       preview: ["- Legacy credentials: /oauth/legacy.json → /oauth/demo/legacy.json"],
     });
-    expect(detector).toHaveBeenCalledTimes(1);
-    expect(loadSetupPlugin).not.toHaveBeenCalled();
-    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+    expect(events()).toEqual(["module", "detector", "detect"]);
+    expect(doctorContractWarnMock).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { name: "entry feature present", entryFeature: true, expectedCount: 1 },
-    { name: "entry feature absent", entryFeature: false, expectedCount: 0 },
-  ])(
-    "gates the legacy setup-plugin lifecycle fallback when the $name",
-    ({ entryFeature, expectedCount }) => {
-      const pluginRoot = makeTempDir();
-      const setupSource = path.join(pluginRoot, "setup-entry.ts");
-      fs.writeFileSync(setupSource, "export {};\n", "utf-8");
-      const detector = vi.fn(() => []);
-      const loadSetupPlugin = vi.fn(() => ({
-        lifecycle: { detectLegacyStateMigrations: detector },
-      }));
-      mocks.createJiti.mockImplementation(() => () => ({
-        default: {
-          kind: "bundled-channel-setup-entry",
-          loadSetupPlugin,
-          ...(entryFeature ? { features: { legacyStateMigrations: true } } : {}),
-        },
-      }));
-      mocks.loadPluginManifestRegistry.mockReturnValue({
-        plugins: [
-          {
-            id: "legacy-channel",
-            origin: "global",
-            rootDir: pluginRoot,
-            setupSource,
-            channels: ["legacy-channel"],
-            providers: [],
-          },
-        ],
-        diagnostics: [],
+  it.each(["stateless", "detector", "invalid-detector", "foreign-owner"] as const)(
+    "inspects the public setup entry without dropping %s migration obligations",
+    (kind) => {
+      legacyFixture(
+        `module.exports = { plugin: {
+          id: ${JSON.stringify(kind === "foreign-owner" ? "other-channel" : "legacy-channel")},
+          ${kind === "detector" ? "lifecycle: { detectLegacyStateMigrations: () => [] }," : ""}
+          ${kind === "invalid-detector" ? "lifecycle: { detectLegacyStateMigrations: true }," : ""}
+        } };`,
+      );
+      const stateless = vi.fn();
+      const entries = migrationEntries({
+        pluginIds: ["legacy-channel"],
+        onInspectedStatelessPlugin: stateless,
       });
+      expect(entries).toHaveLength(kind === "detector" ? 1 : 0);
+      expect(stateless).not.toHaveBeenCalled();
+      expect(doctorContractWarnMock).toHaveBeenCalledTimes(kind === "invalid-detector" ? 1 : 0);
+    },
+  );
 
-      expect(
-        listPluginDoctorStateMigrationEntries({
-          config: {},
-          env: {},
-          pluginIds: ["legacy-channel"],
-        }),
-      ).toHaveLength(expectedCount);
-      expect(loadSetupPlugin).toHaveBeenCalledTimes(expectedCount);
-      expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+  it.each([false, true])(
+    "gates the legacy setup-plugin lifecycle fallback (entry feature=%s)",
+    async (entryFeature) => {
+      const { pluginRoot, events } = legacyFixture(
+        `module.exports = {
+  kind: "bundled-channel-setup-entry",
+  ${entryFeature ? "features: { legacyStateMigrations: true }," : ""}
+  loadSetupPlugin() {
+    record("setup-plugin");
+    return { lifecycle: { detectLegacyStateMigrations() { record("detect"); return []; } } };
+  },
+};`,
+      );
+      const entries = migrationEntries({ pluginIds: ["legacy-channel"] });
+      expect(entries).toHaveLength(Number(entryFeature));
+      if (entries[0]) {
+        await expect(
+          entries[0].migration.detectLegacyState(detectionInput(pluginRoot)),
+        ).resolves.toBeNull();
+      }
+      expect(events()).toEqual(entryFeature ? ["module", "setup-plugin", "detect"] : ["module"]);
+      expect(doctorContractWarnMock).not.toHaveBeenCalled();
     },
   );
 
@@ -232,348 +289,112 @@ describe("doctor-contract-registry state migrations", () => {
       includeSetupLoader: false,
     },
   ])("rejects a legacy setup entry with $name", ({ kind, includeSetupLoader }) => {
-    const pluginRoot = makeTempDir();
-    const setupSource = path.join(pluginRoot, "setup-entry.ts");
-    fs.writeFileSync(setupSource, "export {};\n", "utf-8");
-    const loadLegacyStateMigrationDetector = vi.fn(() => () => []);
-    mocks.createJiti.mockImplementation(() => () => ({
-      default: {
-        kind,
-        features: { legacyStateMigrations: true },
-        ...(includeSetupLoader ? { loadSetupPlugin: () => ({}) } : {}),
-        loadLegacyStateMigrationDetector,
-      },
-    }));
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "legacy-channel",
-          origin: "global",
-          rootDir: pluginRoot,
-          setupSource,
-          channels: ["legacy-channel"],
-          providers: [],
-          packageManifest: { setupFeatures: { legacyStateMigrations: true } },
-        },
-      ],
-      diagnostics: [],
-    });
+    const { events } = legacyFixture(
+      `module.exports = {
+  kind: ${JSON.stringify(kind)},
+  features: { legacyStateMigrations: true },
+  ${includeSetupLoader ? 'loadSetupPlugin() { record("activation"); throw new Error("setup plugin activated"); },' : ""}
+  loadLegacyStateMigrationDetector() { record("detector"); return () => []; },
+};`,
+      { packageManifest: { setupFeatures: { legacyStateMigrations: true } } },
+    );
 
-    expect(listPluginDoctorStateMigrationEntries({ config: {}, env: {} })).toEqual([]);
-    expect(loadLegacyStateMigrationDetector).not.toHaveBeenCalled();
+    expect(migrationEntries()).toEqual([]);
+    expect(events()).toEqual(["module"]);
+    expect(doctorContractWarnMock).not.toHaveBeenCalled();
   });
 
   it.each([
-    {
-      name: "explicitly disabled channel",
-      config: { channels: { alpha: { enabled: false } } },
-    },
-    {
-      name: "explicitly disabled plugin",
-      config: { plugins: { entries: { alpha: { enabled: false } } } },
-    },
-    {
-      name: "denylisted plugin",
-      config: { plugins: { deny: ["alpha"] } },
-    },
-    {
-      name: "globally disabled plugins",
-      config: { plugins: { enabled: false } },
-    },
-    {
-      name: "every configured channel alias disabled",
-      config: { channels: { alpha: { enabled: false }, "alpha-alias": { enabled: false } } },
-    },
-  ])("never loads state migrations for an $name, but still repairs its config", ({ config }) => {
-    const pluginRoot = makeTempDir();
-    fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf8");
-    mocks.createJiti.mockImplementation(() => () => ({
-      legacyConfigRules: [
-        { path: ["channels", "alpha", "legacy"], message: "repair disabled alpha" },
-      ],
-      stateMigrations: [
-        {
-          id: "alpha-state",
-          label: "Alpha state",
-          detectLegacyState: () => ({ preview: ["alpha state"] }),
-          migrateLegacyState: () => ({ changes: ["migrated alpha state"], warnings: [] }),
-        },
-      ],
-    }));
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "alpha",
-          origin: "global",
-          rootDir: pluginRoot,
-          channels: ["alpha", "alpha-alias"],
-          providers: [],
-          doctorContract: { configRepair: true, stateMigrations: true },
-        },
-      ],
-      diagnostics: [],
-    });
+    { channels: { alpha: { enabled: false } } },
+    { plugins: { entries: { alpha: { enabled: false } } } },
+    { plugins: { deny: ["alpha"] } },
+    { plugins: { enabled: false } },
+    { channels: { alpha: { enabled: false }, "alpha-alias": { enabled: false } } },
+  ])("repairs disabled owner config without loading state migrations: %j", (config) => {
+    const { detectLegacyState, migrateLegacyState } = mockModernPlugin(
+      {
+        origin: "global",
+        channels: ["alpha", "alpha-alias"],
+        doctorContract: { configRepair: true, stateMigrations: true },
+      },
+      true,
+    );
 
-    expect(listPluginDoctorStateMigrationEntries({ config, env: {} })).toEqual([]);
+    expect(migrationEntries({ config })).toEqual([]);
     expect(mocks.createJiti).not.toHaveBeenCalled();
-    expect(listPluginDoctorLegacyConfigRules({ config, env: {} })).toEqual([
+    expect(harness.registry.listPluginDoctorLegacyConfigRules({ config, env: {} })).toEqual([
       { path: ["channels", "alpha", "legacy"], message: "repair disabled alpha" },
     ]);
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+    expect(migrationIds({ config, includeDisabled: true })).toEqual(["alpha-state"]);
+    expect(detectLegacyState).not.toHaveBeenCalled();
+    expect(migrateLegacyState).not.toHaveBeenCalled();
   });
 
   it.each([
-    {
-      name: "untrusted workspace even when explicitly scoped",
-      origin: "workspace",
-      config: {},
-      allowed: false,
-    },
+    ...workspaceActivation.map((scenario) => ({ ...scenario, origin: "workspace" })),
     {
       name: "non-bundled owner omitted from a restrictive allowlist",
       origin: "global",
       config: { plugins: { allow: ["other-plugin"] } },
       allowed: false,
     },
-    {
-      name: "explicitly allowlisted workspace",
-      origin: "workspace",
-      config: { plugins: { allow: ["alpha"] } },
-      allowed: true,
-    },
-    {
-      name: "explicitly enabled workspace",
-      origin: "workspace",
-      config: { plugins: { entries: { alpha: { enabled: true } } } },
-      allowed: true,
-    },
   ])("honors effective activation before loading an $name", ({ origin, config, allowed }) => {
-    const pluginRoot = makeTempDir();
-    const setupSource = path.join(pluginRoot, "setup-entry.ts");
-    fs.writeFileSync(setupSource, "export {};\n", "utf8");
-    const loadSetupPlugin = vi.fn(() => {
-      throw new Error("direct setup detector should not activate the plugin");
-    });
-    mocks.createJiti.mockImplementation(() => () => ({
-      default: {
-        kind: "bundled-channel-setup-entry",
-        features: { legacyStateMigrations: true },
-        loadSetupPlugin,
-        loadLegacyStateMigrationDetector: () => () => [],
-      },
-    }));
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "alpha",
-          origin,
-          rootDir: pluginRoot,
-          setupSource,
-          channels: ["alpha"],
-          providers: [],
-          packageManifest: { setupFeatures: { legacyStateMigrations: true } },
-        },
-      ],
-      diagnostics: [],
+    const { events } = legacyFixture(directDetector, {
+      id: "alpha",
+      origin,
+      channels: ["alpha"],
+      packageManifest: { setupFeatures: { legacyStateMigrations: true } },
     });
 
-    expect(
-      listPluginDoctorStateMigrationEntries({ config, env: {}, pluginIds: ["alpha"] }).map(
-        (entry) => entry.migration.id,
-      ),
-    ).toEqual(allowed ? ["alpha-legacy-channel-state"] : []);
-    expect(mocks.createJiti).toHaveBeenCalledTimes(allowed ? 1 : 0);
-    expect(loadSetupPlugin).not.toHaveBeenCalled();
+    expect(migrationIds({ config, pluginIds: ["alpha"] })).toEqual(
+      allowed ? ["alpha-legacy-channel-state"] : [],
+    );
+    expect(events()).toEqual(allowed ? ["module", "detector"] : []);
+    expect(doctorContractWarnMock).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { name: "inactive workspace owner", config: {}, allowed: false },
-    {
-      name: "allowlisted workspace owner",
-      config: { plugins: { allow: ["alpha"] } },
-      allowed: true,
-    },
-    {
-      name: "explicitly enabled workspace owner",
-      config: { plugins: { entries: { alpha: { enabled: true } } } },
-      allowed: true,
-    },
-  ])("gates a modern non-channel $name before loading", ({ config, allowed }) => {
-    const pluginRoot = makeTempDir();
-    fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf8");
-    mocks.createJiti.mockImplementation(() => () => ({
-      stateMigrations: [
-        {
-          id: "alpha-state",
-          label: "Alpha state",
-          detectLegacyState: () => ({ preview: ["alpha state"] }),
-          migrateLegacyState: () => ({ changes: [], warnings: [] }),
-        },
-      ],
-    }));
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "alpha",
-          origin: "workspace",
-          rootDir: pluginRoot,
-          channels: [],
-          providers: [],
-          doctorContract: { stateMigrations: true },
-        },
-      ],
-      diagnostics: [],
-    });
+  it.each(workspaceActivation)(
+    "gates a modern non-channel $name before loading",
+    ({ config, allowed }) => {
+      mockModernPlugin({ origin: "workspace" });
 
-    expect(
-      listPluginDoctorStateMigrationEntries({ config, env: {} }).map((entry) => entry.migration.id),
-    ).toEqual(allowed ? ["alpha-state"] : []);
-    expect(mocks.createJiti).toHaveBeenCalledTimes(allowed ? 1 : 0);
-  });
+      expect(migrationIds({ config })).toEqual(allowed ? ["alpha-state"] : []);
+      expect(mocks.createJiti).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    },
+  );
 
   it("preserves an enabled channel alias and the existing restrictive-allowlist bypass", () => {
     const pluginRoot = makeTempDir();
-    fs.writeFileSync(
-      path.join(pluginRoot, "doctor-contract-api.cjs"),
-      `module.exports = { stateMigrations: [{
-  id: 'alpha-state',
-  label: 'Alpha state',
-  detectLegacyState: () => ({ preview: ['alpha state'] }),
-  migrateLegacyState: () => ({ changes: [], warnings: [] }),
-}] };\n`,
-      "utf8",
-    );
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "alpha",
-          origin: "bundled",
-          rootDir: pluginRoot,
-          channels: ["alpha", "alpha-alias"],
-          providers: [],
-          doctorContract: { stateMigrations: true },
-        },
-      ],
-      diagnostics: [],
-    });
+    writeMigrations(pluginRoot, "alpha-state");
+    mockDoctorPlugins(pluginRecord(pluginRoot, { channels: ["alpha", "alpha-alias"] }));
 
     expect(
-      listPluginDoctorStateMigrationEntries({
+      migrationIds({
         config: {
           channels: { alpha: { enabled: false }, "alpha-alias": { enabled: true } },
           plugins: { allow: ["unrelated"] },
         },
-        env: {},
-      }).map((entry) => entry.migration.id),
+      }),
     ).toEqual(["alpha-state"]);
   });
 
-  it("prefers modern migrations without loading the same owner's legacy setup entry", () => {
-    const pluginRoot = makeTempDir();
-    const setupSource = path.join(pluginRoot, "setup-entry.cjs");
-    fs.writeFileSync(
-      path.join(pluginRoot, "doctor-contract-api.cjs"),
-      `module.exports = { stateMigrations: [{
-  id: 'alpha-modern',
-  label: 'Modern alpha state',
-  detectLegacyState: () => ({ preview: ['modern'] }),
-  migrateLegacyState: () => ({ changes: [], warnings: [] }),
-}] };\n`,
-      "utf8",
-    );
-    fs.writeFileSync(setupSource, "throw new Error('obsolete setup entry loaded');\n", "utf8");
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "alpha",
-          origin: "global",
-          rootDir: pluginRoot,
-          setupSource,
-          channels: ["alpha"],
-          providers: [],
-          doctorContract: { stateMigrations: true },
-          packageManifest: { setupFeatures: { legacyStateMigrations: true } },
-        },
-      ],
-      diagnostics: [],
-    });
-
-    expect(
-      listPluginDoctorStateMigrationEntries({ config: {}, env: {} }).map(
-        (entry) => entry.migration.id,
-      ),
-    ).toEqual(["alpha-modern"]);
-  });
-
-  it("does not fall back to legacy when an explicit modern declaration yields no migrations", () => {
-    const pluginRoot = makeTempDir();
-    const setupSource = path.join(pluginRoot, "setup-entry.cjs");
-    fs.writeFileSync(
-      path.join(pluginRoot, "doctor-contract-api.cjs"),
-      "module.exports = { stateMigrations: [] };\n",
-      "utf8",
-    );
-    fs.writeFileSync(
-      setupSource,
-      `module.exports = {
-  kind: 'bundled-channel-setup-entry',
-  features: { legacyStateMigrations: true },
-  loadSetupPlugin() { return {}; },
-  loadLegacyStateMigrationDetector() { return () => []; },
-};\n`,
-      "utf8",
-    );
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "alpha",
-          origin: "global",
-          rootDir: pluginRoot,
-          setupSource,
-          channels: ["alpha"],
-          providers: [],
-          doctorContract: { stateMigrations: true },
-          packageManifest: { setupFeatures: { legacyStateMigrations: true } },
-        },
-      ],
-      diagnostics: [],
-    });
-
-    expect(listPluginDoctorStateMigrationEntries({ config: {}, env: {} })).toEqual([]);
-    expect(doctorContractWarnMock).not.toHaveBeenCalled();
-  });
+  it.each([{ ids: [] }, { ids: ["alpha-modern"] }])(
+    "never falls back to legacy for an explicit modern declaration: $ids",
+    ({ ids }) => {
+      const { pluginRoot, events } = modernLegacyFixture();
+      writeMigrations(pluginRoot, ...ids);
+      expect(migrationIds()).toEqual(ids);
+      expect(events()).toEqual([]);
+      expect(doctorContractWarnMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps bundled non-channel state migrations available when plugins are globally disabled", () => {
     const pluginRoot = makeTempDir();
-    fs.writeFileSync(
-      path.join(pluginRoot, "doctor-contract-api.cjs"),
-      `module.exports = { stateMigrations: [{
-  id: 'memory-state',
-  label: 'Memory state',
-  detectLegacyState: () => ({ preview: ['memory state'] }),
-  migrateLegacyState: () => ({ changes: [], warnings: [] }),
-}] };\n`,
-      "utf8",
-    );
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "memory-state",
-          origin: "bundled",
-          rootDir: pluginRoot,
-          channels: [],
-          providers: [],
-          doctorContract: { stateMigrations: true },
-        },
-      ],
-      diagnostics: [],
-    });
+    writeMigrations(pluginRoot, "memory-state");
+    mockDoctorPlugins(pluginRecord(pluginRoot, { id: "memory-state" }));
 
-    expect(
-      listPluginDoctorStateMigrationEntries({
-        config: { plugins: { enabled: false } },
-        env: {},
-      }).map((entry) => entry.migration.id),
-    ).toEqual(["memory-state"]);
+    expect(migrationIds({ config: { plugins: { enabled: false } } })).toEqual(["memory-state"]);
   });
 });

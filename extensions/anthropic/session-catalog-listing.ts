@@ -1,14 +1,12 @@
 import fs from "node:fs/promises";
+import { readFileWindowFully } from "openclaw/plugin-sdk/file-access-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import {
   publishSessionCatalogHost,
   type SessionCatalogProvider,
 } from "openclaw/plugin-sdk/session-catalog";
-import {
-  isRecord,
-  normalizeBoundedOptionalString as readBoundedString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_LOCAL_SESSION_HOST_ID } from "./session-catalog-adoption.js";
 import { listClaudeSessions } from "./session-catalog-discovery.js";
 import { resolveClaudeCatalogHomeDir } from "./session-catalog-home.js";
@@ -65,21 +63,39 @@ export async function listLocalClaudeSessionPage(
   const params = readListParams(value);
   const offset = decodeOffset(params.cursor, "catalog");
   const search = params.searchTerm?.toLocaleLowerCase();
-  const records = (await listClaudeSessions(resolvedHome, resolvedScanOptions)).filter((record) => {
-    if (!search) {
+  const scan = await listClaudeSessions(resolvedHome, resolvedScanOptions);
+  // Exact lookup reads only matching transcripts, independent of the ordinary discovery frontier.
+  const exact =
+    search && !scan.records.some((record) => record.threadId.toLocaleLowerCase() === search)
+      ? await listClaudeSessions(resolvedHome, { ...resolvedScanOptions, sessionId: search })
+      : undefined;
+  const needle = search?.normalize("NFC");
+  const records = [...(exact?.records ?? []), ...scan.records].filter((record) => {
+    if (!needle) {
       return true;
     }
     return [record.name, record.cwd, record.gitBranch, record.threadId].some((candidate) =>
-      candidate?.toLocaleLowerCase().includes(search),
+      candidate?.toLocaleLowerCase().normalize("NFC").includes(needle),
     );
   });
   const page = records
     .slice(offset, offset + params.limit)
     .map(({ filePath: _filePath, ...record }) => record);
   const nextOffset = offset + page.length;
+  const hasMore = nextOffset < records.length;
   return {
     sessions: page,
-    ...(nextOffset < records.length ? { nextCursor: encodeOffset(nextOffset) } : {}),
+    ...(hasMore ? { nextCursor: encodeOffset(nextOffset) } : {}),
+    // Host errors stop automatic pagination, so report the frontier after all discovered rows.
+    ...(!hasMore && scan.truncated
+      ? {
+          error: {
+            code: "DISCOVERY_TRUNCATED",
+            message:
+              "Claude session discovery reached its scan limit; some sessions are omitted. Search by exact session ID.",
+          },
+        }
+      : {}),
   };
 }
 
@@ -92,15 +108,16 @@ export async function readLocalClaudeTranscriptPage(
   const resolvedScanOptions =
     scanOptions ?? (homeDir === undefined ? gatewayClaudeScanOptions(true) : {});
   const params = readTranscriptParams(value);
-  let filePath = (await listClaudeSessions(resolvedHome, resolvedScanOptions)).find(
+  const lookupOptions = { ...resolvedScanOptions, sessionId: params.threadId };
+  let filePath = (await listClaudeSessions(resolvedHome, lookupOptions)).records.find(
     (record) => record.threadId === params.threadId,
   )?.filePath;
   if (!filePath) {
     // A just-created session can race the stamp snapshot. Specific reads must retry against disk so
     // opening a new thread never fails only because the assembled catalog is still warm.
     filePath = (
-      await listClaudeSessions(resolvedHome, { ...resolvedScanOptions, forceRefresh: true })
-    ).find((record) => record.threadId === params.threadId)?.filePath;
+      await listClaudeSessions(resolvedHome, { ...lookupOptions, forceRefresh: true })
+    ).records.find((record) => record.threadId === params.threadId)?.filePath;
   }
   if (!filePath) {
     throw new ClaudeCatalogParamsError("Claude session is unavailable");
@@ -124,15 +141,9 @@ export async function readLocalClaudeTranscriptPage(
       );
       position -= size;
       const chunk = Buffer.allocUnsafe(size);
-      // Positional reads may return short, so complete the bounded window.
-      // A zero-byte read before it fills means the file changed after stat.
-      let filled = 0;
-      while (filled < size) {
-        const { bytesRead } = await handle.read(chunk, filled, size - filled, position + filled);
-        if (bytesRead === 0) {
-          throw new Error("Claude transcript changed while it was being read");
-        }
-        filled += bytesRead;
+      const filled = await readFileWindowFully(handle, chunk, position);
+      if (filled !== size) {
+        throw new Error("Claude transcript changed while it was being read");
       }
       scanned += filled;
       let right = filled;
@@ -143,7 +154,7 @@ export async function readLocalClaudeTranscriptPage(
         const segment = chunk.subarray(index + 1, right);
         if (segment.length > 0 || fragments.length > 0) {
           const line = Buffer.concat([segment, ...fragments.toReversed()]);
-          const item = parseTranscriptLine(line, readBoundedString);
+          const item = parseTranscriptLine(line);
           fragments = [];
           if (item) {
             item.resumeCursor = encodeOffset(position + index + 1 + line.length);
@@ -162,7 +173,7 @@ export async function readLocalClaudeTranscriptPage(
       if (position === 0) {
         if (prefix.length > 0 || fragments.length > 0) {
           const line = Buffer.concat([prefix, ...fragments.toReversed()]);
-          const item = parseTranscriptLine(line, readBoundedString);
+          const item = parseTranscriptLine(line);
           if (item) {
             item.resumeCursor = encodeOffset(line.length);
             found.push({ item, start: 0 });
@@ -218,6 +229,13 @@ export async function listClaudeSessionCatalog(params: {
   const query = parseGatewayQuery(params.query);
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
   const scanOptions = gatewayClaudeScanOptions(params.allowProcessHomeFallback);
+  const localHost: ClaudeSessionCatalogHost = {
+    hostId: CLAUDE_LOCAL_SESSION_HOST_ID,
+    label: "Local Claude",
+    kind: "gateway",
+    connected: true,
+    sessions: [],
+  };
   const localHosts: Promise<ClaudeSessionCatalogHost>[] =
     (params.allowProcessHomeFallback !== false || scanOptions.configDir !== undefined) &&
     (!requested || requested.has(CLAUDE_LOCAL_SESSION_HOST_ID))
@@ -225,10 +243,7 @@ export async function listClaudeSessionCatalog(params: {
           (async () => {
             try {
               return {
-                hostId: CLAUDE_LOCAL_SESSION_HOST_ID,
-                label: "Local Claude",
-                kind: "gateway",
-                connected: true,
+                ...localHost,
                 ...(await listLocalClaudeSessionPage(
                   {
                     limit: query.limitPerHost,
@@ -243,11 +258,7 @@ export async function listClaudeSessionCatalog(params: {
               };
             } catch {
               return {
-                hostId: CLAUDE_LOCAL_SESSION_HOST_ID,
-                label: "Local Claude",
-                kind: "gateway",
-                connected: true,
-                sessions: [],
+                ...localHost,
                 error: {
                   code: "LOCAL_READ_FAILED",
                   message: "Local Claude sessions are unavailable",
@@ -325,6 +336,12 @@ export async function listClaudeSessionCatalog(params: {
         params.onHost?.(common);
         return common;
       }
+      const unavailable: ClaudeSessionCatalogHost = Object.assign({}, common, {
+        error: {
+          code: "NODE_INVOKE_FAILED",
+          message: "Paired node Claude sessions are unavailable",
+        },
+      });
       const eventualHost = Promise.resolve()
         .then(async () => {
           const raw = await params.runtime.nodes.invoke({
@@ -341,14 +358,7 @@ export async function listClaudeSessionCatalog(params: {
           });
           return Object.assign({}, common, parseCatalogPage(unwrapNodePayload(raw)));
         })
-        .catch((): ClaudeSessionCatalogHost =>
-          Object.assign({}, common, {
-            error: {
-              code: "NODE_INVOKE_FAILED",
-              message: "Paired node Claude sessions are unavailable",
-            },
-          }),
-        );
+        .catch(() => unavailable);
       // Retain publication through cold discovery without extending the fail-soft response.
       publishSessionCatalogHost(params, eventualHost);
       try {
@@ -356,12 +366,7 @@ export async function listClaudeSessionCatalog(params: {
           message: "paired node Claude session catalog timed out",
         });
       } catch {
-        return Object.assign({}, common, {
-          error: {
-            code: "NODE_INVOKE_FAILED",
-            message: "Paired node Claude sessions are unavailable",
-          },
-        });
+        return unavailable;
       }
     }),
   );

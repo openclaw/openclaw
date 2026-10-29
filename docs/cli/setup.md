@@ -10,10 +10,29 @@ title: "Setup CLI"
 
 # `openclaw setup`
 
+Interactive setup offers optional memory embedding provider/model setup with a
+synthetic readiness check. Skip it without changing existing memory settings, or
+configure it later with `openclaw configure --section memory`. This step does not
+download local models or rebuild indexes. Baseline and non-interactive setup do
+not prompt for embeddings. See [Configure](/cli/configure#memory-section).
+
 `openclaw setup` is the system-agent entry point. On a configured system, bare
 `openclaw setup` opens an interactive OpenClaw chat. On a fresh system, it
 falls through to guided onboarding. Use `-m`/`--message` for one request or
 `--baseline` to initialize config/workspace folders without the wizard.
+
+For models that permit local execution, `setup --message` can verify inference
+without a running Gateway. Configurations with a required worker profile still
+need a Gateway placement owner.
+
+Baseline setup (`--baseline`) works with the local Gateway running or stopped.
+With the Gateway running, setup sends only its config change (for example
+`agents.defaults.workspace` or `agents.defaults.skipBootstrap`) to the Gateway,
+which saves the same config the offline command would; an unchanged config is
+not written. The Gateway seeds missing workspace files on the agent's first run.
+Creating the first config, or overriding a value inherited from an included
+config file, still needs the Gateway stopped: stop it through its service
+owner, wait for it to exit, then rerun the command.
 
 Routing order:
 
@@ -39,18 +58,26 @@ models, supported CLI logins, API-key environment variables, and already
 installed Ollama or LM Studio models. Local models are never downloaded by this
 discovery pass. Both CLI onboarding and the macOS app wait for you to choose a
 connection before testing it. A failed or cancelled attempt never selects another
-provider automatically. A selected candidate must answer a real completion before
-its provider and model configuration is saved.
+provider automatically. Setup saves the credential, then sends one tool-free
+confirmation turn using the candidate settings in memory. It saves the provider
+and model configuration only after that turn succeeds. A failed connection keeps
+the credential and leaves the configuration unchanged. Choose the saved sign-in
+to retry without signing in again. Custom endpoint settings stay available for
+retry while the Gateway runs; after a restart, enter the endpoint settings again.
 
 Initial Claude Code and Codex detection checks executable versions without
 running auth-status commands or starting an app server. Readable Codex
 credentials are reported as stored evidence; the active login remains
 unverified during detection. Stored credentials do not
 receive verified-subscription priority over environment API keys.
+Codex execution or sign-in inspection errors are reported with a retry diagnostic;
+only a missing executable or login is treated as absent.
 
-Pi and OpenCode CLIs may also be reported for context when they cannot serve as
-the reusable inference route for guided setup. Gemini CLI and Antigravity are
-not offered as detected setup routes.
+In the Control UI, Model Setup can also select models from installed native
+agents through the shared model picker. **Use** saves that model and its runtime
+without running the setup test; authentication and tools stay with the native
+agent. Provider **Test & use** still requires a verified tool-free reply.
+Gemini CLI and Antigravity are not offered as detected setup routes.
 
 `setup` accepts the same onboarding flags as `openclaw onboard`, including
 auth (`--auth-choice`, `--token`, provider key flags), Gateway
@@ -68,6 +95,9 @@ Local onboarding generates a Gateway secret in token mode by default, without
 asking you to choose token or password. Existing password-mode configs are
 preserved. Use `--gateway-auth password` or `--gateway-password <value>` to
 choose a password explicitly; Tailscale Funnel still requires password mode.
+
+Use `setup --team` for the same small-team onboarding as `onboard --team`.
+`--agent-name <name>` names the first agent or, with `--team`, the coordinator.
 
 <Note>
 `openclaw setup` is for mutable config installs. In Nix mode (`OPENCLAW_NIX_MODE=1`) OpenClaw refuses setup writes because the config file is managed by Nix. Use the first-party [nix-openclaw Quick Start](https://github.com/openclaw/nix-openclaw#quick-start) or the equivalent source config for another Nix package.
@@ -115,12 +145,25 @@ mode. For remote token SecretRefs, set `OPENCLAW_GATEWAY_TOKEN` and use
 
 ### Baseline mode
 
+Workspace and session-directory completion reports escape terminal control characters.
+The actual directory names and paths returned with `--json` retain their original values.
+
 `openclaw setup --baseline` preserves the older baseline-only behavior: it
 creates the config, workspace, and session directories, then exits without
-running onboarding. It accepts `--workspace` and harmless output controls, but
+running onboarding. It accepts `--workspace`, `--skip-bootstrap`, and harmless output controls, but
 rejects explicit onboarding, Gateway, auth, reset, or daemon options instead of
 silently ignoring them. If an existing config is invalid, baseline setup preserves
-it and asks you to run `openclaw doctor` before retrying.
+it and asks you to run `openclaw doctor --fix` to apply supported repairs before retrying.
+
+Use `openclaw setup --baseline --skip-bootstrap` to create the directories without
+generating workspace bootstrap files. This persists `agents.defaults.skipBootstrap: true`
+as a local config override, preserves existing workspace files and included config files,
+and remains enabled on later baseline runs that omit the flag.
+If the `skipBootstrap` value itself comes from an `$include`, edit that included
+file directly instead of replacing its pointer through baseline setup.
+When also changing `--workspace`, update an included per-agent workspace or an
+exact workspace-file include first; baseline setup rejects that combined change
+before writing either config or workspace files.
 
 ## Examples
 

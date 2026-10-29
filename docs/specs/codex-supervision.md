@@ -20,6 +20,24 @@ fleet catalog, authenticated operator UI, session binding, and channel delivery.
 The feature belongs to the official `codex` plugin. There is no separate
 Supervisor plugin or second Codex protocol implementation.
 
+This spec uses these stage names:
+
+- **Gateway-local branch**: the new supervised Chat that OpenClaw creates from a
+  stored or idle local Codex source instead of resuming that source thread.
+- **Pending harness branch**: that branch before its first turn, when the bounded
+  history is projected but no primary native Codex thread exists yet.
+- **Chat mirror** (visible history mirror): the bounded copy of visible user and
+  assistant messages projected into the Chat.
+- **Visible-history branch**: an unmapped Gateway-local source that carries only
+  that mirrored history, so its primary native harness thread never resumes the
+  source.
+- **Primary native appServer-source branch**: the native Codex thread the plugin
+  creates with `threadSource: "appServer"` after pinning the source snapshot.
+- **Primary full native Codex harness thread**: that primary native thread once it runs
+  with OpenClaw's full harness tool surface; every later model turn runs on it.
+- **Supervised model-locked Chat**: an OpenClaw Chat bound to a supervised
+  thread under the Codex-only model and runtime lock.
+
 ## Product boundary
 
 The catalog registers whenever the Codex plugin is active unless native session
@@ -90,7 +108,7 @@ Codex Desktop -> private stdio App Server -> user Codex home
 OpenClaw Codex plugin -> supervision App Server connection
   (defaults to managed user-home stdio; explicit appServer settings are honored)
   -> passive source catalog and read
-  -> snapshot pin -> canonical appServer-source branch
+  -> snapshot pin -> primary native appServer-source branch
   -> visible-history injection and every later supervised Chat turn
 
 Ordinary OpenClaw Codex sessions -> managed agent-home stdio by default
@@ -105,12 +123,18 @@ stored threads. Explicit `appServer` connection settings are honored. When
 or Unix and `"agent"` for WebSocket. Set `appServer.homeScope: "user"`
 explicitly only when the ordinary harness should also share the native Codex
 home. A Gateway-local Chat adopted from the Codex sidebar group is the exception:
-its private supervision binding keeps source reads, canonical branch creation, and later
+its private supervision binding keeps source reads, primary native branch creation, and later
 turns on the supervision connection. Live status and ownership remain
 process-local; a thread unknown to OpenClaw's supervision process is `notLoaded`
 even when Codex Desktop is actively running it.
 
-Codex has an experimental canonical local daemon with a separate
+Catalog reads and pinned source leases explicitly select native authentication.
+They do not import or replace credentials in either OpenClaw's auth store or the
+selected Codex home. This also applies to a primary catalog source configured
+with agent home scope: its physical home and connection fingerprint remain
+unchanged. Ordinary managed inference keeps its agent-auth preflight.
+
+Codex has an experimental local daemon with a separate
 installer-managed bootstrap contract. This feature must not bootstrap, claim,
 or assume that daemon implicitly.
 
@@ -138,9 +162,24 @@ explicit `appServer.transport: "stdio"` with unset/default supervision scope or
 explicit `appServer.homeScope: "user"`. It carries configured `command`, `args`,
 and normalized `clearEnv` into the child process. With `"unix"`, `"websocket"`,
 or explicit `homeScope: "agent"`, it advertises neither the catalog capability
-nor command; direct invocation also fails closed. It must never expose the user
+nor command; direct invocation is also rejected. It must never expose the user
 Codex home for an agent-scoped configuration or substitute local stdio for an
 explicit endpoint.
+
+Headless node catalogs default to the node's native `CODEX_HOME` or `~/.codex`,
+independently of the Gateway's route agent and the node's agent roster. Native
+readers retain the configured command, arguments, and cleared environment
+variables. Catalog reads and native terminal resume use the same home as the
+node's existing CLI session listing and continuation commands.
+
+The Gateway still sends its optional agent id for released nodes: v2026.9.4
+uses it as a strict local source selector under the same command names. Updated
+native readers validate that field only as inert route context. Explicit
+agent-scoped and non-stdio source configurations keep their shipped local-owner
+selection, including rejection of missing or removed owners. Neither path
+silently substitutes a different source. Retire this compatibility only through
+a versioned node-source contract and an upgrade transition for those configured
+readers.
 
 The catalog projection normalizes identifiers, title, cwd, status, active wait
 flags, timestamps, source, model provider, Codex version, and Git branch. It
@@ -154,12 +193,20 @@ local App Server does not erase healthy hosts from the page. Connectivity is a
 host property, not a thread status: a failed host result contains no fresh
 session rows and does not project `offline` onto native threads.
 
+An empty catalog does not create a sidebar section, even when it has an error
+or a continuation cursor. When healthy cursor hosts have no visible rows under
+the current owner filter, the existing data owner advances one page per catalog
+between refreshes. Accepted pages retain their cursor and page-depth progress;
+later passes continue that search instead of restarting at the same first page.
+Discovery pauses while hidden and stops advancing on errors or cursor cycles.
+Catalogs containing visible sessions remain present when another host fails.
+
 The Control UI requests progressive catalog updates. Each local or paired host
 appears when its own App Server listing settles; the aggregate response remains
 the compatibility and recovery snapshot. The visible page reconciles after
-connectivity changes, on focus, and at most every 30 seconds, with a faster pass
-after changes. Native Codex sessions created in another client are therefore
-eventually discovered without importing them into OpenClaw storage.
+connectivity changes, when the page becomes visible, and every two minutes while
+visible. Discovery pauses while hidden. Native Codex sessions created in another
+client are therefore eventually discovered without importing them into OpenClaw storage.
 
 Catalog discovery is passive. Listing or reading metadata must not call
 `thread/resume`, subscribe the OpenClaw client to live thread requests, or
@@ -205,11 +252,13 @@ connection, and `/codex resume` or `/codex bind` mutates that conversation's
 binding. Those commands do not replace `sessions.catalog.continue`, and there is
 no `/codex continue` or `/codex archive` runtime command.
 
-## Canonical message forks
+<a id="canonical-message-forks" />
+
+## OpenClaw message forks
 
 Message-cut routing classifies the selected local user row before reading the
 original source. Original imported provenance still requires that source's exact
-cut. Canonical provenance is checked against the current privately bound native
+cut. Native-thread provenance is checked against the current privately bound native
 thread, independently of original-source availability. Repeated text does not
 identify a turn: native turn/item identity and retained mirror attestations do.
 Only explicit host-recorded blocked user inputs may be excluded from delivered
@@ -221,13 +270,13 @@ plugin supplies only existing native provenance fields; the host validates the
 live operational instance, recorder, session/writer claim, active anchor, and
 unchanged content again inside the anchored write transaction. Identical
 provenance is a no-op; conflicts, redaction mismatches, confirmed steering, and
-revoked owners fail closed. Annotation uses ordinary transcript generation
+revoked owners are rejected. Annotation uses ordinary transcript generation
 invalidation and refreshes the same recorder admission before publication.
-It never establishes provenance for older unannotated canonical rows. Such a
+It never establishes provenance for older unannotated stored transcript rows. Such a
 prefix requires a fresh original-source branch, not an inferred mapping or
 historical repair.
 
-Canonical creation uses the host's `SessionInitialization` lifetime. Its narrow
+Primary native branch creation uses the host's `SessionInitialization` lifetime. Its narrow
 native tool policy check fixes child identity, source revision, registry and
 configuration without constructing tools, provisioning requester MCP resources,
 or registering live hooks. The native source owns its immutable declarations.
@@ -249,18 +298,18 @@ matching session metadata sets provider, settings-applied events set both, and
 turn context sets model. Rollback does not reset these scalar settings. The exact
 plain file is preferred over its `.zst` sibling. Descriptor/root identity and
 size/timestamps are verified; symlinks, hardlinks, replacement, malformed records
-and budget exhaustion fail closed. Bounds are 64 KiB reads, 1 MiB records, 256-byte
+and budget exhaustion cause snapshot reads to be rejected. Bounds are 64 KiB reads, 1 MiB records, 256-byte
 scalars, an 8 MiB backward scan and five seconds. Compressed input is limited to
 8 MiB and output/window to 32 MiB. This is a verified snapshot, not live-memory
 selection or a metadata cache.
 
 The child uses direct `thread/fork` with `beforeTurnId` and the observed pair,
 then exact cut read-back. It never imports projected history or reinjects the
-inherited prefix. Deterministic child config shares the start/resume renderer;
+inherited prefix. Child config uses the shared start/resume renderer;
 a fresh hook relay generation has static commands but no live registration.
 The first actual admitted run still owns prompt hooks and callback registration.
-Canonical SDK append copies the frozen display messages and their original
-attestations/idempotency identities with new destination event IDs and parents.
+The shared SDK append copies the frozen display messages and their original
+attestations and duplicate-prevention identities with new destination event IDs and parents.
 The public link retains the original source identity and reference; the private
 binding points to the new native child. Its activity marker describes the
 verified retained native cut, including an empty baseline when no turns remain,
@@ -285,7 +334,7 @@ initialize capability, binary patch, or extra operator option is required.
 After native cut, catalog, model, app, and source validation, creation appends
 exactly one raw developer message containing a bounded supersession notice and
 the complete final generic `developerInstructions` body. Accepted cold resumes
-with proven configuration ownership do the same for supervised canonical threads before binding
+with proven configuration ownership do the same for supervised primary native threads before binding
 CAS and `turn/start`, including threads initially materialized from an original
 source. The exact final generic body remains native configuration for compaction
 and native-child inheritance. Full hook replacement and explicit empty bodies
@@ -347,7 +396,7 @@ messages, with hard limits of 200 messages, 512 KiB of UTF-8 text in total, and
 `[Image attachment]`, never copies image payloads or paths, and omits reasoning,
 tool calls, and tool results.
 
-The UI navigates to normal Chat with that session key. No canonical harness
+The UI navigates to normal Chat with that session key. No primary native harness
 thread exists yet. On the first normal Chat turn, the harness installs the real
 Codex approval, elicitation, event, and delivery handlers, then:
 
@@ -357,37 +406,37 @@ Codex approval, elicitation, event, and delivery handlers, then:
    `ConfigManager` state selects the model and provider, and the fork response
    reports the actual pair. If the model differs from the last model recorded
    in the source, Codex emits its normal model-difference warning. The harness
-   confirms `thread/unsubscribe` on that exact probe and physical connection
-   before creating the canonical thread. The probe is never persisted or archived.
-2. On that same connection, starts the canonical full Codex harness thread with
+   confirms `thread/unsubscribe` on that exact check and physical connection
+   before creating the primary native thread. The check is never persisted or archived.
+2. On that same connection, starts the primary full native Codex harness thread with
    `threadSource: "appServer"`, OpenClaw's cwd, policy, config, environment, the
    full OpenClaw harness tool surface, and exactly the model and provider
    returned by the fork for this initial start.
 3. Injects the bounded visible user and assistant history through that
-   connection, commits the canonical binding without dropping its supervision
+   connection, commits the supervised binding without dropping its supervision
    scope, and runs the turn.
 
 Before the first turn, the Chat is a locked pending branch with a visible
-history mirror; afterward, every model turn runs through the canonical Codex
+history mirror; afterward, every model turn runs through the primary native Codex
 harness thread on the supervision connection. The branch is not a full native
 rollout clone: source reasoning, tool calls, and tool results are deliberately
-omitted. If snapshot pinning or canonical thread creation fails, the pending
+omitted. If snapshot pinning or primary native thread creation fails, the pending
 branch remains retryable. A binding race, disabled supervision, or an unavailable
-or mismatched supervision connection fails closed before the turn runs instead
+or mismatched supervision connection stops the turn before it runs instead
 of falling back to the ordinary agent-home harness.
 
 This guarantees Codex-owned selection, not preservation of the source's
-historical model. The fork's returned pair is used for the canonical thread
+historical model. The fork's returned pair is used for the primary native thread
 start, and Codex persists that thread's native model and provider. Later resumes
 omit OpenClaw model and provider overrides, so Codex restores the persisted pair.
-If a separate native Codex control changes the canonical thread, OpenClaw accepts
+If a separate native Codex control changes the primary native thread, OpenClaw accepts
 that native persisted selection. The outer OpenClaw model and fallback chain
 never substitute for it.
 
-Model changes, session deletion, and session reset/new operations fail closed
+Model changes, session deletion, and session reset/new operations are blocked
 for the supervised model-locked Chat. Mutating `/codex model <model>`, `/codex
 bind`, `/codex resume` (including node `--bind here`), and `/codex detach` or
-`/codex unbind` also fail closed because they replace or clear the binding. The
+`/codex unbind` are also blocked because they replace or clear the binding. The
 `/codex model` query and `/codex fast`, `/codex permissions`, and `/codex
 threads` remain available. The `codex_threads` agent tool cannot attach a new
 fork or archive the bound native thread. List and metadata-only read remain
@@ -399,17 +448,17 @@ binding and create or permit a generic thread behind a Codex-looking session.
 Retention maintenance therefore preserves model-locked entries even when they
 exceed ordinary age, count, or disk-budget limits. Disabling or uninstalling the
 owning plugin also retains the lock and plugin ownership marker. The Chat stays
-unavailable and fails closed until the same plugin is re-enabled; cleanup never
+unavailable until the same plugin is re-enabled; cleanup never
 converts it into an ordinary model session.
 
 The source is never resumed or mutated by this action. The temporary fork pins a
 snapshot; it is not the durable continuation thread. Starting a distinct
-canonical harness thread on the first turn prevents OpenClaw from becoming a
+primary native harness thread on the first turn prevents OpenClaw from becoming a
 competing source writer merely because process-local status failed to see a
 Desktop-owned turn. The visible-history mirror and pinned snapshot may omit work
 that has not yet completed in an active source. The original CLI, VS Code,
 Atlas, or ChatGPT source remains eligible for both native and OpenClaw catalogs.
-The canonical branch remains a native Codex thread in the supervision store,
+The primary branch remains a native Codex thread in the supervision store,
 but native clients may filter its `appServer` source kind, so Codex Desktop
 visibility is not a contract.
 
@@ -424,10 +473,10 @@ the non-archived catalog.
 
 An active or error status from the fresh read rejects archive. So does an
 initializing or pending supervised branch from the source: the first Chat turn
-must materialize its canonical branch before the source can be archived. A
+must materialize its primary native branch before the source can be archived. A
 known active OpenClaw binding owner for the exact target or any non-archived
 spawned descendant also rejects archive. OpenClaw paginates Codex's experimental
-`thread/list ancestorThreadId` relation and fails closed on request or response
+`thread/list ancestorThreadId` relation and rejects archive on request or response
 errors, cursor or thread cycles, and safety-limit exhaustion. Native archive can
 shut down loaded parent and descendant work, so archive is not an interrupt
 shortcut. The read, descendant enumeration, and archive calls are not atomic.
@@ -453,7 +502,7 @@ Therefore:
 - passive catalog clients do not subscribe or auto-deny approvals
 - rows currently reported active expose neither a new branch nor Archive
 - an unmapped Gateway-local source becomes a visible-history branch whose
-  canonical harness thread never resumes the source
+  primary native harness thread never resumes the source
 - `notLoaded` is shown as activity unknown and can be archived only after
   informed no-other-runner confirmation
 - local archive requires that confirmation plus a fresh `idle` or `notLoaded`
@@ -495,7 +544,7 @@ plugin finalizes or unhides the Chat. No native fork or resume occurs during
 this catalog action. Later authorized messages run `codex exec resume` against
 that exact native thread on the owning node, with the prompt on stdin, and
 return the final text using the node's native CLI configuration. They do not
-start the Gateway-local canonical branch or forward the full App Server
+start the Gateway-local primary native branch or forward the full App Server
 approval, tool, and delta stream or structured attachments. Bound turns retain
 the owner/admin check and are blocked while OpenClaw sandboxing is active.
 
@@ -531,8 +580,8 @@ disabled.
 `openclaw doctor --fix` migrates shipped `plugins.entries.codex-supervisor`
 configuration, including endpoints and transcript/write policies, plus plugin
 allow/deny references into
-`plugins.entries.codex.config.supervision`. Explicit canonical destination
-values win conflicts. Runtime code uses only the canonical `codex` plugin
+`plugins.entries.codex.config.supervision`. Explicit current destination
+values win conflicts. Runtime code uses only the current `codex` plugin
 shape after migration.
 
 The official plugin retains exactly five Supervisor compatibility tools:
@@ -552,7 +601,7 @@ The standalone legacy MCP adapter resolves these same tools from the official
 plugin and is the only path that honors the retained legacy policy environment
 variables.
 
-The July catalog UI, Gateway method, node capability, and CLI registration had
+The 2026.8.1 catalog UI, Gateway method, node capability, and CLI registration had
 not shipped under the old plugin id. They move directly to `codex` ownership
 without a second runtime facade.
 
@@ -575,17 +624,17 @@ surfaces remain the recovery path for archived threads.
   returns no fresh rows instead of inventing an offline session status.
 - A stored or idle local row creates a Chat mirror with a Codex-only
   model/runtime lock; the first turn pins a temporary snapshot and starts the
-  canonical full harness thread, and repeating Continue opens the existing Chat.
+  primary full native harness thread, and repeating Continue opens the existing Chat.
 - The first turn omits model/provider overrides on the snapshot fork and pins
-  the canonical start to the exact pair returned by Codex, even when Codex warns
+  the primary thread start to the exact pair returned by Codex, even when Codex warns
   that its current model differs from the source's last recorded model.
 - Pending and committed supervised bindings use the supervision connection for
-  source access, canonical branch creation, and every later turn; ordinary
+  source access, primary native branch creation, and every later turn; ordinary
   Codex sessions remain agent-scoped.
 - Later resumes omit OpenClaw model/provider overrides, preserve Codex's
-  canonical persisted selection, accept separate native changes to that thread,
+  native persisted selection, accept separate native changes to that thread,
   and never substitute the outer OpenClaw model or fallback chain.
-- Disabling supervision or losing the binding/connection lifecycle fails closed
+- Disabling supervision or losing the binding/connection lifecycle blocks the turn
   instead of moving the Chat to the ordinary agent-home harness.
 - A supervised model-locked Chat cannot be deleted while it protects the native
   binding.
@@ -593,7 +642,7 @@ surfaces remain the recovery path for archived threads.
   64 KiB per message. Images become placeholders; source reasoning, tool calls,
   tool results, image payloads, and local paths are not cloned.
 - The branch flow never resumes the source thread.
-- The original source remains eligible for both catalogs. The canonical native
+- The original source remains eligible for both catalogs. The primary native
   branch uses the `appServer` source kind and is not guaranteed to appear in
   Codex Desktop.
 - Active local sources cannot create a branch or be archived; an existing
@@ -601,9 +650,9 @@ surfaces remain the recovery path for archived threads.
 - Activity-unknown rows can branch without confirmation; archiving requires
   explicit no-other-runner confirmation.
 - A source with an initializing or pending supervised branch cannot be archived
-  until the first Chat turn materializes the canonical branch.
+  until the first Chat turn materializes the primary native branch.
 - A known active binding owner for the exact target or any non-archived spawned
-  descendant blocks archive; descendant enumeration failures fail closed, and
+  descendant blocks archive; descendant enumeration failures block archive, and
   explicit confirmation remains responsible for unknown clients and the
   status-to-archive race.
 - Confirmed stored or idle local archive removes the row after native success.
@@ -617,7 +666,7 @@ surfaces remain the recovery path for archived threads.
 - Paired-node rows without continuation capabilities remain readable, and no
   paired-node row offers Archive.
 - Passive listing never subscribes to or answers thread approvals.
-- Legacy Supervisor config migrates to the canonical Codex config shape.
+- Legacy Supervisor config migrates to the current Codex config format.
 - Legacy list is loaded-only by default, stored enumeration obeys its per-endpoint
   cap, and compatibility send never starts or resumes an idle thread.
 

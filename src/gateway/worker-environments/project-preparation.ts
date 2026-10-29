@@ -1,16 +1,23 @@
-import { createHash } from "node:crypto";
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { z } from "zod";
 import { requireGit } from "../../agents/worktrees/git.js";
+import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
+import { sha256File } from "../../infra/directory-durability.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { WorkerProvider } from "../../plugins/types.js";
+import { resolveEnvironmentRecipe, type EnvironmentRecipe } from "./environment-recipe.js";
 import { createProjectSeedScript } from "./project-seed-script.js";
-import { createProjectSetupScript } from "./project-setup-script.js";
+import {
+  createProjectSetupScript,
+  type PreparedProjectVerification,
+} from "./project-setup-script.js";
+import { readRepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
 import {
   prepareWorkerWorkspaceGitPack,
   workerProjectSeedKey,
+  type WorkerLocalProjectSnapshot,
   type WorkerProjectSnapshot,
 } from "./workspace-git-base.js";
 import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "./workspace-inventory-limits.js";
@@ -20,23 +27,60 @@ type ProjectPreparation = NonNullable<
 >;
 type PreparationResult = Awaited<ReturnType<ProjectPreparation["prepare"]>>;
 
-export async function readWorkerProjectSetupRecipe(
-  project: WorkerProjectSnapshot,
+const RecipePreparation = z.object({
+  source: z.enum(["devcontainer", "script", "detected", "none"]),
+  ignoredPropertiesNote: z.string().optional(),
+  note: z.string().optional(),
+  phaseDurationsMs: z
+    .object({
+      onCreate: z.number().int().nonnegative().optional(),
+      updateContent: z.number().int().nonnegative().optional(),
+      detectedInstall: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
+  failure: z
+    .object({
+      reason: z.string(),
+      outputTail: z
+        .string()
+        .refine((text) => Buffer.byteLength(text) <= 16384)
+        .optional(),
+    })
+    .optional(),
+});
+
+export async function readWorkerProjectEnvironmentRecipe(
+  project: WorkerLocalProjectSnapshot,
   signal?: AbortSignal,
-): Promise<string | undefined> {
-  const tree = await requireGit(
-    project.root,
-    ["ls-tree", "-z", project.baseCommit, "--", ".openclaw/worktree-setup.sh"],
-    { signal, timeoutMs: 30_000 },
-  );
-  return /^100755 blob ([a-f0-9]{40}(?:[a-f0-9]{24})?)\t\.openclaw\/worktree-setup\.sh\0$/u.exec(
-    tree,
-  )?.[1];
+): Promise<EnvironmentRecipe> {
+  return resolveEnvironmentRecipe(async (file) => {
+    const tree = await requireGit(project.root, ["ls-tree", "-z", project.baseCommit, "--", file], {
+      signal,
+      timeoutMs: 30_000,
+    });
+    const entry = /^(100644|100755) blob ([a-f0-9]{40}(?:[a-f0-9]{24})?)\t[^\0]+\0$/u.exec(tree);
+    if (!entry?.[2]) {
+      return undefined;
+    }
+    const blob = entry[2];
+    const content =
+      file.endsWith("devcontainer.json") || file === "package.json"
+        ? await requireGit(project.root, ["cat-file", "blob", blob], { signal, timeoutMs: 30_000 })
+        : undefined;
+    return {
+      blob,
+      executable: entry[1] === "100755",
+      ...(content !== undefined ? { content } : {}),
+    };
+  });
 }
 
 export function readWorkerProjectSnapshot(value: unknown): WorkerProjectSnapshot | undefined {
   if (value === undefined) {
     return undefined;
+  }
+  if (isRecord(value) && value.source !== undefined) {
+    return readRepositoryWorkerProjectSnapshot(value);
   }
   if (
     !isRecord(value) ||
@@ -44,13 +88,19 @@ export function readWorkerProjectSnapshot(value: unknown): WorkerProjectSnapshot
     !/^[a-f0-9]{64}$/u.test(value.key) ||
     typeof value.baseCommit !== "string" ||
     !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(value.baseCommit) ||
+    (value.label !== undefined && typeof value.label !== "string") ||
     typeof value.root !== "string" ||
     value.root.length > 4096 ||
     !path.isAbsolute(value.root)
   ) {
     throw new Error("Worker environment has an invalid project preparation snapshot");
   }
-  return { key: value.key, root: value.root, baseCommit: value.baseCommit };
+  return {
+    key: value.key,
+    root: value.root,
+    baseCommit: value.baseCommit,
+    ...(value.label !== undefined ? { label: value.label } : {}),
+  };
 }
 
 export function createWorkerProjectPreparation(params: {
@@ -59,10 +109,18 @@ export function createWorkerProjectPreparation(params: {
   preparation?: {
     key: string;
     cacheKey: string;
+    purpose: "session" | "reserve";
+    demandAtMs: number;
     setupRecipe?: string;
     runSetupScript?: boolean;
+    recipe?: EnvironmentRecipe;
   };
   setupAuthorized?: boolean;
+  revalidateRepositorySource?: (signal: AbortSignal) => Promise<void>;
+  prepareRepositoryGitPack?: (input: {
+    temporaryRoot: string;
+    signal: AbortSignal;
+  }) => Promise<string>;
   requireCurrent: () => void;
   signal?: AbortSignal;
 }): {
@@ -74,15 +132,6 @@ export function createWorkerProjectPreparation(params: {
     throw new Error("Worker project preparation namespace is invalid");
   }
   const preparation = params.preparation;
-  if (
-    preparation &&
-    (!/^[a-f0-9]{64}$/u.test(preparation.key) ||
-      !/^[a-f0-9]{64}$/u.test(preparation.cacheKey) ||
-      (preparation.setupRecipe !== undefined &&
-        !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(preparation.setupRecipe)))
-  ) {
-    throw new Error("Worker project preparation identity is invalid");
-  }
   if (preparation?.setupRecipe && preparation.runSetupScript !== false && !params.setupAuthorized) {
     throw new Error("Prepared project setup requires operator.admin authorization");
   }
@@ -90,8 +139,15 @@ export function createWorkerProjectPreparation(params: {
   // Stop must reach active Git/transport work, not only the next owner check.
   const signal = params.signal ? AbortSignal.any([abort.signal, params.signal]) : abort.signal;
   const seedKey = workerProjectSeedKey(params.project);
+  const label =
+    "source" in params.project
+      ? normalizeCloudRepo(params.project.source.url)
+      : params.project.label;
   let active: Promise<PreparationResult> | undefined;
   let preparedWorkspace: PreparationResult["preparedWorkspace"];
+  // The serialized pre-enrollment producer invalidates completion before mutation.
+  // Reuse verification only within this operation; replay starts with a fresh scan.
+  let verifiedRetained: PreparedProjectVerification | null | undefined;
   const requireCurrent = () => {
     signal.throwIfAborted();
     try {
@@ -130,29 +186,51 @@ export function createWorkerProjectPreparation(params: {
       preparedManifestRef: prepared.preparedManifestRef,
     });
   };
+  const preparationInput = preparation && {
+    preparationKey: preparation.key,
+    cacheKey: preparation.cacheKey,
+    setupRecipe: preparation.setupRecipe,
+    runSetupScript: preparation.runSetupScript,
+    recipe: preparation.recipe,
+  };
+  const sourceInput = {
+    namespace: params.namespace,
+    seedKey,
+    baseCommit: params.project.baseCommit,
+  };
+  const scriptInput = {
+    ...sourceInput,
+    ...(preparationInput ? { preparation: preparationInput } : {}),
+  };
   const prepareSeed: ProjectPreparation["prepare"] = async (transport) => {
     requireCurrent();
-    const scriptInput = {
-      namespace: params.namespace,
-      seedKey,
-      baseCommit: params.project.baseCommit,
-      ...(preparation
-        ? {
-            preparation: {
-              preparationKey: preparation.key,
-              cacheKey: preparation.cacheKey,
-              setupRecipe: preparation.setupRecipe,
-              runSetupScript: preparation.runSetupScript,
-            },
-          }
-        : {}),
-    };
     const inspection: unknown = JSON.parse(
       await transport.runScript(createProjectSeedScript(scriptInput), signal),
     );
     requireCurrent();
     if (!isRecord(inspection) || typeof inspection.ready !== "boolean") {
       throw new Error("Project preparation returned invalid seed status");
+    }
+    if (preparation) {
+      const retained = inspection.retainedWorkspace;
+      if (retained === null) {
+        verifiedRetained = null;
+      } else {
+        if (
+          !isRecord(retained) ||
+          typeof retained.baseCommit !== "string" ||
+          !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(retained.baseCommit) ||
+          retained.baseCommit.length !== params.project.baseCommit.length
+        ) {
+          throw new Error("Project preparation returned an invalid retained Git base");
+        }
+        const workspace = readPreparedWorkspace(retained);
+        verifiedRetained = {
+          baseCommit: retained.baseCommit,
+          sourceManifestRef: workspace.sourceManifestRef,
+          preparedManifestRef: workspace.preparedManifestRef,
+        };
+      }
     }
     if (inspection.ready) {
       return {
@@ -164,16 +242,7 @@ export function createWorkerProjectPreparation(params: {
       };
     }
     const directory = inspection.directory;
-    const retainedCommit = inspection.retainedCommit;
-    if (
-      retainedCommit !== undefined &&
-      (!preparation ||
-        typeof retainedCommit !== "string" ||
-        !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(retainedCommit) ||
-        retainedCommit.length !== params.project.baseCommit.length)
-    ) {
-      throw new Error("Project preparation returned an invalid retained Git base");
-    }
+    const retainedCommit = verifiedRetained?.baseCommit;
     if (
       typeof directory !== "string" ||
       directory.length > 4096 ||
@@ -190,35 +259,54 @@ export function createWorkerProjectPreparation(params: {
     );
     try {
       requireCurrent();
-      const pack = await prepareWorkerWorkspaceGitPack({
-        root: params.project.root,
-        baseCommit: params.project.baseCommit,
-        ...(typeof retainedCommit === "string" ? { retainedCommit } : {}),
-        temporaryRoot,
-        signal,
-      });
-      requireCurrent();
-      const bytes = (await fsp.stat(pack)).size;
-      if (bytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
-        throw new Error("Project Git pack exceeds the workspace byte limit");
+      let transfer: Pick<Parameters<typeof createProjectSeedScript>[0], "pack" | "repository">;
+      if ("source" in params.project && !params.prepareRepositoryGitPack) {
+        // Public source fetches need no credential transfer or remote secret lifetime.
+        transfer = { repository: { directory, url: params.project.source.url } };
+      } else {
+        const repository = "source" in params.project ? params.project.source : undefined;
+        const pack =
+          "root" in params.project
+            ? await prepareWorkerWorkspaceGitPack({
+                root: params.project.root,
+                baseCommit: params.project.baseCommit,
+                ...(typeof retainedCommit === "string" ? { retainedCommit } : {}),
+                temporaryRoot,
+                signal,
+              })
+            : await params.prepareRepositoryGitPack!({ temporaryRoot, signal });
+        requireCurrent();
+        const bytes = (await fsp.stat(pack)).size;
+        if (bytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
+          throw new Error("Project Git pack exceeds the workspace byte limit");
+        }
+        let sha256: string;
+        {
+          await using handle = await fsp.open(pack, "r");
+          ({ digest: sha256 } = await sha256File(handle, { signal }));
+        }
+        requireCurrent();
+        await transport.upload(pack, path.posix.join(directory, "base.pack"), signal);
+        requireCurrent();
+        transfer = {
+          pack: {
+            directory,
+            bytes,
+            sha256,
+            ...(repository
+              ? { repositoryUrl: repository.url }
+              : typeof retainedCommit === "string"
+                ? { retainedCommit }
+                : {}),
+          },
+        };
       }
-      const hash = createHash("sha256");
-      for await (const chunk of fs.createReadStream(pack, { signal })) {
-        hash.update(chunk);
-      }
-      requireCurrent();
-      await transport.upload(pack, path.posix.join(directory, "base.pack"), signal);
-      requireCurrent();
       const installed: unknown = JSON.parse(
         await transport.runScript(
           createProjectSeedScript({
             ...scriptInput,
-            pack: {
-              directory,
-              bytes,
-              sha256: hash.digest("hex"),
-              ...(typeof retainedCommit === "string" ? { retainedCommit } : {}),
-            },
+            ...transfer,
+            verifiedRetained,
           }),
           signal,
         ),
@@ -227,23 +315,46 @@ export function createWorkerProjectPreparation(params: {
       if (!isRecord(installed) || installed.ready !== true) {
         throw new Error("Project checkout was not verified before capture");
       }
-      return { seedKey, cacheHit: false };
+      return {
+        seedKey,
+        cacheHit: false,
+        ...(installed.preparedWorkspace !== undefined
+          ? {
+              preparedWorkspace: readPreparedWorkspace(installed.preparedWorkspace),
+              captureRequired: true,
+              ...(isRecord(installed.preparedWorkspace) &&
+              installed.preparedWorkspace.recipePreparation
+                ? {
+                    recipePreparation: RecipePreparation.parse(
+                      installed.preparedWorkspace.recipePreparation,
+                    ),
+                  }
+                : {}),
+            }
+          : {}),
+      };
     } finally {
       await fsp.rm(temporaryRoot, { recursive: true, force: true });
     }
   };
   const prepare: ProjectPreparation["prepare"] = async (transport) => {
     requireCurrent();
-    if (!preparation) {
-      const result = await prepareSeed(transport);
+    if ("source" in params.project) {
+      if (!params.revalidateRepositorySource) {
+        throw new Error("Repository project preparation has no current source authority");
+      }
+      // Retained content does not establish current repository visibility or access.
+      await params.revalidateRepositorySource(signal);
       requireCurrent();
-      return result;
     }
-    if (!transport.runScriptWithBudget) {
+    if (preparationInput && !transport.runScriptWithBudget) {
       throw new Error("Prepared workspaces require a provider command budget");
     }
     const result = await prepareSeed(transport);
     requireCurrent();
+    if (!preparationInput) {
+      return result;
+    }
     if (result.preparedWorkspace) {
       preparedWorkspace = result.preparedWorkspace;
       return result;
@@ -251,58 +362,63 @@ export function createWorkerProjectPreparation(params: {
     // Seed transfer can outlive its caller. Repository code starts only under
     // the current provisioning owner, and never runs in a later session's HOME.
     const prepared: unknown = JSON.parse(
-      await transport.runScriptWithBudget(
-        (timeoutMs) =>
+      await transport.runScriptWithBudget!(
+        (timeoutMs, setupEnv) =>
           createProjectSetupScript({
-            namespace: params.namespace,
-            seedKey,
-            preparationKey: preparation.key,
-            cacheKey: preparation.cacheKey,
-            baseCommit: params.project.baseCommit,
-            setupRecipe: preparation.setupRecipe,
-            runSetupScript: preparation.runSetupScript,
+            ...sourceInput,
+            ...preparationInput,
             timeoutMs,
+            setupEnv,
+            verifiedRetained,
           }),
         signal,
       ),
     );
     requireCurrent();
+    if (!isRecord(prepared)) {
+      throw new Error("Prepared project returned invalid setup status");
+    }
+    const recipePreparation = RecipePreparation.parse(prepared.recipePreparation);
+    await transport.recordRecipePreparation?.(recipePreparation);
+    requireCurrent();
+    if (typeof prepared.setupFailure === "string") {
+      throw new Error(
+        `${prepared.setupFailure}${recipePreparation.failure?.outputTail ? `: ${recipePreparation.failure.outputTail}` : ""}`,
+      );
+    }
     preparedWorkspace = readPreparedWorkspace(prepared);
-    return { ...result, preparedWorkspace, captureRequired: true };
+    return {
+      ...result,
+      preparedWorkspace,
+      recipePreparation,
+      ...(typeof prepared.captureSkipped === "string"
+        ? { captureSkipped: prepared.captureSkipped }
+        : { captureRequired: true as const }),
+    };
   };
   return {
     getPreparedWorkspace: () => preparedWorkspace,
     project: {
       key: params.project.key,
       baseCommit: params.project.baseCommit,
-      ...(preparation
+      ...(preparation?.recipe?.secretNames ? { secretNames: preparation.recipe.secretNames } : {}),
+      ...("source" in params.project ? {} : { root: params.project.root }),
+      ...(label !== undefined ? { label } : {}),
+      ...(preparation && preparationInput
         ? {
             preparation: {
               key: preparation.key,
               cacheKey: preparation.cacheKey,
+              purpose: preparation.purpose,
+              demandAtMs: preparation.demandAtMs,
             },
-          }
-        : {}),
-      ...(preparation
-        ? {
             inspectPreparedWorkspace: async (transport: {
               runScript: (script: string, signal: AbortSignal) => Promise<string>;
             }) => {
               requireCurrent();
               const inspected: unknown = JSON.parse(
                 await transport.runScript(
-                  createProjectSetupScript(
-                    {
-                      namespace: params.namespace,
-                      seedKey,
-                      preparationKey: preparation.key,
-                      cacheKey: preparation.cacheKey,
-                      baseCommit: params.project.baseCommit,
-                      setupRecipe: preparation.setupRecipe,
-                      runSetupScript: preparation.runSetupScript,
-                    },
-                    true,
-                  ),
+                  createProjectSetupScript({ ...sourceInput, ...preparationInput }, true),
                   signal,
                 ),
               );

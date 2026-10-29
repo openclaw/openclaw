@@ -1,6 +1,4 @@
-// Github Copilot plugin entrypoint registers its OpenClaw integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   definePluginEntry,
   type ProviderAuthContext,
@@ -10,12 +8,14 @@ import {
 import {
   applyAuthProfileConfig,
   coerceSecretRef,
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   listProfilesForProvider,
   normalizeOptionalSecretInput,
   resolveDefaultSecretProviderAlias,
   upsertAuthProfileWithLock,
 } from "openclaw/plugin-sdk/provider-auth";
+import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
+import { resolveRequiredConfiguredSecretRefInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
 import {
   normalizeGithubCopilotDomain,
@@ -36,103 +36,44 @@ import {
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import {
   buildGithubCopilotReplayPolicy,
-  sanitizeGithubCopilotReplayHistory,
+  stripCopilotAssistantThinkingMessages,
 } from "./replay-policy.js";
-import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
-import { wrapCopilotProviderStream } from "./stream.js";
+import { wrapCopilotProviderStream, wrapCopilotSimpleCompletionStream } from "./stream.js";
 
-const COPILOT_ENV_VARS: [string, string, string] = [
-  "COPILOT_GITHUB_TOKEN",
-  "GH_TOKEN",
-  "GITHUB_TOKEN",
-];
+const COPILOT_ENV_VAR = "COPILOT_GITHUB_TOKEN";
 const DEFAULT_COPILOT_PROFILE_ID = "github-copilot:github";
 const COPILOT_SECRET_STORE_NAME_PREFIX = "GITHUB_COPILOT_TOKEN";
 
-type GithubCopilotPluginConfig = {
-  discovery?: {
-    enabled?: boolean;
+function buildCopilotTokenProfile(
+  ctx: ProviderAuthContext,
+  token: string,
+): ProviderAuthResult["profiles"][number] {
+  return {
+    profileId: DEFAULT_COPILOT_PROFILE_ID,
+    credential: { type: "token", provider: PROVIDER_ID, token },
+    ...(ctx.secretInputMode === "plaintext"
+      ? {}
+      : { secretStorage: { kind: "store", namePrefix: COPILOT_SECRET_STORE_NAME_PREFIX } }),
   };
-};
+}
 
 async function loadGithubCopilotRuntime() {
   return await import("./register.runtime.js");
 }
 
-function resolveCopilotConfiguredPrimary(cfg: OpenClawConfig): string {
-  const defaults = cfg.agents?.defaults;
-  const existingModel = defaults?.model;
-  return typeof existingModel === "string"
-    ? existingModel.trim()
-    : typeof existingModel === "object" && typeof existingModel?.primary === "string"
-      ? existingModel.primary.trim()
-      : "";
-}
-
-function applyCopilotDefaultModel(cfg: OpenClawConfig, modelRef: string): OpenClawConfig {
-  if (resolveCopilotConfiguredPrimary(cfg)) {
-    return cfg;
-  }
-  const defaults = cfg.agents?.defaults;
-  const existingModel = defaults?.model;
-  const fallbacks =
-    typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
-      ? (existingModel as { fallbacks?: string[] }).fallbacks
-      : undefined;
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...defaults,
-        model: {
-          ...(fallbacks ? { fallbacks } : undefined),
-          primary: modelRef,
-        },
-        models: {
-          ...defaults?.models,
-          [modelRef]: defaults?.models?.[modelRef] ?? {},
-        },
-      },
-    },
-  };
-}
-
-function resolveExistingCopilotTokenProfileId(agentDir?: string): string | undefined {
-  const authStore = ensureAuthProfileStore(agentDir, {
-    allowKeychainPrompt: false,
-  });
-  return listProfilesForProvider(authStore, PROVIDER_ID).find((profileId) => {
-    const profile = authStore.profiles[profileId];
-    if (profile?.type !== "token") {
-      return false;
+function resolveExistingCopilotAuthProfile(profiles: ProviderAuthContext["existingProfiles"]) {
+  for (const profile of profiles ?? []) {
+    const { credential } = profile;
+    if (
+      credential.type === "token" &&
+      credential.provider === PROVIDER_ID &&
+      (normalizeOptionalSecretInput(credential.token) ||
+        coerceSecretRef(credential.tokenRef)?.id.trim())
+    ) {
+      return { ...profile, credential };
     }
-    return Boolean(
-      normalizeOptionalSecretInput(profile.token) || coerceSecretRef(profile.tokenRef)?.id.trim(),
-    );
-  });
-}
-
-function resolveExistingCopilotAuthResult(agentDir?: string): ProviderAuthResult | null {
-  const profileId = resolveExistingCopilotTokenProfileId(agentDir);
-  if (!profileId) {
-    return null;
   }
-  const authStore = ensureAuthProfileStore(agentDir, {
-    allowKeychainPrompt: false,
-  });
-  const credential = authStore.profiles[profileId];
-  if (!credential || credential.type !== "token") {
-    return null;
-  }
-  return {
-    profiles: [
-      {
-        profileId,
-        credential,
-      },
-    ],
-  };
+  return null;
 }
 
 async function resolveInteractiveCopilotStarterModel(params: {
@@ -140,6 +81,9 @@ async function resolveInteractiveCopilotStarterModel(params: {
   githubToken: string;
   githubDomain: string;
 }): Promise<Pick<ProviderAuthResult, "defaultModel" | "notes">> {
+  if (params.ctx.credentialOnly) {
+    return {};
+  }
   try {
     const { resolveCopilotStarterModel } = await loadGithubCopilotRuntime();
     return {
@@ -162,29 +106,16 @@ async function resolveInteractiveCopilotStarterModel(params: {
   }
 }
 
-// Persists the chosen enterprise Copilot host under the provider's free-form
-// params bag. The completions base URL is derived at runtime (token proxy hint
-// or tenant fallback), so only the host is stored here. Mirror of
-// clearGithubCopilotDomainConfigPatch; both are provider-owned and live with the
-// plugin rather than the shared SDK.
-function buildGithubCopilotDomainConfigPatch(domain: string): Partial<OpenClawConfig> {
-  const normalized = normalizeGithubCopilotDomain(domain);
+// Undefined removes a previous tenant on merge; runtime derives service URLs from the host.
+function buildGithubCopilotDomainConfigPatch(domain?: string): Partial<OpenClawConfig> {
   return {
     models: {
       providers: {
-        [PROVIDER_ID]: { params: { githubDomain: normalized } },
-      },
-    },
-  } as unknown as Partial<OpenClawConfig>;
-}
-
-// Removes a previously persisted enterprise domain so config falls back to the
-// "no config == github.com" default. Undefined leaves are deleted on merge.
-function clearGithubCopilotDomainConfigPatch(): Partial<OpenClawConfig> {
-  return {
-    models: {
-      providers: {
-        [PROVIDER_ID]: { params: { githubDomain: undefined } },
+        [PROVIDER_ID]: {
+          params: {
+            githubDomain: domain === undefined ? undefined : normalizeGithubCopilotDomain(domain),
+          },
+        },
       },
     },
   } as unknown as Partial<OpenClawConfig>;
@@ -231,105 +162,56 @@ function applyGithubCopilotDomainToConfig(
   };
 }
 
-async function resolveCopilotNonInteractiveToken(
-  ctx: ProviderAuthMethodNonInteractiveContext,
-  flagValue: string | undefined,
-) {
-  const resolveFromEnvChain = async () => {
-    for (const envVar of COPILOT_ENV_VARS) {
-      const resolved = await ctx.resolveApiKey({
-        provider: PROVIDER_ID,
-        flagName: "--github-copilot-token",
-        envVar,
-        envVarName: envVar,
-        allowProfile: false,
-        required: false,
-      });
-      if (resolved) {
-        return resolved;
-      }
-    }
-    return null;
-  };
-
-  if (ctx.opts.secretInputMode === "ref") {
-    const resolved = await resolveFromEnvChain();
-    if (resolved) {
-      return resolved;
-    }
-    if (flagValue) {
-      ctx.runtime.error(
-        [
-          "--github-copilot-token cannot be used with --secret-input-mode ref unless COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN is set in env.",
-          "Set one of those env vars and omit --github-copilot-token, or use --secret-input-mode plaintext.",
-        ].join("\n"),
-      );
-      ctx.runtime.exit(1);
-    }
-    return null;
-  }
-
-  const primary = await ctx.resolveApiKey({
-    provider: PROVIDER_ID,
-    flagValue,
-    flagName: "--github-copilot-token",
-    envVar: COPILOT_ENV_VARS[0],
-    envVarName: COPILOT_ENV_VARS[0],
-    allowProfile: false,
-    required: false,
-  });
-  if (primary || flagValue) {
-    return primary;
-  }
-
-  for (const envVar of COPILOT_ENV_VARS.slice(1)) {
-    const resolved = await ctx.resolveApiKey({
-      provider: PROVIDER_ID,
-      flagName: "--github-copilot-token",
-      envVar,
-      envVarName: envVar,
-      allowProfile: false,
-      required: false,
-    });
-    if (resolved) {
-      return resolved;
-    }
-  }
-  return null;
-}
-
 async function runGitHubCopilotNonInteractiveAuth(
   ctx: ProviderAuthMethodNonInteractiveContext,
 ): Promise<OpenClawConfig | null> {
   const opts = ctx.opts as Record<string, unknown> | undefined;
   const flagValue = normalizeOptionalSecretInput(opts?.githubCopilotToken);
-  const resolved = await resolveCopilotNonInteractiveToken(ctx, flagValue);
+  const referenceMode = ctx.opts.secretInputMode === "ref";
+  const resolved = await ctx.resolveApiKey({
+    provider: PROVIDER_ID,
+    ...(referenceMode ? {} : { flagValue }),
+    flagName: "--github-copilot-token",
+    envVar: COPILOT_ENV_VAR,
+    envVarName: COPILOT_ENV_VAR,
+    allowProfile: false,
+    required: false,
+  });
+  if (!resolved && referenceMode && flagValue) {
+    throw new Error(
+      "--github-copilot-token cannot be used with --secret-input-mode ref unless COPILOT_GITHUB_TOKEN is set in env. Set COPILOT_GITHUB_TOKEN and omit --github-copilot-token, or use --secret-input-mode plaintext.",
+    );
+  }
 
   let profileId = DEFAULT_COPILOT_PROFILE_ID;
   let githubToken = resolved?.key ?? "";
   if (resolved) {
     const useTokenRef = ctx.opts.secretInputMode === "ref" && resolved.source === "env";
     if (useTokenRef && !resolved.envVarName) {
-      ctx.runtime.error(
+      throw new Error(
         [
           '--secret-input-mode ref requires an explicit environment variable for provider "github-copilot".',
           "Set COPILOT_GITHUB_TOKEN in env and retry, or use --secret-input-mode plaintext.",
         ].join("\n"),
       );
-      ctx.runtime.exit(1);
-      return null;
     }
   } else {
-    if (flagValue && ctx.opts.secretInputMode === "ref") {
-      return null;
-    }
-    const existingProfileId = resolveExistingCopilotTokenProfileId(ctx.agentDir);
-    if (!existingProfileId) {
-      ctx.runtime.error(
-        "Missing --github-copilot-token (or COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN env var) for --auth-choice github-copilot.",
+    const authStore = await ensureAuthProfileStoreAsync(ctx.agentDir, {
+      allowKeychainPrompt: false,
+    });
+    const existingProfileId = listProfilesForProvider(authStore, PROVIDER_ID).find((candidate) => {
+      const profile = authStore.profiles[candidate];
+      if (profile?.type !== "token") {
+        return false;
+      }
+      return Boolean(
+        normalizeOptionalSecretInput(profile.token) || coerceSecretRef(profile.tokenRef)?.id.trim(),
       );
-      ctx.runtime.exit(1);
-      return null;
+    });
+    if (!existingProfileId) {
+      throw new Error(
+        "Missing --github-copilot-token (or COPILOT_GITHUB_TOKEN env var) for --auth-choice github-copilot.",
+      );
     }
     profileId = existingProfileId;
     const existing = await resolveFirstGithubToken({
@@ -350,7 +232,7 @@ async function runGitHubCopilotNonInteractiveAuth(
   );
 
   let starterModel: string | undefined;
-  if (!resolveCopilotConfiguredPrimary(configWithDomain)) {
+  if (!resolveAgentModelPrimaryValue(configWithDomain.agents?.defaults?.model)) {
     const { resolveCopilotStarterModel } = await loadGithubCopilotRuntime();
     starterModel = await resolveCopilotStarterModel({
       githubToken,
@@ -401,7 +283,35 @@ async function runGitHubCopilotNonInteractiveAuth(
     provider: PROVIDER_ID,
     mode: "token",
   });
-  return starterModel ? applyCopilotDefaultModel(configWithAuth, starterModel) : configWithAuth;
+  if (!starterModel) {
+    return configWithAuth;
+  }
+  if (resolveAgentModelPrimaryValue(configWithAuth.agents?.defaults?.model)) {
+    return configWithAuth;
+  }
+  const defaults = configWithAuth.agents?.defaults;
+  const existingModel = defaults?.model;
+  const fallbacks =
+    typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
+      ? (existingModel as { fallbacks?: string[] }).fallbacks
+      : undefined;
+  return {
+    ...configWithAuth,
+    agents: {
+      ...configWithAuth.agents,
+      defaults: {
+        ...defaults,
+        model: {
+          ...(fallbacks ? { fallbacks } : undefined),
+          primary: starterModel,
+        },
+        models: {
+          ...defaults?.models,
+          [starterModel]: defaults?.models?.[starterModel] ?? {},
+        },
+      },
+    },
+  };
 }
 
 export default definePluginEntry({
@@ -409,19 +319,9 @@ export default definePluginEntry({
   name: "GitHub Copilot Provider",
   description: "Bundled GitHub Copilot provider plugin",
   register(api) {
-    const startupPluginConfig = (api.pluginConfig ?? {}) as GithubCopilotPluginConfig;
-    function resolveCurrentPluginConfig(config?: OpenClawConfig): GithubCopilotPluginConfig {
-      const runtimePluginConfig = resolvePluginConfigObject(config, "github-copilot");
-      if (runtimePluginConfig) {
-        return runtimePluginConfig as GithubCopilotPluginConfig;
-      }
-      return config ? {} : startupPluginConfig;
-    }
-    const dynamicModels = createGithubCopilotDynamicModelHooks({
-      discoveryEnabled: (config) => resolveCurrentPluginConfig(config).discovery?.enabled !== false,
-    });
+    const dynamicModels = createGithubCopilotDynamicModelHooks();
 
-    async function promptForEnterpriseDomain(ctx: ProviderAuthContext): Promise<string | null> {
+    async function promptForEnterpriseDomain(ctx: ProviderAuthContext): Promise<string> {
       // COPILOT_GITHUB_DOMAIN is authoritative for every runtime routing path
       // (token refresh, usage, completions). Honor it here too when it is set so
       // the persisted config and freshly minted token can never diverge from the
@@ -461,8 +361,7 @@ export default definePluginEntry({
           return undefined;
         },
       });
-      const domain = normalizeGithubCopilotDomain(value);
-      return domain;
+      return normalizeGithubCopilotDomain(value);
     }
 
     async function runGitHubCopilotDeviceAuth(
@@ -486,10 +385,24 @@ export default definePluginEntry({
       const configPatch = isEnterprise
         ? buildGithubCopilotDomainConfigPatch(normalizedDomain)
         : previousDomain !== PUBLIC_GITHUB_COPILOT_DOMAIN
-          ? clearGithubCopilotDomainConfigPatch()
+          ? buildGithubCopilotDomainConfigPatch()
           : undefined;
 
-      const existing = resolveExistingCopilotAuthResult(ctx.agentDir);
+      const suppliedToken =
+        ctx.opts?.tokenProvider === PROVIDER_ID
+          ? normalizeOptionalSecretInput(ctx.opts.token)
+          : undefined;
+      if (suppliedToken) {
+        return {
+          profiles: [buildCopilotTokenProfile(ctx, suppliedToken)],
+          ...(!ctx.credentialOnly ? { defaultModel: DEFAULT_COPILOT_MODEL } : {}),
+          ...(configPatch ? { configPatch } : {}),
+        };
+      }
+
+      const existing = ctx.credentialOnly
+        ? null
+        : resolveExistingCopilotAuthProfile(ctx.existingProfiles);
       // Only offer to reuse the stored token when it was minted for the same
       // domain. A domain switch (either direction) must re-run the device flow so
       // the token is tenant-scoped to the domain being written to config.
@@ -499,19 +412,23 @@ export default definePluginEntry({
           initialValue: false,
         });
         if (!runLogin) {
-          const profileId = existing.profiles[0]?.profileId;
-          const { githubToken } = await resolveFirstGithubToken({
-            agentDir: ctx.agentDir,
+          ctx.signal?.throwIfAborted();
+          ctx.assertCurrent?.();
+          const { profileId, credential } = existing;
+          const resolved = await resolveRequiredConfiguredSecretRefInputString({
             config: ctx.config,
             env: ctx.env ?? process.env,
-            ...(profileId ? { profileId } : {}),
+            value: credential.tokenRef,
+            path: `providers.github-copilot.authProfiles.${profileId}.tokenRef`,
           });
+          ctx.signal?.throwIfAborted();
+          ctx.assertCurrent?.();
           const starter = await resolveInteractiveCopilotStarterModel({
             ctx,
-            githubToken,
+            githubToken: (resolved ?? credential.token ?? "").trim(),
             githubDomain: normalizedDomain,
           });
-          return { ...existing, ...starter, ...(configPatch ? { configPatch } : {}) };
+          return { profiles: [existing], ...starter, ...(configPatch ? { configPatch } : {}) };
         }
       } else if (existing && domainChanged) {
         await ctx.prompter.note(
@@ -541,6 +458,15 @@ export default definePluginEntry({
             if (ctx.isRemote) {
               await ctx.openUrl(verificationUrl);
             }
+            if (ctx.prompter.deviceCode) {
+              await ctx.prompter.deviceCode({
+                title: "Authorize GitHub Copilot",
+                code: userCode,
+                expiresInMinutes,
+                message: "Enter this one-time code to authorize Copilot.",
+              });
+              return;
+            }
             await ctx.prompter.note(
               [
                 "Open this URL in your browser and enter the code below.",
@@ -561,6 +487,7 @@ export default definePluginEntry({
                 },
               }),
           ...(ctx.signal ? { signal: ctx.signal } : {}),
+          ...(ctx.assertCurrent ? { assertCurrent: ctx.assertCurrent } : {}),
         },
         normalizedDomain,
       );
@@ -593,40 +520,15 @@ export default definePluginEntry({
           : []),
       ];
       return {
-        profiles: [
-          {
-            profileId: DEFAULT_COPILOT_PROFILE_ID,
-            credential: {
-              type: "token" as const,
-              provider: PROVIDER_ID,
-              token: result.accessToken,
-            },
-            ...(!persistInline
-              ? {
-                  secretStorage: {
-                    kind: "store" as const,
-                    namePrefix: COPILOT_SECRET_STORE_NAME_PREFIX,
-                  },
-                }
-              : {}),
-          },
-        ],
+        profiles: [buildCopilotTokenProfile(ctx, result.accessToken)],
         ...(starter.defaultModel ? { defaultModel: starter.defaultModel } : {}),
         ...(notes.length > 0 ? { notes } : {}),
         ...(configPatch ? { configPatch } : {}),
       };
     }
 
-    async function runGitHubCopilotAuth(ctx: ProviderAuthContext) {
-      return await runGitHubCopilotDeviceAuth(ctx, PUBLIC_GITHUB_COPILOT_DOMAIN);
-    }
-
     async function runGitHubCopilotEnterpriseAuth(ctx: ProviderAuthContext) {
       const domain = await promptForEnterpriseDomain(ctx);
-      if (!domain) {
-        await ctx.prompter.note("Enterprise login cancelled.", "GitHub Copilot");
-        return { profiles: [] };
-      }
       if (domain === PUBLIC_GITHUB_COPILOT_DOMAIN) {
         await ctx.prompter.note(
           "github.com is the default — use the standard GitHub Copilot login instead of the enterprise (data residency) option.",
@@ -643,7 +545,7 @@ export default definePluginEntry({
       id: PROVIDER_ID,
       label: "GitHub Copilot",
       docsPath: "/providers/models",
-      envVars: COPILOT_ENV_VARS,
+      envVars: [COPILOT_ENV_VAR],
       auth: [
         {
           id: "device",
@@ -651,15 +553,15 @@ export default definePluginEntry({
           hint: "Browser device-code flow",
           kind: "device_code",
           starterModel: DEFAULT_COPILOT_MODEL,
-          run: async (ctx) => await runGitHubCopilotAuth(ctx),
-          runNonInteractive: async (ctx) => await runGitHubCopilotNonInteractiveAuth(ctx),
+          run: (ctx) => runGitHubCopilotDeviceAuth(ctx, PUBLIC_GITHUB_COPILOT_DOMAIN),
+          runNonInteractive: runGitHubCopilotNonInteractiveAuth,
         },
         {
           id: "device-enterprise",
           label: "GitHub Enterprise device login (data residency)",
           hint: "Device-code flow against your *.ghe.com tenant",
           kind: "device_code",
-          run: async (ctx) => await runGitHubCopilotEnterpriseAuth(ctx),
+          run: runGitHubCopilotEnterpriseAuth,
           wizard: {
             choiceId: "github-copilot-enterprise",
             choiceLabel: "GitHub Copilot (Enterprise / data residency)",
@@ -696,10 +598,14 @@ export default definePluginEntry({
       refreshOAuth: async (credential) => refreshGithubCopilotOAuth(credential),
       buildAuthDoctorHint: buildGithubCopilotAuthDoctorHint,
       wrapStreamFn: wrapCopilotProviderStream,
+      wrapSimpleCompletionStreamFn: wrapCopilotSimpleCompletionStream,
       buildReplayPolicy: buildGithubCopilotReplayPolicy,
-      sanitizeReplayHistory: sanitizeGithubCopilotReplayHistory,
+      sanitizeReplayHistoryAsync: (ctx) =>
+        ctx.modelApi === "openai-responses" || ctx.modelApi === "anthropic-messages"
+          ? stripCopilotAssistantThinkingMessages(ctx.messages)
+          : ctx.messages,
       resolveThinkingProfile,
-      prepareRuntimeAuth: async (ctx) => {
+      prepareRuntimeAuthV2: async (ctx) => {
         const source = parseGithubCopilotApiKey(ctx.apiKey);
         const { resolveCopilotRuntimeAuth } = await loadGithubCopilotRuntime();
         const auth = await resolveCopilotRuntimeAuth({
@@ -711,12 +617,13 @@ export default definePluginEntry({
             config: ctx.config,
           }),
         });
+        // Runtime auth output is sealed and registered for redaction. Configured
+        // headers may hold credentials, so they keep that protection; public
+        // identity headers come from the stream wrappers instead.
         return {
           apiKey: auth.apiKey,
           baseUrl: auth.baseUrl,
-          request: {
-            headers: buildCopilotRuntimeHeaders({ config: ctx.config, headers: ctx.model.headers }),
-          },
+          ...(ctx.model.headers ? { request: { headers: ctx.model.headers } } : {}),
         };
       },
       resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),

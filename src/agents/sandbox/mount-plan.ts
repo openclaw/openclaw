@@ -1,0 +1,483 @@
+import path from "node:path";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasErrnoCode } from "../../infra/errno.js";
+import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
+import { isPathInside } from "../../infra/path-guards.js";
+import { MATERIALIZED_SANDBOX_SKILLS_WORKSPACE } from "../../shared/sandbox-workspace-paths.js";
+import { splitSandboxBindSpec } from "./bind-spec.js";
+import { execContainer, type SandboxContainerEngine } from "./container-engine.js";
+import {
+  type InspectedSandboxMount,
+  parseInspectedSandboxMounts,
+  resolveDockerSourceNamespace,
+  translateSandboxMountSources,
+} from "./docker-mount-source.js";
+import {
+  getSandboxHostPathPolicyKey,
+  resolveSandboxHostPathViaExistingAncestor,
+} from "./host-paths.js";
+import { isPathInsideContainerRoot } from "./path-utils.js";
+import type { SandboxWorkspaceAccess } from "./types.js";
+import {
+  normalizeMountContainerPath,
+  resolveMaterializedSandboxSkillsWorkspaceDir,
+  resolveProtectedMountAncestors,
+  resolveSandboxMountSelection,
+  resolveSandboxTmpfsMounts,
+} from "./workspace-mounts.js";
+
+export type SandboxMountPlan = {
+  binds: string[];
+  protectedTargets: string[];
+  /** Writable self-binds pinning protected mounts' ancestors; upgrade-safe like protectedTargets. */
+  pinnedAncestors?: readonly string[];
+  skippedBinds: string[];
+  readOnlyWorkspaceSkillMounts: ReturnType<
+    typeof resolveSandboxMountSelection
+  >["readOnlyWorkspaceSkillMounts"];
+  tmpfs: ReturnType<typeof resolveSandboxTmpfsMounts>;
+};
+
+/** Returns whether the Gateway sees a managed directory through a read-only bind. */
+function gatewaySourceIsReadOnly(
+  namespace: readonly InspectedSandboxMount[],
+  hostPath: string,
+): boolean {
+  // Ancestors may not exist yet; the covering bind of their nearest existing
+  // parent is the one the engine would project.
+  const source = resolveSandboxHostPathViaExistingAncestor(path.resolve(hostPath));
+  const covering = namespace
+    .filter((entry) => isPathInside(entry.destination, source))
+    .toSorted((a, b) => b.destination.length - a.destination.length)[0];
+  return covering !== undefined && !covering.writable;
+}
+
+export async function prepareSandboxMountPlan(params: {
+  engine: SandboxContainerEngine;
+  workspaceDir: string;
+  workspaceSource?: "managed-worktree";
+  assertCurrent?: () => void;
+  agentWorkspaceDir: string;
+  skillsWorkspaceDir?: string;
+  workdir: string;
+  workspaceAccess: SandboxWorkspaceAccess;
+  binds?: readonly string[];
+  tmpfs?: readonly string[];
+  readOnlyResourceMounts?: readonly { hostPath: string; containerPath: string }[];
+}): Promise<SandboxMountPlan> {
+  const selection = resolveSandboxMountSelection(params);
+  const namespace = await resolveDockerSourceNamespace(params.engine);
+  const relativeSkillMount = `${MATERIALIZED_SANDBOX_SKILLS_WORKSPACE}/skills`;
+  const skillTarget = normalizeMountContainerPath(`${params.workdir}/${relativeSkillMount}`);
+  if (
+    params.workspaceSource === "managed-worktree" &&
+    selection.readOnlyWorkspaceSkillMounts.some((mount) => mount.containerPath === skillTarget)
+  ) {
+    // Engine-created nested mountpoints can be owned by a different user namespace.
+    // Allocate the empty scaffold as its workspace owner before mounting read-only
+    // instructions, so normal workspace retention can later remove it without chmod.
+    try {
+      const workspace = await openFsSafeRoot(params.workspaceDir, {
+        mode: 0o755,
+        mutationSymlinks: "reject",
+        assertBeforeMutation: params.assertCurrent,
+      });
+      await workspace.mkdir(relativeSkillMount);
+    } catch (error) {
+      // Older fs-safe versions wrap traversal denials as path-alias failures.
+      const permissionError = collectNestedErrorCandidates(error).find(
+        (candidate) => hasErrnoCode(candidate, "EACCES") || hasErrnoCode(candidate, "EPERM"),
+      );
+      if (!permissionError) {
+        throw error;
+      }
+      const target = path.join(params.workspaceDir, relativeSkillMount);
+      throw new Error(
+        `Cannot prepare sandbox skills mountpoint "${target}": permission denied. ` +
+          "Fix ownership or ACLs on the existing directory and its parents so the gateway user " +
+          "has search (execute) and write access, then retry.",
+        { cause: error },
+      );
+    }
+  }
+  // A Gateway read-only bind under the workspace is already projected as its own
+  // mountpoint (with its writable children intact), so it needs no extra pin.
+  const ancestors = resolveProtectedMountAncestors(selection.mounts).filter(
+    (ancestor) => !namespace || !gatewaySourceIsReadOnly(namespace, ancestor.hostPath),
+  );
+  for (const ancestor of ancestors) {
+    // Bind sources must exist before create; engines would otherwise create them
+    // root-owned (Docker) or refuse the bind (Podman). Symlinked ancestors fail closed.
+    const owner = await openFsSafeRoot(ancestor.ownerHostPath, {
+      mode: 0o755,
+      mutationSymlinks: "reject",
+      assertBeforeMutation: params.assertCurrent,
+    });
+    await owner.mkdir(ancestor.relativePath);
+  }
+  const ancestorsByProtectedTarget = new Map(
+    selection.mounts
+      .filter((mount) => mount.source === "protectedSkill")
+      .map((mount) => {
+        const target = normalizeMountContainerPath(mount.containerPath);
+        return [
+          target,
+          ancestors.filter((ancestor) => isPathInsideContainerRoot(ancestor.containerPath, target)),
+        ] as const;
+      }),
+  );
+  const allowedRoots = [
+    params.workspaceDir,
+    params.agentWorkspaceDir,
+    params.skillsWorkspaceDir ??
+      resolveMaterializedSandboxSkillsWorkspaceDir(params.agentWorkspaceDir),
+    ...(params.readOnlyResourceMounts ?? []).map((mount) => mount.hostPath),
+  ];
+  const targets = [
+    ...selection.mounts.map((mount) => mount.containerPath),
+    ...ancestors.map((ancestor) => ancestor.containerPath),
+  ];
+  const binds = new Map<string, string>();
+  const planned: Array<(typeof selection.mounts)[number]> = [];
+  const protectedTargets = new Set<string>();
+  const pinnedAncestors = new Set<string>();
+  const pinnedAncestorTargets = new Set(
+    ancestors.map((ancestor) => normalizeMountContainerPath(ancestor.containerPath)),
+  );
+  for (const mount of selection.mounts) {
+    // Keep each self-bind ancestor directly before the first protected mount it pins.
+    for (const ancestor of ancestorsByProtectedTarget.get(
+      normalizeMountContainerPath(mount.containerPath),
+    ) ?? []) {
+      if (!planned.includes(ancestor)) {
+        planned.push(ancestor);
+      }
+    }
+    planned.push(mount);
+  }
+  for (const mount of planned) {
+    const target = normalizeMountContainerPath(mount.containerPath);
+    if (mount.source === "bind") {
+      continue;
+    }
+    const translated = namespace
+      ? translateSandboxMountSources({
+          source: mount.hostPath,
+          containerPath: target,
+          allowedRoots,
+          mounts: namespace,
+          readOnly: mount.readOnly,
+          shadowedTargets: targets.filter(
+            (other) => other !== target && isPathInside(target, other),
+          ),
+        })
+      : [{ ...mount, containerPath: target }];
+    for (const projected of translated) {
+      if (mount.source === "protectedSkill") {
+        protectedTargets.add(projected.containerPath);
+      }
+      if (pinnedAncestorTargets.has(target)) {
+        pinnedAncestors.add(projected.containerPath);
+      }
+      binds.set(
+        projected.containerPath,
+        `${projected.hostPath}:${projected.containerPath}:${projected.readOnly ? "ro,z" : "z"}`,
+      );
+    }
+  }
+  // Custom mounts retain their daemon-host contract. Protected instruction mounts
+  // win exact collisions; other explicit overrides match filesystem bridge policy.
+  for (const bind of selection.custom) {
+    const parsed = splitSandboxBindSpec(bind);
+    const target = parsed ? normalizeMountContainerPath(parsed.container) : bind;
+    binds.set(target, bind);
+    protectedTargets.delete(target);
+  }
+  return {
+    binds: [...binds.values()],
+    protectedTargets: [...protectedTargets],
+    pinnedAncestors: [...pinnedAncestors],
+    skippedBinds: selection.skippedBinds,
+    readOnlyWorkspaceSkillMounts: selection.readOnlyWorkspaceSkillMounts,
+    tmpfs: resolveSandboxTmpfsMounts(params.tmpfs),
+  };
+}
+
+async function inspectSandboxMounts(params: {
+  engine: SandboxContainerEngine;
+  containerName: string;
+}) {
+  const inspected = await execContainer(
+    params.engine,
+    [
+      "inspect",
+      "--format",
+      '{"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}}}',
+      params.containerName,
+    ],
+    { signal: AbortSignal.timeout(5_000) },
+  );
+  const data: unknown = JSON.parse(inspected.stdout);
+  if (!isRecord(data)) {
+    throw new Error("Container inspect did not return mount metadata.");
+  }
+  return parseInspectedSandboxMounts(data.Mounts, data.Tmpfs);
+}
+
+type ContainerMountInfo = {
+  id: string;
+  parent: string;
+  destination: string;
+  backing: string;
+  writable: boolean;
+};
+
+export async function resolveSandboxContainerOnlyMounts(params: {
+  engine: SandboxContainerEngine;
+  containerName: string;
+  assertCurrent?: () => void;
+}): Promise<string[]> {
+  params.assertCurrent?.();
+  const inspected = await inspectSandboxMounts(params);
+  params.assertCurrent?.();
+  const { stdout } = await execContainer(
+    params.engine,
+    ["exec", params.containerName, "cat", "/proc/self/mountinfo"],
+    { signal: AbortSignal.timeout(5_000) },
+  );
+  const entries = new Map<string, ContainerMountInfo>();
+  for (const line of stdout.split("\n")) {
+    if (!line) {
+      continue;
+    }
+    const separator = line.indexOf(" - ");
+    const [id, parent, device, root, destination, options] = line.slice(0, separator).split(" ");
+    if (separator < 0 || !id || !parent || !device || !root || !destination || !options) {
+      throw new Error("Container mountinfo returned an invalid mount entry.");
+    }
+    entries.set(id, {
+      id,
+      parent,
+      destination: decodeMountInfoPath(destination),
+      backing: `${device}\0${decodeMountInfoPath(root)}`,
+      writable: options.split(",").includes("rw"),
+    });
+  }
+  if (entries.size === 0) {
+    throw new Error("Container mountinfo did not return a mount table.");
+  }
+  const byDestination = new Map<string, ContainerMountInfo[]>();
+  const byParent = new Map<string, ContainerMountInfo[]>();
+  const covered = new Set<string>();
+  for (const entry of entries.values()) {
+    const group = byDestination.get(entry.destination) ?? [];
+    group.push(entry);
+    byDestination.set(entry.destination, group);
+    const siblings = byParent.get(entry.parent) ?? [];
+    siblings.push(entry);
+    byParent.set(entry.parent, siblings);
+    if (entries.get(entry.parent)?.destination === entry.destination && entry.parent !== entry.id) {
+      covered.add(entry.parent);
+    }
+  }
+  const visible = (entry: ContainerMountInfo) => {
+    const visited = new Set<string>();
+    for (let current = entry; !visited.has(current.id);) {
+      visited.add(current.id);
+      const parent = entries.get(current.parent);
+      if (!parent || parent.id === current.id) {
+        return true;
+      }
+      if (parent.destination !== current.destination && covered.has(parent.id)) {
+        return false;
+      }
+      // A later mount on an intervening directory hides an older child even
+      // when both retain the same parent ID. A visible child attaches below
+      // that covering mount instead, so genuine nested binds still recover.
+      if (
+        byParent
+          .get(current.parent)
+          ?.some(
+            (sibling) =>
+              sibling.id !== parent.id &&
+              sibling.destination !== current.destination &&
+              isPathInsideContainerRoot(sibling.destination, current.destination),
+          )
+      ) {
+        return false;
+      }
+      current = parent;
+    }
+    return false;
+  };
+  const masks = new Set(byDestination.keys());
+  // Inspect retains configured destinations; runc may resolve them through an
+  // old symlink. Only a visible, proven bind can expose local bytes. Identical
+  // recursive-bind stacks are valid; hidden entries still carry the inspected
+  // bind's backing identity, so different backing remains container-only.
+  for (const mount of inspected) {
+    const group = byDestination.get(mount.destination) ?? [];
+    const tops = group.filter((entry) => !covered.has(entry.id) && visible(entry));
+    const top = tops[0];
+    if (
+      mount.type === "bind" &&
+      tops.length === 1 &&
+      top &&
+      top.writable === mount.writable &&
+      group.every((entry) => entry.backing === top.backing)
+    ) {
+      masks.delete(mount.destination);
+    } else {
+      masks.add(mount.destination);
+    }
+  }
+  return [...masks];
+}
+
+export async function compareSandboxMountPlan(params: {
+  engine: SandboxContainerEngine;
+  containerName: string;
+  plan: SandboxMountPlan;
+}): Promise<"match" | "protected-mounts-added" | "changed"> {
+  const actual = await inspectSandboxMounts(params);
+  const expected = new Map(
+    params.plan.binds.flatMap((bind) => {
+      const parsed = splitSandboxBindSpec(bind);
+      if (!parsed) {
+        return [];
+      }
+      return [[normalizeMountContainerPath(parsed.container), parsed]] as const;
+    }),
+  );
+  const coversBind = (destination: string) =>
+    [...expected.keys()].some((root) => isPathInside(root, destination));
+  const expectedTmpfs = new Map(
+    params.plan.tmpfs
+      .filter((mount) => coversBind(mount.containerPath))
+      .map((mount) => [mount.containerPath, mount]),
+  );
+  // Compare configured tmpfs visibility/access below binds. Implicit image
+  // volumes remain reusable: the prepared fs snapshot masks their host paths.
+  // Other tmpfs options retain the full-config hot advisory policy.
+  const managed = actual.filter(
+    (mount) =>
+      mount.type === "bind" ||
+      expected.has(mount.destination) ||
+      (mount.type === "tmpfs" && coversBind(mount.destination)),
+  );
+  const mountMatches = (mount: (typeof actual)[number]) => {
+    if (mount.type === "tmpfs") {
+      const tmpfs = expectedTmpfs.get(mount.destination);
+      return tmpfs !== undefined && mount.writable === !tmpfs.readOnly;
+    }
+    const bind = expected.get(mount.destination);
+    return (
+      bind !== undefined &&
+      mount.type === "bind" &&
+      getSandboxHostPathPolicyKey(mount.source) === getSandboxHostPathPolicyKey(bind.host) &&
+      mount.writable === !bind.options.split(",").includes("ro")
+    );
+  };
+  const matches =
+    managed.length === expected.size + expectedTmpfs.size && managed.every(mountMatches);
+  if (matches) {
+    return "match";
+  }
+  const actualTargets = new Set(actual.map((mount) => mount.destination));
+  const added = [...params.plan.protectedTargets, ...(params.plan.pinnedAncestors ?? [])].filter(
+    (target) => !actualTargets.has(target),
+  );
+  // Only new Gateway-selected read-only overlays can be installed automatically.
+  // Existing mounts must match: a previous user bind at a protected target is not
+  // evidence that the Gateway owned it, even when it was read-only.
+  // Image volumes require explicit recreation to preserve container-only data.
+  return actual.every((mount) => mount.type === "bind" || mount.type === "tmpfs") &&
+    managed.length + added.length === expected.size + expectedTmpfs.size &&
+    managed.every(mountMatches)
+    ? "protected-mounts-added"
+    : "changed";
+}
+
+/** Read saved workspace bytes only when the existing runtime exposes that same bind. */
+export async function sandboxContainerShowsWorkspacePaths(params: {
+  engine: SandboxContainerEngine;
+  containerName: string;
+  workspaceDir: string;
+  containerRoot: string;
+  targets: readonly string[];
+  assertCurrent: () => void;
+}): Promise<boolean> {
+  params.assertCurrent();
+  const identity = await execContainer(
+    params.engine,
+    ["inspect", "-f", "{{.Id}} {{.State.Running}} {{.State.Paused}}", params.containerName],
+    { signal: AbortSignal.timeout(5_000) },
+  );
+  params.assertCurrent();
+  const [id, running, paused] = identity.stdout.trim().split(/\s+/u);
+  if (
+    !id ||
+    !/^[a-f0-9]{64}$/u.test(id) ||
+    !["true", "false"].includes(running ?? "") ||
+    paused !== "false"
+  ) {
+    return false;
+  }
+  const selected = { ...params, containerName: id };
+  const namespace = await resolveDockerSourceNamespace(params.engine);
+  params.assertCurrent();
+  const planned = namespace
+    ? translateSandboxMountSources({
+        source: params.workspaceDir,
+        containerPath: params.containerRoot,
+        allowedRoots: [params.workspaceDir],
+        mounts: namespace,
+        readOnly: true,
+        shadowedTargets: [],
+      })
+    : [
+        {
+          hostPath: params.workspaceDir,
+          containerPath: normalizeMountContainerPath(params.containerRoot),
+        },
+      ];
+  const actual = await inspectSandboxMounts(selected);
+  params.assertCurrent();
+  // Stopped containers retain inspectable bind/volume metadata. Runtime-only
+  // mounts no longer exist; a running namespace additionally needs mountinfo.
+  const masks = running === "true" ? await resolveSandboxContainerOnlyMounts(selected) : [];
+  params.assertCurrent();
+  return params.targets.every((input) => {
+    const target = normalizeMountContainerPath(input);
+    const covering = actual
+      .filter((mount) => isPathInsideContainerRoot(mount.destination, target))
+      .toSorted((a, b) => b.destination.length - a.destination.length)[0];
+    // Ancestor self-binds pinning protected skill mounts expose the same workspace
+    // bytes: accept a covering bind only when its source is the workspace source at
+    // that exact relative path.
+    const expected =
+      covering === undefined
+        ? undefined
+        : planned
+            .filter((mount) => isPathInsideContainerRoot(mount.containerPath, covering.destination))
+            .toSorted((a, b) => b.containerPath.length - a.containerPath.length)
+            .map((mount) => ({
+              hostPath: path.posix.join(
+                mount.hostPath,
+                path.posix.relative(mount.containerPath, covering.destination),
+              ),
+            }))[0];
+    return (
+      covering?.type === "bind" &&
+      expected !== undefined &&
+      getSandboxHostPathPolicyKey(covering.source) ===
+        getSandboxHostPathPolicyKey(expected.hostPath) &&
+      !masks.some(
+        (mask) =>
+          isPathInsideContainerRoot(mask, target) && mask.length >= covering.destination.length,
+      )
+    );
+  });
+}

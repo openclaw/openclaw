@@ -1,14 +1,12 @@
 import { createHash } from "node:crypto";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizePluginsConfig } from "./config-state.js";
+import type { NormalizedPluginsConfig } from "./config-state.js";
 
 /** Configuration consumed during registration, independent of activation and load scope. */
 export function resolvePluginRegistrationConfigKey(params: {
-  config?: OpenClawConfig;
-  activationSourceConfig?: OpenClawConfig;
+  runtimeEntries: NormalizedPluginsConfig["entries"];
+  sourceEntries: NormalizedPluginsConfig["entries"];
 }): string {
-  const runtimeEntries = normalizePluginsConfig(params.config?.plugins).entries;
-  const sourceEntries = normalizePluginsConfig(params.activationSourceConfig?.plugins).entries;
+  const { runtimeEntries, sourceEntries } = params;
   const pluginIds = new Set([...Object.keys(runtimeEntries), ...Object.keys(sourceEntries)]);
   const inputs = [...pluginIds].toSorted().flatMap((pluginId) => {
     const { enabled: _enabled, ...runtime } = runtimeEntries[pluginId] ?? {};

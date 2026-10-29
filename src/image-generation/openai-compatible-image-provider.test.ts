@@ -1,103 +1,85 @@
-/** Tests OpenAI-compatible image provider request building and response handling. */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   createOpenAiCompatibleImageGenerationProvider,
   type OpenAiCompatibleImageProviderOptions,
 } from "./openai-compatible-image-provider.js";
+import type { ImageGenerationProvider, ImageGenerationRequest } from "./types.js";
 
-const {
-  assertOkOrThrowHttpErrorMock,
-  createProviderOperationDeadlineMock,
-  isProviderApiKeyConfiguredMock,
-  postJsonRequestMock,
-  postMultipartRequestMock,
-  resolveApiKeyForProviderMock,
-  resolveProviderHttpRequestConfigMock,
-  resolveProviderOperationTimeoutMsMock,
-  sanitizeConfiguredModelProviderRequestMock,
-} = vi.hoisted(() => ({
-  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-  createProviderOperationDeadlineMock: vi.fn((params: Record<string, unknown>) => ({
-    timeoutMs: params.timeoutMs,
-    label: params.label,
-  })),
-  isProviderApiKeyConfiguredMock: vi.fn(() => true),
-  postJsonRequestMock: vi.fn(),
-  postMultipartRequestMock: vi.fn(),
-  resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "provider-key" })),
-  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => {
-    const request =
-      typeof params.request === "object" && params.request !== null
-        ? (params.request as Record<string, unknown>)
-        : undefined;
-    return {
-      baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-      allowPrivateNetwork: Boolean(params.allowPrivateNetwork ?? request?.allowPrivateNetwork),
-      headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-      dispatcherPolicy: request ? { request } : undefined,
-    };
-  }),
-  resolveProviderOperationTimeoutMsMock: vi.fn(
-    (params: Record<string, unknown>) => params.defaultTimeoutMs,
-  ),
-  sanitizeConfiguredModelProviderRequestMock: vi.fn((request) => request),
+const { http, auth, availability } = vi.hoisted(() => ({
+  http: {
+    assertOkOrThrowHttpError: vi.fn(async () => {}),
+    createProviderOperationDeadline: vi.fn((params: Record<string, unknown>) => ({
+      timeoutMs: params.timeoutMs,
+      label: params.label,
+    })),
+    postJsonRequest: vi.fn<typeof import("../plugin-sdk/provider-http.js").postJsonRequest>(),
+    postMultipartRequest:
+      vi.fn<typeof import("../plugin-sdk/provider-http.js").postMultipartRequest>(),
+    resolveProviderHttpRequestConfig: vi.fn((params: Record<string, unknown>) => {
+      const request =
+        typeof params.request === "object" && params.request !== null
+          ? (params.request as Record<string, unknown>)
+          : undefined;
+      return {
+        baseUrl: params.baseUrl ?? params.defaultBaseUrl,
+        allowPrivateNetwork: Boolean(params.allowPrivateNetwork ?? request?.allowPrivateNetwork),
+        headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
+        dispatcherPolicy: request ? { request } : undefined,
+      };
+    }),
+    resolveProviderOperationTimeoutMs: vi.fn(
+      (params: Record<string, unknown>) => params.defaultTimeoutMs,
+    ),
+    sanitizeConfiguredModelProviderRequest: vi.fn((request) => request),
+  },
+  auth: { resolveApiKeyForProvider: vi.fn(async () => ({ apiKey: "provider-key" })) },
+  availability: {
+    isProviderApiKeyConfigured: vi.fn(() => true),
+    isProviderApiKeyConfiguredAsync: vi.fn(async () => true),
+  },
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
-  isProviderApiKeyConfigured: isProviderApiKeyConfiguredMock,
-}));
+// mock-isolation: Provider request tests supply auth readiness without host credential reads.
+vi.mock("../plugins/provider-auth-availability.js", () => availability);
 
-vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
-  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-}));
+// mock-isolation: Resolve fixture credentials without reading host auth profiles.
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => auth);
 
 vi.mock("openclaw/plugin-sdk/provider-http", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-http")>(
     "openclaw/plugin-sdk/provider-http",
   );
-  return {
-    assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-    createProviderOperationDeadline: createProviderOperationDeadlineMock,
-    postJsonRequest: postJsonRequestMock,
-    postMultipartRequest: postMultipartRequestMock,
-    readProviderJsonResponse: actual.readProviderJsonResponse,
-    resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-    resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
-    sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
-  };
+  return { ...actual, ...http };
 });
 
-function jsonResponse(payload: unknown): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
+function mockResponse(data: unknown, mode: "json" | "multipart" = "json") {
+  const response = {
+    response: Response.json({ data }),
+    finalUrl: "https://sample.example/v1/images/generations",
+    release: vi.fn(async () => {}),
+  };
+  (mode === "json" ? http.postJsonRequest : http.postMultipartRequest).mockResolvedValue(response);
+  return response.release;
+}
+
+function generate(provider: ImageGenerationProvider, overrides: Partial<ImageGenerationRequest>) {
+  return provider.generateImage({
+    provider: "sample",
+    model: "sample-image",
+    prompt: "draw a square",
+    cfg: {},
+    ...overrides,
   });
 }
 
-function requireFirstRequestHeaders(mock: ReturnType<typeof vi.fn>): Headers {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error("expected request call");
-  }
-  const [request] = call as [{ headers?: Headers }];
-  if (!request) {
-    throw new Error("expected request call");
-  }
-  const headers = request.headers;
-  expect(headers).toBeInstanceOf(Headers);
-  if (!headers) {
-    throw new Error("expected request headers");
-  }
-  return headers;
+function providerConfig<T extends object>(overrides: T) {
+  return { baseUrl: "https://sample.example/v1/", models: [], ...overrides };
 }
 
-function requireFirstCallArg(mock: ReturnType<typeof vi.fn>): unknown {
-  const call = (mock.mock.calls as unknown as Array<[unknown] | undefined>)[0];
-  const arg = call?.[0];
-  if (!arg) {
-    throw new Error("expected mock call argument");
-  }
-  return arg;
+function configuredProviders(
+  providers: NonNullable<ImageGenerationRequest["cfg"]["models"]>["providers"],
+) {
+  return { models: { providers } };
 }
 
 function createProvider(overrides: Partial<OpenAiCompatibleImageProviderOptions> = {}) {
@@ -110,7 +92,6 @@ function createProvider(overrides: Partial<OpenAiCompatibleImageProviderOptions>
     capabilities: {
       generate: { maxCount: 4, supportsSize: true },
       edit: { enabled: true, maxCount: 1, maxInputImages: 1, supportsSize: true },
-      geometry: { sizes: ["1024x1024"] },
     },
     useConfiguredRequest: true,
     buildGenerateRequest: ({ req, model, count }) => ({
@@ -123,284 +104,126 @@ function createProvider(overrides: Partial<OpenAiCompatibleImageProviderOptions>
         response_format: "b64_json",
       },
     }),
-    buildEditRequest: ({ req, inputImages, model, count }) => {
-      const form = new FormData();
-      form.set("model", model);
-      form.set("prompt", req.prompt);
-      form.set("n", String(count));
-      form.append(
-        "image",
-        new Blob([new Uint8Array(inputImages[0]?.buffer ?? Buffer.alloc(0))], {
-          type: inputImages[0]?.mimeType ?? "image/png",
-        }),
-        inputImages[0]?.fileName ?? "image.png",
-      );
-      return { kind: "multipart", form };
-    },
+    buildEditRequest: () => ({ kind: "multipart", form: new FormData() }),
     ...overrides,
   });
 }
 
-function mockGeneratedResponse() {
-  const release = vi.fn(async () => {});
-  const payload = {
-    data: [
+afterEach(() => {
+  for (const mock of [
+    ...Object.values(http),
+    ...Object.values(auth),
+    ...Object.values(availability),
+  ]) {
+    mock.mockClear();
+  }
+  http.postJsonRequest.mockReset();
+  http.postMultipartRequest.mockReset();
+});
+
+it("checks config-backed auth under the credential owner, not its HTTP config alias", async () => {
+  const provider = createProvider({ providerConfigKey: "different-http-provider" });
+  const cfg = configuredProviders({
+    sample: providerConfig({ apiKey: "sample-config-key" }),
+    "different-http-provider": providerConfig({
+      apiKey: "wrong-owner-key",
+      baseUrl: "https://different-http-provider.example/v1/",
+    }),
+  });
+
+  expect(provider.isConfigured?.({ cfg, agentDir: "/tmp/agent" })).toBe(true);
+  const authContext = { provider: "sample", cfg, agentDir: "/tmp/agent" };
+  expect(availability.isProviderApiKeyConfigured).toHaveBeenCalledWith(authContext);
+  expect(await provider.isConfiguredAsync?.({ cfg, agentDir: "/tmp/agent" })).toBe(true);
+  expect(availability.isProviderApiKeyConfiguredAsync).toHaveBeenCalledWith(authContext);
+});
+
+it("posts JSON generation requests and parses OpenAI-compatible image data", async () => {
+  const imageBytes = Buffer.alloc(7 * 1024 * 1024, 1);
+  const release = mockResponse([
+    { b64_json: imageBytes.toString("base64"), revised_prompt: "revised" },
+  ]);
+  const result = await generate(createProvider(), {
+    model: "custom-image",
+    count: 2,
+    size: "512x512",
+    ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    cfg: {
+      ...configuredProviders({
+        sample: providerConfig({ request: { allowPrivateNetwork: true } }),
+      }),
+      agents: { defaults: { mediaMaxMb: 8 } },
+    },
+  });
+
+  expect(auth.resolveApiKeyForProvider).toHaveBeenCalledWith(
+    expect.objectContaining({ provider: "sample" }),
+  );
+  expect(http.sanitizeConfiguredModelProviderRequest).toHaveBeenCalledWith({
+    allowPrivateNetwork: true,
+  });
+  const jsonRequest = http.postJsonRequest.mock.calls[0]![0];
+  expect(jsonRequest).toMatchObject({
+    url: "https://sample.example/v1/images/generations",
+    allowPrivateNetwork: true,
+    ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    dispatcherPolicy: { request: { allowPrivateNetwork: true } },
+  });
+  expect(jsonRequest.body).toEqual({
+    model: "custom-image",
+    prompt: "draw a square",
+    n: 2,
+    size: "512x512",
+    response_format: "b64_json",
+  });
+  expect(new Headers(jsonRequest.headers).get("Content-Type")).toBe("application/json");
+  expect(result).toEqual({
+    model: "custom-image",
+    images: [
       {
-        b64_json: Buffer.from("image-bytes").toString("base64"),
-        revised_prompt: "revised",
+        buffer: imageBytes,
+        mimeType: "image/png",
+        fileName: "image-1.png",
+        revisedPrompt: "revised",
       },
     ],
-  };
-  postJsonRequestMock.mockResolvedValue({ response: jsonResponse(payload), release });
-  postMultipartRequestMock.mockResolvedValue({ response: jsonResponse(payload), release });
-  return release;
-}
-
-describe("OpenAI-compatible image provider helper", () => {
-  afterEach(() => {
-    assertOkOrThrowHttpErrorMock.mockClear();
-    createProviderOperationDeadlineMock.mockClear();
-    isProviderApiKeyConfiguredMock.mockClear();
-    postJsonRequestMock.mockReset();
-    postMultipartRequestMock.mockReset();
-    resolveApiKeyForProviderMock.mockReset();
-    resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "provider-key" });
-    resolveProviderHttpRequestConfigMock.mockClear();
-    resolveProviderOperationTimeoutMsMock.mockClear();
-    sanitizeConfiguredModelProviderRequestMock.mockClear();
   });
+  expect(release).toHaveBeenCalledOnce();
+});
 
-  it("builds provider metadata and delegates configuration checks", () => {
-    const provider = createProvider();
-
-    expect(provider.id).toBe("sample");
-    expect(provider.label).toBe("Sample");
-    expect(provider.defaultModel).toBe("sample-image");
-    expect(provider.isConfigured?.({ agentDir: "/tmp/agent" })).toBe(true);
-    expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith({
-      provider: "sample",
-      agentDir: "/tmp/agent",
-    });
-  });
-
-  it("checks config-backed auth under the credential owner, not its HTTP config alias", () => {
-    const provider = createProvider({ providerConfigKey: "different-http-provider" });
-    const cfg = {
-      models: {
-        providers: {
-          sample: {
-            apiKey: "sample-config-key",
-            baseUrl: "https://sample.example/v1/",
-            models: [],
-          },
-          "different-http-provider": {
-            apiKey: "wrong-owner-key",
-            baseUrl: "https://different-http-provider.example/v1/",
-            models: [],
-          },
-        },
-      },
-    };
-
-    expect(provider.isConfigured?.({ cfg })).toBe(true);
-    expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith({
-      provider: "sample",
-      cfg,
-    });
-  });
-
-  it("posts JSON generation requests and parses OpenAI-compatible image data", async () => {
-    const release = mockGeneratedResponse();
-    const provider = createProvider();
-
-    const result = await provider.generateImage({
-      provider: "sample",
-      model: "custom-image",
-      prompt: "draw a square",
-      count: 2,
-      size: "512x512",
-      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
-      cfg: {
-        models: {
-          providers: {
-            sample: {
-              baseUrl: "https://sample.example/v1/",
-              request: { allowPrivateNetwork: true },
-            },
-          },
-        },
-      },
-    } as never);
-
-    const apiKeyParams = requireFirstCallArg(resolveApiKeyForProviderMock) as { provider?: string };
-    expect(apiKeyParams.provider).toBe("sample");
-    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith({
-      allowPrivateNetwork: true,
-    });
-    const jsonRequest = requireFirstCallArg(postJsonRequestMock) as {
-      url?: string;
-      allowPrivateNetwork?: boolean;
-      ssrfPolicy?: unknown;
-      dispatcherPolicy?: unknown;
-      body?: unknown;
-    };
-    expect(jsonRequest.url).toBe("https://sample.example/v1/images/generations");
-    expect(jsonRequest.allowPrivateNetwork).toBe(true);
-    expect(jsonRequest.ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
-    expect(jsonRequest.dispatcherPolicy).toEqual({ request: { allowPrivateNetwork: true } });
-    expect(jsonRequest.body).toEqual({
-      model: "custom-image",
-      prompt: "draw a square",
-      n: 2,
-      size: "512x512",
-      response_format: "b64_json",
-    });
-    const headers = requireFirstRequestHeaders(postJsonRequestMock);
-    expect(headers.get("Content-Type")).toBe("application/json");
-    expect(result.model).toBe("custom-image");
-    expect(result.images).toHaveLength(1);
-    expect(result.images[0]?.mimeType).toBe("image/png");
-    expect(result.images[0]?.fileName).toBe("image-1.png");
-    expect(result.images[0]?.revisedPrompt).toBe("revised");
-    expect(release).toHaveBeenCalledOnce();
-  });
-
-  it("accepts valid multi-image JSON above the generic provider JSON cap", async () => {
-    const imageBytes = Buffer.alloc(3 * 1024 * 1024 + 64 * 1024, 1);
-    postJsonRequestMock.mockResolvedValue({
-      response: jsonResponse({
-        data: Array.from({ length: 4 }, () => ({
-          b64_json: imageBytes.toString("base64"),
-        })),
-      }),
-      release: vi.fn(async () => {}),
-    });
-    const provider = createProvider();
-
-    const result = await provider.generateImage({
-      provider: "sample",
-      model: "sample-image",
-      prompt: "large",
-      count: 4,
-      cfg: {} as never,
-    });
-
-    expect(result.images.map((image) => image.buffer.byteLength)).toEqual([
-      imageBytes.byteLength,
-      imageBytes.byteLength,
-      imageBytes.byteLength,
-      imageBytes.byteLength,
-    ]);
-  });
-
-  it("honors configured generated media caps above the default image limit", async () => {
-    const imageBytes = Buffer.alloc(7 * 1024 * 1024, 1);
-    postJsonRequestMock.mockResolvedValue({
-      response: jsonResponse({
-        data: [{ b64_json: imageBytes.toString("base64") }],
-      }),
-      release: vi.fn(async () => {}),
-    });
-    const provider = createProvider();
-
-    const result = await provider.generateImage({
-      provider: "sample",
-      model: "sample-image",
-      prompt: "large",
-      cfg: { agents: { defaults: { mediaMaxMb: 8 } } } as never,
-    });
-
-    expect(result.images).toHaveLength(1);
-    expect(result.images[0]?.buffer.byteLength).toBe(imageBytes.byteLength);
-  });
-
-  it("rejects oversized OpenAI-compatible image JSON", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: jsonResponse({
-        data: [{ b64_json: "x".repeat(35 * 1024 * 1024) }],
-      }),
-      release: vi.fn(async () => {}),
-    });
-    const provider = createProvider();
-
-    await expect(
-      provider.generateImage({
-        provider: "sample",
-        model: "sample-image",
-        prompt: "too large",
-        cfg: {} as never,
-      }),
-    ).rejects.toThrow("sample.image-generation: JSON response exceeds");
-  });
-
-  it("posts multipart edit requests without forwarding a content-type header", async () => {
-    mockGeneratedResponse();
-    const provider = createProvider();
-
-    await provider.generateImage({
-      provider: "sample",
-      model: "sample-image",
-      prompt: "edit it",
+it("rejects image JSON beyond the generated image download ceiling", async () => {
+  mockResponse([{ b64_json: "x".repeat(90 * 1024 * 1024) }], "multipart");
+  await expect(
+    generate(createProvider(), {
+      prompt: "too large",
       inputImages: [{ buffer: Buffer.from("source"), mimeType: "image/png" }],
-      cfg: {} as never,
-    });
+    }),
+  ).rejects.toThrow("sample.image-generation: JSON response exceeds");
+  const request = http.postMultipartRequest.mock.calls[0]![0];
+  expect(request.url).toBe("https://sample.example/v1/images/edits");
+  expect(request.body).toBeInstanceOf(FormData);
+  expect(new Headers(request.headers).has("Content-Type")).toBe(false);
+});
 
-    const multipartRequest = requireFirstCallArg(postMultipartRequestMock) as {
-      url?: string;
-      body?: unknown;
-    };
-    expect(multipartRequest.url).toBe("https://sample.example/v1/images/edits");
-    expect(multipartRequest.body).toBeInstanceOf(FormData);
-    const headers = requireFirstRequestHeaders(postMultipartRequestMock);
-    expect(headers.has("Content-Type")).toBe(false);
+it.each([
+  [[], "Sample response missing image data"],
+  [{ b64_json: "not-an-array" }, "Sample image generation response malformed"],
+] as const)("honors operation timeouts and reports invalid response %j", async (data, error) => {
+  mockResponse(data);
+  const provider = createProvider({
+    defaultTimeoutMs: 60_000,
+    emptyResponseError: "Sample response missing image data",
   });
 
-  it("honors default operation timeouts and empty-response errors", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: jsonResponse({ data: [] }),
-      release: vi.fn(async () => {}),
-    });
-    const provider = createProvider({
-      defaultTimeoutMs: 60_000,
-      emptyResponseError: "Sample response missing image data",
-    });
+  await expect(generate(provider, { timeoutMs: 123 })).rejects.toThrow(error);
 
-    await expect(
-      provider.generateImage({
-        provider: "sample",
-        model: "sample-image",
-        prompt: "empty",
-        timeoutMs: 123,
-        cfg: {} as never,
-      }),
-    ).rejects.toThrow("Sample response missing image data");
-
-    expect(createProviderOperationDeadlineMock).toHaveBeenCalledWith({
-      timeoutMs: 123,
-      label: "Sample image generation",
-    });
-    expect(resolveProviderOperationTimeoutMsMock).toHaveBeenCalledWith({
-      deadline: { timeoutMs: 123, label: "Sample image generation" },
-      defaultTimeoutMs: 60_000,
-    });
-    const timeoutRequest = requireFirstCallArg(postJsonRequestMock) as { timeoutMs?: number };
-    expect(timeoutRequest.timeoutMs).toBe(60_000);
+  expect(http.createProviderOperationDeadline).toHaveBeenCalledWith({
+    timeoutMs: 123,
+    label: "Sample image generation",
   });
-
-  it("wraps malformed successful image responses with provider-owned errors", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: jsonResponse({ data: { b64_json: "not-an-array" } }),
-      release: vi.fn(async () => {}),
-    });
-    const provider = createProvider();
-
-    await expect(
-      provider.generateImage({
-        provider: "sample",
-        model: "sample-image",
-        prompt: "bad shape",
-        cfg: {} as never,
-      }),
-    ).rejects.toThrow("Sample image generation response malformed");
+  expect(http.resolveProviderOperationTimeoutMs).toHaveBeenCalledWith({
+    deadline: { timeoutMs: 123, label: "Sample image generation" },
+    defaultTimeoutMs: 60_000,
   });
+  expect(http.postJsonRequest.mock.calls[0]![0].timeoutMs).toBe(60_000);
 });

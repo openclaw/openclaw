@@ -1,11 +1,28 @@
 // Reads PID-reuse-safe Windows process start identities without workspace imports.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { readProcessIdentity } from "@openclaw/proc-safe/identity";
 import { resolveDiagnosticProcessEnv, resolveEnvironmentValue } from "./process-env.ts";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_PROCESS_START_TIMEOUT_MS = 10_000;
 const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
+declare const SEALED_RUNTIME_BUILD: boolean;
+function readNativeProcessStartTime(pid: number): number | null | undefined {
+  // Sealed updater helpers cannot load modules from the installation being replaced.
+  if (
+    process.platform !== "win32" ||
+    (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD)
+  ) {
+    return undefined;
+  }
+  try {
+    const identity = readProcessIdentity(pid);
+    return identity && !identity.exited ? Math.floor(identity.startTimeMicros / 1000) : null;
+  } catch {
+    return undefined;
+  }
+}
 
 function windowsSystemRoot(env: NodeJS.ProcessEnv): string {
   const configured =
@@ -83,12 +100,20 @@ export function readWindowsProcessStartTimeSync(
   timeoutMs = DEFAULT_PROCESS_START_TIMEOUT_MS,
   env: NodeJS.ProcessEnv = process.env,
 ): number | null {
-  if (!Number.isInteger(pid) || pid <= 0) {
+  if (!Number.isInteger(pid) || pid <= 0 || pid > 0xffff_ffff) {
     return null;
   }
   // Preserve both former 5s attempts inside one deadline. Explicit callers
   // still keep their smaller end-to-end budget.
   const deadline = Date.now() + timeoutMs;
+  const nativeStartTime = readNativeProcessStartTime(pid);
+  if (nativeStartTime !== undefined) {
+    return nativeStartTime;
+  }
+  const powershellBudgetMs = deadline - Date.now();
+  if (powershellBudgetMs <= 0) {
+    return null;
+  }
   const powershell = spawnSync(
     windowsPowerShellPath(env),
     [
@@ -102,7 +127,7 @@ export function readWindowsProcessStartTimeSync(
     {
       encoding: "utf8",
       env: resolveDiagnosticProcessEnv(env, "win32"),
-      timeout: Math.min(timeoutMs, DEFAULT_TIMEOUT_MS),
+      timeout: Math.min(powershellBudgetMs, DEFAULT_TIMEOUT_MS),
       windowsHide: true,
     },
   );

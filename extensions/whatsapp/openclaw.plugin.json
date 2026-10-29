@@ -1,19 +1,43 @@
 {
   "id": "whatsapp",
+  "categories": [
+    "channels"
+  ],
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": [{ "id": "whatsapp-legacy-state" }]
+    "stateMigrations": [
+      {
+        "id": "whatsapp-legacy-state"
+      }
+    ]
   },
   "name": "WhatsApp",
   "description": "OpenClaw WhatsApp channel plugin for WhatsApp Web chats.",
-  "skills": ["./skills"],
+  "skills": [
+    "./skills"
+  ],
   "activation": {
     "onStartup": false
   },
   "contracts": {
-    "tools": ["whatsapp_call", "whatsapp_login"]
+    "tools": [
+      "whatsapp_call",
+      "whatsapp_login"
+    ]
   },
-  "channels": ["whatsapp"],
+  "channels": [
+    "whatsapp"
+  ],
+  "configGroups": [
+    {
+      "id": "plugin-hooks",
+      "title": "Plugin hooks",
+      "order": 10,
+      "properties": [
+        "pluginHooks"
+      ]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -29,5 +53,16 @@
         }
       }
     }
+  },
+  "controlUi": {
+    "entry": "dist/control-ui/index.js",
+    "activation": "settings-only",
+    "settingsViews": [
+      {
+        "section": "channels",
+        "panel": "detail",
+        "channelId": "whatsapp"
+      }
+    ]
   }
 }

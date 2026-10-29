@@ -1,6 +1,5 @@
 import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage as errorMessage } from "openclaw/plugin-sdk/error-runtime";
-// Ollama node inference exposes local models to agents through paired node hosts.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   readFiniteNumberParam,
@@ -57,25 +56,6 @@ type NodeModel = {
   loaded: boolean;
 };
 
-type OllamaModelsPayload = {
-  provider: "ollama";
-  models: NodeModel[];
-};
-
-type OllamaChatPayload = {
-  provider: "ollama";
-  model: string;
-  response: string;
-  usage?: {
-    promptTokens?: number;
-    completionTokens?: number;
-  };
-  timings?: {
-    loadMs?: number;
-    totalMs?: number;
-  };
-};
-
 type NodeSummary = Awaited<
   ReturnType<OpenClawPluginApi["runtime"]["nodes"]["list"]>
 >["nodes"][number];
@@ -98,59 +78,7 @@ function durationMs(value: unknown): number | undefined {
   return Math.round((value / 1_000_000) * 100) / 100;
 }
 
-async function requestOllamaJson<T>(params: {
-  baseUrl: string;
-  path: string;
-  timeoutMs: number;
-  init?: RequestInit;
-  signal?: AbortSignal;
-}): Promise<T> {
-  const apiBase = resolveOllamaApiBase(params.baseUrl);
-  let response: Response;
-  let release: (() => Promise<void>) | undefined;
-  try {
-    const guarded = await fetchWithSsrFGuard({
-      url: `${apiBase}${params.path}`,
-      init: params.init,
-      // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
-      timeoutMs: params.timeoutMs,
-      ...(params.signal ? { signal: params.signal } : {}),
-      policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
-      auditContext: `ollama-node-inference${params.path}`,
-    });
-    response = guarded.response;
-    release = guarded.release;
-  } catch (error) {
-    throwIfOllamaRequestAborted(params.signal);
-    throw new Error(`Ollama is unavailable at ${apiBase}: ${errorMessage(error)}`, {
-      cause: error,
-    });
-  }
-
-  try {
-    if (!response.ok) {
-      const body = (await readResponseTextLimited(response, MAX_ERROR_BODY_BYTES)).trim();
-      let detail = body;
-      try {
-        const parsed = asNullableRecord(JSON.parse(body));
-        detail = typeof parsed?.error === "string" ? parsed.error : body;
-      } catch {
-        // Keep the bounded response text when Ollama returns a non-JSON error.
-      }
-      throw new Error(
-        `Ollama ${params.path} failed (HTTP ${response.status})${detail ? `: ${detail}` : ""}`,
-      );
-    }
-    return await readProviderJsonResponse<T>(response, `ollama-node-inference${params.path}`);
-  } finally {
-    await release();
-  }
-}
-
-async function discoverOllamaNodeModels(
-  baseUrl = OLLAMA_DEFAULT_BASE_URL,
-  signal?: AbortSignal,
-): Promise<OllamaModelsPayload> {
+async function discoverOllamaNodeModels(baseUrl = OLLAMA_DEFAULT_BASE_URL, signal?: AbortSignal) {
   const apiBase = resolveOllamaApiBase(baseUrl);
   const discovered = await fetchOllamaModels(apiBase, signal ? { signal } : undefined);
   if (!discovered.reachable) {
@@ -211,100 +139,6 @@ async function discoverOllamaNodeModels(
   return { provider: "ollama", models: rows };
 }
 
-async function runOllamaNodeChat(params: {
-  baseUrl: string;
-  model: string;
-  prompt: string;
-  system?: string;
-  temperature?: number;
-  maxTokens: number;
-  timeoutMs: number;
-  signal?: AbortSignal;
-}): Promise<OllamaChatPayload> {
-  const apiBase = resolveOllamaApiBase(params.baseUrl);
-  const deadlineMs = performance.now() + params.timeoutMs;
-  const remainingTimeoutMs = (): number => {
-    const remainingMs = Math.ceil(deadlineMs - performance.now());
-    if (remainingMs <= 0) {
-      throw new Error(`Ollama node inference timed out after ${params.timeoutMs}ms`);
-    }
-    return remainingMs;
-  };
-  const discovered = await fetchOllamaModels(apiBase, {
-    timeoutMs: remainingTimeoutMs(),
-    ...(params.signal ? { signal: params.signal } : {}),
-  });
-  const localModel = discovered.models.find(
-    (model) => model.name === params.model && !isOllamaRemoteModel(model),
-  );
-  const [model] = localModel
-    ? await enrichOllamaModelsWithContext(apiBase, [localModel], {
-        timeoutMs: remainingTimeoutMs(),
-        ...(params.signal ? { signal: params.signal } : {}),
-      })
-    : [];
-  if (!discovered.reachable || model?.capabilities?.includes("completion") !== true) {
-    remainingTimeoutMs();
-    throw new Error(
-      `Ollama model ${JSON.stringify(params.model)} is not a local chat model; discover models first`,
-    );
-  }
-  const messages = [
-    ...(params.system ? [{ role: "system", content: params.system }] : []),
-    { role: "user", content: params.prompt },
-  ];
-  const data = await requestOllamaJson<{
-    model?: unknown;
-    message?: { content?: unknown };
-    done_reason?: unknown;
-    prompt_eval_count?: unknown;
-    eval_count?: unknown;
-    load_duration?: unknown;
-    total_duration?: unknown;
-  }>({
-    baseUrl: params.baseUrl,
-    path: "/api/chat",
-    timeoutMs: remainingTimeoutMs(),
-    ...(params.signal ? { signal: params.signal } : {}),
-    init: {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: params.model,
-        messages,
-        stream: false,
-        think: false,
-        options: {
-          num_predict: params.maxTokens,
-          ...(params.temperature !== undefined && { temperature: params.temperature }),
-        },
-      }),
-    },
-  });
-  const response = typeof data.message?.content === "string" ? data.message.content : undefined;
-  if (response === undefined) {
-    throw new Error("Ollama /api/chat response did not contain message.content");
-  }
-  if (data.done_reason === "length") {
-    throw new Error(
-      `Ollama stopped after reaching maxTokens (${params.maxTokens}); retry with a larger maxTokens value`,
-    );
-  }
-  const promptTokens = asFiniteNumber(data.prompt_eval_count);
-  const completionTokens = asFiniteNumber(data.eval_count);
-  const loadMs = durationMs(data.load_duration);
-  const totalMs = durationMs(data.total_duration);
-  return {
-    provider: "ollama",
-    model: typeof data.model === "string" && data.model.trim() ? data.model : params.model,
-    response,
-    ...(promptTokens !== undefined || completionTokens !== undefined
-      ? { usage: { promptTokens, completionTokens } }
-      : {}),
-    ...(loadMs !== undefined || totalMs !== undefined ? { timings: { loadMs, totalMs } } : {}),
-  };
-}
-
 export function createOllamaNodeHostCommands(options?: {
   baseUrl?: string;
 }): OpenClawPluginNodeHostCommand[] {
@@ -313,12 +147,14 @@ export function createOllamaNodeHostCommands(options?: {
     {
       command: OLLAMA_MODELS_COMMAND,
       cap: OLLAMA_NODE_INFERENCE_CAPABILITY,
+      hasActiveWork: () => false,
       handle: async (_paramsJSON, _io, context) =>
         JSON.stringify(await discoverOllamaNodeModels(baseUrl, context?.signal)),
     },
     {
       command: OLLAMA_CHAT_COMMAND,
       cap: OLLAMA_NODE_INFERENCE_CAPABILITY,
+      hasActiveWork: () => false,
       handle: async (paramsJSON, _io, context) => {
         const params = readNodeCommandParams(paramsJSON);
         const model = readStringParam(params, "model", { required: true });
@@ -345,18 +181,130 @@ export function createOllamaNodeHostCommands(options?: {
         if (system && system.length > MAX_SYSTEM_PROMPT_CHARS) {
           throw new Error(`system exceeds ${MAX_SYSTEM_PROMPT_CHARS} characters`);
         }
-        return JSON.stringify(
-          await runOllamaNodeChat({
-            baseUrl,
-            model,
-            prompt,
-            system,
-            temperature,
-            maxTokens,
-            timeoutMs,
-            ...(context?.signal ? { signal: context.signal } : {}),
-          }),
+        const signal = context?.signal;
+        const apiBase = resolveOllamaApiBase(baseUrl);
+        const deadlineMs = performance.now() + timeoutMs;
+        const remainingTimeoutMs = (): number => {
+          const remainingMs = Math.ceil(deadlineMs - performance.now());
+          if (remainingMs <= 0) {
+            throw new Error(`Ollama node inference timed out after ${timeoutMs}ms`);
+          }
+          return remainingMs;
+        };
+        const discovered = await fetchOllamaModels(apiBase, {
+          timeoutMs: remainingTimeoutMs(),
+          ...(signal ? { signal } : {}),
+        });
+        const localModel = discovered.models.find(
+          (candidate) => candidate.name === model && !isOllamaRemoteModel(candidate),
         );
+        const [verifiedModel] = localModel
+          ? await enrichOllamaModelsWithContext(apiBase, [localModel], {
+              timeoutMs: remainingTimeoutMs(),
+              ...(signal ? { signal } : {}),
+            })
+          : [];
+        if (!discovered.reachable || verifiedModel?.capabilities?.includes("completion") !== true) {
+          remainingTimeoutMs();
+          throw new Error(
+            `Ollama model ${JSON.stringify(model)} is not a local chat model; discover models first`,
+          );
+        }
+        const messages = [
+          ...(system ? [{ role: "system", content: system }] : []),
+          { role: "user", content: prompt },
+        ];
+        const requestTimeoutMs = remainingTimeoutMs();
+        const init = {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model,
+            messages,
+            stream: false,
+            think: false,
+            options: {
+              num_predict: maxTokens,
+              ...(temperature !== undefined && { temperature }),
+            },
+          }),
+        };
+        let httpResponse: Response;
+        let release: (() => Promise<void>) | undefined;
+        try {
+          const guarded = await fetchWithSsrFGuard({
+            url: `${apiBase}/api/chat`,
+            init,
+            // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
+            timeoutMs: requestTimeoutMs,
+            ...(signal ? { signal } : {}),
+            policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
+            auditContext: "ollama-node-inference/api/chat",
+          });
+          httpResponse = guarded.response;
+          release = guarded.release;
+        } catch (error) {
+          throwIfOllamaRequestAborted(signal);
+          throw new Error(`Ollama is unavailable at ${apiBase}: ${errorMessage(error)}`, {
+            cause: error,
+          });
+        }
+
+        let data: {
+          model?: unknown;
+          message?: { content?: unknown };
+          done_reason?: unknown;
+          prompt_eval_count?: unknown;
+          eval_count?: unknown;
+          load_duration?: unknown;
+          total_duration?: unknown;
+        };
+        try {
+          if (!httpResponse.ok) {
+            const body = (await readResponseTextLimited(httpResponse, MAX_ERROR_BODY_BYTES)).trim();
+            let detail = body;
+            try {
+              const parsed = asNullableRecord(JSON.parse(body));
+              detail = typeof parsed?.error === "string" ? parsed.error : body;
+            } catch {
+              // Keep the bounded response text when Ollama returns a non-JSON error.
+            }
+            throw new Error(
+              `Ollama /api/chat failed (HTTP ${httpResponse.status})${detail ? `: ${detail}` : ""}`,
+            );
+          }
+          data = await readProviderJsonResponse<typeof data>(
+            httpResponse,
+            "ollama-node-inference/api/chat",
+          );
+        } finally {
+          await release();
+        }
+        const response =
+          typeof data.message?.content === "string" ? data.message.content : undefined;
+        if (response === undefined) {
+          throw new Error("Ollama /api/chat response did not contain message.content");
+        }
+        if (data.done_reason === "length") {
+          throw new Error(
+            `Ollama stopped after reaching maxTokens (${maxTokens}); retry with a larger maxTokens value`,
+          );
+        }
+        const promptTokens = asFiniteNumber(data.prompt_eval_count);
+        const completionTokens = asFiniteNumber(data.eval_count);
+        const loadMs = durationMs(data.load_duration);
+        const totalMs = durationMs(data.total_duration);
+        return JSON.stringify({
+          provider: "ollama",
+          model: typeof data.model === "string" && data.model.trim() ? data.model : model,
+          response,
+          ...(promptTokens !== undefined || completionTokens !== undefined
+            ? { usage: { promptTokens, completionTokens } }
+            : {}),
+          ...(loadMs !== undefined || totalMs !== undefined
+            ? { timings: { loadMs, totalMs } }
+            : {}),
+        });
       },
     },
   ];

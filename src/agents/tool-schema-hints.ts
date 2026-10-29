@@ -1,6 +1,8 @@
 /** Bounded TypeScript-style hints for model-visible tool input and output schemas. */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
+export const MAX_TOOL_SCHEMA_DECLARATION_CHARS = 32_768;
+
 const MAX_COMPACT_INPUT_HINT_CHARS = 300;
 // Sized so real multi-branch contracts like web_search's four-way union stay
 // promotable with headroom; the quick index independently truncates total bytes.
@@ -237,7 +239,8 @@ function compactObjectHint(
     ) {
       return UNKNOWN_HINT;
     }
-    const fields = keys.toSorted().map((key) => {
+    // oxlint-disable-next-line unicorn/no-array-sort -- keys is a private array freshly spread from the Set above.
+    const fields = keys.sort().map((key) => {
       const hint = compactSchemaType(properties[key], depth, limits);
       return (
         (IDENTIFIER_RE.test(key) ? key : JSON.stringify(key)) +
@@ -445,7 +448,7 @@ function compactSchemaType(
  */
 export function toolSchemaDeclaration(schema: unknown): string {
   const limits: CompactSchemaLimits = {
-    maxChars: 32_768,
+    maxChars: MAX_TOOL_SCHEMA_DECLARATION_CHARS,
     maxDepth: 12,
     maxProperties: 256,
     numericInputConstraints: true,

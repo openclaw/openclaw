@@ -2,11 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../../test/helpers/wizard-prompter.js";
+import { writeFixtureJsonSync } from "../../cli/cli-fixtures.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   isPluginRegistryRetired,
-  pluginLoaderCacheState,
+  getPluginLoaderCacheState,
 } from "../../plugins/registry-lifecycle.js";
 import {
   clearActivePluginRegistry,
@@ -20,7 +21,7 @@ const tempDirs = createSyncSuiteTempRootTracker("models-auth-registry");
 
 afterEach(async () => {
   await clearActivePluginRegistry();
-  pluginLoaderCacheState.clear();
+  getPluginLoaderCacheState().clear();
   clearPluginMetadataLifecycleCaches();
   vi.unstubAllEnvs();
   tempDirs.cleanup();
@@ -30,14 +31,11 @@ it("keeps the active plugin registry when provider sign-in is declined", async (
   const root = fs.realpathSync(tempDirs.makeTempDir());
   const pluginDir = path.join(root, "provider");
   fs.mkdirSync(pluginDir);
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: "auth-registry-fixture",
-      providers: ["fixture-provider"],
-      configSchema: { type: "object" },
-    }),
-  );
+  writeFixtureJsonSync(path.join(pluginDir, "openclaw.plugin.json"), {
+    id: "auth-registry-fixture",
+    providers: ["fixture-provider"],
+    configSchema: { type: "object" },
+  });
   fs.writeFileSync(
     path.join(pluginDir, "index.cjs"),
     `module.exports = {

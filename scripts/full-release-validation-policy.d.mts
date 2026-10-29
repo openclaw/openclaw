@@ -1,5 +1,23 @@
 export const MAX_RELEASE_ARTIFACT_BYTES: number;
+export function validateReleaseManifestAdvisoryJobs(manifest: unknown): ReleaseRecord[];
+export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY: "split-changelog-release-v1";
+export function isSplitChangelogEvidenceDelta(paths: unknown, version: unknown): boolean;
+export function classifyReleaseChangelogEvidenceComparison(
+  comparison: unknown,
+  identity: { baseSha: string; version?: unknown },
+): { changedPaths: string[]; policy: string };
 export function serializeReleaseArtifact(payload: unknown): string;
+export function buildReleaseValidationManifest(input: {
+  plan: ReleaseRecord;
+  drain?: ReleaseRecord;
+  context: ReleaseRecord;
+  reusedManifest?: ReleaseRecord;
+}): ReleaseRecord;
+export function assertReleasePublicationKnownBudget(
+  plan: ReleaseRecord,
+  context: ReleaseRecord,
+  reusedManifest?: ReleaseRecord,
+): void;
 export function normalizeReleaseCoveragePolicy(
   input: ReleaseRecord,
 ): "npm-beta-v1" | "npm-stable-v1" | undefined;
@@ -7,12 +25,6 @@ export function validateReleaseCoveragePolicyBinding(
   plan: ReleaseRecord | undefined,
   validationInputs?: ReleaseRecord,
 ): void;
-export function normalizeReleaseTelegramWaiver(input: ReleaseRecord): string;
-export function validateReleaseTelegramWaiverBinding(
-  plan: ReleaseRecord | undefined,
-  validationInputs?: ReleaseRecord,
-): void;
-
 export interface ReleaseRecord {
   [key: string]: unknown;
 }
@@ -22,6 +34,20 @@ export interface ReleaseChild extends ReleaseRecord {
   runId: string;
 }
 export interface ReleaseExecutionPlan extends ReleaseRecord {
+  sha256: string;
+  parentRunId: string;
+  parentRunAttempt: number;
+  workflowSha: string;
+  targetSha: string;
+  candidateRequest?: import("./full-release-candidate-contract.mjs").RecordedFullReleaseCandidateRequest;
+  qualificationCoverage?: import("./release-qualification-admission.mjs").QualificationCoverage;
+  qualificationInputs?: import("./release-qualification-admission.mjs").QualificationInputs;
+  sourceAdmissionContract?: "1";
+  sourceAdmission?: import("./full-release-publication-contract.mjs").PublicationSourceFact | null;
+  publicationAdmissionContract?: "1";
+  publicationAdmission?:
+    | import("./full-release-publication-contract.mjs").PublicationAdmission
+    | null;
   children: ReleaseChild[];
   evidenceReuse: ReleaseRecord;
   gates: ReleaseRecord[];
@@ -45,8 +71,27 @@ export interface ReleaseChildSpec {
 }
 export type ReleaseGhTransportErrorClass = "ambiguous" | "hard" | "transient";
 export function classifyReleaseGhTransportError(error: unknown): ReleaseGhTransportErrorClass;
+export function isReleaseGhServerError(error: unknown): boolean;
+export function readReleaseJobListing<T>(
+  readListing: (perPage: number, options: { smallerPageFallback: boolean }) => Promise<T>,
+): Promise<T>;
+export function releaseGhRateLimitRetryAt(
+  error: unknown,
+  now?: number,
+  failures?: number,
+): number | undefined;
 export function isReleaseGhArtifactMissingError(error: unknown): boolean;
 export function releaseChildSpec(key: string): ReleaseChildSpec;
+export function releaseChildSpecs(): ReleaseChildSpec[];
+export function planReleaseChildRerun(input: {
+  childKey: string;
+  jobs: ReleaseRecord[];
+}):
+  | { failed: string[]; mode: "all-jobs" | "failed-jobs" }
+  | { failed: string[]; mode: "producer" | "receipt"; producer: string };
+export const INSTALL_SMOKE_JOB_NEEDS: Readonly<Record<string, readonly string[]>>;
+export const INSTALL_SMOKE_ATTEMPT_BOUND_CONSUMERS: ReadonlySet<string>;
+export const INSTALL_SMOKE_CALLER_DEPENDENTS: ReadonlySet<string>;
 export function validateReleaseChildRunProvenance(
   run: ReleaseRecord,
   expected?: ReleaseRecord,
@@ -71,7 +116,11 @@ export function releaseCompositeJobsSha256(value: ReleaseRecord): string;
 export function compareReleaseJobsByName(left: { name: string }, right: { name: string }): number;
 export function composeReleaseAttemptJobs(
   attempts: Array<{ jobs: ReleaseRecord[]; runAttempt: number }>,
-  expected: { effectiveRunAttempt: number; plannedRunAttempt: number },
+  expected: {
+    effectiveRunAttempt: number;
+    effectiveRunStatus?: string;
+    plannedRunAttempt: number;
+  },
 ): {
   effectiveRunAttempt: number;
   jobs: ReleaseRecord[];
@@ -84,11 +133,8 @@ export function composeReleaseChildAttemptEvidence(input: {
   run: ReleaseRecord;
 }): ReleaseRecord;
 
-export function terminalPolicyPass(
-  child: ReleaseRecord,
-  releaseProfile: string,
-  workflowRef: string,
-): boolean;
+export function releaseChildAdvisories(child: ReleaseRecord): ReleaseRecord[];
+export function terminalPolicyPass(child: ReleaseRecord, targetVersion?: string): boolean;
 
 export function classifyReleaseSnapshot(input: ReleaseRecord): ReleaseStateArtifact;
 export function releasePlanGateFailures(gates: ReleaseRecord[]): ReleaseRecord[];
@@ -98,6 +144,7 @@ export function validateReleaseStateArtifact(
   expected?: Record<string, unknown>,
   expectedMode?: string,
 ): ReleaseStateArtifact;
+export function validateRetiredReleaseRetryFields(value: ReleaseRecord): void;
 export function verifyReleaseStateArtifacts(
   executionPlanPayload: unknown,
   decisionPayload: unknown,
@@ -118,18 +165,8 @@ export function selectReleaseStateArtifacts(
   decisionCandidates: Array<{ name: string; payload: unknown }>,
   drainCandidates: Array<{ name: string; payload: unknown }>,
   expected?: Record<string, unknown>,
-): {
-  decision: ReleaseStateArtifact;
-  drain: ReleaseStateArtifact;
-  executionPlan: ReleaseExecutionPlan;
-  sourceAttempts: {
-    decision: number;
-    drain: number;
-    executionPlan: number;
-  };
-};
+): ReturnType<typeof verifyReleaseStateArtifacts>;
 export function formatReleaseStateOutcome(payload: ReleaseRecord): string;
-export function releaseStateChildEvidence(child: ReleaseRecord): ReleaseRecord;
 export function affectedActiveRunIds(
   children: ReleaseRecord[],
   blockers: ReleaseRecord[],

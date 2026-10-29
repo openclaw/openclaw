@@ -1,117 +1,128 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect } from "vitest";
-import { createWorkerArtifactTest, workerProbe } from "./vitest-worker-artifacts.test-support.js";
+import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
+import {
+  createControlledWorkerCompiler,
+  createWorkerArtifactTest,
+  inWorkerArtifactFixture,
+  readFixtureLines,
+} from "./vitest-worker-artifacts.test-support.js";
+import { workerTransformProbe } from "./vitest-worker-artifacts.transforms.test-support.js";
 
 const root = process.cwd();
 const it = createWorkerArtifactTest();
-// Each sequence rebuilds all workers; avoid competing builds within one runner.
+
+// Each sequence owns its cache and generations; keep their observations ordered.
 describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
   it.for((["single", "projects"] as const).map((layout) => ({ layout })))(
-    "preserves filesystem transforms across fresh generations, source mode, and edits ($layout)",
-    ({ layout }, { workerArtifacts }) =>
-      workerArtifacts.fixtureLifetime.run(async () => {
-        const { node } = workerArtifacts.createFixtureCommands();
-        const directory = workerArtifacts.fixtureDirectory();
-        const { config, value, configuredValue, parent, cacheDirectory } = workerProbe(
-          directory,
-          false,
-          "auto",
-          layout,
-        );
-        const readLines = (name: string) =>
-          fs.readFileSync(path.join(directory, name), "utf8").trim().split("\n");
-        const counts = () => {
-          const transformed = readLines("transforms.jsonl").map((line) =>
-            path.normalize(JSON.parse(line)),
+    "preserves filesystem transforms across generations, source mode, edits, and presets ($layout)",
+    ({ layout }, { workerArtifacts, signal, onTestFinished }) =>
+      inWorkerArtifactFixture(
+        { workerArtifacts, signal, onTestFinished },
+        async ({ runtime, startBorrower, directory }) => {
+          const { config, value, configuredValue, parent } = workerTransformProbe(
+            directory,
+            layout,
           );
-          return [[value, configuredValue], [parent]].map(
-            (ids) => transformed.filter((actual) => ids.includes(actual)).length,
+          const projectNames = layout === "projects" ? ["first", "second"] : ["first"];
+          const projectCount = projectNames.length;
+          const controlled = createControlledWorkerCompiler(
+            directory,
+            testRunnerFixtureEnv(),
+            process.versions.bun ? "bun" : "node",
           );
-        };
-        const generations: string[] = [];
-        const launch = async (
-          mode: "compiled" | "source",
-          expectedValue = "first",
-          configValue = "first",
-        ) => {
-          const result = await node([
-            mode === "compiled" ? "scripts/run-vitest.mjs" : "node_modules/vitest/vitest.mjs",
-            "run",
-            "--config",
-            config,
-            "--project",
-            "first",
-          ]);
-          expect(result.code, result.stderr + result.stdout).toBe(0);
-          const generation: string = JSON.parse(readLines("generations.jsonl").at(-1)!);
-          const observed = JSON.parse(readLines("observations.jsonl").at(-1)!);
-          expect(observed.value).toBe(expectedValue);
-          expect(observed.configValue).toBe(configValue);
-          if (mode === "compiled") {
-            const generationDirectory = fileURLToPath(new URL("../../", generation));
-            expect(result.stderr.match(/\[vitest-workers\] prepared/g)).toHaveLength(1);
-            expect(generations).not.toContain(generation);
-            generations.push(generation);
-            expect(path.dirname(generationDirectory)).toBe(
-              path.join(root, ".artifacts", "vitest-workers"),
+          const readJsonLines = <T>(name: string) =>
+            readFixtureLines<T>(path.join(directory, name));
+          const counts = () => {
+            const transformed = readJsonLines<string>("transforms.jsonl").map(path.normalize);
+            return [[value, configuredValue], [parent]].map(
+              (ids) => transformed.filter((actual) => ids.includes(actual)).length,
             );
-            expect(fileURLToPath(generation)).toBe(
-              path.join(generationDirectory, "dist/infra/sqlite-readonly-location.worker.js"),
+          };
+          let compiled = false;
+          let owner = createVitestWorkerRun(controlled.env);
+          let redirectedCompilers = 0;
+          // The second owner lives in this process; its child env cannot intercept its spawn.
+          let compilerLaunch = controlled.intercept(owner.descriptor.directory, () => {
+            redirectedCompilers += 1;
+          });
+          try {
+            const launch = async (
+              mode: "compiled" | "source",
+              transforms: number[],
+              expectedValue = "first",
+            ) => {
+              const args = [
+                "run",
+                "--config",
+                config,
+                ...projectNames.flatMap((name) => ["--project", name]),
+              ];
+              const previousObservations = fs.existsSync(path.join(directory, "observations.jsonl"))
+                ? readJsonLines("observations.jsonl").length
+                : 0;
+              const reuse = mode === "compiled" && compiled;
+              const result = reuse
+                ? await startBorrower(owner, args).result
+                : await runtime(
+                    [
+                      mode === "compiled"
+                        ? process.versions.bun
+                          ? "scripts/run-vitest-child.mts"
+                          : "scripts/run-vitest.mjs"
+                        : "node_modules/vitest/vitest.mjs",
+                      ...args,
+                    ],
+                    root,
+                    controlled.env,
+                  );
+              expect(result.code, result.stderr + result.stdout).toBe(0);
+              const observed = readJsonLines("observations.jsonl").slice(previousObservations);
+              expect(observed).toEqual(
+                projectNames.map(() => ({ value: expectedValue, configValue: "first" })),
+              );
+              compiled ||= mode === "compiled";
+              expect(counts(), "filesystem transform reuse").toEqual(
+                transforms.map((count) => count * projectCount),
+              );
+            };
+            await launch("compiled", [1, 1]);
+            await launch("compiled", [1, 1]);
+            await launch("source", [2, 2]);
+            fs.writeFileSync(value, 'export const value: string = "second";');
+            await launch("compiled", [3, 2], "second");
+            fs.writeFileSync(
+              config,
+              fs
+                .readFileSync(config, "utf8")
+                .replace(
+                  `replacement:${JSON.stringify(value)}`,
+                  `replacement:${JSON.stringify(configuredValue)}`,
+                ),
             );
-            expect(observed.args[0]).toBe(
-              path.join(generationDirectory, "dist/infra/sqlite-readonly-location.worker.js"),
-            );
-            expect(fileURLToPath(observed.knn)).toBe(
-              path.join(
-                generationDirectory,
-                "dist/extensions/memory-core/memory-search-knn.child.js",
-              ),
-            );
-            // Each completed repository invocation must dispose before the next starts.
-            expect(fs.existsSync(generationDirectory)).toBe(false);
-          } else {
-            expect(result.stderr).not.toContain("[vitest-workers] prepared");
-            expect(fileURLToPath(generation)).toBe(
-              path.join(root, "src/infra/sqlite-readonly-location.worker.ts"),
-            );
-            expect(observed.args[0]).toBe("--import");
-            expect(observed.args[1]).toMatch(/^file:\/\//);
-            expect(fileURLToPath(observed.knn)).toBe(
-              path.join(root, "extensions/memory-core/src/memory/manager-search-knn.child.ts"),
-            );
+            await launch("compiled", [4, 3], "configured");
+            expect(redirectedCompilers).toBe(1);
+            if (layout === "single") {
+              await owner.dispose();
+              compilerLaunch.mockRestore();
+              owner = createVitestWorkerRun(controlled.env, undefined, "runtime");
+              compilerLaunch = controlled.intercept(owner.descriptor.directory, () => {
+                redirectedCompilers += 1;
+              });
+              await launch("compiled", [5, 4], "configured");
+              await launch("compiled", [5, 4], "configured");
+              expect(redirectedCompilers).toBe(2);
+            }
+          } finally {
+            try {
+              await owner.dispose();
+            } finally {
+              compilerLaunch.mockRestore();
+            }
           }
-          console.log(
-            "cache transport",
-            JSON.stringify({ mode, ...observed, generation, transforms: counts() }),
-          );
-        };
-        await launch("compiled");
-        expect(counts()).toEqual([1, 1]);
-        expect(
-          JSON.parse(fs.readFileSync(path.join(cacheDirectory, "_metadata.json"), "utf8")),
-        ).toEqual({ lockfileHash: expect.stringMatching(/^[a-f\d]{8}$/u) });
-        await launch("compiled");
-        expect(counts(), "unchanged parents must reuse filesystem transforms").toEqual([1, 1]);
-        await launch("source");
-        expect(counts()).toEqual([2, 2]);
-        // Switching back with a leaf edit also proves the unchanged parent reuses
-        // its compiled transform, without preparing another complete worker set.
-        fs.writeFileSync(value, 'export const value: string = "second";');
-        await launch("compiled", "second");
-        expect(counts()).toEqual([3, 2]);
-        fs.writeFileSync(
-          config,
-          fs
-            .readFileSync(config, "utf8")
-            .replace(
-              `replacement:${JSON.stringify(value)}`,
-              `replacement:${JSON.stringify(configuredValue)}`,
-            ),
-        );
-        await launch("compiled", "configured");
-        expect(counts()).toEqual([4, 3]);
-      }),
+        },
+      ),
   );
 });

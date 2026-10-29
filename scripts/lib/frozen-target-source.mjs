@@ -50,10 +50,8 @@ export function createFrozenTargetSource(root, sha) {
     throw new Error("selected source checkout does not match OPENCLAW_SELECTED_SHA");
   }
   const readObject = (oid, type) => {
-    if (textDecoder.decode(git("cat-file", "-t", oid)).trim() !== type) {
-      throw new Error(`expected committed ${type} object`);
-    }
     const content = git("cat-file", type, oid);
+    // Hash the expected type too: typed cat-file can dereference a commit or tag.
     const actual = createHash("sha1")
       .update(`${type} ${content.length}\0`)
       .update(content)
@@ -63,10 +61,16 @@ export function createFrozenTargetSource(root, sha) {
     }
     return content;
   };
+  // Trees belong to this pinned reader; retain only entries verified within its read budget.
+  const trees = new Map();
   const readTree = (oid) => {
+    const cached = trees.get(oid);
+    if (cached && Date.now() < deadline && remainingBytes > 0) {
+      return cached;
+    }
     readObject(oid, "tree");
     const names = new Set();
-    return textDecoder
+    const entries = textDecoder
       .decode(git("ls-tree", "-z", oid))
       .split("\0")
       .filter(Boolean)
@@ -78,6 +82,8 @@ export function createFrozenTargetSource(root, sha) {
         names.add(match[4]);
         return { mode: match[1], type: match[2], oid: match[3], name: match[4] };
       });
+    trees.set(oid, entries);
+    return entries;
   };
   const commit = readObject(sha, "commit");
   const rootTree = /^tree ([0-9a-f]{40})\n/.exec(textDecoder.decode(commit))?.[1];
@@ -85,6 +91,7 @@ export function createFrozenTargetSource(root, sha) {
     throw new Error("invalid selected source commit tree");
   }
   const rootEntries = readTree(rootTree);
+  const blobs = new Map();
   const lookup = (relativePath, type) => {
     const parts = relativePath.split("/");
     if (
@@ -111,13 +118,61 @@ export function createFrozenTargetSource(root, sha) {
         );
       }
       if (index === parts.length - 1) {
-        return readObject(entry.oid, expectedType);
+        const content = readObject(entry.oid, expectedType);
+        if (expectedType === "blob") {
+          blobs.set(relativePath, entry.oid);
+        }
+        return content;
       }
       entries = readTree(entry.oid);
     }
     return null;
   };
   return {
+    blobIdentities() {
+      return [...blobs]
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([path, oid]) => ({ path, oid }));
+    },
+    readDirectory(relativePath) {
+      const content = lookup(relativePath, "tree");
+      if (content === null) {
+        return null;
+      }
+      const oid = createHash("sha1")
+        .update(`tree ${content.length}\0`)
+        .update(content)
+        .digest("hex");
+      const paths = [];
+      const visit = (tree, prefix, depth) => {
+        if (depth > 64 || paths.length > 4096) {
+          throw new Error("source directory limit exceeded");
+        }
+        for (const entry of readTree(tree)) {
+          const path = `${prefix}/${entry.name}`;
+          if (entry.type === "tree" && entry.mode === "040000") {
+            visit(entry.oid, path, depth + 1);
+          } else {
+            lookup(path, "blob");
+            paths.push(path);
+          }
+        }
+      };
+      visit(oid, relativePath, 0);
+      return paths.toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    },
+    containingBranches(prefix) {
+      if (!/^refs\/remotes\/origin\/[a-z0-9/-]+$/.test(prefix)) {
+        throw new Error("invalid frozen ancestry scope");
+      }
+      if (textDecoder.decode(git("rev-parse", "--is-shallow-repository")).trim() !== "false") {
+        throw new Error("frozen ancestry requires already-acquired history");
+      }
+      return textDecoder
+        .decode(git("for-each-ref", "--format=%(refname:short)", "--contains", sha, prefix))
+        .split("\n")
+        .filter(Boolean);
+    },
     readText(relativePath) {
       const content = lookup(relativePath, "blob");
       return content === null ? null : textDecoder.decode(content);

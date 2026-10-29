@@ -1,9 +1,7 @@
-// Opencode Go plugin entrypoint registers its OpenClaw integration.
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { resolveFirstProviderCatalogAuth } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import { opencodeGoMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { OPENCODE_GO_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
@@ -16,9 +14,14 @@ import {
   resolveOpencodeGoStarterModel,
 } from "./provider-catalog.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
-import { createOpencodeGoAttributionWrapper, createOpencodeGoWrapper } from "./stream.js";
+import { createOpencodeGoWireWrapper, createOpencodeGoWrapper } from "./stream.js";
 
 const PROVIDER_ID = "opencode-go";
+
+function normalizeGoBaseUrl<T extends { api?: string | null; baseUrl?: string }>(value: T) {
+  const baseUrl = normalizeOpencodeGoBaseUrl(value);
+  return baseUrl && baseUrl !== value.baseUrl ? { ...value, baseUrl } : undefined;
+}
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
@@ -43,44 +46,17 @@ export default defineSingleProviderPluginEntry({
       expectedProviders: ["opencode", "opencode-go"],
       noteMessage: [
         "OpenCode Go is a separate paid subscription that uses the shared OpenCode API key.",
-        "Go focuses on Kimi, GLM, and MiniMax coding models.",
+        "Go includes DeepSeek, Kimi, GLM, Qwen, MiniMax, and other coding models.",
         "Get your API key at: https://opencode.ai/auth",
       ].join("\n"),
       noteTitle: "OpenCode",
     },
-    normalizeConfig: ({ providerConfig }) => {
-      const normalizedBaseUrl = normalizeOpencodeGoBaseUrl({
-        api: providerConfig.api,
-        baseUrl: providerConfig.baseUrl,
-      });
-      return normalizedBaseUrl && normalizedBaseUrl !== providerConfig.baseUrl
-        ? { ...providerConfig, baseUrl: normalizedBaseUrl }
-        : undefined;
-    },
+    normalizeConfig: ({ providerConfig }) => normalizeGoBaseUrl(providerConfig),
     normalizeResolvedModel: ({ model }) => {
-      const normalizedBaseUrl = normalizeOpencodeGoBaseUrl({
-        api: model.api,
-        baseUrl: model.baseUrl,
-      });
-      const baseUrlNormalized =
-        normalizedBaseUrl && normalizedBaseUrl !== model.baseUrl
-          ? { ...model, baseUrl: normalizedBaseUrl }
-          : model;
-      const modelNormalized = normalizeOpencodeGoResolvedModel(baseUrlNormalized);
-      if (modelNormalized) {
-        return modelNormalized;
-      }
-      return baseUrlNormalized !== model ? baseUrlNormalized : undefined;
+      const baseUrlNormalized = normalizeGoBaseUrl(model);
+      return normalizeOpencodeGoResolvedModel(baseUrlNormalized ?? model) ?? baseUrlNormalized;
     },
-    normalizeTransport: ({ api: apiLocal, baseUrl }) => {
-      const normalizedBaseUrl = normalizeOpencodeGoBaseUrl({ api: apiLocal, baseUrl });
-      return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
-        ? {
-            api: apiLocal,
-            baseUrl: normalizedBaseUrl,
-          }
-        : undefined;
-    },
+    normalizeTransport: ({ api, baseUrl }) => normalizeGoBaseUrl({ api, baseUrl }),
     resolveDynamicModel: ({ modelId }) => resolveOpencodeGoModel(modelId),
     catalog: {
       order: "simple",
@@ -115,12 +91,33 @@ export default defineSingleProviderPluginEntry({
     augmentModelCatalog: () => listOpencodeGoModelCatalogEntries(),
     ...buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }),
     resolveThinkingProfile,
-    wrapStreamFn: (ctx) => createOpencodeGoWrapper(ctx.streamFn, ctx.thinkingLevel),
-    wrapSimpleCompletionStreamFn: (ctx) =>
-      createOpencodeGoAttributionWrapper(ctx.streamFn, ctx.sourceApi),
+    resolveTransportTurnState: (ctx) => {
+      if (!normalizeOpencodeGoBaseUrl({ api: ctx.model?.api, baseUrl: ctx.model?.baseUrl })) {
+        return undefined;
+      }
+      if (
+        Object.keys(ctx.model?.headers ?? {}).some(
+          (name) => name.toLowerCase() === "x-opencode-session",
+        )
+      ) {
+        return undefined;
+      }
+      const sessionId = ctx.sessionId?.trim() || ctx.turnId.trim();
+      return sessionId ? { headers: { "x-opencode-session": sessionId } } : undefined;
+    },
+    wrapStreamFn: createOpencodeGoWrapper,
+    wrapSimpleCompletionStreamFn: createOpencodeGoWireWrapper,
     isModernModelRef: () => true,
   },
   register(api) {
-    api.registerMediaUnderstandingProvider(opencodeGoMediaUnderstandingProvider);
+    api.registerMediaUnderstandingProvider({
+      id: "opencode-go",
+      capabilities: ["image"],
+      defaultModels: {
+        image: "kimi-k2.7-code",
+      },
+      describeImage: undefined,
+      describeImages: undefined,
+    });
   },
 });

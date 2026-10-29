@@ -1,272 +1,219 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ControlUiBootstrapConfig } from "../../../src/gateway/control-ui-contract.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
+  type ControlUiBootstrapConfig,
+} from "../../../src/gateway/control-ui-contract.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createApplicationConfigCapability } from "./config.ts";
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
+function bootstrapResponse(serverVersion: string, pluginAssetsRequireAuth?: boolean): Response {
+  return Response.json({
+    basePath: "",
+    serverVersion,
+    cliAgentsEnabled: true,
+    pluginFrameGrants: [],
+    ...(pluginAssetsRequireAuth === undefined ? {} : { pluginAssetsRequireAuth }),
   });
-  return { promise, resolve };
 }
 
-function bootstrapResponse(
-  serverVersion: string,
-  automaticallyFetchFavicons = false,
-  pluginAssetsRequireAuth?: boolean,
-  communityInvite = true,
-): Response {
-  const payload: ControlUiBootstrapConfig = {
-    basePath: "",
-    assistantName: "Assistant",
-    assistantAvatar: "A",
-    assistantAgentId: "main",
-    serverVersion,
-    terminalEnabled: false,
-    cliAgentsEnabled: true,
-    automaticallyFetchFavicons,
-    communityInvite,
-    ...(pluginAssetsRequireAuth === undefined ? {} : { pluginAssetsRequireAuth }),
-    pluginFrameGrants: [],
-  };
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
+let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
+beforeEach(() => {
+  fetchMock = vi.fn<typeof fetch>();
+  vi.stubGlobal("fetch", fetchMock);
+});
+function setup(options: Partial<Parameters<typeof createApplicationConfigCapability>[0]> = {}) {
+  return createApplicationConfigCapability({ resourceBasePath: "", ...options });
 }
+
+function pendingResponse() {
+  const response = createDeferred<Response>();
+  fetchMock.mockImplementationOnce(() => response.promise);
+  return (version: string) => response.resolve(bootstrapResponse(version));
+}
+
+function documentConfig(payload: ControlUiBootstrapConfig) {
+  document.documentElement.setAttribute(
+    CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
+    JSON.stringify(payload),
+  );
+}
+const documentPayload: ControlUiBootstrapConfig = {
+  basePath: "",
+  assistantName: "Observatory",
+  assistantAvatar: "🔭",
+  preferences: { profileId: "synthetic-viewer", entries: { "ui.themeMode": "light" } },
+  pluginFrameGrants: [{ pluginId: "fixture", path: "/panel", match: "exact" }],
+};
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  document.documentElement.removeAttribute(CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE);
 });
 
-describe("createApplicationConfigCapability", () => {
-  it("keeps capabilities available when development plugin grants contain invalid URLs", async () => {
-    vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", {
-      gatewayUrl: "ws://gateway.example/mount",
-      proxyPath: "/dev-gateway",
-    });
-    const fetchMock = vi.fn<typeof fetch>(async () =>
-      Response.json({
-        terminalEnabled: true,
-        cliAgentsEnabled: true,
-        pluginFrameGrants: [
-          {
-            pluginId: "fixture",
-            path: "/mount/plugins/fixture/",
-            match: "prefix",
-            unrecognized: "discard",
-          },
-          { pluginId: "malformed", path: "http://[", match: "prefix" },
-          { pluginId: "foreign", path: "https://other.example/panel", match: "exact" },
-          { path: "/missing-owner", match: "prefix" },
-        ],
-      }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    const config = createApplicationConfigCapability({ resourceBasePath: "/dev-gateway/mount" });
-    await expect(config.refresh()).resolves.toMatchObject({
+it.each([
+  ["chatBubblesEnabled", false],
+  ["uploadsEnabled", true],
+] as const)("publishes %s changes from its default %s", async (field, initial) => {
+  fetchMock
+    .mockResolvedValueOnce(Response.json({ [field]: !initial }))
+    .mockResolvedValueOnce(Response.json({ [field]: initial }));
+  const config = setup();
+  const listener = vi.fn();
+  config.subscribe(listener);
+  expect(config.current[field]).toBe(initial);
+  await config.refresh();
+  expect(config.current[field]).toBe(!initial);
+  await config.refresh();
+  expect(config.current[field]).toBe(initial);
+  expect(listener.mock.calls.map(([value]) => value[field])).toEqual([!initial, initial]);
+});
+
+it("keeps capabilities available when development plugin grants contain invalid URLs", async () => {
+  vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", {
+    gatewayUrl: "ws://gateway.example/mount",
+    proxyPath: "/dev-gateway",
+  });
+  const grants = [
+    { pluginId: "fixture", path: "/mount/plugins/fixture/", match: "prefix" },
+    { pluginId: "malformed", path: "http://[", match: "prefix" },
+    { pluginId: "foreign", path: "https://other.example/panel", match: "exact" },
+  ];
+  fetchMock.mockImplementation(async () =>
+    Response.json({
       terminalEnabled: true,
       cliAgentsEnabled: true,
       pluginFrameGrants: [
-        { pluginId: "fixture", path: "/dev-gateway/mount/plugins/fixture/", match: "prefix" },
-        { pluginId: "malformed", path: "http://[", match: "prefix" },
-        { pluginId: "foreign", path: "https://other.example/panel", match: "exact" },
+        ...grants.map((grant) => ({ ...grant, unrecognized: "discard" })),
+        { path: "/missing-owner", match: "prefix" },
       ],
+    }),
+  );
+  const config = setup({ resourceBasePath: "/dev-gateway/mount" });
+  await expect(config.refresh()).resolves.toMatchObject({
+    terminalEnabled: true,
+    cliAgentsEnabled: true,
+    pluginFrameGrants: [
+      { ...grants[0], path: "/dev-gateway/mount/plugins/fixture/" },
+      ...grants.slice(1),
+    ],
+  });
+  expect(config.current.pluginFrameGrants[0]).not.toHaveProperty("unrecognized");
+});
+
+it.each([undefined, false])(
+  "requires native asset grants unless bootstrap explicitly disables auth: %s",
+  async (pluginAssetsRequireAuth) => {
+    fetchMock.mockImplementation(async () => bootstrapResponse("test", pluginAssetsRequireAuth));
+    const config = setup();
+    expect(config.current.pluginAssetsRequireAuth).toBe(true);
+    await expect(config.refresh()).resolves.toMatchObject({
+      pluginAssetsRequireAuth: pluginAssetsRequireAuth !== false,
+      pluginFrameGrants: [],
     });
-    expect(config.current.pluginFrameGrants[0]).not.toHaveProperty("unrecognized");
-    expect(fetchMock).toHaveBeenCalledOnce();
+  },
+);
+
+it("returns an unavailable result for invalid bootstrap data", async () => {
+  fetchMock.mockImplementation(async () => Response.json({ pluginFrameGrants: {} }));
+  const config = setup();
+  await expect(config.refresh()).resolves.toBeNull();
+  expect(config.current.serverVersion).toBeNull();
+});
+
+it("publishes document config before requests and reuses it until invalidated", async () => {
+  documentConfig(documentPayload);
+  fetchMock.mockImplementation(async () => bootstrapResponse("updated"));
+  const config = setup();
+  expect(config.current.assistantIdentity).toMatchObject({ name: "Observatory", avatar: "🔭" });
+  expect(config.current.pluginFrameGrants).toEqual(documentPayload.pluginFrameGrants);
+  expect(config.preferences).toEqual(documentPayload.preferences);
+  await config.refresh({ ifNeeded: true });
+  expect(fetchMock).not.toHaveBeenCalled();
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 24 * 60 * 60 * 1_000);
+  await config.refresh({ ifNeeded: true });
+  expect(fetchMock).toHaveBeenCalledOnce();
+  await config.refresh();
+  expect(config.current.serverVersion).toBe("updated");
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
+it("revalidates document grants before reusing them with a startup bearer", async () => {
+  documentConfig(documentPayload);
+  fetchMock.mockImplementation(async () => bootstrapResponse("bearer"));
+  const config = setup({
+    getAuth: () => ({ settings: { token: "test-other-identity" } }),
   });
+  expect(config.current.assistantIdentity.name).toBe("Observatory");
+  expect(config.preferences).toBeUndefined();
+  const result = await config.refresh({ ifNeeded: true });
+  expect(result).toMatchObject({ serverVersion: "bearer", pluginFrameGrants: [] });
+});
 
-  it("keeps invitations hidden until bootstrap enables them and accepts later opt-outs", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(bootstrapResponse("test"))
-      .mockResolvedValueOnce(bootstrapResponse("test", false, undefined, false));
-    vi.stubGlobal("fetch", fetchMock);
-    const config = createApplicationConfigCapability({ resourceBasePath: "" });
-    const listener = vi.fn();
-    const unsubscribe = config.subscribe(listener);
+it.each(["/other", "https://other.example"])(
+  "does not adopt another resource owner's document config: %s",
+  (resourceBasePath) => {
+    documentConfig(documentPayload);
+    const config = createApplicationConfigCapability({ resourceBasePath });
+    expect(config.current.assistantIdentity.name).toBe("Assistant");
+  },
+);
 
-    expect(config.current.communityInvite).toBe(false);
-    await expect(config.refresh()).resolves.toMatchObject({ communityInvite: true });
-    await expect(config.refresh()).resolves.toMatchObject({ communityInvite: false });
-    expect(listener).toHaveBeenLastCalledWith(expect.objectContaining({ communityInvite: false }));
-    unsubscribe();
-  });
+it("shares concurrent bootstrap loads with equivalent credentials", async () => {
+  const respond = pendingResponse();
+  let token = "fixture-token";
+  const config = setup({ getAuth: () => ({ settings: { token } }) });
 
-  it.each([undefined, true, false])(
-    "requires native asset grants unless bootstrap explicitly disables auth: %s",
-    async (pluginAssetsRequireAuth) => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn<typeof fetch>(async () => bootstrapResponse("test", false, pluginAssetsRequireAuth)),
-      );
-      const config = createApplicationConfigCapability({ resourceBasePath: "" });
-      expect(config.current.pluginAssetsRequireAuth).toBe(true);
-      await expect(config.refresh()).resolves.toMatchObject({
-        pluginAssetsRequireAuth: pluginAssetsRequireAuth !== false,
-        pluginFrameGrants: [],
-      });
-    },
-  );
+  const first = config.refresh();
+  token = " fixture-token ";
+  const second = config.refresh({ ifNeeded: true });
+  respond("ready");
 
-  it("stays fail closed before bootstrap and accepts the Gateway favicon setting", async () => {
-    const fetchMock = vi.fn<typeof fetch>(async () => bootstrapResponse("test", true));
-    vi.stubGlobal("fetch", fetchMock);
-    const config = createApplicationConfigCapability({ resourceBasePath: "/openclaw" });
+  await expect(first).resolves.toMatchObject({ serverVersion: "ready" });
+  await expect(second).resolves.toMatchObject({ serverVersion: "ready" });
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
 
-    expect(config.current.automaticallyFetchFavicons).toBe(false);
-    await expect(config.refresh()).resolves.toMatchObject({ automaticallyFetchFavicons: true });
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/openclaw/control-ui-config.json");
-    expect(config.current.automaticallyFetchFavicons).toBe(true);
-  });
-
-  it.each([null, { pluginFrameGrants: {} }])(
-    "returns an unavailable result for invalid bootstrap data: %j",
-    async (payload) => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn<typeof fetch>(async () => new Response(JSON.stringify(payload))),
-      );
-      const config = createApplicationConfigCapability({ resourceBasePath: "" });
-
-      await expect(config.refresh()).resolves.toBeNull();
-      expect(config.current.serverVersion).toBeNull();
-    },
-  );
-
-  it("does not discard an in-flight bootstrap when an auth-only refresh skips", async () => {
-    const response = deferred<Response>();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(() => response.promise),
-    );
-    const config = createApplicationConfigCapability({ resourceBasePath: "" });
-
-    const loading = config.refresh();
-    await expect(config.refresh({ skipWithoutAuthCandidate: true })).resolves.toBeNull();
-    response.resolve(bootstrapResponse("ready", false, false));
-
-    await expect(loading).resolves.toMatchObject({ serverVersion: "ready" });
-    expect(config.current.serverVersion).toBe("ready");
-  });
-
-  it("shares concurrent bootstrap loads with equivalent credentials", async () => {
-    const response = deferred<Response>();
-    const fetchMock = vi.fn<typeof fetch>(() => response.promise);
-    vi.stubGlobal("fetch", fetchMock);
+it.each(["cookie", "retired", "replacement", "newer", "aborted"] as const)(
+  "settles concurrent bootstrap reads after %s",
+  async (mode) => {
+    const old = pendingResponse();
+    const replacement = pendingResponse();
     let token = "fixture-token";
-    const config = createApplicationConfigCapability({
-      resourceBasePath: "",
-      getAuth: () => ({ settings: { token } }),
-    });
-
-    const first = config.refresh();
-    token = " fixture-token ";
-    const second = config.refresh({ skipWithoutAuthCandidate: true });
-    response.resolve(bootstrapResponse("ready"));
-
-    await expect(first).resolves.toMatchObject({ serverVersion: "ready" });
-    await expect(second).resolves.toMatchObject({ serverVersion: "ready" });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("rejects an authenticated response after credentials are cleared by a skipped refresh", async () => {
-    const response = deferred<Response>();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(() => response.promise),
-    );
-    let token = "fixture-token";
-    const config = createApplicationConfigCapability({
-      resourceBasePath: "",
-      getAuth: () => ({ settings: { token } }),
-    });
-
+    const config = setup({ getAuth: () => ({ settings: { token } }) });
     const loading = config.refresh();
-    token = "";
-    await expect(config.refresh({ skipWithoutAuthCandidate: true })).resolves.toBeNull();
-    response.resolve(bootstrapResponse("old"));
-
-    await expect(loading).resolves.toBeNull();
-    expect(config.current.serverVersion).toBeNull();
-  });
-
-  it.each(["", "replacement-fixture-token"])(
-    "rejects an authenticated response when live credentials change without another refresh: %s",
-    async (nextToken) => {
-      const response = deferred<Response>();
-      const fetchMock = vi.fn<typeof fetch>(() => response.promise);
-      vi.stubGlobal("fetch", fetchMock);
-      let token = "fixture-token";
-      const config = createApplicationConfigCapability({
-        resourceBasePath: "",
-        getAuth: () => ({ settings: { token } }),
-      });
-
-      const loading = config.refresh();
-      token = nextToken;
-      response.resolve(bootstrapResponse("retired"));
-
-      await expect(loading).resolves.toBeNull();
-      expect(config.current.serverVersion).toBeNull();
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it.each([false, true])(
-    "keeps independent callers valid and publishes the newest successful response (aborted: %s)",
-    async (aborted) => {
-      const firstResponse = deferred<Response>();
-      const secondResponse = deferred<Response>();
-      vi.stubGlobal(
-        "fetch",
-        vi
-          .fn<typeof fetch>()
-          .mockImplementationOnce(() => firstResponse.promise)
-          .mockImplementationOnce(() => secondResponse.promise),
-      );
-      const config = createApplicationConfigCapability({ resourceBasePath: "" });
+    const changesAuth = ["cookie", "retired", "replacement"].includes(mode);
+    if (changesAuth) {
+      token = mode === "cookie" ? "" : "replacement-fixture-token";
+    }
+    if (mode !== "retired") {
       const abort = new AbortController();
-      const first = config.refresh();
-      const second = config.refresh({ signal: abort.signal });
-      if (aborted) {
+      const next = config.refresh({ ifNeeded: true, signal: abort.signal });
+      if (mode === "aborted") {
         abort.abort();
       }
-      secondResponse.resolve(bootstrapResponse("new"));
-      expect(await second).toEqual(
-        aborted ? null : expect.objectContaining({ serverVersion: "new" }),
+      replacement("new");
+      expect(await next).toEqual(
+        mode === "aborted" ? null : expect.objectContaining({ serverVersion: "new" }),
       );
-      firstResponse.resolve(bootstrapResponse("old"));
-
-      await expect(first).resolves.toMatchObject({ serverVersion: "old" });
-      expect(config.current.serverVersion).toBe(aborted ? "old" : "new");
-    },
-  );
-
-  it("returns null for a bootstrap response superseded by different credentials", async () => {
-    const firstResponse = deferred<Response>();
-    const secondResponse = deferred<Response>();
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockImplementationOnce(() => firstResponse.promise)
-      .mockImplementationOnce(() => secondResponse.promise);
-    vi.stubGlobal("fetch", fetchMock);
-    let token = "old-fixture-token";
-    const config = createApplicationConfigCapability({
-      resourceBasePath: "",
-      getAuth: () => ({ settings: { token } }),
-    });
-
-    const firstRefresh = config.refresh();
-    token = "new-fixture-token";
-    const secondRefresh = config.refresh();
-    secondResponse.resolve(bootstrapResponse("new"));
-    await expect(secondRefresh).resolves.toMatchObject({ serverVersion: "new" });
-    firstResponse.resolve(bootstrapResponse("old"));
-
-    await expect(firstRefresh).resolves.toBeNull();
-    expect(config.current.serverVersion).toBe("new");
-    expect(config.current.cliAgentsEnabled).toBe(true);
-  });
-});
+    }
+    old("retired");
+    expect(await loading).toEqual(
+      changesAuth ? null : expect.objectContaining({ serverVersion: "retired" }),
+    );
+    expect(config.current.serverVersion).toBe(
+      mode === "retired" ? null : mode === "aborted" ? "retired" : "new",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(mode === "retired" ? 1 : 2);
+    if (mode === "replacement") {
+      expect(config.current.cliAgentsEnabled).toBe(true);
+    }
+    if (mode === "cookie") {
+      expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+        credentials: "same-origin",
+        headers: { Accept: "application/json" },
+      });
+      expect(fetchMock.mock.calls[1]?.[1]?.headers).not.toHaveProperty("Authorization");
+    }
+  },
+);

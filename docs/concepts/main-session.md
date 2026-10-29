@@ -13,7 +13,7 @@ lands in **one rolling conversation**: the main session. Ask something on your
 phone, follow up from your laptop, and the agent has the same context in both
 places. There is one brain, and this is where it thinks.
 
-Under the hood the main session is an ordinary session with the canonical key
+Under the hood the main session is an ordinary session with the standard key
 `agent:<agentId>:main` (for example `agent:main:main`). The suffix is fixed;
 custom `session.mainKey` values are ignored. What makes it special
 is that the default DM scope collapses all direct messages into it, and that
@@ -54,12 +54,22 @@ the Home agent additional access to another agent's sessions or files.
 The main session is not just a chat log; it is the place where your agent's
 world converges:
 
+- **New sessions.** By default, creating a session queues a system notice in its
+  agent's Home conversation with the session key and available title, creator,
+  and creation source. Home sees it on its next turn or scheduled heartbeat;
+  creation does not trigger an extra wake-up. Set `session.notifyOnCreate: false`
+  to opt out. Home itself, drafts, incognito sessions, hidden internal sessions,
+  and scheduled cron runs are excluded. Resetting or reopening an existing
+  session does not send another creation notice. Pending creations share one
+  bounded, in-memory summary, leaving queue capacity for reminders and other
+  events. The summary keeps recent session metadata and omits older entries
+  when full; it does not subscribe Home to future activity.
 - **Group activity.** Under `session.groupScope: "per-group"` (the default),
   group and room sessions stay isolated while the main session automatically watches them.
   Activity queues up as compact notices — coalesced per conversation, never
   one wake-up per message — and the agent sees them the next time it runs: on
-  your next message or on a scheduled heartbeat. Under the default `all`
-  visibility, the main session can use session tools across the Gateway,
+  your next message or on a scheduled heartbeat. Under `tools.sessions.visibility: "all"`
+  (the default), the main session can use [session tools](/concepts/session-tool) across the Gateway,
   with cross-agent access governed by `tools.agentToAgent` and on by default;
   its system prompt names watched groups so it knows where recent activity happened.
 - **Background work.** Sub-agents and spawned sessions announce their results
@@ -101,9 +111,11 @@ making the model carry its entire history at once:
 - Session lists show the current live conversation, not every historical
   session id behind it.
 - When the per-agent store's physical database, WAL, and session artifacts
-  exceed the disk budget (default 10 GB), OpenClaw extracts the oldest
-  unreferenced history to a verified compressed archive before removing its
-  database rows. Live, routed, and in-flight sessions are never budget victims.
+  exceed the disk budget (`session.maintenance.maxDiskBytes`, default `10gb` —
+  see [Session maintenance](/reference/session-management-compaction/maintenance)),
+  OpenClaw extracts the oldest unreferenced history to a verified compressed
+  archive before removing its database rows. Live, routed, and in-flight
+  sessions are never budget victims.
 
 ## When you want isolation instead
 

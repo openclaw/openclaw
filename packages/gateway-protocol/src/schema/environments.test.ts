@@ -1,5 +1,4 @@
-import { Value } from "typebox/value";
-import { describe, expect, it } from "vitest";
+import { describe, it } from "vitest";
 import {
   EnvironmentsCreateResultSchema,
   EnvironmentsDestroyResultSchema,
@@ -9,457 +8,224 @@ import {
   validateEnvironmentsCreateParams,
   validateEnvironmentsDestroyParams,
   validateEnvironmentsListParams,
+  validateEnvironmentsPrepareParams,
+  validateEnvironmentsPrepareResult,
+  validateEnvironmentsStatusParams,
   validateWorkerDesktopLaunchParams,
   validateWorkerDesktopLaunchResult,
   WorkerEnvironmentStateSchema,
 } from "../index.js";
 import { WorkerSlotSummarySchema } from "./environments.js";
+import { schemaValidation, validation } from "./protocol-validation.test-support.js";
 
-const workerStates = [
-  "requested",
-  "provisioning",
-  "bootstrapping",
-  "ready",
-  "attached",
-  "idle",
-  "draining",
-  "destroying",
-  "destroyed",
-  "failed",
-  "orphaned",
-] as const;
-
-function workerSummary(
-  state: (typeof workerStates)[number],
-  status: "available" | "unavailable" | "starting" = "starting",
-) {
-  return {
-    id: "environment-1",
-    type: "worker",
-    label: "Development worker",
-    status,
-    worker: {
-      providerId: "static-ssh",
-      state,
-      ageMs: 250,
-      attachedSessionIds: [],
-      tunnelStatus: "stopped",
-    },
-  };
-}
+const node = { id: "node:build-mac", type: "node", status: "available" };
+const summary = schemaValidation(EnvironmentSummarySchema);
+const listed = schemaValidation(EnvironmentsListResultSchema);
+const listing = validation(validateEnvironmentsListParams);
+const status = validation(validateEnvironmentsStatusParams);
+const create = validation(validateEnvironmentsCreateParams);
+const destroy = validation(validateEnvironmentsDestroyParams);
+const prepare = validation(validateEnvironmentsPrepareParams);
+const prepared = validation(validateEnvironmentsPrepareResult);
+const slots = schemaValidation(WorkerSlotSummarySchema);
+const launch = validation(validateWorkerDesktopLaunchParams);
+const launched = validation(validateWorkerDesktopLaunchResult);
+const profile = { id: "aws", providerId: "crabbox" };
+const profileResult = (...profiles: unknown[]) => ({ environments: [], profiles });
+const nodeWith = (field: string) => (value: unknown) => ({ ...node, [field]: value });
+const machine = { id: "standard", label: "Standard" };
+const command = (state = "invocable", fields: object = {}) => ({
+  command: "runtime.exec",
+  state,
+  ...fields,
+});
 
 describe("worker environment protocol schemas", () => {
-  it("accepts configured-profile create and environment-id destroy requests", () => {
-    expect(
-      validateEnvironmentsCreateParams({ profileId: "development", idempotencyKey: "request-1" }),
-    ).toBe(true);
-    expect(validateEnvironmentsDestroyParams({ environmentId: "environment-1" })).toBe(true);
+  it("accepts only boolean opt-in for prepared details in list and status requests", () => {
+    for (const includePreparedDetails of [undefined, false, true]) {
+      const option = includePreparedDetails === undefined ? {} : { includePreparedDetails };
+      listing.accepts(option);
+      status.accepts({ environmentId: "worker-1", ...option });
+    }
+    for (const includePreparedDetails of [null, "true", 1]) {
+      listing.rejects({ includePreparedDetails });
+      status.rejects({ environmentId: "worker-1", includePreparedDetails });
+    }
+  });
+
+  it("accepts opt-in desktop setup discovery with a closed credential-free result", () => {
+    listing.accepts({ includeDesktopSetup: true }, { includeDesktopSetup: false });
+    listing.rejects({ includeDesktopSetup: "true" });
+    const desktop = nodeWith("desktopSetup");
+    listed.accepts({ environments: [desktop({ state: "ready" })] });
+    summary.accepts(desktop({ state: "unsupported", detail: "VNC authentication is required" }));
+    summary.rejects(
+      ...[
+        {},
+        { state: "unknown" },
+        { state: "ready", password: "hidden" },
+        { state: "unsupported", detail: "" },
+      ].map(desktop),
+    );
+  });
+  it("accepts only a profile and local project selector for preparation", () => {
+    const request = { profileId: "development", projectPath: "/projects/app" };
+    prepare.accepts(request);
+    prepare.rejects(
+      {},
+      { profileId: "development" },
+      { ...request, profileId: "" },
+      { ...request, projectPath: "" },
+      { ...request, setupAuthorized: false },
+    );
+    const result = { environmentId: "worker-1", preparationKey: "project-key", reused: false };
+    prepared.accepts(result, { ...result, reused: true });
+    prepared.rejects({ ...result, reused: "true" }, { ...result, preparationKey: "" });
   });
 
   it("rejects missing, empty, and unknown lifecycle request fields", () => {
-    expect(validateEnvironmentsCreateParams({})).toBe(false);
-    expect(validateEnvironmentsCreateParams({ profileId: "", idempotencyKey: "request-1" })).toBe(
-      false,
+    create.rejects(
+      {},
+      { profileId: "", idempotencyKey: "request-1" },
+      { profileId: "development", idempotencyKey: "" },
+      { profileId: "development", idempotencyKey: "request-1", providerId: "ssh" },
     );
-    expect(validateEnvironmentsCreateParams({ profileId: "development", idempotencyKey: "" })).toBe(
-      false,
-    );
-    expect(
-      validateEnvironmentsCreateParams({
-        profileId: "development",
-        idempotencyKey: "request-1",
-        providerId: "ssh",
-      }),
-    ).toBe(false);
-    expect(validateEnvironmentsDestroyParams({ environmentId: "" })).toBe(false);
-    expect(validateEnvironmentsDestroyParams({ environmentId: "environment-1", force: true })).toBe(
-      true,
-    );
+    destroy.accepts({ environmentId: "environment-1", force: true });
+    destroy.rejects({ environmentId: "" });
   });
 
   it("keeps the worker lifecycle state closed", () => {
-    for (const state of workerStates) {
-      expect(Value.Check(WorkerEnvironmentStateSchema, state)).toBe(true);
-    }
-    expect(Value.Check(WorkerEnvironmentStateSchema, "unknown")).toBe(false);
-  });
-
-  it("accepts worker metadata additively across summary and mutation results", () => {
-    const requested = {
-      ...workerSummary("requested"),
-      platform: "linux",
-      sessionHost: false,
-      trust: "disposable",
-    };
-    const destroyedBase = workerSummary("destroyed", "unavailable");
-    const destroyed = {
-      ...destroyedBase,
-      worker: {
-        ...destroyedBase.worker,
-        leaseId: "lease-1",
-        idleMs: 50,
-        error: "provider teardown failed",
-      },
-    };
-
-    expect(Value.Check(EnvironmentSummarySchema, requested)).toBe(true);
-    expect(Value.Check(EnvironmentsCreateResultSchema, requested)).toBe(true);
-    expect(Value.Check(EnvironmentsDestroyResultSchema, destroyed)).toBe(true);
-    expect(
-      Value.Check(EnvironmentSummarySchema, {
-        ...workerSummary("ready", "available"),
-        worker: {
-          ...workerSummary("ready", "available").worker,
-          desktop: true,
-          desktopApps: ["browser", "terminal"],
-        },
-      }),
-    ).toBe(true);
+    const states = schemaValidation(WorkerEnvironmentStateSchema);
+    states.accepts("ready");
+    states.rejects("unknown");
   });
 
   it("accepts only redacted node worker bundle status", () => {
-    const node = {
-      id: "node:build-mac",
-      type: "node",
-      status: "available",
-    };
-    expect(
-      Value.Check(EnvironmentSummarySchema, {
-        ...node,
-        workerBundle: { status: "installed", version: "2026.8.9" },
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(EnvironmentSummarySchema, {
-        ...node,
-        workerBundle: { status: "missing" },
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(EnvironmentSummarySchema, {
-        ...node,
-        workerBundle: {
-          status: "installed",
-          version: "2026.8.9",
-          bundleHash: "a".repeat(64),
-        },
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(EnvironmentSummarySchema, {
-        ...node,
-        workerBundle: { status: "installed", version: "" },
-      }),
-    ).toBe(false);
+    const bundle = nodeWith("workerBundle");
+    summary.accepts(
+      bundle({ status: "installed", version: "2026.8.9" }),
+      bundle({ status: "missing" }),
+    );
+    summary.rejects(
+      bundle({ status: "installed", version: "2026.8.9", bundleHash: "a".repeat(64) }),
+      bundle({ status: "installed", version: "" }),
+    );
   });
 
   it("accepts only bounded closed worker slot summaries", () => {
-    const slots = { total: 2, available: 1 };
-    expect(Value.Check(WorkerSlotSummarySchema, slots)).toBe(true);
-    expect(
-      Value.Check(EnvironmentSummarySchema, {
-        id: "node:build-mac",
-        type: "node",
-        status: "available",
-        workerSlots: slots,
-      }),
-    ).toBe(true);
-    expect(Value.Check(WorkerSlotSummarySchema, { total: 0, available: 0 })).toBe(false);
-    expect(Value.Check(WorkerSlotSummarySchema, { total: 2, available: 3 })).toBe(false);
-    expect(Value.Check(WorkerSlotSummarySchema, { total: 2, available: 1_025 })).toBe(false);
-    expect(Value.Check(WorkerSlotSummarySchema, { ...slots, busy: 1 })).toBe(false);
-    expect(
-      Value.Check(EnvironmentSummarySchema, {
-        id: "node:build-mac",
-        type: "node",
-        status: "available",
-        workerSlots: { total: 2, available: 3 },
-      }),
-    ).toBe(false);
+    const available = { total: 2, available: 1 };
+    slots.accepts(available, { total: 1, available: 0, reclaimableIdle: 1 });
+    slots.rejects(
+      { total: 1, available: 1, reclaimableIdle: 1 },
+      { total: 4, available: 0, reclaimableIdle: 3 },
+      { total: 0, available: 0 },
+      { total: 2, available: 3 },
+      { total: 2, available: 1_025 },
+      { ...available, busy: 1 },
+    );
+    summary.accepts({ ...node, workerSlots: available });
+    summary.rejects({ ...node, workerSlots: { total: 2, available: 3 } });
   });
 
   it("accepts only bounded, unique effective node command authority", () => {
-    const node = {
-      id: "node:build-mac",
-      type: "node",
-      status: "available",
-    };
-
-    expect(
-      Value.Check(EnvironmentSummarySchema, {
-        ...node,
-        invocableCommands: ["codex.exec-server.stdio.v1", "system.run"],
-      }),
-    ).toBe(true);
-    expect(Value.Check(EnvironmentSummarySchema, { ...node, invocableCommands: [] })).toBe(true);
-
-    for (const invocableCommands of [
-      [""],
-      ["system.run", "system.run"],
-      ["x".repeat(129)],
-      Array.from({ length: 129 }, (_, index) => `command.${index}`),
-    ]) {
-      expect(Value.Check(EnvironmentSummarySchema, { ...node, invocableCommands })).toBe(false);
-    }
+    const commands = nodeWith("invocableCommands");
+    summary.accepts(commands(["codex.exec-server.stdio.v1", "system.run"]), commands([]));
+    summary.rejects(
+      ...[
+        [""],
+        ["system.run", "system.run"],
+        ["x".repeat(129)],
+        Array.from({ length: 129 }, (_, index) => `command.${index}`),
+      ].map(commands),
+    );
   });
 
   it("keeps runtime-scoped node command state bounded and closed", () => {
-    const node = { id: "node:build-mac", type: "node", status: "available" };
+    const required = nodeWith("requiredNodeCommand");
     for (const state of ["invocable", "pending-approval", "undeclared", "unauthorized"] as const) {
-      expect(
-        Value.Check(EnvironmentSummarySchema, {
-          ...node,
-          requiredNodeCommand: { command: "runtime.exec", state },
-        }),
-      ).toBe(true);
+      summary.accepts(required(command(state)));
     }
-    const commandState = {
-      ...node,
-      requiredNodeCommand: { command: "runtime.exec", state: "invocable" },
-    };
+    summary.accepts(required(command("undeclared", { message: "Enable the runtime plugin." })));
     for (const schema of [
       EnvironmentsCreateResultSchema,
       EnvironmentsDestroyResultSchema,
       EnvironmentsStatusResultSchema,
     ]) {
-      expect(Value.Check(schema, commandState)).toBe(false);
+      schemaValidation(schema).rejects(required(command()));
     }
-    for (const requiredNodeCommand of [
-      { command: "", state: "undeclared" },
-      { command: "x".repeat(129), state: "undeclared" },
-      { command: "runtime.exec", state: "unknown" },
-      { command: "runtime.exec", state: "invocable", pending: true },
-    ]) {
-      expect(Value.Check(EnvironmentSummarySchema, { ...node, requiredNodeCommand })).toBe(false);
-    }
-
-    expect(validateEnvironmentsListParams({})).toBe(true);
-    expect(validateEnvironmentsListParams({ runtimeId: "codex" })).toBe(true);
-    expect(validateEnvironmentsListParams({ runtimeId: "" })).toBe(false);
-    expect(validateEnvironmentsListParams({ runtimeId: "x".repeat(129) })).toBe(false);
-    expect(validateEnvironmentsListParams({ runtimeId: "codex", command: "runtime.exec" })).toBe(
-      false,
+    summary.rejects(
+      ...[
+        command("undeclared", { command: "" }),
+        command("undeclared", { command: "x".repeat(129) }),
+        command("unknown"),
+        command("undeclared", { message: "" }),
+        command("invocable", { pending: true }),
+      ].map(required),
     );
-  });
 
-  it("accepts bounded node lifecycle history and rejects malformed timestamps", () => {
-    const node = {
-      id: "node:build-mac",
-      type: "node",
-      status: "unavailable",
-      lastConnectedAtMs: 1_000,
-      lastDisconnectedAtMs: 2_000,
-      lastSeenAtMs: 1_500,
-      lastSeenReason: "silent_push",
-    };
-    expect(Value.Check(EnvironmentSummarySchema, node)).toBe(true);
-    expect(Value.Check(EnvironmentSummarySchema, { ...node, lastDisconnectedAtMs: -1 })).toBe(
-      false,
+    listing.accepts(
+      {},
+      { runtimeId: "codex" },
+      { projection: "profiles" },
+      { runtimeId: "codex", projection: "profiles" },
     );
-    expect(Value.Check(EnvironmentSummarySchema, { ...node, lastSeenReason: "" })).toBe(false);
+    listing.rejects(
+      { projection: "unknown" },
+      { runtimeId: "" },
+      { runtimeId: "x".repeat(129) },
+      { runtimeId: "codex", command: "runtime.exec" },
+    );
   });
 
   it("keeps desktop app launch requests, results, and projected ids closed", () => {
-    expect(validateWorkerDesktopLaunchParams({ environmentId: "worker:one", app: "browser" })).toBe(
-      true,
-    );
-    expect(validateWorkerDesktopLaunchResult({ app: "terminal", status: "ready" })).toBe(true);
-    expect(validateWorkerDesktopLaunchParams({ environmentId: "worker:one", app: "editor" })).toBe(
-      false,
-    );
-    expect(
-      validateWorkerDesktopLaunchParams({
-        environmentId: "worker:one",
-        app: "browser",
-        args: ["--incognito"],
+    const request = { environmentId: "worker:one", app: "browser" };
+    launch.accepts(request);
+    launched.accepts({ app: "terminal", status: "ready" });
+    launch.rejects({ ...request, app: "editor" }, { ...request, args: ["--incognito"] });
+    launched.rejects({ app: "browser", status: "starting" });
+    summary.rejects(
+      nodeWith("worker")({
+        providerId: "static-ssh",
+        state: "ready",
+        ageMs: 250,
+        attachedSessionIds: [],
+        tunnelStatus: "stopped",
+        desktopApps: ["editor"],
       }),
-    ).toBe(false);
-    expect(validateWorkerDesktopLaunchResult({ app: "browser", status: "starting" })).toBe(false);
-    expect(
-      Value.Check(EnvironmentSummarySchema, {
-        ...workerSummary("ready", "available"),
-        worker: {
-          ...workerSummary("ready", "available").worker,
-          desktopApps: ["editor"],
-        },
-      }),
-    ).toBe(false);
+    );
   });
 
   it("lists configured worker profiles without provider settings", () => {
-    expect(
-      Value.Check(EnvironmentsListResultSchema, {
-        environments: [],
-        profiles: [
-          {
-            id: "aws",
-            providerId: "crabbox",
-            trust: "disposable",
-            executionMode: "worker-turn",
-            executionModes: ["worker-turn", "remote-exec"],
-            operatingSystems: [
-              { id: "linux", label: "Linux", default: true },
-              { id: "windows/wsl2", label: "Windows (WSL2)" },
-            ],
-            machines: [
-              {
-                id: "standard",
-                label: "Standard",
-                cpu: 32,
-                memoryGb: 64,
-                default: true,
-                os: "linux",
-              },
-            ],
-          },
-          {
-            id: "worker",
-            providerId: "static-ssh",
-            executionMode: "remote-exec",
-            executionModes: ["remote-exec"],
-          },
-          { id: "legacy-primary", providerId: "static-ssh", executionMode: "worker-turn" },
-          { id: "legacy", providerId: "static-ssh" },
-        ],
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(EnvironmentsListResultSchema, {
-        environments: [],
-        profiles: [{ id: "aws", providerId: "crabbox", settings: { token: "hidden" } }],
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(EnvironmentsListResultSchema, {
-        environments: [],
-        profiles: [{ id: "aws", providerId: "crabbox", trust: "temporary" }],
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(EnvironmentsListResultSchema, {
-        environments: [],
-        profiles: [{ id: "aws", providerId: "crabbox", executionMode: "sandbox" }],
-      }),
-    ).toBe(false);
-    for (const executionModes of [
-      [],
-      ["worker-turn", "worker-turn"],
-      ["remote-exec", "worker-turn"],
-      ["worker-turn", "sandbox"],
-      ["worker-turn", "remote-exec", "worker-turn"],
-    ]) {
-      expect(
-        Value.Check(EnvironmentsListResultSchema, {
-          environments: [],
-          profiles: [{ id: "aws", providerId: "crabbox", executionModes }],
-        }),
-      ).toBe(false);
-    }
-    expect(
-      Value.Check(EnvironmentsListResultSchema, {
-        environments: [],
-        profiles: [
-          {
-            id: "aws",
-            providerId: "crabbox",
-            machines: [{ id: "standard", label: "Standard", cpu: 0 }],
-          },
-        ],
-      }),
-    ).toBe(false);
-  });
-
-  it("bounds provider-authored OS catalogs and machine choices", () => {
-    const profile = { id: "aws", providerId: "crabbox" };
-    const operatingSystems = Array.from({ length: 8 }, (_, i) => ({
-      id: `os-${i}`,
-      label: `OS ${i}`,
-    }));
-    const machines = Array.from({ length: 64 }, (_, i) => ({
-      id: `class-${i}`,
-      label: `Class ${i}`,
-      os: "os-0",
-    }));
-    const accepts = (choices: object) =>
-      Value.Check(EnvironmentsListResultSchema, {
-        environments: [],
-        profiles: [{ ...profile, ...choices }],
-      });
-    expect(accepts({ operatingSystems, machines })).toBe(true);
-    expect(accepts({ machines: [{ id: "shared", label: "Shared" }] })).toBe(true);
-    for (const choices of [
-      { operatingSystems: [] },
-      { operatingSystems: [...operatingSystems, { id: "overflow", label: "Overflow" }] },
-      { operatingSystems: [{ id: "", label: "Empty ID" }] },
-      { operatingSystems: [{ id: "x".repeat(65), label: "Long ID" }] },
-      { operatingSystems: [{ id: "linux", label: "" }] },
-      { operatingSystems: [{ id: "linux", label: "x".repeat(65) }] },
-      { operatingSystems: [{ id: "linux", label: "Linux", settings: {} }] },
-      { machines: [...machines, { id: "overflow", label: "Overflow" }] },
-      { machines: [{ id: "tiny", label: "Tiny", os: "" }] },
-      { machines: [{ id: "tiny", label: "Tiny", os: "x".repeat(65) }] },
-    ]) {
-      expect(accepts(choices)).toBe(false);
-    }
-  });
-
-  it("preserves summaries without worker metadata and rejects malformed worker metadata", () => {
-    expect(
-      Value.Check(EnvironmentSummarySchema, {
-        id: "gateway",
-        type: "local",
-        status: "available",
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(EnvironmentSummarySchema, {
-        id: "node:outdated",
-        type: "node",
-        status: "available",
-        issues: [
-          {
-            code: "update-required",
-            action: "update-and-reconnect",
-            updateCommand: "openclaw update",
-            headlessReconnectCommand: "openclaw node restart",
-          },
-        ],
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(EnvironmentSummarySchema, {
-        id: "node:outdated",
-        type: "node",
-        status: "available",
-        issues: [{ code: "update-required", action: "run-legacy-worker" }],
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(EnvironmentSummarySchema, {
-        ...workerSummary("ready", "available"),
-        worker: { ...workerSummary("ready", "available").worker, ageMs: -1 },
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(EnvironmentSummarySchema, {
-        ...workerSummary("attached", "available"),
-        worker: {
-          ...workerSummary("attached", "available").worker,
-          attachedSessionIds: [""],
+    listed.accepts(
+      profileResult(
+        {
+          ...profile,
+          trust: "disposable",
+          executionMode: "worker-turn",
+          executionModes: ["worker-turn", "remote-exec"],
+          operatingSystems: [{ id: "linux", label: "Linux", default: true }],
+          machines: [{ ...machine, cpu: 32, memoryGb: 64, default: true, os: "linux" }],
         },
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(EnvironmentSummarySchema, {
-        ...workerSummary("failed"),
-        worker: { ...workerSummary("failed").worker, error: "" },
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(EnvironmentSummarySchema, {
-        ...workerSummary("ready", "available"),
-        trust: "temporary",
-      }),
-    ).toBe(false);
+        {
+          ...profile,
+          executionMode: "remote-exec",
+          executionModes: ["remote-exec"],
+        },
+        profile,
+      ),
+    );
+    for (const invalid of [
+      { settings: { token: "hidden" } },
+      { trust: "temporary" },
+      { executionMode: "sandbox" },
+      { executionModes: [] },
+      { executionModes: ["worker-turn", "worker-turn"] },
+      { executionModes: ["remote-exec", "worker-turn"] },
+      { executionModes: ["worker-turn", "sandbox"] },
+      { executionModes: ["worker-turn", "remote-exec", "worker-turn"] },
+      { machines: [{ ...machine, cpu: 0 }] },
+    ]) {
+      listed.rejects(profileResult({ ...profile, ...invalid }));
+    }
   });
 });

@@ -24,6 +24,17 @@ export async function installNativeWebChrome(page: Page): Promise<void> {
     const stamp = () => {
       document.documentElement.classList.add("openclaw-native-macos", "openclaw-native-web-chrome");
       document.documentElement.style.setProperty("--openclaw-native-titlebar-height", "52px");
+      // The app also pads both desktop navigation surfaces past AppKit's
+      // window controls (DashboardWindowController.installNativeChromeScript).
+      const style = document.createElement("style");
+      style.id = "openclaw-native-macos-chrome";
+      style.textContent = `@media (min-width: 700px) {
+        html.openclaw-native-macos .sidebar-shell,
+        html.openclaw-native-macos .settings-sidebar__header {
+          padding-top: max(14px, var(--openclaw-native-titlebar-height)) !important;
+        }
+      }`;
+      (document.head ?? document.documentElement).appendChild(style);
     };
     if (document.documentElement) {
       stamp();

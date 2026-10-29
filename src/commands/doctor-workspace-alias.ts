@@ -6,17 +6,17 @@ import {
   inspectWorkspaceAliasMove,
   rebindRepointedWorkspaceAlias,
   type RepointedWorkspaceAliasFacts,
-  type WorkspaceAliasRebindOutcome,
 } from "../agents/workspace-alias-rebind.js";
 import { listWorkspaceStateDirs } from "../agents/workspace-state-dirs.js";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
-function configuredWorkspaceDirs(cfg: OpenClawConfig): string[] {
+async function configuredWorkspaceDirs(cfg: OpenClawConfig): Promise<string[]> {
   return listWorkspaceStateDirs({
     cfg,
     env: process.env,
@@ -32,6 +32,8 @@ function describeRepointedWorkspaceAlias(facts: RepointedWorkspaceAliasFacts): s
 export type WorkspaceAliasFinding = {
   checkId: string;
   severity: "warning";
+  category: "fix-now";
+  docsUrl: string;
   message: string;
   fixHint: string;
 };
@@ -39,7 +41,10 @@ export type WorkspaceAliasFinding = {
 const WORKSPACE_ALIAS_CHECK_ID = "core/doctor/workspace-alias";
 const REPAIR_HINT =
   "If the same workspace moved, run `openclaw doctor --fix` and confirm the move, or use `openclaw doctor --fix --force`. Otherwise restore the original link or configure the intended workspace directly.";
-const REBIND_MESSAGES: Record<Exclude<WorkspaceAliasRebindOutcome, "rebound">, string> = {
+const REBIND_MESSAGES: Record<
+  Exclude<Awaited<ReturnType<typeof rebindRepointedWorkspaceAlias>>, "rebound">,
+  string
+> = {
   "no-repoint": "The alias no longer needs repair.",
   "repoint-changed":
     "The workspace changed after inspection. Nothing was transferred; rerun doctor to inspect it again.",
@@ -54,29 +59,34 @@ const REBIND_MESSAGES: Record<Exclude<WorkspaceAliasRebindOutcome, "rebound">, s
 };
 
 /** Read-only findings include failed inspection so health cannot report a false success. */
-export function collectRepointedWorkspaceAliasFindings(
+export async function collectRepointedWorkspaceAliasFindings(
   cfg: OpenClawConfig,
-): WorkspaceAliasFinding[] {
-  const findings: WorkspaceAliasFinding[] = [];
-  for (const workspaceDir of configuredWorkspaceDirs(cfg)) {
-    let message: string;
-    try {
-      const facts = detectRepointedWorkspaceAlias(workspaceDir);
-      if (!facts) {
-        continue;
+): Promise<WorkspaceAliasFinding[]> {
+  const workspaceDirs = await configuredWorkspaceDirs(cfg);
+  return withSynchronousArtifactPreservingStateSnapshot(() => {
+    const findings: WorkspaceAliasFinding[] = [];
+    for (const workspaceDir of workspaceDirs) {
+      let message: string;
+      try {
+        const facts = detectRepointedWorkspaceAlias(workspaceDir);
+        if (!facts) {
+          continue;
+        }
+        message = `${describeRepointedWorkspaceAlias(facts)} Incoming messages cannot use this workspace until it is repaired.`;
+      } catch (error) {
+        message = `Workspace alias inspection failed for ${shortenHomePath(workspaceDir)}: ${formatErrorMessage(error)}`;
       }
-      message = `${describeRepointedWorkspaceAlias(facts)} Incoming messages cannot use this workspace until it is repaired.`;
-    } catch (error) {
-      message = `Workspace alias inspection failed for ${shortenHomePath(workspaceDir)}: ${formatErrorMessage(error)}`;
+      findings.push({
+        checkId: WORKSPACE_ALIAS_CHECK_ID,
+        severity: "warning",
+        category: "fix-now",
+        docsUrl: "https://docs.openclaw.ai/cli/doctor/state-migrations",
+        message,
+        fixHint: REPAIR_HINT,
+      });
     }
-    findings.push({
-      checkId: WORKSPACE_ALIAS_CHECK_ID,
-      severity: "warning",
-      message,
-      fixHint: REPAIR_HINT,
-    });
-  }
-  return findings;
+    return findings;
+  });
 }
 
 async function maybeRepairRepointedWorkspaceAliases(params: {
@@ -87,7 +97,7 @@ async function maybeRepairRepointedWorkspaceAliases(params: {
   if (!params.prompter.shouldRepair) {
     return;
   }
-  const workspaceDirs = configuredWorkspaceDirs(params.cfg);
+  const workspaceDirs = await configuredWorkspaceDirs(params.cfg);
   const configuration = await readConfigFileSnapshot();
   const verifyConfiguration = async () => {
     const current = await readConfigFileSnapshot();
@@ -149,18 +159,16 @@ async function maybeRepairRepointedWorkspaceAliases(params: {
 /** Stop migration discovery if its workspace owner still needs an operator decision. */
 export function createWorkspaceAliasMigrationRepair(
   prompter: DoctorPrompter | undefined,
-  beforePrompt: () => void,
 ): ((cfg: OpenClawConfig) => Promise<void>) | undefined {
   if (!prompter?.shouldRepair) {
     return undefined;
   }
   return async (cfg) => {
-    if (collectRepointedWorkspaceAliasFindings(cfg).length === 0) {
+    if ((await collectRepointedWorkspaceAliasFindings(cfg)).length === 0) {
       return;
     }
-    beforePrompt();
     await maybeRepairRepointedWorkspaceAliases({ cfg, prompter });
-    const unresolved = collectRepointedWorkspaceAliasFindings(cfg);
+    const unresolved = await collectRepointedWorkspaceAliasFindings(cfg);
     if (unresolved.length > 0) {
       throw new Error(
         unresolved.map((finding) => `${finding.message} ${finding.fixHint}`).join("\n"),

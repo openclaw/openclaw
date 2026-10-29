@@ -1,4 +1,3 @@
-// Discord plugin module implements channel.loaders behavior.
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { DiscordProbe } from "./probe.js";
 
@@ -22,7 +21,7 @@ export const loadDiscordProviderRuntime = createLazyRuntimeModule(
   () => import("./monitor/provider.runtime.js"),
 );
 
-export const loadDiscordProbeRuntime = createLazyRuntimeModule(() => import("./probe.runtime.js"));
+export const loadDiscordProbeRuntime = createLazyRuntimeModule(() => import("./probe.js"));
 
 export async function probeDiscordStatusAccount(params: {
   token: string;

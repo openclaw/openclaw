@@ -1,7 +1,6 @@
 // ACP bind live gateway tests exercise real ACP runtime sessions, cron visibility, and image probe routing.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
@@ -19,6 +18,7 @@ import { setTestEnvValue } from "../test-utils/env.js";
 import { sleep } from "../utils.js";
 import type { GatewayClient } from "./client.js";
 import { connectTestGatewayClient } from "./gateway-cli-backend.live-helpers.js";
+import { waitForGatewayPort } from "./gateway-port.test-support.js";
 import {
   assertCronJobMatches,
   assertCronJobVisibleViaCli,
@@ -45,7 +45,7 @@ const ACP_CRON_MCP_PROBE_VERIFY_POLLS = 5;
 const ACP_CRON_MCP_PROBE_VERIFY_POLL_MS = 1_000;
 const DEFAULT_LIVE_CODEX_MODEL = "gpt-5.6-luna";
 const DEFAULT_LIVE_PARENT_MODEL = "openai/gpt-5.4";
-type LiveAcpAgent = "claude" | "codex" | "droid" | "gemini" | "opencode";
+type LiveAcpAgent = "claude" | "codex" | "droid" | "gemini" | "grok-build" | "opencode";
 
 function snapshotAcpBindLiveEnv(): LiveEnvSnapshot {
   return snapshotLiveEnv(["CODEX_HOME"]);
@@ -97,6 +97,9 @@ function normalizeAcpAgent(raw: string | undefined): LiveAcpAgent {
   }
   if (normalized === "opencode") {
     return "opencode";
+  }
+  if (normalized === "grok-build") {
+    return "grok-build";
   }
   return "claude";
 }
@@ -248,38 +251,6 @@ async function prepareCodexHomeForLiveBindTest(tempRoot: string): Promise<void> 
   logLiveStep(`using Codex ACP model ${model}`);
 }
 
-async function waitForGatewayPort(params: {
-  host: string;
-  port: number;
-  timeoutMs?: number;
-}): Promise<void> {
-  const timeoutMs = params.timeoutMs ?? CONNECT_TIMEOUT_MS;
-  const startedAt = Date.now();
-
-  while (Date.now() - startedAt < timeoutMs) {
-    const connected = await new Promise<boolean>((resolve) => {
-      const socket = net.createConnection({
-        host: params.host,
-        port: params.port,
-      });
-      const finish = (ok: boolean) => {
-        socket.removeAllListeners();
-        socket.destroy();
-        resolve(ok);
-      };
-      socket.once("connect", () => finish(true));
-      socket.once("error", () => finish(false));
-      socket.setTimeout(1_000, () => finish(false));
-    });
-    if (connected) {
-      return;
-    }
-    await sleep(250);
-  }
-
-  throw new Error(`timed out waiting for gateway port ${params.host}:${String(params.port)}`);
-}
-
 async function connectClient(params: { url: string; token: string; timeoutMs?: number }) {
   const timeoutMs = params.timeoutMs ?? CONNECT_TIMEOUT_MS;
   return await connectTestGatewayClient({
@@ -401,17 +372,10 @@ async function bindConversationAndWait(params: {
   while (Date.now() - startedAt < timeoutMs) {
     attempt += 1;
     const backend = getAcpRuntimeBackend("acpx");
-    const runtime = backend?.runtime as
-      | {
-          probeAvailability?: () => Promise<void>;
-          doctor?: () => Promise<{ message?: string; details?: string[] }>;
-        }
-      | undefined;
+    const runtime = backend?.runtime;
     const backendUnavailable = !backend || (backend.healthy && !backend.healthy());
     if (backendUnavailable) {
-      if (runtime?.probeAvailability) {
-        await runtime.probeAvailability().catch(() => {});
-      }
+      await runtime?.doctor?.().catch(() => {});
       const backendReadyAfterProbe = backend && (!backend.healthy || backend.healthy());
       if (backendReadyAfterProbe) {
         logLiveStep(`acpx backend became healthy before bind attempt ${attempt}`);
@@ -774,7 +738,9 @@ describeLive("gateway live (ACP bind)", () => {
         const { mainAssistantTexts, spawnedSessionKey } = bindResult;
         logLiveStep("bind command completed");
         expect(mainAssistantTexts.join("\n\n")).toContain("Bound this conversation to");
-        expect(spawnedSessionKey).toMatch(new RegExp(`^agent:${liveAgent}:acp:`));
+        // Raw harness ids stay owned by the requesting `main` agent; this lane configures no agent
+        // named after the harness, which would keep its own namespace instead.
+        expect(spawnedSessionKey).toMatch(/^agent:main:acp:/);
         logLiveStep(`binding announced for session ${spawnedSessionKey ?? "missing"}`);
 
         let firstBoundHistory: Awaited<ReturnType<typeof waitForAssistantText>> | null = null;

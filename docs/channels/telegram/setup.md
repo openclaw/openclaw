@@ -48,15 +48,18 @@ openclaw channels add --channel telegram --token <bot-token>
 
   </Step>
 
-  <Step title="Restart the gateway">
-    A new channel is only picked up after the Gateway loads the new config:
+  <Step title="Verify the channel">
+    <a id="restart-the-gateway" />
+    With the default [hot reload](/gateway/configuration/hot-reload), the running
+    Gateway applies the new channel configuration. Check that Telegram is ready:
 
 ```bash
-openclaw gateway restart
+openclaw channels status --probe
 ```
 
-    Use `openclaw gateway` instead when no Gateway service is installed. That
-    command runs the Gateway in the foreground of this terminal.
+    If the Gateway is offline, start it with `openclaw gateway start` for a managed
+    service, or `openclaw gateway` to run it in this terminal. If you changed the
+    service environment, restart the Gateway to load it.
 
   </Step>
 

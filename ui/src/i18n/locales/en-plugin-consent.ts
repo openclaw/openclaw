@@ -60,6 +60,12 @@ const enPluginConsent = {
     sourceMarketplace: "Marketplace",
     community: "Community",
     enableNamed: "Enable {name}",
+    installPolicy: {
+      technicalDetails: "Technical details",
+      severity: { info: "Info", warn: "Warning", critical: "Critical" },
+      policyScope:
+        "Continuing approves every install-policy warning encountered during this install. Each warning is checked again before installation continues.",
+    },
   },
 } satisfies TranslationMap;
 

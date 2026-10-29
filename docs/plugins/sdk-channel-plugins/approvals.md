@@ -23,23 +23,49 @@ only - core no longer reads approval auth hooks from that object.
 Use `approvalCapability.delivery` only for native approval routing or fallback
 suppression, and `approvalCapability.render` only when a channel truly needs
 custom approval payloads instead of the shared renderer.
+`delivery.shouldBlockForwardingFallback` rejects a fallback that cannot enforce
+the selected reviewer policy even when no native handler is running. A channel
+may require native reviewer delivery and reject all generic forwarding for a
+selected policy;
+`delivery.shouldSuppressForwardingFallbackAsync` avoids duplicate delivery only while
+the native handler is active. Both receive the approval request payload. For a
+terminal notice without a cached pending request, core reconstructs it from the
+resolved event with `createdAtMs` and `expiresAtMs` set to zero; policy checks
+should use the nested request payload.
 
 ### Approval auth
 
-- `approvalCapability.authorizeActorAction` and
-  `approvalCapability.getActionAvailabilityState` are the canonical
-  approval-auth seam.
+- `approvalCapability.authorizeActorActionAsync` and
+  `approvalCapability.getActionAvailabilityState` are the shared
+  approval-auth interface.
+- A channel that enforces host-configured, request-scoped plugin reviewer lists
+  for native cards, forwarded prompts, and final decisions sets
+  `approvalCapability.supportsScopedPluginApprovalApprovers: true`. When a
+  reviewer policy exists for the channel, the host declines plugin approval
+  routes and decisions through an older capability without this marker. Keep
+  the marker absent until every approval path enforces the selected list.
+- If plugin `/approve` authorization needs a space-qualified reviewer ID,
+  implement `approvalCapability.resolveReviewerSenderId`. Core passes `cfg`,
+  `accountId`, `senderId`, and `spaceId`, then uses the result only for plugin
+  approval command authorization. Derive the space from authenticated channel
+  ingress; the callback does not receive the pending request. If it is unknown,
+  return `undefined`: core retains the raw sender ID. An unqualified raw ID
+  cannot satisfy a space-qualified policy. The channel's
+  `authorizeActorActionAsync` and Gateway custody still check the exact request
+  when resolving a decision. Older hosts ignore this optional callback and
+  also retain the raw sender ID; channels that supply only unqualified IDs
+  need a host that calls the callback for space-qualified `/approve` policy.
 - Use `getActionAvailabilityState` for same-chat approval auth availability.
   Keep configured approvers available for `/approve` even when native delivery
   is disabled; use native initiating-surface state for delivery/setup guidance
   instead.
 - If your channel exposes native exec approvals, use
-  `approvalCapability.getExecInitiatingSurfaceState` for the
+  `approvalCapability.getExecInitiatingSurfaceStateAsync` for the
   initiating-surface/native-client state when it differs from same-chat
   approval auth. Core uses that exec-specific hook to distinguish `enabled` vs
   `disabled`, decide whether the initiating channel supports native exec
   approvals, and include the channel in native-client fallback guidance.
-  `createApproverRestrictedNativeApprovalCapability(...)` fills this in for
+  `createApproverRestrictedNativeApprovalCapabilityAsync(...)` fills this in for
   the common case.
 - If a channel can infer stable owner-like DM identities from existing config,
   use `createResolvedApproverActionAuthAdapter` from
@@ -67,7 +93,7 @@ custom approval payloads instead of the shared renderer.
   defaults.
 - Use `approvalCapability.describePluginApprovalSetup` when plugin approval
   failure guidance is safe to show for plugin approval no-route and timeout
-  failures. `createApproverRestrictedNativeApprovalCapability(...)` does not
+  failures. `createApproverRestrictedNativeApprovalCapabilityAsync(...)` does not
   infer this from `describeExecApprovalSetup`; pass the same helper explicitly
   only when plugin and exec approvals truly use the same native setup.
 
@@ -75,17 +101,35 @@ custom approval payloads instead of the shared renderer.
 
 If a channel needs native approval delivery, keep channel code focused on
 target normalization plus transport/presentation facts. Use
-`createChannelExecApprovalProfile`, `createChannelNativeOriginTargetResolver`,
-`createChannelApproverDmTargetResolver`, and
-`createApproverRestrictedNativeApprovalCapability` from
-`openclaw/plugin-sdk/approval-runtime`. Put the channel-specific facts behind
-`approvalCapability.nativeRuntime`, ideally via
-`createChannelApprovalNativeRuntimeAdapter(...)` or
-`createLazyChannelApprovalNativeRuntimeAdapter(...)`, so core can assemble the
+`createChannelExecApprovalProfileAsync` from
+`openclaw/plugin-sdk/approval-client-runtime`,
+`createChannelNativeOriginTargetResolverAsync` and
+`createChannelApproverDmTargetResolverAsync` from
+`openclaw/plugin-sdk/approval-native-runtime`, and
+`createApproverRestrictedNativeApprovalCapabilityAsync` from
+`openclaw/plugin-sdk/approval-delivery-runtime`.
+
+The capability factory returns its object synchronously. Core awaits the
+returned `authorizeActorActionAsync`, `getExecInitiatingSurfaceStateAsync`,
+`delivery.*Async`, and `nativeAsync` callbacks. Configuration-only
+`getActionAvailabilityState` can remain synchronous. When migrating, read
+delivery capabilities and targets from `nativeAsync` and await them; see the
+[async SDK migration guide](/plugins/sdk-migration/sqlite-async).
+
+Put the channel-specific facts behind `approvalCapability.nativeRuntimeAsync`,
+ideally via `createChannelApprovalNativeRuntimeAdapterAsync(...)` from
+`openclaw/plugin-sdk/approval-handler-runtime` or
+`createLazyChannelApprovalNativeRuntimeAdapterAsync(...)` from
+`openclaw/plugin-sdk/approval-handler-adapter-runtime`, so core can assemble the
 handler and own request filtering, routing, dedupe, expiry, gateway
 subscription, and routed-elsewhere notices.
 
-`nativeRuntime` is split into a few smaller seams:
+Gateway-owned handlers use the applied configuration when admitting a new
+request. The request keeps that configuration through routing, presentation,
+delivery, and cleanup, so a hot reload does not redirect an in-flight approval.
+Standalone handlers keep their explicitly supplied configuration.
+
+`nativeRuntimeAsync` is split into a few smaller interfaces:
 
 - `availability` - whether the account is configured and whether a request
   should be handled
@@ -108,18 +152,28 @@ The runtime must render the typed approval actions and then render the final
 application result. An allowed request can finish as applied or not applied;
 do not treat the recorded approval alone as proof that the change completed.
 
+Reaction bindings must preserve the explicit approval kind from delivery
+through decision resolution, including after loading persisted plugin state.
+iMessage native poll and reaction indexes follow the same rule after a restart.
+
 Other approval helpers:
 
 - Use `settleApprovalReaction` from
   `openclaw/plugin-sdk/approval-reaction-runtime` for explicitly authorized
   reaction decisions. It checks the supplied approvers and actor authorization,
-  loads the Gateway resolver lazily, and calls `clearTarget` for every terminal
+  loads the Gateway resolver lazily, and awaits `clearTarget` for every terminal
   result (including a losing click) or approval-not-found error. Keep transport
-  identity, route checks, cleanup, and result logging in the plugin. Other errors
+  identity, route checks, cleanup, and result logging in the plugin. Resolver errors
   propagate with the binding intact; the channel must hand them to its durable
   ingress or poller for replay. `readApprovalReactionTargetRecord` validates the
   shared persisted fields; transport-specific route and author fields still need
   their own validation.
+- Await `createApprovalReactionTargetStore().register(...)` and `.delete(...)`
+  before completing registration or cleanup. Both update their memory index before
+  waiting for storage. Optional storage failures retain the existing policy:
+  report the failure, disable persistent access, and keep the memory fallback.
+  Settlement reports resolution only after cleanup completes; cleanup failures
+  propagate without being reported as Gateway resolution failures.
 - Use `formatChannelApprovalResolvedLabel` and
   `buildSystemAgentApprovalResolvedText` from
   `openclaw/plugin-sdk/approval-runtime` for terminal presentation.
@@ -158,21 +212,21 @@ Other approval helpers:
   whose native approval target is a channel-owned normalized destination.
   Keep group authorization, approver mapping, and other transport policy in
   the channel plugin.
-- `createChannelNativeOriginTargetResolver` uses the shared channel-route
+- `createChannelNativeOriginTargetResolverAsync` uses the shared channel-route
   matcher by default for `{ to, accountId, threadId }` targets. Pass
   `targetsMatch` only when a channel has provider-specific equivalence rules,
   such as Slack timestamp prefix matching. Pass `normalizeTargetForMatch` when
-  the channel needs to canonicalize provider ids before the default route
+  the channel needs to normalize provider ids before the default route
   matcher or a custom `targetsMatch` callback runs, while preserving the
   original target for delivery. Use `normalizeTarget` only when the resolved
-  delivery target itself should be canonicalized.
+  delivery target itself should be normalized.
 - If the channel needs runtime-owned objects such as a client, token, Bolt
   app, or webhook receiver, register them through
   `openclaw/plugin-sdk/channel-runtime-context`. The generic runtime-context
   registry lets core bootstrap capability-driven handlers from channel
   startup state without adding approval-specific wrapper glue.
 - Reach for the lower-level `createChannelApprovalHandler` or
-  `createChannelNativeApprovalRuntime` only when the capability-driven seam is
+  `createChannelNativeApprovalRuntime` only when the capability-driven interface is
   not expressive enough yet.
 - Native approval channels must route both `accountId` and `approvalKind`
   through those helpers. `accountId` keeps multi-account approval policy
@@ -189,7 +243,7 @@ Other approval helpers:
   not guess or rewrite exec vs plugin approval routing from channel-local
   state.
 - Pass that explicit `approvalKind` to `resolveApprovalOverGateway`. This uses
-  the canonical `approval.resolve` service and returns the recorded winner when
+  the shared `approval.resolve` service and returns the recorded winner when
   another surface answers first. The older explicit `resolveMethod` input
   remains for command-backed controls; new native actions must not use it or
   infer kind from an ID.

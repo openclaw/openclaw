@@ -1,4 +1,3 @@
-// before_model_resolve hook
 export type PluginHookBeforeModelResolveAttachment = {
   kind: "image" | "video" | "audio" | "document" | "other";
   mimeType?: string;
@@ -16,12 +15,22 @@ export type PluginHookBeforeModelResolveResult = {
   modelOverride?: string;
   /** Override the provider for this agent run. E.g. "local-provider" */
   providerOverride?: string;
+  /** Replace this run's fallback chain. An empty list disables model fallback. */
+  fallbacksOverride?: string[];
 };
 
-// before_prompt_build hook
 export type PluginHookBeforePromptBuildEvent = {
   prompt: string;
-  /** Session messages prepared for this run. */
+  /** Current request before projection. Empty means no textual request; omission is legacy. */
+  currentUserMessage?: string;
+  /** Stable native admission identity across rebuilds; differs between admitted requests. */
+  currentUserMessageId?: string;
+  /**
+   * Model-context history: fresh array/envelopes per dispatch, shared frozen transcript payloads.
+   * Treat nested content as read-only; strict-mode writes to frozen leaves throw TypeError.
+   * Return result fields to contribute context. Array/envelope edits stay local to this dispatch,
+   * whose handlers share them in priority order; they never update core history.
+   */
   messages: unknown[];
 };
 

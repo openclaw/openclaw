@@ -1,5 +1,6 @@
 {
   "id": "zai",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -8,7 +9,7 @@
   "providerEndpoints": [
     {
       "endpointClass": "zai-native",
-      "hosts": ["api.z.ai"]
+      "hosts": ["api.z.ai", "open.bigmodel.cn"]
     }
   ],
   "providerRequest": {
@@ -36,6 +37,7 @@
         "baseUrl": "https://api.z.ai/api/paas/v4",
         "api": "openai-completions",
         "defaultModel": "glm-5.2",
+        "family": "zai",
         "models": [
           {
             "id": "glm-5.3",
@@ -145,8 +147,8 @@
   "modelPricing": {
     "providers": {
       "zai": {
-        "openRouter": {
-          "provider": "z-ai"
+        "modelsDev": {
+          "provider": "zai"
         },
         "liteLLM": {
           "provider": "zai"
@@ -232,7 +234,13 @@
   ],
   "contracts": {
     "mediaUnderstandingProviders": ["zai"],
+    "videoGenerationProviders": ["zai"],
     "usageProviders": ["zai"]
+  },
+  "videoGenerationProviderMetadata": {
+    "zai": {
+      "authSignals": [{ "provider": "zai" }]
+    }
   },
   "mediaUnderstandingProviderMetadata": {
     "zai": {

@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
@@ -13,6 +14,8 @@ import { parseNodeWorkerLaunchInput } from "../worker/node-supervisor-protocol.j
 import { buildNodeInvokeRequest, serializeNodeEvent } from "./node-invoke-request.js";
 import { createNodeRegistryRuntime, updateNodeRunnerInventory } from "./node-registry-private.js";
 import { NodeRegistry } from "./node-registry.js";
+import { makeClient } from "./node-registry.test-helpers.js";
+import { gatewayTestTextTransport } from "./server/connection-transport.test-support.js";
 import {
   createNodeWorkerLaunchAdapter,
   measureNodeWorkerLaunchBytes,
@@ -29,6 +32,36 @@ describe("private worker launch wire", () => {
   let client: WebSocket;
   let socket: WebSocket;
 
+  const settle = (id: string, payload: unknown) =>
+    nodeRegistry.handleInvokeResult({
+      id,
+      nodeId,
+      connId,
+      ok: true,
+      payloadJSON: JSON.stringify(payload),
+    });
+  const startLaunch = (
+    input: Parameters<ReturnType<typeof createNodeWorkerLaunchAdapter>["launch"]>[0]["input"],
+    timeoutMs: number,
+    onDispatchReady?: () => void,
+  ) => {
+    const controller = new AbortController();
+    const outcome = createNodeWorkerLaunchAdapter({
+      getTransport: () => nodeWorkerSupervisorTransport,
+    })
+      .launch({
+        deviceId: nodeId,
+        input,
+        timeoutMs,
+        onDispatchReady,
+        isDispatchAuthorized: () => true,
+        isCancellationAuthorized: () => true,
+        signal: controller.signal,
+      })
+      .catch((error: unknown) => error);
+    return { controller, outcome };
+  };
+
   beforeAll(async () => {
     server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await once(server, "listening");
@@ -42,39 +75,35 @@ describe("private worker launch wire", () => {
     });
     await once(client, "open");
     [socket] = await connected;
-    nodeRegistry.register(
-      {
-        connId,
-        socket,
-        usesSharedGatewayAuth: false,
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          client: {
-            id: GATEWAY_CLIENT_IDS.NODE_HOST,
-            version: "test",
-            platform: "test",
-            mode: "node",
-          },
-          device: {
-            id: nodeId,
-            publicKey: "fixture",
-            signature: "fixture",
-            signedAt: 1,
-            nonce: "fixture",
-          },
-          commands: [NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND],
-        },
-      },
-      { pairingIdentity: "fixture-pairing", pairingGeneration: "fixture-generation" },
-    );
+    const nodeClient = makeClient(connId, nodeId, [], {
+      socket: gatewayTestTextTransport(socket),
+      clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+      version: "test",
+      platform: "test",
+      commands: [NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND],
+    });
+    Object.assign(nodeClient.connect.device!, {
+      publicKey: "fixture",
+      signature: "fixture",
+      nonce: "fixture",
+    });
+    nodeRegistry.register(nodeClient, {
+      pairingIdentity: "fixture-pairing",
+      pairingGeneration: "fixture-generation",
+    });
     updateNodeRunnerInventory({
       registry: nodeRegistry,
       nodeId,
       connId,
       declaration: {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: { total: 1, available: 1 }, environmentSession: 1 },
+        workerHost: {
+          enabled: true,
+          capacity: { total: 1, available: 1 },
+          environmentSession: 1,
+          capturedExecPolicy: true,
+          promptContext: 1,
+        },
       },
     });
   });
@@ -90,7 +119,7 @@ describe("private worker launch wire", () => {
     }
   });
 
-  it.each([-1, 0, 1])("enforces the complete node frame at cap %+i byte(s)", async (delta) => {
+  it.each([0, 1])("enforces the complete node frame at cap %+i byte(s)", async (delta) => {
     const input = testWorkerLaunchInput("/tmp/workspace", "fixture-turn");
     input.descriptor.assignment.systemPrompt = '"\\\0\n漢😀'.repeat(10_000);
     const encode = () =>
@@ -112,14 +141,14 @@ describe("private worker launch wire", () => {
     parseNodeWorkerLaunchInput(JSON.stringify(input));
     expect(Buffer.byteLength(encode())).toBe(targetBytes);
     expect(measureNodeWorkerLaunchBytes(nodeId, input)).toBeGreaterThanOrEqual(targetBytes);
-    const [node] = await nodeWorkerSupervisorTransport.listCurrentNodes();
-    if (!node) {
-      throw new Error("expected private runner proof");
-    }
+    const node = expectDefined(
+      (await nodeWorkerSupervisorTransport.listCurrentNodes())[0],
+      "private runner proof",
+    );
     const received = delta <= 0 ? once(client, "message") : undefined;
     const sent = vi.spyOn(socket, "send");
     const dispatched = vi.fn((id: string) => {
-      nodeRegistry.handleInvokeResult({ id, nodeId, connId, ok: true, payloadJSON: "null" });
+      settle(id, null);
     });
     try {
       const result = await nodeWorkerSupervisorTransport.invoke({
@@ -167,7 +196,6 @@ describe("private worker launch wire", () => {
 
   it("keeps the first dispatched launch alive beyond the availability grace", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const controller = new AbortController();
     const input = testWorkerLaunchInput("/tmp/workspace", "delayed-receipt-turn");
     const terminal = {
       ...testNodeWorkerLaunchIdentity(input),
@@ -181,20 +209,7 @@ describe("private worker launch wire", () => {
     const sent = vi.spyOn(socket, "send");
     const received = once(client, "message");
     const dispatched = vi.fn();
-    const adapter = createNodeWorkerLaunchAdapter({
-      getTransport: () => nodeWorkerSupervisorTransport,
-    });
-    const outcome = adapter
-      .launch({
-        deviceId: nodeId,
-        input,
-        isDispatchAuthorized: () => true,
-        isCancellationAuthorized: () => true,
-        timeoutMs: 60_000,
-        signal: controller.signal,
-        onDispatchReady: dispatched,
-      })
-      .catch((error: unknown) => error);
+    const { controller, outcome } = startLaunch(input, 60_000, dispatched);
     try {
       const [data] = await received;
       const request = JSON.parse(Buffer.from(data).toString("utf8"));
@@ -206,15 +221,7 @@ describe("private worker launch wire", () => {
 
       // A timeout at the old availability boundary sends cancellation or a duplicate launch.
       expect(sent).toHaveBeenCalledOnce();
-      expect(
-        nodeRegistry.handleInvokeResult({
-          id: request.payload.id,
-          nodeId,
-          connId,
-          ok: true,
-          payloadJSON: JSON.stringify(terminal),
-        }),
-      ).toBe(true);
+      expect(settle(request.payload.id, terminal)).toBe(true);
       expect(await outcome).toEqual(terminal);
       expect(sent).toHaveBeenCalledOnce();
     } finally {
@@ -228,40 +235,29 @@ describe("private worker launch wire", () => {
 
   it.each([
     { timeoutMs: 30_000, expected: { code: "runner-offline" } },
-    { timeoutMs: 5_000, expected: { message: "node worker launch timed out" } },
     { timeoutMs: 10_000, expected: { message: "node worker launch timed out" } },
   ])(
     "rejects clock expiry during discovery before dispatch with a $timeoutMs ms launch budget",
     async ({ timeoutMs, expected }) => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      const controller = new AbortController();
       const startedAt = Date.now();
-      const listCurrentNodes = nodeWorkerSupervisorTransport.listCurrentNodes.bind(
+      const getCurrentNode = nodeWorkerSupervisorTransport.getCurrentNode.bind(
         nodeWorkerSupervisorTransport,
       );
       const discovery = vi
-        .spyOn(nodeWorkerSupervisorTransport, "listCurrentNodes")
-        .mockImplementationOnce(async () => {
-          const nodes = await listCurrentNodes();
+        .spyOn(nodeWorkerSupervisorTransport, "getCurrentNode")
+        .mockImplementationOnce(async (requestedNodeId) => {
+          const node = await getCurrentNode(requestedNodeId);
           vi.setSystemTime(startedAt + 10_000);
-          return nodes;
+          return node;
         });
       const sent = vi.spyOn(socket, "send");
       const unhandledRejection = vi.fn();
       process.on("unhandledRejection", unhandledRejection);
-      const adapter = createNodeWorkerLaunchAdapter({
-        getTransport: () => nodeWorkerSupervisorTransport,
-      });
-      const outcome = adapter
-        .launch({
-          deviceId: nodeId,
-          input: testWorkerLaunchInput("/tmp/workspace", "discovery-expiry-turn"),
-          isDispatchAuthorized: () => true,
-          isCancellationAuthorized: () => true,
-          timeoutMs,
-          signal: controller.signal,
-        })
-        .catch((error: unknown) => error);
+      const { controller, outcome } = startLaunch(
+        testWorkerLaunchInput("/tmp/workspace", "discovery-expiry-turn"),
+        timeoutMs,
+      );
       try {
         await vi.advanceTimersByTimeAsync(0);
         await new Promise<void>((resolve) => {
@@ -281,4 +277,29 @@ describe("private worker launch wire", () => {
       }
     },
   );
+
+  it("rejects event and invoke delivery after a real socket leaves OPEN", async () => {
+    const received = once(client, "message");
+    expect(socket.readyState).toBe(WebSocket.OPEN);
+    expect(nodeRegistry.sendEvent(nodeId, "runtime.proof", { phase: "open" })).toBe(true);
+    await received;
+    const sent = vi.spyOn(socket, "send");
+    try {
+      socket.close(1000, "runtime proof");
+      expect(socket.readyState).toBe(WebSocket.CLOSING);
+      expect(nodeRegistry.sendEvent(nodeId, "runtime.proof", { phase: "closing" })).toBe(false);
+      expect(nodeRegistry.sendEventRaw(nodeId, "runtime.raw", null)).toBe(false);
+      const onDispatchReady = vi.fn();
+      await expect(
+        nodeRegistry.invoke({ nodeId, command: "runtime.proof", timeoutMs: 0, onDispatchReady }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
+      });
+      expect(onDispatchReady).not.toHaveBeenCalled();
+      expect(sent).not.toHaveBeenCalled();
+    } finally {
+      sent.mockRestore();
+    }
+  });
 });

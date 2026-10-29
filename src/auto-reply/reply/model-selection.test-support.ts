@@ -21,7 +21,6 @@ export function createModelSelectionStateFixture(params: {
     }),
     allowedModelKeys: new Set<string>(),
     allowedModelCatalog: [],
-    policyAliasIndex: { byAlias: new Map(), byKey: new Map() },
     resetModelOverride: false,
     resetModelOverrideRef: undefined,
     resetModelOverrideReason: undefined,
@@ -31,7 +30,6 @@ export function createModelSelectionStateFixture(params: {
     resolveDefaultThinkingLevel: async () => params.agentCfg?.thinkingDefault as ThinkLevel,
     hasConfiguredThinkingDefault: params.agentCfg?.thinkingDefault !== undefined,
     resolveDefaultReasoningLevel: async () => "off",
-    needsModelCatalog: false,
     modelContextWindow: undefined,
     modelContextTokens: undefined,
   };

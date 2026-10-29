@@ -1,5 +1,4 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
-// Status text types describe runtime status records used by status rendering.
 import type {
   ElevatedLevel,
   ReasoningLevel,
@@ -10,11 +9,13 @@ import type {
 import type { SessionEntry, SessionScope } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
+import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
 
 // Input contract for buildStatusText. Most fields are already resolved by the
 // caller so status rendering can stay presentation-focused and side-effect-light.
 export type BuildStatusTextParams = {
   cfg: OpenClawConfig;
+  preparedTtsPreferences?: PreparedTtsPreferences;
   /** Prepared owner for bare session keys shared by multiple agents. */
   agentId?: string;
   sessionEntry?: SessionEntry;
@@ -36,13 +37,15 @@ export type BuildStatusTextParams = {
   resolvedVerboseLevel: VerboseLevel;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel?: ElevatedLevel;
-  resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
+  resolveDefaultThinkingLevel: (selection?: {
+    provider: string;
+    model: string;
+    agentRuntime?: string | null;
+  }) => Promise<ThinkLevel | undefined>;
   isGroup: boolean;
   defaultGroupActivation: () => "always" | "mention";
   mediaDecisions?: MediaUnderstandingDecision[];
-  taskLineOverride?: string;
   pluginHealthLineOverride?: string;
-  skipDefaultTaskLookup?: boolean;
   primaryModelLabelOverride?: string;
   modelAuthOverride?: string;
   activeModelAuthOverride?: string;

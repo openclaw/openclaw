@@ -1,13 +1,18 @@
-// QA Lab mock provider contracts, wire helpers, and scenario constants.
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
+import type { MockProviderVariant } from "../shared/mock-provider-variant.js";
+import type { QaMockRequestSnapshot } from "../shared/types.js";
 
 export type ResponsesInputItem = Record<string, unknown>;
 
-export type MockOpenAiRequestKind = "agent-initial" | "compaction-summary" | "tool-continuation";
+export type MockOpenAiRequestKind =
+  | "agent-initial"
+  | "compaction-summary"
+  | "tool-continuation"
+  | "activity-summary";
 export type MockCompactionSummaryFaultMode =
   | "none"
   | "empty-output-once"
@@ -19,6 +24,7 @@ export type QaMockProviderDispatchRequest = {
   route: "responses" | "anthropic-messages";
   body: Record<string, unknown>;
   raw: string;
+  headers?: IncomingMessage["headers"];
 };
 
 export type QaMockProviderFailure = {
@@ -26,6 +32,8 @@ export type QaMockProviderFailure = {
   type: string;
   code?: string;
   message: string;
+  retryAfterSeconds?: number;
+  retryAfterMs?: number;
   presentation?: "anthropic-thinking";
 };
 
@@ -35,7 +43,10 @@ export type QaMockProviderDispatchResult = {
   failure?: QaMockProviderFailure;
   onResponseSent?: () => void;
   previewPauseMs?: number;
+  previewPause?: () => Promise<void>;
   responsePauseMs?: number;
+  /** Holds an accepted SSE stream open with comment keepalives during the pause. */
+  responseKeepaliveMs?: number;
 };
 
 export type StreamEvent =
@@ -146,96 +157,25 @@ export type MockToolCallItem = { id: string; call_id: string; name: string; name
   | { type: "custom_tool_call"; input: string; status: "completed" }
 );
 
-/**
- * Provider variant tag for `body.model`. The mock previously ignored
- * `body.model` for dispatch and only echoed it in the prose output, which
- * made the parity gate tautological when run against the mock alone
- * (both providers produced identical scenario plans by construction).
- * Tagging requests with a normalized variant lets individual scenario
- * branches opt into provider-specific behavior while the rest of the
- * dispatcher stays shared, and lets `/debug/requests` consumers verify
- * which provider lane a given request came from without re-parsing the
- * raw model string.
- *
- * Policy:
- * - `openai/*`, `gpt-*`, `o1-*`, anything starting with `gpt-` → `"openai"`
- * - `anthropic/*`, `claude-*` → `"anthropic"`
- * - Everything else (including empty strings) → `"unknown"`
- *
- * The `/v1/messages` route always feeds `body.model` straight through,
- * so an Anthropic request with an `openai/gpt-5.6-luna` model string is still
- * classified as `"openai"`. That matches the parity program's convention
- * where the provider label is the source of truth, not the HTTP route.
- */
-type MockOpenAiProviderVariant = "openai" | "anthropic" | "unknown";
+export type MockOpenAiCodeModeExecSurface = "native" | "guest";
 
-export function resolveProviderVariant(model: string | undefined): MockOpenAiProviderVariant {
-  if (typeof model !== "string") {
-    return "unknown";
-  }
-  const trimmed = model.trim().toLowerCase();
-  if (trimmed.length === 0) {
-    return "unknown";
-  }
-  // Prefer the explicit `provider/model` or `provider:model` prefix when
-  // the caller supplied one — that's the most reliable signal.
-  const separatorMatch = /^([^/:]+)[/:]/.exec(trimmed);
-  const provider = separatorMatch?.[1] ?? trimmed;
-  if (provider === "openai") {
-    return "openai";
-  }
-  if (provider === "anthropic" || provider === "claude-cli") {
-    return "anthropic";
-  }
-  // Fall back to model-name prefix matching for bare model strings like
-  // `gpt-5.6-luna` or `claude-opus-4-8`.
-  if (/^(?:gpt-|o1-|openai-)/.test(trimmed)) {
-    return "openai";
-  }
-  if (/^(?:claude-|anthropic-)/.test(trimmed)) {
-    return "anthropic";
-  }
-  return "unknown";
-}
-
-export type MockOpenAiRequestSnapshot = {
+export type MockOpenAiRequestSnapshot = QaMockRequestSnapshot & {
   cursor: number;
-  raw: string;
-  body: Record<string, unknown>;
-  prompt: string;
-  allInputText: string;
+  sessionId?: string;
   instructions?: string;
-  toolOutput: string;
-  model: string;
-  providerVariant: MockOpenAiProviderVariant;
-  imageInputCount: number;
+  codeModeExecSurface?: MockOpenAiCodeModeExecSurface;
   requestKind: MockOpenAiRequestKind;
   compactionSummaryFaultMode: MockCompactionSummaryFaultMode;
   outcome: MockOpenAiRequestOutcome;
   errorCode?: string;
   rawByteLength: number;
-  plannedToolCallId?: string;
   plannedToolItemId?: string;
-  plannedToolName?: string;
   plannedWireToolName?: string;
   plannedToolArgs?: Record<string, unknown>;
-  toolOutputCallId?: string;
-  toolOutputStructuredError?: true;
 };
 
 export type MockOpenAiRequestSnapshotInput = Omit<MockOpenAiRequestSnapshot, "cursor">;
 
-// Runtime-context delimiters are owned by src/agents/internal-runtime-context.ts.
-// This mock mirrors the wire shape so delimiter drift fails through QA timeouts.
-export const INTERNAL_RUNTIME_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
-export const INTERNAL_RUNTIME_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
-
-// Anthropic /v1/messages request/response shapes the mock actually needs.
-// This is a subset of the real Anthropic Messages API — just enough so the
-// QA suite can run its parity pack against a "baseline" Anthropic provider
-// without needing real API keys. The scenarios drive their dispatch through
-// the shared mock scenario logic (buildResponsesPayload), with `model`
-// preserved so provider-aware branches can intentionally diverge.
 export type AnthropicMessageContentBlock =
   | { type: "text"; text: string }
   | {
@@ -283,14 +223,16 @@ export const QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE = /repeated request recovery
 export const QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE =
   /repeated request queued reply gateway qa check/i;
 export const QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER = "GATEWAY_REPEATED_REQUEST_QUEUED_OK";
+export const QA_STALLED_TURN_RECOVERY_PROMPT_RE = /stalled turn recovery qa check/i;
+export const QA_STALLED_TURN_RECOVERY_NEEDLE = "previous turn stopped making progress";
+export const QA_STALLED_TURN_RECOVERY_MARKER = "STALLED-TURN-RECOVERED-OK";
 export const QA_STREAMING_PROMPT_RE = /(?:partial|quiet) streaming qa check/i;
 export const QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE = /final-only marker streaming qa check/i;
 export const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
 export const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress( error)? qa check/i;
 export const QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE = /global tool loop breaker qa check/i;
-export const QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE = /provider http 503 after tool qa check/i;
 export const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check/i;
-export const QA_MSTEAMS_AMBIGUOUS_TIMEOUT_PROMPT_RE = /qa msteams ambiguous gateway timeout/i;
+export const QA_GROUP_PROGRESS_THEN_EMPTY_PROMPT_RE = /qa group progress then empty check/i;
 export const QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE = /qa msteams thread message-tool final dedupe/i;
 export const QA_THREAD_REPLY_RECEIPT_PROMPT_RE =
   /qa thread reply receipt check[\s\S]*channel id: `([^`]+)`[\s\S]*thread id: `([^`]+)`/i;
@@ -339,6 +281,13 @@ export const QA_WHATSAPP_REPLY_TO_BOT_TRIGGER_MARKER_RE =
 export const QA_WHATSAPP_BATCHED_FINAL_MARKER_RE = /\bWHATSAPP_QA_BATCHED_FINAL_([A-Z0-9]+)\b/u;
 export const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
 export const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
+// A message-tool-only group turn that starts detached image generation, calls
+// sessions_yield (which cannot wait for detached media), sends a progress ack,
+// and ends empty. The delayed image keeps the media run pending meanwhile.
+export const QA_YIELD_REJECTION_PROMPT_RE = /yield rejection qa check/i;
+export const QA_YIELD_REJECTION_ACK_MARKER = "QA-YIELD-REJECTION-ACK";
+export const QA_YIELD_REJECTION_IMAGE_PROMPT = "QA yield rejection pending lighthouse image.";
+export const QA_YIELD_REJECTION_IMAGE_DELAY_MS = 4_000;
 // A subagent that yields on its own behalf, then finishes on a later follow-up
 // dispatched to the same paused child session. The worker regex must not match
 // the follow-up text, so the two turns carry deliberately disjoint wording: the
@@ -346,9 +295,13 @@ export const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback w
 export const QA_SUBAGENT_SELF_YIELD_WORKER_RE = /subagent self yield qa worker/i;
 export const QA_SUBAGENT_SELF_YIELD_FOLLOW_UP_RE = /subagent self yield qa remote job finished/i;
 export const QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE =
-  /subagent terminal reply qa check:\s*(visible|silent|empty|restart|fallback)/i;
+  /subagent terminal reply qa check:\s*(visible|silent|empty|restart|fallback|race|private)/i;
 export const QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE =
-  /subagent terminal reply qa worker:\s*(visible|silent|empty|restart|fallback)/i;
+  /subagent terminal reply qa worker:\s*(visible|silent|empty|restart|fallback|race)/i;
+export const QA_SUBAGENT_PRIVATE_WORKER_RE =
+  /subagent private completion qa worker:\s*(first|second)/i;
+export const QA_SUBAGENT_PRIVATE_RESULT_RE = /QA-PARENT-PRIVATE-CHILD1-[A-F0-9]{32}/u;
+export const QA_SUBAGENT_PRIVATE_SECOND_RESULT = "QA-PARENT-PRIVATE-CHILD2-DONE";
 export const QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE = /reply to the requester after spawning/i;
 export const QA_SUBAGENT_EMPTY_WORKER_NO_OUTPUT_PROMPT_RE =
   /return no assistant output after the write/i;
@@ -383,6 +336,7 @@ export const QA_SUBAGENT_TERMINAL_MARKERS = {
   empty: "QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED",
   restart: "QA-SUBAGENT-TERMINAL-RESTART-OK",
   fallback: "QA-SUBAGENT-TERMINAL-FALLBACK-OK",
+  race: "QA-SUBAGENT-TERMINAL-RACE-OK",
 } as const;
 export const QA_SUBAGENT_EMPTY_PARENT_VISIBLE_MARKER = "QA-SUBAGENT-EMPTY-PARENT-ACK";
 export const QA_SUBAGENT_TERMINAL_METADATA_SENTINEL = "QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK";
@@ -393,10 +347,9 @@ export const QA_IMAGE_GENERATION_PROMPT_RE =
   /image generation check|capability flip image check|\/tool\s+image_generate/i;
 export const QA_REASONING_ONLY_RETRY_NEEDLE =
   "recorded reasoning but did not produce a user-visible answer";
-export const QA_EMPTY_RESPONSE_RETRY_NEEDLE =
-  "The previous attempt did not produce a user-visible answer.";
+export const QA_EMPTY_RESPONSE_RETRY_NEEDLE = "Continue from the current state";
 export const QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE =
-  "The previous assistant turn completed its tool calls but did not produce a user-visible answer.";
+  "Do not repeat completed tool calls or restart from scratch. Do not call tools in this step.";
 export const QA_SKILL_WORKSHOP_GIF_PROMPT_RE =
   /externally sourced animated GIF asset|animated GIF asset in a product UI/i;
 export const QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE = /Review transcript for durable skill updates/i;
@@ -405,9 +358,8 @@ export const QA_TOOL_SEARCH_PROMPT_RE = /tool search qa check/i;
 export const QA_TOOL_SEARCH_FAILURE_PROMPT_RE = /tool search qa failure/i;
 export const QA_MCP_CODE_MODE_PROMPT_RE = /mcp code mode qa check/i;
 export const QA_RESTART_CODE_MODE_WAIT_PROMPT_RE = /code mode restart wait qa check/i;
-export const QA_RESTART_RECOVERY_PROMPT_RE = /previous turn was interrupted by a gateway restart/i;
-export const QA_KILL_RESTART_PROMPT_RE = /\bKILL-RESTART-PROMPT\b/u;
-export const QA_KILL_RESTART_RECOVERED_MARKER = "KILL-RESTART-RECOVERED-OK";
+export const QA_RESTART_RESUME_PROMPT_RE =
+  /The Gateway restarted while you were working\. Resume your work:/u;
 const QA_AUDIO_TRANSCRIPTION_TEXT =
   "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK";
 const QA_GROUP_AUDIO_TRANSCRIPTION_TEXT =
@@ -426,23 +378,25 @@ export type MockScenarioState = {
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;
   repeatedRequestRecoveryAttempts: number;
+  stalledTurnRecoveryAttempts: number;
   toolLoopReadAttempts: number;
+  rateLimitAfterToolInjected: boolean;
 };
 
-export function sourceDiscoveryReadPathForProvider(providerVariant: MockOpenAiProviderVariant) {
+export function sourceDiscoveryReadPathForProvider(providerVariant: MockProviderVariant) {
   return providerVariant === "anthropic"
     ? "repo/docs/help/testing.md"
     : "repo/qa/scenarios/index.yaml";
 }
 
-export function subagentHandoffTaskForProvider(providerVariant: MockOpenAiProviderVariant) {
+export function subagentHandoffTaskForProvider(providerVariant: MockProviderVariant) {
   return providerVariant === "anthropic"
     ? "Inspect the QA docs fixture and return one concise protocol note."
     : "Inspect the QA workspace and return one concise protocol note.";
 }
 
 export function subagentFanoutTaskForProvider(
-  providerVariant: MockOpenAiProviderVariant,
+  providerVariant: MockProviderVariant,
   worker: "alpha" | "beta",
 ) {
   const marker = worker === "alpha" ? "ALPHA-OK" : "BETA-OK";
@@ -493,33 +447,44 @@ export function isPreviewCompletion(
   );
 }
 
+export function writeSseHeaders(res: ServerResponse, contentLength?: number) {
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+    ...(contentLength === undefined ? {} : { "content-length": contentLength }),
+  });
+}
+
 export async function writeSse(
   res: ServerResponse,
   events: Array<StreamEvent | AnthropicStreamEvent>,
   protocol: "responses" | "anthropic",
   pauseMs?: number,
+  pause?: () => Promise<void>,
 ) {
   const frames = events.map(
     (event) =>
       `${protocol === "anthropic" ? `event: ${event.type}\n` : ""}data: ${JSON.stringify(event)}\n\n`,
   );
   const completionIndex =
-    pauseMs === undefined
+    pauseMs === undefined && pause === undefined
       ? -1
       : events.findIndex((event, index) => isPreviewCompletion(event, events[index - 1]));
   const body =
     frames.slice(Math.max(0, completionIndex)).join("") +
     (protocol === "responses" ? "data: [DONE]\n\n" : "");
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-    ...(completionIndex < 0 ? { "content-length": Buffer.byteLength(body) } : {}),
-  });
+  if (!res.headersSent) {
+    writeSseHeaders(res, completionIndex < 0 ? Buffer.byteLength(body) : undefined);
+  }
   if (completionIndex >= 0) {
     // Flush preview deltas before delaying the final text and completion frames.
     res.write(frames.slice(0, completionIndex).join(""));
-    await sleep(pauseMs);
+    if (pause) {
+      await pause();
+    } else {
+      await sleep(pauseMs);
+    }
   }
   res.end(body);
 }
@@ -535,11 +500,7 @@ export type AnthropicStreamEvent = Record<string, unknown> & {
 };
 
 export function countApproxTokens(text: string) {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return 0;
-  }
-  return Math.max(1, Math.ceil(trimmed.length / 4));
+  return Math.ceil(text.trim().length / 4);
 }
 
 export function extractEmbeddingInputTexts(input: unknown): string[] {
@@ -559,7 +520,8 @@ export function extractEmbeddingInputTexts(input: unknown): string[] {
   return [];
 }
 
-export function buildDeterministicEmbedding(text: string, dimensions = 16) {
+export function buildDeterministicEmbedding(text: string) {
+  const dimensions = 16;
   const values = Array.from({ length: dimensions }, () => 0);
   for (let index = 0; index < text.length; index += 1) {
     const embeddingIndex = index % dimensions;

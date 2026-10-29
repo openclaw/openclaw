@@ -1,28 +1,12 @@
 import type { RouteLocation } from "@openclaw/uirouter";
-import { definePage } from "@openclaw/uirouter";
-import { html } from "lit";
-import { routePageSpec } from "../../app-route-paths.ts";
+import { defineSolidPage } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  SESSIONS_PAGE_DEFAULT_LIMIT,
-  type SessionArchivedFilter,
-  type SessionListOptions,
-} from "../../lib/sessions/index.ts";
-import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
+import { buildSessionsListQuery } from "./list-query.ts";
 
 export type SessionsRouteData = {
   expandedSessionKey: string | null;
   statusFilter: SessionArchivedFilter;
-};
-
-type SessionsPageListFilters = {
-  activeMinutes?: number;
-  limit?: number;
-  includeGlobal: boolean;
-  includeUnknown: boolean;
-  statusFilter: SessionArchivedFilter;
-  deepLinkSessionKey?: string | null;
-  search?: string;
 };
 
 function routeOptions(location: RouteLocation) {
@@ -36,52 +20,35 @@ function routeOptions(location: RouteLocation) {
   return { expandedSessionKey, statusFilter };
 }
 
-export function sessionsPageListQuery(
-  context: Pick<ApplicationContext, "agentSelection">,
-  filters: SessionsPageListFilters,
-): SessionListOptions {
-  const deepLinkSessionKey = filters.deepLinkSessionKey?.trim() || null;
-  const scopeAgentId =
-    parseAgentSessionKey(deepLinkSessionKey)?.agentId ??
-    context.agentSelection.state.scopeId?.trim();
-  const activeMinutes =
-    !deepLinkSessionKey && filters.statusFilter === "active" ? filters.activeMinutes : undefined;
-  return {
-    limit: deepLinkSessionKey ? SESSIONS_PAGE_DEFAULT_LIMIT : filters.limit,
-    ...(activeMinutes ? { activeMinutes } : {}),
-    ...(deepLinkSessionKey || filters.search?.trim()
-      ? { search: deepLinkSessionKey ?? filters.search!.trim() }
-      : {}),
-    includeGlobal: deepLinkSessionKey ? true : filters.includeGlobal,
-    includeUnknown: deepLinkSessionKey ? true : filters.includeUnknown,
-    includeDerivedTitles: false,
-    includeLastMessage: false,
-    archivedFilter: filters.statusFilter,
-    ...(scopeAgentId ? { agentId: scopeAgentId } : {}),
-  };
-}
-
-async function loadSessionsRoute(
-  context: ApplicationContext,
-  location: RouteLocation,
-): Promise<SessionsRouteData> {
-  await context.runtimeConfig.ensureLoaded().catch(() => undefined);
-  // The mounted page owns list issuance, including scope/status navigation
-  // during a search. Prefetching here bypasses its single in-flight request.
-  return routeOptions(location);
-}
-
-export const page = definePage({
-  ...routePageSpec("sessions"),
-  loaderDeps: (context: ApplicationContext, location: RouteLocation) => {
-    const options = routeOptions(location);
-    return `${options.expandedSessionKey ?? ""}\u0000${options.statusFilter}\u0000${context.agentSelection.state.scopeId ?? "all"}`;
+export const page = defineSolidPage<"sessions", ApplicationContext, SessionsRouteData>(
+  "sessions",
+  () => import("./sessions-page.tsx").then((module) => module.SessionsPage),
+  {
+    loaderDeps: (context: ApplicationContext, location: RouteLocation) => {
+      const options = routeOptions(location);
+      return `${options.expandedSessionKey ?? ""}\u0000${options.statusFilter}\u0000${context.agentSelection.state.scopeId ?? "all"}`;
+    },
+    loader: (context: ApplicationContext, { location, cause }): SessionsRouteData => {
+      const options = routeOptions(location);
+      // Entering navigation fills the managed window while the view imports.
+      // Same-route search and filter changes stay with the mounted page.
+      if (
+        cause === "preload" ||
+        (cause === "navigation" && context.router.getState().matches[0]?.routeId !== "sessions")
+      ) {
+        void context.sessions.refreshList(
+          buildSessionsListQuery(
+            context.agentSelection.state.scopeId,
+            {
+              statusFilter: options.statusFilter,
+              includeGlobal: true,
+              includeUnknown: Boolean(options.expandedSessionKey),
+            },
+            options.expandedSessionKey,
+          ),
+        );
+      }
+      return options;
+    },
   },
-  loader: (context: ApplicationContext, { location }) => loadSessionsRoute(context, location),
-  component: () =>
-    import("./sessions-page.ts").then(() => ({
-      header: true,
-      render: (data: SessionsRouteData | undefined) =>
-        html`<openclaw-sessions-page .routeData=${data}></openclaw-sessions-page>`,
-    })),
-});
+);

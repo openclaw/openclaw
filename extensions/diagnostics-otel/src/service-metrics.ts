@@ -1,4 +1,4 @@
-import type { Meter, MetricOptions } from "@opentelemetry/api";
+import type { Meter } from "@opentelemetry/api";
 import {
   AGENT_DURATION_MS_BUCKETS,
   CONTEXT_TOKENS_BUCKETS,
@@ -7,65 +7,160 @@ import {
 } from "./service-constants.js";
 
 const DEFAULT_METRIC_NAME_PREFIX = "openclaw.";
+type SessionRowSelectionBaseline = {
+  selections: Map<string, { calls: number; rows: number }>;
+  resets: number;
+};
+const sessionRowSelectionBaselines = new WeakMap<Meter, Map<string, SessionRowSelectionBaseline>>();
 
 export function createDiagnosticsMetrics(
   meter: Meter,
   metricNamePrefix = DEFAULT_METRIC_NAME_PREFIX,
 ) {
-  const resolveMetricName = (name: `openclaw.${string}`) =>
-    `${metricNamePrefix}${name.slice(DEFAULT_METRIC_NAME_PREFIX.length)}`;
-  const createCounter = (name: `openclaw.${string}`, options?: MetricOptions) =>
-    meter.createCounter(resolveMetricName(name), options);
-  const createHistogram = (name: `openclaw.${string}`, options?: MetricOptions) =>
-    meter.createHistogram(resolveMetricName(name), options);
+  // A preloaded SDK retains its meter and instruments across plugin service reloads.
+  let meterBaselines = sessionRowSelectionBaselines.get(meter);
+  if (!meterBaselines) {
+    sessionRowSelectionBaselines.set(meter, (meterBaselines = new Map()));
+  }
+  let sessionRowSelectionBaseline = meterBaselines.get(metricNamePrefix);
+  if (!sessionRowSelectionBaseline) {
+    sessionRowSelectionBaseline = { selections: new Map(), resets: 0 };
+    meterBaselines.set(metricNamePrefix, sessionRowSelectionBaseline);
+  }
+  const createCounter = (name: string, description: string, unit = "1") =>
+    meter.createCounter(`${metricNamePrefix}${name}`, { unit, description });
+  const createHistogram = (
+    name: string,
+    description: string,
+    unit = "ms",
+    explicitBucketBoundaries?: number[],
+  ) =>
+    meter.createHistogram(`${metricNamePrefix}${name}`, {
+      unit,
+      description,
+      ...(explicitBucketBoundaries ? { advice: { explicitBucketBoundaries } } : {}),
+    });
+  const createDurationHistogram = (name: string, description: string) =>
+    createHistogram(name, description, "ms", AGENT_DURATION_MS_BUCKETS);
 
   return {
-    gcDurationHistogram: createHistogram("openclaw.gc.duration_ms", {
-      unit: "ms",
-      description: "Elapsed garbage collection duration for the hosting JavaScript isolate",
-      advice: { explicitBucketBoundaries: AGENT_DURATION_MS_BUCKETS },
-    }),
-    gatewayEventLoopDelayMaxHistogram: createHistogram("openclaw.gateway.event_loop.delay_max_ms", {
-      unit: "ms",
-      description: "Maximum event-loop delay per completed Gateway observation window",
-      advice: { explicitBucketBoundaries: AGENT_DURATION_MS_BUCKETS },
-    }),
-    gatewayEventLoopObservedCounter: createCounter("openclaw.gateway.event_loop.observed_ms", {
-      unit: "ms",
-      description: "Elapsed time covered by completed Gateway event-loop observation windows",
-    }),
-    gatewayRpcRequestsCounter: createCounter("openclaw.gateway.rpc.requests", {
-      unit: "1",
-      description: "Authenticated Gateway WebSocket requests received",
-    }),
-    gatewayRpcOutcomesCounter: createCounter("openclaw.gateway.rpc.outcomes", {
-      unit: "1",
-      description: "Gateway RPC observations by phase and outcome",
-    }),
-    gatewayRpcFirstResponseHistogram: createHistogram("openclaw.gateway.rpc.first_response_ms", {
-      unit: "ms",
-      description: "Elapsed time until the first Gateway RPC response is sent",
-      advice: { explicitBucketBoundaries: AGENT_DURATION_MS_BUCKETS },
-    }),
-    gatewayRpcHandlerHistogram: createHistogram("openclaw.gateway.rpc.handler_ms", {
-      unit: "ms",
-      description: "Gateway RPC handler duration until return or throw",
-      advice: { explicitBucketBoundaries: AGENT_DURATION_MS_BUCKETS },
-    }),
-    gatewayRpcAdmissionHistogram: createHistogram("openclaw.gateway.rpc.admission_ms", {
-      unit: "ms",
-      description: "Elapsed time from Gateway RPC receipt until handler invocation",
-      advice: { explicitBucketBoundaries: AGENT_DURATION_MS_BUCKETS },
-    }),
-    gatewayRpcQueueWaitHistogram: createHistogram("openclaw.gateway.rpc.queue_wait_ms", {
-      unit: "ms",
-      description: "Gateway operator request start queue wait",
-      advice: { explicitBucketBoundaries: AGENT_DURATION_MS_BUCKETS },
-    }),
-    tokensCounter: createCounter("openclaw.tokens", {
-      unit: "1",
-      description: "Token usage by type",
-    }),
+    sessionRowSelectionBaseline,
+    sessionsListBaselineRetirementsCounter: createCounter(
+      "sessions.list.baseline_retirements",
+      "Session list baseline retirement events by cause, not rows or views retired",
+    ),
+    sessionsListBaseMissesCounter: createCounter(
+      "sessions.list.base_misses",
+      "Successful full sidebar responses with a supplied base, by miss reason",
+    ),
+    gcDurationHistogram: createDurationHistogram(
+      "gc.duration_ms",
+      "Elapsed garbage collection duration for the hosting JavaScript isolate",
+    ),
+    gatewayEventLoopDelayMaxHistogram: createDurationHistogram(
+      "gateway.event_loop.delay_max_ms",
+      "Maximum event-loop delay per completed Gateway observation window",
+    ),
+    gatewayEventLoopObservedCounter: createCounter(
+      "gateway.event_loop.observed_ms",
+      "Elapsed time covered by completed Gateway event-loop observation windows",
+      "ms",
+    ),
+    gatewayRpcRequestsCounter: createCounter(
+      "gateway.rpc.requests",
+      "Authenticated Gateway WebSocket requests received",
+    ),
+    gatewayWsSessionEventFramesCounter: createCounter(
+      "gateway.ws.session_event_frames",
+      "Outbound session event frames by reason and exact message subscription per socket",
+    ),
+    gatewayWsSessionEventBytesCounter: createCounter(
+      "gateway.ws.session_event_bytes",
+      "Encoded outbound session event bytes by reason and exact message subscription per socket",
+      "By",
+    ),
+    gatewayWsPresenceFramesCounter: createCounter(
+      "gateway.ws.presence_frames",
+      "Outbound presence frames accepted by the sender per socket, by delivery mode",
+    ),
+    gatewayWsPresenceBytesCounter: createCounter(
+      "gateway.ws.presence_bytes",
+      "Encoded outbound presence bytes before framing or compression per socket, by delivery mode",
+      "By",
+    ),
+    gatewayWsEventsCounter: createCounter(
+      "gateway.ws.events",
+      "Outbound Gateway WebSocket event frames accepted by the sender per socket",
+    ),
+    gatewayWsEventBytesCounter: createCounter(
+      "gateway.ws.event_bytes",
+      "Encoded outbound Gateway WebSocket event bytes before framing or compression per socket",
+      "By",
+    ),
+    gatewayWsEventWireBytesCounter: createCounter(
+      "gateway.ws.event_wire_bytes",
+      "Outbound Gateway WebSocket payload bytes after compression per socket, excluding framing",
+      "By",
+    ),
+    gatewayWsEventFrameBytesCounter: createCounter(
+      "gateway.ws.event_frame_bytes",
+      "Cumulative counts of accepted raw Gateway event frames by byte-size upper bound",
+    ),
+    gatewayWsOperatorConnectionsGauge: meter.createGauge(
+      `${metricNamePrefix}gateway.ws.operator_connections`,
+      { unit: "1", description: "Connected authenticated Gateway operator WebSockets" },
+    ),
+    sessionsListRetainedViewsGauge: meter.createGauge(
+      `${metricNamePrefix}sessions.list.retained_views`,
+      { unit: "1", description: "Retained session-list views across all publications" },
+    ),
+    sessionsListRetainedRefsGauge: meter.createGauge(
+      `${metricNamePrefix}sessions.list.retained_refs`,
+      {
+        unit: "1",
+        description: "Row references and selection entries retained by session-list views",
+      },
+    ),
+    sessionsListRetainedBytesGauge: meter.createGauge(
+      `${metricNamePrefix}sessions.list.retained_bytes`,
+      { unit: "By", description: "Estimated memory retained by session-list views" },
+    ),
+    sessionEventRowsRetainedEntriesGauge: meter.createGauge(
+      `${metricNamePrefix}session_event_rows_retained_entries`,
+      {
+        unit: "1",
+        description: "Session-event field-hash vectors retained across all connections",
+      },
+    ),
+    sessionEventRowsResetCounter: createCounter(
+      "session_event_rows_reset",
+      "Retained session-event wire baselines retired by cause",
+    ),
+    sessionEventRowsRetainedBytesGauge: meter.createGauge(
+      `${metricNamePrefix}session_event_rows_retained_bytes`,
+      { unit: "By", description: "Estimated memory retained by session-event field-hash vectors" },
+    ),
+    gatewayRpcOutcomesCounter: createCounter(
+      "gateway.rpc.outcomes",
+      "Gateway RPC observations by phase and outcome",
+    ),
+    gatewayRpcFirstResponseHistogram: createDurationHistogram(
+      "gateway.rpc.first_response_ms",
+      "Elapsed time until the first Gateway RPC response is sent",
+    ),
+    gatewayRpcHandlerHistogram: createDurationHistogram(
+      "gateway.rpc.handler_ms",
+      "Gateway RPC handler duration until return or throw",
+    ),
+    gatewayRpcAdmissionHistogram: createDurationHistogram(
+      "gateway.rpc.admission_ms",
+      "Elapsed time from Gateway RPC receipt until handler invocation",
+    ),
+    gatewayRpcQueueWaitHistogram: createDurationHistogram(
+      "gateway.rpc.queue_wait_ms",
+      "Gateway operator start queue or worker frame queue wait",
+    ),
+    tokensCounter: createCounter("tokens", "Token usage by type"),
     genAiTokenUsageHistogram: meter.createHistogram("gen_ai.client.token.usage", {
       unit: "{token}",
       description: "Number of input and output tokens used by GenAI client operations",
@@ -80,246 +175,183 @@ export function createDiagnosticsMetrics(
         explicitBucketBoundaries: GEN_AI_OPERATION_DURATION_BUCKETS,
       },
     }),
-    costCounter: createCounter("openclaw.cost.usd", {
-      unit: "1",
-      description: "Estimated model cost (USD)",
-    }),
-    durationHistogram: createHistogram("openclaw.run.duration_ms", {
-      unit: "ms",
-      description: "Agent run duration",
-      advice: { explicitBucketBoundaries: AGENT_DURATION_MS_BUCKETS },
-    }),
-    harnessDurationHistogram: createHistogram("openclaw.harness.duration_ms", {
-      unit: "ms",
-      description: "Agent harness lifecycle duration",
-      advice: { explicitBucketBoundaries: AGENT_DURATION_MS_BUCKETS },
-    }),
-    contextHistogram: createHistogram("openclaw.context.tokens", {
-      unit: "1",
-      description: "Context window size and usage",
-      advice: { explicitBucketBoundaries: CONTEXT_TOKENS_BUCKETS },
-    }),
-    webhookReceivedCounter: createCounter("openclaw.webhook.received", {
-      unit: "1",
-      description: "Webhook requests received",
-    }),
-    webhookErrorCounter: createCounter("openclaw.webhook.error", {
-      unit: "1",
-      description: "Webhook processing errors",
-    }),
-    webhookDurationHistogram: createHistogram("openclaw.webhook.duration_ms", {
-      unit: "ms",
-      description: "Webhook processing duration",
-    }),
-    messageQueuedCounter: createCounter("openclaw.message.queued", {
-      unit: "1",
-      description: "Messages queued for processing",
-    }),
-    messageReceivedCounter: createCounter("openclaw.message.received", {
-      unit: "1",
-      description: "Inbound messages received",
-    }),
-    messageDispatchStartedCounter: createCounter("openclaw.message.dispatch.started", {
-      unit: "1",
-      description: "Inbound message dispatch attempts started",
-    }),
-    messageDispatchCompletedCounter: createCounter("openclaw.message.dispatch.completed", {
-      unit: "1",
-      description: "Inbound message dispatch attempts completed",
-    }),
-    messageDispatchDurationHistogram: createHistogram("openclaw.message.dispatch.duration_ms", {
-      unit: "ms",
-      description: "Inbound message dispatch duration",
-    }),
-    messageProcessedCounter: createCounter("openclaw.message.processed", {
-      unit: "1",
-      description: "Messages processed by outcome",
-    }),
-    messageDurationHistogram: createHistogram("openclaw.message.duration_ms", {
-      unit: "ms",
-      description: "Message processing duration",
-    }),
-    messageDeliveryStartedCounter: createCounter("openclaw.message.delivery.started", {
-      unit: "1",
-      description: "Outbound message delivery attempts started",
-    }),
-    messageDeliveryDurationHistogram: createHistogram("openclaw.message.delivery.duration_ms", {
-      unit: "ms",
-      description: "Outbound message delivery duration",
-    }),
-    queueDepthHistogram: createHistogram("openclaw.queue.depth", {
-      unit: "1",
-      description: "Queue depth on enqueue/dequeue",
-    }),
-    queueWaitHistogram: createHistogram("openclaw.queue.wait_ms", {
-      unit: "ms",
-      description: "Queue wait time before execution",
-    }),
-    laneEnqueueCounter: createCounter("openclaw.queue.lane.enqueue", {
-      unit: "1",
-      description: "Command queue lane enqueue events",
-    }),
-    laneDequeueCounter: createCounter("openclaw.queue.lane.dequeue", {
-      unit: "1",
-      description: "Command queue lane dequeue events",
-    }),
-    sessionStateCounter: createCounter("openclaw.session.state", {
-      unit: "1",
-      description: "Session state transitions",
-    }),
-    sessionTurnCreatedCounter: createCounter("openclaw.session.turn.created", {
-      unit: "1",
-      description: "Agent session turns created",
-    }),
-    sessionStuckCounter: createCounter("openclaw.session.stuck", {
-      unit: "1",
-      description: "Sessions stuck in processing",
-    }),
-    sessionStuckAgeHistogram: createHistogram("openclaw.session.stuck_age_ms", {
-      unit: "ms",
-      description: "Age of stuck sessions",
-    }),
-    sessionRecoveryRequestedCounter: createCounter("openclaw.session.recovery.requested", {
-      unit: "1",
-      description: "Session recovery attempts requested",
-    }),
-    sessionRecoveryCompletedCounter: createCounter("openclaw.session.recovery.completed", {
-      unit: "1",
-      description: "Session recovery attempts completed",
-    }),
-    sessionRecoveryAgeHistogram: createHistogram("openclaw.session.recovery.age_ms", {
-      unit: "ms",
-      description: "Age of sessions selected for recovery",
-    }),
-    talkEventCounter: createCounter("openclaw.talk.event", {
-      unit: "1",
-      description: "Talk events emitted by type",
-    }),
-    talkEventDurationHistogram: createHistogram("openclaw.talk.event.duration_ms", {
-      unit: "ms",
-      description: "Talk event duration when reported",
-    }),
-    talkAudioBytesHistogram: createHistogram("openclaw.talk.audio.bytes", {
-      unit: "By",
-      description: "Talk audio frame byte lengths",
-    }),
-    runAttemptCounter: createCounter("openclaw.run.attempt", {
-      unit: "1",
-      description: "Run attempts",
-    }),
-    toolLoopCounter: createCounter("openclaw.tool.loop", {
-      unit: "1",
-      description: "Detected repetitive tool-call loop events",
-    }),
-    skillUsedCounter: createCounter("openclaw.skill.used", {
-      unit: "1",
-      description: "Skills used by agent runs",
-    }),
-    modelCallDurationHistogram: createHistogram("openclaw.model_call.duration_ms", {
-      unit: "ms",
-      description: "Model call duration",
-    }),
-    modelCallRequestBytesHistogram: createHistogram("openclaw.model_call.request_bytes", {
-      unit: "By",
-      description: "UTF-8 byte size of sanitized model request payloads",
-    }),
-    modelCallResponseBytesHistogram: createHistogram("openclaw.model_call.response_bytes", {
-      unit: "By",
-      description: "UTF-8 byte size of bounded streamed model response payloads",
-    }),
-    modelCallTimeToFirstByteHistogram: createHistogram(
-      "openclaw.model_call.time_to_first_byte_ms",
-      {
-        unit: "ms",
-        description: "Elapsed time before the first streamed model response event",
-      },
+    costCounter: createCounter("cost.usd", "Estimated model cost (USD)"),
+    durationHistogram: createDurationHistogram("run.duration_ms", "Agent run duration"),
+    harnessDurationHistogram: createDurationHistogram(
+      "harness.duration_ms",
+      "Agent harness lifecycle duration",
     ),
-    modelFailoverCounter: createCounter("openclaw.model.failover", {
-      unit: "1",
-      description: "Model failovers by source, destination, lane, and reason",
-    }),
-    toolExecutionDurationHistogram: createHistogram("openclaw.tool.execution.duration_ms", {
-      unit: "ms",
-      description: "Tool execution duration",
-    }),
-    toolExecutionBlockedCounter: createCounter("openclaw.tool.execution.blocked", {
-      unit: "1",
-      description: "Tool executions blocked by policy or sandbox diagnostics",
-    }),
-    execProcessDurationHistogram: createHistogram("openclaw.exec.duration_ms", {
-      unit: "ms",
-      description: "Exec process duration",
-    }),
-    memoryRssHistogram: createHistogram("openclaw.memory.rss_bytes", {
-      unit: "By",
-      description: "Resident set size reported by diagnostic memory samples",
-    }),
-    memoryHeapUsedHistogram: createHistogram("openclaw.memory.heap_used_bytes", {
-      unit: "By",
-      description: "Heap used bytes reported by diagnostic memory samples",
-    }),
-    memoryHeapTotalHistogram: createHistogram("openclaw.memory.heap_total_bytes", {
-      unit: "By",
-      description: "Heap total bytes reported by diagnostic memory samples",
-    }),
-    memoryExternalHistogram: createHistogram("openclaw.memory.external_bytes", {
-      unit: "By",
-      description: "External memory bytes reported by diagnostic memory samples",
-    }),
-    memoryArrayBuffersHistogram: createHistogram("openclaw.memory.array_buffers_bytes", {
-      unit: "By",
-      description: "ArrayBuffer bytes reported by diagnostic memory samples",
-    }),
-    memoryPressureCounter: createCounter("openclaw.memory.pressure", {
-      unit: "1",
-      description: "Diagnostic memory pressure events",
-    }),
-    asyncQueueDroppedCounter: createCounter("openclaw.diagnostic.async_queue.dropped", {
-      unit: "1",
-      description: "Async diagnostic queue drops by dropped event class",
-    }),
-    payloadLargeCounter: createCounter("openclaw.payload.large", {
-      unit: "1",
-      description: "Oversized payload diagnostics by surface and action",
-    }),
-    payloadLargeBytesHistogram: createHistogram("openclaw.payload.large_bytes", {
-      unit: "By",
-      description: "Oversized payload byte sizes by surface and action",
-    }),
-    livenessWarningCounter: createCounter("openclaw.liveness.warning", {
-      unit: "1",
-      description: "Diagnostic liveness warning events",
-    }),
+    contextHistogram: createHistogram(
+      "context.tokens",
+      "Context window size and usage",
+      "1",
+      CONTEXT_TOKENS_BUCKETS,
+    ),
+    webhookReceivedCounter: createCounter("webhook.received", "Webhook requests received"),
+    webhookErrorCounter: createCounter("webhook.error", "Webhook processing errors"),
+    webhookDurationHistogram: createHistogram("webhook.duration_ms", "Webhook processing duration"),
+    messageQueuedCounter: createCounter("message.queued", "Messages queued for processing"),
+    messageReceivedCounter: createCounter("message.received", "Inbound messages received"),
+    messageDispatchStartedCounter: createCounter(
+      "message.dispatch.started",
+      "Inbound message dispatch attempts started",
+    ),
+    messageDispatchCompletedCounter: createCounter(
+      "message.dispatch.completed",
+      "Inbound message dispatch attempts completed",
+    ),
+    messageDispatchDurationHistogram: createHistogram(
+      "message.dispatch.duration_ms",
+      "Inbound message dispatch duration",
+    ),
+    messageProcessedCounter: createCounter("message.processed", "Messages processed by outcome"),
+    messageDurationHistogram: createDurationHistogram(
+      "message.duration_ms",
+      "Message processing duration",
+    ),
+    messageDeliveryStartedCounter: createCounter(
+      "message.delivery.started",
+      "Outbound message delivery attempts started",
+    ),
+    messageDeliveryDurationHistogram: createHistogram(
+      "message.delivery.duration_ms",
+      "Outbound message delivery duration",
+    ),
+    queueDepthHistogram: createHistogram("queue.depth", "Queue depth on enqueue/dequeue", "1"),
+    queueWaitHistogram: createHistogram("queue.wait_ms", "Queue wait time before execution"),
+    laneEnqueueCounter: createCounter("queue.lane.enqueue", "Command queue lane enqueue events"),
+    laneDequeueCounter: createCounter("queue.lane.dequeue", "Command queue lane dequeue events"),
+    sessionStateCounter: createCounter("session.state", "Session state transitions"),
+    sessionTurnCreatedCounter: createCounter("session.turn.created", "Agent session turns created"),
+    sessionStuckCounter: createCounter("session.stuck", "Sessions stuck in processing"),
+    sessionStuckAgeHistogram: createHistogram("session.stuck_age_ms", "Age of stuck sessions"),
+    sessionRecoveryRequestedCounter: createCounter(
+      "session.recovery.requested",
+      "Session recovery attempts requested",
+    ),
+    sessionRecoveryCompletedCounter: createCounter(
+      "session.recovery.completed",
+      "Session recovery attempts completed",
+    ),
+    sessionRecoveryAgeHistogram: createHistogram(
+      "session.recovery.age_ms",
+      "Age of sessions selected for recovery",
+    ),
+    talkEventCounter: createCounter("talk.event", "Talk events emitted by type"),
+    talkEventDurationHistogram: createHistogram(
+      "talk.event.duration_ms",
+      "Talk event duration when reported",
+    ),
+    talkAudioBytesHistogram: createHistogram(
+      "talk.audio.bytes",
+      "Talk audio frame byte lengths",
+      "By",
+    ),
+    runAttemptCounter: createCounter("run.attempt", "Run attempts"),
+    toolLoopCounter: createCounter("tool.loop", "Detected repetitive tool-call loop events"),
+    skillUsedCounter: createCounter("skill.used", "Skills used by agent runs"),
+    modelCallDurationHistogram: createHistogram("model_call.duration_ms", "Model call duration"),
+    modelCallRequestBytesHistogram: createHistogram(
+      "model_call.request_bytes",
+      "UTF-8 byte size of sanitized model request payloads",
+      "By",
+    ),
+    modelCallResponseBytesHistogram: createHistogram(
+      "model_call.response_bytes",
+      "UTF-8 byte size of bounded streamed model response payloads",
+      "By",
+    ),
+    modelCallTimeToFirstByteHistogram: createHistogram(
+      "model_call.time_to_first_byte_ms",
+      "Elapsed time before the first streamed model response event",
+    ),
+    modelFailoverCounter: createCounter(
+      "model.failover",
+      "Model failovers by source, destination, lane, and reason",
+    ),
+    toolExecutionDurationHistogram: createHistogram(
+      "tool.execution.duration_ms",
+      "Tool execution duration",
+    ),
+    toolExecutionBlockedCounter: createCounter(
+      "tool.execution.blocked",
+      "Tool executions blocked by policy or sandbox diagnostics",
+    ),
+    execProcessDurationHistogram: createHistogram("exec.duration_ms", "Exec process duration"),
+    memoryRssHistogram: createHistogram(
+      "memory.rss_bytes",
+      "Resident set size reported by diagnostic memory samples",
+      "By",
+    ),
+    memoryHeapUsedHistogram: createHistogram(
+      "memory.heap_used_bytes",
+      "Heap used bytes reported by diagnostic memory samples",
+      "By",
+    ),
+    memoryHeapTotalHistogram: createHistogram(
+      "memory.heap_total_bytes",
+      "Heap total bytes reported by diagnostic memory samples",
+      "By",
+    ),
+    memoryExternalHistogram: createHistogram(
+      "memory.external_bytes",
+      "External memory bytes reported by diagnostic memory samples",
+      "By",
+    ),
+    memoryArrayBuffersHistogram: createHistogram(
+      "memory.array_buffers_bytes",
+      "ArrayBuffer bytes reported by diagnostic memory samples",
+      "By",
+    ),
+    memoryPressureCounter: createCounter("memory.pressure", "Diagnostic memory pressure events"),
+    sessionRowSelectionsCounter: createCounter(
+      "session.row.selections",
+      "Successful resident session-row selections by query shape and enclosing task",
+    ),
+    sessionRowSelectionRowsCounter: createCounter(
+      "session.row.selection.rows",
+      "Resident session rows selected before federation and visibility filtering",
+    ),
+    sessionRowSelectionResetsCounter: createCounter(
+      "session.row.selection.resets",
+      "Broad session-row selection invalidations, including topology replacement and disposal",
+    ),
+    asyncQueueDroppedCounter: createCounter(
+      "diagnostic.async_queue.dropped",
+      "Async diagnostic queue drops by dropped event class",
+    ),
+    payloadLargeCounter: createCounter(
+      "payload.large",
+      "Oversized payload diagnostics by surface and action",
+    ),
+    payloadLargeBytesHistogram: createHistogram(
+      "payload.large_bytes",
+      "Oversized payload byte sizes by surface and action",
+      "By",
+    ),
+    livenessWarningCounter: createCounter("liveness.warning", "Diagnostic liveness warning events"),
     livenessEventLoopDelayP99Histogram: createHistogram(
-      "openclaw.liveness.event_loop_delay_p99_ms",
-      {
-        unit: "ms",
-        description: "P99 event-loop delay reported by diagnostic liveness warnings",
-      },
+      "liveness.event_loop_delay_p99_ms",
+      "P99 event-loop delay reported by diagnostic liveness warnings",
     ),
     livenessEventLoopDelayMaxHistogram: createHistogram(
-      "openclaw.liveness.event_loop_delay_max_ms",
-      {
-        unit: "ms",
-        description: "Maximum event-loop delay reported by diagnostic liveness warnings",
-      },
+      "liveness.event_loop_delay_max_ms",
+      "Maximum event-loop delay reported by diagnostic liveness warnings",
     ),
     livenessEventLoopUtilizationHistogram: createHistogram(
-      "openclaw.liveness.event_loop_utilization",
-      {
-        unit: "1",
-        description: "Event-loop utilization reported by diagnostic liveness warnings",
-      },
+      "liveness.event_loop_utilization",
+      "Event-loop utilization reported by diagnostic liveness warnings",
+      "1",
     ),
-    livenessCpuCoreRatioHistogram: createHistogram("openclaw.liveness.cpu_core_ratio", {
-      unit: "1",
-      description:
-        "Whole-process CPU usage in core equivalents, including worker and native threads; can exceed 1.",
-    }),
-    telemetryExporterCounter: createCounter("openclaw.telemetry.exporter.events", {
-      unit: "1",
-      description: "Diagnostic telemetry exporter lifecycle and failure events",
-    }),
+    livenessCpuCoreRatioHistogram: createHistogram(
+      "liveness.cpu_core_ratio",
+      "Whole-process CPU usage in core equivalents, including worker and native threads; can exceed 1.",
+      "1",
+    ),
+    telemetryExporterCounter: createCounter(
+      "telemetry.exporter.events",
+      "Diagnostic telemetry exporter lifecycle and failure events",
+    ),
   };
 }
 

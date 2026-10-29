@@ -1,11 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAgentToolsSandboxContext } from "../../agents/test-helpers/agent-tools-sandbox-context.js";
-import {
-  createSilentIdleArgv,
-  createStubChildAdapter,
-  spawnChild,
-} from "./supervisor.test-support.js";
+import { createStubChildAdapter } from "./supervisor.test-support.js";
 
 const { createChildAdapterMock, createPtyAdapterMock, getProcessSupervisorMock } = vi.hoisted(
   () => ({
@@ -16,7 +13,12 @@ const { createChildAdapterMock, createPtyAdapterMock, getProcessSupervisorMock }
 );
 
 vi.mock("./adapters/child.js", () => ({
-  createChildAdapter: createChildAdapterMock,
+  createChildAdapter: async (
+    ...args: Parameters<typeof import("./adapters/child.js").createChildAdapter>
+  ) => ({
+    adapter: await createChildAdapterMock(...args),
+    ready: Promise.resolve(),
+  }),
 }));
 
 vi.mock("./adapters/pty.js", () => ({ createPtyAdapter: createPtyAdapterMock }));
@@ -31,11 +33,22 @@ vi.mock("./index.js", () => ({
 let runExecProcess: typeof import("../../agents/bash-tools.exec-runtime.js").runExecProcess;
 let createProcessSupervisor: typeof import("./supervisor.js").createProcessSupervisor;
 let createOpenClawCodingTools: typeof import("../../agents/agent-tools.js").createOpenClawCodingTools;
+let supervisor: ReturnType<typeof createProcessSupervisor>;
+let scopeKey: string;
+const generationCleanups: Array<(reason: string) => Promise<void>> = [];
+let child: ReturnType<typeof createStubChildAdapter>;
+let external: typeof child;
+let extinction: ReturnType<typeof createDeferred<void>>;
+let run: Awaited<ReturnType<typeof runExecProcess>> | undefined;
 
-function prepareOneShotTools(
-  scopeKey: string,
-  generationCleanups: Array<(reason: string) => Promise<void>>,
-) {
+async function expectPending(promise: Promise<unknown>) {
+  const settled = vi.fn();
+  void promise.then(settled, settled);
+  await Promise.resolve();
+  expect(settled).not.toHaveBeenCalled();
+}
+
+function prepareOneShotTools() {
   createOpenClawCodingTools({
     config: { plugins: { enabled: false } },
     sessionKey: scopeKey,
@@ -71,127 +84,94 @@ describe("one-shot tool-generation process cleanup", () => {
     createPtyAdapterMock.mockReset();
     getProcessSupervisorMock.mockReset();
     vi.useRealTimers();
+    supervisor = createProcessSupervisor();
+    getProcessSupervisorMock.mockReturnValue(supervisor);
+    scopeKey = `scope:${expect.getState().currentTestName}`;
+    extinction = createDeferred();
+    child = Object.assign(createStubChildAdapter(), {
+      waitForExtinction: () => extinction.promise,
+    });
+    external = createStubChildAdapter();
+    run = undefined;
+    createChildAdapterMock.mockResolvedValue(child);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    child.settle(0);
+    external.settle(0);
+    extinction.resolve();
+    await Promise.allSettled([
+      run?.promise,
+      ...generationCleanups.splice(0).map((cleanup) => cleanup("test cleanup")),
+      supervisor.shutdown(),
+    ]);
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  it.each([false, true])(
-    "joins one-shot tool-generation backend and host cleanup (hostFails=%s)",
-    async (hostFails) => {
-      const supervisor = createProcessSupervisor();
-      getProcessSupervisorMock.mockReturnValue(supervisor);
-      const scopeKey = "scope:mixed-owned-lifetimes";
-      const generationCleanups: Array<(reason: string) => Promise<void>> = [];
-      const external = createStubChildAdapter();
-      const extinction = createDeferred();
-      const host = Object.assign(createStubChildAdapter(), {
-        waitForExtinction: () => extinction.promise,
-      });
-      createChildAdapterMock.mockResolvedValueOnce(external).mockResolvedValueOnce(host);
-      try {
-        const cleanup = prepareOneShotTools(scopeKey, generationCleanups);
-        const externalRun = await supervisor.spawn({
-          mode: "child",
-          argv: createSilentIdleArgv(),
-          scopeKey,
-          cleanupOwnership: "external",
-        });
-        const hostRun = await spawnChild(supervisor, {
-          scopeKey,
-          argv: createSilentIdleArgv(),
-        });
-        expect(createChildAdapterMock.mock.calls[0]?.[0].ownProcessTree).toBeUndefined();
-        expect(createChildAdapterMock.mock.calls[1]?.[0].ownProcessTree).toBe(true);
-        external.settle(0);
-        host.settle(0);
-        await Promise.all([externalRun.wait(), hostRun.wait()]);
-        const joined = vi.fn();
-        const closing = cleanup("completed");
-        void closing.then(joined, joined);
-        await Promise.resolve();
-        expect(joined).not.toHaveBeenCalled();
-        expect(host.killMock).toHaveBeenCalledExactlyOnceWith("SIGTERM");
-        if (hostFails) {
-          extinction.reject(new Error("owned host cleanup failed"));
-          await expect(closing).rejects.toThrow("owned host cleanup failed");
-          await expect(supervisor.shutdown()).rejects.toThrow("owned host cleanup failed");
-        } else {
-          extinction.resolve();
-          await expect(closing).resolves.toBeUndefined();
-          await expect(supervisor.shutdown()).resolves.toBeUndefined();
-        }
-      } finally {
-        external.settle(0);
-        host.settle(0);
-        extinction.resolve();
-        await Promise.allSettled([
-          ...generationCleanups.map((cleanup) => cleanup("test cleanup")),
-          supervisor.shutdown(),
-        ]);
-      }
-    },
-  );
+  it("joins one-shot backend cleanup before reporting host cleanup failure", async () => {
+    createChildAdapterMock.mockResolvedValueOnce(external).mockResolvedValueOnce(child);
+    const cleanup = prepareOneShotTools();
+    const externalRun = await supervisor.spawn({
+      mode: "child",
+      argv: ["fixture"],
+      scopeKey,
+      cleanupOwnership: "external",
+    });
+    const hostRun = await supervisor.spawn({
+      mode: "child",
+      scopeKey,
+      argv: ["fixture"],
+    });
+    expect(createChildAdapterMock.mock.calls[0]?.[0].ownProcessTree).toBeUndefined();
+    expect(createChildAdapterMock.mock.calls[1]?.[0].ownProcessTree).toBe(true);
+    external.settle(0);
+    child.settle(0);
+    await Promise.all([externalRun.wait(), hostRun.wait()]);
+    const closing = cleanup("completed");
+    await expectPending(closing);
+    expect(child.killMock).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    extinction.reject(new Error("owned host cleanup failed"));
+    await expect(closing).rejects.toThrow("owned host cleanup failed");
+    await expect(supervisor.shutdown()).rejects.toThrow("owned host cleanup failed");
+  });
 
   it("runs a one-shot host PTY request once through the owned child fallback", async () => {
-    const supervisor = createProcessSupervisor();
-    getProcessSupervisorMock.mockReturnValue(supervisor);
-    const scopeKey = "scope:pty-owned-fallback";
-    const generationCleanups: Array<(reason: string) => Promise<void>> = [];
-    const extinction = createDeferred();
-    const child = Object.assign(createStubChildAdapter(), {
-      waitForExtinction: () => extinction.promise,
-    });
     const pty = createStubChildAdapter();
     pty.settle(0);
     createPtyAdapterMock.mockResolvedValue(pty);
-    createChildAdapterMock.mockResolvedValue(child);
     const warnings: string[] = [];
-    let run: Awaited<ReturnType<typeof runExecProcess>> | undefined;
-    try {
-      const cleanup = prepareOneShotTools(scopeKey, generationCleanups);
-      run = await runExecProcess({
-        command: "fixture-command",
-        workdir: "/tmp",
-        env: {},
-        usePty: true,
-        scopeKey,
-        warnings,
-        maxOutput: 1000,
-        pendingMaxOutput: 1000,
-        notifyOnExit: false,
-        timeoutSec: null,
-      });
-      expect(createPtyAdapterMock).not.toHaveBeenCalled();
-      expect(createChildAdapterMock).toHaveBeenCalledOnce();
-      expect(createChildAdapterMock.mock.calls[0]?.[0].ownProcessTree).toBe(true);
-      expect(warnings).toEqual([
-        expect.stringContaining("PTY is unavailable when execution requires process-tree cleanup"),
-      ]);
-      child.emitStdout("command ran once");
-      child.settle(0);
-      await expect(run.promise).resolves.toMatchObject({
-        status: "completed",
-        aggregated: "command ran once",
-      });
-      const closed = vi.fn();
-      const closing = cleanup("completed");
-      void closing.then(closed, closed);
-      await Promise.resolve();
-      expect(closed).not.toHaveBeenCalled();
-      expect(child.killMock).toHaveBeenCalledExactlyOnceWith("SIGTERM");
-      extinction.resolve();
-      await expect(closing).resolves.toBeUndefined();
-    } finally {
-      child.settle(0);
-      extinction.resolve();
-      await Promise.allSettled([
-        run?.promise,
-        ...generationCleanups.map((cleanup) => cleanup("test cleanup")),
-        supervisor.shutdown(),
-      ]);
-    }
+    const cleanup = prepareOneShotTools();
+    run = await runExecProcess({
+      command: "fixture-command",
+      workdir: "/tmp",
+      env: {},
+      usePty: true,
+      scopeKey,
+      warnings,
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: false,
+      timeoutSec: null,
+    });
+    expect(createPtyAdapterMock).not.toHaveBeenCalled();
+    expect(createChildAdapterMock).toHaveBeenCalledOnce();
+    expect(createChildAdapterMock.mock.calls[0]?.[0].ownProcessTree).toBe(true);
+    expect(warnings).toEqual([
+      expect.stringContaining("PTY is unavailable when execution requires process-tree cleanup"),
+    ]);
+    child.emitStdout("command ran once");
+    child.settle(0);
+    await vi.waitFor(() => expect(child.killMock).toHaveBeenCalledExactlyOnceWith("SIGTERM"));
+    await expectPending(run.promise);
+    const closing = cleanup("completed");
+    await expectPending(closing);
+    expect(child.killMock).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    extinction.resolve();
+    await expect(run.promise).resolves.toMatchObject({
+      status: "completed",
+      aggregated: "command ran once",
+    });
+    await expect(closing).resolves.toBeUndefined();
   });
 });

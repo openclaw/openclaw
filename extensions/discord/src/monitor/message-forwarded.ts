@@ -1,4 +1,3 @@
-// Discord plugin module implements message forwarded behavior.
 import type { APIAttachment, APIStickerItem } from "discord-api-types/v10";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Message } from "../internal/discord.js";
@@ -40,20 +39,19 @@ function normalizeDiscordStickerItems(value: unknown): APIStickerItem[] {
   );
 }
 
-export function resolveDiscordMessageStickers(message: Message): APIStickerItem[] {
-  const stickers = (message as { stickers?: unknown }).stickers;
-  const normalized = normalizeDiscordStickerItems(stickers);
+export function resolveDiscordMessageStickers(message: {
+  stickers?: unknown;
+  sticker_items?: unknown;
+  rawData?: { sticker_items?: unknown; stickers?: unknown };
+}): APIStickerItem[] {
+  const normalized = normalizeDiscordStickerItems(message.stickers);
   if (normalized.length > 0) {
     return normalized;
   }
-  const rawData = (message as { rawData?: { sticker_items?: unknown; stickers?: unknown } })
-    .rawData;
-  return normalizeDiscordStickerItems(rawData?.sticker_items ?? rawData?.stickers);
-}
-
-export function resolveDiscordSnapshotStickers(snapshot: DiscordSnapshotMessage): APIStickerItem[] {
-  const stickers = normalizeDiscordStickerItems(snapshot.stickers);
-  return stickers.length > 0 ? stickers : normalizeDiscordStickerItems(snapshot.sticker_items);
+  const rawData = message.rawData;
+  return normalizeDiscordStickerItems(
+    message.sticker_items ?? rawData?.sticker_items ?? rawData?.stickers,
+  );
 }
 
 export function hasDiscordMessageStickers(message: Message): boolean {
@@ -61,12 +59,7 @@ export function hasDiscordMessageStickers(message: Message): boolean {
 }
 
 export function resolveDiscordMessageSnapshots(message: Message): DiscordMessageSnapshot[] {
-  const rawData = (message as { rawData?: { message_snapshots?: unknown } }).rawData;
-  return normalizeDiscordMessageSnapshots(
-    rawData?.message_snapshots ??
-      (message as { message_snapshots?: unknown }).message_snapshots ??
-      (message as { messageSnapshots?: unknown }).messageSnapshots,
-  );
+  return normalizeDiscordMessageSnapshots(message.rawData?.message_snapshots);
 }
 
 export function normalizeDiscordMessageSnapshots(snapshots: unknown): DiscordMessageSnapshot[] {
@@ -110,19 +103,13 @@ export function formatDiscordSnapshotAuthor(
   if (!author) {
     return undefined;
   }
-  const globalName = normalizeOptionalString(author.global_name) ?? undefined;
-  const username = normalizeOptionalString(author.username) ?? undefined;
-  const name = normalizeOptionalString(author.name) ?? undefined;
-  const discriminator = normalizeOptionalString(author.discriminator) ?? undefined;
-  const base = globalName || username || name;
+  const globalName = normalizeOptionalString(author.global_name);
+  const username = normalizeOptionalString(author.username);
+  const name = normalizeOptionalString(author.name);
+  const discriminator = normalizeOptionalString(author.discriminator);
+  const base = globalName || username || name || author.id;
   if (username && discriminator && discriminator !== "0") {
     return `@${username}#${discriminator}`;
   }
-  if (base) {
-    return `@${base}`;
-  }
-  if (author.id) {
-    return `@${author.id}`;
-  }
-  return undefined;
+  return base ? `@${base}` : undefined;
 }

@@ -1,8 +1,10 @@
 ---
-summary: "Manifest fields for icons, CLI, MCP, Control UI, dashboard, QA, channel, and backup surfaces"
+summary: "Manifest fields for icons, themes, CLI, MCP, Control UI, dashboard, QA, channel, and backup surfaces"
 read_when:
+  - You are adding plugin branding or compact tool activity artwork
   - Your plugin contributes a CLI command, MCP server, or dashboard widget
   - You are shipping native Control UI or a QA runner
+  - Your plugin contributes a theme to the shared appearance catalog
   - You need backups or transcripts to know about plugin-owned data
 title: "Manifest host surface fields"
 sidebarTitle: "Host surface fields"
@@ -16,8 +18,21 @@ Place the portable plugin icon at `assets/icon.png`, relative to the plugin root
 field is required. Use a square PNG that remains recognizable at 16 px; 512×512 is recommended.
 Missing, unreadable, or invalid icons are ignored and do not invalidate the plugin.
 
+This is the plugin's identity artwork for catalogs, settings, channel setup, and
+installation cards. Tool previews may also use branding for installed third-party
+plugins. The Gateway's optional `hasToolBrandIcon` field in `plugins.list` is true only
+when an icon source is available, the plugin is not bundled, and its recorded
+registry identity resolves to a known ClawHub publisher other than OpenClaw.
+Package names and npm scopes do not establish the publisher. Missing, pending,
+or unavailable publisher metadata leaves branding ineligible; publisher facts
+are prepared and cached with the managed plugin catalog, not fetched per tool.
+
+Bundled and OpenClaw-published plugins retain separate
+[inline activity icons](#inline-activity-icons), so improving a chat glyph does
+not change the plugin's branding elsewhere.
+
 OpenClaw adopts this fixed package path as its icon convention, matching the path proposed in
-[Agent Plugins 1.1](https://github.com/agentplugins/agent-plugins-spec/pull/66). Other Agent Plugins
+Agent Plugins spec proposal [agent-plugins-spec#66](https://github.com/agentplugins/agent-plugins-spec/pull/66). OpenClaw itself implements Agent Plugins 1.0.0. Other Agent Plugins
 consumers may not discover it unless that proposal is adopted. The fixed path keeps packages
 portable and inspectable, avoids manifest path indirection and precedence rules, and lets OpenClaw
 render the icon without a runtime network request. Top-level plugin-branding icon URLs are not
@@ -33,7 +48,29 @@ migration window.
 
 Set `doctorContract.configRepair: true` when the doctor-contract module exports
 non-empty `legacyConfigRules`, a `normalizeCompatibilityConfig` function, or
-both. One declaration covers the complete config-repair artifact.
+`providerRenames`. One declaration covers the complete config-repair artifact.
+
+`providerRenames` declares provider routing migrations as
+`{ from, to, baseUrl }` entries, using `PluginDoctorProviderRename` from
+`openclaw/plugin-sdk/runtime-doctor-migrations`. Both provider IDs must belong
+to the plugin. The host matches the source provider's URL origin, moves its
+catalog, and rewrites model references through the shared Doctor owners.
+Doctor repairs cron and session references before publishing the provider
+rename in config, making interrupted runs retryable from the still-authored
+source entry. This contract does not rename auth profiles or migrate credentials.
+
+The config-repair module can export `historicalWebhookListener` to describe a
+retired default endpoint. The existing compatibility normalizer reports eligible
+accounts; the host owns the one-shot pin and completion write.
+See [webhook migration contracts](/plugins/sdk-overview/infrastructure#webhook-body-rejection).
+
+When Doctor renames saved credentials, it updates exact `authProfileId` and
+`defaultAuthProfileId` references inside plugin config and channel config. This
+preserves the shipped `authProfileId` migration and also covers defaults such as
+LLM Task's `defaultAuthProfileId`, including older installed plugins. Reference
+lookup trims surrounding whitespace, as the credential reader does. Unmapped
+values and literal strings elsewhere remain unchanged. Plugins do not need to
+implement the host's credential rename in their compatibility callbacks.
 
 Bundled plugins declare each state migration in execution order so Doctor can
 plan its owner and receipt without loading plugin code:
@@ -51,7 +88,12 @@ plan its owner and receipt without loading plugin code:
 
 The array must match the migration IDs, order, `doctorOnly` flags, and phases
 exported by the doctor-contract module. The older value `true` still declares
-the dynamic module. Installed external plugin manifests remain outside the
+the dynamic module. During an in-process package update, Doctor loads the replacement
+package's callbacks in its new inventory; earlier inventories retain their original
+callbacks. A changed action list between package versions is allowed, but each
+version's manifest and module must agree.
+
+Installed external plugin manifests remain outside the
 copied-state and candidate content identity, including when they use the
 descriptor array. Candidate validation must bind those artifacts separately.
 Until then, Doctor records an explicit planning refusal instead of treating an
@@ -62,6 +104,12 @@ Doctor repairs by default. A migration may return `warningDisposition: "recovera
 warning is advisory and required state remains safe for later repairs. Doctor preserves those warnings
 in its receipts and continues. Detection errors, thrown failures, and unclassified warnings from another
 migration still refuse the combined step.
+
+For `definePluginDoctorMigrationFromPlans`, a `plugin-state-import` plan may set
+`cleanupWarningDisposition: "recoverable"` when its retired source is an unused,
+rebuildable artifact. This applies only to cleanup failures after import succeeds.
+Read, import, and verification failures still refuse the migration. Every plan
+consuming a shared source must opt in before its cleanup failures become advisory.
 
 The Codex plugin sets `doctorHealthChecks: true` when its public API exports
 health-check registration. Doctor checks the selected plugin's trust before
@@ -77,6 +125,186 @@ distributed separately. This lets `doctor --fix` migrate older configuration
 before plugin installation or capability consent. An installed plugin's doctor
 contract remains authoritative; retained entrypoints do not expose state
 migrations, install plugins, or grant capabilities.
+
+## Inline activity icons
+
+Place a monochrome SVG at `assets/activity.svg` for the compact icon beside the
+plugin's tool calls and collapsed tool results. No manifest field is required.
+Design it to remain clear at 16 px with a transparent background. The Control UI
+renders its shape in the activity row's text color, including dark mode; source
+colors do not become branding colors in the row.
+
+Use `assets/activity/<tool-name>.svg` only when an individual tool needs a
+different shape. The filename must exactly match that tool's `id` from
+`tools.effective`, including case. For example, a tool with ID `calendar_search`
+can ship:
+
+```text
+assets/
+  icon.png
+  activity.svg
+  activity/
+    calendar_search.svg
+```
+
+The tool ID must be at most 128 ASCII characters, start with a letter, digit, or
+underscore, and contain only letters, digits, underscores, hyphens, or periods.
+Keep the override directory to at most 128 entries; larger directories are
+ignored as a whole. The default activity icon covers other tool IDs, including
+integrations whose routing adds prefixes to tool names. These files supply presentation only; they do not
+register tools or change tool ownership.
+
+Keep each SVG file within 32 KiB. Use simple SVG geometry: `path`, `circle`,
+`ellipse`, `line`, `polygon`, `polyline`, and `rect`, optionally inside `g`. The SVG can contain at most four
+elements including the root, 8 KiB of combined path and point data, and 1,024
+path commands. Give the root a `viewBox` with positive width and height, or
+positive numeric `width` and `height`, each at most 4,096. Scripts, stylesheets, event handlers,
+external references, embedded images, and filters are not supported. For
+example:
+
+```xml
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M5 5h14v14H5zM8 2v6m8-6v6M5 10h14"/>
+</svg>
+```
+
+OpenClaw validates the SVG and rasterizes it before using it as an activity
+mask; it never inserts package SVG markup into the chat DOM. Missing or invalid
+activity artwork falls back to the existing tool glyph when third-party branding
+is ineligible or its image cannot load. The plugin remains usable.
+
+Include both `assets/activity.svg` and `assets/activity/*.svg` in the published
+package's `files` list when used. OpenClaw's bundled metadata copier and plugin
+runtime package builder include these paths automatically. Asset discovery
+uses the Gateway's prepared plugin metadata; restart or explicitly reload the
+plugin after changing its artwork.
+
+## Themes
+
+Declare portable themes in `openclaw.plugin.json` to make them available in
+Settings → Appearance and the agent's [theme tool](/tools/theme). The same
+catalog serves both surfaces. Theme discovery reads static JSON and does not
+execute plugin code or depend on the advanced native UI opt-out.
+
+```json
+{
+  "id": "starship",
+  "configSchema": { "type": "object", "additionalProperties": false },
+  "themes": [
+    {
+      "id": "xenovessel",
+      "name": "Xenovessel",
+      "description": "Near-black indigo, acid lime, and alien cyan with monospace text.",
+      "source": "themes/xenovessel.json",
+      "icons": { "rocket": "assets/theme-art/rocket.svg" },
+      "hats": { "beret": "assets/theme-art/beret.svg" },
+      "critters": {
+        "ferris": {
+          "source": "assets/theme-art/ferris.svg",
+          "title": "a crab, allegedly",
+          "crossMs": 12000
+        }
+      },
+      "backgrounds": {
+        "light": "assets/theme-art/hull-light.webp",
+        "dark": "assets/theme-art/hull-dark.webp"
+      }
+    }
+  ]
+}
+```
+
+The catalog ID is `starship/xenovessel`. It preserves the plugin's primary ID,
+including case, scoped IDs such as `@scope/starship`, and multi-entry IDs such as
+`pack/one`; their theme IDs are `@scope/starship/xenovessel` and
+`pack/one/xenovessel`. The complete catalog ID is limited to 256 characters.
+Each plugin can declare up to 32 themes.
+Local IDs must start with a lowercase letter or digit, contain only lowercase
+letters, digits, underscores, or hyphens, and be at most 64 characters. The
+`user/` namespace belongs to personally imported themes.
+
+`source` is a relative `.json` path inside the plugin root; include it in the
+published package's `files` list. Absolute paths, traversal, and symlinks escaping
+the root are rejected. Each source file can contain at most 16 KiB including
+formatting whitespace. Its normalized definition must fit in 4096 UTF-8 bytes.
+
+Each theme may declare `icons` and `hats`, maps of artwork IDs to relative `.svg` paths,
+and `critters`, a map of artwork IDs to objects containing `source` and optional
+`title` and `crossMs`. Each map allows at most 8 entries. Artwork IDs must match
+`^[a-z0-9][a-z0-9_-]{0,31}$`; duplicates and collisions with the corresponding
+built-in brand icon (`claw`, `mark`), hat, or critter catalog are manifest errors. `title` is untranslated
+hover text of at most 60 printable characters. `crossMs` is an integer from
+5000 through 90000, defaulting to 12000 milliseconds.
+
+Artwork paths follow the same containment rules as `source`. Each SVG must be
+self-contained and at most 32 KiB; scripts, event handlers, external references,
+and embedded resources are rejected. The Control UI rasterizes artwork to a
+256 × 256 pixel canvas before rendering it as an image. It uses the activity-icon
+limits: at most 4 elements including the root, 8 KiB of combined path and point
+data, 1024 path commands, and positive source dimensions no larger than 4096.
+Use `path`, `circle`, `ellipse`, `line`, `polygon`, `polyline`, and `rect`, optionally
+inside `g`; the root is `svg`, and `title` and `desc` are also supported within
+the element limit. Stylesheets, filters, and embedded images are unsupported.
+Hats overlay the avatar's full square; place the hat near the top of the SVG
+viewBox and leave the lower area transparent.
+
+`backgrounds` maps `light` and/or `dark` to a relative PNG, JPEG, or WebP path
+with the same containment rules. Each file must be at most 512 KiB; OpenClaw
+checks its image signature when it captures the theme. When the theme is
+selected and **Appearance → Background** uses theme artwork, the Control UI
+paints the image for the matching color mode instead of the neutral plugin
+artwork. A mode without a declared image keeps the neutral artwork. Background
+placement, presentation, visibility, and the accessibility fallbacks that hide
+artwork stay under the viewer's control. Like a custom upload, the image is
+dimmed under a theme-colored overlay sized from the palette's text contrast, so
+busy or bright images stay readable but faint; quiet, low-contrast artwork keeps
+the most detail. Above the default **Image visibility**, the overlay thins
+toward the fixed cap every background image shares, reaching it at 100%, so a
+dark palette no longer hides a dark image a viewer has asked to see. The
+built-in images are lossless WebP files of about 20–35 KiB.
+
+Include the definition JSON and every declared SVG and background in the published
+package's `files` list. OpenClaw's bundled metadata copier and runtime package builder
+include these declared paths automatically. An unreadable or invalid artwork file omits
+the whole theme from the catalog with a plugin warning diagnostic; other plugin
+capabilities remain available.
+
+The JSON file contains `name`, `description`, and at least one of `light` or
+`dark`; its name and description must match the manifest. Names are limited to
+80 characters and descriptions to 320. Each present mode supplies all semantic
+colors from the [theme definition example](/tools/theme#create-and-apply-a-personal-theme),
+plus optional `font-sans` and `font-mono` font-family lists. Individual values are
+limited to 120 characters. Supported colors are hex, `rgb()`, `rgba()`, `hsl()`,
+`hsla()`, `lab()`, `lch()`, `oklab()`, `oklch()`, `color()`, `black`, `white`, and
+`transparent`. CSS declarations, URLs, and references to other CSS variables are
+not theme data. An invalid definition is omitted from the catalog with a plugin
+diagnostic; other plugin capabilities remain available.
+
+The source JSON also accepts optional presentation fields. They belong in the definition referenced by `themes[].source`, alongside `name`, `description`, and the palettes:
+
+- `mascot`: `"claw"` (the default) or `"none"`; `"none"` defaults to neutral branding and hides the resident lobster and visiting lobster strangers. Ordinary critters can still cross the composer ledge when Lobster visits is enabled, and the toggle stays unchanged.
+- `brandName`: a trimmed display name of 1–80 printable characters; defaults to “OpenClaw.”
+- `brandIcon`: `"claw"`, `"mark"`, or an ID from this theme's declared `icons` map. Omission follows `mascot`: claw for `"claw"`, mark for `"none"`. An ID declared only as a hat or critter is not a brand icon.
+- `workingIndicator`: `"claw"`, `"dots"`, `"brand"` (the selected brand icon), or `"none"`. Omission uses claw for the claw mascot and dots otherwise; it does not change long-wait phrases.
+- `lobsterdex` and `communityLinks`: booleans controlling their respective navigation entries; each defaults to `true` independently of the mascot. These are presentation choices, not deletion or authorization controls.
+- `workingPhrases`: up to 24 literal, untranslated long-wait status phrases. Each phrase is trimmed, must contain 1–24 characters, and cannot contain control characters or duplicate another trimmed phrase. Omit it to keep the default vocabulary; use `[]` to hide long-wait phrases.
+- `critters`: up to 8 unique IDs from the built-in `"penguin"` and `"fedora"` catalog or this theme's declared `critters` map, adding occasional visitors to ordinary composer ledge traffic while Lobster visits is enabled. Omit it or use `[]` for no theme-supplied critters. Unknown IDs and duplicates are rejected.
+- `avatarHat`: `"fedora"`, `"crown"`, `"santa"`, `"party"`, `"pumpkin"`, or an ID from this theme's declared `hats` map adds an occasional decorative hat to agent avatars; omission adds no hat.
+
+These fields count toward the same 4096-byte normalized definition limit and are returned with the catalog descriptor. The [theme definition example](/tools/theme#create-and-apply-a-personal-theme) shows these presentation fields.
+Definitions carry IDs only, never SVG markup or URLs. Personal themes imported
+through the agent's `theme` tool remain limited to built-in artwork IDs.
+
+Only enabled plugins contribute themes. OpenClaw retains validated definitions
+and artwork bytes with the current plugin inventory. After editing a source,
+artwork file, or manifest, run
+`openclaw plugins reload starship` or choose **Reload** in the plugin's Lifecycle
+settings. Reload publishes the new palette and refreshes connected clients
+without restarting the Gateway. Artwork URLs include a content hash so changed
+images bypass the page's artwork cache. Serving artwork reads the captured
+generation, never changed files on disk. No filesystem polling is needed. Disabling or
+removing the plugin removes its themes from the catalog; the selected theme can
+then fall back as described in [Plugin themes and hot reload](/tools/theme#plugin-themes-and-hot-reload).
 
 ## Transcript sources reference
 
@@ -118,7 +346,25 @@ Use `backupResources` to declare plugin-owned durable data that backups must
 include, or generated data that OpenClaw can safely omit and regenerate after
 restore. The backup planner reads this metadata without loading plugin runtime
 or modifying plugin files. Only effectively activated, loadable plugins
-contribute resources; disabled or unloadable plugins cannot exclude data.
+contribute ordinary resources; disabled or unloadable plugins cannot exclude data.
+Declared database resources remain included for retained accounts even when
+the plugin is disabled.
+
+An `include` declaration also asks OpenClaw to manage SQLite backups for that
+resource. SQLite files at or below the declared path receive verified online
+snapshots and offline compaction, with their committed write-ahead log (WAL)
+content included and sidecars omitted. Creation refuses a declared database
+when its required SQLite capabilities are unavailable. Declare every hardlink
+alias within these resources so backup can identify its journal owner.
+
+Other plugin SQLite files remain opaque byte copies, including their sidecars,
+unless they alias a primary OpenClaw database. Backup reports each opaque
+SQLite file and sidecar in `warnings`; verification and restore preserve its bytes
+without applying SQLite validation or compaction. Merely placing a database
+under the state or agent directory does not opt it into managed snapshots.
+Undeclared SQLite symbolic links that exceed the link-resolution limit (`ELOOP`),
+including loops, are skipped with filename warnings. Declared database links still
+reject the backup if they cannot be captured safely.
 
 ```json
 {
@@ -139,11 +385,20 @@ contribute resources; disabled or unloadable plugins cannot exclude data.
 
 Each entry is a closed object with exactly these fields:
 
-| Field          | Required | Type                         | What it means                                                                          |
-| -------------- | -------- | ---------------------------- | -------------------------------------------------------------------------------------- |
-| `disposition`  | Yes      | `"include" \| "regenerable"` | Protect durable data from exclusion, or identify data that can be omitted and rebuilt. |
-| `scope`        | Yes      | `"state" \| "agent"`         | Resolve the resource under the state directory or each configured agent directory.     |
-| `relativePath` | Yes      | `string`                     | Strict relative POSIX path contained by the selected scope's authoritative root.       |
+| Field            | Required | Type                         | What it means                                                                          |
+| ---------------- | -------- | ---------------------------- | -------------------------------------------------------------------------------------- |
+| `disposition`    | Yes      | `"include" \| "regenerable"` | Protect durable data from exclusion, or identify data that can be omitted and rebuilt. |
+| `scope`          | Yes      | `"state" \| "agent"`         | Resolve the resource under the state directory or each configured agent directory.     |
+| `relativePath`   | Yes      | `string`                     | Strict relative POSIX path contained by the selected scope's authoritative root.       |
+| `databaseFamily` | No       | `"state"`                    | Associate an included state-scoped resource with the shared-state database family.     |
+
+`databaseFamily` requires `disposition: "include"` and `scope: "state"`.
+Port, backup, update capture, and Doctor discover database files within that
+resource through the declared family. The declaration does not add engine or
+port support to the family: unsupported schemas still refuse the operation.
+For additional shared-state roots, such as account or token-hash directories,
+use `databaseFamily: "state"`. The plugin remains responsible for declaring all
+retained roots; do not depend on active-account configuration alone.
 
 Plugin identity and its trusted root come from manifest discovery; resource
 entries cannot declare or override an owner. `relativePath` must not be empty
@@ -151,7 +406,7 @@ or absolute and must not contain backslashes, NULs, empty path segments, `.`,
 `..`, Windows drive or UNC prefixes, URI-like values, or any path that escapes
 its selected anchor. Invalid entries are rejected rather than normalized.
 
-The planner deduplicates resources deterministically. A narrower `regenerable`
+The planner uses fixed rules to remove duplicate resources. A narrower `regenerable`
 declaration wins over a broad configured state or agent root. Among plugin
 resource declarations, only an explicit nested `include` protects a descendant
 and keeps its excluded ancestors traversable. Explicit config, credentials,
@@ -177,20 +432,71 @@ plugin can recreate.
 
 OpenClaw includes these servers only while the owning plugin is enabled. Relative `command`, `args`, `cwd`, and `workingDirectory` paths resolve from the plugin root. User configuration remains authoritative: `mcp.servers.<name>` can replace a plugin default or set `enabled: false` to omit it. MCP App rendering and server-tool calls still require the normal MCP Apps setting and effective tool policy; declaring a server does not bypass either boundary.
 
+## UI capabilities
+
+Declare `uiCapabilities` in `openclaw.plugin.json` to describe what the plugin adds
+to the OpenClaw interface. The plugin detail page shows these kinds in its
+**Capabilities** section before installation and while the plugin is disabled or
+enabled. Display reads static manifest or catalog metadata without executing
+plugin code.
+
+```json
+{
+  "uiCapabilities": ["page", "navigation", "accessory", "widget"]
+}
+```
+
+| Value         | Contribution                                                   |
+| ------------- | -------------------------------------------------------------- |
+| `page`        | A dedicated plugin page.                                       |
+| `navigation`  | A navigation entry that opens a plugin page.                   |
+| `panel`       | A panel within an existing view.                               |
+| `action`      | A user-facing action in an existing view.                      |
+| `accessory`   | A small addition such as a session-header accessory.           |
+| `widget`      | A dashboard widget.                                            |
+| `inline`      | A native view populated by tool-result data in a conversation. |
+| `replacement` | A replacement for a supported host UI surface.                 |
+| `link-reader` | A reader or preview for supported links.                       |
+
+The field is optional. Omission means unspecified; `[]` explicitly declares no
+UI contributions. OpenClaw ignores an invalid declaration (unknown values or a
+non-array value) and reports a plugin warning; the plugin still loads. Older
+OpenClaw versions ignored this field, so malformed display metadata does not
+break existing installs after an update. Duplicates are removed, and values use
+the order above. Declare kinds only,
+not instance counts or live availability. Conditional registrations may be absent
+in a particular session without invalidating the declaration.
+
+This field is independent of `controlUi.entry`: a plugin using a host-rendered
+link reader can declare `link-reader` without shipping browser JavaScript.
+It does not activate a plugin, grant permissions, or prove that a capability is
+currently configured or healthy. Browser registration and known backend UI
+registrations emit a diagnostic when an observed kind is missing from an
+explicit declaration; omission skips that comparison. These diagnostics do not
+block activation.
+
+For a catalog listing, publish the same metadata with the selected plugin
+version. If the catalog omits it, OpenClaw leaves the UI contribution kinds
+unspecified rather than loading the plugin to infer them. For native browser
+modules, explicit UI reload reads the updated declaration and creates a new
+revision even when browser code is unchanged.
+
 ## controlUi reference
 
 `controlUi` declares a trusted native browser entry and optional stylesheets for
 the Control UI. Paths are relative to the plugin root and must name compiled
 JavaScript and CSS. Assets follow the Gateway's authentication policy, are
 captured as immutable revisions, and refresh only through the explicit UI reload
-flow.
+flow. Bundled plugins and Nix-store plugins in Nix mode can load hardlinked
+assets and reload hardlinked manifests under the shared plugin-file policy.
+Mutable external plugin roots and CLI packing still reject hardlinks.
 
-User-installed native UI requires **Settings → Labs → Custom plugin UI**
-(`gateway.controlUi.experimental.customPlugins`, default `false`). Native UI
-from enabled bundled plugins remains available. See
+Native UI is available by default for enabled plugins. The existing
+`gateway.controlUi.experimental.customPlugins: false` remains an advanced
+opt-out for user-installed native UI; enabled bundled views are unaffected. See
 [Enable custom plugin UI](/plugins/feature-plugins#enable-custom-plugin-ui) for
-restart and browser reload requirements. This gate does not disable the
-plugin's backend APIs or the sandboxed dashboard bindings below.
+upgrade behavior and browser reload requirements. This opt-out does not disable
+the plugin’s backend APIs or the sandboxed dashboard bindings below.
 
 ```json
 {
@@ -275,7 +581,7 @@ Declare every plugin-owned root command in `cliCommands` so root help and comman
 }
 ```
 
-The manifest row is the canonical help text. Register the same command at runtime with `api.registerCli(..., { descriptors: [...] })`; runtime descriptors may additionally provide `machineOutput`. Nested commands such as `openclaw nodes <feature>` are not root commands and do not belong in `cliCommands`.
+The manifest row is the source of help text. Register the same command at runtime with `api.registerCli(..., { descriptors: [...] })`; runtime descriptors may additionally provide `machineOutput`. Nested commands such as `openclaw nodes <feature>` are not root commands and do not belong in `cliCommands`.
 
 ## commandAliases reference
 
@@ -306,10 +612,9 @@ If a plugin fails to load, invoking its declared `runtime-slash` command in chat
 Use `qaRunners` when a plugin contributes one or more transport runners beneath
 the shared `openclaw qa` root. Keep this metadata cheap and static; the plugin
 runtime still owns actual CLI registration through a lightweight
-`qa-runner-api.ts` surface that exports matching `qaRunnerCliRegistrations`. For
-plugins using the shipped `runtime-api.ts` contract, that legacy surface remains
-accepted through 2026-10-01 while authors migrate. An
-optional `adapterFactory` exposes the transport to shared QA scenarios without
+`qa-runner-api.ts` surface that exports matching `qaRunnerCliRegistrations`.
+The pre-July 2026 `runtime-api.ts` fallback is retired; move runner registrations
+to `qa-runner-api.ts`. An optional `adapterFactory` exposes the transport to shared QA scenarios without
 changing the registered command's runner.
 
 Module-backed flow scenarios are an adapter-owned execution form. Set
@@ -335,6 +640,39 @@ from implementations that do not declare support.
 
 The `adapterFactory` id must match `commandName`. Do not export registrations
 for commands absent from the manifest.
+
+## channelAccountKeyPolicies reference
+
+`channelAccountKeyPolicies` declares stored account-key selection rules for channels
+listed in the plugin's `channels` array. It is plugin metadata; operators keep their
+account config under `channels.<id>.accounts`.
+
+```json
+{
+  "channels": ["signal"],
+  "channelAccountKeyPolicies": {
+    "signal": { "canonicalAliasesRequireOwnField": "account" }
+  }
+}
+```
+
+`canonicalAliasesRequireOwnField` is the name of a string field in the account
+entry. An alias that matches only after account-id normalization is eligible when
+that entry has a nonempty value for this field. Root values do not satisfy it.
+Exact stored keys win; existing case-insensitive matches keep their behavior.
+Readers and writers use the same selected stored key.
+
+For Signal, `Work Phone` resolves as `work-phone` when it has its own `account`
+number. Its settings then apply even if the channel root also has a number.
+Without its own number, the previously ignored entry stays ignored and the route
+keeps its inherited settings. Doctor preserves that key and reports the required
+manual change. Doctor also reports normalized-key collisions and preserves both
+entries; an exact `work-phone` key wins at runtime.
+
+Rules for undeclared channels are ignored. Runtime reads use the selected plugin
+metadata snapshot; they do not load plugin code to find the rule. See
+[account lookup arguments](/plugins/sdk-channel-plugins/setup-and-config#stored-account-key-selection)
+for the SDK contract.
 
 ## channelConfigs reference
 

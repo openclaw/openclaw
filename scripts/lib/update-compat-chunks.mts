@@ -1,19 +1,69 @@
 import fs from "node:fs";
 import path from "node:path";
-import type ts from "typescript";
+import * as ts from "typescript/ast";
+import { packageActivationRuntimeEntrypoint } from "../../src/infra/package-update-activation-runtime-assets.ts";
+import { managedHandoffRuntimeEntrypoint } from "../../src/infra/update-managed-service-handoff-runtime-assets.ts";
+import { createNativeTypeScriptParser } from "./native-typescript.mts";
+import { controlUiBuildSiblingPid } from "./output-root-guard.mjs";
+import { isRecord as object } from "./record-shared.mjs";
 import { parseReleaseVersion } from "./release-version.mjs";
-import { getTypeScript } from "./ts-guard-utils.mts";
+import {
+  getStandaloneRuntimeProcessOutputOptions,
+  standaloneRuntimeProcessBuildEntries,
+} from "./runtime-process-core-build-entries.mts";
 import {
   isUpdateCompatibilityChunk,
   UPDATE_COMPATIBILITY_CHUNK_HEADER,
 } from "./update-compat-contract.mjs";
+import { ModuleGraph, type UpdateCompatibilityOrigin } from "./update-compat-module-graph.mts";
 
 export { isUpdateCompatibilityChunk } from "./update-compat-contract.mjs";
-export const UPDATE_COMPATIBILITY_INVENTORY_FILE = "update-compat-inventory.json";
 const HASHED_CHUNK = /-[A-Za-z0-9_-]{8}\.m?js$/;
-const POST_SWAP_OWNER = /^src\/(?:cli\/update-cli\/|daemon\/|cli\/runtime-cleanup\.ts$)/;
+const POST_SWAP_OWNER = /^src\/(?:cli\/update-cli\/|daemon\/|cli\/runtime-cleanup(?:-scope)?\.ts$)/;
+const STANDALONE_CHUNK_PREFIXES = Object.keys(standaloneRuntimeProcessBuildEntries).flatMap(
+  (name) => {
+    const { chunkFileNames } = getStandaloneRuntimeProcessOutputOptions(name);
+    return chunkFileNames ? [chunkFileNames.split("[name]", 1)[0]!] : [];
+  },
+);
 
-type UpdateCompatibilityOrigin = { module: string; symbol: string };
+// These verified releases coalesced lifecycle declarations under the cache module's region.
+// Keep this provenance correction only while those releases remain in the supported upgrade window.
+const COALESCED_REGISTRY_RELEASES = [
+  {
+    version: "2026.9.1",
+    buildId: "2026.9.1-release-ad6fe23aecb9-2026-09-03T15-04-19.382Z",
+    commit: "ad6fe23aecb9b833d68139b0ddc9f239b894d2f1",
+    integrity:
+      "sha512-0Ve0631CdgkJDwd4NNG1BawIdF5yCL2sO+Tts8amStw+H6vKURTj0K4rOa4+hFpJk1Dnw5LyKl5twzwX1VtA2w==",
+    chunk: "registry-lifecycle-CzoxN0g_.js",
+  },
+  {
+    version: "2026.9.2",
+    buildId: "2026.9.2-release-3928bad9badf-2026-09-05T15-22-41.651Z",
+    commit: "3928bad9badfcb6c7d140530435e806fb8092190",
+    integrity:
+      "sha512-M6C7UsnX815nv26qBJFYGe6aGzv+ftZLRzV6S9oRXUtXg2Yn67eVntpssT94kgkquKVSeUxerUg0j1ONp4WYQg==",
+    chunk: "registry-lifecycle-D1ErazNK.js",
+  },
+  {
+    version: "2026.9.3",
+    buildId: "2026.9.3-release-1391f7cd2d40-2026-09-08T07-46-00.264Z",
+    commit: "1391f7cd2d40ab5bbcf2f5f831d3a64f520e72d7",
+    integrity:
+      "sha512-CzDHMeHdnjlIZ76ZyBb1lvLO4H/yBIMYXupFGGBN87x0853y3hg5nLAnKfxSKqLzqhbUKqy9ebDRAWWV4t8aew==",
+    chunk: "registry-lifecycle-BxSg6w0a.mjs",
+  },
+  {
+    version: "2026.9.4",
+    buildId: "2026.9.4-release-3a9d69db306c-2026-09-10T22-53-16.719Z",
+    commit: "3a9d69db306cd7f081e06254cb89c4bcc14a7107",
+    integrity:
+      "sha512-lTQpEEe1Xm3u2PCHaPEr+vP8paGk1vLdHuzdItsNToaLI6hAqRVvgJYg+GxukJhETJp4tPy/S1Gftl4KuB8n7A==",
+    chunk: "registry-lifecycle-Dbi3yP7o.mjs",
+  },
+];
+
 type UpdateCompatibilityChunk = {
   path: string;
   imports: Array<{ importer: string; owner: string; exports: string[] }>;
@@ -24,6 +74,7 @@ export type UpdateCompatibilityRelease = {
   buildId: string;
   commit: string;
   integrity: string;
+  schemaVersions?: unknown;
   chunks: UpdateCompatibilityChunk[];
 };
 export type UpdateCompatibilityInventory = {
@@ -31,29 +82,44 @@ export type UpdateCompatibilityInventory = {
   releases: UpdateCompatibilityRelease[];
 };
 
-type Binding = { file: string; symbol: string } | { local: string };
-type ModuleBinding = {
-  file: string;
-  symbol: string;
-  origin: UpdateCompatibilityOrigin | undefined;
-};
-type ModuleInfo = {
-  imports: Map<string, Binding>;
-  exports: Map<string, Binding>;
-  stars: string[];
-  declarations: Map<string, UpdateCompatibilityOrigin | undefined>;
-};
-
 function portable(value: string): string {
   return value.split(path.sep).join("/");
 }
 
 function moduleFiles(root: string): string[] {
+  const standaloneEntries = Object.keys(standaloneRuntimeProcessBuildEntries);
+  const standaloneFiles = new Set([
+    ...standaloneEntries.map((name) => `${name}.js`),
+    managedHandoffRuntimeEntrypoint.distWorkerPath,
+    packageActivationRuntimeEntrypoint.distWorkerPath,
+  ]);
+  const independentDirectories = new Set([
+    "config-doctor",
+    "state-retention",
+    "native-hook-relay",
+    ...standaloneEntries,
+  ]);
   const files: string[] = [];
   const visit = (directory: string) => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const file = path.join(directory, entry.name);
+      const relative = portable(path.relative(root, file));
+      // Independent graphs cannot supply updater bridges or record copied updater imports.
+      if (
+        standaloneFiles.has(relative) ||
+        independentDirectories.has(relative) ||
+        STANDALONE_CHUNK_PREFIXES.some((prefix) => relative.startsWith(prefix))
+      ) {
+        continue;
+      }
       if (entry.isDirectory()) {
+        // The UI publishes its independent browser graph by renaming these trees.
+        if (
+          directory === root &&
+          (entry.name === "control-ui" || controlUiBuildSiblingPid(entry.name) !== null)
+        ) {
+          continue;
+        }
         // Plugin outputs and installed dependencies are independent runtime graphs.
         if (!["node_modules", "extensions", "plugin-sdk"].includes(entry.name)) {
           visit(file);
@@ -78,214 +144,93 @@ function ownerAt(source: string, offset: number): string | undefined {
   return owner;
 }
 
-function parseModule(file: string, source: string): ts.SourceFile {
-  const ts = getTypeScript();
-  return ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-}
-
-function namedBinding(node: ts.BindingName): string[] {
-  const ts = getTypeScript();
-  if (ts.isIdentifier(node)) {
-    return [node.text];
+function isPostSwapImport(owner: string, node: ts.CallExpression): boolean {
+  // The wizard starts the update, and cleanup-scope prepares its resources
+  // before running the command. Only its final drain can follow replacement.
+  if (owner === "src/cli/update-cli/wizard.ts") {
+    return false;
   }
-  return node.elements.flatMap((element) =>
-    ts.isBindingElement(element) ? namedBinding(element.name) : [],
-  );
+  if (owner !== "src/cli/runtime-cleanup-scope.ts") {
+    return true;
+  }
+  for (let ancestor: ts.Node = node; ancestor.parent; ancestor = ancestor.parent) {
+    if (ts.isTryStatement(ancestor.parent) && ancestor.parent.finallyBlock === ancestor) {
+      return true;
+    }
+  }
+  return false;
 }
 
-function inspectModule(file: string, source: string, sourceModule?: string): ModuleInfo {
-  const ts = getTypeScript();
-  const info: ModuleInfo = {
-    imports: new Map(),
-    exports: new Map(),
-    stars: [],
-    declarations: new Map(),
-  };
-  const target = (specifier: string) => {
-    const resolved = path.resolve(path.dirname(file), specifier);
-    return sourceModule === undefined
-      ? resolved
-      : resolved.replace(/\.js$/, ".ts").replace(/\.mjs$/, ".mts");
-  };
-  const regions = [...source.matchAll(/^\/\/#region (.+)$/gm)];
-  let regionIndex = 0;
-  let regionOwner: string | undefined;
-  for (const statement of parseModule(file, source).statements) {
-    if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
-      const clause = statement.importClause;
-      const importedFile = target(statement.moduleSpecifier.text);
-      if (clause?.name) {
-        info.imports.set(clause.name.text, { file: importedFile, symbol: "default" });
-      }
-      if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) {
-        for (const element of clause.namedBindings.elements) {
-          info.imports.set(element.name.text, {
-            file: importedFile,
-            symbol: (element.propertyName ?? element.name).text,
-          });
-        }
-      }
+function consumedPromiseAllExports(node: ts.CallExpression): string[] | undefined {
+  const array = node.parent;
+  if (
+    !ts.isArrayLiteralExpression(array) ||
+    !array.elements.every(
+      (element) =>
+        ts.isCallExpression(element) &&
+        element.expression.kind === ts.SyntaxKind.ImportKeyword &&
+        element.arguments.length === 1 &&
+        ts.isStringLiteralLikeNode(element.arguments[0]!),
+    )
+  ) {
+    return undefined;
+  }
+  const call = array.parent;
+  if (
+    !ts.isCallExpression(call) ||
+    call.questionDotToken ||
+    call.arguments.length !== 1 ||
+    !ts.isPropertyAccessExpression(call.expression) ||
+    call.expression.questionDotToken ||
+    !ts.isIdentifier(call.expression.expression) ||
+    call.expression.expression.text !== "Promise" ||
+    call.expression.name.text !== "all" ||
+    !ts.isAwaitExpression(call.parent)
+  ) {
+    return undefined;
+  }
+  const declaration = call.parent.parent;
+  if (
+    !ts.isVariableDeclaration(declaration) ||
+    declaration.initializer !== call.parent ||
+    !ts.isArrayBindingPattern(declaration.name) ||
+    declaration.name.elements.length !== array.elements.length
+  ) {
+    return undefined;
+  }
+  const names: string[][] = [];
+  for (const element of declaration.name.elements) {
+    if (
+      !ts.isBindingElement(element) ||
+      element.dotDotDotToken ||
+      element.initializer ||
+      !element.name ||
+      !ts.isObjectBindingPattern(element.name) ||
+      element.name.elements.length === 0
+    ) {
+      return undefined;
     }
-    if (ts.isExportDeclaration(statement)) {
-      const from =
-        statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)
-          ? target(statement.moduleSpecifier.text)
-          : undefined;
-      if (!statement.exportClause && from) {
-        info.stars.push(from);
-      }
-      if (statement.exportClause && ts.isNamedExports(statement.exportClause)) {
-        for (const element of statement.exportClause.elements) {
-          const symbol = (element.propertyName ?? element.name).text;
-          info.exports.set(element.name.text, from ? { file: from, symbol } : { local: symbol });
-        }
-      }
-    }
-    const names = ts.isVariableStatement(statement)
-      ? statement.declarationList.declarations.flatMap((declaration) =>
-          namedBinding(declaration.name),
-        )
-      : (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name
-        ? [statement.name.text]
-        : [];
-    while (regionIndex < regions.length) {
-      const region = regions[regionIndex];
-      if (!region || region.index >= statement.getStart()) {
-        break;
-      }
-      regionOwner = region[1];
-      regionIndex += 1;
-    }
-    const owner = sourceModule ?? regionOwner;
-    for (const symbol of names) {
-      info.declarations.set(symbol, owner ? { module: owner, symbol } : undefined);
+    const exports: string[] = [];
+    for (const binding of element.name.elements) {
+      const name = binding.propertyName ?? binding.name;
       if (
-        ts.canHaveModifiers(statement) &&
-        ts
-          .getModifiers(statement)
-          ?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)
+        binding.dotDotDotToken ||
+        binding.initializer ||
+        !binding.name ||
+        !name ||
+        !ts.isIdentifier(binding.name) ||
+        !ts.isIdentifier(name)
       ) {
-        info.exports.set(symbol, { local: symbol });
+        return undefined;
       }
+      exports.push(name.text);
     }
-    if (ts.isExportAssignment(statement) && ts.isIdentifier(statement.expression)) {
-      info.exports.set("default", { local: statement.expression.text });
-    }
+    names.push(exports);
   }
-  return info;
-}
-
-class ModuleGraph {
-  private modules = new Map<string, ModuleInfo>();
-  private sourceDir: string | undefined;
-
-  constructor(sourceDir?: string) {
-    this.sourceDir = sourceDir;
-  }
-
-  info(file: string): ModuleInfo {
-    let info = this.modules.get(file);
-    if (!info) {
-      info = inspectModule(
-        file,
-        fs.readFileSync(file, "utf8"),
-        this.sourceDir === undefined ? undefined : portable(path.relative(this.sourceDir, file)),
-      );
-      this.modules.set(file, info);
-    }
-    return info;
-  }
-
-  private exportedNames(file: string, seen = new Set<string>()): string[] {
-    if (seen.has(file)) {
-      return [];
-    }
-    seen.add(file);
-    const info = this.info(file);
-    return [
-      ...new Set([
-        ...info.exports.keys(),
-        ...info.stars.flatMap((star) =>
-          this.exportedNames(star, seen).filter((name) => name !== "default"),
-        ),
-      ]),
-    ].toSorted();
-  }
-
-  names(file: string): string[] {
-    return this.exportedNames(file).filter((name) => this.resolveExport(file, name).length === 1);
-  }
-
-  private resolveLocal(file: string, symbol: string, seen: Set<string>): ModuleBinding[] {
-    const key = `local:${file}:${symbol}`;
-    if (seen.has(key)) {
-      return [];
-    }
-    const next = new Set(seen).add(key);
-    const info = this.info(file);
-    const imported = info.imports.get(symbol);
-    if (imported && "file" in imported) {
-      return this.resolveExport(imported.file, imported.symbol, next);
-    }
-    return info.declarations.has(symbol)
-      ? [{ file, symbol, origin: info.declarations.get(symbol) }]
-      : [];
-  }
-
-  private resolveExport(file: string, symbol: string, seen = new Set<string>()): ModuleBinding[] {
-    const key = `export:${file}:${symbol}`;
-    if (seen.has(key)) {
-      return [];
-    }
-    const next = new Set(seen).add(key);
-    const info = this.info(file);
-    const binding = info.exports.get(symbol);
-    if (binding && "file" in binding) {
-      return this.resolveExport(binding.file, binding.symbol, next);
-    }
-    if (binding && "local" in binding) {
-      return this.resolveLocal(file, binding.local, next);
-    }
-    if (symbol === "default") {
-      return [];
-    }
-    const matches = new Map<string, ModuleBinding>();
-    for (const star of info.stars) {
-      for (const resolved of this.resolveExport(star, symbol, next)) {
-        // ESM compares declaration bindings, not their source-map annotations.
-        matches.set(`${resolved.file}:${resolved.symbol}`, resolved);
-      }
-    }
-    return [...matches.values()];
-  }
-
-  private sourceOrigin(
-    file: string,
-    symbol: string,
-    bindings: ModuleBinding[],
-  ): UpdateCompatibilityOrigin | undefined {
-    if (bindings.length > 1) {
-      throw new Error(
-        `Ambiguous export ${file}:${symbol}; conflicting sources: ${bindings
-          .map((binding) => `${binding.file}:${binding.symbol}`)
-          .toSorted()
-          .join(", ")}`,
-      );
-    }
-    return bindings[0]?.origin;
-  }
-
-  origin(file: string, symbol: string): UpdateCompatibilityOrigin | undefined {
-    return this.sourceOrigin(file, symbol, this.resolveExport(file, symbol));
-  }
-
-  localOrigin(file: string, symbol: string): UpdateCompatibilityOrigin | undefined {
-    return this.sourceOrigin(file, symbol, this.resolveLocal(file, symbol, new Set()));
-  }
+  return names[array.elements.indexOf(node)];
 }
 
 function consumedExports(node: ts.CallExpression): string[] | undefined {
-  const ts = getTypeScript();
   let expression: ts.Node = node;
   let awaited = false;
   while (
@@ -297,7 +242,7 @@ function consumedExports(node: ts.CallExpression): string[] | undefined {
   }
   // A direct import() is a Promise; its properties are not namespace exports.
   if (!awaited) {
-    return undefined;
+    return consumedPromiseAllExports(node);
   }
   const parent = expression.parent;
   if (ts.isPropertyAccessExpression(parent) && parent.expression === expression) {
@@ -306,7 +251,7 @@ function consumedExports(node: ts.CallExpression): string[] | undefined {
   if (
     ts.isElementAccessExpression(parent) &&
     parent.expression === expression &&
-    ts.isStringLiteralLike(parent.argumentExpression)
+    ts.isStringLiteralLikeNode(parent.argumentExpression)
   ) {
     return [parent.argumentExpression.text];
   }
@@ -315,15 +260,15 @@ function consumedExports(node: ts.CallExpression): string[] | undefined {
     parent.initializer === expression &&
     ts.isObjectBindingPattern(parent.name)
   ) {
-    if (
-      parent.name.elements.some(
-        (element) =>
-          element.dotDotDotToken || !ts.isIdentifier(element.propertyName ?? element.name),
-      )
-    ) {
-      return undefined;
+    const names: string[] = [];
+    for (const element of parent.name.elements) {
+      const name = element.propertyName ?? element.name;
+      if (element.dotDotDotToken || !name || !ts.isIdentifier(name)) {
+        return undefined;
+      }
+      names.push(name.text);
     }
-    return parent.name.elements.map((element) => (element.propertyName ?? element.name).getText());
+    return names;
   }
   return undefined;
 }
@@ -348,7 +293,15 @@ export function recordUpdateCompatibilityRelease(params: {
       "Update compatibility inventory requires an OpenClaw release build and npm SHA-512 integrity",
     );
   }
-  const graph = new ModuleGraph();
+  const historicalRegistryChunk = COALESCED_REGISTRY_RELEASES.find(
+    (release) =>
+      release.version === packageJson.version &&
+      release.buildId === build.buildId &&
+      release.commit === build.commit &&
+      release.integrity === params.integrity,
+  )?.chunk;
+  using parser = createNativeTypeScriptParser({ cwd: packageDir });
+  const graph = new ModuleGraph(parser);
   const chunks = new Map<string, UpdateCompatibilityChunk>();
   for (const file of moduleFiles(distDir)) {
     const source = fs.readFileSync(file, "utf8");
@@ -360,15 +313,15 @@ export function recordUpdateCompatibilityRelease(params: {
     ) {
       continue;
     }
-    const ts = getTypeScript();
     const visit = (node: ts.Node) => {
       if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
         const owner = ownerAt(source, node.getStart());
-        // The wizard's only lazy command import starts the update, before replacement.
-        if (owner && POST_SWAP_OWNER.test(owner) && owner !== "src/cli/update-cli/wizard.ts") {
+        if (owner && POST_SWAP_OWNER.test(owner) && isPostSwapImport(owner, node)) {
           const specifier = node.arguments[0];
-          if (!specifier || !ts.isStringLiteralLike(specifier)) {
-            throw new Error(`Nonliteral post-swap import in ${file}: ${node.getText()}`);
+          if (!specifier || !ts.isStringLiteralLikeNode(specifier)) {
+            // This inventory bridges literal dist imports. Computed package
+            // assets retain their package owner's installation contract.
+            return;
           }
           if (specifier.text.startsWith(".")) {
             const target = path.resolve(path.dirname(file), specifier.text);
@@ -387,11 +340,19 @@ export function recordUpdateCompatibilityRelease(params: {
               if (chunk.exports.some((entry) => entry.exported === exported)) {
                 continue;
               }
-              const origin = graph.origin(target, exported);
+              let origin = graph.origin(target, exported);
               if (!origin) {
                 throw new Error(
                   `Cannot trace ${relative} export ${exported} to its release source`,
                 );
+              }
+              if (
+                relative === historicalRegistryChunk &&
+                exported === "markPluginRegistryRetired" &&
+                origin.module === "src/plugins/loader-cache-state.ts" &&
+                origin.symbol === "markPluginRegistryRetired"
+              ) {
+                origin = { module: "src/plugins/registry-lifecycle.ts", symbol: origin.symbol };
               }
               chunk.exports.push({ exported, origin });
             }
@@ -399,15 +360,16 @@ export function recordUpdateCompatibilityRelease(params: {
           }
         }
       }
-      ts.forEachChild(node, visit);
+      node.forEachChild(visit);
     };
-    visit(parseModule(file, source));
+    visit(parser.parseSourceFile(file, source));
   }
   return {
     version: packageJson.version,
     buildId: build.buildId,
     commit: build.commit,
     integrity: params.integrity,
+    schemaVersions: packageJson.openclaw?.schemaVersions,
     chunks: [...chunks.values()]
       .toSorted((a, b) => a.path.localeCompare(b.path))
       .map((chunk) => ({
@@ -418,9 +380,6 @@ export function recordUpdateCompatibilityRelease(params: {
   };
 }
 
-function object(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 function safeRelative(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -515,6 +474,7 @@ export function parseUpdateCompatibilityInventory(
       buildId: release.buildId,
       commit: release.commit,
       integrity: release.integrity,
+      schemaVersions: release.schemaVersions,
       chunks,
     };
   });
@@ -567,14 +527,20 @@ function collectRequiredCompatibilityChunks(
   return [...requiredByPath.values()];
 }
 
+const STABLE_10_1_CLEANUP_FACADE = "runtime-cleanup-DlrF_x2c.mjs";
+const STABLE_10_1_CLEANUP_OWNER = "runtime-cleanup-Dowg583v.mjs";
+
 export function listUpdateCompatibilityChunkPaths(
   inventory: UpdateCompatibilityInventory,
 ): string[] {
   return [
     ...new Set(
-      inventory.releases.flatMap((release) =>
-        release.chunks.filter((chunk) => HASHED_CHUNK.test(chunk.path)).map((chunk) => chunk.path),
-      ),
+      inventory.releases.flatMap((release) => [
+        ...release.chunks
+          .filter((chunk) => HASHED_CHUNK.test(chunk.path))
+          .map((chunk) => chunk.path),
+        ...(release.version === "2026.10.1" ? [STABLE_10_1_CLEANUP_OWNER] : []),
+      ]),
     ),
   ].toSorted();
 }
@@ -607,8 +573,9 @@ export function writeUpdateCompatibilityChunks(params: {
   inventory: UpdateCompatibilityInventory;
 }): string[] {
   const distDir = path.resolve(params.distDir);
-  const graph = new ModuleGraph();
-  const sourceGraph = new ModuleGraph(params.sourceDir);
+  using parser = createNativeTypeScriptParser({ cwd: params.sourceDir });
+  const graph = new ModuleGraph(parser);
+  const sourceGraph = new ModuleGraph(parser, params.sourceDir);
   const required = collectRequiredCompatibilityChunks(params.inventory.releases);
   const origins = new Map<string, UpdateCompatibilityOrigin>();
   for (const chunk of required) {
@@ -618,12 +585,9 @@ export function writeUpdateCompatibilityChunks(params: {
     }
   }
   const ownerModules = new Set([...origins.values()].map((origin) => origin.module));
-  const candidates = new Map<string, Array<{ file: string; exported: string }>>();
+  const candidates = new Map<string, Map<string, { file: string; exported: string }>>();
   for (const file of moduleFiles(distDir)) {
     const relative = portable(path.relative(distDir, file));
-    if (relative.startsWith("extensions/") || relative.startsWith("plugin-sdk/")) {
-      continue;
-    }
     const source = fs.readFileSync(file, "utf8");
     if (
       isUpdateCompatibilityChunk(source) ||
@@ -634,13 +598,19 @@ export function writeUpdateCompatibilityChunks(params: {
       continue;
     }
     for (const exported of graph.names(file)) {
-      const origin = graph.origin(file, exported);
-      if (!origin) {
+      const binding = graph.binding(file, exported);
+      const origin = binding?.origin;
+      if (!binding || binding.kind !== "file" || !origin) {
         continue;
       }
       const key = `${origin.module}:${origin.symbol}`;
-      const matches = candidates.get(key) ?? [];
-      matches.push({ file: relative, exported });
+      const matches = candidates.get(key) ?? new Map<string, { file: string; exported: string }>();
+      const bindingKey = `${binding.file}:${binding.symbol}`;
+      const previous = matches.get(bindingKey);
+      // Prefer the declaration's own export; sorted files/names break alias ties.
+      if (!previous || (file === binding.file && previous.file !== relative)) {
+        matches.set(bindingKey, { file: relative, exported });
+      }
       candidates.set(key, matches);
     }
   }
@@ -678,7 +648,7 @@ export function writeUpdateCompatibilityChunks(params: {
     const lines = [UPDATE_COMPATIBILITY_CHUNK_HEADER];
     for (const entry of chunk.exports) {
       const origin = origins.get(`${entry.origin.module}:${entry.origin.symbol}`)!;
-      const matches = candidates.get(`${origin.module}:${origin.symbol}`) ?? [];
+      const matches = [...(candidates.get(`${origin.module}:${origin.symbol}`)?.values() ?? [])];
       const match = matches[0];
       if (matches.length !== 1 || !match) {
         throw new Error(
@@ -691,9 +661,30 @@ export function writeUpdateCompatibilityChunks(params: {
       if (!specifier.startsWith(".")) {
         specifier = `./${specifier}`;
       }
-      lines.push(
-        `export { ${match.exported} as ${entry.exported} } from ${JSON.stringify(specifier)};`,
-      );
+      if (
+        chunk.path === STABLE_10_1_CLEANUP_FACADE &&
+        entry.exported === "runCliDisposerAfterPending"
+      ) {
+        // Published 10.1 loads the queue owner before updating, then imports this
+        // facade after replacement. Resolve through that original URL so Node uses
+        // its cached disposer queue, not the candidate's empty queue. Keep the owner
+        // path resolver-visible until upgrades from 10.1 are no longer supported.
+        const owner = path.join(distDir, STABLE_10_1_CLEANUP_OWNER);
+        if (!fs.existsSync(owner) || isUpdateCompatibilityChunk(fs.readFileSync(owner, "utf8"))) {
+          outputs.set(
+            STABLE_10_1_CLEANUP_OWNER,
+            `${UPDATE_COMPATIBILITY_CHUNK_HEADER}\nexport { ${match.exported} as i } from ${JSON.stringify(specifier)};\n`,
+          );
+        }
+        lines.push(
+          "// 10.1's already-loaded owner must drain its original pending disposer queue.",
+          `export { i as runCliDisposerAfterPending } from "./${STABLE_10_1_CLEANUP_OWNER}";`,
+        );
+      } else {
+        lines.push(
+          `export { ${match.exported} as ${entry.exported} } from ${JSON.stringify(specifier)};`,
+        );
+      }
     }
     const contents = `${lines.join("\n")}\n`;
     outputs.set(chunk.path, contents);
@@ -706,9 +697,5 @@ export function writeUpdateCompatibilityChunks(params: {
       fs.writeFileSync(destination, contents);
     }
   }
-  fs.writeFileSync(
-    path.join(distDir, UPDATE_COMPATIBILITY_INVENTORY_FILE),
-    `${JSON.stringify(params.inventory, null, 2)}\n`,
-  );
   return [...outputs.keys()].toSorted();
 }

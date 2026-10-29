@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements scenario behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaTransportActionName, QaTransportState } from "./qa-transport.js";
 
@@ -10,7 +9,7 @@ export type QaScenarioStepContext = {
   ) => Promise<unknown>;
 };
 
-export type QaScenarioStep = {
+type QaScenarioStep = {
   name: string;
   run: (ctx: QaScenarioStepContext) => Promise<string | void>;
 };
@@ -20,7 +19,7 @@ export type QaScenarioDefinition = {
   steps: QaScenarioStep[];
 };
 
-export type QaScenarioStepResult = {
+type QaScenarioStepResult = {
   name: string;
   status: "pass" | "fail";
   details?: string;

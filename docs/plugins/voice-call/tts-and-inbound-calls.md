@@ -147,7 +147,7 @@ consult path, and TTS playback. If no route matches, the global Voice Call
 config is used. Outbound calls do not use `numbers`; pass the outbound
 target, message, and session explicitly when initiating the call.
 
-Route overrides currently support:
+Route overrides support exactly these fields:
 
 - `inboundGreeting`
 - `tts`
@@ -228,6 +228,11 @@ The reaper runs every 30 seconds and only ends calls that have no
 (`speaking`/`listening`) state, so answered conversations are never reaped
 by this timer; `maxDurationSeconds` (default 300) is the separate cap that
 ends answered calls that run too long.
+
+The Gateway service owns the reaper schedule and joins pending provider hangups
+before closing its call manager. Missed checks coalesce while provider hangups
+are pending. Standalone CLI calls bind to their existing executable CLI owner,
+which stays active until the call runtime closes.
 
 For notify-style flows where carriers can be slow to deliver ring/answer
 webhooks, raise `staleCallReaperSeconds` past the default so slow-but-normal

@@ -4,14 +4,16 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { resolveSessionKey } from "../../lib/sessions/index.ts";
+import { resolveSessionKey } from "../../lib/sessions/navigation.ts";
 import {
   isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
-  uiSessionRowMatchesSelectedChat,
+  createUiSessionRowMatcher,
+  readSessionDefaults,
 } from "../../lib/sessions/session-key.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
+import { isExpiredIncognitoSession } from "./chat-history-state.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 export { resolveChatAgentId } from "./chat-agent-id.ts";
@@ -24,7 +26,7 @@ export function bindChatPageSession(
   const agentId = parseAgentSessionKey(routeKey)?.agentId ?? routeAgentId?.trim();
   if (parseCatalogSessionKey(routeKey)) {
     if (agentId) {
-      context.agentSelection.set(agentId);
+      context.agentSelection.set(agentId, { background: true });
     }
     return;
   }
@@ -43,6 +45,7 @@ export function bindChatPageSession(
       gateway: context.gateway,
       sessionKey,
       agentId,
+      background: true,
     });
   }
 }
@@ -53,15 +56,53 @@ export function canCreateChatSession(state: ChatPageHost) {
     !state.chatSending &&
     !state.chatRunId &&
     state.chatStream === null &&
-    state.chatQueue.length === 0
+    (state.chatQueue.length === 0 || isExpiredIncognitoSession(state))
   );
 }
 
+const selectedRows = new WeakMap<
+  NonNullable<ChatPageHost["sessionsResult"]>,
+  WeakMap<
+    ChatPageHost,
+    {
+      inputs: readonly unknown[];
+      row: NonNullable<ChatPageHost["sessionsResult"]>["sessions"][number] | undefined;
+    }
+  >
+>();
+
 export function selectedChatSessionRow(state: ChatPageHost) {
-  const rows = state.sessionsResult?.sessions ?? [];
-  const row = rows.find((candidate) =>
-    uiSessionRowMatchesSelectedChat(state, candidate.key, state.sessionKey, candidate.agentId),
-  );
+  const result = state.sessionsResult;
+  if (!result) {
+    return undefined;
+  }
+  const defaults = readSessionDefaults(state);
+  const inputs = [
+    state.sessionKey,
+    state.assistantAgentId,
+    state.agentsList != null,
+    state.agentsList?.defaultId,
+    state.agentsList?.mainKey,
+    state.agentsList?.scope,
+    defaults !== undefined,
+    defaults?.defaultAgentId,
+    defaults?.mainKey,
+    defaults?.mainSessionKey,
+    result.sessions,
+  ];
+  let panes = selectedRows.get(result);
+  if (!panes) {
+    panes = new WeakMap();
+    selectedRows.set(result, panes);
+  }
+  const cached = panes.get(state);
+  let row = cached?.row;
+  if (!cached || !inputs.every((value, index) => value === cached.inputs[index])) {
+    const matches = createUiSessionRowMatcher(state, state.sessionKey);
+    row = result.sessions.find((candidate) => matches(candidate.key, candidate.agentId));
+    // Panes keep independent selections; retired results and panes release their cached rows.
+    panes.set(state, { inputs, row });
+  }
   if (!row || !isUiGlobalSessionKey(row.key)) {
     return row;
   }
@@ -102,9 +143,8 @@ export function resolveChatAvatarUrl(state: ChatPageHost): string | null {
   ) {
     return assistantAvatar;
   }
-  const agent = state.agentsList?.agents?.find((candidate) => candidate.id === agentId) as
-    | { identity?: { avatar?: string; avatarUrl?: string } }
-    | undefined;
+  const agentsList: ApplicationContext["agents"]["state"]["agentsList"] = state.agentsList;
+  const agent = agentsList?.agents?.find((candidate) => candidate.id === agentId);
   const identity = agent?.identity;
   const avatar = identity?.avatarUrl ?? identity?.avatar;
   return typeof avatar === "string" && isRenderableControlUiAvatarUrl(avatar) ? avatar : null;

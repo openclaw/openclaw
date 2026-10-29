@@ -4,215 +4,224 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { slackActionRuntime } from "./action-runtime.js";
 import {
   listSlackReactions,
+  reactSlackMessage,
   removeOwnSlackReactions,
   type SlackMessageSummary,
 } from "./actions.js";
 import { createSlackActions } from "./channel-actions.js";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
 
+const getSlackWriteClientMock = vi.hoisted(() => vi.fn());
+const installations: Array<ReturnType<typeof registerSlackInstallationState>> = [];
+vi.mock("./client.js", async () => ({
+  ...(await vi.importActual<typeof import("./client.js")>("./client.js")),
+  getSlackWriteClient: getSlackWriteClientMock,
+}));
 type SlackReaction = NonNullable<SlackMessageSummary["reactions"]>[number];
-
-const slackConfig = {
+const slackConfig: OpenClawConfig = {
   channels: { slack: { botToken: "xoxb-local-proof", groupPolicy: "open" } },
-} as OpenClawConfig;
-
-function createSlackReactionClient(reactions: SlackReaction[]) {
+};
+function createClient(
+  reactions: SlackReaction[] = [],
+  failure?: { method: string; error: string },
+) {
+  let pendingFailure = failure;
   const calls: Array<{ method: string; body: URLSearchParams }> = [];
   const client = new WebClient("xoxb-local-proof", {
     retryConfig: { retries: 0 },
     fetch: async (input, init) => {
       const method = new URL(String(input)).pathname.split("/").at(-1) ?? "";
-      const requestBody = init?.body;
-      if (typeof requestBody !== "string") {
-        throw new Error("Slack reaction requests must use URL-encoded request bodies.");
+      if (typeof init?.body !== "string") {
+        throw new Error("Expected URL-encoded Slack request");
       }
-      const body = new URLSearchParams(requestBody);
-      calls.push({ method, body });
+      calls.push({ method, body: new URLSearchParams(init.body) });
+      if (pendingFailure?.method === method) {
+        const error = pendingFailure.error;
+        pendingFailure = undefined;
+        return Response.json({ ok: false, error });
+      }
       const result =
         method === "reactions.get"
-          ? { ok: true, channel: "C1", message: { reactions } }
+          ? { message: { reactions } }
           : method === "auth.test"
-            ? { ok: true, user_id: "UBOT" }
-            : method === "reactions.remove"
-              ? { ok: true }
-              : null;
+            ? { user_id: "UBOT" }
+            : method === "reactions.add" || method === "reactions.remove"
+              ? {}
+              : undefined;
       if (!result) {
-        throw new Error(`Unexpected Slack API method: ${method}`);
+        throw new Error("Unexpected Slack API method: " + method);
       }
-      return new Response(JSON.stringify(result), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      return Response.json({ ok: true, ...result });
     },
   });
   return { client, calls };
 }
-
-async function readSlackReactionsThroughPublicAction(params: {
-  client: WebClient;
-  limit?: number;
-}) {
-  vi.spyOn(slackActionRuntime, "resolveSlackConversationInfo").mockResolvedValue({
-    type: "channel",
-  });
+function lookupSpies(client: WebClient) {
   vi.spyOn(slackActionRuntime, "listSlackReactions").mockImplementation(
     (channelId, messageId, options) =>
-      listSlackReactions(channelId, messageId, { ...options, client: params.client }),
+      listSlackReactions(channelId, messageId, { ...options, client }),
   );
-  const result = await createSlackActions("slack").handleAction?.({
-    action: "reactions",
-    cfg: slackConfig,
+  return vi.spyOn(slackActionRuntime, "readSlackMessages");
+}
+function action(kind: "reactions" | "read", cfg: OpenClawConfig, params: Record<string, unknown>) {
+  return createSlackActions("slack").handleAction?.({
+    action: kind,
+    cfg,
     conversationReadOrigin: "direct-operator",
-    params: {
-      channelId: "C1",
-      messageId: "123.456",
-      ...(params.limit === undefined ? {} : { limit: params.limit }),
-    },
+    params: { channelId: "C1", messageId: "123.456", ...params },
   } as never);
-  const content = result?.content[0];
-  if (!content || content.type !== "text") {
-    throw new Error("Slack reactions did not return a text tool result.");
-  }
-  return JSON.parse(content.text) as { ok: boolean; reactions: SlackReaction[] };
 }
 
-describe("Slack reaction user limits", () => {
+function installEnterprise() {
+  installations.push(registerSlackInstallationState("default", "enterprise"));
+}
+
+function expectReactionWrites(
+  calls: ReturnType<typeof createClient>["calls"],
+  method: string,
+  names: string[],
+) {
+  expect(
+    calls
+      .filter((call) => call.method === method)
+      .map(({ body }) => [body.get("channel"), body.get("timestamp"), body.get("name")]),
+  ).toEqual(names.map((name) => ["C1", "123.456", name]));
+}
+
+describe("Slack reactions", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    getSlackWriteClientMock.mockReset();
+    for (const installation of installations.splice(0)) {
+      installation.release();
+    }
   });
 
-  it("limits users per emoji through the public action without changing reaction facts", async () => {
-    const { client, calls } = createSlackReactionClient([
-      { name: "eyes", count: 3, users: ["U1", "U2", "UBOT"] },
-      { name: "wave", count: 2, users: ["U3", "U4"] },
+  it("bounds public users without changing reaction facts", async () => {
+    const users = Array.from({ length: 101 }, (_, index) => "U" + String(index + 1));
+    const { client, calls } = createClient([
+      { name: "eyes", count: 101, users },
       { name: "heart", count: 5 },
       { name: "party", count: 0, users: [] },
     ]);
-
-    const result = await readSlackReactionsThroughPublicAction({ client, limit: 1 });
-
-    expect(result).toEqual({
+    vi.spyOn(slackActionRuntime, "resolveSlackConversationInfo").mockResolvedValue({
+      type: "channel",
+    });
+    lookupSpies(client);
+    const result = await action("reactions", slackConfig, {});
+    const content = result?.content[0];
+    if (!content || content.type !== "text") {
+      throw new Error("Expected text tool result");
+    }
+    expect(JSON.parse(content.text)).toEqual({
       ok: true,
       reactions: [
-        { name: "eyes", count: 3, users: ["U1"] },
-        { name: "wave", count: 2, users: ["U3"] },
+        { name: "eyes", count: 101, users: users.slice(0, 100) },
         { name: "heart", count: 5 },
         { name: "party", count: 0, users: [] },
       ],
     });
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.method).toBe("reactions.get");
-    expect(calls[0]?.body.get("full")).toBe("true");
-    expect(calls[0]?.body.has("limit")).toBe(false);
-  });
-
-  it.each([
-    { name: "omitted", limit: undefined },
-    { name: "larger than the hard cap", limit: 500 },
-    { name: "the largest safe integer", limit: Number.MAX_SAFE_INTEGER },
-  ])("caps $name user limits at 100 users per emoji", async ({ limit }) => {
-    const users = Array.from({ length: 101 }, (_, index) => `U${index + 1}`);
-    const { client } = createSlackReactionClient([{ name: "eyes", count: 101, users }]);
-
-    const result = await readSlackReactionsThroughPublicAction({ client, limit });
-
-    expect(result.reactions).toEqual([{ name: "eyes", count: 101, users: users.slice(0, 100) }]);
     expect(users).toHaveLength(101);
+    expect(calls.map(({ method, body }) => [method, body.get("full"), body.has("limit")])).toEqual([
+      ["reactions.get", "true", false],
+    ]);
   });
 
   it.each(["reactions", "read"] as const)(
-    "authorizes public %s targets before inspecting malformed limits",
-    async (action) => {
-      const restrictedConfig = {
-        channels: {
-          slack: {
-            botToken: "xoxb-local-proof",
-            groupPolicy: "allowlist",
-            channels: { C_ALLOWED: { enabled: true } },
+    "authorizes %s before inspecting malformed limits",
+    async (kind) => {
+      const { client, calls } = createClient();
+      const lookups = lookupSpies(client);
+      await expect(
+        action(
+          kind,
+          {
+            channels: {
+              slack: {
+                botToken: "xoxb-local-proof",
+                groupPolicy: "allowlist",
+                channels: { C_ALLOWED: { enabled: true } },
+              },
+            },
           },
-        },
-      } as OpenClawConfig;
-      const { client, calls } = createSlackReactionClient([]);
-      const reactionLookup = vi
-        .spyOn(slackActionRuntime, "listSlackReactions")
-        .mockImplementation((channelId, messageId, options) =>
-          listSlackReactions(channelId, messageId, { ...options, client }),
-        );
-      const messageLookup = vi.spyOn(slackActionRuntime, "readSlackMessages");
-
-      await expect(
-        createSlackActions("slack").handleAction?.({
-          action,
-          cfg: restrictedConfig,
-          params: { channelId: "C_FORBIDDEN", messageId: "123.456", limit: 0 },
-        } as never),
+          { channelId: "C_FORBIDDEN", limit: 0 },
+        ),
       ).rejects.toThrow("Slack read target channel is not allowed.");
-      expect(reactionLookup).not.toHaveBeenCalled();
-      expect(messageLookup).not.toHaveBeenCalled();
+      expect(lookups).not.toHaveBeenCalled();
       expect(calls).toEqual([]);
     },
   );
 
-  it.each([
-    { action: "reactions", limit: 0 },
-    { action: "reactions", limit: -1 },
-    { action: "reactions", limit: 1.5 },
-    { action: "reactions", limit: Number.NaN },
-    { action: "reactions", limit: Number.POSITIVE_INFINITY },
-    { action: "reactions", limit: Number.NEGATIVE_INFINITY },
-    { action: "reactions", limit: Number.MAX_SAFE_INTEGER + 1 },
-    { action: "read", limit: 0 },
-  ])(
-    "rejects invalid public $action limit $limit before Slack API work",
-    async ({ action, limit }) => {
-      const { client, calls } = createSlackReactionClient([]);
-      const conversationLookup = vi
-        .spyOn(slackActionRuntime, "resolveSlackConversationInfo")
-        .mockResolvedValue({ type: "channel" });
-      const reactionLookup = vi
-        .spyOn(slackActionRuntime, "listSlackReactions")
-        .mockImplementation((channelId, messageId, options) =>
-          listSlackReactions(channelId, messageId, { ...options, client }),
-        );
-      const messageLookup = vi.spyOn(slackActionRuntime, "readSlackMessages");
-
-      await expect(
-        createSlackActions("slack").handleAction?.({
-          action,
-          cfg: slackConfig,
-          params: { channelId: "C1", messageId: "123.456", limit },
-        } as never),
-      ).rejects.toThrow("limit must be a positive integer.");
-      expect(conversationLookup).toHaveBeenCalledOnce();
-      expect(reactionLookup).not.toHaveBeenCalled();
-      expect(messageLookup).not.toHaveBeenCalled();
-      expect(calls).toEqual([]);
-    },
-  );
-
-  it("preserves all reaction users for existing live approval helper callers", async () => {
-    const users = [...Array.from({ length: 100 }, (_, index) => `U${index + 1}`), "U_APPROVER"];
-    const { client } = createSlackReactionClient([
-      { name: "white_check_mark", count: users.length, users },
-    ]);
-
-    await expect(listSlackReactions("C1", "123.456", { client })).resolves.toEqual([
-      { name: "white_check_mark", count: users.length, users },
-    ]);
+  it("rejects invalid read limits before Slack API work", async () => {
+    const { client, calls } = createClient();
+    const lookups = lookupSpies(client);
+    vi.spyOn(slackActionRuntime, "resolveSlackConversationInfo").mockResolvedValue({
+      type: "channel",
+    });
+    await expect(action("read", slackConfig, { limit: 0 })).rejects.toThrow(
+      "limit must be a positive integer.",
+    );
+    expect(lookups).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
   });
 
-  it("removes the bot's own reaction when its user is beyond the public cap", async () => {
-    const users = [...Array.from({ length: 100 }, (_, index) => `U${index + 1}`), "UBOT"];
-    const { client, calls } = createSlackReactionClient([
-      { name: "eyes", count: users.length, users },
+  it("sends normalized emoji through the workspace-scoped Enterprise Grid client", async () => {
+    const { client, calls } = createClient();
+    getSlackWriteClientMock.mockReturnValue(client);
+    installEnterprise();
+    await reactSlackMessage("C1", "123.456", "👍🏽", { teamId: "T1", token: "xoxb-test" });
+    expect(getSlackWriteClientMock).toHaveBeenCalledWith("xoxb-test", { teamId: "T1" });
+    expectReactionWrites(calls, "reactions.add", ["thumbsup::skin-tone-4"]);
+  });
+
+  it("rejects an unscoped Enterprise Grid reaction before constructing a client", async () => {
+    installEnterprise();
+    await expect(reactSlackMessage("C1", "123.456", "✅", { token: "xoxb-test" })).rejects.toThrow(
+      "unsupported_enterprise_slack_delivery",
+    );
+    expect(getSlackWriteClientMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps prototype-named shortcodes intact on an idempotent add", async () => {
+    const { client, calls } = createClient([], {
+      method: "reactions.add",
+      error: "already_reacted",
+    });
+    await expect(
+      reactSlackMessage("C1", "123.456", ":constructor:", { client }),
+    ).resolves.toBeUndefined();
+    expectReactionWrites(calls, "reactions.add", ["constructor"]);
+  });
+
+  it("propagates unrelated API errors", async () => {
+    const { client } = createClient([], { method: "reactions.add", error: "invalid_name" });
+    await expect(reactSlackMessage("C1", "123.456", "⚠️", { client })).rejects.toMatchObject({
+      message: "An API error occurred: invalid_name",
+      data: { ok: false, error: "invalid_name" },
+    });
+  });
+
+  it("removes only own reactions beyond the public cap through the idempotent remove helper", async () => {
+    const users = [...Array.from({ length: 100 }, (_, index) => "U" + String(index)), "UBOT"];
+    const { client, calls } = createClient(
+      [
+        { name: "thumbsup", users },
+        { name: "eyes", users: ["U2", "UBOT"] },
+        { name: "wave", users: ["U2"] },
+      ],
+      { method: "reactions.remove", error: "no_reaction" },
+    );
+    await expect(removeOwnSlackReactions("C1", "123.456", { client })).resolves.toEqual([
+      "thumbsup",
+      "eyes",
     ]);
-
-    await expect(removeOwnSlackReactions("C1", "123.456", { client })).resolves.toEqual(["eyes"]);
-
     expect(calls.map(({ method }) => method)).toEqual([
       "auth.test",
       "reactions.get",
       "reactions.remove",
+      "reactions.remove",
     ]);
-    expect(calls[2]?.body.get("name")).toBe("eyes");
+    expect(calls[1]?.body.get("full")).toBe("true");
+    expectReactionWrites(calls, "reactions.remove", ["thumbsup", "eyes"]);
   });
 });

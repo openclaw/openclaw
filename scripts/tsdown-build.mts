@@ -5,15 +5,15 @@
 import {
   spawn,
   spawnSync,
-  type StdioOptions,
   type SpawnSyncOptionsWithStringEncoding,
   type SpawnSyncReturns,
 } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "@openclaw/fs-safe/path";
-import { decodeMountInfoPath } from "../packages/normalization-core/src/mountinfo-path.ts";
+import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import { BUNDLED_PLUGIN_BUILD_ENV_NAMES } from "./lib/bundled-plugin-build-entries.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
@@ -22,6 +22,7 @@ import {
   withDistArtifactOwnership,
 } from "./lib/dist-artifact-ownership.mts";
 import { toErrorObject } from "./lib/error-format.mts";
+import { applyLocalTsgoPolicy } from "./lib/local-check-runtime.mts";
 import {
   inspectManagedProcessGroup,
   signalExitCode,
@@ -29,18 +30,26 @@ import {
   waitForManagedProcessGroupExit,
 } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
-import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
+import { assertRealOutputRoot, controlUiBuildSiblingPid } from "./lib/output-root-guard.mjs";
+import { readProcessMemoryCapacity, type MemoryLimitParams } from "./lib/process-memory.mts";
 import { sanitizeBundlerHelperDtsExportTree } from "./lib/sanitize-bundler-helper-dts-exports.mts";
 import {
+  TSDOWN_DECLARATION_CONFIG_GROUPS,
   TSDOWN_PACKAGE_CONFIG_GROUP,
+  TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "./lib/tsdown-config-groups.mts";
 import {
   TSDOWN_PACKAGE_OUTPUT_ROOTS,
+  TSDOWN_PACKAGES_CACHE_INPUT,
   tsdownPackageOutputRoot,
 } from "./lib/tsdown-output-roots.mts";
-import { resolvePnpmRunner } from "./pnpm-runner.mts";
+import {
+  finalizeTsdownRuntimeCaches,
+  TSDOWN_CACHE_GROUPS_ENV,
+  TSDOWN_CACHE_PENDING_ENV,
+} from "./lib/tsdown-runtime-cache.mts";
 
 const logLevel = process.env.OPENCLAW_BUILD_VERBOSE ? "info" : "warn";
 const INEFFECTIVE_DYNAMIC_IMPORT_MARKER = "[INEFFECTIVE_DYNAMIC_IMPORT]";
@@ -54,22 +63,16 @@ const DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB = 8192;
 export const TSDOWN_MAX_OLD_SPACE_MB_ENV = "OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB";
 const DOCKER_TSDOWN_MAX_OLD_SPACE_MB_ENV = "OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB";
 const TSDOWN_CGROUP_MEMORY_HEADROOM_MB = 768;
-const DEFAULT_CGROUP_V2_MOUNT_PATH = "/sys/fs/cgroup";
-const DEFAULT_CGROUP_V1_MEMORY_MOUNT_PATH = "/sys/fs/cgroup/memory";
-const PROC_SELF_CGROUP_PATH = "/proc/self/cgroup";
-const PROC_SELF_LIMITS_PATH = "/proc/self/limits";
-const PROC_SELF_MOUNTINFO_PATH = "/proc/self/mountinfo";
-const PROC_SELF_STATUS_PATH = "/proc/self/status";
 const SERIALIZED_MAIN_CONFIG_GROUPS = [
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
   ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 ];
-// The v2 high limit throttles reclaim, so a heap sized above it can stall the build instead of
-// OOM-ing. Cgroup v1's soft limit is only advisory and must not reject an otherwise viable build.
-const CGROUP_V2_MEMORY_LIMIT_FILES = ["memory.max", "memory.high"];
-const CGROUP_V1_MEMORY_LIMIT_FILES = ["memory.limit_in_bytes"];
-const PROC_MEMINFO_PATH = "/proc/meminfo";
+const SELECTABLE_MAIN_CONFIG_GROUPS = [
+  TSDOWN_PACKAGE_CONFIG_GROUP,
+  TSDOWN_UNIFIED_CONFIG_GROUP,
+  ...TSDOWN_DECLARATION_CONFIG_GROUPS,
+];
 const tsdownStdio = () => ["ignore", "pipe", "pipe"] satisfies ["ignore", "pipe", "pipe"];
 // Build descendants get a short cleanup window; a timed-out build must not hold CI for seconds.
 const TERMINATION_GRACE_MS = 250;
@@ -82,54 +85,7 @@ export const TSDOWN_DECLARATION_EXTENSIONS = [".d.ts", ".d.mts", ".d.cts"];
 const SOURCE_DECLARATION_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"];
 const RUN_NODE_SKIP_DTS_BUILD_ENV = "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD";
 
-const TSDOWN_SOURCE_EXTENSIONS = [
-  ".cjs",
-  ".cts",
-  ".js",
-  ".json",
-  ".json5",
-  ".mjs",
-  ".mts",
-  ".sql",
-  ".ts",
-  ".tsx",
-  ".yaml",
-  ".yml",
-];
-
-export const TSDOWN_DECLARATION_TOOL_INPUTS = [
-  "package.json",
-  "pnpm-lock.yaml",
-  "tsconfig.json",
-  "scripts/tsdown-build.mts",
-  "scripts/build-all.mts",
-  "scripts/lib/build-artifact-cache.mts",
-  "scripts/lib/dist-artifact-ownership.mts",
-  "scripts/lib/managed-child-process.mts",
-  "scripts/lib/vitest-resource-ownership.mts",
-  "scripts/lib/direct-run.mjs",
-  "scripts/lib/repo-root.mjs",
-  "scripts/lib/local-check-runtime.mts",
-  "scripts/tsx.mjs",
-  "scripts/lib/tsx-cli-shim.mjs",
-  "scripts/lib/bundled-plugin-build-entries.mjs",
-  "scripts/lib/bundled-plugin-paths.mjs",
-  "scripts/lib/optional-bundled-clusters.mjs",
-  "scripts/lib/plugin-sdk-entries.mts",
-  "scripts/lib/plugin-sdk-entrypoints.json",
-  "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
-  "scripts/lib/plugin-sdk-deprecated-public-subpaths.json",
-  "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
-  "scripts/lib/root-package-bundled-plugin-excludes.mjs",
-  "scripts/lib/tsdown-config-groups.mts",
-  "scripts/lib/tsdown-declaration-boundary.mts",
-  "scripts/lib/tsdown-output-roots.mts",
-];
-export const TSDOWN_PACKAGES_CACHE_INPUT = {
-  path: "packages",
-  extensions: TSDOWN_SOURCE_EXTENSIONS,
-  excludeDirectories: ["dist", "node_modules"],
-};
+export { TSDOWN_PACKAGES_CACHE_INPUT };
 export const TSDOWN_UNIFIED_CACHE_ENV = [
   "OPENCLAW_BUILD_PRIVATE_QA",
   ...BUNDLED_PLUGIN_BUILD_ENV_NAMES,
@@ -143,29 +99,18 @@ type OutputRootParams = {
   roots?: string[];
 };
 
-export type MemoryLimitParams = {
-  availableMemoryBytes?: number;
-  cgroupMemoryLimitBytes?: number;
-  cgroupMemoryLimitPaths?: string[];
-  constrainedMemoryBytes?: number;
-  env?: NodeJS.ProcessEnv;
-  fs?: { readFileSync(filePath: string, encoding: "utf8"): string };
-  physicalMemoryBytes?: number;
-  platform?: string;
-  processResidentMemoryBytes?: number;
-  procMeminfoPath?: string;
-  procMemTotalBytes?: number;
+type TsdownMemoryBudget = {
+  maxOldSpaceMb: number;
+  unresolvedCgroupMemory: boolean;
+  capacityBytes: number | null;
 };
-
-type CgroupMount = { mountPoint: string; observed: boolean; root: string };
-
-type ResolvedMemoryLimitParams = MemoryLimitParams & { resolvedMaxOldSpaceMb?: number };
+type ResolvedMemoryLimitParams = MemoryLimitParams & {
+  resolvedMemoryBudget?: TsdownMemoryBudget;
+};
 
 type TsdownBuildParams = ResolvedMemoryLimitParams & {
   args?: string[];
-  comSpec?: string;
   nodeExecPath?: string;
-  npmExecPath?: string;
 };
 
 type TsdownBuildResult = ReturnType<ReturnType<typeof createTsdownOutputScanner>["finish"]> & {
@@ -310,7 +255,8 @@ function cleanOutputRootExcept(rootPath: string, protectedPaths: Set<string>, fs
   for (const entry of entries) {
     const entryPath = path.join(rootPath, entry.name);
     const resolvedEntryPath = path.resolve(entryPath);
-    if (protectedPaths.has(resolvedEntryPath)) {
+    // scripts/ui.mts owns in-flight Control UI staging trees.
+    if (protectedPaths.has(resolvedEntryPath) || controlUiBuildSiblingPid(entry.name) !== null) {
       continue;
     }
     try {
@@ -332,8 +278,13 @@ function listExistingGeneratedDeclarationOutputPaths(
   roots: string[],
 ) {
   const protectedPaths = new Set<string>();
+  // Postbuild recreates the staging-only overlay from canonical dist declarations.
+  const runtimeOverlay = path.resolve(cwd, "dist-runtime");
   for (const root of roots) {
-    collectDeclarationOutputPaths(path.resolve(cwd, root), protectedPaths, fsImpl);
+    const outputRoot = path.resolve(cwd, root);
+    if (outputRoot !== runtimeOverlay) {
+      collectDeclarationOutputPaths(outputRoot, protectedPaths, fsImpl);
+    }
   }
   return protectedPaths;
 }
@@ -478,24 +429,7 @@ function readForwardedOptions(args: string[], names: string[]) {
 const readForwardedOption = (args: string[], names: string[]) =>
   readForwardedOptions(args, names)[0];
 function readForwardedScalarOption(args: string[], names: string[], label: string) {
-  const values: string[] = [];
-  for (const [index, arg] of args.entries()) {
-    for (const name of names) {
-      if (arg === name) {
-        const value = args[index + 1];
-        if (!value || value.startsWith("-")) {
-          throw new Error(`tsdown build requires one concrete ${label} value`);
-        }
-        values.push(value);
-      } else if (arg.startsWith(`${name}=`)) {
-        const value = arg.slice(name.length + 1);
-        if (!value) {
-          throw new Error(`tsdown build requires one concrete ${label} value`);
-        }
-        values.push(value);
-      }
-    }
-  }
+  const values = readForwardedOptions(args, names);
   if (values.length > 1) {
     throw new Error(`tsdown build accepts only one ${label} value`);
   }
@@ -513,7 +447,7 @@ const isConfigArg = (arg: string) =>
 const isWatchArg = (arg: string) =>
   arg === "--watch" || arg.startsWith("--watch=") || arg === "-w" || arg.startsWith("-w=");
 const isUnifiedDtsGroup = (value: string | undefined) =>
-  TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.some((group) => group === value);
+  TSDOWN_DECLARATION_CONFIG_GROUPS.some((group) => group === value);
 
 /** Limits cleanup to the output roots owned by an explicitly filtered build. */
 export function resolveTsdownCleanOutputRoots(args: string[] = []) {
@@ -631,22 +565,15 @@ export function pruneUntrackedGeneratedSourceDeclarations(
   return removed;
 }
 
-function findFatalUnresolvedImport(lines: string[]) {
-  for (const line of lines) {
-    if (!line.includes("[UNRESOLVED_IMPORT]")) {
-      continue;
-    }
-
-    const normalizedLine = line.replace(ANSI_ESCAPE_RE, "");
-    if (
-      !normalizedLine.includes(BUNDLED_PLUGIN_PATH_PREFIX) &&
-      !DEPENDENCY_PATH_MARKERS.some((marker) => normalizedLine.includes(marker))
-    ) {
-      return normalizedLine;
-    }
+function findFatalUnresolvedImport(line: string) {
+  if (!line.includes("[UNRESOLVED_IMPORT]")) {
+    return null;
   }
-
-  return null;
+  const normalizedLine = line.replace(ANSI_ESCAPE_RE, "");
+  return !normalizedLine.includes(BUNDLED_PLUGIN_PATH_PREFIX) &&
+    !DEPENDENCY_PATH_MARKERS.some((marker) => normalizedLine.includes(marker))
+    ? normalizedLine
+    : null;
 }
 
 function parsePositiveIntegerEnv(value: string | undefined, name: string) {
@@ -671,474 +598,9 @@ function parseNonNegativeIntegerEnv(value: string | undefined, name: string) {
   return parsed;
 }
 
-function parseCgroupMemoryLimitBytes(value: string) {
-  const trimmed = value.trim();
-  if (trimmed === "" || trimmed === "max" || !/^\d+$/u.test(trimmed)) {
-    return null;
-  }
-  const parsed = BigInt(trimmed);
-  if (parsed < 0n || parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
-    return null;
-  }
-  return Number(parsed);
-}
-
-function isMissingFileError(error: unknown) {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
-}
-
-function readProcessRlimitMemoryBytes(params: MemoryLimitParams) {
-  if ((params.platform ?? process.platform) !== "linux") {
-    return null;
-  }
-  try {
-    const rawLimits = (params.fs ?? fs).readFileSync(PROC_SELF_LIMITS_PATH, "utf8");
-    let tightestLimitBytes: number | null = null;
-    for (const match of rawLimits.matchAll(
-      /^Max (?:address space|data size)\s+(?<soft>\d+|unlimited)\s+/gmu,
-    )) {
-      const softLimit = match.groups?.soft;
-      if (!softLimit || softLimit === "unlimited") {
-        continue;
-      }
-      const parsed = parseCgroupMemoryLimitBytes(softLimit);
-      if (parsed !== null && (tightestLimitBytes === null || parsed < tightestLimitBytes)) {
-        tightestLimitBytes = parsed;
-      }
-    }
-    return tightestLimitBytes;
-  } catch {
-    return null;
-  }
-}
-
-function parseCgroupInactiveFileBytes(value: string, isV1: boolean) {
-  const match = isV1
-    ? (value.match(/^total_inactive_file\s+(\d+)$/mu) ?? value.match(/^inactive_file\s+(\d+)$/mu))
-    : value.match(/^inactive_file\s+(\d+)$/mu);
-  return match?.[1] ? parseCgroupMemoryLimitBytes(match[1]) : 0;
-}
-
-function readProcessResidentMemoryBytes(params: MemoryLimitParams) {
-  const configured = params.processResidentMemoryBytes;
-  if (configured !== undefined && Number.isFinite(configured) && configured >= 0) {
-    return Math.trunc(configured);
-  }
-  try {
-    const match = (params.fs ?? fs)
-      .readFileSync(PROC_SELF_STATUS_PATH, "utf8")
-      .match(/^VmRSS:\s+(\d+)\s+kB$/mu);
-    const bytes = match?.[1] ? BigInt(match[1]) * 1024n : null;
-    return bytes !== null && bytes <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(bytes) : null;
-  } catch {
-    return null;
-  }
-}
-
-// Controller mount points are host layout, not constants: v1 controllers may be co-mounted at
-// the cgroup root instead of a per-controller directory. Read them where the kernel records
-// them so a slice budget is never missed because a path was assumed.
-function resolveCgroupMountPoints(params: MemoryLimitParams = {}) {
-  const fsImpl = params.fs ?? fs;
-  let rawMountinfo = "";
-  try {
-    rawMountinfo = fsImpl.readFileSync(PROC_SELF_MOUNTINFO_PATH, "utf8");
-  } catch {
-    // Unreadable off Linux; the documented defaults still apply.
-  }
-
-  // One hierarchy can be visible through several mounts, and only some of them expose a subtree
-  // containing this process, so every view is kept as a candidate rather than the last one seen.
-  const unified: CgroupMount[] = [];
-  const v1Memory: CgroupMount[] = [];
-  for (const line of rawMountinfo.split("\n")) {
-    // mountinfo separates its variable optional fields from the fstype with a lone "-".
-    const [fields, describe] = line.split(" - ");
-    // mountinfo fields 4 and 5 are the mount root and mount point.
-    const mountFields = (fields ?? "").split(" ");
-    const rawRoot = mountFields[3];
-    const rawMountPoint = mountFields[4];
-    const [fsType, , superOptions] = (describe ?? "").split(" ");
-    if (!rawMountPoint || !rawRoot) {
-      continue;
-    }
-    // The kernel escapes space, tab, newline, and backslash in these two fields, so
-    // matching them verbatim would miss any cgroup path containing one of them.
-    const root = decodeMountInfoPath(rawRoot);
-    const mountPoint = decodeMountInfoPath(rawMountPoint);
-    if (fsType === "cgroup2") {
-      unified.push({ mountPoint, observed: true, root });
-    } else if (fsType === "cgroup" && (superOptions ?? "").split(",").includes("memory")) {
-      v1Memory.push({ mountPoint, observed: true, root });
-    }
-  }
-  return {
-    unified:
-      unified.length > 0
-        ? unified
-        : [{ mountPoint: DEFAULT_CGROUP_V2_MOUNT_PATH, observed: false, root: "/" }],
-    v1Memory:
-      v1Memory.length > 0
-        ? v1Memory
-        : [{ mountPoint: DEFAULT_CGROUP_V1_MEMORY_MOUNT_PATH, observed: false, root: "/" }],
-  };
-}
-
-// mountinfo field 4 is the subtree a cgroupfs mount exposes, so /proc/self/cgroup records are
-// relative to it: under a container mount the visible leaf is the mount point itself, not the
-// host-absolute path. A record outside that subtree is not reachable through this mount, and
-// probing the mount root instead would size the build from an unrelated cgroup's limit.
-function relativeCgroupPath(mountRoot: string, cgroupPath: string) {
-  if (cgroupPath.split("/").includes("..")) {
-    return null;
-  }
-  if (mountRoot === "/") {
-    return cgroupPath;
-  }
-  const mountRootSegments = mountRoot.split("/").filter(Boolean);
-  if (mountRootSegments.length > 0 && mountRootSegments.every((segment) => segment === "..")) {
-    // The visible root is an ancestor, but the process's hidden child name cannot be
-    // reconstructed. Treat it as unresolved instead of mistaking the parent for the leaf.
-    return null;
-  }
-  if (mountRootSegments.includes("..")) {
-    return null;
-  }
-  // A namespace-root record proves nothing about a mount rooted elsewhere: the kernel
-  // contract does not make "/" plus an arbitrary subtree a match, so adopting that pair
-  // could cap the heap from an unrelated cgroup. Fail closed to host sizing instead.
-  if (cgroupPath === "/") {
-    return null;
-  }
-  if (cgroupPath === mountRoot) {
-    return "/";
-  }
-  return cgroupPath.startsWith(`${mountRoot}/`) ? cgroupPath.slice(mountRoot.length) : null;
-}
-
-// A systemd slice budget lives on the process's own cgroup, never on a hierarchy root, so
-// probing only the root misses every limit outside a namespaced container. Legacy and hybrid
-// hosts publish that same budget through the v1 memory controller instead of the `0::` record,
-// so both hierarchies are walked leaf-to-root; depth 0 is the root probe.
-function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
-  const fsImpl = params.fs ?? fs;
-  let rawCgroup = "";
-  let cgroupRecordReadFailed = false;
-  try {
-    rawCgroup = fsImpl.readFileSync(PROC_SELF_CGROUP_PATH, "utf8");
-  } catch {
-    cgroupRecordReadFailed = (params.platform ?? process.platform) === "linux";
-  }
-
-  const paths: string[] = [];
-  const addHierarchy = (
-    mounts: CgroupMount[],
-    limitFiles: string[],
-    cgroupPath: string,
-    hierarchyFile?: string,
-  ) => {
-    const initialPathCount = paths.length;
-    let addedObservedPath = false;
-    let hierarchyMetadataUnreadable = false;
-    for (const mount of mounts) {
-      const mountInitialPathCount = paths.length;
-      const mountRootSegments = mount.root.split("/").filter(Boolean);
-      if (mountRootSegments.length > 0 && mountRootSegments.every((segment) => segment === "..")) {
-        continue;
-      }
-      const relative = relativeCgroupPath(mount.root, cgroupPath ?? mount.root);
-      if (relative === null) {
-        continue;
-      }
-      const segments = relative.split("/").filter(Boolean);
-      for (let depth = segments.length; depth >= 0; depth -= 1) {
-        if (hierarchyFile && depth < segments.length) {
-          try {
-            const hierarchyPath = path.join(
-              mount.mountPoint,
-              ...segments.slice(0, depth),
-              hierarchyFile,
-            );
-            const hierarchyMode = fsImpl.readFileSync(hierarchyPath, "utf8").trim();
-            if (hierarchyMode === "0") {
-              break;
-            }
-            if (hierarchyMode !== "1") {
-              hierarchyMetadataUnreadable = true;
-              break;
-            }
-          } catch {
-            hierarchyMetadataUnreadable = true;
-            break;
-          }
-        }
-        for (const limitFile of limitFiles) {
-          paths.push(path.join(mount.mountPoint, ...segments.slice(0, depth), limitFile));
-        }
-      }
-      addedObservedPath ||= mount.observed && paths.length > mountInitialPathCount;
-    }
-    return {
-      added: paths.length > initialPathCount,
-      addedObservedPath,
-      hierarchyMetadataUnreadable,
-    };
-  };
-
-  const mounts = resolveCgroupMountPoints(params);
-  let sawMemoryRecord = false;
-  let sawObservedV2Mapping = false;
-  let sawObservedV2Root = false;
-  let sawUnreadableV1HierarchyMetadata = false;
-  let sawV1MemoryRecord = false;
-  let sawRejectedCgroupMapping = false;
-  let sawUnresolvedCgroupLimit = false;
-  for (const line of rawCgroup.split("\n")) {
-    const record = /^\d+:([^:]*):(.*)$/u.exec(line);
-    if (!record) {
-      continue;
-    }
-    const controllers = record[1] ?? "";
-    if (controllers === "") {
-      sawMemoryRecord = true;
-      const cgroupPath = record[2] ?? "";
-      sawObservedV2Root ||=
-        cgroupPath === "/" && mounts.unified.some((mount) => mount.observed && mount.root === "/");
-      const resolved = addHierarchy(mounts.unified, CGROUP_V2_MEMORY_LIMIT_FILES, cgroupPath);
-      sawObservedV2Mapping ||= resolved.addedObservedPath;
-      sawRejectedCgroupMapping ||= !resolved.added;
-      sawUnresolvedCgroupLimit ||= !resolved.added;
-    } else if (controllers.split(",").includes("memory")) {
-      sawMemoryRecord = true;
-      sawV1MemoryRecord = true;
-      const resolved = addHierarchy(
-        mounts.v1Memory,
-        CGROUP_V1_MEMORY_LIMIT_FILES,
-        record[2] ?? "",
-        "memory.use_hierarchy",
-      );
-      sawUnreadableV1HierarchyMetadata ||= resolved.hierarchyMetadataUnreadable;
-      sawRejectedCgroupMapping ||= !resolved.added;
-      sawUnresolvedCgroupLimit ||= !resolved.added;
-    }
-  }
-  // Only probe the mounts blind when this process has no memory cgroup record at all; a record
-  // that no mount can represent means the limit is unreadable here, not that the root applies.
-  if (!sawMemoryRecord) {
-    for (const mount of mounts.unified) {
-      addHierarchy([mount], CGROUP_V2_MEMORY_LIMIT_FILES, mount.root);
-    }
-    for (const mount of mounts.v1Memory) {
-      addHierarchy([mount], CGROUP_V1_MEMORY_LIMIT_FILES, mount.root);
-    }
-  }
-  return {
-    paths,
-    cgroupRecordReadFailed,
-    sawMemoryRecord,
-    sawObservedV2Mapping,
-    sawObservedUnconstrainedV2Root: sawObservedV2Root && !sawV1MemoryRecord,
-    sawRejectedCgroupMapping,
-    sawUnresolvedCgroupLimit,
-    sawUnreadableV1HierarchyMetadata,
-    sawV1MemoryRecord,
-  };
-}
-
-function readCgroupMemoryLimitBytes(params: MemoryLimitParams = {}) {
-  const configuredLimit = params.cgroupMemoryLimitBytes;
-  if (configuredLimit !== undefined && Number.isFinite(configuredLimit) && configuredLimit >= 0) {
-    return { limitBytes: Math.trunc(configuredLimit), unresolved: false };
-  }
-
-  const fsImpl = params.fs ?? fs;
-  const resolvedPaths = params.cgroupMemoryLimitPaths
-    ? {
-        cgroupRecordReadFailed: false,
-        paths: params.cgroupMemoryLimitPaths,
-        sawMemoryRecord: false,
-        sawObservedV2Mapping: false,
-        sawObservedUnconstrainedV2Root: false,
-        sawRejectedCgroupMapping: false,
-        sawUnresolvedCgroupLimit: false,
-        sawUnreadableV1HierarchyMetadata: false,
-        sawV1MemoryRecord: false,
-      }
-    : resolveCgroupMemoryLimitPaths(params);
-  // libuv folds cgroup v1's advisory soft limit into constrainedMemory(). Preserve its separate
-  // process rlimit candidate while the owner walk reads only authoritative cgroup hard limits.
-  const rlimitMemoryBytes = readProcessRlimitMemoryBytes(params);
-  const constrainedMemoryBytes =
-    resolvedPaths.sawV1MemoryRecord ||
-    resolvedPaths.sawRejectedCgroupMapping ||
-    resolvedPaths.sawUnresolvedCgroupLimit ||
-    resolvedPaths.sawUnreadableV1HierarchyMetadata
-      ? 0
-      : (params.constrainedMemoryBytes ??
-        (params.fs === undefined ? process.constrainedMemory() : 0));
-  // An ancestor may bound the leaf, so the tightest limit in the chain wins.
-  let tightestLimitBytes =
-    Number.isFinite(constrainedMemoryBytes) && constrainedMemoryBytes > 0
-      ? Math.trunc(constrainedMemoryBytes)
-      : null;
-  if (
-    rlimitMemoryBytes !== null &&
-    (tightestLimitBytes === null || rlimitMemoryBytes < tightestLimitBytes)
-  ) {
-    tightestLimitBytes = rlimitMemoryBytes;
-  }
-  const processResidentMemoryBytes = readProcessResidentMemoryBytes(params);
-  let readControllerLimit = false;
-  let readV1HardLimit = false;
-  let sawDisabledV2MemoryController = false;
-  let sawUnreadableControllerFile = false;
-  for (const limitPath of resolvedPaths.paths) {
-    try {
-      const rawLimit = fsImpl.readFileSync(limitPath, "utf8");
-      const trimmedLimit = rawLimit.trim();
-      readControllerLimit ||= trimmedLimit === "max" || /^\d+$/u.test(trimmedLimit);
-      // A controller cannot be bound to v1 and v2 simultaneously. Reading the v1 hard-limit
-      // file therefore resolves memory ownership even when its value is the unlimited sentinel.
-      if (path.basename(limitPath) === "memory.limit_in_bytes" && /^\d+$/u.test(trimmedLimit)) {
-        readV1HardLimit = true;
-      }
-      const limitBytes = parseCgroupMemoryLimitBytes(rawLimit);
-      if (limitBytes === null) {
-        continue;
-      }
-      let availableBytes = limitBytes;
-      try {
-        const isV1 = path.basename(limitPath) === "memory.limit_in_bytes";
-        const cgroupDir = path.dirname(limitPath);
-        const usageBytes = parseCgroupMemoryLimitBytes(
-          fsImpl.readFileSync(
-            path.join(cgroupDir, isV1 ? "memory.usage_in_bytes" : "memory.current"),
-            "utf8",
-          ),
-        );
-        if (usageBytes !== null) {
-          let inactiveFileBytes = 0;
-          try {
-            inactiveFileBytes =
-              parseCgroupInactiveFileBytes(
-                fsImpl.readFileSync(path.join(cgroupDir, "memory.stat"), "utf8"),
-                isV1,
-              ) ?? 0;
-          } catch {
-            // Missing stats make all charged usage non-reclaimable for admission.
-          }
-          // Total controller usage includes kernel and unreclaimable file charges. Credit only
-          // inactive file pages and this wrapper's resident set before sizing its child.
-          const competingBytes = Math.max(
-            0,
-            usageBytes -
-              Math.min(usageBytes, inactiveFileBytes) -
-              (processResidentMemoryBytes ?? 0),
-          );
-          availableBytes = Math.max(0, limitBytes - competingBytes);
-        }
-      } catch {
-        // Older or synthetic cgroup views may not expose current usage; the limit remains a cap.
-      }
-      if (tightestLimitBytes === null || availableBytes < tightestLimitBytes) {
-        tightestLimitBytes = availableBytes;
-      }
-    } catch (error) {
-      if (!isMissingFileError(error)) {
-        sawUnreadableControllerFile = true;
-        continue;
-      }
-      if (path.basename(limitPath) === "memory.limit_in_bytes") {
-        continue;
-      }
-      try {
-        const controllers = fsImpl
-          .readFileSync(path.join(path.dirname(limitPath), "cgroup.controllers"), "utf8")
-          .trim()
-          .split(/\s+/u)
-          .filter(Boolean);
-        sawDisabledV2MemoryController ||= !controllers.includes("memory");
-      } catch (controllerError) {
-        sawUnreadableControllerFile ||= !isMissingFileError(controllerError);
-      }
-    }
-  }
-
-  return {
-    limitBytes: tightestLimitBytes,
-    unresolved:
-      resolvedPaths.cgroupRecordReadFailed ||
-      sawUnreadableControllerFile ||
-      resolvedPaths.sawUnreadableV1HierarchyMetadata ||
-      (resolvedPaths.sawUnresolvedCgroupLimit && !readV1HardLimit) ||
-      (resolvedPaths.sawMemoryRecord &&
-        !readControllerLimit &&
-        !resolvedPaths.sawObservedUnconstrainedV2Root &&
-        !(
-          resolvedPaths.sawObservedV2Mapping &&
-          sawDisabledV2MemoryController &&
-          !sawUnreadableControllerFile
-        )),
-  };
-}
-
-function parseProcMemoryBytes(value: string, field: "MemAvailable" | "MemTotal") {
-  const match = value.match(new RegExp(`^${field}:\\s+(\\d+)\\s+kB$`, "imu"));
-  const kibibytes = match?.[1];
-  if (!kibibytes) {
-    return null;
-  }
-  const parsed = BigInt(kibibytes) * 1024n;
-  if (parsed < 0n || parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
-    return null;
-  }
-  return Number(parsed);
-}
-
-function readProcMemTotalBytes(params: MemoryLimitParams = {}) {
-  const configuredTotal = params.procMemTotalBytes;
-  if (configuredTotal && Number.isFinite(configuredTotal) && configuredTotal > 0) {
-    return Math.trunc(configuredTotal);
-  }
-
-  const fsImpl = params.fs ?? fs;
-  try {
-    return parseProcMemoryBytes(
-      fsImpl.readFileSync(params.procMeminfoPath ?? PROC_MEMINFO_PATH, "utf8"),
-      "MemTotal",
-    );
-  } catch {
-    return null;
-  }
-}
-
-function readPhysicalMemoryTotalBytes(params: MemoryLimitParams = {}) {
-  const totalBytes = params.physicalMemoryBytes ?? os.totalmem();
-  return Number.isFinite(totalBytes) && totalBytes > 0 ? Math.trunc(totalBytes) : null;
-}
-
-function readHostAvailableMemoryBytes(params: MemoryLimitParams) {
-  if (params.availableMemoryBytes !== undefined) {
-    return Number.isFinite(params.availableMemoryBytes) && params.availableMemoryBytes >= 0
-      ? Math.trunc(params.availableMemoryBytes)
-      : null;
-  }
-  if ((params.platform ?? process.platform) === "linux") {
-    try {
-      return parseProcMemoryBytes(
-        (params.fs ?? fs).readFileSync(params.procMeminfoPath ?? PROC_MEMINFO_PATH, "utf8"),
-        "MemAvailable",
-      );
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-function resolveTsdownMemoryBudget(params: ResolvedMemoryLimitParams = {}) {
-  if (params.resolvedMaxOldSpaceMb !== undefined) {
-    return { maxOldSpaceMb: params.resolvedMaxOldSpaceMb, unresolvedCgroupMemory: false };
+function resolveTsdownMemoryBudget(params: ResolvedMemoryLimitParams = {}): TsdownMemoryBudget {
+  if (params.resolvedMemoryBudget) {
+    return params.resolvedMemoryBudget;
   }
   const defaultMaxOldSpaceMb =
     (params.platform ?? process.platform) === "win32"
@@ -1148,26 +610,15 @@ function resolveTsdownMemoryBudget(params: ResolvedMemoryLimitParams = {}) {
     (params.env ?? process.env)[TSDOWN_MAX_OLD_SPACE_MB_ENV],
     TSDOWN_MAX_OLD_SPACE_MB_ENV,
   );
+  const { limitBytes, unresolved, capacityBytes } = readProcessMemoryCapacity(params);
   if (envOverride !== null) {
-    return { maxOldSpaceMb: envOverride, unresolvedCgroupMemory: false };
+    return { maxOldSpaceMb: envOverride, unresolvedCgroupMemory: false, capacityBytes };
   }
-
-  const cgroupMemory = readCgroupMemoryLimitBytes(params);
-  if (cgroupMemory.unresolved) {
-    return { maxOldSpaceMb: 1, unresolvedCgroupMemory: true };
+  if (unresolved) {
+    return { maxOldSpaceMb: 1, unresolvedCgroupMemory: true, capacityBytes };
   }
-  const physicalTotalBytes = readProcMemTotalBytes(params) ?? readPhysicalMemoryTotalBytes(params);
-  const hostAvailableBytes = readHostAvailableMemoryBytes(params);
-  const physicalLimitBytes =
-    hostAvailableBytes === null || physicalTotalBytes === null
-      ? (hostAvailableBytes ?? physicalTotalBytes)
-      : Math.min(hostAvailableBytes, physicalTotalBytes);
-  const limitBytes =
-    cgroupMemory.limitBytes === null || physicalLimitBytes === null
-      ? (cgroupMemory.limitBytes ?? physicalLimitBytes)
-      : Math.min(cgroupMemory.limitBytes, physicalLimitBytes);
   if (limitBytes === null) {
-    return { maxOldSpaceMb: defaultMaxOldSpaceMb, unresolvedCgroupMemory: false };
+    return { maxOldSpaceMb: defaultMaxOldSpaceMb, unresolvedCgroupMemory: false, capacityBytes };
   }
 
   const limitMb = Math.floor(limitBytes / 1024 / 1024);
@@ -1177,15 +628,14 @@ function resolveTsdownMemoryBudget(params: ResolvedMemoryLimitParams = {}) {
   return {
     maxOldSpaceMb: Math.min(defaultMaxOldSpaceMb, cgroupCap),
     unresolvedCgroupMemory: false,
+    capacityBytes,
   };
 }
 
-const resolveTsdownMaxOldSpaceMb = (params: ResolvedMemoryLimitParams = {}) =>
-  resolveTsdownMemoryBudget(params).maxOldSpaceMb;
-
 /**
- * Measured against this repo by running the full eleven-invocation build inside real cgroups.
- * A 5GiB slice resolves this heap, completes, and peaks at 4730MiB. A 4GiB slice (3328MB heap)
+ * Measured against this repo's former eleven-invocation build inside real cgroups.
+ * The current four-invocation build retains the runtime graph that sets this floor:
+ * a 5GiB slice resolves this heap, completes, and peaks at 4730MiB. A 4GiB slice (3328MB heap)
  * and a 2816MiB slice (2048MB heap) are both killed in the third, unified-runtime invocation,
  * which also runs when declarations are disabled. Roughly 380MiB of the peak is rolldown, a
  * native addon which --max-old-space-size does not govern at all.
@@ -1217,17 +667,13 @@ export function describeInsufficientTsdownHeap(
     : TSDOWN_MAX_OLD_SPACE_MB_ENV;
   const fatal = explicitHeapMb === null;
   const outcome = fatal
-    ? budget.unresolvedCgroupMemory
-      ? [
-          "Stopping before any build output is removed. Pick one:",
-          "  - run the build where the process cgroup limit is visible",
-          `  - set ${heapOverrideEnv}=<MB> to explicitly attempt the build anyway`,
-        ]
-      : [
-          "Stopping before any build output is removed. Pick one:",
-          "  - give this machine or container more memory",
-          `  - set ${heapOverrideEnv}=<MB> to explicitly attempt the build anyway`,
-        ]
+    ? [
+        "Stopping before any build output is removed. Pick one:",
+        budget.unresolvedCgroupMemory
+          ? "  - run the build where the process cgroup limit is visible"
+          : "  - give this machine or container more memory",
+        `  - set ${heapOverrideEnv}=<MB> to explicitly attempt the build anyway`,
+      ]
     : [
         `Continuing because ${heapOverrideEnv} explicitly requests ${explicitHeapMb}MB. Existing build output will now be cleaned; the build may stall or fail.`,
       ];
@@ -1244,26 +690,7 @@ export function describeInsufficientTsdownHeap(
   };
 }
 
-function parseMaxOldSpaceSizeMb(value: unknown, fallbackMb: number) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return fallbackMb;
-  }
-  return Math.trunc(parsed);
-}
-
-function normalizeMaxOldSpaceSizeMb(value: unknown, maxOldSpaceMb: number) {
-  // Build wrappers may inherit smaller runner-level caps; tsdown needs the
-  // resolved build heap while still respecting cgroup-derived upper bounds.
-  const parsed = parseMaxOldSpaceSizeMb(value, maxOldSpaceMb);
-  if (parsed < maxOldSpaceMb) {
-    return maxOldSpaceMb;
-  }
-  return Math.min(parsed, maxOldSpaceMb);
-}
-
-function normalizeTsdownNodeOptions(nodeOptions: string, params: ResolvedMemoryLimitParams = {}) {
-  const maxOldSpaceMb = resolveTsdownMaxOldSpaceMb(params);
+function normalizeTsdownNodeOptions(nodeOptions: string, maxOldSpaceMb: number) {
   const parts = nodeOptions.trim().split(/\s+/u).filter(Boolean);
   const normalized: string[] = [];
   let foundMaxOldSpaceSize = false;
@@ -1276,16 +703,14 @@ function normalizeTsdownNodeOptions(nodeOptions: string, params: ResolvedMemoryL
     const inlineMatch = part.match(/^--max-old-space-size=(\d+)$/u);
     if (inlineMatch) {
       foundMaxOldSpaceSize = true;
-      const value = normalizeMaxOldSpaceSizeMb(inlineMatch[1], maxOldSpaceMb);
-      normalized.push(`--max-old-space-size=${value}`);
+      normalized.push(`--max-old-space-size=${maxOldSpaceMb}`);
       continue;
     }
 
     if (part === "--max-old-space-size") {
       foundMaxOldSpaceSize = true;
       const next = parts[index + 1];
-      const value = normalizeMaxOldSpaceSizeMb(next, maxOldSpaceMb);
-      normalized.push(`--max-old-space-size=${value}`);
+      normalized.push(`--max-old-space-size=${maxOldSpaceMb}`);
       if (next !== undefined) {
         index += 1;
       }
@@ -1307,9 +732,16 @@ function resolveTsdownEnv(
   params: ResolvedMemoryLimitParams = {},
 ): NodeJS.ProcessEnv {
   const nodeOptions = env.NODE_OPTIONS?.trim() ?? "";
+  const budget = resolveTsdownMemoryBudget(params);
+  // The native declaration compiler is Go-based; Node's heap limit does not govern it.
+  const { env: compilerEnv } = applyLocalTsgoPolicy([], env, {
+    logicalCpuCount: os.availableParallelism(),
+    totalMemoryBytes: params.physicalMemoryBytes ?? os.totalmem(),
+    memoryCapacityBytes: budget.capacityBytes,
+  });
   return {
-    ...env,
-    NODE_OPTIONS: normalizeTsdownNodeOptions(nodeOptions, params),
+    ...compilerEnv,
+    NODE_OPTIONS: normalizeTsdownNodeOptions(nodeOptions, budget.maxOldSpaceMb),
   };
 }
 
@@ -1326,7 +758,7 @@ function tsdownBuildUsage() {
   ].join("\n");
 }
 
-export function parseTsdownBuildArgs(argv: string[]) {
+function parseTsdownBuildArgs(argv: string[]) {
   if (argv.includes("--help") || argv.includes("-h")) {
     return {
       forwardedArgs: [],
@@ -1348,19 +780,17 @@ export function createTsdownOutputScanner(params: { maxCaptureBytes?: number } =
 
   function scanLines(text: string) {
     const combined = pendingLine + text;
+    hasIneffectiveDynamicImport ||= combined.includes(INEFFECTIVE_DYNAMIC_IMPORT_MARKER);
     const lines = combined.split(/\r?\n/u);
     pendingLine = lines.pop() ?? "";
     for (const line of lines) {
-      fatalUnresolvedImport ??= findFatalUnresolvedImport([line]);
+      fatalUnresolvedImport ??= findFatalUnresolvedImport(line);
     }
   }
 
   return {
     append(chunk: unknown) {
       const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
-      if (text.includes(INEFFECTIVE_DYNAMIC_IMPORT_MARKER)) {
-        hasIneffectiveDynamicImport = true;
-      }
       scanLines(text);
       captured += text;
       if (captured.length > maxCaptureBytes) {
@@ -1369,7 +799,7 @@ export function createTsdownOutputScanner(params: { maxCaptureBytes?: number } =
     },
     finish() {
       if (pendingLine) {
-        fatalUnresolvedImport ??= findFatalUnresolvedImport([pendingLine]);
+        fatalUnresolvedImport ??= findFatalUnresolvedImport(pendingLine);
         pendingLine = "";
       }
       return {
@@ -1389,44 +819,45 @@ export function resolveTsdownBuildInvocation(
   const forwardedArgs = wrapperOwnsTsdownCleanup(args)
     ? args.filter((arg) => arg !== "--clean" && !arg.startsWith("--clean="))
     : args;
+  const explicitConcurrency = args.some(
+    (arg) => arg === "--concurrency" || arg.startsWith("--concurrency="),
+  );
+  const filters = readForwardedOptions(args, ["--filter", "-F"]);
+  const runtimeOnly =
+    !args.includes("--dts") &&
+    (!args.some(isConfigArg) || selectsMainConfig(args)) &&
+    filters.length > 0 &&
+    filters.every((filter) => filter === TSDOWN_UNIFIED_CONFIG_GROUP);
   const tsdownArgs = [
     "--config-loader",
     "unrun",
     "--logLevel",
     logLevel,
     "--no-clean",
+    // Native declaration children retain entire compiler graphs. Let tsdown own
+    // config admission so preparation and trace drainage cannot overlap unboundedly.
+    ...(!explicitConcurrency && !runtimeOnly && tsdownDeclarationsEnabled(args, env)
+      ? ["--concurrency", "1"]
+      : []),
     ...forwardedArgs,
   ];
-  if (env.OPENCLAW_BUILD_ALL_NO_PNPM === "1") {
-    return {
-      command: params.nodeExecPath ?? process.execPath,
-      args: ["node_modules/tsdown/dist/run.mjs", ...tsdownArgs],
-      options: {
-        stdio: tsdownStdio(),
-        shell: false,
-        windowsVerbatimArguments: undefined,
-        env,
-      },
-    };
-  }
-  const runner = resolvePnpmRunner({
-    env,
-    pnpmArgs: ["exec", "tsdown", ...tsdownArgs],
-    nodeExecPath: params.nodeExecPath ?? process.execPath,
-    npmExecPath: params.npmExecPath ?? env.npm_execpath,
-    comSpec: params.comSpec,
-    platform: (params.platform ?? process.platform) === "win32" ? "win32" : "linux",
-  });
+  // A package-manager bin shim can select a different runtime from PATH.
+  // Keep the compiler on the runtime chosen by its build owner.
   return {
-    command: runner.command,
-    args: runner.args,
+    command: params.nodeExecPath ?? process.execPath,
+    args: ["node_modules/tsdown/dist/run.mjs", ...tsdownArgs],
     options: {
       stdio: tsdownStdio(),
-      shell: runner.shell,
-      windowsVerbatimArguments: runner.windowsVerbatimArguments,
+      shell: false,
+      windowsVerbatimArguments: undefined,
       env,
     },
   };
+}
+
+function tsdownDeclarationsEnabled(args: string[], env: NodeJS.ProcessEnv) {
+  const dtsArg = args.findLast((arg) => arg === "--dts" || arg === "--no-dts");
+  return dtsArg ? dtsArg === "--dts" : env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1";
 }
 
 function selectsMainConfig(args: string[]) {
@@ -1446,7 +877,7 @@ function resolveSerializedMainConfigGroups(filters: string[]) {
   }
   if (
     uniqueFilters.some(
-      (filter) => filter !== "." && !SERIALIZED_MAIN_CONFIG_GROUPS.includes(filter),
+      (filter) => filter !== "." && !SELECTABLE_MAIN_CONFIG_GROUPS.includes(filter),
     )
   ) {
     return null;
@@ -1460,7 +891,7 @@ function resolveSerializedMainConfigGroups(filters: string[]) {
     return null;
   }
   const selectedFilters = new Set(uniqueFilters);
-  return SERIALIZED_MAIN_CONFIG_GROUPS.filter((group) => selectedFilters.has(group));
+  return SELECTABLE_MAIN_CONFIG_GROUPS.filter((group) => selectedFilters.has(group));
 }
 
 /** Builds declarations in dependency order without overlapping the largest graphs. */
@@ -1477,16 +908,25 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
     const previous = forwardedArgs[index - 1];
     return !isFilterArg(arg) && !isFilterFlag(previous);
   });
-  const dtsArg = aiArgs.findLast((arg) => arg === "--dts" || arg === "--no-dts");
-  const declarationsEnabled = dtsArg
-    ? dtsArg === "--dts"
-    : env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1";
+  const declarationsEnabled = tsdownDeclarationsEnabled(aiArgs, env);
   const hasForwardedConfig = aiArgs.some(isConfigArg);
+  const mainConfig = hasForwardedConfig && selectsMainConfig(forwardedArgs);
+  if (
+    (!hasForwardedConfig || mainConfig) &&
+    TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.some((group) => forwardedFilters.includes(group)) &&
+    TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS.some((group) => forwardedFilters.includes(group))
+  ) {
+    throw new Error(
+      "Select either full or SDK-only declarations; full declarations already include the SDK",
+    );
+  }
 
-  const declarationEnv =
-    declarationsEnabled && env[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1"
-      ? { ...env, [RUN_NODE_SKIP_DTS_BUILD_ENV]: "0" }
-      : env;
+  // Config construction must see the same declaration choice as the CLI,
+  // including a single selected group and long-lived watchers.
+  const mainEnv = {
+    ...env,
+    [RUN_NODE_SKIP_DTS_BUILD_ENV]: declarationsEnabled ? "0" : "1",
+  };
 
   if (forwardedArgs.some(isWatchArg)) {
     if (!hasForwardedConfig) {
@@ -1496,49 +936,53 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
     }
     // Watchers are long-lived, so sequential group orchestration would block forever on the
     // first child. Keep watch mode inside tsdown's single owning process.
-    return [resolveTsdownBuildInvocation(params)];
+    const groups =
+      declarationsEnabled && mainConfig
+        ? resolveSerializedMainConfigGroups(forwardedFilters)
+        : null;
+    return [
+      resolveTsdownBuildInvocation({
+        ...params,
+        ...(groups ? { args: [...groups.flatMap((group) => ["--filter", group]), ...aiArgs] } : {}),
+        env: mainConfig ? mainEnv : env,
+      }),
+    ];
   }
-
-  if (hasForwardedConfig) {
-    if (declarationsEnabled && selectsMainConfig(forwardedArgs)) {
-      const serializedGroups = resolveSerializedMainConfigGroups(forwardedFilters);
-      if (serializedGroups) {
-        return serializedGroups.map((group) =>
-          resolveTsdownBuildInvocation({
-            ...params,
-            args: ["--filter", group, ...aiArgs],
-            env: declarationEnv,
-          }),
-        );
-      }
-    }
-    return [resolveTsdownBuildInvocation(params)];
-  }
-
-  const invocations = [
-    resolveTsdownBuildInvocation({
-      ...params,
-      args: ["--config", "tsdown.ai.config.ts", ...aiArgs],
-    }),
-  ];
 
   const forwardedFilterSet = new Set(forwardedFilters);
-  const uniqueForwardedFilters = SERIALIZED_MAIN_CONFIG_GROUPS.filter((group) =>
+  const uniqueForwardedFilters = SELECTABLE_MAIN_CONFIG_GROUPS.filter((group) =>
     forwardedFilterSet.has(group),
   );
   const hasUnknownFilter = forwardedFilters.some(
-    (filter) => filter !== "." && !SERIALIZED_MAIN_CONFIG_GROUPS.includes(filter),
+    (filter) => filter !== "." && !SELECTABLE_MAIN_CONFIG_GROUPS.includes(filter),
   );
-  const serializedGroups = forwardedFilters.includes(".")
-    ? SERIALIZED_MAIN_CONFIG_GROUPS
-    : !hasUnknownFilter && uniqueForwardedFilters.length > 1
-      ? uniqueForwardedFilters
-      : null;
+  const serializedGroups = hasForwardedConfig
+    ? declarationsEnabled && mainConfig
+      ? resolveSerializedMainConfigGroups(forwardedFilters)
+      : null
+    : forwardedFilters.includes(".")
+      ? SERIALIZED_MAIN_CONFIG_GROUPS
+      : !hasUnknownFilter && uniqueForwardedFilters.length > 1
+        ? uniqueForwardedFilters
+        : null;
+  if (hasForwardedConfig && !serializedGroups) {
+    return [
+      resolveTsdownBuildInvocation({
+        ...params,
+        env: mainConfig ? mainEnv : env,
+      }),
+    ];
+  }
+
+  const invocations = hasForwardedConfig
+    ? []
+    : [
+        resolveTsdownBuildInvocation({
+          ...params,
+          args: ["--config", "tsdown.ai.config.ts", ...aiArgs],
+        }),
+      ];
   if (!declarationsEnabled || (hasForwardedFilter && !serializedGroups)) {
-    const mainEnv =
-      !declarationsEnabled && env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1"
-        ? { ...env, [RUN_NODE_SKIP_DTS_BUILD_ENV]: "1" }
-        : env;
     invocations.push(resolveTsdownBuildInvocation({ ...params, env: mainEnv }));
     return invocations;
   }
@@ -1548,7 +992,7 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
       resolveTsdownBuildInvocation({
         ...params,
         args: ["--filter", group, ...aiArgs],
-        env: declarationEnv,
+        env: mainEnv,
       }),
     );
   }
@@ -1558,7 +1002,10 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
 function isFullTsdownBuildPlan(args: string[]) {
   const filters = readForwardedOptions(args, ["--filter", "-F"]);
   const selectsUnifiedRuntime =
-    filters.length === 0 || filters.includes(TSDOWN_UNIFIED_CONFIG_GROUP) || filters.includes(".");
+    filters.length === 0 ||
+    filters.includes(TSDOWN_UNIFIED_CONFIG_GROUP) ||
+    TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.some((group) => filters.includes(group)) ||
+    filters.includes(".");
   return selectsUnifiedRuntime && (!args.some(isConfigArg) || selectsMainConfig(args));
 }
 
@@ -1567,7 +1014,7 @@ export function resolveTsdownBuildPlan(params: TsdownBuildParams = {}) {
   const maxOldSpaceMb = budget.maxOldSpaceMb;
   const preparedParams = {
     ...params,
-    resolvedMaxOldSpaceMb: maxOldSpaceMb,
+    resolvedMemoryBudget: budget,
   };
   return {
     env: resolveTsdownEnv(params.env ?? process.env, preparedParams),
@@ -1612,12 +1059,6 @@ export function prepareTsdownBuildExecution(
   return plan;
 }
 
-type TaskkillRunner = (
-  command: string,
-  args: string[],
-  options: { killSignal?: NodeJS.Signals; stdio?: StdioOptions; timeout?: number },
-) => { error?: Error; status: number | null };
-
 export async function runTsdownBuildInvocation(
   invocation: TsdownBuildInvocation,
   params: {
@@ -1626,7 +1067,7 @@ export async function runTsdownBuildInvocation(
     env?: NodeJS.ProcessEnv;
     scanner?: ReturnType<typeof createTsdownOutputScanner>;
     platform?: NodeJS.Platform;
-    runTaskkill?: TaskkillRunner;
+    runTaskkill?: NonNullable<Parameters<typeof terminateManagedChild>[2]>["runTaskkill"];
   } = {},
 ): Promise<TsdownBuildResult> {
   const stdout = params.stdout ?? process.stdout;
@@ -1696,12 +1137,15 @@ export async function runTsdownBuildInvocation(
     relayParentSignal("SIGHUP");
   }
 
-  const processTreeAlive = () =>
-    inspectManagedProcessGroup(child, {
+  let observedProcessState: ReturnType<typeof inspectManagedProcessGroup> | undefined;
+  const processTreeAlive = () => {
+    observedProcessState = inspectManagedProcessGroup(child, {
       errorPolicy: "alive-on-eperm",
       inspectLeaderWhenNoGroup: true,
       platform,
-    }) === "live";
+    });
+    return observedProcessState === "live";
+  };
   const waitForProcessTreeExit = (timeoutMsToWait: number) =>
     waitForManagedProcessGroupExit(child, timeoutMsToWait, {
       errorPolicy: "alive-on-eperm",
@@ -1767,12 +1211,16 @@ export async function runTsdownBuildInvocation(
         }, timeoutMs).unref()
       : null;
 
+  function stopObserving() {
+    settled = true;
+    cleanupParentSignalHandlers();
+    clearInterval(heartbeat ?? undefined);
+    clearTimeout(timeout ?? undefined);
+  }
+
   return new Promise<TsdownBuildResult>((resolve) => {
     child.once("error", (error) => {
-      settled = true;
-      cleanupParentSignalHandlers();
-      clearInterval(heartbeat ?? undefined);
-      clearTimeout(timeout ?? undefined);
+      stopObserving();
       stderr.write(`[tsdown-build] failed to start: ${String(error)}\n`);
       resolve({
         status: 1,
@@ -1784,13 +1232,31 @@ export async function runTsdownBuildInvocation(
     });
     child.once("close", (status, signal) => {
       let exitStatus = status;
+      let cleanup = parentSignal ? "parent-signal" : timedOut ? "timeout" : "none";
+      const reportFailure = (finalStatus: number | null) => {
+        // Cleanup can reject a successful compiler. Preserve both outcomes so a
+        // failed build does not look like a compiler error with missing output.
+        stderr.write(
+          `[tsdown-build] child result${pidText}: ${JSON.stringify({
+            status,
+            signal,
+            parentSignal: parentSignal ?? null,
+            timedOut,
+            cleanup,
+            observedProcessState: observedProcessState ?? "not-observed",
+            observationScope: useProcessGroup ? "process-group" : "leader",
+            finalStatus,
+          })}\n`,
+        );
+      };
       function finish() {
-        settled = true;
-        cleanupParentSignalHandlers();
-        clearInterval(heartbeat ?? undefined);
-        clearTimeout(timeout ?? undefined);
+        stopObserving();
+        const finalStatus = parentSignal ? signalExitCode(parentSignal) : exitStatus;
+        if (finalStatus !== 0 || timedOut) {
+          reportFailure(finalStatus);
+        }
         resolve({
-          status: parentSignal ? signalExitCode(parentSignal) : exitStatus,
+          status: finalStatus,
           signal: parentSignal ?? signal,
           timedOut,
           error: null,
@@ -1802,6 +1268,7 @@ export async function runTsdownBuildInvocation(
         if (timedOut || parentSignal) {
           await finishTimedOutProcessTree();
         } else if (processTreeAlive()) {
+          cleanup = "remaining-descendants";
           signalChild("SIGKILL");
           await waitForProcessTreeExit(POST_FORCE_KILL_WAIT_MS);
           exitStatus = 1;
@@ -1815,10 +1282,8 @@ export async function runTsdownBuildInvocation(
         }
         finish();
       })().catch((error: unknown) => {
-        settled = true;
-        cleanupParentSignalHandlers();
-        clearInterval(heartbeat ?? undefined);
-        clearTimeout(timeout ?? undefined);
+        stopObserving();
+        reportFailure(1);
         resolve({
           status: 1,
           signal,
@@ -1831,36 +1296,96 @@ export async function runTsdownBuildInvocation(
   });
 }
 
-/** Execute CLI and staged declaration plans with the same diagnostics and deadlines. */
-export async function executeTsdownBuildPlan(
-  plan: NonNullable<ReturnType<typeof prepareTsdownBuildExecution>>,
-) {
-  let result: TsdownBuildResult | undefined;
-  for (const [index, invocation] of plan.invocations.entries()) {
-    const startedAt = performance.now();
-    result = await runTsdownBuildInvocation(invocation);
-    if (result.error) {
-      throw result.error;
-    }
-    // Per-invocation timing separates the AI-declarations pass from the main
-    // graph in CI logs; the combined step is otherwise a single opaque cost.
-    console.log(
-      `[tsdown-build] invocation ${index + 1}/${plan.invocations.length} finished in ${((performance.now() - startedAt) / 1000).toFixed(1)}s`,
-    );
-    if (
-      result.timedOut ||
-      result.status !== 0 ||
-      result.hasIneffectiveDynamicImport ||
-      result.fatalUnresolvedImport
-    ) {
-      break;
+async function executeTsdownInvocation(
+  invocation: TsdownBuildInvocation,
+  index: number,
+  count: number,
+): Promise<number> {
+  const startedAt = performance.now();
+  const pendingRoot = createTsdownCachePendingRoot(invocation);
+  try {
+    return await executeValidatedTsdownInvocation(invocation, index, count, startedAt, pendingRoot);
+  } finally {
+    if (pendingRoot) {
+      fs.rmSync(pendingRoot, { recursive: true, force: true });
     }
   }
+}
 
-  if (!result) {
-    return 1;
+function createTsdownCachePendingRoot(invocation: TsdownBuildInvocation) {
+  const args = invocation.args.slice(1);
+  const env = invocation.options.env;
+  if (env.OPENCLAW_BUILD_CACHE === "0" || env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD !== "1") {
+    return undefined;
   }
+  // Unknown CLI overrides may affect output bytes or selection. Let tsdown own
+  // those builds unchanged; only the wrapper's normal release plan is cached.
+  const valued = new Set([
+    "--config-loader",
+    "--logLevel",
+    "--concurrency",
+    "--filter",
+    "-F",
+    "--config",
+    "-c",
+  ]);
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!;
+    if (valued.has(arg)) {
+      index++;
+      continue;
+    }
+    if (arg === "--no-clean" || arg === "--no-dts") {
+      continue;
+    }
+    return undefined;
+  }
+  const config = readForwardedOption(args, ["--config", "-c"]);
+  if (config && !["tsdown.config.ts", "tsdown.ai.config.ts"].includes(config)) {
+    return undefined;
+  }
+  const filters = readForwardedOptions(args, ["--filter", "-F"]);
+  if (
+    filters.some(
+      (filter) => ![TSDOWN_PACKAGE_CONFIG_GROUP, TSDOWN_UNIFIED_CONFIG_GROUP].includes(filter),
+    )
+  ) {
+    return undefined;
+  }
+  fs.mkdirSync(".artifacts", { recursive: true });
+  return fs.mkdtempSync(path.resolve(".artifacts/tsdown-cache-pending-"));
+}
 
+async function executeValidatedTsdownInvocation(
+  invocation: TsdownBuildInvocation,
+  index: number,
+  count: number,
+  startedAt: number,
+  pendingRoot: string | undefined,
+): Promise<number> {
+  const cachedInvocation = pendingRoot
+    ? {
+        ...invocation,
+        options: {
+          ...invocation.options,
+          env: {
+            ...invocation.options.env,
+            [TSDOWN_CACHE_PENDING_ENV]: pendingRoot,
+            [TSDOWN_CACHE_GROUPS_ENV]: readForwardedOptions(invocation.args, [
+              "--filter",
+              "-F",
+            ]).join(","),
+          },
+        },
+      }
+    : invocation;
+  const result = await runTsdownBuildInvocation(cachedInvocation);
+  if (result.error) {
+    throw result.error;
+  }
+  console.log(
+    `[tsdown-build] invocation ${index + 1}/${count} finished in ${((performance.now() - startedAt) / 1000).toFixed(1)}s`,
+  );
   if (result.status === 0 && result.hasIneffectiveDynamicImport) {
     console.error(
       "Build emitted [INEFFECTIVE_DYNAMIC_IMPORT]. Replace transparent runtime re-export facades with real runtime boundaries.",
@@ -1879,11 +1404,82 @@ export async function executeTsdownBuildPlan(
     return 124;
   }
 
-  if (typeof result.status === "number") {
-    return result.status;
+  if (result.status === 0 && pendingRoot) {
+    finalizeTsdownRuntimeCaches(pendingRoot);
   }
+  return result.status ?? 1;
+}
 
-  return 1;
+/** Execute CLI and staged declaration plans with the same diagnostics and deadlines. */
+export async function executeTsdownBuildPlan(
+  plan: NonNullable<ReturnType<typeof prepareTsdownBuildExecution>>,
+  concurrency: 1 | 2 = 1,
+) {
+  let next = 0;
+  let exitCode = plan.invocations.length ? 0 : 1;
+  const failedExits: { index: number; code: number }[] = [];
+  const run = async () => {
+    while (exitCode === 0 && next < plan.invocations.length) {
+      const index = next++;
+      try {
+        const code = await executeTsdownInvocation(
+          plan.invocations[index]!,
+          index,
+          plan.invocations.length,
+        );
+        if (code !== 0) {
+          failedExits.push({ index, code });
+          exitCode ||= code;
+        }
+      } catch (error) {
+        exitCode ||= 1;
+        throw error;
+      }
+    }
+  };
+  // A failed sibling stops admission, not the lifetime of an already admitted compiler.
+  // Join every result before the writer may seal, publish, or release its private stages.
+  const results = await Promise.allSettled(
+    Array.from({ length: Math.min(concurrency, plan.invocations.length) }, run),
+  );
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length || failedExits.length > 1) {
+    failures.push(
+      ...failedExits.map(({ index, code }) =>
+        Object.assign(new Error(`tsdown invocation ${index + 1} failed with exit ${code}`), {
+          exitCode: code,
+        }),
+      ),
+    );
+    throw failures.length === 1
+      ? failures[0]
+      : new AggregateError(failures, "tsdown compiler batch failed");
+  }
+  return exitCode;
+}
+
+type LiveGatewayDistFenceFn = (
+  checkoutRoot: string,
+  deps?: { env?: NodeJS.ProcessEnv },
+) => Promise<{ refuse: true; message: string } | { refuse: false }>;
+
+async function loadDefaultLiveGatewayDistFence(): Promise<LiveGatewayDistFenceFn> {
+  try {
+    // Non-literal import: a static specifier would pull daemon service-layout into
+    // the plugin-sdk declaration generator through write-plugin-sdk-entry-dts.
+    const liveGatewayDistFenceHref = pathToFileURL(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "lib", "live-gateway-dist-fence.mts"),
+    ).href;
+    const loaded = (await import(liveGatewayDistFenceHref)) as {
+      resolveLiveManagedGatewayDistFence: LiveGatewayDistFenceFn;
+    };
+    return loaded.resolveLiveManagedGatewayDistFence;
+  } catch {
+    // Declaration fixtures and hosts without daemon sources still have to build.
+    return async () => ({ refuse: false });
+  }
 }
 
 export async function runTsdownBuild(
@@ -1898,6 +1494,15 @@ export async function runTsdownBuild(
     console.log(tsdownBuildUsage());
     return 0;
   }
+  // Shared destructive owner with build-all: refuse before cleanTsdownOutputRoots
+  // so a direct tsdown entry cannot wipe live managed Gateway modules either.
+  const resolveFence = await loadDefaultLiveGatewayDistFence();
+  const fence = await resolveFence(options.cwd ?? process.cwd(), { env: process.env });
+  if (fence.refuse) {
+    console.error(fence.message);
+    return 1;
+  }
+  await ensureKyselyTypes(options.cwd ?? process.cwd());
   let code: number;
   if (options.executeBuild) {
     code = await options.executeBuild(args.forwardedArgs);

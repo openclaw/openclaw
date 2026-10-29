@@ -1,11 +1,8 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { chunkByParagraph, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
-import {
-  avoidTrailingHighSurrogateBreak,
-  chunkTextForOutbound,
-  findCodeRegions,
-} from "openclaw/plugin-sdk/text-chunking";
+import { chunkTextForOutbound, findCodeRegions } from "openclaw/plugin-sdk/text-chunking";
+import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";
 
 type ChunkDiscordTextOpts = {
   /** Max characters per Discord message. Default: 2000. */
@@ -33,10 +30,6 @@ const FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
 
 function hasReasoningItalics(text: string): boolean {
   return /^(?:Reasoning:|Thinking\.{0,3})\n+_/u.test(text) && text.trimEnd().endsWith("_");
-}
-
-function resolveDiscordChunkLimit(value: unknown, fallback: number) {
-  return resolveIntegerOption(value, fallback, { min: 1 });
 }
 
 function countLines(text: string) {
@@ -70,8 +63,8 @@ function closesFence(open: OpenFence, close: OpenFence): boolean {
 
 type DiscordFrame = { start: number; end: number };
 function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string[] {
-  const hardMaxChars = resolveDiscordChunkLimit(opts.maxChars, DEFAULT_MAX_CHARS);
-  const maxLines = resolveDiscordChunkLimit(opts.maxLines, DEFAULT_MAX_LINES);
+  const hardMaxChars = resolveIntegerOption(opts.maxChars, DEFAULT_MAX_CHARS, { min: 1 });
+  const maxLines = resolveIntegerOption(opts.maxLines, DEFAULT_MAX_LINES, { min: 1 });
   if (!text) {
     return [];
   }
@@ -88,9 +81,8 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
   let consumed = 0;
   let lineStart = 0;
   // Keep existing soft breaks based on source bytes; render measures the full payload.
-  const raw = (frame: DiscordFrame) => {
+  const raw = (frame: DiscordFrame, body = text.slice(frame.start, frame.end)) => {
     const prefix = ranges.fenceAt(frame.start)?.reopenLine ?? "";
-    const body = text.slice(frame.start, frame.end);
     return prefix + (prefix ? "\n" : "") + body;
   };
   const render = (frame: DiscordFrame) => {
@@ -98,8 +90,7 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
     if (body === undefined) {
       return undefined;
     }
-    const prefix = ranges.fenceAt(frame.start)?.reopenLine ?? "";
-    const result = prefix + (prefix ? "\n" : "") + body;
+    const result = raw(frame, body);
     const close = ranges.fenceAt(frame.end);
     return close?.reopenLine
       ? result + (result.endsWith("\n") ? "" : "\n") + close.closeLine
@@ -132,13 +123,20 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
       const cut = ranges.cutBoundary(frame.start, end - 1);
       end = cut > frame.start ? cut : minimum;
     }
+    // The line loop splits on LF and drops the terminator at a chunk boundary. Drop a
+    // trailing CRLF as one separator too; otherwise the chunk ends in a bare CR and the LF
+    // is lost when the next line starts after it. A cut inside code keeps the pair.
+    const dropsCrLf =
+      end === frame.end - 1 &&
+      text[end] === "\r" &&
+      text[end + 1] === "\n" &&
+      !ranges.cutsSpan(end);
     const payload = expectDefined(render({ ...frame, end }), "renderable Discord source range");
     if (payload.trim()) {
       chunks.push(payload);
     }
     consumed = end;
-    // Keep an opener or CRLF pair with the unconsumed source, never synthetic offsets.
-    return end < frame.end ? { start: end, end: frame.end } : undefined;
+    return dropsCrLf || end >= frame.end ? undefined : { start: end, end: frame.end };
   };
   for (const line of text.split("\n")) {
     const openFence = ranges.fenceAt(lineStart - 1);
@@ -171,17 +169,19 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
       const candidate = { start, end };
       // An original closing fence consumes the reservation; do not reserve a second closer.
       const closesBlock = openFence && !ranges.fenceAt(end);
+      let candidateText = raw(candidate);
       const exceeds = closesBlock
         ? !fits(candidate)
-        : raw(candidate).length > charLimit ||
-          countLines(raw(candidate)) > lineLimit ||
+        : candidateText.length > charLimit ||
+          countLines(candidateText) > lineLimit ||
           (ranges.overlaps(start, end) && !fits(candidate));
       if (current && exceeds) {
         current = flush(current);
         candidate.start =
           current?.start ?? (ranges.joins(consumed, segmentStart) ? consumed : segmentStart);
+        candidateText = raw(candidate);
       }
-      current = raw(candidate) ? candidate : undefined;
+      current = candidateText ? candidate : undefined;
       segmentStart = end;
     }
     lineStart += line.length + 1;
@@ -202,7 +202,7 @@ export function chunkDiscordTextWithMode(
   }
   const lineChunks = chunkByParagraph(
     text,
-    resolveDiscordChunkLimit(opts.maxChars, DEFAULT_MAX_CHARS),
+    resolveIntegerOption(opts.maxChars, DEFAULT_MAX_CHARS, { min: 1 }),
     { splitLongParagraphs: false },
   );
   return lineChunks.flatMap((line) => {
@@ -309,12 +309,6 @@ function renderInlineCode(body: string, delimiter: string): string | undefined {
   return marker + padding + body + padding + marker;
 }
 
-type InlineSpan = DiscordFrame & {
-  code: NonNullable<ReturnType<typeof findCodeRegions>[number]["source"]>;
-  base: number;
-  marker: string;
-  atomicTicks: boolean;
-};
 type FenceRange = DiscordFrame &
   OpenFence & {
     bodyStart: number;
@@ -322,7 +316,12 @@ type FenceRange = DiscordFrame &
   };
 // Inline spans are collected only between Discord fences, using the existing close grammar.
 function createDiscordRanges(source: string, maxChars: number, maxLines: number) {
-  const spans: InlineSpan[] = [];
+  const spans: (DiscordFrame & {
+    code: NonNullable<ReturnType<typeof findCodeRegions>[number]["source"]>;
+    base: number;
+    marker: string;
+    atomicTicks: boolean;
+  })[] = [];
   const fences: FenceRange[] = [];
   let offset = 0;
   let plainStart = 0;
@@ -384,25 +383,62 @@ function createDiscordRanges(source: string, maxChars: number, maxLines: number)
   if (!fence) {
     collect(source.length);
   }
-  const overlaps = (start: number, end: number) =>
-    spans.some((span) => span.start < end && span.end > start);
-  const joins = (end: number, start: number) =>
-    end <= start && spans.some((span) => span.start < end && end < span.end && start < span.end);
-  const boundary = (start: number, end: number) => {
-    let safe = avoidTrailingHighSurrogateBreak(source, start, end);
-    for (const span of spans) {
-      const prefix = span.code.prefix;
-      if (span.base + prefix.start < safe && safe < span.base + prefix.end) {
-        return span.base + prefix.start;
+  const firstMatchingIndex = (length: number, before: (index: number) => boolean) => {
+    let low = 0;
+    let high = length;
+    while (low < high) {
+      const middle = low + Math.floor((high - low) / 2);
+      if (before(middle)) {
+        low = middle + 1;
+      } else {
+        high = middle;
       }
-      if (span.start < safe && safe < span.end) {
-        if (source[safe - 1] === "\r" && source[safe] === "\n") {
+    }
+    return low;
+  };
+  // The parser emits disjoint inline spans in source order.
+  const firstSpanEndingAfter = (position: number) =>
+    firstMatchingIndex(
+      spans.length,
+      (index) => expectDefined(spans[index], "Discord inline span").end <= position,
+    );
+  // Spans in the same container can share a prefix; prefix ends remain ordered.
+  const firstPrefixEndingAfter = (position: number) =>
+    spans[
+      firstMatchingIndex(spans.length, (index) => {
+        const span = expectDefined(spans[index], "Discord inline span");
+        return span.base + span.code.prefix.end <= position;
+      })
+    ];
+  const overlaps = (start: number, end: number) => {
+    const span = spans[firstSpanEndingAfter(start)];
+    return Boolean(span && span.start < end);
+  };
+  const joins = (end: number, start: number) => {
+    if (end > start) {
+      return false;
+    }
+    const span = spans[firstSpanEndingAfter(end)];
+    return Boolean(span && span.start < end && start < span.end);
+  };
+  const cutsSpan = (position: number) => {
+    const span = spans[firstSpanEndingAfter(position)];
+    return Boolean(span && span.start < position && position < span.end);
+  };
+  const boundary = (start: number, end: number) => {
+    let safe = findGraphemeChunkEnd(source, start, end);
+    const prefixSpan = firstPrefixEndingAfter(safe);
+    if (prefixSpan && prefixSpan.base + prefixSpan.code.prefix.start < safe) {
+      return prefixSpan.base + prefixSpan.code.prefix.start;
+    }
+    const span = spans[firstSpanEndingAfter(safe)];
+    if (span && span.start < safe) {
+      if (source[safe - 1] === "\r" && source[safe] === "\n") {
+        safe -= 1;
+      }
+      if (span.atomicTicks) {
+        while (source[safe - 1] === "`" && source[safe] === "`") {
           safe -= 1;
-        }
-        if (span.atomicTicks) {
-          while (source[safe - 1] === "`" && source[safe] === "`") {
-            safe -= 1;
-          }
         }
       }
     }
@@ -411,9 +447,10 @@ function createDiscordRanges(source: string, maxChars: number, maxLines: number)
   const render = (start: number, end: number) => {
     let cursor = start,
       text = "";
-    for (const span of spans) {
-      if (span.end <= start || span.start >= end) {
-        continue;
+    for (let index = firstSpanEndingAfter(start); index < spans.length; index += 1) {
+      const span = expectDefined(spans[index], "Discord inline span");
+      if (span.start >= end) {
+        break;
       }
       const prefix = span.code.prefix;
       const prefixStart = span.base + prefix.start;
@@ -442,17 +479,28 @@ function createDiscordRanges(source: string, maxChars: number, maxLines: number)
     }
     return text + source.slice(cursor, end);
   };
+  // The scanner emits disjoint fences in source order, including an open final fence.
+  const fenceEndingAtOrAfter = (position: number) =>
+    fences[
+      firstMatchingIndex(
+        fences.length,
+        (index) => expectDefined(fences[index], "Discord fence range").end < position,
+      )
+    ];
   // A partial closing line is still inside the fence until its original text is consumed.
-  const fenceAt = (position: number) =>
-    fences.find(
-      (range) =>
-        range.bodyStart - 1 <= position &&
-        (position < range.end || (position === range.end && range.closeStart === range.end)),
-    );
+  const fenceAt = (position: number) => {
+    const range = fenceEndingAtOrAfter(position);
+    return range &&
+      range.bodyStart - 1 <= position &&
+      (position < range.end || (position === range.end && range.closeStart === range.end))
+      ? range
+      : undefined;
+  };
   const cutBoundary = (start: number, end: number) => {
     const safe = boundary(start, end);
     // Keep marker lines intact and leave an opening fence with its body.
-    for (const range of fences) {
+    const range = fenceEndingAtOrAfter(safe);
+    if (range) {
       if (start < range.start && range.start < safe && safe <= range.bodyStart) {
         return range.start;
       }
@@ -462,5 +510,5 @@ function createDiscordRanges(source: string, maxChars: number, maxLines: number)
     }
     return safe;
   };
-  return { render, overlaps, joins, boundary, fenceAt, cutBoundary };
+  return { render, overlaps, joins, cutsSpan, boundary, fenceAt, cutBoundary };
 }

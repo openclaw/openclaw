@@ -77,12 +77,29 @@ const config = {
   },
   plugins: {
     enabled: true,
+    // Recall must restore its own cold history, not a background memory indexing pass.
+    slots: { memory: "none" },
     allow: ["openai"],
     entries: { openai: { enabled: true } },
   },
   skills: { allowBundled: [] },
   tools: { allow: ["get_weather"] },
 };
+
+const coldStorageMode = process.env.OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE ?? "required";
+if (coldStorageMode === "required") {
+  config.session = {
+    maintenance: {
+      mode: "warn",
+      pruneAfter: "3650d",
+      archiveDashboardAfter: false,
+      maxDiskBytes: false,
+      coldStorage: { enabled: true, afterDays: 30 },
+    },
+  };
+} else if (coldStorageMode !== "unsupported") {
+  throw new Error("invalid frozen session cold-storage mode");
+}
 
 fs.mkdirSync(path.dirname(configPath), { recursive: true });
 fs.mkdirSync(workspaceDir, { recursive: true });

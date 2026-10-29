@@ -27,12 +27,30 @@ At startup, OpenClaw does roughly this:
 7. call native `register(api)` hooks and collect registrations into the plugin registry
 8. expose the registry to commands/runtime surfaces
 
+The asynchronous host loader prepares up to four independent external plugin source
+captures at a time. Module evaluation, registration, and diagnostics remain in
+manifest order; readiness waits for the complete registry. Each capture keeps its
+existing artifact and worker owner. Synchronous CLI loads acquire sources inline.
+
+Native plugin imports evaluate each requested SDK entry synchronously before
+linking the plugin's asynchronous module graph. This lets CommonJS bundles
+`require()` the same SDK entry during concurrent channel startup without seeing
+an unfinished ESM module. Unused SDK entries remain unloaded.
+
+Bundled channel entries and channel metadata modules use the shared cached module
+loader. It prepares SDK aliases before evaluation and owns native-to-source
+fallback; channel adapters do not retry a failed evaluation through another loader.
+
 Safety gates run **before** runtime execution. Discovery blocks a candidate
 when:
 
 - its resolved entry escapes the plugin root
 - its path (or its root directory) is world-writable
 - for non-bundled plugins, path ownership does not match the current uid (or root)
+
+On Windows, plugin roots can sit beneath directory junctions, including Node
+version-manager prefixes. Root aliases are resolved and verified by directory
+identity before entries are opened; files must still stay inside that root.
 
 World-writable bundled directories get an in-place `chmod` repair attempt
 first (npm/global installs can ship package dirs at `0777`) before the gate
@@ -43,6 +61,10 @@ one is known (including ids resolved from a manifest inside an
 otherwise-rejected directory), so config referencing that id sees a blocked
 plugin tied to a path-safety warning instead of an unrelated "unknown plugin"
 error.
+
+When every candidate is rejected, installation and capability inspection surface
+the discovery warning, including the unsafe path, so you can correct permissions
+or ownership before retrying.
 
 ### Manifest-first behavior
 
@@ -61,35 +83,25 @@ actual behavior such as hooks, tools, commands, or provider flows.
 Optional manifest `activation` and `setup` blocks stay on the control plane.
 They are metadata-only descriptors for activation planning and setup discovery;
 they do not replace runtime registration, `register(...)`, or `setupEntry`.
-Live activation consumers use manifest command, channel, and provider hints to
-narrow plugin loading before broader registry materialization:
+Live activation consumers use manifest activation metadata to narrow plugin
+loading before broader registry materialization:
 
 - CLI loading narrows to plugins that own the requested primary command
 - channel setup/plugin resolution narrows to plugins that own the requested
   channel id
 - explicit provider setup/runtime resolution narrows to plugins that own the
   requested provider id
+- agent-runtime planning narrows to plugins that declare the selected embedded
+  harness runtime id in `activation.onAgentHarnesses`
+- startup plugin selection adds plugins whose `activation.onConfigPaths`
+  entries are present and enabled in config
 - Gateway startup planning uses `activation.onStartup` for explicit startup
   imports; plugins without startup metadata load only through narrower
   activation triggers
 
-The activation planner exposes both an ids-only API for existing callers and a
-plan API for diagnostics. Plan entries report why a plugin was selected,
-separating explicit `activation.*` hints from manifest-ownership fallback:
-
-| Reason (from `activation.*` hints)   | Reason (from manifest ownership)                                                             |
-| ------------------------------------ | -------------------------------------------------------------------------------------------- |
-| `activation-agent-harness-hint`      | —                                                                                            |
-| `activation-capability-hint`         | —                                                                                            |
-| `activation-channel-hint`            | `manifest-channel-owner` (`channels`)                                                        |
-| `activation-command-hint`            | `manifest-command-alias` (`commandAliases`)                                                  |
-| `activation-provider-hint`           | `manifest-provider-owner` (`providers`), `manifest-setup-provider-owner` (`setup.providers`) |
-| `activation-route-hint`              | —                                                                                            |
-| — (hook trigger has no hint variant) | `manifest-hook-owner` (`hooks`), `manifest-tool-contract` (`contracts.tools`)                |
-
-That reason split is the compatibility boundary: existing plugin metadata
-keeps working, while new code can detect broad hints or fallback behavior
-without changing runtime loading semantics.
+The activation planner returns unique, sorted plugin ids selected by explicit
+`activation.*` hints or existing manifest ownership metadata. Both paths respect
+plugin policy and the caller's requested scope without importing runtime modules.
 
 Request-time runtime preloads that ask for the broad `all` scope still derive
 an explicit effective plugin id set from config, startup planning, configured
@@ -114,7 +126,7 @@ metadata-only while the setup module contributes other setup hooks.
 
 ### Plugin cache boundary
 
-One `PluginCache` owns plugin facts from first access until Gateway shutdown.
+One `PluginCache` owns plugin facts for a retained generation.
 CLI preflight and startup progressively fill the same cache; later access fills
 only facts not yet acquired. Its immutable metadata snapshot combines the installed index, manifests, owner maps, and available
 discovery facts from every configured agent workspace. Disabled plugins remain
@@ -123,11 +135,35 @@ plugin IDs from different workspace sources remain rejected.
 
 Runtime readers use this `PluginMetadataSnapshot`, a derived `PluginLookUpTable`,
 or an explicit manifest registry. Plugin scopes are in-memory projections;
-config changes, account changes, and run workspace changes must not trigger
+ordinary lookups, account changes, and run workspace changes do not trigger
 filesystem scanning, `stat`/`realpath` freshness polling, manifest rereads, or
-hashing. Activation and runtime service generations can change while their
-package metadata stays fixed. Account health and authentication state are not
-part of the immutable package inventory.
+hashing. Plugin lifecycle operations prepare fresh metadata in their own cache
+generation. Gateway runtime work after a lifecycle commit, including config
+reload listeners and owners started by the reload, reads the published
+generation instead. Account health and authentication state are not part of the
+immutable package inventory.
+
+Gateway model admission uses the configured agent's workspace and plugin inventory,
+including its published discovery catalog. A session opened in another folder keeps
+that folder as its execution cwd without losing discovered models. Standalone hosts
+continue to scope plugin discovery to their requested workspace.
+
+Setup provider detection loads providers from the metadata snapshot that
+selected its choices. Its operation cache owns only the probe registrations and
+plugin instances, which retire after the probes settle, so repeated detection
+does not rediscover plugin packages. Setup activation still prepares fresh
+metadata because it can install the plugin it is about to load.
+
+An explicit install or refresh clears mutable discovery caches for the command,
+so its next metadata phase observes the updated inventory. Immutable runtime
+generations keep their captured metadata. Each process normally owns one Gateway.
+Overlapping independent Gateways in one process are best effort rather than
+coordinated owners of the same inventory.
+
+Native SDK alias resolution retains each importing file's resolved filesystem path, root
+membership, and alias targets in that same generation. Alias registration or
+replacement clears those results, as does metadata invalidation; repeated
+imports do not repeat filesystem path resolution or containment checks.
 
 The same cache generation prepares installed-index scope lookups, compiled model
 matching patterns, parsed install-record projections, and manifest fingerprints
@@ -152,13 +188,35 @@ Bounded loaded-owner lookups retain the owner's artifact policy when no preferen
 is specified. An explicit preference is checked; exact loader requests apply the
 full cache identity and cold-load defaults.
 
+A completed registry is cached under both its original request and its resolved
+manifest selection. Reusing those prepared manifests does not repeat plugin
+registration. Both keys share the existing bounded cache and are removed when
+the registry retires or the load cache is cleared.
+Validation, full registration, and CLI metadata loads have separate cache entries;
+validating a module cannot satisfy a later request for its registrations.
+
+An uncached inspection releases its execution authority immediately, while borrowed
+registrations keep physical resources alive until the last claim releases them.
+After registration cleanup, instance retirement, work drains, and donor releases
+finish, the inspection drops its retirement callback, registry, and cleanup captures.
+Keeping a released handle does not keep those completed discovery graphs alive.
+Pending disposal and failures that retain resource custody keep their references.
+
+Outbound channel bootstrap remembers successful and unavailable senders within
+the selected plugin cache and metadata scope. Inventory replacement or metadata
+invalidation permits a fresh attempt; repeated deliveries within the same scope
+reuse the outcome without retrying failed registration. A request-scoped channel
+owner still takes precedence over process-root bootstrap outcomes.
+Payload preparation carries the selected sender's directive policy on its handler,
+so one batch resolves its plugin once before parsing and applying channel transforms.
+
 Provider lookup uses an explicit caller workspace first, then the workspace
 recorded by its metadata snapshot, including an explicitly shared-root scope.
 Only narrowed metadata views without a workspace field inherit the active
 workspace. The registry's existing load context retains its workspace so a request or active
 registry from another workspace cannot replace a prepared selection.
 
-Provider hooks share the canonical provider registry selection. Declared providers
+Provider hooks use the shared provider registry selection. Declared providers
 reserve their names, while provider-triggered helpers still activate beside them.
 Required load owners and eligible hook receivers are captured separately in that
 selection. Declared provider owners need matching physical records and provider
@@ -183,11 +241,13 @@ they do not cache trust decisions or credentials. Callers supplying a partial
 manifest view keep fresh per-call projection rather than sharing mutable metadata.
 
 Explicit install, update, registry refresh, and doctor operations use isolated
-generations of the same cache type, acquired after their lifecycle lease. They may inspect changed files and rebuild the persisted
-installed index, but cannot clear or replace the running Gateway's inventory.
-The new inventory takes effect after restart. The `plugins.refresh` RPC reports
-`restartRequired: true`; with reload disabled, it leaves the running inventory
-in place until a manual restart.
+generations of the same cache type, acquired after their lifecycle lease. They
+may inspect changed files and rebuild the persisted installed index. Live
+inventory replacement belongs to the Gateway plugin lifecycle: `plugins.refresh`
+prepares and applies a new generation, then returns its runtime receipt with
+`restartRequired: false`, including when passive config reload is disabled.
+Standalone registry or doctor repair does not itself prove the Gateway applied
+the repaired files; use [plugin Reload](/cli/plugins#reload) when needed.
 
 The shared cache owns checked file contents, parsed package and manifest data,
 bundle MCP/LSP/settings files, plugin skill paths, discovery paths, installed-index
@@ -198,15 +258,35 @@ reuse the same checked bytes rather than reopening a file at each stage.
 
 Actual code imports retain their boundary and file-identity checks before first
 execution. Consent checks use a fresh inspection after an awaited approval so
-changed artifacts cannot inherit approval for older capabilities. Failed module
-evaluation remains retryable; a successful import is shared across consumers.
+changed artifacts cannot inherit approval for older capabilities. The plugin
+cache releases failed loads, but Node retains failed native ESM evaluations for
+the process lifetime; restarting an account cannot repair that module graph.
+A successful import is shared across consumers.
+
+Document and web-content extraction select callbacks from the current metadata
+scope on each request. A shared config object does not make two inventories
+interchangeable; the plugin cache still reuses their module exports. Public
+artifact adapters carry an explicit environment through both provider selection
+and module loading, including the selected profile's bundled-discovery policy.
+When selection supplies a manifest owner, artifacts resolve from that owner's
+root and entry, preserving source overlays and retained module instances.
+
+Bundled provider policy lookups retain their resolved surface, including absence,
+in the metadata cache. Repeated model-reference normalization reuses that
+surface without resolving artifact candidates again. The memo follows the
+selected registry's publication version and bundled-directory selection, with
+separate weakly held entries for each registry. Completed private registries
+become cacheable when their loader publishes its identity; registration and
+incomplete registries remain uncached. A new generation or explicit metadata
+invalidation resolves the surface again, and managed surfaces
+retain their instance's admission checks.
 
 The CLI invocation owns one operation cache across config reads, output metadata,
 command ownership, nested registration, and actions. Standalone registration uses
 its caller's active generation. Config validation covers every
 workspace; execution uses the original selected workspace snapshot, or shared
-roots when no workspace owner is proven. Exact config/source identities and
-revision checks fence retained registrars. Preparation closes before Commander
+roots when no workspace owner is proven. Prepared registrars keep their captured
+metadata if configuration changes during the operation. Preparation closes before Commander
 actions, while its cache scope lasts through action completion for late imports.
 Changed package files require a new operation; changing activation inputs does
 not retire compatible package facts. SDK alias maps are prepared on first alias

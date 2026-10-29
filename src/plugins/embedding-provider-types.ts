@@ -1,6 +1,8 @@
 /** Type contracts for plugin-contributed embedding providers. */
+import type { MemorySearchDeadlineControlOptions } from "../../packages/memory-host-sdk/src/host/search-deadline-control.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
+import type { EmbeddingProviderBatchRuntime } from "./embedding-provider-runtime-types.js";
 
 /** Input accepted by embedding providers, including multimodal inline-data parts. */
 export type EmbeddingInput =
@@ -12,24 +14,36 @@ export type EmbeddingInput =
       >;
     };
 
+/** Provider-reported token counts for one embedding request. */
+export type EmbeddingUsage = {
+  promptTokens: number;
+  totalTokens: number;
+};
+
 /** Per-call options passed to embedding provider calls. */
 export type EmbeddingProviderCallOptions = {
   signal?: AbortSignal;
   inputType?: "query" | "document" | "semantic" | "classification" | "clustering";
-};
+  /** The host applied an explicit query instruction; skip provider query templates. */
+  queryInstructionApplied?: boolean;
+  /** The host applied an explicit document format; skip provider document templates. */
+  documentFormatApplied?: boolean;
+  /** Report each successful upstream request before resolving; undefined means usage unavailable. */
+  onUsage?: (usage: EmbeddingUsage | undefined) => void;
+} & MemorySearchDeadlineControlOptions;
 
 /** Runtime metadata returned with a created embedding provider. */
 export type EmbeddingProviderRuntime = {
   id: string;
   cacheKeyData?: Record<string, unknown>;
-  /** Prior persisted model/cache identities that are equivalent to the current identity. */
+  /** Equivalent prior identities; alias cache reads require matching published index metadata. */
   indexIdentityAliases?: Array<{
     model: string;
     cacheKeyData: Record<string, unknown>;
   }>;
   inlineQueryTimeoutMs?: number;
   inlineBatchTimeoutMs?: number;
-};
+} & Partial<EmbeddingProviderBatchRuntime>;
 
 /** Provider-owned canonical identity and exact aliases for persisted indexes. */
 export type EmbeddingProviderIndexIdentity = {
@@ -47,6 +61,8 @@ export type EmbeddingProvider = {
   model: string;
   dimensions?: number;
   maxInputTokens?: number;
+  /** Positive safe integer cap for memory embedding requests; omit when the endpoint limit is unknown. */
+  maxInputsPerRequest?: number;
   embed: (input: EmbeddingInput, options?: EmbeddingProviderCallOptions) => Promise<number[]>;
   embedBatch: (
     inputs: EmbeddingInput[],
@@ -86,6 +102,8 @@ export type EmbeddingProviderCreateResult = {
 /** Adapter contract registered by core or plugin embedding providers. */
 export type EmbeddingProviderAdapter = {
   id: string;
+  /** Alternate lookup ids; creation and index identity retain the canonical id. */
+  aliases?: readonly string[];
   defaultModel?: string;
   transport?: "local" | "remote";
   authProviderId?: string;

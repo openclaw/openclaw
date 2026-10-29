@@ -4,36 +4,42 @@
  * new public access-profile config surface.
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { normalizeChatType } from "../channels/chat-type.js";
+import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
-import type { SkillSnapshot } from "../skills/types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
-import {
-  resolveEffectiveToolPolicy,
-  resolveTrustedGroupId,
-  sessionKeyNamesGroupConversation,
-} from "./agent-tools.policy.js";
-import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
+import type { AdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { resolveEffectiveToolPolicy, resolveTrustedGroupId } from "./agent-tools.policy.js";
+import type { DelegatedToolDenyFloor } from "./delegated-tool-policy.js";
+import { normalizeInheritedToolDenylist } from "./inherited-tool-deny.js";
+import { captureRequesterOrigin, type RequesterOrigin } from "./requester-origin.js";
+import { isInternalOwnerRequester, resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
-import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
+import {
+  resolveScheduledToolCallerContext,
+  type ScheduledToolPolicyContext,
+} from "./scheduled-tool-policy.js";
 import { resolveSessionPlacementSandboxToolPolicy } from "./session-placement-computer.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
-import type { PromptMode } from "./system-prompt.types.js";
+import type {
+  PreparedSessionCapabilityEntry,
+  SessionCapabilityStore,
+} from "./subagents/spawn/subagent-capabilities.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import {
   collectExplicitAllowlist,
   collectExplicitDenylist,
+  hasRestrictiveAllowPolicy,
   mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
+import { prepareSandboxSessionTools } from "./tools/sessions-operator-authority.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
-
-type ConversationCapabilityScope = "direct" | "shared" | "unknown";
 
 function resolveManifestToolProfileNames(
   snapshot: Pick<PluginMetadataSnapshot, "plugins"> | undefined,
@@ -52,31 +58,35 @@ function resolveManifestToolProfileNames(
 }
 
 export type ConversationCapabilityProfileParams = {
+  requesterOrigin?: RequesterOrigin;
+  operatorProfileId?: string;
+  /** Captured policy owner; null excludes ambient request authority. */
+  operatorAuthority?: AdmittedRunOperatorAuthority | null;
+  /** Original authenticated conversation, independent of the execution session route. */
+  conversationId?: string | null;
+  chatType?: string;
+  messageThreadId?: string | number | null;
+  memberRoleIds?: readonly string[];
   config?: OpenClawConfig;
   sessionKey?: string;
   /** Live conversation key when a sandbox/policy key is used for tool filtering. */
   runSessionKey?: string;
   /** Session key used for subagent capability inheritance when it differs from sessionKey. */
   sandboxSessionKey?: string;
+  /** Owner-read session metadata consumed synchronously during policy preparation. */
+  preparedSessionEntry?: PreparedSessionCapabilityEntry;
+  /** Complete owner-prepared lineage; no database reads during policy projection. */
+  preparedSessionCapabilityStore?: SessionCapabilityStore;
   sessionId?: string;
   runId?: string;
   agentId?: string;
-  agentDir?: string;
   agentAccountId?: string | null;
   messageProvider?: string | null;
   messageChannel?: string | null;
-  chatType?: string;
-  messageTo?: string | null;
-  messageThreadId?: string | number | null;
   conversationToolPolicy?: GroupToolPolicyConfig;
-  currentChannelId?: string | null;
-  currentMessagingTarget?: string | null;
-  currentThreadTs?: string | null;
-  currentMessageId?: string | number | null;
   groupId?: string | null;
   groupChannel?: string | null;
   groupSpace?: string | null;
-  memberRoleIds?: readonly string[];
   spawnedBy?: string | null;
   senderId?: string | null;
   senderName?: string | null;
@@ -85,15 +95,9 @@ export type ConversationCapabilityProfileParams = {
   senderIsOwner?: boolean;
   modelProvider?: string;
   modelId?: string;
-  modelApi?: string;
-  modelContextWindowTokens?: number;
-  modelHasVision?: boolean;
   workspaceDir?: string;
   cwd?: string;
   spawnWorkspaceDir?: string;
-  isCanonicalWorkspace?: boolean;
-  promptMode?: PromptMode;
-  skillsSnapshot?: SkillSnapshot;
   sandboxToolPolicy?: SandboxToolPolicy;
   runtimeToolAllowlist?: string[];
   /** Persist the runtime allowlist as real parent authority on spawned children. */
@@ -107,60 +111,68 @@ export type ConversationCapabilityProfileParams = {
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
 
-export function resolveConversationCapabilityProfile(params: ConversationCapabilityProfileParams) {
+/** Prepare the authoritative inbound surface once for each tool catalog. */
+export function resolveConversationQuestionInputMode(
+  params: Pick<ConversationCapabilityProfileParams, "messageChannel" | "messageProvider">,
+): "native" | "buttons" | "none" {
+  const channel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
+  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
+    return "native";
+  }
+  return getChannelPlugin(channel)?.agentPrompt?.questionInputMode ?? "none";
+}
+
+/** Prepare standalone worker reads before running the shared synchronous policy. */
+export function prepareConversationCapabilityProfile(params: ConversationCapabilityProfileParams) {
+  return withPreparedSessionCapabilityRead(() => resolveConversationCapabilityProfile(params));
+}
+
+/** Resolve live tool policy without constructing descriptive catalog metadata. */
+export function resolveConversationCapabilityPolicy(params: ConversationCapabilityProfileParams) {
   const messageProvider = params.messageProvider;
-  const effective = resolveEffectiveToolPolicy({
-    config: params.config,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-  });
-  const sandboxToolPolicy = resolveSessionPlacementSandboxToolPolicy(params.sandboxToolPolicy, {
-    runId: params.runId,
-    agentId: effective.agentId,
-  });
-  const trustedGroup = resolveTrustedGroupId({
-    sessionKey: params.sessionKey,
-    spawnedBy: params.spawnedBy,
-    groupId: params.groupId,
-  });
+  const senderIsOwner = params.senderIsOwner;
+  const effective = resolveEffectiveToolPolicy(params);
+  const { policy: sandboxToolPolicy, renameOnly: sandboxSessionRenameOnly } =
+    prepareSandboxSessionTools({
+      policy: resolveSessionPlacementSandboxToolPolicy(params.sandboxToolPolicy, {
+        runId: params.runId,
+        agentId: effective.agentId,
+      }),
+      senderIsOwner,
+      authority: params.operatorAuthority,
+    });
+  const trustedGroup = resolveTrustedGroupId(params);
   // Group channel/space labels have no session-bound counterpart to verify
   // against; mask them whenever the trust check dropped the caller group id.
   const trustedGroupChannel = trustedGroup.dropped ? null : params.groupChannel;
   const trustedGroupSpace = trustedGroup.dropped ? null : params.groupSpace;
-  // Owner WebChat intentionally has no external sender identity. Its trusted
-  // owner state must not fall through to the wildcard policy for guests.
-  const isOwnerInternalSession =
-    params.senderIsOwner === true &&
-    normalizeMessageChannel(messageProvider ?? params.messageChannel) === INTERNAL_MESSAGE_CHANNEL;
+  const isOwnerInternalSession = isInternalOwnerRequester(params);
   const subagentSessionKey = params.sandboxSessionKey ?? params.sessionKey;
+  const callerContext = resolveScheduledToolCallerContext({
+    scheduledToolPolicy: params.scheduledToolPolicy,
+    channel: messageProvider ?? undefined,
+  });
   const requesterPolicies = resolveRequesterToolPolicies({
-    config: params.config,
-    sessionKey: params.sessionKey,
+    ...params,
     subagentSessionKey,
     agentId: effective.agentId,
-    spawnedBy: params.spawnedBy,
-    messageProvider,
+    messageProvider: callerContext.local ? messageProvider : callerContext.channel,
     groupId: trustedGroup.groupId,
     groupChannel: trustedGroupChannel,
     groupSpace: trustedGroupSpace,
     accountId: params.scheduledToolPolicy?.ownerAccountId ?? params.agentAccountId,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-    inputProvenance: params.inputProvenance,
-    trustedInternalHandoff: params.trustedInternalHandoff,
-    sessionId: params.sessionId,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
     senderPolicyMode: params.scheduledToolPolicy || isOwnerInternalSession ? "never" : "always",
     groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
     requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
     conversationPolicy: pickSandboxToolPolicy(params.conversationToolPolicy),
   });
-  const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
+  const {
+    groupPolicy,
+    senderPolicy,
+    subagentPolicy,
+    inheritedToolPolicy,
+    sessionInheritedToolPolicy,
+  } = requesterPolicies;
   const profilePolicy = mergeAlsoAllowPolicy(
     resolveToolProfilePolicy(effective.profile),
     resolveManifestToolProfileNames(params.pluginMetadataSnapshot, effective.profile),
@@ -196,118 +208,93 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
     profilePolicy,
     providerProfilePolicy,
     ...configuredOverridePolicies,
-    inheritedToolPolicy,
+    sessionInheritedToolPolicy,
     runtimeToolPolicy,
   ];
+  const inheritedToolPolicyForSpawn =
+    requesterPolicies.inheritedToolPolicyForSpawn ?? inheritedToolPolicy;
   const inheritancePolicies = [
     profilePolicy,
     providerProfilePolicy,
     ...configuredOverridePolicies,
-    inheritedToolPolicy,
+    inheritedToolPolicyForSpawn,
     runtimeToolPolicyForInheritance,
   ];
 
   return {
-    agentId: effective.agentId,
+    ...effective,
+    sessionKey: params.sessionKey,
+    subagentSessionKey,
+    trustedGroup,
+    profilePolicy,
+    providerProfilePolicy,
+    profileAlsoAllow: mergeRuntimeToolAlsoAllowlist(effective.profileAlsoAllow),
+    providerProfileAlsoAllow: mergeRuntimeToolAlsoAllowlist(effective.providerProfileAlsoAllow),
+    groupPolicy,
+    senderPolicy,
+    sandboxPolicy: sandboxToolPolicy,
+    sandboxSessionRenameOnly,
+    subagentPolicy,
+    inheritedToolPolicy,
+    sessionInheritedToolPolicy,
+    inheritedToolPolicyForSpawn,
+    delegatedToolPolicy: requesterPolicies.delegatedToolPolicy,
+    inheritedToolPolicySource: requesterPolicies.inheritedToolPolicySource,
+    delegated: requesterPolicies.delegated,
+    requesterPolicySource: requesterPolicies.requesterPolicySource,
+    runtimeToolPolicyForInheritance,
+    inheritancePolicies,
+    explicitToolAllowlist: collectExplicitAllowlist(explicitToolAllowlistPolicies),
+    explicitToolOverrideAllowlist: collectExplicitAllowlist(explicitOverridePolicies),
+    explicitToolDenylist: collectExplicitDenylist(explicitToolAllowlistPolicies),
+    runtimePluginToolGrant: params.runtimePluginToolGrant,
+  };
+}
+
+export function resolveConversationCapabilityProfile(params: ConversationCapabilityProfileParams) {
+  const policy = resolveConversationCapabilityPolicy(params);
+  const { trustedGroup } = policy;
+  const trustedGroupChannel = trustedGroup.dropped ? null : params.groupChannel;
+  const trustedGroupSpace = trustedGroup.dropped ? null : params.groupSpace;
+  return {
+    requesterOrigin: captureRequesterOrigin({
+      ...params,
+      groupId: trustedGroup.groupId,
+      groupChannel: trustedGroupChannel,
+      groupSpace: trustedGroupSpace,
+    }),
+    agentId: policy.agentId,
     serviceIdentity: {
-      agentId: effective.agentId,
-      agentDir: params.agentDir,
       accountId: params.agentAccountId,
-      runId: params.runId,
-      sessionId: params.sessionId,
     },
     model: {
       provider: params.modelProvider,
       id: params.modelId,
-      api: params.modelApi,
-      contextWindowTokens: params.modelContextWindowTokens,
-      hasVision: params.modelHasVision,
     },
     conversation: {
-      scope: resolveConversationScope({
-        chatType: params.chatType,
-        sessionKey: params.sessionKey,
-        runSessionKey: params.runSessionKey,
-        trustedGroup,
-        groupChannel: trustedGroupChannel,
-        groupSpace: trustedGroupSpace,
-      }),
-      chatType: normalizeChatType(params.chatType),
       sessionKey: params.runSessionKey ?? params.sessionKey,
       policySessionKey: params.sessionKey,
       runSessionKey: params.runSessionKey,
       sessionId: params.sessionId,
-      messageProvider,
+      messageProvider: params.messageProvider,
       messageChannel: params.messageChannel,
-      messageTo: params.messageTo,
-      messageThreadId: params.messageThreadId,
-      currentChannelId: params.currentChannelId,
-      currentMessagingTarget: params.currentMessagingTarget,
-      currentThreadTs: params.currentThreadTs,
-      currentMessageId: params.currentMessageId,
+      questionInputMode: resolveConversationQuestionInputMode(params),
       groupId: trustedGroup.groupId,
       groupChannel: trustedGroupChannel,
       groupSpace: trustedGroupSpace,
-      memberRoleIds: params.memberRoleIds,
       spawnedBy: params.spawnedBy,
     },
     sender: {
-      id: params.senderId,
-      name: params.senderName,
-      username: params.senderUsername,
-      e164: params.senderE164,
       isOwner: params.senderIsOwner,
     },
     workspace: {
-      workspaceDir: params.workspaceDir,
-      cwd: params.cwd,
-      spawnWorkspaceDir: params.spawnWorkspaceDir,
       workspaceRoot: resolveWorkspaceRoot(params.workspaceDir),
       runtimeRoot: resolveWorkspaceRoot(params.cwd ?? params.workspaceDir),
       spawnWorkspaceRoot: params.spawnWorkspaceDir
         ? resolveWorkspaceRoot(params.spawnWorkspaceDir)
         : undefined,
-      instructionRoot: params.agentDir ?? params.workspaceDir,
-      isCanonicalWorkspace: params.isCanonicalWorkspace,
     },
-    instructions: {
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      promptMode: params.promptMode,
-      isCanonicalWorkspace: params.isCanonicalWorkspace,
-    },
-    skills: {
-      snapshot: params.skillsSnapshot,
-    },
-    policy: {
-      agentId: effective.agentId,
-      sessionKey: params.sessionKey,
-      subagentSessionKey,
-      trustedGroup,
-      profile: effective.profile,
-      providerProfile: effective.providerProfile,
-      profilePolicy,
-      providerProfilePolicy,
-      profileAlsoAllow: mergeRuntimeToolAlsoAllowlist(effective.profileAlsoAllow),
-      providerProfileAlsoAllow: mergeRuntimeToolAlsoAllowlist(effective.providerProfileAlsoAllow),
-      globalPolicy: effective.globalPolicy,
-      globalProviderPolicy: effective.globalProviderPolicy,
-      agentPolicy: effective.agentPolicy,
-      agentProviderPolicy: effective.agentProviderPolicy,
-      groupPolicy,
-      senderPolicy,
-      sandboxPolicy: sandboxToolPolicy,
-      subagentPolicy,
-      inheritedToolPolicy,
-      delegated: requesterPolicies.delegated,
-      requesterPolicySource: requesterPolicies.requesterPolicySource,
-      runtimeToolPolicyForInheritance,
-      inheritancePolicies,
-      explicitToolAllowlist: collectExplicitAllowlist(explicitToolAllowlistPolicies),
-      explicitToolOverrideAllowlist: collectExplicitAllowlist(explicitOverridePolicies),
-      explicitToolDenylist: collectExplicitDenylist(explicitToolAllowlistPolicies),
-      runtimePluginToolGrant: params.runtimePluginToolGrant,
-    },
+    policy,
   };
 }
 
@@ -315,38 +302,49 @@ export type ResolvedConversationCapabilityProfile = ReturnType<
   typeof resolveConversationCapabilityProfile
 >;
 
-function resolveConversationScope(params: {
-  chatType?: string;
-  sessionKey?: string;
-  runSessionKey?: string;
-  trustedGroup: { groupId: string | null | undefined; dropped: boolean };
-  groupChannel?: string | null;
-  groupSpace?: string | null;
-}): ConversationCapabilityScope {
-  const chatType = normalizeChatType(params.chatType);
-  if (chatType === "direct") {
-    return "direct";
-  }
-  if (chatType === "group" || chatType === "channel") {
-    return "shared";
-  }
-  // Without a live chat type, classify only from server-derived session keys
-  // and trust-checked group facts. A caller-supplied group id that
-  // resolveTrustedGroupId dropped must not flip an unknown-audience
-  // conversation to "shared": downstream audience and credential decisions
-  // read this field, and the profile already publishes that group as null.
+/** Prepare before flattening: duplicate nonlocal denies survive the local exception. */
+export function prepareDelegatedToolDenyFloor(
+  profile: ResolvedConversationCapabilityProfile,
+  additionalDeny: readonly string[] = [],
+): DelegatedToolDenyFloor | undefined {
+  const policy = profile.policy;
+  const continuation = policy.delegatedToolPolicy;
   if (
-    sessionKeyNamesGroupConversation(params.runSessionKey) ||
-    sessionKeyNamesGroupConversation(params.sessionKey)
+    !policy.agentId ||
+    policy.inheritedToolPolicySource === "sender" ||
+    policy.runtimeToolPolicyForInheritance?.allow.length === 0 ||
+    (!continuation && policy.inheritancePolicies.some(hasRestrictiveAllowPolicy))
   ) {
-    return "shared";
+    return undefined;
   }
-  if (params.trustedGroup.dropped) {
-    return "unknown";
+  if (!continuation && !policy.agentPolicy?.deny?.length) {
+    return undefined;
   }
-  return params.trustedGroup.groupId?.trim() ||
-    params.groupChannel?.trim() ||
-    params.groupSpace?.trim()
-    ? "shared"
-    : "unknown";
+  return {
+    policyAgentId: policy.agentId,
+    deny: normalizeInheritedToolDenylist([
+      ...collectExplicitDenylist([
+        policy.globalPolicy,
+        policy.globalProviderPolicy,
+        // A grantee's own local policy is never waived by the original requester's grant.
+        continuation ? policy.agentPolicy : undefined,
+        policy.agentProviderPolicy,
+        policy.groupPolicy,
+        policy.senderPolicy,
+        policy.sandboxPolicy,
+        policy.subagentPolicy,
+        continuation ? policy.inheritedToolPolicy : policy.inheritedToolPolicyForSpawn,
+        policy.runtimeToolPolicyForInheritance,
+      ]),
+      ...additionalDeny,
+    ]),
+    ...(continuation
+      ? {
+          continuation: {
+            requesterSessionKey: continuation.requesterSessionKey,
+            targetAgentId: continuation.targetAgentId,
+          },
+        }
+      : {}),
+  };
 }

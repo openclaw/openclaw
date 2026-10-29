@@ -1,34 +1,26 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { makeOpenClawConfigFixture } from "./embedded-agent-runner/model.test-harness.js";
+import { beforeEach, expect, it, vi } from "vitest";
+import {
+  makeModel,
+  makeOpenClawConfigFixture,
+} from "./embedded-agent-runner/model.test-harness.js";
+import {
+  acquireEffectiveToolInventoryRuntimeModelContext as acquireContext,
+  resolveConfiguredModelCompat,
+} from "./tools-effective-inventory.js";
 
 const runtimeMocks = vi.hoisted(() => {
-  const createLease = (owner: string) => {
-    const authStorage = { owner };
-    const modelRegistry = { owner };
-    return {
-      authStorage,
-      modelRegistry,
-      snapshot: {
-        createStores: vi.fn(() => ({ authStorage, modelRegistry })),
-      },
-      release: vi.fn(),
-    };
+  const stores = { authStorage: { owner: "request" }, modelRegistry: { owner: "request" } };
+  const model = (id: string) => ({ id, provider: "openai", api: "openai-responses" });
+  const requestLease = {
+    ...stores,
+    snapshot: { createStores: () => stores },
+    [Symbol.asyncDispose]: vi.fn(async () => {}),
   };
-  const requestLease = createLease("request");
-  const publishedLease = createLease("published");
   return {
     acquire: vi.fn(async () => requestLease),
-    publishedLease,
     requestLease,
-    resolveModelAsync: vi.fn(async () => ({
-      model: {
-        id: "chat-latest",
-        name: "chat-latest",
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      },
-    })),
+    model,
+    resolveModelAsync: vi.fn(async () => ({ model: model("chat-latest") })),
     staticCatalogModel: vi.fn(),
   };
 });
@@ -60,164 +52,115 @@ vi.mock("./agent-scope.js", () => ({
   resolveSessionAgentId: () => "main",
 }));
 
-describe("acquireEffectiveToolInventoryRuntimeModelContext", () => {
-  beforeEach(() => {
-    runtimeMocks.acquire.mockReset().mockResolvedValue(runtimeMocks.requestLease);
-    runtimeMocks.requestLease.snapshot.createStores.mockClear();
-    runtimeMocks.publishedLease.snapshot.createStores.mockClear();
-    runtimeMocks.resolveModelAsync.mockClear();
-    runtimeMocks.requestLease.release.mockClear();
-    runtimeMocks.publishedLease.release.mockClear();
-    runtimeMocks.staticCatalogModel.mockReset();
+const location = {
+  agentId: "main",
+  agentDir: "/tmp/agents/main/agent",
+  workspaceDir: "/tmp/workspace-main",
+};
+function acquire(modelId: string, overrides: Partial<Parameters<typeof acquireContext>[0]> = {}) {
+  return acquireContext({
+    cfg: {},
+    modelProvider: "openai",
+    modelId,
+    ...overrides,
   });
+}
+beforeEach(() => {
+  runtimeMocks.acquire.mockReset().mockResolvedValue(runtimeMocks.requestLease);
+  runtimeMocks.resolveModelAsync.mockClear();
+  runtimeMocks.requestLease[Symbol.asyncDispose].mockClear();
+  runtimeMocks.staticCatalogModel.mockReset();
+});
 
-  it.each([
-    { owner: "request-owned", agentId: "main", lease: runtimeMocks.requestLease },
-    { owner: "published", agentId: "research", lease: runtimeMocks.publishedLease },
-  ])("prepares dynamic model context with a $owner runtime lease", async ({ lease, agentId }) => {
-    runtimeMocks.acquire.mockResolvedValueOnce(lease);
-    const { acquireEffectiveToolInventoryRuntimeModelContext } =
-      await import("./tools-effective-inventory.js");
-    const cfg = makeOpenClawConfigFixture();
-    const agentDir = `/tmp/agents/${agentId}/agent`;
-    const workspaceDir = `/tmp/workspace-${agentId}`;
+it("prepares dynamic model context with a runtime lease", async () => {
+  const lease = runtimeMocks.requestLease;
+  const cfg = makeOpenClawConfigFixture();
 
-    const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
-      cfg,
-      agentId,
-      agentDir,
-      workspaceDir,
-      modelProvider: " OpenAI ",
-      modelId: " chat-latest ",
-    });
-    expect(acquired.run((context) => context)).toMatchObject({
-      modelApi: "openai-responses",
-      runtimeModel: { id: "chat-latest", provider: "openai" },
-    });
-    expect(runtimeMocks.resolveModelAsync).toHaveBeenCalledWith(
-      "openai",
-      "chat-latest",
-      agentDir,
-      cfg,
-      {
-        agentId,
-        workspaceDir,
-        authStorage: lease.authStorage,
-        modelRegistry: lease.modelRegistry,
-        preparedModelRuntime: lease.snapshot,
-      },
-    );
-    expect(runtimeMocks.acquire).toHaveBeenCalledWith({
-      agentId,
-      agentDir,
+  const acquired = await acquire(" chat-latest ", {
+    cfg,
+    ...location,
+    modelProvider: " OpenAI ",
+  });
+  expect(acquired.run((context) => context)).toMatchObject({
+    modelApi: "openai-responses",
+    runtimeModel: { id: "chat-latest", provider: "openai" },
+  });
+  expect(runtimeMocks.resolveModelAsync).toHaveBeenCalledWith(
+    "openai",
+    "chat-latest",
+    location.agentDir,
+    cfg,
+    {
+      agentId: location.agentId,
+      workspaceDir: location.workspaceDir,
+      authStorage: lease.authStorage,
+      modelRegistry: lease.modelRegistry,
+      preparedModelRuntime: lease.snapshot,
+    },
+  );
+  expect(runtimeMocks.acquire).toHaveBeenCalledWith(
+    {
+      ...location,
       config: cfg,
-      workspaceDir,
       loadRuntimePlugins: true,
-      runtimePluginSelections: [{ provider: "openai", modelId: "chat-latest", agentId }],
-    });
-    expect(lease.release).not.toHaveBeenCalled();
-    acquired.release();
-    acquired.release();
-    expect(lease.release).toHaveBeenCalledTimes(1);
-    expect(() => acquired.run(() => undefined)).toThrow("has been released");
-  });
+      runtimePluginSelections: [
+        { provider: "openai", modelId: "chat-latest", agentId: location.agentId },
+      ],
+      allowGatewaySubagentBinding: true,
+    },
+    { catalogMode: "static" },
+  );
+  expect(lease[Symbol.asyncDispose]).not.toHaveBeenCalled();
+  await acquired[Symbol.asyncDispose]();
+  await acquired[Symbol.asyncDispose]();
+  expect(lease[Symbol.asyncDispose]).toHaveBeenCalledTimes(1);
+  expect(() => acquired.run(() => undefined)).toThrow("has been released");
+});
 
-  it.each([
-    { modelProvider: "", modelId: "chat-latest" },
-    { modelProvider: "openai", modelId: " " },
-  ])("skips runtime preparation for invalid model input", async (input) => {
-    const { acquireEffectiveToolInventoryRuntimeModelContext } =
-      await import("./tools-effective-inventory.js");
-
-    const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
-      cfg: {},
-      ...input,
-    });
-    expect(acquired.run((context) => context)).toEqual({});
-    acquired.release();
+it.each(["blank", "bundled", "configured"])(
+  "uses %s context without a runtime lease",
+  async (source) => {
+    const alias = source === "configured";
+    const modelId = alias ? "grok-4.3-latest" : source === "blank" ? " " : "bundled";
+    const provider = alias ? "xai" : "openai";
+    const compat = { supportsTools: true };
+    const providerConfig = {
+      baseUrl: "https://configured.example.invalid",
+      api: "anthropic-messages" as const,
+      models: [{ ...makeModel("grok-4.3"), name: "Configured", compat: { ...compat } }],
+    };
+    const cfg = makeOpenClawConfigFixture(
+      alias ? { models: { providers: { [provider]: providerConfig } } } : {},
+    );
+    if (source === "bundled") {
+      runtimeMocks.staticCatalogModel.mockReturnValue(runtimeMocks.model(modelId));
+    }
+    const acquired = await acquire(modelId, { cfg, modelProvider: provider });
+    const context = acquired.run((value) => value);
+    if (source === "blank") {
+      expect(context).toEqual({});
+    } else {
+      expect(context).toMatchObject({
+        modelApi: alias ? "anthropic-messages" : "openai-responses",
+        runtimeModel: { id: modelId, provider, ...(alias ? { name: "Configured", compat } : {}) },
+      });
+    }
+    if (alias) {
+      expect(resolveConfiguredModelCompat({ cfg, modelProvider: provider, modelId })).toEqual(
+        compat,
+      );
+    }
+    await acquired[Symbol.asyncDispose]();
     expect(runtimeMocks.acquire).not.toHaveBeenCalled();
     expect(runtimeMocks.resolveModelAsync).not.toHaveBeenCalled();
-    expect(runtimeMocks.requestLease.release).not.toHaveBeenCalled();
-  });
+    expect(runtimeMocks.requestLease[Symbol.asyncDispose]).not.toHaveBeenCalled();
+  },
+);
 
-  it("uses configured model context without acquiring a runtime lease", async () => {
-    const { acquireEffectiveToolInventoryRuntimeModelContext } =
-      await import("./tools-effective-inventory.js");
-    const cfg = makeOpenClawConfigFixture({
-      models: {
-        providers: {
-          custom: {
-            api: "anthropic-messages",
-            models: [
-              {
-                id: "configured",
-                name: "Configured",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 8192,
-                maxTokens: 1024,
-              },
-            ],
-          },
-        },
-      },
-    });
+it("releases the runtime lease when dynamic model resolution fails", async () => {
+  const failure = new Error("dynamic model failed");
+  runtimeMocks.resolveModelAsync.mockRejectedValueOnce(failure);
 
-    const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
-      cfg,
-      modelProvider: "custom",
-      modelId: "configured",
-    });
-    expect(acquired.run((context) => context)).toMatchObject({
-      modelApi: "anthropic-messages",
-      runtimeModel: { id: "configured", provider: "custom" },
-    });
-    acquired.release();
-    expect(runtimeMocks.acquire).not.toHaveBeenCalled();
-    expect(runtimeMocks.resolveModelAsync).not.toHaveBeenCalled();
-    expect(runtimeMocks.requestLease.release).not.toHaveBeenCalled();
-  });
-
-  it("uses bundled model context without acquiring a runtime lease", async () => {
-    runtimeMocks.staticCatalogModel.mockReturnValue({
-      id: "bundled",
-      name: "Bundled",
-      provider: "openai",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    });
-    const { acquireEffectiveToolInventoryRuntimeModelContext } =
-      await import("./tools-effective-inventory.js");
-
-    const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
-      cfg: {},
-      modelProvider: "openai",
-      modelId: "bundled",
-    });
-    expect(acquired.run((context) => context)).toMatchObject({
-      modelApi: "openai-responses",
-      runtimeModel: { id: "bundled", provider: "openai" },
-    });
-    acquired.release();
-    expect(runtimeMocks.acquire).not.toHaveBeenCalled();
-    expect(runtimeMocks.resolveModelAsync).not.toHaveBeenCalled();
-    expect(runtimeMocks.requestLease.release).not.toHaveBeenCalled();
-  });
-
-  it("releases the runtime lease when dynamic model resolution fails", async () => {
-    const failure = new Error("dynamic model failed");
-    runtimeMocks.resolveModelAsync.mockRejectedValueOnce(failure);
-    const { acquireEffectiveToolInventoryRuntimeModelContext } =
-      await import("./tools-effective-inventory.js");
-
-    await expect(
-      acquireEffectiveToolInventoryRuntimeModelContext({
-        cfg: {},
-        modelProvider: "openai",
-        modelId: "chat-latest",
-      }),
-    ).rejects.toBe(failure);
-    expect(runtimeMocks.requestLease.release).toHaveBeenCalledTimes(1);
-  });
+  await expect(acquire("chat-latest")).rejects.toBe(failure);
+  expect(runtimeMocks.requestLease[Symbol.asyncDispose]).toHaveBeenCalledTimes(1);
 });

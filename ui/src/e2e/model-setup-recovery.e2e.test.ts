@@ -1,9 +1,25 @@
 // Control UI tests cover local-provider recovery against a mocked Gateway.
-import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { expect, it } from "vitest";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expandProvider } from "./model-providers.test-support.ts";
+import {
+  activationFailure,
+  button,
+  candidate,
+  expectCount,
+  expectRequestCounts,
+  expectText,
+  makeDetection,
+  providerLogin,
+  runningWizard,
+  setupContext,
+  setupPages,
+  setupRpc as rpc,
+  waitText,
+} from "./model-setup-fixtures.test-support.ts";
+import { installSetupGateway, openModelSetup } from "./model-setup.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI local-provider recovery mocked Gateway E2E",
@@ -11,202 +27,150 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-let artifactDir: string | undefined;
-beforeEach(() => {
-  artifactDir = artifactRoot
-    ? createControlUiE2eArtifactDir("model-setup-recovery", artifactRoot)
-    : undefined;
-});
+const withPage = setupPages(suite, () => setupContext({ viewport: { height: 900, width: 1280 } }));
 
 suite.define(() => {
   it.each(["rejected", "uncertain"] as const)(
     "preserves first-run recovery after a terminal %s activation outcome",
     async (outcome) => {
-      await suite.withPage(
-        {
-          locale: "en-US",
-          serviceWorkers: "block",
-          viewport: { height: 900, width: 1280 },
-          ...(artifactDir
-            ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
-            : {}),
-        },
-        async ({ page }) => {
-          const gateway = await installMockGateway(page, {
-            featureMethods: ["openclaw.setup.detect", "openclaw.setup.auth.start", "wizard.next"],
-            methodResponses: {
-              "openclaw.setup.detect": {
-                candidates: [],
-                manualProviders: [],
-                authOptions: [
-                  { id: "provider-login", label: "Provider login", kind: "oauth", featured: true },
-                ],
-                workspace: "/tmp/openclaw-e2e",
-                setupComplete: false,
-              },
-              "openclaw.setup.auth.start": { done: false, status: "running" },
-              "wizard.next": {
-                done: true,
-                status: "error",
-                error: "The model could not finish setup",
-                ...(outcome === "rejected"
-                  ? {
-                      activationRejection: {
-                        disposition: "rejected-before-promotion",
-                        status: "timeout",
-                      },
-                    }
-                  : {}),
-              },
-            },
-          });
-          await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
-          const signIn = page.locator('[data-auth-choice="provider-login"] button');
-          await signIn.waitFor();
-          if (artifactDir) {
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(artifactDir, `${outcome}-before.png`),
-            });
-          }
+      await withPage(async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: [rpc.detect, rpc.auth, rpc.next],
+          methodResponses: {
+            [rpc.detect]: makeDetection({ authOptions: [providerLogin] }),
+            [rpc.auth]: runningWizard(),
+            [rpc.next]: activationFailure(
+              "The model could not finish setup",
+              outcome === "rejected" ? "timeout" : undefined,
+            ),
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
+        const signIn = page.locator('[data-auth-choice="provider-login"] button');
+        await signIn.waitFor();
+
+        await signIn.click();
+        const dialog = page.locator("openclaw-modal-dialog");
+        const alert = dialog.getByRole("alert");
+        await alert.waitFor();
+        await waitText(alert, "The model could not finish setup");
+        expect(await dialog.locator("details").count()).toBe(0);
+        await button(dialog, "Close").click();
+        await expectCount(dialog, 0);
+        await expect.poll(() => signIn.isDisabled()).toBe(outcome === "uncertain");
+        const receiptKey = "openclaw.modelSetup.pendingActivation.v1";
+        const receipt = await page.evaluate((key) => localStorage.getItem(key), receiptKey);
+        expect(receipt === null).toBe(outcome === "rejected");
+        expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
+        await expectRequestCounts(gateway, { [rpc.auth]: 1, [rpc.activate]: 0 });
+        if (outcome === "uncertain") {
+          const recovery = page.locator(".model-setup__recovery");
+          await button(recovery, "Check again").click();
+          await waitText(page, "may still be running", false);
+          expect(await gateway.getRequests(rpc.auth)).toHaveLength(1);
+          expect(await page.evaluate((key) => localStorage.getItem(key), receiptKey)).toBe(receipt);
+        } else {
           await signIn.click();
-          const dialog = page.locator("openclaw-modal-dialog");
-          await dialog.getByText("The model could not finish setup", { exact: true }).waitFor();
-          await dialog.getByRole("button", { name: "Close", exact: true }).click();
-          await expect.poll(() => dialog.count()).toBe(0);
-          await expect.poll(() => signIn.isDisabled()).toBe(outcome === "uncertain");
-          const receiptKey = "openclaw.modelSetup.pendingActivation.v1";
-          const receipt = await page.evaluate((key) => localStorage.getItem(key), receiptKey);
-          expect(receipt === null).toBe(outcome === "rejected");
-          expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
-          expect(await gateway.getRequests("openclaw.setup.auth.start")).toHaveLength(1);
-          expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
-          if (outcome === "uncertain") {
-            const recovery = page.locator(".model-setup__recovery");
-            await recovery.getByRole("button", { name: "Check again", exact: true }).click();
-            await page.getByText("may still be running", { exact: false }).waitFor();
-            expect(await gateway.getRequests("openclaw.setup.auth.start")).toHaveLength(1);
-            expect(await page.evaluate((key) => localStorage.getItem(key), receiptKey)).toBe(
-              receipt,
-            );
-          } else {
-            await signIn.click();
-            await dialog.getByText("The model could not finish setup", { exact: true }).waitFor();
-            expect(await gateway.getRequests("openclaw.setup.auth.start")).toHaveLength(2);
-          }
-          if (artifactDir) {
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(artifactDir, `${outcome}-after.png`),
-            });
-          }
-        },
-      );
+          await alert.waitFor();
+          await waitText(alert, "The model could not finish setup");
+          expect(await gateway.getRequests(rpc.auth)).toHaveLength(2);
+        }
+      });
     },
   );
 
-  it("shows a failed LM Studio connection with its detected endpoint", async () => {
-    await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
+  it("shows a failed configured LM Studio connection without implicit preparation", async () => {
+    await withPage(
       async ({ page }) => {
         const modelRef = "lmstudio/qwen3-8b-instruct";
-        const gateway = await installMockGateway(page, {
+        const config = {
+          agents: { defaults: { model: modelRef } },
+          // LM Studio persists this non-secret placeholder for local, unauthenticated access.
+          models: {
+            providers: {
+              lmstudio: {
+                baseUrl: "http://localhost:1234/v1",
+                apiKey: "lmstudio-local",
+                models: [{ id: "qwen3-8b-instruct", name: "qwen3-8b-instruct" }],
+              },
+            },
+          },
+        };
+        const gateway = await installSetupGateway(page, {
+          agentModel: modelRef,
+          models: [
+            {
+              id: "qwen3-8b-instruct",
+              name: "qwen3-8b-instruct",
+              provider: "lmstudio",
+              available: true,
+            },
+          ],
           featureMethods: [
             "chat.metadata",
             "chat.startup",
-            "openclaw.setup.detect",
-            "openclaw.setup.verify",
-            "openclaw.setup.prepare.start",
-            "wizard.next",
+            rpc.detect,
+            "models.probe",
+            rpc.prepare,
+            rpc.next,
           ],
           methodResponses: {
-            "openclaw.setup.detect": {
-              candidates: [
-                {
-                  kind: "provider-auto:lmstudio",
-                  brandId: "lmstudio",
-                  label: "LM Studio",
-                  detail: "qwen3-8b-instruct at http://localhost:1234/v1",
-                  modelRef,
-                  recommended: false,
-                  credentials: true,
-                },
+            "config.get": sourceConfigSnapshot(config, "configured-provider"),
+            "models.authStatus": {
+              ts: 1,
+              providerCapabilities: [],
+              providers: [
+                { provider: "lmstudio", displayName: "LM Studio", status: "static", profiles: [] },
               ],
-              manualProviders: [],
-              prepareOptions: [
-                {
-                  id: "lmstudio",
-                  brandId: "lmstudio",
-                  label: "LM Studio",
-                  hint: "Connect to a running LM Studio server and use an already loaded model",
-                  actionLabel: "Connect server",
-                },
-              ],
-              workspace: "/tmp/openclaw-e2e",
+            },
+            [rpc.detect]: makeDetection({
+              candidates: [candidate("provider-auto:lmstudio", "LM Studio", modelRef)],
+              prepareOptions: [{ id: "lmstudio", label: "LM Studio" }],
               configuredModel: modelRef,
               setupComplete: true,
-            },
-            "openclaw.setup.verify": {
-              ok: false,
-              status: "unavailable",
-              error: "connect ECONNREFUSED 127.0.0.1:1234",
-            },
-            "openclaw.setup.prepare.start": {
-              sessionId: "lmstudio-recovery-session",
-              done: false,
-              status: "running",
-            },
-            "wizard.next": {
-              done: false,
-              status: "running",
-              step: {
-                id: "lmstudio-base-url",
-                type: "text",
-                message: "LM Studio base URL",
-                initialValue: "http://localhost:1234/v1",
-              },
+            }),
+            // models.probe intentionally sanitizes raw connection errors.
+            "models.probe": {
+              provider: "lmstudio",
+              status: "unknown",
+              error: "The connection probe failed.",
+              results: [],
             },
           },
         });
 
-        const response = await page.goto(`${suite.server.baseUrl}settings/model-setup`);
+        const response = await page.goto(suite.server.baseUrl + "settings/model-providers");
         expect(response?.status()).toBe(200);
-        const selectedModel = page.locator(".model-setup__current");
-        await selectedModel.getByText("LM Studio", { exact: true }).waitFor();
-        await selectedModel.getByRole("button", { name: "Check model" }).click();
-        await selectedModel.getByText("qwen3-8b-instruct at http://localhost:1234/v1").waitFor();
+        const selectedModel = await expandProvider(page, "lmstudio");
+        await waitText(selectedModel, "LM Studio");
+        await expectText(
+          page.locator(".model-providers__defaults openclaw-select-picker").first(),
+          "qwen3-8b-instruct",
+        );
+        await button(selectedModel, "Test connection: LM Studio").click();
         await selectedModel
-          .getByText("connect ECONNREFUSED 127.0.0.1:1234", { exact: false })
+          .locator(".model-providers__probe-summary")
+          .getByText("Connection failed", { exact: true })
           .waitFor();
-        await selectedModel.getByRole("button", { name: "Try again" }).waitFor();
-        await expect.poll(() => selectedModel.getByText("Change connection").count()).toBe(0);
-        await expect
-          .poll(() => page.locator('[data-candidate-kind="provider-auto:lmstudio"]').count())
-          .toBe(0);
+        await expectText(
+          selectedModel.locator(".model-providers__probe"),
+          "The connection probe failed.",
+        );
+        await button(selectedModel, "Test connection: LM Studio").waitFor();
+        await expectRequestCounts(gateway, { [rpc.prepare]: 0, [rpc.activate]: 0 });
 
-        if (artifactDir) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(artifactDir, "local-provider-failure-desktop.png"),
-          });
-          await page.setViewportSize({ height: 844, width: 390 });
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(artifactDir, "local-provider-failure-mobile.png"),
-          });
-        }
+        await page.setViewportSize({ height: 844, width: 390 });
 
-        const verify = await gateway.waitForRequest("openclaw.setup.verify");
-        expect(verify.params).toEqual({ agentId: "main" });
+        const verify = await gateway.waitForRequest("models.probe");
+        expect(verify.params).toEqual({ provider: "lmstudio", agentId: "main" });
+        await openModelSetup(page);
+        expect(await page.locator('[data-candidate-kind="provider-auto:lmstudio"]').count()).toBe(
+          0,
+        );
+        expect(await page.locator('[data-prepare-choice="lmstudio"]').count()).toBe(0);
+        await expectRequestCounts(gateway, { [rpc.prepare]: 0, [rpc.activate]: 0 });
       },
+      { colorScheme: "dark", viewport: { height: 900, width: 1280 } },
     );
   });
 });

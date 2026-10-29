@@ -1,229 +1,497 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import { chromium, type Browser } from "playwright";
-import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol/frame-guards";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Locator, Page } from "playwright";
+import { expect, it } from "vitest";
+import type { ModelCatalogResult } from "../api/types.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { catalogModel, configAuth } from "./model-catalog-fixtures.test-support.ts";
 import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  waitForControlUiRoute,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+  expectCount,
+  expectText,
+  setupPages,
+  setupContext,
+} from "./model-setup-fixtures.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
-let artifactDir: string;
-beforeEach(() => {
-  if (recordVisuals) {
-    artifactDir = createControlUiE2eArtifactDir(
-      "model-providers-progressive",
-      process.env.OPENCLAW_UI_E2E_PROOF_DIR,
-    );
-  }
+const suite = createControlUiE2eSuite({
+  name: "Control UI progressive Model Providers loading",
+  startServerBeforeBrowser: true,
 });
-
-describeControlUiE2e("Control UI progressive Model Providers loading", () => {
-  let browser: Browser;
-  let server: ControlUiE2eServer;
-
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
-  it.each(["cold", "prewarmed", "cached"] as const)(
-    "renders provider controls before usage and cost settle (%s module)",
-    async (moduleState) => {
-      const context = await browser.newContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 1_000, width: 1_280 },
-        ...(recordVisuals
-          ? { recordVideo: { dir: artifactDir, size: { height: 1_000, width: 1_280 } } }
-          : {}),
-      });
-      const page = await context.newPage();
-      const now = Date.now();
-      const gateway = await installMockGateway(page, {
-        models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true }],
-        heldMethods:
-          moduleState === "cached"
-            ? []
-            : [
-                "usage.status",
-                "sessions.usage",
-                ...(moduleState === "cold" ? ["models.authStatus"] : []),
-              ],
-        methodResponses: {
-          "config.get": {
-            config: { agents: { defaults: { model: "openai/gpt-5.5" } } },
-            sourceConfig: {},
-            hash: "progressive-model-providers",
-            issues: [],
-            raw: "{}",
-            valid: true,
+const withPage = setupPages(suite, setupContext);
+const snapshot = (config: object, hash: string) => ({
+  config,
+  sourceConfig: config,
+  hash,
+  raw: JSON.stringify(config),
+  valid: true,
+});
+const model = (id: string, name: string, provider = "fixture") => catalogModel(provider, id, name);
+const defaultsConfig = (modelRef: string) => ({ agents: { defaults: { model: modelRef } } });
+const option = (picker: Locator, value: string) =>
+  picker.locator(`[role="option"][data-value="${value}"]`);
+function defaultPicker(page: Page) {
+  const defaults = page.locator(".model-providers__defaults");
+  const picker = defaults.locator("openclaw-select-picker").first();
+  return { defaults, picker, trigger: picker.locator(".picker-select__trigger") };
+}
+suite.define(() => {
+  it.each(["fresh", "populated", "empty"] as const)(
+    "adopts partial provider inventory on the Models route (%s cache)",
+    async (cacheState) => {
+      await withPage(async ({ page }) => {
+        const initialConfig = defaultsConfig("healthy/anchor");
+        const savedConfig = defaultsConfig("healthy/current");
+        const partial: ModelCatalogResult = {
+          models:
+            cacheState === "empty"
+              ? []
+              : [
+                  model("current", "Healthy current", "healthy"),
+                  model("returned", "Returned sibling", "broken"),
+                ],
+          refreshFailed: true,
+          providerOutcomes: [
+            { provider: "healthy", status: "ready" },
+            { provider: "broken", status: "unavailable" },
+          ],
+          defaultModels: {
+            automaticUtilityModel: cacheState === "empty" ? null : "healthy/current",
           },
-          "models.authStatus": {
-            ts: now,
-            providers: [
-              {
-                provider: "openai",
-                displayName: "OpenAI",
-                status: "static",
-                profiles: [],
-                apiKey: { source: "env", envVar: "OPENAI_API_KEY" },
-              },
-            ],
-          },
-          "usage.status": {
-            updatedAt: now,
-            providers: [{ provider: "openai", displayName: "OpenAI", plan: "Pro", windows: [] }],
-          },
-          "sessions.usage": {
-            aggregates: {
-              byProvider: [
-                {
-                  provider: "openai",
-                  count: 1,
-                  totals: { totalTokens: 100, totalCost: 1.25 },
-                },
-              ],
+          pendingProviders: [],
+        };
+        const initialCatalog: ModelCatalogResult =
+          cacheState === "fresh"
+            ? partial
+            : {
+                models: [
+                  model("retired", "Retired healthy", "healthy"),
+                  model("retired", "Retired sibling", "broken"),
+                ],
+                defaultModels: { automaticUtilityModel: "healthy/retired" },
+              };
+        const gateway = await installMockGateway(page, {
+          defaultAgentId: "main",
+          models: initialCatalog.models,
+          methodResponses: {
+            "config.get": snapshot(initialConfig, "initial"),
+            "config.patch": { ok: true, config: savedConfig, hash: "saved" },
+            "models.list": initialCatalog,
+            "models.authStatus": {
+              ts: 1,
+              providers: ["healthy", "broken"].map((provider) => configAuth(provider)),
             },
           },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+        await waitForControlUiRoute(page, { routeId: "model-providers" });
+        const settings = page.locator("openclaw-model-providers-page");
+        const { defaults, picker, trigger } = defaultPicker(page);
+        await trigger.click();
+        if (cacheState !== "fresh") {
+          await option(picker, "healthy/retired").waitFor();
+          await gateway.setMethodResponse("models.list", partial);
+          await gateway.emitGatewayEvent("chat.metadata.changed", {});
+        }
+        // Provider details explain the gap; catalog feedback keeps discovery retryable.
+        await expect
+          .poll(() =>
+            settings.locator('[data-provider-id="broken"] .model-providers__head').textContent(),
+          )
+          .toContain("Models unavailable");
+        const catalogWarning = settings.locator('.model-providers__catalog-progress[role="alert"]');
+        await catalogWarning.waitFor({ state: "visible" });
+        expect(
+          await catalogWarning.getByRole("button", { name: "Retry", exact: true }).isVisible(),
+        ).toBe(true);
+        expect(
+          await settings
+            .locator('[data-provider-id="healthy"] .model-providers__head')
+            .textContent(),
+        ).not.toContain("Models unavailable");
+        expect(await trigger.getAttribute("aria-expanded")).toBe("true");
+        await expectCount(option(picker, "healthy/retired"), 0);
+        expect(await option(picker, "broken/retired").count()).toBe(0);
+        const utility = defaults.locator("#model-providers-utility-model");
+        if (cacheState === "empty") {
+          expect(await option(picker, "healthy/current").count()).toBe(0);
+          expect(await utility.textContent()).not.toContain("Retired healthy");
+          await trigger.click();
+        } else {
+          const current = option(picker, "healthy/current");
+          await current.waitFor({ state: "visible" });
+          expect(await current.getAttribute("aria-disabled")).not.toBe("true");
+          expect(await option(picker, "broken/returned").isVisible()).toBe(true);
+          expect(await utility.textContent()).toContain("Auto · Healthy current");
+          await gateway.setMethodResponse("config.get", snapshot(savedConfig, "saved"));
+          await gateway.deferNext("config.patch");
+          await current.click();
+          await gateway.waitForRequest("config.patch");
+          await expect.poll(() => trigger.isEnabled()).toBe(false);
+          await gateway.resolveDeferred("config.patch");
+          await expect.poll(() => trigger.isEnabled()).toBe(true);
+          expect(await trigger.textContent()).toContain("Healthy current");
+          expect(await defaults.getByText("Defaults saved.", { exact: true }).count()).toBe(0);
+        }
+        const recovered: ModelCatalogResult = {
+          models: [
+            model("recovered", "Healthy recovered", "healthy"),
+            model("recovered", "Sibling recovered", "broken"),
+          ],
+          providerOutcomes: [
+            { provider: "healthy", status: "ready" },
+            { provider: "broken", status: "ready" },
+          ],
+          defaultModels: { automaticUtilityModel: "healthy/recovered" },
+          pendingProviders: [],
+        };
+        await gateway.setMethodResponse("models.list", recovered);
+        await gateway.deferNext("models.list", { refresh: true });
+        const refreshes = (await gateway.getRequests("models.list", { refresh: true })).length;
+        // Provider access refresh retries discovery for the failing provider.
+        await settings.getByRole("button", { name: "Refresh", exact: true }).click();
+        await gateway.waitForRequest("models.list", { after: refreshes, match: { refresh: true } });
+        await trigger.click();
+        await gateway.resolveDeferred("models.list", recovered);
+        await picker
+          .locator('[role="option"][data-value="healthy/recovered"]')
+          .waitFor({ state: "visible" });
+        expect(await trigger.getAttribute("aria-expanded")).toBe("true");
+        expect(
+          await settings
+            .locator('[data-provider-id="broken"] .model-providers__head')
+            .textContent(),
+        ).not.toContain("Models unavailable");
+        expect(await utility.textContent()).toContain("Auto · Healthy recovered");
+      });
+    },
+  );
+
+  it("keeps Models defaults unavailable after a replacement connection fails to read config", async () => {
+    await withPage(async ({ page }) => {
+      const previous = defaultsConfig("fixture/previous");
+      const current = defaultsConfig("fixture/current");
+      const previousModel = model("previous", "Previous connection model");
+      const currentModels = [model("current", "Current connection model")];
+      const gateway = await installMockGateway(page, {
+        connectCapabilities: [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT],
+        defaultAgentId: "main",
+        models: [previousModel],
+        methodResponses: {
+          "models.list": { models: [previousModel] },
+          "config.get": snapshot(previous, "previous-settings"),
+          "models.authStatus": { ts: 1, providers: [] },
         },
       });
+      await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+      await waitForControlUiRoute(page, { routeId: "model-providers" });
+      const { defaults, picker, trigger } = defaultPicker(page);
+      await expect.poll(() => pickerValue(picker)).toBe("fixture/previous");
+      await expect.poll(() => trigger.isEnabled()).toBe(true);
 
-      try {
-        const previousLoads = moduleState === "cached" ? 1 : 0;
-        let previousConfigLoads = 0;
-        if (moduleState === "cached") {
-          await page.goto(`${server.baseUrl}settings/appearance`);
+      const configReads = (await gateway.getRequests("config.get")).length;
+      await gateway.deferNext("config.get");
+      await gateway.setMethodResponse("config.get", {
+        __mockError: { code: "UNAVAILABLE", message: "Current config is unavailable." },
+      });
+      await gateway.setMethodResponse("models.list", {
+        models: currentModels,
+        defaultModels: { automaticUtilityModel: "fixture/current" },
+      });
+      await evaluateControlUiContext(page, (application) => {
+        application.gateway.connect();
+      });
+      await gateway.waitForRequest("config.get", { after: configReads });
+      await gateway.emitGatewayEvent("models.snapshot", {
+        target: {},
+        scope: { agentId: "main" },
+        catalog: {
+          models: currentModels,
+          defaultModels: { automaticUtilityModel: "fixture/current" },
+        },
+      });
+      await gateway.rejectDeferred("config.get", { message: "Current config is unavailable." });
+      await expect
+        .poll(() =>
+          evaluateControlUiContext(
+            page,
+            (application) => application.runtimeConfig.state.lastError,
+          ),
+        )
+        .toContain("Current config is unavailable.");
+      await trigger.click();
+      const currentOption = option(picker, "fixture/current");
+      expect(await currentOption.getAttribute("aria-disabled")).toBe("true");
+      await currentOption.click({ force: true });
+      await trigger.click();
+      expect(await pickerValue(picker)).toBe("");
+      expect(await defaults.locator("#model-providers-utility-model").textContent()).toContain(
+        "Auto · Current connection model",
+      );
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      await gateway.setMethodResponse("config.get", snapshot(current, "current-settings"));
+      await page.locator(".model-providers__refresh-button").click();
+      await expect.poll(() => trigger.isEnabled()).toBe(true);
+      await expect.poll(() => pickerValue(picker)).toBe("fixture/current");
+      await trigger.click();
+      expect(await option(picker, "fixture/previous").count()).toBe(0);
+    });
+  });
+
+  it("unlocks Models editing when Refresh supersedes the initial config read", async () => {
+    await withPage(async ({ page }) => {
+      const config = defaultsConfig("fixture/current");
+      const models = [model("current", "Current model")];
+      const gateway = await installMockGateway(page, {
+        defaultAgentId: "main",
+        models,
+        heldMethods: ["config.get"],
+        methodResponses: {
+          "models.list": { models },
+          "models.authStatus": { ts: 1, providers: [] },
+          "config.get": snapshot(config, "current-settings"),
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+      await waitForControlUiRoute(page, { routeId: "model-providers" });
+      await gateway.waitForRequest("config.get");
+      const { picker, trigger } = defaultPicker(page);
+      await trigger.click();
+      const currentOption = option(picker, "fixture/current");
+      expect(await currentOption.getAttribute("aria-disabled")).toBe("true");
+      await currentOption.click({ force: true });
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      await trigger.click();
+      const configReads = (await gateway.getRequests("config.get")).length;
+      await page.locator(".model-providers__refresh-button").click();
+      await gateway.waitForRequest("config.get", { after: configReads });
+      await gateway.resolveDeferred("config.get");
+      await expectText(trigger, "Current model");
+      await expect
+        .poll(() => page.locator(".model-providers__refresh-button").isEnabled())
+        .toBe(true);
+      await expect.poll(() => trigger.isEnabled()).toBe(true);
+      await trigger.click();
+      await expect.poll(() => option(picker, "fixture/current").isVisible()).toBe(true);
+    });
+  });
+
+  it.each(["snapshot", "ordinary"] as const)(
+    "opens the Models route from %s catalog publication and refreshes after overlapping reads",
+    async (publicationKind) => {
+      await withPage(async ({ page }) => {
+        const prepared = model("prepared", "Prepared model");
+        const older = { ...prepared, id: "older", name: "Older model" };
+        const added = { ...prepared, id: "added", name: "New model" };
+        const gateway = await installMockGateway(page, {
+          ...(publicationKind === "snapshot"
+            ? { connectCapabilities: [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT] }
+            : {}),
+          defaultAgentId: "main",
+          models: [older],
+          heldMethods: ["models.list", "models.authStatus", "usage.status"],
+          methodResponses: {
+            "config.get": {
+              config: defaultsConfig("fixture/prepared"),
+              hash: "prepared-settings-model",
+              valid: true,
+            },
+            "models.authStatus": { ts: 1, providers: [] },
+          },
+        });
+        if (publicationKind === "snapshot") {
+          await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+        } else {
+          await page.goto(`${suite.server.baseUrl}settings/appearance`);
           await waitForControlUiRoute(page, { routeId: "appearance" });
           await page.locator('a[href="/settings/model-providers"]').first().click();
-          await waitForControlUiRoute(page, { routeId: "model-providers" });
-          await expect
-            .poll(() => page.locator('[data-provider-id="openai"]').textContent())
-            .toContain("$1.25");
-          await page.locator('a[href="/settings/appearance"]').first().click();
-          await waitForControlUiRoute(page, { routeId: "appearance" });
-          await gateway.deferNext("usage.status");
-          await gateway.deferNext("sessions.usage");
         }
-        if (moduleState !== "cold") {
-          if (moduleState === "prewarmed") {
-            await page.goto(`${server.baseUrl}settings/appearance`);
-          }
-          await waitForControlUiRoute(page, { routeId: "appearance" });
-          // Hold only the route's core request: a competing page load must not
-          // share this gate and conceal the duplicate work.
-          await gateway.deferNext("config.get");
-          previousConfigLoads = (await gateway.getRequests("config.get")).length;
-          await page.evaluate(async () => {
-            const app = document.querySelector<
-              HTMLElement & { runtime: { router: ApplicationRouter } }
-            >("openclaw-app");
-            const route = app?.runtime.router.getRoute("model-providers");
-            if (!route) {
-              throw new Error("Models route is unavailable");
-            }
-            await route.component();
-          });
-          await page.locator('a[href="/settings/model-providers"]').first().click();
-        } else {
-          expect((await page.goto(`${server.baseUrl}settings/model-providers`))?.status()).toBe(
-            200,
+        // Appearance can start a prepared-only read before navigation. Release the
+        // held catalog only after the Models page has admitted its own projection.
+        const routeCatalogRequests = async () =>
+          (await gateway.getRequests("models.list")).filter(
+            (request) => asNullableRecord(request.params)?.preparedOnly !== true,
           );
-        }
-        if (moduleState === "cold") {
-          await gateway.waitForRequest("models.authStatus");
+        await expect.poll(async () => (await routeCatalogRequests()).length).toBe(1);
+        const publication = {
+          target: {},
+          scope: { agentId: "main" },
+          catalog: {
+            models: [prepared],
+            defaultModels: { automaticUtilityModel: "fixture/prepared" },
+          },
+        };
+        if (publicationKind === "snapshot") {
+          await gateway.emitGatewayEvent("models.snapshot", publication);
         } else {
-          await expect
-            .poll(async () => (await gateway.getRequests("config.get")).length)
-            .toBeGreaterThan(previousConfigLoads);
+          await gateway.resolveDeferred("models.list", publication.catalog);
         }
-        await page.locator("openclaw-model-providers-page").waitFor();
-        if (moduleState === "cached") {
-          await expect
-            .poll(() => page.locator('[data-provider-id="openai"]').textContent())
-            .toContain("Credentials configured");
-          await expect
-            .poll(() => page.locator('[data-provider-id="openai"]').textContent())
-            .toContain("Loading");
-        }
-        if (recordVisuals) {
-          await writeFile(
-            path.join(artifactDir, "route-pending.png"),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-              page.locator("openclaw-model-providers-page"),
-            ]),
-          );
-        }
-        expect(await gateway.getRequests("usage.status")).toHaveLength(previousLoads);
-        expect(await gateway.getRequests("sessions.usage")).toHaveLength(previousLoads);
-        await gateway.resolveDeferred(moduleState === "cold" ? "models.authStatus" : "config.get");
+        const { picker, trigger } = defaultPicker(page);
+        await expect.poll(() => trigger.isEnabled()).toBe(true);
+        await trigger.click();
+        const preparedRow = option(picker, "fixture/prepared");
+        await expect.poll(() => preparedRow.isVisible()).toBe(true);
+        await expectText(preparedRow, "Prepared model");
+        expect(await preparedRow.isEnabled()).toBe(true);
+        expect(await routeCatalogRequests()).toHaveLength(1);
+
+        await gateway.resolveDeferred("models.authStatus");
         await waitForControlUiRoute(page, { routeId: "model-providers" });
-        await gateway.waitForRequest("usage.status");
-        await gateway.waitForRequest("sessions.usage");
-        const provider = page.locator('[data-provider-id="openai"]');
-        await provider.waitFor();
-        await expect.poll(async () => provider.textContent()).toContain("Credentials configured");
-        await expect.poll(async () => provider.textContent()).toContain("Loading");
-        expect(await gateway.getRequests("usage.status")).toHaveLength(previousLoads + 1);
-        expect(await gateway.getRequests("sessions.usage")).toHaveLength(previousLoads + 1);
-        if (recordVisuals) {
-          await writeFile(
-            path.join(artifactDir, "before.png"),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [provider]),
-          );
-        }
+        expect(await trigger.getAttribute("aria-expanded")).toBe("true");
 
-        await gateway.resolveDeferred("usage.status");
-        await expect.poll(async () => provider.textContent()).toContain("Pro");
-        expect(await provider.textContent()).not.toContain("$1.25");
-        if (recordVisuals) {
-          await writeFile(
-            path.join(artifactDir, "usage-ready.png"),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [provider]),
-          );
+        if (publicationKind === "snapshot") {
+          await gateway.resolveDeferred("models.list", { models: [older] });
         }
+        await expect.poll(() => preparedRow.isVisible()).toBe(true);
 
-        await gateway.resolveDeferred("sessions.usage");
-        await expect.poll(async () => provider.textContent()).toContain("$1.25");
-        expect(await gateway.getRequests("usage.status")).toHaveLength(previousLoads + 1);
-        expect(await gateway.getRequests("sessions.usage")).toHaveLength(previousLoads + 1);
-        expect(await page.locator('[data-provider-id="unknown-provider"]').count()).toBe(0);
-        if (recordVisuals) {
-          await writeFile(
-            path.join(artifactDir, "after.png"),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [provider]),
-          );
+        const beforeRefresh = await gateway.deferNext("models.list", { refresh: true });
+        await page.locator(".model-providers__refresh-button").click();
+        const refreshed = await gateway.waitForRequest("models.list", {
+          after: beforeRefresh,
+          match: { refresh: true },
+        });
+        expect(refreshed.params).toMatchObject({ agentId: "main", refresh: true });
+        await gateway.resolveDeferred("models.list", {
+          models: [prepared, added],
+          defaultModels: { automaticUtilityModel: "fixture/added" },
+        });
+        if ((await trigger.getAttribute("aria-expanded")) !== "true") {
+          await trigger.click();
         }
-      } finally {
-        if (recordVisuals) {
-          await writeFile(
-            path.join(artifactDir, "final.png"),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-              page.locator("openclaw-model-providers-page"),
-            ]),
-          );
-        }
-        await context.close();
-      }
+        await expect.poll(() => option(picker, "fixture/added").isVisible()).toBe(true);
+        expect(await picker.locator('[data-value="fixture/older"]').count()).toBe(0);
+        expect(await trigger.getAttribute("aria-expanded")).toBe("true");
+      });
+    },
+  );
+
+  it.each(["cold", "prewarmed", "cached"] as const)(
+    "renders provider controls before provider usage settles (%s module)",
+    async (moduleState) => {
+      await withPage(
+        async ({ page }) => {
+          const now = Date.now();
+          const gateway = await installMockGateway(page, {
+            models: [model("gpt-5.5", "GPT-5.5", "openai")],
+            heldMethods:
+              moduleState === "cached"
+                ? []
+                : ["usage.status", ...(moduleState === "cold" ? ["models.authStatus"] : [])],
+            methodResponses: {
+              "config.get": {
+                config: defaultsConfig("openai/gpt-5.5"),
+                sourceConfig: {},
+                hash: "progressive-model-providers",
+                issues: [],
+                raw: "{}",
+                valid: true,
+              },
+              "models.authStatus": {
+                ts: now,
+                providers: [
+                  {
+                    provider: "openai",
+                    displayName: "OpenAI",
+                    status: "static",
+                    profiles: [],
+                    apiKey: { source: "env", envVar: "OPENAI_API_KEY" },
+                  },
+                ],
+              },
+              "usage.status": {
+                updatedAt: now,
+                providers: [
+                  { provider: "openai", displayName: "OpenAI", plan: "Pro", windows: [] },
+                ],
+              },
+              "sessions.usage": {
+                aggregates: {
+                  byProvider: [
+                    {
+                      provider: "openai",
+                      count: 1,
+                      totals: { totalTokens: 100, totalCost: 1.25 },
+                    },
+                  ],
+                },
+              },
+            },
+          });
+
+          const previousLoads = moduleState === "cached" ? 1 : 0;
+          let previousAuthLoads = 0;
+          if (moduleState === "cached") {
+            await page.goto(`${suite.server.baseUrl}settings/appearance`);
+            await waitForControlUiRoute(page, { routeId: "appearance" });
+            await page.locator('a[href="/settings/model-providers"]').first().click();
+            await waitForControlUiRoute(page, { routeId: "model-providers" });
+            await expectText(
+              page.locator('[data-provider-id="openai"] .provider-row__plan'),
+              "Pro",
+            );
+            await page.locator('a[href="/settings/appearance"]').first().click();
+            await waitForControlUiRoute(page, { routeId: "appearance" });
+            await gateway.deferNext("usage.status");
+          }
+          if (moduleState !== "cold") {
+            if (moduleState === "prewarmed") {
+              await page.goto(`${suite.server.baseUrl}settings/appearance`);
+            }
+            await waitForControlUiRoute(page, { routeId: "appearance" });
+            await gateway.deferNext("models.authStatus");
+            previousAuthLoads = (await gateway.getRequests("models.authStatus")).length;
+            if (moduleState === "cached") {
+              await gateway.emitGatewayEvent("chat.metadata.changed", {});
+            }
+            await evaluateControlUiContext(page, async (application) => {
+              const route = (application.router as ApplicationRouter).getRoute("model-providers");
+              if (!route) {
+                throw new Error("Models route is unavailable");
+              }
+              await route.component();
+            });
+            await page.locator('a[href="/settings/model-providers"]').first().click();
+          } else {
+            expect(
+              (await page.goto(`${suite.server.baseUrl}settings/model-providers`))?.status(),
+            ).toBe(200);
+          }
+          if (moduleState === "cold") {
+            await gateway.waitForRequest("models.authStatus");
+          } else {
+            await expect
+              .poll(async () => (await gateway.getRequests("models.authStatus")).length)
+              .toBeGreaterThan(previousAuthLoads);
+          }
+          await page.locator("openclaw-model-providers-page").waitFor();
+          if (moduleState === "cached") {
+            await expectText(page.locator('[data-provider-id="openai"]'), "Credentials configured");
+          }
+          expect(await gateway.getRequests("usage.status")).toHaveLength(previousLoads);
+          expect(await gateway.getRequests("sessions.usage")).toHaveLength(0);
+          await gateway.resolveDeferred("models.authStatus");
+          await waitForControlUiRoute(page, { routeId: "model-providers" });
+          await gateway.waitForRequest("usage.status");
+          const provider = page.locator('[data-provider-id="openai"]');
+          await provider.waitFor();
+          await expectText(provider, "Credentials configured");
+          expect(await provider.locator(".provider-row__plan").count()).toBe(0);
+          expect(await gateway.getRequests("usage.status")).toHaveLength(previousLoads + 1);
+          expect(await gateway.getRequests("sessions.usage")).toHaveLength(0);
+
+          await gateway.resolveDeferred("usage.status");
+          await expectText(provider.locator(".provider-row__plan"), "Pro");
+          expect(await provider.textContent()).not.toContain("$1.25");
+          expect(await gateway.getRequests("usage.status")).toHaveLength(previousLoads + 1);
+          expect(await gateway.getRequests("sessions.usage")).toHaveLength(0);
+          expect(await page.locator('[data-provider-id="unknown-provider"]').count()).toBe(0);
+        },
+        {
+          viewport: { height: 1_000, width: 1_280 },
+        },
+      );
     },
   );
 });

@@ -1,4 +1,6 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { parseConfigPathArrayIndex } from "./path-array-index.js";
 
 export type ConcreteConfigPathSegment = string | number;
@@ -9,77 +11,28 @@ export type ParsedConcreteConfigPath = {
 
 function parseQuotedBracketPathSegment(value: string): unknown {
   const quote = value.startsWith('"') ? '"' : "'";
-  if (quote === '"') {
-    try {
-      return JSON.parse(value) as unknown;
-    } catch {
-      // Quoted config paths also accept the JSON5 string escapes used by shipped CLI paths.
-    }
-  }
   if (!value.endsWith(quote)) {
     throw new SyntaxError("Unterminated quoted path segment");
   }
 
-  let normalized = '"';
-  for (let index = 1; index < value.length - 1; index += 1) {
-    const character = value[index];
-    if (character === quote) {
+  // Retain the path grammar's control-character rejection and silent line separators.
+  const normalized = value.replace(/\\(?:\r\n|[\s\S])|[\s\S]/g, (token, index: number) => {
+    if (token.startsWith("\\")) {
+      const escaped = token[1];
+      if (escaped && escaped.charCodeAt(0) < 0x20 && escaped !== "\r" && escaped !== "\n") {
+        throw new SyntaxError("Invalid escaped control character in path segment");
+      }
+      return token;
+    }
+    if (token === quote && index !== 0 && index !== value.length - 1) {
       throw new SyntaxError("Unexpected quote in path segment");
     }
-    if (character === '"') {
-      normalized += '\\"';
-      continue;
+    if (token.charCodeAt(0) < 0x20) {
+      throw new SyntaxError("Unescaped control character in path segment");
     }
-    if (character === "\\") {
-      const escaped = value[index + 1];
-      if (escaped === undefined || index + 1 >= value.length - 1) {
-        throw new SyntaxError("Unterminated escape in path segment");
-      }
-      index += 1;
-      if (escaped === "\n" || escaped === "\u2028" || escaped === "\u2029") {
-        continue;
-      }
-      if (escaped === "\r") {
-        if (value[index + 1] === "\n") {
-          index += 1;
-        }
-        continue;
-      }
-      if (escaped === "x") {
-        const hex = value.slice(index + 1, index + 3);
-        if (!/^[\da-f]{2}$/i.test(hex)) {
-          throw new SyntaxError("Invalid hexadecimal escape in path segment");
-        }
-        normalized += `\\u00${hex}`;
-        index += 2;
-        continue;
-      }
-      if (escaped === "0") {
-        if (/\d/.test(value[index + 1] ?? "")) {
-          throw new SyntaxError("Invalid numeric escape in path segment");
-        }
-        normalized += "\\u0000";
-        continue;
-      }
-      if (escaped === "v") {
-        normalized += "\\u000b";
-        continue;
-      }
-      if (/[1-9]/.test(escaped)) {
-        throw new SyntaxError("Invalid numeric escape in path segment");
-      }
-      if (escaped === "'") {
-        normalized += "'";
-      } else if ('"\\/bfnrtu'.includes(escaped)) {
-        normalized += `\\${escaped}`;
-      } else {
-        normalized += escaped;
-      }
-      continue;
-    }
-    normalized += character;
-  }
-  return JSON.parse(`${normalized}"`) as unknown;
+    return token === "\u2028" ? "\\u2028" : token === "\u2029" ? "\\u2029" : token;
+  });
+  return parseJsonWithJson5Fallback(normalized);
 }
 
 function parseBracketPathSegment(raw: string, fullPath: string): ConcreteConfigPathSegment {
@@ -129,8 +82,8 @@ function findBracketPathClose(path: string, open: number): number {
   return -1;
 }
 
-/** Retains quoted numeric-key provenance alongside the public concrete path tokens. */
-export function parseConcreteConfigPathWithProvenance(raw: string): ParsedConcreteConfigPath {
+/** Reads diagnostic path identity without applying object-mutation key restrictions. */
+export function tokenizeConcreteConfigPath(raw: string): ParsedConcreteConfigPath {
   const trimmed = raw.trim();
   if (!trimmed) {
     throw new Error("Path is empty.");
@@ -178,9 +131,6 @@ export function parseConcreteConfigPathWithProvenance(raw: string): ParsedConcre
         throw new Error(`Invalid path (missing "]"): ${raw}`);
       }
       const inside = trimmed.slice(index + 1, close).trim();
-      if (!inside) {
-        throw new Error(`Invalid path (empty "[]"): ${raw}`);
-      }
       const segment = parseBracketPathSegment(inside, raw);
       if (
         typeof segment === "string" &&
@@ -207,12 +157,18 @@ export function parseConcreteConfigPathWithProvenance(raw: string): ParsedConcre
   if (current) {
     parts.push(current.trim());
   }
-  for (const segment of parts) {
+  return { tokens: parts, quotedNumericSegments };
+}
+
+/** Retains quoted numeric-key provenance while rejecting unsafe object-key segments. */
+export function parseConcreteConfigPathWithProvenance(raw: string): ParsedConcreteConfigPath {
+  const parsed = tokenizeConcreteConfigPath(raw);
+  for (const segment of parsed.tokens) {
     if (typeof segment === "string" && isBlockedObjectKey(segment)) {
       throw new Error(`Invalid path segment: ${segment}`);
     }
   }
-  return { tokens: parts, quotedNumericSegments };
+  return parsed;
 }
 
 /** Parses one concrete path while keeping explicit array brackets distinct from quoted keys. */
@@ -253,6 +209,29 @@ export function formatConcreteConfigPath(
         : undefined;
     return appendConfigPathSegment(path, concreteSegment);
   }, "");
+}
+
+/** Reads object paths, optionally restricting array keys to canonical config indexes. */
+export function readObjectPath(
+  root: unknown,
+  path: readonly string[],
+  arrayMode: "raw" | "canonical" | "bounded" = "raw",
+): unknown {
+  let current: unknown = root;
+  for (const key of path) {
+    const parent = asOptionalObjectRecord(current);
+    if (!parent) {
+      return undefined;
+    }
+    if (arrayMode !== "raw" && Array.isArray(parent)) {
+      const index = parseConfigPathArrayIndex(key);
+      if (index === undefined || (arrayMode === "bounded" && index >= parent.length)) {
+        return undefined;
+      }
+    }
+    current = parent[key];
+  }
+  return current;
 }
 
 /** Joins path segments into their dotted-path representation. */

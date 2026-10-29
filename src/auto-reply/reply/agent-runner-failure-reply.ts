@@ -5,42 +5,60 @@ import {
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
   classifyOAuthRefreshFailureError,
-  formatOAuthRefreshFailureLoginCommandMarkdown,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
-import { classifyFailoverReason } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
-import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
-import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import {
-  describeFailoverError,
+  renderAgentHarnessPreflightUserMessage,
+  renderUserFacingText,
+} from "../../agents/embedded-agent-helpers/user-facing-text.js";
+import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import {
   findCliTerminalStopError,
   findCliTimeoutError,
   isFailoverError,
+  isNonProviderRuntimeCoordinationError,
 } from "../../agents/failover-error.js";
-import { renderAssistantRequestFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
-import { classifyProviderRequestFacets } from "../../agents/failover/request-error-facets.js";
+import {
+  renderAssistantRequestFailureCopy,
+  renderRuntimeCoordinationFailureCopy,
+} from "../../agents/failover/assistant-request-failure-copy.js";
+import {
+  ContextPreparationTimeoutError,
+  findLocalWorkerTaskFailure,
+} from "../../agents/failover/local-preparation-error.js";
+import { resolveExecutionApprovalFailureMessage } from "../../agents/failover/message-patterns.js";
+import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
   renderAuthProfileFailoverCopy,
   renderBillingReplyCopy,
   renderCliTimeoutReplyCopy,
+  renderCodexAppServerFailureCopy,
   renderFailoverCodeUserCopy,
-  renderHeartbeatRunFailureCopy,
   renderMissingApiKeyReplyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
-  resolveProviderRequestFailureCopy,
   type ReplyFallbackAttempt,
 } from "../../agents/failover/user-copy.js";
 import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { isProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
 import { buildProviderAuthRecoveryHint } from "../../agents/provider-auth-recovery-hint.js";
-import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { extractErrorHttpStatus } from "../../shared/assistant-error-format.js";
-import { buildCodexLoginRecovery } from "../codex-login-recovery.js";
+import {
+  createMissingReplyNotice,
+  MISSING_REPLY_NOTICE_TEXT,
+  resolveReplyExpectation,
+  shouldDeliverMissingReplyNotice,
+  type ReplyExpectation,
+} from "../../agents/reply-completion.js";
+import {
+  collectErrorGraphCandidates,
+  formatErrorMessage,
+  readErrorCauses,
+} from "../../infra/errors.js";
+import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
+import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
+import { buildProviderLoginRecovery } from "../provider-login-recovery.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -50,34 +68,7 @@ import {
 } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
-
-export function resolveReplyFailoverFacts(error: unknown, message: string) {
-  const described = describeFailoverError(error);
-  const status = extractErrorHttpStatus(described.rawError ?? message)?.code ?? described.status;
-  const reason =
-    described.reason ??
-    classifyFailoverReason(described.rawError ?? message, { provider: described.provider });
-  const classification = reason ? ({ kind: "reason", reason } as const) : null;
-  return {
-    reason: classification?.kind === "reason" ? classification.reason : undefined,
-    code: described.code,
-    provider: described.provider,
-    model: described.model,
-    status,
-    authMode: described.authMode,
-    providerRequestError: resolveProviderRequestFailureCopy({
-      classification,
-      facet: classifyProviderRequestFacets({
-        status,
-        message: described.rawError ?? message,
-      }),
-      status,
-      technicalMessage: message,
-    }),
-  };
-}
 
 type ReplyFailoverFacts = ReturnType<typeof resolveReplyFailoverFacts>;
 
@@ -126,6 +117,8 @@ export function resolveReplyFailureSummary(params: {
             reason: params.reason,
             attempts,
             provider: failoverError?.provider,
+            code: failoverError?.code,
+            rateLimitRetriesExhausted: failoverError?.rateLimitRetriesExhausted,
             cooldownExpiry: failoverError?.soonestCooldownExpiry,
             sanitizeText: (rawText) => sanitizeUserFacingText(rawText, { errorContext: true }),
           });
@@ -144,7 +137,6 @@ function collapseRepeatedFailureDetail(message: string): string {
 }
 
 const EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS = 900;
-const AGENT_FAILED_BEFORE_REPLY_TEXT = "Agent failed before reply:";
 const PREFLIGHT_COMPACTION_FAILURE_PREFIX = "Preflight compaction required but failed:";
 
 type ExternalRunFailureReply = Pick<ReplyPayload, "text" | "presentation"> & {
@@ -168,51 +160,6 @@ export function isVerboseFailureDetailEnabled(level: VerboseLevel | undefined): 
   return level === "on" || level === "full";
 }
 
-export function resolveExternalRunFailureTextForConversation(params: {
-  text: string;
-  sessionCtx: ExternalFailureConversationContext;
-  isGenericRunnerFailure: boolean;
-  cfg?: OpenClawConfig;
-  visibleReplyDelivered?: boolean;
-}): string {
-  // Group silence must not strand an already-visible partial without its terminal failure.
-  if (params.visibleReplyDelivered || !isNonDirectConversationContext(params.sessionCtx)) {
-    return params.text;
-  }
-  if (!params.isGenericRunnerFailure && !params.text.includes(AGENT_FAILED_BEFORE_REPLY_TEXT)) {
-    return params.text;
-  }
-  const silentPolicy = resolveSilentReplyPolicy({
-    cfg: params.cfg,
-    sessionKey: params.sessionCtx.SessionKey,
-    surface: params.sessionCtx.Surface ?? params.sessionCtx.Provider,
-    conversationType: "group",
-  });
-  return silentPolicy === "disallow" ? params.text : SILENT_REPLY_TOKEN;
-}
-
-const CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE =
-  /\bcodex app-server client closed before turn completed\b/iu;
-const CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE =
-  /\bcodex app-server turn idle timed out waiting for turn\/completed\b/iu;
-const CODEX_SESSION_GENERATION_NOT_CURRENT_RE =
-  /\bcodex session generation is no longer current\b/iu;
-
-function buildCodexAppServerFailureText(message: string): string | null {
-  const normalizedMessage = collapseRepeatedFailureDetail(message);
-  if (CODEX_SESSION_GENERATION_NOT_CURRENT_RE.test(normalizedMessage)) {
-    return "⚠️ This Codex session changed before your message could run. Please send it again.";
-  }
-  if (CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE.test(normalizedMessage)) {
-    return "⚠️ Codex app-server connection closed before this turn finished. OpenClaw retried once when the stdio turn was still replay-safe; please try again if this keeps happening.";
-  }
-  if (CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE.test(normalizedMessage)) {
-    return "⚠️ Codex app-server stopped before confirming turn completion. OpenClaw did not replay the turn automatically because it may still be active; try again, or use /new if the session stays stuck.";
-  }
-  return null;
-}
-
-/** Formats the reply shown when preflight compaction fails before a run. */
 export function buildPreflightCompactionFailureText(
   message: string,
   options?: { includeDetails?: boolean },
@@ -227,11 +174,15 @@ export function buildPreflightCompactionFailureText(
   )
     .trim()
     .replace(/\s+/gu, " ");
-  const isTimeout = classifyCompactionReason(reason) === "timeout";
+  const classification = classifyCompactionReason(reason);
+  if (classification === "unshrinkable_request") {
+    return `⚠️ ${reason}`;
+  }
+  const isTimeout = classification === "timeout";
   const reasonSuffix = options?.includeDetails && reason && !isTimeout ? ` Reason: ${reason}.` : "";
   const summary = isTimeout
-    ? "⚠️ Context is too large and auto-compaction timed out before it could finish."
-    : "⚠️ Context is too large and auto-compaction could not recover this turn.";
+    ? "⚠️ This conversation is too long, and shortening it took too long."
+    : "⚠️ This conversation is too long, and OpenClaw couldn't shorten it.";
   return `${summary}${reasonSuffix} Try again, use /compact, or use /new to start a fresh session.`;
 }
 
@@ -243,23 +194,19 @@ export function buildAuthProfileFailoverFailureText(error: unknown): string | nu
     reason: error.reason,
     provider: error.provider,
     allInCooldown: error.authProfileFailure.allInCooldown,
-    causeText: error.cause ? formatErrorMessage(error.cause).trim() : undefined,
     recoveryHint: buildProviderAuthRecoveryHint({ provider: error.provider }),
   });
 }
 
-function resolveExternalRunFailureDetail(message: string): string | undefined {
+function formatForwardedExternalRunFailureText(message: string): string {
   const sanitized = message
     .trim()
     .replace(/^⚠️\s*/u, "")
     .replace(/\s+/gu, " ");
-  return sanitized.length > EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS
-    ? `${truncateUtf16Safe(sanitized, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
-    : sanitized || undefined;
-}
-
-function formatForwardedExternalRunFailureText(message: string): string {
-  const detail = resolveExternalRunFailureDetail(message);
+  const detail =
+    sanitized.length > EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS
+      ? `${truncateUtf16Safe(sanitized, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
+      : sanitized || undefined;
   return detail
     ? `⚠️ Agent failed before reply: ${detail}${/[.!?]$/u.test(detail) ? "" : "."} Please try again, or use /new to start a fresh session.`
     : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
@@ -270,7 +217,6 @@ export function buildExternalRunFailureReply(
   options?: {
     includeAuthProfileId?: boolean;
     includeDetails?: boolean;
-    isHeartbeat?: boolean;
     replayPrevented?: boolean;
     failoverFacts?: ReplyFailoverFacts;
   },
@@ -278,18 +224,51 @@ export function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
-  // A preflight refusal is host-authored and names the next step. Heartbeats run
-  // unattended in the owner's session, so they disclose it without the verbose
-  // opt-in; raw thrown detail further below stays verbose-gated.
-  if (isAgentHarnessPreflightError(error)) {
+  const buildUnclassifiedReply = (): ExternalRunFailureReply => {
     const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
     return {
-      text: options?.isHeartbeat
-        ? renderHeartbeatRunFailureCopy(resolveExternalRunFailureDetail(sanitizedMessage))
-        : options?.includeDetails
-          ? formatForwardedExternalRunFailureText(sanitizedMessage)
-          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-      isGenericRunnerFailure: !options?.isHeartbeat,
+      text: options?.includeDetails
+        ? formatForwardedExternalRunFailureText(sanitizedMessage)
+        : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isGenericRunnerFailure: true,
+    };
+  };
+  const approvalMessage = resolveExecutionApprovalFailureMessage(normalizedMessage);
+  if (approvalMessage) {
+    return { text: `⚠️ ${approvalMessage}`, isGenericRunnerFailure: false };
+  }
+  if (
+    collectErrorGraphCandidates(error, readErrorCauses).some(
+      (candidate) => candidate instanceof SkillResourceDeliveryLimitError,
+    )
+  ) {
+    return {
+      text: "⚠️ Selected skill resources exceed the 8 MiB delivery limit. Select fewer skills, then try again.",
+      isGenericRunnerFailure: false,
+    };
+  }
+  // A preflight refusal is host-authored and names the next step;
+  // raw thrown detail further below stays verbose-gated.
+  if (isAgentHarnessPreflightError(error)) {
+    const userMessage = renderAgentHarnessPreflightUserMessage(error);
+    if (userMessage !== undefined) {
+      return {
+        text: userMessage,
+        isGenericRunnerFailure: false,
+      };
+    }
+    return buildUnclassifiedReply();
+  }
+  const localFailure = findLocalWorkerTaskFailure(error);
+  if (localFailure) {
+    return {
+      text:
+        localFailure.code === "overloaded"
+          ? "OpenClaw's local workers are at capacity. Check the conversation for completed work before trying again."
+          : localFailure instanceof ContextPreparationTimeoutError
+            ? localFailure.message
+            : "A local worker task timed out. Please try again.",
+      isGenericRunnerFailure: false,
     };
   }
   const failoverFacts =
@@ -299,10 +278,19 @@ export function buildExternalRunFailureReply(
   if (failoverCodeCopy) {
     return { text: failoverCodeCopy, isGenericRunnerFailure: false };
   }
+  const runtimeCoordinationFailure =
+    failoverFacts.code && isNonProviderRuntimeCoordinationError(error)
+      ? renderRuntimeCoordinationFailureCopy(failoverFacts.code)
+      : undefined;
+  if (runtimeCoordinationFailure) {
+    return { text: runtimeCoordinationFailure, isGenericRunnerFailure: false };
+  }
   const oauthRefreshFailure =
     classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
-  const codexLoginRecovery = buildCodexLoginRecovery({
-    provider: oauthRefreshFailure?.provider ?? failoverFacts.provider,
+  const providerLoginRecovery = buildProviderLoginRecovery({
+    provider: oauthRefreshFailure
+      ? (oauthRefreshFailure.provider ?? undefined)
+      : failoverFacts.provider,
     oauthReason: oauthRefreshFailure?.reason,
     failoverReason: failoverFacts.reason,
     authMode: failoverFacts.authMode,
@@ -311,17 +299,17 @@ export function buildExternalRunFailureReply(
     const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider, {
       profileId: options?.includeAuthProfileId ? oauthRefreshFailure.profileId : undefined,
     });
-    const loginCommandMarkdown = formatOAuthRefreshFailureLoginCommandMarkdown(loginCommand);
+    const loginCommandMarkdown = formatInlineCodeSpan(loginCommand);
     const providerText = oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : "";
-    const retryLoginHint = codexLoginRecovery
-      ? "send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth"
+    const retryLoginHint = providerLoginRecovery
+      ? "send `/login` from a private chat or Control UI session to choose a provider, or re-auth"
       : "re-auth";
     if (oauthRefreshFailure.reason) {
       return {
-        text: codexLoginRecovery
-          ? `⚠️ ${codexLoginRecovery.hint} You can also re-auth with ${loginCommandMarkdown} on the gateway.`
+        text: providerLoginRecovery
+          ? `⚠️ ${providerLoginRecovery.hint} You can also re-auth with ${loginCommandMarkdown} on the gateway.`
           : `⚠️ Model login expired on the gateway${providerText}. Re-auth with ${loginCommandMarkdown} in a terminal, then try again.`,
-        ...(codexLoginRecovery ? { presentation: codexLoginRecovery.presentation } : {}),
+        ...(providerLoginRecovery ? { presentation: providerLoginRecovery.presentation } : {}),
         isGenericRunnerFailure: false,
       };
     }
@@ -333,10 +321,10 @@ export function buildExternalRunFailureReply(
   const authProfileFailoverFailure = buildAuthProfileFailoverFailureText(error);
   if (authProfileFailoverFailure) {
     return {
-      text: codexLoginRecovery
-        ? `${codexLoginRecovery.hint}\n\n${authProfileFailoverFailure}`
+      text: providerLoginRecovery
+        ? `${providerLoginRecovery.hint}\n\n${authProfileFailoverFailure}`
         : authProfileFailoverFailure,
-      ...(codexLoginRecovery ? { presentation: codexLoginRecovery.presentation } : {}),
+      ...(providerLoginRecovery ? { presentation: providerLoginRecovery.presentation } : {}),
       isGenericRunnerFailure: false,
     };
   }
@@ -357,6 +345,17 @@ export function buildExternalRunFailureReply(
   if (cliBackendTimeoutFailure) {
     return { text: cliBackendTimeoutFailure, isGenericRunnerFailure: false };
   }
+  if (isFailoverError(error) && error.rateLimitRetriesExhausted !== undefined) {
+    const summary = resolveReplyFailureSummary({
+      error,
+      message,
+      reason: failoverFacts.reason,
+      attempts: error.attempts,
+    });
+    if (summary) {
+      return { text: summary.text, isGenericRunnerFailure: false };
+    }
+  }
   const providerRequestError = failoverFacts.providerRequestError;
   if (providerRequestError) {
     // Curated facet copy carries recovery guidance (quota/billing ambiguity,
@@ -373,19 +372,12 @@ export function buildExternalRunFailureReply(
   if (missingApiKeyFailure) {
     return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
   }
-  if (options?.isHeartbeat) {
-    const detail = options.includeDetails
-      ? resolveExternalRunFailureDetail(
-          sanitizeUserFacingText(normalizedMessage, { errorContext: true }),
-        )
-      : undefined;
-    return { text: renderHeartbeatRunFailureCopy(detail), isGenericRunnerFailure: false };
-  }
-  const codexAppServerFailure = buildCodexAppServerFailureText(normalizedMessage);
+  const codexAppServerFailure = renderCodexAppServerFailureCopy(normalizedMessage);
   if (codexAppServerFailure) {
     return { text: codexAppServerFailure, isGenericRunnerFailure: false };
   }
-  const classifiedFailure = renderAssistantRequestFailureCopy(failoverFacts);
+  const classifiedFailure =
+    failoverFacts.requestFailureText ?? renderAssistantRequestFailureCopy(failoverFacts);
   if (classifiedFailure) {
     return { text: classifiedFailure, isGenericRunnerFailure: false };
   }
@@ -403,9 +395,7 @@ export function buildExternalRunFailureReply(
 
 export function markAgentRunFailureReplyPayload<T extends ReplyPayload>(payload: T): T {
   const marked = markReplyPayloadForSourceSuppressionDelivery(payload);
-  if (!isSilentReplyText(marked.text, SILENT_REPLY_TOKEN)) {
-    marked.isError = true;
-  }
+  marked.isError = true;
   return marked;
 }
 
@@ -416,14 +406,14 @@ export function markPostCompactionModelFailurePayload(
   return postCompactionModelFailure === true &&
     payload.isError === true &&
     isReplyPayloadTerminalContent(payload) &&
-    typeof payload.text === "string"
+    payload.text !== undefined
     ? setReplyPayloadMetadata(payload, { postCompactionModelFailure: true })
     : payload;
 }
 
 export function renderPostCompactionModelFailurePayload(payload: ReplyPayload): ReplyPayload {
   return getReplyPayloadMetadata(payload)?.postCompactionModelFailure === true &&
-    typeof payload.text === "string"
+    payload.text !== undefined
     ? copyReplyPayloadMetadata(payload, {
         ...payload,
         text: `⚠️ Context compaction succeeded, but the later model request still failed. ${payload.text.replace(/^⚠️\s*/u, "")}`,
@@ -431,71 +421,90 @@ export function renderPostCompactionModelFailurePayload(payload: ReplyPayload): 
     : payload;
 }
 
-export function buildTerminalAgentRunFailureReplyPayload(params: {
-  isHeartbeat?: boolean;
+/** Optional silence hides generic boilerplate, not guidance or the outcome of visible work. */
+export function resolveAgentRunFailureText(params: {
+  text: string;
+  replyExpectation: ReplyExpectation;
+  isGenericRunnerFailure: boolean;
   visibleReplyDelivered: boolean;
-  sessionCtx: ExternalFailureConversationContext;
-  cfg?: OpenClawConfig;
+}): string {
+  return params.replyExpectation === "optional" &&
+    params.isGenericRunnerFailure &&
+    !params.visibleReplyDelivered
+    ? ""
+    : params.text;
+}
+
+export function buildTerminalAgentRunFailureReplyPayload(params: {
+  replyExpectation: ReplyExpectation;
+  visibleReplyDelivered: boolean;
 }): ReplyPayload {
-  const text = params.isHeartbeat
-    ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
-    : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
   return markAgentRunFailureReplyPayload({
-    text: resolveExternalRunFailureTextForConversation({
+    text: resolveAgentRunFailureText({
       ...params,
-      text,
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
       isGenericRunnerFailure: true,
     }),
   });
 }
 
-export function buildEmptyInteractiveReplyPayload(params: {
-  isInteractive: boolean;
-  isHeartbeat?: boolean;
-  silentExpected?: boolean;
-  allowEmptyAssistantReplyAsSilent?: boolean;
-  hasPendingContinuation: boolean;
-  hasExplicitSilentReply: boolean;
-  hasCommittedDelivery: boolean;
-  hasIntentionalTerminalCompletion: boolean;
-  sessionCtx: ExternalFailureConversationContext;
-  cfg?: OpenClawConfig;
-}): ReplyPayload | undefined {
-  if (
-    !params.isInteractive ||
-    params.isHeartbeat === true ||
-    params.silentExpected === true ||
-    params.allowEmptyAssistantReplyAsSilent === true ||
-    params.hasPendingContinuation ||
-    params.hasExplicitSilentReply ||
-    params.hasCommittedDelivery ||
-    params.hasIntentionalTerminalCompletion
-  ) {
+/** Lifts the owned failure notice without inventing chat output for a background empty turn. */
+export async function resolveTerminalAgentRunFailurePayload(params: {
+  result: EmbeddedAgentRunResult;
+  run: Parameters<typeof shouldDeliverMissingReplyNotice>[0];
+  visibleReplyDelivered: () => Promise<boolean>;
+}): Promise<ReplyPayload | undefined> {
+  const terminalError = params.result.meta?.error;
+  const missingReplyNotice =
+    terminalError?.kind === "incomplete_turn" &&
+    terminalError.message.startsWith(MISSING_REPLY_NOTICE_TEXT);
+  const suppressMissingReplyNotice =
+    missingReplyNotice && !shouldDeliverMissingReplyNotice(params.run);
+  const ownedFailureNotice = params.result.payloads?.find(
+    (payload) =>
+      payload.isError === true &&
+      payload.isStatusNotice === true &&
+      getReplyPayloadMetadata(payload)?.assistantTranscriptOwned === true,
+  );
+  if (ownedFailureNotice) {
+    params.result.payloads = params.result.payloads?.filter(
+      (payload) => payload !== ownedFailureNotice,
+    );
+    return suppressMissingReplyNotice
+      ? undefined
+      : markAgentRunFailureReplyPayload(ownedFailureNotice);
+  }
+  if (suppressMissingReplyNotice) {
     return undefined;
   }
-  return markAgentRunFailureReplyPayload({
-    text: resolveExternalRunFailureTextForConversation({
-      text: "I finished the turn, but it did not produce a visible reply. Please try again, or start a new session if this keeps happening.",
-      sessionCtx: params.sessionCtx,
-      isGenericRunnerFailure: true,
-      cfg: params.cfg,
-    }),
+  if (missingReplyNotice) {
+    return markAgentRunFailureReplyPayload(createMissingReplyNotice(terminalError.message));
+  }
+  const replyExpectation = resolveReplyExpectation(params.run);
+  return buildTerminalAgentRunFailureReplyPayload({
+    replyExpectation,
+    visibleReplyDelivered:
+      replyExpectation === "optional" ? await params.visibleReplyDelivered() : false,
   });
 }
 
-/** Converts known agent-run failures into user-facing reply payloads. */
 export function buildKnownAgentRunFailureReplyPayload(params: {
   err: unknown;
   sessionCtx: TemplateContext;
   resolvedVerboseLevel: VerboseLevel | undefined;
-  cfg?: OpenClawConfig;
 }): ReplyPayload | undefined {
-  // Direct preflight diagnostics are not provider failures; preserve their
-  // identity for the caller's generic settlement and disclosure policy.
-  if (isAgentHarnessPreflightError(params.err)) {
-    return undefined;
-  }
+  // Preflight diagnostics are not provider failures. Only explicit public copy
+  // can bypass the caller's diagnostic disclosure policy.
   const message = formatErrorMessage(params.err);
+  if (isAgentHarnessPreflightError(params.err) || findLocalWorkerTaskFailure(params.err)) {
+    const reply = buildExternalRunFailureReply({
+      message,
+      error: params.err,
+    });
+    return reply.isGenericRunnerFailure
+      ? undefined
+      : markAgentRunFailureReplyPayload({ text: reply.text });
+  }
   const failoverFacts = resolveReplyFailoverFacts(params.err, message);
   const failureSummary = resolveReplyFailureSummary({
     error: params.err,
@@ -523,12 +532,7 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
     return undefined;
   }
   return markAgentRunFailureReplyPayload({
-    text: resolveExternalRunFailureTextForConversation({
-      text: externalRunFailureReply.text,
-      sessionCtx: params.sessionCtx,
-      isGenericRunnerFailure: false,
-      cfg: params.cfg,
-    }),
+    text: externalRunFailureReply.text,
     ...(externalRunFailureReply.presentation
       ? { presentation: externalRunFailureReply.presentation }
       : {}),

@@ -1,4 +1,3 @@
-// Defines external auth contracts for provider plugins.
 import type { AuthProfileStore, OAuthCredential } from "../agents/auth-profiles/types.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -22,8 +21,10 @@ export type ProviderResolveSyntheticAuthContext = {
 export type ProviderSyntheticAuthResult = {
   apiKey: string;
   source: string;
-  mode: Exclude<ModelProviderAuthMode, "aws-sdk">;
+  mode: Exclude<ModelProviderAuthMode, "aws-sdk" | "none">;
   expiresAt?: number;
+  /** Native presence authorizes only this runtime, never a provider bearer request. */
+  nativeAuth?: { runtime: string; mode: "api-key" | "oauth" | "token" };
 };
 
 /** Context for resolving external provider auth profiles. */

@@ -4,21 +4,23 @@ import type {
   CliBackendLiveSessionCapability,
   CliBackendLiveSessionHandle,
 } from "../../plugins/cli-backend.types.js";
+import { formatSkillsForPromptCore } from "../../skills/loading/skill-contract.js";
+import { materializeSkill } from "../../skills/loading/skill-materializer.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { hasModelFallbackStop } from "../failover-error.js";
 import { createAgentCleanupScope } from "../run-cleanup-timeout.js";
 import {
   acceptsCliLiveSession,
-  buildCliLiveOwnerKey,
   closeCliLiveSession,
   createCliLiveSessionCapability,
+  getCliLiveSessionApprovalGrants,
   getCliLiveSessionGeneration,
   hasCliLiveSession,
   restartCliLiveSession,
 } from "./cli-live-session-registry.js";
 import { settlePreparedCliRun } from "./cli-run-settlement.js";
-import { buildCliLiveSessionFingerprint } from "./live-session-fingerprint.js";
 
 const admissions: Array<ReturnType<typeof prepareSystemAgentRunAdmission>> = [];
 const sessions = new Set<CliBackendLiveSessionHandle>();
@@ -27,14 +29,20 @@ let nextOwnerId = 0;
 async function createOwner(
   options: {
     sessionId?: string;
+    agentAccountId?: string;
+    authProfileId?: string;
     generation?: string;
     idle?: boolean;
     deferExit?: boolean;
     cleanup?: () => Promise<void>;
     systemPrompt?: string;
-    argv0?: string;
+    skillsSnapshot?: SkillSnapshot;
     capture?: { token: string; key: string };
     requiredGeneration?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    nativeLogin?: string;
+    mcpConfigHash?: string;
   } = {},
 ) {
   const index = ++nextOwnerId;
@@ -54,6 +62,16 @@ async function createOwner(
     "main",
     "registry-test",
   );
+  context.params.skillsSnapshot = options.skillsSnapshot;
+  context.params.agentAccountId = options.agentAccountId;
+  context.effectiveAuthProfileId = options.authProfileId;
+  context.preparedBackend.mcpConfigHash = options.mcpConfigHash;
+  if (options.nativeLogin) {
+    context.cliHistoryWriter = {
+      authFingerprint: options.nativeLogin,
+      bindsNativeLogin: true,
+    } as NonNullable<typeof context.cliHistoryWriter>;
+  }
   admissions.push(admission);
   context.params.admittedRunContext = await admission.admit("plugin-harness");
   const controller = new AbortController();
@@ -79,9 +97,8 @@ async function createOwner(
   const beginCapture = vi.fn();
   const capability: CliBackendLiveSessionCapability = createCliLiveSessionCapability({
     context,
-    argv: ["claude", "-p"],
-    argv0: options.argv0,
-    env: { PATH: "/usr/bin:/bin" },
+    argv: ["claude", "-p", ...(options.args ?? [])],
+    env: options.env ?? { PATH: "/usr/bin:/bin" },
     beginCapture,
     abortSignal: controller.signal,
     ...(options.cleanup ? { claimResources: () => options.cleanup } : {}),
@@ -126,6 +143,12 @@ async function createOwner(
   };
 }
 
+async function registeredOwner(options: Parameters<typeof createOwner>[0] = {}) {
+  const owner = await createOwner(options);
+  owner.register();
+  return owner;
+}
+
 afterEach(() => {
   for (const session of sessions) {
     session.close("restart");
@@ -138,77 +161,72 @@ afterEach(() => {
 });
 
 describe("generic plugin-owned live session registry", () => {
-  it("keeps owner identity deterministic and isolated across sessions", () => {
-    const owner = {
-      agentAccountId: "acct-1",
-      agentId: "agent-main",
-      authProfileId: "profile-a",
-      sessionId: "sess-1",
-      sessionKey: "key-a",
+  it.each([{ agentAccountId: "telegram-account" }, { authProfileId: "different-profile" }])(
+    "retires one conversation's conflicting process before replacement: %j",
+    async (scope) => {
+      const entered = createDeferred();
+      const held = createDeferred();
+      const original = await registeredOwner({
+        ...scope,
+        cleanup: async () => {
+          entered.resolve();
+          await held.promise;
+        },
+      });
+      getCliLiveSessionApprovalGrants(original.context)?.add("Read");
+      const next = await createOwner({ sessionId: original.sessionId });
+
+      let restarting: Promise<void> | undefined;
+      try {
+        expect(next.capability.current()).toBe(original.session);
+        expect(next.capability.fingerprint).not.toBe(original.session.fingerprint);
+        expect(getCliLiveSessionApprovalGrants(next.context)).toBeUndefined();
+        expect(() => next.capability.activate(original.session)).toThrow("admitted run");
+        restarting = next.capability.restart();
+        await entered.promise;
+        expect(() => next.register()).toThrow("cleanup has not settled");
+      } finally {
+        held.resolve();
+        await restarting;
+      }
+      next.register();
+      expect(getCliLiveSessionApprovalGrants(next.context)?.size).toBe(0);
+      expect(original.capability.current()).toBe(next.session);
+      expect(original.close).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each<[NonNullable<Parameters<typeof createOwner>[0]>, boolean]>([
+    [{}, true],
+    [{ nativeLogin: "b".repeat(64) }, false],
+    [{ nativeLogin: undefined }, false],
+    [{ systemPrompt: "Changed system policy." }, false],
+    [{ args: ["--resume", "native-session", "--effort", "max"] }, false],
+    [{ env: { PATH: "/usr/bin:/bin", CLAUDE_CODE_EFFORT_LEVEL: "max" } }, false],
+    [
+      { mcpConfigHash: "stable", args: ["--resume", "native-session", "--mcp-config", "/tmp/b"] },
+      true,
+    ],
+  ])("normalizes only transient process inputs: %j", async (overrides, equal) => {
+    const shared = {
+      systemPrompt: "Original system policy.",
+      mcpConfigHash: overrides.mcpConfigHash,
+      nativeLogin: "a".repeat(64),
     };
-
-    expect(buildCliLiveOwnerKey({ ...owner })).toBe(buildCliLiveOwnerKey(owner));
-    expect(buildCliLiveOwnerKey({ ...owner, sessionKey: "key-b" })).not.toBe(
-      buildCliLiveOwnerKey(owner),
-    );
-  });
-
-  it("keeps fresh and resumed process fingerprints identical without hiding prompt changes", () => {
-    const fresh = buildPreparedCliRunContext({ systemPrompt: "Original system policy." });
-    const resumed = buildPreparedCliRunContext({ systemPrompt: "Original system policy." });
-    const changed = buildPreparedCliRunContext({ systemPrompt: "Changed system policy." });
-    const mcpFresh = buildPreparedCliRunContext({ systemPrompt: "Original system policy." });
-    const mcpResumed = buildPreparedCliRunContext({ systemPrompt: "Original system policy." });
-    mcpFresh.preparedBackend.mcpConfigHash = "stable-mcp-config";
-    mcpResumed.preparedBackend.mcpConfigHash = "stable-mcp-config";
-    const env = { PATH: "/usr/bin:/bin" };
-    const freshFingerprint = buildCliLiveSessionFingerprint({
-      context: fresh,
-      argv: ["claude", "-p", "--session-id", "native-session"],
-      env,
+    const fresh = await createOwner({
+      ...shared,
+      args: [
+        "--session-id",
+        "native-session",
+        ...(overrides.mcpConfigHash ? ["--mcp-config", "/tmp/a"] : []),
+      ],
     });
-
-    expect(
-      buildCliLiveSessionFingerprint({
-        context: resumed,
-        argv: ["claude", "-p", "--resume", "native-session"],
-        env,
-      }),
-    ).toBe(freshFingerprint);
-    expect(
-      buildCliLiveSessionFingerprint({
-        context: changed,
-        argv: ["claude", "-p", "--resume", "native-session"],
-        env,
-      }),
-    ).not.toBe(freshFingerprint);
-    expect(
-      buildCliLiveSessionFingerprint({
-        context: resumed,
-        argv: ["claude", "-p", "--resume", "native-session", "--effort", "max"],
-        env,
-      }),
-    ).not.toBe(freshFingerprint);
-    expect(
-      buildCliLiveSessionFingerprint({
-        context: resumed,
-        argv: ["claude", "-p", "--resume", "native-session"],
-        env: { ...env, CLAUDE_CODE_EFFORT_LEVEL: "max" },
-      }),
-    ).not.toBe(freshFingerprint);
-
-    const mcpFreshFingerprint = buildCliLiveSessionFingerprint({
-      context: mcpFresh,
-      argv: ["claude", "-p", "--session-id", "native-session", "--mcp-config", "/tmp/turn-a.json"],
-      env,
+    const resumed = await createOwner({
+      ...shared,
+      args: ["--resume", "native-session"],
+      ...overrides,
     });
-    expect(
-      buildCliLiveSessionFingerprint({
-        context: mcpResumed,
-        argv: ["claude", "-p", "--resume", "native-session", "--mcp-config", "/tmp/turn-b.json"],
-        env,
-      }),
-    ).toBe(mcpFreshFingerprint);
+    expect(resumed.capability.fingerprint === fresh.capability.fingerprint).toBe(equal);
   });
 
   it("exposes only an active registered generation and never revives a removed owner", async () => {
@@ -257,8 +275,7 @@ describe("generic plugin-owned live session registry", () => {
   );
 
   it("fences caller-revoked live access while allowing its owned cleanup", async () => {
-    const owner = await createOwner();
-    owner.register();
+    const owner = await registeredOwner();
     owner.capability.activate(owner.session);
     expect(owner.capability.current()).toBe(owner.session);
     owner.revokeCaller();
@@ -271,18 +288,18 @@ describe("generic plugin-owned live session registry", () => {
     expect(owner.close).toHaveBeenCalledOnce();
   });
 
-  it.each([false, true])(
-    "rechecks caller authority after registered process cleanup (revoked=%s)",
+  it.each(["current", "caller", "signal"] as const)(
+    "rechecks authority after cross-route process cleanup (%s)",
     async (revoked) => {
       const entered = createDeferred();
       const held = createDeferred();
-      const owner = await createOwner({
+      const owner = await registeredOwner({
+        agentAccountId: "telegram-account",
         cleanup: async () => {
           entered.resolve();
           await held.promise;
         },
       });
-      owner.register();
       const restarting = await createOwner({ sessionId: owner.sessionId });
       const run = restarting.capability.restart();
       const observed = run.then(
@@ -291,15 +308,21 @@ describe("generic plugin-owned live session registry", () => {
       );
       try {
         await entered.promise;
-        if (revoked) {
+        expect(() => restarting.register()).toThrow("cleanup has not settled");
+        if (revoked === "caller") {
           restarting.revokeCaller();
+        } else if (revoked === "signal") {
+          restarting.controller.abort(new Error("turn cancelled"));
         }
-        expect(restarting.controller.signal.aborted).toBe(false);
       } finally {
         held.resolve();
       }
       expect(await observed).toEqual(
-        revoked ? new Error("caller is no longer active") : "restarted",
+        revoked === "caller"
+          ? new Error("caller is no longer active")
+          : revoked === "signal"
+            ? expect.objectContaining({ name: "AbortError" })
+            : "restarted",
       );
       expect(owner.close).toHaveBeenCalledOnce();
     },
@@ -308,8 +331,7 @@ describe("generic plugin-owned live session registry", () => {
   it.each(["retained", "registered"] as const)(
     "refuses replacement when the %s process has not exited by the cleanup deadline",
     async (ownerKind) => {
-      const owner = await createOwner({ deferExit: true });
-      owner.register();
+      const owner = await registeredOwner({ deferExit: true });
       const restarting =
         ownerKind === "retained" ? owner : await createOwner({ sessionId: owner.sessionId });
       restarting.context.params.oneShotCliRun = true;
@@ -362,8 +384,7 @@ describe("generic plugin-owned live session registry", () => {
   it("joins natural retirement that starts while restart is awaiting the previous owner", async () => {
     const held = createDeferred();
     const cleanup = vi.fn(() => held.promise);
-    const original = await createOwner({ cleanup });
-    original.register();
+    const original = await registeredOwner({ cleanup });
     const next = await createOwner({ sessionId: original.sessionId });
     let settled = false;
     const restarting = next.capability.restart().then(() => {
@@ -386,9 +407,8 @@ describe("generic plugin-owned live session registry", () => {
   it.each([false, true])(
     "rejects the same process handle under a different owner (retired=%s)",
     async (retired) => {
-      const original = await createOwner({ sessionId: "original-owner" });
+      const original = await registeredOwner({ sessionId: "original-owner" });
       const other = await createOwner({ sessionId: "different-owner" });
-      original.register();
       if (retired) {
         original.capability.remove(original.session);
       }
@@ -403,44 +423,8 @@ describe("generic plugin-owned live session registry", () => {
     },
   );
 
-  it.each([
-    {
-      change: "system prompt",
-      originalOptions: { systemPrompt: "Original system policy." },
-      changedOptions: { systemPrompt: "Changed system policy." },
-    },
-    {
-      change: "invocation name",
-      originalOptions: { argv0: "/usr/bin/cli-alias-a" },
-      changedOptions: { argv0: "/usr/bin/cli-alias-b" },
-    },
-  ])(
-    "rejects required generation reuse after $change changes without closing its only process",
-    async ({ originalOptions, changedOptions }) => {
-      const original = await createOwner({
-        sessionId: "required-changed-owner",
-        generation: "required-generation",
-        ...originalOptions,
-      });
-      original.register();
-      const changed = await createOwner({
-        sessionId: "required-changed-owner",
-        requiredGeneration: "required-generation",
-        ...changedOptions,
-      });
-
-      expect(changed.capability.fingerprint).not.toBe(original.capability.fingerprint);
-      expect(() => changed.capability.current()).toThrow(
-        expect.objectContaining({ reason: "session_expired", code: "cli_live_session_changed" }),
-      );
-      expect(original.close).not.toHaveBeenCalled();
-      expect(original.capability.current()).toBe(original.session);
-    },
-  );
-
   it("refuses plugin restart when the exact live generation is required", async () => {
-    const original = await createOwner({ generation: "required-live-process" });
-    original.register();
+    const original = await registeredOwner({ generation: "required-live-process" });
     const resumed = await createOwner({
       sessionId: original.sessionId,
       requiredGeneration: original.session.generation,
@@ -454,12 +438,59 @@ describe("generic plugin-owned live session registry", () => {
     expect(original.capability.current()).toBe(original.session);
   });
 
+  it.each([
+    ["refresh epoch with identical bytes", "known", "Before", 2, true],
+    ["body at the same path and epoch", "known", "After", 1, false],
+    ["external snapshot without a digest", "missing", "Before", 2, false],
+    ["unprepared snapshot refresh epoch", "unprepared", "Before", 2, false],
+  ] as const)(
+    "preserves required-generation skill identity after %s",
+    async (_change, identity, body, version, reusable) => {
+      const snapshot = (instructions: string, epoch: number): SkillSnapshot => {
+        const skill = materializeSkill({
+          content: `---\nname: procedure\ndescription: Review changes\n---\n# Procedure\n${instructions}\n`,
+          frontmatter: { name: "procedure", description: "Review changes" },
+          name: "procedure",
+          description: "Review changes",
+          filePath: "/workspace/skills/procedure/SKILL.md",
+          baseDir: "/workspace/skills/procedure",
+          source: "test",
+          sourceOptions: { source: "test" },
+        });
+        if (identity === "missing") {
+          skill.contentHash = undefined;
+        }
+        return {
+          prompt: formatSkillsForPromptCore([skill]),
+          skills: [{ name: skill.name }],
+          resolvedSkills: identity === "unprepared" ? undefined : [skill],
+          version: epoch,
+        };
+      };
+      const original = await registeredOwner({ skillsSnapshot: snapshot("Before", 1) });
+      const resumed = await createOwner({
+        sessionId: original.sessionId,
+        requiredGeneration: original.session.generation,
+        skillsSnapshot: snapshot(body, version),
+      });
+
+      if (reusable) {
+        expect(resumed.capability.current()).toBe(original.session);
+      } else {
+        expect(() => resumed.capability.current()).toThrow(
+          expect.objectContaining({ reason: "session_expired", code: "cli_live_session_changed" }),
+        );
+      }
+      expect(original.close).not.toHaveBeenCalled();
+      expect(original.capability.current()).toBe(original.session);
+    },
+  );
+
   it("transfers admitted MCP authority to the original private process before capture", async () => {
-    const original = await createOwner({
+    const original = await registeredOwner({
       sessionId: "captured-owner",
       capture: { token: "process-token-a", key: "capture-a" },
     });
-    original.register();
     const resumed = await createOwner({
       sessionId: "captured-owner",
       capture: { token: "turn-token-b", key: "capture-b" },
@@ -472,9 +503,9 @@ describe("generic plugin-owned live session registry", () => {
     expect(resumed.grant?.adoptProcessToken.mock.invocationCallOrder[0]).toBeLessThan(
       resumed.beginCapture.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
-    expect(Object.keys(resumed.capability)).not.toEqual(
-      expect.arrayContaining(["ownerKey", "transportToken", "captureKey"]),
-    );
+    expect(resumed.capability).not.toHaveProperty("ownerKey");
+    expect(resumed.capability).not.toHaveProperty("transportToken");
+    expect(resumed.capability).not.toHaveProperty("captureKey");
 
     resumed.capability.remove(original.session);
     resumed.capability.remove(original.session);
@@ -486,11 +517,10 @@ describe("generic plugin-owned live session registry", () => {
   it.each(["admission", "caller"] as const)(
     "fences MCP capture when %s authority closes during process transfer",
     async (authority) => {
-      const original = await createOwner({
+      const original = await registeredOwner({
         sessionId: "transfer-closed-owner",
         capture: { token: "original-process-token", key: "original-capture" },
       });
-      original.register();
       const resumed = await createOwner({
         sessionId: "transfer-closed-owner",
         capture: { token: "replacement-turn-token", key: "replacement-capture" },
@@ -513,41 +543,32 @@ describe("generic plugin-owned live session registry", () => {
     },
   );
 
-  it.each([
-    {
-      name: "a captured process cannot resume without an admitted turn grant",
-      originalCapture: { token: "captured-process-token", key: "captured-process-key" },
-      resumedCapture: undefined,
-    },
-    {
-      name: "an uncaptured process cannot inherit a newly admitted turn grant",
-      originalCapture: undefined,
-      resumedCapture: { token: "new-turn-token", key: "new-turn-key" },
-    },
-  ])("$name", async ({ originalCapture, resumedCapture }) => {
-    const sessionId = "changed-capture-topology-owner";
-    const original = await createOwner({
-      sessionId,
-      ...(originalCapture ? { capture: originalCapture } : {}),
-    });
-    original.register();
-    const resumed = await createOwner({
-      sessionId,
-      ...(resumedCapture ? { capture: resumedCapture } : {}),
-    });
+  it.each([true, false])(
+    "rejects changed capture topology (original captured=%s)",
+    async (captured) => {
+      const sessionId = "changed-capture-topology-owner";
+      const capture = { token: "process-token", key: "process-key" };
+      const original = await registeredOwner({
+        sessionId,
+        ...(captured ? { capture } : {}),
+      });
+      const resumed = await createOwner({
+        sessionId,
+        ...(captured ? {} : { capture }),
+      });
 
-    expect(() => resumed.capability.activate(original.session)).toThrow("MCP topology changed");
-    expect(resumed.beginCapture).not.toHaveBeenCalled();
-    if (resumed.grant) {
-      expect(resumed.grant.adoptProcessToken).not.toHaveBeenCalled();
-    }
-    expect(original.capability.current()).toBe(original.session);
-  });
+      expect(() => resumed.capability.activate(original.session)).toThrow("MCP topology changed");
+      expect(resumed.beginCapture).not.toHaveBeenCalled();
+      if (resumed.grant) {
+        expect(resumed.grant.adoptProcessToken).not.toHaveBeenCalled();
+      }
+      expect(original.capability.current()).toBe(original.session);
+    },
+  );
 
   it("keeps claimed native skill resources until subprocess exit and cleans exactly once", async () => {
     const cleanup = vi.fn(async () => {});
-    const owner = await createOwner({ deferExit: true, cleanup });
-    owner.register();
+    const owner = await registeredOwner({ deferExit: true, cleanup });
 
     const closing = closeCliLiveSession(owner.context, "restart");
     owner.capability.remove(owner.session);
@@ -573,8 +594,7 @@ describe("generic plugin-owned live session registry", () => {
           throw failure;
         }
       });
-      const original = await createOwner({ cleanup });
-      original.register();
+      const original = await registeredOwner({ cleanup });
       original.capability.remove(original.session);
       original.exited.resolve();
       const successor = await createOwner({ sessionId: original.sessionId });
@@ -635,6 +655,7 @@ describe("generic plugin-owned live session registry", () => {
       payloads: [{ text: "original delivery" }],
       meta: { durationMs: 1 },
       didSendViaMessagingTool: outcome === "delivered-cleanup-error",
+      didDeliverSourceReplyViaMessageTool: outcome === "delivered-cleanup-error",
     };
     const run = cleanupScope.run(() =>
       settlePreparedCliRun({
@@ -678,8 +699,7 @@ describe("generic plugin-owned live session registry", () => {
   });
 
   it("does not let a previous turn close a process activated by its successor", async () => {
-    const original = await createOwner({ sessionId: "transferred-close" });
-    original.register();
+    const original = await registeredOwner({ sessionId: "transferred-close" });
     const successor = await createOwner({ sessionId: "transferred-close" });
     successor.capability.activate(original.session);
     await closeCliLiveSession(original.context, "restart");
@@ -691,9 +711,7 @@ describe("generic plugin-owned live session registry", () => {
   it("evicts an idle owner at capacity and fails closed when every owner is active", async () => {
     const owners = [];
     for (let index = 0; index < 16; index += 1) {
-      const owner = await createOwner({ idle: index === 0 });
-      owner.register();
-      owners.push(owner);
+      owners.push(await registeredOwner({ idle: index === 0 }));
     }
 
     const replacement = await createOwner();

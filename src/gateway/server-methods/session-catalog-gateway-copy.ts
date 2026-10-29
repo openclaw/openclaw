@@ -17,16 +17,18 @@ import {
   truncateSanitizedExternalContent,
   wrapExternalContent,
 } from "../../security/external-content.js";
-import { recordSessionStateEvent } from "../../sessions/session-state-events.js";
+import { recordSessionStateEventAsync } from "../../sessions/session-state-events.js";
 import { createGatewaySession } from "../session-create-service.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { buildModelsListResult } from "./models-list-result.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
+import { createSessionModelCatalogWait } from "./session-model-catalog-wait.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const GATEWAY_COPY_MODEL_LABEL_MAX_CHARS = 384;
 
 async function resolveGatewayCopyModel(params: {
   agentId: string;
+  catalogWait: ReturnType<typeof createSessionModelCatalogWait>;
   context: GatewayRequestContext;
   preferredModel?: string;
 }): Promise<{ preferredModel?: string; sourceModel?: string }> {
@@ -40,11 +42,13 @@ async function resolveGatewayCopyModel(params: {
   }
   const sourceModel = `${source.provider}/${source.model}`;
   try {
-    const result = await buildModelsListResult({
-      source: { kind: "gateway", context: params.context },
-      agentId: params.agentId,
-      params: { view: "all" },
-    });
+    const result = await params.catalogWait.run(() =>
+      buildModelsListResult({
+        source: { kind: "gateway", context: params.context },
+        agentId: params.agentId,
+        params: { view: "all" },
+      }),
+    );
     const catalog = result.models.map(({ id, name, provider }) => ({ id, name, provider }));
     const executable = result.models.some(
       (model) =>
@@ -57,7 +61,7 @@ async function resolveGatewayCopyModel(params: {
       catalog,
       ref: source,
       defaultProvider: defaultModel.provider,
-      defaultModel: defaultModel.model,
+      defaultModel,
       agentId: params.agentId,
     });
     return {
@@ -65,6 +69,9 @@ async function resolveGatewayCopyModel(params: {
       ...(executable && policy.allowed ? { preferredModel: sourceModel } : {}),
     };
   } catch (error) {
+    if (error === params.catalogWait.unavailable) {
+      throw error;
+    }
     params.context.logGateway.debug(
       `session catalog could not assess source model availability: ${String(error)}`,
     );
@@ -102,6 +109,7 @@ export async function copySessionCatalogToGateway(params: {
   client: GatewayClient | null;
   context: GatewayRequestContext;
   commitGuard?: () => void;
+  signal?: AbortSignal;
 }): Promise<{ ok: true; sessionKey: string } | { ok: false; error: ErrorShape }> {
   const copyToGatewaySession = params.provider.copyToGatewaySession;
   if (!copyToGatewaySession) {
@@ -109,12 +117,25 @@ export async function copySessionCatalogToGateway(params: {
   }
   const gatewayCopy = await copyToGatewaySession(params.providerContinueParams);
   const cfg = params.context.getRuntimeConfig();
-  const model = await resolveGatewayCopyModel({
-    agentId: params.agentId,
-    context: params.context,
-    preferredModel: gatewayCopy.preferredModel,
-  });
-  const created = await createGatewaySession({
+  const catalogWait = createSessionModelCatalogWait([
+    params.signal,
+    params.client?.connectionSignal,
+    params.client?.internal?.operatorRunAuthority?.signal,
+    params.client?.internal?.operatorAccessAuthority?.signal,
+  ]);
+  const modelResult = await catalogWait.settle(
+    resolveGatewayCopyModel({
+      agentId: params.agentId,
+      catalogWait,
+      context: params.context,
+      preferredModel: gatewayCopy.preferredModel,
+    }),
+  );
+  if (!modelResult.ok) {
+    return modelResult;
+  }
+  const model = modelResult.value;
+  const createdPromise = createGatewaySession({
     cfg,
     agentId: params.agentId,
     displayName: gatewayCopy.displayName,
@@ -128,8 +149,10 @@ export async function copySessionCatalogToGateway(params: {
       : {}),
     creation: resolveOperatorSessionCreation(params.client),
     commandSource: "gateway:sessions.catalog.continue",
-    loadGatewayModelCatalog: () =>
-      params.context.loadGatewayModelCatalog({ agentId: params.agentId }),
+    loadGatewayModelCatalogSnapshot: () =>
+      catalogWait.run(() =>
+        params.context.loadGatewayModelCatalogSnapshot({ agentId: params.agentId }),
+      ),
     atomicInitialization: true,
     commitGuard: params.commitGuard,
     afterCreate: async (entry) => {
@@ -175,17 +198,26 @@ export async function copySessionCatalogToGateway(params: {
       });
     },
   });
+  const createdResult = await catalogWait.settle(createdPromise);
+  if (!createdResult.ok) {
+    return createdResult;
+  }
+  const created = createdResult.value;
   if (!created.ok) {
     return created;
   }
-  recordSessionStateEvent({
-    sessionKey: created.key,
-    agentId: created.agentId,
-    kind: "adopted",
-    actorType: "human",
-    dedupeKey: `adopted:${created.key}`,
-    summary: `adopted from ${params.request.catalogId}`,
-    payload: { catalogId: params.request.catalogId, hostId: params.request.hostId },
-  });
+  await recordSessionStateEventAsync(
+    {
+      sessionKey: created.key,
+      agentId: created.agentId,
+      kind: "adopted",
+      actorType: "human",
+      dedupeKey: `adopted:${created.key}`,
+      summary: `adopted from ${params.request.catalogId}`,
+      payload: { catalogId: params.request.catalogId, hostId: params.request.hostId },
+    },
+    { assertCurrent: params.commitGuard },
+  );
+  params.commitGuard?.();
   return { ok: true, sessionKey: created.key };
 }

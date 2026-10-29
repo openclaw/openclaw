@@ -1,21 +1,26 @@
 import type { SessionCatalogTranscriptItem } from "openclaw/plugin-sdk/session-catalog";
 import { sessionCatalogPaging } from "openclaw/plugin-sdk/session-catalog-paging";
 import { z } from "zod";
-import type { CodexThreadItem, CodexThreadTurnsListResponse } from "./app-server/protocol.js";
+import { readItem } from "./app-server/event-projector-values.js";
+import { jsonObjectSchema } from "./app-server/json-schema.js";
+import { isJsonObject, type CodexThreadItem } from "./app-server/protocol.js";
 import {
   CatalogParamsError,
   MAX_TRANSCRIPT_PAGE_BYTES,
   parseTranscriptPage,
   readControlCursor,
 } from "./session-catalog-parsing.js";
-import { toGenericTranscriptItem } from "./session-catalog-transcript-item.js";
+import {
+  codexCatalogDisplayFacts,
+  toGenericTranscriptItem,
+} from "./session-catalog-transcript-item.js";
 import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
 
 type TranscriptRequest = { threadId: string; cursor?: string; limit: number };
 type TranscriptPage = { items: SessionCatalogTranscriptItem[]; nextCursor?: string };
 type ReadTurns = (
   params: TranscriptRequest & { sortDirection: "desc"; itemsView: "full" },
-) => Promise<CodexThreadTurnsListResponse>;
+) => Promise<unknown>;
 const TURN_ITEM_CURSOR_PREFIX = "turn-item:";
 const transcriptPageSchema = z.strictObject({
   items: z.array(
@@ -23,7 +28,7 @@ const transcriptPageSchema = z.strictObject({
       id: z.string(),
       type: z.enum(["userMessage", "agentMessage", "reasoning", "toolCall", "toolResult", "other"]),
       text: z.string().optional(),
-      raw: z.record(z.string(), z.json()).optional(),
+      raw: jsonObjectSchema.optional(),
       truncated: z.boolean().optional(),
     }),
   ),
@@ -32,6 +37,70 @@ const transcriptPageSchema = z.strictObject({
 
 export function parseCodexCatalogTranscriptPage(value: unknown): TranscriptPage {
   return transcriptPageSchema.parse(value);
+}
+
+/** Enrich local and released-node source pages once, without changing their rows or cursor. */
+export function projectCodexCatalogTranscriptPageForDisplay(page: TranscriptPage): TranscriptPage {
+  const projected: TranscriptPage = {
+    ...page,
+    items: page.items.map((item) => {
+      const native = isJsonObject(item.raw) ? readItem(item.raw) : undefined;
+      if (!native) {
+        return item;
+      }
+      // The source owns bounded text and identity; display facts do not replace them.
+      return { ...item, ...codexCatalogDisplayFacts(native) };
+    }),
+  };
+  // Released nodes already chose their cursor. Never remove their source rows.
+  return fitDisplayInputsToNodeTransport(projected) ? projected : page;
+}
+
+function projectTranscriptPage(
+  entries: { item: CodexThreadItem }[],
+  limit: number,
+): SessionCatalogTranscriptItem[] {
+  const projected = entries.map(({ item }) => toGenericTranscriptItem(item));
+  const page = sessionCatalogPaging.boundTranscriptPage(projected.toReversed(), limit, 0).items;
+  for (const [index, item] of page.entries()) {
+    if (item.text !== projected[index]?.text && projected[index]?.text) {
+      item.truncated = true;
+    }
+  }
+  return page;
+}
+
+function pageFitsNodeTransport(page: TranscriptPage): boolean {
+  // node.invoke carries JSON inside payloadJSON. Bound that representation before sending,
+  // while retaining the full native raw item for non-UI consumers.
+  return (
+    Buffer.byteLength(JSON.stringify({ payloadJSON: JSON.stringify(page) }), "utf8") <=
+    MAX_TRANSCRIPT_PAGE_BYTES
+  );
+}
+
+function fitDisplayInputsToNodeTransport(page: TranscriptPage): boolean {
+  if (pageFitsNodeTransport(page)) {
+    return true;
+  }
+  // Inputs duplicate native raw fields; optional presentation must not evict
+  // source history or make a previously readable single item unreadable.
+  for (const item of page.items) {
+    if (item.toolDetails !== undefined) {
+      delete item.toolDetails;
+      item.truncated = true;
+    }
+  }
+  if (pageFitsNodeTransport(page)) {
+    return true;
+  }
+  for (const item of page.items) {
+    if (item.toolInput !== undefined) {
+      delete item.toolInput;
+      item.toolInputOmitted = true;
+    }
+  }
+  return pageFitsNodeTransport(page);
 }
 
 function encodeTurnItemCursor(turnCursor: string, itemId: string): string {
@@ -66,30 +135,7 @@ function decodeTurnItemCursor(cursor?: string): { turnCursor?: string; itemId?: 
   return { turnCursor: value[0], itemId: value[1] };
 }
 
-function projectTranscriptPage(
-  items: CodexThreadItem[],
-  limit: number,
-): SessionCatalogTranscriptItem[] {
-  const projected = items.map(toGenericTranscriptItem);
-  const page = sessionCatalogPaging.boundTranscriptPage(projected.toReversed(), limit, 0).items;
-  for (const [index, item] of page.entries()) {
-    if (item.text !== projected[index]?.text && projected[index]?.text) {
-      item.truncated = true;
-    }
-  }
-  return page;
-}
-
-function pageFitsNodeTransport(page: TranscriptPage): boolean {
-  // node.invoke carries JSON inside payloadJSON. Bound that representation before sending,
-  // while retaining the full native raw item for non-UI consumers.
-  return (
-    Buffer.byteLength(JSON.stringify({ payloadJSON: JSON.stringify(page) }), "utf8") <=
-    MAX_TRANSCRIPT_PAGE_BYTES
-  );
-}
-
-/** The legacy API can anchor a turn, but cannot continue within that turn. */
+/** Legacy stores expose only turn cursors; an item identity preserves paging across appends. */
 export async function readLegacyCodexTranscriptPage(
   readTurns: ReadTurns,
   request: TranscriptRequest,
@@ -104,24 +150,22 @@ export async function readLegacyCodexTranscriptPage(
       ...(turnCursor ? { cursor: turnCursor } : {}),
     }),
   );
-  const source = page.data.flatMap((turn) => turn.items.toReversed());
-  // Appends can shift a turn's newest-relative offsets. The delivered item is the
-  // stable boundary, so later pages neither replay it nor skip older items.
-  const anchorIndex = itemId ? source.findIndex((item) => item.id === itemId) : -1;
+  const source = page.data.flatMap(({ items }) => items.toReversed().map((item) => ({ item })));
+  const anchorIndex = itemId ? source.findIndex(({ item }) => item.id === itemId) : -1;
   if (itemId && anchorIndex < 0) {
     throw new CatalogParamsError(
       "Codex transcript changed; refresh the session before loading older items",
     );
   }
   const remaining = source.slice(anchorIndex + 1);
-  const items = projectTranscriptPage(remaining, request.limit);
+  const items = projectTranscriptPage(remaining.slice(0, request.limit), request.limit);
   const result = (): TranscriptPage => {
     const lastSource = remaining[items.length - 1];
     const partial = lastSource !== undefined && items.length < remaining.length;
     const nativeCursor = partial ? page.backwardsCursor : page.nextCursor;
     const cursor = nativeCursor
       ? partial
-        ? encodeTurnItemCursor(nativeCursor, lastSource.id)
+        ? encodeTurnItemCursor(nativeCursor, lastSource.item.id)
         : nativeCursor
       : undefined;
     if (partial && !cursor) {
@@ -158,10 +202,7 @@ export async function readCodexCatalogTranscriptPage(
       ...(request.cursor ? { cursor: request.cursor } : {}),
     });
     const nextCursor = readControlCursor(page.nextCursor, "transcript next response");
-    const items = projectTranscriptPage(
-      page.data.map(({ item }) => item),
-      limit,
-    );
+    const items = projectTranscriptPage(page.data, limit);
     const result = { items, ...(nextCursor ? { nextCursor } : {}) };
     const fittingCount = items.length - (pageFitsNodeTransport(result) ? 0 : 1);
     if (fittingCount === page.data.length) {
@@ -170,8 +211,7 @@ export async function readCodexCatalogTranscriptPage(
     if (fittingCount < 1) {
       throw new Error("Codex transcript item exceeds the safe response size");
     }
-    // Re-read the same anchor with a strictly smaller count. The returned native cursor
-    // must describe exactly the items sent; slicing while retaining it would skip history.
+    // The native cursor must describe exactly the delivered entries. Never slice and retain it.
     limit = fittingCount;
   }
 }

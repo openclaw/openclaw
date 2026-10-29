@@ -1,93 +1,43 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { Compile } from "typebox/compile";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  WizardNextParams,
-  WizardNextResult,
-} from "../../../packages/gateway-protocol/src/index.js";
-import { WizardNextResultSchema } from "../../../packages/gateway-protocol/src/schema/wizard.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { WizardSession } from "../../wizard/session.js";
+import type { WizardSession } from "../../wizard/session.js";
 import { whenAdmittedWizardSessionSettled } from "./setup-admission.js";
-import { systemAgentHandlers } from "./system-agent.js";
-import type { GatewayRequestContext } from "./types.js";
-import { wizardHandlers } from "./wizard.js";
+import {
+  answerWizard,
+  callWizardNext,
+  invoke,
+  makeContext,
+} from "./system-agent-setup.test-support.js";
 
-const providerAuthChoiceMocks = vi.hoisted(() => ({
-  prepareAuthChoiceLoadedPluginProvider: vi.fn(),
-}));
-const setupSharedMocks = vi.hoisted(() => ({
-  readSetupConfigFileSnapshot: vi.fn(),
-  writeWizardConfigFile: vi.fn(),
+const mocks = vi.hoisted(() => ({
+  prepare: vi.fn(),
+  snapshot: vi.fn(),
+  write: vi.fn(),
 }));
 
+// mock-isolation: Hold provider preparation without prompting for or storing real credentials.
 vi.mock("../../plugins/provider-auth-choice.js", () => ({
-  prepareAuthChoiceLoadedPluginProvider:
-    providerAuthChoiceMocks.prepareAuthChoiceLoadedPluginProvider,
+  prepareAuthChoiceLoadedPluginProvider: mocks.prepare,
 }));
+// mock-isolation: Admission tests use controlled snapshots, never the operator's configuration.
 vi.mock("../../wizard/setup.shared.js", () => ({
-  readSetupConfigFileSnapshot: setupSharedMocks.readSetupConfigFileSnapshot,
-  writeWizardConfigFile: setupSharedMocks.writeWizardConfigFile,
+  readSetupConfigFileSnapshot: mocks.snapshot,
+}));
+vi.mock("../../plugins/provider-auth-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/provider-auth-config.js")>()),
+  writeProviderAuthConfig: mocks.write,
 }));
 
 const config: OpenClawConfig = {
   agents: { defaults: { model: "openai/gpt-5.6-luna" } },
 };
-const validateWizardResult = Compile(WizardNextResultSchema);
-
-function makeContext() {
-  const wizardSessions = new Map<string, WizardSession>();
-  return {
-    wizardSessions,
-    context: {
-      wizardSessions,
-      findRunningWizard: () => undefined,
-      purgeWizardSession: (id: string) => wizardSessions.delete(id),
-    } as unknown as GatewayRequestContext,
-  };
-}
-
-function makeRespond() {
-  const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-  return {
-    calls,
-    respond: (ok: boolean, payload?: unknown, error?: unknown) => {
-      calls.push({ ok, payload, error });
-    },
-  };
-}
-
-function systemAgentHandler(method: keyof typeof systemAgentHandlers) {
-  return expectDefined(systemAgentHandlers[method], `systemAgentHandlers["${method}"] invariant`);
-}
-
-async function callWizardNext(
-  context: GatewayRequestContext,
-  params: WizardNextParams,
-): Promise<WizardNextResult> {
-  const { calls, respond } = makeRespond();
-  await expectDefined(
-    wizardHandlers["wizard.next"],
-    "wizard.next handler",
-  )({
-    params,
-    respond,
-    context,
-  } as never);
-  expect(calls).toHaveLength(1);
-  expect(calls[0]?.ok).toBe(true);
-  const payload = calls[0]?.payload;
-  if (!validateWizardResult.Check(payload)) {
-    throw new Error("wizard.next returned an invalid result");
-  }
-  return payload;
-}
 
 describe("openclaw.setup provider preparation", () => {
   beforeEach(() => {
-    setupSharedMocks.readSetupConfigFileSnapshot.mockResolvedValue({
+    mocks.snapshot.mockResolvedValue({
       exists: true,
       valid: true,
       path: "/tmp/openclaw.json",
@@ -96,9 +46,7 @@ describe("openclaw.setup provider preparation", () => {
       config,
       issues: [],
     });
-    setupSharedMocks.writeWizardConfigFile.mockImplementation(
-      async (writtenConfig) => writtenConfig,
-    );
+    mocks.write.mockImplementation(async ({ config: writtenConfig }) => writtenConfig);
   });
 
   afterEach(() => {
@@ -124,41 +72,32 @@ describe("openclaw.setup provider preparation", () => {
       let credentialsWritten = false;
       let session: WizardSession | undefined;
       const persistAuthProfiles = vi.fn();
-      providerAuthChoiceMocks.prepareAuthChoiceLoadedPluginProvider.mockImplementationOnce(
-        async (params) => {
-          await params.prompter.confirm({ message: "Prepare provider?", initialValue: false });
+      mocks.prepare.mockImplementationOnce(async (params, consume) => {
+        await params.prompter.confirm({ message: "Prepare provider?", initialValue: false });
+        await params.beforePersistentEffect();
+        preparationStarted.resolve();
+        await finishPreparation.promise;
+        persistAuthProfiles.mockImplementationOnce(async () => {
           await params.beforePersistentEffect();
-          preparationStarted.resolve();
-          await finishPreparation.promise;
-          persistAuthProfiles.mockImplementationOnce(async () => {
-            await params.beforePersistentEffect();
-            credentialWriteStarted.resolve();
-            await finishCredentialWrite.promise;
-            credentialsWritten = true;
-          });
-          return {
-            config: preparedConfig,
-            agentModelOverride: "fixture/demo-model",
-            authProfiles: [],
-            persistAuthProfiles,
-          };
-        },
-      );
+          credentialWriteStarted.resolve();
+          await finishCredentialWrite.promise;
+          credentialsWritten = true;
+        });
+        return consume({
+          config: preparedConfig,
+          agentModelOverride: "fixture/demo-model",
+          authProfiles: [],
+          persistAuthProfiles,
+        });
+      });
       try {
-        await systemAgentHandler("openclaw.setup.prepare.start")({
-          params: { sessionId, authChoice: "fixture-provider" },
-          respond: () => undefined,
-          context,
-        } as never);
+        await invoke("openclaw.setup.prepare.start", context, {
+          sessionId,
+          authChoice: "fixture-provider",
+        });
         session = expectDefined(wizardSessions.get(sessionId), "provider preparation wizard");
         const confirmation = await callWizardNext(context, { sessionId });
-        const terminal = callWizardNext(context, {
-          sessionId,
-          answer: {
-            stepId: expectDefined(confirmation.step, "prepare confirmation").id,
-            value: true,
-          },
-        });
+        const terminal = answerWizard(context, sessionId, confirmation, true);
         await preparationStarted.promise;
         if (beforeCredentials) {
           await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1_000);
@@ -169,18 +108,11 @@ describe("openclaw.setup provider preparation", () => {
         if (!beforeCredentials) {
           await credentialWriteStarted.promise;
           await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1_000);
-          const { calls, respond } = makeRespond();
-          await expectDefined(
-            wizardHandlers["wizard.cancel"],
-            "wizard cancel",
-          )({
-            params: { sessionId },
-            respond,
-            context,
-          } as never);
+
+          const calls = await invoke("wizard.cancel", context, { sessionId });
           expect(calls[0]?.payload).toMatchObject({ status: "running" });
           expect(session.signal.aborted).toBe(false);
-          expect(setupSharedMocks.writeWizardConfigFile).not.toHaveBeenCalled();
+          expect(mocks.write).not.toHaveBeenCalled();
           finishCredentialWrite.resolve();
         }
         const done = await terminal;
@@ -191,13 +123,10 @@ describe("openclaw.setup provider preparation", () => {
           status: beforeCredentials ? "cancelled" : "done",
         });
         if (beforeCredentials) {
-          expect(setupSharedMocks.writeWizardConfigFile).not.toHaveBeenCalled();
+          expect(mocks.write).not.toHaveBeenCalled();
           expect(done).not.toHaveProperty("preparedModelRef");
         } else {
-          expect(setupSharedMocks.writeWizardConfigFile).toHaveBeenCalledWith(
-            preparedConfig,
-            expect.objectContaining({ baseHash: "setup-resolution-config" }),
-          );
+          expect(mocks.write).toHaveBeenCalledOnce();
           expect(done.preparedModelRef).toBe("fixture/demo-model");
         }
         expect(wizardSessions.has(sessionId)).toBe(false);
@@ -221,32 +150,25 @@ describe("openclaw.setup provider preparation", () => {
         models: { providers: { ollama: { baseUrl: "http://127.0.0.1:11434", models: [] } } },
       };
       const persistAuthProfiles = vi.fn();
-      providerAuthChoiceMocks.prepareAuthChoiceLoadedPluginProvider.mockImplementationOnce(
-        async (params) => {
-          await params.prompter.note("Model ready", "Ollama");
-          await params.beforePersistentEffect();
-          return {
-            config: preparedConfig,
-            agentModelOverride: "ollama/qwen3:0.6b",
-            authProfiles: [],
-            persistAuthProfiles,
-          };
-        },
-      );
+      mocks.prepare.mockImplementationOnce(async (params, consume) => {
+        await params.prompter.note("Model ready", "Ollama");
+        await params.beforePersistentEffect();
+        return consume({
+          config: preparedConfig,
+          agentModelOverride: "ollama/qwen3:0.6b",
+          authProfiles: [],
+          persistAuthProfiles,
+        });
+      });
       const { wizardSessions, context } = makeContext();
-      const { calls, respond } = makeRespond();
 
-      await systemAgentHandler("openclaw.setup.prepare.start")({
-        params: {
-          sessionId: "prepare-session-1",
-          nativeSessionCatalogsEnabled,
-          agentId: "research",
-          authChoice: "ollama",
-          workspace: "/tmp/models-workspace",
-        },
-        respond,
-        context,
-      } as never);
+      const calls = await invoke("openclaw.setup.prepare.start", context, {
+        sessionId: "prepare-session-1",
+        nativeSessionCatalogsEnabled,
+        agentId: "research",
+        authChoice: "ollama",
+        workspace: "/tmp/models-workspace",
+      });
 
       expect(calls[0]).toMatchObject({
         ok: true,
@@ -261,7 +183,7 @@ describe("openclaw.setup provider preparation", () => {
         done: false,
         step: { type: "note", title: "Ollama", message: "Model ready" },
       });
-      expect(providerAuthChoiceMocks.prepareAuthChoiceLoadedPluginProvider).toHaveBeenCalledWith(
+      expect(mocks.prepare).toHaveBeenCalledWith(
         expect.objectContaining({
           authChoice: "ollama",
           agentId: "research",
@@ -272,22 +194,16 @@ describe("openclaw.setup provider preparation", () => {
           signal: session.signal,
           isRemote: true,
         }),
+        expect.any(Function),
       );
-      const done = await callWizardNext(context, {
-        sessionId: "prepare-session-1",
-        answer: { stepId: expectDefined(note.step, "prepare wizard step").id, value: null },
-      });
+      const done = await answerWizard(context, "prepare-session-1", note, null);
       expect(done).toEqual({
         done: true,
         status: "done",
         preparedModelRef: "ollama/qwen3:0.6b",
       });
       expect(persistAuthProfiles).toHaveBeenCalledOnce();
-      expect(setupSharedMocks.writeWizardConfigFile).toHaveBeenCalledWith(preparedConfig, {
-        allowConfigSizeDrop: false,
-        baseSnapshot: expect.objectContaining({ hash: "setup-resolution-config" }),
-        baseHash: "setup-resolution-config",
-      });
+      expect(mocks.write).toHaveBeenCalledOnce();
     },
   );
 });

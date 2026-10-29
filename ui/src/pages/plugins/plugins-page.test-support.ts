@@ -1,5 +1,6 @@
-import type { RouteLocation } from "@openclaw/uirouter";
-import { vi } from "vitest";
+import { createRouter, type RouteLocation } from "@openclaw/uirouter";
+import { createComponent, createSignal, flush } from "solid-js";
+import { onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   ApplicationContext,
@@ -7,22 +8,23 @@ import type {
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
 import type {
   PluginCatalogItem,
+  PluginDiscoveryDetailResult,
   PluginListResult,
-  PluginMutationResult,
-  PluginSearchResult,
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
-import {
-  createApplicationContextProvider,
-  type ApplicationContextProvider,
-} from "../../test-helpers/application-context.ts";
+import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import type { PluginsConsentController } from "./plugins-consent-controller.ts";
-import type { PluginsRouteData } from "./plugins-page.ts";
-import type { PluginRowMessage } from "./view.ts";
-import "./plugins-page.ts";
+import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { createPluginDeclaredSurface } from "../../test-helpers/plugins-e2e-fixtures.test-support.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { PluginsPage } from "./plugins-page.tsx";
+import type { PluginsRouteData } from "./route-data.ts";
+import type { DetailProps } from "./settings-view.tsx";
 
 type RequestHandler = (method: string, params: unknown) => Promise<unknown>;
 
@@ -31,33 +33,29 @@ const PLUGINS_GATEWAY_HELLO = gatewayHelloForMethods([
   "plugins.inspect",
   "plugins.install",
   "plugins.list",
-  "plugins.search",
+  "plugins.reload",
   "plugins.setEnabled",
   "plugins.uninstall",
 ]);
 
 type GatewayHarness = {
   gateway: ApplicationGateway;
-  emit: (client: GatewayBrowserClient | null, connected: boolean) => ApplicationGatewaySnapshot;
+  publishPlugins: () => void;
+  emit: (
+    client: GatewayBrowserClient | null,
+    connected: boolean,
+    overrides?: Partial<ApplicationGatewaySnapshot>,
+  ) => ApplicationGatewaySnapshot;
 };
 
 type TestPluginsPage = HTMLElement & {
+  surface: "discovery" | "settings";
   routeData?: PluginsRouteData;
-  updateComplete: Promise<boolean>;
-  result: PluginListResult | null;
-  loading: boolean;
-  busy: Record<string, boolean>;
-  messages: Record<string, PluginRowMessage>;
-  activeTab: "installed" | "discover";
-  searchResults: PluginSearchResult[] | null;
-  applyMutationResult: (result: PluginMutationResult) => void;
-  consentController: Pick<PluginsConsentController, "install">;
-  refreshCatalog: () => Promise<void>;
-  updateEnabled: (pluginId: string, enabled: boolean, key?: string) => Promise<void>;
-  uninstall: (pluginId: string, rowKey: string) => Promise<void>;
+  readonly updateComplete: Promise<boolean>;
 };
 
 export type RuntimeConfigTestState = {
+  connected?: boolean;
   configFormDirty: boolean;
   lastError: string | null;
   configSnapshot?: { sourceConfig: Record<string, unknown>; hash: string } | null;
@@ -78,8 +76,93 @@ export function createPlugin(overrides: Partial<PluginCatalogItem> = {}): Plugin
   };
 }
 
-export function createResult(plugin = createPlugin()): PluginListResult {
-  return { plugins: [plugin], diagnostics: [], mutationAllowed: true };
+export function createResult(
+  pluginOrPlugins: PluginCatalogItem | PluginCatalogItem[] = createPlugin(),
+): PluginListResult {
+  return {
+    plugins: Array.isArray(pluginOrPlugins) ? pluginOrPlugins : [pluginOrPlugins],
+    diagnostics: [],
+    mutationAllowed: true,
+  };
+}
+
+export function createPluginSettingsDetailProps(
+  result: PluginListResult,
+  overrides: Partial<DetailProps> = {},
+): DetailProps {
+  return {
+    connected: true,
+    loading: false,
+    result,
+    error: null,
+    busy: {},
+    messages: {},
+    iconUrls: {},
+    canMutate: true,
+    mutationBlockedReason: null,
+    configBusy: false,
+    configSchemaLoading: false,
+    configRead: undefined,
+    configSchemaRead: undefined,
+    configError: null,
+    canEditConfig: true,
+    configValue: {},
+    configHints: {},
+    configUnsupportedPaths: [],
+    pluginId: "workboard",
+    inspection: null,
+    inspectionRead: { receipt: () => null, value: () => null },
+    configSchema: null,
+    hostControlsSchema: null,
+    backHref: "/settings/plugins",
+    backLabel: "Plugins",
+    tab: "readme",
+    onBack: vi.fn(),
+    onRetryInspection: vi.fn(),
+    onTabChange: vi.fn(),
+    onIconError: vi.fn(),
+    onSetEnabled: vi.fn(),
+    onUninstall: vi.fn(),
+    onConfigPatch: vi.fn(),
+    onConfigRemove: vi.fn(),
+    onConfigReload: vi.fn(),
+    onConfigReadRetry: vi.fn(),
+    onConfigWriteRetry: vi.fn(),
+    onRefresh: vi.fn(),
+    ...overrides,
+  };
+}
+
+export function createDiscoveryDetail(plugin = createPlugin()): PluginDiscoveryDetailResult {
+  return {
+    plugin: {
+      id: `catalog:${plugin.id}`,
+      catalog: {
+        name: plugin.name,
+        family: "code-plugin",
+        official: plugin.origin === "official",
+        categories: [],
+      },
+      local: {
+        pluginId: plugin.installed ? plugin.id : undefined,
+        present: plugin.installed,
+        installed: plugin.installed,
+        enabled: plugin.enabled,
+        state: plugin.state,
+        action: plugin.installed ? "manage" : "install",
+        install: plugin.install,
+      },
+    },
+    detail: {
+      origin: "clawhub",
+      packageName: plugin.packageName ?? plugin.id,
+      topics: [],
+      configuration: [],
+      mcpServers: [],
+      skills: [],
+      versions: [],
+    },
+  };
 }
 
 export function createInspectResult(
@@ -96,17 +179,15 @@ export function createInspectResult(
       enabled: false,
     },
     source: { kind: "npm", packageName: "workboard" },
-    declared: {
-      channels: [],
-      providers: [],
-      tools: [],
-      contracts: [],
-      hooks: [],
-      mcpServers: [],
-      cliCommands: [],
-      cliBackends: [],
+    declared: createPluginDeclaredSurface(),
+    components: {
+      mapped: [],
       skills: [],
-      dangerousConfigFlags: [],
+      mcpServers: [],
+      commands: [],
+      hooks: [],
+      lspServers: [],
+      unavailable: { capabilities: [], mcpServers: [], lspServers: [] },
     },
     grants: {
       hooks: {
@@ -138,7 +219,7 @@ export function createPluginsRouteData(
 export function createClient(handler: RequestHandler) {
   const request = vi.fn(handler);
   return {
-    client: { request } as unknown as GatewayBrowserClient,
+    client: { request, addEventListener: () => () => {} } as unknown as GatewayBrowserClient,
     request,
   };
 }
@@ -147,16 +228,27 @@ function createSnapshot(
   client: GatewayBrowserClient | null,
   connected: boolean,
 ): ApplicationGatewaySnapshot {
-  return {
+  return createApplicationGatewaySnapshot({
     client,
     phase: connected ? "connected" : "reconnecting",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
     hello: PLUGINS_GATEWAY_HELLO,
     assistantAgentId: "main",
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
+  });
+}
+
+export function createPluginCapabilities(
+  generation: number,
+  methods: string[] = [],
+): NonNullable<ApplicationGatewaySnapshot["pluginCapabilities"]> {
+  return {
+    ok: true,
+    generation,
+    descriptors: [],
+    methods,
+    controlUiTabs: [],
+    controlUiWidgetKinds: [],
+    pluginSurfaceUrls: {},
   };
 }
 
@@ -171,7 +263,9 @@ export function createGateway(client: GatewayBrowserClient, connected = true): G
     connectionRevision: 0,
     eventLog: [],
     eventLogRevision: 0,
+    loadSelfProfile: async () => null,
     connect: () => undefined,
+    defer: () => false,
     setSessionKey: () => undefined,
     start: () => undefined,
     stop: () => undefined,
@@ -184,8 +278,20 @@ export function createGateway(client: GatewayBrowserClient, connected = true): G
   } satisfies ApplicationGateway;
   return {
     gateway,
-    emit(nextClient, nextConnected) {
-      snapshot = createSnapshot(nextClient, nextConnected);
+    publishPlugins() {
+      snapshot = {
+        ...snapshot,
+        pluginCapabilities: createPluginCapabilities(
+          (snapshot.pluginCapabilities?.generation ?? 0) + 1,
+          snapshot.hello?.features?.methods ?? [],
+        ),
+      };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
+    emit(nextClient, nextConnected, overrides = {}) {
+      snapshot = { ...createSnapshot(nextClient, nextConnected), ...overrides };
       for (const listener of listeners) {
         listener(snapshot);
       }
@@ -197,10 +303,22 @@ export function createGateway(client: GatewayBrowserClient, connected = true): G
 type RuntimeConfigTestHarness = {
   runtimeConfig: {
     state: RuntimeConfigTestState;
+    canSet: boolean;
     refresh: ApplicationContext["runtimeConfig"]["refresh"];
     ensureLoaded: ReturnType<typeof vi.fn<() => Promise<undefined>>>;
+    ensureSchemaLoaded: ReturnType<typeof vi.fn<() => Promise<undefined>>>;
+    refreshSchema: ReturnType<typeof vi.fn<() => Promise<undefined>>>;
+    retry: ReturnType<typeof vi.fn<() => Promise<boolean>>>;
     patch: ReturnType<
       typeof vi.fn<(options: { raw: Record<string, unknown>; note: string }) => Promise<boolean>>
+    >;
+    patchForm: ReturnType<typeof vi.fn<ApplicationContext["runtimeConfig"]["patchForm"]>>;
+    removeFormValue: ReturnType<
+      typeof vi.fn<ApplicationContext["runtimeConfig"]["removeFormValue"]>
+    >;
+    save: ReturnType<typeof vi.fn<ApplicationContext["runtimeConfig"]["save"]>>;
+    flushFormChanges: ReturnType<
+      typeof vi.fn<ApplicationContext["runtimeConfig"]["flushFormChanges"]>
     >;
     patchFromSnapshot: ApplicationContext["runtimeConfig"]["patchFromSnapshot"];
     runExternalMutation: ApplicationContext["runtimeConfig"]["runExternalMutation"];
@@ -218,11 +336,26 @@ export function createRuntimeConfigHarness(
   const patch = vi.fn<
     (options: { raw: Record<string, unknown>; note: string }) => Promise<boolean>
   >(async () => true);
+  const patchForm = vi.fn<(path: Array<string | number>, value: unknown) => void>();
+  const removeFormValue = vi.fn<(path: Array<string | number>) => void>();
+  const save = vi.fn(async () => true);
   const runtimeConfig = {
-    state: runtimeConfigState,
+    // Keep the fixture identity used by autosave notifications, with the owner's real defaults.
+    state: Object.assign(runtimeConfigState, {
+      ...createInitialConfigState(),
+      ...runtimeConfigState,
+    }),
+    canSet: true,
     refresh: refreshConfig,
     ensureLoaded: vi.fn(async () => undefined),
+    ensureSchemaLoaded: vi.fn(async () => undefined),
+    refreshSchema: vi.fn(async () => undefined),
+    retry: vi.fn(async () => true),
     patch,
+    patchForm,
+    removeFormValue,
+    save,
+    flushFormChanges: vi.fn(async () => true),
     patchFromSnapshot: vi.fn(async (build) => {
       const config = runtimeConfigState.configSnapshot?.sourceConfig ?? {};
       const built = build(config);
@@ -292,60 +425,85 @@ export function createContext(
     () => gateway.snapshot.client,
   ),
 ): ApplicationContext {
-  return {
+  const plugins = new ControlUiPluginRuntime(() => context);
+  onTestFinished(() => plugins.dispose());
+  const context = {
     gateway,
+    plugins,
     basePath: "",
     resourceBasePath: "",
+    router: createRouter({ routes: [] }),
     runtimeConfig: harness.runtimeConfig,
     navigate: vi.fn(),
     replace: vi.fn(),
   } as unknown as ApplicationContext;
+  return context;
+}
+
+export async function settlePlugins(): Promise<boolean> {
+  flush();
+  await Promise.resolve();
+  flush();
+  await Promise.resolve();
+  flush();
+  return true;
 }
 
 export async function mountPage(
   context: ApplicationContext,
   routeData?: PluginsRouteData,
-): Promise<{ page: TestPluginsPage; provider: ApplicationContextProvider }> {
-  const provider = createApplicationContextProvider(context);
-  const page = document.createElement("openclaw-plugins-page") as unknown as TestPluginsPage;
-  page.routeData = routeData;
-  provider.append(page);
-  document.body.append(provider);
-  await page.updateComplete;
-  return { page, provider };
-}
-
-export async function mountClawHubSearchPage(client: GatewayBrowserClient) {
-  const harness = createGateway(client);
-  return mountPage(
-    createContext(harness.gateway),
-    createPluginsRouteData(
-      harness.gateway,
-      createResult(),
-      createPluginsRouteLocation("/settings/plugins/discover"),
-    ),
+  surface: TestPluginsPage["surface"] = routeData?.location.pathname.includes("/settings/plugins")
+    ? "settings"
+    : "discovery",
+): Promise<{ page: TestPluginsPage }> {
+  const provider = createSolidApplicationContextProvider(context);
+  const [currentRouteData, setRouteData] = createSignal(routeData);
+  const [currentSurface, setSurface] = createSignal(surface);
+  const mounted = mountSolid(
+    () =>
+      createComponent(PluginsPage, {
+        get routeData() {
+          return currentRouteData();
+        },
+        get surface() {
+          return currentSurface();
+        },
+      }),
+    {
+      wrapper: provider.wrapper,
+    },
   );
-}
-
-export function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((nextResolve, nextReject) => {
-    resolve = nextResolve;
-    reject = nextReject;
+  await settlePlugins();
+  const page = mounted.container.querySelector("openclaw-plugins-page") as TestPluginsPage;
+  if (!page) {
+    throw new Error("Plugins page did not render its host element");
+  }
+  Object.defineProperties(page, {
+    routeData: { get: currentRouteData, set: setRouteData },
+    surface: { get: currentSurface, set: setSurface },
+    updateComplete: { get: settlePlugins },
   });
-  return { promise, reject, resolve };
+  page.remove = () => mounted.unmount();
+  return { page };
 }
 
-export async function clickRowAction(page: TestPluginsPage, pluginSelector: string, label: string) {
-  const button = [...page.querySelectorAll<HTMLButtonElement>(`${pluginSelector} button`)].find(
-    (element) => (element.getAttribute("aria-label") ?? element.textContent ?? "").includes(label),
-  );
-  button?.click();
-  await page.updateComplete;
+export async function clickPluginAction(page: HTMLElement, label: string): Promise<void> {
+  const button = await waitForSolid(() => {
+    const control = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+      (element) =>
+        element.getAttribute("aria-label") === label || element.textContent?.trim() === label,
+    );
+    if (!control) {
+      throw new Error(`No plugin action matching ${label}`);
+    }
+    return control;
+  });
+  button.click();
+  await settlePlugins();
 }
 
 export function resetPluginsPageTestState(): void {
+  cleanupSolid();
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.restoreAllMocks();

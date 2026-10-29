@@ -1,4 +1,5 @@
 import { extractFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import type { ParsedSkillFrontmatter } from "../types.js";
 import { resolveSkillInvocationPolicy } from "./frontmatter.js";
 import { createSyntheticSourceInfo, type Skill } from "./skill-contract.js";
@@ -37,6 +38,7 @@ export function materializeSkill(params: {
     name: params.name,
     displayName: resolveSkillDisplayName(params.content, params.frontmatter.name || params.name),
     description: params.description,
+    contentHash: sha256Hex(params.content),
     filePath: params.filePath,
     baseDir: params.baseDir,
     source: params.source,

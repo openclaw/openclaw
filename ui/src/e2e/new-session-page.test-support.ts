@@ -3,6 +3,10 @@ import path from "node:path";
 import { errors, type Locator, type Page } from "playwright";
 import { expect } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import {
+  evaluateControlUiContext,
+  getControlUiContextHandle,
+} from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionPath,
@@ -18,22 +22,39 @@ import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 export { controlUiSessionPath, controlUiSessionUrl, waitForConfirmModal };
 
-const NEW_SESSION_FEATURE_METHODS = [
-  "agent.wait",
-  "chat.metadata",
-  "chat.startup",
-  "sessions.create",
-  "sessions.dispatch",
-] as const;
-
 export function installMockGateway(
   page: Page,
   scenario: ControlUiMockGatewayScenario = {},
 ): Promise<MockGatewayControls> {
   return installControlUiMockGateway(page, {
     ...scenario,
-    featureMethods: scenario.featureMethods ?? [...NEW_SESSION_FEATURE_METHODS],
+    featureMethods: scenario.featureMethods ?? [
+      "agent.wait",
+      "chat.metadata",
+      "chat.startup",
+      "sessions.create",
+      "sessions.dispatch",
+    ],
   });
+}
+
+// The scale-in animation moves inventory rows after they first become visible.
+// Wait for its public completion event before hovering a nested details card.
+export async function openEnvironmentPicker(page: Page) {
+  const afterShow = page.locator(".oc-popover.new-session-page__where-popover").evaluate(
+    (element) =>
+      new Promise<void>((resolve) => {
+        element.addEventListener("overlay-after-show", () => resolve(), { once: true });
+      }),
+  );
+  await page.locator("#new-session-where-trigger").click();
+  await afterShow;
+}
+
+export function checkoutBaseRefInput(scope: Page | Locator): Locator {
+  return scope
+    .getByRole("combobox", { name: "From", exact: true })
+    .or(scope.getByRole("textbox", { name: "From", exact: true }));
 }
 
 export const NEW_SESSION_MODEL_CATALOG = [
@@ -53,38 +74,19 @@ export const NEW_SESSION_MODEL_CATALOG = [
 
 export const WORKSPACE = "/home/peter/openclaw";
 
-export function createCloudAgentsListResponse() {
+function workspaceAgents(id: string, name: string) {
   return {
-    agents: [
-      {
-        id: "cloud",
-        identity: { name: "Cloud" },
-        name: "Cloud",
-        workspace: WORKSPACE,
-        workspaceGit: true,
-      },
-    ],
-    defaultId: "cloud",
+    agents: [{ id, identity: { name }, name, workspace: WORKSPACE, workspaceGit: true }],
+    defaultId: id,
     mainKey: "main",
     scope: "agent",
   };
 }
 
+export const createCloudAgentsListResponse = () => workspaceAgents("cloud", "Cloud");
+
 export const LOCAL_GIT_WORKSPACE_RESPONSES = {
-  "agents.list": {
-    agents: [
-      {
-        id: "main",
-        identity: { name: "Main" },
-        name: "Main",
-        workspace: WORKSPACE,
-        workspaceGit: true,
-      },
-    ],
-    defaultId: "main",
-    mainKey: "main",
-    scope: "agent",
-  },
+  "agents.list": workspaceAgents("main", "Main"),
   "worktrees.branches": {
     branches: [{ kind: "local", name: "main" }],
     defaultBranch: "main",
@@ -96,8 +98,6 @@ export const SOURCE_REPO = "/tmp/source-repo";
 export const TARGET_REPO = "/tmp/target-repo";
 export const REFRESHED_RESEARCH_WORKSPACE = "/home/peter/research-next";
 export const MOVED_WORKSPACE = "/home/peter/openclaw-next";
-const LOCATOR_TEXT_READ_TIMEOUT_MS = 500;
-const LOCATOR_TEXT_POLL_TIMEOUT_MS = 10_000;
 
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
@@ -111,13 +111,19 @@ export const SESSION_LIST_DEFAULTS = {
   modelProvider: "openai",
 };
 
-type LocatorTextPoll = ReturnType<typeof expect.poll<Promise<string | null>>>;
+export const pollText = (locator: Locator) => expect.poll(() => locator.textContent());
+export const pollValue = (locator: Locator) => expect.poll(() => locator.inputValue());
+export const pollCount = (locator: Locator) => expect.poll(() => locator.count());
+export const pollDisabled = (locator: Locator) => expect.poll(() => locator.isDisabled());
+export const pollEnabled = (locator: Locator) => expect.poll(() => locator.isEnabled());
+export const pollAttribute = (locator: Locator, name: string) =>
+  expect.poll(() => locator.getAttribute(name));
 
-export function pollLocatorText(locator: Locator): LocatorTextPoll {
+export function pollLocatorText(locator: Locator) {
   return expect.poll(
     async () => {
       try {
-        return await locator.textContent({ timeout: LOCATOR_TEXT_READ_TIMEOUT_MS });
+        return await locator.textContent({ timeout: 500 });
       } catch (error) {
         if (error instanceof errors.TimeoutError) {
           return null;
@@ -125,7 +131,7 @@ export function pollLocatorText(locator: Locator): LocatorTextPoll {
         throw error;
       }
     },
-    { timeout: LOCATOR_TEXT_POLL_TIMEOUT_MS },
+    { timeout: 10_000 },
   );
 }
 
@@ -178,18 +184,15 @@ export async function expectPendingNewSessionPresentation(page: Page) {
     const user = thread.querySelector<HTMLElement>(".chat-group.user")!;
     const bubble = user.querySelector<HTMLElement>(".chat-bubble")!;
     const text = bubble.classList.contains("chat-bubble--with-images")
-      ? bubble.querySelector<HTMLElement>(".chat-text, .chat-json-collapse")!
+      ? bubble.querySelector<HTMLElement>(".chat-text")!
       : bubble;
     const claw = thread.querySelector<SVGElement>(".chat-reading-indicator svg")!;
-    const userStyle = getComputedStyle(user);
     const textStyle = getComputedStyle(text);
     const clawStyle = getComputedStyle(claw);
-    const row = user.getBoundingClientRect();
-    const content = bubble.getBoundingClientRect();
     return {
-      direction: userStyle.flexDirection,
+      direction: getComputedStyle(user).flexDirection,
       width: thread.getBoundingClientRect().width,
-      rightGap: Math.abs(row.right - content.right),
+      rightGap: Math.abs(user.getBoundingClientRect().right - bubble.getBoundingClientRect().right),
       padding: [textStyle.paddingTop, textStyle.paddingRight],
       images: bubble.classList.contains("chat-bubble--with-images"),
       background: textStyle.backgroundColor,
@@ -198,17 +201,17 @@ export async function expectPendingNewSessionPresentation(page: Page) {
       reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
     };
   });
-  expect(presentation.direction).toBe("row-reverse");
+  expect(presentation).toMatchObject({
+    direction: "row-reverse",
+    clawSize: ["18px", "18px"],
+    padding: presentation.images ? ["10px", "14px"] : ["16px", "16px"],
+  });
   expect(presentation.width).toBeLessThanOrEqual(768);
   expect(presentation.rightGap).toBeLessThanOrEqual(1);
-  expect(presentation.padding).toEqual(presentation.images ? ["10px", "14px"] : ["16px", "16px"]);
   expect(presentation.background).not.toBe("rgba(0, 0, 0, 0)");
-  expect(presentation.clawSize).toEqual(["18px", "18px"]);
-  if (presentation.reducedMotion) {
-    expect(presentation.animation).toBe("none");
-  } else {
-    expect(presentation.animation).toContain("chatWorkingClawFlex");
-  }
+  expect(presentation.animation).toEqual(
+    presentation.reducedMotion ? "none" : expect.stringContaining("chatWorkingClawFlex"),
+  );
   return presentation;
 }
 
@@ -219,12 +222,10 @@ export function createdSessionListResult(sessionKey: string) {
     path: "",
     sessions: [
       {
-        contextTokens: null,
+        ...SESSION_LIST_DEFAULTS,
         displayName: "Created session",
         key: sessionKey,
         kind: "direct",
-        model: "gpt-5.5",
-        modelProvider: "openai",
         totalTokens: 0,
         updatedAt: Date.now(),
       },
@@ -242,70 +243,34 @@ export async function expectPendingSessionPlacementStartupBeforeRuntime(
   await waitForCommittedChatRoute(page);
   expect(page.url()).toContain(controlUiSessionPath(sessionKey));
   const startupStatus = page.locator('.chat-thread .chat-working-indicator[role="status"]');
-  await expect.poll(() => startupStatus.count()).toBe(1);
+  await pollCount(startupStatus).toBe(1);
   await pollLocatorText(startupStatus).toContain("Provisioning environment…");
   expect(await page.locator(".chat-cloud-startup, .agent-chat__composer-status-band").count()).toBe(
     0,
   );
-  await expect
-    .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
-    .toBe(true);
+  await pollDisabled(page.locator(".agent-chat__composer-combobox textarea")).toBe(false);
   expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
-  expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+  expect(await gateway.getRequests("chat.send")).toHaveLength(0);
   await captureUiProof(owner, page, "02-cloud-startup-chunk-pending.png");
   return startupStatus;
 }
 
-export async function captureUiProof(
-  owner: { readonly artifactDir: string },
-  page: Page,
-  fileName: string,
-  presentation?: NewSessionProofSurface,
-) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await captureProof(
-    page,
-    path.join(owner.artifactDir, "cloud-worker-session"),
-    fileName,
-    presentation,
-  );
+function proofCapture(directory: string) {
+  return async (
+    owner: { readonly artifactDir: string },
+    page: Page,
+    fileName: string,
+    presentation?: NewSessionProofSurface,
+  ) => {
+    if (captureUiProofEnabled) {
+      await captureProof(page, path.join(owner.artifactDir, directory), fileName, presentation);
+    }
+  };
 }
 
-export async function captureProjectUiProof(
-  owner: { readonly artifactDir: string },
-  page: Page,
-  fileName: string,
-  presentation?: NewSessionProofSurface,
-) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await captureProof(
-    page,
-    path.join(owner.artifactDir, "project-registry"),
-    fileName,
-    presentation,
-  );
-}
-
-export async function captureNewSessionComposerUiProof(
-  owner: { readonly artifactDir: string },
-  page: Page,
-  fileName: string,
-  presentation?: NewSessionProofSurface,
-) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await captureProof(
-    page,
-    path.join(owner.artifactDir, "new-session-slash-menu"),
-    fileName,
-    presentation,
-  );
-}
+export const captureUiProof = proofCapture("cloud-worker-session");
+export const captureProjectUiProof = proofCapture("project-registry");
+export const captureDeviceRuntimeUiProof = proofCapture("device-runtime-gating");
 
 export async function captureEnvironmentMetadataUiProof(
   owner: { readonly artifactDir: string },
@@ -322,34 +287,15 @@ export async function captureEnvironmentMetadataUiProof(
   );
 }
 
-export async function captureDeviceRuntimeUiProof(
-  owner: { readonly artifactDir: string },
-  page: Page,
-  fileName: string,
-  presentation?: NewSessionProofSurface,
-) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await captureProof(
-    page,
-    path.join(owner.artifactDir, "device-runtime-gating"),
-    fileName,
-    presentation,
-  );
-}
-
 async function captureProof(
   page: Page,
   artifactDir: string,
   fileName: string,
   presentation?: NewSessionProofSurface,
 ) {
-  if (page.video()) {
-    await mkdir(artifactDir, { recursive: true });
-    await writeFile(
-      path.join(artifactDir, fileName),
-      await takeControlUiViewportScreenshot(
+  await mkdir(artifactDir, { recursive: true });
+  const screenshot = page.video()
+    ? await takeControlUiViewportScreenshot(
         page,
         presentation?.surface ?? page.locator(".shell"),
         presentation?.content ?? [
@@ -359,15 +305,9 @@ async function captureProof(
             )
             .first(),
         ],
-      ),
-    );
-    return;
-  }
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(artifactDir, fileName),
-  });
+      )
+    : await page.screenshot({ animations: "disabled", fullPage: true });
+  await writeFile(path.join(artifactDir, fileName), screenshot);
 }
 
 export async function pastePng(target: Locator, count = 1) {
@@ -393,67 +333,41 @@ export async function waitForCommittedNewSessionDraft(
   expectedAttachments: number | readonly string[],
 ): Promise<void> {
   const params = new URL(page.url()).searchParams;
-  const scopeKey = JSON.stringify([
-    params.get("agent")?.trim() ?? "",
-    params.get("catalog")?.trim() ?? "",
-    params.get("group")?.trim() ?? "",
-  ]);
+  const scopeKey = JSON.stringify(
+    ["agent", "catalog", "group"].map((key) => params.get(key)?.trim() ?? ""),
+  );
   await waitForCommittedComposerDraft(page, scopeKey, expectedText, expectedAttachments);
 }
 
 export async function waitForGatewayRecoveryScope(page: Page, ready = true) {
-  await page.waitForFunction((expected) => {
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime?: { context: ApplicationContext };
-    };
-    return app.runtime?.context.gateway.snapshot.client?.recoveryScopeReady === expected;
-  }, ready);
+  const application = await getControlUiContextHandle(page);
+  try {
+    await page.waitForFunction(
+      ({ context, expected }) => context.gateway.snapshot.client?.recoveryScopeReady === expected,
+      { context: application, expected: ready },
+    );
+  } finally {
+    await application.dispose();
+  }
 }
 
 export async function replaceGatewayClient(page: Page) {
-  await page.evaluate(() => {
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime?: { context: { gateway: { connect: () => void } } };
-    };
-    if (!app.runtime) {
-      throw new Error("OpenClaw application runtime is unavailable");
-    }
-    app.runtime.context.gateway.connect();
-  });
+  await evaluateControlUiContext(page, (context) => context.gateway.connect());
 }
 
-export async function openNewSessionPlusMenu(page: Page) {
-  const composer = page.locator(".new-session-page__composer");
-  const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
-  await composer.getByRole("button", { name: "Add attachment" }).click();
-  await expect.poll(() => menu.getAttribute("data-view")).toBe("root");
-  return menu;
-}
-
-export async function navigateInApp(page: Page, routeId: string, search = "") {
-  await page.evaluate(
-    ({ targetRouteId, targetSearch }) => {
-      const app = document.querySelector("openclaw-app") as HTMLElement & {
-        runtime?: {
-          context: {
-            navigate: (routeId: string, options?: { search?: string }) => void;
-          };
-        };
-      };
-      if (!app.runtime) {
-        throw new Error("OpenClaw application runtime is unavailable");
-      }
-      app.runtime.context.navigate(targetRouteId, { search: targetSearch });
-    },
-    { targetRouteId: routeId, targetSearch: search },
+export async function navigateInApp(
+  page: Page,
+  routeId: Parameters<ApplicationContext["navigate"]>[0],
+  search = "",
+) {
+  await evaluateControlUiContext(
+    page,
+    (context, target) => context.navigate(target.routeId, { search: target.search }),
+    { routeId, search },
   );
 }
 
-/**
- * Chat first pushes its base path and then commits the canonical session path.
- * A repeated URL alone cannot prove that the router has finished, so require
- * the successful active match and browser location to agree before leaving.
- */
+// Router match and URL must agree after Chat's two-stage path commit.
 export async function waitForCommittedChatRoute(page: Page) {
   await waitForControlUiRoute(page, { pathnamePrefix: "/chat/", routeId: "chat" });
 }

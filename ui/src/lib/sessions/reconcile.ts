@@ -11,14 +11,17 @@ import {
   isPersistedSessionRow,
   isSessionRowOutsideResultScope,
   matchesExistingSession,
+  parseSessionChangedEvent,
   preserveRosterPresentationMetadata,
-  readSessionChangedEvent,
-  reconcileSessionChangedRow,
+  reconcileParsedSessionChangedRow,
   reconcileSessionRow,
+  sessionChangedSnapshots,
+  type SessionChangedEventInfo,
   type SessionChangedRowProjection,
   type SessionChangedRowResult,
   type SessionReconcileOptions,
   type SessionRowObservation,
+  type ParsedSessionChangedEvent,
 } from "./session-row-reconcile.ts";
 import { preserveOmittedThinkingMetadata } from "./session-thinking-metadata.ts";
 
@@ -33,7 +36,37 @@ export type { SessionReconcileOptions, SessionRowObservation } from "./session-r
 export type SessionChangedResult = Omit<
   SessionChangedRowResult,
   "reconciled" | "eventTs" | "ownershipChanged" | "disposition"
-> & { result: SessionsListResult | null };
+> & { result: SessionsListResult | null; admittedRows?: GatewaySessionRow[] };
+
+/** Retain result identity when a membership-preserving projection leaves every row unchanged. */
+export function projectSessionResultRows(
+  result: SessionsListResult | null,
+  sessions: GatewaySessionRow[],
+): SessionsListResult | null {
+  return result && sessions.some((row, index) => row !== result.sessions[index])
+    ? { ...result, sessions }
+    : result;
+}
+
+export function mapSessionResultRows(
+  result: SessionsListResult | null,
+  project: (row: GatewaySessionRow) => GatewaySessionRow,
+): SessionsListResult | null {
+  return result && projectSessionResultRows(result, result.sessions.map(project));
+}
+
+function replaceSessionResultRow(
+  result: SessionsListResult,
+  key: string,
+  row: GatewaySessionRow | undefined,
+): SessionsListResult {
+  const sessions = result.sessions.filter((candidate) => candidate.key !== key);
+  if (row) {
+    sessions.push(row);
+    sessions.sort(compareSessionRowsByUpdatedAt);
+  }
+  return { ...result, count: sessions.length, sessions };
+}
 
 /** Merge canonical and filtered pages with the same cursor/deduplication contract. */
 export function appendSessionResults(
@@ -49,11 +82,7 @@ export function appendSessionResults(
     return true;
   });
   const totalCount = page.totalCount ?? previous.totalCount;
-  const hasMore =
-    page.hasMore ??
-    (typeof totalCount === "number" && Number.isFinite(totalCount)
-      ? sessions.length < totalCount
-      : false);
+  const hasMore = page.hasMore ?? (totalCount !== undefined && sessions.length < totalCount);
   return {
     ...page,
     count: sessions.length,
@@ -72,13 +101,9 @@ export function reconcileRosterPresentationMetadata(
     return incoming;
   }
   const existingByKey = new Map(existing.sessions.map((session) => [session.key, session]));
-  let changed = false;
-  const sessions = incoming.sessions.map((session) => {
-    const reconciled = preserveRosterPresentationMetadata(session, existingByKey.get(session.key));
-    changed ||= reconciled !== session;
-    return reconciled;
-  });
-  return changed ? { ...incoming, sessions } : incoming;
+  return mapSessionResultRows(incoming, (session) =>
+    preserveRosterPresentationMetadata(session, existingByKey.get(session.key)),
+  );
 }
 
 export function preserveCurrentSessionRow(
@@ -112,13 +137,16 @@ export function preserveCurrentSessionRow(
   return result;
 }
 
-export function reconcileSessionChanged(
+function reconcileSessionChangedSnapshot(
   result: SessionsListResult | null,
-  payload: unknown,
+  parsed: ParsedSessionChangedEvent | null,
   options: SessionReconcileOptions = {},
   project?: SessionChangedRowProjection,
 ): SessionChangedResult {
-  const info = readSessionChangedEvent(payload);
+  if (!parsed) {
+    return { applied: false, result };
+  }
+  const [info] = parsed;
   const selectedGlobalAgentId = info?.agentId ?? options.selectedGlobalAgentId ?? null;
   const existing = info
     ? result?.sessions.find((candidate) =>
@@ -126,7 +154,7 @@ export function reconcileSessionChanged(
       )
     : undefined;
   const { row, admittedRow, reconciled, eventTs, ownershipChanged, disposition, ...eventResult } =
-    reconcileSessionChangedRow(existing, payload, options, project);
+    reconcileParsedSessionChangedRow(existing, parsed, options, project);
   if (disposition === "outside-scope") {
     // A foreign row cannot advance this query's clock or invalidate its owner facet.
     return { ...eventResult, row: existing, result };
@@ -145,24 +173,50 @@ export function reconcileSessionChanged(
   if (!result || !existing) {
     return { applied: false, result };
   }
-  let next = result;
-  if (row !== existing) {
-    const sessions = row
-      ? [...result.sessions.filter((candidate) => candidate.key !== existing.key), row].toSorted(
-          compareSessionRowsByUpdatedAt,
-        )
-      : result.sessions.filter((candidate) => candidate.key !== existing.key);
-    next = { ...result, count: sessions.length, sessions };
-  }
+  const next = row === existing ? result : replaceSessionResultRow(result, existing.key, row);
   const timestamped = eventTs !== undefined && eventTs > next.ts ? { ...next, ts: eventTs } : next;
   // Facets describe the whole query, so the list adapter owns their invalidation.
   const published = ownershipChanged ? { ...timestamped, owners: undefined } : timestamped;
-  const retainedRow = info
-    ? published.sessions.find((candidate) =>
-        matchesExistingSession(candidate, info.key, selectedGlobalAgentId),
-      )
-    : undefined;
-  return { ...eventResult, row: retainedRow, admittedRow, result: published };
+  return { ...eventResult, row, admittedRow, result: published };
+}
+
+export function reconcileSessionChanged(
+  result: SessionsListResult | null,
+  payload: unknown,
+  options: SessionReconcileOptions = {},
+  project?: SessionChangedRowProjection,
+  accepts: (info: SessionChangedEventInfo) => boolean = () => true,
+): SessionChangedResult {
+  let nextResult = result;
+  let primary: SessionChangedResult | undefined;
+  const admittedRows: GatewaySessionRow[] = [];
+  for (const snapshot of sessionChangedSnapshots(payload)) {
+    const parsed = parseSessionChangedEvent(snapshot);
+    const info = parsed?.[0];
+    if (
+      info &&
+      (!accepts(info) ||
+        (snapshot !== payload &&
+          nextResult?.sessions.some(
+            (row) =>
+              matchesExistingSession(row, info.key, info.agentId) &&
+              row.sessionId !== info.sessionId,
+          )))
+    ) {
+      continue;
+    }
+    const changed = reconcileSessionChangedSnapshot(nextResult, parsed, options, project);
+    primary ??= changed;
+    nextResult = changed.result;
+    if (changed.admittedRow) {
+      admittedRows.push(changed.admittedRow);
+    }
+  }
+  return {
+    ...(primary ?? { applied: false }),
+    ...(admittedRows.length ? { applied: true, admittedRows } : {}),
+    result: nextResult,
+  };
 }
 
 export function reconcileSessionHistory(
@@ -223,12 +277,5 @@ export function reconcileSessionHistory(
   if (reduced.disposition !== "accepted") {
     return resultWithDefaults;
   }
-  const visibleKey = matching?.key ?? row.key;
-  const sessions = reduced.row
-    ? [
-        ...result.sessions.filter((candidate) => candidate.key !== visibleKey),
-        reduced.row,
-      ].toSorted(compareSessionRowsByUpdatedAt)
-    : result.sessions.filter((candidate) => candidate.key !== visibleKey);
-  return { ...result, defaults: nextDefaults, count: sessions.length, sessions };
+  return replaceSessionResultRow(resultWithDefaults, matching?.key ?? row.key, reduced.row);
 }

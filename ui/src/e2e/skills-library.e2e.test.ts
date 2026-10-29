@@ -7,11 +7,10 @@ import type {
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { buildSkillLibraryMock } from "../test-helpers/skill-library-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expectNoRequests, expectRequestCount } from "./workspace-terminal.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Custom skill libraries" });
-const own = buildSkillLibraryMock()[0];
-const shared = buildSkillLibraryMock()[1];
-const team = buildSkillLibraryMock()[2];
+const [own, shared, team] = buildSkillLibraryMock();
 const list: SkillsLibraryListResult = {
   entries: [own.entry, shared.entry, team.entry],
   profileId: "profile-alice",
@@ -33,6 +32,31 @@ const status = {
   skills: [],
 };
 
+function libraryGateway(page: Page, methodResponses: Record<string, unknown> = {}) {
+  return installMockGateway(page, {
+    operatorScopes: ["operator.read", "operator.write"],
+    methodResponses: {
+      "skills.library.list": list,
+      "skills.status": status,
+      "skills.library.save": published,
+      ...methodResponses,
+    },
+  });
+}
+
+const newSkill = (files: Array<{ path: string; content: string; encoding: "utf8" }> = []) => ({
+  slug: "release-notes",
+  content: own.content,
+  files,
+  expectedRevision: null,
+});
+
+async function openSkillSettings(page: Page) {
+  await page.goto(`${suite.server.baseUrl}skills`);
+  await page.getByRole("button", { name: "Skill settings", exact: true }).click();
+  await page.waitForURL(`${suite.server.baseUrl}settings/skills?agent=main`);
+}
+
 async function expectLibraryDialogOpen(page: Page) {
   const dialog = page.locator("openclaw-modal-dialog dialog");
   await dialog.evaluate(async (element) => {
@@ -45,6 +69,7 @@ async function expectLibraryDialogOpen(page: Page) {
 }
 
 async function expectSkillNameValidation(page: Page) {
+  await expectLibraryDialogOpen(page);
   const input = page.getByLabel("Skill name", { exact: true });
   await input.hover();
   await page
@@ -73,73 +98,10 @@ async function expectSkillNameValidation(page: Page) {
 }
 
 suite.define(() => {
-  it("keeps workspace creation for a solo shared-token admin with many channel identities", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      const proposal = {
-        record: { id: "proposal-synthetic", status: "pending" },
-        content: "Draft",
-        revisionHash: "a".repeat(64),
-      };
-      const gateway = await installMockGateway(page, {
-        presenceUsers: [
-          { id: "channel-1", name: "Sender one" },
-          { id: "channel-2", name: "Sender two" },
-          { id: "channel-3", name: "Sender three" },
-        ],
-        methodResponses: {
-          "skills.library.list": {
-            entries: [],
-            profileId: null,
-            multipleProfiles: false,
-            defaultTarget: "workspace",
-            canManageWorkspace: true,
-            defaultSelectionLimit: 64,
-          },
-          "skills.status": status,
-          "skills.proposals.create": proposal,
-          "skills.proposals.apply": {
-            record: { ...proposal.record, status: "applied" },
-            targetSkillFile: "/tmp/synthetic-workspace/skills/checklist/SKILL.md",
-          },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}skills`);
-      await page.getByRole("button", { name: "Create skill", exact: true }).click();
-      expect(await page.getByText("My skills", { exact: true }).count()).toBe(0);
-      expect(await page.getByText("Team", { exact: true }).count()).toBe(0);
-      await page.getByLabel("Skill name", { exact: true }).fill("checklist");
-      await page.getByLabel("Description", { exact: true }).fill("A repeatable checklist");
-      await page
-        .getByLabel("SKILL.md", { exact: true })
-        .fill("---\nname: checklist\ndescription: A repeatable checklist\n---\nDo the work.\n");
-      await page.getByRole("button", { name: "Save workspace proposal" }).click();
-      const request = await gateway.waitForRequest("skills.proposals.create");
-      expect(request.params).toMatchObject({ agentId: "main", name: "checklist" });
-      await page.getByText(/pending review and is not active yet/u).waitFor();
-      expect(await gateway.getRequests("skills.proposals.apply")).toHaveLength(0);
-      await page.getByRole("button", { name: "Apply to workspace" }).click();
-      expect((await gateway.waitForRequest("skills.proposals.apply")).params).toEqual({
-        agentId: "main",
-        proposalId: "proposal-synthetic",
-        expectedRevisionHash: "a".repeat(64),
-      });
-      await page.getByText(/Workspace main: applied/u).waitFor();
-      expect(await gateway.getRequests("skills.library.save")).toHaveLength(0);
-    });
-  });
-
   it("saves and edits an operator's complete bundle, preserving a stale draft on a narrow viewport", async () => {
     await suite.withPage({ viewport: { width: 375, height: 844 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        operatorScopes: ["operator.read", "operator.write"],
-        methodResponses: {
-          "skills.library.list": list,
-          "skills.status": status,
-          "skills.library.read": own,
-          "skills.library.save": published,
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}skills`);
+      const gateway = await libraryGateway(page, { "skills.library.read": own });
+      await openSkillSettings(page);
       await page.getByRole("button", { name: "Create skill", exact: true }).click();
       await expectSkillNameValidation(page);
       await page.getByLabel("Skill name", { exact: true }).fill("a".repeat(64));
@@ -149,12 +111,7 @@ suite.define(() => {
       await page.getByLabel("Skill name", { exact: true }).fill("release-notes");
       await page.getByLabel("SKILL.md", { exact: true }).fill(own.content);
       await page.getByLabel("SKILL.md", { exact: true }).press("Control+Enter");
-      expect((await gateway.waitForRequest("skills.library.save")).params).toEqual({
-        slug: "release-notes",
-        content: own.content,
-        files: [],
-        expectedRevision: null,
-      });
+      expect((await gateway.waitForRequest("skills.library.save")).params).toEqual(newSkill());
       await page.getByText(/Saved release-notes to personal library/u).waitFor();
       await page.getByRole("button", { name: "Close", exact: true }).click();
       await page.getByRole("button", { name: /release-notes Draft concise/u }).click();
@@ -190,9 +147,7 @@ suite.define(() => {
       expect(await page.getByLabel("SKILL.md", { exact: true }).inputValue()).toBe(draft);
       await gateway.deferNext("skills.library.save");
       await page.getByRole("button", { name: "Save skill", exact: true }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("skills.library.save")).length)
-        .toBe(2);
+      await expectRequestCount(gateway, "skills.library.save", 2);
       const saves = await gateway.getRequests("skills.library.save");
       expect(await page.getByRole("button", { name: "Close", exact: true }).isDisabled()).toBe(
         true,
@@ -204,9 +159,10 @@ suite.define(() => {
         slug: own.entry.slug,
         expectedRevision: own.entry.revision,
         content: draft,
-        files: own.files.map((file) =>
-          file.path === "assets/sample.bin" ? { ...file, executable: true } : file,
-        ),
+        files: own.files
+          .filter((file) => file.path === "assets/sample.bin")
+          .map(({ path, content, encoding }) => ({ path, content, encoding, executable: true })),
+        retainFiles: ["references/checklist.md"],
       });
       await gateway.rejectDeferred("skills.library.save", {
         code: "INVALID_REQUEST",
@@ -260,14 +216,12 @@ suite.define(() => {
       await expect
         .poll(() => page.getByLabel("SKILL.md", { exact: true }).inputValue())
         .toBe(externalContent);
-      for (const method of [
+      await expectNoRequests(gateway, [
         "skills.install",
         "skills.update",
         "config.patch",
         "skills.library.activate",
-      ]) {
-        expect(await gateway.getRequests(method)).toHaveLength(0);
-      }
+      ]);
     });
   });
 
@@ -275,15 +229,8 @@ suite.define(() => {
     "keeps the file picker aligned through add, select, delete and keyboard save at %ipx",
     async (width) => {
       await suite.withPage({ viewport: { width, height: 900 } }, async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          operatorScopes: ["operator.read", "operator.write"],
-          methodResponses: {
-            "skills.library.list": list,
-            "skills.status": status,
-            "skills.library.save": published,
-          },
-        });
-        await page.goto(`${suite.server.baseUrl}skills`);
+        const gateway = await libraryGateway(page);
+        await openSkillSettings(page);
         await page.getByRole("button", { name: "Create skill", exact: true }).click();
         await page.getByLabel("Skill name", { exact: true }).fill("release-notes");
         const skill = page.getByLabel("SKILL.md", { exact: true });
@@ -296,18 +243,15 @@ suite.define(() => {
         expect(await picker.inputValue()).toBe("references/lilac.txt");
         expect(await support.inputValue()).toBe("Supporting instructions.\n");
         await support.press("Control+Enter");
-        expect((await gateway.waitForRequest("skills.library.save")).params).toEqual({
-          slug: "release-notes",
-          content: own.content,
-          files: [
+        expect((await gateway.waitForRequest("skills.library.save")).params).toEqual(
+          newSkill([
             {
               path: "references/lilac.txt",
               content: "Supporting instructions.\n",
               encoding: "utf8",
             },
-          ],
-          expectedRevision: null,
-        });
+          ]),
+        );
         await page.getByText(/Saved release-notes to personal library/u).waitFor();
         expect(await picker.inputValue()).toBe("references/lilac.txt");
         expect(await support.inputValue()).toBe("Supporting instructions.\n");
@@ -325,9 +269,7 @@ suite.define(() => {
         expect(await skill.inputValue()).toBe(own.content);
         expect(await picker.locator('option[value="references/lilac.txt"]').count()).toBe(0);
         await skill.press("Control+Enter");
-        await expect
-          .poll(async () => (await gateway.getRequests("skills.library.save")).length)
-          .toBe(2);
+        await expectRequestCount(gateway, "skills.library.save", 2);
         expect((await gateway.getRequests("skills.library.save"))[1]?.params).toEqual({
           skillId: published.entry.skillId,
           expectedRevision: published.entry.revision,
@@ -341,21 +283,15 @@ suite.define(() => {
 
   it("imports local support files privately and keeps shared entries read-only", async () => {
     await suite.withPage({}, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        operatorScopes: ["operator.read", "operator.write"],
-        methodResponses: {
-          "skills.library.list": list,
-          "skills.status": status,
-          "skills.library.read": {
-            cases: [
-              { match: { skillId: shared.entry.skillId }, response: shared },
-              { match: { skillId: team.entry.skillId }, response: team },
-            ],
-          },
-          "skills.library.save": published,
+      const gateway = await libraryGateway(page, {
+        "skills.library.read": {
+          cases: [
+            { match: { skillId: shared.entry.skillId }, response: shared },
+            { match: { skillId: team.entry.skillId }, response: team },
+          ],
         },
       });
-      await page.goto(`${suite.server.baseUrl}skills`);
+      await openSkillSettings(page);
       await page.getByRole("button", { name: "Import skill", exact: true }).click();
       await expectSkillNameValidation(page);
       await page.getByLabel("Skill name", { exact: true }).fill("a".repeat(64));
@@ -406,11 +342,14 @@ suite.define(() => {
       await page.getByRole("radio", { name: "Team", exact: true }).click();
       await page.getByRole("button", { name: /release-notes Prepare the team's/u }).click();
       await page.getByText(/Only its owner or an authorized administrator/u).waitFor();
+      // The read-only checks can finish while the reader is still animating in.
+      await expectLibraryDialogOpen(page);
       expect(await page.getByRole("button", { name: "Transfer to team" }).count()).toBe(0);
       expect(await page.getByRole("button", { name: "Share with team" }).count()).toBe(0);
       expect(await page.getByRole("button", { name: "Save skill", exact: true }).count()).toBe(0);
       expect(await page.getByLabel("Executable supporting file").count()).toBe(0);
       await page.getByRole("button", { name: "Close", exact: true }).click();
+      await page.locator("openclaw-modal-dialog").waitFor({ state: "detached" });
       await page.getByRole("button", { name: /support-triage Turn a support report/u }).click();
       await page
         .getByText(`Team · revision ${team.entry.revision.slice(0, 8)}`, { exact: true })
@@ -419,8 +358,7 @@ suite.define(() => {
       await page.getByText("Skill details", { exact: true }).click();
       await page.getByText(team.entry.skillId, { exact: true }).waitFor();
       expect(await page.getByRole("button", { name: "Save skill", exact: true }).count()).toBe(0);
-      expect(await gateway.getRequests("skills.install")).toHaveLength(0);
-      expect(await gateway.getRequests("skills.update")).toHaveLength(0);
+      await expectNoRequests(gateway, ["skills.install", "skills.update"]);
     });
   });
 
@@ -449,7 +387,7 @@ suite.define(() => {
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}skills`);
+      await openSkillSettings(page);
       await page.getByRole("button", { name: "Import skill", exact: true }).click();
       await page.getByLabel("Skill name", { exact: true }).fill("release-notes");
       await page
@@ -481,8 +419,7 @@ suite.define(() => {
         { action: "chunk", uploadId, offset: 0, data: bytes.toString("base64") },
         { action: "commit", uploadId },
       ]);
-      expect(await gateway.getRequests("skills.install")).toHaveLength(0);
-      expect(await gateway.getRequests("skills.library.save")).toHaveLength(0);
+      await expectNoRequests(gateway, ["skills.install", "skills.library.save"]);
       expect(pageErrors).toEqual([]);
     });
   });
@@ -502,7 +439,7 @@ suite.define(() => {
           "skills.library.mutate": published,
         },
       });
-      await page.goto(`${suite.server.baseUrl}skills`);
+      await openSkillSettings(page);
       await page.getByRole("button", { name: /release-notes Draft concise/u }).click();
       await page.getByRole("button", { name: "Share with team", exact: true }).click();
       expect((await gateway.waitForRequest("skills.library.mutate")).params).toMatchObject({
@@ -520,9 +457,7 @@ suite.define(() => {
       });
       await page.getByLabel("Retained revision").selectOption(oldRevision);
       await page.getByRole("button", { name: "Restore revision" }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("skills.library.mutate")).length)
-        .toBe(2);
+      await expectRequestCount(gateway, "skills.library.mutate", 2);
       expect((await gateway.getRequests("skills.library.mutate"))[1]?.params).toMatchObject({
         skillId: own.entry.skillId,
         action: "rollback",

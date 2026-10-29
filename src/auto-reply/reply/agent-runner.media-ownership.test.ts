@@ -1,0 +1,111 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import {
+  createMediaFollowupRun,
+  createReplyMediaContextRuntimeMock,
+  makeRunReplyAgentParams,
+  resolveOutboundAttachmentFromUrlMock,
+  runEmbeddedAgentMock,
+  runReplyAgent,
+  resetAgentRunnerMediaTestState,
+  cleanupAgentRunnerMediaTestState,
+} from "./agent-runner.media-paths.test-harness.js";
+
+describe("runReplyAgent media delivery ownership", () => {
+  beforeEach(resetAgentRunnerMediaTestState);
+  afterEach(cleanupAgentRunnerMediaTestState);
+
+  it.each([
+    { sessionKey: "agent:qa:main", provider: "webchat", gateway: true },
+    { sessionKey: "global", provider: "slack", gateway: false },
+  ])(
+    "keeps $sessionKey media with its prepared delivery owner (gateway=$gateway, provider=$provider)",
+    async ({ sessionKey, provider, gateway }) => {
+      const { drainGlobalSingletonLifecycleState } =
+        await import("../../shared/global-singleton.js");
+      const { withOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+      await withOpenClawTestState(
+        { layout: "state-only", label: "agent-media-owner" },
+        async (state) => {
+          try {
+            const selected = state.path("project");
+            const bytes = Buffer.from(
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+              "base64",
+            );
+            const sources = [
+              path.join(selected, "generated.png"),
+              state.path("outside", "outside.png"),
+            ];
+            for (const file of sources) {
+              await mkdir(path.dirname(file), { recursive: true });
+              await writeFile(file, bytes);
+            }
+            const config: OpenClawConfig = {
+              tools: { allow: ["read"] },
+              agents: {
+                ownership: "explicit",
+                entries: { qa: { workspace: state.workspaceDir }, beta: {} },
+              },
+            };
+            const workspaceScope = { permissionMode: "workspace" as const, sessionRoot: selected };
+            setRuntimeConfigSnapshot(config, config);
+            const replyOperation = createReplyOperation({
+              sessionKey,
+              sessionId: "session",
+              agentId: "qa",
+              resetTriggered: false,
+            });
+            onTestFinished(() => replyOperation.complete());
+            const actual = await vi.importActual<
+              typeof import("../../media/outbound-attachment.js")
+            >("../../media/outbound-attachment.js");
+            resolveOutboundAttachmentFromUrlMock.mockImplementation(
+              actual.resolveOutboundAttachmentFromUrl,
+            );
+            runEmbeddedAgentMock.mockResolvedValue({
+              payloads: [{ text: sources.map((file) => `MEDIA:${file}`).join("\n") }],
+              meta: { agentMeta: { sessionId: "session", provider: "anthropic", model: "claude" } },
+            });
+            const result = await runReplyAgent(
+              await makeRunReplyAgentParams({
+                sessionKey,
+                provider,
+                replyOperation,
+                followupRun: createMediaFollowupRun({
+                  run: {
+                    agentId: "qa",
+                    sessionKey,
+                    messageProvider: provider,
+                    workspaceDir: selected,
+                    ...workspaceScope,
+                    config,
+                    mediaNormalizationOwner: gateway ? "gateway" : undefined,
+                  },
+                }),
+              }),
+            );
+            assert(result && !Array.isArray(result), "Expected a single reply payload");
+            if (gateway) {
+              expect(result.mediaUrls).toEqual(sources);
+            } else {
+              expect(result.mediaUrls).toHaveLength(2);
+              expect(result.mediaUrls).not.toEqual(sources);
+              for (const file of result.mediaUrls ?? []) {
+                expect(await readFile(file)).toEqual(bytes);
+              }
+            }
+            // The shared spy includes initial preparation; execution must reuse that context.
+            expect(createReplyMediaContextRuntimeMock).toHaveBeenCalledOnce();
+          } finally {
+            await drainGlobalSingletonLifecycleState();
+          }
+        },
+      );
+    },
+  );
+});

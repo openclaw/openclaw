@@ -1,5 +1,6 @@
 {
   "id": "arcee",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },

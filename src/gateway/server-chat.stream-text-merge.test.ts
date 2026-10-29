@@ -1,116 +1,91 @@
-/**
- * Tests chat stream text merging before gateway events reach clients.
- */
-import { describe, expect, it } from "vitest";
-import { mergeAssistantText, type AssistantTextSnapshot } from "./agent-event-assistant-text.js";
+import { expect, it } from "vitest";
+import {
+  createAssistantTextStream,
+  mergeAssistantText,
+  type AssistantTextSnapshot,
+} from "./agent-event-assistant-text.js";
 import { capLiveAssistantText } from "./live-chat-projector.js";
 
 const LIVE_CHAT_BUFFER_CHARS = 500_000;
 
-describe("server chat stream text merge", () => {
-  it.each([
-    {
-      name: "repeated digits",
-      chunks: ["1", "1", "1"],
-      expected: "111",
-    },
-    {
-      name: "repeated CJK punctuation",
-      chunks: ["。", "。", "。"],
-      expected: "。。。",
-    },
-    {
-      name: "repeated markdown emphasis tokens",
-      chunks: ["**", "**"],
-      expected: "****",
-    },
-    {
-      name: "repeated markdown table separators",
-      chunks: ["|", "|", "|"],
-      expected: "|||",
-    },
-  ])("appends incremental deltas without collapsing $name", ({ chunks, expected }) => {
-    const merged = chunks.reduce<AssistantTextSnapshot>(
-      (previous, delta) => mergeAssistantText(previous, { text: delta, delta }, "live"),
-      { text: "" },
-    );
+const merge = (
+  previous: string | AssistantTextSnapshot,
+  input: Parameters<typeof mergeAssistantText>[1],
+) =>
+  mergeAssistantText(typeof previous === "string" ? { text: previous } : previous, input, "live");
 
-    expect(merged.text).toBe(expected);
-  });
+it("keeps certified raw appends independent of display text and reconciles final corrections", () => {
+  const stream = createAssistantTextStream(false);
+  expect([
+    stream.update({ itemId: "answer", text: "provisional display" }, "Raw"),
+    stream.update({ itemId: "answer", text: "different display" }, " bytes"),
+    stream.streamedText,
+    stream.update({ itemId: "answer", text: "Raw bytes!", replace: true }),
+    stream.update({ itemId: "answer", text: "Correction", replace: true }),
+  ]).toEqual([
+    { delta: "Raw" },
+    { delta: " bytes" },
+    "Raw bytes",
+    { delta: "!", replacement: "representable" },
+    { replacement: "unrepresentable" },
+  ]);
+});
 
-  it.each([
-    {
-      name: "growing cumulative snapshots",
-      previous: "Hello",
-      input: { text: "Hello world", delta: " world" },
-      live: "Hello world",
-      appendOnly: "Hello world",
-    },
-    {
-      name: "incremental segments after tool calls",
-      previous: "Before tool call",
-      input: { text: "After tool call", delta: "\nAfter tool call" },
-      live: "Before tool call\nAfter tool call",
-      appendOnly: "Before tool call\nAfter tool call",
-    },
-    {
-      name: "non-prefix snapshots with empty deltas",
-      previous: "coordination draft",
-      input: { text: "final answer", delta: "" },
-      live: "final answer",
-      appendOnly: "coordination draft",
-    },
-    {
-      name: "repeated text with an explicit delta",
-      previous: "Echo",
-      input: { text: "Echo", delta: "Echo" },
-      live: "EchoEcho",
-      appendOnly: "Echo",
-    },
-  ])("preserves legacy unkeyed handling of $name", ({ previous, input, live, appendOnly }) => {
-    expect(mergeAssistantText({ text: previous }, input, "live").text).toBe(live);
-    expect(mergeAssistantText({ text: previous }, input, "append-only").text).toBe(appendOnly);
-  });
+it.each([
+  ["coordination draft", "final answer", "", "final answer", "coordination draft"],
+  ["Echo", "Echo", "Echo", "EchoEcho", "Echo"],
+])("preserves legacy unkeyed handling from %j to %j", (previous, text, delta, live, appendOnly) => {
+  const input = { text, delta };
+  expect(mergeAssistantText({ text: previous }, input, "live").text).toBe(live);
+  expect(mergeAssistantText({ text: previous }, input, "append-only").text).toBe(appendOnly);
+});
 
-  it("caps merged live text while preserving the newest assistant output", () => {
-    const result = capLiveAssistantText(
-      mergeAssistantText(
-        { text: "a".repeat(LIVE_CHAT_BUFFER_CHARS - 2) },
-        { delta: "bbbb" },
-        "live",
-      ),
-    );
+it("does not resurrect a discarded scoped prefix after a shorter correction", () => {
+  const snapshot = "y".repeat(LIVE_CHAT_BUFFER_CHARS - 6);
+  const merged = merge("x🚀keep", { itemId: "answer", text: snapshot, delta: snapshot });
+  const capped = capLiveAssistantText(merged);
+  expect(capped).toBe(`keep\n\n${snapshot}`);
+  expect(
+    capLiveAssistantText(
+      merge({ text: capped, scope: merged.scope }, { itemId: "answer", text: "!", delta: "" }),
+    ),
+  ).toBe("keep\n\n!");
+});
 
-    expect(result).toHaveLength(LIVE_CHAT_BUFFER_CHARS);
-    expect(result.endsWith("bbbb")).toBe(true);
-  });
+it("owes the paragraph boundary to a new item that starts with a delta, not to its later deltas", () => {
+  const first = merge("First.", { itemId: "next-item", delta: "Sec" });
+  expect(first.text).toBe("First.\n\nSec");
+  const grown = merge(first, { itemId: "next-item", delta: "ond." });
+  expect(grown.text).toBe("First.\n\nSecond.");
+  expect(merge(grown, { itemId: "next-item", text: "Second!", delta: "!" }).text).toBe(
+    "First.\n\nSecond!",
+  );
+});
 
-  it("does not resurrect a discarded scoped prefix after a shorter correction", () => {
-    const snapshot = "y".repeat(LIVE_CHAT_BUFFER_CHARS - 5);
-    const merged = mergeAssistantText(
-      { text: "x🚀keep" },
-      { itemId: "answer", text: snapshot, delta: snapshot },
-      "live",
-    );
-    const capped = capLiveAssistantText(merged);
-    expect(capped).toBe(`keep${snapshot}`);
-    expect(
-      capLiveAssistantText(
-        mergeAssistantText(
-          { text: capped, scope: merged.scope },
-          { itemId: "answer", text: "!", delta: "" },
-          "live",
-        ),
-      ),
-    ).toBe("keep!");
-  });
+it("does not start the capped tail with the low half of a surrogate pair", () => {
+  const safeTail = "y".repeat(LIVE_CHAT_BUFFER_CHARS - 1);
+  const result = capLiveAssistantText(merge("", { text: `x🚀${safeTail}`, delta: "" }));
+  expect(result).toBe(safeTail);
+});
 
-  it("does not start the capped tail with the low half of a surrogate pair", () => {
-    const safeTail = "y".repeat(LIVE_CHAT_BUFFER_CHARS - 1);
-    const result = capLiveAssistantText(
-      mergeAssistantText({ text: "" }, { text: `x🚀${safeTail}`, delta: "" }, "live"),
-    );
+it.each([
+  { itemLength: LIVE_CHAT_BUFFER_CHARS - 1, corrected: "\n!" },
+  { itemLength: LIVE_CHAT_BUFFER_CHARS + 1, corrected: "!" },
+])("retains only the uncapped boundary for length $itemLength", ({ itemLength, corrected }) => {
+  const merged = merge("First.", { itemId: "answer", text: "y".repeat(itemLength) });
+  const capped = capLiveAssistantText(merged);
+  expect(capped).toHaveLength(LIVE_CHAT_BUFFER_CHARS);
+  const grown = merge({ text: capped, scope: merged.scope }, { itemId: "answer", delta: "?" });
+  expect(grown.text).toBe(`${capped}?`);
+  const replacement = merge(grown, { itemId: "answer", text: "!" });
+  expect(replacement.text).toBe(corrected);
+  expect(merge(replacement, { itemId: "answer", delta: "?" }).text).toBe(`${corrected}?`);
+});
 
-    expect(result).toBe(safeTail);
-  });
+it("recalculates padding when a current-item snapshot gains a leading newline", () => {
+  const previous = merge("First.", { itemId: "answer", text: "\nSecond." });
+  expect(previous.text).toBe("First.\n\nSecond.");
+  const corrected = merge(previous, { itemId: "answer", text: "\n\nSecond." });
+  expect(corrected.text).toBe("First.\n\nSecond.");
+  expect(merge(corrected, { itemId: "answer", delta: "!" }).text).toBe("First.\n\nSecond.!");
 });

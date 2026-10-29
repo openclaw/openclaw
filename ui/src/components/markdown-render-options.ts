@@ -1,25 +1,30 @@
-type MarkdownCodeBlockChrome = "copy" | "none";
-type MarkdownCodeBlockInteraction = "interactive" | "static";
-type MarkdownTableInteractions = "enabled" | "none";
-type MarkdownRenderMode = "document" | "message";
+import type { HumanMention } from "@openclaw/gateway-protocol";
+
+export type MarkdownHumanMentionToken = { marker: string; profileId: string; label: string };
+
+// Larger message-mode inputs use the literal-text fallback instead of Markdown parsing.
+export const MARKDOWN_PARSE_LIMIT = 40_000;
 
 export type MarkdownRenderOptions = {
   assistantTranscriptRoleHeaders?: boolean;
-  codeBlockChrome?: MarkdownCodeBlockChrome;
-  codeBlockInteraction?: MarkdownCodeBlockInteraction;
+  codeBlockChrome?: "copy" | "none";
+  codeBlockInteraction?: "interactive" | "static";
   fileLinks?: boolean;
-  githubRepo?: { owner: string; repo: string } | null;
+  /** Selection cues accept query-bearing references without resolving or reading them. */
+  documentFileLinks?: boolean | "select";
+  humanMentions?: readonly HumanMention[];
   interactiveImages?: boolean;
   linkFavicons?: boolean;
   progressBars?: boolean;
-  mode?: MarkdownRenderMode;
+  mode?: "document" | "message";
   remoteImages?: boolean;
   sessionLinks?: boolean;
-  tableInteractions?: MarkdownTableInteractions;
+  tableInteractions?: "enabled" | "none";
 };
 
 export type MarkdownRenderEnv = Required<MarkdownRenderOptions> & {
   streamingOpenFence?: boolean;
+  humanMentionTokens?: readonly MarkdownHumanMentionToken[];
 };
 
 export function normalizeMarkdownRenderOptions(
@@ -30,7 +35,8 @@ export function normalizeMarkdownRenderOptions(
     codeBlockChrome: options.codeBlockChrome ?? "copy",
     codeBlockInteraction: options.codeBlockInteraction ?? "static",
     fileLinks: options.fileLinks ?? false,
-    githubRepo: options.githubRepo ?? null,
+    documentFileLinks: options.documentFileLinks ?? false,
+    humanMentions: options.humanMentions ?? [],
     interactiveImages: options.interactiveImages ?? false,
     linkFavicons: options.linkFavicons ?? false,
     progressBars: options.progressBars ?? false,

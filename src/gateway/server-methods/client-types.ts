@@ -1,13 +1,12 @@
-import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { RuntimeContextFragment } from "../../agents/internal-runtime-context.js";
+import type { RequesterOrigin } from "../../agents/requester-origin.js";
+import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { TranscriptSenderIdentity } from "../../chat/sender-identity.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
-import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
-import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.js";
-import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
-import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
-import type { TrustedSessionCreation } from "./session-creation-provenance.js";
+import type { GatewayWsClient } from "../server/ws-types.js";
+import type { TrustedSessionCreation } from "../session-creation-provenance.js";
 
 /** Trusted in-process spawn control plane that already owns this run's task row.
     Gateway CLI tracking only covers runs nobody else records, so a marked run
@@ -18,6 +17,11 @@ export type GatewayAgentRunTaskOwner = "plugin_subagent" | "native_subagent";
 export type TrustedAgentToolCaller = Readonly<{
   agentId: string;
   sessionKey: string;
+  requesterOrigin?: RequesterOrigin;
+  /** Parent audit binding captured with this caller; never grants execution authority. */
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
+  /** Exact admitted requester lifetime; identity alone does not establish live authority. */
+  assertCurrent?: () => void;
 }>;
 
 /** Closure-bound streaming hooks attached only to trusted plugin-owned synthetic clients. */
@@ -28,42 +32,44 @@ export type GatewayNodeInvokeStream = {
   isRuntimeCurrent: () => boolean;
 };
 
-/** Per-connection client metadata captured after the gateway handshake. */
-export type GatewayClient = {
-  connect: ConnectParams;
-  /** Transport-owned revocation marker; retained callers have no authority after invalidation. */
-  invalidated?: boolean;
-  /** Host-owned transport retirement notification; does not cancel ordinary admitted RPCs. */
-  connectionSignal?: AbortSignal;
+/** Handshake metadata retained for RPCs; transport retirement does not cancel admitted work. */
+export type GatewayClient = Pick<
+  GatewayWsClient,
+  | "connect"
+  | "authPolicy"
+  | "invalidated"
+  | "connectionSignal"
+  | "remoteControlUiIngress"
+  | "browserOrigin"
+  | "presenceKey"
+  | "presenceSnapshot"
+  | "includeSessionMessageBodies"
+  | "clientIp"
+  | "pairedClientId"
+  | "authenticatedUserId"
+  | "authenticatedFactoryGitHubAccountId"
+  | "authenticatedUserIsTailscaleProvider"
+  | "authenticatedGitHubIdentitySync"
+  | "preparedSessionProfile"
+  | "pluginSurfaceUrls"
+  | "pluginNodeCapabilitySurfaces"
+  | "pluginNodeCapabilities"
+  | "isDeviceTokenAuth"
+  | "sharedGatewaySessionGeneration"
+> & {
+  usesSharedGatewayAuth?: boolean;
   connId?: string;
-  presenceKey?: string;
-  clientIp?: string;
-  /** Client id verified against the server-approved device pairing record. */
-  pairedClientId?: string;
-  authenticatedUserId?: string;
-  /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
-  authenticatedUserIsTailscaleProvider?: boolean;
-  authenticatedGitHubIdentitySync?: AuthenticatedGitHubIdentitySync;
-  authenticatedUserProfile?: {
-    profileId: string;
-    displayName: string | null;
+  authenticatedUserProfile?: Omit<
+    NonNullable<GatewayWsClient["authenticatedUserProfile"]>,
+    "avatarRevision"
+  > & {
     avatarRevision?: string;
-    hasAvatar: boolean;
-    updatedAt: number;
   };
-  pluginSurfaceUrls?: Record<string, string>;
-  pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;
-  pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;
-  isDeviceTokenAuth?: boolean;
-  internal?: {
-    /** Handshake-attested direct-local transport; never accepted from wire params. */
-    isLocalClient?: true;
-    /** Authenticated Control UI admin admission; never accepted from wire params. */
-    controlUiAdmin?: true;
+  internal?: NonNullable<GatewayWsClient["internal"]> & {
     /** Marks the server-constructed client used by trusted in-process dispatch. */
     syntheticClient?: true;
-    /** Host-owned role authority retained separately from an autonomous run principal. */
-    operatorRoleActor?: GatewayOperatorRoleActor;
+    /** Original source restriction carried only by trusted in-process run admission. */
+    operatorRunAuthority?: AdmittedRunOperatorAuthority;
     /** Overrides persisted sender attribution without changing the authorizing client identity. */
     senderAttribution?: { id: string; name?: string; identity?: TranscriptSenderIdentity };
     /** Trusted session creation provenance; never accepted from Gateway wire params. */
@@ -72,8 +78,9 @@ export type GatewayClient = {
     agentToolCaller?: TrustedAgentToolCaller;
     allowModelOverride?: boolean;
     approvalRuntime?: boolean;
+    /** Host-bound owner for one plugin approval request, without reviewer authority. */
+    pluginApprovalRequestOwnerId?: string;
     cronRunContinuation?: boolean;
-    agentRuntimeIdentity?: AgentRuntimeIdentity;
     pluginRuntimeOwnerId?: string;
     /** Host-attested session provenance for a trusted official plugin node invocation. */
     nodeInvokeApprovalSessionKey?: string;
@@ -82,10 +89,9 @@ export type GatewayClient = {
     agentRunTracking?: GatewayAgentRunTaskOwner;
     /** Host-captured requester lineage for opt-in plugin subagent completion delivery. */
     pluginSubagentRequester?: PluginSubagentRequesterContext;
-    /** Host-owned exact media set for a scoped automatic recovery delivery. */
-    internalDeliveryMediaUrls?: string[];
     runtimeContextFragments?: RuntimeContextFragment[];
-    internalDeliverySuppressText?: boolean;
+    /** Host-owned: deliver only authored output, never runtime error payloads. */
+    internalDeliverySuppressErrors?: boolean;
     /** Plugin-owned tools authorized for this internal subagent run. */
     runtimePluginToolGrant?: RuntimePluginToolGrant;
     /** Host-owned exact tool cap for a tracked plugin subagent run. */

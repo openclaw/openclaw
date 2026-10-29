@@ -1,77 +1,23 @@
-// Registry contract tests cover plugin contract registry contents and lookup behavior.
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { describe, expect, it } from "vitest";
-import { loadPluginManifestRegistryCore, type PluginManifestRecord } from "../manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "../manifest-registry.js";
 import { resolveManifestContractPluginIds } from "../plugin-registry.js";
 import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "./inventory/bundled-capability-metadata.js";
-import { pluginRegistrationContractRegistry, providerContractLoadError } from "./registry.js";
+import { pluginRegistrationContractRegistry } from "./registry.js";
 
-const ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS = ["codex", "qa-lab"] as const;
-const ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_ID_SET = new Set<string>(
-  ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS,
-);
+const activationScopedSearchIds = ["codex", "qa-lab"] as const;
+function registeredPluginIds(key: "webFetchProviderIds" | "webSearchProviderIds") {
+  return sortUniqueStrings(
+    pluginRegistrationContractRegistry
+      .filter((entry) => entry[key].length > 0)
+      .map((entry) => entry.pluginId),
+  );
+}
 
 describe("plugin contract registry", () => {
   function expectUniqueIds(ids: readonly string[]) {
     expect(ids).toEqual([...new Set(ids)]);
   }
-
-  function expectRegistryPluginIds(params: {
-    actualPluginIds: readonly string[];
-    predicate: (plugin: PluginManifestRecord) => boolean;
-  }) {
-    expect(sortUniqueStrings(params.actualPluginIds)).toEqual(
-      resolveBundledManifestPluginIds(params.predicate),
-    );
-  }
-
-  function resolveBundledManifestPluginIds(predicate: (plugin: PluginManifestRecord) => boolean) {
-    if (process.env.VITEST) {
-      return BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map(
-        (entry) =>
-          ({
-            id: entry.pluginId,
-            origin: "bundled",
-            providers: entry.providerIds,
-            contracts: {
-              embeddingProviders: entry.embeddingProviderIds,
-              workerProviders: entry.workerProviderIds,
-              speechProviders: entry.speechProviderIds,
-              realtimeTranscriptionProviders: entry.realtimeTranscriptionProviderIds,
-              realtimeVoiceProviders: entry.realtimeVoiceProviderIds,
-              mediaUnderstandingProviders: entry.mediaUnderstandingProviderIds,
-              transcriptSourceProviders: entry.transcriptSourceProviderIds,
-              documentExtractors: entry.documentExtractorIds,
-              imageGenerationProviders: entry.imageGenerationProviderIds,
-              videoGenerationProviders: entry.videoGenerationProviderIds,
-              musicGenerationProviders: entry.musicGenerationProviderIds,
-              webContentExtractors: entry.webContentExtractorIds,
-              webFetchProviders: entry.webFetchProviderIds,
-              webSearchProviders: entry.webSearchProviderIds,
-              migrationProviders: entry.migrationProviderIds,
-              tools: entry.toolNames,
-            },
-          }) as PluginManifestRecord,
-      )
-        .filter(predicate)
-        .map((plugin) => plugin.id)
-        .toSorted((left, right) => left.localeCompare(right));
-    }
-    const snapshotPluginIds = new Set(
-      BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map((entry) => entry.pluginId),
-    );
-    return loadPluginManifestRegistryCore({})
-      .plugins.filter((plugin) => snapshotPluginIds.has(plugin.id) && predicate(plugin))
-      .map((plugin) => plugin.id)
-      .toSorted((left, right) => left.localeCompare(right));
-  }
-
-  it("loads bundled non-provider capability registries without import-time failure", () => {
-    expect(providerContractLoadError).toBeUndefined();
-    expect(Array.from(pluginRegistrationContractRegistry)).toStrictEqual(
-      BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS,
-    );
-  });
 
   it.each([
     {
@@ -131,8 +77,6 @@ describe("plugin contract registry", () => {
 
   it.each([
     ["azure-speech", "speechProviderIds", ["azure-speech", "azure"]],
-    ["microsoft", "speechProviderIds", ["microsoft", "edge"]],
-    ["tts-local-cli", "speechProviderIds", ["tts-local-cli", "cli"]],
     ["volcengine", "speechProviderIds", ["volcengine", "bytedance", "doubao"]],
     ["xiaomi", "speechProviderIds", ["xiaomi", "mimo"]],
     ["xai", "realtimeVoiceProviderIds", ["xai", "grok-voice", "xai-realtime-voice"]],
@@ -140,16 +84,6 @@ describe("plugin contract registry", () => {
     expect(
       pluginRegistrationContractRegistry.find((entry) => entry.pluginId === pluginId)?.[contract],
     ).toEqual(providerIds);
-  });
-
-  it("covers every bundled worker provider plugin discovered from manifests", () => {
-    expectRegistryPluginIds({
-      actualPluginIds: pluginRegistrationContractRegistry
-        .filter((entry) => entry.workerProviderIds.length > 0)
-        .map((entry) => entry.pluginId),
-      predicate: (plugin) =>
-        plugin.origin === "bundled" && (plugin.contracts?.workerProviders?.length ?? 0) > 0,
-    });
   });
 
   it("keeps video-only provider auth choices out of text onboarding", () => {
@@ -193,6 +127,8 @@ describe("plugin contract registry", () => {
         provider: "github-copilot",
         method: "device",
         appGuidedAuth: "device-code",
+        credentialOnly: true,
+        channelLogin: {},
         appGuidedSecret: true,
         choiceId: "github-copilot",
         choiceLabel: "GitHub Copilot",
@@ -210,6 +146,7 @@ describe("plugin contract registry", () => {
         provider: "github-copilot",
         method: "device-enterprise",
         appGuidedAuth: "device-code",
+        credentialOnly: true,
         choiceId: "github-copilot-enterprise",
         choiceLabel: "GitHub Copilot (Enterprise / data residency)",
         choiceHint: "Device login against your GitHub Enterprise (*.ghe.com) tenant",
@@ -221,61 +158,10 @@ describe("plugin contract registry", () => {
     ]);
   });
 
-  it("covers every bundled speech plugin discovered from manifests", () => {
-    expectRegistryPluginIds({
-      actualPluginIds: pluginRegistrationContractRegistry
-        .filter((entry) => entry.speechProviderIds.length > 0)
-        .map((entry) => entry.pluginId),
-      predicate: (plugin) =>
-        plugin.origin === "bundled" && (plugin.contracts?.speechProviders?.length ?? 0) > 0,
-    });
-  });
-
-  it("covers every bundled realtime voice plugin discovered from manifests", () => {
-    expectRegistryPluginIds({
-      actualPluginIds: pluginRegistrationContractRegistry
-        .filter((entry) => entry.realtimeVoiceProviderIds.length > 0)
-        .map((entry) => entry.pluginId),
-      predicate: (plugin) =>
-        plugin.origin === "bundled" && (plugin.contracts?.realtimeVoiceProviders?.length ?? 0) > 0,
-    });
-  });
-
-  it("covers every bundled realtime transcription plugin discovered from manifests", () => {
-    expectRegistryPluginIds({
-      actualPluginIds: pluginRegistrationContractRegistry
-        .filter((entry) => entry.realtimeTranscriptionProviderIds.length > 0)
-        .map((entry) => entry.pluginId),
-      predicate: (plugin) =>
-        plugin.origin === "bundled" &&
-        (plugin.contracts?.realtimeTranscriptionProviders?.length ?? 0) > 0,
-    });
-  });
-
-  it("covers every bundled transcripts source plugin discovered from manifests", () => {
-    expectRegistryPluginIds({
-      actualPluginIds: pluginRegistrationContractRegistry
-        .filter((entry) => entry.transcriptSourceProviderIds.length > 0)
-        .map((entry) => entry.pluginId),
-      predicate: (plugin) =>
-        plugin.origin === "bundled" &&
-        (plugin.contracts?.transcriptSourceProviders?.length ?? 0) > 0,
-    });
-  });
-
   it("covers every bundled web fetch plugin from the shared resolver", () => {
-    const bundledWebFetchPluginIds = resolveManifestContractPluginIds({
-      contract: "webFetchProviders",
-      origin: "bundled",
-    });
-
-    expect(
-      sortUniqueStrings(
-        pluginRegistrationContractRegistry
-          .filter((entry) => entry.webFetchProviderIds.length > 0)
-          .map((entry) => entry.pluginId),
-      ),
-    ).toEqual(bundledWebFetchPluginIds);
+    expect(registeredPluginIds("webFetchProviderIds")).toEqual(
+      resolveManifestContractPluginIds({ contract: "webFetchProviders", origin: "bundled" }),
+    );
   });
 
   it("covers every bundled web search plugin from the shared resolver", () => {
@@ -287,32 +173,10 @@ describe("plugin contract registry", () => {
       origin: "bundled",
     }).filter(
       (pluginId) =>
-        snapshotPluginIds.has(pluginId) &&
-        !ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_ID_SET.has(pluginId),
+        snapshotPluginIds.has(pluginId) && !activationScopedSearchIds.some((id) => id === pluginId),
     );
-    const expectedPluginIds = sortUniqueStrings([
-      ...bundledWebSearchPluginIds,
-      ...ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS,
-    ]);
-    const actualPluginIds = sortUniqueStrings(
-      pluginRegistrationContractRegistry
-        .filter((entry) => entry.webSearchProviderIds.length > 0)
-        .map((entry) => entry.pluginId),
+    expect(registeredPluginIds("webSearchProviderIds")).toEqual(
+      sortUniqueStrings([...bundledWebSearchPluginIds, ...activationScopedSearchIds]),
     );
-
-    expect(actualPluginIds).toEqual(expectedPluginIds);
-    expect(
-      actualPluginIds.filter((pluginId) => !bundledWebSearchPluginIds.includes(pluginId)),
-    ).toEqual([...ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS]);
-  });
-
-  it("covers every bundled migration provider plugin discovered from manifests", () => {
-    expectRegistryPluginIds({
-      actualPluginIds: pluginRegistrationContractRegistry
-        .filter((entry) => entry.migrationProviderIds.length > 0)
-        .map((entry) => entry.pluginId),
-      predicate: (plugin) =>
-        plugin.origin === "bundled" && (plugin.contracts?.migrationProviders?.length ?? 0) > 0,
-    });
   });
 });

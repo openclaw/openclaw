@@ -13,16 +13,6 @@ let userTimeFormatter:
   | { timeZone: string; format: ResolvedTimeFormat; formatter: Intl.DateTimeFormat }
   | undefined;
 
-function buildNormalizedTimestamp(
-  timestampMs: number,
-): { timestampMs: number; timestampUtc: string } | undefined {
-  if (!Number.isSafeInteger(timestampMs)) {
-    return undefined;
-  }
-  const timestampUtc = new Date(timestampMs).toISOString();
-  return { timestampMs, timestampUtc };
-}
-
 /** Resolve a valid IANA timezone from config, host preferences, or UTC. */
 export function resolveUserTimezone(configured?: string): string {
   const trimmed = configured?.trim();
@@ -30,9 +20,7 @@ export function resolveUserTimezone(configured?: string): string {
     try {
       getDateStampFormatter(trimmed);
       return trimmed;
-    } catch {
-      // ignore invalid timezone
-    }
+    } catch {}
   }
   const host = Intl.DateTimeFormat().resolvedOptions().timeZone;
   return host?.trim() || "UTC";
@@ -72,44 +60,21 @@ export function formatDateStamp(nowMs: number, timeZone: string): string {
   const year = parts.find((part) => part.type === "year")?.value;
   const month = parts.find((part) => part.type === "month")?.value;
   const day = parts.find((part) => part.type === "day")?.value;
-  if (year && month && day) {
-    return `${year}-${month}-${day}`;
-  }
-  return date.toISOString().slice(0, 10);
+  return `${year}-${month}-${day}`;
 }
 
-export function buildTemporalContextSection(params: {
-  userDate?: string;
-  userTimezone?: string;
-  sessionStatusAvailable: boolean;
-}): string[] {
-  const userDate = params.userDate?.trim();
-  const userTimezone = params.userTimezone?.trim();
-  if (!userDate || !userTimezone) {
-    return [];
-  }
-  return [
-    "## Temporal Context",
-    `Current date: ${userDate}`,
-    `Time zone: ${userTimezone}`,
-    ...(params.sessionStatusAvailable ? ["For the exact current time, use `session_status`."] : []),
-    "",
-  ];
-}
-
-/** Build current prompt text using the configured timezone or the canonical host fallback. */
+/** Build current turn context using the configured timezone or the canonical host fallback. */
 export function buildTemporalContextText(params: {
   configuredTimezone?: string;
   sessionStatusAvailable: boolean;
 }): string {
   const userTimezone = resolveUserTimezone(params.configuredTimezone);
-  return buildTemporalContextSection({
-    userDate: formatDateStamp(Date.now(), userTimezone),
-    userTimezone,
-    sessionStatusAvailable: params.sessionStatusAvailable,
-  })
-    .join("\n")
-    .trimEnd();
+  return [
+    "## Temporal Context",
+    `Current date: ${formatDateStamp(Date.now(), userTimezone)}`,
+    `Time zone: ${userTimezone}`,
+    ...(params.sessionStatusAvailable ? ["For the exact current time, use `session_status`."] : []),
+  ].join("\n");
 }
 
 /** Normalize Date, second, millisecond, or parseable string timestamps. */
@@ -133,13 +98,7 @@ function normalizeTimestamp(
     if (/^\d+(\.\d+)?$/.test(trimmed)) {
       const num = Number(trimmed);
       if (Number.isFinite(num)) {
-        if (trimmed.includes(".")) {
-          timestampMs = Math.round(num * 1000);
-        } else if (trimmed.length >= 13) {
-          timestampMs = Math.round(num);
-        } else {
-          timestampMs = Math.round(num * 1000);
-        }
+        timestampMs = Math.round(num * (trimmed.includes(".") || trimmed.length < 13 ? 1000 : 1));
       }
     } else {
       const parsed = Date.parse(trimmed);
@@ -149,11 +108,11 @@ function normalizeTimestamp(
     }
   }
 
-  if (timestampMs === undefined || !Number.isFinite(timestampMs)) {
+  if (timestampMs === undefined || !Number.isSafeInteger(timestampMs)) {
     return undefined;
   }
   try {
-    return buildNormalizedTimestamp(timestampMs);
+    return { timestampMs, timestampUtc: new Date(timestampMs).toISOString() };
   } catch {
     return undefined;
   }
@@ -182,65 +141,40 @@ export function withNormalizedTimestamp<T extends Record<string, unknown>>(
 }
 
 function detectSystemTimeFormat(): boolean {
-  if (process.platform === "darwin") {
-    try {
+  try {
+    if (process.platform === "darwin") {
       const result = execFileSync("defaults", ["read", "-g", "AppleICUForce24HourTime"], {
         encoding: "utf8",
         timeout: 500,
         stdio: ["pipe", "pipe", "pipe"],
       }).trim();
-      if (result === "1") {
-        return true;
+      if (result === "1" || result === "0") {
+        return result === "1";
       }
-      if (result === "0") {
-        return false;
-      }
-    } catch {
-      // macOS omits the key for locale-default behavior.
-    }
-  }
-
-  if (process.platform === "win32") {
-    try {
+    } else if (process.platform === "win32") {
       const result = execFileSync(
         "powershell",
         ["-Command", "(Get-Culture).DateTimeFormat.ShortTimePattern"],
         { encoding: "utf8", timeout: 1000 },
       ).trim();
-      if (result.startsWith("H")) {
-        return true;
+      if (result.startsWith("H") || result.startsWith("h")) {
+        return result.startsWith("H");
       }
-      if (result.startsWith("h")) {
-        return false;
-      }
-    } catch {
-      // Windows detection is best-effort; Intl below is the portable fallback.
     }
+  } catch {
+    // Missing OS preferences and failed probes use the portable Intl fallback.
   }
 
-  try {
-    const sample = new Date(2000, 0, 1, 13, 0);
-    const formatted = new Intl.DateTimeFormat(undefined, { hour: "numeric" }).format(sample);
-    return formatted.includes("13");
-  } catch {
-    return false;
-  }
+  // Read the declared cycle; localized hour digits need not contain ASCII "13".
+  const formatter = new Intl.DateTimeFormat(undefined, { hour: "numeric" });
+  return formatter.resolvedOptions().hour12 === false;
 }
 
 function ordinalSuffix(day: number): string {
   if (day >= 11 && day <= 13) {
     return "th";
   }
-  switch (day % 10) {
-    case 1:
-      return "st";
-    case 2:
-      return "nd";
-    case 3:
-      return "rd";
-    default:
-      return "th";
-  }
+  return ["th", "st", "nd", "rd"][day % 10] ?? "th";
 }
 
 /** Format the prompt-facing localized time string with weekday and date. */
@@ -282,7 +216,7 @@ export function formatUserTime(
     const suffix = ordinalSuffix(dayNum);
     const timePart = use24Hour
       ? `${map.hour}:${map.minute}`
-      : `${map.hour}:${map.minute} ${map.dayPeriod ?? ""}`.trim();
+      : `${map.hour}:${map.minute} ${map.dayPeriod}`;
     return `${map.weekday}, ${map.month} ${dayNum}${suffix}, ${map.year} - ${timePart}`;
   } catch {
     return undefined;

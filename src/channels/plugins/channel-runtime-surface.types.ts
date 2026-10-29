@@ -1,8 +1,3 @@
-/**
- * Channel runtime context registry types.
- *
- * Defines the public plugin SDK surface for channel runtime context registration and watches.
- */
 export type ChannelRuntimeContextKey = {
   channelId: string;
   accountId?: string | null;

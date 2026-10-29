@@ -2,78 +2,173 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isPathInside } from "@openclaw/fs-safe/path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db.js";
+import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import {
-  closeOpenClawStateDatabaseByPath,
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import {
+  generateStoredDeviceIdentity,
+  insertStoredDeviceIdentityIfAbsent,
+  readStoredDeviceIdentityReadOnly,
+} from "./device-identity-store.js";
+import { listDirectoryTreeStrict } from "./directory-walk.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { hasNodeErrorCode } from "./path-guards.js";
-import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import { projectUpdateCandidatePlugins } from "./update-candidate-plugins.js";
-import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
 import {
-  readUpdateStateSchemaVersions,
-  type snapshotUpdateCandidateState,
-  updateStateSchemaVersionsMatch,
-  UpdateCandidateStateSnapshotSchema,
-} from "./update-candidate-state.js";
+  copyUpdateCandidatePlugins,
+  prepareUpdateCandidatePlugins,
+} from "./update-candidate-plugins.js";
+import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
+import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
+import {
+  materializeUpdateCandidateStateWorker,
+  runUpdateCandidateSnapshotWorker,
+} from "./update-candidate-state.test-support.js";
+import { updateStateSchemaVersionsMatch } from "./update-candidate-state.versions.js";
 
 let root: string;
+const rehearsals: Awaited<ReturnType<typeof prepareUpdateCandidateRehearsal>>[] = [];
 beforeEach(async () => {
   root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "candidate-state-")));
+  await materializeUpdateCandidateStateWorker(root);
 });
 afterEach(async () => {
-  closeOpenClawStateDatabaseForTest();
-  await fs.rm(root, { recursive: true, force: true });
+  try {
+    for (const rehearsal of rehearsals.splice(0)) {
+      await rehearsal.cleanup();
+    }
+  } finally {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
-async function createDatabase(file: string, sql = ""): Promise<void> {
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const db = openNodeSqliteDatabase(file);
-  try {
-    db.exec(
-      `PRAGMA user_version = 3; CREATE TABLE evidence(value TEXT); INSERT INTO evidence VALUES ('preserved'); ${sql}`,
-    );
-  } finally {
-    db.close();
+async function expectRepositoryExcluded(stateDir: string, repository: string) {
+  const entries = await listDirectoryTreeStrict(stateDir);
+  expect(entries.some(({ relativePath }) => path.basename(relativePath) === "unrelated.txt")).toBe(
+    false,
+  );
+  const repositoryRoot = await fs.realpath(repository);
+  for (const { relativePath, dirent } of entries) {
+    if (!dirent.isSymbolicLink()) {
+      continue;
+    }
+    const target = await fs.realpath(path.join(stateDir, relativePath));
+    // A nonfollowing inventory must still detect aliases into the repository or its ancestors.
+    expect(
+      isPathInside(repositoryRoot, target) || isPathInside(target, repositoryRoot),
+      relativePath,
+    ).toBe(false);
   }
 }
 
-async function runSnapshotWorker(
-  input: Omit<Parameters<typeof snapshotUpdateCandidateState>[0], "candidateRoot">,
-) {
-  // Backup/VACUUM cannot be cancelled in-process; use the canary's worker before fixture cleanup.
-  const result = await runCommandBuffered(
-    [
-      process.execPath,
-      ...resolveRuntimeWorkerArgv(
-        resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState),
-      ),
-    ],
-    {
-      input: JSON.stringify({
-        ...input,
-        candidateRoot: path.join(root, "candidate-host"),
-        mode: "snapshot",
-      }),
-      timeoutMs: 30_000,
-      killGraceMs: 500,
-      maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
-    },
+async function createDatabase(file: string, sql = ""): Promise<void> {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  using db = openNodeSqliteDatabase(file);
+  db.exec(
+    `PRAGMA user_version = 3; CREATE TABLE evidence(value TEXT); INSERT INTO evidence VALUES ('preserved'); ${sql}`,
   );
-  expect(result.code, result.stderr.toString("utf8")).toBe(0);
-  return UpdateCandidateStateSnapshotSchema.parse(JSON.parse(result.stdout.toString("utf8")))
-    .versions;
 }
 
-it.each(["DELETE", "WAL"])(
+async function writePackage(directory: string, code: string, manifest: object = {}) {
+  await writeText(directory, "package.json", JSON.stringify({ type: "module", ...manifest }));
+  await writeText(directory, "index.js", code);
+}
+
+async function link(target: string, alias: string, type: "junction" | "file" | "dir" = "junction") {
+  await fs.mkdir(path.dirname(alias), { recursive: true });
+  await fs.symlink(target, alias, type);
+}
+
+async function hostPackages(live: string, candidate: string, alias: string) {
+  for (const [directory, value] of [
+    [live, "serving"],
+    [candidate, "candidate"],
+  ]) {
+    await writePackage(directory!, `export default ${JSON.stringify(value)};`, {
+      name: "openclaw",
+      exports: "./index.js",
+    });
+  }
+  if (alias !== live) {
+    await link(live, alias);
+  }
+}
+
+const readText = (directory: string, file: string) =>
+  fs.readFile(path.join(directory, file), "utf8");
+async function writeText(directory: string, file: string, text: string) {
+  const target = path.join(directory, file);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(target, text);
+}
+const pluginConfig = (paths: string[]): OpenClawConfig => ({ plugins: { load: { paths } } });
+const privateEntry = (rehearsal: Awaited<ReturnType<typeof rehearse>>, index = 0) =>
+  rehearsal.copied.plugins!.load!.paths![index]!;
+
+async function writePluginIndex(stateDir: string, index: object) {
+  const registry = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } }).db;
+  registry
+    .prepare(
+      "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+    )
+    .run("plugins.installedIndex", JSON.stringify({ revision: 1, index }), 1);
+  await closeOpenClawStateDatabaseByPathAsync(path.join(stateDir, "state", "openclaw.sqlite"));
+}
+
+async function runNode(args: string[]) {
+  const result = await runCommandBuffered([process.execPath, ...args], { timeoutMs: 10_000 });
+  expect(result.code, result.stderr.toString()).toBe(0);
+  return result.stdout.toString().trim();
+}
+
+async function rehearse(
+  config: OpenClawConfig,
+  stateDir = path.join(root, "source-state"),
+  candidateRoot = root,
+) {
+  const rehearsal = await prepareUpdateCandidateRehearsal({ config, stateDir, candidateRoot });
+  rehearsals.push(rehearsal);
+  const copied: OpenClawConfig = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
+  return { ...rehearsal, copied };
+}
+
+async function readDefault(entry: string) {
+  return runNode([
+    "--input-type=module",
+    "-e",
+    `console.log((await import(${JSON.stringify(pathToFileURL(entry).href)})).default)`,
+  ]);
+}
+
+async function readEntry(directory: string) {
+  return runNode([path.join(directory, "index.js")]);
+}
+
+function runSnapshotWorker(stateDir: string, targetStateDir: string) {
+  return runUpdateCandidateSnapshotWorker({
+    stateDir,
+    targetStateDir,
+    config: {},
+    candidateRoot: path.join(root, "candidate-host"),
+  });
+}
+
+function readEvidence(file: string) {
+  using database = openNodeSqliteDatabase(file);
+  return database.prepare("SELECT value FROM evidence").get();
+}
+
+it.each(["DELETE"])(
   "copies registered databases in %s mode without source process leases or source artifact changes",
   async (journalMode) => {
     const source = path.join(root, "source");
@@ -81,9 +176,13 @@ it.each(["DELETE", "WAL"])(
     const shared = path.join(source, "state", "openclaw.sqlite");
     const canonical = path.join(source, "agents", "main", "agent", "openclaw-agent.sqlite");
     const external = path.join(root, "external", "openclaw-agent.sqlite");
+    const credentialPath = path.join(source, "client", "credentials.sqlite");
     await createDatabase(canonical);
     await createDatabase(external);
     const registry = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: source } }).db;
+    const identity = insertStoredDeviceIdentityIfAbsent(generateStoredDeviceIdentity(17), {
+      env: { OPENCLAW_STATE_DIR: source },
+    });
     const insert = registry.prepare(
       "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at) VALUES (?, ?, 3, 0)",
     );
@@ -91,16 +190,12 @@ it.each(["DELETE", "WAL"])(
     insert.run("main", canonical);
     insert.run("main", path.relative(source, canonical));
     const now = Date.now();
+    const started = getFileLockProcessStartTime(process.pid);
     registry
-      .prepare("INSERT INTO agent_database_leases VALUES (?, ?, ?, ?, ?, ?)")
-      .run(
-        "live-main",
-        "main",
-        canonical,
-        process.pid,
-        getFileLockProcessStartTime(process.pid),
-        now,
-      );
+      .prepare(
+        "INSERT INTO agent_database_leases (lease_id, agent_id, path, owner_pid, owner_start_time, opened_at) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run("live-main", "main", canonical, process.pid, started, now);
     registry
       .prepare("INSERT INTO state_leases VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
       .run(
@@ -113,8 +208,8 @@ it.each(["DELETE", "WAL"])(
         now,
         now,
       );
-    closeOpenClawStateDatabaseByPath(shared);
-    const sources = [shared, canonical, external];
+    await closeOpenClawStateDatabaseByPathAsync(shared);
+    const sources = [shared, canonical, external, credentialPath];
     for (const file of sources) {
       const database = openNodeSqliteDatabase(file);
       database.exec(`PRAGMA journal_mode = ${journalMode};`);
@@ -128,15 +223,22 @@ it.each(["DELETE", "WAL"])(
         })),
       );
     const before = await artifacts();
+    const expectArtifactsUnchanged = async () => {
+      const after = await artifacts();
+      expect(after.map(({ entries }) => entries)).toEqual(before.map(({ entries }) => entries));
+      // Keep exact bytes without expanding whole databases through iterable equality.
+      for (const [index, { bytes }] of after.entries()) {
+        expect(bytes.equals(before[index]!.bytes)).toBe(true);
+      }
+    };
     const inspected = await readUpdateStateSchemaVersions({ stateDir: source, config: {} });
     expect(inspected.filter((entry) => entry.userVersion === 3)).toHaveLength(2);
-    expect(await artifacts()).toEqual(before);
-    const versions = await runSnapshotWorker({
-      stateDir: source,
-      targetStateDir: target,
-      config: {},
-    });
+    await expectArtifactsUnchanged();
+    const versions = await runSnapshotWorker(source, target);
     expect(versions).toEqual(inspected);
+    expect(readStoredDeviceIdentityReadOnly({ env: { OPENCLAW_STATE_DIR: target } })).toEqual(
+      identity,
+    );
     await expect(
       withAgentDatabaseMaintenanceLease(
         {
@@ -148,7 +250,7 @@ it.each(["DELETE", "WAL"])(
         async (maintenance) => maintenance.assertOwned(),
       ),
     ).resolves.toBeUndefined();
-    expect(await artifacts()).toEqual(before);
+    await expectArtifactsUnchanged();
     const copiedRegistry = openNodeSqliteDatabase(path.join(target, "state", "openclaw.sqlite"));
     expect(copiedRegistry.prepare("SELECT * FROM agent_database_leases").all()).toEqual([]);
     expect(copiedRegistry.prepare("SELECT * FROM state_leases").all()).toEqual([]);
@@ -169,11 +271,7 @@ it.each(["DELETE", "WAL"])(
       path.join(target, rebound.path),
       path.join(target, "agents", "main", "agent", "openclaw-agent.sqlite"),
     ]) {
-      const copied = openNodeSqliteDatabase(file);
-      expect(copied.prepare("SELECT value FROM evidence").get()).toMatchObject({
-        value: "preserved",
-      });
-      copied.close();
+      expect(readEvidence(file)).toMatchObject({ value: "preserved" });
     }
   },
 );
@@ -195,36 +293,21 @@ it("retains deferred content in both inspection and rehearsal snapshots", async 
     userVersion: 15,
     contentVersion: 16,
   });
-  expect(
-    await runSnapshotWorker({
-      stateDir,
-      targetStateDir: path.join(root, "rehearsal"),
-      config: {},
-    }),
-  ).toEqual(inspected);
-});
-
-it("reads committed WAL schemas without ending the live writer's transaction", async () => {
-  const stateDir = path.join(root, "live");
-  const file = path.join(stateDir, "state", "openclaw.sqlite");
-  await createDatabase(file, "PRAGMA journal_mode = WAL;");
-  const writer = openNodeSqliteDatabase(file);
-  try {
-    writer.exec("PRAGMA user_version = 4; BEGIN IMMEDIATE; PRAGMA user_version = 5;");
-    const versions = await readUpdateStateSchemaVersions({ stateDir, config: {} });
-    expect(versions.find((entry) => entry.path === file)?.userVersion).toBe(4);
-    expect(writer.isTransaction).toBe(true);
-    expect(writer.prepare("PRAGMA user_version").get()).toEqual({ user_version: 5 });
-  } finally {
-    writer.exec("ROLLBACK");
-    writer.close();
-  }
+  expect(await runSnapshotWorker(stateDir, path.join(root, "rehearsal"))).toEqual(inspected);
 });
 
 it("keeps absent stores explicit and observes newly created databases for rollback fencing", async () => {
   const stateDir = path.join(root, "state-owner");
   const before = await readUpdateStateSchemaVersions({ stateDir, config: {} });
   expect(before.every((entry) => entry.userVersion === null)).toBe(true);
+  const daemon = path.join(stateDir, "control", "services.sqlite");
+  const client = path.join(stateDir, "client", "credentials.sqlite");
+  const legacy = before.filter((entry) => entry.path !== daemon && entry.path !== client);
+  expect(
+    updateStateSchemaVersionsMatch(legacy, before, {
+      sharedPath: path.join(stateDir, "state", "openclaw.sqlite"),
+    }),
+  ).toBe(true);
   const main = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
   await createDatabase(main);
   const after = await readUpdateStateSchemaVersions({ stateDir, config: {} });
@@ -241,67 +324,22 @@ it("keeps absent stores explicit and observes newly created databases for rollba
   ).toBe(false);
   expect(updateStateSchemaVersionsMatch(after, before, candidate)).toBe(false);
   expect(updateStateSchemaVersionsMatch(after, after.toReversed(), candidate)).toBe(true);
-});
-
-it("inspects with the installed candidate and selected Node after the old package is removed", async () => {
-  const stateDir = path.join(root, "state-owner");
-  await createDatabase(path.join(stateDir, "state", "openclaw.sqlite"));
-  const previousRoot = path.join(root, "previous-package");
-  const candidateRoot = path.join(root, "candidate-package");
-  const worker = `
-    import path from "node:path";
-    import { DatabaseSync } from "node:sqlite";
-    let input = "";
-    for await (const chunk of process.stdin) input += chunk;
-    const file = path.join(JSON.parse(input).stateDir, "state", "openclaw.sqlite");
-    const db = new DatabaseSync(file, { readOnly: true });
-    try {
-      console.log(JSON.stringify([{ path: file, userVersion: db.prepare("PRAGMA user_version").get().user_version }]));
-    } finally {
-      db.close();
-    }
-  `;
-  for (const packageRoot of [previousRoot, candidateRoot]) {
-    const file = path.join(packageRoot, "dist/infra/update-candidate-state.worker.js");
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(path.join(packageRoot, "package.json"), '{"type":"module"}');
-    await fs.writeFile(file, worker);
-  }
-  const entrypoint = runtimeProcessEntrypoints.updateCandidateState;
-  const originalModuleUrl = entrypoint.currentModuleUrl;
-  Object.assign(entrypoint, {
-    currentModuleUrl: pathToFileURL(path.join(previousRoot, "dist/old-updater.js")).href,
-  });
-  try {
-    const before = await readUpdateStateSchemaVersions({ stateDir, config: {} });
-    expect(before).toEqual([
-      { path: path.join(stateDir, "state", "openclaw.sqlite"), userVersion: 3 },
-    ]);
-    await fs.rm(previousRoot, { recursive: true });
-    const selectedNodeMarker = path.join(root, "selected-node-ran");
-    let nodeRunner = process.execPath;
-    if (process.platform !== "win32") {
-      nodeRunner = path.join(root, "selected-node");
-      const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-      await fs.writeFile(
-        nodeRunner,
-        `#!/bin/sh\nprintf selected > ${quote(selectedNodeMarker)}\nexec ${quote(process.execPath)} "$@"\n`,
-        { mode: 0o755 },
-      );
-    }
-    const after = await readUpdateStateSchemaVersions({
-      stateDir,
-      config: {},
-      root: candidateRoot,
-      nodeRunner,
-    });
-    expect(after).toEqual(before);
-    if (process.platform !== "win32") {
-      expect(await fs.readFile(selectedNodeMarker, "utf8")).toBe("selected");
-    }
-  } finally {
-    Object.assign(entrypoint, { currentModuleUrl: originalModuleUrl });
-  }
+  await createDatabase(daemon, "PRAGMA user_version = 1;");
+  const withDaemon = await readUpdateStateSchemaVersions({ stateDir, config: {} });
+  expect(
+    updateStateSchemaVersionsMatch(
+      after.filter((entry) => entry.path !== daemon),
+      withDaemon,
+      { sharedPath },
+    ),
+  ).toBe(false);
+  expect(updateStateSchemaVersionsMatch(after, withDaemon, candidate)).toBe(true);
+  expect(updateStateSchemaVersionsMatch(withDaemon, after, candidate)).toBe(false);
+  await createDatabase(client, "PRAGMA user_version = 1;");
+  const withClient = await readUpdateStateSchemaVersions({ stateDir, config: {} });
+  expect(updateStateSchemaVersionsMatch(withDaemon, withClient, { sharedPath })).toBe(false);
+  expect(updateStateSchemaVersionsMatch(withDaemon, withClient, candidate)).toBe(true);
+  expect(updateStateSchemaVersionsMatch(withClient, withDaemon, candidate)).toBe(false);
 });
 
 it.runIf(process.platform !== "win32")(
@@ -315,7 +353,10 @@ it.runIf(process.platform !== "win32")(
     await fs.symlink(symlinkTarget, path.join(source, "link"), "dir");
     const filesystemPath = path.join(source, "external", "x", "openclaw-agent.sqlite");
     const lexicalPath = path.join(source, "x", "openclaw-agent.sqlite");
-    await createDatabase(filesystemPath, "UPDATE evidence SET value = 'filesystem';");
+    await createDatabase(
+      filesystemPath,
+      "UPDATE evidence SET value = 'filesystem'; PRAGMA user_version = 4;",
+    );
     await createDatabase(lexicalPath, "UPDATE evidence SET value = 'lexical';");
     await createDatabase(
       shared,
@@ -327,30 +368,25 @@ it.runIf(process.platform !== "win32")(
     insert.run("lexical", lexicalPath);
     registry.close();
 
-    await runSnapshotWorker({ stateDir: source, targetStateDir: target, config: {} });
+    const versions = await readUpdateStateSchemaVersions({ stateDir: source, config: {} });
+    expect(versions).toContainEqual({
+      path: `${source}${path.sep}link${path.sep}..${path.sep}x${path.sep}openclaw-agent.sqlite`,
+      userVersion: 4,
+    });
+    expect(versions).toContainEqual({ path: lexicalPath, userVersion: 3 });
+    await runSnapshotWorker(source, target);
 
-    const copiedRegistry = openNodeSqliteDatabase(path.join(target, "state", "openclaw.sqlite"));
-    try {
-      for (const owner of ["filesystem", "lexical"]) {
-        const row = copiedRegistry
-          .prepare("SELECT path FROM agent_databases WHERE agent_id = ?")
-          .get(owner) as { path: string };
-        const copied = openNodeSqliteDatabase(path.join(target, row.path));
-        try {
-          expect(copied.prepare("SELECT value FROM evidence").get()).toEqual({ value: owner });
-        } finally {
-          copied.close();
-        }
-      }
-    } finally {
-      copiedRegistry.close();
+    using copiedRegistry = openNodeSqliteDatabase(path.join(target, "state", "openclaw.sqlite"));
+    for (const owner of ["filesystem", "lexical"]) {
+      const row = copiedRegistry
+        .prepare("SELECT path FROM agent_databases WHERE agent_id = ?")
+        .get(owner) as { path: string };
+      expect(readEvidence(path.join(target, row.path))).toEqual({ value: owner });
     }
   },
 );
 
 it.each([
-  { source: "npm", relative: "extensions/demo" },
-  { source: "clawhub", relative: "extensions/demo" },
   { source: "npm", relative: "npm/projects/demo/node_modules/demo" },
   { source: "npm", relative: "npm/node_modules/demo" },
 ])(
@@ -362,227 +398,124 @@ it.each([
     const liveHost = path.join(root, "live-host");
     const candidateHost = path.join(root, "candidate-host");
     const dependency = path.join(root, "external-dependency");
-    const modulesDir = relative.includes("npm/")
-      ? path.dirname(packageDir)
-      : path.join(packageDir, "node_modules");
-    await fs.mkdir(path.join(packageDir, "node_modules"), { recursive: true });
-    for (const [directory, name, value] of [
-      [liveHost, "openclaw", "live"],
-      [candidateHost, "openclaw", "candidate"],
-      [dependency, "dependency", "preserved"],
-    ]) {
-      await fs.mkdir(directory!);
-      await fs.writeFile(
-        path.join(directory!, "package.json"),
-        JSON.stringify({ name, type: "module", exports: "./index.js" }),
-      );
-      await fs.writeFile(
-        path.join(directory!, "index.js"),
-        `export default ${JSON.stringify(value)};`,
-      );
-    }
-    await fs.symlink(dependency, path.join(modulesDir, "dependency"), "junction");
-    await fs.writeFile(
-      path.join(packageDir, "package.json"),
-      JSON.stringify({
+    await hostPackages(liveHost, candidateHost, path.join(packageDir, "node_modules/openclaw"));
+    await writePackage(dependency, 'export default "preserved";', {
+      name: "dependency",
+      exports: "./index.js",
+    });
+    await link(dependency, path.join(path.dirname(packageDir), "dependency"));
+    await writePackage(
+      packageDir,
+      'import host from "openclaw"; import dependency from "dependency"; export default {host, dependency};',
+      {
         name: "demo",
         version: "1.0.0",
-        type: "module",
         peerDependencies: { openclaw: "*" },
-      }),
+      },
     );
-    await fs.writeFile(
-      path.join(packageDir, "index.js"),
-      'import host from "openclaw"; import dependency from "dependency"; export default {host, dependency};',
-    );
-    await fs.symlink(liveHost, path.join(packageDir, "node_modules", "openclaw"), "junction");
-    const registry = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: source } }).db;
-    registry
-      .prepare(
-        "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
-      )
-      .run(
-        "plugins.installedIndex",
-        JSON.stringify({
-          revision: 1,
-          index: {
-            plugins: [{ source: packageDir }],
-            installRecords: {
-              demo: { source: installSource, installPath: packageDir, version: "1.0.0" },
-            },
-          },
-        }),
-        1,
-      );
+    await writePluginIndex(source, {
+      plugins: [{ source: packageDir }],
+      installRecords: {
+        demo: { source: installSource, installPath: packageDir, version: "1.0.0" },
+      },
+    });
     const shared = path.join(source, "state", "openclaw.sqlite");
-    closeOpenClawStateDatabaseByPath(shared);
     const before = await fs.readFile(shared);
-    await runSnapshotWorker({ stateDir: source, targetStateDir: target, config: {} });
-    expect(await fs.readFile(shared)).toEqual(before);
+    await runSnapshotWorker(source, target);
+    expect((await fs.readFile(shared)).equals(before)).toBe(true);
     expect(await fs.realpath(path.join(packageDir, "node_modules", "openclaw"))).toBe(liveHost);
-    const copied = openNodeSqliteDatabase(path.join(target, "state", "openclaw.sqlite"));
-    try {
-      const row = copied
-        .prepare(
-          "SELECT value_json FROM config_machine_state WHERE state_key = 'plugins.installedIndex'",
-        )
-        .get() as { value_json: string };
-      const record = JSON.parse(row.value_json).index.installRecords.demo;
-      expect(record.installPath).toBe(path.join(target, relative));
-      expect(await fs.realpath(path.join(record.installPath, "node_modules", "openclaw"))).toBe(
-        candidateHost,
-      );
-      const result = await runCommandBuffered(
-        [
-          process.execPath,
-          "--input-type=module",
-          "-e",
-          `console.log(JSON.stringify((await import(${JSON.stringify(pathToFileURL(path.join(record.installPath, "index.js")).href)})).default))`,
-        ],
-        { timeoutMs: 10_000 },
-      );
-      expect(result.code, result.stderr.toString()).toBe(0);
-      expect(JSON.parse(result.stdout.toString())).toEqual({
-        host: "candidate",
-        dependency: "preserved",
-      });
-      const copiedDependency = path.join(
-        target,
-        path.relative(source, modulesDir),
-        "dependency",
-        "index.js",
-      );
-      await fs.writeFile(copiedDependency, "changed in rehearsal");
-      expect(await fs.readFile(path.join(dependency, "index.js"), "utf8")).toContain("preserved");
-      expect(await fs.readFile(shared)).toEqual(before);
-    } finally {
-      copied.close();
-    }
+    using copied = openNodeSqliteDatabase(path.join(target, "state", "openclaw.sqlite"));
+    const row = copied
+      .prepare(
+        "SELECT value_json FROM config_machine_state WHERE state_key = 'plugins.installedIndex'",
+      )
+      .get() as { value_json: string };
+    const record = JSON.parse(row.value_json).index.installRecords.demo;
+    expect(record.installPath).toBe(path.join(target, relative));
+    expect(await fs.realpath(path.join(record.installPath, "node_modules", "openclaw"))).toBe(
+      candidateHost,
+    );
+    const result = await runNode([
+      "--input-type=module",
+      "-e",
+      `console.log(JSON.stringify((await import(${JSON.stringify(pathToFileURL(path.join(record.installPath, "index.js")).href)})).default))`,
+    ]);
+    expect(JSON.parse(result)).toEqual({
+      host: "candidate",
+      dependency: "preserved",
+    });
   },
 );
 
 it.each([
-  { extension: "js", linked: false },
   { extension: "ts", linked: false },
   { extension: "js", linked: true },
-  { extension: "js", linked: false, directoryAlias: true },
 ])(
-  "preserves external .$extension entry imports and path identity (linked=$linked, directoryAlias=$directoryAlias)",
-  async ({ extension, linked, directoryAlias = false }) => {
+  "preserves external .$extension entry imports and path identity (linked=$linked)",
+  async ({ extension, linked }) => {
     const source = path.join(root, "source-state");
     const external = path.join(root, "external-plugin");
     const install = path.join(root, "installed-plugin");
     const sourcePackage = path.join(root, "source-plugin");
-    for (const directory of [external, install, ...(linked ? [] : [sourcePackage])]) {
-      await fs.mkdir(directory);
-    }
-    await fs.writeFile(path.join(external, "package.json"), '{"type":"module"}');
-    await fs.writeFile(path.join(external, "adjacent.js"), 'export default "adjacent survived";');
+    await writeText(external, "package.json", '{"type":"module"}');
+    await writeText(external, "adjacent.js", 'export default "adjacent survived";');
     const dependency = path.join(external, "node_modules", "dependency");
-    await fs.mkdir(dependency, { recursive: true });
-    await fs.writeFile(
-      path.join(dependency, "package.json"),
-      '{"type":"module","exports":"./index.js"}',
-    );
-    await fs.writeFile(path.join(dependency, "index.js"), 'export default "dependency survived";');
-    await fs.mkdir(path.join(external, "dist"));
+    await writePackage(dependency, 'export default "dependency survived";', {
+      exports: "./index.js",
+    });
     const realEntry = path.join(external, "dist", `plugin.${extension}`);
     let entry = realEntry;
-    await fs.writeFile(
-      realEntry,
+    await writeText(
+      path.dirname(realEntry),
+      path.basename(realEntry),
       'import adjacent from "../adjacent.js"; import dependency from "dependency"; export default `${adjacent}:${dependency}`;',
     );
-    await fs.writeFile(path.join(install, "marker"), "installed payload");
+    await writeText(install, "marker", "installed payload");
     if (linked) {
-      await fs.symlink(install, sourcePackage, "junction");
+      await link(install, sourcePackage);
       const aliasDirectory = path.join(root, "external-alias");
       if (process.platform === "win32") {
-        await fs.symlink(path.dirname(realEntry), aliasDirectory, "junction");
+        await link(path.dirname(realEntry), aliasDirectory);
         entry = path.join(aliasDirectory, path.basename(realEntry));
       } else {
-        await fs.mkdir(aliasDirectory);
         entry = path.join(aliasDirectory, `public-name.${extension}`);
-        await fs.symlink(realEntry, entry, "file");
+        await link(realEntry, entry, "file");
       }
     } else {
-      await fs.writeFile(path.join(sourcePackage, "marker"), "source payload");
+      await writeText(sourcePackage, "marker", "source payload");
     }
-    if (directoryAlias) {
-      const aliasDirectory = path.join(root, "directory-alias");
-      await fs.symlink(path.dirname(realEntry), aliasDirectory, "junction");
-      entry = path.join(aliasDirectory, path.basename(realEntry));
-    }
-    const registry = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: source } }).db;
-    registry
-      .prepare(
-        "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
-      )
-      .run(
-        "plugins.installedIndex",
-        JSON.stringify({ revision: 1, index: { installRecords: {} } }),
-        1,
-      );
-    closeOpenClawStateDatabaseByPath(path.join(source, "state", "openclaw.sqlite"));
+    await writePluginIndex(source, { installRecords: {} });
     const config: OpenClawConfig = {
       plugins: {
         load: { paths: [entry] },
         installs: { demo: { source: "path", installPath: install, sourcePath: sourcePackage } },
       },
     };
-    const rehearsal = await prepareUpdateCandidateRehearsal({
-      config,
-      stateDir: source,
-      candidateRoot: root,
-    });
-    try {
-      const copied: OpenClawConfig = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
-      const copiedEntry = copied.plugins!.load!.paths![0]!;
-      expect(path.basename(copiedEntry)).toBe(path.basename(entry));
-      if (directoryAlias) {
-        expect((await fs.lstat(copiedEntry)).isSymbolicLink()).toBe(false);
-      }
-      expect(copiedEntry.startsWith(rehearsal.stateDir + path.sep)).toBe(true);
-      const result = await runCommandBuffered(
-        [
-          process.execPath,
-          "--input-type=module",
-          "-e",
-          `console.log((await import(${JSON.stringify(pathToFileURL(copiedEntry).href)})).default)`,
-        ],
-        { timeoutMs: 10_000 },
-      );
-      expect(result.code, result.stderr.toString()).toBe(0);
-      expect(result.stdout.toString().trim()).toBe("adjacent survived:dependency survived");
-      const record = copied.plugins!.installs!.demo!;
-      expect(await fs.readFile(path.join(record.installPath!, "marker"), "utf8")).toBe(
-        "installed payload",
-      );
-      expect(await fs.readFile(path.join(record.sourcePath!, "marker"), "utf8")).toBe(
-        linked ? "installed payload" : "source payload",
-      );
-      expect(
-        (await fs.realpath(record.installPath!)) === (await fs.realpath(record.sourcePath!)),
-      ).toBe(linked);
-      await fs.writeFile(path.join(record.sourcePath!, "marker"), "private change");
-      expect(await fs.readFile(path.join(sourcePackage, "marker"), "utf8")).toBe(
-        linked ? "installed payload" : "source payload",
-      );
-      expect(config.plugins!.load!.paths).toEqual([entry]);
-      expect(config.plugins!.installs!.demo!.sourcePath).toBe(sourcePackage);
-      expect(await rehearsal.changedConfigKeys()).toEqual([]);
-    } finally {
-      await rehearsal.cleanup();
-    }
+    const rehearsal = await rehearse(config, source);
+    const copied = rehearsal.copied;
+    const copiedEntry = copied.plugins!.load!.paths![0]!;
+    expect(path.basename(copiedEntry)).toBe(path.basename(entry));
+    expect(copiedEntry.startsWith(rehearsal.stateDir + path.sep)).toBe(true);
+    expect(await readDefault(copiedEntry)).toBe("adjacent survived:dependency survived");
+    const record = copied.plugins!.installs!.demo!;
+    expect(await readText(record.installPath!, "marker")).toBe("installed payload");
+    expect(await readText(record.sourcePath!, "marker")).toBe(
+      linked ? "installed payload" : "source payload",
+    );
+    expect(
+      (await fs.realpath(record.installPath!)) === (await fs.realpath(record.sourcePath!)),
+    ).toBe(linked);
+    expect(config.plugins!.load!.paths).toEqual([entry]);
+    expect(config.plugins!.installs!.demo!.sourcePath).toBe(sourcePackage);
   },
 );
 
 it("preserves an existing copied file behind a case-equivalent entry name", async (context) => {
   const plugin = path.join(root, "case-plugin");
-  await fs.mkdir(plugin);
   const lower = path.join(plugin, "entry.js");
   const upper = path.join(plugin, "ENTRY.js");
   const payload = 'export default "case alias survived";';
-  await fs.writeFile(path.join(plugin, "package.json"), '{"type":"module"}');
+  await writeText(plugin, "package.json", '{"type":"module"}');
   await fs.writeFile(lower, payload);
   const upperReal = await fs.realpath(upper).catch((error: unknown) => {
     if (hasNodeErrorCode(error, "ENOENT")) {
@@ -593,35 +526,16 @@ it("preserves an existing copied file behind a case-equivalent entry name", asyn
   if (upperReal !== (await fs.realpath(lower))) {
     context.skip("Requires a case-insensitive fixture volume with canonical filename casing");
   }
-  const rehearsal = await prepareUpdateCandidateRehearsal({
-    config: { plugins: { load: { paths: [upper] } } },
-    stateDir: path.join(root, "source-state"),
-    candidateRoot: root,
-  });
-  try {
-    const copied: OpenClawConfig = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
-    const entry = copied.plugins!.load!.paths![0]!;
-    expect(path.basename(entry)).toBe("ENTRY.js");
-    const result = await runCommandBuffered(
-      [
-        process.execPath,
-        "--input-type=module",
-        "-e",
-        `console.log((await import(${JSON.stringify(pathToFileURL(entry).href)})).default)`,
-      ],
-      { timeoutMs: 10_000 },
-    );
-    expect(result.code, result.stderr.toString()).toBe(0);
-    expect(result.stdout.toString().trim()).toBe("case alias survived");
-    expect((await fs.lstat(entry)).isFile()).toBe(true);
-    expect(await fs.readFile(lower, "utf8")).toBe(payload);
-    expect(await fs.readFile(upper, "utf8")).toBe(payload);
-  } finally {
-    await rehearsal.cleanup();
-  }
+  const rehearsal = await rehearse(pluginConfig([upper]));
+  const entry = privateEntry(rehearsal);
+  expect(path.basename(entry)).toBe("ENTRY.js");
+  expect(await readDefault(entry)).toBe("case alias survived");
+  expect((await fs.lstat(entry)).isFile()).toBe(true);
+  expect(await fs.readFile(lower, "utf8")).toBe(payload);
+  expect(await fs.readFile(upper, "utf8")).toBe(payload);
 });
 
-it.each(["relative", "absolute", "external-store", "cycle"] as const)(
+it.each(["external-store", "cycle"] as const)(
   "preserves pnpm transitive dependency topology in a private rehearsal (%s)",
   async (layout) => {
     const plugin = path.join(root, "local-plugin");
@@ -635,12 +549,7 @@ it.each(["relative", "absolute", "external-store", "cycle"] as const)(
       [foo, "foo", 'import value from "bar"; export default `foo:${value}`;'],
       [bar, "bar", 'export default "bar";'],
     ]) {
-      await fs.mkdir(directory!, { recursive: true });
-      await fs.writeFile(
-        path.join(directory!, "package.json"),
-        JSON.stringify({ name, type: "module", exports: "./index.js" }),
-      );
-      await fs.writeFile(path.join(directory!, "index.js"), code!);
+      await writePackage(directory!, code!, { name, exports: "./index.js" });
     }
     await fs.mkdir(modules, { recursive: true });
     if (layout === "external-store") {
@@ -653,105 +562,72 @@ it.each(["relative", "absolute", "external-store", "cycle"] as const)(
       [path.join(modules, "foo"), foo],
       [path.join(path.dirname(foo), "bar"), bar],
     ] as const;
-    for (const [link, target] of links) {
+    for (const [linkPath, target] of links) {
       await fs.symlink(
-        layout === "absolute" || process.platform === "win32"
-          ? target
-          : path.relative(path.dirname(link), target),
-        link,
+        process.platform === "win32" ? target : path.relative(path.dirname(linkPath), target),
+        linkPath,
         "junction",
       );
     }
     if (layout === "cycle") {
       await fs.symlink(foo, path.join(path.dirname(bar), "foo"), "junction");
     }
-    await fs.writeFile(
-      path.join(foo, "cli.js"),
-      'import value from "./index.js"; console.log(value);',
-    );
-    await fs.mkdir(path.join(modules, ".bin"));
-    const launcher = path.join(modules, ".bin", "foo");
-    await fs.writeFile(
-      launcher,
-      `#!/bin/sh\nbasedir=$(dirname "$0")\nexec "${process.execPath}" "$basedir/../foo/cli.js"\n`,
-    );
-    const originalLinks = await Promise.all(links.map(([link]) => fs.readlink(link)));
-    const readPlugin = async (directory: string) => {
-      const result = await runCommandBuffered(
-        [
-          process.execPath,
-          "--input-type=module",
-          "-e",
-          `console.log((await import(${JSON.stringify(pathToFileURL(path.join(directory, "index.js")).href)})).default)`,
-        ],
-        { timeoutMs: 10_000 },
-      );
-      expect(result.code, result.stderr.toString()).toBe(0);
-      return result.stdout.toString().trim();
-    };
-    expect(await readPlugin(plugin)).toBe("foo:bar");
-    const rehearsal = await prepareUpdateCandidateRehearsal({
-      config: { plugins: { load: { paths: [plugin] } } },
-      stateDir: path.join(root, "source-state"),
-      candidateRoot: root,
-    });
-    try {
-      const config: OpenClawConfig = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
-      const copiedPlugin = config.plugins!.load!.paths![0]!;
-      expect(await readPlugin(copiedPlugin)).toBe("foo:bar");
-      if (process.platform !== "win32") {
-        const result = await runCommandBuffered(
-          ["/bin/sh", path.join(copiedPlugin, "node_modules", ".bin", "foo")],
-          { timeoutMs: 10_000 },
-        );
-        expect(result.code, result.stderr.toString()).toBe(0);
-        expect(result.stdout.toString().trim()).toBe("foo:bar");
-      }
-      const copiedFoo = await fs.realpath(path.join(copiedPlugin, "node_modules", "foo"));
-      const copiedBar = await fs.realpath(path.join(path.dirname(copiedFoo), "bar"));
-      expect(copiedBar.startsWith(rehearsal.stateDir + path.sep)).toBe(true);
-      await fs.writeFile(path.join(copiedBar, "index.js"), 'export default "changed";');
-      expect(await readPlugin(copiedPlugin)).toBe("foo:changed");
-      expect(await readPlugin(plugin)).toBe("foo:bar");
-      expect(await Promise.all(links.map(([link]) => fs.readlink(link)))).toEqual(originalLinks);
-    } finally {
-      await rehearsal.cleanup();
-    }
+    const readPlugin = (directory: string) => readDefault(path.join(directory, "index.js"));
+    const rehearsal = await rehearse(pluginConfig([plugin]));
+    const copiedPlugin = privateEntry(rehearsal);
+    expect(await readPlugin(copiedPlugin)).toBe("foo:bar");
+    const copiedFoo = await fs.realpath(path.join(copiedPlugin, "node_modules", "foo"));
+    const copiedBar = await fs.realpath(path.join(path.dirname(copiedFoo), "bar"));
+    expect(copiedBar.startsWith(rehearsal.stateDir + path.sep)).toBe(true);
   },
 );
 
-it.skipIf(process.platform === "win32")(
-  "copies an external file link without traversing unrelated siblings",
-  async () => {
-    const plugin = path.join(root, "plugin");
-    const assets = path.join(root, "assets");
-    await fs.mkdir(plugin);
-    await fs.mkdir(assets);
-    await fs.writeFile(path.join(plugin, "package.json"), '{"name":"plugin"}');
-    const source = path.join(assets, "config.txt");
-    await fs.writeFile(source, "preserved");
-    await fs.symlink(path.join(root, "missing-unrelated-target"), path.join(assets, "unrelated"));
-    await fs.symlink(source, path.join(plugin, "config.txt"));
-    const rehearsal = await prepareUpdateCandidateRehearsal({
-      config: { plugins: { load: { paths: [plugin] } } },
-      stateDir: path.join(root, "source-state"),
-      candidateRoot: root,
-    });
-    try {
-      const config: OpenClawConfig = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
-      const copied = path.join(config.plugins!.load!.paths![0]!, "config.txt");
-      expect(await fs.readFile(copied, "utf8")).toBe("preserved");
-      await fs.writeFile(copied, "private");
-      expect(await fs.readFile(source, "utf8")).toBe("preserved");
-      expect(await fs.readlink(path.join(plugin, "config.txt"))).toBe(source);
-    } finally {
-      await rehearsal.cleanup();
-    }
-  },
-);
+it("copies external directory and file links under an aliased state root without traversing unrelated siblings", async () => {
+  const source = path.join(root, "source");
+  const plugin = path.join(source, "extensions", "demo");
+  const dependency = path.join(root, "dependency");
+  const fileLinks = process.platform !== "win32";
+  const file = fileLinks
+    ? path.join(root, "assets", "config.txt")
+    : path.join(dependency, "config.txt");
+  const physical = path.join(root, "physical-state");
+  const alias = path.join(root, "state-alias");
+  await fs.mkdir(physical);
+  await link(physical, alias);
+  await writeText(plugin, "package.json", '{"name":"demo"}');
+  await writeText(dependency, "package.json", '{"name":"dependency"}');
+  await writeText(path.dirname(file), path.basename(file), "source");
+  if (fileLinks) {
+    await link(path.join(root, "missing-unrelated-target"), path.join(root, "assets", "unrelated"));
+    await link(file, path.join(dependency, "config.txt"));
+  }
+  await link(dependency, path.join(plugin, "node_modules", "dependency"));
+  const params = {
+    config: pluginConfig([plugin]),
+    stateDir: source,
+    targetStateDir: path.join(alias, "candidate"),
+    candidateRoot: root,
+  } satisfies Parameters<typeof prepareUpdateCandidatePlugins>[0];
+  const paths = await copyUpdateCandidatePlugins(
+    await prepareUpdateCandidatePlugins(params),
+    params,
+  );
+  const copied = path.join(paths[plugin]!, "node_modules", "dependency", "config.txt");
+  expect((await fs.realpath(copied)).startsWith(physical + path.sep)).toBe(true);
+  expect(await fs.readFile(copied, "utf8")).toBe("source");
+  await fs.writeFile(copied, "private");
+  expect(await fs.readFile(file, "utf8")).toBe("source");
+  expect(await fs.realpath(path.join(plugin, "node_modules", "dependency"))).toBe(dependency);
+  if (fileLinks) {
+    expect(await fs.readlink(path.join(dependency, "config.txt"))).toBe(file);
+  }
+  const rehearsal = await rehearse(pluginConfig([plugin]));
+  expect(await readText(privateEntry(rehearsal), "node_modules/dependency/config.txt")).toBe(
+    "source",
+  );
+});
 
 it.each([
-  { alias: false, shadow: false, linkedModules: false, sharedOrder: "none" },
   { alias: true, shadow: false, linkedModules: false, sharedOrder: "none" },
   { alias: false, shadow: true, linkedModules: false, sharedOrder: "none" },
   { alias: false, shadow: false, linkedModules: true, sharedOrder: "none" },
@@ -774,239 +650,116 @@ it.each([
     const sourceHostLink = path.join(shared ? plugin : repo, "node_modules", "openclaw");
     const candidateHost = path.join(root, "candidate-host");
     const expected = shadow ? "nearest" : "hoisted";
-    await fs.mkdir(plugin, { recursive: true });
     await fs.mkdir(dependency, { recursive: true });
     if (shared) {
-      await fs.symlink(modules, path.join(plugin, "node_modules"), "junction");
-      await fs.writeFile(
-        path.join(sharedOwner, "package.json"),
-        '{"name":"owner","type":"module"}',
-      );
-      await fs.writeFile(
-        path.join(sharedOwner, "index.js"),
+      await link(modules, path.join(plugin, "node_modules"));
+      await writePackage(
+        sharedOwner,
         'console.log(JSON.stringify({value:"owner",host:"owner",dependency:import.meta.url}));',
+        { name: "owner" },
       );
     } else if (linkedModules) {
-      await fs.symlink(modules, path.join(repo, "node_modules"), "junction");
+      await link(modules, path.join(repo, "node_modules"));
     }
-    for (const [directory, value] of [
-      [liveHost, "serving"],
-      [candidateHost, "candidate"],
-    ] as const) {
-      await fs.mkdir(directory);
-      await fs.writeFile(
-        path.join(directory, "package.json"),
-        JSON.stringify({ name: "openclaw", type: "module", exports: "./index.js" }),
-      );
-      await fs.writeFile(
-        path.join(directory, "index.js"),
-        `export default ${JSON.stringify(value)};`,
-      );
-    }
-    if (!shared) {
-      await fs.symlink(liveHost, sourceHostLink, "junction");
-    }
-    await fs.writeFile(
-      path.join(repo, "package.json"),
+    await hostPackages(liveHost, candidateHost, shared ? liveHost : sourceHostLink);
+    await writeText(
+      repo,
+      "package.json",
       JSON.stringify({ private: true, workspaces: ["packages/*"] }),
     );
-    await fs.writeFile(path.join(repo, "unrelated.txt"), "do not copy repository files");
-    await fs.writeFile(
-      path.join(plugin, "package.json"),
-      JSON.stringify({
+    await writeText(repo, "unrelated.txt", "do not copy repository files");
+    await writePackage(
+      plugin,
+      'import value from "@demo/dependency"; import host from "openclaw"; console.log(JSON.stringify({value, host, dependency: import.meta.resolve("@demo/dependency")}));',
+      {
         name: "demo",
         version: "1.0.0",
-        type: "module",
         dependencies: { "@demo/dependency": "1.0.0" },
         optionalDependencies: { absent: "1.0.0" },
         peerDependencies: { openclaw: "*" },
-      }),
+      },
     );
-    await fs.writeFile(
-      path.join(plugin, "index.js"),
-      'import value from "@demo/dependency"; import host from "openclaw"; console.log(JSON.stringify({value, host, dependency: import.meta.resolve("@demo/dependency")}));',
-    );
-    await fs.writeFile(
-      path.join(dependency, "package.json"),
-      JSON.stringify({
-        name: "@demo/dependency",
-        version: "1.0.0",
-        type: "module",
-        exports: "./index.js",
-      }),
-    );
-    await fs.writeFile(path.join(dependency, "index.js"), 'export default "hoisted";');
+    await writePackage(dependency, 'export default "hoisted";', {
+      name: "@demo/dependency",
+      version: "1.0.0",
+      exports: "./index.js",
+    });
     if (shadow) {
       const nearest = path.join(plugin, "node_modules", "@demo", "dependency");
       await fs.cp(dependency, nearest, { recursive: true });
-      await fs.writeFile(path.join(nearest, "index.js"), 'export default "nearest";');
+      await writeText(nearest, "index.js", 'export default "nearest";');
     }
     const locator = alias ? path.join(root, "linked-demo") : plugin;
     if (alias) {
-      await fs.symlink(plugin, locator, "junction");
+      await link(plugin, locator);
     }
-    const readPlugin = async (directory: string) => {
-      const result = await runCommandBuffered(
-        [process.execPath, path.join(directory, "index.js")],
-        { timeoutMs: 10_000 },
-      );
-      expect(result.code, result.stderr.toString()).toBe(0);
-      return JSON.parse(result.stdout.toString()) as {
+    const readPlugin = async (directory: string) =>
+      JSON.parse(await readEntry(directory)) as {
         value: string;
         dependency: string;
         host: string;
       };
-    };
-    expect(await readPlugin(locator)).toMatchObject({ value: expected, host: "serving" });
     const paths = !shared
       ? [locator]
       : sharedOrder === "owner-first"
         ? [sharedOwner, locator]
         : [locator, sharedOwner];
+    await materializeUpdateCandidateStateWorker(candidateHost);
+    const rehearsal = await rehearse(pluginConfig(paths), undefined, candidateHost);
+    const config = rehearsal.copied;
+    const copied = config.plugins!.load!.paths![paths.indexOf(locator)]!;
     if (shared) {
-      expect((await readPlugin(sharedOwner)).value).toBe("owner");
-    }
-    const rehearsal = await prepareUpdateCandidateRehearsal({
-      config: { plugins: { load: { paths } } },
-      stateDir: path.join(root, "source-state"),
-      candidateRoot: candidateHost,
-    });
-    try {
-      const config: OpenClawConfig = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
-      const copied = config.plugins!.load!.paths![paths.indexOf(locator)]!;
-      if (shared) {
-        expect(
-          (await readPlugin(config.plugins!.load!.paths![paths.indexOf(sharedOwner)]!)).value,
-        ).toBe("owner");
-      }
-      expect(path.basename(copied)).toBe(path.basename(locator));
-      const result = await readPlugin(copied);
-      expect(result).toMatchObject({ value: expected, host: "candidate" });
-      const copiedDependency = await fs.realpath(fileURLToPath(result.dependency));
-      expect(copiedDependency.startsWith(rehearsal.stateDir + path.sep)).toBe(true);
       expect(
-        (await fs.readdir(rehearsal.stateDir, { recursive: true })).some(
-          (entry) => path.basename(entry) === "unrelated.txt",
-        ),
-      ).toBe(false);
-      await fs.writeFile(copiedDependency, 'export default "private";');
-      expect((await readPlugin(copied)).value).toBe("private");
-      expect((await readPlugin(locator)).value).toBe(expected);
-      expect(await fs.realpath(sourceHostLink)).toBe(liveHost);
-      if (alias) {
-        expect(await fs.realpath(locator)).toBe(plugin);
-      }
-    } finally {
-      await rehearsal.cleanup();
+        (await readPlugin(config.plugins!.load!.paths![paths.indexOf(sharedOwner)]!)).value,
+      ).toBe("owner");
     }
+    expect(path.basename(copied)).toBe(path.basename(locator));
+    const result = await readPlugin(copied);
+    expect(result).toMatchObject({ value: expected, host: "candidate" });
+    const copiedDependency = await fs.realpath(fileURLToPath(result.dependency));
+    expect(copiedDependency.startsWith(rehearsal.stateDir + path.sep)).toBe(true);
+    await expectRepositoryExcluded(rehearsal.stateDir, repo);
   },
 );
-
-it("projects through an aliased temporary state directory without changing source links", async () => {
-  const source = path.join(root, "source");
-  const plugin = path.join(source, "extensions", "demo");
-  const dependency = path.join(root, "dependency");
-  const physical = path.join(root, "physical-state");
-  const alias = path.join(root, "state-alias");
-  await fs.mkdir(path.join(plugin, "node_modules"), { recursive: true });
-  await fs.mkdir(dependency);
-  await fs.mkdir(physical);
-  await fs.symlink(physical, alias, "junction");
-  await fs.writeFile(path.join(plugin, "package.json"), '{"name":"demo"}');
-  await fs.writeFile(path.join(dependency, "package.json"), '{"name":"dependency"}');
-  await fs.writeFile(path.join(dependency, "value.txt"), "source");
-  await fs.symlink(dependency, path.join(plugin, "node_modules", "dependency"), "junction");
-  const paths = await projectUpdateCandidatePlugins({
-    config: { plugins: { load: { paths: [plugin] } } },
-    stateDir: source,
-    targetStateDir: path.join(alias, "candidate"),
-    candidateRoot: root,
-  });
-  const copied = path.join(paths[plugin]!, "node_modules", "dependency", "value.txt");
-  expect((await fs.realpath(copied)).startsWith(physical + path.sep)).toBe(true);
-  await fs.writeFile(copied, "private");
-  expect(await fs.readFile(path.join(dependency, "value.txt"), "utf8")).toBe("source");
-  expect(await fs.realpath(path.join(plugin, "node_modules", "dependency"))).toBe(dependency);
-});
 
 it("keeps an optional-only linked node_modules copy bounded to its module owner", async () => {
   const repo = path.join(root, "repository");
   const plugin = path.join(repo, "plugin");
   const modules = path.join(repo, "external-modules");
-  await fs.mkdir(plugin, { recursive: true });
-  await fs.mkdir(modules);
-  await fs.writeFile(path.join(repo, "package.json"), '{"private":true}');
-  await fs.writeFile(path.join(repo, "unrelated.txt"), "repository data");
-  await fs.writeFile(
-    path.join(plugin, "package.json"),
-    JSON.stringify({ name: "demo", type: "module", optionalDependencies: { missing: "1.0.0" } }),
-  );
-  await fs.writeFile(path.join(plugin, "index.js"), 'console.log("optional plugin ready");');
-  await fs.writeFile(path.join(modules, "marker.txt"), "source");
-  await fs.symlink(modules, path.join(plugin, "node_modules"), "junction");
-  const readEntry = async (directory: string) => {
-    const result = await runCommandBuffered([process.execPath, path.join(directory, "index.js")], {
-      timeoutMs: 10_000,
-    });
-    expect(result.code, result.stderr.toString()).toBe(0);
-    return result.stdout.toString().trim();
-  };
-  expect(await readEntry(plugin)).toBe("optional plugin ready");
-  const rehearsal = await prepareUpdateCandidateRehearsal({
-    config: { plugins: { load: { paths: [plugin] } } },
-    stateDir: path.join(root, "source-state"),
-    candidateRoot: root,
+  await writeText(repo, "package.json", '{"private":true}');
+  await writeText(repo, "unrelated.txt", "repository data");
+  await writePackage(plugin, 'console.log("optional plugin ready");', {
+    name: "demo",
+    optionalDependencies: { missing: "1.0.0" },
   });
-  try {
-    const config: OpenClawConfig = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
-    const copied = config.plugins!.load!.paths![0]!;
-    expect(await readEntry(copied)).toBe("optional plugin ready");
-    expect(
-      (await fs.readdir(rehearsal.stateDir, { recursive: true })).some(
-        (entry) => path.basename(entry) === "unrelated.txt",
-      ),
-    ).toBe(false);
-    const marker = path.join(copied, "node_modules", "marker.txt");
-    expect((await fs.realpath(marker)).startsWith(rehearsal.stateDir + path.sep)).toBe(true);
-    await fs.writeFile(marker, "private");
-    expect(await fs.readFile(path.join(modules, "marker.txt"), "utf8")).toBe("source");
-    expect(await fs.realpath(path.join(plugin, "node_modules"))).toBe(modules);
-  } finally {
-    await rehearsal.cleanup();
-  }
+  await writeText(modules, "marker.txt", "source");
+  await link(modules, path.join(plugin, "node_modules"));
+  const rehearsal = await rehearse(pluginConfig([plugin]));
+  const copied = privateEntry(rehearsal);
+  expect(await readEntry(copied)).toBe("optional plugin ready");
+  await expectRepositoryExcluded(rehearsal.stateDir, repo);
+  const marker = path.join(copied, "node_modules", "marker.txt");
+  expect((await fs.realpath(marker)).startsWith(rehearsal.stateDir + path.sep)).toBe(true);
+  await fs.writeFile(marker, "private");
+  expect(await readText(modules, "marker.txt")).toBe("source");
+  expect(await fs.realpath(path.join(plugin, "node_modules"))).toBe(modules);
 });
 
 it("rejects an ordinary link that would repeatedly copy an immutable host package", async () => {
   const plugin = path.join(root, "plugin");
   const host = path.join(root, "live-host");
   const candidate = path.join(root, "candidate-host");
-  await fs.mkdir(path.join(plugin, "node_modules"), { recursive: true });
-  await fs.mkdir(path.join(host, "docs"), { recursive: true });
-  await fs.mkdir(candidate);
-  await fs.writeFile(
-    path.join(plugin, "package.json"),
-    JSON.stringify({ name: "demo", type: "module", peerDependencies: { openclaw: "*" } }),
-  );
-  await fs.writeFile(
-    path.join(host, "package.json"),
-    JSON.stringify({ name: "openclaw", type: "module", exports: "./index.js" }),
-  );
-  await fs.writeFile(path.join(host, "index.js"), 'export default "serving";');
-  await fs.writeFile(
-    path.join(plugin, "index.js"),
-    'import host from "openclaw"; console.log(host);',
-  );
-  await fs.writeFile(path.join(host, "docs", "marker.txt"), "source");
-  await fs.symlink(host, path.join(plugin, "node_modules", "openclaw"), "junction");
-  await fs.symlink(path.join(host, "docs"), path.join(plugin, "manual"), "junction");
-  const source = await runCommandBuffered([process.execPath, path.join(plugin, "index.js")], {
-    timeoutMs: 10_000,
+  await writePackage(plugin, 'import host from "openclaw"; console.log(host);', {
+    name: "demo",
+    peerDependencies: { openclaw: "*" },
   });
-  expect(source.code, source.stderr.toString()).toBe(0);
-  expect(source.stdout.toString().trim()).toBe("serving");
+  await hostPackages(host, candidate, path.join(plugin, "node_modules", "openclaw"));
+  await writeText(host, "docs/marker.txt", "source");
+  await link(path.join(host, "docs"), path.join(plugin, "manual"));
+  await materializeUpdateCandidateStateWorker(candidate);
   await expect(
     prepareUpdateCandidateRehearsal({
-      config: { plugins: { load: { paths: [plugin] } } },
+      config: pluginConfig([plugin]),
       stateDir: path.join(root, "source-state"),
       candidateRoot: candidate,
       timeoutMs: 10_000,

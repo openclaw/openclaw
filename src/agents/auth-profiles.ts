@@ -10,7 +10,6 @@ export { resolveAuthProfileMetadata } from "./auth-profiles/identity.js";
 export {
   externalCliDiscoveryForConfigStatus,
   externalCliDiscoveryForProviderAuth,
-  externalCliDiscoveryForProviders,
   externalCliDiscoveryScoped,
 } from "./auth-profiles/external-cli-discovery.js";
 export {
@@ -25,7 +24,9 @@ export {
 } from "./auth-profiles/order.js";
 export {
   resolveAuthStatePathForDisplay,
+  resolveAuthStatePathForDisplayAsync,
   resolveAuthStorePathForDisplay,
+  resolveAuthStorePathForDisplayAsync,
 } from "./auth-profiles/paths.js";
 export {
   dedupeProfileIds,
@@ -36,6 +37,7 @@ export {
   resolveSubscriptionAuthModeForProfiles,
   setAuthProfileOrder,
   upsertAuthProfile,
+  upsertAuthProfileAsync,
   upsertAuthProfileWithLock,
 } from "./auth-profiles/profiles.js";
 export { persistAuthProfileBatch } from "./auth-profiles/upsert-with-lock.js";
@@ -43,7 +45,6 @@ export { buildPortableAuthProfileStoreForAgentCopy } from "./auth-profiles/porta
 export {
   clearRuntimeAuthProfileStoreSnapshot,
   getPreparedRuntimeAuthProfileStoreSnapshot,
-  getRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreSnapshotRevision,
   hasAuthProfileStoreSourceForProvider,
   hasAnyAuthProfileStoreSource,
@@ -53,17 +54,26 @@ export {
   withEnvOnlyAuthProfileStore,
   withAuthProfileStoreAgentDir,
 } from "./auth-profiles/store.js";
+export { hasAnyAuthProfileStoreSourceAsync } from "./auth-profiles/source-check.js";
 export {
   ensureAuthProfileStore,
+  findPersistedAuthProfileCredentialAsync,
+  resolvePersistedAuthProfileOwnerAgentDirAsync,
+  ensureAuthProfileStoreAsync,
   ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
   loadAuthProfileStoreForSecretsRuntime,
+  loadAuthProfileStoreForSecretsRuntimeAsync,
   loadAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreWithoutExternalProfilesAsync,
   loadAuthProfileStoreForRuntime,
+  loadAuthProfileStoreForRuntimeAsync,
   saveAuthProfileStore,
 } from "./auth-profiles/store-runtime.js";
 export {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
+  replaceRuntimeAuthProfileStoreSnapshotsAsync,
 } from "./auth-profiles/runtime-snapshots.js";
 export type {
   AuthProfileCredential,

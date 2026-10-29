@@ -14,11 +14,10 @@ func normalizeLocaleIdentifier(_ raw: String) -> String {
     if let at = trimmed.firstIndex(of: "@") {
         trimmed = String(trimmed[..<at])
     }
-    if let u = trimmed.range(of: "-u-") {
-        trimmed = String(trimmed[..<u.lowerBound])
-    }
-    if let t = trimmed.range(of: "-t-") {
-        trimmed = String(trimmed[..<t.lowerBound])
+    for marker in ["-u-", "-t-"] {
+        if let range = trimmed.range(of: marker) {
+            trimmed = String(trimmed[..<range.lowerBound])
+        }
     }
     return trimmed
 }

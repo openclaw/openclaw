@@ -28,7 +28,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -168,7 +167,7 @@ internal fun ChatMessageDisclosureButton(
   ) {
     Text(
       text = label,
-      style = ClawTheme.type.body.copy(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
+      style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
       modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
     )
   }

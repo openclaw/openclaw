@@ -1,29 +1,32 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
+import {
+  repositorySessionNeedsWorker,
+  sessionPlacementActionReason,
+  sessionPlacementRetry,
+} from "../../components/session-placement-action.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
+import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
 import { registerSessionPlacementEnglish } from "../../i18n/locales/en-session-placement.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import type { ChatComposerDisabledBanner } from "./components/chat-composer-types.ts";
+
+registerSessionOrganizationSharedEnglish();
+
+registerNewSessionRuntimeEnglish();
 
 registerSessionPlacementEnglish();
 
 type ChatPanePlacementComposerState =
   | { kind: "ready" }
+  | { kind: "setup"; startup: ApplicationPlacementStartupStatus }
   | { kind: "busy"; message: string }
+  | { kind: "dispatch-required" }
+  | { kind: "move-failed"; message: string }
   | { kind: "failed"; recoveryAction?: "restart" | "stop-first" };
-
-export type PlacementComposerPresentation = {
-  state: ChatPanePlacementComposerState;
-  blocksSend: boolean;
-  busyMessage: string | null;
-  diskSpace: Extract<NonNullable<GatewaySessionRow["placement"]>, { state: "active" }>["diskSpace"];
-  runError: { summary: string } | null;
-  failedUnavailableMessage: string;
-  disabledBanner: ChatComposerDisabledBanner | undefined;
-};
 
 function resolvePlacementComposerState(params: {
   reclaimingKey: string | null;
@@ -33,7 +36,14 @@ function resolvePlacementComposerState(params: {
   moving: boolean;
 }): ChatPanePlacementComposerState {
   if (params.restartingKey === params.row?.key) {
-    return { kind: "busy", message: t("sessionsView.restartingSession") };
+    return {
+      kind: "busy",
+      message: t(
+        params.row?.repositoryWorkspaceId && params.row.placement?.state !== "failed"
+          ? "sessionsView.dispatchingSession"
+          : "sessionsView.restartingSession",
+      ),
+    };
   }
   if (params.reclaimingKey === params.row?.key) {
     return { kind: "busy", message: t("sessionsView.stoppingSession") };
@@ -44,17 +54,27 @@ function resolvePlacementComposerState(params: {
   if (params.workspaceResultReconciling) {
     return { kind: "busy", message: t("sessionsView.syncingCloudFilesComposer") };
   }
+  if (repositorySessionNeedsWorker(params.row)) {
+    return { kind: "dispatch-required" };
+  }
   switch (params.row?.placement?.state) {
     case "requested":
     case "provisioning":
-      return { kind: "busy", message: t("chat.startupStatus.provisioningEnvironment") };
     case "syncing":
-      return { kind: "busy", message: t("chat.startupStatus.preparingWorkspace") };
     case "starting":
-      return { kind: "busy", message: t("newSession.starting") };
+      return {
+        kind: "setup",
+        startup: {
+          sessionKey: params.row.key,
+          phase: params.row.placement.state,
+          startedAt: params.row.placement.createdAtMs,
+        },
+      };
     case "draining":
     case "reconciling":
-      return { kind: "busy", message: t("sessionsView.finishingSessionMove") };
+      return params.row.placementMove?.error
+        ? { kind: "move-failed", message: params.row.placementMove.error }
+        : { kind: "busy", message: t("sessionsView.finishingSessionMove") };
     case "failed":
       return {
         kind: "failed",
@@ -71,15 +91,18 @@ function resolvePlacementComposerState(params: {
 
 export function resolvePlacementComposer(params: {
   gatewaySnapshot: ApplicationGatewaySnapshot;
+  requiredProfile?: string;
   movingKey: string | null;
   reclaimingKey: string | null;
   restartingKey: string | null;
   row: GatewaySessionRow | undefined;
   startupPending: boolean;
+  requiredWorkerInferenceProfileId?: string;
   workspaceResultReconciling: boolean;
-  onRestart: () => void;
+  onRecover: () => void;
   onReclaim: () => void;
-}): PlacementComposerPresentation {
+  onRetryMove: () => void;
+}) {
   const controls = resolveChatPanePlacement(params);
   // Sync status does not reopen admission closed by Stop, Restart, or a local/durable Move.
   const canSendDuringWorkspaceSync =
@@ -88,54 +111,108 @@ export function resolvePlacementComposer(params: {
     !controls.moving &&
     !controls.restarting &&
     params.reclaimingKey !== params.row.key;
-  const canSendDuringSetup =
-    ["requested", "provisioning", "syncing", "starting"].includes(
-      params.row?.placement?.state ?? "",
-    ) &&
-    !params.startupPending &&
-    !controls.moving &&
-    !controls.restarting &&
-    params.reclaimingKey !== params.row?.key;
   const state = resolvePlacementComposerState({
     ...params,
     moving: controls.moving,
     workspaceResultReconciling: canSendDuringWorkspaceSync,
   });
-  const busyMessage = !params.startupPending && state.kind === "busy" ? state.message : null;
+  const canSendDuringSetup = state.kind === "setup" && !params.startupPending;
   const placement = params.row?.placement;
+  const hideRequiredWorkerSyncHint =
+    canSendDuringWorkspaceSync &&
+    placement?.state === "active" &&
+    placement.inference === "worker" &&
+    Boolean(params.requiredWorkerInferenceProfileId) &&
+    params.requiredWorkerInferenceProfileId === placement.profileId;
+  const busyMessage =
+    !params.startupPending && state.kind === "busy" && !hideRequiredWorkerSyncHint
+      ? state.message
+      : null;
+  const canRecoverOnSend =
+    !params.startupPending &&
+    state.kind === "failed" &&
+    placement?.state === "failed" &&
+    placement.retryOnSend === true;
   const terminalReason =
     placement && "terminalReason" in placement ? placement.terminalReason : undefined;
   const failureReason = placement?.state === "failed" ? placement.recoveryError : terminalReason;
   const common = {
     state,
-    blocksSend: state.kind !== "ready" && !canSendDuringWorkspaceSync && !canSendDuringSetup,
+    blocksSend:
+      !params.startupPending &&
+      state.kind !== "ready" &&
+      !canSendDuringWorkspaceSync &&
+      !canSendDuringSetup &&
+      !canRecoverOnSend,
     busyMessage,
+    startup: state.kind === "setup" ? state.startup : null,
     diskSpace: placement?.state === "active" ? placement.diskSpace : undefined,
-    runError: failureReason
-      ? { summary: t("chat.cloudWorkerFailed", { error: failureReason }) }
-      : null,
+    workerRuntimeInstall:
+      placement?.state === "active" || placement?.state === "provisioning"
+        ? placement.workerRuntimeInstall
+        : undefined,
+    runError:
+      failureReason && !controls.restarting
+        ? { summary: t("chat.cloudWorkerFailed", { error: failureReason }) }
+        : null,
     failedUnavailableMessage: t("sessionsView.failedSessionUnavailable"),
   };
-  if (params.startupPending || state.kind !== "failed" || !state.recoveryAction || !params.row) {
+  if (params.startupPending || !params.row || canRecoverOnSend) {
     return { ...common, disabledBanner: undefined };
   }
-  const restart = state.recoveryAction === "restart";
+  if (state.kind === "move-failed") {
+    const banner: ChatComposerDisabledBanner = {
+      kind: "above-composer",
+      title: t("sessionsView.moveSessionFailed"),
+      text: state.message,
+      icon: "warning",
+    };
+    return {
+      ...common,
+      disabledBanner: sessionPlacementRetry(params.row)
+        ? ({
+            ...banner,
+            actionLabel: t("sessionsView.retrySessionMove"),
+            actionStyle: "primary",
+            disabledReason: controls.moveDisabledReason,
+            onAction: params.onRetryMove,
+          } satisfies ChatComposerDisabledBanner)
+        : banner,
+    };
+  }
+  const dispatchRequired = state.kind === "dispatch-required";
+  if (!dispatchRequired && (state.kind !== "failed" || !state.recoveryAction)) {
+    return { ...common, disabledBanner: undefined };
+  }
+  const recover = dispatchRequired || state.recoveryAction === "restart";
   return {
     ...common,
     disabledBanner: {
       kind: "above-composer",
-      title: t("sessionsView.failedSessionTitle"),
+      title: t(
+        dispatchRequired
+          ? "sessionsView.repositoryWorkerRequiredTitle"
+          : "sessionsView.failedSessionTitle",
+      ),
       text: t(
-        restart
-          ? "sessionsView.failedSessionRestartPrompt"
-          : "sessionsView.failedSessionStopPrompt",
+        dispatchRequired
+          ? "sessionsView.repositoryWorkerRequiredPrompt"
+          : recover
+            ? "sessionsView.failedSessionRestartPrompt"
+            : "sessionsView.failedSessionStopPrompt",
       ),
       icon: "warning",
-      actionLabel: t(restart ? "sessionsView.restartSession" : "sessionsView.stopCloudWorker"),
+      actionLabel: t(
+        dispatchRequired
+          ? "sessionsView.chooseWorker"
+          : recover
+            ? "sessionsView.restartSession"
+            : "sessionsView.stopCloudWorker",
+      ),
       actionStyle: "primary",
-      disabledReason: restart ? controls.restartDisabledReason : controls.reclaimDisabledReason,
-      onAction: restart ? params.onRestart : params.onReclaim,
-    },
+      disabledReason: recover ? controls.recoveryDisabledReason : controls.reclaimDisabledReason,
+      onAction: recover ? params.onRecover : params.onReclaim,
+    } satisfies ChatComposerDisabledBanner,
   };
 }
 
@@ -178,80 +255,45 @@ export function resolveChatPaneWorkerPresentation(
   };
 }
 
-export function resolveChatPaneDesktopTarget(
-  session: GatewaySessionRow | undefined,
-): string | null {
-  if (!session) {
-    return null;
-  }
-  const placement = session.placement;
-  if (placement && placement.state !== "local") {
-    // Wait for the active owner; starting or reclaimed sessions do not own a desktop yet.
-    if (placement.state !== "active") {
-      return null;
-    }
-    if (placement.runner?.kind === "device") {
-      const nodeId = normalizeOptionalString(placement.runner.deviceId);
-      return placement.runner.status === "available" && nodeId ? `node:${nodeId}` : null;
-    }
-    return normalizeOptionalString(placement.environmentId) ?? null;
-  }
-  const execNode = normalizeOptionalString(session.execNode);
-  return execNode ? `node:${execNode}` : "gateway";
-}
-
 export function resolveChatPanePlacement(params: {
   gatewaySnapshot: ApplicationGatewaySnapshot;
+  requiredProfile?: string;
   movingKey: string | null;
   reclaimingKey: string | null;
   restartingKey?: string | null;
   row: GatewaySessionRow | undefined;
-}): {
-  moving: boolean;
-  restarting: boolean;
-  moveDisabledReason: string | undefined;
-  reclaimDisabledReason: string | undefined;
-  restartDisabledReason: string | undefined;
-} {
+}) {
   const moving =
     params.movingKey === params.row?.key ||
     (params.row?.placementMove !== undefined && params.row.placementMove.error === undefined);
   const reclaiming = params.reclaimingKey === params.row?.key;
   const restarting = params.restartingKey === params.row?.key;
   const action = resolveCloudWorkerStopAction(params.row?.placement);
-  const moveAccess = readSessionMethodAccess(params.gatewaySnapshot, {
-    method: "sessions.move",
-    requiredScope: "operator.write",
-  });
-  const reclaimAccess = readSessionMethodAccess(params.gatewaySnapshot, {
-    method: "sessions.reclaim",
-    requiredScope: "operator.write",
-  });
-  const restartAccess = readSessionMethodAccess(params.gatewaySnapshot, {
-    method: "sessions.dispatch",
-    requiredScope: "operator.write",
-  });
+  const readWriteAccess = (method: string) =>
+    readSessionMethodAccess(params.gatewaySnapshot, { method, requiredScope: "operator.write" });
+  const reclaimAccess = readWriteAccess("sessions.reclaim");
+  const restartAccess = readWriteAccess("sessions.dispatch");
   const placementState = params.row?.placement?.state;
+  const dispatchRequired = repositorySessionNeedsWorker(params.row);
   const recoveryAction =
     placementState === "failed" ? params.row?.placement?.recoveryAction : undefined;
   const runner = placementState === "active" ? params.row?.placement?.runner : undefined;
   const deviceOffline = runner?.kind === "device" && runner.status === "offline";
   const moveDisabledReason = moving
     ? t("common.loading")
-    : reclaiming
+    : reclaiming || !params.row
       ? t("sessionsView.actionUnavailable")
-      : placementState !== "active"
-        ? t("sessionsView.actionUnavailable")
-        : moveAccess.allowed
-          ? undefined
-          : moveAccess.reason;
-  const restartDisabledReason = restarting
+      : sessionPlacementActionReason(params.gatewaySnapshot, params.row, params.requiredProfile);
+  const recoveryDisabledReason = restarting
     ? t("common.loading")
-    : moving || reclaiming
+    : moving ||
+        reclaiming ||
+        params.row?.placementMove !== undefined ||
+        (!dispatchRequired && recoveryAction !== "restart")
       ? t("sessionsView.actionUnavailable")
-      : recoveryAction !== "restart"
-        ? t("sessionsView.actionUnavailable")
-        : restartAccess.allowed
+      : params.row?.archived
+        ? t("chat.archivedSessionDisabled")
+        : restartAccess.allowed || (!dispatchRequired && reclaimAccess.allowed)
           ? undefined
           : restartAccess.reason;
   const reclaimDisabledReason = reclaiming
@@ -262,7 +304,7 @@ export function resolveChatPanePlacement(params: {
         ? t("sessionsView.offlineDeviceStopUnavailable")
         : action?.blocksActiveRun && params.row?.hasActiveRun === true
           ? t("sessionsView.activeRun")
-          : action?.method !== "sessions.reclaim"
+          : !action
             ? t("sessionsView.actionUnavailable")
             : reclaimAccess.allowed
               ? undefined
@@ -272,6 +314,6 @@ export function resolveChatPanePlacement(params: {
     restarting,
     moveDisabledReason,
     reclaimDisabledReason,
-    restartDisabledReason,
+    recoveryDisabledReason,
   };
 }

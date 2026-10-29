@@ -1,45 +1,70 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
+import fsAsync from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
-import {
-  replaceSessionEntry,
-  replaceTranscriptEvents,
-} from "../config/sessions/session-accessor.js";
+import { ensureSessionEntrySync } from "../config/sessions/session-accessor.js";
 import {
   publishEncodedSessionTranscriptArchive,
   resolveSqliteTranscriptArchivePath,
-} from "../config/sessions/session-accessor.sqlite-archive.js";
+} from "../config/sessions/session-accessor.sqlite-archive-artifact.js";
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import {
-  runWithSessionTranscriptReadFence,
-  SessionTranscriptReadFenceError,
-} from "../config/sessions/session-transcript-read-fence.js";
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { appendSessionTranscriptMessageByIdentity } from "../plugin-sdk/session-transcript-runtime.js";
+import { withChannelReadAuthority } from "../shared/channel-read-authority.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+} from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   cleanupManagedOutgoingMediaRecords,
+  createManagedOutgoingMediaBlocks,
   MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
   resolveManagedOutgoingMediaArtifactDownload,
 } from "./managed-image-attachments.js";
 import {
+  createFixture,
+  interceptManagedImageMutationReplies,
+} from "./managed-image-attachments.test-support.js";
+import {
   insertManagedImageRecord,
+  listManagedImageRecordEntries,
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
+  type ManagedImageRecord,
   readManagedImageRecord,
 } from "./managed-image-record-store.js";
+import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import {
   readSessionMessageCountAsync,
+  readSessionMessagesAsync,
   readSessionMessagesMatchingIdAsync,
   readSessionMessagesWithSourceAsync,
 } from "./session-transcript-readers.js";
+import { iterateSessionTranscriptSourcePages } from "./session-transcript-source-pages.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const timestamp = "2026-09-04T00:00:00.000Z";
@@ -51,63 +76,48 @@ function message(id: string, parentId: string | null, content: unknown) {
 }
 
 async function fixture(messageId = "attached") {
+  const agentId = "main";
   const sessionId = `managed-visibility-${randomUUID()}`;
-  const sessionKey = `agent:main:${sessionId}`;
-  const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-  const scope = { agentId: "main", sessionId, sessionKey, storePath };
-  await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
-  const attachmentId = randomUUID();
-  const body = Buffer.from("synthetic managed original\n");
-  const mediaRoot = path.join(stateDir, "media");
-  const mediaId = `${attachmentId}.png`;
-  const originalPath = path.join(mediaRoot, MANAGED_OUTGOING_ORIGINALS_SUBDIR, mediaId);
-  fs.mkdirSync(path.dirname(originalPath), { recursive: true });
-  fs.writeFileSync(originalPath, body);
-  insertManagedImageRecord(
-    {
-      attachmentId,
-      sessionKey,
-      agentId: "main",
-      messageId,
-      createdAt: timestamp,
-      alt: "Synthetic attachment",
-      original: {
-        mediaRoot,
-        mediaId,
-        mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
-        contentType: "image/png",
-        width: 1,
-        height: 1,
-        sizeBytes: body.length,
-        filename: "fixture.png",
-      },
-    },
-    stateDir,
-  );
+  const sessionKey = `agent:${agentId}:${sessionId}`;
+  const storePath = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
+  const scope = { agentId, sessionId, sessionKey, storePath };
+  // This fixture owns the competing writer; background entry maintenance must not join it.
+  expect(ensureSessionEntrySync(scope, { sessionId, updatedAt: Date.now() })).toBe(true);
+  const { attachmentId, originalPath } = await createFixture(stateDir, {
+    attachmentId: randomUUID(),
+    sessionKey,
+    agentId,
+    messageId,
+    createdAt: timestamp,
+    body: Buffer.from("synthetic managed original\n"),
+    filename: "fixture.png",
+  });
   const url = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
   const block = { type: "image", url, openUrl: url };
   const download = () =>
     resolveManagedOutgoingMediaArtifactDownload({
       sessionKey,
-      agentId: "main",
+      agentId,
       stateDir,
       artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
     });
   return { scope, attachmentId, messageId, originalPath, block, download };
 }
 
-async function seed(f: Awaited<ReturnType<typeof fixture>>, events: unknown[]) {
+type Fixture = Awaited<ReturnType<typeof fixture>>;
+
+async function seed(f: Fixture, events: unknown[], source: "sqlite" | "archive" = "sqlite") {
   await replaceTranscriptEvents(f.scope, [
     { type: "session", version: 3, id: f.scope.sessionId, timestamp, cwd: stateDir },
-    ...events,
+    ...(source === "sqlite" ? events : []),
   ]);
   await readSessionMessageCountAsync(f.scope);
+  if (source === "archive") {
+    archive(f, events);
+  }
 }
 
-function archive(
-  f: Awaited<ReturnType<typeof fixture>>,
-  events: unknown[] = [message(f.messageId, null, [f.block])],
-) {
+function archive(f: Fixture, events: unknown[] = [message(f.messageId, null, [f.block])]) {
   const bytes = Buffer.from(
     [{ type: "session", version: 3, id: f.scope.sessionId, timestamp, cwd: stateDir }, ...events]
       .map((event) => JSON.stringify(event))
@@ -131,124 +141,216 @@ function archive(
   });
 }
 
-beforeEach(() => {
-  savedEnv = captureEnv(["OPENCLAW_STATE_DIR"]);
-  stateDir = fs.realpathSync(tempDirs.make("managed-visibility-"));
-  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-  setRuntimeConfigSnapshot({ agents: { list: [{ id: "main" }] } });
-});
+const cleanup = (
+  options: Omit<
+    NonNullable<Parameters<typeof cleanupManagedOutgoingMediaRecords>[0]>,
+    "stateDir"
+  > = {},
+) => cleanupManagedOutgoingMediaRecords({ stateDir, ...options });
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  clearRuntimeConfigSnapshot();
-  savedEnv.restore();
-});
+async function expectRetained(f: Pick<Fixture, "attachmentId" | "originalPath">) {
+  expect(await readManagedImageRecord(f.attachmentId, stateDir)).not.toBeNull();
+  expect(fs.existsSync(f.originalPath)).toBe(true);
+}
 
 describe("managed attachment SQLite visibility", () => {
-  it("does not decode every unrelated payload when resolving one attachment", async () => {
-    const f = await fixture();
-    const marker = "managed-membership-wide-payload";
-    const text = marker + "x".repeat(16 * 1024);
-    const unrelated = Array.from({ length: 40 }, (_, index) =>
-      message(`other-${index}`, index === 0 ? null : `other-${index - 1}`, [
-        { type: "text", text },
-      ]),
-    );
-    await seed(f, [...unrelated, message(f.messageId, "other-39", [f.block])]);
-    const parse = JSON.parse;
-    let decodedUnrelatedPayloads = 0;
-    const spy = vi.spyOn(JSON, "parse").mockImplementation((value, reviver) => {
-      if (typeof value === "string" && value.includes(marker)) {
-        decodedUnrelatedPayloads += 1;
-      }
-      return parse(value, reviver);
-    });
-    try {
-      expect((await f.download())?.artifactId).toBe(
-        `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${f.attachmentId}`,
-      );
-      // One payload can establish nonempty display history; the requested record
-      // must not require decoding the remaining unrelated message bodies.
-      expect(decodedUnrelatedPayloads).toBeLessThanOrEqual(1);
-    } finally {
-      spy.mockRestore();
-    }
+  beforeEach(() => {
+    savedEnv = captureEnv(["OPENCLAW_STATE_DIR"]);
+    stateDir = fs.realpathSync(tempDirs.make("managed-visibility-"));
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
   });
 
-  it.each([" padded-id ", "   "])("preserves raw message ID %j", async (messageId) => {
-    const f = await fixture(messageId);
-    await seed(f, [message(messageId, null, [f.block])]);
-    const full = await readSessionMessagesWithSourceAsync(f.scope, {
-      mode: "full",
-      reason: "raw managed attachment identity",
-      allowResetArchiveFallback: true,
-    });
-    expect(full.messages).toMatchObject([{ __openclaw: { id: messageId } }]);
-    expect((await f.download())?.artifactId).toBe(
-      `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${f.attachmentId}`,
-    );
+  afterEach(async () => {
+    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
+    savedEnv.restore();
   });
 
-  it.each(["active", "archive"] as const)(
-    "preserves %s ID-less rows with an existing projected message ID",
+  it("loads original IDs only when a regular file is old enough for orphan cleanup", async ({
+    onTestFinished,
+  }) => {
+    const nowMs = 2_000_000;
+    const originals = path.join(stateDir, "media", MANAGED_OUTGOING_ORIGINALS_SUBDIR);
+    const { originalPath: kept } = await createFixture(stateDir, {
+      messageId: null,
+      createdAt: new Date(nowMs).toISOString(),
+      body: Buffer.from("kept"),
+      filename: "kept.png",
+    });
+    await fsAsync.unlink(kept);
+    await fsAsync.rmdir(originals);
+    const reads: string[] = [];
+    onTestFinished(
+      onInternalDiagnosticEvent(
+        (event) => {
+          if (
+            event.type === "worker.request" &&
+            event.phase === "queued" &&
+            event.kind === "stateRead" &&
+            event.requestClass === "managedImages"
+          ) {
+            reads.push(event.kind);
+          }
+        },
+        { include: ["worker.request"] },
+      ),
+    );
+    const cleanAndCountReads = async (expectedReads: number) => {
+      reads.length = 0;
+      await cleanupManagedOutgoingMediaRecords({ stateDir, nowMs });
+      await waitForDiagnosticEventsDrained();
+      expect(reads).toHaveLength(expectedReads);
+    };
+
+    await cleanAndCountReads(1);
+    await fsAsync.mkdir(originals, { recursive: true });
+    await cleanAndCountReads(1);
+    await fsAsync.writeFile(kept, "kept");
+    await fsAsync.utimes(kept, new Date(nowMs), new Date(nowMs));
+    await cleanAndCountReads(1);
+
+    const orphan = path.join(originals, "orphan.png");
+    await fsAsync.writeFile(orphan, "orphan");
+    await fsAsync.utimes(orphan, new Date(0), new Date(0));
+    await fsAsync.utimes(kept, new Date(0), new Date(0));
+    await cleanAndCountReads(2);
+    expect(await fsAsync.readFile(kept, "utf8")).toBe("kept");
+    await expect(fsAsync.stat(orphan)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each(["missing", "invalid-row", "ambiguous"] as const)(
+    "refuses a %s ownership source",
     async (source) => {
       const f = await fixture();
-      const event = {
-        type: "message",
-        message: {
-          role: "assistant",
-          content: [f.block],
-          __openclaw: { id: f.messageId },
-        },
-      };
-      await seed(f, source === "active" ? [event] : []);
-      if (source === "archive") {
-        archive(f, [event]);
+      await seed(f, [message(f.messageId, null, [f.block])]);
+      if (source === "missing") {
+        setRuntimeConfigSnapshot({ session: { store: path.join(stateDir, "missing.sqlite") } });
+      } else if (source === "invalid-row") {
+        const database = openOpenClawAgentDatabase({ agentId: "main" });
+        database.db
+          .prepare(
+            "UPDATE session_nodes SET entry_json = ?, entry_valid = -1 WHERE session_key = ?",
+          )
+          .run("{invalid", f.scope.sessionKey);
+      } else {
+        const template = path.join(stateDir, "custom", "{agentId}", "sessions.json");
+        ensureSessionEntrySync(
+          { ...f.scope, storePath: template.replace("{agentId}", "main") },
+          { sessionId: f.scope.sessionId, updatedAt: 1 },
+        );
+        setRuntimeConfigSnapshot({
+          agents: { entries: { main: {} } },
+          session: { store: template },
+        });
       }
-      const full = await readSessionMessagesWithSourceAsync(f.scope, {
-        mode: "full",
-        reason: "retained message metadata ID",
-        allowResetArchiveFallback: true,
-      });
-      expect(full.messages).toMatchObject([{ __openclaw: { id: f.messageId } }]);
-      expect(await f.download()).not.toBeNull();
+      expect(await f.download()).toBeNull();
+      await cleanup({ sessionKey: f.scope.sessionKey });
+      await expectRetained(f);
     },
   );
 
-  it("falls back to archives only when no live row projects a message", async () => {
-    const f = await fixture();
-    archive(f);
-    await seed(f, [
-      { type: "message", id: "null", parentId: null, message: null },
-      { type: "message", id: "false", parentId: "null", message: false },
-      { type: "message", id: "empty", parentId: "false", message: "" },
-    ]);
-    expect(await readSessionMessageCountAsync(f.scope)).toBe(3);
-    expect(await f.download()).not.toBeNull();
-    await seed(f, [message("live", null, [])]);
-    expect(await f.download()).toBeNull();
-  });
+  it.each(["sqlite", "archive"] as const)(
+    "retains media owned by oversized %s history while cleaning other sessions",
+    async (source) => {
+      const oversized = await fixture();
+      const orphan = await fixture("missing");
+      const history = [
+        message(oversized.messageId, null, [
+          oversized.block,
+          { type: "text", text: "x".repeat(8 * 1024 * 1024) },
+        ]),
+      ];
+      await seed(oversized, history, source);
+      const original = await readManagedImageRecord(oversized.attachmentId, stateDir);
+      expect(original).not.toBeNull();
+      await insertManagedImageRecord(
+        { ...original!, attachmentId: randomUUID(), messageId: "unverified" },
+        stateDir,
+      );
+      await seed(orphan, [message("different", null, "no attachment")]);
 
-  it.each([
-    ["selected", 1_100],
-    ["unrelated", 1_100],
-    ["unrelated", 999],
-  ] as const)("accepts JavaScript-readable %s JSON at depth %i", async (kind, depth) => {
-    const f = await fixture();
-    const deep = JSON.parse("[".repeat(depth) + "0" + "]".repeat(depth));
-    const other = message("other", null, "other");
-    const attached = message(f.messageId, "other", [f.block]);
-    Object.assign(kind === "selected" ? attached : other, { deep, escapedNul: "valid\u0000text" });
-    await seed(f, [other, attached]);
-    expect(await f.download()).not.toBeNull();
-    expect(
-      await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey }),
-    ).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
-  });
+      await cleanup();
+      await expectRetained(oversized);
+      expect(await readManagedImageRecord(orphan.attachmentId, stateDir)).toBeNull();
+      expect(fs.existsSync(orphan.originalPath)).toBe(false);
+    },
+  );
+
+  it.each(["active", "off-path", "archive"] as const)(
+    "selects recorded attachment messages without returning unrelated %s payloads",
+    async (source) => {
+      const f = await fixture();
+      const second = await createFixture(stateDir, {
+        attachmentId: randomUUID(),
+        sessionKey: f.scope.sessionKey,
+        agentId: "main",
+        messageId: "second",
+        createdAt: timestamp,
+        body: Buffer.from("second managed original"),
+        filename: "second.png",
+      });
+      const secondBlock = {
+        type: "image",
+        url: `/api/chat/media/outgoing/${encodeURIComponent(f.scope.sessionKey)}/${second.attachmentId}/full`,
+      };
+      const events = [
+        message("root", null, "root"),
+        ...Array.from({ length: 129 }, (_, index) =>
+          message(
+            `unrelated-${index}`,
+            index ? `unrelated-${index - 1}` : "root",
+            "x".repeat(1024),
+          ),
+        ),
+        message(f.messageId, "unrelated-128", [f.block]),
+        message("second", source === "off-path" ? "root" : f.messageId, [secondBlock]),
+      ];
+      await seed(f, events, source === "archive" ? "archive" : "sqlite");
+      const selected: unknown[] = [];
+      for await (const page of iterateSessionTranscriptSourcePages(
+        readSessionMessagesWithSourceAsync,
+        f.scope,
+        {
+          allowResetArchiveFallback: true,
+          includeOffPathMessages: true,
+          messageIds: [f.messageId, "second"],
+        },
+      )) {
+        selected.push(...page.messages);
+      }
+      expect(selected).toHaveLength(2);
+      expect(selected).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ __openclaw: expect.objectContaining({ id: f.messageId }) }),
+          expect.objectContaining({ __openclaw: expect.objectContaining({ id: "second" }) }),
+        ]),
+      );
+      await cleanup({ sessionKey: f.scope.sessionKey });
+      await expectRetained(f);
+      await expectRetained(second);
+    },
+  );
+
+  it.each(["sqlite", "archive"] as const)(
+    "retains attachments whose %s message ID comes from legacy metadata",
+    async (source) => {
+      const f = await fixture();
+      const legacy = {
+        type: "message",
+        timestamp,
+        message: { role: "assistant", content: [f.block], __openclaw: { id: f.messageId } },
+      };
+      await seed(f, [legacy], source);
+      await cleanup({ sessionKey: f.scope.sessionKey });
+      await expectRetained(f);
+    },
+  );
 
   it("preserves archive duplicates and full-reader oversized recovery", async () => {
-    const f = await fixture();
+    const f = await fixture("   ");
     await seed(f, []);
     // Parentless duplicate records remain in the archive's flat selected history.
     const { parentId: _parent, ...attached } = message(f.messageId, null, [f.block]);
@@ -272,17 +374,19 @@ describe("managed attachment SQLite visibility", () => {
         message: { role: "assistant", content: "later duplicate without attachment" },
       },
     ]);
-    const full = await readSessionMessagesWithSourceAsync(f.scope, {
+    const full = await readSessionMessagesAsync(f.scope, {
       mode: "full",
-      reason: "archive membership parity",
+      reason: "retained archive duplicate and image recovery",
       allowResetArchiveFallback: true,
     });
-    expect(full.messages.length).toBe(2);
-    expect(await readSessionMessagesMatchingIdAsync(f.scope, f.messageId)).toEqual(full.messages);
+    expect(full).toHaveLength(2);
+    expect(await readSessionMessagesMatchingIdAsync(f.scope, f.messageId)).toEqual(full);
     expect(await f.download()).not.toBeNull();
+    await cleanup({ sessionKey: f.scope.sessionKey });
+    expect(await readManagedImageRecord(f.attachmentId, stateDir)).not.toBeNull();
   });
 
-  it("validates the admitted generation on both matching and missing IDs", async () => {
+  it("uses the admitted bounds for both matching and missing IDs", async () => {
     const f = await fixture();
     await seed(f, [message(f.messageId, null, [f.block])]);
     const admitted = await appendSessionTranscriptMessageByIdentity({
@@ -297,8 +401,7 @@ describe("managed attachment SQLite visibility", () => {
     for (const id of [f.messageId, "missing"]) {
       await runWithSessionTranscriptReadFence(receipt, async () => {
         const full = await readSessionMessagesWithSourceAsync(f.scope, {
-          mode: "full",
-          reason: "fenced membership parity",
+          mode: "page",
           allowResetArchiveFallback: true,
         });
         expect(await readSessionMessagesMatchingIdAsync(f.scope, id)).toEqual(
@@ -307,191 +410,289 @@ describe("managed attachment SQLite visibility", () => {
           ),
         );
       });
-      await expect(
-        runWithSessionTranscriptReadFence({ ...receipt, generation: "stale" }, () =>
-          readSessionMessagesMatchingIdAsync(f.scope, id),
-        ),
-      ).rejects.toBeInstanceOf(SessionTranscriptReadFenceError);
     }
     expect(openOpenClawAgentDatabase({ agentId: "main" }).db.isTransaction).toBe(false);
   });
 
-  it("keeps validation, presence and selected content on one snapshot across a writer", async () => {
-    const f = await fixture();
-    const other = message("other", null, "snapshot writer trigger");
-    const attached = message(f.messageId, "other", [f.block]);
-    await seed(f, [other, attached]);
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const row = database.db
-      .prepare(
-        "SELECT seq, event_json FROM transcript_events WHERE session_id = ? AND seq = (SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = ?)",
-      )
-      .get(f.scope.sessionId, f.scope.sessionId, f.messageId) as {
-      seq: number;
-      event_json: string;
-    };
-    const writer = new DatabaseSync(database.path);
-    const parse = JSON.parse;
-    let rewrote = false;
-    const spy = vi.spyOn(JSON, "parse").mockImplementation((value, reviver) => {
-      if (!rewrote && value === JSON.stringify(other)) {
-        rewrote = true;
-        expect(database.db.isTransaction).toBe(true);
-        writer.exec("BEGIN IMMEDIATE");
-        try {
-          rewriteSqliteTranscriptEventRowsInTransaction({ ...database, db: writer }, f.scope, [
-            {
-              seq: row.seq,
-              expectedEventJson: row.event_json,
-              event: message(f.messageId, "other", []),
-            },
-          ]);
-          writer.exec("COMMIT");
-        } catch (error) {
-          writer.exec("ROLLBACK");
-          throw error;
-        }
-      }
-      return parse(value, reviver);
-    });
-    try {
-      expect(await f.download()).not.toBeNull();
-      expect(rewrote).toBe(true);
-      expect(database.db.isTransaction).toBe(false);
-    } finally {
-      spy.mockRestore();
-      writer.close();
-    }
-    expect(await f.download()).toBeNull();
-  });
-
-  it.each(["fresh-message", "reset-only", "inactive-branch"] as const)(
-    "rechecks archive membership after the active history becomes %s",
+  it.each(["visible", "retained"] as const)(
+    "keeps %s content on one snapshot across a writer",
     async (kind) => {
       const f = await fixture();
-      await seed(f, []);
-      const archivePath = archive(f);
-      const archiveBefore = fs.readFileSync(archivePath);
-      expect((await f.download()) !== null).toBe(true);
-      const root = message("root", null, "root");
-      const replacement = message("replacement", "root", "fresh history");
-      const events =
-        kind === "fresh-message"
-          ? [root, replacement]
-          : kind === "reset-only"
-            ? [
-                message(f.messageId, null, [f.block]),
-                { type: "reset", id: "reset", parentId: f.messageId, timestamp, reason: "new" },
-              ]
-            : [root, message(f.messageId, "root", [f.block]), replacement];
-      await seed(f, events);
-      const full = await readSessionMessagesWithSourceAsync(f.scope, {
-        mode: "full",
-        reason: "managed attachment visibility",
-        allowResetArchiveFallback: true,
-      });
-      expect(
-        full.messages.map((m) => (m as { __openclaw?: { id?: string } })["__openclaw"]?.id),
-      ).toEqual(kind === "reset-only" ? ["reset"] : ["root", "replacement"]);
-      expect((await f.download()) === null).toBe(true);
-      expect(
-        await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey }),
-      ).toEqual({ deletedRecordCount: 1, deletedFileCount: 1, retainedCount: 0 });
-      expect(readManagedImageRecord(f.attachmentId, stateDir)).toBeNull();
-      expect(fs.existsSync(f.originalPath)).toBe(false);
-      expect(fs.readFileSync(archivePath)).toEqual(archiveBefore);
-    },
-  );
-
-  it.each([
-    { location: "other-session", retainedCount: 2 },
-    { location: "before-reset", retainedCount: 1 },
-  ] as const)(
-    "ignores NUL-corrupt history outside the visible range: $location",
-    async ({ location, retainedCount }) => {
-      const f = await fixture();
-      const corrupt = location === "other-session" ? await fixture("hidden") : f;
-      const hidden = message("hidden", null, "hidden history");
-      if (location === "other-session") {
-        await seed(corrupt, [hidden]);
-        await seed(f, [message(f.messageId, null, [f.block])]);
-      } else {
-        await seed(f, [
-          hidden,
-          { type: "reset", id: "reset", parentId: "hidden", timestamp, reason: "fresh" },
-          message(f.messageId, "reset", [f.block]),
-        ]);
-      }
-      openOpenClawAgentDatabase({ agentId: "main" })
-        .db.prepare(`UPDATE transcript_events SET event_json = event_json || ? WHERE session_id = ? AND seq = (
-          SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = 'hidden'
-        )`)
-        .run("\u0000trailing", corrupt.scope.sessionId, corrupt.scope.sessionId);
-      const full = await readSessionMessagesWithSourceAsync(f.scope, {
-        mode: "full",
-        reason: "excluded corrupt attachment history",
-        allowResetArchiveFallback: true,
-      });
-      expect(full.messages).toContainEqual(
-        expect.objectContaining({
-          __openclaw: expect.objectContaining({ id: f.messageId }),
-        }),
-      );
-      expect(await f.download()).not.toBeNull();
-      expect(
-        await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey }),
-      ).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount });
-    },
-  );
-
-  it.each([
-    ...(["selected", "unrelated", "unrelated-missing"] as const).flatMap((fault) =>
-      (["invalid syntax", "literal NUL"] as const).map((corruption) => ({ fault, corruption })),
-    ),
-    { fault: "unrelated", corruption: "multiple values" },
-    { fault: "unrelated", corruption: "premature envelope close" },
-  ] as const)(
-    "retains records when $fault history JSON has $corruption",
-    async ({ fault, corruption }) => {
-      const f = await fixture();
-      const unrelated = message("unrelated", "first", "unrelated content");
-      const attached = message(f.messageId, "unrelated", [f.block]);
+      const other = message("other", null, "snapshot writer trigger");
+      const attached = message(f.messageId, "other", [f.block]);
       await seed(f, [
-        message("first", null, "first visible content"),
-        unrelated,
-        ...(fault === "unrelated-missing" ? [] : [attached]),
+        other,
+        attached,
+        ...(kind === "retained" ? [message("active", "other", [])] : []),
       ]);
-      const sourceJson = JSON.stringify(fault === "selected" ? attached : unrelated);
-      const invalidJson = {
-        "invalid syntax": "{malformed",
-        "literal NUL": sourceJson + "\u0000trailing",
-        "multiple values": sourceJson + ",{}",
-        "premature envelope close": sourceJson + "]\u0000trailing",
-      }[corruption];
       const database = openOpenClawAgentDatabase({ agentId: "main" });
-      database.db
-        .prepare(`UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = (
-        SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = ?
-      )`)
-        .run(
-          invalidJson,
-          f.scope.sessionId,
-          f.scope.sessionId,
-          fault === "selected" ? f.messageId : "unrelated",
-        );
-      await expect(
-        readSessionMessagesWithSourceAsync(f.scope, {
-          mode: "full",
-          reason: "corrupt managed attachment history",
-          allowResetArchiveFallback: true,
-        }),
-      ).rejects.toBeInstanceOf(SyntaxError);
-      await expect(f.download()).rejects.toBeInstanceOf(SyntaxError);
-      await expect(
-        cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey }),
-      ).rejects.toBeInstanceOf(SyntaxError);
-      expect(readManagedImageRecord(f.attachmentId, stateDir)).not.toBeNull();
-      expect(fs.existsSync(f.originalPath)).toBe(true);
+      const row = database.db
+        .prepare(
+          "SELECT seq, event_json FROM transcript_events WHERE session_id = ? AND seq = (SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = ?)",
+        )
+        .get(f.scope.sessionId, f.scope.sessionId, f.messageId) as {
+        seq: number;
+        event_json: string;
+      };
+      // Match runtime connection admission instead of failing immediately on an
+      // unrelated transient lock. The write still commits inside the read snapshot.
+      const writer = openNodeSqliteDatabase(database.path, {
+        timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+      });
+      admitSqliteSchema(writer);
+      const parse = JSON.parse;
+      let rewrote = false;
+      const spy = vi.spyOn(JSON, "parse").mockImplementation((value, reviver) => {
+        if (!rewrote && value === JSON.stringify(other)) {
+          rewrote = true;
+          writer.exec("BEGIN IMMEDIATE");
+          try {
+            rewriteSqliteTranscriptEventRowsInTransaction({ ...database, db: writer }, f.scope, [
+              {
+                seq: row.seq,
+                expectedEventJson: row.event_json,
+                event: message(f.messageId, "other", []),
+              },
+            ]);
+            writer.exec("COMMIT");
+          } catch (error) {
+            writer.exec("ROLLBACK");
+            throw error;
+          }
+        }
+        return parse(value, reviver);
+      });
+      try {
+        // Run the worker's reader kernel here so this deterministic competing writer
+        // fires inside its read snapshot; the other cases exercise actual dispatch.
+        const reader = createReadonlySessionHistoryReader({
+          database: { agentId: "main", path: database.path },
+          transcript: { ...f.scope, sessionFile: f.scope.sessionKey },
+        });
+        const selected =
+          kind === "visible"
+            ? await reader.readSessionMessagesMatchingIdAsync(f.scope, f.messageId)
+            : (
+                await reader.readSessionMessagesWithSourceAsync(f.scope, {
+                  mode: "page",
+                  includeOffPathMessages: true,
+                })
+              ).messages;
+        expect(
+          selected?.filter(
+            (candidate) =>
+              (candidate as { __openclaw: { id: string } })["__openclaw"].id === f.messageId,
+          ),
+        ).toMatchObject([{ content: [f.block], __openclaw: { id: f.messageId } }]);
+        expect(rewrote).toBe(true);
+        expect(database.db.isTransaction).toBe(false);
+      } finally {
+        spy.mockRestore();
+        writer.close();
+      }
+      expect(await f.download()).toBeNull();
     },
   );
+
+  it("rechecks archive membership after the active history becomes reset-only", async () => {
+    const f = await fixture();
+    await seed(f, []);
+    const archivePath = archive(f);
+    const archiveBefore = fs.readFileSync(archivePath);
+    expect(await f.download()).not.toBeNull();
+    await seed(f, [
+      message(f.messageId, null, [f.block]),
+      { type: "reset", id: "reset", parentId: f.messageId, timestamp, reason: "new" },
+    ]);
+    expect(await f.download()).toBeNull();
+    const hostSql = observeHostDataSql();
+    try {
+      await cleanup({ sessionKey: f.scope.sessionKey });
+      expect(hostSql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+    } finally {
+      hostSql.restore();
+    }
+    expect(await readManagedImageRecord(f.attachmentId, stateDir)).toBeNull();
+    expect(fs.existsSync(f.originalPath)).toBe(false);
+    expect(await f.download()).toBeNull();
+    expect(fs.readFileSync(archivePath)).toEqual(archiveBefore);
+  });
+
+  it("ignores NUL-corrupt history in another session", async () => {
+    const f = await fixture();
+    const corrupt = await fixture("hidden");
+    await seed(corrupt, [message("hidden", null, "hidden history")]);
+    await seed(f, [message(f.messageId, null, [f.block])]);
+    openOpenClawAgentDatabase({ agentId: "main" })
+      .db.prepare(`UPDATE transcript_events SET event_json = event_json || ? WHERE session_id = ? AND seq = (
+        SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = 'hidden'
+      )`)
+      .run("\u0000trailing", corrupt.scope.sessionId, corrupt.scope.sessionId);
+    expect(await f.download()).not.toBeNull();
+    await cleanup({ sessionKey: f.scope.sessionKey });
+    await expectRetained(f);
+    await expectRetained(corrupt);
+  });
+});
+
+const bytes = createSolidPngBuffer(1, 1, { r: 17, g: 34, b: 51 });
+
+function createMedia(custodyStateDir: string, assertCurrent?: () => void) {
+  return createManagedOutgoingMediaBlocks({
+    sessionKey: "agent:main:custody",
+    agentId: "main",
+    stateDir: custodyStateDir,
+    items: [{ url: `data:image/png;base64,${bytes.toString("base64")}`, trustedLocal: false }],
+    assertCurrent,
+  });
+}
+
+function recordPath(record: ManagedImageRecord) {
+  return path.join(record.original.mediaRoot, record.original.mediaSubdir, record.original.mediaId);
+}
+
+describe("managed media worker custody", () => {
+  it.each([
+    "closed database",
+    "replaced original",
+    "refused commit",
+    "revoked after commit",
+    "lost ordinary reply",
+    "lost native receipt",
+  ] as const)("settles file, record and authority after %s", async (failure) => {
+    await withOpenClawTestState(
+      { layout: "state-only", label: "managed-media-custody" },
+      async (state) => {
+        const entries = () => listManagedImageRecordEntries({ stateDir: state.stateDir });
+        const scopedOnly = failure === "closed database" || failure === "replaced original";
+        if (!scopedOnly) {
+          await entries();
+        }
+        const revoked = new Error("Synthetic channel authority revoked");
+        let active = true;
+        let nativeReplies = 0;
+        let refused = false;
+        const accepted = vi.fn();
+        const assertCurrent = () => {
+          if (!active) {
+            throw revoked;
+          }
+        };
+        const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
+        const admissionSpy = scopedOnly
+          ? undefined
+          : vi
+              .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
+              .mockImplementation((admit, attachment) => {
+                const admission = createAdmission((request, grant) => {
+                  if (failure === "refused commit" && request.stage === "commit") {
+                    refused = true;
+                    active = false;
+                  }
+                  admit(request, grant);
+                }, attachment);
+                if (failure !== "lost native receipt") {
+                  return admission;
+                }
+                // Keep native execution, but lose its retained facts as well as the ordinary reply.
+                return new Proxy(admission, {
+                  get(target, key, receiver) {
+                    return key === "committed" || key === "settlement"
+                      ? undefined
+                      : Reflect.get(target, key, receiver);
+                  },
+                });
+              });
+        const restoreReplies = scopedOnly
+          ? () => {}
+          : interceptManagedImageMutationReplies((commandType) => {
+              if (commandType !== "managedImages.insert") {
+                return false;
+              }
+              nativeReplies++;
+              if (failure === "revoked after commit") {
+                active = false;
+              }
+              return failure === "lost ordinary reply" || failure === "lost native receipt";
+            });
+        const displaced = state.statePath("displaced-original.png");
+        try {
+          const result = withChannelReadAuthority(
+            assertCurrent,
+            async () => {
+              const blocks = await createMedia(
+                state.stateDir,
+                scopedOnly ? undefined : assertCurrent,
+              );
+              if (failure === "closed database") {
+                await closeOpenClawStateDatabaseByPathAsync(
+                  state.statePath("state", "openclaw.sqlite"),
+                );
+              } else if (failure === "replaced original") {
+                const records = await entries();
+                expect(records).toHaveLength(1);
+                const original = recordPath(records[0]!.record);
+                await fsAsync.rename(original, displaced);
+                await fsAsync.writeFile(original, "synthetic replacement");
+              }
+              return blocks;
+            },
+            undefined,
+            accepted,
+          );
+          const outcome = await result.then(
+            (blocks) => ({ blocks }),
+            (error: unknown) => ({ error }),
+          );
+          // Read persisted state only after disabling transport fault injection.
+          restoreReplies();
+          admissionSpy?.mockRestore();
+          const records = await entries();
+          if (failure === "refused commit" || failure === "revoked after commit") {
+            expect(outcome).toEqual({ error: revoked });
+            expect(records).toEqual([]);
+            expect(
+              await fsAsync.readdir(state.statePath("media", "outgoing", "originals")),
+            ).toEqual([]);
+            expect(refused).toBe(failure === "refused commit");
+            expect(nativeReplies).toBe(failure === "refused commit" ? 0 : 1);
+          } else {
+            expect(records).toHaveLength(1);
+            const record = records[0]!.record;
+            if (failure === "closed database") {
+              expect(
+                "error" in outcome && isStateDatabaseReadAdmissionInvalidatedError(outcome.error),
+              ).toBe(true);
+              expect(records[0]?.cleanupPending).toBe(false);
+            } else {
+              expect(record).toMatchObject({ retentionClass: "transient", messageId: null });
+              if (failure === "replaced original") {
+                await expect(result).rejects.toThrow(
+                  "Media output no longer names the created file",
+                );
+                expect(records[0]?.cleanupPending).toBe(true);
+              } else {
+                expect(nativeReplies).toBe(1);
+                expect(outcome).toHaveProperty(
+                  failure === "lost ordinary reply" ? "blocks" : "error",
+                );
+              }
+            }
+            if (failure === "replaced original") {
+              expect(await fsAsync.readFile(recordPath(record), "utf8")).toBe(
+                "synthetic replacement",
+              );
+              expect(await fsAsync.readFile(displaced)).toEqual(bytes);
+            } else {
+              expect(await fsAsync.readFile(recordPath(record))).toEqual(bytes);
+            }
+          }
+          expect(accepted).toHaveBeenCalledTimes(failure === "lost ordinary reply" ? 1 : 0);
+        } finally {
+          restoreReplies();
+          admissionSpy?.mockRestore();
+        }
+      },
+    );
+  });
 });

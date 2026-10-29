@@ -24,6 +24,14 @@ Default human inspection uses `enabled`, `disabled`, or `error` status labels,
 matching `plugins list`. It describes the metadata snapshot; it does not claim
 that a plugin module was imported. With `--runtime`, successful runtime inspection
 uses `loaded`. JSON retains the underlying registry status and separate `imported` field.
+Known-incompatible plugins remain visible with their repair guidance. Their
+diagnostics do not prevent inspection of other plugins, including with `--runtime`.
+
+An unfinished plugin data migration also prevents runtime evaluation. The plugin
+stays visible with its Doctor action instead of running against unmigrated data.
+Stop the Gateway, run `openclaw doctor --fix` against the same state and config,
+then start the Gateway again. A reload that encounters this condition refuses the
+replacement before stopping the existing plugin.
 
 For multi-entry packages, inspecting any child shows the shared package install metadata. `inspect --all --json` includes that same record for each child. If package ownership is missing or ambiguous, inspection omits install metadata rather than attributing an unrelated install record.
 
@@ -48,8 +56,9 @@ Global discovery diagnostics go to stderr, including with `--json`. This explain
 
 SDK import failures appear in the existing plugin error output and Doctor's
 plugin diagnostics. The diagnostic names the plugin, imported
-`openclaw/plugin-sdk/*` seam, running core version, and build version when known.
-For an official plugin, run `openclaw plugins update <id>` and restart the Gateway.
+`openclaw/plugin-sdk/*` API, running core version, and build version when known.
+For an official plugin, run `openclaw plugins update <id>`. A running Gateway applies
+the update before the command completes; otherwise it loads the update at its next start.
 If the error identifies a nested SDK, the plugin bundles an incompatible
 OpenClaw SDK; update the plugin or contact its author.
 
@@ -80,6 +89,23 @@ If a configured plugin is present on disk but blocked by the loader's path-safet
 
 For module-shape failures such as missing `register`/`activate` exports, rerun with `OPENCLAW_PLUGIN_LOAD_DEBUG=1` to include a compact export-shape summary in the diagnostic output.
 
+### Doctor priorities and repair steps
+
+The main `openclaw doctor` summary puts current plugin inspection and loading
+failures under **Fix now**. Run `openclaw plugins inspect <id> --runtime` for the
+named plugin, then repair its configured path, ownership, dependencies, or install
+according to that diagnostic. For an incompatible official plugin, run
+`openclaw plugins update <id>` and rerun Doctor. Preserve an enabled plugin's
+configuration while repairing its files.
+
+Legacy compatibility notices are **Recommended improvements**: update or replace
+the affected plugin to remove its dependence on legacy APIs. A plugin version
+mismatch includes a confirmed update command when one is available; update before
+restarting the Gateway. When no compatible registry release exists, keep the
+current install and check for a compatible release rather than attempting an
+unavailable version. These local findings do not replace the running Gateway's
+health check.
+
 ## Registry
 
 ```bash
@@ -90,7 +116,15 @@ openclaw plugins registry --json
 
 The local plugin registry is OpenClaw's persisted cold read model for installed plugin identity, enablement, source metadata, and contribution ownership. Normal startup, provider owner lookup, channel setup classification, and plugin inventory can read it without importing plugin runtime modules.
 
+When that registry is missing or stale, Gateway startup validates current plugin metadata and serves from that prepared snapshot. After readiness, maintenance refreshes the persisted registry in the shared-state worker under the plugin lifecycle lease using current config and package facts. This retains metadata for later updates without blocking request handling on a SQLite write. Refresh failures produce warnings without replacing the active runtime snapshot. Config recovery and database compatibility checks remain startup gates; updates retain those checks.
+
 Use `plugins registry` to inspect whether the persisted registry is present, current, or stale. Use `--refresh` to rebuild it from the persisted plugin index, config policy, and manifest/package metadata. This is a repair path, not a runtime activation path.
+
+Inspection revalidates warnings for unavailable or unreadable configured plugin load
+paths against the current config, including permission errors and symbolic link
+loops. Removing the final path removes its warning from the inspected view; a path
+that remains configured and unavailable or unreadable still produces a warning.
+Inspection does not rewrite the persisted registry. Use `--refresh` to update that ledger.
 
 When persisted and derived plugin records differ, the command lists each differing plugin with both sources. JSON output returns the same rows in `differences`. Policy staleness reports `policy-changed` in `refreshReasons` and leaves `differences` empty because policy validation runs before record comparison; a policy refresh can still update enabled fields. A refresh rereads and verifies its persisted replacement before it reports success. If plugin package files keep changing during verification, stop those updates and run `openclaw plugins registry --refresh` again.
 

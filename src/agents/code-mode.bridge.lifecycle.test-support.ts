@@ -1,18 +1,26 @@
 /** Real embedded subscriber/catalog executor shared by bridge lifecycle regressions. */
 import { createDiagnosticEmbeddedRunOwner } from "../logging/diagnostic-run-activity.js";
-import type { NestedToolActivity } from "../sessions/nested-tool-activity.js";
+import { createReplyOperation } from "../sessions/session-controller.js";
+import type { CodeModeExecutorId } from "./code-mode-executor-types.js";
 import { createCodeModeTools } from "./code-mode.js";
+import {
+  createAttemptNestedToolActivityState,
+  readAttemptNestedToolActivity,
+} from "./embedded-agent-runner/run/attempt-nested-tool-activity.js";
 import { prepareEmbeddedAttemptStream } from "./embedded-agent-runner/run/attempt-stream-prepare.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
-import { clearActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
+import { clearTestEmbeddedRun as clearActiveEmbeddedRun } from "./embedded-agent-runner/runs.test-support.js";
 import { createStubSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
+import type { Agent } from "./runtime/index.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search.js";
 
 export function createSubscribedCodeModeHarness(params: {
   name: string;
+  executor?: CodeModeExecutorId;
   sessionManager?: SessionManager;
+  agent?: Agent;
   onBlockReplyFlush?: () => Promise<void>;
   onToolResult?: EmbeddedRunAttemptParams["onToolResult"];
   onBlockReply?: EmbeddedRunAttemptParams["onBlockReply"];
@@ -26,17 +34,30 @@ export function createSubscribedCodeModeHarness(params: {
   const sessionId = `session-code-mode-${params.name}`;
   const sessionKey = `agent:main:${params.name}`;
   const config = {
-    tools: { codeMode: { enabled: true, timeoutMs: params.timeoutMs ?? 1_500 } },
+    tools: {
+      codeMode: {
+        enabled: true,
+        executor: params.executor,
+        // Lifecycle cases use product admission defaults; deadline tests opt into their own budget.
+        timeoutMs: params.timeoutMs,
+      },
+    },
   } as never;
   const catalogRef = createToolSearchCatalogRef();
   const runAbortController = new AbortController();
+  const replyOperation = createReplyOperation({
+    sessionKey,
+    sessionId,
+    agentId: "main",
+    resetTriggered: false,
+  });
   const { session, emit } = createStubSessionHarness();
   const sessionManager = params.sessionManager ?? SessionManager.inMemory();
-  const nestedToolActivities: NestedToolActivity[] = [];
+  const nestedToolActivityState = createAttemptNestedToolActivityState();
   guardSessionManager(sessionManager, { config: {}, runId, sessionKey });
   const activeSession = Object.assign(session, {
     sessionManager,
-    agent: { hasQueuedMessages: () => false },
+    agent: params.agent ?? { hasQueuedMessages: () => false },
     isStreaming: false,
     messages: [],
     pendingMessageCount: 0,
@@ -47,6 +68,7 @@ export function createSubscribedCodeModeHarness(params: {
       runId,
       sessionId,
       sessionKey,
+      replyOperation,
       onToolResult: params.onToolResult,
       observeToolTerminal: params.observeToolTerminal,
       onToolStreamBoundary: params.onToolStreamBoundary,
@@ -54,13 +76,24 @@ export function createSubscribedCodeModeHarness(params: {
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       blockReplyBreak: "message_end",
     } as never,
-    activeSession: activeSession as never,
-    hookRunner: undefined as never,
+    agentSession: {
+      activeSession: activeSession as never,
+      hookRunner: undefined as never,
+      clientToolCallSlots: [],
+      hasDeliveredSourceReply: () => false,
+      markSourceReplyDelivered: () => undefined,
+      builtinToolNames: new Set(),
+      sourceReplyCapableToolNames: new Set(),
+      coreBuiltinToolNames: new Set(),
+      replaySafeToolNames: new Set(),
+      codeModeExecToolNames: new Set(),
+      sideEffectToolOwners: new Map(),
+      trustedLocalMediaToolNames: new Set(),
+    },
     hookAgentId: "main",
     diagnosticTrace: {} as never,
     diagnosticOwner: createDiagnosticEmbeddedRunOwner({ sessionId, sessionKey, runId }),
-    clientToolCallSlots: [],
-    nestedToolActivities,
+    nestedToolActivityState,
     isReplaySafeTool: () => false,
     runAbortController,
     abortRun: () => runAbortController.abort(),
@@ -71,13 +104,8 @@ export function createSubscribedCodeModeHarness(params: {
       timedOut: false,
       yieldDetected: false,
     }),
-    hasDeliveredSourceReply: () => false,
-    markSourceReplyDelivered: () => undefined,
     onBlockReply: params.onBlockReply,
     onBlockReplyFlush: params.onBlockReplyFlush,
-    sandboxSessionKey: sessionKey,
-    builtinToolNames: new Set(),
-    replaySafeToolNames: new Set(),
   });
   const context = {
     config,
@@ -91,8 +119,10 @@ export function createSubscribedCodeModeHarness(params: {
   };
   return {
     ...context,
+    replyOperation,
     sessionManager,
-    nestedToolActivities,
+    readNestedActivities: () =>
+      readAttemptNestedToolActivity(sessionManager, nestedToolActivityState),
     emit,
     tools: createCodeModeTools(context),
     runAbortController,
@@ -101,6 +131,7 @@ export function createSubscribedCodeModeHarness(params: {
       clearToolSearchCatalog(context);
       stream.subscription.unsubscribe();
       clearActiveEmbeddedRun(sessionId, stream.queueHandle, sessionKey);
+      replyOperation.complete();
     },
   };
 }

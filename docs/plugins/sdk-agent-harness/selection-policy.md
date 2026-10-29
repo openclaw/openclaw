@@ -20,6 +20,10 @@ OpenClaw chooses a harness after provider/model resolution:
    route. Provider/model prefixes alone never select a harness.
 4. If no registered harness matches, OpenClaw uses its embedded runtime.
 
+For configured models, transport details and request overrides come from the
+same selected model row. An exact model ID takes precedence over a legacy
+provider-prefixed row, including when the exact row inherits provider defaults.
+
 Plugin harness failures surface as run failures. In `auto` mode, embedded
 fallback only applies when no registered plugin harness supports the resolved
 provider/model. Once a plugin harness has claimed a run, OpenClaw does not
@@ -43,7 +47,7 @@ A durable native harness pin retains its transcript owner; an observed harness
 on a plugin-owned concrete model chat does not become a pin, even when model
 selection is locked. For concrete-model execution, neither a request nor a pin
 makes an incompatible route compatible: the harness must support the prepared
-facts, declare the exact-request OpenClaw fallback, or fail closed.
+facts, declare the exact-request OpenClaw fallback, or refuse to run.
 [Bound native session ownership](/plugins/sdk-agent-harness#bound-native-session-ownership) separately
 identifies sessions whose verified native connection owns model and auth, so
 unrelated outer route metadata does not replace that connection.
@@ -76,7 +80,7 @@ OpenClaw. The harness then claims that provider in `supports(...)`.
 
 The bundled Codex plugin follows this pattern:
 
-- preferred user model refs: `openai/gpt-5.6-sol`
+- preferred user model refs: `openai/gpt-6-astra`
 - compatibility refs: legacy `codex/gpt-*` refs remain accepted, but new
   configs should not use them as normal provider/model refs
 - harness id: `codex`

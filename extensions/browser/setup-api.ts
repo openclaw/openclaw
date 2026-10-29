@@ -32,7 +32,6 @@ function hasBrowserToolReference(config: OpenClawConfig): boolean {
   );
 }
 
-/** Setup entry that detects existing Browser configuration references. */
 export default definePluginEntry({
   id: "browser",
   name: "Browser Setup",

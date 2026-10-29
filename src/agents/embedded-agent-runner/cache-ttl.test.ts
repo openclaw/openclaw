@@ -1,158 +1,107 @@
-// Cache-TTL eligibility coverage for native and provider-routed model families.
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("../../plugins/provider-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../../plugins/provider-runtime.js")>(
-    "../../plugins/provider-runtime.js",
-  );
-  return {
-    ...actual,
-    resolveProviderCacheTtlEligibility: (params: {
-      context: { provider: string; modelId: string; modelApi?: string };
-    }) => {
-      // Provider runtime owns model-family-specific eligibility; tests mirror
-      // plugin decisions without loading actual provider plugins.
-      if (params.context.provider === "anthropic") {
-        return true;
-      }
-      if (params.context.provider === "moonshot" || params.context.provider === "zai") {
-        return true;
-      }
-      if (params.context.provider === "openrouter") {
-        return ["anthropic/", "deepseek/", "moonshot/", "moonshotai/", "zai/"].some((prefix) =>
-          params.context.modelId.startsWith(prefix),
-        );
-      }
-      return undefined;
-    },
-  };
-});
+const providerEligibility = vi.hoisted(() => vi.fn());
 
-import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
+// mock-isolation: Pin provider eligibility without loading plugin registries into this policy test.
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  resolveProviderCacheTtlEligibility: (params: { context: { provider: string } }) => {
+    providerEligibility(params);
+    if (params.context.provider === "moonshot") {
+      return true;
+    }
+    if (params.context.provider === "openrouter") {
+      return false;
+    }
+    return undefined;
+  },
+}));
+
+import {
+  isCacheTtlEligibleProvider as isEligible,
+  readLastCacheTtlTimestamp,
+} from "./cache-ttl.js";
 
 describe("isCacheTtlEligibleProvider", () => {
-  it("allows anthropic", () => {
-    expect(isCacheTtlEligibleProvider("anthropic", "claude-sonnet-4-20250514")).toBe(true);
+  it("forwards only the normalized identity and bounded resolved route", () => {
+    providerEligibility.mockClear();
+    const route = {
+      baseUrl: "https://proxy.example/v1",
+      supportsPromptCacheKey: false,
+      headers: { "x-test-private": "not-for-provider-hooks" },
+      apiKey: "synthetic-not-for-provider-hooks",
+    };
+    expect(isEligible(" Moonshot ", " Kimi-K2.5 ", "openai-responses", route)).toBe(true);
+    expect(providerEligibility).toHaveBeenCalledExactlyOnceWith({
+      provider: "moonshot",
+      context: {
+        provider: "moonshot",
+        modelId: "kimi-k2.5",
+        modelApi: "openai-responses",
+        baseUrl: "https://proxy.example/v1",
+        supportsPromptCacheKey: false,
+      },
+    });
   });
 
-  it("allows moonshot and zai providers", () => {
-    expect(isCacheTtlEligibleProvider("moonshot", "kimi-k2.5")).toBe(true);
-    expect(isCacheTtlEligibleProvider("zai", "glm-5")).toBe(true);
+  it.each([
+    ["openai", "gpt-4o", undefined, undefined],
+    ["openrouter", "openai/gpt-4o", undefined, undefined],
+    ["openrouter", "model-1", "openai-responses", { supportsPromptCacheKey: true }],
+    ["myproxy", "model-1", "custom-api", { supportsPromptCacheKey: true }],
+  ] as const)("rejects unsupported %s/%s via %s", (provider, model, api, route) => {
+    expect(isEligible(provider, model, api, route)).toBe(false);
   });
 
-  it("is case-insensitive for native providers", () => {
-    expect(isCacheTtlEligibleProvider("Moonshot", "Kimi-K2.5")).toBe(true);
-    expect(isCacheTtlEligibleProvider("ZAI", "GLM-5")).toBe(true);
-  });
-
-  it("allows openrouter cache-ttl models", () => {
-    expect(isCacheTtlEligibleProvider("openrouter", "anthropic/claude-sonnet-4")).toBe(true);
-    expect(isCacheTtlEligibleProvider("openrouter", "deepseek/deepseek-v3.2")).toBe(true);
-    expect(isCacheTtlEligibleProvider("openrouter", "moonshotai/kimi-k2.5")).toBe(true);
-    expect(isCacheTtlEligibleProvider("openrouter", "moonshot/kimi-k2.5")).toBe(true);
-    expect(isCacheTtlEligibleProvider("openrouter", "zai/glm-5")).toBe(true);
-  });
-
-  it("rejects unsupported providers and models", () => {
-    expect(isCacheTtlEligibleProvider("openai", "gpt-4o")).toBe(false);
-    expect(isCacheTtlEligibleProvider("openrouter", "openai/gpt-4o")).toBe(false);
-  });
-
-  it("allows direct Google Gemini cache-ttl models", () => {
-    expect(
-      isCacheTtlEligibleProvider("google", "gemini-3.1-pro-preview", "google-generative-ai"),
-    ).toBe(true);
-    expect(isCacheTtlEligibleProvider("google", "gemini-2.5-flash", "google-generative-ai")).toBe(
-      true,
-    );
-  });
-
-  it("rejects non-cacheable Google model families", () => {
-    expect(
-      isCacheTtlEligibleProvider("google", "gemini-live-2.5-flash-preview", "google-generative-ai"),
-    ).toBe(false);
-  });
+  it.each(["openai-responses", "openai-completions", "openai-chatgpt-responses"])(
+    "requires explicit cache support for a custom %s provider",
+    (modelApi) => {
+      const eligible = (supportsPromptCacheKey?: boolean) =>
+        isEligible("myproxy", "model-1", modelApi, {
+          baseUrl: "https://proxy.example/v1",
+          supportsPromptCacheKey,
+        });
+      expect([eligible(true), eligible(false), eligible()]).toEqual([true, false, false]);
+    },
+  );
 
   it("allows custom anthropic-messages providers", () => {
-    expect(isCacheTtlEligibleProvider("litellm", "claude-sonnet-4-6", "anthropic-messages")).toBe(
-      true,
-    );
-  });
-
-  it("allows anthropic Bedrock models", () => {
-    expect(
-      isCacheTtlEligibleProvider(
-        "amazon-bedrock",
-        "us.anthropic.claude-sonnet-4-20250514-v1:0",
-        "anthropic-messages",
-      ),
-    ).toBe(true);
+    expect(isEligible("litellm", "claude-sonnet-4-6", "anthropic-messages")).toBe(true);
   });
 });
 
 describe("readLastCacheTtlTimestamp", () => {
+  const target = { provider: "Anthropic", modelId: "Claude-Sonnet-4-5" };
+  const marker = (data: Record<string, unknown>) => ({
+    type: "custom",
+    customType: "openclaw.cache-ttl",
+    data,
+  });
+  const read = (...entries: ReturnType<typeof marker>[]) =>
+    readLastCacheTtlTimestamp({ getEntries: () => entries }, target);
   it("returns the latest matching timestamp while ignoring projection metadata", () => {
-    // Replay only reuses cache TTL entries scoped to the current model target;
-    // stale entries for other providers must not reset pruning clocks.
-    const sessionManager = {
-      getEntries: () => [
-        {
-          type: "custom",
-          customType: "openclaw.cache-ttl",
-          data: {
-            timestamp: 1_700_000_000_000,
-            provider: "anthropic",
-            modelId: "claude-sonnet-4-5",
-            prunedToolResults: [{ key: "tool:old:42", mode: "hard" }],
-            ambiguousToolResultBaseKeys: [],
-          },
-        },
-        {
-          type: "custom",
-          customType: "openclaw.cache-ttl",
-          data: {
-            timestamp: 1_700_000_001_000,
-            provider: "google",
-            modelId: "gemini-3.1-pro-preview",
-          },
-        },
-        {
-          type: "custom",
-          customType: "openclaw.cache-ttl",
-          data: {
-            prunedToolResults: [],
-            frozenToolResults: [{ key: "tool:new:43", sourceHash: "hash" }],
-          },
-        },
-      ],
-    };
-
     expect(
-      readLastCacheTtlTimestamp(sessionManager, {
-        provider: "Anthropic",
-        modelId: "Claude-Sonnet-4-5",
-      }),
+      read(
+        marker({
+          timestamp: 1_700_000_000_000,
+          provider: "anthropic",
+          modelId: "claude-sonnet-4-5",
+          prunedToolResults: [{ key: "tool:old:42", mode: "hard" }],
+          ambiguousToolResultBaseKeys: [],
+        }),
+        marker({
+          timestamp: 1_700_000_001_000,
+          provider: "google",
+          modelId: "gemini-3.1-pro-preview",
+        }),
+        marker({
+          prunedToolResults: [],
+          frozenToolResults: [{ key: "tool:new:43", sourceHash: "hash" }],
+        }),
+      ),
     ).toBe(1_700_000_000_000);
   });
 
   it("ignores unscoped cache-ttl entries when a context filter is requested", () => {
-    const sessionManager = {
-      getEntries: () => [
-        {
-          type: "custom",
-          customType: "openclaw.cache-ttl",
-          data: {
-            timestamp: 1_700_000_000_000,
-          },
-        },
-      ],
-    };
-
-    expect(
-      readLastCacheTtlTimestamp(sessionManager, {
-        provider: "anthropic",
-        modelId: "claude-sonnet-4-5",
-      }),
-    ).toBeNull();
+    expect(read(marker({ timestamp: 1_700_000_000_000 }))).toBeNull();
   });
 });

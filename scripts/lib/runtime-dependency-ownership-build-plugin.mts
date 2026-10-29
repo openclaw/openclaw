@@ -4,7 +4,20 @@ import type { TsdownPlugin } from "tsdown";
 import {
   RUNTIME_DEPENDENCY_OWNERSHIP_ASSET_NAME,
   type RuntimeDependencyOwnership,
-} from "./runtime-dependency-ownership-contract.mts";
+} from "../../src/infra/runtime-dependency-ownership.ts";
+import {
+  pluginSdkEntrypoints,
+  privateQaPluginSdkEntrypoints,
+  productionPluginSdkEntrypoints,
+} from "./plugin-sdk-entries.mts";
+
+const productionSdkEntries = new Set(productionPluginSdkEntrypoints);
+const localOnlySdkSources = new Set(
+  [
+    ...pluginSdkEntrypoints.filter((entry) => !productionSdkEntries.has(entry)),
+    ...privateQaPluginSdkEntrypoints,
+  ].map((entry) => `src/plugin-sdk/${entry}.ts`),
+);
 
 export function createRuntimeDependencyOwnershipBuildPlugin(rootDir = process.cwd()): TsdownPlugin {
   return {
@@ -13,25 +26,27 @@ export function createRuntimeDependencyOwnershipBuildPlugin(rootDir = process.cw
       order: "post",
       handler(_options, bundle) {
         const chunks = Object.values(bundle).filter((output) => output.type === "chunk");
-        const ownersByChunk = new Map<string, Set<string>>();
+        const ownersByChunk = new Map<string, Set<string | null>>();
         for (const entry of chunks.filter((chunk) => chunk.isEntry)) {
           const source = entry.facadeModuleId?.split("?", 1)[0];
           const relative = source ? path.relative(rootDir, source).split(path.sep).join("/") : "";
-          // An empty owner represents a root entry and prevents plugin authorization.
-          const owner = /^extensions\/([a-z0-9][a-z0-9-]*)\//u.exec(relative)?.[1] ?? "";
+          // Local test facades must not make their shared chunks part of the shipped root.
+          // An empty string still represents a shipped root and prevents plugin authorization.
+          const owner = localOnlySdkSources.has(relative)
+            ? null
+            : (/^extensions\/([a-z0-9][a-z0-9-]*)\//u.exec(relative)?.[1] ?? "");
           const pending = [entry.fileName];
-          const visited = new Set<string>();
           while (pending.length > 0) {
             const fileName = pending.pop()!;
-            if (visited.has(fileName)) {
+            // Entries with the same owner share one traversal of their chunk closure.
+            if (ownersByChunk.get(fileName)?.has(owner)) {
               continue;
             }
-            visited.add(fileName);
             const chunk = bundle[fileName];
             if (chunk?.type !== "chunk") {
               continue;
             }
-            const owners = ownersByChunk.get(fileName) ?? new Set<string>();
+            const owners = ownersByChunk.get(fileName) ?? new Set<string | null>();
             owners.add(owner);
             ownersByChunk.set(fileName, owners);
             pending.push(...chunk.imports, ...chunk.dynamicImports);
@@ -45,7 +60,7 @@ export function createRuntimeDependencyOwnershipBuildPlugin(rootDir = process.cw
           }
           ownership.chunks[chunk.fileName] = {
             sha256: createHash("sha256").update(chunk.code).digest("hex"),
-            extensions: [...owners].toSorted(),
+            extensions: [...owners].filter((owner) => owner !== null).toSorted(),
           };
         }
         this.emitFile({

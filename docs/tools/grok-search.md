@@ -37,6 +37,9 @@ Skip it to enable or change `x_search` later in config.
 
 ## Sign in or get an API key
 
+The `xai` plugin that provides Grok web search ships with OpenClaw, so there is
+no `openclaw plugins install` step. Start at the credential you already have.
+
 <Steps>
   <Step title="Use xAI OAuth">
     If you already signed in with xAI during onboarding or model auth, choose
@@ -105,8 +108,14 @@ compatibility, but Grok always returns one synthesized answer with citations
 rather than an N-result list. Provider-specific filters are not supported.
 
 Grok defaults to a 60 second timeout because xAI Responses web-grounded
-searches can run longer than the shared `web_search` default. Override it
-with `tools.web.search.timeoutSeconds`.
+searches can run longer than the shared `web_search` default. This budget
+includes credential preparation, the search request, and authentication
+recovery. Override it with `tools.web.search.timeoutSeconds`.
+
+OAuth refresh failures remain authentication errors rather than being reported
+as a missing API key. If a refresh cannot recover, sign in again with
+`openclaw models auth login --provider xai --method oauth`; increasing the search
+timeout does not repair an unavailable credential.
 
 ## Base URL overrides
 

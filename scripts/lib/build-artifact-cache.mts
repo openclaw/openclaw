@@ -3,7 +3,11 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { acquireFileLockSync } from "@openclaw/fs-safe/file-lock";
+import {
+  acquireFileLock,
+  acquireFileLockSync,
+  type FileLockHandle,
+} from "@openclaw/fs-safe/file-lock";
 
 export const ARTIFACT_CACHE_VERSION = 6;
 export type BuildCachePath = {
@@ -79,7 +83,7 @@ export function portableRelativePath(rootDir: string, filePath: string) {
   return path.relative(rootDir, filePath).split(path.sep).join("/");
 }
 
-function hashInputFiles(
+export function hashInputFiles(
   rootDir: string,
   files: string[],
   fsImpl: typeof fs,
@@ -215,14 +219,14 @@ export function publishArtifactFiles(
   for (const file of files) {
     const source = path.resolve(sourceRoot, file);
     const target = path.resolve(targetRoot, file);
-    const bytes = fs.readFileSync(source);
-    if (fs.existsSync(target) && fs.readFileSync(target).equals(bytes)) {
+    if (fs.existsSync(target) && fs.readFileSync(target).equals(fs.readFileSync(source))) {
       continue;
     }
     fs.mkdirSync(path.dirname(target), { recursive: true });
     const temporary = `${target}.${randomUUID()}.tmp`;
     try {
-      fs.writeFileSync(temporary, bytes, { flag: "wx" });
+      // Clone where supported, with an independent-inode copy elsewhere.
+      fs.copyFileSync(source, temporary, fs.constants.COPYFILE_FICLONE);
       fs.renameSync(temporary, target);
     } finally {
       fs.rmSync(temporary, { force: true });
@@ -235,29 +239,58 @@ export function publishArtifactFiles(
   }
 }
 
-/** Identify the emitter selected from tsdown, not a separately hoisted dependency. */
+/** Private stages become visible only through their owner's final publication. */
+function copyArtifactFilesToStaging(sourceRoot: string, targetRoot: string, files: string[]) {
+  for (const file of files) {
+    const target = path.resolve(targetRoot, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.copyFileSync(path.resolve(sourceRoot, file), target, fs.constants.COPYFILE_FICLONE);
+  }
+}
+
+/** Hash the bundler and the checkout-owned native emitter, including its executable and API. */
 export function resolveTsdownCompilerFiles() {
   const require = createRequire(import.meta.url);
   const tsdown = fs.realpathSync(require.resolve("tsdown"));
   const tsdownRequire = createRequire(tsdown);
   const dts = fs.realpathSync(tsdownRequire.resolve("rolldown-plugin-dts"));
-  const compilerRequire = createRequire(dts);
+  const compilerPackage = require.resolve("typescript/package.json");
+  const compilerRoot = path.dirname(compilerPackage);
+  const platformPackage = createRequire(compilerPackage).resolve(
+    `@typescript/typescript-${process.platform}-${process.arch}/package.json`,
+  );
+  const platformRoot = path.dirname(platformPackage);
   return [
     tsdown,
     require.resolve("tsdown/package.json"),
     dts,
     tsdownRequire.resolve("rolldown-plugin-dts/package.json"),
-    compilerRequire.resolve("typescript"),
-    compilerRequire.resolve("typescript/package.json"),
+    compilerPackage,
+    platformPackage,
+    path.join(compilerRoot, "bin/tsc"),
+    ...listCacheFiles(
+      compilerRoot,
+      [
+        { path: "lib", extensions: [".js", ".cjs", ".json"] },
+        { path: "dist", extensions: [".js", ".json"] },
+        { path: "vendor", extensions: [".js", ".json"] },
+      ],
+      fs,
+    ),
+    ...listCacheFiles(platformRoot, ["lib"], fs),
   ];
 }
 
-function resolveTsdownCompilerIdentity() {
+let tsdownCompilerIdentity: string | undefined;
+export function resolveTsdownCompilerIdentity() {
+  if (tsdownCompilerIdentity) {
+    return tsdownCompilerIdentity;
+  }
   const hash = createHash("sha256");
   for (const file of resolveTsdownCompilerFiles()) {
     hash.update(fs.readFileSync(file));
   }
-  return hash.digest("hex");
+  return (tsdownCompilerIdentity = hash.digest("hex"));
 }
 
 function ownerIsDead(payload: unknown) {
@@ -279,21 +312,33 @@ function ownerIsDead(payload: unknown) {
   }
 }
 
-/** Own only synchronous cache snapshots; process lifetimes need checkout ownership. */
-export function acquireBuildArtifactLock(target: string, timeoutMs = 600_000) {
-  return acquireFileLockSync(target, {
+function buildArtifactLockOptions(timeoutMs: number) {
+  const reclaim = ({ payload }: { payload: unknown }) => ownerIsDead(payload);
+  return {
     timeoutMs,
     retry: { minTimeout: 500, maxTimeout: 500, factor: 1, randomize: false },
     payload: () => ({ pid: process.pid }),
-    shouldReclaim: ({ payload }) => ownerIsDead(payload),
-    staleRecovery: "remove-if-unchanged",
-    shouldRemoveStaleLock: ({ payload }) => ownerIsDead(payload),
-  });
+    shouldReclaim: reclaim,
+    staleRecovery: "remove-if-unchanged" as const,
+    shouldRemoveStaleLock: reclaim,
+  };
+}
+
+/** Snapshot locks never own subprocess lifetimes. */
+export function acquireBuildArtifactLock(target: string, timeoutMs = 600_000) {
+  return acquireFileLockSync(target, buildArtifactLockOptions(timeoutMs));
+}
+
+export function acquireBuildArtifactLockAsync(
+  target: string,
+  timeoutMs = 600_000,
+): Promise<FileLockHandle> {
+  return acquireFileLock(target, buildArtifactLockOptions(timeoutMs));
 }
 
 export type BuildCache = {
   env?: string[];
-  inputs: BuildCacheEntry[];
+  inputs: BuildCacheEntry[] | ((rootDir: string) => BuildCacheEntry[]);
   outputs: BuildCacheEntry[];
   requiredOutputs?: string[] | ((env: NodeJS.ProcessEnv) => string[]);
   restore?: "always";
@@ -348,6 +393,38 @@ function resolveCachePaths(rootDir: string, step: BuildCacheStep, env: NodeJS.Pr
   };
 }
 
+const BUILD_CACHE_INPUT_DIRECTORY = ".artifacts/build-cache-inputs";
+
+/** The build owner resets receipts before admitting children, then joins them before publication. */
+export function resetBuildCacheInputs(rootDir: string) {
+  fs.rmSync(path.join(rootDir, BUILD_CACHE_INPUT_DIRECTORY), { recursive: true, force: true });
+}
+
+function recordBuildCacheInput(rootDir: string, step: BuildCacheStep, signature: string) {
+  const directory = path.join(rootDir, BUILD_CACHE_INPUT_DIRECTORY);
+  fs.mkdirSync(directory, { recursive: true });
+  const file = path.join(directory, `${step.label.replace(/[^a-zA-Z0-9._-]+/g, "_")}.json`);
+  fs.writeFileSync(file, JSON.stringify({ label: step.label, inputHash: signature }));
+}
+
+export function writeBuildCacheInputs(rootDir: string) {
+  const directory = path.join(rootDir, BUILD_CACHE_INPUT_DIRECTORY);
+  const steps: Record<string, string> = {};
+  if (fs.existsSync(directory)) {
+    for (const file of fs.readdirSync(directory).toSorted()) {
+      const receipt: { label: string; inputHash: string } = JSON.parse(
+        fs.readFileSync(path.join(directory, file), "utf8"),
+      );
+      steps[receipt.label] = receipt.inputHash;
+    }
+  }
+  fs.mkdirSync(path.join(rootDir, "dist"), { recursive: true });
+  fs.writeFileSync(
+    path.join(rootDir, "dist/build-cache-inputs.json"),
+    `${JSON.stringify({ version: 1, steps }, null, 2)}\n`,
+  );
+}
+
 function hasAllFiles(rootDir: string, relativeFiles: string[], fsImpl: BuildCacheFs) {
   return relativeFiles.every((relativeFile) => {
     try {
@@ -368,7 +445,9 @@ export function resolveBuildStepCacheState(
   const rootDir = params.rootDir ?? process.cwd();
   const artifactRoot = params.artifactRoot ?? rootDir;
   const fsImpl = params.fs ?? fs;
-  const inputFiles = listCacheFiles(rootDir, step.cache.inputs, fsImpl);
+  const inputs =
+    typeof step.cache.inputs === "function" ? step.cache.inputs(rootDir) : step.cache.inputs;
+  const inputFiles = listCacheFiles(rootDir, inputs, fsImpl);
   if (inputFiles.length === 0) {
     return { cacheable: true, fresh: false, reason: "missing-inputs" };
   }
@@ -376,10 +455,9 @@ export function resolveBuildStepCacheState(
   const lock = acquireBuildArtifactLock(stampPath);
   try {
     const stamp = readArtifactRecord(stampPath);
-    let signature: string;
+    let signature: string | undefined;
     let consumedInputs: string[] | undefined;
     if (params.inputSignature) {
-      signature = params.inputSignature([]);
       try {
         if (stamp?.inputs) {
           signature = params.inputSignature(stamp.inputs);
@@ -389,6 +467,7 @@ export function resolveBuildStepCacheState(
         // Missing previous inputs invalidate normally; the successful compiler
         // supplies the next membership before this owner can seal a generation.
       }
+      signature ??= params.inputSignature([]);
     } else {
       signature = hashInputFiles(
         rootDir,
@@ -403,22 +482,20 @@ export function resolveBuildStepCacheState(
     const relativeOutputFiles = outputFiles.map((file) => portableRelativePath(artifactRoot, file));
     const stampedOutputs = Object.keys(stamp?.outputs ?? {});
     const requiredOutputs = resolveCacheRequiredOutputs(step.cache, params.env ?? process.env);
-    const actualOutputsPresent =
+    const actualOutputsAcceptable =
+      step.cache.restore !== "always" &&
       artifactRecordMismatch(artifactRoot, stamp, signature, requiredOutputs) === undefined;
-    const cachedOutputMismatch = artifactRecordMismatch(
-      outputRoot,
-      stamp,
-      signature,
-      requiredOutputs,
-    );
+    const cachedOutputMismatch = actualOutputsAcceptable
+      ? undefined
+      : artifactRecordMismatch(outputRoot, stamp, signature, requiredOutputs);
     const cachedOutputsPresent = cachedOutputMismatch === undefined;
     const stampMatches =
       (!params.inputSignature || consumedInputs !== undefined) && stamp?.signature === signature;
-    const alwaysRestore = step.cache.restore === "always";
-    const actualOutputsAcceptable = actualOutputsPresent && !alwaysRestore;
-    const restorable =
-      stampMatches && cachedOutputsPresent && (alwaysRestore || !actualOutputsPresent);
+    const restorable = stampMatches && cachedOutputsPresent && !actualOutputsAcceptable;
     const fresh = stampMatches && (actualOutputsAcceptable || cachedOutputsPresent);
+    if (fresh) {
+      recordBuildCacheInput(rootDir, step, signature);
+    }
     return {
       cacheable: true,
       fresh,
@@ -504,13 +581,14 @@ export function writeBuildStepCacheStamp(
     // This cache tree belongs entirely to the step. Replace it even when an old
     // or missing record cannot enumerate obsolete bytes for pruning.
     fsImpl.rmSync(cacheState.outputRoot, { force: true, recursive: true });
-    publishArtifactFiles(rootDir, cacheState.outputRoot, Object.keys(record.outputs));
+    copyArtifactFilesToStaging(rootDir, cacheState.outputRoot, Object.keys(record.outputs));
     if (
       artifactRecordMismatch(cacheState.outputRoot, record, cacheState.signature, requiredOutputs)
     ) {
       throw new Error(`Incomplete build cache snapshot: ${step.label}`);
     }
     writeArtifactRecord(cacheState.stampPath, record);
+    recordBuildCacheInput(params.rootDir ?? process.cwd(), step, cacheState.signature);
   } finally {
     lock.release();
   }
@@ -536,7 +614,7 @@ export function resolveBuildStepCacheStampState(
 
 export function restoreBuildStepCacheOutputs(
   cacheState: BuildCacheState,
-  params: Pick<BuildCacheParams, "rootDir" | "artifactRoot" | "fs"> = {},
+  params: Pick<BuildCacheParams, "rootDir" | "artifactRoot" | "fs"> & { staging?: true } = {},
 ) {
   if (!cacheState.restorable || !cacheState.outputRoot || !cacheState.stampedOutputs?.length) {
     return false;
@@ -553,12 +631,17 @@ export function restoreBuildStepCacheOutputs(
     ) {
       return false;
     }
-    publishArtifactFiles(
-      cacheState.outputRoot,
-      params.artifactRoot ?? params.rootDir ?? process.cwd(),
-      cacheState.stampedOutputs,
-      cacheState.relativeOutputFiles,
-    );
+    const targetRoot = params.artifactRoot ?? params.rootDir ?? process.cwd();
+    if (params.staging) {
+      copyArtifactFilesToStaging(cacheState.outputRoot, targetRoot, cacheState.stampedOutputs);
+    } else {
+      publishArtifactFiles(
+        cacheState.outputRoot,
+        targetRoot,
+        cacheState.stampedOutputs,
+        cacheState.relativeOutputFiles,
+      );
+    }
     return true;
   } finally {
     lock.release();

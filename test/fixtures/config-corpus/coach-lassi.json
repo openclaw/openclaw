@@ -1,0 +1,73 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "/home/fixture/path0-0/path1-0/path2-0/path3-0",
+      "models": {
+        "openai/gpt-5.4": {
+          "agentRuntime": {
+            "id": "openclaw"
+          },
+          "params": {
+            "responsesServerCompaction": true,
+            "responsesCompactEndpoint": true
+          }
+        }
+      }
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "bind": "loopback",
+    "auth": {
+      "mode": "token"
+    }
+  },
+  "browser": {
+    "noSandbox": true
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "botToken": {
+        "source": "env",
+        "provider": "default",
+        "id": "TELEGRAM_BOT_TOKEN"
+      },
+      "dmPolicy": "allowlist",
+      "allowFrom": [
+        "900000002",
+        "900000003"
+      ],
+      "groupPolicy": "disabled",
+      "groups": {
+        "*": {
+          "requireMention": true
+        }
+      }
+    }
+  },
+  "plugins": {
+    "entries": {
+      "telegram": {
+        "enabled": true
+      }
+    }
+  },
+  "commands": {
+    "ownerAllowFrom": [
+      "900000002",
+      "900000003"
+    ]
+  },
+  "meta": {
+    "migrations": {
+      "modelPolicyAllowlist": true
+    },
+    "lastTouchedVersion": "2026.9.2"
+  },
+  "memory": {
+    "search": {
+      "provider": "none"
+    }
+  }
+}

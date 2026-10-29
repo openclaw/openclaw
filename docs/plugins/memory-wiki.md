@@ -9,7 +9,7 @@ title: "Memory wiki"
 ---
 
 `memory-wiki` is a bundled plugin that compiles durable knowledge into a
-navigable wiki: deterministic pages, structured claims with evidence,
+navigable wiki: pages built from saved data, structured claims with evidence,
 provenance, dashboards, and machine-readable digests.
 
 It does not replace the active memory plugin. Recall, promotion, indexing, and
@@ -21,8 +21,10 @@ Enable the plugin before using its CLI, tools, or runtime integration:
 
 ```bash
 openclaw plugins enable memory-wiki
-openclaw gateway restart
 ```
+
+Enablement applies to a running Gateway automatically. If it is offline, start
+it to use the runtime integration. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 | Layer                | Owns                                                                              |
 | -------------------- | --------------------------------------------------------------------------------- |
@@ -46,8 +48,14 @@ then confirm the active memory plugin supports public artifacts.
 ## Vault modes
 
 - `isolated` (default): own vault, own sources, no dependency on the active memory plugin. Use this for a self-contained curated knowledge store.
-- `bridge`: reads public memory artifacts and event logs from the active memory plugin through public plugin SDK seams. Use this to compile the memory plugin's exported artifacts without reaching into private plugin internals.
+- `bridge`: reads public memory artifacts and event logs from the active memory plugin through public plugin SDK interfaces. Use this to compile the memory plugin's exported artifacts without reaching into private plugin internals.
 - `unsafe-local`: explicit same-machine escape hatch for local private paths. Intentionally experimental and non-portable; use only when you understand the trust boundary and specifically need local filesystem access bridge mode cannot provide.
+
+Bridge and unsafe-local source files must contain valid UTF-8. If a changed
+source contains malformed bytes, its import fails without replacing its existing
+wiki page or updating its synchronization metadata. Restore the source as valid
+UTF-8, then retry `openclaw wiki bridge import` or
+`openclaw wiki unsafe-local import`.
 
 Vault mode and vault scope are separate choices:
 
@@ -94,6 +102,10 @@ reads are off, those commands keep local/offline behavior.
 
 Managed content stays inside generated blocks; human note blocks are
 preserved across regeneration.
+Pruning also leaves a source page and its synchronization record intact when
+its bytes are not valid UTF-8, rather than salvaging replacement-decoded Notes
+and deleting the original. Keep a byte-for-byte backup, convert a copy to UTF-8
+using its original encoding, and retry the import.
 
 - `sources/`: imported raw material and bridge/unsafe-local-backed pages
 - `entities/`: durable things, people, systems, projects, objects
@@ -117,6 +129,7 @@ turn it into OpenClaw-native concept pages and compiled digests.
 - unknown `type` values are accepted as generic concepts
 - `index.md` and `log.md` are reserved and never imported as concepts
 - broken or external markdown links are left unchanged
+- links inside inline code, fenced code, and indented code blocks remain literal
 
 Imported pages flatten under `concepts/` so existing compile, search, get, and
 dashboard flows see them without a second wiki tree. Each page keeps the
@@ -124,6 +137,13 @@ original OKF concept ID, source path, `type`, `resource`, `tags`, timestamp,
 and full producer frontmatter. Internal OKF links rewrite to the generated
 wiki concept pages and also emit structured `relationships` entries with
 `kind: okf-link`.
+
+Keep handwritten notes in the page's `## Notes` slot, between
+`<!-- openclaw:human:start -->` and `<!-- openclaw:human:end -->`. Re-import
+preserves that marked block exactly; text outside it is producer-owned and
+can be replaced. Legacy OKF pages without a marked block regenerate with an
+empty Notes slot. If a marker is missing from an existing block, restore it
+before retrying the import. Existing-page read failures leave that page unchanged.
 
 ## Structured claims and evidence
 
@@ -164,7 +184,7 @@ aliases:
   - example-handle
 privacyTier: local-private
 bestUsedFor:
-  - Example ecosystem routing
+  - Example project routing
 notEnoughFor:
   - legal approval
 lastRefreshedAt: "2026-04-29T00:00:00.000Z"
@@ -176,7 +196,7 @@ personCard:
   emails:
     - alex@example.com
   timezone: America/Chicago
-  lane: Example ecosystem
+  lane: Example project
   askFor:
     - Example rollout questions
   avoidAskingFor:
@@ -191,7 +211,7 @@ relationships:
     evidenceKind: discrawl-stat
 claims:
   - id: claim.example.routing
-    text: Alex is useful for example-ecosystem routing.
+    text: Alex is useful for example-project routing.
     status: supported
     confidence: 0.9
     evidence:
@@ -211,6 +231,10 @@ Compiled output also powers first-pass wiki indexing for search/get, claim-id
 lookup back to owning pages, compact prompt supplements, and report
 generation.
 
+Compile preserves existing indexes and dashboard notes when their files cannot
+be read. It reports the read error instead of treating the page as missing;
+resolve the filesystem error and compile again.
+
 Source edits and vault restores become machine-facing only after the next
 compile. Restarting or refreshing the plugin lifecycle compares the vault's
 causally chained compile publication with SQLite and rejects a snapshot from a
@@ -220,6 +244,10 @@ vault or install file watchers.
 After rollback quarantine, a compile in the running process clears the owner
 immediately; a separate compiler process requires plugin lifecycle refresh so
 the daemon can confirm the new durable publication.
+When automatic compilation is enabled, source synchronization for status and
+wiki tools checks for a valid externally published cache before rebuilding a
+missing in-process snapshot. An unchanged vault reuses that publication;
+changed imports, missing indexes, or an invalid cache still require compilation.
 ChatGPT import rollback records post-import edits before compile and keeps
 their recovery paths in plugin state, so an interrupted rollback can reconcile
 the recovery directory and report the same preserved pages on retry. Target
@@ -272,7 +300,7 @@ Search modes (`--mode` / tool `mode` param):
 | Mode              | Boosts                                                         |
 | ----------------- | -------------------------------------------------------------- |
 | `auto`            | balanced default                                               |
-| `find-person`     | person-like entities, aliases, handles, socials, canonical IDs |
+| `find-person`     | person-like entities, aliases, handles, socials, primary IDs   |
 | `route-question`  | agent cards, ask-for/best-used-for hints, relationship context |
 | `source-evidence` | source pages and structured evidence metadata                  |
 | `raw-claim`       | matching structured claims; returns claim/evidence metadata    |
@@ -291,6 +319,22 @@ includes compact `Claim:` and `Evidence:` lines when available.
 | `wiki_get`    | read a wiki page by id/path, falling back to the shared memory corpus when shared search is enabled and the lookup misses                                     |
 | `wiki_apply`  | narrow synthesis/metadata mutations without freeform page surgery                                                                                             |
 | `wiki_lint`   | structural checks, provenance gaps, contradictions, open questions                                                                                            |
+
+`wiki_search` has a 30-second deadline and honors turn cancellation. A timeout
+or cancellation returns a tool error rather than an empty result, and stops
+the ongoing page scan. For a known page, use `wiki_get` with its id or path.
+The page scan itself (reading, parsing and scoring every page when the compiled
+digest cannot narrow the search, resolving `wiki_get` id lookups and misses,
+and `wiki_apply` metadata updates) runs in a plugin-owned pool of two worker
+threads, so the gateway event loop stays responsive while a large vault is
+scanned. Every 64 pages a scan checks whether another task is waiting for its
+shared compute slot or its worker, such as `memory_search` retrieval on a small
+host or a third concurrent scan, and if so hands it over and resumes afterwards
+instead of making it wait for the whole scan. The pool adds no deadline of its
+own: `wiki_search` keeps its 30-second deadline and turn
+cancellation, and CLI, RPC and lookup scans run to completion as before.
+Single-page reads (`wiki_get` by exact path or claim id) stay on the calling
+thread and never wait behind a scan.
 
 The plugin also registers a non-exclusive memory corpus supplement, so shared
 `memory_search` and `memory_get` can reach the wiki when the active memory
@@ -392,22 +436,22 @@ Put config under `plugins.entries.memory-wiki.config`:
 
 Key toggles:
 
-| Key                                        | Values / default                               | Notes                                                                         |
-| ------------------------------------------ | ---------------------------------------------- | ----------------------------------------------------------------------------- |
-| `vaultMode`                                | `isolated` (default), `bridge`, `unsafe-local` | chooses input and integration behavior                                        |
-| `vault.scope`                              | `global` (default), `agent`                    | one shared vault or one child vault per agent                                 |
-| `vault.path`                               | global default `<state-dir>/wiki/main`         | exact vault globally; agent-scope parent defaults to `<state-dir>/wiki`       |
-| `vault.renderMode`                         | `native` (default), `obsidian`                 |                                                                               |
-| `bridge.readMemoryArtifacts`               | default `true`                                 | import active memory plugin public artifacts                                  |
-| `bridge.followMemoryEvents`                | default `true`                                 | include event logs in bridge mode                                             |
-| `unsafeLocal.allowPrivateMemoryCoreAccess` | default `false`                                | required to run `unsafe-local` imports                                        |
-| `unsafeLocal.paths`                        | default `[]`                                   | explicit local paths to import in `unsafe-local` mode                         |
-| `ingest.autoCompile`                       | default `true`                                 | rebuild compiled output after imported sources change                         |
-| `search.backend`                           | `shared` (default), `local`                    |                                                                               |
-| `search.corpus`                            | `wiki` (default), `memory`, `all`              |                                                                               |
-| `context.includeCompiledDigestPrompt`      | default `false`                                | append the selected agent's compact digest snapshot to memory prompt sections |
-| `render.createBacklinks`                   | default `true`                                 | generate deterministic related blocks                                         |
-| `render.createDashboards`                  | default `true`                                 | generate dashboard pages                                                      |
+| Key                                        | Values / default                               | Notes                                                                                      |
+| ------------------------------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `vaultMode`                                | `isolated` (default), `bridge`, `unsafe-local` | chooses input and integration behavior                                                     |
+| `vault.scope`                              | `global` (default), `agent`                    | one shared vault or one child vault per agent                                              |
+| `vault.path`                               | global default `<state-dir>/wiki/main`         | exact vault globally; agent-scope parent defaults to `<state-dir>/wiki`                    |
+| `vault.renderMode`                         | `native` (default), `obsidian`                 | `obsidian` writes Obsidian-friendly pages instead of native output                         |
+| `bridge.readMemoryArtifacts`               | default `true`                                 | import active memory plugin public artifacts                                               |
+| `bridge.followMemoryEvents`                | default `true`                                 | include event logs in bridge mode                                                          |
+| `unsafeLocal.allowPrivateMemoryCoreAccess` | default `false`                                | required to run `unsafe-local` imports                                                     |
+| `unsafeLocal.paths`                        | default `[]`                                   | explicit local paths to import in `unsafe-local` mode                                      |
+| `ingest.autoCompile`                       | default `true`                                 | rebuild compiled output after imported sources change                                      |
+| `search.backend`                           | `shared` (default), `local`                    | `shared` uses the shared memory search flow when available; `local` searches the wiki only |
+| `search.corpus`                            | `wiki` (default), `memory`, `all`              | which corpus wiki search covers                                                            |
+| `context.includeCompiledDigestPrompt`      | default `false`                                | append the selected agent's compact digest snapshot to memory prompt sections              |
+| `render.createBacklinks`                   | default `true`                                 | generate related blocks from saved data                                                    |
+| `render.createDashboards`                  | default `true`                                 | generate dashboard pages                                                                   |
 
 The state directory is `~/.openclaw` by default. When `OPENCLAW_STATE_DIR` is
 set, default wiki vaults use that directory instead. Explicit `vault.path`
@@ -423,11 +467,17 @@ normalized agent id:
 ```json5
 {
   agents: {
+    ownership: "explicit",
+    defaults: {
+      systemAgent: { agentId: "support" },
+      authInheritance: { agentId: "support" },
+    },
     entries: {
-      support: { default: true },
+      support: { workspace: "~/.openclaw/workspace" },
       marketing: {},
     },
   },
+  talk: { agentId: "support" },
   plugins: {
     entries: {
       "memory-wiki": {
@@ -545,13 +595,13 @@ subcommand set.
 
 When `vault.renderMode` is `obsidian`, the plugin writes Obsidian-friendly
 Markdown and can optionally use the official `obsidian` CLI for status
-probing, vault search, opening a page, invoking a command, and jumping to the
+checking, vault search, opening a page, invoking a command, and jumping to the
 daily note. This is optional; the wiki still works in native mode without
 Obsidian.
 
 Agent-scoped vaults can still use Obsidian-friendly Markdown, but configuration
 validation rejects `obsidian.useOfficialCli: true` with `vault.scope: "agent"`.
-The current `obsidian.vaultName` setting is global and cannot select a distinct
+The `obsidian.vaultName` setting is global and cannot select a distinct
 Obsidian vault for each agent. Use the wiki tools and CLI operations instead,
 or keep an Obsidian-operated wiki in global scope.
 

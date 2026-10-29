@@ -1,0 +1,100 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { Worker } from "node:worker_threads";
+import { expect, it, vi } from "vitest";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
+import {
+  useSqliteWorkerStoreFixture,
+  appendWorkerRow as append,
+  readWorkerRows as read,
+} from "./sqlite-worker-fixture.test-support.js";
+import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
+import {
+  closeUnclaimedSharedStateSqliteWorkers,
+  hasUnclaimedSharedStateSqliteCleanup,
+  openAgentDatabaseSqliteWorkerStore,
+} from "./sqlite-worker-store.js";
+import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
+
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  availableParallelism: () => 32,
+}));
+
+const { stores, databasePath, open } = useSqliteWorkerStoreFixture(
+  "openclaw-sqlite-worker-open-refusal-",
+);
+
+const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRuntimeCapabilities();
+
+it.skipIf(!explicitSqliteCloseReleasesNativeResources)(
+  "refuses before native factory entry without retiring pooled siblings or blocking recovery",
+  async () => {
+    const file = databasePath();
+    const root = path.dirname(file);
+    await (await open(file)).close();
+    const refused = new Error("Fixture opening authority revoked");
+    let allowed = false;
+    const markerPath = path.join(root, "factory-entered");
+    const input = { type: "observe" as const, markerPath };
+    const reopen = async (pathname = file) => {
+      const openingInput = pathname === file ? input : undefined;
+      const store = await openAgentDatabaseSqliteWorkerStore<FixtureOperations>(
+        {
+          moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+          databasePath: pathname,
+          existingOnly: pathname === file,
+          input: openingInput,
+        },
+        {
+          stateContext: { environment: { OPENCLAW_STATE_DIR: root } },
+          assertCurrent() {},
+          createAdmission: () => ({
+            nativeLocations: [pathname],
+            admission: createSqliteWorkerOperationAdmission((request, grant) => {
+              expect(request).toEqual({ stage: "open", facts: openingInput });
+              if (pathname === file && !allowed) {
+                throw refused;
+              }
+              grant();
+            }),
+          }),
+        },
+      );
+      assert(store, "Fixture store did not reopen");
+      stores.add(store);
+      return store;
+    };
+    const siblings = [];
+    for (let index = 0; index < 4; index++) {
+      const store = await reopen(databasePath());
+      siblings.push({ store, receipt: await append(store, "before refusal") });
+    }
+    const requests = vi.spyOn(Worker.prototype, "postMessage");
+    try {
+      await expect(reopen()).rejects.toBe(refused);
+      const opening = requests.mock.calls.findIndex(
+        ([request]) => request.type === "open" && request.databasePath === file,
+      );
+      const targetWorker = requests.mock.contexts[opening];
+      assert(targetWorker instanceof Worker, "Expected the refused request's native Worker");
+      expect(siblings.map(({ receipt }) => receipt.threadId)).toContain(targetWorker.threadId);
+      await expect(readFile(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(hasUnclaimedSharedStateSqliteCleanup(file)).toBe(false);
+      await closeUnclaimedSharedStateSqliteWorkers(file);
+      allowed = true;
+      const recovered = await reopen();
+      expect(await readFile(markerPath, "utf8")).toBe("factory called");
+      await recovered.close();
+      for (const { store, receipt } of siblings) {
+        expect(await append(store, "after cleanup")).toEqual({ ...receipt, writes: 2 });
+        expect(await read(store)).toEqual(["before refusal", "after cleanup"]);
+      }
+    } finally {
+      requests.mockRestore();
+      await drainGlobalSingletonLifecycleState();
+    }
+  },
+);

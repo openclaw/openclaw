@@ -1,6 +1,8 @@
 // Verifies channel config loading surfaces visible plugin settings.
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { loadChannelConfigSurfaceModule } from "../../scripts/load-channel-config-surface.ts";
 import { withTestDir } from "../test-helpers/temp-dir.js";
@@ -44,17 +46,14 @@ describe("loadChannelConfigSurfaceModule", () => {
 
   it("wraps a raw config schema loaded natively", async () => {
     await withTestDir({ prefix: "openclaw-config-surface-" }, async (repoRoot) => {
+      const zodModuleUrl = pathToFileURL(createRequire(import.meta.url).resolve("zod")).href;
       const modulePath = createDemoModule(
         repoRoot,
         "config-schema.mjs",
         `
-          export const DemoConfigSchema = {
-            toJSONSchema: () => ({
-              type: "object",
-              properties: { count: { type: "number" } },
-            }),
-            safeParse: (value) => ({ success: true, data: value }),
-          };
+          import { z } from ${JSON.stringify(zodModuleUrl)};
+
+          export const DemoConfigSchema = z.object({ count: z.number() });
         `,
       );
 

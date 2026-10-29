@@ -1,10 +1,12 @@
 {
   "id": "qianfan",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providers": ["qianfan"],
+  "contracts": { "embeddingProviders": ["qianfan"] },
   "setup": {
     "providers": [
       {

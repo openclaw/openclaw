@@ -1,27 +1,28 @@
-// OpenAI Responses provider adapts OpenAI response streams to the agent runtime.
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import { resolveOpenAICompletionsCompat } from "../transports/openai-completions-compat.js";
-import type { OpenAIResponsesReplayMode } from "../transports/openai-responses-compaction-replay.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
-import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
-import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
+import { resolveProviderSimpleCompletionHeaders } from "../transports/provider-transport-turn-state.js";
+import type { Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { requireApiKey } from "../utils/required-api-key.js";
 import { resolveCacheRetention } from "./cache-retention.js";
-import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
+import { buildCopilotDynamicHeaders } from "./github-copilot-headers.js";
 import {
   clampOpenAIPromptCacheKey,
   resolveOpenAIPromptCacheParams,
 } from "./openai-prompt-cache.js";
 import { createOpenAIProviderClient } from "./openai-provider-client.js";
-import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
+import {
+  resolveOpenAISimpleReasoningEffort,
+  type OpenAIRequestReasoningEffort,
+} from "./openai-request-reasoning.js";
 import {
   applyCommonResponsesParams,
   applyResponsesServiceTierPricing,
   convertResponsesMessages,
   createResponsesAssistantOutput,
-  resolveResponsesReasoningEffort,
   runResponsesStreamLifecycle,
 } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
@@ -35,9 +36,8 @@ function getCompat(model: Model<"openai-responses">) {
   };
 }
 
-// OpenAI Responses-specific options
 export interface OpenAIResponsesOptions extends BaseOpenAIStreamOptions {
-  reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  reasoningEffort?: OpenAIRequestReasoningEffort;
   reasoningSummary?: "auto" | "detailed" | "concise" | null;
   replayResponsesItemIds?: boolean;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
@@ -46,38 +46,89 @@ export interface OpenAIResponsesOptions extends BaseOpenAIStreamOptions {
 type OpenAIResponsesReplayOptions = SimpleStreamOptions & {
   authProfileId?: string;
   replayResponsesItemIds?: boolean;
-};
+} & Pick<
+    BaseOpenAIStreamOptions,
+    "openclawCodeModeToolSurface" | "openclawCodeModeAllowedHostedToolTypes"
+  >;
 
-/**
- * Generate function for OpenAI Responses API
- */
 export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIResponsesOptions> = (
-  model: Model<"openai-responses">,
-  context: Context,
-  options?: OpenAIResponsesOptions,
+  model,
+  context,
+  options,
 ) => {
   const stream = new AssistantMessageEventStream();
   const output = createResponsesAssistantOutput(model);
 
-  // Start async processing
   void runResponsesStreamLifecycle({
     stream,
     model,
     output,
+    context,
     options,
     createClient: () => {
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
       const cacheRetention = resolveCacheRetention(options?.cacheRetention);
       const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-      return createClient(
+      if (!apiKey) {
+        throw new Error(`No API key for provider: ${model.provider}`);
+      }
+
+      const compat = getCompat(model);
+      const headers = { ...model.headers };
+      if (model.provider === "github-copilot") {
+        Object.assign(headers, buildCopilotDynamicHeaders(context.messages));
+      }
+
+      if (cacheSessionId) {
+        if (compat.sendSessionIdHeader) {
+          headers.session_id = cacheSessionId;
+        }
+        headers["x-client-request-id"] = cacheSessionId;
+      }
+
+      return createOpenAIProviderClient(
         model,
-        context,
         apiKey,
-        resolveOpencodeSessionHeaders(model, options),
-        cacheSessionId,
+        headers,
+        resolveProviderSimpleCompletionHeaders(model, options),
+        options?.onResponse,
       );
     },
-    buildParams: (_requestModel, replayMode) => buildParams(model, context, options, replayMode),
+    buildParams: (_requestModel, replayMode) => {
+      const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
+        replayResponsesItemIds: options?.replayResponsesItemIds ?? false,
+        sessionId: options?.sessionId,
+        authProfileId: options?.authProfileId,
+        mutableInput: Boolean(options?.onPayload),
+        replayMode,
+      });
+
+      const cacheRetention = resolveCacheRetention(options?.cacheRetention);
+      const compat = getCompat(model);
+      // The API supports 12h before the pinned SDK exposes that TTL. Keep other SDK fields strict.
+      const params: Omit<ResponseCreateParamsStreaming, "prompt_cache_options"> &
+        OpenAIResponsesRequestParams = {
+        model: model.id,
+        input: messages,
+        stream: true,
+        prompt_cache_key:
+          cacheRetention === "none" || !compat.supportsPromptCacheKey
+            ? undefined
+            : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
+        ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat, options?.promptCacheTtl),
+        store: false,
+      };
+
+      if (options?.serviceTier !== undefined) {
+        params.service_tier = options.serviceTier;
+      }
+
+      applyCommonResponsesParams(params, model, context, options, {
+        setDefaultReasoningOff: model.provider !== "github-copilot",
+      });
+
+      return params;
+    },
     processStreamOptions: {
       serviceTier: options?.serviceTier,
       applyServiceTierPricing: (usage, serviceTier) =>
@@ -91,11 +142,8 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 export const streamSimpleOpenAIResponses: StreamFunction<
   "openai-responses",
   SimpleStreamOptions
-> = (model: Model<"openai-responses">, context: Context, options?: SimpleStreamOptions) => {
-  const apiKey = options?.apiKey || getEnvApiKey(model.provider);
-  if (!apiKey) {
-    throw new Error(`No API key for provider: ${model.provider}`);
-  }
+> = (model, context, options) => {
+  const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const base = buildBaseOptions(model, options, apiKey);
   const replayOptions = options as OpenAIResponsesReplayOptions | undefined;
@@ -103,85 +151,9 @@ export const streamSimpleOpenAIResponses: StreamFunction<
   return streamOpenAIResponses(model, context, {
     ...base,
     authProfileId: replayOptions?.authProfileId,
-    reasoningEffort: resolveResponsesReasoningEffort(model, options?.reasoning),
+    openclawCodeModeToolSurface: replayOptions?.openclawCodeModeToolSurface,
+    openclawCodeModeAllowedHostedToolTypes: replayOptions?.openclawCodeModeAllowedHostedToolTypes,
+    reasoningEffort: resolveOpenAISimpleReasoningEffort(model, options?.reasoning),
     replayResponsesItemIds: replayOptions?.replayResponsesItemIds,
   } satisfies OpenAIResponsesOptions);
 };
-
-function createClient(
-  model: Model<"openai-responses">,
-  context: Context,
-  apiKey?: string,
-  optionsHeaders?: Record<string, string>,
-  sessionId?: string,
-) {
-  if (!apiKey) {
-    throw new Error(`No API key for provider: ${model.provider}`);
-  }
-
-  const compat = getCompat(model);
-  const headers = { ...model.headers };
-  if (model.provider === "github-copilot") {
-    const hasImages = hasCopilotVisionInput(context.messages);
-    const copilotHeaders = buildCopilotDynamicHeaders({
-      messages: context.messages,
-      hasImages,
-    });
-    Object.assign(headers, copilotHeaders);
-  }
-
-  if (sessionId) {
-    if (compat.sendSessionIdHeader) {
-      headers.session_id = sessionId;
-    }
-    headers["x-client-request-id"] = sessionId;
-  }
-
-  return createOpenAIProviderClient(model, apiKey, headers, optionsHeaders);
-}
-
-function buildParams(
-  model: Model<"openai-responses">,
-  context: Context,
-  options?: OpenAIResponsesOptions,
-  replayMode: OpenAIResponsesReplayMode = "checkpoint",
-) {
-  const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
-    replayResponsesItemIds: options?.replayResponsesItemIds ?? false,
-    sessionId: options?.sessionId,
-    authProfileId: options?.authProfileId,
-    replayMode,
-  });
-
-  const cacheRetention = resolveCacheRetention(options?.cacheRetention);
-  const compat = getCompat(model);
-  const params: ResponseCreateParamsStreaming & OpenAIResponsesRequestParams = {
-    model: model.id,
-    input: messages,
-    stream: true,
-    prompt_cache_key:
-      cacheRetention === "none" || !compat.supportsPromptCacheKey
-        ? undefined
-        : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
-    ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat),
-    store: false,
-  };
-
-  if (options?.maxTokens) {
-    params.max_output_tokens = options?.maxTokens;
-  }
-
-  if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
-    params.temperature = options?.temperature;
-  }
-
-  if (options?.serviceTier !== undefined) {
-    params.service_tier = options.serviceTier;
-  }
-
-  applyCommonResponsesParams(params, model, context, options, {
-    setDefaultReasoningOff: model.provider !== "github-copilot",
-  });
-
-  return params;
-}

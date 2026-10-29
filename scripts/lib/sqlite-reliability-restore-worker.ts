@@ -31,20 +31,25 @@ async function main(argv: string[]): Promise<void> {
   const resolvedTargetPath = canonicalPathWithExistingParent(targetPath);
 
   if (crashPoint === "before-publish") {
-    const originalLink = fs.link.bind(fs);
-    Object.defineProperty(fs, "link", {
+    const originalOpen = fs.open.bind(fs);
+    Object.defineProperty(fs, "open", {
       configurable: true,
       enumerable: true,
-      value: async (sourcePath: string, publishedPath: string) => {
-        const resolvedSourcePath = path.resolve(sourcePath);
+      value: async (...args: Parameters<typeof fs.open>) => {
+        const [sourcePath, flags] = args;
+        const resolvedSourcePath = typeof sourcePath === "string" ? path.resolve(sourcePath) : "";
+        // Both native and JS publication pin the fully verified staging file
+        // with numeric read flags before creating the target.
         if (
-          canonicalPathWithExistingParent(publishedPath) === resolvedTargetPath &&
+          typeof flags === "number" &&
           path.basename(resolvedSourcePath) === "database.sqlite" &&
-          path.basename(path.dirname(resolvedSourcePath)).startsWith(".sqlite-publish-")
+          path.basename(path.dirname(resolvedSourcePath)).startsWith(".sqlite-publish-") &&
+          canonicalPathWithExistingParent(path.dirname(path.dirname(resolvedSourcePath))) ===
+            path.dirname(resolvedTargetPath)
         ) {
           holdAtCrashPoint(crashPoint);
         }
-        await originalLink(sourcePath, publishedPath);
+        return await originalOpen(...args);
       },
       writable: true,
     });

@@ -13,7 +13,6 @@ describe("embedded agent transcript repair runtime contract", () => {
   it("merges text orphan leaves into the next prompt with the queued marker", () => {
     const result = mergeOrphanedTrailingUserPrompt({
       prompt: "newest inbound message",
-      trigger: "user",
       leafMessage: textOrphanLeaf(),
     });
 
@@ -27,7 +26,6 @@ describe("embedded agent transcript repair runtime contract", () => {
   it("does not duplicate an orphan leaf that is already present in the next prompt", () => {
     const result = mergeOrphanedTrailingUserPrompt({
       prompt: "summary\nolder active-turn message\nnewest inbound message",
-      trigger: "user",
       leafMessage: textOrphanLeaf(),
     });
 
@@ -41,7 +39,6 @@ describe("embedded agent transcript repair runtime contract", () => {
   it("preserves structured text and media references before removing the leaf", () => {
     const result = mergeOrphanedTrailingUserPrompt({
       prompt: "newest inbound message",
-      trigger: "user",
       leafMessage: structuredOrphanLeaf(),
     });
 
@@ -62,7 +59,6 @@ describe("embedded agent transcript repair runtime contract", () => {
     // while avoiding byte replay in the merged prompt.
     const result = mergeOrphanedTrailingUserPrompt({
       prompt: "newest inbound message",
-      trigger: "user",
       leafMessage: inlineDataUriOrphanLeaf(),
     });
 
@@ -73,19 +69,5 @@ describe("embedded agent transcript repair runtime contract", () => {
     expect(result.prompt).not.toContain("data:");
     expect(result.prompt).not.toContain("data:image/png;base64,");
     expect(result.prompt).not.toContain("aaaa");
-  });
-
-  it("merges manual-run orphan leaves into the next prompt", () => {
-    const result = mergeOrphanedTrailingUserPrompt({
-      prompt: "newest inbound message",
-      trigger: "manual",
-      leafMessage: textOrphanLeaf("queued manual message"),
-    });
-
-    expect(result).toEqual({
-      merged: true,
-      removeLeaf: false,
-      prompt: `${QUEUED_USER_MESSAGE_MARKER}\nqueued manual message\n\nnewest inbound message`,
-    });
   });
 });

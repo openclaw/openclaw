@@ -62,10 +62,10 @@ requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
   expose configured MCP tools.
   Remote entries use `transport: "streamable-http"` or `transport: "sse"`;
   `type: "http"` is a CLI-native alias that `openclaw mcp set` and
-  `openclaw doctor --fix` normalize into the canonical `transport` field.
+  `openclaw doctor --fix` normalize into the current `transport` field.
 - `mcp.servers.<name>.enabled`: set `false` to keep a saved server definition
   while excluding it from embedded OpenClaw MCP discovery and tool projection.
-- `mcp.servers.<name>.requestTimeoutMs`: per-server MCP request timeout in milliseconds.
+- `mcp.servers.<name>.requestTimeoutMs`: per-server MCP request timeout in milliseconds (default 60 seconds). When it is not set, tool listing at session start uses 10 seconds. The built-in HTTP client keeps header and body inactivity timeouts at least this long, preserving longer transport defaults without imposing a deadline on the entire SSE stream.
 - `mcp.servers.<name>.connectionTimeoutMs`: per-server connection timeout in milliseconds.
 - `mcp.servers.<name>.supportsParallelToolCalls`: optional concurrency hint for
   adapters that can choose whether to issue parallel MCP tool calls.
@@ -82,10 +82,17 @@ requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
   for private endpoints and mutual TLS.
 - `mcp.servers.<name>.toolFilter`: optional per-server tool selection. `include`
   limits the discovered MCP tools to matching names; `exclude` hides matching
-  names. Entries are exact MCP tool names or simple `*` globs. Servers with
-  resources or prompts also generate utility tool names (`resources_list`,
-  `resources_read`, `prompts_list`, `prompts_get`), and those names use the
-  same filter.
+  names. Entries are exact MCP tool names or simple `*` globs. An exact entry
+  that names no advertised raw tool can also be an unambiguous unsuffixed name
+  shown by `openclaw mcp probe` (for example `docs__search`). Exact raw names
+  take precedence, and globs match raw names only. Use raw names for colliding
+  probe names, including names with a collision suffix such as `-2`: in
+  `include` such a name selects nothing, and in `exclude` it hides every tool
+  that could carry it. If `include` is set and the filter leaves none of the
+  advertised tools, OpenClaw logs a warning; an exclude-only filter that hides
+  every tool is treated as intentional. Servers with resources or prompts also
+  generate utility tool names (`resources_list`, `resources_read`,
+  `prompts_list`, `prompts_get`), and those names use the same filter.
 - `mcp.servers.<name>.codex`: optional Codex app-server projection controls.
   This block is OpenClaw metadata for Codex app-server threads only; it does not
   affect ACP sessions, generic Codex harness config, or other runtime adapters.
@@ -105,7 +112,7 @@ requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
   lifetime and retires its runtimes at run end; retained transcripts alone do
   not keep them alive.
 - `mcp.sessionIdleTtlMs`: optional idle eviction in milliseconds. Unset or `0`
-  keeps the session lifetime above. Positive finite values opt into eviction;
+  keeps the session lifetime above unless capacity eviction is needed. Positive finite values opt into TTL eviction;
   fractions round down. For example, `mcp: { sessionIdleTtlMs: 3600000 }` evicts
   after one hour without use. While enabled, a sweep runs once per minute and
   preserves active leases and pending acquisitions. This override does not
@@ -114,8 +121,21 @@ requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
   intended value from your config backup; the deleted value cannot be inferred.
 - Each Gateway admits at most 256 OpenClaw-managed MCP runtimes with server connections across sessions
   and requester partitions, including creation and cleanup in progress. At the
-  limit, existing runtimes stay alive and new admissions fail with a log message
-  directing you to stop or reset unused sessions. A runtime can own multiple
+  limit, the least-recently-used idle runtime is retired and its servers stop;
+  that session reconnects on its next turn. Active runs, leases, app views, and
+  pending acquisitions are preserved. An active turn protects its session runtime;
+  idle requester partitions in that session remain eligible for eviction. If every runtime is in use, the turn
+  continues with a bounded warning once per capacity episode.
+  Waiting for idle cleanup is bounded; unfinished cleanup retains its slot and continues
+  under the lifecycle owner. Usable static or requester connections remain available. Previously advertised
+  tool schemas stay stable; unavailable bindings return an error without contacting MCP.
+  Sign-in tools from a refused connection keep their schemas but cannot start authorization;
+  retry on the next turn.
+  Tool catalogs for up to 256 evicted runtime partitions and advertised requester catalogs
+  for up to 256 evicted sessions are retained in least-recently-used order, in addition
+  to catalogs with live ownership. Session retirement or config reload
+  clears retained catalogs; older evicted sessions rediscover their tools on reconnect.
+  A runtime can own multiple
   configured server connections. Sessions without available MCP servers and
   sign-in-only catalogs do not consume this limit. Native client runtimes manage their own bounds.
 - MCP config changes retire only changed or removed server connections. Unchanged
@@ -174,7 +194,7 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `entries.<skillKey>.enabled: false` disables a skill even if bundled/installed.
 - `entries.<skillKey>.apiKey`: convenience for skills declaring a primary env var (plaintext string or SecretRef object).
 - `limits.maxCandidatesPerRoot`, `limits.maxSkillsLoadedPerSource`, `limits.maxSkillsInPrompt`, `limits.maxSkillsPromptChars`, `limits.maxSkillFileBytes`: bound skill discovery and the model-facing skills prompt.
-- Skill Workshop autonomy/approval settings (`workshop.autonomous.mode`, `workshop.approvalPolicy`, `workshop.maxPending`, `workshop.maxSkillBytes`) are documented in [Skills configuration](/tools/skills-config).
+- Skill Workshop settings (`workshop.autonomous.mode`, `workshop.maxSkillBytes`) are documented in [Skills configuration](/tools/skills-config).
 
 ---
 
@@ -203,18 +223,18 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 ```
 
 - Loaded from package or bundle directories under `~/.openclaw/extensions` and `<workspace>/.openclaw/extensions`, plus files or directories listed in `plugins.load.paths`.
-- Put standalone plugin files in `plugins.load.paths`; auto-discovered extension roots ignore top-level `.js`, `.mjs`, and `.ts` files so helper scripts in those roots do not block startup.
+- Put standalone plugin files in `plugins.load.paths`; auto-discovered extension roots ignore top-level `.js`, `.mjs`, and `.ts` files so helper scripts in those roots do not block startup. A standalone file uses its file name as plugin id and starts with the Gateway once enabled through `allow` or `entries.<id>.enabled`.
 - Discovery accepts native OpenClaw plugins plus compatible Codex bundles and Claude bundles, including manifestless Claude default-layout bundles.
-- With the default hybrid reload mode, ordinary plugin policy and entry changes hot-reload the plugin runtime. Plugin code, metadata, and discovery-root changes require a Gateway restart; active plugins can also declare restart-triggering config prefixes.
+- With the default hybrid reload mode, ordinary plugin policy, entry, and discovery-path changes hot-reload the plugin runtime. Entry config changes replace the affected instance. Use `openclaw plugins reload <id>` after source or manifest edits; active plugins can still declare restart-triggering config prefixes. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 - `allow`: optional allowlist (only listed plugins load). `deny` wins.
 - `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
 - `plugins.entries.<id>.env`: plugin-scoped env var map.
 - `plugins.entries.<id>.hooks.allowPromptInjection`: when `false`, core blocks prompt-mutating hooks such as `before_prompt_build`. Applies to native plugin hooks and supported bundle-provided hook directories.
-- `plugins.entries.<id>.hooks.allowConversationAccess`: when `true`, trusted non-bundled plugins may read raw conversation content from typed hooks such as `before_model_resolve`, `agent_turn_prepare`, `before_prompt_build`, `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_run`, `before_agent_finalize`, and `agent_end`.
+- `plugins.entries.<id>.hooks.allowConversationAccess`: when `true`, trusted non-bundled plugins may read raw conversation content from typed hooks such as `before_model_resolve`, `agent_turn_prepare`, `before_prompt_build`, `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_run`, `before_agent_finalize`, and `agent_end`. It also grants the bounded, invocation-scoped `session_end` ended-transcript reader; metadata-only `session_end` handlers remain registerable without the grant.
 - `plugins.entries.<id>.subagent.allowModelOverride`: explicitly trust this plugin to request per-run `provider` and `model` overrides for background subagent runs.
-- `plugins.entries.<id>.subagent.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted subagent overrides. Use `"*"` only when you intentionally want to allow any model.
+- `plugins.entries.<id>.subagent.allowedModels`: optional allowlist of normalized `provider/model` targets for trusted subagent overrides. Use `"*"` only when you intentionally want to allow any model.
 - `plugins.entries.<id>.llm.allowModelOverride`: explicitly trust this plugin to request model overrides for `api.runtime.llm.complete`.
-- `plugins.entries.<id>.llm.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted model overrides. Use `"*"` only when you intentionally want to allow any model override.
+- `plugins.entries.<id>.llm.allowedModels`: optional allowlist of normalized `provider/model` targets for trusted model overrides. Use `"*"` only when you intentionally want to allow any model override.
 - `plugins.entries.<id>.llm.allowedCompletionModels`: optional allowlist applied to every plugin LLM completion, including host-resolved defaults and overrides. Use `"*"` only when you intentionally want to allow any model.
 - `plugins.entries.<id>.llm.allowAuthProfileOverride`: explicitly trust this plugin to select a non-default auth profile for isolated `api.runtime.llm.complete` execution. Direct `model@profile` calls remain governed by model-override policy.
 - `plugins.entries.<id>.llm.allowAgentIdOverride`: explicitly trust this plugin to run `api.runtime.llm.complete` against a non-default agent id.
@@ -288,6 +308,11 @@ conversation bindings, or any non-Codex harness.
   marketplace-qualified. `/codex plugins available` lists discoverable
   identities, and an owner or `operator.admin` can install one with
   `/codex plugins install <plugin>@<marketplace>`.
+- `plugins.entries.codex.config.codexPlugins.plugins.<key>.read_only`: defaults to
+  `false`. When `true`, only connected-app tools explicitly marked read-only
+  and enabled in the current app inventory are available. Unknown tools and
+  stale native tool grants are denied. This restriction applies with every
+  `allow_destructive_actions` value; it does not change that flag when disabled.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.allow_destructive_actions`:
   per-plugin destructive-action override. When omitted, the global
   `allow_destructive_actions` value is used. The per-plugin value accepts the
@@ -302,7 +327,7 @@ entries written by migration preserve durable curated install and repair
 eligibility. An owner or `operator.admin` can add other discovered plugins with
 `/codex plugins install <plugin>@<marketplace>`; Codex still controls upstream
 installation and connector authentication. Plugins without exact identity,
-installation, or accessible app ownership fail closed. `plugins["*"]` is not
+installation, or accessible app ownership are blocked. `plugins["*"]` is not
 supported, and local `marketplacePath` values are intentionally not config
 fields because they are host-specific. See
 [Native Codex plugins](/plugins/codex-native-plugins) for app-server version and
@@ -319,7 +344,7 @@ app into each new native Codex thread. It does not install plugins or apps, and
 inaccessible apps stay excluded. Account apps use the global
 `codexPlugins.allow_destructive_actions` policy. Explicit plugin entries take
 precedence when the same app is present in both paths. If `app/installed`
-cannot be read, account-wide exposure fails closed.
+cannot be read, account-wide exposure is blocked.
 
 - `plugins.entries.firecrawl.config.webFetch`: Firecrawl web-fetch provider settings.
   - `apiKey`: Optional Firecrawl API key for higher limits (accepts SecretRef). Falls back to `plugins.entries.firecrawl.config.webSearch.apiKey` or `FIRECRAWL_API_KEY` env var.
@@ -367,12 +392,11 @@ See [Plugins](/tools/plugin).
 ```
 
 - `host.enabled` is the single Canvas host switch and defaults to enabled. It
-  gates hosted widget documents under `/__openclaw__/canvas/` and A2UI renderer
-  assets under `/__openclaw__/a2ui/`.
+  gates hosted widget documents under `/__openclaw__/canvas/`.
 - Local-only: keep `gateway.bind: "loopback"` (default).
 - Non-loopback binds: these routes require Gateway auth (token/password/trusted-proxy), same as other Gateway HTTP surfaces.
 - Node WebViews typically don't send auth headers; after a macOS node is paired and connected, the Gateway advertises a node-scoped `pluginSurfaceUrls.canvas` capability URL.
 - Capability URLs are bound to the active node WS session and expire quickly. IP-based fallback is not used.
-- Changes require a gateway restart.
+- `host.enabled` hot-applies through the Canvas plugin in the default hybrid reload mode. The `OPENCLAW_SKIP_CANVAS_HOST` environment override still requires a Gateway restart.
 
 ---

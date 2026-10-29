@@ -1,0 +1,161 @@
+.session-menu > .oc-menu {
+  border: 1px solid var(--overlay-border);
+  box-shadow: var(--overlay-shadow);
+  min-width: 224px;
+  max-width: 264px;
+}
+
+.session-menu__panel {
+  --oc-overlay-distance: 0px;
+
+  min-width: 224px;
+  max-width: min(264px, calc(100dvw - 16px));
+}
+
+@media (min-width: 769px) {
+  @media not all and (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+    :is(.chat-header-session-menu__panel, .session-menu__panel) .session-menu__separator {
+      border-top-color: var(--details-separator);
+    }
+  }
+}
+
+.session-menu__panel .oc-menu-item__icon {
+  margin-inline-end: 0;
+}
+
+.session-menu__panel .oc-menu-item--submenu > .oc-menu-item__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.session-menu__panel > .session-menu__item {
+  padding: 0 8px;
+}
+
+/* Contributed dropdown rows share the menu typography without renderer-specific classes. */
+:is(.session-menu .oc-menu-item, .session-menu__item, .sidebar-session-sort-menu__item) {
+  font: inherit;
+  font-size: calc(13px * var(--control-ui-text-scale));
+}
+
+.session-menu__item,
+.sidebar-session-sort-menu__item {
+  --oc-menu-item-padding-inline: 8px;
+
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: var(--menu-item-height);
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.row.session-menu__label {
+  gap: 8px;
+}
+
+.session-menu__status {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  max-width: min(300px, calc(100vw - 48px));
+  padding: 8px;
+  color: var(--text);
+  font-size: calc(13px * var(--control-ui-text-scale));
+}
+
+.session-menu__status .session-menu__text {
+  white-space: normal;
+}
+
+/* Canonical Menu rows own their states; keep these rules for plain session rows
+   without changing their specificity or depending on stylesheet load order. */
+.session-menu__item:where(:not(.oc-menu-item)):hover:not(:disabled):not([aria-disabled="true"]),
+.session-menu__item:where(:not(.oc-menu-item))[aria-expanded="true"],
+.session-menu__item:where(:not(.oc-menu-item)):focus-visible,
+.sidebar-session-sort-menu__item:where(:not(.oc-menu-item)):hover,
+.sidebar-session-sort-menu__item:where(:not(.oc-menu-item)):focus-visible {
+  background: var(--bg-hover);
+}
+
+.session-menu__item:where(:not(.oc-menu-item)):disabled,
+.session-menu__item:where(:not(.oc-menu-item))[aria-disabled="true"] {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.session-menu__item--destructive,
+.session-menu__item--destructive .session-menu__icon {
+  color: var(--danger);
+}
+
+.session-menu__icon,
+.session-menu__avatar,
+.session-menu__check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.session-menu__check {
+  color: var(--accent);
+}
+
+.session-menu__icon {
+  color: var(--muted);
+}
+
+/* Identity choices need room for recognizable faces, not action-sized glyphs. */
+.session-menu__avatar,
+.session-menu__avatar .viewer-avatar {
+  width: 24px;
+  height: 24px;
+  font-size: 10px;
+}
+
+/* Icon templates only carry paths; without an explicit stroke rule the SVGs
+   render as solid black fills (invisible-blob chips in dark mode). */
+.session-menu__icon svg,
+.session-menu__check svg,
+.new-session-page__trigger-chevron svg,
+.new-session-page__target-icon svg,
+.new-session-page__browser-nav svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.session-menu__item[data-new-tab-action]:not(:disabled, [aria-disabled="true"]) {
+  cursor: pointer;
+}
+
+@supports (corner-shape: superellipse(1.5)) {
+  .session-menu {
+    --menu-radius: calc(10px * var(--openclaw-corner-radius-scale));
+    --menu-item-radius: calc(var(--menu-radius) - var(--menu-padding));
+  }
+
+  .session-menu > .oc-menu {
+    corner-shape: superellipse(1.5);
+  }
+}
+
+.chat-controls__speed-option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

@@ -1,5 +1,5 @@
 ---
-summary: "The architecture case for OpenClaw: a trusted gateway, untrusted execution, deterministic policy, and versioned state, compared source-by-source with single-process harnesses"
+summary: "The architecture case for OpenClaw: a trusted gateway, untrusted execution, policy enforced by code, and versioned state, compared source-by-source with single-process harnesses"
 read_when:
   - You are evaluating agent harnesses for team or enterprise use
   - You need to explain to a security team how OpenClaw differs from single-process harnesses
@@ -35,24 +35,28 @@ A good harness spans the whole range: the same product runs as a personal assist
 Seven testable properties:
 
 1. **Separated trust boundary.** Execution moves into a sandbox, a node, or a throwaway cloud machine without standing Gateway credentials; scoped worker credentials have a separate lifecycle.
-2. **Policy is code.** Denial is structural, not a request the model is asked to honor; approval paths fail closed.
+2. **Policy is code.** Denial is structural, not a request the model is asked to honor; approval paths deny requests when validation fails.
 3. **Authenticated access, bounded roles.** Inbound access is default-deny and authenticated; people hold bounded roles; the vendor states which boundaries are security and which are convenience.
 4. **Secrets have owners.** Isolatable credential failures degrade their owners; ingress-auth and invalid-configuration failures stop startup.
 5. **Versioned state, guarded upgrades.** State is schema-versioned with owned migrations; upgrades are guarded and delivered through release channels.
 6. **Recorded provenance.** Memory, audit, and delivery use recorded facts, explicit retention policies, and documented deletion limits.
 7. **Independent stewardship.** The license has no separate enterprise edition; releases are signed by an accountable identity; the security record is public.
 
+<a id="where-each-section-moved" />
+
 ## How OpenClaw answers
 
 The short answers, with details and limits on the linked pages:
 
-- **Isolation limits what compromised execution can reach.** Configured sandboxes, nodes, and cloud workers separate execution from Gateway authority; exposure still depends on tools, mounts, network policy, and scoped credentials. ([Trust boundary](/start/why-openclaw/the-trust-boundary))
-- **Configured policy is enforced in code.** Tool availability and exec denial do not depend only on model compliance; commands requiring approval must satisfy the applicable binding rules. ([Policy as code](/start/why-openclaw/policy-as-code))
-- **Access follows the configured admission policy.** Pairing-mode channels challenge unknown senders, and broader device scopes require approval; role ceilings and a deny-all default role require configuration. ([Identity and roles](/start/why-openclaw/identity-and-roles))
-- **Protected credentials can stay out of model context.** Protected secret values use handles and supported egress substitution; agent-readable entries, host access, and permitted-service responses have separate exposure risks. ([Secrets](/start/why-openclaw/secrets))
-- **Version checks guard upgrades.** Schemas are versioned, updaters check compatibility, and releases are immutable and signed. Version checks do not guarantee that every upgrade succeeds. ([Versioned state](/start/why-openclaw/versioned-state-guarded-upgrades))
-- **Forgetting has explicit boundaries.** Attributable memories can be purged, and forgotten-session records prevent reingestion through participating paths; original transcripts, untracked writes, and external copies remain separate. ([Provenance](/start/why-openclaw/provenance))
+- <a id="the-trust-boundary" />**Isolation limits what compromised execution can reach.** Configured sandboxes, nodes, and cloud workers separate execution from Gateway authority; exposure still depends on tools, mounts, network policy, and scoped credentials. ([Trust boundary](/start/why-openclaw/the-trust-boundary))
+- <a id="policy-as-code" />**Configured policy is enforced in code.** Tool availability and exec denial do not depend only on model compliance; commands requiring approval must satisfy the applicable binding rules. ([Policy as code](/start/why-openclaw/policy-as-code))
+- <a id="identity-and-roles" />**Access follows the configured admission policy.** Pairing-mode channels challenge unknown senders, and broader device scopes require approval; role ceilings and a deny-all default role require configuration. ([Identity and roles](/start/why-openclaw/identity-and-roles))
+- <a id="secrets" />**Protected credentials can stay out of model context.** Protected secret values use handles and supported egress substitution; agent-readable entries, host access, and permitted-service responses have separate exposure risks. ([Secrets](/start/why-openclaw/secrets))
+- <a id="versioned-state%2C-guarded-upgrades" /><a id="versioned-state-guarded-upgrades" />**Version checks guard upgrades.** Schemas are versioned, updaters check compatibility, and releases are immutable and signed. Version checks do not guarantee that every upgrade succeeds. ([Versioned state](/start/why-openclaw/versioned-state-guarded-upgrades))
+- <a id="provenance" />**Forgetting has explicit boundaries.** Attributable memories can be purged, and forgotten-session records prevent reingestion through participating paths; original transcripts, untracked writes, and external copies remain separate. ([Provenance](/start/why-openclaw/provenance))
 - **The Foundation provides independent stewardship.** MIT under an independent 501(c)(3) foundation, with signed releases and public security advisories. Advisory counts are not a comparative safety score. ([Governance](#governance))
+
+<a id="openclaw-and-hermes-agent" />
 
 The [comparison table](/start/why-openclaw/openclaw-and-hermes-agent) condenses the source-verified contrast with Hermes. [What we do not claim](#what-we-do-not-claim) states the limits, starting with sandboxing being off by default.
 
@@ -70,7 +74,7 @@ The public plugin SDK publishes about 150 entrypoints, held under shrink-only su
 
 ## Open standards
 
-OpenClaw adopts the protocols the ecosystem is converging on. It is an [MCP client](/tools/mcp) (Streamable HTTP, SSE, and stdio transports, with OAuth) and an [MCP server](/cli/mcp), and plugins can [ship their own MCP servers and apps](/plugins/manifest/surfaces#mcp-server-reference). Other agents reach it through the Linux Foundation [A2A 1.0 protocol](/channels/a2a) — Agent Card discovery, authenticated JSON-RPC tasks, and outbound peer messaging — and editors connect over the [Agent Client Protocol](/cli/acp), which OpenClaw also uses to [host external harnesses](/tools/acp-agents). Agents render live [A2UI widgets](/web/dashboards) on session dashboards.
+OpenClaw adopts protocols used across AI tools. It is an [MCP client](/tools/mcp) (Streamable HTTP, SSE, and stdio transports, with OAuth) and an [MCP server](/cli/mcp), and plugins can [ship their own MCP servers and apps](/plugins/manifest/surfaces#mcp-server-reference). Other agents reach it through the Linux Foundation [A2A 1.0 protocol](/channels/a2a) — Agent Card discovery, authenticated JSON-RPC tasks, and outbound peer messaging — and editors connect over the [Agent Client Protocol](/cli/acp), which OpenClaw also uses to [host external harnesses](/tools/acp-agents). Agents render interactive [HTML widgets](/tools/show-widget) on session dashboards.
 
 Skills follow the [AgentSkills spec](/tools/skills), plugin installs auto-detect [Agent Plugins, Codex, Claude, and Cursor bundle layouts](/plugins/bundles), and the Gateway can serve an [OpenAI-compatible API](/gateway/openai-http-api) (`/v1/chat/completions` with a documented function-tool subset, [`/v1/responses`](/gateway/openresponses-http-api), `/v1/models`, `/v1/embeddings`; disabled by default, `/v1/responses` separately enabled) so OpenAI clients can target the Gateway directly. Observability exports over [OpenTelemetry](/gateway/opentelemetry) and [Prometheus](/gateway/prometheus); gateways advertise via [Bonjour and DNS-SD](/gateway/bonjour); channels include native [Matrix](/channels/matrix), [IRC](/channels/irc), and [Nostr](/channels/nostr) protocol implementations; and releases ship with [npm provenance and verifiable artifact attestations](/reference/RELEASING).
 
@@ -97,7 +101,7 @@ OpenClaw [publishes repository security advisories](https://github.com/openclaw/
 ## What we do not claim
 
 - Sandboxing and exec approvals are off by default. Default OpenClaw is a trusted single-operator assistant. Hardening is deliberate configuration, and `openclaw security audit` will tell you when you have drifted from it.
-- One gateway is one trust domain. Roles and session ownership are collaboration guardrails. Tenancy means one gateway cell per tenant, and fleet is still experimental.
+- One gateway is one trust domain. Roles and session ownership are collaboration guardrails. Mutually untrusted tenants need separate gateways, ideally under separate OS users or hosts.
 - Native plugins run in-process and are not sandboxed. Mitigations are allow-lists, an install-policy hook, pinned versions, dependency locking, and CI-enforced SDK boundaries. Both OpenClaw and Hermes require trust in installed native plugins.
 - Egress allowlisting covers cooperating traffic only. The [secret egress proxy](/gateway/secrets) gained an opt-in traffic allowlist for Gateway-hosted exec (August 2026) on top of its bypass-surviving sentinels, sandboxed execution defaults to kernel-enforced `network: "none"` or runs under the [OpenShell backend's](/gateway/openshell) default-deny policy allowlists, but raw sockets from unsandboxed host exec answer to an operator-supplied [proxy](/security/network-proxy) or host policy, not to OpenClaw. Allowlist proxies elsewhere have had published bypasses; the sentinel design assumes bypass instead of trying to prevent it.
 - Promoted memories have no time-based retention bound. Provenance and [`openclaw memory forget`](/cli/memory) cover tracked artifacts; admission exclusions apply to dreaming ingestion and session backfill, not direct writes, hooks, or raw transcript indexing. Review [deletion limits](/concepts/memory-provenance#what-deletion-does-not-cover) separately. Turn taint covers network-sourced tool output; text arriving through non-network tools does not taint the turn.
@@ -117,18 +121,3 @@ Each enterprise configuration item links to its reference:
 Then operate it as replaceable infrastructure: pin a channel, let [doctor](/cli/doctor) own migrations, restore [backups](/cli/backup) by verification, and redeploy instead of repairing deployments in place.
 
 Corrections to any claim on this page, about OpenClaw or about others, are welcome as issues or pull requests.
-
-## Where each section moved
-
-Every section heading from the previous single-page version keeps its anchor
-here, so an existing link such as `/start/why-openclaw#the-trust-boundary` still
-resolves. Each entry points at the page that now holds the content.
-
-- <a id="the-trust-boundary" />[The trust boundary](/start/why-openclaw/the-trust-boundary)
-- <a id="policy-as-code" />[Policy as code](/start/why-openclaw/policy-as-code)
-- <a id="identity-and-roles" />[Identity and roles](/start/why-openclaw/identity-and-roles)
-- <a id="secrets" />[Secrets](/start/why-openclaw/secrets)
-- <a id="versioned-state%2C-guarded-upgrades" />[Versioned state, guarded upgrades](/start/why-openclaw/versioned-state-guarded-upgrades)
-- <a id="versioned-state-guarded-upgrades" />[Versioned state, guarded upgrades](/start/why-openclaw/versioned-state-guarded-upgrades)
-- <a id="provenance" />[Provenance](/start/why-openclaw/provenance)
-- <a id="openclaw-and-hermes-agent" />[OpenClaw and Hermes Agent](/start/why-openclaw/openclaw-and-hermes-agent)

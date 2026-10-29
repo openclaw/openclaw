@@ -1,15 +1,16 @@
 import fs from "node:fs/promises";
 import { z } from "zod";
+import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { formatInstallationTargetCommand } from "../cli/installation-target-format.js";
 import { resolveSubprocessExitCode } from "../cli/subprocess-exit-code.js";
-import { withOwnedManagedUpdateEnv } from "../cli/update-cli/update-command-managed-context.js";
 import {
   disableUpdatedPackageCompileCacheEnv,
   resolveServiceRefreshEnv,
   resolveUpdateTargetEnv,
   stripGatewayServiceMarkerEnv,
+  withOwnedManagedUpdateEnv,
 } from "../cli/update-cli/update-command-service-env.js";
-import { writeTriageUpdateFailure, type TriageUpdateFailure } from "../commands/triage-update.js";
+import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
@@ -20,6 +21,7 @@ import { resolveOsHomeDir } from "./home-dir.js";
 import { installationTargetEnv, resolveInstallationTarget } from "./installation-target-context.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
+import { writeTriageUpdateFailure } from "./update-failure-report-artifact.js";
 
 export type UpdateTriageTarget = {
   root?: string;
@@ -123,7 +125,11 @@ async function runPreparedUpdateFailureTriage(
   delete env[UPDATE_RUN_ID_ENV];
   const redaction = { env, stateDir: installationTarget.stateDir };
   const { log, error: logError } = prepared.runtime;
-  log("Update failed. Entering triage...");
+  log(
+    prepared.mode === "interactive"
+      ? "Update failed. Entering triage..."
+      : "Preparing triage diagnostics...",
+  );
   let contextPath: string | undefined;
   try {
     let stdout = "";
@@ -173,6 +179,14 @@ async function runPreparedUpdateFailureTriage(
       if (!isCurrent()) {
         return { status: "cancelled" };
       }
+      log(`Saved failure diagnostics: ${contextPath}`);
+      log(
+        `To start a repair agent, run ${formatInstallationTargetCommand(
+          ["openclaw", "triage", "--run", "--update-result", contextPath],
+          installationTarget,
+          { env: targetEnv },
+        )}`,
+      );
       const root = params.target.root ?? (await params.resolveRoot?.());
       const entryPath = await resolveGatewayInstallEntrypoint(root);
       if (!isCurrent()) {
@@ -182,14 +196,19 @@ async function runPreparedUpdateFailureTriage(
         throw new Error("The installed OpenClaw entrypoint is unavailable.");
       }
       const args = [
-        entryPath,
         "triage",
         "--update-result",
         contextPath,
         prepared.mode === "json" ? "--json" : "--non-interactive",
       ];
       const nodeRunner = params.target.nodeRunner ?? process.execPath;
-      const result = await runCommandWithTimeout([nodeRunner, ...args], {
+      const invocation = resolveOpenClawCliInvocation({
+        execPath: nodeRunner,
+        entryPath,
+        execArgv: [],
+        args,
+      });
+      const result = await runCommandWithTimeout([invocation.command, ...invocation.args], {
         cwd: root,
         baseEnv: {},
         env,
@@ -221,13 +240,16 @@ async function runPreparedUpdateFailureTriage(
       return { status: "cancelled" };
     }
     // Restart notices reach model context; executable paths stay in local output.
-    let hint = `Triage completed. ${TRIAGE_OUTPUT_HINT}`;
+    let hint = `${prepared.mode === "interactive" ? "Triage completed." : "Triage diagnostics saved; no repair agent was started."} ${TRIAGE_OUTPUT_HINT}`;
     if (prepared.mode === "json") {
       const report = triageReportPathsSchema.parse(JSON.parse(stdout));
       if (report.bundleError) {
         const reason = scrubDoctorErrorMessage(redactSupportString(report.bundleError, redaction));
         hint += `\nDiagnostics export unavailable: ${reason}`;
       }
+    }
+    if (prepared.mode !== "interactive") {
+      log("Triage diagnostics saved; no repair agent was started.");
     }
     return { status: "completed", hint };
   } catch (error) {

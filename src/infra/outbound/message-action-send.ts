@@ -1,9 +1,14 @@
+import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import { projectPluginMessageDeliveryFact } from "../../agents/embedded-agent-message-delivery.js";
 import { resolveAgentIdentity, resolveResponsePrefix } from "../../agents/identity.js";
 import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
 import {
   copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
   setReplyPayloadMetadata,
   type ReplyMediaAttachment,
   type ReplyPayload,
@@ -11,7 +16,9 @@ import {
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
 import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.public.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { TtsAutoMode } from "../../config/types.tts.js";
 import {
   hasLegacyInteractiveReplyBlocks,
   hasMessagePresentationBlocks,
@@ -21,25 +28,35 @@ import {
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
 import type { AssistantDeliveryTtsFacts } from "../../llm/types.js";
+import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import { resolveLocalMediaPath } from "../../media/local-media-path.js";
+import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachment.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
+import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import { findCodeRegions } from "../../shared/text/code-regions.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
+import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
+import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
+import { isPathInside } from "../path-guards.js";
 import { throwIfAborted } from "./abort.js";
-import type {
-  MessageActionInput,
-  MessageActionResult,
-  ResolvedActionContext,
+import {
+  messageActionRequesterMediaContext,
+  type MessageActionInput,
+  type MessageActionResult,
+  type ResolvedActionContext,
 } from "./message-action-contracts.js";
 import {
-  annotateSourceDelivery,
   applyMessageCrossContextMarker,
   executeGatewayAction,
 } from "./message-action-execution.js";
-import { stageGatewayWorkspaceMedia } from "./message-action-gateway-media.js";
-import { collectAttachmentSources, normalizeSandboxMediaList } from "./message-action-params.js";
+import { recordGatewayActionSend } from "./message-action-gateway-transcript.js";
+import { collectAttachmentSources, normalizeSandboxMediaSource } from "./message-action-params.js";
+import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 import {
   applySendLocationToActionParams,
   applySendPayloadPartsToActionParams,
@@ -48,16 +65,20 @@ import {
   withSendNormalization,
 } from "./message-action-send-payload.js";
 import {
-  prepareOutboundMirrorRoute,
   resolveAndApplyOutboundReplyToId,
+  resolveAndApplyOutboundThreadId,
 } from "./message-action-threading.js";
-import { maybeApplyTtsToMessageActionSendPayload } from "./message-action-tts.js";
 import {
   executeSendAction,
   hasCorePresentationDelivery,
   materializeMessagePresentationFallback,
 } from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
+
+// Keep the TTS runtime lazy so ordinary sends do not pay the provider import cost.
+const loadMessageActionTtsRuntime = createLazyRuntimeModule(
+  () => import("../../tts/tts.runtime.js"),
+);
 
 function resolveReplyMediaAttachmentType(value: unknown): ReplyMediaAttachment["type"] {
   return value === "image" || value === "audio" || value === "video" || value === "file"
@@ -66,7 +87,6 @@ function resolveReplyMediaAttachmentType(value: unknown): ReplyMediaAttachment["
 }
 
 export async function buildMessagePayload(params: {
-  cfg: OpenClawConfig;
   actionParams: Record<string, unknown>;
   input: MessageActionInput;
   channel?: ChannelId;
@@ -133,69 +153,43 @@ export async function buildMessagePayload(params: {
   });
   const topLevelFilename = readToolStringParam(actionParams, "filename");
   const topLevelMimeType = readToolStringParam(actionParams, "contentType");
+  const attachmentEntries = attachmentSources.map((source) => ({
+    url: source.value,
+    filename: source.filename,
+    mimeType: source.contentType,
+    type: resolveReplyMediaAttachmentType(source.attachment.type),
+  }));
   const attachmentByUrl = new Map(
-    attachmentSources.map((source) => [
-      normalizeOptionalString(source.value),
-      {
-        filename: source.filename,
-        mimeType: source.contentType,
-        type: resolveReplyMediaAttachmentType(source.attachment.type),
-      },
-    ]),
+    attachmentEntries.map(({ url, ...metadata }) => [normalizeOptionalString(url), metadata]),
   );
-  const mediaEntries: Array<{
-    url: string;
-    filename?: string;
-    mimeType?: string;
-    type?: ReplyMediaAttachment["type"];
-  }> = [];
-  const pushMedia = (
-    value?: string | null,
-    metadata?: { filename?: string; mimeType?: string; type?: ReplyMediaAttachment["type"] },
-  ) => {
-    const trimmed = normalizeOptionalString(value);
-    if (!trimmed) {
-      return;
-    }
-    mediaEntries.push({ url: trimmed, ...metadata });
-  };
-  pushMedia(mediaHint, {
-    ...attachmentByUrl.get(normalizeOptionalString(mediaHint)),
-    filename: topLevelFilename ?? attachmentByUrl.get(normalizeOptionalString(mediaHint))?.filename,
-    mimeType: topLevelMimeType ?? attachmentByUrl.get(normalizeOptionalString(mediaHint))?.mimeType,
+  const primaryAttachment = attachmentByUrl.get(normalizeOptionalString(mediaHint));
+  const mediaEntries = [
+    {
+      url: mediaHint,
+      ...primaryAttachment,
+      filename: topLevelFilename ?? primaryAttachment?.filename,
+      mimeType: topLevelMimeType ?? primaryAttachment?.mimeType,
+    },
+    ...mediaUrlHints.map((url) =>
+      Object.assign({ url }, attachmentByUrl.get(normalizeOptionalString(url))),
+    ),
+    ...attachmentEntries,
+  ].flatMap((entry) => {
+    const url = normalizeOptionalString(entry.url);
+    return url ? [{ ...entry, url }] : [];
   });
-  for (const mediaUrlHint of mediaUrlHints) {
-    pushMedia(mediaUrlHint, attachmentByUrl.get(normalizeOptionalString(mediaUrlHint)));
-  }
-  for (const attachmentSource of attachmentSources) {
-    pushMedia(attachmentSource.value, {
-      filename: attachmentSource.filename,
-      mimeType: attachmentSource.contentType,
-      type: resolveReplyMediaAttachmentType(attachmentSource.attachment.type),
-    });
-  }
 
   const normalizedMedia = await Promise.all(
     mediaEntries.map(async (entry) => {
-      const normalizedUrl = (
-        await normalizeSandboxMediaList({
-          values: [entry.url],
-          sandboxRoot: input.sandboxRoot,
-          sandboxContainerWorkdir: input.sandboxContainerWorkdir,
-        })
-      )[0];
-      entry.url = normalizedUrl ?? entry.url;
+      entry.url = await normalizeSandboxMediaSource({
+        value: entry.url,
+        sandboxRoot: input.sandboxRoot,
+        sandboxContainerWorkdir: input.sandboxContainerWorkdir,
+      });
       return entry;
     }),
   );
-  const seenMedia = new Set<string>();
-  const preparedMedia = normalizedMedia.filter((entry) => {
-    if (seenMedia.has(entry.url)) {
-      return false;
-    }
-    seenMedia.add(entry.url);
-    return true;
-  });
+  const preparedMedia = dedupeByKey(normalizedMedia, (entry) => entry.url);
   const mergedMediaUrls = preparedMedia.map((entry) => entry.url);
   const mediaAttachments = preparedMedia.map((entry) =>
     Object.assign(
@@ -209,11 +203,14 @@ export async function buildMessagePayload(params: {
   message = stripPlainTextToolCallBlocks(stripUnsupportedCitationControlMarkers(parsed.text), {
     resolveProtectedRanges: findCodeRegions,
   });
-  if (message || !hasPresentation) {
-    actionParams.message = message;
-  } else {
-    delete actionParams.message;
-  }
+  const updateActionMessage = () => {
+    if (message || !hasPresentation) {
+      actionParams.message = message;
+    } else {
+      delete actionParams.message;
+    }
+  };
+  updateActionMessage();
   if (!actionParams.replyTo && parsed.replyToId) {
     actionParams.replyTo = parsed.replyToId;
   }
@@ -248,18 +245,24 @@ export async function buildMessagePayload(params: {
   applySendLocationToActionParams(actionParams, location);
 
   if (params.channel && params.target) {
-    message = await applyMessageCrossContextMarker({
-      cfg: params.cfg,
-      channel: params.channel,
-      action: "send",
-      target: params.target,
-      toolContext: input.toolContext,
-      accountId: params.accountId,
-      agentId: params.agentId,
-      args: actionParams,
-      message,
-      preferPresentation: true,
-    });
+    const channel = params.channel;
+    const target = params.target;
+    message = await withChannelReadAuthority(
+      input.messageActionAuthorization?.scheduled ? input.assertDirectAdapterHandoff : undefined,
+      () =>
+        applyMessageCrossContextMarker({
+          cfg: input.cfg,
+          channel,
+          action: "send",
+          target,
+          toolContext: input.toolContext,
+          accountId: params.accountId,
+          agentId: params.agentId,
+          args: actionParams,
+          message,
+          preferPresentation: true,
+        }),
+    );
   }
 
   const mediaUrl = readToolStringParam(actionParams, "media", { trim: false });
@@ -276,11 +279,7 @@ export async function buildMessagePayload(params: {
   ) {
     throw new Error("send requires text or media or location");
   }
-  if (message || !hasPresentation) {
-    actionParams.message = message;
-  } else {
-    delete actionParams.message;
-  }
+  updateActionMessage();
   const gifPlayback = readBooleanParam(actionParams, "gifPlayback") ?? false;
   const forceDocument =
     readBooleanParam(actionParams, "forceDocument") ??
@@ -300,11 +299,7 @@ export async function buildMessagePayload(params: {
     rawDelivery && typeof rawDelivery === "object" && !Array.isArray(rawDelivery)
       ? (rawDelivery as ReplyPayloadDelivery)
       : undefined;
-  const rawChannelData = actionParams.channelData;
-  const channelData =
-    rawChannelData && typeof rawChannelData === "object" && !Array.isArray(rawChannelData)
-      ? (rawChannelData as Record<string, unknown>)
-      : undefined;
+  const channelData = asOptionalRecord(actionParams.channelData);
   const presentation = normalizeMessagePresentation(actionParams.presentation);
   const interactive = normalizeLegacyInteractiveReply(actionParams.interactive);
   const payload: ReplyPayload = {
@@ -377,7 +372,6 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   const action: ChannelMessageActionName = "send";
   const to = readToolStringParam(params, "to", { required: true });
   let sendPayload = await buildMessagePayload({
-    cfg,
     actionParams: params,
     input,
     channel,
@@ -423,24 +417,39 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   const initialReply = resolveAndApplyOutboundReplyToId(params, {
     channel,
     toolContext: input.toolContext,
-    matchesToolContextTarget: channelPlugin?.threading?.matchesToolContextTarget,
+    matchesToolContextTarget: channelPlugin.threading?.matchesToolContextTarget,
   });
-  const { resolvedThreadId, outboundRoute } = await prepareOutboundMirrorRoute({
+  const resolvedThreadId = resolveAndApplyOutboundThreadId(params, {
     cfg,
-    channel,
     to,
-    actionParams: params,
     accountId,
     toolContext: input.toolContext,
-    agentId,
-    currentSessionKey: input.sessionKey,
-    dryRun,
-    resolvedTarget,
-    resolveAutoThreadId: channelPlugin?.threading?.resolveAutoThreadId,
-    resolveReplyTransport: channelPlugin?.threading?.resolveReplyTransport,
+    resolveAutoThreadId: channelPlugin.threading?.resolveAutoThreadId,
+    resolveReplyTransport: channelPlugin.threading?.resolveReplyTransport,
     replyToIsExplicit: initialReply?.source === "explicit",
-    resolveOutboundSessionRoute,
   });
+  // Route resolution is read-only; persist only after the send succeeds so a
+  // failed probe cannot rebind the main session's delivery route.
+  const outboundRoute =
+    agentId && !dryRun
+      ? await resolveOutboundSessionRoute({
+          cfg,
+          channel,
+          agentId,
+          accountId,
+          target: to,
+          currentSessionKey: input.sessionKey,
+          resolvedTarget,
+          replyToId: readToolStringParam(params, "replyTo"),
+          threadId: resolvedThreadId,
+        })
+      : null;
+  if (outboundRoute) {
+    params["__sessionKey"] = outboundRoute.sessionKey;
+  }
+  if (agentId) {
+    params["__agentId"] = agentId;
+  }
   const canonicalReplyToId = readToolStringParam(params, "replyTo");
   const reply =
     initialReply && canonicalReplyToId && canonicalReplyToId !== initialReply.replyToId
@@ -466,16 +475,46 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   };
   throwIfAborted(abortSignal);
 
-  const ttsPayload = await maybeApplyTtsToMessageActionSendPayload({
-    payload: sendPayload.payload,
-    cfg,
-    channel,
-    accountId,
-    agentId,
-    sessionKey: input.sessionKey,
-    inboundAudio: input.inboundAudio,
-    dryRun,
-  });
+  let ttsPayload = sendPayload.payload;
+  if (!dryRun) {
+    const sessionKey = input.sessionKey?.trim();
+    let ttsAuto: TtsAutoMode | undefined;
+    if (sessionKey) {
+      try {
+        const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+        ttsAuto = (await readSessionEntryReadOnlyInWorker({ agentId, sessionKey, storePath }))
+          ?.ttsAuto;
+      } catch {
+        // Missing or unreadable session stores should not block message delivery.
+      }
+    }
+    const explicitTts = getReplyPayloadMetadata(ttsPayload)?.ttsExplicit === true;
+    const preparedTtsPreferences = await prepareTtsPreferences();
+    if (
+      explicitTts ||
+      shouldAttemptTtsPayload({
+        cfg,
+        preparedTtsPreferences,
+        ttsAuto,
+        agentId,
+        channelId: channel,
+        accountId: accountId ?? undefined,
+      })
+    ) {
+      const { maybeApplyTtsToPayload } = await loadMessageActionTtsRuntime();
+      ttsPayload = await maybeApplyTtsToPayload({
+        payload: ttsPayload,
+        preparedTtsPreferences,
+        cfg,
+        channel,
+        kind: "final",
+        inboundAudio: input.inboundAudio,
+        ttsAuto,
+        agentId,
+        accountId: accountId ?? undefined,
+      });
+    }
+  }
   if (ttsPayload !== sendPayload.payload) {
     sendPayload = updateSendPayloadPartsFromReplyPayload(sendPayload, ttsPayload);
     applySendPayloadPartsToActionParams(params, sendPayload);
@@ -492,14 +531,9 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       cfg,
       agentId,
       mediaSources: sendPayload.mediaUrls,
-      workspaceMediaAccess: input.workspaceMediaAccess,
-      sessionKey: input.sessionKey,
+      ...messageActionRequesterMediaContext(input),
       messageProvider: input.sessionKey ? undefined : channel,
       accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
-      requesterSenderId: input.requesterSenderId,
-      requesterSenderName: input.requesterSenderName,
-      requesterSenderUsername: input.requesterSenderUsername,
-      requesterSenderE164: input.requesterSenderE164,
     });
 
   // Required queue persistence is itself an ownership decision: neither the
@@ -509,18 +543,41 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   const usesGatewayAction =
     !requiresCoreDelivery &&
     Boolean(gateway) &&
-    (channelPlugin?.actions?.resolveExecutionMode?.({ action }) === "gateway" ||
-      channelPlugin?.outbound?.deliveryMode === "gateway");
+    (channelPlugin.actions?.resolveExecutionMode?.({ action }) === "gateway" ||
+      channelPlugin.outbound?.deliveryMode === "gateway");
   if (usesGatewayAction && !dryRun) {
-    const stagedPayload = await stageGatewayWorkspaceMedia({
-      cfg,
-      channel,
-      accountId,
-      payload: sendPayload.payload,
-      mediaUrls: sendPayload.mediaUrls,
-      mediaAccess,
-      workspaceMediaAccess: input.workspaceMediaAccess,
-    });
+    let stagedPayload = sendPayload.payload;
+    const mediaUrls = sendPayload.mediaUrls;
+    const workspaceRoots = input.workspaceMediaAccess?.localRoots ?? [];
+    if (mediaUrls?.length && workspaceRoots.length > 0) {
+      const maxBytes = resolveOutboundMediaMaxBytes({ cfg, channel, accountId });
+      const stagedMediaUrls = await Promise.all(
+        mediaUrls.map(async (mediaUrl) => {
+          const localPath = resolveLocalMediaPath(mediaUrl);
+          if (
+            !localPath ||
+            !workspaceRoots.some((root) =>
+              isPathInside(path.resolve(root), path.resolve(localPath)),
+            )
+          ) {
+            return mediaUrl;
+          }
+          return (await resolveOutboundAttachmentFromUrl(mediaUrl, maxBytes, { mediaAccess })).path;
+        }),
+      );
+      if (!stagedMediaUrls.every((mediaUrl, index) => mediaUrl === mediaUrls[index])) {
+        const stagedAttachments = stagedPayload.attachments?.map((attachment, index) => {
+          const { url: _url, mediaUrl: _mediaUrl, filePath: _filePath, ...metadata } = attachment;
+          return { ...metadata, path: stagedMediaUrls[index] };
+        });
+        stagedPayload = {
+          ...stagedPayload,
+          mediaUrl: stagedMediaUrls[0],
+          mediaUrls: stagedMediaUrls,
+          ...(stagedAttachments ? { attachments: stagedAttachments } : {}),
+        };
+      }
+    }
     sendPayload = updateSendPayloadPartsFromReplyPayload(sendPayload, stagedPayload);
     applySendPayloadPartsToActionParams(params, sendPayload);
   }
@@ -537,14 +594,37 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
           channel,
           action,
           to,
+          accountId: accountId ?? undefined,
           handledBy: "plugin",
           payload,
           dryRun,
         }),
       });
   if (gatewayPluginAction) {
-    await commitOutboundSessionRoute();
-    return annotateSourceDelivery(
+    const deliveryFact = projectPluginMessageDeliveryFact(gatewayPluginAction.payload);
+    if (!deliveryFact || deliveryFact.status === "settled") {
+      await commitOutboundSessionRoute();
+      // The Gateway owns source-reply history; other conversations get the
+      // confirmed send through the destination history owner.
+      if (!dryRun && outboundRoute && !deliveryFact?.partialDelivery) {
+        await recordGatewayActionSend({
+          cfg,
+          channel,
+          to,
+          accountId: ctx.accountId ?? undefined,
+          route: outboundRoute,
+          producerSessionKey: input.sourceReplySessionKey ?? input.sessionKey,
+          agentId,
+          payload: sendPayload.payload,
+          deliveryId:
+            normalizeOptionalString(params.idempotencyKey) ??
+            input.deliveryIntentId ??
+            randomUUID(),
+          signal: ctx.abortSignal,
+        });
+      }
+    }
+    return await annotateSourceDelivery(
       withSendNormalization(gatewayPluginAction, sendPayload.normalization),
       ctx,
       reply?.source === "explicit",
@@ -552,7 +632,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   }
 
   const useCorePresentationDelivery = Boolean(
-    sendPayload.payload.presentation && hasCorePresentationDelivery(channelPlugin?.outbound),
+    sendPayload.payload.presentation && hasCorePresentationDelivery(channelPlugin.outbound),
   );
   if (sendPayload.payload.presentation && !useCorePresentationDelivery) {
     const fallbackMessage = materializeMessagePresentationFallback({
@@ -575,24 +655,8 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       // Model-authored sends get the failure back and resend it themselves; every
       // other caller only reports the error, so recovery keeps its replay right.
       deliveryRetryOwner: input.actionOrigin === "message-tool" ? "caller" : undefined,
-      // Both delivery paths must commit a first-contact route before mirroring.
       onSendAccepted: commitOutboundSessionRoute,
-      mirror:
-        !dryRun && input.transcriptMirror
-          ? {
-              ...input.transcriptMirror,
-              text: sendPayload.message,
-              mediaUrls: sendPayload.mediaUrls,
-            }
-          : outboundRoute && !dryRun && input.suppressTranscriptMirror !== true
-            ? {
-                sessionKey: outboundRoute.sessionKey,
-                agentId,
-                text: sendPayload.message,
-                mediaUrls: sendPayload.mediaUrls,
-                idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
-              }
-            : undefined,
+      transcriptRoute: outboundRoute ?? undefined,
       silent: sendPayload.silent ?? undefined,
     },
     to,
@@ -611,12 +675,19 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     threadId: resolvedThreadId ?? undefined,
   });
 
-  // Gateway-relayed core sends return no identified platform result locally;
-  // a non-failed, non-suppressed return is their success proof. Failed and
-  // suppressed sends leave the durable route untouched.
-  const coreDeliveryStatus = send.sendResult?.deliveryStatus;
-  if (coreDeliveryStatus !== "failed" && coreDeliveryStatus !== "suppressed") {
-    await commitOutboundSessionRoute();
+  // Local plugin acceptance commits through onSendAccepted. Gateway-relayed core
+  // sends may return no identified platform result locally; their successful
+  // return still commits the route unless the payload proves non-delivery.
+  if (send.handledBy === "core") {
+    const coreDeliveryStatus = send.sendResult?.deliveryStatus;
+    const deliveryFact = projectPluginMessageDeliveryFact(send.payload);
+    if (
+      coreDeliveryStatus !== "failed" &&
+      coreDeliveryStatus !== "suppressed" &&
+      (!deliveryFact || deliveryFact.status === "settled")
+    ) {
+      await commitOutboundSessionRoute();
+    }
   }
 
   const result: Extract<MessageActionResult, { kind: "send" }> = {
@@ -624,6 +695,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     channel,
     action,
     to,
+    accountId: accountId ?? undefined,
     handledBy: send.handledBy,
     payload: send.payload,
     ...(send.deliveredText ? { deliveredText: send.deliveredText } : {}),
@@ -631,7 +703,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     sendResult: send.sendResult,
     dryRun,
   };
-  return annotateSourceDelivery(
+  return await annotateSourceDelivery(
     withSendNormalization(result, sendPayload.normalization),
     ctx,
     reply?.source === "explicit",

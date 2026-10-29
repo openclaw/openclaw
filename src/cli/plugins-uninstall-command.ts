@@ -1,46 +1,43 @@
 // Terminal preview and confirmation for the shared plugin uninstall owner.
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../config/config.js";
 import type { PreparedPluginUninstall } from "../plugins/management-uninstall.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
+import { resolvePluginLifecycleGateway } from "./plugins-lifecycle-client.js";
+import { runWithLocalPluginState } from "./plugins-local-state.js";
 
-type PluginUninstallOptions = {
+export type PluginUninstallOptions = {
   keepFiles?: boolean;
   /** @deprecated Use keepFiles. */
   keepConfig?: boolean;
   force?: boolean;
   dryRun?: boolean;
   invalidateRuntimeCache?: boolean;
-  /** True when a Claw lifecycle caller already owns the package lease. */
-  clawManaged?: boolean;
   /** Synchronous authority guard at each final plugin/config mutation. */
   beforePersistentApply?: () => void;
 };
 
 export async function runPluginUninstallCommand(
-  id: string,
+  ids: string[],
   opts: PluginUninstallOptions = {},
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   if (!opts.dryRun) {
     assertConfigWriteAllowedInCurrentMode();
   }
+  // System-agent callers retain their closure-bound owner and outer lease.
+  const gateway =
+    opts.dryRun || opts.beforePersistentApply ? null : await resolvePluginLifecycleGateway();
   const { preparePluginUninstall, uninstallPluginWithPolicy } =
     await import("../plugins/management-uninstall.js");
   const { formatUninstallActionLabels, resolveUninstallChannelConfigKeys } =
     await import("../plugins/uninstall.js");
-  const { collectClawPluginUninstallWarnings } =
-    await import("../plugins/uninstall-claw-references.js");
   const { PromptInputClosedError, promptYesNo } = await import("./prompt.js");
-  const request = { pluginId: id, keepFiles: Boolean(opts.keepFiles || opts.keepConfig) };
-  const warnKeepConfig = () => {
-    if (opts.keepConfig) {
-      runtime.log(theme.warn("`--keep-config` is deprecated, use `--keep-files`."));
-    }
-  };
-  const printPreview = (preview: PreparedPluginUninstall) => {
+  const keepFiles = Boolean(opts.keepFiles || opts.keepConfig);
+  const printPreview = async (preview: PreparedPluginUninstall) => {
     const channelConfigKeys =
       preview.plan.actions.channelConfig && Object.hasOwn(preview.installRecords, preview.pluginId)
         ? resolveUninstallChannelConfigKeys(preview.pluginId, {
@@ -51,88 +48,130 @@ export async function runPluginUninstallCommand(
     if (preview.plan.directoryRemoval) {
       labels.push(`directory: ${shortenHomePath(preview.plan.directoryRemoval.target)}`);
     }
+    const pluginId = terminalText`${preview.pluginId}`;
     runtime.log(
-      `Plugin: ${theme.command(preview.name)}${preview.name !== preview.pluginId ? theme.muted(` (${preview.pluginId})`) : ""}`,
+      `Plugin: ${theme.command(terminalText`${preview.name}`)}${preview.name !== preview.pluginId ? theme.muted(` (${pluginId})`) : ""}`,
     );
     if (preview.pluginIds.length > 1 || preview.requestedPluginId !== preview.pluginId) {
       runtime.log(
-        `Package owner: ${theme.command(preview.pluginId)}; all entries will be removed: ${preview.pluginIds.join(", ")}`,
+        `Package owner: ${theme.command(pluginId)}; all entries will be removed: ${terminalText`${preview.pluginIds.join(", ")}`}`,
       );
     }
-    runtime.log(`Will remove: ${labels.length ? labels.join(", ") : "(nothing)"}`);
-    for (const warning of collectClawPluginUninstallWarnings({
-      pluginId: preview.pluginId,
-      installRecord: preview.installRecords[preview.pluginId],
-    })) {
-      runtime.log(theme.warn(warning));
-    }
+    runtime.log(terminalText`Will remove: ${labels.length ? labels.join(", ") : "(nothing)"}`);
   };
-  const execute = async (skipPreview: boolean) => {
-    warnKeepConfig();
+  const executeLocal = async (
+    targetPluginId: string,
+    skipPreview: boolean,
+    assertCurrent: () => void,
+  ) => {
     // Keep errors/output inside the plugin lease; the owner emits success inside any package lease.
     const result = await uninstallPluginWithPolicy({
-      ...request,
+      pluginId: targetPluginId,
+      keepFiles,
       caller: "cli",
-      clawManaged: opts.clawManaged,
-      beforePersistentApply: opts.beforePersistentApply,
+      beforePersistentApply: () => {
+        assertCurrent();
+        opts.beforePersistentApply?.();
+      },
       invalidateRuntimeCache: opts.invalidateRuntimeCache,
-      ...(skipPreview ? {} : { onPreview: printPreview }),
-      onWarning: (message) => runtime.log(theme.warn(message)),
+      onPreview: async (preview) => {
+        if (skipPreview && preview.pluginId !== targetPluginId) {
+          throw new Error(`Plugin package owner changed for "${targetPluginId}"; retry uninstall.`);
+        }
+        if (!skipPreview) {
+          await printPreview(preview);
+        }
+      },
+      onWarning: (message) => runtime.log(theme.warn(terminalText`${message}`)),
       onComplete: ({ pluginId, requestedPluginId, pluginIds, removed }) => {
         const subject =
           pluginIds.length > 1 || requestedPluginId !== pluginId
             ? `plugin package "${pluginId}" and entries ${pluginIds.join(", ")}`
             : `plugin "${pluginId}"`;
         runtime.log(
-          `Uninstalled ${subject}. Removed: ${removed.length ? removed.join(", ") : "nothing"}.`,
+          terminalText`Uninstalled ${subject}. Removed: ${removed.length ? removed.join(", ") : "nothing"}.`,
         );
-        runtime.log("Restart the gateway to apply changes.");
+        runtime.log("Saved for the next Gateway start.");
       },
     });
     if (!result.ok) {
-      runtime.error(result.error);
+      runtime.error(terminalText`${result.error}`);
       runtime.exit(1);
     }
+    return result.ok;
   };
-  if (opts.force && !opts.dryRun) {
-    return await withPluginLifecycleLease({}, async () => await execute(false));
+  const execute = (targetPluginId: string, skipPreview: boolean) =>
+    runWithLocalPluginState("uninstall", (assertCurrent) =>
+      withPluginLifecycleLease({}, () => executeLocal(targetPluginId, skipPreview, assertCurrent)),
+    );
+  if (opts.keepConfig) {
+    runtime.log(theme.warn("`--keep-config` is deprecated, use `--keep-files`."));
+  }
+  const [onlyId] = ids;
+  if (ids.length === 1 && onlyId && opts.force && !opts.dryRun && !gateway) {
+    await execute(onlyId, false);
+    return;
   }
   if (!opts.dryRun) {
     assertConfigWriteAllowedInCurrentMode();
   }
-  const prepared = await preparePluginUninstall({ ...request, caller: "cli" });
-  warnKeepConfig();
-  if (!prepared.ok) {
-    runtime.error(prepared.error);
-    runtime.exit(1);
-    return;
+  // Resolve every request before any removal; child IDs can share one package owner.
+  const previews = new Map<string, PreparedPluginUninstall>();
+  for (const pluginId of ids) {
+    const prepared = await preparePluginUninstall({ pluginId, keepFiles, caller: "cli" });
+    if (!prepared.ok) {
+      runtime.error(terminalText`${prepared.error}`);
+      runtime.exit(1);
+      return;
+    }
+    if (!previews.has(prepared.value.pluginId)) {
+      previews.set(prepared.value.pluginId, prepared.value);
+    }
   }
-  const preview = prepared.value;
-  printPreview(preview);
+  for (const preview of previews.values()) {
+    await printPreview(preview);
+    if (opts.dryRun) {
+      continue;
+    }
+    if (!opts.force) {
+      let confirmed: boolean;
+      try {
+        confirmed = await promptYesNo(
+          preview.pluginIds.length > 1
+            ? terminalText`Uninstall plugin package "${preview.pluginId}" and all entries?`
+            : terminalText`Uninstall plugin "${preview.pluginId}"?`,
+        );
+      } catch (error) {
+        if (!(error instanceof PromptInputClosedError)) {
+          throw error;
+        }
+        runtime.error(
+          "Error: plugins uninstall requires confirmation input. Re-run in an interactive TTY or pass --force.",
+        );
+        runtime.exit(1);
+        return;
+      }
+      if (!confirmed) {
+        runtime.log("Cancelled.");
+        return;
+      }
+    }
+    if (gateway) {
+      const result = await gateway<{ pluginId: string; removed: string[]; warnings?: string[] }>(
+        "plugins.uninstall",
+        { pluginId: preview.pluginId, keepFiles },
+      );
+      for (const warning of result.warnings ?? []) {
+        runtime.log(theme.warn(terminalText`${warning}`));
+      }
+      runtime.log(
+        terminalText`Uninstalled plugin "${result.pluginId}". Removed: ${result.removed.join(", ") || "nothing"}.`,
+      );
+    } else if (!(await execute(preview.pluginId, true))) {
+      return;
+    }
+  }
   if (opts.dryRun) {
     runtime.log(theme.muted("Dry run, no changes made."));
-    return;
   }
-  let confirmed: boolean;
-  try {
-    confirmed = await promptYesNo(
-      preview.pluginIds.length > 1
-        ? `Uninstall plugin package "${preview.pluginId}" and all entries?`
-        : `Uninstall plugin "${preview.pluginId}"?`,
-    );
-  } catch (error) {
-    if (!(error instanceof PromptInputClosedError)) {
-      throw error;
-    }
-    runtime.error(
-      "Error: plugins uninstall requires confirmation input. Re-run in an interactive TTY or pass --force.",
-    );
-    runtime.exit(1);
-    return;
-  }
-  if (!confirmed) {
-    runtime.log("Cancelled.");
-    return;
-  }
-  await withPluginLifecycleLease({}, async () => await execute(true));
 }

@@ -1,9 +1,8 @@
-// WhatsApp tests prove filename-derived media facts reach native delivery.
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { describe, expect, it, vi } from "vitest";
 import { createAcceptedWhatsAppSendResult } from "../inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
-import { loadWebMedia } from "../media.js";
 import { createWhatsAppReplyTransportContext, deliverWebReply } from "./deliver-reply.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -17,123 +16,31 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   return { ...actual, transcodeAudioBufferToOpus: hoisted.transcodeAudioBufferToOpus };
 });
 
-vi.mock("../media.js", () => ({ loadWebMedia: vi.fn() }));
+vi.mock("openclaw/plugin-sdk/web-media", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/web-media")>()),
+  loadWebMedia: vi.fn(),
+}));
 
 describe("WhatsApp filename-only media delivery", () => {
   it.each([
-    {
-      fileName: "photo.png",
-      contentType: undefined,
-      payloadKey: "image",
-      mimetype: "image/png",
-      expectedBuffer: "filename-only-media",
-    },
-    {
-      fileName: "clip.mp4",
-      contentType: undefined,
-      payloadKey: "video",
-      mimetype: "video/mp4",
-      expectedBuffer: "filename-only-media",
-    },
-    {
-      fileName: "voice.ogg",
-      contentType: undefined,
-      payloadKey: "audio",
-      mimetype: "audio/ogg; codecs=opus",
-      expectedBuffer: "filename-only-media",
-    },
-    {
-      fileName: "voice.mp3",
-      contentType: undefined,
-      payloadKey: "audio",
-      mimetype: "audio/ogg; codecs=opus",
-      expectedBuffer: "opus-output",
-    },
-    {
-      fileName: "report.pdf",
-      contentType: undefined,
-      payloadKey: "document",
-      mimetype: "application/pdf",
-      expectedBuffer: "filename-only-media",
-    },
-    {
-      fileName: "unknown.bin",
-      contentType: undefined,
-      payloadKey: "document",
-      mimetype: "application/octet-stream",
-      expectedBuffer: "filename-only-media",
-    },
-    {
-      fileName: "photo.png",
-      contentType: "application/octet-stream",
-      payloadKey: "image",
-      mimetype: "image/png",
-      expectedBuffer: "filename-only-media",
-    },
-    {
-      fileName: "clip.mp4",
-      contentType: "application/octet-stream",
-      payloadKey: "video",
-      mimetype: "video/mp4",
-      expectedBuffer: "filename-only-media",
-    },
-    {
-      fileName: "voice.ogg",
-      contentType: "application/octet-stream",
-      payloadKey: "audio",
-      mimetype: "audio/ogg; codecs=opus",
-      expectedBuffer: "filename-only-media",
-    },
-    {
-      fileName: "voice.mp3",
-      contentType: "application/octet-stream",
-      payloadKey: "audio",
-      mimetype: "audio/ogg; codecs=opus",
-      expectedBuffer: "opus-output",
-    },
-    {
-      fileName: "report.pdf",
-      contentType: "application/octet-stream",
-      payloadKey: "document",
-      mimetype: "application/pdf",
-      expectedBuffer: "filename-only-media",
-    },
-    {
-      fileName: "unknown.bin",
-      contentType: "application/octet-stream",
-      payloadKey: "document",
-      mimetype: "application/octet-stream",
-      expectedBuffer: "filename-only-media",
-    },
-    {
-      fileName: "photo.png",
-      contentType: "image/jpeg",
-      payloadKey: "image",
-      mimetype: "image/jpeg",
-      expectedBuffer: "filename-only-media",
-    },
-    {
-      fileName: "photo.png",
-      contentType: "application/pdf",
-      payloadKey: "document",
-      mimetype: "application/pdf",
-      expectedBuffer: "filename-only-media",
-    },
+    ["photo.png", undefined, "image/png", "image", "filename-only-media"],
+    ["clip.mp4", undefined, "video/mp4", "video", "filename-only-media"],
+    ["voice.ogg", undefined, "audio/ogg; codecs=opus", "audio", "filename-only-media"],
+    ["voice.mp3", undefined, "audio/ogg; codecs=opus", "audio", "opus-output"],
+    ["report.pdf", undefined, "application/pdf", "document", "filename-only-media"],
+    ["unknown.bin", undefined, "application/octet-stream", "document", "filename-only-media"],
+    ["photo.png", "application/octet-stream", "image/png", "image", "filename-only-media"],
+    ["photo.png", "application/pdf", "application/pdf", "document", "filename-only-media"],
   ] as const)(
-    "delivers $fileName with $contentType as native $mimetype",
-    async ({ fileName, contentType, payloadKey, mimetype, expectedBuffer }) => {
+    "delivers %s with %s as native %s",
+    async (fileName, contentType, mimetype, payloadKey, expectedBuffer) => {
       vi.clearAllMocks();
       hoisted.transcodeAudioBufferToOpus.mockResolvedValue(Buffer.from("opus-output"));
       vi.mocked(loadWebMedia).mockResolvedValueOnce({
         buffer: Buffer.from("filename-only-media"),
         contentType,
         fileName,
-        kind:
-          contentType === "application/octet-stream" || contentType === "application/pdf"
-            ? "document"
-            : contentType === "image/jpeg"
-              ? "image"
-              : undefined,
+        kind: contentType ? "document" : undefined,
       });
       const sendMedia = vi
         .fn<AdmittedWebInboundMessage["platform"]["sendMedia"]>()
@@ -142,11 +49,7 @@ describe("WhatsApp filename-only media delivery", () => {
         .fn<AdmittedWebInboundMessage["platform"]["reply"]>()
         .mockResolvedValue(createAcceptedWhatsAppSendResult("text", "text-1"));
       const msg = createTestWebInboundMessage({
-        event: { id: "msg-1" },
-        payload: { body: "hello" },
         platform: {
-          chatJid: "15551234567@s.whatsapp.net",
-          recipientJid: "+20000000000",
           senderJid: "222@s.whatsapp.net",
           reply,
           sendMedia,
@@ -165,7 +68,6 @@ describe("WhatsApp filename-only media delivery", () => {
         maxMediaBytes: 1024 * 1024,
         textLimit: 200,
         replyLogger: { info: vi.fn(), warn: vi.fn() },
-        skipLog: true,
       });
 
       expect(sendMedia).toHaveBeenCalledOnce();

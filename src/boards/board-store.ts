@@ -8,6 +8,7 @@ import type {
   BoardWidgetGeneratedIdentity,
   BoardWidgetPutResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../packages/gateway-protocol/src/schema/canvas.js";
 import { boardDeclarationIsSubset, normalizeBoardWidgetDeclared } from "./board-capabilities.js";
 import {
   BOARD_SIZE_PRESETS,
@@ -18,9 +19,10 @@ import {
   type BoardSize,
 } from "./board-layout.js";
 import { BOARD_REPORT_WIDGET_KIND, parseBoardReport } from "./board-report.js";
+import { BOARD_WEBSITE_WIDGET_KIND, parseBoardWebsite } from "./board-website.js";
 import { GITHUB_ACTIONS_GRANT_PREFIX } from "./github-actions-capability.js";
 
-export type BoardWidgetHtmlDocument = {
+type BoardWidgetHtmlDocument = {
   html: string;
   revision: number;
   sha256: string;
@@ -30,16 +32,6 @@ export type BoardWidgetHtmlDocument = {
   resourceOrigins?: string[];
 };
 export type BoardWidgetHtmlViewMetadata = Omit<BoardWidgetHtmlDocument, "html">;
-export type BoardWidgetRegisteredDocument = {
-  pluginKind: string;
-  source: string;
-  title?: string;
-  revision: number;
-  sha256: string;
-  viewGeneration: string;
-  grantState: "none" | "pending" | "granted" | "rejected";
-  declared?: BoardWidgetDeclared;
-};
 export type BoardWidgetMcpAppDocument = {
   descriptor: BoardMcpAppDescriptor;
   revision: number;
@@ -48,10 +40,7 @@ export type BoardWidgetMcpAppDocument = {
   declaredTools: string[];
   interactive: boolean;
 };
-export type BoardWidgetDocument =
-  | BoardWidgetHtmlDocument
-  | BoardWidgetRegisteredDocument
-  | BoardWidgetMcpAppDocument;
+export type BoardWidgetDocument = BoardWidgetHtmlDocument | BoardWidgetMcpAppDocument;
 export type BoardSnapshotWithHtmlViewMetadata = {
   snapshot: BoardSnapshot;
   htmlViewMetadata: ReadonlyMap<string, BoardWidgetHtmlViewMetadata>;
@@ -59,28 +48,56 @@ export type BoardSnapshotWithHtmlViewMetadata = {
 
 export type BoardSessionTarget = { sessionKey: string; agentId?: string };
 
+export type BoardWriteOptions = {
+  /** Check owner-held source authority at admission; admitted writes may finish after revocation. */
+  assertCurrent?: () => void;
+};
+
+export type BoardWidgetWriteOptions = BoardWriteOptions & {
+  /** Refresh source permission under writer admission before persisting an interactive MCP pin. */
+  resolveMcpAppInteraction?: () => Promise<boolean>;
+};
+
 export interface BoardStore {
-  getSnapshot(target: BoardSessionTarget): BoardSnapshot;
-  getSnapshotWithHtmlViewMetadata(target: BoardSessionTarget): BoardSnapshotWithHtmlViewMetadata;
-  applyOps(target: BoardSessionTarget, ops: readonly BoardOp[]): BoardSnapshot;
-  putWidget(params: BoardWidgetMaterializedPutParams): BoardWidgetPutResult;
+  /** Start consumption in the authoritative read turn; release the database before awaiting its result. */
+  useSnapshot<T>(
+    target: BoardSessionTarget,
+    consume: (snapshot: BoardSnapshot) => T,
+  ): Promise<Awaited<T>>;
+  useWidgetDocument<T>(
+    target: BoardSessionTarget,
+    name: string,
+    consume: (document: BoardWidgetDocument | undefined) => T,
+  ): Promise<Awaited<T>>;
+
+  getSnapshot(target: BoardSessionTarget): Promise<BoardSnapshot>;
+  getSnapshotWithHtmlViewMetadata(
+    target: BoardSessionTarget,
+  ): Promise<BoardSnapshotWithHtmlViewMetadata>;
+  applyOps(
+    target: BoardSessionTarget,
+    ops: readonly BoardOp[],
+    options?: BoardWriteOptions,
+  ): Promise<BoardSnapshot>;
+  putWidget(
+    params: BoardWidgetMaterializedPutParams,
+    options?: BoardWidgetWriteOptions,
+  ): Promise<BoardWidgetPutResult>;
   grant(
     target: BoardSessionTarget,
     name: string,
     decision: "granted" | "rejected",
     revision: number,
     instanceId?: string,
-  ): BoardSnapshot;
-  readWidgetHtml(target: BoardSessionTarget, name: string): BoardWidgetHtmlDocument | undefined;
-  readWidgetRegistered(
+    options?: BoardWriteOptions,
+  ): Promise<BoardSnapshot>;
+  readWidgetMcpApp(
     target: BoardSessionTarget,
     name: string,
-  ): BoardWidgetRegisteredDocument | undefined;
-  readWidgetMcpApp(target: BoardSessionTarget, name: string): BoardWidgetMcpAppDocument | undefined;
+  ): Promise<BoardWidgetMcpAppDocument | undefined>;
 }
 
 const BOARD_MAX_WIDGETS = 48;
-const BOARD_MAX_WIDGET_HTML_BYTES = 256 * 1024;
 type BoardWidgetGeneratedIdentityMarker = Pick<BoardWidgetGeneratedIdentity, "source" | "key"> & {
   kind: "generated";
 };
@@ -89,29 +106,8 @@ export type BoardWidgetNameIdentityMarker =
   | BoardWidgetGeneratedIdentityMarker
   | { kind: "invalid" };
 
-export function cloneBoardSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
-  return {
-    sessionKey: snapshot.sessionKey,
-    revision: snapshot.revision,
-    tabs: snapshot.tabs.map((tab) => ({ ...tab })),
-    widgets: snapshot.widgets.map((widget) => ({
-      ...widget,
-      ...(widget.props !== undefined ? { props: structuredClone(widget.props) } : {}),
-      ...(widget.declaredSummary !== undefined
-        ? { declaredSummary: [...widget.declaredSummary] }
-        : {}),
-      ...(widget.declared !== undefined
-        ? {
-            declared: {
-              ...(widget.declared.netOrigins
-                ? { netOrigins: [...widget.declared.netOrigins] }
-                : {}),
-              ...(widget.declared.tools ? { tools: [...widget.declared.tools] } : {}),
-            },
-          }
-        : {}),
-    })),
-  };
+function cloneBoardSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
+  return structuredClone(snapshot);
 }
 
 export function createBoardDeclaredSummary(
@@ -126,13 +122,6 @@ export function createBoardDeclaredSummary(
     ),
   ];
   return lines.length > 0 ? lines : undefined;
-}
-
-function generatedIdentityMatches(
-  left: BoardWidgetNameIdentityMarker | undefined,
-  right: BoardWidgetGeneratedIdentityMarker,
-): boolean {
-  return left?.kind === "generated" && left.source === right.source && left.key === right.key;
 }
 
 export function resolveBoardWidgetPutParams(
@@ -150,14 +139,14 @@ export function resolveBoardWidgetPutParams(
       "generated widget fallback name must differ from its preferred name",
     );
   }
-  const marker: BoardWidgetGeneratedIdentityMarker = {
-    kind: "generated",
-    source: generatedIdentity.source,
-    key: generatedIdentity.key,
-  };
-  const existingGenerated = prior.widgets.find((widget) =>
-    generatedIdentityMatches(nameIdentities.get(widget.name), marker),
-  );
+  const existingGenerated = prior.widgets.find((widget) => {
+    const identity = nameIdentities.get(widget.name);
+    return (
+      identity?.kind === "generated" &&
+      identity.source === generatedIdentity.source &&
+      identity.key === generatedIdentity.key
+    );
+  });
   if (existingGenerated) {
     return { ...params, name: existingGenerated.name };
   }
@@ -219,17 +208,8 @@ function validatePluginContent(params: BoardWidgetMaterializedPutParams): void {
       `board plugin widget props exceed ${BOARD_WIDGET_PROPS_MAX_BYTES} UTF-8 bytes`,
     );
   }
-}
-
-function validateRegisteredContent(params: BoardWidgetMaterializedPutParams): void {
-  if (params.content.kind !== "registered") {
-    return;
-  }
-  if (Buffer.byteLength(params.content.source, "utf8") > BOARD_MAX_WIDGET_HTML_BYTES) {
-    throw new BoardValidationError(
-      "invalid_operation",
-      `board registered widget source exceeds ${BOARD_MAX_WIDGET_HTML_BYTES} UTF-8 bytes`,
-    );
+  if (params.content.pluginKind === BOARD_WEBSITE_WIDGET_KIND) {
+    parseBoardWebsite(params.content.props);
   }
 }
 
@@ -243,14 +223,13 @@ export function createBoardWidgetPutSnapshot(
   },
 ): BoardSnapshot {
   validatePluginContent(params);
-  validateRegisteredContent(params);
   if (
     params.content.kind === "html" &&
-    Buffer.byteLength(params.content.html, "utf8") > BOARD_MAX_WIDGET_HTML_BYTES
+    Buffer.byteLength(params.content.html, "utf8") > WIDGET_HTML_MAX_UTF8_BYTES
   ) {
     throw new BoardValidationError(
       "invalid_operation",
-      `board widget HTML exceeds ${BOARD_MAX_WIDGET_HTML_BYTES} UTF-8 bytes`,
+      `board widget HTML exceeds ${WIDGET_HTML_MAX_UTF8_BYTES} UTF-8 bytes`,
     );
   }
   let layout = normalizeBoardLayout(prior);
@@ -261,15 +240,10 @@ export function createBoardWidgetPutSnapshot(
   if (
     existing &&
     (existing.contentOwner !== params.content.kind ||
-      ((params.content.kind === "plugin" || params.content.kind === "registered") &&
-        (existing.pluginKind !== params.content.pluginKind ||
-          (params.content.kind === "registered" &&
-            existing.registeredContentKind !== params.content.contentKind))))
+      (params.content.kind === "plugin" && existing.pluginKind !== params.content.pluginKind))
   ) {
     const incomingOwner =
-      params.content.kind === "plugin" || params.content.kind === "registered"
-        ? params.content.pluginKind
-        : params.content.kind;
+      params.content.kind === "plugin" ? params.content.pluginKind : params.content.kind;
     throw new BoardValidationError(
       "invalid_operation",
       `board widget ${params.name} contains ${existing.pluginKind ?? existing.contentOwner} content; update it with the same content kind or remove it before replacing it with ${incomingOwner} content`,
@@ -293,9 +267,7 @@ export function createBoardWidgetPutSnapshot(
   const contentSha256 =
     params.content.kind === "html"
       ? createHash("sha256").update(params.content.html).digest("hex")
-      : params.content.kind === "registered"
-        ? createHash("sha256").update(params.content.source).digest("hex")
-        : undefined;
+      : undefined;
   // HTML grants are frozen to approved bytes. MCP App grants stay within the
   // source server. Either kind may narrow, but never widen, its declaration.
   const preservesGrant =
@@ -303,9 +275,7 @@ export function createBoardWidgetPutSnapshot(
     context.grantScopeMatches &&
     (params.content.kind !== "mcp-app" || params.content.interactive) &&
     existing?.grantState === "granted" &&
-    (params.content.kind === "html" || params.content.kind === "registered"
-      ? contentSha256 === context.grantedSha256
-      : true) &&
+    (params.content.kind === "html" ? contentSha256 === context.grantedSha256 : true) &&
     boardDeclarationIsSubset(declared, existing.declared);
   layout = insertBoardWidget(
     layout,
@@ -317,11 +287,8 @@ export function createBoardWidgetPutSnapshot(
         : existing?.title !== undefined
           ? { title: existing.title }
           : {}),
-      contentKind: params.content.kind === "registered" ? "plugin" : params.content.kind,
+      contentKind: params.content.kind,
       contentOwner: params.content.kind,
-      ...(params.content.kind === "registered"
-        ? { registeredContentKind: params.content.contentKind }
-        : {}),
       ...(params.presentation !== undefined
         ? { presentation: params.presentation }
         : existing?.presentation !== undefined
@@ -332,12 +299,10 @@ export function createBoardWidgetPutSnapshot(
         : existing?.heightMode !== undefined
           ? { heightMode: existing.heightMode }
           : {}),
-      ...(params.content.kind === "plugin" || params.content.kind === "registered"
+      ...(params.content.kind === "plugin"
         ? {
             pluginKind: params.content.pluginKind,
-            ...(params.content.kind === "plugin" && params.content.props !== undefined
-              ? { props: structuredClone(params.content.props) }
-              : {}),
+            ...(params.content.props !== undefined ? { props: params.content.props } : {}),
           }
         : {}),
       sizeW: params.placement?.size ? size.sizeW : (existing?.sizeW ?? size.sizeW),
@@ -354,7 +319,11 @@ export function createBoardWidgetPutSnapshot(
                 ? "pending"
                 : "none",
       revision: widgetRevision,
-      ...(params.content.kind !== "plugin" ? { instanceId: context.instanceId } : {}),
+      // Native widget resources follow the insertion; document grants follow each put.
+      instanceId:
+        params.content.kind === "plugin"
+          ? (existing?.instanceId ?? context.instanceId)
+          : context.instanceId,
       ...(declaredSummary ? { declaredSummary } : {}),
       ...(declared ? { declared } : {}),
     },

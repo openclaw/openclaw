@@ -42,28 +42,34 @@ Common methods and events:
 | Nodes      | `node.list`, `node.invoke`, `node.pair.*`                  | Gateway WS plus node actions                 |
 | Events     | `tick`, `presence`, `agent`, `chat`, `health`, `shutdown`  | server push                                  |
 
-The authoritative advertised **discovery** inventory lives in `src/gateway/server-methods-list.ts` (`listGatewayMethods`, `GATEWAY_EVENTS`).
+The authoritative advertised **discovery** inventory lives in `src/gateway/server-methods-list.ts` (`listGatewayMethods`) and `src/gateway/events.ts` (`GATEWAY_EVENTS`).
 
 ## Where the schemas live
 
-- Source barrels: `packages/gateway-protocol/src/schema-modules.ts` owns the canonical domain-module list, while the public `schema.ts` wrapper also exposes `ProtocolSchemas`.
-- Generator registry: ordered `protocol-schema-fragment-*.ts` files map stable names to the canonical TypeBox objects from their owner modules. `protocol-schemas.ts` composes those fragments in a fixed order and rejects duplicate keys.
+- Source barrels: `packages/gateway-protocol/src/schema-modules.ts` owns the shared domain-module list, while the public `schema.ts` wrapper also exposes `ProtocolSchemas`.
+- Generator selection: `packages/gateway-protocol/src/schema/protocol-schema-selection.ts` derives registry names from the shared barrel's `*Schema` exports and explicit `skill-library.ts` imports, removing the `Schema` suffix. `EXCLUDED_SCHEMA_EXPORTS` keeps helpers and schemas with supplemental registry owners out of this derived selection.
+- Generator registry: `protocol-schemas.ts` composes the derived selection, `MigrationProtocolSchemas`, and `SessionPlacementProtocolSchemas`, rejecting duplicate keys and retaining the original TypeBox objects. `protocol-schema-types.ts` preserves each member's schema type and public readonly/writable modifiers.
 - Runtime validators: `packages/gateway-protocol/src/validator-registry.ts`, using the lazy TypeBox Compile owner in `protocol-validator.ts`
-- Advertised feature/discovery registry: `src/gateway/server-methods-list.ts`
+- Advertised feature/discovery registries: `src/gateway/server-methods-list.ts` and `src/gateway/events.ts`
 - Server handshake and method dispatch: `src/gateway/server-core-runtime.ts`
 - Node client: `src/gateway/client.ts`
 - Generated JSON Schema: `dist/protocol.schema.json` (build output, not committed)
-- Generated Swift models: `apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift`
+- Generated Swift models: SwiftPM/Xcode plugin output, or `apps/shared/OpenClawKit/.build/protocol/GatewayModels.swift` for repository tooling
+
+The derived selection uses lexical order of the full source export names **before** removing the `Schema` suffix. The migration and session-placement maps follow it in their own insertion order. This replaces the former manually ordered registration fragments; JSON definition order and Swift declaration placement can change without changing schema data or native declaration bodies.
+
+Membership is now opt-out for eligible source exports: a new `*Schema` export in the shared barrel enters the generator registry unless explicitly excluded. Review each new export for intended generated-protocol membership, and add helper-only exports to `EXCLUDED_SCHEMA_EXPORTS`. The registry guard checks selection consistency, original objects, exclusions, and composition; it cannot independently determine whether a newly exported schema belongs in the public generated protocol.
 
 ## Current pipeline
 
 - `pnpm protocol:gen` writes JSON Schema (draft-07) to `dist/protocol.schema.json`.
-- `pnpm protocol:gen:swift` generates the Swift gateway models.
-- `pnpm protocol:check:swift` verifies the committed Swift models without rewriting them.
-- `pnpm protocol:gen:kotlin` generates the Android protocol models and constants.
-- `pnpm protocol:check` checks the registry structure, runs all three generators, and verifies the committed Swift and Kotlin output. The JSON Schema output is a gitignored build artifact with no committed baseline to diff against, so `pnpm protocol:gen` instead asserts the published-document contract (required frame definitions, frame ordering, `type` discriminator mapping, non-empty method metadata) and fails the check when the generated schema drifts from it.
+- `pnpm install` and `pnpm build` prepare native protocol models automatically. SwiftPM/Xcode and Gradle also generate their own build-owned sources and skip unchanged generation. Fresh full-repository source archives use these same entry points.
+- `pnpm protocol:gen:swift` generates Swift models in the shared package's ignored `.build/protocol` directory.
+- `pnpm protocol:gen:kotlin` generates Android models and constants under `apps/android/app/build/generated/openclaw-protocol`.
+- `pnpm protocol:check:swift` and `pnpm protocol:check:kotlin` bypass the cache, check the schema/version contract, and generate twice to verify determinism.
+- `pnpm protocol:check` checks the registry structure and all generated artifacts. Outputs are ignored build artifacts, not committed baselines. JSON Schema validation checks required frame definitions, frame ordering, the `type` discriminator mapping, and non-empty method metadata. Native validation checks protocol versions and Swift model/enum membership against the schema registry; native compatibility tests protect decoding and initializer contracts.
 
-When a gateway schema affects native clients, run `pnpm protocol:gen:swift`, review the generated diff, then run `pnpm protocol:check:swift`. Commit the schema and `GatewayModels.swift` update together. Stable decoding behavior belongs in the focused `GatewayModelsCompatibilityTests.swift` regressions rather than in handwritten model copies.
+Commit schema and generator changes together; native outputs are never committed. `scripts/native-protocol-inputs.json` owns the source inputs shared by repository tooling and both native build systems. Generation checks its import graph against that manifest, so an undeclared dependency fails instead of leaving stale models. Stable decoding behavior belongs in the focused `GatewayModelsCompatibilityTests.swift` regressions rather than in handwritten model copies.
 
 ## How the schemas are used at runtime
 
@@ -198,20 +204,9 @@ export const SystemEchoResultSchema = Type.Object(
 );
 ```
 
-Add both entries to the closest semantic `packages/gateway-protocol/src/schema/protocol-schema-fragment-*.ts` file. Import the owner module as a namespace when that fragment does not already use it, then map the stable registry names to the canonical schema objects:
+`system-info.ts` is already exported by `packages/gateway-protocol/src/schema-modules.ts`, so both schemas enter `ProtocolSchemas` automatically as `SystemEchoParams` and `SystemEchoResult`. For a new owner module, add its export to that shared barrel. Review any other `*Schema` exports it introduces and exclude helper-only schemas in `protocol-schema-selection.ts`. Keep schemas owned by the migration or session-placement maps in those maps and excluded from the derived selection.
 
-```ts
-import * as system from "./system.js";
-
-export const OperationsProtocolSchemas = {
-  // Existing entries stay in their current order.
-  // ...
-  SystemEchoParams: system.SystemEchoParamsSchema,
-  SystemEchoResult: system.SystemEchoResultSchema,
-} as const;
-```
-
-Do not sort fragment keys or move existing entries: native code generation follows registry insertion order. `protocol-schemas.ts` owns the deliberate fragment order and should change only when introducing a new semantic fragment.
+Export the corresponding static types from the owner module:
 
 ```ts
 export type SystemEchoParams = Static<typeof SystemEchoParamsSchema>;
@@ -263,6 +258,10 @@ The Swift generator emits:
 
 Unknown frame types are preserved as raw payloads for forward compatibility.
 
+Some registry names alias the same underlying schema object. The explicit primary alias preferences in `scripts/protocol-gen-swift.ts` preserve the existing public Swift type names when registry enumeration changes. Review generated declaration bodies, including field types, initializers, and encoding/decoding behavior; moving declarations must not silently select different nominal types.
+
+The published JSON Schema's `oneOf` frame order is a separate contract: `req`, `res`, then `event`, with the matching `type` discriminator mapping. `scripts/lib/protocol-schema-document.mts` owns and checks that order independently of registry definition order.
+
 ## Versioning and compatibility
 
 - `PROTOCOL_VERSION` lives in `packages/gateway-protocol/src/version.ts` (current value: `4`).
@@ -285,11 +284,11 @@ Generated JSON Schema is a build artifact, not committed to the repo. During the
 
 ## When you change schemas
 
-1. Update the TypeBox schemas in the owning `packages/gateway-protocol/src/schema/*.ts` module and register them in the closest `protocol-schema-fragment-*.ts` file without reordering existing keys.
-2. Register the method/event in `src/gateway/server-methods-list.ts`.
+1. Update the TypeBox schemas in the owning `packages/gateway-protocol/src/schema/*.ts` module. Check that a new module is exported by `schema-modules.ts`, review its automatic `*Schema` membership, and update helper exclusions or existing supplemental owner maps as needed.
+2. Register the method in `src/gateway/server-methods-list.ts` or the event in `src/gateway/events.ts`.
 3. Update `src/gateway/method-scopes.ts` when the new RPC needs operator or node scope classification.
 4. Run `pnpm protocol:check`.
-5. Commit the regenerated Swift models.
+5. Commit the schema and generator source changes together. Generated JSON, Swift, and Kotlin outputs stay in ignored build directories and are not committed.
 
 ## Related
 

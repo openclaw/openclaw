@@ -5,10 +5,9 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { expect, it, vi } from "vitest";
-import { resolveSlackAccount } from "../accounts.js";
 import type { SlackMessageEvent } from "../types.js";
-import { createSlackMonitorContext } from "./context.js";
 import { createSlackMessageHandler } from "./message-handler.js";
+import { createMonitorTestContext } from "./monitor-context.test-support.js";
 
 const prepare = vi.hoisted(() => vi.fn(async (_params: { message: SlackMessageEvent }) => null));
 vi.mock("./message-handler/pipeline.runtime.js", () => ({
@@ -27,43 +26,24 @@ it("updates Slack delay and flushes newly buffered top-level keys before immedia
   });
   const abort = new AbortController();
   const handler = createSlackMessageHandler({
-    ctx: createSlackMonitorContext({
+    ctx: createMonitorTestContext({
       cfg,
-      accountId: "default",
       app,
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       botToken: "synthetic-token",
       botUserId: "BOT",
-      identityHealth: { lifecycle: "ready", lastError: null },
+      botId: undefined,
       teamId: "TEAM",
       apiAppId: "APP",
-      historyLimit: 0,
-      sessionScope: "per-sender",
-      mainKey: "main",
-      dmEnabled: true,
-      dmPolicy: "open",
-      allowFrom: [],
-      allowNameMatching: false,
-      groupDmEnabled: false,
-      groupDmChannels: [],
       groupPolicy: "open",
-      useAccessGroups: true,
-      reactionMode: "off",
-      reactionAllowlist: [],
-      replyToMode: "off",
-      threadHistoryScope: "thread",
-      threadInheritParent: false,
       slashCommand: {
         enabled: false,
         name: "openclaw",
         ephemeral: true,
         sessionPrefix: "slack:slash",
       },
-      textLimit: 4000,
-      typingReaction: "",
       mediaMaxBytes: 1024,
     }),
-    account: resolveSlackAccount({ cfg, accountId: "default" }),
     abortSignal: abort.signal,
   });
   let sequence = 0;
@@ -86,7 +66,7 @@ it("updates Slack delay and flushes newly buffered top-level keys before immedia
     await enqueue("second");
     expect(bodies()).toEqual(["immediate"]);
     await vi.advanceTimersByTimeAsync(25);
-    expect(bodies()).toEqual(["immediate", "first\nsecond"]);
+    await vi.waitFor(() => expect(bodies()).toEqual(["immediate", "first\nsecond"]));
     await enqueue("pending top level", "C1");
     publish(0);
     await enqueue("after disable", "C1");

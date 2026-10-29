@@ -1,6 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { expect, it } from "vitest";
+import { ShellGatewayOwner } from "../../ui/src/app/app-shell-gateway.ts";
+import type { ApplicationContext } from "../../ui/src/app/context.ts";
 import { makeChatHost, makeRequestMock } from "../../ui/src/pages/chat/chat-host.test-support.ts";
 import { handlePageGatewayEvent } from "../../ui/src/pages/chat/chat-state-events.ts";
 import type { ChatPageHost } from "../../ui/src/pages/chat/chat-state-host.ts";
@@ -11,16 +13,19 @@ import {
 import { createTestGatewayClient } from "../../ui/src/test-helpers/gateway-client.ts";
 import { waitForFast } from "../../ui/src/test-helpers/wait-for.ts";
 import { getRuntimeConfig } from "../config/io.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { applySessionModelSelection } from "../model-picker/apply-session-model-selection.js";
+import { applySessionModelSelectionInternal as applySessionModelSelection } from "../model-picker/apply-session-model-selection.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { createLifecycleEventBroadcastHandler } from "./server-session-lifecycle-events.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 
 it("refreshes a retained pane from a persisted profile-only selection through the Gateway lifecycle broadcaster", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     // The picker supplies prepared capabilities; omission would start unrelated catalog discovery.
     const model = {
       provider: "anthropic",
@@ -46,43 +51,61 @@ it("refreshes a retained pane from a persisted profile-only selection through th
       { ...entry, sessionId: "other-session" },
     );
     const request = makeRequestMock({
-      "chat.metadata": async () => ({ commands: [] }),
+      "chat.metadata": { commands: [] },
       "models.list": async (params: unknown) => {
-        const selected = loadGatewaySessionEntryReadOnly(
+        const { entry: selected } = await loadGatewaySessionEntryReadOnlyAsync(
           (params as { sessionKey: string }).sessionKey,
           { agentId: "main" },
-        ).entry;
+        );
         const available = selected?.authProfileOverride === "anthropic:restored";
         return {
-          commands: [],
           models: [
             { ...model, available, ...(available ? {} : { unavailableReason: "missing-auth" }) },
           ],
         };
       },
-      "sessions.list": async () => ({ sessions: [], defaults: {}, count: 0, path: "", ts: 0 }),
+      "sessions.list": { sessions: [], defaults: {}, count: 0, path: "", ts: 0 },
     });
     const client = createTestGatewayClient(request);
-    const retained = makeChatHost({
-      sessionKey,
-      chatMessage: "Keep this draft",
-      client,
-    }) as ChatPageHost;
+    const draft = "Keep this draft";
+    const retained = makeChatHost({ sessionKey, chatMessage: draft, client }) as ChatPageHost;
     const sibling = makeChatHost({ sessionKey: otherKey, client }) as ChatPageHost;
+    const shell = new ShellGatewayOwner({
+      context: {
+        gateway: { snapshot: { client, hello: retained.hello, phase: "connected" } },
+        agents: { state: { agentsList: null } },
+        sessions: retained.sessions,
+      } as unknown as ApplicationContext,
+      routeState: { routeId: "chat" },
+      activeSessionKey: sessionKey,
+      desktopNavigationExpanded: false,
+      lastLocalePrefSignature: null,
+      outboxStoreImport: { load: async () => undefined },
+      shellNavigation: {
+        recoverDeletedActiveSession() {},
+        selectChatSession() {},
+        synchronizeSessionUrl() {},
+      },
+      invalidate() {},
+    });
     await refreshChatMetadata(retained);
     await refreshChatMetadata(sibling);
     expect(retained.chatModelCatalog[0]?.available).toBe(false);
     const transcript = retained.chatMessages;
-    const unsubscribe = onSessionLifecycleEvent(
-      createLifecycleEventBroadcastHandler({
-        sessionEventSubscribers: { getAll: () => new Set(["reader"]) },
-        chatAbortControllers: new Map(),
-        broadcastToConnIds: (event, payload) => {
-          handlePageGatewayEvent(retained, { type: "event", event, payload });
-          handlePageGatewayEvent(sibling, { type: "event", event, payload });
-        },
-      }),
-    );
+    const rowProjection = await createSessionRowProjection({ cfg: getRuntimeConfig() });
+    const publications: Promise<void>[] = [];
+    const publishLifecycle = createLifecycleEventBroadcastHandler({
+      getSessionRowProjection: () => rowProjection,
+      sessionEventSubscribers: { getAll: () => new Set(["reader"]) },
+      broadcastToConnIds: (event, payload) => {
+        shell.handleGatewayEvent({ type: "event", event, payload });
+        handlePageGatewayEvent(retained, { type: "event", event, payload });
+        handlePageGatewayEvent(sibling, { type: "event", event, payload });
+      },
+    });
+    const unsubscribe = onSessionLifecycleEvent((event) => {
+      publications.push(publishLifecycle(event));
+    });
     try {
       await expect(
         applySessionModelSelection({
@@ -108,15 +131,21 @@ it("refreshes a retained pane from a persisted profile-only selection through th
           },
         }),
       ).resolves.toMatchObject({ status: "applied", changed: true });
+      await Promise.all(publications);
       await waitForFast(() => expect(retained.chatModelCatalog[0]?.available).toBe(true));
       expect(sibling.chatModelCatalog[0]?.available).toBe(false);
-      expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(3);
-      expect(retained.chatMessage).toBe("Keep this draft");
+      expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(2);
+      expect(retained.chatMessage).toBe(draft);
       expect(retained.chatMessages).toBe(transcript);
     } finally {
       unsubscribe();
-      retireChatMetadataRequests(retained);
-      retireChatMetadataRequests(sibling);
+      try {
+        await Promise.all(publications);
+      } finally {
+        rowProjection.dispose();
+        retireChatMetadataRequests(retained);
+        retireChatMetadataRequests(sibling);
+      }
     }
   });
 });

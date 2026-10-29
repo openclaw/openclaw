@@ -1,0 +1,444 @@
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { setImmediate } from "node:timers/promises";
+import { afterEach, expect, it, vi } from "vitest";
+import { fixtureReceiptClientSource } from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { retainCommandProcessCleanup } from "../process/exec-spawn.js";
+import * as commands from "../process/exec.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
+import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
+import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
+import { useStateReceipts, stateClock } from "./update-candidate-state-fixtures.test-support.js";
+import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
+import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
+
+const dirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    vi.restoreAllMocks();
+    cleanup();
+  }),
+);
+
+const receipts = useStateReceipts();
+
+// Native hooks block their process thread. An unreferenced fixture worker flushes
+// the receipt independently; the durable marker still wins an operation-settlement race.
+function nativeEntryReceiptSource(marker: string): string {
+  const source = `${fixtureReceiptClientSource(receipts.endpoint)}
+sendReceipt(${JSON.stringify(marker)}, "entered");
+fixtureReceiptSocket.ref();
+await new Promise((resolve) => fixtureReceiptSocket.end(resolve));`;
+  return `new (require("node:worker_threads").Worker)(
+    new URL(${JSON.stringify(`data:text/javascript,${encodeURIComponent(source)}`)}),
+    { execArgv: [] },
+  ).unref();`;
+}
+
+async function nativeEntryBeforeSettlement(marker: string, operation: PromiseLike<unknown>) {
+  await Promise.race([
+    receipts.waitFor(marker, "entered"),
+    Promise.resolve(operation).then(() => {
+      expect(fs.existsSync(marker)).toBe(true);
+    }),
+  ]);
+}
+
+function fixture() {
+  const stateDir = fs.realpathSync(dirs.make("update-schema-lifetime-"));
+  const file = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const writer = openNodeSqliteDatabase(file);
+  writer.exec("PRAGMA user_version=3;");
+  return { stateDir, file, writer };
+}
+
+function workerEnv(preload: string, extra: NodeJS.ProcessEnv = {}) {
+  return { ...process.env, ...sqliteWorkerPreloadEnv(preload), ...extra };
+}
+
+function sizes(file: string, preload: string) {
+  return readUpdateStateDatabaseSizes([file, path.join(path.dirname(file), "missing.sqlite")], {
+    nodeRunner: process.execPath,
+    sourceEnv: workerEnv(preload),
+    stagingRoot: path.dirname(file),
+  });
+}
+
+function expectMessage(error: unknown, parts: (string | RegExp)[], soft = false) {
+  for (const part of parts) {
+    (soft ? expect.soft(error) : expect(error)).toHaveProperty(
+      "message",
+      typeof part === "string" ? expect.stringContaining(part) : expect.stringMatching(part),
+    );
+  }
+}
+
+it.each([
+  ["metadata", "uncertain", "metadata inventory"],
+  ["discover", "uncertain", "shared database discovery"],
+  ["versions", "uncertain", "schema inspection startup"],
+  ["legacy-copy", "uncertain", "shared database discovery"],
+  ["legacy-copy", "forced", "shared database discovery"],
+] as const)(
+  "retains %s staging until command cleanup is %s",
+  async (phase, settlement, expectedPhase) => {
+    const { stateDir, file, writer } = fixture();
+    const shared = path.join(stateDir, "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(shared));
+    const registry = openNodeSqliteDatabase(shared);
+    registry.exec("CREATE TABLE agent_databases(path TEXT); PRAGMA user_version=3;");
+    registry.prepare("INSERT INTO agent_databases VALUES (?)").run(file);
+    registry.close();
+    const controller = new AbortController();
+    const cleanup = createDeferredCore<"forced" | "uncertain">();
+    const admitted = createDeferredCore();
+    const roots = new Set<string>();
+    let marker = "";
+    const run = commands.runUtf8CommandWithTimeout;
+    vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation(async (argv, options) => {
+      if (typeof options === "number") {
+        return run(argv, options);
+      }
+      const input = JSON.parse(String(options.input ?? "{}")) as {
+        directory?: string;
+        files?: string[];
+        mode?: string;
+      };
+      const result = createCommandResult();
+      if (input.directory) {
+        return { ...result, stdout: JSON.stringify({ facts: "0".repeat(64), bytes: 0 }) };
+      }
+      const current = input.files
+        ? "metadata"
+        : argv.includes(SQLITE_READONLY_CHILD_ARG)
+          ? "legacy-copy"
+          : input.mode;
+      const stagingRoot = String(options.env?.XDG_CACHE_HOME);
+      roots.add(stagingRoot);
+      if (phase === "legacy-copy" && current === "discover") {
+        options.onOutputChunk?.(Buffer.from("Unknown update state inspection mode"), "stderr");
+        return { ...result, code: 1, stdout: "" };
+      }
+      if (current !== phase) {
+        return run(argv, options);
+      }
+      marker = path.join(stagingRoot, "database.sqlite.partial");
+      fs.writeFileSync(marker, "pending worker bytes");
+      // Model the runner's bounded pre-readiness result separately from the
+      // canonical cleanup promise that owns its late broker PID and close.
+      retainCommandProcessCleanup(cleanup.promise);
+      controller.abort(new Error("inspection canceled"));
+      admitted.resolve();
+      return { ...result, code: null, stdout: "", termination: "signal", cleanup: "uncertain" };
+    });
+    const finished = vi.fn();
+    const operation = readUpdateStateSchemaVersions({
+      stateDir,
+      config: {},
+      signal: controller.signal,
+      env: { ...process.env, XDG_CACHE_HOME: path.join(stateDir, "cache") },
+    });
+    const outcome = operation.catch((error: unknown) => error).finally(finished);
+    let finalizing: Promise<void> | undefined;
+    try {
+      await admitted.promise;
+      await setImmediate();
+      expect.soft(finished).not.toHaveBeenCalled();
+      expect.soft(fs.existsSync(marker)).toBe(true);
+      const finalized = vi.fn();
+      finalizing = cleanupSnapshotOperations().finally(finalized);
+      await setImmediate();
+      expect.soft(finalized).not.toHaveBeenCalled();
+      expect.soft(fs.existsSync(marker)).toBe(true);
+      cleanup.resolve(settlement);
+      const failure = await outcome;
+      await finalizing;
+      expect(hasCommandProcessCleanupError(failure)).toBe(settlement === "uncertain");
+      if (settlement === "uncertain") {
+        expectMessage(failure, [
+          "Staging retained at",
+          phase === "versions" ? file : shared,
+          expectedPhase,
+          /after \d+(?:\.\d+)? seconds/,
+        ]);
+        expect(fs.readFileSync(marker, "utf8")).toBe("pending worker bytes");
+      } else {
+        expect(failure).toHaveProperty("message", "inspection canceled");
+      }
+      expect([...roots].map((root) => fs.existsSync(root))).toEqual(
+        [...roots].map(() => settlement === "uncertain"),
+      );
+      expect(writer.prepare("PRAGMA user_version").get()).toEqual({ user_version: 3 });
+    } finally {
+      cleanup.resolve("forced");
+      await outcome;
+      await finalizing;
+      writer.close();
+    }
+  },
+);
+
+it("preserves the parent agent writer lock and excludes its uncommitted migration", async () => {
+  const { stateDir, file, writer } = fixture();
+  writer.exec("BEGIN IMMEDIATE; PRAGMA user_version=4;");
+  try {
+    const versions = await readUpdateStateSchemaVersions({ stateDir, config: {} });
+    expect(versions).toContainEqual({ path: file, userVersion: 3 });
+    const competitor = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `
+        import { DatabaseSync } from 'node:sqlite';
+        const db = new DatabaseSync(process.argv[1]);
+        try {
+          db.exec('PRAGMA busy_timeout=0; BEGIN IMMEDIATE; ROLLBACK;');
+          process.exitCode = 2;
+        } catch(error) {
+          if (error.errcode !== 5) throw error;
+          process.stdout.write('writer refused');
+        } finally { db.close(); }
+      `,
+        file,
+      ],
+      { encoding: "utf8", timeout: 5000 },
+    );
+    expect(competitor.status, competitor.stderr).toBe(0);
+    expect(competitor.stdout).toBe("writer refused");
+    expect(writer.isTransaction).toBe(true);
+  } finally {
+    writer.exec("ROLLBACK;");
+    writer.close();
+  }
+});
+
+it.for(["timeout", "cancel", "read-failure", "close-failure"] as const)(
+  "settles the schema worker before releasing ownership after %s",
+  { timeout: 15_000 },
+  async (outcome, { signal }) => {
+    const { stateDir, file, writer } = fixture();
+    const blocked = outcome === "timeout" || outcome === "cancel";
+    if (blocked) {
+      writer.exec("BEGIN EXCLUSIVE; PRAGMA user_version=4;");
+    }
+    const marker = path.join(stateDir, "native-read.json");
+    const cache = path.join(stateDir, "cache");
+    fs.mkdirSync(cache);
+    fs.mkdirSync(path.join(cache, "openclaw"));
+    const sentinel = path.join(cache, "unrelated.txt");
+    fs.writeFileSync(sentinel, "preserved");
+    const preload = path.join(stateDir, "native-fault.cjs");
+    // Fault the real source connection inside the launched worker. A held
+    // exclusive writer exercises SQLite's blocking read, not a sleeping stand-in.
+    fs.writeFileSync(
+      preload,
+      `
+      const fs = require('node:fs'), path = require('node:path');
+      const { DatabaseSync } = require('node:sqlite');
+      const source = ${JSON.stringify(file)}, marker = ${JSON.stringify(marker)};
+      const outcome = ${JSON.stringify(outcome)};
+      if (outcome === 'cancel') process.on('SIGTERM', () => {});
+      const isSource = db => db.location() && path.toNamespacedPath(db.location()) === path.toNamespacedPath(source);
+      const prepare = DatabaseSync.prototype.prepare, close = DatabaseSync.prototype.close;
+      DatabaseSync.prototype.prepare = function(sql) {
+        if (isSource(this) && sql === 'PRAGMA user_version') {
+          fs.writeFileSync(marker, JSON.stringify({pid:process.pid}));
+          ${nativeEntryReceiptSource(marker)}
+          if (outcome === 'read-failure') throw new Error('native header read failed');
+        }
+        return prepare.call(this, sql);
+      };
+      DatabaseSync.prototype.close = function() {
+        if (isSource(this) && outcome === 'close-failure') throw new Error('native header close failed');
+        return close.call(this);
+      };
+    `,
+    );
+    const controller = new AbortController();
+    const cancellation = new DOMException("test cancellation", "AbortError");
+    const advanceClock = stateClock();
+    const operation = readUpdateStateSchemaVersions({
+      stateDir,
+      config: {},
+      signal: controller.signal,
+      env: workerEnv(preload, { XDG_CACHE_HOME: cache }),
+    });
+    const rejected = operation.catch((error: unknown) => error);
+    try {
+      if (blocked) {
+        await withinTest(nativeEntryBeforeSettlement(marker, rejected), signal);
+        if (outcome === "cancel") {
+          controller.abort(cancellation);
+        } else {
+          advanceClock(400_000, true);
+        }
+      }
+      const failure = await rejected;
+      if (outcome === "cancel") {
+        expect(failure).toBe(cancellation);
+      } else {
+        expect(failure).toBeInstanceOf(Error);
+        expectMessage(failure, [
+          outcome === "timeout" ? /exceeded its/ : /native header (read|close) failed/,
+        ]);
+        expectMessage(
+          failure,
+          [file, "agent schema inspection", /after \d+(?:\.\d+)? seconds/, "then retry the update"],
+          true,
+        );
+      }
+      const { pid } = JSON.parse(fs.readFileSync(marker, "utf8")) as { pid: number };
+      expect(() => process.kill(pid, 0)).toThrow();
+      expect(fs.readdirSync(cache).toSorted()).toEqual(["openclaw", "unrelated.txt"]);
+      expect(fs.readdirSync(path.join(cache, "openclaw"))).toEqual([]);
+      expect(fs.readFileSync(sentinel, "utf8")).toBe("preserved");
+      expect(writer.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: blocked ? 4 : 3,
+      });
+    } finally {
+      controller.abort();
+      await Promise.allSettled([operation, rejected]);
+      if (writer.isTransaction) {
+        writer.exec("ROLLBACK;");
+      }
+      writer.close();
+    }
+  },
+);
+
+// Inject metadata faults only in the child; the parent must remain able to cancel it.
+function writeMetadataFault(root: string, target: string, block: boolean): string {
+  const preload = path.join(root, "metadata-fault.cjs");
+  fs.writeFileSync(
+    preload,
+    `
+    const fs = require("node:fs");
+    const stat = fs.statSync;
+    fs.statSync = function(file, ...args) {
+      if (file === ${JSON.stringify(target)}) {
+        if (${block}) {
+          process.on("SIGTERM", () => {});
+          fs.writeFileSync(${JSON.stringify(path.join(root, "started.json"))}, JSON.stringify({
+            pid: process.pid, stagingRoot: process.env.XDG_CACHE_HOME,
+          }));
+          ${nativeEntryReceiptSource(path.join(root, "started.json"))}
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+        }
+        throw Object.assign(new Error("metadata unavailable"), { code: "EIO" });
+      }
+      return stat.call(this, file, ...args);
+    };
+    `,
+  );
+  return preload;
+}
+
+it.each(["", "-wal"])("keeps an unknown size when %s metadata cannot be read", async (suffix) => {
+  const root = dirs.make("openclaw-metadata-unknown-");
+  const file = path.join(root, "database.sqlite");
+  fs.writeFileSync(file, "database");
+  const preload = writeMetadataFault(root, `${file}${suffix}`, false);
+  await expect(sizes(file, preload)).resolves.toEqual([{ path: file, sizeBytes: undefined }]);
+});
+
+function writeProgressFault(root: string, code: string, phase: string): string {
+  const preload = path.join(root, "progress-fault.cjs");
+  fs.writeFileSync(
+    preload,
+    `
+    const fs = require("node:fs");
+    const write = fs.writeSync;
+    let failed = false;
+    fs.writeSync = function(fd, value, ...args) {
+      if (fd === 2 && !failed && typeof value === "string" && value.startsWith("State schema progress: ") && JSON.parse(value.slice("State schema progress: ".length)).phase === ${JSON.stringify(phase)}) {
+        failed = true;
+        fs.writeFileSync(${JSON.stringify(path.join(root, "progress-fault-fired"))}, "fired");
+        throw Object.assign(new Error("synthetic progress write failed"), { code: ${JSON.stringify(code)} });
+      }
+      return write.call(this, fd, value, ...args);
+    };
+    require("node:module").syncBuiltinESMExports();
+    `,
+  );
+  return preload;
+}
+
+it.each([
+  ["metadata inventory", "EAGAIN"],
+  ["metadata inventory", "EWOULDBLOCK"],
+  ["metadata inventory", "EIO"],
+  ["agent schema inspection", "EAGAIN"],
+  ["agent schema inspection", "EWOULDBLOCK"],
+  ["agent schema inspection", "EIO"],
+] as const)("preserves %s semantics when progress encounters %s", async (phase, code) => {
+  const metadata = phase === "metadata inventory";
+  const database = metadata ? undefined : fixture();
+  database?.writer.close();
+  const stateDir = database?.stateDir ?? dirs.make("openclaw-metadata-progress-");
+  const file = database?.file ?? path.join(stateDir, "database.sqlite");
+  if (metadata) {
+    fs.writeFileSync(file, Buffer.alloc(4096));
+    fs.writeFileSync(`${file}-wal`, Buffer.alloc(512));
+  }
+  const preload = writeProgressFault(stateDir, code, phase);
+  const inspection = metadata
+    ? sizes(file, preload)
+    : readUpdateStateSchemaVersions({
+        stateDir,
+        config: {},
+        env: workerEnv(preload),
+      });
+  if (code === "EAGAIN" || code === "EWOULDBLOCK") {
+    if (metadata) {
+      await expect(inspection).resolves.toEqual([{ path: file, sizeBytes: 4608n }]);
+    } else {
+      await expect(inspection).resolves.toContainEqual({ path: file, userVersion: 3 });
+    }
+  } else {
+    await expect(inspection).rejects.toThrow("synthetic progress write failed");
+  }
+  if (!metadata) {
+    expect(fs.readFileSync(path.join(stateDir, "progress-fault-fired"), "utf8")).toBe("fired");
+  }
+});
+
+it("cancels blocked sidecar metadata before candidate discovery and removes staging after child exit", async ({
+  signal,
+}) => {
+  const root = dirs.make("openclaw-metadata-cancel-");
+  const file = path.join(root, "state", "openclaw.sqlite");
+  fs.mkdirSync(path.dirname(file));
+  fs.writeFileSync(file, "database");
+  const preload = writeMetadataFault(root, `${file}-wal`, true);
+  const controller = new AbortController();
+  const inspection = readUpdateStateSchemaVersions({
+    stateDir: root,
+    config: {},
+    // No candidate worker exists: cancellation must happen during metadata inventory.
+    root: path.join(root, "unavailable-candidate"),
+    signal: controller.signal,
+    env: workerEnv(preload),
+  });
+  const rejected = expect(inspection).rejects.toThrow("metadata cancellation");
+  let report: { pid: number; stagingRoot: string } | undefined;
+  try {
+    const marker = path.join(root, "started.json");
+    await withinTest(nativeEntryBeforeSettlement(marker, rejected), signal);
+    report = JSON.parse(fs.readFileSync(marker, "utf8"));
+    expect(report).toBeDefined();
+    expect(fs.existsSync(report!.stagingRoot)).toBe(true);
+  } finally {
+    controller.abort(new Error("metadata cancellation"));
+    await rejected;
+  }
+  expect(() => process.kill(report!.pid, 0)).toThrow();
+  expect(fs.existsSync(report!.stagingRoot)).toBe(false);
+});

@@ -12,13 +12,10 @@ export function selectRefsForExecPolicy(params: { refs: SecretRef[]; allowExec: 
 } {
   const refsToResolve: SecretRef[] = [];
   const skippedExecRefs: SecretRef[] = [];
+  // Dry-run preflight can still report static exec-ref problems without invoking commands.
   for (const ref of params.refs) {
-    if (ref.source === "exec" && !params.allowExec) {
-      // Dry-run preflight can still report static exec-ref problems without invoking commands.
-      skippedExecRefs.push(ref);
-      continue;
-    }
-    refsToResolve.push(ref);
+    const selected = ref.source === "exec" && !params.allowExec ? skippedExecRefs : refsToResolve;
+    selected.push(ref);
   }
   return { refsToResolve, skippedExecRefs };
 }

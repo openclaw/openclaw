@@ -4,16 +4,18 @@ import { execFileSync } from "node:child_process";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { isMissingManifestError } from "./lib/docker-manifest-error.mjs";
-import { resolveDockerReleasePolicy } from "./lib/docker-release-policy.mjs";
+import {
+  inspectDockerImageVersion,
+  resolveDockerReleasePolicy,
+} from "./lib/docker-release-policy.mjs";
 import { compareReleaseVersions } from "./lib/release-version.mjs";
 import { verifyDockerAttestations } from "./verify-docker-attestations.mjs";
 
 const IMAGETOOLS_TIMEOUT_MS = 20 * 60_000;
 // Conservative decimal client caps, not independently verified server byte thresholds.
-// https://vercel.com/docs/container-registry/limits-and-pricing (September 9, 2026).
+// https://vercel.com/docs/container-registry/limits-and-pricing (September 23, 2026).
 const VCR_BYTE_CAPS = Object.freeze({
-  layer: 500_000_000,
+  layer: 2_000_000_000,
   total: 15_000_000_000,
   manifest: 4_000_000,
   config: 1_000_000,
@@ -233,45 +235,6 @@ function inspectManifestDescriptor(imageRef, execFileSyncImpl) {
   }
 }
 
-function inspectImageVersion(imageRef, execFileSyncImpl, { allowMissing = false } = {}) {
-  const versions = new Map();
-  for (const [index, architecture] of ARCHITECTURES.entries()) {
-    const platform = `linux/${architecture}`;
-    let raw;
-    try {
-      raw = runImagetools(
-        ["inspect", imageRef, "--format", `{{json (index .Image "${platform}")}}`],
-        execFileSyncImpl,
-      );
-    } catch (error) {
-      if (allowMissing && index === 0 && isMissingManifestError(error, imageRef)) {
-        return null;
-      }
-      throw error;
-    }
-    let version;
-    try {
-      version = JSON.parse(raw)?.config?.Labels?.["org.opencontainers.image.version"];
-    } catch (error) {
-      throw new Error(`Could not parse the ${platform} image config for ${imageRef}.`, {
-        cause: error,
-      });
-    }
-    if (typeof version !== "string" || version.trim().length === 0) {
-      throw new Error(
-        `${imageRef} does not have an org.opencontainers.image.version label for ${platform}.`,
-      );
-    }
-    versions.set(platform, version.trim());
-  }
-  const uniqueVersions = new Set(versions.values());
-  if (uniqueVersions.size !== 1) {
-    const details = [...versions].map(([platform, version]) => `${platform}=${version}`).join(", ");
-    throw new Error(`${imageRef} has inconsistent platform versions: ${details}.`);
-  }
-  return uniqueVersions.values().next().value;
-}
-
 function resolvePlatformDigests(imageRef, execFileSyncImpl, architectures) {
   const manifest = inspectRawManifest(imageRef, execFileSyncImpl);
   if (manifest.mediaType !== IMAGE_INDEX_MEDIA_TYPE || !Array.isArray(manifest.manifests)) {
@@ -351,7 +314,9 @@ export function publishVercelContainerRegistryImages(params, options = {}) {
   const variants = selectedVariants.map(({ aliasKey, suffix }) => {
     const manifestTag = `${plan.version}${suffix}`;
     const manifestSourceRef = immutableSources.byAlias.get(aliasKey);
-    const sourceVersion = inspectImageVersion(manifestSourceRef, execFileSyncImpl);
+    const sourceVersion = inspectDockerImageVersion(manifestSourceRef, execFileSyncImpl, {
+      timeoutMs: IMAGETOOLS_TIMEOUT_MS,
+    });
     if (sourceVersion !== plan.version) {
       throw new Error(
         `${manifestSourceRef} reports version ${sourceVersion}, expected ${plan.version}.`,
@@ -457,15 +422,18 @@ export function promoteVercelContainerRegistryAliases(params, options = {}) {
   // write so an out-of-order retry cannot partially roll a channel backward.
   for (const { manifestDigest, targetRefs } of promotions) {
     const sourceDigestRef = `${targetImage}@${manifestDigest}`;
-    const sourceVersion = inspectImageVersion(sourceDigestRef, execFileSyncImpl);
+    const sourceVersion = inspectDockerImageVersion(sourceDigestRef, execFileSyncImpl, {
+      timeoutMs: IMAGETOOLS_TIMEOUT_MS,
+    });
     if (sourceVersion !== policy.version) {
       throw new Error(
         `${sourceDigestRef} reports version ${sourceVersion}, expected ${policy.version}.`,
       );
     }
     for (const targetRef of targetRefs) {
-      const currentVersion = inspectImageVersion(targetRef, execFileSyncImpl, {
+      const currentVersion = inspectDockerImageVersion(targetRef, execFileSyncImpl, {
         allowMissing: true,
+        timeoutMs: IMAGETOOLS_TIMEOUT_MS,
       });
       if (currentVersion === null) {
         continue;

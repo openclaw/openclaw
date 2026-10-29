@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
+import type { Page } from "playwright";
+import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -14,87 +15,93 @@ const suite = createControlUiE2eSuite({
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
-let uiProofArtifactDir: string;
-beforeEach(() => {
-  if (captureUiProofEnabled) {
-    uiProofArtifactDir = createControlUiE2eArtifactDir("native-session-discovery");
-  }
+const localHost = (sessions: unknown[]) => ({
+  hostId: "gateway:local",
+  label: "Gateway",
+  kind: "gateway",
+  connected: true,
+  sessions,
 });
-
+const capabilities = { continueSession: true, archive: true };
+const readOnlyCapabilities = { continueSession: true, archive: false };
+const session = (threadId: string, name: string, overrides: Record<string, unknown> = {}) => ({
+  threadId,
+  name,
+  status: "idle",
+  archived: false,
+  canContinue: true,
+  canArchive: true,
+  ...overrides,
+});
+const host = (hostId: string, label: string, overrides: Record<string, unknown> = {}) => ({
+  hostId,
+  label,
+  kind: "node",
+  connected: true,
+  sessions: [],
+  ...overrides,
+});
+const catalog = (hosts: unknown[], features = capabilities) => ({
+  id: "codex",
+  label: "Codex",
+  capabilities: features,
+  hosts,
+});
+const contextOptions = {
+  deviceScaleFactor: 2,
+  locale: "en-US",
+  serviceWorkers: "block",
+  viewport: { height: 1100, width: 1440 },
+} as const;
+function installCatalog(
+  page: Page,
+  catalogs: unknown[],
+  options: Parameters<typeof installMockGateway>[1] = {},
+) {
+  return installMockGateway(page, {
+    ...options,
+    featureMethods: [
+      "chat.metadata",
+      "chat.startup",
+      "sessions.catalog.list",
+      ...(options.featureMethods ?? []),
+    ],
+    methodResponses: { "sessions.catalog.list": { catalogs } },
+  });
+}
+async function withCatalogPage(run: (page: Page) => Promise<void>, hasTouch?: boolean) {
+  await suite.withPage({ ...contextOptions, hasTouch }, async ({ page }) => {
+    if (hasTouch === undefined) {
+      await page.addInitScript(
+        (key) => localStorage.removeItem(key),
+        collapsedSessionSectionsStorageKey,
+      );
+    }
+    await run(page);
+  });
+}
 suite.define(() => {
   it("hides empty native hosts and the empty Coding section", async () => {
-    const context = await suite.newBrowserContext({
-      deviceScaleFactor: 2,
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 1100, width: 1440 },
-    });
-    const page = await context.newPage();
-    await page.addInitScript(
-      (key) => localStorage.removeItem(key),
-      collapsedSessionSectionsStorageKey,
-    );
-    await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
-      methodResponses: {
-        "sessions.catalog.list": {
-          catalogs: [
-            {
-              id: "codex",
-              label: "Codex",
-              capabilities: { continueSession: true, archive: true },
-              hosts: [
-                {
-                  hostId: "gateway:local",
-                  label: "Gateway",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [
-                    {
-                      threadId: "thread-shared",
-                      name: "Shared gateway session",
-                      cwd: "/workspace/openclaw",
-                      status: "idle",
-                      archived: false,
-                      canContinue: true,
-                      canArchive: true,
-                    },
-                  ],
-                },
-                {
-                  hostId: "node:remote",
-                  label: "Remote Workstation",
-                  kind: "node",
-                  connected: true,
-                  nodeId: "remote",
-                  sessions: [
-                    {
-                      threadId: "thread-remote",
-                      name: "Remote-only session",
-                      cwd: "/workspace/remote",
-                      status: "idle",
-                      archived: false,
-                      canContinue: false,
-                      canArchive: false,
-                    },
-                  ],
-                },
-                {
-                  hostId: "node:empty",
-                  label: "Empty Workstation",
-                  kind: "node",
-                  connected: true,
-                  nodeId: "empty",
-                  sessions: [],
-                },
-              ],
-            },
-          ],
-        },
-      },
-    });
+    await withCatalogPage(async (page) => {
+      await installCatalog(page, [
+        catalog([
+          localHost([
+            session("thread-shared", "Shared gateway session", { cwd: "/workspace/openclaw" }),
+          ]),
+          host("node:remote", "Remote Workstation", {
+            nodeId: "remote",
+            sessions: [
+              session("thread-remote", "Remote-only session", {
+                cwd: "/workspace/remote",
+                canContinue: false,
+                canArchive: false,
+              }),
+            ],
+          }),
+          host("node:empty", "Empty Workstation", { nodeId: "empty" }),
+        ]),
+      ]);
 
-    try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.evaluate(() => {
         document.documentElement.setAttribute("data-theme", "openknot");
@@ -108,7 +115,10 @@ suite.define(() => {
       if (captureUiProofEnabled) {
         await sessionGroups.screenshot({
           animations: "disabled",
-          path: path.join(uiProofArtifactDir, "08-after-deduplicated-session-hosts.png"),
+          path: path.join(
+            createControlUiE2eArtifactDir("native-session-discovery"),
+            "08-after-deduplicated-session-hosts.png",
+          ),
         });
       }
 
@@ -116,84 +126,51 @@ suite.define(() => {
       expect(await section.getByText("Shared gateway session", { exact: true }).count()).toBe(1);
       expect(await section.locator('[data-session-catalog-host="node:remote"]').count()).toBe(1);
       expect(await section.locator('[data-session-catalog-host="node:empty"]').count()).toBe(0);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 
-  it("preserves native actions across adopted session menu entry points", async () => {
+  it.each([false, true])("preserves adopted session menus (touch: %s)", async (hasTouch) => {
     const adoptedKey = "agent:main:adopted-native-menu";
     const proofRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const proofDir = proofRoot
       ? createControlUiE2eArtifactDir("adopted-session-menu", proofRoot)
       : undefined;
-    const context = await suite.newBrowserContext({
-      deviceScaleFactor: 2,
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 1100, width: 1440 },
+    const adopted = session("adopted-thread", "Adopted native session", {
+      status: "stored",
+      sessionKey: adoptedKey,
+      canOpenTerminal: true,
+      canArchive: false,
     });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      sessionKey: "agent:main:main",
-      terminalEnabled: true,
-      sessions: [
-        { key: "agent:main:main", kind: "direct", label: "Main session", updatedAt: 2 },
-        { key: adoptedKey, kind: "direct", label: "Adopted native session", updatedAt: 1 },
-      ],
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list", "terminal.open"],
-      methodResponses: {
-        "sessions.catalog.list": {
-          catalogs: [
-            {
-              id: "codex",
-              label: "Codex",
-              capabilities: { continueSession: true, archive: false },
-              hosts: [
-                {
-                  hostId: "gateway:local",
-                  label: "Gateway",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [
-                    {
-                      threadId: "adopted-thread",
-                      name: "Adopted native session",
-                      status: "stored",
-                      archived: false,
-                      sessionKey: adoptedKey,
-                      canContinue: true,
-                      canOpenTerminal: true,
-                      canArchive: false,
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
-        },
-      },
-    });
+    await withCatalogPage(async (page) => {
+      await installCatalog(page, [catalog([localHost([adopted])], readOnlyCapabilities)], {
+        sessionKey: "agent:main:main",
+        terminalEnabled: true,
+        sessions: [
+          { key: "agent:main:main", kind: "direct", label: "Main session", updatedAt: 2 },
+          { key: adoptedKey, kind: "direct", label: "Adopted native session", updatedAt: 1 },
+        ],
+        featureMethods: ["terminal.open"],
+      });
 
-    try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const row = page.locator(`[data-session-key="${adoptedKey}"]`);
       await row.waitFor({ state: "visible" });
-      const menuButton = row.locator('[data-session-menu="true"]');
+      const menuTrigger = row.locator(".sidebar-recent-session__link");
       const catalogMenu = () => page.locator("openclaw-catalog-session-menu");
       const menuValues = async () =>
         catalogMenu()
-          .locator("wa-dropdown-item")
+          .getByRole("menuitem")
           .evaluateAll((items) =>
             items
-              .map((item) => item.getAttribute("value"))
+              .map((item) => item.getAttribute("data-value"))
               .filter((value): value is string => Boolean(value)),
           );
       const assertCatalogMenu = async (entryPoint: string) => {
         await expect.poll(() => catalogMenu().count()).toBe(1);
-        await expect.poll(menuValues).toEqual(["viewer", "terminal"]);
+        await catalogMenu().getByRole("menu").waitFor();
+        await expect.poll(menuValues).toEqual(["viewer", "import", "terminal"]);
         await expect
-          .poll(() => catalogMenu().locator('[value="terminal"]').getAttribute("disabled"))
+          .poll(() => catalogMenu().locator('[data-value="terminal"]').getAttribute("disabled"))
           .toBeNull();
         console.info(`[catalog-menu-proof] ${entryPoint} values=${(await menuValues()).join(",")}`);
         if (proofDir) {
@@ -201,33 +178,31 @@ suite.define(() => {
             path.join(proofDir, `${entryPoint}.png`),
             await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
               row,
-              catalogMenu(),
+              catalogMenu().getByRole("menu"),
             ]),
           );
         }
       };
 
-      await row.hover();
-      await menuButton.hover();
-      await menuButton.click();
-      await assertCatalogMenu("01-button");
-      await page.keyboard.press("Escape");
-      await expect.poll(() => catalogMenu().count()).toBe(0);
-
-      await row.click({ button: "right" });
-      await assertCatalogMenu("02-context");
+      const touchMenu = row.locator("[data-sidebar-session-menu]");
+      if (hasTouch) {
+        await touchMenu.tap();
+        await assertCatalogMenu("touch");
+      } else {
+        expect(await touchMenu.isVisible()).toBe(false);
+        await row.click({ button: "right" });
+        await assertCatalogMenu("context");
+      }
       await page.keyboard.press("Escape");
       await expect.poll(() => catalogMenu().count()).toBe(0);
 
       for (const key of ["ContextMenu", "Shift+F10"]) {
-        await menuButton.focus();
+        await menuTrigger.focus();
         await page.keyboard.press(key);
         await assertCatalogMenu(key);
         await page.keyboard.press("Escape");
         await expect.poll(() => catalogMenu().count()).toBe(0);
       }
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    }, hasTouch);
   });
 });

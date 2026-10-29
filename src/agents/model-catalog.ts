@@ -9,7 +9,6 @@ import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
@@ -17,42 +16,36 @@ import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runt
 import { createLazyPromise } from "../shared/lazy-promise.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
+import { resolveEligibleManifestCatalogPlugins } from "./model-catalog-manifest.js";
+import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import { assignProviderModelOrder, compareModelCatalogEntries } from "./model-catalog-order.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
+import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
 import { createConfiguredProviderCatalogModelIdNormalizer } from "./model-ref-shared.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
-import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
-import type { AuthStorageData, ModelRegistry } from "./sessions/index.js";
+import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
+import type { AuthStorageData } from "./sessions/index.js";
 
 const log = createSubsystemLogger("model-catalog");
 
-export type {
-  ModelCatalogEntry,
-  ModelCatalogSnapshot,
-  ModelInputType,
-} from "./model-catalog.types.js";
-export {
-  findModelCatalogEntry,
-  findModelInCatalog,
-  modelSupportsInput,
-} from "./model-catalog-lookup.js";
+export type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
+export { findModelCatalogEntry, findModelInCatalog } from "./model-catalog-lookup.js";
 
 export type BuildPreparedModelCatalogParams = {
   agentDir: string;
   authCredentials: Readonly<AuthStorageData>;
   config: OpenClawConfig;
-  modelRegistry: ModelRegistry;
+  models: ReadonlyArray<Parameters<typeof modelCatalogRowToEntry>[0]>;
   readOnly?: boolean;
   includeProviderPluginAugmentation?: boolean;
+  providerIds?: readonly string[];
   metadataSnapshot: PluginMetadataSnapshot;
   providerOutcomes?: ModelCatalogSnapshot["providerOutcomes"];
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 };
 
-let hasLoggedModelCatalogError = false;
 type ManifestModelCatalogCacheEntry = {
   snapshot: PluginMetadataSnapshot;
   rows: ModelCatalogEntry[];
@@ -63,154 +56,14 @@ const loadProviderApiKeyResolver = createLazyPromise(
   () => import("./models-config.providers.secrets.js"),
 );
 
-export function resetModelCatalogBuilderCacheForTest() {
+function resetModelCatalogBuilderCacheForTest() {
   manifestModelCatalogCache = new WeakMap();
-  hasLoggedModelCatalogError = false;
 }
 
-function mergeCatalogCompat(
-  base: ModelCatalogEntry["compat"] | undefined,
-  override: ModelCatalogEntry["compat"] | undefined,
-): ModelCatalogEntry["compat"] | undefined {
-  if (!base) {
-    return override;
-  }
-  if (!override) {
-    return base;
-  }
-  return { ...base, ...override };
-}
-
-function mergeCatalogParams(
-  base: ModelCatalogEntry["params"] | undefined,
-  override: ModelCatalogEntry["params"] | undefined,
-): ModelCatalogEntry["params"] | undefined {
-  if (!base) {
-    return override;
-  }
-  if (!override) {
-    return base;
-  }
-  return { ...base, ...override };
-}
-
-function normalizeCatalogRouteBaseUrl(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  try {
-    const url = new URL(value);
-    url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
-    return url.toString();
-  } catch {
-    return value.replace(/\/+$/u, "");
-  }
-}
-
-function catalogRouteChanges(base: ModelCatalogEntry, overlay: ModelCatalogEntry): boolean {
-  if (overlay.api === undefined && overlay.baseUrl === undefined) {
-    return false;
-  }
-  return (
-    (overlay.api !== undefined && base.api !== undefined && overlay.api !== base.api) ||
-    (overlay.baseUrl !== undefined &&
-      base.baseUrl !== undefined &&
-      normalizeCatalogRouteBaseUrl(overlay.baseUrl) !== normalizeCatalogRouteBaseUrl(base.baseUrl))
-  );
-}
-
-function clearRouteBoundCatalogMetadata(entry: ModelCatalogEntry): ModelCatalogEntry {
-  const {
-    contextWindow: _contextWindow,
-    contextWindows: _contextWindows,
-    contextWindowDefault: _contextWindowDefault,
-    contextTokens: _contextTokens,
-    reasoning: _reasoning,
-    configuredReasoning: _configuredReasoning,
-    thinkingLevelMap: _thinkingLevelMap,
-    input: _input,
-    params: _params,
-    compat: _compat,
-    mediaInput: _mediaInput,
-    ...routeNeutral
-  } = entry;
-  return routeNeutral;
-}
-
-function overlayCatalogMetadata(
-  base: ModelCatalogEntry,
-  overlay: ModelCatalogEntry,
-  options?: {
-    preserveBaseCompat?: boolean;
-  },
-): ModelCatalogEntry {
-  // Catalog rows with one logical provider/id may describe different physical
-  // routes. Capabilities are atomic with their route; never carry them across
-  // an API/endpoint change when the new source omits those facts.
-  const routeChanged = catalogRouteChanges(base, overlay);
-  const routeBase = routeChanged ? clearRouteBoundCatalogMetadata(base) : base;
-  const params = mergeCatalogParams(routeBase.params, overlay.params);
-  const thinkingLevelMap = overlay.thinkingLevelMap ?? routeBase.thinkingLevelMap;
-  // Options + default are one normalized unit (default ∈ options): an overlay
-  // that replaces the options list must also own the default, or a base default
-  // absent from the new list would leak through the field-by-field merge.
-  const {
-    contextWindows: _baseContextWindows,
-    contextWindowDefault: _baseContextWindowDefault,
-    ...selectionNeutralBase
-  } = routeBase;
-  const contextWindowSelection =
-    overlay.contextWindows !== undefined
-      ? {
-          contextWindows: overlay.contextWindows,
-          ...(overlay.contextWindowDefault !== undefined
-            ? { contextWindowDefault: overlay.contextWindowDefault }
-            : {}),
-        }
-      : {
-          ...(routeBase.contextWindows !== undefined
-            ? { contextWindows: routeBase.contextWindows }
-            : {}),
-          ...((overlay.contextWindowDefault ?? routeBase.contextWindowDefault)
-            ? {
-                contextWindowDefault:
-                  overlay.contextWindowDefault ?? routeBase.contextWindowDefault,
-              }
-            : {}),
-        };
-  return {
-    ...selectionNeutralBase,
-    ...contextWindowSelection,
-    ...(routeChanged ? { name: overlay.name } : {}),
-    ...(overlay.api !== undefined ? { api: overlay.api } : {}),
-    ...(overlay.baseUrl !== undefined ? { baseUrl: overlay.baseUrl } : {}),
-    ...(overlay.contextWindow !== undefined ? { contextWindow: overlay.contextWindow } : {}),
-    ...(overlay.contextTokens !== undefined ? { contextTokens: overlay.contextTokens } : {}),
-    ...(overlay.reasoning !== undefined ? { reasoning: overlay.reasoning } : {}),
-    ...(overlay.configuredReasoning !== undefined
-      ? { configuredReasoning: overlay.configuredReasoning }
-      : {}),
-    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
-    ...(overlay.input !== undefined ? { input: overlay.input } : {}),
-    ...(params ? { params } : {}),
-    ...(overlay.mediaInput !== undefined ? { mediaInput: overlay.mediaInput } : {}),
-    ...(overlay.providerOrder !== undefined ? { providerOrder: overlay.providerOrder } : {}),
-    ...(overlay.status !== undefined ? { status: overlay.status } : {}),
-    ...(overlay.statusReason !== undefined ? { statusReason: overlay.statusReason } : {}),
-    ...(overlay.replaces !== undefined ? { replaces: overlay.replaces } : {}),
-    ...(overlay.replacedBy !== undefined ? { replacedBy: overlay.replacedBy } : {}),
-    compat: options?.preserveBaseCompat
-      ? resolveCatalogOwnedModelCompat({
-          catalogRoute: base,
-          catalogCompat: base.compat,
-          configuredRoute: {
-            api: overlay.api ?? base.api,
-            baseUrl: overlay.baseUrl ?? base.baseUrl,
-          },
-          configuredCompat: overlay.compat,
-        })
-      : mergeCatalogCompat(routeBase.compat, overlay.compat),
-  };
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  Reflect.set(globalThis, Symbol.for("openclaw.modelCatalogTestApi"), {
+    resetModelCatalogBuilderCacheForTest,
+  });
 }
 
 function normalizeCatalogEntryContract(entry: ModelCatalogEntry): ModelCatalogEntry {
@@ -228,14 +81,18 @@ function mergeCatalogEntries(
   entries: ModelCatalogEntry[],
   options?: {
     catalogRoutes?: ModelCatalogRouteVariantCollector;
+    routeVariantIndex?: Map<string, number>;
     preserveBaseCompat?: boolean;
   },
 ): void {
-  const indexByKey = new Map(
-    models.map((entry, index) => [resolveModelCatalogIdentityKey(entry), index]),
-  );
+  const identityKeyOf = createModelCatalogIdentityKeyResolver();
+  const keyOf = options?.routeVariantIndex
+    ? (entry: ModelCatalogEntry) => catalogRouteVariantKey(entry, identityKeyOf(entry))
+    : identityKeyOf;
+  const indexByKey =
+    options?.routeVariantIndex ?? new Map(models.map((entry, index) => [keyOf(entry), index]));
   for (const entry of entries) {
-    const key = resolveModelCatalogIdentityKey(entry);
+    const key = keyOf(entry);
     const existingIndex = indexByKey.get(key);
     if (existingIndex === undefined) {
       models.push(entry);
@@ -248,7 +105,7 @@ function mergeCatalogEntries(
       // from the exact catalog variant selected by config, not that sibling.
       const routes = options?.catalogRoutes;
       const routeIndex = options?.preserveBaseCompat
-        ? routes?.indexByKey.get(catalogRouteVariantKey(entry))
+        ? routes?.indexByKey.get(catalogRouteVariantKey(entry, key))
         : undefined;
       const catalogRoute = routeIndex === undefined ? undefined : routes?.entries[routeIndex];
       models[existingIndex] = overlayCatalogMetadata(catalogRoute ?? existing, entry, options);
@@ -256,12 +113,10 @@ function mergeCatalogEntries(
   }
 }
 
-function catalogRouteVariantKey(entry: ModelCatalogEntry): string {
-  return [
-    resolveModelCatalogIdentityKey(entry),
-    entry.api ?? "",
-    normalizeCatalogRouteBaseUrl(entry.baseUrl) ?? "",
-  ].join("\u0000");
+function catalogRouteVariantKey(entry: ModelCatalogEntry, identityKey: string): string {
+  return [identityKey, entry.api ?? "", normalizeCatalogRouteBaseUrl(entry.baseUrl) ?? ""].join(
+    "\u0000",
+  );
 }
 
 type ModelCatalogRouteVariantCollector = {
@@ -269,90 +124,121 @@ type ModelCatalogRouteVariantCollector = {
   indexByKey: Map<string, number>;
 };
 
-function createModelCatalogRouteVariantCollector(): ModelCatalogRouteVariantCollector {
-  return { entries: [], indexByKey: new Map() };
-}
-
-function mergeCatalogRouteVariants(
-  collector: ModelCatalogRouteVariantCollector,
-  entries: readonly ModelCatalogEntry[],
-  options?: { preserveBaseCompat?: boolean },
-): void {
-  for (const entry of entries) {
-    const key = catalogRouteVariantKey(entry);
-    const existingIndex = collector.indexByKey.get(key);
-    if (existingIndex === undefined) {
-      collector.entries.push(entry);
-      collector.indexByKey.set(key, collector.entries.length - 1);
-      continue;
-    }
-    const existingEntry = collector.entries[existingIndex];
-    if (existingEntry === undefined) {
-      continue;
-    }
-    collector.entries[existingIndex] = overlayCatalogMetadata(existingEntry, entry, options);
-  }
-}
-
 function createModelCatalogSnapshot(
   entries: ModelCatalogEntry[],
   routeVariants: ModelCatalogRouteVariantCollector,
+  providerOutcomes?: ModelCatalogSnapshot["providerOutcomes"],
 ): ModelCatalogSnapshot {
   return {
-    entries: sortModelCatalogEntries(entries),
-    routeVariants: sortModelCatalogEntries(routeVariants.entries),
+    entries: sortModelCatalogEntries(applyReadyCatalogModelOrder(entries, providerOutcomes)),
+    routeVariants: sortModelCatalogEntries(
+      applyReadyCatalogModelOrder(routeVariants.entries, providerOutcomes),
+    ),
   };
 }
 
-function resolveEligibleManifestCatalogPlugins(
-  snapshot: PluginMetadataSnapshot,
-  config: OpenClawConfig,
-): PluginMetadataSnapshot["plugins"] {
-  return snapshot.plugins.filter(
-    (plugin) =>
-      plugin.modelCatalog &&
-      isManifestPluginAvailableForControlPlane({
-        snapshot,
-        plugin,
-        config,
-      }),
-  );
+function applyReadyCatalogModelOrder(
+  entries: ModelCatalogEntry[],
+  outcomes?: ModelCatalogSnapshot["providerOutcomes"],
+): ModelCatalogEntry[] {
+  const keyOf = createModelCatalogIdentityKeyResolver();
+  const orders = new Map<string, Map<string, number>>();
+  for (const outcome of outcomes ?? []) {
+    if (outcome.status !== "ready" || !outcome.modelOrder?.length) {
+      continue;
+    }
+    const provider = normalizeProviderId(outcome.provider);
+    const order = new Map<string, number>();
+    for (const id of outcome.modelOrder) {
+      const key = keyOf({ provider, id });
+      if (!order.has(key)) {
+        order.set(key, order.size);
+      }
+    }
+    orders.set(provider, order);
+  }
+  if (orders.size === 0) {
+    return entries;
+  }
+  return entries.map((entry) => {
+    const order = orders.get(normalizeProviderId(entry.provider));
+    if (!order) {
+      return entry;
+    }
+    const rank = order.get(keyOf(entry));
+    return {
+      ...entry,
+      providerOrder:
+        rank ?? (entry.providerOrder === undefined ? undefined : order.size + entry.providerOrder),
+    };
+  });
 }
 
 export function loadManifestModelCatalog(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
   fallbackToMetadataScan?: boolean;
   metadataSnapshot?: PluginMetadataSnapshot;
 }): ModelCatalogEntry[] {
+  if (params.config.models?.mode === "replace") {
+    return [];
+  }
   const resolvedSnapshot =
     params.metadataSnapshot ??
     (params.fallbackToMetadataScan === false
       ? getCurrentPluginMetadataSnapshot({
           config: params.config,
-          env: params.env,
           ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
           ...(params.workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : {}),
         })
       : resolvePluginMetadataSnapshot({
           config: params.config,
           ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-          env: params.env ?? process.env,
+          env: process.env,
           allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
         }));
-  if (!resolvedSnapshot) {
+  return resolvedSnapshot ? loadManifestModelCatalogRows(params.config, resolvedSnapshot) : [];
+}
+
+/** Overlays configured capabilities on a copy of the captured catalog. */
+export function overlayConfiguredModelCatalog(params: {
+  catalog: readonly ModelCatalogEntry[];
+  config: OpenClawConfig;
+  workspaceDir?: string;
+}): ModelCatalogEntry[] {
+  const models = params.config.models?.mode === "replace" ? [] : [...params.catalog];
+  mergeCatalogEntries(
+    models,
+    buildConfiguredModelCatalog({
+      cfg: params.config,
+      catalog: models,
+      workspaceDir: params.workspaceDir,
+    }),
+    { preserveBaseCompat: true },
+  );
+  return models;
+}
+
+function loadManifestModelCatalogRows(
+  config: OpenClawConfig,
+  snapshot: PluginMetadataSnapshot,
+  preparedPlan?: ReturnType<typeof planEffectiveModelCatalogRows>,
+): ModelCatalogEntry[] {
+  // Prepared builds also enter here directly; replace must precede cached-row publication.
+  if (config.models?.mode === "replace") {
     return [];
   }
-  const cached = manifestModelCatalogCache.get(params.config);
-  if (cached?.snapshot === resolvedSnapshot) {
+  const cached = manifestModelCatalogCache.get(config);
+  if (cached?.snapshot === snapshot) {
     return cached.rows;
   }
-  const plugins = resolveEligibleManifestCatalogPlugins(resolvedSnapshot, params.config);
-  const plan = planEffectiveModelCatalogRows({
-    registry: { plugins },
-    config: params.config,
-  });
+  const plugins = resolveEligibleManifestCatalogPlugins(snapshot, config);
+  const plan =
+    preparedPlan ??
+    planEffectiveModelCatalogRows({
+      registry: { plugins },
+      config,
+    });
   const providerOrderByKey = new Map<string, number>();
   for (const plugin of plugins) {
     for (const [provider, providerCatalog] of Object.entries(
@@ -374,7 +260,7 @@ export function loadManifestModelCatalog(params: {
     }
     return entry;
   });
-  manifestModelCatalogCache.set(params.config, { snapshot: resolvedSnapshot, rows });
+  manifestModelCatalogCache.set(config, { snapshot, rows });
   return rows;
 }
 
@@ -387,7 +273,7 @@ export async function buildPreparedModelCatalogSnapshot(
   params: BuildPreparedModelCatalogParams,
 ): Promise<ModelCatalogSnapshot> {
   const models: ModelCatalogEntry[] = [];
-  const routeVariants = createModelCatalogRouteVariantCollector();
+  const routeVariants: ModelCatalogRouteVariantCollector = { entries: [], indexByKey: new Map() };
   const cfg = params.config;
   const env = params.env ?? process.env;
   const timingEnabled = isDiagnosticFlagEnabled("ingress.timing", cfg);
@@ -399,218 +285,241 @@ export async function buildPreparedModelCatalogSnapshot(
     const suffix = extra ? ` ${extra}` : "";
     log.info(`model-catalog stage=${stage} elapsedMs=${Date.now() - startMs}${suffix}`);
   };
-  try {
-    const workspaceDir = params.workspaceDir;
-    const manifestMetadataSnapshot = params.metadataSnapshot;
-    const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer({
-      manifestPlugins: manifestMetadataSnapshot,
-    });
-    const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
-      manifestMetadataSnapshot,
-      cfg,
-      env,
-    );
-    const observedProviders = new Set(
-      params.providerOutcomes?.map((outcome) => normalizeProvider(outcome.provider)),
-    );
-    const { buildShouldSuppressBuiltInModelCore } = await loadModelSuppression();
-    logStage("catalog-deps-ready");
-    const entries = params.modelRegistry.getAll();
-    const declaredManifestModels = loadManifestModelCatalog({
-      config: cfg,
-      env,
-      metadataSnapshot: manifestMetadataSnapshot,
-    });
-    logStage("registry-read", `entries=${entries.length}`);
+  const workspaceDir = params.workspaceDir;
+  const manifestMetadataSnapshot = params.metadataSnapshot;
+  const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer({
+    manifestPlugins: manifestMetadataSnapshot,
+  });
+  const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
+    manifestMetadataSnapshot,
+    cfg,
+    env,
+  );
+  const observedProviders = new Set(
+    params.providerOutcomes?.map((outcome) => normalizeProvider(outcome.provider)),
+  );
+  const { buildShouldSuppressBuiltInModelCore } = await loadModelSuppression();
+  logStage("catalog-deps-ready");
+  const entries = params.models;
+  const manifestPlan = planEffectiveModelCatalogRows({
+    registry: {
+      plugins: resolveEligibleManifestCatalogPlugins(manifestMetadataSnapshot, cfg),
+    },
+    config: cfg,
+  });
+  const declaredManifestModels = loadManifestModelCatalogRows(
+    cfg,
+    manifestMetadataSnapshot,
+    manifestPlan,
+  );
+  logStage("registry-read", `entries=${entries.length}`);
 
-    const shouldSuppressBuiltInModel = buildShouldSuppressBuiltInModelCore({ config: cfg });
-    logStage("suppress-resolver-ready");
+  const shouldSuppressBuiltInModel = buildShouldSuppressBuiltInModelCore({ config: cfg });
+  logStage("suppress-resolver-ready");
 
-    for (const entry of entries) {
-      const rawId = entry.id.trim();
-      if (!rawId) {
-        continue;
-      }
-      const rawProvider = entry.provider.trim();
-      if (!rawProvider) {
-        continue;
-      }
-      const provider = normalizeProvider(rawProvider);
-      const id = normalizeModelId(provider, rawId);
-      const baseUrl = entry.baseUrl?.trim();
-      if (shouldSuppressBuiltInModel({ provider, id, baseUrl })) {
-        continue;
-      }
-      const model = modelCatalogRowToEntry({
-        ...entry,
-        id,
-        name: entry.name.trim() || id,
-        provider,
-        baseUrl,
-      });
-      models.push(model);
+  for (const entry of entries) {
+    // Registry IDs name executable models. Reinterpreting them as input
+    // aliases would move their capabilities onto another model.
+    const id = entry.id.trim();
+    if (!id) {
+      continue;
     }
-    // Gateway startup may publish registry rows without runtime augmentation.
-    // Rank them here so both static startup and later live enrichment preserve
-    // provider-owned order instead of falling back to model-id sorting.
-    const orderedRegistryModels = assignProviderModelOrder(models, declaredManifestModels, {
-      appendUnknown: false,
-    });
-    models.splice(0, models.length, ...orderedRegistryModels);
-    mergeCatalogRouteVariants(routeVariants, orderedRegistryModels);
-    const supplementalManifestPlan = planEffectiveModelCatalogRows({
-      registry: {
-        plugins: resolveEligibleManifestCatalogPlugins(manifestMetadataSnapshot, cfg),
-      },
-      config: cfg,
-      selection: "supplemental",
-    });
-    const supplementalManifestKeys = new Set(
-      supplementalManifestPlan.rows.map((entry) =>
-        buildModelCatalogMergeKey(entry.provider, entry.id),
-      ),
-    );
-    const runtimeDiscoveryProviders = new Set([
-      ...observedProviders,
-      ...supplementalManifestPlan.entries.flatMap((entry) =>
-        entry.discovery === "runtime" ? [normalizeProviderId(entry.provider)] : [],
-      ),
-    ]);
-    // Runtime declarations describe possible models, not account entitlement.
-    // Only live registry or refreshed rows may publish those provider models.
-    const discoveredKeys = new Set(models.map(resolveModelCatalogIdentityKey));
-    const manifestModels = declaredManifestModels.filter(
-      (entry) =>
-        supplementalManifestKeys.has(buildModelCatalogMergeKey(entry.provider, entry.id)) &&
-        (!observedProviders.has(entry.provider) ||
-          discoveredKeys.has(resolveModelCatalogIdentityKey(entry))),
-    );
-    mergeCatalogRouteVariants(routeVariants, manifestModels);
-    mergeCatalogEntries(models, manifestModels);
-    logStage("manifest-models-merged", `entries=${models.length}`);
-    const configuredModels = buildConfiguredModelCatalog({
-      cfg,
-      manifestPlugins: manifestMetadataSnapshot,
-    });
-    logStage("configured-models-prepared", `entries=${models.length}`);
-
-    if (!params.readOnly && params.includeProviderPluginAugmentation !== false) {
-      const augmentEntries = [...models];
-      if (configuredModels.length > 0) {
-        mergeCatalogEntries(augmentEntries, configuredModels, {
-          catalogRoutes: routeVariants,
-          preserveBaseCompat: true,
-        });
-      }
-      const { createProviderApiKeyResolverFromPreparedCredentials } =
-        await loadProviderApiKeyResolver();
-      const resolveProviderApiKeyForProvider = createProviderApiKeyResolverFromPreparedCredentials(
-        env,
-        params.authCredentials,
-        cfg,
-        workspaceDir,
-      );
-      const resolveProviderApiKey = (providerId?: string) =>
-        providerId?.trim()
-          ? resolveProviderApiKeyForProvider(providerId)
-          : { apiKey: undefined, discoveryApiKey: undefined };
-      const supplemental = await augmentModelCatalogWithProviderPlugins({
-        config: cfg,
-        workspaceDir,
-        env,
-        metadataSnapshot: manifestMetadataSnapshot,
-        context: {
-          config: cfg,
-          agentDir: params.agentDir,
-          workspaceDir,
-          env,
-          resolveProviderApiKey,
-          entries: augmentEntries,
-        },
-      });
-      if (supplemental.length > 0) {
-        // Explicitly configured rows are user-authorized even when live
-        // discovery omits them; normalize both sets to preserve their routes.
-        const accountVisibleModelKeys = new Set(
-          [...models, ...configuredModels].map((entry) =>
-            resolveModelCatalogIdentityKey({
-              provider: entry.provider,
-              id: normalizeModelId(entry.provider, entry.id),
-            }),
-          ),
-        );
-        const normalizedSupplemental: ModelCatalogEntry[] = [];
-        for (const entry of supplemental) {
-          const provider = normalizeProvider(entry.provider);
-          const owners = manifestMetadataSnapshot.owners;
-          const pluginIds =
-            owners.modelCatalogProviders.get(provider) ?? owners.providers.get(provider);
-          const pluginId = pluginIds?.length === 1 ? pluginIds[0] : undefined;
-          const plugin = pluginId ? manifestMetadataSnapshot.byPluginId.get(pluginId) : undefined;
-          if (!isProviderCatalogSourceAllowed({ provider, config: cfg, plugin })) {
-            continue;
-          }
-          const id = normalizeModelId(provider, entry.id);
-          // Account-discovered providers own the visible model set. Synthetic
-          // metadata can enrich an available or explicitly configured model,
-          // but must never advertise a model the account did not discover.
-          if (
-            runtimeDiscoveryProviders.has(normalizeProviderId(provider)) &&
-            !accountVisibleModelKeys.has(resolveModelCatalogIdentityKey({ provider, id }))
-          ) {
-            continue;
-          }
-          normalizedSupplemental.push({
-            ...entry,
-            provider,
-            id,
-          });
-        }
-        // Manifest ranks are provider-owned policy. Live discovery enriches
-        // those rows and appends unknown models without replacing the ranking.
-        const orderedSupplemental = assignProviderModelOrder(normalizedSupplemental, [
-          ...declaredManifestModels,
-          ...models,
-        ]);
-        mergeCatalogRouteVariants(routeVariants, orderedSupplemental);
-        mergeCatalogEntries(models, orderedSupplemental);
-      }
+    const rawProvider = entry.provider.trim();
+    if (!rawProvider) {
+      continue;
     }
-    logStage("plugin-models-merged", `entries=${models.length}`);
+    const provider = normalizeProvider(rawProvider);
+    const baseUrl = entry.baseUrl?.trim();
+    if (shouldSuppressBuiltInModel({ provider, id, baseUrl })) {
+      continue;
+    }
+    const model = modelCatalogRowToEntry({
+      ...entry,
+      id,
+      name: entry.name.trim() || id,
+      provider,
+      baseUrl,
+    });
+    models.push(model);
+  }
+  // Gateway startup may publish registry rows without runtime augmentation.
+  // Rank them here so both static startup and later live enrichment preserve
+  // provider-owned order instead of falling back to model-id sorting.
+  const orderedRegistryModels = assignProviderModelOrder(models, declaredManifestModels, {
+    appendUnknown: false,
+  });
+  models.splice(0, models.length, ...orderedRegistryModels);
+  mergeCatalogEntries(routeVariants.entries, orderedRegistryModels, {
+    routeVariantIndex: routeVariants.indexByKey,
+  });
+  const dynamicManifestKeys = new Set(
+    manifestPlan.entries.flatMap((entry) =>
+      entry.discovery === "runtime" || entry.discovery === "refreshable"
+        ? entry.rows.map((row) => buildModelCatalogMergeKey(row.provider, row.id))
+        : [],
+    ),
+  );
+  const runtimeDiscoveryProviders = new Set([
+    ...observedProviders,
+    ...manifestPlan.entries.flatMap((entry) =>
+      entry.discovery === "runtime" || entry.discovery === "refreshable"
+        ? [normalizeProviderId(entry.provider)]
+        : [],
+    ),
+  ]);
+  // Runtime declarations describe possible models, not account entitlement.
+  // Only live registry or refreshed rows may publish those provider models.
+  const manifestKeyOf = createModelCatalogIdentityKeyResolver();
+  const discoveredKeys = new Set(models.map(manifestKeyOf));
+  const discoveredByRoute = new Map(
+    orderedRegistryModels.map((entry) => [
+      catalogRouteVariantKey(entry, manifestKeyOf(entry)),
+      entry,
+    ]),
+  );
+  const manifestModels = declaredManifestModels.filter(
+    (entry) =>
+      (params.includeProviderPluginAugmentation === false ||
+        !dynamicManifestKeys.has(buildModelCatalogMergeKey(entry.provider, entry.id))) &&
+      (!observedProviders.has(entry.provider) || discoveredKeys.has(manifestKeyOf(entry))),
+  );
+  // Static declarations are defaults, not a veto over independently discovered
+  // capabilities. Only the exact physical route may replace their inference contract.
+  const enrichedManifestModels = manifestModels.map((entry) => {
+    const discovered = discoveredByRoute.get(catalogRouteVariantKey(entry, manifestKeyOf(entry)));
+    return discovered?.inference
+      ? Object.assign({}, entry, { inference: discovered.inference })
+      : entry;
+  });
+  mergeCatalogEntries(routeVariants.entries, enrichedManifestModels, {
+    routeVariantIndex: routeVariants.indexByKey,
+  });
+  mergeCatalogEntries(models, enrichedManifestModels);
+  logStage("manifest-models-merged", `entries=${models.length}`);
+  const configuredCatalogParams = {
+    cfg,
+    catalog: orderedRegistryModels,
+    manifestPlugins: manifestMetadataSnapshot,
+  };
+  const configuredModels = buildConfiguredModelCatalog(configuredCatalogParams);
+  logStage("configured-models-prepared", `entries=${models.length}`);
 
+  if (
+    cfg.models?.mode !== "replace" &&
+    !params.readOnly &&
+    params.includeProviderPluginAugmentation !== false
+  ) {
+    const augmentEntries = [...models];
     if (configuredModels.length > 0) {
-      // Augmentation may mutate borrowed rows. Reindex before configured overlays so
-      // route lookup keeps the first current donor, including duplicate keys.
-      routeVariants.indexByKey.clear();
-      routeVariants.entries.forEach((entry, index) => {
-        const key = catalogRouteVariantKey(entry);
-        if (!routeVariants.indexByKey.has(key)) {
-          routeVariants.indexByKey.set(key, index);
-        }
-      });
-      mergeCatalogEntries(models, configuredModels, {
+      mergeCatalogEntries(augmentEntries, configuredModels, {
         catalogRoutes: routeVariants,
         preserveBaseCompat: true,
       });
-      mergeCatalogRouteVariants(routeVariants, configuredModels, { preserveBaseCompat: true });
     }
-    logStage("configured-models-finalized", `entries=${models.length}`);
-
-    const snapshot = createModelCatalogSnapshot(models, routeVariants);
-    logStage("complete", `entries=${snapshot.entries.length}`);
-    return params.providerOutcomes
-      ? {
-          ...snapshot,
-          authoritative: params.providerOutcomes.every((outcome) => outcome.status === "ready"),
+    const { createProviderApiKeyResolverFromPreparedCredentials } =
+      await loadProviderApiKeyResolver();
+    const resolveProviderApiKeyForProvider = createProviderApiKeyResolverFromPreparedCredentials(
+      env,
+      params.authCredentials,
+      cfg,
+      workspaceDir,
+    );
+    const resolveProviderApiKey = (providerId?: string) =>
+      providerId?.trim()
+        ? resolveProviderApiKeyForProvider(providerId)
+        : { apiKey: undefined, discoveryApiKey: undefined };
+    const supplemental = await augmentModelCatalogWithProviderPlugins({
+      providerIds: params.providerIds,
+      config: cfg,
+      workspaceDir,
+      env,
+      metadataSnapshot: manifestMetadataSnapshot,
+      context: {
+        config: cfg,
+        agentDir: params.agentDir,
+        workspaceDir,
+        env,
+        resolveProviderApiKey,
+        entries: augmentEntries,
+      },
+    });
+    if (supplemental.length > 0) {
+      // Explicitly configured rows are user-authorized even when live
+      // discovery omits them; compare emitted identities to preserve their routes.
+      const keyOf = createModelCatalogIdentityKeyResolver();
+      const accountVisibleModelKeys = new Set([...models, ...configuredModels].map(keyOf));
+      const normalizedSupplemental: ModelCatalogEntry[] = [];
+      for (const entry of supplemental) {
+        const provider = normalizeProvider(entry.provider);
+        const owners = manifestMetadataSnapshot.owners;
+        const pluginIds =
+          owners.modelCatalogProviders.get(provider) ?? owners.providers.get(provider);
+        const pluginId = pluginIds?.length === 1 ? pluginIds[0] : undefined;
+        const plugin = pluginId ? manifestMetadataSnapshot.byPluginId.get(pluginId) : undefined;
+        if (!isProviderCatalogSourceAllowed({ provider, config: cfg, plugin })) {
+          continue;
         }
-      : snapshot;
-  } catch (error) {
-    if (!hasLoggedModelCatalogError) {
-      hasLoggedModelCatalogError = true;
-      log.warn(`Failed to load model catalog: ${String(error)}`);
+        const id = normalizeModelId(provider, entry.id);
+        // Account-discovered providers own the visible model set. Synthetic
+        // metadata can enrich an available or explicitly configured model,
+        // but must never advertise a model the account did not discover.
+        if (
+          runtimeDiscoveryProviders.has(normalizeProviderId(provider)) &&
+          !accountVisibleModelKeys.has(keyOf({ provider, id }))
+        ) {
+          continue;
+        }
+        normalizedSupplemental.push({
+          ...entry,
+          provider,
+          id,
+        });
+      }
+      // Manifest ranks are provider-owned policy. Live discovery enriches
+      // those rows and appends unknown models without replacing the ranking.
+      const orderedSupplemental = assignProviderModelOrder(normalizedSupplemental, [
+        ...declaredManifestModels,
+        ...models,
+      ]);
+      mergeCatalogEntries(routeVariants.entries, orderedSupplemental, {
+        routeVariantIndex: routeVariants.indexByKey,
+      });
+      mergeCatalogEntries(models, orderedSupplemental);
     }
-    throw error;
   }
+  logStage("plugin-models-merged", `entries=${models.length}`);
+
+  if (configuredModels.length > 0) {
+    const configuredOverrides = buildConfiguredModelCatalog(configuredCatalogParams);
+    // Augmentation may mutate borrowed rows. Reindex before configured overlays so
+    // route lookup keeps the first current donor, including duplicate keys.
+    routeVariants.indexByKey.clear();
+    const keyOf = createModelCatalogIdentityKeyResolver();
+    routeVariants.entries.forEach((entry, index) => {
+      const key = catalogRouteVariantKey(entry, keyOf(entry));
+      if (!routeVariants.indexByKey.has(key)) {
+        routeVariants.indexByKey.set(key, index);
+      }
+    });
+    mergeCatalogEntries(models, configuredOverrides, {
+      catalogRoutes: routeVariants,
+      preserveBaseCompat: true,
+    });
+    mergeCatalogEntries(routeVariants.entries, configuredOverrides, {
+      routeVariantIndex: routeVariants.indexByKey,
+      preserveBaseCompat: true,
+    });
+  }
+  logStage("configured-models-finalized", `entries=${models.length}`);
+
+  const snapshot = createModelCatalogSnapshot(models, routeVariants, params.providerOutcomes);
+  logStage("complete", `entries=${snapshot.entries.length}`);
+  return params.providerOutcomes
+    ? {
+        ...snapshot,
+        authoritative: params.providerOutcomes.every((outcome) => outcome.status === "ready"),
+      }
+    : snapshot;
 }
 
 /**
@@ -618,11 +527,4 @@ export async function buildPreparedModelCatalogSnapshot(
  */
 export function modelSupportsVision(entry: ModelCatalogEntry | undefined): boolean {
   return modelCatalogEntrySupportsInput(entry, "image");
-}
-
-/**
- * Check if a model supports native document/PDF input based on its catalog entry.
- */
-export function modelSupportsDocument(entry: ModelCatalogEntry | undefined): boolean {
-  return modelCatalogEntrySupportsInput(entry, "document");
 }

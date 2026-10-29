@@ -25,6 +25,8 @@ The pages below are the deep end: the trust model, what the audit checks, and ho
   users or hosts.
 </Note>
 
+Agents with message-tool access can send across conversations and channel providers by default. If your deployment needs messaging confined to the current provider or conversation, configure [cross-provider messaging restrictions](/gateway/security/tool-permissions#cross-provider-messaging).
+
 ## Security pages
 
 Understand the model:
@@ -32,6 +34,7 @@ Understand the model:
 - [Security trust model](/gateway/security/trust-model) - One trust boundary per gateway, the boundary matrix, and the findings closed as no-action.
 - [Running the security audit](/gateway/security/running-the-audit) - What `openclaw security audit` checks and the order to fix findings in.
 - [Security audit checks](/gateway/security/audit-checks) - Reference catalog of every `checkId`, its severity, and its auto-fix support.
+- [Threat model](/security/THREAT-MODEL-ATLAS) - Adversarial threats to the OpenClaw platform and ClawHub, mapped to MITRE ATLAS.
 
 Harden a deployment:
 

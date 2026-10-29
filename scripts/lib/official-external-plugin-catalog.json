@@ -16,6 +16,7 @@
           "label": "ACPX Runtime"
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/acpx",
           "npmSpec": "@openclaw/acpx",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.25"
@@ -52,10 +53,37 @@
           }
         ],
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/brave-plugin",
           "npmSpec": "@openclaw/brave-plugin",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.10",
           "allowInvalidConfigRecovery": true
+        }
+      }
+    },
+    {
+      "name": "@openclaw/cloudflare",
+      "description": "Cloudflare R2 storage for named OpenClaw storage locations.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "build": {
+          "bundledDist": true
+        },
+        "plugin": {
+          "id": "cloudflare",
+          "label": "Cloudflare"
+        },
+        "contracts": {
+          "storageProviders": [
+            "r2"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/cloudflare",
+          "npmSpec": "@openclaw/cloudflare",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.7"
         }
       }
     },
@@ -75,6 +103,7 @@
           ]
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/codex",
           "npmSpec": "@openclaw/codex",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.1-beta.1"
@@ -110,6 +139,42 @@
           "npmSpec": "@openclaw/copilot",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.28"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/muse",
+      "description": "OpenClaw Muse Code agent runtime plugin",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "muse",
+          "label": "Muse Code"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/muse",
+          "npmSpec": "@openclaw/muse",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.10.3"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/cua-computer",
+      "description": "Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "cua-computer",
+          "label": "CUA Computer"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/cua-computer",
+          "npmSpec": "@openclaw/cua-computer",
+          "defaultChoice": "clawhub",
+          "minHostVersion": ">=2026.9.6"
         }
       }
     },
@@ -272,6 +337,30 @@
       }
     },
     {
+      "name": "@openclaw/facetime",
+      "description": "Experimental OpenClaw FaceTime realtime voice carrier",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "facetime",
+          "label": "FaceTime"
+        },
+        "contracts": {
+          "tools": [
+            "facetime_call"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/facetime",
+          "npmSpec": "@openclaw/facetime",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.4",
+          "allowInvalidConfigRecovery": true
+        }
+      }
+    },
+    {
       "name": "@openclaw/firecrawl-plugin",
       "description": "OpenClaw Firecrawl plugin.",
       "source": "official",
@@ -367,6 +456,7 @@
           "label": "Google Meet"
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/google-meet",
           "npmSpec": "@openclaw/google-meet",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.20"
@@ -416,6 +506,24 @@
           "npmSpec": "@openclaw/inworld-speech",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/levanto",
+      "description": "OpenClaw Levanto Sage native decision provider",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "levanto",
+          "label": "Levanto Sage"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/levanto",
+          "npmSpec": "@openclaw/levanto",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.6"
         }
       }
     },
@@ -479,6 +587,7 @@
           ]
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/llama-cpp-provider",
           "npmSpec": "@openclaw/llama-cpp-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.6.2"
@@ -496,9 +605,28 @@
           "label": "MXC Sandbox Execution"
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/mxc-sandbox",
           "npmSpec": "@openclaw/mxc-sandbox",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.6.11"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/onnx",
+      "description": "Local ONNX decision models for OpenClaw",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "onnx",
+          "label": "ONNX"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/onnx",
+          "npmSpec": "@openclaw/onnx",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.6"
         }
       }
     },
@@ -513,6 +641,7 @@
           "label": "OpenShell Sandbox"
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/openshell-sandbox",
           "npmSpec": "@openclaw/openshell-sandbox",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.12-beta.1"
@@ -664,6 +793,50 @@
       }
     },
     {
+      "name": "@openclaw/slack-huddles",
+      "description": "OpenClaw Slack huddle browser meeting participant plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "slack-huddles",
+          "label": "Slack huddles"
+        },
+        "contracts": {
+          "tools": [
+            "slack_huddles"
+          ],
+          "transcriptSourceProviders": [
+            "slack-huddle"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/slack-huddles",
+          "npmSpec": "@openclaw/slack-huddles",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.8"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/subq",
+      "description": "OpenClaw SubQ Snap decision provider",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "subq",
+          "label": "SubQ"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/subq",
+          "npmSpec": "@openclaw/subq",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.10.3"
+        }
+      }
+    },
+    {
       "name": "@openclaw/tavily-plugin",
       "description": "OpenClaw Tavily plugin",
       "source": "official",
@@ -750,7 +923,7 @@
           "clawhubSpec": "clawhub:@openclaw/teams-meetings",
           "npmSpec": "@openclaw/teams-meetings",
           "defaultChoice": "npm",
-          "minHostVersion": ">=2026.7.2"
+          "minHostVersion": ">=2026.9.8"
         }
       }
     },
@@ -777,6 +950,24 @@
       }
     },
     {
+      "name": "@openclaw/typesafe",
+      "description": "OpenClaw TypeSafe typed decisions and optional evaluation tool",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "typesafe",
+          "label": "TypeSafe AI"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/typesafe",
+          "npmSpec": "@openclaw/typesafe",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.6"
+        }
+      }
+    },
+    {
       "name": "@openclaw/voice-call",
       "description": "OpenClaw voice-call plugin",
       "source": "official",
@@ -787,6 +978,7 @@
           "label": "Voice Call"
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/voice-call",
           "npmSpec": "@openclaw/voice-call",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.10"
@@ -815,7 +1007,7 @@
           "clawhubSpec": "clawhub:@openclaw/zoom-meetings",
           "npmSpec": "@openclaw/zoom-meetings",
           "defaultChoice": "npm",
-          "minHostVersion": ">=2026.7.2"
+          "minHostVersion": ">=2026.9.8"
         }
       }
     }

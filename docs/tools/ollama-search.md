@@ -46,7 +46,11 @@ configured host.
 1. Create an [Ollama API key](https://docs.ollama.com/api/authentication#api-keys)
    and set `OLLAMA_API_KEY` in the Gateway environment.
 2. Set `models.providers.ollama.baseUrl` to `https://ollama.com`; see
-   [Config](#config).
+   [Config](#config). This is the shared Ollama model-provider host, so it also
+   sends your Ollama **model** traffic to `https://ollama.com` instead of a
+   local daemon. To move web search alone, set
+   `plugins.entries.ollama.config.webSearch.baseUrl` to `https://ollama.com`
+   and leave `models.providers.ollama.baseUrl` pointing at your local host.
 3. Run `openclaw configure --section web` and select **Ollama Web Search**.
 
 Hosted search does not require a local Ollama daemon or `ollama signin`.
@@ -70,6 +74,11 @@ Hosted search does not require a local Ollama daemon or `ollama signin`.
   },
 }
 ```
+
+Ollama Web Search uses `tools.web.search.maxResults` for the default result
+count (5 when unset) and `tools.web.search.timeoutSeconds` for its request
+deadline (15 seconds when unset). A search's `count` argument overrides the
+configured result count.
 
 Optional host override, scoped to web search only:
 
@@ -103,7 +112,7 @@ Or reuse the host already configured for the Ollama model provider:
 }
 ```
 
-`models.providers.ollama.baseUrl` is the canonical key; the web-search
+`models.providers.ollama.baseUrl` is the current key; the web-search
 provider also accepts `baseURL` there for compatibility with OpenAI SDK-style
 config examples. If nothing is set, OpenClaw defaults to
 `http://127.0.0.1:11434`.

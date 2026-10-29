@@ -24,7 +24,6 @@ Use these hubs to discover more of the documentation, including deep dives and r
 - [Configuration](/gateway/configuration)
 - [Configuration examples](/gateway/configuration-examples)
 - [OpenClaw assistant](/start/openclaw)
-- [Showcase](/start/showcase)
 - [Lore](/start/lore)
 
 ## Installation + updates
@@ -68,7 +67,7 @@ Use these hubs to discover more of the documentation, including deep dives and r
 ## Providers + ingress
 
 - [Chat channels hub](/channels)
-- [Model providers hub](/providers/models)
+- [Model providers hub](/providers)
 - [Discord](/channels/discord)
 - [iMessage](/channels/imessage)
 - [Mattermost](/channels/mattermost)

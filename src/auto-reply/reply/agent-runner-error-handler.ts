@@ -3,22 +3,26 @@ import {
   classifyOAuthRefreshFailure,
   classifyOAuthRefreshFailureError,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
-import {
-  isCompactionFailureError,
-  isLikelyContextOverflowError,
-} from "../../agents/embedded-agent-helpers.js";
+import { isCompactionFailureError } from "../../agents/embedded-agent-helpers/context-overflow-observation.js";
 import { findCliTimeoutError, isFailoverError } from "../../agents/failover-error.js";
+import { isLikelyContextOverflowError } from "../../agents/failover/context-overflow.js";
+import { isCliPartialOutputRejected } from "../../agents/failover/error.js";
+import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
   renderControlUiAgentFailureCopy,
   renderFailoverCodeUserCopy,
 } from "../../agents/failover/user-copy.js";
 import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
+import { resolveReplyCompletion, resolveReplyExpectation } from "../../agents/reply-completion.js";
+import { isChannelRunAuthorizationError } from "../../channels/message-access/run-authorization-error.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import { GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
+import { hasReplyOperationExecutionStarted } from "../../sessions/session-controller.state.js";
+import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
@@ -29,18 +33,17 @@ import {
   isNonDirectConversationContext,
   isVerboseFailureDetailEnabled,
   markAgentRunFailureReplyPayload,
-  resolveExternalRunFailureTextForConversation,
+  resolveAgentRunFailureText,
   resolveReplyFailureSummary,
-  resolveReplyFailoverFacts,
 } from "./agent-runner-failure-reply.js";
-import type { AgentFallbackCycleState } from "./agent-runner-fallback-cycle.js";
+import type { AgentFallbackCycleState } from "./agent-runner-fallback-cycle.types.js";
 import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import {
-  buildRestartLifecycleReplyText,
   resolveReplyOperationAbortReason,
   resolveReplyOperationTerminationFields,
   resolveRestartLifecycleError,
 } from "./reply-operation-abort.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 
 const MAX_LIVE_SWITCH_RETRIES = 2;
 
@@ -57,6 +60,7 @@ export async function handleAgentExecutionError(params: {
   liveModelSwitchRetries: number;
   shouldSurfaceToControlUi: boolean;
   timing: AgentTurnTimingTracker;
+  resolveVisibleReplyDelivery: () => Promise<boolean>;
   modelPatch: { fail: (error: unknown) => Promise<void> };
 }): Promise<ErrorAction> {
   const turn = params.turn;
@@ -86,11 +90,25 @@ export async function handleAgentExecutionError(params: {
     return terminal;
   };
   const settleFailure = async (
-    payload: ReplyPayload,
+    payload: ReplyPayload & { text: string },
+    isGenericRunnerFailure = false,
   ): Promise<Extract<AgentTurnInternalResult, { kind: "final" }>> => {
     takePendingLifecycleTerminal().emit("error", err);
     turn.replyOperation?.fail("run_failed", err);
     await params.modelPatch.fail(err);
+    const replyExpectation = resolveReplyExpectation({
+      ...turn.followupRun.run,
+      scheduledAutomation: turn.followupRun.run.scheduledAutomation !== undefined,
+    });
+    payload.text = resolveAgentRunFailureText({
+      text: payload.text,
+      replyExpectation,
+      isGenericRunnerFailure,
+      visibleReplyDelivered:
+        replyExpectation === "optional" && isGenericRunnerFailure
+          ? await params.resolveVisibleReplyDelivery()
+          : false,
+    });
     return {
       kind: "final",
       payload: markAgentRunFailureReplyPayload(payload),
@@ -98,12 +116,27 @@ export async function handleAgentExecutionError(params: {
     };
   };
   const resolveReplyOperationAbortAction = (abortError: unknown): ErrorAction | undefined => {
-    const reason = resolveReplyOperationAbortReason(turn.replyOperation, abortError);
+    const reason = resolveReplyOperationAbortReason(
+      turn.replyOperation,
+      abortError,
+      turn.replyOperation?.abortSignal ?? turn.opts?.abortSignal,
+    );
     if (!reason) {
       return undefined;
     }
+    if (reason === "restart") {
+      turn.replyOperation?.abortForRestart();
+    }
+    if (isCliPartialOutputRejected(abortError)) {
+      turn.replyOperation?.fail("run_failed", abortError);
+    }
     // Preserve signal-owned timeout attribution; only normalized restart/supersession need metadata.
-    const terminalMetadata = reason === "user" ? undefined : { aborted: true, stopReason: reason };
+    const terminalMetadata = {
+      ...(reason === "user" ? {} : { aborted: true, stopReason: reason }),
+      ...(turn.replyOperation && !hasReplyOperationExecutionStarted(turn.replyOperation)
+        ? { executionStarted: false, providerStarted: false }
+        : {}),
+    };
     takePendingLifecycleTerminal().emit(
       reason === "restart" ? "end" : "error",
       abortError,
@@ -111,43 +144,71 @@ export async function handleAgentExecutionError(params: {
     );
     return { kind: "aborted", reason };
   };
+  const finalFailure = (text: string) => ({
+    kind: "final" as const,
+    payload: markAgentRunFailureReplyPayload({ text }),
+  });
   const replyOperationAbortAction = resolveReplyOperationAbortAction(err);
   if (replyOperationAbortAction) {
     return replyOperationAbortAction;
+  }
+  if (err instanceof WorkerNodeLostError) {
+    const runState = resolveReplyOperationRunState(turn.opts);
+    if (
+      err.canContinue &&
+      turn.replyOperation &&
+      runState?.continueStalledTurn?.(
+        `${err.message} Continue the interrupted request from the transcript.`,
+        turn.replyOperation,
+      )
+    ) {
+      runState.replyCompletion = resolveReplyCompletion(
+        resolveReplyExpectation({
+          ...turn.followupRun.run,
+          scheduledAutomation: turn.followupRun.run.scheduledAutomation !== undefined,
+        }),
+        "pending",
+      );
+      takePendingLifecycleTerminal().emit("end", undefined, {
+        yielded: true,
+        terminalReply: { disposition: "empty" },
+      });
+      return { kind: "final", payload: { text: "" } };
+    }
+    delete runState?.replyCompletion;
+    return settleFailure({ text: `${err.message} This turn will not be continued automatically.` });
+  }
+  if (isChannelRunAuthorizationError(err)) {
+    if (isChannelRunAuthorizationError(err, "unavailable")) {
+      return settleFailure({
+        text: "⚠️ OpenClaw could not verify current channel access. Please try your request again.",
+      });
+    }
+    takePendingLifecycleTerminal().emit("error", err);
+    turn.replyOperation?.fail("run_failed", err);
+    await params.modelPatch.fail(err);
+    defaultRuntime.log("Channel request dropped: source authorization is no longer current.");
+    return { kind: "final", payload: { text: SILENT_REPLY_TOKEN } };
   }
   if (err instanceof LiveSessionModelSwitchError) {
     if (params.liveModelSwitchRetries <= MAX_LIVE_SWITCH_RETRIES) {
       params.state.pendingLifecycleTerminal = undefined;
       return { kind: "retry", liveModelSwitchError: err };
     }
-    const visibleReplyDelivered = await turn.resolveVisibleReplyDelivery?.();
     defaultRuntime.error(
       `Live model switch failed after ${MAX_LIVE_SWITCH_RETRIES} retries ` +
         `(${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)}). The requested model may be unavailable.`,
     );
     takePendingLifecycleTerminal().emit("error", err);
     const switchErrorText = params.shouldSurfaceToControlUi
-      ? renderControlUiAgentFailureCopy(
-          "model switch could not be completed. The requested model may be temporarily unavailable.",
-        )
+      ? "⚠️ Couldn't switch models. Choose another model in the Control UI, then try again."
       : isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel)
         ? "⚠️ Agent failed before reply: model switch could not be completed. " +
           "The requested model may be temporarily unavailable. Please try again shortly."
         : "⚠️ Model switch could not be completed. The requested model may be temporarily unavailable. Please try again shortly.";
     turn.replyOperation?.fail("run_failed", err);
     await params.modelPatch.fail(err);
-    return {
-      kind: "final",
-      payload: markAgentRunFailureReplyPayload({
-        text: resolveExternalRunFailureTextForConversation({
-          text: switchErrorText,
-          visibleReplyDelivered,
-          sessionCtx: turn.sessionCtx,
-          isGenericRunnerFailure: !params.shouldSurfaceToControlUi,
-          cfg: turn.followupRun.run.config,
-        }),
-      }),
-    };
+    return finalFailure(switchErrorText);
   }
   const message = formatErrorMessage(err);
   params.timing.logIfSlow({
@@ -164,19 +225,13 @@ export async function handleAgentExecutionError(params: {
       { message, error: err },
       {
         includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
-        isHeartbeat: turn.isHeartbeat,
       },
     );
-    const text = resolveExternalRunFailureTextForConversation({
-      text: params.shouldSurfaceToControlUi
-        ? renderControlUiAgentFailureCopy(message)
-        : externalReply.text,
-      visibleReplyDelivered: await turn.resolveVisibleReplyDelivery?.(),
-      sessionCtx: turn.sessionCtx,
-      isGenericRunnerFailure: externalReply.isGenericRunnerFailure,
-      cfg: turn.followupRun.run.config,
-    });
-    return await settleFailure({ text });
+    const text =
+      params.shouldSurfaceToControlUi && err.userMessage === undefined
+        ? renderControlUiAgentFailureCopy()
+        : externalReply.text;
+    return await settleFailure({ text }, externalReply.isGenericRunnerFailure);
   }
   const failoverFacts = resolveReplyFailoverFacts(err, message);
   const failureSummary = resolveReplyFailureSummary({
@@ -201,21 +256,13 @@ export async function handleAgentExecutionError(params: {
       ? failoverFacts.providerRequestError
       : undefined;
   const restartLifecycleError = resolveRestartLifecycleError(err);
-  if (
-    restartLifecycleError instanceof GatewayDrainingError ||
-    restartLifecycleError instanceof CommandLaneClearedError
-  ) {
-    takePendingLifecycleTerminal().emit("error", restartLifecycleError);
-    turn.replyOperation?.fail(
-      restartLifecycleError instanceof GatewayDrainingError
-        ? "gateway_draining"
-        : "command_lane_cleared",
-      restartLifecycleError,
-    );
-    return {
-      kind: "final",
-      payload: markAgentRunFailureReplyPayload({ text: buildRestartLifecycleReplyText() }),
-    };
+  if (restartLifecycleError instanceof GatewayDrainingError) {
+    turn.replyOperation?.abortForRestart();
+    takePendingLifecycleTerminal().emit("end", undefined, {
+      aborted: true,
+      stopReason: "restart",
+    });
+    return { kind: "aborted", reason: "restart" };
   }
   if (isCompactionFailure) {
     takePendingLifecycleTerminal().emit("error", err);
@@ -223,29 +270,19 @@ export async function handleAgentExecutionError(params: {
       `Auto-compaction failed (${message}). Preserving existing session mapping for ${turn.sessionKey ?? turn.followupRun.run.sessionId}.`,
     );
     turn.replyOperation?.fail("run_failed", err);
-    return {
-      kind: "final",
-      payload: markAgentRunFailureReplyPayload({
-        text: buildContextOverflowRecoveryText({
-          duringCompaction: true,
-          preserveSessionMapping: true,
-          cfg: params.runtimeConfig,
-          agentId: turn.followupRun.run.agentId,
-          primaryProvider: turn.followupRun.run.provider,
-          primaryModel: turn.followupRun.run.model,
-          runtimeProvider: params.state.attemptedRuntimeProvider,
-          runtimeModel: params.state.attemptedRuntimeModel,
-          activeSessionEntry: turn.getActiveSessionEntry(),
-        }),
-      }),
-    };
+    return finalFailure(buildContextOverflowRecoveryText());
   }
   const replayPrevented = findCliTimeoutError(err)?.cliTimeout.observedActivity === true;
   if (providerRequestError) {
     return await settleFailure({
-      // Curated facet copy beats the generic classified summary; see
-      // buildExternalRunFailureReply for the same priority.
-      text: providerRequestError.userMessage,
+      // Recorded retry exhaustion is more specific than generic quota guidance.
+      // Other facets keep their recovery advice, as in buildExternalRunFailureReply.
+      text:
+        failureSummary?.kind === "rate_limit" &&
+        isFailoverError(err) &&
+        err.rateLimitRetriesExhausted !== undefined
+          ? failureSummary.text
+          : providerRequestError.userMessage,
     });
   }
   defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
@@ -256,7 +293,6 @@ export async function handleAgentExecutionError(params: {
           {
             includeAuthProfileId: !isNonDirectConversationContext(turn.sessionCtx),
             includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
-            isHeartbeat: turn.isHeartbeat,
             replayPrevented,
             failoverFacts,
           },
@@ -264,6 +300,7 @@ export async function handleAgentExecutionError(params: {
       : undefined;
   const externalRunFailureReply =
     !params.shouldSurfaceToControlUi ||
+    externalRunFailureCandidate?.isGenericRunnerFailure === false ||
     externalRunFailureCandidate?.presentation ||
     renderFailoverCodeUserCopy(failoverFacts.code)
       ? externalRunFailureCandidate
@@ -274,21 +311,17 @@ export async function handleAgentExecutionError(params: {
       ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
       : (externalRunFailureReply?.text ??
         (params.shouldSurfaceToControlUi
-          ? renderControlUiAgentFailureCopy(message)
-          : turn.isHeartbeat
-            ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
-            : GENERIC_EXTERNAL_RUN_FAILURE_TEXT)));
-  const userVisibleFallbackText = resolveExternalRunFailureTextForConversation({
-    text: fallbackText,
-    visibleReplyDelivered: await turn.resolveVisibleReplyDelivery?.(),
-    sessionCtx: turn.sessionCtx,
-    isGenericRunnerFailure: externalRunFailureReply?.isGenericRunnerFailure ?? false,
-    cfg: turn.followupRun.run.config,
-  });
-  return await settleFailure({
-    text: userVisibleFallbackText,
-    ...(externalRunFailureReply?.presentation
-      ? { presentation: externalRunFailureReply.presentation }
-      : {}),
-  });
+          ? renderControlUiAgentFailureCopy()
+          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT)));
+  return await settleFailure(
+    {
+      text: fallbackText,
+      ...(externalRunFailureReply?.presentation
+        ? { presentation: externalRunFailureReply.presentation }
+        : {}),
+    },
+    !failureSummary &&
+      !isContextOverflow &&
+      (externalRunFailureCandidate?.isGenericRunnerFailure ?? true),
+  );
 }

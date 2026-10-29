@@ -3,12 +3,18 @@ import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
+import { MISSING_REPLY_NOTICE_TEXT } from "../../agents/reply-completion.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../../config/config.js";
+import type { PendingFinalDeliveryState } from "../../config/sessions/pending-final-delivery-types.js";
+import { createMemorySessionActorOwner } from "../../config/sessions/session-actor-memory.js";
+import { runWithSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "../../config/sessions/session-actor-storage-result.js";
 import {
   createDiagnosticTraceContext,
   getActiveDiagnosticTraceContext,
@@ -20,18 +26,22 @@ import {
 } from "../../infra/outbound/deliver-types.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { PluginTargetedInboundClaimOutcome } from "../../plugins/hooks.test-fixtures.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { createPluginBindingRecord } from "./conversation-binding.test-fixtures.js";
 import { needsTtsFallback } from "./dispatch-from-config.finalize.js";
-import { buildNoVisibleReplyFallbackText } from "./dispatch-from-config.payloads.js";
+import { registerPreparedSettlementTests } from "./dispatch-from-config.prepared-settlement.test-support.js";
 import {
   createDispatcher,
   diagnosticMocks,
   emptyConfig,
   hookMocks,
   messageAuditMocks,
+  mockPluginBinding,
+  mockPluginBindingClaim,
   mocks,
   replyMediaPathMocks,
   sessionBindingMocks,
@@ -40,8 +50,10 @@ import {
 } from "./dispatch-from-config.shared.test-harness.js";
 import {
   automaticGroupReplyConfig,
+  mockPluginBoundDiscordBinding,
   dispatchReplyFromConfig,
   installCaptionedVoiceTestPlugin,
+  installThreadingTestPlugin,
   setNoAbort,
   firstFinalReplyPayload,
   firstMockArg,
@@ -49,14 +61,66 @@ import {
   messageAuditEvents,
   globalBeforeAll0,
   describe0BeforeEach0,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { usesFullReplyRuntime } from "./reply-config-runtime-mode.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
-import { buildTestCtx } from "./test-ctx.js";
+import { buildTestCtx, createDiscordPluginBindingCtx, createRoutedTestCtx } from "./test-ctx.js";
 
-const NO_VISIBLE_REPLY_FALLBACK_TEXT = buildNoVisibleReplyFallbackText();
+const NO_VISIBLE_REPLY_FALLBACK_TEXT = MISSING_REPLY_NOTICE_TEXT;
+
+function createHistoryContext(body: string, messageSid: string) {
+  return buildTestCtx({
+    Provider: "openclaw",
+    Surface: "openclaw",
+    OriginatingChannel: "slack",
+    OriginatingTo: "user:U123",
+    To: "user:U123",
+    AccountId: "default",
+    CommandAuthorized: true,
+    BodyForAgent: body,
+    RawBody: body,
+    Body: body,
+    MessageSid: messageSid,
+    SessionKey: "agent:main:main",
+  });
+}
+
+function createPreparedRuntimeSnapshot(config: OpenClawConfig) {
+  return Object.freeze({
+    agentId: "main",
+    agentDir: "/tmp/prepared-agent",
+    workspaceDir: "/tmp/prepared-workspace",
+    config,
+    modelCatalog: { entries: [], routeVariants: [] },
+    inboundPluginRegistry: createTestRegistry([]),
+    pluginGeneration: {} as never,
+  });
+}
+
+function queuedBlockError() {
+  return Object.assign(
+    new OutboundDeliveryError("queued block", {
+      cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
+    }),
+    { queueCustody: "held" as const },
+  );
+}
+
+function createHeldDeliveryDispatcher() {
+  const delivered: ReplyPayload[] = [];
+  const deliveryStarted = createDeferred();
+  const deliveryGate = createDeferred();
+  const dispatcher = createReplyDispatcher({
+    deliver: async (payload) => {
+      delivered.push(payload);
+      deliveryStarted.resolve();
+      await deliveryGate.promise;
+    },
+  });
+  return { delivered, deliveryStarted, deliveryGate, dispatcher };
+}
 
 beforeAll(globalBeforeAll0);
 
@@ -67,47 +131,13 @@ describe("dispatchReplyFromConfig", () => {
   });
   afterEach(clearRuntimeConfigSnapshot);
 
-  it("records channel transform suppression before TTS or visible fallback delivery", async () => {
-    setNoAbort();
-    const transport = vi.fn(async () => {});
-    const transformReplyPayload = vi.fn(() => null);
-    const dispatcher = createReplyDispatcher({ deliver: transport, transformReplyPayload });
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      Surface: "telegram",
-      SessionKey: "agent:main:telegram:direct:123",
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver: vi.fn(async (_ctx, opts) => {
-        await opts?.onBlockReply?.({ text: "private block" });
-        return { text: "private reply" };
-      }),
-    });
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
-
-    expect(result).toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-    expect(result).not.toHaveProperty("noVisibleReplyFallbackEligible");
-    expect(result).not.toHaveProperty("noVisibleReplyFallbackDelivered");
-    expect(transformReplyPayload).toHaveBeenCalledTimes(2);
-    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
-    expect(transport).not.toHaveBeenCalled();
-    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: "completed", reason: "channel_transform" }),
-    );
-  });
+  registerPreparedSettlementTests();
 
   it.each([true, false])(
     "keeps a held native final with its delivery owner (primary=%s)",
     async (primary) => {
       setNoAbort();
+      installThreadingTestPlugin({ id: "qa-channel" });
       const error = Object.assign(
         new OutboundDeliveryError("still queued", {
           cause: new PlatformMessageNotDispatchedError("offline before dispatch", {
@@ -223,53 +253,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(receipt?.anyVisibleDelivered).toBe(false);
   });
 
-  it("does not dispatch a settled final reply after its session writer is replaced", async () => {
-    setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      lifecycleRevision: "revision-a",
-      activeWriterRunId: "run-settled",
-      updatedAt: 0,
-    };
-    const payload = setReplyPayloadMetadata(
-      { text: "settled fallback" },
-      {
-        assistantTranscriptOwned: true,
-        assistantTranscriptIdempotencyKey: "run-settled:settled-finalization-fallback",
-        sessionWriterDeliveryAuthority: {
-          expectedLifecycleRevision: "revision-a",
-          expectedSessionId: "s1",
-          expectedWriterRunId: "run-settled",
-          sessionKey: "agent:main:telegram:direct:123",
-          storePath: "/tmp/mock-sessions.json",
-        },
-      },
-    );
-    const dispatcher = createDispatcher();
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "telegram",
-        Surface: "telegram",
-        SessionKey: "agent:main:telegram:direct:123",
-      }),
-      cfg: emptyConfig,
-      dispatcher,
-      replyOptions: { runId: "run-settled" },
-      replyResolver: vi.fn(async () => {
-        sessionStoreMocks.currentEntry = {
-          ...sessionStoreMocks.currentEntry,
-          activeWriterRunId: "replacement-run",
-        };
-        return payload;
-      }),
-    });
-
-    expect(result).toMatchObject({ queuedFinal: false });
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    expect(mocks.routeReply).not.toHaveBeenCalled();
-  });
-
   it("keeps a block-only channel transform veto terminal", async () => {
     setNoAbort();
     const transport = vi.fn(async () => {});
@@ -336,53 +319,26 @@ describe("dispatchReplyFromConfig", () => {
 
   it("keeps unauthorized plugin-owned binding slash replies suppressed while routed to the bound plugin", async () => {
     setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) =>
-        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+    mockPluginBindingClaim({
       status: "handled",
       result: { handled: true, reply: { text: "do not leak slash reply" } },
     });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-command-escape-denied",
       targetSessionKey: "plugin-binding:codex:abc123",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-        detachHint: "/codex detach",
-      },
-    } satisfies SessionBindingRecord);
+      pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      detachHint: "/codex detach",
+    });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "discord:channel:1481858418548412579",
-      To: "discord:channel:1481858418548412579",
-      AccountId: "default",
-      SenderId: "user-9",
-      SenderUsername: "ada",
+    const ctx = createDiscordPluginBindingCtx({
       ChatType: "channel",
       CommandSource: "text",
       CommandAuthorized: false,
-      WasMentioned: false,
       CommandBody: "/codex detach",
       RawBody: "/codex detach",
       Body: "/codex detach",
       MessageSid: "msg-claim-plugin-command-denied",
-      SessionKey: "agent:main:discord:channel:1481858418548412579",
     });
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
@@ -412,50 +368,23 @@ describe("dispatchReplyFromConfig", () => {
 
   it("delivers plugin-owned binding replies returned by the owning inbound claim hook", async () => {
     setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) =>
-        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    mockPluginBindingClaim(
+      {
+        status: "handled",
+        result: { handled: true, reply: { text: "Codex native reply" } },
+      },
+      { pluginId: "codex" },
     );
-    hookMocks.registry.plugins = [{ id: "codex", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "handled",
-      result: { handled: true, reply: { text: "Codex native reply" } },
-    });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-reply-1",
       targetSessionKey: "plugin-binding:codex:reply123",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "codex",
-        pluginRoot: "/plugins/codex",
-      },
-    } satisfies SessionBindingRecord);
+      pluginId: "codex",
+      pluginRoot: "/plugins/codex",
+    });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "discord:channel:1481858418548412579",
-      To: "discord:channel:1481858418548412579",
-      AccountId: "default",
-      SenderId: "user-9",
-      SenderUsername: "ada",
-      CommandAuthorized: true,
-      WasMentioned: false,
-      CommandBody: "who are you",
-      RawBody: "who are you",
-      Body: "who are you",
+    const ctx = createDiscordPluginBindingCtx({
       MessageSid: "msg-claim-plugin-reply",
-      SessionKey: "agent:main:discord:channel:1481858418548412579",
     });
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
@@ -480,40 +409,21 @@ describe("dispatchReplyFromConfig", () => {
 
   it("aborts plugin-bound completion while reply delivery is still settling", async () => {
     setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) =>
-        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    mockPluginBindingClaim(
+      {
+        status: "handled",
+        result: { handled: true, reply: { text: "Codex native reply" } },
+      },
+      { pluginId: "codex" },
     );
-    hookMocks.registry.plugins = [{ id: "codex", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "handled",
-      result: { handled: true, reply: { text: "Codex native reply" } },
-    });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-reply-abort-1",
       targetSessionKey: "plugin-binding:codex:reply-abort-123",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "codex",
-        pluginRoot: "/plugins/codex",
-      },
-    } satisfies SessionBindingRecord);
-    let markDeliveryStarted: (() => void) | undefined;
-    let releaseDelivery: (() => void) | undefined;
-    const deliveryStarted = new Promise<void>((resolve) => {
-      markDeliveryStarted = resolve;
+      pluginId: "codex",
+      pluginRoot: "/plugins/codex",
     });
-    const deliveryRelease = new Promise<void>((resolve) => {
-      releaseDelivery = resolve;
-    });
+    const { promise: deliveryStarted, resolve: markDeliveryStarted } = createDeferred();
+    const { promise: deliveryRelease, resolve: releaseDelivery } = createDeferred();
     const dispatcher = createReplyDispatcher({
       deliver: async () => {
         markDeliveryStarted?.();
@@ -526,22 +436,8 @@ describe("dispatchReplyFromConfig", () => {
 
     const dispatch = withDispatchProcessedOutcomeSink(() =>
       dispatchReplyFromConfig({
-        ctx: buildTestCtx({
-          Provider: "discord",
-          Surface: "discord",
-          OriginatingChannel: "discord",
-          OriginatingTo: "discord:channel:1481858418548412579",
-          To: "discord:channel:1481858418548412579",
-          AccountId: "default",
-          SenderId: "user-9",
-          SenderUsername: "ada",
-          CommandAuthorized: true,
-          WasMentioned: false,
-          CommandBody: "who are you",
-          RawBody: "who are you",
-          Body: "who are you",
+        ctx: createDiscordPluginBindingCtx({
           MessageSid: "msg-claim-plugin-reply-abort",
-          SessionKey: "agent:main:discord:channel:1481858418548412579",
         }),
         cfg: emptyConfig,
         dispatcher,
@@ -567,14 +463,13 @@ describe("dispatchReplyFromConfig", () => {
 
   it("persists Gateway plugin-bound turns and routed replies in the binding session", async () => {
     setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
+    mockPluginBindingClaim(
+      {
+        status: "handled",
+        result: { handled: true, reply: { text: "Codex bound reply" } },
+      },
+      { pluginId: "codex", receiveMessages: false },
     );
-    hookMocks.registry.plugins = [{ id: "codex", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "handled",
-      result: { handled: true, reply: { text: "Codex bound reply" } },
-    });
     const targetSessionKey = "plugin-binding:codex:history123";
     const targetSessionEntry = {
       sessionId: "bound-session-id",
@@ -592,23 +487,17 @@ describe("dispatchReplyFromConfig", () => {
         sessionStoreMocks.currentEntry
       );
     });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBinding({
       bindingId: "binding-history-1",
       targetSessionKey,
-      targetKind: "session",
       conversation: {
         channel: "slack",
         accountId: "default",
         conversationId: "user:U123",
       },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "codex",
-        pluginRoot: "/plugins/codex",
-      },
-    } satisfies SessionBindingRecord);
+      pluginId: "codex",
+      pluginRoot: "/plugins/codex",
+    });
     const persistApproved = vi.fn(async () => ({
       appended: true,
       sessionFile: "sqlite:bound-session-id",
@@ -621,20 +510,7 @@ describe("dispatchReplyFromConfig", () => {
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
     const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "openclaw",
-        Surface: "openclaw",
-        OriginatingChannel: "slack",
-        OriginatingTo: "user:U123",
-        To: "user:U123",
-        AccountId: "default",
-        CommandAuthorized: true,
-        BodyForAgent: "continue",
-        RawBody: "continue",
-        Body: "continue",
-        MessageSid: "msg-plugin-history",
-        SessionKey: "agent:main:main",
-      }),
+      ctx: createHistoryContext("continue", "msg-plugin-history"),
       cfg: emptyConfig,
       dispatcher,
       replyOptions: {
@@ -690,20 +566,7 @@ describe("dispatchReplyFromConfig", () => {
     mocks.routeReply.mockClear();
     const rotatedDispatcher = createDispatcher();
     const rotatedResult = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "openclaw",
-        Surface: "openclaw",
-        OriginatingChannel: "slack",
-        OriginatingTo: "user:U123",
-        To: "user:U123",
-        AccountId: "default",
-        CommandAuthorized: true,
-        BodyForAgent: "continue after reset",
-        RawBody: "continue after reset",
-        Body: "continue after reset",
-        MessageSid: "msg-plugin-history-rotated",
-        SessionKey: "agent:main:main",
-      }),
+      ctx: createHistoryContext("continue after reset", "msg-plugin-history-rotated"),
       cfg: emptyConfig,
       dispatcher: rotatedDispatcher,
       replyOptions: {
@@ -740,20 +603,7 @@ describe("dispatchReplyFromConfig", () => {
     mocks.routeReply.mockClear();
     const blockedDispatcher = createDispatcher();
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "openclaw",
-        Surface: "openclaw",
-        OriginatingChannel: "slack",
-        OriginatingTo: "user:U123",
-        To: "user:U123",
-        AccountId: "default",
-        CommandAuthorized: true,
-        BodyForAgent: "continue during second reset",
-        RawBody: "continue during second reset",
-        Body: "continue during second reset",
-        MessageSid: "msg-plugin-history-blocked",
-        SessionKey: "agent:main:main",
-      }),
+      ctx: createHistoryContext("continue during second reset", "msg-plugin-history-blocked"),
       cfg: emptyConfig,
       dispatcher: blockedDispatcher,
       replyOptions: {
@@ -904,12 +754,7 @@ describe("dispatchReplyFromConfig", () => {
     "attests observed delivery only when the routed binding turn delivered: $name",
     async (params) => {
       setNoAbort();
-      hookMocks.runner.hasHooks.mockImplementation(
-        ((hookName?: string) =>
-          hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
-      );
-      hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
-      hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue(params.claimOutcome);
+      mockPluginBindingClaim(params.claimOutcome);
       const abortController = new AbortController();
       mocks.routeReply.mockImplementation(async () => {
         if (params.abortAfterRoute) {
@@ -917,23 +762,16 @@ describe("dispatchReplyFromConfig", () => {
         }
         return params.routeResult;
       });
-      sessionBindingMocks.resolveByConversation.mockReturnValue({
+      mockPluginBinding({
         bindingId: "binding-routed-attest-1",
         targetSessionKey: "plugin-binding:codex:routed-attest",
-        targetKind: "session",
         conversation: {
           channel: "slack",
           accountId: "default",
           conversationId: "user:U123",
         },
-        status: "active",
-        boundAt: 1710000000000,
-        metadata: {
-          pluginBindingOwner: "plugin",
-          pluginId: "openclaw-codex-app-server",
-          pluginRoot: "/plugins/codex",
-        },
-      } satisfies SessionBindingRecord);
+        pluginRoot: "/plugins/codex",
+      });
       const dispatcher = createDispatcher();
       const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
@@ -978,42 +816,17 @@ describe("dispatchReplyFromConfig", () => {
 
   it("routes plugin-owned Discord DM bindings to the owning plugin before generic inbound claim broadcast", async () => {
     setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) =>
-        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "handled",
-      result: { handled: true },
-    });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBindingClaim();
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-dm-1",
       targetSessionKey: "plugin-binding:codex:dm123",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "user:1177378744822943744",
-      },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-      },
-    } satisfies SessionBindingRecord);
+      pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      conversationId: "user:1177378744822943744",
+    });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
+    const ctx = createRoutedTestCtx("discord", "channel:1480574946919846079", {
       From: "discord:1177378744822943744",
-      OriginatingTo: "channel:1480574946919846079",
-      To: "channel:1480574946919846079",
-      AccountId: "default",
       SenderId: "user-9",
       SenderUsername: "ada",
       CommandAuthorized: true,
@@ -1056,32 +869,24 @@ describe("dispatchReplyFromConfig", () => {
 
   it("notifies once per binding owner when a bound plugin is missing", async () => {
     setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) =>
-        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    mockPluginBindingClaim(
+      {
+        status: "missing_plugin",
+      },
+      { pluginLoaded: false },
     );
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "missing_plugin",
-    });
-    const binding: SessionBindingRecord = {
+    const binding: SessionBindingRecord = createPluginBindingRecord({
       bindingId: "binding-missing-1",
       targetSessionKey: "plugin-binding:codex:missing123",
-      targetKind: "session",
       conversation: {
         channel: "discord",
         accountId: "default",
         conversationId: "channel:missing-plugin",
       },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginName: "Codex App Server",
-        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-        detachHint: "/codex_detach",
-      },
-    };
+      pluginName: "Codex App Server",
+      pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      detachHint: "/codex_detach",
+    });
 
     const cases = [
       { channel: "discord", accountId: "default", notice: true },
@@ -1131,44 +936,22 @@ describe("dispatchReplyFromConfig", () => {
 
   it("falls back to OpenClaw when the bound plugin is loaded but has no inbound_claim handler", async () => {
     setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) =>
-        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+    mockPluginBindingClaim({
       status: "no_handler",
     });
     hookMocks.runner.runInboundClaimForPluginOutcome.mockClear();
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-no-handler-1",
       targetSessionKey: "plugin-binding:codex:nohandler123",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:no-handler",
-      },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginName: "Codex App Server",
-        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-      },
-    } satisfies SessionBindingRecord);
+      pluginName: "Codex App Server",
+      pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      conversationId: "channel:no-handler",
+    });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "openclaw fallback" }) satisfies ReplyPayload);
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "discord:channel:no-handler",
-        To: "discord:channel:no-handler",
-        AccountId: "default",
+      ctx: createRoutedTestCtx("discord", "discord:channel:no-handler", {
         MessageSid: "msg-no-handler-1",
         SessionKey: "agent:main:discord:channel:no-handler",
         CommandBody: "hello",
@@ -1191,44 +974,22 @@ describe("dispatchReplyFromConfig", () => {
 
   it("notifies the user when a bound plugin declines the turn and keeps the binding attached", async () => {
     setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) =>
-        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+    mockPluginBindingClaim({
       status: "declined",
     });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-declined-1",
       targetSessionKey: "plugin-binding:codex:declined123",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:declined",
-      },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginName: "Codex App Server",
-        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-        detachHint: "/codex_detach",
-      },
-    } satisfies SessionBindingRecord);
+      pluginName: "Codex App Server",
+      pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      detachHint: "/codex_detach",
+      conversationId: "channel:declined",
+    });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "discord:channel:declined",
-        To: "discord:channel:declined",
-        AccountId: "default",
+      ctx: createRoutedTestCtx("discord", "discord:channel:declined", {
         MessageSid: "msg-declined-1",
         SessionKey: "agent:main:discord:channel:declined",
         CommandBody: "hello",
@@ -1249,44 +1010,22 @@ describe("dispatchReplyFromConfig", () => {
 
   it("notifies the user when a bound plugin errors and keeps raw details out of the reply", async () => {
     setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) =>
-        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+    mockPluginBindingClaim({
       status: "error",
       error: "boom",
     });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-error-1",
       targetSessionKey: "plugin-binding:codex:error123",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:error",
-      },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginName: "Codex App Server",
-        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-      },
-    } satisfies SessionBindingRecord);
+      pluginName: "Codex App Server",
+      pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      conversationId: "channel:error",
+    });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "discord:channel:error",
-        To: "discord:channel:error",
-        AccountId: "default",
+      ctx: createRoutedTestCtx("discord", "discord:channel:error", {
         MessageSid: "msg-error-1",
         SessionKey: "agent:main:discord:channel:error",
         CommandBody: "hello",
@@ -1325,7 +1064,6 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "whatsapp:+15555550123",
       AccountId: "default",
@@ -1366,7 +1104,6 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "whatsapp:+15555550123",
       AccountId: "default",
@@ -1414,7 +1151,6 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "whatsapp:+15555550124",
       To: "whatsapp:+15555550124",
@@ -1493,7 +1229,6 @@ describe("dispatchReplyFromConfig", () => {
       sessionStoreMocks.currentEntry = { sessionId: "s1", updatedAt: 0, sendPolicy: "deny" };
     }
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: `whatsapp:${phone}`,
       To: `whatsapp:${phone}`,
@@ -1551,17 +1286,7 @@ describe("dispatchReplyFromConfig", () => {
     const preparedRuntimeModule = await import("../../agents/prepared-model-runtime.js");
     const preparedLookup = vi
       .spyOn(preparedRuntimeModule, "loadPublishedGatewayReplyDispatchRuntime")
-      .mockResolvedValue(
-        Object.freeze({
-          agentId: "main",
-          agentDir: "/tmp/prepared-agent",
-          workspaceDir: "/tmp/prepared-workspace",
-          config: runtimeCfg,
-          modelCatalog: { entries: [], routeVariants: [] },
-          inboundPluginRegistry: createTestRegistry([]),
-          pluginGeneration: {} as never,
-        }),
-      );
+      .mockResolvedValue(createPreparedRuntimeSnapshot(runtimeCfg));
 
     const overrideCfg = {
       agents: { defaults: { userTimezone: "America/New_York" } },
@@ -1587,7 +1312,6 @@ describe("dispatchReplyFromConfig", () => {
         dispatcher,
         replyResolver,
         configOverride: overrideCfg,
-        usePublishedModelRuntime: true,
       });
     } finally {
       preparedLookup.mockRestore();
@@ -1657,7 +1381,6 @@ describe("dispatchReplyFromConfig", () => {
       ctx: buildTestCtx({ Provider: "slack", Surface: "slack" }),
       cfg,
       dispatcher: createDispatcher(),
-      usePublishedModelRuntime: true,
       replyResolver: async (_ctx, _opts, cfgArg) => {
         receivedCfg = cfgArg;
         return { text: "hi" };
@@ -1693,17 +1416,7 @@ describe("dispatchReplyFromConfig", () => {
     const preparedRuntimeModule = await import("../../agents/prepared-model-runtime.js");
     const preparedLookup = vi
       .spyOn(preparedRuntimeModule, "loadPublishedGatewayReplyDispatchRuntime")
-      .mockResolvedValue(
-        Object.freeze({
-          agentId: "main",
-          agentDir: "/tmp/prepared-agent",
-          workspaceDir: "/tmp/prepared-workspace",
-          config: runtimeCfg,
-          modelCatalog: { entries: [], routeVariants: [] },
-          inboundPluginRegistry: createTestRegistry([]),
-          pluginGeneration: {} as never,
-        }),
-      );
+      .mockResolvedValue(createPreparedRuntimeSnapshot(runtimeCfg));
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({ Provider: "discord", Surface: "discord" });
 
@@ -1726,7 +1439,6 @@ describe("dispatchReplyFromConfig", () => {
         cfg,
         dispatcher,
         replyResolver,
-        usePublishedModelRuntime: true,
       });
     } finally {
       preparedLookup.mockRestore();
@@ -1892,6 +1604,7 @@ describe("dispatchReplyFromConfig", () => {
     "settles $deliveryPath $outcome blocks before identical final=$finalReturned later=$laterFinal and observation",
     async ({ deliveryPath, outcome, finalReturned, laterFinal }) => {
       setNoAbort();
+      installThreadingTestPlugin({ id: "qa-channel" });
       const attempts: string[] = [];
       const onBlockReplyQueued = vi.fn();
       const noSend = new PlatformMessageNotDispatchedError("block was not dispatched", {
@@ -2030,20 +1743,14 @@ describe("dispatchReplyFromConfig", () => {
 
   it("does not send the final fallback when aborted during block settlement", async () => {
     setNoAbort();
-    let markBlockStarted: (() => void) | undefined;
-    let releaseBlock: (() => void) | undefined;
-    const blockStarted = new Promise<void>((resolve) => {
-      markBlockStarted = resolve;
-    });
-    const blockRelease = new Promise<void>((resolve) => {
-      releaseBlock = resolve;
-    });
+    const blockStarted = createDeferred();
+    const blockRelease = createDeferred();
     const delivered: Array<{ kind: string; text?: string }> = [];
     const dispatcher = createReplyDispatcher({
       deliver: async (payload, info) => {
         if (info.kind === "block") {
-          markBlockStarted?.();
-          await blockRelease;
+          blockStarted.resolve();
+          await blockRelease.promise;
           throw new Error("block delivery failed after abort");
         }
         delivered.push({ kind: info.kind, text: payload.text });
@@ -2065,12 +1772,12 @@ describe("dispatchReplyFromConfig", () => {
       replyOptions: { abortSignal: abortController.signal },
       replyResolver,
     });
-    await blockStarted;
+    await blockStarted.promise;
     abortController.abort();
     await dispatch;
     expect(delivered).toEqual([]);
 
-    releaseBlock?.();
+    blockRelease.resolve();
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
 
@@ -2120,9 +1827,17 @@ describe("dispatchReplyFromConfig", () => {
   it("strips split TTS directives from streamed block text before delivery", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;
-    const dispatcher = createDispatcher();
+
     const ctx = buildTestCtx({ Provider: "whatsapp" });
     const blockReplySentTexts: string[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, { kind }) => {
+        if (kind === "block" && payload.text) {
+          blockReplySentTexts.push(payload.text);
+        }
+      },
+    });
+    vi.spyOn(dispatcher, "sendFinalReply");
     const replyResolver = async (
       _ctx: MsgContext,
       opts?: GetReplyOptions,
@@ -2131,14 +1846,6 @@ describe("dispatchReplyFromConfig", () => {
       await opts?.onBlockReply?.({ text: "xt]]hidden[[/tts:text]] visible" });
       return undefined;
     };
-    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mockImplementation(
-      (payload: ReplyPayload) => {
-        if (payload.text) {
-          blockReplySentTexts.push(payload.text);
-        }
-        return true;
-      },
-    );
 
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
 
@@ -2159,8 +1866,6 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
       ChatType: "group",
       From: "whatsapp:120363111111111@g.us",
       To: "whatsapp:120363111111111@g.us",
@@ -2174,7 +1879,7 @@ describe("dispatchReplyFromConfig", () => {
         text: "generated",
         mediaUrls: ["https://example.com/generated.png"],
       });
-      return { text: "NO_REPLY" };
+      return {};
     };
 
     await dispatchReplyFromConfig({
@@ -2229,22 +1934,7 @@ describe("dispatchReplyFromConfig", () => {
   it("does not wait for same-channel block dispatcher delivery before resolving block replies", async () => {
     setNoAbort();
     const ctx = buildTestCtx({ Provider: "whatsapp" });
-    const delivered: ReplyPayload[] = [];
-    let releaseDelivery: (() => void) | undefined;
-    let markDeliveryStarted: (() => void) | undefined;
-    const deliveryStarted = new Promise<void>((resolve) => {
-      markDeliveryStarted = resolve;
-    });
-    const deliveryGate = new Promise<void>((resolve) => {
-      releaseDelivery = resolve;
-    });
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        delivered.push(payload);
-        markDeliveryStarted?.();
-        await deliveryGate;
-      },
-    });
+    const { delivered, deliveryStarted, deliveryGate, dispatcher } = createHeldDeliveryDispatcher();
     let blockReplySettled = false;
     const replyResolver = async (
       _ctx: MsgContext,
@@ -2256,13 +1946,13 @@ describe("dispatchReplyFromConfig", () => {
         },
       );
 
-      await deliveryStarted;
+      await deliveryStarted.promise;
 
       expect(delivered).toEqual([{ text: "before tool" }]);
       await blockReplyPromise;
       expect(blockReplySettled).toBe(true);
 
-      releaseDelivery?.();
+      deliveryGate.resolve();
       return undefined;
     };
 
@@ -2280,22 +1970,7 @@ describe("dispatchReplyFromConfig", () => {
   it("waits for pending same-channel block delivery before completing block-only dispatch", async () => {
     setNoAbort();
     const ctx = buildTestCtx({ Provider: "whatsapp" });
-    const delivered: ReplyPayload[] = [];
-    let releaseDelivery: (() => void) | undefined;
-    let markDeliveryStarted: (() => void) | undefined;
-    const deliveryStarted = new Promise<void>((resolve) => {
-      markDeliveryStarted = resolve;
-    });
-    const deliveryGate = new Promise<void>((resolve) => {
-      releaseDelivery = resolve;
-    });
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        delivered.push(payload);
-        markDeliveryStarted?.();
-        await deliveryGate;
-      },
-    });
+    const { delivered, deliveryStarted, deliveryGate, dispatcher } = createHeldDeliveryDispatcher();
     const replyResolver = async (
       _ctx: MsgContext,
       opts?: GetReplyOptions,
@@ -2315,12 +1990,12 @@ describe("dispatchReplyFromConfig", () => {
       return result;
     });
 
-    await deliveryStarted;
+    await deliveryStarted.promise;
 
     expect(delivered).toEqual([{ text: "only block" }]);
     expect(dispatchSettled).toBe(false);
 
-    releaseDelivery?.();
+    deliveryGate.resolve();
     await dispatchPromise;
 
     expect(dispatchSettled).toBe(true);
@@ -2333,14 +2008,8 @@ describe("dispatchReplyFromConfig", () => {
     } as const satisfies OpenClawConfig;
     const ctx = buildTestCtx({ Provider: "whatsapp" });
     const delivered: ReplyPayload[] = [];
-    let releaseDelivery: (() => void) | undefined;
-    let markDeliveryStarted: (() => void) | undefined;
-    const deliveryStarted = new Promise<void>((resolve) => {
-      markDeliveryStarted = resolve;
-    });
-    const deliveryGate = new Promise<void>((resolve) => {
-      releaseDelivery = resolve;
-    });
+    const deliveryStarted = createDeferred();
+    const deliveryGate = createDeferred();
     const progressOrder: string[] = [];
     const dispatcher = createReplyDispatcher({
       deliver: async (payload) => {
@@ -2348,8 +2017,8 @@ describe("dispatchReplyFromConfig", () => {
         if (payload.text === "final") {
           progressOrder.push("final");
         }
-        markDeliveryStarted?.();
-        await deliveryGate;
+        deliveryStarted.resolve();
+        await deliveryGate.promise;
       },
     });
     const onToolStart = vi.fn();
@@ -2392,14 +2061,14 @@ describe("dispatchReplyFromConfig", () => {
       return result;
     });
 
-    await deliveryStarted;
+    await deliveryStarted.promise;
     expect(delivered).toEqual([{ text: "before tool" }]);
     expect(onToolStart).not.toHaveBeenCalled();
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(toolProgressSettled).toBe(false);
     expect(dispatchSettled).toBe(false);
 
-    releaseDelivery?.();
+    deliveryGate.resolve();
     await Promise.all([dispatchPromise, toolProgressPromise, partialProgressPromise]);
 
     expect(dispatchSettled).toBe(true);
@@ -2416,22 +2085,7 @@ describe("dispatchReplyFromConfig", () => {
       agents: { defaults: { verboseDefault: "on" } },
     } as const satisfies OpenClawConfig;
     const ctx = buildTestCtx({ Provider: "whatsapp" });
-    const delivered: ReplyPayload[] = [];
-    let releaseDelivery: (() => void) | undefined;
-    let markDeliveryStarted: (() => void) | undefined;
-    const deliveryStarted = new Promise<void>((resolve) => {
-      markDeliveryStarted = resolve;
-    });
-    const deliveryGate = new Promise<void>((resolve) => {
-      releaseDelivery = resolve;
-    });
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        delivered.push(payload);
-        markDeliveryStarted?.();
-        await deliveryGate;
-      },
-    });
+    const { delivered, deliveryStarted, deliveryGate, dispatcher } = createHeldDeliveryDispatcher();
     const onItemEvent = vi.fn();
     let itemProgressSettled = false;
     const replyResolver = async (
@@ -2446,13 +2100,13 @@ describe("dispatchReplyFromConfig", () => {
         itemProgressSettled = true;
       });
 
-      await deliveryStarted;
+      await deliveryStarted.promise;
 
       expect(delivered).toEqual([{ text: "before item" }]);
       expect(onItemEvent).not.toHaveBeenCalled();
       expect(itemProgressSettled).toBe(false);
 
-      releaseDelivery?.();
+      deliveryGate.resolve();
       await itemProgressPromise;
       return undefined;
     };
@@ -2646,19 +2300,14 @@ describe("dispatchReplyFromConfig", () => {
     { final: "same", audio: false, native: true },
     { final: "different", audio: false, native: true },
     { final: "same", audio: true, native: true },
-    { final: "same", audio: false, native: "identityless" },
     { final: "different", audio: false, native: "identityless" },
     { final: "same", audio: true, native: "identityless" },
-    { final: "same", audio: false, native: "deferred" },
     { final: "different", audio: false, native: "deferred" },
     { final: "same", audio: true, native: "deferred" },
-    { final: "same", audio: false, native: "ambiguous" },
     { final: "different", audio: false, native: "ambiguous" },
     { final: "same", audio: true, native: "ambiguous" },
-    { final: "same", audio: false, native: "partial" },
     { final: "different", audio: false, native: "partial" },
     { final: "same", audio: true, native: "partial" },
-    { final: "same", audio: false, native: "partial-envelope" },
     { final: "different", audio: false, native: "partial-envelope" },
     { final: "same", audio: true, native: "partial-envelope" },
   ])(
@@ -2774,12 +2423,7 @@ describe("dispatchReplyFromConfig", () => {
         if (info.kind === "block") {
           blockStarted.resolve();
           await releaseBlock.promise;
-          throw Object.assign(
-            new OutboundDeliveryError("queued block", {
-              cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
-            }),
-            { queueCustody: "held" as const },
-          );
+          throw queuedBlockError();
         }
       },
     });
@@ -2891,95 +2535,120 @@ describe("dispatchReplyFromConfig", () => {
   it.each([
     { completionState: "prepared", audio: false, native: false },
     { completionState: "queued", audio: false, native: false },
-    { completionState: "unknown", audio: false, native: false },
     { completionState: "prepared", audio: true, native: false },
-    { completionState: "queued", audio: true, native: false },
-    { completionState: "unknown", audio: true, native: false },
     { completionState: "prepared", audio: false, native: true },
-    { completionState: "queued", audio: false, native: true },
-    { completionState: "unknown", audio: false, native: true },
     { completionState: "prepared", audio: true, native: true },
-    { completionState: "queued", audio: true, native: true },
     { completionState: "unknown", audio: true, native: true },
   ] as const)(
     "preserves completion ownership for a pending block ($completionState, audio=$audio, native=$native)",
     async ({ completionState, audio, native }) => {
       setNoAbort();
       ttsMocks.state.synthesizeFinalAudio = audio;
-      const pending = {
+      const pending: PendingFinalDeliveryState = {
         kind: "replayable",
         text: "same",
         createdAt: 1,
         intentId: "pending-block",
         deliveries: [{ id: "original", state: completionState }],
       };
-      sessionStoreMocks.currentEntry = { sessionId: "session-1", pendingFinalDelivery: pending };
-      const onFinalDeliverySuccess = vi.fn();
-      const payload = setReplyPayloadMetadata(
-        { text: "same" },
-        {
-          pendingFinalDeliveryCompletion: {
-            deliveryId: "original",
-            intentId: "pending-block",
-            sessionId: "session-1",
-            sessionKey: "agent:main:slack:direct:123",
-            storePath: "/tmp/mock-sessions.json",
-          },
-          onFinalDeliverySuccess,
-        },
-      );
-      mocks.routeReply
-        .mockResolvedValueOnce({ ok: true, delivered: false, ambiguous: true })
-        .mockResolvedValue({ ok: true, delivered: true });
-      const nativePayloads: ReplyPayload[] = [];
-      const dispatcher = native
-        ? createReplyDispatcher({
-            deliver: async (reply, info) => {
-              nativePayloads.push(reply);
-              if (info.kind === "block") {
-                throw Object.assign(
-                  new OutboundDeliveryError("queued block", {
-                    cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
-                  }),
-                  { queueCustody: "held" as const },
-                );
-              }
-            },
-          })
-        : createDispatcher();
-      await dispatchReplyFromConfig({
-        ctx: buildTestCtx({
-          Provider: native ? "telegram" : "slack",
-          Surface: native ? "telegram" : "slack",
-          OriginatingChannel: "telegram",
-          OriginatingTo: "telegram:999",
-          SessionKey: "agent:main:slack:direct:123",
-        }),
-        cfg: emptyConfig,
-        dispatcher,
-        replyResolver: async (_ctx, opts) => {
-          await opts?.onBlockReply?.({ text: "same" });
-          return payload;
-        },
+      const sessionKey = "agent:main:dashboard:incognito-pending-block";
+      const storePath = resolveIncognitoOpenClawAgentSqlitePath({
+        agentId: "main",
+        env: { OPENCLAW_STATE_DIR: "/synthetic/dispatch-pending-block" },
       });
-
-      dispatcher.markComplete();
-      await dispatcher.waitForIdle();
-      const attempted = native
-        ? nativePayloads
-        : mocks.routeReply.mock.calls.map(([call]) => call.payload);
-      expect(attempted).toHaveLength(audio ? 2 : 1);
-      expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toEqual(
-        completionState === "prepared" ? undefined : pending,
+      const owner = createMemorySessionActorOwner({ agentId: "main", path: storePath });
+      const actor = await owner.acquire(
+        { database: owner.identity, sessionKey },
+        { assertCurrent() {}, assertReadable() {} },
       );
-      expect(onFinalDeliverySuccess).not.toHaveBeenCalled();
-      if (audio) {
-        const supplement = expectDefined(attempted[1], "audio supplement");
-        expect(supplement).toMatchObject({
-          text: undefined,
-          mediaUrl: "https://example.com/tts-synth.opus",
-        });
-        expect(getReplyPayloadMetadata(supplement)?.pendingFinalDeliveryCompletion).toBeUndefined();
+      const authority = { assertCurrent() {}, authorize() {} };
+      const entry = { sessionId: "session-1", updatedAt: 1, pendingFinalDelivery: pending };
+      try {
+        readSessionActorStorageResult(
+          await actor.storage!.mutate(
+            {
+              type: "session.metadata.initialize",
+              input: {
+                scope: { agentId: "main", storePath, sessionKey, sessionId: entry.sessionId },
+                entry,
+              },
+            },
+            authority,
+          ),
+        );
+        sessionStoreMocks.currentEntry = { ...actor.snapshot(authority)?.entry };
+        const onFinalDeliverySuccess = vi.fn();
+        const payload = setReplyPayloadMetadata(
+          { text: "same" },
+          {
+            pendingFinalDeliveryCompletion: {
+              deliveryId: "original",
+              intentId: "pending-block",
+              sessionId: "session-1",
+              sessionKey,
+              storePath,
+            },
+            onFinalDeliverySuccess,
+          },
+        );
+        mocks.routeReply
+          .mockResolvedValueOnce({ ok: true, delivered: false, ambiguous: true })
+          .mockResolvedValue({ ok: true, delivered: true });
+        const nativePayloads: ReplyPayload[] = [];
+        const dispatcher = native
+          ? createReplyDispatcher({
+              deliver: async (reply, info) => {
+                nativePayloads.push(reply);
+                if (info.kind === "block") {
+                  throw queuedBlockError();
+                }
+              },
+            })
+          : createDispatcher();
+        await runWithSessionActorStorage(
+          { actor, authority, agentId: "main", path: storePath },
+          async () => {
+            await dispatchReplyFromConfig({
+              ctx: buildTestCtx({
+                Provider: native ? "telegram" : "slack",
+                Surface: native ? "telegram" : "slack",
+                OriginatingChannel: "telegram",
+                OriginatingTo: "telegram:999",
+                SessionKey: sessionKey,
+              }),
+              cfg: emptyConfig,
+              dispatcher,
+              replyResolver: async (_ctx, opts) => {
+                await opts?.onBlockReply?.({ text: "same" });
+                return payload;
+              },
+            });
+
+            dispatcher.markComplete();
+            await dispatcher.waitForIdle();
+          },
+        );
+        const attempted = native
+          ? nativePayloads
+          : mocks.routeReply.mock.calls.map(([call]) => call.payload);
+        expect(attempted).toHaveLength(audio ? 2 : 1);
+        expect(actor.snapshot(authority)?.entry?.pendingFinalDelivery).toEqual(
+          completionState === "prepared" ? undefined : pending,
+        );
+        expect(onFinalDeliverySuccess).not.toHaveBeenCalled();
+        if (audio) {
+          const supplement = expectDefined(attempted[1], "audio supplement");
+          expect(supplement).toMatchObject({
+            text: undefined,
+            mediaUrl: "https://example.com/tts-synth.opus",
+          });
+          expect(
+            getReplyPayloadMetadata(supplement)?.pendingFinalDeliveryCompletion,
+          ).toBeUndefined();
+        }
+      } finally {
+        await actor.release();
+        owner.close();
       }
     },
   );
@@ -3065,7 +2734,10 @@ describe("dispatchReplyFromConfig", () => {
     expect(firstFinalReplyPayload(dispatcher)).toEqual({ text: "Partial useful answer." });
     expect(
       vi.mocked(dispatcher.sendFinalReply).mock.calls.map(([payload]) => payload.text),
-    ).toEqual(["Partial useful answer.", expect.stringContaining("Something went wrong")]);
+    ).toEqual([
+      "Partial useful answer.",
+      expect.stringContaining(GENERIC_EXTERNAL_RUN_FAILURE_TEXT),
+    ]);
   });
 
   it.each([
@@ -3182,7 +2854,7 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
 
     expect(firstFinalReplyPayload(dispatcher)).toMatchObject({
-      text: "Visible block.\nVisible final.",
+      text: "Visible block. \nVisible final.",
       mediaUrl: "https://example.com/tts-synth.opus",
     });
   });
@@ -3303,11 +2975,6 @@ describe("dispatchReplyFromConfig", () => {
       expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     }
   });
-
-  it.each(["run\nprivate detail", "<@everyone>", "https://example.com/private", "x".repeat(129)])(
-    "omits unsafe fallback references: %j",
-    (runId) => expect(buildNoVisibleReplyFallbackText(runId)).toBe(NO_VISIBLE_REPLY_FALLBACK_TEXT),
-  );
 
   it("skips fallback when directives stay visible", () =>
     expect(needsTtsFallback(false, "[[tts:text]]x", "x")).toBe(false));

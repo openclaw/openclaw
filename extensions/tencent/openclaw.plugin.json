@@ -1,5 +1,6 @@
 {
   "id": "tencent",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -16,6 +17,7 @@
         "baseUrl": "https://tokenhub.tencentmaas.com/v1",
         "api": "openai-completions",
         "defaultModel": "hy4-preview",
+        "family": "tencent",
         "models": [
           {
             "id": "hy3-preview",
@@ -105,6 +107,7 @@
         "baseUrl": "https://api.lkeap.cloud.tencent.com/plan/v3",
         "api": "openai-completions",
         "defaultModel": "hy4-preview",
+        "family": "tencent",
         "models": [
           {
             "id": "hy3",

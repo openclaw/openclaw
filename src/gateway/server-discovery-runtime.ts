@@ -1,41 +1,97 @@
+import path from "node:path";
 import {
   clampTimerTimeoutMs,
   parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import type { DiscoveryConfig, MdnsDiscoveryMode } from "../config/types.gateway.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { isRegularFile } from "../infra/executable-path.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
+import { getTailnetHostname } from "../infra/tailscale.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { resolveWideAreaDiscoveryDomain, writeWideAreaGatewayZone } from "../infra/widearea-dns.js";
+import { getPluginValueInstance, runPluginCleanup } from "../plugins/plugin-instance-scope.js";
 import type { PluginGatewayDiscoveryServiceRegistration } from "../plugins/registry-types.js";
-import {
-  formatBonjourInstanceName,
-  resolveBonjourCliPath,
-  resolveTailnetDnsHint,
-} from "./server-discovery.js";
-import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
+import { runExec } from "../process/exec.js";
+
+/** Formats the Bonjour instance name while preserving user-provided OpenClaw names. */
+function formatBonjourInstanceName(displayName: string) {
+  const trimmed = displayName.trim();
+  if (!trimmed) {
+    return "OpenClaw";
+  }
+  if (/openclaw/i.test(trimmed)) {
+    return trimmed;
+  }
+  return `${trimmed} (OpenClaw)`;
+}
+
+/** Resolves the CLI path advertised to Bonjour clients, preferring explicit env config. */
+function resolveBonjourCliPath(): string | undefined {
+  const envPath = process.env.OPENCLAW_CLI_PATH?.trim();
+  if (envPath) {
+    return envPath;
+  }
+
+  const execDir = path.dirname(process.execPath);
+  const siblingCli = path.join(execDir, "openclaw");
+  if (isRegularFile(siblingCli)) {
+    return siblingCli;
+  }
+
+  const argvPath = process.argv[1];
+  if (argvPath && isRegularFile(argvPath)) {
+    return argvPath;
+  }
+
+  const cwd = process.cwd();
+  return [path.join(cwd, "dist", "index.js"), path.join(cwd, "bin", "openclaw")].find(
+    isRegularFile,
+  );
+}
+
+/** Resolves a Tailnet DNS hint from env or the local tailscale CLI when enabled. */
+async function resolveTailnetDnsHint(opts?: { enabled?: boolean }): Promise<string | undefined> {
+  const envValue = process.env.OPENCLAW_TAILNET_DNS?.trim().replace(/\.$/, "");
+  if (envValue) {
+    return envValue;
+  }
+  if (opts?.enabled === false) {
+    return undefined;
+  }
+
+  try {
+    return await getTailnetHostname((command, args) =>
+      runExec(command, args, { timeoutMs: 1500, maxBuffer: 200_000 }),
+    );
+  } catch {
+    return undefined;
+  }
+}
 
 type DiscoveryUpdate = {
   mdnsMode?: MdnsDiscoveryMode;
+  gatewayTlsFingerprintSha256?: string;
   gatewayDiscoveryServices?: readonly PluginGatewayDiscoveryServiceRegistration[];
 };
 export type GatewayDiscovery = {
-  update: (next: DiscoveryUpdate, claim?: GatewayPluginRuntimeClaim) => Promise<void>;
+  update: (next: DiscoveryUpdate) => Promise<void>;
   stop: () => Promise<void>;
 };
 type DiscoveryGeneration = {
   mode: MdnsDiscoveryMode;
-  services: Iterator<PluginGatewayDiscoveryServiceRegistration>;
-  stops: Array<() => void | Promise<void>>;
-  claim: GatewayPluginRuntimeClaim;
-  waiting: boolean;
+  tlsFingerprint?: string;
+  services: Map<
+    PluginGatewayDiscoveryServiceRegistration,
+    { started?: boolean; stop?: () => void | Promise<void> }
+  >;
 };
 
 /** One owner replaces local advertisements and keeps wide-area TXT policy in sync. */
 export async function startGatewayDiscovery(params: {
   discovery?: DiscoveryConfig;
   gatewayDiscoveryServices?: readonly PluginGatewayDiscoveryServiceRegistration[];
-  pluginRuntimeClaim: GatewayPluginRuntimeClaim;
   machineDisplayName: string;
   port: number;
   gatewayTls?: { enabled: boolean; fingerprintSha256?: string };
@@ -44,9 +100,9 @@ export async function startGatewayDiscovery(params: {
   logDiscovery: { info: (msg: string) => void; warn: (msg: string) => void };
 }): Promise<GatewayDiscovery> {
   let mode = params.discovery?.mdns?.mode ?? "minimal";
+  let tlsFingerprint = params.gatewayTls?.fingerprintSha256;
   const wideAreaDomain = params.discovery?.wideArea?.domain;
   let services = params.gatewayDiscoveryServices ?? [];
-  let claim = params.pluginRuntimeClaim;
   let current: DiscoveryGeneration | undefined;
   let closed = false;
   let pending = Promise.resolve();
@@ -59,8 +115,16 @@ export async function startGatewayDiscovery(params: {
     return cleanup;
   };
   const stopGeneration = async (generation?: DiscoveryGeneration) => {
-    for (const stop of generation?.stops.splice(0).toReversed() ?? []) {
-      void stopService(stop);
+    for (const [entry, advertisement] of [...(generation?.services ?? [])].toReversed()) {
+      if (current !== generation && current?.services.get(entry) === advertisement) {
+        continue;
+      }
+      generation?.services.delete(entry);
+      const stop = advertisement.stop;
+      advertisement.stop = undefined;
+      if (stop) {
+        void stopService(stop);
+      }
     }
     // Timed-out starts may acquire handles while another stop is awaiting I/O.
     // Drain those acquired callbacks too, without joining unresolved starts.
@@ -74,27 +138,6 @@ export async function startGatewayDiscovery(params: {
     const result = pending.then(operation);
     pending = result.catch(() => {});
     return result;
-  };
-  const waitForClaim = (generation: DiscoveryGeneration) => {
-    if (generation.waiting) {
-      return;
-    }
-    generation.waiting = true;
-    // A reservation may reject. Wait outside the operation queue: committing its
-    // successor can itself await a mode update on this owner.
-    void generation.claim
-      .waitForUnblocked()
-      .then((accepted) =>
-        enqueue(async () => {
-          generation.waiting = false;
-          if (isCurrent(generation)) {
-            await (accepted ? advertise(generation) : stopGeneration(generation));
-          }
-        }),
-      )
-      .catch((err: unknown) =>
-        params.logDiscovery.warn(`gateway discovery refresh failed: ${String(err)}`),
-      );
   };
   const advertise = async (generation: DiscoveryGeneration) => {
     if (!isCurrent(generation)) {
@@ -117,7 +160,7 @@ export async function startGatewayDiscovery(params: {
       machineDisplayName: params.machineDisplayName,
       gatewayPort: params.port,
       gatewayTlsEnabled: params.gatewayTls?.enabled ?? false,
-      gatewayTlsFingerprintSha256: params.gatewayTls?.fingerprintSha256,
+      gatewayTlsFingerprintSha256: generation.tlsFingerprint,
       gatewayDirectReachable: params.gatewayDirectReachable === true,
       sshPort: minimal ? undefined : (parseTcpPort(process.env.OPENCLAW_SSH_PORT) ?? undefined),
       tailnetDns,
@@ -158,86 +201,93 @@ export async function startGatewayDiscovery(params: {
           process.env.OPENCLAW_GATEWAY_DISCOVERY_ADVERTISE_TIMEOUT_MS?.trim(),
         ),
       ) ?? 5_000;
-    for (;;) {
-      const drained = cleanup;
-      await drained;
-      if (drained !== cleanup) {
-        continue;
-      }
+    for (const [entry, advertisement] of generation.services) {
+      let drained: Promise<void>;
+      do {
+        drained = cleanup;
+        await drained;
+      } while (drained !== cleanup);
       // Keep cleanup, ownership checks, and publication in one continuation.
       if (!localEnabled || !isCurrent(generation)) {
         return;
       }
-      if (!generation.claim.isCurrent()) {
-        waitForClaim(generation);
-        return;
+      if (advertisement.started) {
+        continue;
       }
-      const next = generation.services.next();
-      if (next.done) {
-        return;
-      }
-      const entry = next.value;
+      advertisement.started = true;
       let timedOut = false;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const started = (async () => entry.service.advertise(context))()
-        .then(async (handle) => {
-          if (handle?.stop) {
-            if (isCurrent(generation)) {
-              generation.stops.push(handle.stop);
-              if (!generation.claim.isCurrent()) {
-                waitForClaim(generation);
-              }
-            } else {
-              await stopService(handle.stop);
-            }
+      const instance = entry.instance ?? getPluginValueInstance(entry.service);
+      const start = async () => {
+        let handle: Awaited<ReturnType<typeof entry.service.advertise>>;
+        try {
+          handle = await entry.service.advertise(context);
+        } catch (error) {
+          // A settled acquisition failure can retry on the next update; acquired handles cannot.
+          advertisement.started = false;
+          throw error;
+        }
+        if (handle?.stop) {
+          const stop = handle.stop;
+          const invokeStop = () => stop.call(handle);
+          const stopOwned = () =>
+            instance ? instance.runCleanup(invokeStop) : runPluginCleanup(stop, invokeStop);
+          if (!closed && current?.services.get(entry) === advertisement) {
+            advertisement.stop = stopOwned;
+          } else {
+            await stopService(stopOwned);
           }
-          if (timedOut) {
-            params.logDiscovery.warn(
-              `gateway discovery service completed after startup timeout (${entry.service.id}, plugin=${entry.pluginId})`,
-            );
-          }
-        })
-        .catch((err: unknown) => {
+        }
+        if (timedOut) {
           params.logDiscovery.warn(
-            `gateway discovery service failed${timedOut ? " after startup timeout" : ""} (${entry.service.id}, plugin=${entry.pluginId}): ${String(err)}`,
+            `gateway discovery service completed after startup timeout (${entry.id}, plugin=${entry.pluginId})`,
           );
-        });
-      await Promise.race([
+        }
+      };
+      // Admission spans handle adoption, including cleanup of a late acquisition.
+      const started = (async () => (instance ? instance.run(start) : start()))().catch(
+        (err: unknown) => {
+          params.logDiscovery.warn(
+            `gateway discovery service failed${timedOut ? " after startup timeout" : ""} (${entry.id}, plugin=${entry.pluginId}): ${String(err)}`,
+          );
+        },
+      );
+      await raceWithTimeout(
         started,
-        new Promise<void>((resolve) => {
-          timer = setTimeout(() => {
-            timedOut = true;
-            params.logDiscovery.warn(
-              `gateway discovery service timed out after ${advertiseTimeoutMs}ms (${entry.service.id}, plugin=${entry.pluginId}); continuing startup`,
-            );
-            resolve();
-          }, advertiseTimeoutMs);
-          timer.unref?.();
-        }),
-      ]);
-      clearTimeout(timer);
+        advertiseTimeoutMs,
+        () => {
+          timedOut = true;
+          params.logDiscovery.warn(
+            `gateway discovery service timed out after ${advertiseTimeoutMs}ms (${entry.id}, plugin=${entry.pluginId}); continuing startup`,
+          );
+        },
+        { ref: false },
+      );
     }
   };
-  const update: GatewayDiscovery["update"] = (next, nextClaim = claim) => {
+  const update: GatewayDiscovery["update"] = (next) => {
     const nextMode = "mdnsMode" in next ? (next.mdnsMode ?? "minimal") : mode;
     const nextServices = next.gatewayDiscoveryServices ?? services;
+    const nextTlsFingerprint = next.gatewayTlsFingerprintSha256 ?? tlsFingerprint;
     if (
       closed ||
-      (current && mode === nextMode && services === nextServices && claim === nextClaim)
+      (current &&
+        mode === nextMode &&
+        services === nextServices &&
+        tlsFingerprint === nextTlsFingerprint)
     ) {
       return Promise.resolve();
     }
-    mode = nextMode;
-    services = nextServices;
-    claim = nextClaim;
     const previous = current;
-    // Fence before awaiting cleanup so late startup cannot retain an obsolete beacon.
+    const retained =
+      mode === nextMode && tlsFingerprint === nextTlsFingerprint ? previous?.services : undefined;
+    mode = nextMode;
+    tlsFingerprint = nextTlsFingerprint;
+    services = nextServices;
+    // Exact retained registrations keep acquired and pending handles across publication.
     const generation = (current = {
       mode,
-      services: services.values(),
-      stops: [],
-      claim,
-      waiting: false,
+      tlsFingerprint,
+      services: new Map(services.map((entry) => [entry, retained?.get(entry) ?? {}])),
     });
     return enqueue(async () => {
       await stopGeneration(previous);

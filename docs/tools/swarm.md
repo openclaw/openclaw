@@ -9,9 +9,9 @@ read_when:
   - You want to observe collector children in chat
 ---
 
-Swarm is an experimental way to orchestrate many sub-agents from a
+Swarm orchestrates many sub-agents from a
 [Code Mode](/tools/code-mode) script. It is enabled by default, with an explicit
-opt-out. Use normal JavaScript or TypeScript control flow such as `Promise.all`,
+opt-out. Use normal JavaScript control flow such as `Promise.all`,
 `while`, and `if` to fan out work, collect results, and make decisions.
 
 There is no graph DSL and no separate workflow format. The program is the
@@ -23,8 +23,8 @@ bounded concurrency, and progress reporting to that program.
 Use ordinary `sessions_spawn` announcing runs for one or a few children. Reserve
 Swarm for large parallel fan-out: several similar children (about five or more),
 typically driven by Code Mode `agents.run` with control flow such as `Promise.all`.
-Collectors (`collect: true`) send no completion notification and cannot be steered;
-their results must be explicitly collected. Use `outputSchema` for structured
+Collector children (`collect: true`) send no completion notification and cannot be steered.
+Their results must be explicitly collected. Use `outputSchema` for structured
 results and `groupId` to group a batch.
 
 ## Enable Swarm
@@ -32,13 +32,11 @@ results and `groupId` to group a batch.
 Swarm needs no enablement setting. Omitted `tools.swarm`, an empty object, or
 an object that sets only limits all leave Swarm enabled. Code Mode remains
 separately opt-in, and normal tool policy still applies. Existing Codex sessions
-can retain an older tool catalog; see the
+can retain an older tool catalog. See the
 [fresh-session guidance](/tools/swarm#use-swarm-from-other-harnesses) below.
 
-To opt out, turn off **Settings → Agents & Tools → Labs → Swarm** in the
-Control UI. The switch saves `tools.swarm.enabled: false` immediately and
-applies to future runs without restarting the Gateway. Or set the boolean
-shorthand in `openclaw.json`:
+To opt out, disable Swarm in **Settings → Agent Defaults → Tools**, or set
+`tools.swarm: false` in `openclaw.json`:
 
 ```json5
 {
@@ -50,16 +48,16 @@ shorthand in `openclaw.json`:
 
 `swarm: { enabled: false }` has the same effect while preserving configured
 limits. To re-enable Swarm, remove the explicit opt-out, set `swarm: true` or
-`swarm: { enabled: true }`, or turn the Labs switch back on.
+`swarm: { enabled: true }`, or enable it in **Settings → Agent Defaults → Tools**.
 
-To tune the limits, use object form. These are the defaults; you only need to
+To tune the limits, use object form. These are the defaults. You only need to
 include values you want to change:
 
 ```json5
 {
   tools: {
     swarm: {
-      maxConcurrent: 8,
+      maxConcurrent: 32,
       maxChildrenPerGroup: 50,
       maxTotalPerGroup: 200,
       waitTimeoutSecondsMax: 600,
@@ -72,7 +70,7 @@ include values you want to change:
 | Field                   | Default | Description                                                                                                                    |
 | ----------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `enabled`               | `true`  | Enables collector features subject to tool policy; set `false` to opt out. Code Mode has additional requirements below.        |
-| `maxConcurrent`         | `8`     | Maximum collector children running concurrently in one swarm group. Additional accepted children queue in FIFO order.          |
+| `maxConcurrent`         | `32`    | Maximum collector children running concurrently in one swarm group's execution lane. Additional accepted children queue FIFO.  |
 | `maxChildrenPerGroup`   | `50`    | Maximum live collector children in one group.                                                                                  |
 | `maxTotalPerGroup`      | `200`   | Maximum collector children a group may spawn over its lifetime. This is the runaway-spawn backstop.                            |
 | `waitTimeoutSecondsMax` | `600`   | Maximum timeout accepted by one `agents_wait` call. The call default is 30 seconds.                                            |
@@ -83,10 +81,15 @@ Numeric values must be positive integers. OpenClaw bounds
 `maxTotalPerGroup` to `1`–`100000`, and `waitTimeoutSecondsMax` to
 `1`–`86400`.
 
+Each group has its own execution lane, independent of the parent's ordinary
+sub-agent limit. Budget for one model stream and one Code Mode worker isolate
+per running child. Raising `maxConcurrent` increases model and Gateway resource
+use; it does not raise `maxChildrenPerGroup` or `maxTotalPerGroup`.
+
 You can override Swarm for one configured agent with
 `agents.entries.*.tools.swarm`. Per-agent values merge over the top-level
 setting. An agent's `false` or `{ enabled: false }` disables Swarm for that
-agent; `true` or `{ enabled: true }` enables it even if globally disabled.
+agent. `true` or `{ enabled: true }` enables it even if globally disabled.
 A limits-only per-agent object inherits global enablement, so it does not
 re-enable a global `false`.
 
@@ -111,7 +114,7 @@ sandbox policy can remove the native tool. If the Swarm API is absent, check
 [Code Mode activation](/tools/code-mode/configuration#activation) and
 [Sub-agents](/tools/subagents).
 
-Code Mode waits for collector results internally; its `agents.run()` API does
+Code Mode waits for collector results internally. Its `agents.run()` API does
 not require the standalone `agents_wait` tool to be allowed. The
 [low-level tool flow](/tools/swarm#use-swarm-from-other-harnesses) needs both
 `sessions_spawn` and `agents_wait` allowed. Enabling Swarm never grants tools
@@ -148,16 +151,16 @@ JSON Schema, it resolves to the value submitted through the child's
 `structured_output` tool. A failed, killed, timed-out, or schema-invalid child
 rejects the promise with an error whose `name` is `"SwarmAgentError"` and whose
 `runId`, `status`, and `message` identify the failed child and outcome. There is
-no global `SwarmAgentError` constructor; inspect the caught error's fields.
+no global `SwarmAgentError` constructor. Inspect the caught error's fields.
 Spawn or bridge failures can reject with other errors. Read the exact generated
 declarations and short orchestration idioms from `API.read("agents.d.ts")`
 inside Code Mode.
 
-Use `label` for a recognizable child name in the dashboard and sidebar. Use
+Use `label` for a recognizable child name in session transcripts. Use
 `phase` in the options to publish a phase immediately before that child
 starts, or call `phase()` when several children belong to the same stage.
-`log()` publishes a short progress note. Progress calls are fire-and-forget;
-they do not delay the script if the UI is unavailable.
+`log()` publishes a short progress note. Progress calls are fire-and-forget.
+They do not delay the script if the UI is unavailable.
 
 ### Fan out in parallel with structured results
 
@@ -219,7 +222,7 @@ try {
 
 `Promise.allSettled` preserves partial results while waiting for every child.
 `Promise.all` rejects on the first failure and does not collect the remaining
-outcomes for you. Keep completed work and report failed lanes; do not respawn
+outcomes for you. Keep completed work and report failed lanes. Do not respawn
 the batch automatically. A later provider failure can still prevent a final
 model reply, so retain the collected results for recovery.
 
@@ -230,13 +233,13 @@ Code Mode separately bounds concurrent guest bridge calls with
 `tools.codeMode.maxPendingToolCalls` (default `16`, maximum `128`). Swarm
 launches, progress notes, and result waits queue automatically when those slots
 are full. Queued requests retain their original arguments across snapshot
-resumes; stopping the run discards requests that have not been admitted.
+resumes. Stopping the run discards requests that have not been admitted.
 `maxConcurrent` still limits running children, and group child limits still
 apply. Ordinary tool calls and timers share this guest queue but have their own
 128-request waiting quota, separate from the in-flight bridge cap. Swarm launches,
 notes, and result waits do not consume that quota and retain their existing group,
 VM memory, and snapshot limits. Exceeding the ordinary quota fails the synchronous
-frontier before any new calls from it are dispatched; await smaller ordinary
+frontier before any new calls from it are dispatched. Await smaller ordinary
 batches instead. See [Code Mode](/tools/code-mode/internals#nested-tool-execution)
 for queue, cancellation, and resource-limit semantics.
 
@@ -299,7 +302,34 @@ completion path. They write a durable collector result for the parent to
 await instead of announcing or steering a reply back into the parent session.
 The accepted spawn receipt describes this path: collect the result with
 `agents_wait`, or await `agents.run()` in OpenClaw Code Mode. Do not use
-`sessions_yield` to wait for collectors; they do not send completion notifications.
+`sessions_yield` to wait for collector children. They do not send completion notifications.
+
+The collected result is the child's complete final answer, read from its recorded
+transcript, including after delete-mode cleanup archives the session. Run lifecycle
+events carry only a 4,096-character preview of a reply; the collected result does
+not stop there. One result is bounded at 100 KB. A longer answer keeps its first
+100 KB and ends with a `[truncated: frozen completion output exceeded 100KB ...]`
+notice. If the complete answer is no longer available, the result is the preview
+followed by a `[truncated: the complete child answer is unavailable ...]` notice.
+Both cases set `resultTruncated: true` on the `agents_wait` item. For reports that
+may exceed the bound, have the child write the report to a file and return its path.
+
+Collector children are one-shot. They accept no steering or follow-up input, including
+after they finish or time out. A `sessions_send` to a collector child fails with an
+error that says so, and no run starts. To continue the work, start a new child with
+the context it needs. Give it a larger `runTimeoutSeconds` if the previous child timed
+out, and omit `collect` if the work needs follow-up turns: ordinary children accept
+`sessions_send` follow-ups after they finish.
+
+If OpenClaw cannot recover the requester for a queued collector after a restart,
+it records a failed launch and asks you to submit the task again. This can affect
+queued collectors created by older versions.
+
+Embedded and CLI-backed collector turns are not offered `sessions_yield`. If an
+override reaches the tool, it returns an error explaining that collector results
+are collected explicitly. A collector that nevertheless yields through another
+path is settled at its own terminal instead of pausing, so the turn finishes and
+its collected result is recorded for the waiter.
 
 The target agent resolves in this order:
 
@@ -307,9 +337,9 @@ The target agent resolves in this order:
 2. `tools.swarm.defaultAgentId`.
 3. The requesting agent.
 
-A dedicated, lean worker agent is useful when swarm children need a smaller
+A dedicated, lean worker agent is useful when collector children need a smaller
 tool surface, cheaper model, or tighter sandbox policy. OpenClaw does not ship
-a built-in `worker` agent id; configure one before naming it as the default.
+a built-in `worker` agent id. Configure one before naming it as the default.
 Harden that worker with `tools.swarm: false` in its per-agent configuration so
 it can be spawned but cannot start swarms from its own top-level sessions:
 
@@ -317,31 +347,41 @@ it can be spawned but cannot start swarms from its own top-level sessions:
 {
   tools: { swarm: { enabled: true, defaultAgentId: "worker" } },
   agents: {
+    ownership: "explicit",
+    defaults: {
+      systemAgent: { agentId: "main" },
+    },
     entries: {
       main: {
-        default: true,
+        workspace: "~/.openclaw/workspace",
         subagents: { allowAgents: ["worker"] },
       },
       worker: { tools: { swarm: false } },
     },
   },
+  talk: { agentId: "main" },
 }
 ```
 
-Collector approvals fail closed. A child never opens an operator approval
+Collectors deny actions that require approval. A child never opens an operator approval
 prompt. A tool action that would require approval is denied, and the child can
 report that denial in its result so the script can decide what to do next.
 
 For structured output, OpenClaw adds a synthetic `structured_output` tool to
-the child and validates its payload against the supplied JSON Schema. An
-invalid payload gets one corrective nudge. If no payload is submitted, or the
+the child and validates its payload against the supplied JSON Schema. If a
+string-valued `result` fails validation, OpenClaw decodes it once as JSON and accepts
+the decoded value only if it matches the schema. Valid string results stay unchanged;
+integer literals outside JavaScript's safe range are preserved as strings.
+An invalid payload gets one corrective nudge. If no payload is submitted, or the
 retry still does not validate, the collector completion keeps the child's raw
-text, leaves `structured` unset, and includes `schemaError`. The low-level `agents_wait`
+text, leaves `structured` unset, and includes `schemaError`. Later `structured_output`
+calls in that run are not evaluated; they return `reason: "retry_budget_exhausted"`
+rather than a verdict on the new payload. The low-level `agents_wait`
 result exposes those fields for explicit recovery logic.
 
 ### Keep collector groups flat
 
-Swarm children can delegate recursively, but the usual orchestration idiom is
+Collector children can delegate recursively, but the usual orchestration idiom is
 to return work to the parent instead of expanding the collector tree:
 
 ```javascript
@@ -356,7 +396,7 @@ const plan = await agents.run("Plan this job as independent tasks.", {
 return await Promise.all(plan.tasks.map((task) => agents.run(task)));
 ```
 
-Nested collectors are discouraged for Swarm. Group caps, budgets, and
+Nested collector children are discouraged for Swarm. Group caps, budgets, and
 observability all assume flat collector groups. Set
 `agents.defaults.subagents.maxSpawnDepth: 1` when a workflow must enforce that
 shape.
@@ -364,13 +404,17 @@ shape.
 Every child has one admission owner. Announce and interactive children use
 `agents.defaults.subagents.maxChildrenPerAgent` (default `5`) and do not count
 collector children. Collector children use only `maxChildrenPerGroup` and
-`maxTotalPerGroup`; they do not consume the per-session child budget. The spawn
+`maxTotalPerGroup`. They do not consume the per-session child budget. The spawn
 depth guard still applies to both modes.
 
-After admission, children above `maxConcurrent` queue FIFO within their swarm
-group, nested inside the global sub-agent lane. These concurrency layers queue
-work rather than rejecting it. A collector spawn that exceeds either group cap
-is rejected with the relevant config key in the error.
+After admission, collector children execute in
+`subagent:swarm:<schedulerGroupKey>`, capped by the group's resolved
+`tools.swarm.maxConcurrent` (default `32`). Additional children queue FIFO.
+They do not consume the parent's ordinary `subagent:<immediate session>` slots,
+which remain capped by `agents.defaults.subagents.maxConcurrent` (default `8`).
+An ordinary child spawned by a collector uses the collector's own session lane.
+A collector spawn that exceeds either group admission cap is rejected with the
+relevant config key in the error.
 
 ## Observe a Swarm
 
@@ -378,36 +422,46 @@ Keep the parent session open in Chat while a swarm is active. The Control UI and
 native Android, iOS, and macOS chat surfaces show a compact Swarm progress widget
 between the transcript and composer.
 
-In the Control UI, cards show queued, running, completed, and failed counts with
-visible status markers. Click or tap **Child details**, or activate it with the
-keyboard, to expand available child names, status icons, and run durations. The
+In the Control UI, cards show queued, running, completed, and **failed or stopped**
+counts with visible status markers. The combined count includes failures, timeouts,
+and cancelled children; the summary does not report these outcomes separately.
+Click or tap **Child details**, or activate it with the keyboard, to expand available child names, status icons, and run durations. The
 view shows up to four active groups plus the latest completed group, with an
 explicit count when more groups are active. Each card displays at most 64 markers
-and 64 child details; its counts include every accepted group member.
+and 64 child details. Its counts include every accepted group member.
 
 The latest completed group's counts remain visible after the children finish,
 including when the parent fails before writing its final response. Groups whose
-children all succeed use a compact completion row; activate the row to expand
-child details and the final-response reminder. Running, queued, and failed groups
-keep their visible status markers and counts. These are
-child outcomes, not confirmation that the parent produced a synthesis. Counts
+children all succeed use a compact completion row. Activate the row to expand
+child details and the final-response reminder. Groups with running, queued,
+failed, or stopped children keep their visible status markers and counts. These
+are child outcomes, not confirmation that the parent produced a synthesis. Counts
 come from retained collector records, so reloading the page or cleaning up a
 child session does not reduce the reported total. They expire with the existing
-collector retention policy; this is not a permanent execution archive.
+collector retention policy. This is not a permanent execution archive.
 
 Native Android, iOS, and macOS chat surfaces still show active-only phase-grouped
 grids, capped at 256 markers per phase with an overflow count. Accessible labels
-identify each child's status. All clients present killed and timed-out children
+identify each child's status. Native clients present killed and timed-out children
 as failed. Native groups leave the widget when none of their children are queued
-or running; the native widget disappears when no active groups remain.
+or running. The native widget disappears when no active groups remain.
 
-The session sidebar keeps the normal parent/child tree. Expand the parent row to
-inspect a collector child or open its transcript without losing the swarm hierarchy.
+Collector children appear in their session transcripts. They have no session-sidebar
+rows. Their activity and unread failures still contribute to the parent’s sidebar
+ring and attention signals. Persistent spawned sessions and forks keep their
+normal sidebar nesting.
 
-Delete-mode collectors can clean up their child sessions immediately after
+Delete-mode collector children can clean up their child sessions immediately after
 completion while retaining their waitable results. Those collector records remain
 available until the group is archived after every member reaches its retention
 deadline. Retained child sessions are archived as a batch at that point.
+
+Resetting a child session durably revokes completed runs' cleanup before changing
+that session, so a delayed cleanup retry cannot delete its replacement. Reset fails
+if completion is still settling or revocation cannot be saved. If reset fails or
+the Gateway stops after revocation is saved, the original session may remain with
+that cleanup disabled. Collector results and task outcomes keep their normal
+retention, and active reset continuations keep running.
 
 ## Stop a Swarm
 
@@ -415,12 +469,15 @@ Use **Stop** in the parent chat to cancel a running swarm. A Stop targeting a
 specific parent run also cancels its associated collector children and their
 nested descendants. Collector mode changes result delivery, not cancellation
 scope. Successful cancellation prevents selected queued children from starting
-as running siblings stop; it does not cancel work from unrelated parent turns.
+as running siblings stop. It does not cancel work from unrelated parent turns.
 
-If Stop reports incomplete descendant cancellation, inspect the remaining work
-on the [Tasks page](/automation/tasks#control-ui) and retry cancellation for
+Stop also waits for the selected children's execution and queued-launch cleanup.
+A child's task can show a terminal status while that cleanup is still settling.
+
+If Stop times out or reports incomplete descendant cancellation, inspect the remaining work
+with `subagents` using `action: "list"` and retry cancellation for
 those children. A stopped parent alone does not confirm that every child stopped,
-and a cancellation acknowledgment does not promise instantaneous runtime cleanup.
+and a failed request can leave cleanup pending.
 
 Already-accepted children remain independent when the parent completes normally,
 yields, or times out. If the parent is no longer active, cancel the child tasks
@@ -432,11 +489,11 @@ session-wide Stop scopes.
 You can use Swarm without OpenClaw Code Mode. Its core tools are
 harness-independent: start collector children with
 `sessions_spawn({ collect: true })` and drain them with bounded `agents_wait`
-calls. Both tools must be allowed by the effective tool policy; default-on
+calls. Both tools must be allowed by the effective tool policy. Default-on
 Swarm does not add them to a restrictive tool profile or allowlist.
 
 Codex Code Mode automatically exposes eligible dynamic OpenClaw tools under
-`tools.*`. It does not use OpenClaw's QuickJS guest API or require
+`tools.*`. It does not use OpenClaw's guest API or require
 `tools.codeMode`, but `tools.swarm` must still be enabled. Codex harness
 `agents_wait` calls support the full 600-second timeout.
 
@@ -453,8 +510,8 @@ The new session still needs a tool policy that permits both collector tools.
 With the currently supported Codex runtime, dynamic OpenClaw tool results reach
 Code Mode as JSON text. Parse each result before reading fields. Codex also
 serializes dynamic tool calls, so `Promise.all` does not submit several
-`sessions_spawn` calls concurrently. Launch collectors in a bounded loop;
-already-accepted children can still run while later launches are submitted.
+`sessions_spawn` calls concurrently. Launch collector children in a bounded loop.
+Already-accepted children can still run while later launches are submitted.
 
 ```javascript
 function parseToolResult(value) {
@@ -522,10 +579,18 @@ return { completed, failures };
 
 Drain the pending set before synthesizing the successful results and reporting
 failures. A rejected launch or failed child must not discard results from other
-accepted children. Keep the returned run IDs for recovery; do not repeat
+accepted children. Keep the returned run IDs for recovery. Do not repeat
 successful launches or automatically rerun failed work.
 
-Each `agents_wait` call accepts 1–1000 run ids. It returns:
+Each `agents_wait` call accepts 1–1000 run ids. Use `awaitResults: true` to keep
+collection owned until **all** authorized requested collectors settle, without
+an observer polling timeout. It is mutually exclusive with `timeoutSeconds`;
+child and agent-run deadlines, tool watchdogs, cancellation, and ownership
+checks still apply. In OpenClaw Code Mode this also makes the enclosing cell
+required, so the runtime—not repeated model calls—waits for registry completion
+events. An ordinary call keeps its existing first-completion and timeout behavior.
+
+It returns:
 
 ```typescript
 type AgentsWaitResult = {
@@ -533,9 +598,11 @@ type AgentsWaitResult = {
     runId: string;
     status: "done" | "failed" | "killed" | "timeout";
     result: string;
+    resultTruncated?: true;
     structured?: unknown;
     error?: string;
     schemaError?: string;
+    reason?: "yielded_without_result";
     sessionKey: string;
     label?: string;
     usage?: { inputTokens: number; outputTokens: number };
@@ -548,11 +615,28 @@ type AgentsWaitResult = {
 };
 ```
 
+`not_found` means no collector run with that ID is visible to the caller. When
+every requested ID is your own announcing child (started without `collect=true`
+and with completion messages enabled), the call is rejected as an input error
+instead: its result arrives as a completion message to your session, so continue
+other work or end the turn. Mixed batches keep their other results and report
+those children as `not_found`.
+
 A completed item can contain partial `structured` data and still have
 `status: "failed"` when the provider or runtime fails afterward. In that case,
 `error` is the authoritative terminal failure. Recovery code should prefer a
 nonblank `error`, then `schemaError`, then a nonblank `result`, and finally a
 run/status fallback.
+
+`reason: "yielded_without_result"` marks a collector that the registry settled as
+failed after a legacy yield with no recorded outcome. Branch on it rather than on
+`error` text; every other completion omits it.
+
+`resultTruncated: true` marks a `result` that may be incomplete: the child's answer
+exceeded the 100 KB result bound, or its complete answer was no longer available and
+only the 4,096-character preview remained. Each case ends `result` with a
+`[truncated: ...]` notice. Do not treat a truncated result as the child's whole report,
+and do not parse it as complete structured data.
 
 Individual failed items do not make a mixed `agents_wait` poll a top-level tool
 error. The poll remains a successful JSON result so callers can process its
@@ -560,27 +644,26 @@ error. The poll remains a successful JSON result so callers can process its
 
 The call returns immediately when any requested child is already complete,
 when at least one pending child completes, when no valid pending ids remain,
-or when its timeout expires. Completed records are idempotent, so passing an
-already-completed run id returns its result again. Only the spawning session
+or when its timeout expires. Passing an already-completed run id returns the same saved result again. Only the spawning session
 or its authorized parent chain can wait on a collector.
 
 This is bounded long polling, not a busy status loop. Keep passing only the
 remaining run ids until `pending` is empty. Collector mode supports native
-OpenClaw sub-agents; it does not support ACP runtime, thread binding, visible
+OpenClaw sub-agents. It does not support ACP runtime, thread binding, visible
 sessions, or persistent session mode.
 
 <a id="limits-and-roadmap" />
 
 ## Limits
 
-Swarm runs one-shot collector children; there is no stateful multi-turn worker
-API. Children run on the local Gateway's sub-agent lane, and spawns have no
+Swarm runs one-shot collector children. There is no stateful multi-turn worker
+API. Children run on the local Gateway in their group's Swarm lane, and spawns have no
 cloud-placement option. Saved workflow definitions and a graph DSL are not part
 of Swarm's current direction.
 
 ## Related
 
-- [Code Mode](/tools/code-mode) for the QuickJS guest runtime and activation rules
+- [Code Mode](/tools/code-mode) for JavaScript executors and activation rules
 - [Sub-agents](/tools/subagents) for child policy, isolation, and session behavior
 - [Multi-agent sandbox tools](/tools/multi-agent-sandbox-tools) for per-agent restrictions
 - [Tools overview](/tools) for tool profiles and policy routing

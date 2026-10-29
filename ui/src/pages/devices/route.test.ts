@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
 
-import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { page } from "./route.ts";
 
 it("loads Devices from the connection current after the route module yield", async () => {
@@ -25,19 +26,16 @@ it("loads Devices from the connection current after the route module yield", asy
   const currentRequest = vi.fn(response("current-node"));
   const oldClient = createTestGatewayClient(oldRequest);
   const currentClient = createTestGatewayClient(currentRequest);
-  const harness = createApplicationGateway({
-    client: oldClient,
-    phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: "main",
-    sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-  });
+  const harness = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      client: oldClient,
+      phase: "connected",
+      assistantAgentId: "main",
+      sessionKey: "agent:main:main",
+    }),
+  );
   const runtimeConfig = createRuntimeConfigCapability(harness.gateway);
-  onTestFinished(runtimeConfig.dispose);
+  onTestFinished(() => runtimeConfig.dispose());
   const refresh = vi.spyOn(runtimeConfig, "refresh").mockResolvedValue(undefined);
   const context = {
     gateway: harness.gateway,
@@ -47,14 +45,10 @@ it("loads Devices from the connection current after the route module yield", asy
   if (!page.loader) {
     throw new Error("Devices route has no loader");
   }
-  const pending = page.loader(context, {
-    signal: new AbortController().signal,
-    shouldRun: () => true,
-    revalidating: false,
-    location: { pathname: "/devices", search: "", hash: "" },
-    deps: "",
-    cause: "navigation",
-  } satisfies RouteLoaderOptions);
+  const pending = page.loader(
+    context,
+    createRouteLoaderOptions({ pathname: "/devices", search: "", hash: "" }),
+  );
   harness.publish({ ...harness.gateway.snapshot, client: currentClient });
   const data = await pending;
 

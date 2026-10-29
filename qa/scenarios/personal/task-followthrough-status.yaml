@@ -22,7 +22,7 @@ scenario:
     - Final reply includes pending, blocked, and done status labels.
     - Final reply does not claim completion before the status artifact exists.
   docsRefs:
-    - docs/automation/tasks.md
+    - docs/concepts/personal-agent-benchmark-pack.md
     - docs/automation/standing-orders.md
   codeRefs:
     - extensions/qa-lab/src/providers/mock-openai/server.ts

@@ -1,7 +1,6 @@
-/** Adaptive Node heap policy for the managed Gateway service. */
 import os from "node:os";
+import { parseNodeOptionsEnvVar } from "../../node-runtime-env.mjs";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
-import { parseNodeOptionsEnvVar } from "../infra/node-options.js";
 import { resolveServiceEntrypointIndex } from "./service-layout.js";
 import {
   hasGatewayServiceEnvironmentOverride,
@@ -29,17 +28,12 @@ export type GatewayHeapLimitReport = GatewayHeapLimit & {
   execArgv: string[];
 };
 
-type GatewayHeapMemoryInputs = {
-  constrainedMemoryBytes?: number;
-  physicalMemoryBytes?: number;
-};
-
-function readAvailableMemory(params: GatewayHeapMemoryInputs): {
+function readAvailableMemory(): {
   bytes: number | null;
   source: GatewayHeapMemorySource;
 } {
-  const constrainedMemoryBytes = params.constrainedMemoryBytes ?? process.constrainedMemory();
-  const physicalMemoryBytes = params.physicalMemoryBytes ?? os.totalmem();
+  const constrainedMemoryBytes = process.constrainedMemory();
+  const physicalMemoryBytes = os.totalmem();
   const validPhysical = Number.isSafeInteger(physicalMemoryBytes) && physicalMemoryBytes > 0;
   if (
     Number.isSafeInteger(constrainedMemoryBytes) &&
@@ -54,8 +48,8 @@ function readAvailableMemory(params: GatewayHeapMemoryInputs): {
   };
 }
 
-function resolveGatewayHeapLimit(params: GatewayHeapMemoryInputs = {}): GatewayHeapLimit {
-  const memory = readAvailableMemory(params);
+function resolveGatewayHeapLimit(): GatewayHeapLimit {
+  const memory = readAvailableMemory();
   if (memory.bytes === null || memory.bytes < 2 * MEBIBYTE_BYTES) {
     return {
       maxOldSpaceSizeMiB: null,
@@ -131,7 +125,7 @@ export function resolveGatewayHeapNodeOptions(
   return limit === null ? "" : `--max-old-space-size=${Math.min(GATEWAY_HEAP_CAP_MIB, limit)}`;
 }
 
-function readServiceHeapExecArgv(programArguments: readonly string[]): string[] {
+export function readServiceHeapExecArgv(programArguments: readonly string[]): string[] {
   const entrypointIndex = resolveServiceEntrypointIndex(programArguments);
   return parseHeapControls(programArguments.slice(1, entrypointIndex ?? 1));
 }
@@ -156,11 +150,10 @@ export function resolveGatewayHeapExecArgv(
 
 export function inspectGatewayHeapLimit(
   nodeOptions: string | undefined,
-  memory: GatewayHeapMemoryInputs = {},
   programArguments: readonly string[] = [],
 ): GatewayHeapLimitReport {
   return {
-    ...resolveGatewayHeapLimit(memory),
+    ...resolveGatewayHeapLimit(),
     nodeOptions: resolveGatewayHeapNodeOptions(nodeOptions),
     execArgv: readServiceHeapExecArgv(programArguments),
   };

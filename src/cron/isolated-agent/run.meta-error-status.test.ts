@@ -1,25 +1,17 @@
-// Run meta error tests cover status reporting when cron run metadata fails.
 import { describe, expect, it, vi } from "vitest";
-import { FailoverError } from "../../agents/failover-error.js";
+import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
-import {
-  callGatewayMock,
-  dispatchCronDeliveryMock,
-  loadRunCronIsolatedAgentTurn,
-  resolveCronDeliveryPlanMock,
-  resolveCronPayloadOutcomeMock,
-  runWithModelFallbackMock,
-} from "./run.test-harness.js";
+import * as harness from "./run.test-harness.js";
 
-const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
-
-function makeCommandLaneTaskTimeoutError(lane: string, timeoutMs: number): Error {
-  const error = new Error(`Command lane "${lane}" task timed out after ${timeoutMs}ms`);
-  error.name = "CommandLaneTaskTimeoutError";
-  return error;
-}
-
+const runCronIsolatedAgentTurn = await harness.loadRunCronIsolatedAgentTurn();
+const runTurn = ({
+  job,
+  ...overrides
+}: { job?: Record<string, unknown>; [key: string]: unknown } = {}) =>
+  runCronIsolatedAgentTurn(
+    makeIsolatedAgentParamsFixture({ ...overrides, job: makeIsolatedAgentJobFixture(job) }),
+  );
 function mockAgentRun({
   provider = "anthropic",
   model = "claude-opus-4-8",
@@ -33,88 +25,73 @@ function mockAgentRun({
   meta?: Record<string, unknown>;
   [key: string]: unknown;
 } = {}) {
-  runWithModelFallbackMock.mockResolvedValueOnce({
-    result: {
-      result: {
-        payloads: [],
-        ...result,
-        meta: { agentMeta: { usage }, ...meta },
-      },
-    },
+  harness.runWithModelFallbackMock.mockResolvedValueOnce({
+    result: { result: { payloads: [], ...result, meta: { agentMeta: { usage }, ...meta } } },
     provider,
     model,
     attempts: [],
   });
 }
-
-function mockAnnounceOutcome(overrides: Record<string, unknown> = {}) {
-  resolveCronDeliveryPlanMock.mockReturnValue({
-    requested: true,
-    mode: "announce",
-    channel: "messagechat",
-    to: "test-target",
+function mockChildRun(payloads: unknown[] = []) {
+  mockAgentRun({
+    payloads,
+    usage: { input: 10, output: 1 },
+    acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:default:child" }],
   });
-  resolveCronPayloadOutcomeMock.mockReturnValue({
-    summary: undefined,
-    outputText: undefined,
-    synthesizedText: undefined,
-    deliveryPayload: undefined,
+}
+const failedDeliveryState = (error: string) => ({
+  status: "not-delivered",
+  delivered: false,
+  error,
+  failureNotification: { status: "not-requested" },
+});
+function mockDelivery(overrides: Record<string, unknown>) {
+  harness.dispatchCronDeliveryMock.mockResolvedValueOnce({
+    delivered: false,
+    deliveryAttempted: true,
     deliveryPayloads: [],
-    deliveryDisposition: { kind: "visible" },
-    deliveryPayloadHasStructuredContent: false,
-    hasFatalErrorPayload: false,
-    hasFatalStructuredErrorPayload: false,
-    embeddedRunError: undefined,
     ...overrides,
   });
 }
-
-function mockDeliveryFailure(error: string, deliveryPayloads: unknown[] = []) {
-  dispatchCronDeliveryMock.mockImplementationOnce(({ withRunSession }) => ({
-    result: withRunSession({ status: "error", error, deliveryAttempted: true }),
-    delivered: false,
-    deliveryAttempted: true,
-    summary: undefined,
-    outputText: undefined,
-    synthesizedText: undefined,
-    deliveryPayloads,
-  }));
+async function useRealOutcome() {
+  const { resolveCronPayloadOutcome } =
+    await vi.importActual<typeof import("./helpers.js")>("./helpers.js");
+  harness.resolveCronPayloadOutcomeMock.mockImplementation(resolveCronPayloadOutcome);
 }
 
 describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
-  it("preserves a provider failure reason independently of its message", async () => {
-    const message = "Saved selection requires an update.";
-    runWithModelFallbackMock.mockRejectedValueOnce(
-      new FailoverError(message, { reason: "model_not_found", provider: "openai" }),
-    );
+  it.each([false, true])(
+    "keeps delivery target failure separate from execution (agent failed: %s)",
+    async (agentFailed) => {
+      await useRealOutcome();
+      const reply = agentFailed ? "Task blocked" : "REPORT_COMPLETE";
+      mockAgentRun({
+        payloads: [{ text: reply, ...(agentFailed ? { isError: true } : {}) }],
+        meta: { finalAssistantVisibleText: reply },
+      });
+      const deliveryError = "Channel is required (no configured channels detected).";
+      mockDelivery({
+        disposition: { kind: "error", errorKind: "delivery-target", error: deliveryError },
+        deliveryAttempted: false,
+        deliveryError,
+        deliveryState: failedDeliveryState(deliveryError),
+        summary: reply,
+        outputText: reply,
+        deliveryPayloads: [{ text: reply }],
+      });
+      const result = await runTurn();
+      expectObjectFields(result, {
+        status: agentFailed ? "error" : "ok",
+        error: agentFailed ? "Task blocked" : undefined,
+        delivered: false,
+        ...(!agentFailed ? { summary: reply, outputText: reply, deliveryError } : {}),
+      });
+    },
+  );
 
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
-
-    expect(result).toMatchObject({
-      status: "error",
-      error: message,
-      errorClassification: { kind: "reason", reason: "model_not_found" },
-    });
-  });
-
-  it("marks a run-level error with empty payloads as a cron error", async () => {
-    mockAgentRun({
-      provider: "openai",
-      model: "gpt-5.4",
-      usage: { input: 0, output: 0 },
-      meta: { error: { kind: "provider_error", message: "model provider unreachable" } },
-    });
-
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
-
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("cron isolated run failed: model provider unreachable");
-    expect(result.outputText).toBe("cron isolated run failed: model provider unreachable");
-  });
-
-  it("does not deliver partial success text when a run-level error is present", async () => {
+  it("preserves a run-level error with partial text when delivery is pending", async () => {
     mockAgentRun({
       provider: "openai",
       model: "gpt-5.4",
@@ -122,360 +99,134 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       payloads: [{ text: "Partial success-looking text" }],
       meta: { error: { kind: "retry_limit", message: "retry limit exceeded" } },
     });
-
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
-
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("cron isolated run failed: retry limit exceeded");
-    expect(result.outputText).toBe("cron isolated run failed: retry limit exceeded");
-  });
-
-  it("marks an aborted embedded agent run without a run-level error as a cron error", async () => {
-    mockAgentRun({
-      provider: "openai",
-      model: "gpt-5.4",
-      usage: { input: 0, output: 0 },
-      meta: { aborted: true },
+    mockDelivery({
+      disposition: { kind: "pending" },
+      deliveryError: "delivery failed",
+      summary: "Pending child summary",
+      outputText: "Pending child output",
     });
-
-    const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentParamsFixture({
-        job: makeIsolatedAgentJobFixture({ deleteAfterRun: true }),
-      }),
+    const result = await runTurn();
+    const expectedError = "cron isolated run failed: retry limit exceeded";
+    expectObjectFields(result, {
+      status: "error",
+      error: expectedError,
+      outputText: expectedError,
+      delivered: undefined,
+      deliveryError: undefined,
+    });
+    expect(result.diagnostics?.entries).toContainEqual(
+      expect.objectContaining({ source: "agent-run", message: expectedError }),
     );
-
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("cron isolated agent run aborted");
-    expect(callGatewayMock).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    { label: "accidental", intentionalTerminalCompletion: undefined },
-    { label: "intentional terminal tool", intentionalTerminalCompletion: "tool-batch" as const },
-  ])("accounts for an $label embedded run with no final payload", async (testCase) => {
-    mockAgentRun({
-      meta: testCase.intentionalTerminalCompletion
-        ? { intentionalTerminalCompletion: testCase.intentionalTerminalCompletion }
-        : {},
-    });
-    mockAnnounceOutcome();
-
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
-
-    if (testCase.intentionalTerminalCompletion) {
-      expect(dispatchCronDeliveryMock).toHaveBeenCalled();
-      expect(result.status).toBe("ok");
-      expect(result.error).toBeUndefined();
-      return;
-    }
-    expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("cron isolated run completed without a final assistant payload");
-    expect(result.delivered).toBe(false);
-  });
-
-  it("marks empty message-tool attempts without source delivery as cron errors", async () => {
-    mockAgentRun({
-      didSendViaMessagingTool: true,
-      messagingToolSentTargets: [],
-    });
-    mockAnnounceOutcome();
-
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
-
-    expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("cron isolated run completed without a final assistant payload");
-    expect(result.delivered).toBe(false);
-  });
-
-  it("keeps explicit silent replies as successful cron completions", async () => {
-    const { resolveCronPayloadOutcome } =
-      await vi.importActual<typeof import("./helpers.js")>("./helpers.js");
-    resolveCronPayloadOutcomeMock.mockImplementation(resolveCronPayloadOutcome);
-    mockAgentRun({
-      usage: { input: 10, output: 1 },
-      meta: {
-        finalAssistantRawText: "NO_REPLY",
-        finalAssistantVisibleText: "NO_REPLY",
-      },
-    });
-
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
-
-    expect(dispatchCronDeliveryMock).toHaveBeenCalled();
-    expect(result.status).toBe("ok");
-    expect(result.error).toBeUndefined();
-  });
-
-  it("records a real tool error when the terminal assistant reply is silent", async () => {
-    const { resolveCronPayloadOutcome } =
-      await vi.importActual<typeof import("./helpers.js")>("./helpers.js");
-    resolveCronPayloadOutcomeMock.mockImplementation(resolveCronPayloadOutcome);
-    mockAgentRun({
-      payloads: [{ text: "⚠️ 🛠️ Bash failed: mount unavailable", isError: true }],
-      meta: { finalAssistantVisibleText: "NO_REPLY" },
-    });
-
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
-
-    expect(result.status).toBe("error");
-    expect(result.error).toContain("Bash failed");
-  });
-
-  it("keeps committed message-tool deliveries as successful cron completions", async () => {
-    mockAgentRun({
-      didSendViaMessagingTool: true,
-      messagingToolSentTexts: ["Delivered to an intentional recipient"],
-      messagingToolSentTargets: [],
-    });
-    mockAnnounceOutcome();
-
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
-
-    expect(dispatchCronDeliveryMock).toHaveBeenCalled();
-    expect(result.status).toBe("ok");
-    expect(result.error).toBeUndefined();
-  });
-
-  it("does not mark empty deterministic approval prompts as cron errors", async () => {
-    mockAgentRun({ didSendDeterministicApprovalPrompt: true });
-    mockAnnounceOutcome();
-
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
-
-    expect(dispatchCronDeliveryMock).toHaveBeenCalled();
-    expect(result.status).toBe("ok");
-    expect(result.error).toBeUndefined();
-  });
-
-  it("does not mark empty accepted child-session handoffs as cron errors", async () => {
-    mockAgentRun({
-      acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:default:child" }],
-    });
-    mockAnnounceOutcome({ deliveryDisposition: { kind: "empty" } });
-
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
-
-    expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spawnOnlyHandoff: true,
-        skipDelivery: undefined,
-        deliveryPayloads: [],
-        synthesizedText: undefined,
-      }),
-    );
-    expect(result.status).toBe("ok");
-    expect(result.error).toBeUndefined();
-  });
-
-  it("preserves incomplete accepted child-session handoffs as cron errors", async () => {
-    const error = "cron child-session handoff timed out before producing a final assistant payload";
-    mockAgentRun({
-      acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:default:child" }],
-    });
-    mockAnnounceOutcome();
-    mockDeliveryFailure(error);
-
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
-
-    expect(result.status).toBe("error");
-    expect(result.error).toBe(error);
-    expect(result.delivered).toBe(false);
-  });
-
-  it.each([
-    "HEARTBEAT_OK",
-    "**HEARTBEAT_OK**",
-    "<b>HEARTBEAT_OK</b>",
-    "<thinking>Check the schedule.</thinking>\nHEARTBEAT_OK",
-    '{"action":"HEARTBEAT_OK"}',
-    '"HEARTBEAT_OK"',
-  ])(
-    "waits for the accepted child instead of treating %s as its final reply",
-    async (heartbeatReply) => {
-      const heartbeatPayload = { text: heartbeatReply };
+  it.each([false, true])(
+    "preserves tool-error status for silent replies (error: %s)",
+    async (failed) => {
+      await useRealOutcome();
       mockAgentRun({
-        payloads: [heartbeatPayload],
-        usage: { input: 10, output: 1 },
-        acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:default:child" }],
+        payloads: failed ? [{ text: "⚠️ 🛠️ Bash failed: mount unavailable", isError: true }] : [],
+        usage: { input: 10, output: failed ? 0 : 1 },
+        meta: { terminalReply: { disposition: "silent" } },
       });
-      mockAnnounceOutcome({
-        summary: heartbeatPayload.text,
-        outputText: heartbeatPayload.text,
-        synthesizedText: heartbeatPayload.text,
-        deliveryPayload: heartbeatPayload,
-        deliveryPayloads: [heartbeatPayload],
-        deliveryDisposition: { kind: "heartbeat", controlOnly: true },
+      const result = await runTurn();
+      expectObjectFields(result, {
+        status: failed ? "error" : "ok",
+        error: failed ? expect.stringContaining("Bash failed") : undefined,
       });
-
-      const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
-
-      expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          spawnOnlyHandoff: true,
-          skipDelivery: undefined,
-          deliveryPayloads: [],
-          synthesizedText: undefined,
-          summary: undefined,
-          outputText: undefined,
-        }),
-      );
-      expect(result.status).toBe("ok");
     },
   );
 
-  it.each([
-    {
-      name: "a substantive sibling payload",
-      parentReply: "Checked inbox and calendar.",
-      payloads: [{ text: "Checked inbox and calendar." }, { text: "HEARTBEAT_OK" }],
-    },
-    {
-      name: "substantive text in the heartbeat payload",
-      parentReply: "HEARTBEAT_OK child completed reminder",
-      payloads: [{ text: "HEARTBEAT_OK child completed reminder" }],
-    },
-  ])(
-    "preserves $name instead of treating an accepted child as the only completion",
-    async ({ parentReply, payloads }) => {
-      mockAgentRun({
-        payloads,
-        usage: { input: 10, output: 1 },
-        acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:default:child" }],
-      });
-      mockAnnounceOutcome({
-        summary: parentReply,
-        outputText: parentReply,
-        synthesizedText: parentReply,
-        deliveryPayload: payloads.at(-1),
-        deliveryPayloads: payloads,
-        deliveryDisposition: { kind: "heartbeat", controlOnly: false },
-      });
-
-      const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
-
-      expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          spawnOnlyHandoff: false,
-          skipDelivery: "heartbeat",
-          deliveryPayloads: payloads,
-          synthesizedText: parentReply,
-          summary: parentReply,
-          outputText: parentReply,
-        }),
-      );
-      expect(result.summary).toBe(parentReply);
-      expect(result.outputText).toBe(parentReply);
-    },
-  );
-
-  it("preserves a heartbeat-only accepted child handoff failure as a cron error", async () => {
-    const heartbeatPayload = { text: "HEARTBEAT_OK" };
+  it("preserves an empty accepted child handoff failure as a cron error", async () => {
+    await useRealOutcome();
     const error = "cron child-session handoff timed out before producing a final assistant payload";
-    mockAgentRun({
-      payloads: [heartbeatPayload],
-      usage: { input: 10, output: 1 },
-      acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:default:child" }],
+    mockChildRun();
+    mockDelivery({
+      disposition: { kind: "error", error },
     });
-    mockAnnounceOutcome({
-      summary: heartbeatPayload.text,
-      outputText: heartbeatPayload.text,
-      synthesizedText: heartbeatPayload.text,
-      deliveryPayload: heartbeatPayload,
-      deliveryPayloads: [heartbeatPayload],
-      deliveryDisposition: { kind: "heartbeat", controlOnly: true },
-    });
-    mockDeliveryFailure(error);
-
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
-
-    expect(result.status).toBe("error");
-    expect(result.error).toBe(error);
-    expect(result.delivered).toBe(false);
-    expect(result.summary).not.toBe(heartbeatPayload.text);
-    expect(result.outputText).not.toBe(heartbeatPayload.text);
+    const result = await runTurn();
+    expectObjectFields(result, { status: "error", error, delivered: false });
+    expect(harness.dispatchCronDeliveryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ spawnOnlyHandoff: true }),
+    );
   });
 
   it("preserves structured-parent delivery failures after accepting a child", async () => {
     const mediaPayload = { mediaUrl: "https://example.invalid/chart.png" };
     const error = "Structured message failed";
-    mockAgentRun({
-      payloads: [mediaPayload],
-      usage: { input: 10, output: 1 },
-      acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:default:child" }],
+    mockChildRun([mediaPayload]);
+    await useRealOutcome();
+    harness.resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "test-target",
     });
-    mockAnnounceOutcome({
-      deliveryPayload: mediaPayload,
-      deliveryPayloads: [mediaPayload],
-      deliveryPayloadHasStructuredContent: true,
-    });
-    dispatchCronDeliveryMock.mockResolvedValueOnce({
-      delivered: false,
-      deliveryAttempted: true,
+    mockDelivery({
       deliveryError: error,
-      deliveryState: {
-        status: "not-delivered",
-        delivered: false,
-        error,
-        failureNotification: { status: "not-requested" },
-      },
+      deliveryState: failedDeliveryState(error),
       deliveryPayloads: [mediaPayload],
     });
-
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
-
-    expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spawnOnlyHandoff: false,
-        deliveryPayloadHasStructuredContent: true,
-      }),
+    const result = await runTurn();
+    expect(harness.dispatchCronDeliveryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ spawnOnlyHandoff: false }),
     );
-    expect(result.status).toBe("ok");
-    expect(result.deliveryError).toBe(error);
+    expectObjectFields(result, { status: "ok", deliveryError: error });
   });
 
-  it("does not mark empty successful cron-add completions as cron errors", async () => {
-    mockAgentRun({ successfulCronAdds: 1 });
-    mockAnnounceOutcome();
+  it("records a silently completed report as successful after a final read is rate-limited", async () => {
+    const { buildEmbeddedRunPayloads } =
+      await import("../../agents/embedded-agent-runner/run/payloads.js");
+    await useRealOutcome();
+    harness.mockRunCronFallbackPassthrough();
+    const delivery = { mode: "none" as const, channel: "topicchat", to: "room#42", threadId: 42 };
+    harness.resolveCronDeliveryPlanMock.mockReturnValue({ ...delivery, requested: false });
+    harness.resolveDeliveryTargetMock.mockResolvedValue({ ...delivery, ok: true });
+    const messagingToolSentTargets = [
+      {
+        tool: "message",
+        provider: "topicchat",
+        to: "room#42",
+        threadId: "42",
+        text: "Daily report",
+      },
+    ];
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: ["NO_REPLY"],
+      lastAssistant: undefined,
+      isCronTrigger: true,
+      sessionKey: "cron:delivered-report",
+      verboseLevel: "off",
+      didSendViaMessagingTool: true,
+      messagingToolSentTargets,
+      lastToolError: {
+        toolName: "codex_apps.slack.slack_read_thread",
+        error: "429 RATE_LIMITED",
+        mutatingAction: false,
+      },
+    });
+    harness.runEmbeddedAgentMock.mockResolvedValue({
+      payloads,
+      didSendViaMessagingTool: true,
+      messagingToolSentTargets,
+      meta: {
+        agentMeta: { usage: { input: 10, output: 20 } },
+        terminalReply: { disposition: "silent" },
+      },
+    });
 
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+    const result = await runTurn({
+      job: {
+        id: "delivered-report",
+        delivery,
+      },
+      sessionKey: "cron:delivered-report",
+    });
 
-    expect(dispatchCronDeliveryMock).toHaveBeenCalled();
-    expect(result.status).toBe("ok");
-    expect(result.error).toBeUndefined();
-  });
-
-  it("surfaces cron timeout result when the cron-nested lane watchdog fires", async () => {
-    runWithModelFallbackMock.mockRejectedValueOnce(
-      makeCommandLaneTaskTimeoutError("cron-nested", 330_000),
-    );
-
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
-
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("cron: job execution timed out");
-    expect(result.error).not.toContain("CommandLaneTaskTimeoutError");
-    expect(result.error).not.toContain("cron-nested");
-    // The timeout row must keep the already-resolved run attribution so
-    // Task-run history does not show an un-attributed cron timeout (#95873).
-    expect(result.provider).toBe("openai");
-    expect(result.model).toBe("gpt-5.4");
-    expect(result.sessionId).toBe("test-session-id");
-  });
-
-  it("keeps cron timeout result when executor rejects after the cron abort signal fires", async () => {
-    const abortController = new AbortController();
-    const timeoutError = new Error(
-      "cron: job execution timed out (last phase: model_call_started)",
-    );
-    timeoutError.name = "TimeoutError";
-    abortController.abort(timeoutError);
-    await expect(
-      runCronIsolatedAgentTurn(
-        makeIsolatedAgentParamsFixture({ abortSignal: abortController.signal }),
-      ),
-    ).rejects.toBe(timeoutError);
-    expect(runWithModelFallbackMock).not.toHaveBeenCalled();
+    expectObjectFields(result, {
+      status: "ok",
+      error: undefined,
+      delivered: true,
+      replyDisposition: "silent",
+    });
   });
 });

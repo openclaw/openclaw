@@ -4,7 +4,6 @@ import path from "node:path";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { writeJson } from "../../infra/json-files.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
-import { isRecord } from "../bundle-mcp-adapter.js";
 
 export function injectBundleMcpBackendArgs(
   backend: CliBackendConfig,
@@ -25,10 +24,15 @@ export async function writeTemporaryBundleMcpJson(
 ): Promise<{ filePath: string; cleanup: () => Promise<void> }> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   const filePath = path.join(tempDir, fileName);
-  if (atomic) {
-    await writeJson(filePath, value, { trailingNewline: true });
-  } else {
-    await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+  try {
+    if (atomic) {
+      await writeJson(filePath, value, { trailingNewline: true });
+    } else {
+      await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+    }
+  } catch (error) {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
   }
   return {
     filePath,
@@ -39,13 +43,7 @@ export async function writeTemporaryBundleMcpJson(
 export function withOpenClawMcpCaptureHeader(
   config: Record<string, unknown>,
   captureKey: string,
-  missingServerError?: string,
 ): Record<string, unknown> {
-  const mcpServers = isRecord(config.mcpServers) ? config.mcpServers : {};
-  const openclaw = isRecord(mcpServers.openclaw) ? mcpServers.openclaw : undefined;
-  if (!openclaw && missingServerError) {
-    throw new Error(missingServerError);
-  }
   return applyMergePatch(config, {
     mcpServers: {
       openclaw: {

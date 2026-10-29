@@ -13,10 +13,10 @@ For the usual OpenClaw iMessage deployment, run the Gateway and `imsg` on the sa
 </Note>
 
 <Warning>
-BlueBubbles support was removed. Migrate `channels.bluebubbles` configs to `channels.imessage`; OpenClaw supports iMessage through `imsg` only. Start with [BlueBubbles removal and the imsg iMessage path](/announcements/bluebubbles-imessage) for the short announcement, or [Coming from BlueBubbles](/channels/imessage-from-bluebubbles) for the full migration table.
+BlueBubbles support was removed. Migrate `channels.bluebubbles` configs to `channels.imessage`. OpenClaw supports iMessage through `imsg` only. Start with [BlueBubbles removal and the imsg iMessage path](/announcements/bluebubbles-imessage) for the short announcement, or [Coming from BlueBubbles](/channels/imessage-from-bluebubbles) for the full migration table.
 </Warning>
 
-Status: native external CLI integration. The Gateway spawns `imsg rpc` and speaks JSON-RPC over stdio — no separate daemon or port. Private API mode is strongly encouraged for a complete iMessage channel; replies, tapbacks, effects, polls, attachment replies, and group actions require `imsg launch` and a successful private API probe.
+Status: native external CLI integration. The Gateway spawns `imsg rpc` and speaks JSON-RPC over stdio — no separate daemon or port. Private API mode is strongly encouraged for a complete iMessage channel. Replies, tapbacks, effects, polls, attachment replies, and group actions require `imsg launch` and a successful private API check.
 
 For the common local setup, OpenClaw setup can offer a user-confirmed Homebrew install or update for `imsg` on the signed-in Messages Mac. Manual setup and SSH-wrapper topologies remain operator-managed: install or update `imsg` in the same user context that will run the Gateway or wrapper.
 
@@ -39,7 +39,7 @@ For the common local setup, OpenClaw setup can offer a user-confirmed Homebrew i
 - [iMessage access control and routing](/channels/imessage/access-control) — DM and group policy, mention gating, per-group prompts, ACP bindings, and config writes.
 - [iMessage deployment patterns](/channels/imessage/deployment) — dedicated bot macOS user, remote Mac over Tailscale, multi-account, and DM history.
 - [iMessage media and attachments](/channels/imessage/media) — attachment ingestion and staging, outbound chunking, and delivery target formats.
-- [iMessage private API actions](/channels/imessage/rich-messages) — tapbacks, threaded replies, effects, native polls, approval controls, and question reactions.
+- [iMessage private API actions](/channels/imessage/rich-messages) — tapbacks, threaded replies, effects, native polls, approval controls, and agent questions.
 - [iMessage message behavior](/channels/imessage/messaging) — split-send DM coalescing and automatic inbound recovery after a restart.
 - [iMessage troubleshooting](/channels/imessage/troubleshooting) — symptom-first fixes and the configuration reference links.
 
@@ -78,7 +78,7 @@ Every section heading from the previous single-page version keeps its anchor her
 - <a id="ssh-wrapper-sends-fail-with-appleevents-1743" />[SSH wrapper sends fail with AppleEvents -1743](/channels/imessage/setup#ssh-wrapper-sends-fail-with-appleevents-1743)
 - <a id="dm-policy" />[DM policy](/channels/imessage/access-control#dm-policy)
 - <a id="group-policy-%2B-mentions" />[Group policy + mentions](/channels/imessage/access-control#group-policy-%2B-mentions)
-- <a id="sessions-and-deterministic-replies" />[Sessions and deterministic replies](/channels/imessage/access-control#sessions-and-deterministic-replies)
+- <a id="sessions-and-deterministic-replies" />[Sessions and reply routing](/channels/imessage/access-control#sessions-and-deterministic-replies)
 - <a id="dedicated-bot-macos-user-separate-imessage-identity" />[Dedicated bot macOS user (separate iMessage identity)](/channels/imessage/deployment#dedicated-bot-macos-user-separate-imessage-identity)
 - <a id="remote-mac-over-tailscale-example" />[Remote Mac over Tailscale (example)](/channels/imessage/deployment#remote-mac-over-tailscale-example)
 - <a id="multi-account-pattern" />[Multi-account pattern](/channels/imessage/deployment#multi-account-pattern)
@@ -92,7 +92,7 @@ Every section heading from the previous single-page version keeps its anchor her
 - <a id="read-receipts-and-typing" />[Read receipts and typing](/channels/imessage/rich-messages#read-receipts-and-typing)
 - <a id="inbound-tapbacks" />[Inbound tapbacks](/channels/imessage/rich-messages#inbound-tapbacks)
 - <a id="approval-polls-and-reactions" />[Approval polls and reactions](/channels/imessage/rich-messages#approval-polls-and-reactions)
-- <a id="question-reactions-1-2-3-4" />[Question reactions (1️⃣ / 2️⃣ / 3️⃣ / 4️⃣)](/channels/imessage/rich-messages#question-reactions-1-2-3-4)
+- <a id="question-reactions-1-2-3-4" />[Agent questions](/channels/imessage/rich-messages#question-reactions-1-2-3-4)
 - <a id="imsg-not-found-or-rpc-unsupported" />[imsg not found or RPC unsupported](/channels/imessage/troubleshooting#imsg-not-found-or-rpc-unsupported)
 - <a id="messages-send-but-inbound-imessages-do-not-arrive" />[Messages send but inbound iMessages do not arrive](/channels/imessage/troubleshooting#messages-send-but-inbound-imessages-do-not-arrive)
 - <a id="gateway-is-not-running-on-macos" />[Gateway is not running on macOS](/channels/imessage/troubleshooting#gateway-is-not-running-on-macos)
@@ -113,13 +113,22 @@ Every section heading from the previous single-page version keeps its anchor her
   <Card title="Pairing" icon="link" href="/channels/pairing">
     DM authentication and pairing flow.
   </Card>
+  <Card title="Reactions" icon="thumbs-up" href="/tools/reactions">
+    Emoji reaction semantics for the `message` tool.
+  </Card>
   <Card title="Groups" icon="users" href="/channels/groups">
     Group chat behavior and mention gating.
   </Card>
-  <Card title="Channel Routing" icon="route" href="/channels/channel-routing">
+  <Card title="Channel routing" icon="route" href="/channels/channel-routing">
     Session routing for messages.
   </Card>
   <Card title="Configuration reference" icon="sliders" href="/gateway/config-channels#imessage">
     Full iMessage field reference.
+  </Card>
+  <Card title="RPC adapters" icon="plug" href="/reference/rpc">
+    The line-delimited JSON-RPC stdio protocol OpenClaw speaks to `imsg rpc`.
+  </Card>
+  <Card title="macOS VMs" icon="display" href="/install/macos-vm">
+    Run OpenClaw in a sandboxed macOS VM, local or hosted, when you want iMessage isolated from your main Mac.
   </Card>
 </CardGroup>

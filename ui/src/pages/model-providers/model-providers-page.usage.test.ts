@@ -1,16 +1,24 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import { expectAbsent, expectContent, expectPresent } from "../../test-helpers/model-providers.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
-  advanceUsageRetries,
   appendPage,
+  createPage,
+  mountPage,
+  createAuthStatus,
+  createApiKeyProviderData,
   createHarness,
-  deferred,
-  focusDocument,
+  drainPageUpdates,
+  expandProvider,
   requestCount,
-  type ModelProvidersPageTestElement,
-} from "./model-providers-page.test-support.ts";
+  waitForProviders,
+  advanceUsageRetries,
+  focusDocument,
+  publishRouteData,
+} from "./model-providers-page.test-support.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -19,255 +27,249 @@ afterEach(() => {
 });
 
 describe("ModelProvidersPage usage convergence", () => {
-  it("waits for the route loader before starting provider requests, including after reconnect", async () => {
-    const harness = createHarness("main");
-    const page = document.createElement(
-      "openclaw-model-providers-page",
-    ) as ModelProvidersPageTestElement;
-    page.context = harness.context;
-    document.body.append(page);
-    await page.updateComplete;
-    expect(harness.request).not.toHaveBeenCalled();
-
-    harness.publishPhase("offline");
-    harness.publishPhase("connected");
-    await page.updateComplete;
-    expect(harness.request).not.toHaveBeenCalled();
-
-    page.routeData = {
-      gateway: harness.context.gateway,
-      gatewaySnapshot: harness.context.gateway.snapshot,
-      client: harness.context.gateway.snapshot.client,
-      agentId: "main",
-      data: { ...EMPTY_MODEL_PROVIDERS_DATA, config: {}, updatedAt: Date.now() },
+  it("keeps account quotas during config saves and refreshes them from the page", async () => {
+    const { context, request, snapshot, runtimeConfig, notifyRuntimeConfig } =
+      createHarness("main");
+    snapshot.hello = {
+      type: "hello-ok",
+      protocol: 3,
+      features: { methods: ["config.get", "config.patch", "codex.accountUsage"] },
+      auth: { role: "operator", scopes: ["operator.admin"] },
     };
-    await vi.waitFor(() => expect(page.data?.costByProvider).toEqual([]));
-    expect(requestCount(harness.request, "models.authStatus")).toBe(0);
-    expect(requestCount(harness.request, "usage.status")).toBe(1);
-    expect(requestCount(harness.request, "sessions.usage")).toBe(1);
-  });
-
-  it("restarts an exhausted retry cycle on same-client reconnect", async () => {
-    vi.useFakeTimers();
-    focusDocument();
-    const harness = createHarness("main");
-    harness.setUsageStatus({ updatedAt: 1, providers: [], refreshing: true });
-    const page = appendPage(harness.context);
-    await page.updateComplete;
-    await advanceUsageRetries();
-
-    const usageCallsBeforeReconnect = harness.request.mock.calls.filter(
-      ([method]) => method === "usage.status",
-    ).length;
-    expect(usageCallsBeforeReconnect).toBe(4);
-
-    harness.publishPhase("offline");
-    await page.updateComplete;
-    harness.publishPhase("connected");
-    await page.updateComplete;
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(harness.request.mock.calls.filter(([method]) => method === "usage.status").length).toBe(
-      5,
-    );
-  });
-
-  it("reports a stalled provider refresh once the retry budget is spent", async () => {
-    vi.useFakeTimers();
-    focusDocument();
-    const harness = createHarness("main");
-    harness.setUsageStatus({ updatedAt: 1, providers: [], refreshing: true });
-    const page = appendPage(harness.context);
-    await page.updateComplete;
-
-    // Nothing is visible while retries are still in flight: a converging load is
-    // not a failure and must not warn.
-    expect(page.textContent ?? "").not.toContain("did not finish loading");
-
-    await advanceUsageRetries();
-    await page.updateComplete;
-
-    // Budget spent and the payload is still incomplete. Rendering the ordinary
-    // cards with no usage and no notice is indistinguishable from a provider
-    // that simply reports none.
-    expect(page.textContent ?? "").toContain("did not finish loading");
-
-    // The notice says "Refresh to retry", so a manual refresh has to hand back a
-    // budget — otherwise the button is a dead end and nothing ever converges.
-    const callsBeforeManual = harness.request.mock.calls.filter(
-      ([method]) => method === "usage.status",
-    ).length;
-    page.querySelector<HTMLButtonElement>(".settings-section__actions button")?.click();
-    await page.updateComplete;
-    await advanceUsageRetries();
-    expect(
-      harness.request.mock.calls.filter(([method]) => method === "usage.status").length,
-    ).toBeGreaterThan(callsBeforeManual + 1);
-  });
-
-  it("keeps the stalled explanation when usage.status starts rejecting", async () => {
-    vi.useFakeTimers();
-    focusDocument();
-    const harness = createHarness("main");
-    harness.setUsageStatus({ updatedAt: 1, providers: [], refreshing: true });
-    const page = appendPage(harness.context);
-    await page.updateComplete;
-    await advanceUsageRetries();
-    await page.updateComplete;
-    expect(page.textContent ?? "").toContain("did not finish loading");
-
-    // The supplemental load turns a rejected usage.status into a failed result.
-    // Treating it as complete would reset the budget and erase the notice,
-    // leaving broken usage looking exactly like absent usage.
-    harness.failUsageStatus();
-    page.querySelector<HTMLButtonElement>(".settings-section__actions button")?.click();
-    await page.updateComplete;
-    await advanceUsageRetries();
-    await page.updateComplete;
-
-    expect(page.textContent ?? "").toContain("did not finish loading");
-  });
-
-  it("retries incomplete usage without restarting pending cost", async () => {
-    vi.useFakeTimers();
-    focusDocument();
-    const harness = createHarness("main");
-    harness.setUsageStatus({ updatedAt: 1, providers: [], refreshing: true });
-    const pendingCost = deferred<unknown>();
-    const originalRequest = harness.request.getMockImplementation()!;
-    let costSignal: AbortSignal | undefined;
-    harness.request.mockImplementation(
-      async (method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
-        if (method === "sessions.usage") {
-          costSignal = options?.signal;
-          return pendingCost.promise;
-        }
-        return originalRequest(method);
-      },
-    );
-
-    const page = appendPage(harness.context);
-    await page.updateComplete;
-    await vi.advanceTimersByTimeAsync(5_000);
-
-    expect(requestCount(harness.request, "usage.status")).toBeGreaterThan(1);
-    expect(requestCount(harness.request, "sessions.usage")).toBe(1);
-    expect(costSignal?.aborted).toBe(false);
-
-    pendingCost.resolve({ aggregates: { byProvider: [] } });
-    await vi.waitFor(() => expect(page.data?.costByProvider).toEqual([]));
-  });
-
-  it("does not warn about a stall while disconnected", async () => {
-    vi.useFakeTimers();
-    const harness = createHarness("main");
-    const page = appendPage(harness.context);
-    await page.updateComplete;
-
-    // Disconnected route data carries providerUsage: null for the ordinary
-    // "nothing loaded yet" reason. Treating that as unresolved would count down
-    // the budget and warn about a stall that never happened.
-    page.routeData = {
-      gateway: harness.context.gateway,
-      gatewaySnapshot: harness.context.gateway.snapshot,
-      data: EMPTY_MODEL_PROVIDERS_DATA,
-      client: null,
-      agentId: "main",
-    };
-    page.requestUpdate();
-    await page.updateComplete;
-    await vi.advanceTimersByTimeAsync(60_000);
-    await page.updateComplete;
-
-    expect(page.textContent ?? "").not.toContain("did not finish loading");
-  });
-
-  it("replaces a pending pre-disconnect load before it can publish", async () => {
-    const harness = createHarness("main");
-    harness.setUsageStatus({ updatedAt: 1, providers: [] });
-    const releaseOldLoad = harness.deferNextAuthStatus();
-    const page = appendPage(harness.context);
-    await page.updateComplete;
-
-    harness.publishPhase("offline");
-    await page.updateComplete;
-    harness.setUsageStatus({ updatedAt: 2, providers: [] });
-    harness.publishPhase("connected");
-    await page.updateComplete;
-
-    await vi.waitFor(() =>
-      expect(
-        harness.request.mock.calls.filter(([method]) => method === "usage.status").length,
-      ).toBe(1),
-    );
-    releaseOldLoad();
-    await vi.waitFor(() =>
-      expect(page.data?.providerUsage).toMatchObject({
-        ok: true,
-        value: { updatedAt: 2 },
-      }),
-    );
-  });
-
-  it("cancels and replaces supplemental work on forced refresh", async () => {
-    const harness = createHarness("main");
-    const oldUsage = deferred<unknown>();
-    const oldCost = deferred<unknown>();
-    const originalRequest = harness.request.getMockImplementation()!;
-    let firstUsageSignal: AbortSignal | undefined;
-    let firstCostSignal: AbortSignal | undefined;
-    let usageCall = 0;
-    let costCall = 0;
-    harness.request.mockImplementation(
-      async (method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
-        if (method === "sessions.usage") {
-          costCall += 1;
-          if (costCall === 1) {
-            firstCostSignal = options?.signal;
-            return oldCost.promise;
-          }
-          return originalRequest(method);
-        }
-        if (method === "usage.status") {
-          usageCall += 1;
-          if (usageCall === 1) {
-            firstUsageSignal = options?.signal;
-            return oldUsage.promise;
-          }
-          return { updatedAt: 2, providers: [] };
-        }
-        return originalRequest(method);
-      },
-    );
-    const page = appendPage(harness.context);
-    await vi.waitFor(() => expect(requestCount(harness.request, "usage.status")).toBe(1));
-    await vi.waitFor(() => expect(requestCount(harness.request, "sessions.usage")).toBe(1));
-
-    const releaseCoreRefresh = harness.deferNextAuthStatus();
-    const refresh = page.refresh({ force: true });
-    expect(firstUsageSignal?.aborted).toBe(true);
-    expect(firstCostSignal?.aborted).toBe(true);
-
-    oldUsage.resolve({ updatedAt: 1, providers: [] });
-    oldCost.resolve({
-      aggregates: { byProvider: [{ provider: "stale", totals: { totalCost: 1 } }] },
+    const original = request.getMockImplementation()!;
+    let usedPercent = 10;
+    const accountRequests: unknown[] = [];
+    request.mockImplementation(async (method, params?: unknown) => {
+      if (method === "models.authStatus") {
+        return createAuthStatus([
+          {
+            profiles: [
+              { profileId: "openai:one", type: "oauth", status: "ok" },
+              { profileId: "openai:two", type: "token", status: "static" },
+              { profileId: "openai:key", type: "api_key", status: "static" },
+            ],
+          },
+          {
+            provider: "anthropic",
+            displayName: "Anthropic",
+            profiles: [{ profileId: "anthropic:one", type: "oauth", status: "ok" }],
+          },
+        ]);
+      }
+      if (method === "codex.accountUsage") {
+        accountRequests.push(params);
+        return {
+          updatedAt: 1,
+          providers: [
+            { provider: "openai", displayName: "OpenAI", windows: [{ label: "5h", usedPercent }] },
+          ],
+        };
+      }
+      return original(method);
     });
-    await Promise.resolve();
-    expect(page.data?.providerUsage).toBeNull();
-    expect(page.data?.costByProvider).toBeNull();
+    const page = appendPage(context);
+    await waitForProviders(page);
+    const openai = await expandProvider(page, "openai");
+    const anthropic = await expandProvider(page, "anthropic");
+    const limitsText = () =>
+      [...openai.querySelectorAll(".model-providers__account-limits")].map(
+        (limits) => limits.textContent,
+      );
+    const expectLimits = (remaining: number) =>
+      expect(limitsText()).toEqual(
+        Array.from({ length: 2 }, () => expect.stringContaining(`${remaining}% left`)),
+      );
+    await vi.waitFor(() => expectLimits(90));
+    expect(accountRequests).toEqual([
+      { agentId: "main", profileId: "openai:one" },
+      { agentId: "main", profileId: "openai:two" },
+    ]);
+    expect(
+      [...openai.querySelectorAll('.model-providers__account-limits [role="meter"]')].map((meter) =>
+        meter.getAttribute("aria-valuenow"),
+      ),
+    ).toEqual(["90", "90"]);
+    for (const [row, id] of [
+      [anthropic, "anthropic:one"],
+      [openai, "openai:key"],
+    ] as const) {
+      expectAbsent(row, `[data-profile-id="${id}"] .model-providers__account-limits`);
+    }
+    runtimeConfig.state.configSaving = true;
+    notifyRuntimeConfig();
+    await page.updateComplete;
+    expectLimits(90);
+    runtimeConfig.state.configSaving = false;
+    notifyRuntimeConfig();
+    usedPercent = 90;
+    page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')?.click();
+    await vi.waitFor(() => expectLimits(10));
+    expect(accountRequests).toHaveLength(4);
+  });
 
-    releaseCoreRefresh();
-    await refresh;
+  it.each(["reconnect", "manual refresh"] as const)(
+    "restarts an exhausted retry cycle on %s",
+    async (trigger) => {
+      vi.useFakeTimers();
+      focusDocument();
+      const harness = createHarness("main");
+      harness.setUsageStatus({ updatedAt: 1, providers: [], refreshing: true });
+      const page = appendPage(harness.context);
+      await page.updateComplete;
+      await advanceUsageRetries();
+      await page.updateComplete;
+      expectContent(page.renderRoot, ["did not finish loading"]);
 
-    await vi.waitFor(() => expect(requestCount(harness.request, "usage.status")).toBe(2));
-    await vi.waitFor(() => expect(requestCount(harness.request, "sessions.usage")).toBe(2));
-    await vi.waitFor(() =>
-      expect(page.data?.providerUsage).toMatchObject({ ok: true, value: { updatedAt: 2 } }),
+      const usageCallsBeforeRestart = requestCount(harness.request, "usage.status");
+      expect(usageCallsBeforeRestart).toBe(4);
+
+      if (trigger === "manual refresh") {
+        page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')?.click();
+        await page.updateComplete;
+        await advanceUsageRetries();
+        expect(requestCount(harness.request, "usage.status")).toBeGreaterThan(
+          usageCallsBeforeRestart + 1,
+        );
+        return;
+      }
+
+      harness.publishPhase("offline");
+      await page.updateComplete;
+      harness.publishPhase("connected");
+      await page.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(requestCount(harness.request, "usage.status")).toBe(5);
+    },
+  );
+
+  it.each(["core reconnect", "usage refresh"] as const)(
+    "retires pending %s data before publishing its replacement",
+    async (mode) => {
+      const h = createHarness("main");
+      const replacement = {
+        provider: "openai",
+        displayName: "OpenAI",
+        windows: [{ label: "replacement", usedPercent: 25 }],
+      };
+      const stale = deferred<unknown>();
+      const original = h.request.getMockImplementation()!;
+      let firstSignal: AbortSignal | undefined;
+      let reads = 0;
+      h.request.mockImplementation(
+        async (method, _params?: unknown, options?: { signal?: AbortSignal }) => {
+          if (method !== "usage.status") {
+            return original(method);
+          }
+          if (++reads === 1 && mode === "usage refresh") {
+            firstSignal = options?.signal;
+            return stale.promise;
+          }
+          return { updatedAt: 2, providers: [replacement] };
+        },
+      );
+      const releaseOldCore = mode === "core reconnect" ? h.deferNextAuthStatus() : () => {};
+      const page = appendPage(h.context);
+      await page.updateComplete;
+      if (mode === "core reconnect") {
+        h.publishPhase("offline");
+        await page.updateComplete;
+        h.publishPhase("connected");
+        await vi.waitFor(() => expect(reads).toBe(1));
+        releaseOldCore();
+      } else {
+        await vi.waitFor(() => expect(reads).toBe(1));
+        const releaseRefresh = h.deferNextAuthStatus();
+        page.view.props.onRefresh();
+        expect(firstSignal?.aborted).toBe(true);
+        stale.resolve({
+          updatedAt: 1,
+          providers: [{ ...replacement, windows: [{ label: "stale", usedPercent: 1 }] }],
+        });
+        await Promise.resolve();
+        expect(page.view.props.cards.every((card) => !card.usage)).toBe(true);
+        releaseRefresh();
+      }
+      const current = () => page.view.props.cards.find((card) => card.id === "openai")?.usage;
+      await vi.waitFor(() => expect(current()).toEqual(replacement));
+      await drainPageUpdates(page);
+      expect(current()).toEqual(replacement);
+      expect(reads).toBe(mode === "core reconnect" ? 1 : 2);
+      expect(requestCount(h.request, "sessions.usage")).toBe(0);
+    },
+  );
+
+  it("gates provider reads on settled route data and retains controls through usage recovery", async () => {
+    const harness = createHarness("main");
+    const usage = deferred<unknown>();
+    const original = harness.request.getMockImplementation()!;
+    let usageReads = 0;
+    let usageFails = true;
+    harness.request.mockImplementation(async (method, ...args) => {
+      if (method === "usage.status") {
+        if (++usageReads === 1) {
+          return usage.promise;
+        }
+        if (usageFails) {
+          throw new Error("Usage temporarily unavailable");
+        }
+        return { updatedAt: 2, providers: [] };
+      }
+      if (method === "models.authStatus") {
+        return createAuthStatus([{ status: "missing", profiles: [] }]);
+      }
+      return original(method, ...args);
+    });
+    const page = createPage(harness.context);
+    mountPage(page);
+    await page.updateComplete;
+    const expectNoProviderReads = () =>
+      expect(harness.request.mock.calls.filter(([method]) => method !== "config.get")).toEqual([]);
+    expectNoProviderReads();
+    harness.publishPhase("offline");
+    harness.publishPhase("connected");
+    await page.updateComplete;
+    expectNoProviderReads();
+    page.loaderPending = true;
+    publishRouteData(page, createApiKeyProviderData());
+    await waitForSolid(() => expectPresent(page, '[data-provider-id="openai"]'));
+    expect(usageReads).toBe(0);
+    expect(requestCount(harness.request, "sessions.usage")).toBe(0);
+    const search = page.querySelector<HTMLInputElement>(".model-providers__search input")!;
+    const row = page.querySelector('[data-provider-id="openai"]')!;
+    const expectRetainedControls = () => {
+      expect(requestCount(harness.request, "sessions.usage")).toBe(0);
+      expect(page.querySelector('[data-provider-id="openai"]')).toBe(row);
+      expect(page.querySelector(".model-providers__search input")).toBe(search);
+      expect(document.activeElement).toBe(search);
+      expect(row.querySelector(".provider-row__plan")?.textContent).toBe("Pro");
+    };
+    search.focus();
+    page.loaderPending = false;
+    await waitForSolid(() => expect(usageReads).toBe(1));
+    expect(requestCount(harness.request, "models.authStatus")).toBe(0);
+    usage.resolve({
+      updatedAt: 1,
+      providers: [{ provider: "openai", displayName: "OpenAI", plan: "Pro", windows: [] }],
+    });
+    await waitForSolid(() =>
+      expect(row.querySelector(".provider-row__plan")?.textContent).toBe("Pro"),
     );
-    await vi.waitFor(() => expect(page.data?.costByProvider).toEqual([]));
-
-    expect(requestCount(harness.request, "usage.status")).toBe(2);
-    expect(requestCount(harness.request, "sessions.usage")).toBe(2);
-    expect(page.data?.providerUsage).toMatchObject({ ok: true, value: { updatedAt: 2 } });
+    expectRetainedControls();
+    page.view.props.onRefresh();
+    await waitForSolid(() =>
+      expectContent(page.renderRoot, [
+        "Provider usage is unavailable; the last request failed. Refresh to retry.",
+      ]),
+    );
+    expectRetainedControls();
+    usageFails = false;
+    page.view.props.onRefresh();
+    await waitForSolid(() => {
+      expect(page.view.props.providerUsageFailed).toBe(false);
+      expect(page.view.props.cards.find((card) => card.id === "openai")?.usage).toBeUndefined();
+    });
+    expectAbsent(page, ".provider-row__plan");
+    expect(requestCount(harness.request, "sessions.usage")).toBe(0);
   });
 });

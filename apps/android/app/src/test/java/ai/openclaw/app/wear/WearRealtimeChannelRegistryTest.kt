@@ -13,6 +13,7 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
@@ -35,9 +36,34 @@ class WearRealtimeChannelRegistryTest {
   private val registry = WearRealtimeChannelRegistry(scope, transport)
 
   @After
-  fun cancelScope() {
+  fun cancelScope() =
+    runBlocking {
+      cancelAndJoinFixtureScope()
+    }
+
+  private suspend fun cancelAndJoinFixtureScope() {
     scope.cancel()
+    // Cancelling a coroutine does not release the fixture's blocking InputStream.
+    transport.closeInputs()
+    scope.coroutineContext.job.join()
   }
+
+  @Test
+  fun `fixture cancellation joins an activated blocking reader`() =
+    runBlocking {
+      val channel = FakeChannel("watch-cleanup", "channel-cleanup", "attempt-cleanup")
+      try {
+        registry.accept(channel, appendAudio = { _, _ -> }, stopTalk = {})
+        transport.awaitOpened(channel)
+        checkNotNull(registry.claim("watch-cleanup", "attempt-cleanup"))
+        withTimeout(1_000L) {
+          while (!transport.hasStartedReading(channel)) yield()
+        }
+        withTimeout(1_000L) { cancelAndJoinFixtureScope() }
+      } finally {
+        transport.finishInput(channel)
+      }
+    }
 
   @Test
   fun `replacement stops displaced owner once before its finalizer`() =
@@ -469,13 +495,23 @@ class WearRealtimeChannelRegistryTest {
           transport = transport,
           connectionReadyTimeoutMillis = 200L,
           pendingConnectionTimeoutMillis = 1_000L,
-          retireCallbackTimeoutMillis = 100L,
+          // Cleanup, not channel publication, crosses the discovery deadline.
+          retireCallbackTimeoutMillis = 300L,
         )
       val first = FakeChannel("watch-a", "channel-a", "attempt-a")
       val replacement = FakeChannel("watch-a", "channel-b", "attempt-b")
-      val releaseReplacement = transport.holdOpen(replacement)
+      val stopStarted = CompletableDeferred<Unit>()
+      val releaseStop = CompletableDeferred<Unit>()
+      val stopFinished = CompletableDeferred<Unit>()
       val stopTalk: suspend (WearRealtimeAttemptOwner) -> Unit = { owner ->
-        if (owner.attemptId == "attempt-a") awaitCancellation()
+        if (owner.attemptId == "attempt-a") {
+          stopStarted.complete(Unit)
+          try {
+            releaseStop.await()
+          } finally {
+            stopFinished.complete(Unit)
+          }
+        }
       }
 
       try {
@@ -483,19 +519,22 @@ class WearRealtimeChannelRegistryTest {
         transport.awaitOpened(first)
         checkNotNull(registry.claim("watch-a", "attempt-a"))
         registry.accept(replacement, appendAudio = { _, _ -> }, stopTalk = stopTalk)
-        val replacementClaim = async { registry.claim("watch-a", "attempt-b") }
-        delay(150L)
-        releaseReplacement.complete(Unit)
         transport.awaitOpened(replacement)
+        val replacementClaim = async { registry.claim("watch-a", "attempt-b") }
+        withTimeout(1_000L) { stopStarted.await() }
 
         val replacementOwner =
           withTimeout(1_000L) {
             checkNotNull(replacementClaim.await()).owner
           }
         assertTrue(registry.isCurrent(replacementOwner))
+        assertFalse(stopFinished.isCompleted)
         registry.close(replacementOwner)
       } finally {
-        releaseReplacement.complete(Unit)
+        releaseStop.complete(Unit)
+        if (stopStarted.isCompleted) {
+          withTimeout(1_000L) { stopFinished.await() }
+        }
       }
     }
 
@@ -940,6 +979,10 @@ private class FakeChannelTransport : WearRealtimeChannelTransport {
   fun wasOpened(channel: ChannelClient.Channel): Boolean = openedResources.containsKey(channel)
 
   fun hasStartedReading(channel: ChannelClient.Channel): Boolean = (openedResources[channel]?.input as? ClosingInputStream)?.hasStartedReading() == true
+
+  fun closeInputs() {
+    openedResources.values.forEach { it.input.close() }
+  }
 }
 
 private class ClosingInputStream : InputStream() {

@@ -15,7 +15,7 @@ Search the live OpenClaw docs index from the terminal.
 ```bash
 openclaw docs                              # print docs entrypoint and example search
 openclaw docs --json                       # print the same guidance as JSON
-openclaw docs <query...> [--json] [--limit <count>]
+openclaw docs [query...] [--json] [--limit <count>]
 ```
 
 | Argument/option   | Description                                                                        |
@@ -42,9 +42,14 @@ openclaw docs gateway token secretref
 
 `openclaw docs` calls `https://docs.openclaw.ai/api/search` and renders the JSON results. The search request uses a fixed 30 second timeout.
 
+Ctrl-C or SIGTERM cancels an in-progress search, including its response download,
+without printing a partial result or a search-failure envelope.
+
 ## Output
 
 In a rich (TTY) terminal, results render as a heading followed by a bullet list: page title, linked docs URL, and a short snippet on the next line. Empty results print "No results.".
+
+A response without a results array is malformed and fails the command; it is not treated as a successful search with no matches.
 
 In non-rich output (piped, `--no-color`, scripts), the same data renders as Markdown:
 
@@ -59,6 +64,9 @@ With `--json`, stdout contains one object with the normalized query and result
 list. With no query, `query` is `null`, `url` is the docs entrypoint, and
 `results` is empty. Styling and headings are suppressed; request diagnostics
 stay on stderr so stdout can be piped directly to a JSON parser.
+
+On failure, `--json` emits the [CLI JSON failure envelope](/cli#json-failures) on stdout
+while retaining the error message on stderr.
 
 ## Exit codes
 

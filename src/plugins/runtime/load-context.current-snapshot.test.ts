@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getCurrentPluginMetadataSnapshot,
@@ -8,6 +8,7 @@ import { getGatewayPluginMetadataSnapshot } from "../current-plugin-metadata-sta
 import { resolveInstalledPluginIndexPolicyHash } from "../installed-plugin-index-policy.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
+import { createPluginMetadataSnapshotFixture } from "../plugin-metadata.test-support.js";
 import { resolvePluginRuntimeLoadContext } from "./load-context.resolve.js";
 
 const resolvePluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
@@ -22,95 +23,44 @@ function createSnapshot(params: {
   workspaceDir: string;
 }): PluginMetadataSnapshot {
   const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
-  const index: PluginMetadataSnapshot["index"] = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash,
-    generatedAtMs: 1,
-    installRecords: {},
-    plugins: [],
-    diagnostics: [],
-  };
+  const snapshot = createPluginMetadataSnapshotFixture();
+  const index = { ...snapshot.index, policyHash, generatedAtMs: 1 };
   return {
+    ...snapshot,
     policyHash,
     workspaceDir: params.workspaceDir,
     index,
     registryIndex: index,
-    registryDiagnostics: [],
-    manifestRegistry: { plugins: [], diagnostics: [] },
-    plugins: [],
-    diagnostics: [],
-    byPluginId: new Map(),
     normalizePluginId: (pluginId) => pluginId,
-    declaredProviderOwners: new Map(),
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      modelIdNormalizationPolicies: new Map(),
-    },
-    metrics: {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
-      indexPluginCount: 0,
-      manifestPluginCount: 0,
-    },
     discovery: { candidates: [], diagnostics: [] },
   };
 }
 
-describe("plugin runtime load context current snapshot ownership", () => {
-  afterEach(() => {
-    resolvePluginMetadataSnapshotMock.mockReset();
-    clearPluginMetadataLifecycleCaches();
+afterEach(() => {
+  resolvePluginMetadataSnapshotMock.mockReset();
+  clearPluginMetadataLifecycleCaches();
+});
+
+it("keeps explicit operation metadata from replacing the Gateway startup inventory", () => {
+  const lifecycle = {
+    config: { plugins: { allow: ["lifecycle"] } },
+    workspaceDir: "/workspace/lifecycle",
+  };
+  const operation = {
+    config: { plugins: { allow: ["operation"] } },
+    workspaceDir: "/workspace/operation",
+  };
+  const lifecycleSnapshot = createSnapshot(lifecycle);
+  const operationSnapshot = createSnapshot(operation);
+  setGatewayPluginMetadataSnapshot(lifecycleSnapshot, lifecycle);
+  const context = resolvePluginRuntimeLoadContext({
+    ...operation,
+    metadataSnapshot: operationSnapshot,
   });
 
-  it("keeps explicit operation metadata from replacing the Gateway startup inventory", () => {
-    const lifecycleConfig = { plugins: { allow: ["lifecycle"] } };
-    const operationConfig = { plugins: { allow: ["operation"] } };
-    const lifecycleWorkspace = "/workspace/lifecycle";
-    const operationWorkspace = "/workspace/operation";
-    const lifecycleSnapshot = createSnapshot({
-      config: lifecycleConfig,
-      workspaceDir: lifecycleWorkspace,
-    });
-    const operationSnapshot = createSnapshot({
-      config: operationConfig,
-      workspaceDir: operationWorkspace,
-    });
-    setGatewayPluginMetadataSnapshot(lifecycleSnapshot, {
-      config: lifecycleConfig,
-      workspaceDir: lifecycleWorkspace,
-    });
-    const context = resolvePluginRuntimeLoadContext({
-      config: operationConfig,
-      workspaceDir: operationWorkspace,
-      metadataSnapshot: operationSnapshot,
-    });
-
-    expect(context.metadataSnapshot).toBe(operationSnapshot);
-    expect(resolvePluginMetadataSnapshotMock).not.toHaveBeenCalled();
-    expect(getGatewayPluginMetadataSnapshot()).toBe(lifecycleSnapshot);
-    expect(
-      getCurrentPluginMetadataSnapshot({
-        config: lifecycleConfig,
-        workspaceDir: lifecycleWorkspace,
-      }),
-    ).toBe(lifecycleSnapshot);
-    expect(
-      getCurrentPluginMetadataSnapshot({
-        config: operationConfig,
-        workspaceDir: operationWorkspace,
-      }),
-    ).toBe(lifecycleSnapshot);
-  });
+  expect(context.metadataSnapshot).toBe(operationSnapshot);
+  expect(resolvePluginMetadataSnapshotMock).not.toHaveBeenCalled();
+  expect(getGatewayPluginMetadataSnapshot()).toBe(lifecycleSnapshot);
+  expect(getCurrentPluginMetadataSnapshot(lifecycle)).toBe(lifecycleSnapshot);
+  expect(getCurrentPluginMetadataSnapshot(operation)).toBe(lifecycleSnapshot);
 });

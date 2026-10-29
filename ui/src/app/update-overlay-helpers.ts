@@ -1,11 +1,15 @@
-import type { UpdateRunRecord } from "../../../src/infra/update-run-record.js";
-import { renderUpdateRunReport } from "../../../src/infra/update-run-report.js";
-import { classifyUpdateOutcome } from "../../../src/shared/update-outcome.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "../../../src/infra/update-run-legacy-expiry.js";
+import {
+  isAcknowledgedAbandonedUpdateRun,
+  type UpdateRunRecord,
+} from "../../../src/infra/update-run-record.js";
+import { classifyUpdateOutcome } from "../../../src/shared/update-outcome-classification.js";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import type { CustodianTurnAdmission } from "../components/custodian-alert-contract.ts";
 import { t } from "../i18n/index.ts";
-import { formatUiExternalText } from "../lib/format-error.ts";
-import { readUpdateAvailableValue, readUpdateScheduleValue } from "./update-schedule-dto.ts";
+import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
+import { resolveHeldUpdateCampaignId } from "./update-schedule-projection.ts";
 
 export type ApplicationStatusBanner = {
   source?: "read";
@@ -35,10 +39,7 @@ export type UpdateFailureTriage = {
 
 type UpdateOutcomeRecord = { id: string | null; timestampMs: number | null };
 
-export type UpdateTriageAdmission = {
-  isCurrent: () => boolean;
-  admit: () => boolean;
-};
+export type UpdateTriageAdmission = CustodianTurnAdmission;
 
 const UPDATE_FAILURE_REASON_KEYS: Record<string, string> = {
   dirty: "updates.failureReasons.dirty",
@@ -52,6 +53,7 @@ const UPDATE_FAILURE_REASON_KEYS: Record<string, string> = {
   "global-install-failed": "updates.failureReasons.globalInstallFailed",
   "restart-disabled": "updates.failureReasons.restartDisabled",
   "restart-unavailable": "updates.failureReasons.restartUnavailable",
+  "external-supervisor-update-required": "updates.failureReasons.externalSupervisorUpdateRequired",
   "restart-unhealthy": "updates.failureReasons.restartUnhealthy",
   "restart-revision-mismatch": "updates.failureReasons.restartRevisionMismatch",
   "restart-revision-unavailable": "updates.failureReasons.restartRevisionUnavailable",
@@ -103,12 +105,6 @@ export type UpdateRestartStatusResponse = {
 
 type UpdateFailureCause = { step: string; detail: string };
 
-function readUpdateAttemptId(sentinel: UpdateRestartStatusResponse["sentinel"]): string | null {
-  const id = sentinel?.stats?.runId?.trim() || sentinel?.stats?.handoffId?.trim();
-  return id && id.length <= 256 ? id : null;
-}
-
-/** One projection owns the recorded display facts and the typed triage transition. */
 export function projectUpdateSentinel(sentinel: UpdateRestartStatusResponse["sentinel"]): {
   attempt: RecordedUpdateAttempt | null;
   banner: ApplicationStatusBanner | null;
@@ -123,7 +119,17 @@ export function projectUpdateSentinel(sentinel: UpdateRestartStatusResponse["sen
     reason: stats?.reason ?? undefined,
   });
   const showResult = outcome !== "succeeded" && outcome !== "pending";
-  const cause = showResult ? readUpdateFailureCause(sentinel) : null;
+  let cause: UpdateFailureCause | null = null;
+  if (showResult) {
+    const steps = sentinel?.stats?.steps;
+    // The run stops at its first failure, so the last non-zero exit is the cause.
+    const failed = Array.isArray(steps)
+      ? steps.findLast((step) => typeof step?.log?.exitCode === "number" && step.log.exitCode !== 0)
+      : undefined;
+    const detail = lastLogLine(failed?.log?.stderrTail) ?? lastLogLine(failed?.log?.stdoutTail);
+    const step = failed?.name?.trim();
+    cause = step && detail ? { step, detail } : null;
+  }
   const attempt =
     showResult && typeof sentinel.ts === "number"
       ? {
@@ -148,9 +154,10 @@ export function projectUpdateSentinel(sentinel: UpdateRestartStatusResponse["sen
   if (banner && outcome === "failed") {
     banner.text += ` ${t("updates.triage.hostHint")}`;
   }
+  const attemptId = sentinel?.stats?.runId?.trim() || sentinel?.stats?.handoffId?.trim();
   const record = {
     id:
-      readUpdateAttemptId(sentinel) ??
+      (attemptId && attemptId.length <= 256 ? attemptId : null) ??
       (typeof sentinel.ts === "number" ? `recorded:${sentinel.ts}` : null),
     timestampMs: sentinel.ts ?? null,
   };
@@ -171,24 +178,6 @@ function lastLogLine(tail: string | null | undefined): string | null {
   return last ? last.slice(0, MAX_UPDATE_FAILURE_CAUSE_CHARS) : null;
 }
 
-/**
- * The updater records why it stopped — the failing step plus its captured
- * output — in the restart sentinel. Read that recorded fact instead of making
- * the operator reconstruct a disk-full or build failure from a reason slug.
- */
-function readUpdateFailureCause(
-  sentinel: UpdateRestartStatusResponse["sentinel"],
-): UpdateFailureCause | null {
-  const steps = sentinel?.stats?.steps;
-  // The run stops at its first failure, so the last non-zero exit is the cause.
-  const failed = Array.isArray(steps)
-    ? steps.findLast((step) => typeof step?.log?.exitCode === "number" && step.log.exitCode !== 0)
-    : undefined;
-  const detail = lastLogLine(failed?.log?.stderrTail) ?? lastLogLine(failed?.log?.stdoutTail);
-  const step = failed?.name?.trim();
-  return step && detail ? { step, detail } : null;
-}
-
 export type UpdateRunResponse = {
   runId?: string;
   ok?: boolean;
@@ -206,59 +195,70 @@ export type UpdateRunResponse = {
 export function createUpdateStatusRefresher(params: {
   getClient: () => GatewayBrowserClient | null;
   getEpoch: () => number;
-  getRevision: () => number;
+  getAuthorization: () => GatewayHelloOk["auth"] | undefined;
   canRefresh: () => boolean;
   isCurrent: (client: GatewayBrowserClient, epoch: number) => boolean;
   onRefreshing: (refreshing: boolean) => void;
-  onStatus: (response: UpdateRestartStatusResponse) => void;
-  onError: (error: unknown) => void;
+  onStatus: (
+    response: UpdateRestartStatusResponse,
+    isCurrent: () => boolean,
+  ) => void | Promise<void>;
+  onError: (error: unknown, mode: "manual" | "completion") => void;
 }) {
-  let generation = 0;
-  let manualIsCurrent: (() => boolean) | null = null;
-  return async (mode: "manual" | "background" | "completion" = "manual") => {
+  const refresh = async (
+    mode: "manual" | "background" | "completion" = "manual",
+  ): Promise<boolean> => {
     const client = params.getClient();
     const epoch = params.getEpoch();
-    if (
-      !client ||
-      !params.canRefresh() ||
-      !params.isCurrent(client, epoch) ||
-      (mode === "background" && manualIsCurrent?.())
-    ) {
-      return;
+    // A later admin grant cannot authorize a response issued under a revoked grant.
+    const authorization = params.getAuthorization();
+    if (!client || !params.canRefresh() || !params.isCurrent(client, epoch)) {
+      return false;
     }
     const refreshCheckout = mode === "manual";
-    const operationGeneration = ++generation;
-    const revision = params.getRevision();
-    const ownsRequest = () => operationGeneration === generation && params.isCurrent(client, epoch);
     const isCurrent = () =>
-      ownsRequest() && params.canRefresh() && revision === params.getRevision();
+      params.isCurrent(client, epoch) &&
+      params.getAuthorization() === authorization &&
+      params.canRefresh();
     if (refreshCheckout) {
-      manualIsCurrent = isCurrent;
       params.onRefreshing(true);
     }
     try {
-      const response = await client
-        .request<UpdateRestartStatusResponse>(
-          "update.status",
-          refreshCheckout ? { refreshCheckout: true } : {},
-          { timeoutMs: 5_000 },
-        )
-        .catch((error: unknown) => {
-          if (mode !== "background" && isCurrent()) {
-            params.onError(error);
-          }
-          return null;
-        });
+      const pending = client.request<UpdateRestartStatusResponse>(
+        "update.status",
+        refreshCheckout ? { refreshCheckout: true } : {},
+        // Checkout discovery uses the Gateway's Git command budgets.
+        { timeoutMs: refreshCheckout ? null : 5_000 },
+      );
+      // Start discovery first, but do not make progress wait for network Git.
+      const progress = refreshCheckout ? refresh("background") : null;
+      const response = await pending;
       if (response && isCurrent()) {
-        params.onStatus(response);
+        if (refreshCheckout) {
+          params.onError(null, "manual");
+          await params.onStatus(response, isCurrent);
+          // The fast read may predate the fetch. Reconcile the target before
+          // the caller opens confirmation.
+          await progress;
+          return isCurrent() && (await refresh("completion"));
+        }
+        params.onError(null, "completion");
+        await params.onStatus(response, isCurrent);
+        return isCurrent();
       }
+      return false;
+    } catch (error) {
+      if (mode !== "background" && isCurrent()) {
+        params.onError(error, mode);
+      }
+      return false;
     } finally {
-      if (ownsRequest()) {
-        manualIsCurrent = null;
+      if (refreshCheckout && params.isCurrent(client, epoch)) {
         params.onRefreshing(false);
       }
     }
   };
+  return refresh;
 }
 
 /** Retained pre-ledger sentinels remain readable across a stable upgrade. */
@@ -268,41 +268,54 @@ export function projectUpdateStatusResponse(
     updateStatusBanner: ApplicationStatusBanner | null;
     recordedUpdateAttempt: RecordedUpdateAttempt | null;
     heldUpdateCampaignId: string | null;
+    updateSchedule?: UpdateScheduleState | null;
   },
 ) {
   const result = projectUpdateSentinel(response.sentinel);
+  const failure = result?.failure ?? null;
+  const updateStatusBanner = result ? result.banner : current.updateStatusBanner;
+  const recordedUpdateAttempt = result ? result.attempt : current.recordedUpdateAttempt;
   const updateSchedule = Object.hasOwn(response, "schedule")
-    ? readUpdateScheduleValue(response.schedule)
+    ? (response.schedule ?? null)
     : undefined;
   return {
-    failure: result?.failure ?? null,
-    updateStatusBanner: result ? result.banner : current.updateStatusBanner,
-    recordedUpdateAttempt: result ? result.attempt : current.recordedUpdateAttempt,
+    failure,
+    updateStatusBanner,
+    recordedUpdateAttempt,
     ...(Object.hasOwn(response, "updateAvailable")
-      ? { updateAvailable: readUpdateAvailableValue(response.updateAvailable) }
+      ? { updateAvailable: response.updateAvailable ?? null }
       : {}),
     ...(updateSchedule !== undefined
       ? {
           updateSchedule,
-          heldUpdateCampaignId:
-            updateSchedule?.campaign?.holdUntilMs !== undefined
-              ? updateSchedule.campaign.id
-              : current.heldUpdateCampaignId,
+          heldUpdateCampaignId: resolveHeldUpdateCampaignId(
+            updateSchedule,
+            current.heldUpdateCampaignId,
+          ),
         }
       : {}),
   };
 }
 
-export function projectUpdateRunFailure(run: UpdateRunRecord): UpdateFailureTriage | null {
-  if (run.status !== "failed" && run.status !== "rolled-back") {
+export async function projectUpdateRunFailure(
+  run: UpdateRunRecord,
+): Promise<UpdateFailureTriage | null> {
+  if (
+    isAcknowledgedAbandonedUpdateRun(run) ||
+    (run.status !== "failed" && run.status !== "rolled-back")
+  ) {
     return null;
   }
+  const { renderUpdateRunReport } = await import("../../../src/infra/update-run-report.js");
   const step = run.steps.findLast((entry) => entry.status === "failed");
   return {
     id: run.runId,
     reconciledRecord: { id: run.runId, timestampMs: run.finishedAtMs ?? run.updatedAtMs },
     outcome: "failed",
-    banner: { tone: "danger", text: renderUpdateRunReport(run).markdown },
+    banner: {
+      tone: run.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON ? "warn" : "danger",
+      text: renderUpdateRunReport(run).markdown,
+    },
     attempt: {
       timestampMs: run.finishedAtMs ?? run.updatedAtMs,
       status: run.status,
@@ -317,6 +330,13 @@ export function projectUpdateRunFailure(run: UpdateRunRecord): UpdateFailureTria
   };
 }
 
+export function resolveUpdateStatusCheckBanner(error: unknown): ApplicationStatusBanner {
+  return {
+    tone: "warn",
+    text: t("updates.checkError", { error: formatUiError(error) }),
+  };
+}
+
 export function resolveUpdateStatusBanner(params: {
   status?: string;
   reason?: string;
@@ -324,7 +344,10 @@ export function resolveUpdateStatusBanner(params: {
 }): ApplicationStatusBanner {
   const status = (params.status ?? "error").trim() || "error";
   const reason = (params.reason ?? "unexpected-error").trim() || "unexpected-error";
-  const guidance = t(UPDATE_FAILURE_REASON_KEYS[reason] ?? "updates.failureReasons.default");
+  const guidanceKey = Object.hasOwn(UPDATE_FAILURE_REASON_KEYS, reason)
+    ? UPDATE_FAILURE_REASON_KEYS[reason]
+    : undefined;
+  const guidance = t(guidanceKey ?? "updates.failureReasons.default");
   const cause = params.cause;
   return {
     tone: status === "skipped" ? "warn" : "danger",

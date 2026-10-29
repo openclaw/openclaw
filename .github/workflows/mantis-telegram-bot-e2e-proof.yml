@@ -99,6 +99,12 @@ jobs:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
+
       - name: Verify protected main-ancestry workflow pin
         env:
           GH_TOKEN: ${{ github.token }}
@@ -131,7 +137,7 @@ jobs:
       - name: Setup trusted tooling
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: 24.x
+          node-version: 24.22.1
           install-bun: "false"
           cache-mode: restore
       - name: Ensure rootless networking helper
@@ -151,19 +157,11 @@ jobs:
           git archive "$GITHUB_WORKFLOW_SHA" |
             podman build --memory 16g --cpu-period 100000 --cpu-quota 200000 --file scripts/mantis/telegram-test-server-proof.Dockerfile \
               --tag localhost/mantis-telegram-proof -
-      - name: Install pinned Crabbox for disposable candidate lifecycle
+      - name: Install Crabbox for disposable candidate lifecycle
         if: ${{ inputs.scenario == 'telegram-bot-e2e-proof' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          install_dir="$RUNNER_TEMP/mantis-crabbox"
-          mkdir -p "$install_dir/bin"
-          curl --fail --location --proto '=https' --tlsv1.2 \
-            https://github.com/openclaw/crabbox/releases/download/v0.50.0/crabbox_0.50.0_linux_amd64.tar.gz \
-            --output "$install_dir/crabbox.tar.gz"
-          printf '%s  %s\n' 8ab55a0302e7119a45e7522c2fff2d4e295496c33766c87cf619f342824cab75 "$install_dir/crabbox.tar.gz" | sha256sum --check
-          tar -xzf "$install_dir/crabbox.tar.gz" -C "$install_dir/bin" crabbox
-          echo "$install_dir/bin" >> "$GITHUB_PATH"
+        env:
+          OPENCLAW_STATE_DIR: ${{ runner.temp }}/openclaw-crabbox-setup
+        run: node scripts/crabbox-setup.mjs
       - name: Build exact candidate without credentials or network
         env:
           CANDIDATE_SHA: ${{ inputs.candidate_ref }}
@@ -204,7 +202,7 @@ jobs:
         run: node scripts/mantis/telegram-proof-storage.mts cleanup
       - name: Upload normalized public observations
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mantis-request-telegram-${{ github.run_id }}-1
           path: ${{ inputs.scenario == 'telegram-markdown-parser-fidelity' && '.artifacts/telegram-test-server-proof/qa-*.json' || '.artifacts/telegram-test-server-proof/*.json' }}
@@ -246,7 +244,7 @@ jobs:
       - name: Setup trusted finalizer dependencies
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: 24.x
+          node-version: 24.22.1
           install-bun: "false"
           cache-mode: restore
       - name: Verify artifacts and bind receipt
@@ -259,7 +257,7 @@ jobs:
           PLAN_SHA256: ${{ inputs.plan_sha256 }}
         run: node scripts/mantis/finalize-request-proof.mts "$SCENARIO"
       - name: Upload request receipt
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mantis-request-receipt-${{ github.run_id }}-1
           path: .artifacts/mantis-request-finalizer/receipt.json

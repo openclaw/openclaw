@@ -1,0 +1,20 @@
+{
+  "currentModelId": "grok-4.6[effort=high,fast=true]",
+  "availableModelIds": [
+    "default[]",
+    "grok-4.6[effort=high,fast=true]",
+    "composer-2.5[fast=true]",
+    "grok-4.5[effort=high,fast=true]",
+    "gpt-5.5[context=272k,reasoning=medium,fast=false]",
+    "gpt-5.5[context=272k,reasoning=high,fast=false]",
+    "locked-1[tier=pro]",
+    "vendor/native-model",
+    "native-model",
+    "vendor/ambiguous[fast=true]",
+    "vendor/ambiguous[fast=false]",
+    "ambiguous[fast=true]"
+  ],
+  "unselectableModelIds": [
+    "locked-1[tier=pro]"
+  ]
+}

@@ -34,8 +34,8 @@ jobs:
           # Pin the official Linux asset and its published digest. The upstream
           # installer validates tags through an unauthenticated GitHub API and
           # can fail before scanning even when this fixed release is available.
-          OPENGREP_VERSION: v1.27.1
-          OPENGREP_LINUX_X64_SHA256: 58053da76672bbeb5b0a5441021c58338707052e10f81d777140ca879bd491ce
+          OPENGREP_VERSION: v1.31.0
+          OPENGREP_LINUX_X64_SHA256: dbbe3c2058dbe600c449a8ba22ea79a1643a6660658400090d0323a8d0d31147
         run: |
           set -euo pipefail
           binary="$(mktemp "${RUNNER_TEMP}/opengrep.XXXXXX")"
@@ -60,6 +60,13 @@ jobs:
           mkdir -p .opengrep-out
           scripts/run-opengrep.sh --sarif --error
 
+      - name: Setup supported Node runtime
+        if: always() && hashFiles('.opengrep-out/precise.sarif') != ''
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
+
       - name: Prepare SARIF for GitHub Code Scanning
         id: github-sarif
         if: always() && hashFiles('.opengrep-out/precise.sarif') != ''
@@ -68,7 +75,7 @@ jobs:
           > .opengrep-out/precise.github.sarif
 
       - name: Upload SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         # Never publish a partial conversion; the raw audit artifact stays intact.
         if: always() && steps.github-sarif.outcome == 'success'
         with:
@@ -77,7 +84,7 @@ jobs:
 
       - name: Upload SARIF as workflow artifact
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: opengrep-full-sarif
           path: .opengrep-out/precise.sarif

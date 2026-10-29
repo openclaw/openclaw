@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
-import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
 import { FailoverError } from "../agents/failover-error.js";
+import { errorShapeFromError } from "./error-shape.js";
 import { unwrapGatewayMethodDispatchResponse } from "./server-in-process-dispatch.js";
 
 describe("in-process gateway error causes", () => {
@@ -12,13 +13,13 @@ describe("in-process gateway error causes", () => {
         { provider: "openai", model: "gpt-5.6", reason: "overloaded", error: "overloaded" },
       ],
     });
-    const error = errorShape(ErrorCodes.UNAVAILABLE, original.message, {
+    const error = errorShapeFromError(ErrorCodes.UNAVAILABLE, original, {
       details: { reason: "busy" },
       retryable: true,
       retryAfterMs: 250,
     });
     const payload = { runId: "in-process-run", privateResult: "not-for-logs" };
-    Object.defineProperty(error, "cause", { value: original });
+    expect(JSON.stringify(error)).not.toContain('"cause":');
 
     let thrown: unknown;
     try {

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+
 const args = process.argv.slice(2);
 if (JSON.stringify(args) === JSON.stringify(["serve", "status", "--json"])) {
   process.stdout.write("{}");
@@ -16,6 +18,14 @@ if (
 if (JSON.stringify(args) === JSON.stringify(serveArgs)) {
   process.stdout.write("Press Ctrl+C to exit.\n");
 } else {
-  process.stderr.write("Funnel is not enabled on your tailnet.\n");
+  process.stderr.write("Funnel is not enabled on your tailnet.\n", (error) => {
+    if (error) {
+      throw error;
+    }
+    const marker = process.env.OPENCLAW_TEST_TAILSCALE_FIXTURE_MARKER;
+    if (marker) {
+      writeFileSync(marker, "ready");
+    }
+  });
 }
 setInterval(() => {}, 1000);

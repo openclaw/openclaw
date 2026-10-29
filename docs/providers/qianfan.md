@@ -18,18 +18,20 @@ Qianfan is Baidu's MaaS platform: a unified, OpenAI-compatible API that routes r
 
 ## Install plugin
 
-Install the official plugin, then restart Gateway:
+Install the official plugin:
 
 ```bash
 openclaw plugins install @openclaw/qianfan-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Getting started
 
 <Steps>
   <Step title="Create a Baidu Cloud account">
-    Sign up or log in at the [Qianfan Console](https://console.bce.baidu.com/qianfan/ais/console/apiKey) and ensure you have Qianfan API access enabled.
+    Sign up or log in at the [Qianfan Console](https://console.bce.baidu.com/qianfan/ais/console/apiKey) and enable Qianfan API access.
   </Step>
   <Step title="Generate an API key">
     Create a new application or select an existing one, then generate an API key. Baidu Cloud keys use the `bce-v3/ALTAK-...` format.
@@ -51,6 +53,31 @@ openclaw gateway restart
     ```
   </Step>
 </Steps>
+
+## Memory embeddings
+
+Select `qianfan` as the memory embedding provider to apply its model-specific
+request limits. Existing configurations using `openai-compatible` for Qianfan
+should change `memory.search.provider` to `qianfan`; keep their endpoint and key.
+
+```json5
+{
+  memory: {
+    search: {
+      provider: "qianfan",
+      model: "bge-large-zh",
+    },
+  },
+}
+```
+
+The plugin reuses your configured Qianfan connection and resolves credentials
+from your saved profile or `QIANFAN_API_KEY`. An explicit remote API key or
+Authorization header takes precedence; a different remote endpoint requires
+its own credentials. It limits each memory
+embedding request to 16 inputs for `bge-large-zh`, `bge-large-en`, and
+`Embedding-V1`, following [Baidu's documented batch limits](https://ai.baidu.com/ai-doc/WENXINWORKSHOP/Ultiovtgu).
+Other models retain the compatible transport's existing batching behavior.
 
 ## Built-in catalog
 
@@ -123,7 +150,7 @@ Model refs use the `qianfan/` prefix (for example `qianfan/deepseek-v4-pro`).
   </Accordion>
 
   <Accordion title="Troubleshooting">
-    - Ensure your API key starts with `bce-v3/ALTAK-` and has Qianfan API access enabled in the Baidu Cloud console.
+    - Check that your API key starts with `bce-v3/ALTAK-` and has Qianfan API access enabled in the Baidu Cloud console.
     - If models are not listed, confirm your account has the Qianfan service activated.
     - Only change the base URL if you use a custom endpoint or proxy.
 

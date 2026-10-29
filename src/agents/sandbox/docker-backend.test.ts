@@ -1,31 +1,42 @@
-// Docker backend manager tests cover runtime image matching and removal error
-// handling for sandbox and browser containers.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { managedGitHubIdentityEnvironment } from "../github-tool-identity-env.js";
+import type { CreateSandboxBackendParams, SandboxBackendHandle } from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
+import type { SandboxContainerEngineTarget } from "./container-engine.js";
 
-const dockerMocks = vi.hoisted(() => ({
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+const mocks = vi.hoisted(() => ({
   containerState: vi.fn(),
   ensureSandboxContainer: vi.fn(),
   execContainer: vi.fn(),
   execContainerRaw: vi.fn(),
-  resolvePodmanSandboxRuntimeInfo: vi.fn(),
   validateSandboxContainerEngineTarget: vi.fn(),
 }));
 
 vi.mock("./docker.js", async () => {
   const actual = await vi.importActual<typeof import("./docker.js")>("./docker.js");
-  return {
-    ...actual,
-    containerState: dockerMocks.containerState,
-    ensureSandboxContainer: dockerMocks.ensureSandboxContainer,
-    execContainer: dockerMocks.execContainer,
-    execContainerRaw: dockerMocks.execContainerRaw,
-    resolvePodmanSandboxRuntimeInfo: dockerMocks.resolvePodmanSandboxRuntimeInfo,
-    validateSandboxContainerEngineTarget: dockerMocks.validateSandboxContainerEngineTarget,
-  };
+  return { ...actual, ...mocks };
 });
+
+vi.mock("./container-engine.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./container-engine.js")>()),
+  execContainer: mocks.execContainer,
+}));
+
+// These fixtures exercise ordinary engine execution; persistent transport ownership
+// has its own protocol and real-container boundary proof.
+// mock-isolation: Ordinary-engine fixtures must not discover or bind a real persistent Docker transport.
+vi.mock("./docker-persistent-target.js", () => ({
+  captureDockerPersistentTarget: async () => undefined,
+  bindDockerPersistentTarget: vi.fn(),
+  readDockerPersistentContainer: vi.fn(),
+}));
 
 const {
   createDockerSandboxBackend,
@@ -34,487 +45,617 @@ const {
   podmanSandboxBackendManager,
 } = await import("./docker-backend.js");
 
-function createConfig(): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        sandbox: {
-          mode: "all",
-          scope: "session",
-          workspaceAccess: "none",
-          docker: {
-            image: "openclaw-sandbox:bookworm-slim",
-          },
-          browser: {
-            enabled: true,
-            image: "openclaw-sandbox-browser:bookworm-slim",
-          },
-        },
-      },
-      list: [],
-    },
-  };
+const containerId = "a".repeat(64);
+const scopeKey = `agent:coder:workspace:${"a".repeat(32)}`;
+const readOnlyResourceMounts = [
+  { hostPath: "/host/attachments", containerPath: "/openclaw/attachments" },
+];
+const completed = { status: "completed", exitCode: 0, timedOut: false } as const;
+const localTarget: SandboxContainerEngineTarget = { key: "local", globalArgs: [] };
+
+function createConfig(backend?: "docker" | "podman", browserEnabled = true): OpenClawConfig {
+  const sandbox = {
+    mode: "all",
+    scope: "session",
+    workspaceAccess: "none",
+    backend,
+    docker: { image: "openclaw-sandbox:trixie-slim" },
+    browser: { enabled: browserEnabled, image: "openclaw-sandbox-browser:trixie-slim" },
+  } satisfies NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["sandbox"];
+  return { agents: { defaults: { sandbox }, entries: {} } };
 }
 
-async function createDockerExecBackend() {
-  dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-container");
-  return createDockerSandboxBackend({
+function backendParams(
+  overrides: Partial<CreateSandboxBackendParams> = {},
+): CreateSandboxBackendParams {
+  return {
     sessionKey: "agent:coder:main",
     scopeKey: "agent:coder:main",
     workspaceDir: "/workspace",
     agentWorkspaceDir: "/workspace",
     cfg: resolveSandboxConfigForAgent(createConfig()),
+    ...overrides,
+  };
+}
+
+async function createDockerExecBackend() {
+  provision();
+  return createDockerSandboxBackend(backendParams({ scopeKey, readOnlyResourceMounts }));
+}
+
+const finalize = (backend: SandboxBackendHandle, token: unknown) =>
+  backend.finalizeExec?.({ ...completed, token });
+const envFile = (spec: { argv: string[] }) => spec.argv[spec.argv.indexOf("--env-file") + 1]!;
+
+function assertStaged(staged: string, expected: Record<string, string>) {
+  for (const [key, value] of Object.entries(expected)) {
+    expect(staged).toContain(`${key}=${value}\n`);
+  }
+}
+
+const mount = (type: string, source: string, destination: string, writable = true) => ({
+  Type: type,
+  Source: source,
+  Destination: destination,
+  RW: writable,
+});
+
+type Bridge = { resolvePath: (input: { filePath: string }) => unknown };
+function assertMasked(bridge: Bridge, paths: string[]) {
+  for (const filePath of paths) {
+    expect(() => bridge.resolvePath({ filePath })).toThrow("container-only");
+  }
+}
+
+function provision(containerName = "sandbox-container", podmanTarget?: typeof localTarget) {
+  mocks.ensureSandboxContainer.mockResolvedValueOnce({ containerName, containerId, podmanTarget });
+}
+
+const bind = (source: string, target: string, writable: boolean) => ({ source, target, writable });
+const engineResult = (stdout: string) => ({ code: 0, stdout, stderr: "" });
+const rawResult = (code = 0, stderr = "") => ({
+  code,
+  stdout: Buffer.alloc(0),
+  stderr: Buffer.from(stderr),
+});
+
+function launch(spec: { argv: string[]; env?: NodeJS.ProcessEnv }, cwd: string) {
+  const {
+    status: code,
+    stdout,
+    stderr,
+    error,
+  } = spawnSync(spec.argv[0]!, spec.argv.slice(1), {
+    cwd,
+    env: { ...spec.env, PATH: `${cwd}${path.delimiter}${process.env.PATH}` },
+    encoding: "utf8",
+  });
+  if (error) {
+    throw error;
+  }
+  return { code, stdout, stderr };
+}
+
+async function mountedBridge(
+  binds: ReturnType<typeof bind>[],
+  tmpfs: Partial<Record<string, string>>,
+  table: string,
+  extraMounts: { Type: string; Source: string; Destination: string; RW: boolean }[] = [],
+) {
+  const inspected = {
+    Mounts: [
+      mount("bind", "/host/project", "/workspace"),
+      ...extraMounts,
+      ...binds.map(({ source, target, writable }) => mount("bind", source, target, writable)),
+    ],
+    Tmpfs: tmpfs,
+  };
+  const baseMounts =
+    "1 1 0:1 / / rw - overlay overlay rw\n2 1 8:1 /project /workspace rw - ext4 /dev/root rw\n";
+  mocks.execContainer
+    .mockResolvedValueOnce(engineResult(JSON.stringify(inspected)))
+    .mockResolvedValueOnce(engineResult(baseMounts + table));
+  const backend = await createDockerExecBackend();
+  return backend.createFsBridge!({
+    sandbox: {
+      workspaceDir: "/host/project",
+      agentWorkspaceDir: "/host/project",
+      workspaceAccess: "rw",
+      containerName: backend.runtimeId,
+      containerWorkdir: "/workspace",
+      docker: {
+        binds: binds.map(
+          ({ source, target, writable }) => `${source}:${target}:${writable ? "rw" : "ro"}`,
+        ),
+      },
+      backend,
+    },
   });
 }
 
-describe("docker sandbox backend manager", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    dockerMocks.containerState.mockResolvedValue({
-      exists: true,
-      running: true,
-    });
-    dockerMocks.execContainer.mockResolvedValue({
-      code: 0,
-      stdout: "unused-image",
-      stderr: "",
-    });
-    dockerMocks.resolvePodmanSandboxRuntimeInfo.mockResolvedValue({
-      machine: false,
-      rootless: true,
-      target: { key: "local", globalArgs: [] },
-    });
-  });
+function runtimeEntry(backendId = "docker") {
+  const containerName = backendId === "podman" ? "sandbox-podman" : "sandbox-1";
+  return {
+    containerName,
+    backendId,
+    runtimeLabel: containerName,
+    sessionKey: "agent:coder:main",
+    createdAtMs: 1,
+    lastUsedAtMs: 1,
+    image: "openclaw-sandbox:trixie-slim",
+    ...(backendId === "podman" ? { backendTarget: localTarget } : {}),
+  };
+}
 
-  it("forwards the canonical scope key to container provisioning", async () => {
-    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-container");
-    const scopeKey = `agent:poly:workspace:${"a".repeat(32)}`;
+beforeEach(() => {
+  for (const mock of Object.values(mocks)) {
+    mock.mockReset();
+  }
+  mocks.containerState.mockResolvedValue({ exists: true, running: true });
+  mocks.execContainer.mockImplementation(async (_engine, args: string[]) => ({
+    code: 0,
+    stdout: args.includes('{"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}}}')
+      ? JSON.stringify({ Mounts: [], Tmpfs: null })
+      : args.includes("{{.Id}}")
+        ? containerId
+        : args.includes("/proc/self/mountinfo")
+          ? "1 1 0:1 / / rw - overlay overlay rw\n2 1 8:1 /workspace /workspace rw - ext4 /dev/root rw\n"
+          : "unused-image",
+    stderr: "",
+  }));
+});
 
-    await createDockerSandboxBackend({
-      sessionKey: "agent:poly:msteams:channel-1",
-      scopeKey,
-      workspaceDir: "/tmp/customer/workspace",
-      agentWorkspaceDir: "/tmp/customer/workspace",
-      cfg: resolveSandboxConfigForAgent(createConfig(), "poly"),
+it.each(["allocation", "mount inspection", "engine validation"] as const)(
+  "rechecks authority after awaited %s",
+  async (stage) => {
+    let current = true;
+    const message = stage === "engine validation" ? "runtime revoked" : "runtime retired";
+    const execute = mocks.execContainer.getMockImplementation()!;
+    mocks.execContainer.mockImplementation(async (engine, args, options) => {
+      const result = await execute(engine, args, options);
+      if (
+        stage === "mount inspection" &&
+        args[0] === "inspect" &&
+        args.some((arg: string) => arg.includes("Mounts"))
+      ) {
+        current = false;
+      }
+      return result;
     });
-
-    expect(dockerMocks.ensureSandboxContainer).toHaveBeenCalledWith(
-      expect.objectContaining({ scopeKey }),
+    mocks.ensureSandboxContainer.mockImplementationOnce(async () => {
+      if (stage === "allocation") {
+        current = false;
+      }
+      return { containerName: "sandbox-container", containerId };
+    });
+    const operation = createDockerSandboxBackend(
+      backendParams({
+        assertRuntimeCurrent: () => {
+          if (!current) {
+            throw new Error(message);
+          }
+        },
+      }),
     );
+    if (stage === "engine validation") {
+      const backend = await operation;
+      mocks.validateSandboxContainerEngineTarget.mockImplementationOnce(async () => {
+        await Promise.resolve();
+        current = false;
+      });
+      await expect(backend.runShellCommand({ script: "write should not run" })).rejects.toThrow(
+        message,
+      );
+      expect(mocks.execContainerRaw).not.toHaveBeenCalled();
+    } else {
+      await expect(operation).rejects.toThrow(message);
+      expect(mocks.execContainer.mock.calls.some(([, args]) => args[0] === "exec")).toBe(false);
+    }
+  },
+);
+
+it.each(["cleanup", "filesystem"])("pins %s to the allocated generation", async (operation) => {
+  const execute = mocks.execContainer.getMockImplementation()!;
+  mocks.execContainer.mockImplementation(async (engine, args, options) => {
+    if (args.includes("{{.Id}}") && args.at(-1) === "sandbox-container") {
+      return engineResult("b".repeat(64));
+    }
+    return execute(engine, args, options);
   });
+  const backend = await createDockerExecBackend();
+  mocks.execContainerRaw.mockResolvedValueOnce(rawResult());
+  if (operation === "cleanup") {
+    await backend.prepareProcessCleanup!({}).terminate();
+  } else {
+    await backend.runShellCommand({ script: "true" });
+  }
+  expect(mocks.execContainerRaw.mock.calls.at(-1)?.[1]?.[2]).toBe(containerId);
+});
 
-  it("binds Podman provisioning and later execs to the resolved target", async () => {
-    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-podman");
-    const podmanTarget = {
-      key: `machine:${"a".repeat(32)}`,
-      globalArgs: [
-        "--url",
-        "ssh://core@127.0.0.1:60001/run/user/501/podman/podman.sock",
-        "--identity",
-        "/tmp/podman-machine-key",
-      ],
-    };
-    dockerMocks.resolvePodmanSandboxRuntimeInfo.mockResolvedValueOnce({
-      machine: true,
-      rootless: true,
-      target: podmanTarget,
-    });
-    const config = createConfig();
-    config.agents!.defaults!.sandbox!.backend = "podman";
-    config.agents!.defaults!.sandbox!.browser!.enabled = false;
-
-    const backend = await createPodmanSandboxBackend({
-      sessionKey: "agent:coder:main",
-      scopeKey: "agent:coder:main",
-      workspaceDir: "/workspace",
-      agentWorkspaceDir: "/workspace",
-      cfg: resolveSandboxConfigForAgent(config),
-    });
-    const execSpec = await backend.buildExecSpec({
-      command: "true",
-      env: {},
-      usePty: false,
-    });
-
-    expect(dockerMocks.ensureSandboxContainer).toHaveBeenCalledWith(
-      expect.objectContaining({ podmanTarget }),
-    );
-    expect(dockerMocks.validateSandboxContainerEngineTarget).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "podman" }),
-      podmanTarget,
-    );
-    expect(execSpec.argv.slice(0, 6)).toEqual(["podman", ...podmanTarget.globalArgs, "exec"]);
-    expect(execSpec.stdinMode).toBe("pipe-closed");
-    await backend.finalizeExec?.({
-      status: "completed",
-      exitCode: 0,
-      timedOut: false,
-      token: execSpec.finalizeToken,
-    });
-  });
-
-  it("delivers exec environment outside process arguments and cleans it after finalization", async () => {
-    const sentinel = "synthetic-container-exec-transport-value";
-    const requestedPath = "/synthetic/bin:/synthetic/system/bin";
+it.each(["removed", "stopped", "paused", "unreachable", "still present"] as const)(
+  "settles cleanup only after confirmed termination: %s",
+  async (state) => {
     const backend = await createDockerExecBackend();
+    const cleanup = backend.prepareProcessCleanup!({});
+    mocks.execContainerRaw.mockResolvedValueOnce(rawResult(125, "exec failed"));
+    mocks.execContainer.mockResolvedValueOnce({
+      code: state === "removed" || state === "unreachable" ? 1 : 0,
+      stdout: JSON.stringify({
+        Running: state === "still present",
+        Paused: state === "paused",
+        Pid: state === "stopped" ? 0 : 123,
+      }),
+      stderr: state === "removed" ? `Error: No such object: ${containerId}` : "engine unreachable",
+    });
+    if (state === "removed" || state === "stopped") {
+      await expect(cleanup.terminate()).resolves.toBeUndefined();
+    } else if (state === "unreachable") {
+      await expect(cleanup.terminate()).rejects.toThrow("engine unreachable");
+    } else {
+      await expect(cleanup.terminate()).rejects.toThrow("exec failed");
+    }
+    expect(mocks.execContainer.mock.calls.at(-1)?.[1]).toEqual([
+      "inspect",
+      "-f",
+      "{{json .State}}",
+      containerId,
+    ]);
+  },
+);
 
-    const execSpec = await backend.buildExecSpec({
+it("captures volume masks once after provisioning", async () => {
+  const bridge = await mountedBridge(
+    [bind("/host/export", "/workspace/cache/export", false)],
+    { "/tmp": "rw" },
+    "3 2 8:1 /volume /workspace/cache rw - ext4 /dev/root rw\n4 3 8:1 /export /workspace/cache/export ro - ext4 /dev/root rw",
+    [mount("volume", "/engine/volume", "/workspace/cache")],
+  );
+  assertMasked(bridge, ["cache/marker", "/workspace/cache/marker"]);
+  expect(bridge.resolvePath({ filePath: "cache/export/marker" }).hostPath).toBe(
+    path.resolve("/host/export/marker"),
+  );
+  expect(mocks.execContainer).toHaveBeenCalledTimes(2);
+  expect(mocks.ensureSandboxContainer.mock.invocationCallOrder[0]).toBeLessThan(
+    mocks.execContainer.mock.invocationCallOrder[0]!,
+  );
+});
+
+type MaskFixture = {
+  name: string;
+  binds?: ReturnType<typeof bind>[];
+  tmpfs?: Partial<Record<string, string>>;
+  table: string;
+  masked?: string[];
+  readable?: string[];
+};
+it.each<MaskFixture>([
+  {
+    name: "tmpfs destination alias and retained retarget",
+    tmpfs: { "/workspace/link": "rw" },
+    table: "3 2 0:9 / /workspace/cache rw - tmpfs tmpfs rw",
+    masked: ["/workspace/link/marker", "/workspace/cache/marker"],
+    readable: ["/workspace/other/marker"],
+  },
+  {
+    name: "different backing stacked on a declared bind",
+    binds: [
+      bind("/host/cache", "/workspace/cache", true),
+      bind("/host/hidden", "/workspace/cache/hidden", true),
+      bind("/host/live", "/workspace/cache/live", true),
+    ],
+    tmpfs: { "/workspace/aliases/link": "rw" },
+    table: `3 2 8:1 /cache /workspace/cache rw - ext4 /dev/root rw
+4 3 8:1 /hidden /workspace/cache/hidden rw - ext4 /dev/root rw
+5 3 0:9 / /workspace/cache rw - tmpfs tmpfs rw
+6 5 8:1 /live /workspace/cache/live rw - ext4 /dev/root rw`,
+    masked: ["/workspace/cache/marker", "/workspace/cache/hidden/marker"],
+    readable: ["/workspace/cache/live/marker"],
+  },
+  {
+    name: "intervening tmpfs hides an older sibling bind",
+    binds: [bind("/host/export", "/workspace/cache/export", true)],
+    tmpfs: { "/workspace/aliases/deep/link": "rw" },
+    table: `3 2 8:1 /export /workspace/cache/export rw - ext4 /dev/root rw
+4 2 0:9 / /workspace/cache rw - tmpfs tmpfs rw`,
+    masked: ["/workspace/cache/marker", "/workspace/cache/export/marker"],
+    readable: ["/workspace/other/marker"],
+  },
+  {
+    name: "readonly bind with mismatched realized access",
+    binds: [bind("/host/export", "/workspace/export", false)],
+    table: "3 2 8:1 /export /workspace/export rw - ext4 /dev/root rw",
+    masked: ["/workspace/export/marker"],
+  },
+  {
+    name: "escaped whitespace in realized bind paths",
+    binds: [bind("/host/export ", "/workspace/export ", false)],
+    table: "3 2 8:1 /export\\040 /workspace/export\\040 ro - ext4 /dev/root rw",
+    readable: ["/workspace/export /marker"],
+  },
+  {
+    name: "visible recursive child above a hidden older child",
+    binds: [bind("/host/export", "/workspace/export", false)],
+    table: `3 2 8:1 /export /workspace/export rw - ext4 /dev/root rw
+4 2 8:1 /project /workspace rw - ext4 /dev/root rw
+5 4 8:1 /export /workspace/export rw - ext4 /dev/root rw
+6 5 8:1 /export /workspace/export ro - ext4 /dev/root rw`,
+    readable: ["/workspace/export/marker"],
+  },
+  {
+    name: "bind destination alias without a realized lexical mount",
+    binds: [bind("/host/export", "/workspace/link", true)],
+    table: "3 2 8:1 /export /workspace/cache rw - ext4 /dev/root rw",
+    masked: ["/workspace/link/marker", "/workspace/cache/marker"],
+    readable: ["/workspace/other/marker"],
+  },
+])(
+  "captures realized masks for $name",
+  async ({ binds = [], tmpfs = {}, table, masked = [], readable = [] }) => {
+    const bridge = await mountedBridge(binds, tmpfs, table);
+    assertMasked(bridge, masked);
+    for (const filePath of readable) {
+      expect(bridge.resolvePath({ filePath }).containerPath).toBe(filePath);
+    }
+  },
+);
+
+it("rejects an unreadable filesystem snapshot", async () => {
+  mocks.execContainer.mockRejectedValueOnce(new Error("inspect failed"));
+  await expect(createDockerExecBackend()).rejects.toThrow("inspect failed");
+});
+
+it("binds Podman provisioning and later execs to the resolved target", async () => {
+  const podmanTarget = {
+    key: `machine:${"a".repeat(32)}`,
+    globalArgs: [
+      "--url",
+      "ssh://core@127.0.0.1:60001/run/user/501/podman/podman.sock",
+      "--identity",
+      "/tmp/podman-machine-key",
+    ],
+  };
+  provision("sandbox-podman", podmanTarget);
+  const backend = await createPodmanSandboxBackend(
+    backendParams({
+      scopeKey,
+      readOnlyResourceMounts,
+      cfg: resolveSandboxConfigForAgent(createConfig("podman", false)),
+    }),
+  );
+  const execSpec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
+
+  expect(mocks.ensureSandboxContainer).toHaveBeenCalledWith(
+    expect.objectContaining({
+      engine: expect.objectContaining({ id: "podman" }),
+      scopeKey,
+      readOnlyResourceMounts,
+    }),
+  );
+  expect(mocks.execContainer).toHaveBeenCalledWith(
+    expect.objectContaining({ id: "podman", globalArgs: podmanTarget.globalArgs }),
+    expect.arrayContaining(["inspect", containerId]),
+    expect.anything(),
+  );
+  expect(execSpec.argv.slice(0, 6)).toEqual(["podman", ...podmanTarget.globalArgs, "exec"]);
+  expect(execSpec.stdinMode).toBe("pipe-closed");
+  expect(execSpec.argv.at(-1)).toBe("true");
+  expect(fs.readFileSync(envFile(execSpec), "utf8")).not.toContain("OPENCLAW_PREPEND_PATH=");
+  await finalize(backend, execSpec.finalizeToken);
+});
+
+it("admits explicit piped input without enabling a PTY", async () => {
+  const backend = await createDockerExecBackend();
+  const spec = await backend.buildExecSpec({ command: "cat", env: {}, usePty: false, stdin: true });
+  expect(spec.stdinMode).toBe("pipe-open");
+  expect(spec.argv).toContain("-i");
+  expect(spec.argv).not.toContain("-t");
+  await finalize(backend, spec.finalizeToken);
+});
+
+it.skipIf(process.platform === "win32").each([
+  { engine: "docker", host: "github.com" },
+  { engine: "podman", host: "ghe.example.test" },
+  { engine: "docker", host: "tenant.ghe.com" },
+] as const)(
+  "$engine binds the current $host identity at launch without staging its token",
+  async ({ engine, host }) => {
+    const requestedPath = "$(touch /tmp/openclaw-path-injection)";
+    const root = tempDirs.make("github-sandbox-launch-");
+    const profile = path.join(root, "profile");
+    fs.mkdirSync(profile, { mode: 0o700 });
+    const hosts = path.join(profile, "hosts.yml");
+    fs.writeFileSync(hosts, `${host}:\n  oauth_token: synthetic-before-launch\n`, {
+      mode: 0o600,
+    });
+    fs.writeFileSync(path.join(root, "package.json"), '{"type":"commonjs"}\n');
+    fs.writeFileSync(
+      path.join(root, engine),
+      `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+process.stdout.write(JSON.stringify({
+  args,
+  selected: process.env[${JSON.stringify(host === "ghe.example.test" ? "GH_ENTERPRISE_TOKEN" : "GH_TOKEN")}] === "synthetic-after-preparation",
+  cleared: !process.env.GITHUB_TOKEN && !process.env.GITHUB_ENTERPRISE_TOKEN && !process.env[${JSON.stringify(host === "ghe.example.test" ? "GH_TOKEN" : "GH_ENTERPRISE_TOKEN")}],
+  staged: fs.readFileSync(args[args.indexOf("--env-file") + 1], "utf8"),
+}));
+`,
+      { mode: 0o700 },
+    );
+    provision("sandbox-github", engine === "podman" ? localTarget : undefined);
+    const createBackend =
+      engine === "docker" ? createDockerSandboxBackend : createPodmanSandboxBackend;
+    const backend = await createBackend(
+      backendParams({
+        sessionKey: "agent:release:main",
+        scopeKey: "agent:release:main",
+        workspaceDir: root,
+        agentWorkspaceDir: root,
+        cfg: resolveSandboxConfigForAgent(createConfig(engine, false)),
+      }),
+      undefined,
+      {
+        managedLocalIdentity: true,
+        credentialScrubEnv: { GH_TOKEN: "", GITHUB_TOKEN: "", PREVIEW_TOKEN: "" },
+        localIdentityEnv: managedGitHubIdentityEnvironment({
+          profileDir: profile,
+          host,
+          gitAuthor: { name: "Release Agent", email: "release@example.test" },
+        }),
+        excludedStoreNames: [],
+      },
+    );
+    const spec = await backend.buildExecSpec({
       command: "printf ready",
       workdir: "/workspace/project",
-      env: { CONFIGURED_VALUE: sentinel, PATH: requestedPath },
+      env: {
+        CONFIGURED_VALUE: "configured-value",
+        PATH: requestedPath,
+        GH_CONFIG_DIR: "/untrusted/profile",
+        GH_TOKEN: "synthetic-request-token",
+        GITHUB_TOKEN: "synthetic-request-fallback",
+        GIT_AUTHOR_NAME: "Untrusted Author",
+        PREVIEW_TOKEN: "synthetic-preview-token",
+      },
       usePty: true,
     });
-
-    expect(execSpec.argv.join(" ")).not.toContain(sentinel);
-    expect(execSpec.argv.join(" ")).not.toContain(requestedPath);
-    expect(execSpec.argv).not.toContain("-e");
-    expect(execSpec.argv).toContain("-t");
-    expect(execSpec.argv).toContain("-w");
-    expect(execSpec.argv).toContain("/workspace/project");
-    expect(execSpec.argv.slice(-4, -1)).toEqual(["sandbox-container", "/bin/sh", "-lc"]);
-    expect(execSpec.argv.at(-1)).toBe(
-      'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; printf ready',
-    );
-    expect(execSpec.stdinMode).toBe("pipe-open");
-    const envFile = execSpec.argv[execSpec.argv.indexOf("--env-file") + 1];
-    expect(envFile).toBeDefined();
-    const envFileContent = fs.readFileSync(envFile!, "utf8");
-    expect(envFileContent).toContain(`CONFIGURED_VALUE=${sentinel}\n`);
-    expect(envFileContent).toContain(`OPENCLAW_PREPEND_PATH=${requestedPath}\n`);
-    expect(envFileContent).not.toMatch(/^PATH=/m);
-    expect(backend.finalizeExec).toBeDefined();
-
-    const finalization = {
-      status: "completed",
-      exitCode: 0,
-      timedOut: false,
-      token: execSpec.finalizeToken,
-    } as const;
-    await backend.finalizeExec?.(finalization);
-
-    expect(fs.existsSync(envFile!)).toBe(false);
-    await expect(backend.finalizeExec?.(finalization)).resolves.toBeUndefined();
-  });
-
-  it.each([
-    {
-      description: "never interpolates shell metacharacters from PATH into the command",
-      requestedPath: "$(touch /tmp/openclaw-path-injection)",
-      expectedCommand:
-        'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; echo hello',
-    },
-    {
-      description: "does not add a PATH export when PATH is absent",
-      requestedPath: undefined,
-      expectedCommand: "echo hello",
-    },
-  ])("$description", async ({ requestedPath, expectedCommand }) => {
-    const backend = await createDockerExecBackend();
-    const execSpec = await backend.buildExecSpec({
-      command: "echo hello",
-      env: { HOME: "/synthetic/home", ...(requestedPath ? { PATH: requestedPath } : {}) },
-      usePty: false,
-    });
-
     try {
-      expect(execSpec.argv.at(-1)).toBe(expectedCommand);
-      const envFile = execSpec.argv[execSpec.argv.indexOf("--env-file") + 1];
-      const envFileContent = fs.readFileSync(envFile!, "utf8");
-      if (requestedPath) {
-        expect(execSpec.argv.join(" ")).not.toContain(requestedPath);
-        expect(envFileContent).toContain(`OPENCLAW_PREPEND_PATH=${requestedPath}\n`);
-      } else {
-        expect(envFileContent).not.toContain("OPENCLAW_PREPEND_PATH=");
+      fs.writeFileSync(hosts, `${host}:\n  oauth_token: synthetic-after-preparation\n`);
+      const result = launch(spec, root);
+      expect(result).toMatchObject({ code: 0, stderr: "" });
+      const delivered = JSON.parse(result.stdout);
+      expect(delivered).toMatchObject({ selected: true, cleared: true });
+      expect(spec.stdinMode).toBe("pipe-open");
+      for (const value of ["configured-value", requestedPath]) {
+        expect(spec.argv.join(" ")).not.toContain(value);
+        expect(delivered.args.join(" ")).not.toContain(value);
       }
-    } finally {
-      await backend.finalizeExec?.({
-        status: "completed",
-        exitCode: 0,
-        timedOut: false,
-        token: execSpec.finalizeToken,
+      expect(delivered.args).not.toContain("-e");
+      expect(delivered.args).toEqual(expect.arrayContaining(["-t", "-w", "/workspace/project"]));
+      expect(delivered.args.slice(-4, -1)).toEqual([containerId, "/bin/sh", "-lc"]);
+      expect(delivered.args.at(-1)).toBe(
+        'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; printf ready',
+      );
+      expect(delivered.args.slice(delivered.args.indexOf("--env-file") + 2, -4)).toEqual(
+        ["GH_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_TOKEN", "GITHUB_ENTERPRISE_TOKEN"].flatMap(
+          (name) => ["--env", name],
+        ),
+      );
+      assertStaged(delivered.staged, {
+        CONFIGURED_VALUE: "configured-value",
+        OPENCLAW_PREPEND_PATH: requestedPath,
+        GH_CONFIG_DIR: "/openclaw/github",
+        GH_HOST: host,
+        GIT_AUTHOR_NAME: "Release Agent",
+        GIT_AUTHOR_EMAIL: "release@example.test",
+        GH_TOKEN: "",
+        GITHUB_TOKEN: "",
+        PREVIEW_TOKEN: "",
       });
+      expect(JSON.stringify({ argv: spec.argv, staged: delivered.staged })).not.toContain(
+        "synthetic-",
+      );
+      expect(delivered.staged).not.toMatch(/^PATH=/m);
+      fs.unlinkSync(hosts);
+      const refused = launch(spec, root);
+      expect(refused).toMatchObject({ code: 1, stdout: "" });
+      expect(refused.stderr).toContain("GitHub Identity credential is unavailable or insecure");
+      const stagedFile = envFile({ argv: delivered.args });
+      await finalize(backend, spec.finalizeToken);
+      expect(fs.existsSync(stagedFile)).toBe(false);
+      await expect(finalize(backend, spec.finalizeToken)).resolves.toBeUndefined();
+    } finally {
+      await finalize(backend, spec.finalizeToken);
     }
-  });
+  },
+);
 
-  it("matches ordinary sandbox runtimes against sandbox.docker.image", async () => {
-    dockerMocks.execContainer.mockResolvedValueOnce({
-      code: 0,
-      stdout: "openclaw-sandbox:bookworm-slim\n",
-      stderr: "",
-    });
-
-    const result = await dockerSandboxBackendManager.describeRuntime({
-      entry: {
-        containerName: "sandbox-1",
-        backendId: "docker",
-        runtimeLabel: "sandbox-1",
-        sessionKey: "agent:coder:main",
-        createdAtMs: 1,
-        lastUsedAtMs: 1,
-        image: "stale-entry-image",
-        configLabelKind: "Image",
-      },
+it.each([
+  { backend: "docker", kind: "BrowserImage", image: "openclaw-sandbox-browser:trixie-slim" },
+  { backend: "docker", kind: undefined, image: "openclaw-sandbox:trixie-slim" },
+  { backend: "podman", kind: "Image", image: "localhost/openclaw-sandbox:trixie-slim" },
+])("matches $backend $kind image identity", async ({ backend, kind, image }) => {
+  mocks.execContainer.mockResolvedValueOnce(
+    engineResult(backend === "podman" ? `${image}\tsha256:abc123\n` : `${image}\n`),
+  );
+  if (backend === "podman") {
+    mocks.execContainer.mockResolvedValueOnce(engineResult("abc123\n"));
+  }
+  const manager = backend === "podman" ? podmanSandboxBackendManager : dockerSandboxBackendManager;
+  await expect(
+    manager.describeRuntime({
+      entry: { ...runtimeEntry(backend), image: "stale-entry-image", configLabelKind: kind },
       config: createConfig(),
       agentId: "coder",
-    });
+    }),
+  ).resolves.toEqual({ running: true, actualConfigLabel: image, configLabelMatch: true });
+});
 
-    expect(result).toEqual({
-      running: true,
-      actualConfigLabel: "openclaw-sandbox:bookworm-slim",
-      configLabelMatch: true,
-    });
-  });
-
-  it("matches browser runtimes against sandbox.browser.image", async () => {
-    dockerMocks.execContainer.mockResolvedValueOnce({
-      code: 0,
-      stdout: "openclaw-sandbox-browser:bookworm-slim\n",
-      stderr: "",
-    });
-
-    const result = await dockerSandboxBackendManager.describeRuntime({
-      entry: {
-        containerName: "browser-1",
-        backendId: "docker",
-        runtimeLabel: "browser-1",
-        sessionKey: "agent:coder:main",
-        createdAtMs: 1,
-        lastUsedAtMs: 1,
-        image: "stale-entry-image",
-        configLabelKind: "BrowserImage",
-      },
-      config: createConfig(),
-      agentId: "coder",
-    });
-
-    expect(result).toEqual({
-      running: true,
-      actualConfigLabel: "openclaw-sandbox-browser:bookworm-slim",
-      configLabelMatch: true,
-    });
-  });
-
-  it("defaults docker-backed runtime matching to sandbox.docker.image when label kind is missing", async () => {
-    // Older registry entries did not record configLabelKind; keep ordinary
-    // sandbox matching stable for those existing containers.
-    dockerMocks.execContainer.mockResolvedValueOnce({
-      code: 0,
-      stdout: "openclaw-sandbox:bookworm-slim\n",
-      stderr: "",
-    });
-
-    const result = await dockerSandboxBackendManager.describeRuntime({
-      entry: {
-        containerName: "sandbox-legacy",
-        backendId: "docker",
-        runtimeLabel: "sandbox-legacy",
-        sessionKey: "agent:coder:main",
-        createdAtMs: 1,
-        lastUsedAtMs: 1,
-        image: "stale-entry-image",
-      },
-      config: createConfig(),
-      agentId: "coder",
-    });
-
-    expect(result).toEqual({
-      running: true,
-      actualConfigLabel: "openclaw-sandbox:bookworm-slim",
-      configLabelMatch: true,
-    });
-  });
-
-  it("reports Docker runtime removal failures", async () => {
-    dockerMocks.execContainer.mockResolvedValueOnce({
-      code: 1,
-      stdout: "",
-      stderr: "permission denied",
-    });
-
-    await expect(
-      dockerSandboxBackendManager.removeRuntime({
-        entry: {
-          containerName: "sandbox-1",
-          backendId: "docker",
-          runtimeLabel: "sandbox-1",
-          sessionKey: "agent:coder:main",
-          createdAtMs: 1,
-          lastUsedAtMs: 1,
-          image: "openclaw-sandbox:bookworm-slim",
-        },
-        config: createConfig(),
-      }),
-    ).rejects.toThrow("Failed to remove Docker sandbox runtime sandbox-1: permission denied");
-  });
-
-  it("treats already-missing Docker runtimes as removed", async () => {
-    // Prune/remove flows are idempotent; Docker may have already removed the
-    // container by the time the manager runs.
-    dockerMocks.execContainer.mockResolvedValueOnce({
-      code: 1,
-      stdout: "",
-      stderr: "Error response from daemon: No such container: sandbox-1",
-    });
-
-    await expect(
-      dockerSandboxBackendManager.removeRuntime({
-        entry: {
-          containerName: "sandbox-1",
-          backendId: "docker",
-          runtimeLabel: "sandbox-1",
-          sessionKey: "agent:coder:main",
-          createdAtMs: 1,
-          lastUsedAtMs: 1,
-          image: "openclaw-sandbox:bookworm-slim",
-        },
-        config: createConfig(),
-      }),
-    ).resolves.toBeUndefined();
-  });
-
-  it("uses Podman for Podman registry entries", async () => {
-    dockerMocks.execContainer.mockResolvedValueOnce({
-      code: 0,
-      stdout: "",
-      stderr: "",
-    });
-
-    await podmanSandboxBackendManager.removeRuntime({
-      entry: {
-        containerName: "sandbox-podman",
-        backendId: "podman",
-        backendTarget: { key: "local", globalArgs: [] },
-        runtimeLabel: "sandbox-podman",
-        sessionKey: "agent:coder:main",
-        createdAtMs: 1,
-        lastUsedAtMs: 1,
-        image: "openclaw-sandbox:bookworm-slim",
-      },
-      config: createConfig(),
-    });
-
-    expect(dockerMocks.execContainer).toHaveBeenCalledWith(
+it.each([
+  [
+    "docker",
+    1,
+    "permission denied",
+    "Failed to remove Docker sandbox runtime sandbox-1: permission denied",
+  ],
+  ["docker", 1, "Error response from daemon: No such container: sandbox-1", undefined],
+  ["podman", 0, "", undefined],
+] as const)("removes %s runtime (exit %s, %s)", async (backend, code, stderr, error) => {
+  mocks.execContainer.mockResolvedValueOnce({ code, stdout: "", stderr });
+  const manager = backend === "podman" ? podmanSandboxBackendManager : dockerSandboxBackendManager;
+  const entry = runtimeEntry(backend);
+  const operation = manager.removeRuntime({ entry, config: createConfig() });
+  if (error) {
+    await expect(operation).rejects.toThrow(error);
+  } else {
+    await expect(operation).resolves.toBeUndefined();
+  }
+  if (backend === "podman") {
+    expect(mocks.execContainer).toHaveBeenCalledWith(
       expect.objectContaining({ id: "podman", command: "podman" }),
       ["rm", "-f", "sandbox-podman"],
       { allowFailure: true },
     );
-    expect(dockerMocks.validateSandboxContainerEngineTarget).toHaveBeenCalledWith(
+    expect(mocks.validateSandboxContainerEngineTarget).toHaveBeenCalledWith(
       expect.objectContaining({ id: "podman", command: "podman" }),
-      { key: "local", globalArgs: [] },
+      localTarget,
     );
-  });
+  }
+});
 
-  it("rejects a stale Podman registry target before inspecting the runtime", async () => {
+it.each(["describeRuntime", "removeRuntime"] as const)(
+  "rejects a stale Podman registry target before %s",
+  async (operation) => {
     const targetError = new Error("active Podman connection changed");
-    dockerMocks.validateSandboxContainerEngineTarget.mockRejectedValueOnce(targetError);
-
+    mocks.validateSandboxContainerEngineTarget.mockRejectedValueOnce(targetError);
     await expect(
-      podmanSandboxBackendManager.describeRuntime({
+      podmanSandboxBackendManager[operation]({
         entry: {
-          containerName: "sandbox-podman",
-          backendId: "podman",
+          ...runtimeEntry("podman"),
           backendTarget: {
             key: `machine:${"a".repeat(32)}`,
             globalArgs: ["--url", "ssh://core@127.0.0.1:60001/run/podman/podman.sock"],
           },
-          runtimeLabel: "sandbox-podman",
-          sessionKey: "agent:coder:main",
-          createdAtMs: 1,
-          lastUsedAtMs: 1,
-          image: "openclaw-sandbox:bookworm-slim",
         },
         config: createConfig(),
       }),
     ).rejects.toBe(targetError);
+    expect(mocks.containerState).not.toHaveBeenCalled();
+    expect(mocks.execContainer).not.toHaveBeenCalled();
+  },
+);
 
-    expect(dockerMocks.containerState).not.toHaveBeenCalled();
-    expect(dockerMocks.execContainer).not.toHaveBeenCalled();
-  });
-
-  it("rejects a stale Podman registry target before removing the runtime", async () => {
-    const targetError = new Error("active Podman connection changed");
-    dockerMocks.validateSandboxContainerEngineTarget.mockRejectedValueOnce(targetError);
-
-    await expect(
-      podmanSandboxBackendManager.removeRuntime({
-        entry: {
-          containerName: "sandbox-podman",
-          backendId: "podman",
-          backendTarget: {
-            key: `machine:${"a".repeat(32)}`,
-            globalArgs: ["--url", "ssh://core@127.0.0.1:60001/run/podman/podman.sock"],
-          },
-          runtimeLabel: "sandbox-podman",
-          sessionKey: "agent:coder:main",
-          createdAtMs: 1,
-          lastUsedAtMs: 1,
-          image: "openclaw-sandbox:bookworm-slim",
-        },
-        config: createConfig(),
-      }),
-    ).rejects.toBe(targetError);
-
-    expect(dockerMocks.execContainer).not.toHaveBeenCalled();
-  });
-
-  it("rejects browser sandboxing on the explicit Podman backend", async () => {
-    const config = createConfig();
-    config.agents!.defaults!.sandbox!.backend = "podman";
-    await expect(
-      createPodmanSandboxBackend({
-        sessionKey: "agent:coder:main",
-        scopeKey: "agent:coder:main",
-        workspaceDir: "/workspace",
-        agentWorkspaceDir: "/workspace",
+it("rejects browser sandboxing on the explicit Podman backend", async () => {
+  await expect(
+    createPodmanSandboxBackend(
+      backendParams({
         skillsWorkspaceDir: "/workspace/.openclaw/sandbox-skills",
-        cfg: resolveSandboxConfigForAgent(config),
+        cfg: resolveSandboxConfigForAgent(createConfig("podman")),
       }),
-    ).rejects.toThrow(
-      "Podman sandboxing does not support browser sandboxes. Install Docker and select the docker backend, or disable sandbox.browser.enabled.",
-    );
+    ),
+  ).rejects.toThrow(
+    "Podman sandboxing does not support browser sandboxes. Install Docker and select the docker backend, or disable sandbox.browser.enabled.",
+  );
 
-    expect(dockerMocks.ensureSandboxContainer).not.toHaveBeenCalled();
-  });
-
-  it("matches canonical Podman image identity when Podman expands a short name", async () => {
-    dockerMocks.execContainer
-      .mockResolvedValueOnce({
-        code: 0,
-        stdout: "localhost/openclaw-sandbox:bookworm-slim\tsha256:abc123\n",
-        stderr: "",
-      })
-      .mockResolvedValueOnce({
-        code: 0,
-        stdout: "abc123\n",
-        stderr: "",
-      });
-
-    const result = await podmanSandboxBackendManager.describeRuntime({
-      entry: {
-        containerName: "sandbox-podman",
-        backendId: "podman",
-        backendTarget: { key: "local", globalArgs: [] },
-        runtimeLabel: "sandbox-podman",
-        sessionKey: "agent:coder:main",
-        createdAtMs: 1,
-        lastUsedAtMs: 1,
-        image: "openclaw-sandbox:bookworm-slim",
-        configLabelKind: "Image",
-      },
-      config: createConfig(),
-      agentId: "coder",
-    });
-
-    expect(result).toEqual({
-      running: true,
-      actualConfigLabel: "localhost/openclaw-sandbox:bookworm-slim",
-      configLabelMatch: true,
-    });
-    expect(dockerMocks.execContainer).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ id: "podman", command: "podman" }),
-      ["image", "inspect", "-f", "{{.Id}}", "openclaw-sandbox:bookworm-slim"],
-      { allowFailure: true },
-    );
-  });
+  expect(mocks.ensureSandboxContainer).not.toHaveBeenCalled();
 });

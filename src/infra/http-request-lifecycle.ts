@@ -8,6 +8,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 // This is a transport grace period, not another body-upload allowance. The
 // request stays paused; Node's readable high-water mark bounds residual input.
 const REJECTION_CLOSE_TIMEOUT_MS = 1_000;
+const responseFinishDiagnostics = channel("http.server.response.finish");
 
 type Rejection = {
   request: IncomingMessage;
@@ -23,6 +24,42 @@ type HttpConnection = {
 };
 
 const connections = new WeakMap<Duplex, HttpConnection>();
+
+/** Abort disconnected work without treating normal request/response completion as cancellation. */
+export function createHttpRequestAbortSignal(req: IncomingMessage, res: ServerResponse) {
+  const controller = new AbortController();
+  let responseFinished = res.writableFinished;
+  const abortIfRequestIncomplete = () => {
+    if (!req.complete) {
+      controller.abort();
+    }
+  };
+  const abortIfResponseStillOpen = () => {
+    if (!responseFinished) {
+      controller.abort();
+    }
+  };
+  const finishResponse = () => {
+    // Node 24 can emit finish after a lost socket drains its write queue.
+    responseFinished = !req.socket.destroyed;
+    abortIfResponseStillOpen();
+  };
+  // Observe completion before Node's own finish listener closes a normal non-keepalive socket.
+  res.prependOnceListener("finish", finishResponse);
+  req.once("close", abortIfRequestIncomplete);
+  res.once("close", abortIfResponseStillOpen);
+  if ((req.destroyed && !req.complete) || (res.destroyed && !responseFinished)) {
+    controller.abort();
+  }
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      res.off("finish", finishResponse);
+      req.off("close", abortIfRequestIncomplete);
+      res.off("close", abortIfResponseStillOpen);
+    },
+  };
+}
 
 function connectionFor(socket: Duplex): HttpConnection {
   const existing = connections.get(socket);
@@ -172,12 +209,18 @@ export function selectHttpRequestRejection(req: IncomingMessage): Rejection {
   req.on("readable", pauseCompletedRequest);
   const timer = setTimeout(rejection.destroy, REJECTION_CLOSE_TIMEOUT_MS);
   timer.unref();
+  const detachRequestError = () => req.off("error", rejection.destroy);
+  req.once("close", detachRequestError);
   const onClose = () => {
     rejection.phase = "closed";
     clearTimeout(timer);
-    req.off("error", rejection.destroy);
+    req.off("close", detachRequestError);
     req.off("readable", pauseCompletedRequest);
     socket.off("error", rejection.destroy);
+    // Some Node-compatible runtimes finish dispatching the request's terminal error after the
+    // socket close listeners. Keep ownership through that dispatch, then release it before the
+    // closed promise resumes application work.
+    queueMicrotask(detachRequestError);
     completion.resolve();
   };
   req.on("error", rejection.destroy);
@@ -209,7 +252,9 @@ export async function sendHttpRequestRejection(
   }
   const socket = req.socket;
   const onResponseClose = () => {
-    rejection.destroy();
+    if (!res.writableFinished) {
+      rejection.destroy();
+    }
   };
   res.on("error", rejection.destroy);
   res.once("close", onResponseClose);
@@ -240,16 +285,7 @@ export async function sendHttpRequestRejection(
         }
       }
     };
-    if (process.versions.bun) {
-      // Bun's native HTTP response owns framing/closure; raw socket.end() does
-      // not flush that response and Bun emits no HTTP finish diagnostics event.
-      // Unlike Node's destroySoon path, use its ordered native end operation.
-      res.end(body, () => {
-        if (rejection.phase === "writing") {
-          rejection.phase = "written";
-        }
-      });
-    } else if (req.method === "HEAD") {
+    if (req.method === "HEAD") {
       const writeHeaders = () => {
         if (!res.socket || rejection.phase !== "writing") {
           return;
@@ -257,24 +293,37 @@ export async function sendHttpRequestRejection(
         stopWaitingForSocket?.();
         try {
           res.flushHeaders();
-          res.socket.write("", onWritten);
+          if (process.versions.bun) {
+            // Bun's response callback flushes native headers without waiting on
+            // the dispatcher's raw socket cork. Only write after socket assignment.
+            res.write("", onWritten);
+          } else {
+            res.socket.write("", onWritten);
+          }
         } catch {
           rejection.destroy();
         }
       };
       if (!res.socket) {
-        // HEAD write callbacks do not flush headers. The public notification lets a
-        // standalone SDK response wait for earlier responses without private
-        // socket-assignment events; Node completes that handoff on this stack.
-        const finished = channel("http.server.response.finish");
-        const onFinish = (message: unknown) => {
-          // SAFETY: Node documents this channel's payload as including the response's socket.
-          if ((message as { socket: Duplex }).socket === socket) {
-            queueMicrotask(writeHeaders);
-          }
-        };
-        finished.subscribe(onFinish);
-        stopWaitingForSocket = () => finished.unsubscribe(onFinish);
+        if (process.versions.bun) {
+          // Bun assigns queued response sockets before replaying writes, even on
+          // builds that do not publish http.server.response.finish diagnostics.
+          const onSocket = () => queueMicrotask(writeHeaders);
+          res.once("socket", onSocket);
+          stopWaitingForSocket = () => res.off("socket", onSocket);
+        } else {
+          // HEAD write callbacks do not flush headers. The public notification lets a
+          // standalone SDK response wait for earlier responses without private
+          // socket-assignment events; Node completes that handoff on this stack.
+          const onFinish = (message: unknown) => {
+            // SAFETY: Node documents this channel's payload as including the response's socket.
+            if ((message as { socket: Duplex }).socket === socket) {
+              queueMicrotask(writeHeaders);
+            }
+          };
+          responseFinishDiagnostics.subscribe(onFinish);
+          stopWaitingForSocket = () => responseFinishDiagnostics.unsubscribe(onFinish);
+        }
       }
       writeHeaders();
     } else {

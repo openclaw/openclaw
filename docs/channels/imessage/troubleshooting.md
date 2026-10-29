@@ -21,7 +21,7 @@ Symptom-first fixes for the iMessage channel, plus the configuration reference l
     openclaw channels status --probe
     ```
 
-    If the probe reports RPC unsupported, update `imsg`. If private API actions are unavailable, run `imsg launch` in the logged-in macOS user session and probe again. If the Gateway is not running on macOS, use the [Remote Mac over SSH](/channels/imessage/setup#remote-mac-over-ssh) setup instead of the default local `imsg` path.
+    If the check reports RPC unsupported, update `imsg`. If private API actions are unavailable, run `imsg launch` in the logged-in macOS user session and check again. If the Gateway is not running on macOS, use the [Remote Mac over SSH](/channels/imessage/setup#remote-mac-over-ssh) setup instead of the default local `imsg` path.
 
   </Accordion>
 
@@ -122,5 +122,5 @@ openclaw channels status --probe --channel imessage
 - [Coming from BlueBubbles](/channels/imessage-from-bluebubbles) — config translation table and step-by-step cutover
 - [Pairing](/channels/pairing) — DM authentication and pairing flow
 - [Groups](/channels/groups) — group chat behavior and mention gating
-- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Channel routing](/channels/channel-routing) — session routing for messages
 - [Security](/gateway/security) — access model and hardening

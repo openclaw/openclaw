@@ -10,7 +10,7 @@ title: "How active memory works"
 
 ```mermaid
 flowchart LR
-  U["User Message"] --> D["Deterministic Trigger Recall"]
+  U["User Message"] --> D["Rule-Based Trigger Recall"]
   D -->|strong trusted match| I["Inject Bounded Hidden Context"]
   D -->|weak or empty| H["Check Recall Intent"]
   H -->|no| O["Inject Bounded Recall Outcome"]
@@ -39,6 +39,11 @@ inference feature:
 | Heartbeat/background runs                                           | No                                                       |
 | Generic internal `agent-command` paths                              | No                                                       |
 | Sub-agent/internal helper execution                                 | No                                                       |
+
+Inter-session messages and child completion deliveries do not run Active
+Memory, even when they arrive in a visible conversation. OpenClaw uses their
+typed delivery origin to skip recall. Later human messages in that same
+conversation remain eligible under the usual targeting and session rules.
 
 Use it when the session is persistent and user-facing, the agent has
 meaningful long-term memory to search, and continuity/personalization matter
@@ -71,7 +76,7 @@ for that turn, and the main reply is unaffected.
 | `always`   | Preserve the previous behavior and run on every eligible targeted turn. |
 | `off`      | Disable deep recall without unloading the plugin.                       |
 
-The deterministic trusted-trigger lane remains available in `off` mode.
+The rule-based trusted-trigger lane remains available in `off` mode.
 `rememberAcrossConversations` is unchanged: it still controls whether deep
 recall may search other private conversations.
 

@@ -3,21 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import { normalizeOptionalString as normalizeOptionalPathInput } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
-
-type LocalProviderAuthEvidence = {
-  type: "local-file-with-env";
-  fileEnvVar?: string;
-  fallbackPaths?: readonly string[];
-  requiresAnyEnv?: readonly string[];
-  requiresAllEnv?: readonly string[];
-  credentialMarker: string;
-  source?: string;
-};
-
-type ResolvedLocalProviderAuthEvidence = {
-  credentialMarker: string;
-  source: string;
-};
+import type { ProviderAuthEvidence } from "./provider-env-vars.js";
 
 function expandAuthEvidencePath(
   rawPath: string,
@@ -51,7 +37,7 @@ function expandAuthEvidencePath(
 }
 
 function hasRequiredAuthEvidenceEnv(
-  evidence: LocalProviderAuthEvidence,
+  evidence: ProviderAuthEvidence,
   env: NodeJS.ProcessEnv,
 ): boolean {
   const hasEnv = (key: string) => Boolean(normalizeOptionalSecretInput(env[key]));
@@ -64,10 +50,7 @@ function hasRequiredAuthEvidenceEnv(
   return true;
 }
 
-function hasLocalFileAuthEvidence(
-  evidence: LocalProviderAuthEvidence,
-  env: NodeJS.ProcessEnv,
-): boolean {
+function hasLocalFileAuthEvidence(evidence: ProviderAuthEvidence, env: NodeJS.ProcessEnv): boolean {
   if (evidence.fileEnvVar) {
     const explicitPath = normalizeOptionalPathInput(env[evidence.fileEnvVar]);
     if (explicitPath) {
@@ -91,9 +74,9 @@ function hasLocalFileAuthEvidence(
 }
 
 export function resolveLocalProviderAuthEvidence(
-  evidenceEntries: readonly LocalProviderAuthEvidence[] | undefined,
+  evidenceEntries: readonly ProviderAuthEvidence[] | undefined,
   env: NodeJS.ProcessEnv,
-): ResolvedLocalProviderAuthEvidence | null {
+) {
   for (const evidence of evidenceEntries ?? []) {
     if (
       evidence.type !== "local-file-with-env" ||

@@ -1,11 +1,14 @@
 import { expect, it } from "vitest";
-import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
+import type { ChatQueueItem, ChatReplyTarget } from "../lib/chat/chat-types.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { expectRequestCountStable, requireRecord } from "./chat-flow.test-support.ts";
+import { composerStore, composerStorePage } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
@@ -16,7 +19,192 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
+const withStore = composerStorePage(suite);
+
 suite.define(() => {
+  it("captures a restore baseline before native storage yields to a new edit", async () => {
+    await withStore(async ({ page, store: storeHandle }) => {
+      const persistenceHandle = await page.evaluateHandle<
+        typeof import("../pages/chat/durable-composer-persistence.ts")
+      >('import("/src/pages/chat/durable-composer-persistence.ts")');
+      const result = await page.evaluate(
+        async ({ store, composer }) => {
+          const scope = {
+            gatewayOwner: "restore-order-gateway",
+            recoveryScope: "restore-order-owner",
+            scopeKey: "restore-order-draft",
+          };
+          const written = await store.seed(scope, "Older saved draft", 10, "stored-draft");
+          if (written.status !== "persisted") {
+            throw new Error("failed to seed restore-order draft");
+          }
+          const current = { text: "Before restore", revision: 1 };
+          let prepared = 0;
+          let appliedText: string | null = null;
+          let storageFailed = false;
+          let currentWins = false;
+          const { promise: observed, resolve: observeRestore } = Promise.withResolvers<void>();
+          const persistence = new composer.DurableChatComposerPersistence(
+            () => {
+              storageFailed = true;
+              observeRestore();
+            },
+            () => {},
+          );
+          persistence.restore(
+            scope,
+            () => {
+              prepared++;
+              return {
+                latestRevision: current.revision,
+                signature: current.text,
+                onCurrentWins: () => {
+                  currentWins = true;
+                },
+              };
+            },
+            () => {
+              observeRestore();
+              return { scope, signature: current.text, revision: current.revision };
+            },
+            (draft) => {
+              appliedText = draft.text;
+            },
+          );
+          current.text = "New edit during restore";
+          current.revision = 2;
+          await observed;
+          return { prepared, appliedText, storageFailed, currentWins, text: current.text };
+        },
+        { store: storeHandle, composer: persistenceHandle },
+      );
+      expect(result).toEqual({
+        prepared: 1,
+        appliedText: null,
+        storageFailed: false,
+        currentWins: false,
+        text: "New edit during restore",
+      });
+    });
+  });
+
+  it("reopens composer storage after the browser forcibly closes its database", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ context, page }) => {
+      await page.route("**/composer-storage-reopen", (route) =>
+        route.fulfill({ contentType: "text/html", body: "Composer storage recovery" }),
+      );
+      await page.goto(`${suite.server.baseUrl}composer-storage-reopen`);
+      const draftStore = await composerStore(page);
+      const scope = {
+        gatewayOwner: "reopen-gateway",
+        recoveryScope: "reopen-owner",
+        scopeKey: "chat:v3:agent:main:reopen\u0000agent:main",
+      };
+      expect(
+        await draftStore.evaluate((store, destination) => store.prepare(destination), scope),
+      ).toEqual({ status: "ready", entries: [] });
+      const database = await page.evaluateHandle<
+        typeof import("../lib/chat/control-ui-database.runtime.ts")
+      >('import("/src/lib/chat/control-ui-database.runtime.ts")');
+      const lifecycle = await database.evaluateHandle(async (store) => {
+        const connection = await store.openControlUiDatabase();
+        return {
+          closed: new Promise<void>((resolve) => {
+            connection.addEventListener("close", () => resolve(), { once: true });
+          }),
+        };
+      });
+      const protocol = await context.newCDPSession(page);
+      try {
+        await protocol.send("Storage.clearDataForOrigin", {
+          origin: new URL(suite.server.baseUrl).origin,
+          storageTypes: "indexeddb",
+        });
+        await lifecycle.evaluate((state) => state.closed);
+      } finally {
+        await protocol.detach();
+      }
+      const result = await draftStore.evaluate(async (store, destination) => {
+        const recovered = await store.prepare(destination);
+        const written = await store.seed(
+          destination,
+          "Draft after browser storage recovery",
+          1,
+          "after-reopen",
+        );
+        return { recovered, written, read: await store.read(destination) };
+      }, scope);
+      expect(result).toMatchObject({
+        recovered: { status: "ready", entries: [] },
+        written: { status: "persisted" },
+        read: { status: "found", draft: { text: "Draft after browser storage recovery" } },
+      });
+    });
+  });
+
+  it("shows a storage failure without claiming there are messages missing destinations", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1000, height: 700 } },
+      async ({ page }) => {
+        await installMockGateway(page);
+        // The shell opens the Control UI database at startup.
+        await page.addInitScript(() => {
+          IDBFactory.prototype.open = () => {
+            throw new DOMException("Storage unavailable", "UnknownError");
+          };
+        });
+        await page.goto(`${suite.server.baseUrl}settings`);
+        const recoveryModule = await page.evaluateHandle<
+          typeof import("../pages/chat/chat-outbox-recovery.tsx")
+        >('import("/src/pages/chat/chat-outbox-recovery.tsx")');
+        const solidModule = await page.evaluateHandle<
+          typeof import("../test-helpers/solid-render.tsx")
+        >('import("/src/test-helpers/solid-render.tsx")');
+        await page.evaluate(
+          ({ recovery, solid }) => {
+            const stage = document.createElement("main");
+            stage.id = "storage-error-recovery";
+            stage.style.cssText = "position:fixed;inset:0;z-index:100;background:var(--bg)";
+            document.body.append(stage);
+            solid.mountSolid(
+              recovery.PaneOutboxRecovery,
+              {
+                state: {
+                  settings: { gatewayUrl: "ws://recovery-error.test" },
+                  connected: true,
+                  client: { recoveryScopeReady: true, recoveryScope: "owner" },
+                  sessionKey: "agent:main:main",
+                  chatMessage: "",
+                  chatAttachments: [],
+                  chatQueue: [],
+                  chatMessages: [],
+                },
+                identity: "storage-error",
+                onRestored: () => {},
+              },
+              stage,
+            );
+          },
+          { recovery: recoveryModule, solid: solidModule },
+        );
+        const notice = page.locator("#storage-error-recovery .chat-outbox-recovery");
+        await notice.getByRole("alert").waitFor();
+        if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
+          const artifacts = createControlUiE2eArtifactDir("recovery-error");
+          await page.screenshot({ path: `${artifacts}/expanded.png`, animations: "disabled" });
+          await page.setViewportSize({ width: 390, height: 700 });
+          await page.screenshot({ path: `${artifacts}/mobile.png`, animations: "disabled" });
+        }
+        expect(await notice.getByRole("alert").textContent()).toContain(
+          "We could not access your saved messages.",
+        );
+        expect(await notice.textContent()).not.toContain("older browser");
+        expect(await notice.textContent()).not.toContain("Free browser storage");
+        expect(await notice.getByRole("button", { name: "Restore", exact: true }).count()).toBe(0);
+      },
+    );
+  });
+
   it("commits an independent offline split-pane draft after submit, remove and reorder", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 1000 } },
@@ -39,7 +227,7 @@ suite.define(() => {
           .locator(".chat-bubble")
           .getByText("Split seed completed.", { exact: true })
           .waitFor();
-        await page.getByRole("button", { name: "Open split view", exact: true }).click();
+        await selectChatLayoutAction(page, "Open split view");
         const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
         await expect.poll(() => panes.count()).toBe(2);
         const left = panes.nth(0);
@@ -168,73 +356,118 @@ suite.define(() => {
     );
   });
 
-  it.each(["incognito", "toggle-incognito", "replacement", "reconnect"])(
+  it.each(["incognito", "toggle-incognito", "replacement", "reconnect", "reply"])(
     "fences recovery confirmation after %s at the rendered owner boundary",
     async (change) => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
         await installMockGateway(page);
         await page.goto(`${suite.server.baseUrl}settings`);
-        await page.evaluate('import("/src/pages/chat/chat-outbox-recovery.ts")');
-        const hostHandle = await page.evaluateHandle((initialIncognito) => {
-          const host = {
-            settings: { gatewayUrl: "ws://recovery-fence.test" },
-            connected: true,
-            client: { recoveryScopeReady: true, recoveryScope: "owner" },
-            agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
-            sessionKey: "agent:main:main",
-            currentSessionId: "incarnation-a",
-            connectionEpoch: 1,
-            selectedChatSessionIncognito: initialIncognito,
-            chatMessage: "",
-            chatGoalDraftMode: undefined,
-            chatAttachments: [],
-            chatQueue: [],
-          };
-          sessionStorage.setItem(
-            `openclaw.control.chatComposer.v2:${encodeURIComponent(host.settings.gatewayUrl)}`,
-            JSON.stringify({
-              version: 2,
-              gatewayOwner: host.settings.gatewayUrl,
-              sessions: {
-                "global\u0000agent:main": {
-                  draft: "Retained confirmation draft",
-                  draftRevision: 1,
-                  updatedAt: 1,
-                },
+        const recoveryModule = await page.evaluateHandle<
+          typeof import("../pages/chat/chat-outbox-recovery.tsx")
+        >('import("/src/pages/chat/chat-outbox-recovery.tsx")');
+        const solidModule = await page.evaluateHandle<
+          typeof import("../test-helpers/solid-render.tsx")
+        >('import("/src/test-helpers/solid-render.tsx")');
+        const legacyKey = `openclaw.control.chatComposer.v2:${encodeURIComponent("ws://recovery-fence.test")}`;
+        const legacyValue = JSON.stringify({
+          version: 2,
+          gatewayOwner: "ws://recovery-fence.test",
+          sessions: {
+            "global\u0000agent:main": {
+              draft: "Retained confirmation draft",
+              draftRevision: 1,
+              updatedAt: 1,
+            },
+          },
+        });
+        const fixture = await page.evaluateHandle(
+          ({ initialIncognito, key, value, recovery, solid }) => {
+            const replyState: { chatReplyTarget: ChatReplyTarget | null } = {
+              chatReplyTarget: null,
+            };
+            const host = {
+              ...replyState,
+              settings: { gatewayUrl: "ws://recovery-fence.test" },
+              connected: true,
+              client: { recoveryScopeReady: true, recoveryScope: "owner" },
+              agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
+              sessionKey: "agent:main:main",
+              currentSessionId: "incarnation-a",
+              connectionEpoch: 1,
+              selectedChatSessionIncognito: initialIncognito,
+              chatMessage: "",
+              chatGoalDraftMode: undefined,
+              chatAttachments: [],
+              chatQueue: [],
+              chatMessages: [],
+            } satisfies Parameters<typeof recovery.PaneOutboxRecovery>[0]["state"];
+            sessionStorage.setItem(key, value);
+            const component = document.createElement("div");
+            component.id = "recovery-fence-fixture";
+            component.style.cssText =
+              "position: fixed; inset: 24px; z-index: 100; background: white; color: black";
+            document.body.append(component);
+            const view = solid.mountSolid(
+              recovery.PaneOutboxRecovery,
+              {
+                state: host,
+                identity: "unchanged-route-and-owner",
+                onRestored: () => {},
               },
-            }),
-          );
-          const component = Object.assign(document.createElement("openclaw-chat-outbox-recovery"), {
-            host,
-            identity: "unchanged-route-and-owner",
-          });
-          component.style.cssText =
-            "position: fixed; inset: 24px; z-index: 100; background: white; color: black";
-          document.body.append(component);
-          return host;
-        }, change === "incognito");
-        const notice = page.locator("openclaw-chat-outbox-recovery");
-        await notice.locator("summary").click();
-        const restore = notice.getByRole("button", { name: "Restore here for review" });
+              component,
+            );
+            return { host, view };
+          },
+          {
+            initialIncognito: change === "incognito",
+            key: legacyKey,
+            value: legacyValue,
+            recovery: recoveryModule,
+            solid: solidModule,
+          },
+        );
+        const hostHandle = await fixture.evaluateHandle(({ host }) => host);
+        const notice = page.locator("#recovery-fence-fixture");
+        const restore = notice.getByRole("button", { name: "Restore", exact: true });
         if (change === "incognito") {
-          expect(await restore.isDisabled()).toBe(true);
+          expect(await notice.locator(".chat-outbox-recovery-row").count()).toBe(0);
+          expect(await restore.count()).toBe(0);
+          expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
+          expect(await page.evaluate((key) => sessionStorage.getItem(key), legacyKey)).toBe(
+            legacyValue,
+          );
+          // Leaving Incognito reveals the retained source, never an adopted destination.
+          await fixture.evaluate(({ host, view }) => {
+            host.selectedChatSessionIncognito = false;
+            view.update({
+              state: host,
+              identity: "non-incognito-review-owner",
+              onRestored: () => {},
+            });
+          });
+        }
+        await notice.locator(".chat-outbox-recovery-row").first().waitFor();
+        if (change === "incognito") {
+          expect(await restore.isDisabled()).toBe(false);
         } else {
           await restore.click();
           const dialog = page.locator("openclaw-modal-dialog");
-          await dialog.getByText("agent:main:main (main)", { exact: true }).waitFor();
+          await dialog.getByText(/Add this saved copy to “Main/).waitFor();
           await page.evaluate(
             ({ host: currentHost, change: retirement }) => {
               if (retirement === "replacement") {
                 currentHost.currentSessionId = "incarnation-b";
               } else if (retirement === "reconnect") {
                 currentHost.connectionEpoch++;
+              } else if (retirement === "reply") {
+                currentHost.chatReplyTarget = { messageId: "newer-quote", text: "Keep this quote" };
               } else {
                 currentHost.selectedChatSessionIncognito = true;
               }
             },
             { host: hostHandle, change },
           );
-          await dialog.getByRole("button", { name: "Restore here for review" }).click();
+          await dialog.getByRole("button", { name: "Restore", exact: true }).click();
           await dialog.waitFor({ state: "detached" });
           await expect
             .poll(
@@ -259,38 +492,43 @@ suite.define(() => {
         });
         expect(records.sessions).toEqual({});
         expect(Object.keys(records.recovery)).toHaveLength(1);
-        await notice.getByText("Retained confirmation draft", { exact: true }).waitFor();
+        expect(await hostHandle.evaluate((host) => host.chatMessage)).toBe("");
+        expect(
+          await page.evaluate(() => {
+            const raw = sessionStorage.getItem(
+              `openclaw.control.chatComposer.v4:${encodeURIComponent("ws://recovery-fence.test")}:account:owner`,
+            );
+            return raw ? JSON.parse(raw).sessions : {};
+          }),
+        ).toEqual({});
+        if (change === "reply") {
+          expect(await hostHandle.evaluate((host) => host.chatReplyTarget)).toEqual({
+            messageId: "newer-quote",
+            text: "Keep this quote",
+          });
+        }
+        await notice
+          .locator(".chat-outbox-recovery-row")
+          .getByText("Retained confirmation draft", { exact: true })
+          .waitFor();
       });
     },
   );
 
   it("migrates an identifiable draft by its captured key after the configured main key changes", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}settings`);
-      const handle = await page.evaluateHandle<
-        typeof import("../lib/chat/composer-draft-store.runtime.ts")
-      >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+    await withStore(async ({ page, store: handle }) => {
       const result = await page.evaluate(async (store) => {
         const owner = { gatewayOwner: "main-key-change", recoveryScope: "credential" };
         const legacy = { ...owner, scopeKey: "agent:main:main\u0000agent:main" };
-        await store.writeDurableComposerDraft(
-          legacy,
-          {
-            revision: 10,
-            text: "original main draft",
-            attachments: [],
-          },
-          { expectedRevision: 0, writeId: "original" },
-        );
+        await store.seed(legacy, "original main draft", 10, "original");
         // Migration has no current-defaults input: captured keys own the transfer.
-        await store.prepareDurableComposerRecovery(owner);
+        await store.prepare(owner);
         return {
-          original: await store.readDurableComposerDraft({
+          original: await store.read({
             ...legacy,
             scopeKey: `chat:v3:${legacy.scopeKey}`,
           }),
-          reinterpreted: await store.readDurableComposerDraft({
+          reinterpreted: await store.read({
             ...owner,
             scopeKey: "chat:v3:agent:main:workspace\u0000agent:main",
           }),
@@ -305,44 +543,21 @@ suite.define(() => {
   });
 
   it("honors newer exact-target draft tombstones without retiring ambiguous legacy data", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}settings`);
-      const handle = await page.evaluateHandle<
-        typeof import("../lib/chat/composer-draft-store.runtime.ts")
-      >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+    await withStore(async ({ page, store: handle }) => {
       const result = await page.evaluate(async (store) => {
         const owner = { gatewayOwner: "tombstone-owner", recoveryScope: "credential" };
         const sources = ["agent:main:notes", "agent:main:newer", "global"].map((key) =>
-          Object.assign({}, owner, {
-            scopeKey: `${key}\u0000agent:main`,
-          }),
+          Object.assign({}, owner, { scopeKey: `${key}\u0000agent:main` }),
         );
         for (const [index, source] of sources.entries()) {
-          await store.writeDurableComposerDraft(
-            source,
-            {
-              revision: 10,
-              text: `legacy ${index}`,
-              attachments: [],
-            },
-            { expectedRevision: 0, writeId: `legacy-${index}` },
-          );
+          await store.seed(source, `legacy ${index}`, 10, `legacy-${index}`);
           const destination = { ...source, scopeKey: `chat:v3:${source.scopeKey}` };
-          await store.writeDurableComposerDraft(
-            destination,
-            {
-              revision: index === 1 ? 5 : 20,
-              text: "",
-              attachments: [],
-            },
-            { expectedRevision: 0, writeId: `clear-${index}` },
-          );
+          await store.seed(destination, "", index === 1 ? 5 : 20, `clear-${index}`);
         }
-        const recovery = await store.prepareDurableComposerRecovery(owner);
+        const recovery = await store.prepare(owner);
         return {
           entries: recovery.status === "ready" ? recovery.entries.map((entry) => entry.text) : null,
-          sources: await Promise.all(sources.map((scope) => store.readDurableComposerDraft(scope))),
+          sources: await Promise.all(sources.map((scope) => store.read(scope))),
         };
       }, handle);
       expect(result.entries).toEqual(["legacy 1", "legacy 2"]);

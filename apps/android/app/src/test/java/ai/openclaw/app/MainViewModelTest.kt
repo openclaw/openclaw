@@ -113,7 +113,7 @@ class MainViewModelTest {
   }
 
   @Test
-  fun pairNewGatewayStopsStickyNodeServiceWithoutClearingSavedGateways() {
+  fun returnToGatewaySetupStopsStickyNodeServiceWithoutClearingSavedGateways() {
     val (viewModel, prefs) = createViewModel()
     val gateway =
       GatewayRegistryEntry(
@@ -125,8 +125,10 @@ class MainViewModelTest {
       )
     prefs.gatewayRegistry.upsert(gateway)
 
-    viewModel.pairNewGateway()
+    viewModel.openGatewayAddition()
+    viewModel.returnToGatewaySetup()
 
+    assertEquals(null, viewModel.gatewayAdditionRequest.value)
     assertNodeServiceStopRequested()
     assertEquals(listOf(gateway), prefs.gatewayRegistry.entries.value)
   }

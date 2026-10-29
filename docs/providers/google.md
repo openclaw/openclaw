@@ -11,6 +11,7 @@ The Google plugin provides access to Gemini models through Google AI Studio, plu
 - Provider: `google`
 - Auth: `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 - API: Google Gemini API
+- Default model: `google/gemini-4-argon`
 - Managed-cloud provider: `google-vertex` with Google Cloud Application Default Credentials
 - Optional runtime: `agentRuntime.id: "google-gemini-cli"` runs an explicitly configured model through the local Gemini CLI
 
@@ -46,7 +47,7 @@ the Gateway already runs inside a managed Google Cloud environment.
         {
           agents: {
             defaults: {
-              model: { primary: "google/gemini-3.1-pro-preview" },
+              model: { primary: "google/gemini-4-argon" },
             },
           },
         }
@@ -64,8 +65,7 @@ the Gateway already runs inside a managed Google Cloud environment.
     </Tip>
 
     With a configured API key, OpenClaw refreshes Google AI Studio's text-model
-    catalog from the Gemini `models.list` API. Newly released Gemini 3 Pro, Flash,
-    and Flash-Lite variants therefore appear in
+    catalog from the Gemini `models.list` API. Supported Gemini text models therefore appear in
     `openclaw models list --provider google` without waiting for an OpenClaw
     release. Failed refreshes report the failure and retain the last successful
     inventory, or bundled models before the first success. A successful empty
@@ -73,8 +73,79 @@ the Gateway already runs inside a managed Google Cloud environment.
 
   </Tab>
 
+  <Tab title="Vertex AI (ADC)">
+    **Recommended for:** Gateway instances running inside Google Cloud (GCE,
+    GKE, Cloud Run) or workstations already authenticated through gcloud
+    Application Default Credentials.
+
+    <Steps>
+      <Step title="Authenticate with gcloud ADC">
+        On a workstation, run:
+
+        ```bash
+        gcloud auth application-default login
+        ```
+
+        On a Google Cloud VM with an attached service account, the metadata
+        server already provides credentials and no file is needed.
+      </Step>
+      <Step title="Set project and location">
+        Both are required in the gateway service environment:
+
+        ```bash
+        export GOOGLE_CLOUD_PROJECT="my-project"
+        export GOOGLE_CLOUD_LOCATION="us-central1"
+        ```
+
+        `GCLOUD_PROJECT` is also accepted for the project. Without a project,
+        runs fail with `Vertex AI requires a project ID. Set GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT or pass project in options.`
+        Without a location, the error is `Vertex AI requires a location. Set GOOGLE_CLOUD_LOCATION or pass location in options.`
+      </Step>
+      <Step title="Credential: automatic discovery or manual sentinel">
+        With a recognized ADC file (created by
+        `gcloud auth application-default login`) **and** the project and
+        location variables set, OpenClaw discovers `google-vertex`
+        automatically — nothing needs to be stored.
+
+        Manual storage is only needed for metadata-only credentials (for
+        example a GCE VM with an attached service account and no ADC file on
+        disk) or to select the ADC path explicitly. The ADC path is selected
+        by a sentinel value, not a real key — store exactly
+        `gcp-vertex-credentials`:
+
+        ```bash
+        openclaw models auth paste-api-key --provider google-vertex
+        # paste exactly: gcp-vertex-credentials
+        ```
+
+        <Warning>
+        Other stored values are sent in the `x-goog-api-key` header, not as
+        ADC credentials. Do not paste an OAuth access token from
+        `gcloud auth print-access-token`: it is not an API key and can cause
+        an authentication error such as `401 UNAUTHENTICATED`.
+        </Warning>
+      </Step>
+      <Step title="List the Vertex catalog">
+        ```bash
+        openclaw models list --refresh --all --provider google-vertex
+        ```
+
+        `--all` includes models you have not configured. `--refresh` populates
+        the local catalog when it has not been loaded yet; it does not query
+        a live Vertex model inventory or verify that ADC can obtain a token.
+      </Step>
+    </Steps>
+
+    <Tip>
+    Vertex uses a separate static model catalog; new Gemini variants appear
+    there per OpenClaw release rather than through the live refresh used by the
+    AI Studio key path.
+    </Tip>
+
+  </Tab>
+
   <Tab title="Gemini CLI runtime">
-    **Advanced use only:** run a canonical `google/*` model through an installed
+    **Advanced use only:** run a standard `google/*` model through an installed
     Gemini CLI while keeping authentication on the supported AI Studio API-key
     path.
 
@@ -104,7 +175,7 @@ the Gateway already runs inside a managed Google Cloud environment.
         common Windows/npm layouts.
       </Step>
       <Step title="Select the CLI runtime">
-        Keep the canonical Google model ref and opt that model into the CLI
+        Keep the standard Google model ref and opt that model into the CLI
         runtime:
 
         ```json5
@@ -126,7 +197,12 @@ the Gateway already runs inside a managed Google Cloud environment.
 
     - Runtime: `google-gemini-cli`
     - Auth: selected Google AI Studio API-key profile
-    - Model refs: canonical `google/*`
+    - Model refs: `google/*`
+
+    `google-gemini-cli` is the CLI backend the bundled Google plugin registers.
+    See [CLI backends](/gateway/cli-backends) for its argv, JSONL dialect, and
+    session and compaction behavior, and for the settings shared by every
+    registered backend.
 
     Existing valid Gemini CLI OAuth profiles remain executable for compatibility,
     but OpenClaw cannot create or repair them. If one breaks, replace it with a
@@ -139,8 +215,24 @@ the Gateway already runs inside a managed Google Cloud environment.
 </Tabs>
 
 <Note>
-`google/gemini-3-pro-preview` was retired on 2026-03-09; use `google/gemini-3.1-pro-preview` instead. Re-running Gemini API key setup (`openclaw onboard --auth-choice gemini-api-key` or `openclaw models auth login --provider google`) rewrites a stale configured default to the current model.
+`google/gemini-3-pro-preview` was retired on 2026-03-09; use `google/gemini-4-argon` instead. Re-running Gemini API key setup (`openclaw onboard --auth-choice gemini-api-key` or `openclaw models auth login --provider google`) updates the configured primary model to `google/gemini-4-argon`.
 </Note>
+
+## Gemini 4 Argon
+
+`google/gemini-4-argon` is the default Google model, with a 1,048,576-token
+context window and up to 65,536 output tokens. `google/gemini-4` is its shorthand;
+the same model ID and shorthand are available for `google-vertex`.
+
+Gemini 4 Argon supports text, image, audio, video, and PDF inputs, function
+calling, structured outputs, and search grounding. It uses implicit context
+caching only: explicit `cachedContents` handles and the Live API are not
+supported. See [Google's model documentation](https://ai.google.dev/gemini-api/docs/models/gemini-4-argon).
+
+The bundled catalog also includes the stable `google/gemini-3.8-flash`, with a
+1,048,576-token context window and up to 65,536 output tokens. The built-in
+`gemini-flash` alias selects this model; `gemini-flash-lite` selects
+`google/gemini-3.5-flash-lite`.
 
 ## Capabilities
 
@@ -158,6 +250,18 @@ the Gateway already runs inside a managed Google Cloud environment.
 | Thinking/reasoning     | Yes (Gemini 2.5+ / Gemini 3+) |
 | Gemma 4 models         | Yes                           |
 
+Responses marked `MAX_TOKENS` or `CONTINUATION` reached a generation limit.
+OpenClaw preserves their partial content and reports a length-limited result.
+Function calls in that partial response remain incomplete instead of becoming
+an executable tool-use turn.
+
+The managed Gemini and Vertex transports stop reading when a compatible proxy
+sends `data: [DONE]`, release the response body, and ignore later frames. A valid
+candidate finish reason is still required for a successful result. First-frame
+quota errors participate in API-key rotation. For Gemini's first-response retry,
+usage metadata, response IDs, and empty or unspecified finish states do not count
+as generated output or disable the existing retry deadline.
+
 ## Web search
 
 The bundled `gemini` web-search provider uses Gemini Google Search grounding.
@@ -173,7 +277,7 @@ or let it reuse `models.providers.google.apiKey` after `GEMINI_API_KEY`:
           webSearch: {
             apiKey: "AIza...", // optional if GEMINI_API_KEY or models.providers.google.apiKey is set
             baseUrl: "https://generativelanguage.googleapis.com/v1beta", // falls back to models.providers.google.baseUrl
-            model: "gemini-2.5-flash",
+            model: "gemini-3.6-flash",
           },
         },
       },
@@ -189,15 +293,18 @@ Gemini web search reuses `models.providers.google.baseUrl`. See
 [Gemini search](/tools/gemini-search) for the provider-specific tool behavior.
 
 <Tip>
-Gemini 3 models use `thinkingLevel` rather than `thinkingBudget`. OpenClaw maps
-Gemini 3, Gemini 3.1, and `gemini-*-latest` alias reasoning controls to
+Gemini 3 and Gemini 4 models use `thinkingLevel` rather than `thinkingBudget`.
+OpenClaw maps these models and `gemini-*-latest` alias reasoning controls to
 `thinkingLevel` so default/low-latency runs do not send disabled
 `thinkingBudget` values.
 
 `/think adaptive` keeps Google's dynamic thinking semantics instead of choosing
-a fixed OpenClaw level. Gemini 3 and Gemini 3.1 omit a fixed `thinkingLevel` so
+a fixed OpenClaw level. Gemini 3 and Gemini 4 omit a fixed `thinkingLevel` so
 Google can choose the level; Gemini 2.5 sends Google's dynamic sentinel
 `thinkingBudget: -1`.
+
+Gemini 4 Argon supports `low`, `medium`, and `high`. OpenClaw maps `minimal` and
+`off` to `low`, because thinking cannot be fully disabled on this model.
 
 Gemma 4 models (for example `gemma-4-26b-a4b-it`) support thinking mode. OpenClaw
 rewrites `thinkingBudget` to a supported Google `thinkingLevel` for Gemma 4.
@@ -205,8 +312,16 @@ Setting thinking to `off` preserves thinking disabled instead of mapping to
 `MINIMAL`.
 
 Gemini 2.5 Pro only works in thinking mode and rejects an explicit
-`thinkingBudget: 0`; OpenClaw strips that value for Gemini 2.5 Pro requests
-instead of sending it.
+`thinkingBudget: 0`. With an explicit `maxTokens`, OpenClaw uses its minimum
+thinking budget of 128 when thinking is off. Without an explicit cap, OpenClaw
+continues to omit the rejected zero budget.
+
+Google counts thinking inside its output-token limit. For Gemini API and Vertex
+requests with a fixed numeric thinking budget, OpenClaw adds that budget to the caller's
+`maxTokens`, capped at the model's output limit. Flash with thinking off keeps
+the caller's cap unchanged. Thinking levels, adaptive/automatic thinking, and
+Interactions requests keep the caller's `maxTokens` cap unchanged. Omitted caps
+remain omitted.
 </Tip>
 
 ## Image generation
@@ -303,18 +418,54 @@ See [Music Generation](/tools/music-generation) for shared tool parameters, prov
 
 ## Text-to-speech
 
-The bundled `google` speech provider uses the Gemini API TTS path with
-`gemini-3.1-flash-tts-preview`.
+The bundled `google` speech provider uses Gemini API TTS. The default model
+stays `gemini-3.1-flash-tts-preview`. Set `model` to `gemini-3.8-flash-tts` to
+opt in to Gemini 3.8, or `gemini-3.8-flash-lite-tts` for the faster, lower-cost
+variant. `gemini-2.5-flash-preview-tts` and `gemini-2.5-pro-preview-tts` remain
+available.
 
 - Default voice: `Kore`
 - Auth: `tts.providers.google.apiKey`, `models.providers.google.apiKey`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY`
 - Output: WAV for regular TTS attachments, Opus for voice-note targets, PCM for Talk/telephony
 - Voice-note output: Google PCM is wrapped as WAV and transcoded to 48 kHz Opus with `ffmpeg`
 
-Google's batch Gemini TTS path returns generated audio in the completed
-`generateContent` response. For lowest-latency spoken conversations, use the
-Google realtime voice provider backed by the Gemini Live API instead of batch
-TTS.
+Malformed or oversized successful TTS responses are reported without automatically
+submitting another Google synthesis request. Transient network failures, HTTP 5xx
+responses, and responses with no audio retain one automatic retry.
+
+OpenClaw sends Gemini 3.8 TTS through the Interactions API
+(`POST /v1beta/interactions`) with `store: false`. Google also documents 3.8 on
+`generateContent`; Interactions is OpenClaw's routing choice, not a model
+requirement. OpenClaw asks for headerless 24 kHz PCM (`audio/l16`) and still
+wraps that PCM locally. `audioProfile` and `personaPrompt` are sent as
+`speech_metadata.style`, `speakerName` as the structured `speaker` label, and
+none of them are spoken as part of the transcript. Momentary 3.8 vocal tags use
+angle brackets, such as `<laugh>` or `<short pause>`; sustained delivery such as
+whispering belongs in `audioProfile`.
+
+Set `speakers` to exactly two `{ speaker, voice, style? }` entries to cast a
+dialogue. Only lines that start with one of those two names followed by a colon
+begin a turn (`Puck: Hello` and `Puck:Hello` both count), and the name is not
+spoken. Every other line is spoken as part of
+the current turn, including ordinary colon-prefixed prose such as
+`Budget: 10 dollars` and any unconfigured label such as `Alice: Hi`. Words
+before the first label are spoken by that first speaker, not dropped. A
+transcript with no configured labels stays on the single-voice path.
+Multi-speaker dialogue requires `gemini-3.8-flash-tts` or
+`gemini-3.8-flash-lite-tts`.
+
+```text
+Puck: Headphones on. <laugh> We opened it.
+Kore: It is waiting at the maintainer gate.
+```
+
+Gemini 3.1 and 2.5 preview TTS still use `generateContent`. Those models keep
+the older behavior: `audioProfile` is prepended to the transcript, and
+expressive tags use square brackets such as `[whispers]`. An unknown
+`gemini-3.8-*-tts` id is rejected instead of being sent to `generateContent`.
+
+For lowest-latency spoken conversations, use the Google realtime voice provider
+backed by the Gemini Live API instead of batch TTS.
 
 To use Google as the default TTS provider:
 
@@ -325,9 +476,13 @@ To use Google as the default TTS provider:
     provider: "google",
     providers: {
       google: {
-        model: "gemini-3.1-flash-tts-preview",
+        model: "gemini-3.8-flash-tts",
         speakerVoice: "Kore",
         audioProfile: "Speak professionally with a calm tone.",
+        speakers: [
+          { speaker: "Puck", voice: "Puck", style: "bright" },
+          { speaker: "Kore", voice: "Kore", style: "whispered" },
+        ],
       },
     },
   },
@@ -335,18 +490,23 @@ To use Google as the default TTS provider:
 ```
 
 Gemini API TTS uses natural-language prompting for style control. Set
-`audioProfile` to prepend a reusable style prompt before the spoken text. Set
-`speakerName` when your prompt text refers to a named speaker.
+`audioProfile` for a reusable delivery style. On Gemini 3.8 that style is
+`speech_metadata.style` and is not read aloud. On Gemini 3.1 and 2.5 preview
+models it is still prepended to the spoken text. Set `speakerName` when the
+performance needs a named speaker; 3.8 sends it as the structured
+`speech_metadata.speaker` label, never as style text, and the selected voice
+stays the single configured voice.
 
-Gemini API TTS also accepts expressive square-bracket audio tags in the text,
-such as `[whispers]` or `[laughs]`. To keep tags out of the visible chat reply
+Gemini 3.1 and 2.5 preview TTS accept expressive square-bracket audio tags in
+the text, such as `[whispers]` or `[laughs]`. Gemini 3.8 uses angle-bracket
+vocal tags such as `<laugh>` instead. To keep tags out of the visible chat reply
 while sending them to TTS, put them inside a `[[tts:text]]...[[/tts:text]]`
 block:
 
 ```text
 Here is the clean reply text.
 
-[[tts:text]][whispers] Here is the spoken version.[[/tts:text]]
+[[tts:text]]<laugh> Here is the spoken version. <short pause> Enjoy.[[/tts:text]]
 ```
 
 <Note>
@@ -358,6 +518,11 @@ provider. This is not the separate Cloud Text-to-Speech API path.
 
 The bundled `google` plugin registers a realtime voice provider backed by the
 Gemini Live API for backend audio bridges such as Voice Call and Google Meet.
+
+Talk and Discord expose Google's prebuilt voices in their voice catalogs. During
+an active Talk or Discord call, use `talk_voice` to select a new voice. OpenClaw
+reconnects with that voice while preserving the conversation and unfinished agent
+work; saved voice defaults stay unchanged. See [Discord voice changes](/channels/discord/voice-follow).
 
 | Setting               | Config path                                                         | Default                                                                               |
 | --------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
@@ -422,6 +587,26 @@ nearest supported level, while `-1` leaves Google's default in place. See the
 </Note>
 
 <Note>
+Gemini 3.8 Live (`gemini-3.8-live`) keeps the async function-calling contract and
+rejects any thinking config, so OpenClaw sends none for it. Gemini 3.8 Live Extended
+Thinking (`gemini-3.8-live-extended-thinking`) requires `NON_BLOCKING` tools, rejects
+function response scheduling, and abandons a call after an interim response, so OpenClaw
+sends one final result per agent consult without a "working" interim. Configure its
+reasoning depth with `thinkingLevel` (`low`, `medium`, or `high`; `minimal` maps to
+`low`), or a positive `thinkingBudget` mapped to the nearest level. Spoken filler has its
+own utterance boundary while the interaction remains in progress; OpenClaw finalizes that
+transcript and audio but keeps the response active until Google reports the interaction
+as idle. On this model an explicit stop or barge-in interrupts generation through a short
+client-content turn that
+tells the model it was interrupted (an empty turn makes it resume). Cancelling the current
+generation is reliable, but the silence that follows is best effort: the model may still
+resume or start another response, so treat a stop as "stop this reply", not a guarantee of
+silence. Other Gemini Live models interrupt only through server-side voice activity
+detection. See the
+[Gemini 3.8 Live thinking guide](https://ai.google.dev/gemini-api/docs/live-api/thinking).
+</Note>
+
+<Note>
 Control UI Talk supports Google Live browser sessions with constrained one-use
 tokens. In Video Talk, the browser sends bounded JPEG frames directly to
 Google Live at the provider's maximum of one frame per second. The
@@ -443,9 +628,55 @@ roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
 ## Advanced configuration
 
 <AccordionGroup>
+  <Accordion title="Gemini Interactions API (stateless)">
+    Gemini Interactions is an opt-in alternative to the default
+    `google-generative-ai` transport. Register a provider with
+    `api: "google-interactions"` and select models through that provider ID:
+
+    ```json5
+    {
+      models: {
+        mode: "merge",
+        providers: {
+          "google-interactions": {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            apiKey: "***",
+            api: "google-interactions",
+            models: [
+              {
+                id: "gemini-3.8-flash",
+                name: "Gemini 3.8 Flash (Interactions)",
+                reasoning: true,
+                input: ["text", "image"],
+                contextWindow: 1048576,
+                maxTokens: 65536,
+              },
+            ],
+          },
+        },
+      },
+      agents: {
+        defaults: { model: { primary: "google-interactions/gemini-3.8-flash" } },
+      },
+    }
+    ```
+
+    This transport is stateless: OpenClaw sends `store: false`, does not retain a
+    server-side interaction ID, and replays the needed conversation context on
+    each request. Explicit Gemini `cachedContent` handles are not supported on
+    this route; use `google-generative-ai` for that feature.
+
+    Interrupted text replies use the normal transient-error retry and failover
+    policy. Malformed streaming JSON fails the request instead of silently
+    dropping content. Malformed completed tool-call arguments remain rejected.
+
+  </Accordion>
+
   <Accordion title="Direct Gemini cache reuse">
     For direct Gemini API runs (`api: "google-generative-ai"`), OpenClaw
-    passes a configured `cachedContent` handle through to Gemini requests.
+    passes a configured `cachedContent` handle through to supported Gemini models.
+    Gemini 4 Argon supports implicit caching only; do not configure an explicit
+    cache handle for it.
 
     - Configure per-model or global params with either
       `cachedContent` or legacy `cached_content`

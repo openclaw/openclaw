@@ -1,116 +1,63 @@
-// Runs music generation requests through provider runtimes and fallbacks.
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { parseMusicGenerationModelRef } from "../media-generation/model-ref.js";
-import {
-  withMusicGenerationProviders,
+import { createMediaProviderLookup } from "../media-generation/provider-registry.js";
+import type {
   getMusicGenerationProvider,
   listMusicGenerationProviders,
 } from "../media-generation/registry.js";
 import {
   buildMediaGenerationNormalizationMetadata,
-  buildNoCapabilityModelConfiguredMessage,
-  resolveCapabilityModelCandidates,
+  normalizeDurationToClosestMax,
   resolveReferenceImageCapabilityError,
   runMediaGenerationCandidates,
 } from "../media-generation/runtime-shared.js";
-import {
-  buildCapabilityProviderIndex,
-  normalizeCapabilityProviderId,
-} from "../plugins/provider-registry-shared.js";
-import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
-import { resolveMusicGenerationOverrides } from "./normalization.js";
+import { withAcquiredPluginCapabilityProviders } from "../plugins/capability-provider-acquisition.js";
+import { resolveMusicGenerationModeCapabilities } from "./capabilities.js";
 import type { GenerateMusicParams, GenerateMusicRuntimeResult } from "./runtime-types.js";
-import type { MusicGenerationResult } from "./types.js";
+import type {
+  MusicGenerationIgnoredOverride,
+  MusicGenerationNormalization,
+  MusicGenerationResult,
+} from "./types.js";
 
-/**
- * Music generation runtime orchestration.
- *
- * The runtime resolves provider/model candidates, applies capability-based
- * normalization, invokes providers, and records fallback attempts consistently
- * with other media generation capabilities.
- */
 const log = createSubsystemLogger("music-generation");
 
-/** Injectable dependencies used by tests and alternate runtime hosts. */
 type MusicGenerationRuntimeDeps = {
-  getProvider?: typeof getMusicGenerationProvider;
-  listProviders?: typeof listMusicGenerationProviders;
-  getProviderEnvVars?: typeof getProviderEnvVars;
-  log?: Pick<typeof log, "debug">;
+  getProvider: typeof getMusicGenerationProvider;
+  listProviders: typeof listMusicGenerationProviders;
 };
-
-/** List runtime-visible music generation providers for a config snapshot. */
-export function listRuntimeMusicGenerationProviders(
-  params?: { config?: OpenClawConfig },
-  deps: MusicGenerationRuntimeDeps = {},
-) {
-  return (deps.listProviders ?? listMusicGenerationProviders)(params?.config);
-}
 
 /** Generate music with provider fallback and capability-aware request normalization. */
 export async function generateMusic(
   params: GenerateMusicParams,
-  deps: MusicGenerationRuntimeDeps = {},
+  deps?: MusicGenerationRuntimeDeps,
 ): Promise<GenerateMusicRuntimeResult> {
-  if (deps.getProvider && deps.listProviders) {
+  if (deps) {
     return runMusicGeneration(params, deps);
   }
-  return withMusicGenerationProviders(params.cfg, (providers) => {
-    const canonical = buildCapabilityProviderIndex(providers, "canonical");
-    const aliases = buildCapabilityProviderIndex(providers, "aliases");
-    return runMusicGeneration(params, {
-      ...deps,
-      getProvider:
-        deps.getProvider ??
-        ((id) => {
-          const normalized = normalizeCapabilityProviderId(id);
-          return normalized ? aliases.get(normalized) : undefined;
-        }),
-      listProviders: deps.listProviders ?? (() => [...canonical.values()]),
-    });
-  });
+  return withAcquiredPluginCapabilityProviders(
+    { key: "musicGenerationProviders", cfg: params.cfg },
+    (providers) => runMusicGeneration(params, createMediaProviderLookup(providers)),
+  );
 }
 
 async function runMusicGeneration(
   params: GenerateMusicParams,
   deps: MusicGenerationRuntimeDeps,
 ): Promise<GenerateMusicRuntimeResult> {
-  const getProvider = deps.getProvider ?? getMusicGenerationProvider;
-  const listProviders = deps.listProviders ?? listMusicGenerationProviders;
-  const logger = deps.log ?? log;
   const timeoutMs =
     params.timeoutMs ??
     resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.mediaModels?.music);
-  const candidates = resolveCapabilityModelCandidates({
-    cfg: params.cfg,
-    modelConfig: params.cfg.agents?.defaults?.mediaModels?.music,
-    modelOverride: params.modelOverride,
-    parseModelRef: parseMusicGenerationModelRef,
-    agentDir: params.agentDir,
-    listProviders,
-    autoProviderFallback: params.autoProviderFallback,
-  });
-  if (candidates.length === 0) {
-    throw new Error(
-      buildNoCapabilityModelConfiguredMessage({
-        capabilityLabel: "music-generation",
-        modelConfigKey: "mediaModels.music",
-        providers: listProviders(params.cfg),
-        fallbackSampleRef: "google/lyria-3-clip-preview",
-        getProviderEnvVars: deps.getProviderEnvVars,
-      }),
-    );
-  }
 
   return runMediaGenerationCandidates({
-    candidates,
+    request: params,
+    listProviders: deps.listProviders,
     capability: "music",
-    getProvider: (providerId) => getProvider(providerId, params.cfg),
-    includeSkipFailureDetails: true,
+    getProvider: (providerId) => deps.getProvider(providerId, params.cfg),
     onFailure: (attempt) => {
-      logger.debug(`music-generation candidate failed: ${attempt.provider}/${attempt.model}`);
+      log.warn(
+        `music-generation candidate failed: ${attempt.provider}/${attempt.model}: ${attempt.error}`,
+      );
     },
     prepareCandidate(candidate, provider) {
       const referenceImageError = resolveReferenceImageCapabilityError({
@@ -119,20 +66,69 @@ async function runMusicGeneration(
         edit: provider.capabilities.edit,
       });
       if (referenceImageError) {
-        logger.debug(`music-generation candidate skipped: ${referenceImageError}`);
+        log.debug(`music-generation candidate skipped: ${referenceImageError}`);
         return referenceImageError;
       }
 
       return async (attempts): Promise<GenerateMusicRuntimeResult> => {
-        const sanitized = resolveMusicGenerationOverrides({
+        const caps = resolveMusicGenerationModeCapabilities({
           provider,
-          model: candidate.model,
-          lyrics: params.lyrics,
-          instrumental: params.instrumental,
-          durationSeconds: params.durationSeconds,
-          format: params.format,
-          inputImages: params.inputImages,
+          inputImageCount: params.inputImages?.length ?? 0,
         });
+        const ignoredOverrides: MusicGenerationIgnoredOverride[] = [];
+        const normalization: MusicGenerationNormalization = {};
+        let { lyrics, instrumental, durationSeconds, format } = params;
+        if (caps) {
+          if (
+            lyrics?.trim() &&
+            !(caps.supportsLyricsByModel?.[candidate.model] ?? caps.supportsLyrics === true)
+          ) {
+            ignoredOverrides.push({ key: "lyrics", value: lyrics });
+            lyrics = undefined;
+          }
+          if (
+            typeof instrumental === "boolean" &&
+            !(
+              caps.supportsInstrumentalByModel?.[candidate.model] ??
+              caps.supportsInstrumental === true
+            )
+          ) {
+            ignoredOverrides.push({ key: "instrumental", value: instrumental });
+            instrumental = undefined;
+          }
+          if (typeof durationSeconds === "number" && !caps.supportsDuration) {
+            ignoredOverrides.push({ key: "durationSeconds", value: durationSeconds });
+            durationSeconds = undefined;
+          } else if (typeof durationSeconds === "number") {
+            const normalizedDurationSeconds = normalizeDurationToClosestMax(
+              durationSeconds,
+              caps.maxDurationSeconds,
+            );
+            if (
+              typeof normalizedDurationSeconds === "number" &&
+              normalizedDurationSeconds !== durationSeconds
+            ) {
+              normalization.durationSeconds = {
+                requested: durationSeconds,
+                applied: normalizedDurationSeconds,
+              };
+            }
+            durationSeconds = normalizedDurationSeconds;
+          }
+          if (format) {
+            const supportedFormats =
+              caps.supportedFormatsByModel?.[candidate.model] ?? caps.supportedFormats ?? [];
+            // An empty list means the provider validates formats internally.
+            if (
+              !caps.supportsFormat ||
+              (supportedFormats.length > 0 && !supportedFormats.includes(format))
+            ) {
+              ignoredOverrides.push({ key: "format", value: format });
+              format = undefined;
+            }
+          }
+        }
+        const appliedNormalization = normalization.durationSeconds ? normalization : undefined;
         const result: MusicGenerationResult = await provider.generateMusic({
           provider: candidate.provider,
           model: candidate.model,
@@ -140,10 +136,10 @@ async function runMusicGeneration(
           cfg: params.cfg,
           agentDir: params.agentDir,
           authStore: params.authStore,
-          lyrics: sanitized.lyrics,
-          instrumental: sanitized.instrumental,
-          durationSeconds: sanitized.durationSeconds,
-          format: sanitized.format,
+          lyrics,
+          instrumental,
+          durationSeconds,
+          format,
           inputImages: params.inputImages,
           ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         });
@@ -162,14 +158,14 @@ async function runMusicGeneration(
           model: result.model ?? candidate.model,
           attempts,
           lyrics: result.lyrics,
-          normalization: sanitized.normalization,
+          normalization: appliedNormalization,
           metadata: {
             ...result.metadata,
             ...buildMediaGenerationNormalizationMetadata({
-              normalization: sanitized.normalization,
+              normalization: appliedNormalization,
             }),
           },
-          ignoredOverrides: sanitized.ignoredOverrides,
+          ignoredOverrides,
         };
       };
     },

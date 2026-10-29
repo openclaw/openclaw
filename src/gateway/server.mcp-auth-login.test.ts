@@ -1,0 +1,904 @@
+import { createHash, randomUUID } from "node:crypto";
+import { once } from "node:events";
+import { mkdir, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import path from "node:path";
+import { text } from "node:stream/consumers";
+import { Client as McpClient, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WebSocket } from "ws";
+import type {
+  WizardNextResult,
+  WizardStartResult,
+} from "../../packages/gateway-protocol/src/index.js";
+import { getOrCreateSessionMcpRuntime } from "../agents/agent-bundle-mcp-manager.test-support.js";
+import { partitionMcpServersByConnectionScope } from "../agents/mcp-connection-resolver.js";
+import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
+import { readMcpOAuthStore } from "../agents/mcp-oauth-store.js";
+import {
+  cancelMcpOAuthAuthorization,
+  clearMcpOAuthCredentials,
+  recordMcpOAuthAuthorizationRequired,
+  startMcpOAuthAuthorization,
+} from "../agents/mcp-oauth.js";
+import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
+import { writeConfigFile } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
+import type { McpServerConfig } from "../config/types.mcp.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { getCurrentPluginMetadataSnapshotState } from "../plugins/current-plugin-metadata-state.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import * as setupMigration from "../wizard/setup.migration-snapshot.js";
+import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
+import { createGatewayMethodRegistry } from "./methods/registry.js";
+import { mcpAuthLoginHandlers } from "./server-methods/mcp-auth-login.js";
+import { whenAdmittedWizardSessionSettled } from "./server-methods/setup-admission.js";
+import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
+import {
+  registerMcpAuthForcedEffects,
+  mcpOAuthMetadata,
+  type McpAuthEffectEndpoint,
+} from "./server.mcp-auth-login.forced-effects.test-support.js";
+import {
+  connectOk,
+  createGatewaySuiteHarness,
+  installGatewayTestHooks,
+  rpcReq,
+} from "./test-helpers.server.js";
+
+installGatewayTestHooks({ scope: "suite" });
+
+describe("registered mcp.authLogin", () => {
+  let gateway: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
+  let owner: WebSocket;
+  let other: WebSocket;
+  let readOnly: WebSocket;
+  let resourceUrl: string;
+  let config: McpServerConfig;
+  let expectedChallenge: string;
+  let registeredRedirect: string;
+  let tokenError: "invalid_client" | false = false;
+  let issuerRequired = false;
+  const effects: McpAuthEffectEndpoint = { tokenLifetimeSeconds: 3600 };
+  let tokenEntered = createDeferredCore();
+  let releaseToken: Deferred | undefined;
+  let redirectStage: "register" | "token" | undefined;
+  let redirectEntered = createDeferredCore();
+  let releaseRedirect: Deferred | undefined;
+  let admitted: GatewayRequestHandlerOptions | undefined;
+  let beforeLogin: ((request: GatewayRequestHandlerOptions) => Promise<void>) | undefined;
+  let admissionSettled = createDeferredCore();
+  let discoveryEntered = createDeferredCore();
+  let releaseDiscovery: Deferred | undefined;
+  const requests: string[] = [];
+  const endpoint = createServer((request, response) => {
+    void (async () => {
+      const json = (value: unknown, code = 200) =>
+        response.writeHead(code).end(JSON.stringify(value));
+      const url = new URL(request.url ?? "/", resourceUrl);
+      requests.push(url.pathname);
+      response.setHeader("Content-Type", "application/json");
+      if (effects.endpoint && (await effects.endpoint(request, response))) {
+        return;
+      }
+      if (redirectStage && url.pathname === `/${redirectStage}`) {
+        redirectEntered.resolve();
+        await releaseRedirect?.promise;
+        response.writeHead(307, { Location: `/${redirectStage}-final` }).end();
+        return;
+      }
+      if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) {
+        discoveryEntered.resolve();
+        await releaseDiscovery?.promise;
+        json({ resource: resourceUrl, authorization_servers: [new URL(resourceUrl).origin] });
+      } else if (url.pathname === "/.well-known/oauth-authorization-server") {
+        json({
+          ...mcpOAuthMetadata(resourceUrl),
+          authorization_response_iss_parameter_supported: issuerRequired,
+        });
+      } else if (url.pathname === "/register") {
+        const metadata = JSON.parse(await text(request));
+        registeredRedirect = metadata.redirect_uris[0];
+        json({ ...metadata, client_id: "fixture-client" });
+      } else if (url.pathname === "/token") {
+        const params = new URLSearchParams(await text(request));
+        tokenEntered.resolve();
+        if (releaseToken) {
+          await releaseToken.promise;
+        }
+        if (tokenError) {
+          json({ error: tokenError, error_description: "private exchange detail" }, 400);
+        } else if (
+          params.get("code") !== "fixture-code" ||
+          params.get("redirect_uri") !== registeredRedirect ||
+          createHash("sha256")
+            .update(params.get("code_verifier") ?? "")
+            .digest("base64url") !== expectedChallenge
+        ) {
+          json({ error: "invalid_grant" }, 400);
+        } else {
+          json({
+            access_token: "fixture-access",
+            refresh_token: "fixture-refresh",
+            token_type: "Bearer",
+            expires_in: effects.tokenLifetimeSeconds,
+          });
+        }
+      } else if (url.pathname === "/mcp") {
+        if (request.headers.authorization !== "Bearer fixture-access") {
+          response
+            .writeHead(401, {
+              "www-authenticate": `Bearer resource_metadata="${new URL("/.well-known/oauth-protected-resource", resourceUrl).href}"`,
+            })
+            .end();
+          return;
+        }
+        const body = await text(request);
+        if (!body) {
+          response.writeHead(405).end();
+          return;
+        }
+        const message = JSON.parse(body);
+        if (message.id === undefined) {
+          response.writeHead(202).end();
+          return;
+        }
+        const result =
+          message.method === "initialize"
+            ? {
+                protocolVersion: message.params.protocolVersion,
+                capabilities: { tools: {} },
+                serverInfo: { name: "fixture", version: "1.0.0" },
+              }
+            : message.method === "tools/list"
+              ? {
+                  tools: [
+                    {
+                      name: "echo",
+                      description: "Returns a fixture reply",
+                      inputSchema: { type: "object", properties: {} },
+                    },
+                  ],
+                }
+              : { content: [{ type: "text", text: "Authenticated connector reply" }] };
+        json({ jsonrpc: "2.0", id: message.id, result });
+      } else {
+        response.writeHead(404).end();
+      }
+    })().catch(() => response.writeHead(500).end());
+  });
+
+  beforeAll(async () => {
+    const login = expectDefined(mcpAuthLoginHandlers["mcp.authLogin"], "registered login handler");
+    vi.spyOn(mcpAuthLoginHandlers, "mcp.authLogin").mockImplementation(async (request) => {
+      admitted = request;
+      try {
+        await beforeLogin?.(request);
+        await login(request);
+      } finally {
+        admissionSettled.resolve();
+      }
+    });
+    endpoint.listen(0, "127.0.0.1");
+    await once(endpoint, "listening");
+    const address = endpoint.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Fixture listener unavailable");
+    }
+    resourceUrl = `http://127.0.0.1:${address.port}/mcp`;
+    config = { url: resourceUrl, transport: "streamable-http", auth: "oauth" };
+    await configure();
+    gateway = await createGatewaySuiteHarness({
+      serverOptions: { bind: "loopback", auth: { mode: "none" } },
+    });
+    await gateway.server.startupSettled;
+    owner = await connect(["operator.admin"]);
+    other = await connect(["operator.admin"]);
+    readOnly = await connect(["operator.read"]);
+  });
+
+  afterAll(async () => {
+    releaseToken?.resolve();
+    releaseRedirect?.resolve();
+    releaseDiscovery?.resolve();
+    owner?.close();
+    other?.close();
+    readOnly?.close();
+    await gateway?.close();
+    endpoint.closeAllConnections();
+    await new Promise<void>((resolve) => {
+      endpoint.close(() => resolve());
+    });
+    vi.restoreAllMocks();
+  });
+
+  beforeEach(() => {
+    issuerRequired = false;
+    pruneStaleControlPlaneBuckets(Number.MAX_SAFE_INTEGER);
+  });
+
+  const identity = () => operatorMcpOAuthIdentity("docs", resourceUrl);
+  const store = () => readMcpOAuthStore(identity().storeKey);
+  const login = (client = owner, sessionId = randomUUID(), extra: Record<string, string> = {}) =>
+    rpcReq<WizardStartResult>(client, "mcp.authLogin", { sessionId, serverName: "docs", ...extra });
+  const configure = (server = config, origin?: string) =>
+    writeConfigFile({
+      gateway: {
+        reload: { mode: "off" },
+        ...(origin ? { controlUi: { allowedOrigins: [origin] } } : {}),
+      },
+      mcp: { servers: { docs: server } },
+    });
+  const getInvocation = () => expectDefined(admitted, "admitted request");
+  const registryGetter = () =>
+    expectDefined(getInvocation().context.getGatewayMethodRegistry, "selected registry getter");
+  const getSession = (sessionId: string) =>
+    expectDefined(getInvocation().context.wizardSessions.get(sessionId), "admitted wizard");
+  function resolverRegistry() {
+    const registry = createEmptyPluginRegistry();
+    registry.mcpServerConnectionResolvers.push({
+      pluginId: "fixture-resolver",
+      source: "mcp-auth-login-fixture",
+      resolver: { serverName: "docs", resolve: async () => ({ url: resourceUrl }) },
+    });
+    return registry;
+  }
+  function expectPendingCleared(stored: Awaited<ReturnType<typeof store>>) {
+    expect(stored.codeVerifier).toBeUndefined();
+    expect(stored.lastAuthorizationUrl).toBeUndefined();
+  }
+  async function expectSettled(session: ReturnType<typeof getSession>) {
+    await whenAdmittedWizardSessionSettled(session);
+    expect(session.getStatus()).toBe("error");
+  }
+  function resolvedTransport() {
+    const resolved = resolveMcpTransportConfig("docs", config);
+    if (resolved?.kind !== "http") {
+      throw new Error("Fixture transport unavailable");
+    }
+    return resolved;
+  }
+  async function connect(scopes: string[], origin = `http://127.0.0.1:${gateway.port}`) {
+    const client = await gateway.openWs({ origin });
+    await connectOk(client, {
+      scopes,
+      deviceIdentityPath: path.join(
+        resolveStateDir(),
+        `connector-${randomUUID()}`,
+        "client",
+        "credentials.sqlite",
+      ),
+      browserOrigin: origin,
+      client: {
+        id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+        version: "test",
+        platform: "test",
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+      },
+    });
+    return client;
+  }
+  async function startLogin(client = owner) {
+    const sessionId = randomUUID();
+    const started = await login(client, sessionId);
+    expect(started, JSON.stringify(started.error)).toMatchObject({
+      ok: true,
+      payload: { sessionId, done: false, status: "running" },
+    });
+    return sessionId;
+  }
+  async function begin(client = owner) {
+    const sessionId = await startLogin(client);
+    while (true) {
+      const next = await rpcReq<WizardNextResult>(client, "wizard.next", { sessionId });
+      expect(next.ok, JSON.stringify(next.error)).toBe(true);
+      const result = expectDefined(next.payload, "wizard result");
+      expect(result.done, result.error).toBe(false);
+      if (result.step?.externalUrl) {
+        const authorization = new URL(result.step.externalUrl);
+        expectedChallenge = expectDefined(
+          authorization.searchParams.get("code_challenge"),
+          "PKCE challenge",
+        );
+        return {
+          sessionId,
+          state: expectDefined(authorization.searchParams.get("state"), "OAuth state"),
+        };
+      }
+    }
+  }
+  const callback = (state: string, query = "code=fixture-code") =>
+    fetch(
+      `http://127.0.0.1:${gateway.port}/oauth/provider/callback?state=${encodeURIComponent(state)}&${query}`,
+    );
+  async function terminal(sessionId: string, client = owner) {
+    while (true) {
+      const next = await rpcReq<WizardNextResult>(client, "wizard.next", { sessionId });
+      expect(next.ok, JSON.stringify(next.error)).toBe(true);
+      const result = expectDefined(next.payload, "wizard result");
+      if (result.done) {
+        return result;
+      }
+    }
+  }
+
+  registerMcpAuthForcedEffects({
+    connection: () => ({ resourceUrl, config }),
+    request: () => admitted,
+    identity,
+    begin,
+    start: startLogin,
+    callback,
+    terminal,
+    requests,
+    effects,
+  });
+
+  it("rejects non-admin callers and injected authority selectors before discovery", async () => {
+    const before = requests.length;
+    expect((await login(readOnly)).ok).toBe(false);
+    for (const field of ["url", "identity", "storeKey", "redirectUrl", "secret", "agentId"]) {
+      expect((await login(owner, randomUUID(), { [field]: "injected" })).ok).toBe(false);
+    }
+    expect(requests).toHaveLength(before);
+  });
+
+  it("replaces a tokenless CLI registration for issuer-bound browser sign-in, then calls the MCP tool", async () => {
+    issuerRequired = true;
+    await clearMcpOAuthCredentials(identity());
+    const cliAttempt = await startMcpOAuthAuthorization(identity(), resolvedTransport(), {});
+    if (cliAttempt.status !== "redirect") {
+      throw new Error("Expected CLI authorization to register its callback");
+    }
+    expect(registeredRedirect).toBe("http://127.0.0.1:8989/oauth/callback");
+    await cancelMcpOAuthAuthorization(identity(), cliAttempt.state);
+
+    const started = await begin();
+    expect((await rpcReq(other, "wizard.cancel", { sessionId: started.sessionId })).ok).toBe(false);
+    const query = `code=fixture-code&iss=${encodeURIComponent(new URL(resourceUrl).origin)}`;
+    expect((await callback(started.state, query)).status).toBe(200);
+    expect(await terminal(started.sessionId)).toMatchObject({ status: "done" });
+    expect((await callback(started.state, query)).status).toBe(410);
+    const stored = await store();
+    expect(stored.tokens?.access_token).toBe("fixture-access");
+    expect(stored.tokensAuthorizationServerUrl).toBe(new URL(resourceUrl).origin);
+    expect(stored.codeVerifier).toBeUndefined();
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: randomUUID(),
+      sessionKey: "agent:main:connector-proof",
+      workspaceDir: resolveStateDir(),
+      cfg: { mcp: { servers: { docs: config } } },
+    });
+    try {
+      expect(await runtime.callTool("docs", "echo", {})).toMatchObject({
+        content: [{ type: "text", text: "Authenticated connector reply" }],
+      });
+    } finally {
+      await runtime.dispose();
+    }
+    const before = requests.length;
+    const sessionId = randomUUID();
+    expect((await login(owner, sessionId)).ok).toBe(true);
+    expect(await terminal(sessionId)).toMatchObject({ status: "done" });
+    expect(requests).toHaveLength(before);
+  });
+
+  it("explains an unavailable browser callback without starting OAuth", async () => {
+    const origin = "http://localhost:3000";
+    let client: WebSocket | undefined;
+    try {
+      await configure(config, origin);
+      client = await connect(["operator.admin"], origin);
+      const before = requests.length;
+      const sessionId = randomUUID();
+      expect((await login(client, sessionId)).ok).toBe(true);
+      expect(await terminal(sessionId, client)).toMatchObject({
+        status: "error",
+        error: expect.stringContaining("secure Gateway address"),
+      });
+      expect(requests).toHaveLength(before);
+    } finally {
+      client?.close();
+      await configure();
+    }
+  });
+
+  it.each([undefined, "", "https://wrong.example/?code=private-callback-value"])(
+    "rejects an unverified callback issuer %s without exchanging the code",
+    async (iss) => {
+      issuerRequired = true;
+      await clearMcpOAuthCredentials(identity());
+      const started = await begin();
+      const before = requests.length;
+      const query = `code=fixture-code${iss === undefined ? "" : `&iss=${encodeURIComponent(iss)}`}`;
+      expect((await callback(started.state, query)).status).toBe(200);
+      const result = await terminal(started.sessionId);
+      expect(result).toMatchObject({
+        status: "error",
+        error:
+          "OpenClaw could not verify the sign-in provider. Close this dialog, review the connection settings, and try again.",
+      });
+      expect(JSON.stringify(result)).not.toMatch(
+        /wrong\.example|private-callback-value|fixture-code/,
+      );
+      expect(requests.slice(before)).not.toContain("/token");
+      const stored = await store();
+      expect(stored.tokens).toBeUndefined();
+      expectPendingCleared(stored);
+    },
+  );
+
+  it.each(["registration", "network"] as const)(
+    "explains %s failure without exposing provider-controlled details",
+    async (failure) => {
+      await clearMcpOAuthCredentials(identity());
+      effects.endpoint = async (request, response) => {
+        if (new URL(request.url ?? "/", resourceUrl).pathname !== "/register") {
+          return false;
+        }
+        if (failure === "network") {
+          request.socket.destroy();
+        } else {
+          response.writeHead(400).end(
+            JSON.stringify({
+              error: "invalid_client_metadata",
+              error_description: "private-registration-detail https://private.example/?code=secret",
+            }),
+          );
+        }
+        return true;
+      };
+      try {
+        const sessionId = await startLogin();
+        const result = await terminal(sessionId);
+        expect(result).toMatchObject({
+          status: "error",
+          error: expect.stringContaining(
+            failure === "network"
+              ? "could not reach the sign-in service"
+              : "rejected this connection's settings",
+          ),
+        });
+        expect(JSON.stringify(result)).not.toMatch(
+          /private-registration-detail|private\.example|secret/,
+        );
+        expect((await store()).tokens).toBeUndefined();
+      } finally {
+        effects.endpoint = undefined;
+      }
+    },
+  );
+
+  it("reports an expired attempt rather than an explicit cancellation", async () => {
+    await clearMcpOAuthCredentials(identity());
+    const started = await begin();
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now + 10 * 60_000 + 1);
+    try {
+      expect((await callback(started.state)).status).toBe(410);
+    } finally {
+      clock.mockRestore();
+    }
+    expect(await terminal(started.sessionId)).toMatchObject({
+      status: "error",
+      error: "This sign-in attempt expired. Close this dialog and start sign-in again.",
+    });
+    expectPendingCleared(await store());
+  });
+
+  it.each(["unchanged", "disabled", "metadata replaced"] as const)(
+    "keeps bundle-only sign-in bound to its installed owner: %s",
+    async (change) => {
+      await clearMcpOAuthCredentials(identity());
+      const previousMetadata = getCurrentPluginMetadataSnapshotState();
+      const rootDir = path.join(resolveStateDir(), "docs-bundle");
+      const manifestPath = path.join(rootDir, ".codex-plugin", "plugin.json");
+      await mkdir(path.dirname(manifestPath), { recursive: true });
+      await writeFile(
+        manifestPath,
+        JSON.stringify({ name: "docs-bundle", mcpServers: { docs: config } }),
+      );
+      const metadata = () =>
+        createPluginMetadataSnapshotFixture({
+          plugins: [
+            {
+              id: "docs-bundle",
+              origin: "global",
+              format: "bundle",
+              bundleFormat: "codex",
+              rootDir,
+              manifestPath,
+            },
+          ],
+        });
+      const bundleConfig: OpenClawConfig = {
+        gateway: { reload: { mode: "off" } },
+        plugins: { enabled: true, entries: { "docs-bundle": { enabled: true } } },
+      };
+      let started: Awaited<ReturnType<typeof begin>> | undefined;
+      try {
+        setGatewayPluginMetadataSnapshot(metadata(), { config: bundleConfig });
+        await writeConfigFile(bundleConfig);
+        started = await begin();
+        tokenEntered = createDeferredCore();
+        releaseToken = createDeferredCore();
+        expect((await callback(started.state)).status).toBe(200);
+        await tokenEntered.promise;
+        if (change === "disabled") {
+          await writeConfigFile({
+            ...bundleConfig,
+            plugins: { ...bundleConfig.plugins, entries: { "docs-bundle": { enabled: false } } },
+          });
+        } else if (change === "metadata replaced") {
+          setGatewayPluginMetadataSnapshot(metadata(), { config: bundleConfig });
+        }
+        releaseToken.resolve();
+        const result = await terminal(started.sessionId);
+        expect(result.status).toBe(change === "unchanged" ? "done" : "error");
+        if (change !== "unchanged") {
+          // The CLI cannot resolve plugin-declared servers, so recovery names the plugin.
+          expect(result.error).toBe(
+            "Sign-in did not finish. Check the plugin settings, then select Connect to try again.",
+          );
+        }
+        const stored = await store();
+        expect(stored.tokens?.access_token).toBe(
+          change === "unchanged" ? "fixture-access" : undefined,
+        );
+        expectPendingCleared(stored);
+        expect((await callback(started.state)).status).toBe(410);
+      } finally {
+        releaseToken?.resolve();
+        releaseToken = undefined;
+        if (started) {
+          const session = admitted?.context.wizardSessions.get(started.sessionId);
+          if (session) {
+            await rpcReq(owner, "wizard.cancel", { sessionId: started.sessionId });
+            await whenAdmittedWizardSessionSettled(session);
+          }
+        }
+        if (previousMetadata.owner === "gateway") {
+          setGatewayPluginMetadataSnapshot(previousMetadata.snapshot);
+        } else {
+          setCurrentPluginMetadataSnapshot(previousMetadata.snapshot);
+        }
+        await configure();
+      }
+    },
+  );
+
+  it("does not cancel a newer CLI attempt when its browser sign-in is denied", async () => {
+    await clearMcpOAuthCredentials(identity());
+    const started = await begin();
+    const pending = await store();
+    const requestCount = requests.length;
+    let settled = false;
+    try {
+      expect((await callback(started.state, "code=%20")).status).toBe(400);
+      expect(await store()).toEqual(pending);
+      expect(requests).toHaveLength(requestCount);
+      expect(await rpcReq(owner, "wizard.status", { sessionId: started.sessionId })).toMatchObject({
+        ok: true,
+        payload: { status: "running" },
+      });
+      const newer = await startMcpOAuthAuthorization(identity(), resolvedTransport(), {});
+      expect(newer.status).toBe("redirect");
+      const before = await store();
+      expect(
+        (
+          await callback(
+            started.state,
+            "error=access_denied&error_description=private-denial-detail&error_uri=https%3A%2F%2Fprivate.example",
+          )
+        ).status,
+      ).toBe(400);
+      const result = await terminal(started.sessionId);
+      settled = true;
+      expect(result).toMatchObject({
+        status: "error",
+        error: "The provider did not approve sign-in. Close this dialog and try again.",
+      });
+      expect(JSON.stringify(result)).not.toMatch(/private-denial-detail|private\.example/);
+      expect(await store()).toEqual(before);
+    } finally {
+      if (!settled) {
+        await rpcReq(owner, "wizard.cancel", { sessionId: started.sessionId });
+        await terminal(started.sessionId);
+      }
+    }
+  });
+
+  it("preserves existing tokens and registration after invalid_client", async () => {
+    await clearMcpOAuthCredentials(identity());
+    const initial = await begin();
+    expect((await callback(initial.state)).status).toBe(200);
+    expect(await terminal(initial.sessionId)).toMatchObject({ status: "done" });
+    const before = await store();
+    expect(
+      await recordMcpOAuthAuthorizationRequired({
+        identity: identity(),
+        rejectedAccessToken: "fixture-access",
+        scope: "expanded",
+      }),
+    ).toBe(true);
+    const started = await begin();
+    tokenError = "invalid_client";
+    const exchangeRequests = requests.length;
+    try {
+      expect((await callback(started.state)).status).toBe(200);
+      const result = await terminal(started.sessionId);
+      expect(result.status).toBe("error");
+      expect(result.error).toBe(
+        "The sign-in service rejected this attempt. Existing credentials were not changed. Close this dialog, review the connection settings, and try again.",
+      );
+      expect(JSON.stringify(result)).not.toContain("private exchange detail");
+      const after = await store();
+      expect(after.tokens).toEqual(before.tokens);
+      expect(after.clientInformation).toEqual(before.clientInformation);
+      expect(after.tokensAuthorizationServerUrl).toEqual(before.tokensAuthorizationServerUrl);
+      expectPendingCleared(after);
+      expect(requests.slice(exchangeRequests)).toEqual(["/token"]);
+      const retainedClient = new McpClient(
+        { name: "retained-credential", version: "1.0.0" },
+        { versionNegotiation: { mode: "legacy" } },
+      );
+      try {
+        const Authorization = `Bearer ${expectDefined(after.tokens, "retained tokens").access_token}`;
+        await retainedClient.connect(
+          new StreamableHTTPClientTransport(new URL(resourceUrl), {
+            requestInit: { headers: { Authorization } },
+          }),
+        );
+        expect((await retainedClient.listTools()).tools).toEqual(
+          expect.arrayContaining([expect.objectContaining({ name: "echo" })]),
+        );
+        expect(await retainedClient.callTool({ name: "echo", arguments: {} })).toMatchObject({
+          content: [{ type: "text", text: "Authenticated connector reply" }],
+        });
+      } finally {
+        await retainedClient.close();
+      }
+    } finally {
+      tokenError = false;
+    }
+  });
+
+  it("rejects a resolver replacement between dispatch and handler admission", async () => {
+    await clearMcpOAuthCredentials(identity());
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const sessionId = randomUUID();
+    const before = requests.length;
+    beforeLogin = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    const start = login(owner, sessionId);
+    await entered.promise;
+    const invocation = getInvocation();
+    const resolveRegistry = registryGetter();
+    const registry = resolverRegistry();
+    const replacement = createGatewayMethodRegistry(resolveRegistry().descriptors(), registry);
+    try {
+      invocation.context.getGatewayMethodRegistry = () => replacement;
+      release.resolve();
+      expect((await start).ok).toBe(false);
+      expect(requests).toHaveLength(before);
+      expect((await store()).tokens).toBeUndefined();
+    } finally {
+      beforeLogin = undefined;
+      release.resolve();
+      invocation.context.getGatewayMethodRegistry = resolveRegistry;
+      const session = invocation.context.wizardSessions.get(sessionId);
+      if (session) {
+        session.close(new Error("Test cleanup"));
+        await whenAdmittedWizardSessionSettled(session);
+        invocation.context.purgeWizardSession(sessionId);
+      }
+    }
+  });
+
+  it("cancels the exact published attempt", async () => {
+    await clearMcpOAuthCredentials(identity());
+    const next = await begin();
+    const session = getSession(next.sessionId);
+    expect(await rpcReq(owner, "wizard.cancel", { sessionId: next.sessionId })).toMatchObject({
+      ok: true,
+      payload: { status: "cancelled" },
+    });
+    expect((await callback(next.state)).status).toBe(410);
+    await whenAdmittedWizardSessionSettled(session);
+    expectPendingCleared(await store());
+  });
+
+  it.each(["register", "token"] as const)(
+    "does not follow a %s redirect after configuration authority is withdrawn",
+    async (stage) => {
+      await clearMcpOAuthCredentials(identity());
+      redirectEntered = createDeferredCore();
+      releaseRedirect = createDeferredCore();
+      const sessionId = randomUUID();
+      let activeSessionId = sessionId;
+      try {
+        if (stage === "register") {
+          redirectStage = stage;
+          expect((await login(owner, sessionId)).ok).toBe(true);
+        } else {
+          const started = await begin();
+          activeSessionId = started.sessionId;
+          redirectStage = stage;
+          expect((await callback(started.state)).status).toBe(200);
+        }
+        await redirectEntered.promise;
+        await configure({ ...config, enabled: false });
+        const before = requests.length;
+        releaseRedirect.resolve();
+        expect(await terminal(activeSessionId)).toMatchObject({ status: "error" });
+        expect(requests.slice(before)).not.toContain(`/${stage}-final`);
+        expect((await store()).tokens).toBeUndefined();
+      } finally {
+        releaseRedirect.resolve();
+        redirectStage = undefined;
+        releaseRedirect = undefined;
+        await configure();
+      }
+    },
+  );
+
+  it.each(["admin scope", "plugin registry", "connector URL", "in-place connector URL"] as const)(
+    "rejects token publication after its %s authority changes",
+    async (change) => {
+      await clearMcpOAuthCredentials(identity());
+      const started = await begin();
+      const invocation = getInvocation();
+      const client = expectDefined(invocation.client, "admitted client");
+      const scopes = client.connect.scopes;
+      const resolveRegistry = registryGetter();
+      const originalRegistry = resolveRegistry();
+      const registry = resolverRegistry();
+      const replacement = createGatewayMethodRegistry(originalRegistry.descriptors(), registry);
+      let changedServer: McpServerConfig | undefined;
+      let originalUrl: string | undefined;
+      tokenEntered = createDeferredCore();
+      releaseToken = createDeferredCore();
+      try {
+        expect((await callback(started.state)).status).toBe(200);
+        await tokenEntered.promise;
+        if (change === "admin scope") {
+          client.connect.scopes = ["operator.read"];
+        } else if (change === "plugin registry") {
+          invocation.context.getGatewayMethodRegistry = () => replacement;
+          expect(
+            withPluginRuntimeRegistryScope(
+              registry,
+              () =>
+                partitionMcpServersByConnectionScope({ docs: config }).resolverRequesterServerNames,
+            ),
+          ).toEqual(["docs"]);
+        } else if (change === "connector URL") {
+          await configure({ ...config, url: resourceUrl + "/replacement" });
+          await rpcReq(owner, "wizard.status", { sessionId: started.sessionId });
+        } else {
+          changedServer = expectDefined(
+            invocation.context.getRuntimeConfig().mcp?.servers?.docs,
+            "published connector",
+          );
+          originalUrl = changedServer.url;
+          changedServer.url = resourceUrl + "/replacement";
+        }
+        const session = getSession(started.sessionId);
+        releaseToken.resolve();
+        // rpcReq republishes disk config. Let the exchange inspect the edited
+        // runtime object before a subsequent RPC replaces that publication.
+        await expectSettled(session);
+        expect((await store()).tokens).toBeUndefined();
+        if (change === "connector URL" || change === "in-place connector URL") {
+          const result = await terminal(started.sessionId);
+          expect(result.status).toBe("error");
+          expect(JSON.stringify(result)).not.toContain("private exchange detail");
+        }
+      } finally {
+        releaseToken.resolve();
+        releaseToken = undefined;
+        client.connect.scopes = scopes;
+        invocation.context.getGatewayMethodRegistry = resolveRegistry;
+        if (changedServer) {
+          changedServer.url = originalUrl;
+        }
+        if (change === "connector URL" || change === "in-place connector URL") {
+          tokenError = false;
+          await configure();
+        } else {
+          await terminal(started.sessionId);
+        }
+      }
+    },
+  );
+
+  it.each(["admission", "discovery", "exchange"] as const)(
+    "settles sign-in when its socket closes during %s",
+    async (stage) => {
+      await clearMcpOAuthCredentials(identity());
+      const client = await connect(["operator.admin"]);
+      discoveryEntered = createDeferredCore();
+      tokenEntered = createDeferredCore();
+      const release = createDeferredCore();
+      const entered = createDeferredCore();
+      const original = setupMigration.withSetupMigrationTargetLock;
+      const admission =
+        stage === "admission"
+          ? vi.spyOn(setupMigration, "withSetupMigrationTargetLock")
+          : undefined;
+      admission?.mockImplementationOnce(async (stateDir, run) => {
+        entered.resolve();
+        await release.promise;
+        return await original(stateDir, run);
+      });
+      admissionSettled = createDeferredCore();
+      const before = requests.length;
+      let callbackState: string | undefined;
+      const sessionId = randomUUID();
+      try {
+        if (stage === "admission") {
+          client.send(
+            JSON.stringify({
+              type: "req",
+              id: randomUUID(),
+              method: "mcp.authLogin",
+              params: { sessionId, serverName: "docs" },
+            }),
+          );
+          await entered.promise;
+        } else if (stage === "discovery") {
+          releaseDiscovery = release;
+          expect((await login(client, sessionId)).ok).toBe(true);
+          await discoveryEntered.promise;
+        } else {
+          const started = await begin(client);
+          callbackState = started.state;
+          releaseToken = release;
+          expect((await callback(started.state)).status).toBe(200);
+          await tokenEntered.promise;
+        }
+        const invocation = getInvocation();
+        const session =
+          stage === "admission" ? undefined : getSession(String(invocation.params.sessionId));
+        const signal = expectDefined(invocation.client?.connectionSignal, "connection lifetime");
+        const closed = new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        client.close();
+        await closed;
+        release.resolve();
+        if (session) {
+          await expectSettled(session);
+        } else {
+          await admissionSettled.promise;
+          expect(invocation.context.wizardSessions.has(sessionId)).toBe(false);
+          expect(requests).toHaveLength(before);
+        }
+        const stored = await store();
+        expect(stored.tokens).toBeUndefined();
+        if (session) {
+          expectPendingCleared(stored);
+        }
+        if (callbackState) {
+          expect((await callback(callbackState)).status).toBe(410);
+        }
+      } finally {
+        release.resolve();
+        releaseDiscovery = undefined;
+        releaseToken = undefined;
+        client.close();
+        admission?.mockRestore();
+      }
+    },
+  );
+});

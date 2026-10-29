@@ -1,7 +1,131 @@
 [
   {
+    "source": "Get support",
+    "target": "获取支持"
+  },
+  {
+    "source": "Database engines",
+    "target": "数据库引擎"
+  },
+  {
+    "source": "PostgreSQL operator guide",
+    "target": "PostgreSQL 运维指南"
+  },
+  {
+    "source": "MCP Events",
+    "target": "MCP Events"
+  },
+  {
+    "source": "Mcp Events plugin reference",
+    "target": "MCP Events 插件参考"
+  },
+  {
+    "source": "MCP connections",
+    "target": "MCP 连接"
+  },
+  {
+    "source": "Plugin service runtime",
+    "target": "插件服务运行时"
+  },
+  {
+    "source": "Migrate synchronous SQLite APIs",
+    "target": "迁移同步 SQLite API"
+  },
+  {
+    "source": "Async SQLite migration",
+    "target": "异步 SQLite 迁移"
+  },
+  {
+    "source": "X / Twitter",
+    "target": "X / Twitter"
+  },
+  {
+    "source": "X plugin reference",
+    "target": "X 插件参考"
+  },
+  {
+    "source": "X replies",
+    "target": "X 回复"
+  },
+  {
+    "source": "x",
+    "target": "x"
+  },
+  {
+    "source": "Radius",
+    "target": "Radius"
+  },
+  {
+    "source": "Radius plugin reference",
+    "target": "Radius 插件参考"
+  },
+  {
+    "source": "radius",
+    "target": "radius"
+  },
+  {
+    "source": "Requesty",
+    "target": "Requesty"
+  },
+  {
+    "source": "Requesty (unified router)",
+    "target": "Requesty（统一路由）"
+  },
+  {
+    "source": "Requesty plugin reference",
+    "target": "Requesty 插件参考"
+  },
+  {
+    "source": "requesty",
+    "target": "requesty"
+  },
+  {
+    "source": "Abliteration",
+    "target": "Abliteration"
+  },
+  {
+    "source": "Abliteration plugin reference",
+    "target": "Abliteration 插件参考"
+  },
+  {
+    "source": "abliteration",
+    "target": "abliteration"
+  },
+  {
+    "source": "All providers",
+    "target": "所有提供商"
+  },
+  {
+    "source": "Thinking modes",
+    "target": "思考模式"
+  },
+  {
+    "source": "Omarchy",
+    "target": "Omarchy"
+  },
+  {
     "source": "OpenClaw",
     "target": "OpenClaw"
+  },
+  {
+    "source": "FaceTime plugin",
+    "target": "FaceTime 插件"
+  },
+  {
+    "source": "FaceTime recovery and removal",
+    "target": "FaceTime 恢复与移除"
+  },
+  {
+    "source": "Facetime plugin",
+    "target": "FaceTime 插件"
+  },
+  {
+    "source": "Facetime plugin reference",
+    "target": "FaceTime 插件参考"
+  },
+  {
+    "source": "facetime",
+    "target": "facetime"
   },
   {
     "source": "macOS platform notes",
@@ -50,6 +174,18 @@
   {
     "source": "Secrets management",
     "target": "密钥管理"
+  },
+  {
+    "source": "Secrets CLI",
+    "target": "密钥 CLI"
+  },
+  {
+    "source": "SecretRef credential surface",
+    "target": "SecretRef 凭据覆盖面"
+  },
+  {
+    "source": "Auth credential semantics",
+    "target": "认证凭据语义"
   },
   {
     "source": "Secrets runtime model",
@@ -144,6 +280,14 @@
     "target": "OpenAI provider"
   },
   {
+    "source": "OpenAI authentication",
+    "target": "OpenAI 身份验证"
+  },
+  {
+    "source": "Authentication",
+    "target": "身份验证"
+  },
+  {
     "source": "xAI provider",
     "target": "xAI provider"
   },
@@ -166,6 +310,10 @@
   {
     "source": "Mantis",
     "target": "Mantis"
+  },
+  {
+    "source": "Mantis Slack desktop runbook",
+    "target": "Mantis Slack 桌面端操作手册"
   },
   {
     "source": "Message lifecycle refactor",
@@ -224,6 +372,14 @@
     "target": "Azure Speech provider"
   },
   {
+    "source": "Fish Audio provider",
+    "target": "Fish Audio provider"
+  },
+  {
+    "source": "ElevenLabs",
+    "target": "ElevenLabs"
+  },
+  {
     "source": "Web tools",
     "target": "Web 工具"
   },
@@ -242,6 +398,10 @@
   {
     "source": "Gateway protocol",
     "target": "Gateway 协议"
+  },
+  {
+    "source": "RPC adapters",
+    "target": "RPC 适配器"
   },
   {
     "source": "Gateway RPC methods",
@@ -368,6 +528,10 @@
     "target": "诊断导出"
   },
   {
+    "source": "Diagnostics flags",
+    "target": "诊断标志"
+  },
+  {
     "source": "Agent harness plugins",
     "target": "Agent harness plugins"
   },
@@ -482,6 +646,10 @@
   {
     "source": "Getting started",
     "target": "入门指南"
+  },
+  {
+    "source": "Personal assistant setup",
+    "target": "个人助理设置"
   },
   {
     "source": "Quick start",
@@ -632,8 +800,28 @@
     "target": "Moonshot AI"
   },
   {
+    "source": "Neon AI Gateway",
+    "target": "Neon AI Gateway"
+  },
+  {
+    "source": "Liquid Inference",
+    "target": "Liquid Inference"
+  },
+  {
+    "source": "Mistral",
+    "target": "Mistral"
+  },
+  {
+    "source": "OpenRouter",
+    "target": "OpenRouter"
+  },
+  {
     "source": "Model providers",
     "target": "模型提供商"
+  },
+  {
+    "source": "Models FAQ",
+    "target": "模型常见问题"
   },
   {
     "source": "Quick rules",
@@ -708,6 +896,34 @@
     "target": "VPS 托管"
   },
   {
+    "source": "Ansible",
+    "target": "Ansible"
+  },
+  {
+    "source": "Kubernetes",
+    "target": "Kubernetes"
+  },
+  {
+    "source": "Cloudflare",
+    "target": "Cloudflare"
+  },
+  {
+    "source": "Cloudflare Containers",
+    "target": "Cloudflare Containers"
+  },
+  {
+    "source": "Cloudflare plugin",
+    "target": "Cloudflare 插件"
+  },
+  {
+    "source": "Cloudflare plugin reference",
+    "target": "Cloudflare 插件参考"
+  },
+  {
+    "source": "cloudflare",
+    "target": "cloudflare"
+  },
+  {
     "source": "Fly.io",
     "target": "Fly.io"
   },
@@ -722,6 +938,10 @@
   {
     "source": "Linux server",
     "target": "Linux 服务器"
+  },
+  {
+    "source": "macOS VMs",
+    "target": "macOS 虚拟机"
   },
   {
     "source": "Platforms",
@@ -770,6 +990,10 @@
   {
     "source": "Credits",
     "target": "致谢"
+  },
+  {
+    "source": "OpenClaw lore",
+    "target": "OpenClaw 传说"
   },
   {
     "source": "Features",
@@ -1148,6 +1372,10 @@
     "target": "发布策略"
   },
   {
+    "source": "Full release validation",
+    "target": "完整发布验证"
+  },
+  {
     "source": "Release notes",
     "target": "发布说明"
   },
@@ -1209,7 +1437,7 @@
   },
   {
     "source": "troubleshooting",
-    "target": "故障排除"
+    "target": "故障排查"
   },
   {
     "source": "FAQ",
@@ -1352,6 +1580,26 @@
     "target": "Zoom 会议插件"
   },
   {
+    "source": "Slack huddles plugin",
+    "target": "Slack 快速通话插件"
+  },
+  {
+    "source": "Slack huddles plugin reference",
+    "target": "Slack 快速通话插件参考"
+  },
+  {
+    "source": "slack-huddles",
+    "target": "slack-huddles"
+  },
+  {
+    "source": "Slack channel",
+    "target": "Slack 频道"
+  },
+  {
+    "source": "Transcripts CLI",
+    "target": "转录 CLI"
+  },
+  {
     "source": "Voice call plugin",
     "target": "语音通话插件"
   },
@@ -1396,6 +1644,10 @@
     "target": "插件 SDK 子路径"
   },
   {
+    "source": "Plugin SDK migration",
+    "target": "插件 SDK 迁移"
+  },
+  {
     "source": "Plugins CLI",
     "target": "插件 CLI"
   },
@@ -1418,6 +1670,18 @@
   {
     "source": "Lobster plugin reference",
     "target": "Lobster 插件参考"
+  },
+  {
+    "source": "ACPx plugin reference",
+    "target": "ACPx 插件参考"
+  },
+  {
+    "source": "Llama Cpp plugin reference",
+    "target": "Llama Cpp 插件参考"
+  },
+  {
+    "source": "Policy plugin reference",
+    "target": "Policy 插件参考"
   },
   {
     "source": "A2A plugin reference",
@@ -1524,6 +1788,22 @@
     "target": "插件入口点"
   },
   {
+    "source": "Plugin runtime helpers",
+    "target": "插件运行时辅助函数"
+  },
+  {
+    "source": "Plugin setup and config",
+    "target": "插件设置与配置"
+  },
+  {
+    "source": "Building channel plugins",
+    "target": "构建渠道插件"
+  },
+  {
+    "source": "Building provider plugins",
+    "target": "构建提供商插件"
+  },
+  {
     "source": "Plugin SDK tool policy and sandbox helpers",
     "target": "插件 SDK 工具策略与沙箱辅助方法"
   },
@@ -1600,6 +1880,10 @@
     "target": "迁移"
   },
   {
+    "source": "Backups",
+    "target": "备份"
+  },
+  {
     "source": "Migrating from Hermes",
     "target": "从 Hermes 迁移"
   },
@@ -1610,6 +1894,14 @@
   {
     "source": "Agent workspace",
     "target": "Agent 工作区"
+  },
+  {
+    "source": "Default AGENTS.md",
+    "target": "默认 AGENTS.md"
+  },
+  {
+    "source": "Bootstrapping",
+    "target": "引导初始化"
   },
   {
     "source": "Migration",
@@ -1646,6 +1938,14 @@
   {
     "source": "Testing",
     "target": "测试"
+  },
+  {
+    "source": "Tests",
+    "target": "测试"
+  },
+  {
+    "source": "Scripts",
+    "target": "脚本"
   },
   {
     "source": "Update and plugin tests",
@@ -1764,6 +2064,10 @@
     "target": "子智能体"
   },
   {
+    "source": "Parallel specialist lanes",
+    "target": "并行专职通道"
+  },
+  {
     "source": "Thinking levels",
     "target": "思考级别"
   },
@@ -1817,7 +2121,7 @@
   },
   {
     "source": "Multi-agent sandbox and tools",
-    "target": "多 Agent 沙盒和工具"
+    "target": "多智能体沙箱与工具"
   },
   {
     "source": "Exec tool",
@@ -1924,6 +2228,10 @@
     "target": "Control UI"
   },
   {
+    "source": "Hosted embeds",
+    "target": "托管嵌入"
+  },
+  {
     "source": "Control UI URLs",
     "target": "Control UI 地址"
   },
@@ -1998,6 +2306,14 @@
   {
     "source": "Channel routing",
     "target": "渠道路由"
+  },
+  {
+    "source": "Bot loop protection",
+    "target": "机器人循环保护"
+  },
+  {
+    "source": "Access groups",
+    "target": "访问组"
   },
   {
     "source": "Channels Overview",
@@ -2148,6 +2464,14 @@
     "target": "网络代理"
   },
   {
+    "source": "Network",
+    "target": "网络"
+  },
+  {
+    "source": "Proxy",
+    "target": "代理"
+  },
+  {
     "source": "Node troubleshooting",
     "target": "节点故障排查"
   },
@@ -2170,6 +2494,10 @@
   {
     "source": "Onboard",
     "target": "引导设置"
+  },
+  {
+    "source": "Setup CLI",
+    "target": "设置 CLI"
   },
   {
     "source": "Operator scopes",
@@ -2204,12 +2532,28 @@
     "target": "Task Flow"
   },
   {
+    "source": "Tasks",
+    "target": "任务"
+  },
+  {
     "source": "Telegram reaction notifications",
     "target": "Telegram 表情回应通知"
   },
   {
+    "source": "Telegram reaction level",
+    "target": "Telegram 表情回应级别"
+  },
+  {
     "source": "Threat model",
     "target": "威胁模型"
+  },
+  {
+    "source": "Contributing to the threat model",
+    "target": "参与威胁模型贡献"
+  },
+  {
+    "source": "Formal verification",
+    "target": "形式化验证"
   },
   {
     "source": "Reconnaissance (AML.TA0002)",
@@ -2266,6 +2610,10 @@
   {
     "source": "Gateway service and process",
     "target": "Gateway 网关服务与进程"
+  },
+  {
+    "source": "Config validation and checks",
+    "target": "配置验证与检查"
   },
   {
     "source": "Config validation and probes",
@@ -2358,6 +2706,10 @@
   {
     "source": "WhatsApp reaction level",
     "target": "WhatsApp 表情回应级别"
+  },
+  {
+    "source": "Reactions",
+    "target": "表情回应"
   },
   {
     "source": "Zalo (official Bot/webhook channel)",
@@ -2600,6 +2952,14 @@
     "target": "会话管理"
   },
   {
+    "source": "Session controller",
+    "target": "会话控制器"
+  },
+  {
+    "source": "Transcript hygiene",
+    "target": "转录净化"
+  },
+  {
     "source": "Session tools",
     "target": "会话工具"
   },
@@ -2706,6 +3066,10 @@
   {
     "source": "llmman (local models)",
     "target": "llmman（本地模型）"
+  },
+  {
+    "source": "llmman (local + hybrid local/hosted models)",
+    "target": "llmman（本地 + 本地/托管混合模型）"
   },
   {
     "source": "llama.cpp (managed or existing server)",
@@ -3034,6 +3398,10 @@
   {
     "source": "CI runner classes",
     "target": "CI 运行器类型"
+  },
+  {
+    "source": "CI routing costs",
+    "target": "CI 路由成本"
   },
   {
     "source": "CI capacity and shard weights",
@@ -3572,8 +3940,8 @@
     "target": "OpenAI 覆盖范围与费用"
   },
   {
-    "source": "OpenAI image and video generation",
-    "target": "OpenAI 图像与视频生成"
+    "source": "OpenAI image generation",
+    "target": "OpenAI 图像生成"
   },
   {
     "source": "OpenAI voice and speech",
@@ -3590,6 +3958,10 @@
   {
     "source": "Code Mode quickstart",
     "target": "代码模式快速上手"
+  },
+  {
+    "source": "Code Mode executors",
+    "target": "代码模式执行器"
   },
   {
     "source": "Code Mode configuration",
@@ -3668,6 +4040,10 @@
     "target": "远程与托管浏览器"
   },
   {
+    "source": "Lightweight browsers",
+    "target": "轻量级浏览器"
+  },
+  {
     "source": "Browser security",
     "target": "浏览器安全"
   },
@@ -3718,6 +4094,10 @@
   {
     "source": "Canonical scenario coverage",
     "target": "标准场景覆盖"
+  },
+  {
+    "source": "Scenario coverage",
+    "target": "场景覆盖"
   },
   {
     "source": "Channel QA reference",
@@ -3952,6 +4332,14 @@
     "target": "节点文件传输"
   },
   {
+    "source": "File transfers",
+    "target": "文件传输"
+  },
+  {
+    "source": "File Transfer plugin reference",
+    "target": "文件传输插件参考"
+  },
+  {
     "source": "Node command policy",
     "target": "节点命令策略"
   },
@@ -4086,6 +4474,18 @@
   {
     "source": "Storage changes and release preflight",
     "target": "存储变更与发布预检"
+  },
+  {
+    "source": "storage",
+    "target": "storage"
+  },
+  {
+    "source": "Storage locations",
+    "target": "存储位置"
+  },
+  {
+    "source": "Storage CLI",
+    "target": "存储 CLI"
   },
   {
     "source": "Agent schema history",
@@ -4380,8 +4780,12 @@
     "target": "Telegram 传输方式"
   },
   {
-    "source": "Telegram Dashboard Mini App",
-    "target": "Telegram 仪表盘小程序"
+    "source": "Control UI Mini App",
+    "target": "Control UI 小程序"
+  },
+  {
+    "source": "Telegram Control UI Mini App",
+    "target": "Telegram Control UI 小程序"
   },
   {
     "source": "Telegram troubleshooting",
@@ -4658,5 +5062,121 @@
   {
     "source": "FAQ: providers, hardware, and hosting",
     "target": "常见问题：服务商、硬件与托管"
+  },
+  {
+    "source": "Decision models",
+    "target": "决策模型"
+  },
+  {
+    "source": "TypeSafe AI",
+    "target": "TypeSafe AI"
+  },
+  {
+    "source": "Typesafe plugin reference",
+    "target": "TypeSafe 插件参考"
+  },
+  {
+    "source": "typesafe",
+    "target": "typesafe"
+  },
+  {
+    "source": "Local ONNX decision models",
+    "target": "本地 ONNX 决策模型"
+  },
+  {
+    "source": "ONNX",
+    "target": "ONNX"
+  },
+  {
+    "source": "onnx",
+    "target": "onnx"
+  },
+  {
+    "source": "Onnx plugin reference",
+    "target": "ONNX 插件参考"
+  },
+  {
+    "source": "Telnyx",
+    "target": "Telnyx"
+  },
+  {
+    "source": "Telnyx plugin",
+    "target": "Telnyx 插件"
+  },
+  {
+    "source": "telnyx",
+    "target": "telnyx"
+  },
+  {
+    "source": "Telnyx (AI inference)",
+    "target": "Telnyx（AI 推理）"
+  },
+  {
+    "source": "Deploy a team server",
+    "target": "部署团队服务器"
+  },
+  {
+    "source": "Worker-local inference",
+    "target": "工作器本地推理"
+  },
+  {
+    "source": "Recommended models",
+    "target": "推荐模型"
+  },
+  {
+    "source": "MCP Relay",
+    "target": "MCP Relay"
+  },
+  {
+    "source": "Mcp Relay plugin reference",
+    "target": "MCP Relay 插件参考"
+  },
+  {
+    "source": "mcp-relay",
+    "target": "mcp-relay"
+  },
+  {
+    "source": "Remote Control UI ingress",
+    "target": "远程 Control UI 入口"
+  },
+  {
+    "source": "Cloud environment file",
+    "target": "云环境文件"
+  },
+  {
+    "source": "Standalone builds",
+    "target": "独立可执行文件构建"
+  },
+  {
+    "source": "PostgreSQL operator guide",
+    "target": "PostgreSQL 运维指南"
+  },
+  {
+    "source": "Plugin runtime compatibility",
+    "target": "插件运行时兼容性"
+  },
+  {
+    "source": "Runtime compatibility",
+    "target": "运行时兼容性"
+  },
+  {
+    "source": "Runtime compatibility lint",
+    "target": "运行时兼容性静态检查"
+  },
+  {
+    "source": "Liquid AI",
+    "target": "Liquid AI"
+  },
+  {
+    "source": "Liquid AI plugin reference",
+    "target": "Liquid AI 插件参考"
+  },
+  {
+    "source": "liquid-ai",
+    "target": "liquid-ai"
+  },
+  {
+    "source": "Liquid AI (Decision models)",
+    "target": "Liquid AI（决策模型）"
   }
 ]

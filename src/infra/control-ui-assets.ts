@@ -1,14 +1,19 @@
-// Resolves and checks packaged Control UI assets.
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../gateway/control-ui-root-assets.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { selectControlUiRoutePreloads } from "../gateway/control-ui-route-preloads.js";
+import type { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import * as controlUiFsRuntime from "./control-ui-assets.fs.runtime.js";
+import { openRootFileSync, readFileDescriptorBoundedSync } from "./boundary-file-read.js";
+import { FsSafeError } from "./fs-safe.js";
 import { resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } from "./openclaw-root.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "./runtime-process-url.js";
 
 export function formatControlUiSourceCommand(root: string, action: "build" | "dev"): string {
   const directory = process.platform === "win32" ? quotePowerShellArg(root) : quoteCliArg(root);
@@ -25,67 +30,35 @@ type ControlUiAssetHealth =
   | { kind: "stale"; indexPath: string; buildId: string | null }
   | { kind: "ready"; indexPath: string; publicAssetBuildId?: string };
 
-export async function resolveControlUiAssetHealth(
-  opts: {
-    root?: string;
-    argv1?: string;
-    moduleUrl?: string;
-    expectedBuildId?: string | null;
-  } = {},
-): Promise<ControlUiAssetHealth> {
-  const indexPath = opts.root
-    ? resolveControlUiDistIndexPathForRoot(opts.root)
-    : await resolveControlUiDistIndexPath({
-        argv1: opts.argv1 ?? process.argv[1],
-        moduleUrl: opts.moduleUrl,
-      });
+export async function resolveControlUiAssetHealth(opts: {
+  root: string;
+  expectedBuildId?: string | null;
+}): Promise<ControlUiAssetHealth> {
+  const indexPath = resolveControlUiDistIndexPathForRoot(opts.root);
   return inspectControlUiAssetHealth(indexPath, opts.expectedBuildId);
 }
 
-function resolveControlUiRepoRoot(opts: {
-  root?: string;
-  argv1?: string;
-  moduleUrl?: string;
-  cwd?: string;
-}): string | null {
-  const cwd = opts.cwd ?? process.cwd();
-  const roots = opts.root
-    ? [path.resolve(opts.root)]
-    : [
-        resolveOpenClawPackageRootSync({
-          argv1: opts.argv1 ?? process.argv[1],
-          moduleUrl: opts.moduleUrl ?? import.meta.url,
-          cwd,
-        }),
-        resolveOpenClawPackageRootSync({ cwd }),
-      ];
-  return (
-    roots.find(
-      (root): root is string =>
-        root !== null && controlUiFsRuntime.existsSync(path.join(root, "ui", "vite.config.ts")),
-    ) ?? null
-  );
+function tryRealpath(value: string): string | null {
+  try {
+    return fs.realpathSync(value);
+  } catch {
+    return null;
+  }
 }
 
-async function resolveControlUiDistIndexPath(
-  argv1OrOpts?: string | { argv1?: string; moduleUrl?: string },
-): Promise<string | null> {
-  const argv1 =
-    typeof argv1OrOpts === "string" ? argv1OrOpts : (argv1OrOpts?.argv1 ?? process.argv[1]);
-  const moduleUrl = typeof argv1OrOpts === "object" ? argv1OrOpts?.moduleUrl : undefined;
+function resolveControlUiEntrypointPaths(argv1: string): string[] {
+  const normalized = path.resolve(argv1);
+  const realpath = tryRealpath(normalized);
+  return realpath && realpath !== normalized ? [normalized, realpath] : [normalized];
+}
+
+async function resolveControlUiDistIndexPath(opts: { moduleUrl?: string }): Promise<string | null> {
+  const argv1 = process.argv[1];
+  const moduleUrl = opts.moduleUrl;
   if (!argv1) {
     return null;
   }
-  const normalized = path.resolve(argv1);
-  const entrypointCandidates = [normalized];
-  try {
-    const realpathEntrypoint = controlUiFsRuntime.realpathSync(normalized);
-    if (realpathEntrypoint !== normalized) {
-      entrypointCandidates.push(realpathEntrypoint);
-    }
-  } catch {
-    // Ignore missing/non-realpath argv1 and keep path-based candidates.
-  }
+  const entrypointCandidates = resolveControlUiEntrypointPaths(argv1);
 
   // Case 1: entrypoint is directly inside dist/ (e.g., dist/entry.js).
   // Include symlink-resolved argv1 so global wrappers (e.g. Bun) still map to dist/control-ui.
@@ -96,44 +69,11 @@ async function resolveControlUiDistIndexPath(
     }
   }
 
-  const packageRoot = await resolveOpenClawPackageRoot({ argv1: normalized, moduleUrl });
-  if (packageRoot) {
-    return path.join(packageRoot, "dist", "control-ui", "index.html");
-  }
-
-  // Fallback: traverse up and find package.json with name "openclaw" + dist/control-ui/index.html
-  // This handles global installs where path-based resolution might fail.
-  const fallbackStartDirs = new Set(
-    entrypointCandidates.map((candidate) => path.dirname(candidate)),
-  );
-  for (const startDir of fallbackStartDirs) {
-    let dir = startDir;
-    for (let i = 0; i < 8; i++) {
-      const pkgJsonPath = path.join(dir, "package.json");
-      const indexPath = path.join(dir, "dist", "control-ui", "index.html");
-      if (controlUiFsRuntime.existsSync(pkgJsonPath)) {
-        try {
-          const raw = controlUiFsRuntime.readFileSync(pkgJsonPath, "utf-8");
-          const parsed = JSON.parse(raw) as { name?: unknown };
-          if (parsed.name === "openclaw") {
-            return controlUiFsRuntime.existsSync(indexPath) ? indexPath : null;
-          }
-          // Stop at the first package boundary to avoid resolving through unrelated ancestors.
-          break;
-        } catch {
-          // Invalid package.json at package boundary; abort this candidate chain.
-          break;
-        }
-      }
-      const parent = path.dirname(dir);
-      if (parent === dir) {
-        break;
-      }
-      dir = parent;
-    }
-  }
-
-  return null;
+  const packageRoot = await resolveOpenClawPackageRoot({
+    argv1: path.resolve(argv1),
+    moduleUrl,
+  });
+  return packageRoot ? resolveControlUiDistIndexPathForRoot(packageRoot) : null;
 }
 
 type ControlUiRootResolveOptions = {
@@ -144,38 +84,19 @@ type ControlUiRootResolveOptions = {
 };
 
 function pathsMatchByRealpathOrResolve(left: string, right: string): boolean {
-  let realLeft: string;
-  let realRight: string;
-  try {
-    realLeft = controlUiFsRuntime.realpathSync(left);
-  } catch {
-    realLeft = path.resolve(left);
-  }
-  try {
-    realRight = controlUiFsRuntime.realpathSync(right);
-  } catch {
-    realRight = path.resolve(right);
-  }
-  return realLeft === realRight;
-}
-
-function addCandidate(candidates: Set<string>, value: string | null) {
-  if (!value) {
-    return;
-  }
-  candidates.add(path.resolve(value));
+  return (tryRealpath(left) ?? path.resolve(left)) === (tryRealpath(right) ?? path.resolve(right));
 }
 
 export function resolveControlUiRootOverrideSync(rootOverride: string): string | null {
   const resolved = path.resolve(rootOverride);
   try {
-    const stats = controlUiFsRuntime.statSync(resolved);
+    const stats = fs.statSync(resolved);
     if (stats.isFile()) {
       return path.basename(resolved) === "index.html" ? path.dirname(resolved) : null;
     }
     if (stats.isDirectory()) {
       const indexPath = path.join(resolved, "index.html");
-      return controlUiFsRuntime.existsSync(indexPath) ? resolved : null;
+      return fs.existsSync(indexPath) ? resolved : null;
     }
   } catch {
     return null;
@@ -185,63 +106,42 @@ export function resolveControlUiRootOverrideSync(rootOverride: string): string |
 
 export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {}): string | null {
   const candidates = new Set<string>();
+  const addCandidate = (value: string | null) => {
+    if (value) {
+      candidates.add(path.resolve(value));
+    }
+  };
   const argv1 = opts.argv1 ?? process.argv[1];
   const cwd = opts.cwd ?? process.cwd();
   const moduleDir = opts.moduleUrl ? path.dirname(fileURLToPath(opts.moduleUrl)) : null;
-  const argv1Dir = argv1 ? path.dirname(path.resolve(argv1)) : null;
-  const argv1RealpathDir = (() => {
-    if (!argv1) {
-      return null;
-    }
-    try {
-      return path.dirname(controlUiFsRuntime.realpathSync(path.resolve(argv1)));
-    } catch {
-      return null;
-    }
-  })();
-  const execDir = (() => {
-    try {
-      const execPath = opts.execPath ?? process.execPath;
-      return path.dirname(controlUiFsRuntime.realpathSync(execPath));
-    } catch {
-      return null;
-    }
-  })();
+  const entrypointPaths = argv1 ? resolveControlUiEntrypointPaths(argv1) : [];
+  const execPath = tryRealpath(opts.execPath ?? process.execPath);
   const packageRoot = resolveOpenClawPackageRootSync({
     argv1,
     moduleUrl: opts.moduleUrl,
     cwd,
   });
 
-  // Packaged app: prefer bundled resources, then support legacy alongside-executable layout.
-  addCandidate(candidates, execDir ? path.join(execDir, "../Resources/control-ui") : null);
-  addCandidate(candidates, execDir ? path.join(execDir, "control-ui") : null);
+  // Support legacy packaged runtimes that place assets alongside the executable.
+  addCandidate(execPath ? path.join(path.dirname(execPath), "control-ui") : null);
   if (moduleDir) {
-    // dist/<bundle>.js -> dist/control-ui
-    addCandidate(candidates, path.join(moduleDir, "control-ui"));
-    // dist/gateway/control-ui.js -> dist/control-ui
-    addCandidate(candidates, path.join(moduleDir, "../control-ui"));
-    // src/gateway/control-ui.ts -> dist/control-ui
-    addCandidate(candidates, path.join(moduleDir, "../../dist/control-ui"));
+    // Bundle, nested Gateway bundle, then source Gateway module.
+    for (const relative of ["control-ui", "../control-ui", "../../dist/control-ui"]) {
+      addCandidate(path.join(moduleDir, relative));
+    }
   }
-  if (argv1Dir) {
-    // openclaw.mjs or dist/<bundle>.js
-    addCandidate(candidates, path.join(argv1Dir, "dist", "control-ui"));
-    addCandidate(candidates, path.join(argv1Dir, "control-ui"));
+  // Keep the lexical launcher before its target for symlinked global wrappers.
+  for (const entrypoint of entrypointPaths) {
+    const directory = path.dirname(entrypoint);
+    addCandidate(path.join(directory, "dist", "control-ui"));
+    addCandidate(path.join(directory, "control-ui"));
   }
-  if (argv1RealpathDir && argv1RealpathDir !== argv1Dir) {
-    // Symlinked wrappers (e.g. ~/.bun/bin/openclaw -> .../dist/index.js)
-    addCandidate(candidates, path.join(argv1RealpathDir, "dist", "control-ui"));
-    addCandidate(candidates, path.join(argv1RealpathDir, "control-ui"));
-  }
-  if (packageRoot) {
-    addCandidate(candidates, path.join(packageRoot, "dist", "control-ui"));
-  }
-  addCandidate(candidates, path.join(cwd, "dist", "control-ui"));
+  addCandidate(packageRoot ? path.join(packageRoot, "dist", "control-ui") : null);
+  addCandidate(path.join(cwd, "dist", "control-ui"));
 
   for (const dir of candidates) {
     const indexPath = path.join(dir, "index.html");
-    if (controlUiFsRuntime.existsSync(indexPath)) {
+    if (fs.existsSync(indexPath)) {
       return dir;
     }
   }
@@ -267,23 +167,13 @@ export function isPackageProvenControlUiRootSync(
 }
 
 type EnsureControlUiAssetsResult =
-  | { ok: true; built: boolean; assets: Extract<ControlUiAssetHealth, { kind: "ready" }> }
-  | { ok: false; built: boolean; message: string };
-
-type EnsureControlUiAssetsOptions = ControlUiRootResolveOptions & {
-  root?: string;
-  assetRoot?: string;
-  expectedBuildId?: string | null;
-  force?: boolean;
-  signal?: AbortSignal;
-  timeoutMs?: number;
-  onBuildStart?: () => void;
-};
+  | { ok: true; assets: Extract<ControlUiAssetHealth, { kind: "ready" }> }
+  | { ok: false; message: string };
 
 export const CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS = 10 * 60_000;
 
-function controlUiAssetsFailure(message: string, built = false): EnsureControlUiAssetsResult {
-  return { ok: false, built, message };
+function controlUiAssetsFailure(message: string): EnsureControlUiAssetsResult {
+  return { ok: false, message };
 }
 
 function inspectControlUiAssetHealth(
@@ -295,34 +185,62 @@ function inspectControlUiAssetHealth(
   }
   let html: string;
   try {
-    if (controlUiFsRuntime.statSync(indexPath).size > 256 * 1024) {
+    const opened = openRootFileSync({
+      absolutePath: indexPath,
+      rootPath: path.dirname(indexPath),
+      boundaryLabel: "control ui root",
+      rejectSymlinks: false,
+      rejectHardlinks: false,
+      maxBytes: 256 * 1024,
+    });
+    if (!opened.ok) {
+      if (opened.error instanceof FsSafeError && opened.error.code === "too-large") {
+        throw opened.error;
+      }
+      return { kind: "missing-index", indexPath };
+    }
+    try {
+      html = readFileDescriptorBoundedSync(opened.fd, 256 * 1024).toString("utf8");
+    } finally {
+      fs.closeSync(opened.fd);
+    }
+  } catch (error) {
+    if (
+      error instanceof RangeError ||
+      (error instanceof FsSafeError && error.code === "too-large")
+    ) {
       return { kind: "incomplete", indexPath, missingAsset: "index.html exceeds its size limit" };
     }
-    html = controlUiFsRuntime.readFileSync(indexPath, "utf8");
-  } catch {
     return { kind: "missing-index", indexPath };
   }
-  let references = 0;
-  for (const tag of html.matchAll(/<(?:link|script)\b[^>]*>/giu)) {
-    const attribute = tag[0].match(/\s(?:href|src)\s*=\s*["']([^"']+)["']/iu);
-    const reference = attribute?.[1]?.split(/[?#]/u, 1)[0]?.replace(/\\/gu, "/");
-    if (!reference || /^(?:[a-z][a-z\d+.-]*:|\/\/|#)/iu.test(reference)) {
-      continue;
-    }
-    const marker = reference.lastIndexOf("assets/");
-    if (marker === -1 || !/\.(?:css|js)$/iu.test(reference)) {
-      continue;
-    }
-    const asset = reference.slice(marker);
-    if (++references > 128 || reference.split("/").includes("..")) {
-      return {
-        kind: "incomplete",
-        indexPath,
-        missingAsset: references > 128 ? "too many startup assets" : asset,
-      };
-    }
-    if (!controlUiFsRuntime.existsSync(path.join(path.dirname(indexPath), asset))) {
-      return { kind: "incomplete", indexPath, missingAsset: asset };
+  // Route templates are mutually exclusive. Inspect the same documents the
+  // Gateway serves, retaining the reference limit and integrity checks per page.
+  const documents = new Set(
+    ([null, "chat", "new"] as const).map((route) => selectControlUiRoutePreloads(html, route)),
+  );
+  for (const document of documents) {
+    let references = 0;
+    for (const tag of document.matchAll(/<(?:link|script)\b[^>]*>/giu)) {
+      const attribute = tag[0].match(/\s(?:href|src)\s*=\s*["']([^"']+)["']/iu);
+      const reference = attribute?.[1]?.split(/[?#]/u, 1)[0]?.replace(/\\/gu, "/");
+      if (!reference || /^(?:[a-z][a-z\d+.-]*:|\/\/|#)/iu.test(reference)) {
+        continue;
+      }
+      const marker = reference.lastIndexOf("assets/");
+      if (marker === -1 || !/\.(?:css|js)$/iu.test(reference)) {
+        continue;
+      }
+      const asset = reference.slice(marker);
+      if (++references > 128 || reference.split("/").includes("..")) {
+        return {
+          kind: "incomplete",
+          indexPath,
+          missingAsset: references > 128 ? "too many startup assets" : asset,
+        };
+      }
+      if (!fs.existsSync(path.join(path.dirname(indexPath), asset))) {
+        return { kind: "incomplete", indexPath, missingAsset: asset };
+      }
     }
   }
   const publicAssetBuildId = new RegExp(
@@ -345,20 +263,33 @@ export function inspectControlUiRootAssets(
 }
 
 function summarizeCommandOutput(text: string): string | undefined {
-  const lines = normalizeStringEntries(text.split(/\r?\n/g));
+  const lines = normalizeStringEntries(
+    stripAnsi(text)
+      .split(/\r?\n/g)
+      .map((line) => sanitizeTerminalText(line.trim())),
+  );
   if (!lines.length) {
     return undefined;
   }
-  const last = lines.at(-1);
-  if (!last) {
-    return undefined;
-  }
-  return last.length > 240 ? `${truncateUtf16Safe(last, 239)}…` : last;
+  // Keep the error and its context, not a warning preamble or a stack/object tail.
+  const errorIndex = lines.findIndex((line) =>
+    /^(?:\[[^\]]+\]\s*)?(?:\w*error|fatal)\b/iu.test(line),
+  );
+  const summary = lines.slice(Math.max(0, errorIndex)).join(" ");
+  return summary.length > 240 ? `${truncateUtf16Safe(summary, 239)}…` : summary;
 }
 
 export async function ensureControlUiAssetsBuilt(
   runtime: RuntimeEnv = defaultRuntime,
-  opts: EnsureControlUiAssetsOptions = {},
+  opts: {
+    moduleUrl?: string;
+    root?: string;
+    assetRoot?: string;
+    expectedBuildId?: string | null;
+    force?: boolean;
+    signal?: AbortSignal;
+    onBuildStart?: () => void;
+  } = {},
 ): Promise<EnsureControlUiAssetsResult> {
   const assetRoot =
     opts.assetRoot ??
@@ -370,10 +301,25 @@ export async function ensureControlUiAssetsBuilt(
     : await resolveControlUiDistIndexPath(opts);
   const health = inspectControlUiAssetHealth(selectedIndex, opts.expectedBuildId);
   if (!opts.force && health.kind === "ready") {
-    return { ok: true, built: false, assets: health };
+    return { ok: true, assets: health };
   }
 
-  const repoRoot = resolveControlUiRepoRoot(opts);
+  const cwd = process.cwd();
+  const roots = opts.root
+    ? [path.resolve(opts.root)]
+    : [
+        resolveOpenClawPackageRootSync({
+          argv1: process.argv[1],
+          moduleUrl: opts.moduleUrl ?? import.meta.url,
+          cwd,
+        }),
+        resolveOpenClawPackageRootSync({ cwd }),
+      ];
+  const repoRoot =
+    roots.find(
+      (root): root is string =>
+        root !== null && fs.existsSync(path.join(root, "ui", "vite.config.ts")),
+    ) ?? null;
   const indexPath = repoRoot ? resolveControlUiDistIndexPathForRoot(repoRoot) : null;
   // Only the selected source tree owns its output. A healthy checkout beside a
   // damaged app's Resources directory cannot repair the assets that app serves.
@@ -394,8 +340,10 @@ export async function ensureControlUiAssetsBuilt(
     );
   }
 
-  const uiScript = path.join(repoRoot, "scripts", "ui.js");
-  if (!controlUiFsRuntime.existsSync(uiScript)) {
+  const uiScript = fileURLToPath(
+    resolveExternalPackageRuntimeEntrypointUrl("sourceUiBuild", repoRoot),
+  );
+  if (!fs.existsSync(uiScript)) {
     return controlUiAssetsFailure(`Control UI assets missing but ${uiScript} is unavailable.`);
   }
 
@@ -415,9 +363,10 @@ export async function ensureControlUiAssetsBuilt(
 
   let build: Awaited<ReturnType<typeof runCommandWithTimeout>>;
   try {
+    const { runCommandWithTimeout } = await import("../process/exec.js");
     build = await runCommandWithTimeout([process.execPath, uiScript, "build"], {
       cwd: repoRoot,
-      timeoutMs: opts.timeoutMs ?? CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS,
+      timeoutMs: CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS,
       ...(opts.signal ? { signal: opts.signal } : {}),
     });
   } catch (error) {
@@ -446,7 +395,7 @@ export async function ensureControlUiAssetsBuilt(
         : builtHealth.kind === "incomplete"
           ? `startup asset ${builtHealth.missingAsset} is missing.`
           : `its identity is ${builtHealth.buildId ?? "unknown"}; expected ${opts.expectedBuildId}. Restart the Gateway after rebuilding its runtime and UI together.`;
-    return controlUiAssetsFailure(`Control UI build completed but ${issue}`, true);
+    return controlUiAssetsFailure(`Control UI build completed but ${issue}`);
   }
-  return { ok: true, built: true, assets: builtHealth };
+  return { ok: true, assets: builtHealth };
 }

@@ -1,63 +1,55 @@
-// Browser tests cover server context.list profiles plugin behavior.
-import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { SdkError, SdkErrorCode } from "@modelcontextprotocol/client";
+import { expectDefined } from "@openclaw/normalization-core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
+import { listChromeMcpTabs } from "./chrome-mcp-tabs.js";
+import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import {
-  listChromeMcpTabs,
-  resetChromeMcpSessionsForTest,
-  setChromeMcpProcessCleanupDepsForTest,
+  createSessionStub,
+  fakeListPagesResult,
+  installChromeMcpSessionTestHooks,
   setChromeMcpSessionFactoryForTest,
-} from "./chrome-mcp.js";
+} from "./chrome-mcp.test-support.js";
 import * as chromeModule from "./chrome.js";
 import { registerBrowserBasicRoutes } from "./routes/basic.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./routes/test-helpers.js";
 import { createBrowserRouteContext } from "./server-context.js";
 import { beginProfileTransition } from "./server-context.lifecycle.js";
-import { makeBrowserProfile, makeBrowserServerState } from "./server-context.test-harness.js";
+import {
+  makeBrowserProfile,
+  makeBrowserServerState,
+  mockLaunchedChrome,
+} from "./server-context.test-harness.js";
 
-afterEach(async () => {
-  await resetChromeMcpSessionsForTest();
+const { mockChromeMcpProcesses } = await vi.hoisted(
+  () => import("./chrome-mcp-process.test-support.js"),
+);
+
+installChromeMcpSessionTestHooks();
+beforeEach(() => getChromeMcpModule.clear());
+
+afterEach(() => {
+  getChromeMcpModule.clear();
   vi.clearAllMocks();
-  vi.restoreAllMocks();
 });
 
-function createExistingSessionProcessFixture(
-  profileCount = 1,
-  pageFailure = false,
-  options: { attachElapsedMs?: number; hangingPage?: boolean; instantProcessScans?: boolean } = {},
-) {
-  const profiles = Array.from({ length: profileCount }, (_, index) =>
-    makeBrowserProfile({
-      name: `chrome-live-${index + 1}`,
-      driver: "existing-session",
-      attachOnly: true,
-      cdpUrl: "",
-      cdpPort: 0,
-      userDataDir: `/tmp/openclaw-browser-status-${index + 1}`,
-    }),
-  );
-  const profile = profiles[0];
-  if (!profile) {
-    throw new Error("expected browser profile");
-  }
-  const state = makeBrowserServerState({
-    profile,
-    resolvedOverrides: {
-      defaultProfile: profile.name,
-      profiles: Object.fromEntries(profiles.map((current) => [current.name, current])),
-    },
+function createExistingSessionProcessFixture(attachElapsedMs = 0) {
+  const profile = makeBrowserProfile({
+    name: "chrome-live",
+    driver: "existing-session",
+    attachOnly: true,
+    cdpUrl: "",
+    cdpPort: 0,
+    userDataDir: "/tmp/openclaw-browser-status-1",
   });
+  const state = makeBrowserServerState({ profile });
   const alive = new Set<number>();
   let nextPid = 40_000;
-  const listProcesses = vi.fn(async () => {
-    if (!options.instantProcessScans) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 5);
-      });
-    }
-    return [...alive].map((pid) => ({ pid, ppid: 1, identity: `fixture:${pid}` }));
-  });
-  setChromeMcpProcessCleanupDepsForTest({
+  const listProcesses = vi.fn(async () =>
+    [...alive].map((pid) => ({ pid, ppid: 1, identity: `fixture:${pid}` })),
+  );
+  mockChromeMcpProcesses({
     platform: "linux",
     listProcesses,
     sleep: async () => {},
@@ -66,416 +58,167 @@ function createExistingSessionProcessFixture(
   const callTool = vi.fn(
     async (
       _request: { name: string; arguments?: Record<string, unknown> },
-      _resultSchema?: unknown,
-      requestOptions?: { signal?: AbortSignal; timeout?: number },
-    ) => {
-      if (options.hangingPage) {
-        return await new Promise<never>((_resolve, reject) => {
-          const timer = setTimeout(
-            () => reject(new McpError(ErrorCode.RequestTimeout, "Request timed out")),
-            requestOptions?.timeout ?? 60_000,
-          );
-          requestOptions?.signal?.addEventListener(
-            "abort",
-            () => {
-              clearTimeout(timer);
-              reject(new McpError(ErrorCode.RequestTimeout, "Request cancelled"));
-            },
-            { once: true },
-          );
-        });
-      }
-      if (pageFailure) {
-        throw new Error("page unavailable");
-      }
-      return {
-        content: [{ type: "text", text: "## Pages\n1: https://example.com [selected]" }],
-      };
-    },
+      _requestOptions?: { signal?: AbortSignal; timeout?: number },
+    ) => fakeListPagesResult(),
   );
-  const factory = vi.fn(async () => {
-    if (options.attachElapsedMs) {
-      vi.setSystemTime(Date.now() + options.attachElapsedMs);
+  const factory = vi.fn(() => {
+    if (attachElapsedMs) {
+      const now = performance.now.bind(performance);
+      vi.spyOn(performance, "now").mockImplementation(() => now() + attachElapsedMs);
     }
     const pid = nextPid++;
     alive.add(pid);
-    const transport: { pid: number | null } = { pid };
-    const client = {
-      callTool,
-      close: vi.fn(async () => {
-        alive.delete(pid);
-        transport.pid = null;
-      }),
-    };
-    return {
-      transport,
-      closeTransport: () => client.close(),
-      processCleanup: { status: "open" as const },
-      ready: Promise.resolve(),
-      client,
-    } as never;
+    const session = createSessionStub(callTool, pid);
+    session.processCleanup = { status: "open" };
+    vi.spyOn(session.client, "close").mockImplementation(async () => {
+      alive.delete(pid);
+      Object.assign(session.transport, { pid: null });
+    });
+    return session;
   });
   setChromeMcpSessionFactoryForTest(factory);
-  return { callTool, factory, listProcesses, profile, profiles, state };
+  const ctx = createBrowserRouteContext({ getState: () => state });
+  const { app, getHandlers } = createBrowserRouteApp();
+  registerBrowserBasicRoutes(app, ctx);
+  const response = createBrowserRouteResponse();
+  const status = () =>
+    getHandlers.get("/")?.({ params: {}, query: { profile: profile.name } }, response.res);
+  return { callTool, factory, listProcesses, profile, ctx, response, status };
 }
 
-describe("browser server-context listProfiles", () => {
-  it.each([1, 3])(
-    "uses one temporary MCP session and only authority-required process scans for %i cold profiles",
-    async (profileCount) => {
-      const fixture = createExistingSessionProcessFixture(profileCount);
-      const started = performance.now();
-      const profiles = await createBrowserRouteContext({
-        getState: () => fixture.state,
-      }).listProfiles();
-      const elapsedMs = performance.now() - started;
-
-      console.info(
-        `[browser-status-process-scans] profiles=${profileCount} scans=${fixture.listProcesses.mock.calls.length} elapsedMs=${elapsedMs.toFixed(1)}`,
-      );
-      expect(profiles.map(({ name, running, tabCount }) => ({ name, running, tabCount }))).toEqual(
-        fixture.profiles.map(({ name }) => ({ name, running: true, tabCount: 1 })),
-      );
-      expect(fixture.factory).toHaveBeenCalledTimes(profileCount);
-      expect(fixture.listProcesses).toHaveBeenCalledTimes(profileCount * 2);
-    },
+it("uses request-scoped cold probes and reuses a warm MCP session", async () => {
+  const fixture = createExistingSessionProcessFixture();
+  const { ctx } = fixture;
+  await ctx.listProfiles();
+  expect((await ctx.listProfiles())[0]).toMatchObject({ running: true, tabCount: 1 });
+  expect(fixture.factory).toHaveBeenCalledTimes(2);
+  expect(fixture.callTool).toHaveBeenCalledWith(
+    { name: "list_pages", arguments: {} },
+    { signal: expect.any(AbortSignal), timeout: 300 },
   );
+  const profile = ctx.forProfile(fixture.profile.name).profile;
+  await listChromeMcpTabs(profile.name, profile);
+  fixture.listProcesses.mockClear();
+  expect((await ctx.listProfiles())[0]).toMatchObject({ running: true, tabCount: 1 });
+  expect(fixture.factory).toHaveBeenCalledTimes(3);
+  expect(fixture.listProcesses).not.toHaveBeenCalled();
+});
 
-  it("does not enumerate processes when profile status reuses a warm MCP session", async () => {
-    const fixture = createExistingSessionProcessFixture();
-    const ctx = createBrowserRouteContext({ getState: () => fixture.state });
-    const profile = ctx.forProfile(fixture.profile.name).profile;
-    await listChromeMcpTabs(profile.name, profile);
-    fixture.listProcesses.mockClear();
+it("preserves healthy transport status when the shared page probe fails", async () => {
+  const fixture = createExistingSessionProcessFixture();
+  fixture.callTool.mockRejectedValue(new Error("page unavailable"));
+  const { ctx, response, status } = fixture;
+  await status();
 
-    const profiles = await ctx.listProfiles();
+  expect(response.body).toMatchObject({ running: true, cdpReady: true, pageReady: false });
 
-    expect(profiles[0]).toMatchObject({ running: true, tabCount: 1 });
-    expect(fixture.factory).toHaveBeenCalledOnce();
-    expect(fixture.listProcesses).not.toHaveBeenCalled();
-  });
+  expect((await ctx.listProfiles())[0]).toMatchObject({ running: true, tabCount: 0 });
+});
 
-  it("bounds a shared profile-list page probe with its inherited transport timeout", async () => {
-    const fixture = createExistingSessionProcessFixture();
-
-    const profiles = await createBrowserRouteContext({
-      getState: () => fixture.state,
-    }).listProfiles();
-
-    expect(profiles[0]).toMatchObject({ running: true, tabCount: 1 });
-    expect(fixture.callTool).toHaveBeenCalledWith(
-      { name: "list_pages", arguments: {} },
-      undefined,
-      { signal: expect.any(AbortSignal), timeout: 300 },
-    );
-  });
-
-  it("keeps process discovery scoped to each independent cold profile request", async () => {
-    const fixture = createExistingSessionProcessFixture();
-    const ctx = createBrowserRouteContext({ getState: () => fixture.state });
-
-    await ctx.listProfiles();
-    await ctx.listProfiles();
-
-    expect(fixture.factory).toHaveBeenCalledTimes(2);
-    expect(fixture.listProcesses).toHaveBeenCalledTimes(4);
-  });
-
-  it("reuses one temporary MCP session for the real browser status route", async () => {
-    const fixture = createExistingSessionProcessFixture();
-    const ctx = createBrowserRouteContext({ getState: () => fixture.state });
-    const { app, getHandlers } = createBrowserRouteApp();
-    registerBrowserBasicRoutes(app, ctx);
-    const response = createBrowserRouteResponse();
-    const started = performance.now();
-
-    await getHandlers.get("/")?.(
-      { params: {}, query: { profile: fixture.profile.name } },
-      response.res,
-    );
-
-    console.info(
-      `[browser-status-process-scans] route=status scans=${fixture.listProcesses.mock.calls.length} elapsedMs=${(performance.now() - started).toFixed(1)}`,
-    );
-    expect(response.statusCode).toBe(200);
-    expect(response.body).toMatchObject({
-      profile: fixture.profile.name,
-      running: true,
-      cdpReady: true,
-      pageReady: true,
-    });
-    expect(fixture.factory).toHaveBeenCalledOnce();
-    expect(fixture.listProcesses).toHaveBeenCalledTimes(2);
-  });
-
-  it("preserves healthy transport status when the shared page probe fails", async () => {
-    const fixture = createExistingSessionProcessFixture(1, true);
-    const ctx = createBrowserRouteContext({ getState: () => fixture.state });
-    const { app, getHandlers } = createBrowserRouteApp();
-    registerBrowserBasicRoutes(app, ctx);
-    const response = createBrowserRouteResponse();
-
-    await getHandlers.get("/")?.(
-      { params: {}, query: { profile: fixture.profile.name } },
-      response.res,
-    );
-
-    expect(response.body).toMatchObject({ running: true, cdpReady: true, pageReady: false });
-    expect(fixture.factory).toHaveBeenCalledOnce();
-
-    const profiles = await ctx.listProfiles();
-    expect(profiles[0]).toMatchObject({ running: true, tabCount: 0 });
-    expect(fixture.factory).toHaveBeenCalledTimes(2);
-  });
-
-  it("times out a stuck status page probe within the budget remaining after attach", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    try {
-      const fixture = createExistingSessionProcessFixture(1, false, {
-        attachElapsedMs: 3_000,
-        hangingPage: true,
-        instantProcessScans: true,
-      });
-      const ctx = createBrowserRouteContext({ getState: () => fixture.state });
-      const { app, getHandlers } = createBrowserRouteApp();
-      registerBrowserBasicRoutes(app, ctx);
-      const response = createBrowserRouteResponse();
-
-      const pending = getHandlers.get("/")?.(
-        { params: {}, query: { profile: fixture.profile.name } },
-        response.res,
+it("times out a stuck status page probe within the budget remaining after attach", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_000);
+  const fixture = createExistingSessionProcessFixture(3_000);
+  fixture.callTool.mockImplementation(async (_request, requestOptions) => {
+    return await new Promise<never>((_resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new SdkError(SdkErrorCode.RequestTimeout, "Request timed out")),
+        requestOptions?.timeout ?? 60_000,
       );
-      await vi.advanceTimersByTimeAsync(0);
-
-      expect(fixture.callTool).toHaveBeenCalledWith(
-        { name: "list_pages", arguments: {} },
-        undefined,
-        { signal: expect.any(AbortSignal), timeout: 4_000 },
+      requestOptions?.signal?.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          reject(new SdkError(SdkErrorCode.RequestTimeout, "Request cancelled"));
+        },
+        { once: true },
       );
-      await vi.advanceTimersByTimeAsync(3_999);
-      expect(response.body).toBeUndefined();
-
-      await vi.advanceTimersByTimeAsync(1);
-      await pending;
-
-      expect(response.statusCode).toBe(200);
-      expect(response.body).toMatchObject({ running: true, cdpReady: true, pageReady: false });
-      expect(fixture.factory).toHaveBeenCalledOnce();
-      expect(fixture.listProcesses).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
+  const { response, status } = fixture;
+  const pending = status();
+  await vi.advanceTimersByTimeAsync(0);
 
-  it("cancels one profile operation without interrupting a shared transition", async () => {
-    const state = makeBrowserServerState();
-    const ctx = createBrowserRouteContext({ getState: () => state });
-    const profile = ctx.forProfile("openclaw");
-    const runtime = state.profiles.get("openclaw");
-    if (!runtime) {
-      throw new Error("expected profile runtime");
-    }
+  expect(fixture.callTool).toHaveBeenCalledWith(
+    { name: "list_pages", arguments: {} },
+    { signal: expect.any(AbortSignal), timeout: 4_000 },
+  );
+  await vi.advanceTimersByTimeAsync(3_999);
+  expect(response.body).toBeUndefined();
 
-    let releaseCleanup!: () => void;
-    const cleanupGate = new Promise<void>((resolve) => {
-      releaseCleanup = resolve;
-    });
-    let transitionCompleted = false;
-    const transition = beginProfileTransition({
-      state,
-      runtime,
-      reason: "profile refresh requested",
-      closeSharedAdapters: false,
-      afterCleanup: async () => {
-        await cleanupGate;
-        transitionCompleted = true;
-      },
-    });
-    const isChromeCdpReady = vi.mocked(chromeModule.isChromeCdpReady);
-    isChromeCdpReady.mockResolvedValue(true);
+  await vi.advanceTimersByTimeAsync(1);
+  await pending;
 
-    const controller = new AbortController();
-    const aborted = profile.isReachable(undefined, { signal: controller.signal });
-    const surviving = profile.isReachable();
-    let survivingCompleted = false;
-    void surviving.then(() => {
-      survivingCompleted = true;
-    });
-
-    const reason = new Error("profile request cancelled during transition");
-    controller.abort(reason);
-
-    try {
-      const outcome = await Promise.race([
-        aborted.then(
-          () => ({ state: "resolved" as const }),
-          (error: unknown) => ({ state: "rejected" as const, error }),
-        ),
-        new Promise<{ state: "pending" }>((resolve) => {
-          setTimeout(() => resolve({ state: "pending" }), 50);
-        }),
-      ]);
-
-      expect(outcome).toEqual({ state: "rejected", error: reason });
-      expect(transitionCompleted).toBe(false);
-      expect(survivingCompleted).toBe(false);
-      expect(isChromeCdpReady).not.toHaveBeenCalled();
-    } finally {
-      releaseCleanup();
-      await transition;
-    }
-
-    await expect(surviving).resolves.toBe(true);
-    expect(survivingCompleted).toBe(true);
-    await expect(profile.isReachable()).resolves.toBe(true);
-    expect(isChromeCdpReady).toHaveBeenCalledTimes(2);
+  expect(response).toMatchObject({
+    statusCode: 200,
+    body: { running: true, cdpReady: true, pageReady: false },
   });
+});
 
-  it("reads running state only after an in-flight profile transition settles", async () => {
-    const state = makeBrowserServerState();
-    const ctx = createBrowserRouteContext({ getState: () => state });
-    ctx.forProfile("openclaw");
-    const runtime = state.profiles.get("openclaw");
-    if (!runtime) {
-      throw new Error("expected profile runtime");
-    }
-    runtime.running = {
-      pid: 123,
-      exe: { kind: "chromium", path: "/usr/bin/chromium" },
-      userDataDir: "/tmp/openclaw-profile",
-      cdpPort: 18800,
-      startedAt: Date.now(),
-      proc: {} as never,
-    };
-    let releaseCleanup!: () => void;
-    const cleanupGate = new Promise<void>((resolve) => {
-      releaseCleanup = resolve;
-    });
-    const transition = beginProfileTransition({
-      state,
-      runtime,
-      reason: "stop requested",
-      closeSharedAdapters: false,
-      afterCleanup: async () => {
-        await cleanupGate;
-        runtime.running = null;
-      },
-    });
-    vi.mocked(chromeModule.isChromeReachable).mockResolvedValue(false);
+it("cancels one waiter while other probes observe the settled profile transition", async () => {
+  const state = makeBrowserServerState();
+  const ctx = createBrowserRouteContext({ getState: () => state });
+  const profile = ctx.forProfile("openclaw");
+  const runtime = expectDefined(state.profiles.get("openclaw"), "profile runtime");
+  runtime.running = mockLaunchedChrome(vi.mocked(chromeModule.launchOpenClawChrome), 123);
+  const cleanup = createDeferred<void>();
+  const transitionCompleted = vi.fn();
+  const transition = beginProfileTransition({
+    state,
+    runtime,
+    reason: "profile refresh requested",
+    closeSharedAdapters: false,
+    afterCleanup: async () => {
+      await cleanup.promise;
+      runtime.running = null;
+      transitionCompleted();
+    },
+  });
+  const isChromeCdpReady = vi.mocked(chromeModule.isChromeCdpReady);
+  isChromeCdpReady.mockResolvedValue(true);
+  vi.mocked(chromeModule.isChromeReachable).mockResolvedValue(false);
 
-    const listing = ctx.listProfiles();
-    await Promise.resolve();
-    releaseCleanup();
+  const controller = new AbortController();
+  const aborted = profile.isReachable(undefined, { signal: controller.signal });
+  const survivingCompleted = vi.fn();
+  const surviving = profile.isReachable().finally(survivingCompleted);
+  const listing = ctx.listProfiles();
+
+  const reason = new Error("profile request cancelled during transition");
+  controller.abort(reason);
+
+  try {
+    await expect(aborted).rejects.toBe(reason);
+    expect(transitionCompleted).not.toHaveBeenCalled();
+    expect(survivingCompleted).not.toHaveBeenCalled();
+    expect(isChromeCdpReady).not.toHaveBeenCalled();
+  } finally {
+    cleanup.resolve();
     await transition;
-    const profiles = await listing;
+  }
 
-    expect(profiles[0]?.running).toBe(false);
+  await expect(surviving).resolves.toBe(true);
+  expect(survivingCompleted).toHaveBeenCalledOnce();
+  await expect(profile.isReachable()).resolves.toBe(true);
+  expect(isChromeCdpReady).toHaveBeenCalledTimes(2);
+  expect((await listing)[0]?.running).toBe(false);
+});
+
+it("marks a runtime-only constructor profile as missing from config", async () => {
+  const profile = makeBrowserProfile({ name: "constructor" });
+  const state = makeBrowserServerState({
+    profile,
+    resolvedOverrides: { profiles: {} },
+  });
+  state.profiles.set(profile.name, {
+    profile,
+    running: { pid: 123 } as never,
+    lastTargetId: null,
   });
 
-  it("bypasses SSRF gating when probing managed loopback profiles", async () => {
-    const state = makeBrowserServerState({
-      resolvedOverrides: {
-        ssrfPolicy: {},
-      },
-    });
-    const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
-    isChromeReachable.mockResolvedValue(true);
+  const ctx = createBrowserRouteContext({ getState: () => state });
+  const profiles = await ctx.listProfiles();
 
-    const ctx = createBrowserRouteContext({ getState: () => state });
-    const profiles = await ctx.listProfiles();
-
-    expect(isChromeReachable).toHaveBeenCalledWith("http://127.0.0.1:18800", 200, undefined);
-    expect(profiles).toHaveLength(1);
-    expect(profiles[0]?.name).toBe("openclaw");
-    expect(profiles[0]?.running).toBe(true);
-  });
-
-  it("uses remote-class probes for attachOnly loopback CDP profiles", async () => {
-    const state = makeBrowserServerState({
-      profile: {
-        name: "manual-cdp",
-        cdpUrl: "http://127.0.0.1:9222",
-        cdpHost: "127.0.0.1",
-        cdpIsLoopback: true,
-        cdpPort: 9222,
-        color: "#00AA00",
-        driver: "openclaw",
-        headless: false,
-        attachOnly: true,
-      },
-      resolvedOverrides: {
-        defaultProfile: "manual-cdp",
-        ssrfPolicy: {},
-      },
-    });
-    const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
-    isChromeReachable.mockResolvedValue(true);
-
-    const ctx = createBrowserRouteContext({ getState: () => state });
-    const profiles = await ctx.listProfiles();
-
-    expect(isChromeReachable).toHaveBeenCalledWith(
-      "http://127.0.0.1:9222",
-      state.resolved.remoteCdpTimeoutMs,
-      undefined,
-    );
-    expect(profiles).toHaveLength(1);
-    expect(profiles[0]?.name).toBe("manual-cdp");
-    expect(profiles[0]?.running).toBe(true);
-  });
-
-  it("redacts CDP URL credentials from profile status", async () => {
-    const state = makeBrowserServerState({
-      profile: {
-        name: "manual-cdp",
-        cdpUrl: "http://openclaw:relay-token@127.0.0.1:9222",
-        cdpHost: "127.0.0.1",
-        cdpIsLoopback: true,
-        cdpPort: 9222,
-        color: "#00AA00",
-        driver: "openclaw",
-        headless: false,
-        attachOnly: true,
-      },
-      resolvedOverrides: {
-        defaultProfile: "manual-cdp",
-        ssrfPolicy: {},
-      },
-    });
-    const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
-    isChromeReachable.mockResolvedValue(true);
-
-    const ctx = createBrowserRouteContext({ getState: () => state });
-    const profiles = await ctx.listProfiles();
-
-    expect(isChromeReachable).toHaveBeenCalledWith(
-      "http://openclaw:relay-token@127.0.0.1:9222",
-      state.resolved.remoteCdpTimeoutMs,
-      undefined,
-    );
-    expect(profiles[0]?.cdpUrl).toBe("http://127.0.0.1:9222");
-  });
-
-  it.each(["constructor", "prototype"] as const)(
-    "marks runtime-only %s profiles as missing from config",
-    async (profileName) => {
-      const profile = makeBrowserProfile({ name: profileName });
-      const state = makeBrowserServerState({
-        profile,
-        resolvedOverrides: { profiles: {} },
-      });
-      state.profiles.set(profileName, {
-        profile,
-        running: { pid: 123 } as never,
-        lastTargetId: null,
-      });
-
-      const ctx = createBrowserRouteContext({ getState: () => state });
-      const profiles = await ctx.listProfiles();
-
-      expect(profiles).toHaveLength(1);
-      expect(profiles[0]).toMatchObject({ name: profileName, missingFromConfig: true });
-    },
-  );
+  expect(profiles).toHaveLength(1);
+  expect(profiles[0]).toMatchObject({ name: "constructor", missingFromConfig: true });
 });

@@ -2,134 +2,26 @@ import Foundation
 import OpenClawIPC
 import OpenClawKit
 
-actor MacNodeClaudeSessionCatalogWorker {
-    typealias Operation = @Sendable (String?) throws -> String
-
-    private struct PendingOperation {
-        var id: UUID
-        var paramsJSON: String?
-        var operation: Operation
-        var continuation: CheckedContinuation<String, Error>
-    }
-
-    private struct ActiveOperation {
-        var id: UUID
-        var task: Task<String, Error>
-        var continuation: CheckedContinuation<String, Error>?
-    }
-
-    static let shared = MacNodeClaudeSessionCatalogWorker(
-        listOperation: { try MacNodeClaudeSessionCatalog.list(paramsJSON: $0) },
-        readOperation: { try MacNodeClaudeSessionCatalog.read(paramsJSON: $0) })
-
-    private let listOperation: Operation
-    private let readOperation: Operation
-    private var pending: [PendingOperation] = []
-    private var active: ActiveOperation?
-
-    init(
-        listOperation: @escaping Operation,
-        readOperation: @escaping Operation)
-    {
-        self.listOperation = listOperation
-        self.readOperation = readOperation
-    }
-
-    func list(paramsJSON: String?) async throws -> String {
-        try await self.enqueue(paramsJSON: paramsJSON, operation: self.listOperation)
-    }
-
-    func read(paramsJSON: String?) async throws -> String {
-        try await self.enqueue(paramsJSON: paramsJSON, operation: self.readOperation)
-    }
-
-    private func enqueue(
-        paramsJSON: String?,
-        operation: @escaping Operation) async throws -> String
-    {
-        let id = UUID()
-        let result: String = try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                guard !Task.isCancelled else {
-                    continuation.resume(throwing: CancellationError())
-                    return
-                }
-                self.pending.append(PendingOperation(
-                    id: id,
-                    paramsJSON: paramsJSON,
-                    operation: operation,
-                    continuation: continuation))
-                self.startNextIfNeeded()
-            }
-        } onCancel: {
-            Task { await self.cancel(id: id) }
-        }
-        try Task.checkCancellation()
-        return result
-    }
-
-    private func startNextIfNeeded() {
-        guard self.active == nil, !self.pending.isEmpty else { return }
-        let pending = self.pending.removeFirst()
-        let task = Task.detached(priority: .utility) {
-            try Task.checkCancellation()
-            return try pending.operation(pending.paramsJSON)
-        }
-        self.active = ActiveOperation(
-            id: pending.id,
-            task: task,
-            continuation: pending.continuation)
-        // One Claude filesystem operation at a time. Codex and other node commands
-        // remain free to run while this dedicated lane waits or scans.
-        Task {
-            let result = await task.result
-            self.finish(id: pending.id, result: result)
-        }
-    }
-
-    private func cancel(id: UUID) {
-        if let index = pending.firstIndex(where: { $0.id == id }) {
-            let pending = self.pending.remove(at: index)
-            pending.continuation.resume(throwing: CancellationError())
-            return
-        }
-        guard self.active?.id == id else { return }
-        self.active?.continuation?.resume(throwing: CancellationError())
-        self.active?.continuation = nil
-        self.active?.task.cancel()
-    }
-
-    private func finish(id: UUID, result: Result<String, Error>) {
-        guard self.active?.id == id else { return }
-        let continuation = self.active?.continuation
-        self.active = nil
-        continuation?.resume(with: result)
-        self.startNextIfNeeded()
-    }
-}
-
 actor MacNodeRuntime {
     private static let maxGatewayPayloadBytes = 25 * 1024 * 1024
-    private static let maxScreenSnapshotRawBytesBeforeBase64 = (maxGatewayPayloadBytes / 4) * 3
+    private static let maxInlineMediaRawBytes = (maxGatewayPayloadBytes / 4) * 3
     private static let cuaOwnedCommands = Set([
-        MacNodeScreenCommand.snapshot.rawValue,
+        OpenClawScreenCommand.snapshot.rawValue,
         OpenClawComputerCommand.act.rawValue,
     ])
     private let cameraCapture = CameraCaptureService()
     private let cameraPTZ: any CameraPTZServicing
     private let nodeHostWorker: (any MacNodeHostWorking)?
     private let makeMainActorServices: @Sendable () async -> any MacNodeRuntimeMainActorServices
+    private let desktopAvailability: MacDesktopAvailabilityCoordinator?
     // Injectable so tests pin the gate instead of racing on process-global UserDefaults.
     private let computerControlEnabled: @Sendable () -> Bool
     private let computerControlProvider: @Sendable () -> ComputerControlProvider
     private let canvasHostedSurfaceResolver: MacNodeCanvasHostedSurfaceResolver
     private let codexThreadCatalogEnabled: @Sendable () -> Bool
     private let codexThreadCatalogClient: MacNodeCodexThreadCatalogClient
-    private let codexThreadListRequest: (@Sendable (String?) async throws -> String)?
-    private let codexThreadTurnsRequest: (@Sendable (String?) async throws -> String)?
-    private let claudeSessionCatalogEnabled: @Sendable () -> Bool
-    private let claudeSessionListRequest: @Sendable (String?) async throws -> String
-    private let claudeSessionReadRequest: @Sendable (String?) async throws -> String
+    private let codexThreadListRequest: @Sendable (String?) async throws -> String
+    private let codexThreadTurnsRequest: @Sendable (String?) async throws -> String
     private var cachedMainActorServices: (any MacNodeRuntimeMainActorServices)?
     /// Single-flight lazy initialization. Separate service instances would split
     /// ownership of held computer input and make lifecycle release incomplete.
@@ -137,16 +29,18 @@ actor MacNodeRuntime {
     /// Invalidates computer actions admitted before a lifecycle release, including
     /// the first action while the shared main-actor services are still initializing.
     private var computerInputReleaseGeneration: UInt64 = 0
+    private var activeDesktopInvokes: [String: MacDesktopAvailabilityCoordinator.Permit] = [:]
     private var mainSessionKey: String = "main"
 
     init(
         nodeHostWorker: (any MacNodeHostWorking)? = nil,
         cameraPTZ: any CameraPTZServicing = CameraPTZService(),
+        desktopAvailability: MacDesktopAvailabilityCoordinator? = nil,
         makeMainActorServices: @escaping @Sendable () async -> any MacNodeRuntimeMainActorServices = {
             await MainActor.run { LiveMacNodeRuntimeMainActorServices() }
         },
         computerControlEnabled: @escaping @Sendable () -> Bool = {
-            MacNodeRuntime.computerControlEnabledDefault()
+            isComputerControlEnabled()
         },
         computerControlProvider: @escaping @Sendable () -> ComputerControlProvider = {
             ComputerControlProvider.current()
@@ -160,20 +54,12 @@ actor MacNodeRuntime {
         },
         codexThreadCatalogClient: MacNodeCodexThreadCatalogClient = MacNodeCodexThreadCatalogClient(),
         codexThreadListRequest: (@Sendable (String?) async throws -> String)? = nil,
-        codexThreadTurnsRequest: (@Sendable (String?) async throws -> String)? = nil,
-        claudeSessionCatalogEnabled: @escaping @Sendable () -> Bool = {
-            MacNodeClaudeSessionCatalog.shouldAdvertise()
-        },
-        claudeSessionListRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
-            try await MacNodeClaudeSessionCatalogWorker.shared.list(paramsJSON: paramsJSON)
-        },
-        claudeSessionReadRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
-            try await MacNodeClaudeSessionCatalogWorker.shared.read(paramsJSON: paramsJSON)
-        })
+        codexThreadTurnsRequest: (@Sendable (String?) async throws -> String)? = nil)
     {
         self.nodeHostWorker = nodeHostWorker
         self.cameraPTZ = cameraPTZ
         self.makeMainActorServices = makeMainActorServices
+        self.desktopAvailability = desktopAvailability
         self.computerControlEnabled = computerControlEnabled
         self.computerControlProvider = computerControlProvider
         self.canvasHostedSurfaceResolver = MacNodeCanvasHostedSurfaceResolver(
@@ -181,11 +67,12 @@ actor MacNodeRuntime {
             refreshSurfaceURL: refreshCanvasSurfaceUrl)
         self.codexThreadCatalogEnabled = codexThreadCatalogEnabled
         self.codexThreadCatalogClient = codexThreadCatalogClient
-        self.codexThreadListRequest = codexThreadListRequest
-        self.codexThreadTurnsRequest = codexThreadTurnsRequest
-        self.claudeSessionCatalogEnabled = claudeSessionCatalogEnabled
-        self.claudeSessionListRequest = claudeSessionListRequest
-        self.claudeSessionReadRequest = claudeSessionReadRequest
+        self.codexThreadListRequest = codexThreadListRequest ?? { paramsJSON in
+            try await codexThreadCatalogClient.list(paramsJSON: paramsJSON)
+        }
+        self.codexThreadTurnsRequest = codexThreadTurnsRequest ?? { paramsJSON in
+            try await codexThreadCatalogClient.turns(paramsJSON: paramsJSON)
+        }
     }
 
     func updateMainSessionKey(_ sessionKey: String) {
@@ -197,11 +84,11 @@ actor MacNodeRuntime {
     /// One branch per advertised native command keeps command ownership explicit.
     func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         let command = req.command
+        if Self.cuaOwnedCommands.contains(command) {
+            return await self.handleDesktopInvoke(req)
+        }
         if let rejection = Self.canvasCommandRejection(req) {
             return rejection
-        }
-        if let cuaResponse = await handleCuaInvokeIfSelected(req) {
-            return cuaResponse
         }
         do {
             switch command {
@@ -217,12 +104,8 @@ actor MacNodeRuntime {
                 return try await handleCameraInvoke(req)
             case OpenClawLocationCommand.get.rawValue:
                 return try await handleLocationInvoke(req)
-            case MacNodeScreenCommand.snapshot.rawValue:
-                return try await handleScreenSnapshotInvoke(req)
-            case MacNodeScreenCommand.record.rawValue:
+            case OpenClawScreenCommand.record.rawValue:
                 return try await handleScreenRecordInvoke(req)
-            case OpenClawComputerCommand.act.rawValue:
-                return try await handleComputerActInvoke(req)
             case OpenClawSystemCommand.notify.rawValue:
                 return try await handleSystemNotify(req)
             case MacNodeCodexThreadCatalogContract.listCommand,
@@ -230,7 +113,7 @@ actor MacNodeRuntime {
                 return try await self.handleCodexThreadInvoke(req)
             case MacNodeClaudeSessionCatalogContract.listCommand,
                  MacNodeClaudeSessionCatalogContract.readCommand:
-                return try await self.handleClaudeSessionInvoke(req)
+                return await self.handleClaudeSessionInvoke(req)
             default:
                 // Private supervisor controls are not public pairing capabilities.
                 // The shared dispatcher owns their validation and local hosting consent.
@@ -239,12 +122,9 @@ actor MacNodeRuntime {
                 }
                 return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
             }
+        } catch let error as OpenClawNodeError {
+            return BridgeInvokeResponse(id: req.id, ok: false, error: error)
         } catch let error as MacNodeCodexThreadCatalog.CatalogError {
-            return Self.errorResponse(
-                req,
-                code: error.isInvalidRequest ? .invalidRequest : .unavailable,
-                message: error.localizedDescription)
-        } catch let error as MacNodeClaudeSessionCatalog.CatalogError {
             return Self.errorResponse(
                 req,
                 code: error.isInvalidRequest ? .invalidRequest : .unavailable,
@@ -259,6 +139,163 @@ actor MacNodeRuntime {
             return Self.errorResponse(req, code: .invalidRequest, message: error.localizedDescription)
         } catch {
             return Self.errorResponse(req, code: .unavailable, message: error.localizedDescription)
+        }
+    }
+
+    private struct DesktopExecutionEnvelope: Decodable {
+        var executionId: String?
+        var action: String?
+    }
+
+    private func handleDesktopInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
+        let envelope: DesktopExecutionEnvelope
+        do {
+            envelope = try Self.decodeParams(DesktopExecutionEnvelope.self, from: req.paramsJSON ?? "{}")
+        } catch {
+            return Self.invalidDesktopParamsResponse(req)
+        }
+        do {
+            if let id = envelope.executionId, UUID(uuidString: id) == nil {
+                return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: invalid executionId")
+            }
+            let generation = self.computerInputReleaseGeneration
+            let closing = req.command == OpenClawComputerCommand.act.rawValue && envelope.action == "__close_execution"
+            let desktop = if let desktopAvailability {
+                desktopAvailability
+            } else {
+                await MacDesktopAvailabilityCoordinator.shared
+            }
+            if closing {
+                guard let id = envelope.executionId else {
+                    return Self.errorResponse(
+                        req,
+                        code: .invalidRequest,
+                        message: "INVALID_REQUEST: executionId required")
+                }
+                guard let permit = await desktop.beginClose(executionId: id) else {
+                    return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: #"{"ok":true}"#)
+                }
+                await self.cancelDesktopInvokes(permits: [permit])
+                let response: BridgeInvokeResponse = if self.computerControlProvider() == .cua, let nodeHostWorker {
+                    await nodeHostWorker.invoke(req)
+                } else {
+                    BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: #"{"ok":true}"#)
+                }
+                await desktop.finishClose(permit, succeeded: response.ok)
+                return response
+            }
+            let permit = try await desktop.admit(executionId: envelope.executionId)
+            self.activeDesktopInvokes[req.id] = permit
+            defer { self.activeDesktopInvokes.removeValue(forKey: req.id) }
+            let services = await self.mainActorServices()
+            let controlsComputer = req.command == OpenClawComputerCommand.act.rawValue ||
+                self.computerControlProvider() == .cua
+            let capabilities: [Capability] = controlsComputer
+                ? [.accessibility, .eventPosting, .screenRecording, .computerControl] : [.screenRecording]
+            if let error = await services.missingPermissions(
+                capabilities,
+                disabled: controlsComputer && !self.computerControlEnabled() ? [.computerControl] : [])
+            {
+                await desktop.finishInvocation(permit)
+                throw error
+            }
+            guard generation == self.computerInputReleaseGeneration else {
+                await desktop.invalidate(permit, reason: "admission-retired")
+                await desktop.finishInvocation(permit)
+                return Self.errorResponse(
+                    req, code: .unavailable, message: "UNAVAILABLE: computer control lifecycle changed")
+            }
+            if req.command == OpenClawComputerCommand.act.rawValue || self.computerControlProvider() == .cua,
+               !self.computerControlEnabled()
+            {
+                await desktop.invalidate(permit, reason: "computer-disabled")
+                await desktop.finishInvocation(permit)
+                return BridgeInvokeResponse(
+                    id: req.id,
+                    ok: false,
+                    error:
+                    PermissionManager.missingPermission([(.computerControl, .disabledInOpenClaw)]))
+            }
+            let response: BridgeInvokeResponse
+            do {
+                guard generation == self.computerInputReleaseGeneration else {
+                    await desktop.invalidate(permit, reason: "admission-retired")
+                    throw MacDesktopAvailabilityCoordinator.AvailabilityError.executionClosed
+                }
+                try Task.checkCancellation()
+                if self.computerControlProvider() == .cua {
+                    guard let nodeHostWorker, await nodeHostWorker.supports(req.command) else {
+                        await desktop.finishInvocation(permit)
+                        return Self.errorResponse(
+                            req, code: .unavailable, message: "UNAVAILABLE: selected CUA provider is not ready")
+                    }
+                    try await desktop.validate(permit)
+                    guard generation == self.computerInputReleaseGeneration else {
+                        await desktop.invalidate(permit, reason: "admission-retired")
+                        throw MacDesktopAvailabilityCoordinator.AvailabilityError.executionClosed
+                    }
+                    try Task.checkCancellation()
+                    response = await nodeHostWorker.invoke(req)
+                } else {
+                    try await desktop.validate(permit)
+                    guard generation == self.computerInputReleaseGeneration else {
+                        await desktop.invalidate(permit, reason: "admission-retired")
+                        throw MacDesktopAvailabilityCoordinator.AvailabilityError.executionClosed
+                    }
+                    try Task.checkCancellation()
+                    response = req.command == OpenClawScreenCommand.snapshot.rawValue
+                        ? try await self.handleScreenSnapshotInvoke(req, desktopPermit: permit)
+                        : try await self.handleComputerActInvoke(req, desktopPermit: permit)
+                }
+                try await desktop.validate(permit)
+            } catch {
+                await desktop.finishInvocation(permit)
+                throw error
+            }
+            await desktop.finishInvocation(permit)
+            return response
+        } catch let error as OpenClawNodeError {
+            return BridgeInvokeResponse(id: req.id, ok: false, error: error)
+        } catch {
+            return Self.errorResponse(req, code: .unavailable, message: error.localizedDescription)
+        }
+    }
+
+    private func cancelDesktopInvokes(permits: [MacDesktopAvailabilityCoordinator.Permit]) async {
+        let requests = self.activeDesktopInvokes.filter { permits.contains($0.value) }.map(\.key)
+        for permit in permits {
+            await self.cachedMainActorServices?.releaseExecutionInput(permit)
+        }
+        for request in requests {
+            await self.nodeHostWorker?.cancel(invokeId: request)
+        }
+    }
+
+    /// Native lock/expiry retires Computer work while leaving the Desktop stream available for login.
+    func revokeDesktopExecutions(
+        _ permits: [MacDesktopAvailabilityCoordinator.Permit],
+        reason: String) async
+    {
+        let desktop = if let desktopAvailability {
+            desktopAvailability
+        } else {
+            await MacDesktopAvailabilityCoordinator.shared
+        }
+        for permit in permits {
+            guard await desktop.beginRevocationCleanup(permit) else { continue }
+            await self.cancelDesktopInvokes(permits: [permit])
+            var succeeded = true
+            if self.computerControlProvider() == .cua, let nodeHostWorker, let executionId = permit.executionId {
+                let params = ["action": "__close_execution", "executionId": executionId, "reason": reason]
+                if let json = try? Self.encodePayload(params) {
+                    let response = await nodeHostWorker.invoke(BridgeInvokeRequest(
+                        id: UUID().uuidString, command: OpenClawComputerCommand.act.rawValue, paramsJSON: json))
+                    succeeded = response.ok
+                } else {
+                    succeeded = false
+                }
+            }
+            await desktop.finishRevocationCleanup(permit, succeeded: succeeded)
         }
     }
 
@@ -280,30 +317,10 @@ actor MacNodeRuntime {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "CANVAS_DISABLED: enable Canvas in Settings"))
+                error:
+                PermissionManager.missingPermission([(.canvas, .disabledInOpenClaw)]))
         }
         return nil
-    }
-
-    private func handleCuaInvokeIfSelected(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse? {
-        guard self.computerControlProvider() == .cua,
-              Self.cuaOwnedCommands.contains(req.command)
-        else { return nil }
-        guard self.computerControlEnabled() else {
-            return Self.errorResponse(
-                req,
-                code: .unavailable,
-                message: "COMPUTER_DISABLED: enable Computer Control in Settings")
-        }
-        guard let nodeHostWorker, await nodeHostWorker.supports(req.command) else {
-            return Self.errorResponse(
-                req,
-                code: .unavailable,
-                message: "UNAVAILABLE: selected CUA provider is not ready")
-        }
-        return await nodeHostWorker.invoke(req)
     }
 
     private func handleCodexThreadInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
@@ -321,34 +338,56 @@ actor MacNodeRuntime {
                 code: .unavailable,
                 message: "UNAVAILABLE: Codex session catalog is disabled")
         }
-        let payload: String = if req.command == MacNodeCodexThreadCatalogContract.listCommand {
-            if let request = codexThreadListRequest {
-                try await request(req.paramsJSON)
-            } else {
-                try await self.codexThreadCatalogClient.list(paramsJSON: req.paramsJSON)
-            }
-        } else {
-            if let request = codexThreadTurnsRequest {
-                try await request(req.paramsJSON)
-            } else {
-                try await self.codexThreadCatalogClient.turns(paramsJSON: req.paramsJSON)
-            }
-        }
+        let request = req.command == MacNodeCodexThreadCatalogContract.listCommand
+            ? self.codexThreadListRequest
+            : self.codexThreadTurnsRequest
+        let payload = try await request(req.paramsJSON)
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 
-    private func handleClaudeSessionInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        guard self.claudeSessionCatalogEnabled() else {
+    private func handleClaudeSessionInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
+        guard let nodeHostWorker, await nodeHostWorker.supports(req.command) else {
             return Self.errorResponse(
                 req,
                 code: .unavailable,
                 message: "UNAVAILABLE: Claude session catalog is disabled")
         }
-        let request = req.command == MacNodeClaudeSessionCatalogContract.listCommand
-            ? self.claudeSessionListRequest
-            : self.claudeSessionReadRequest
-        let payload = try await request(req.paramsJSON)
-        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+        let response = await nodeHostWorker.invoke(req)
+        guard !response.ok, let error = response.error, error.code == .invalidRequest else {
+            return response
+        }
+        // Plugin failures share one wire code; preserve the native catalog's errors without leaking file paths.
+        let message = error.message.hasPrefix("Error: ") ? String(error.message.dropFirst(7)) : error.message
+        let parameterError: String? = if message == "Claude session parameters must be valid JSON" ||
+            message == "Claude session catalog parameters must be an object" ||
+            message == "Claude session read parameters must be an object"
+        {
+            "parameters must be valid JSON objects"
+        } else if message.hasPrefix("unknown Claude session ") {
+            message
+                .replacingOccurrences(of: "catalog parameter:", with: "parameter:")
+                .replacingOccurrences(of: "read parameter:", with: "parameter:")
+        } else if message.hasPrefix("limit must be an integer from 1 to ") ||
+            [
+                "threadId is invalid",
+                "catalog cursor is invalid",
+                "transcript cursor is invalid",
+                "Claude session is unavailable",
+            ].contains(message)
+        {
+            message
+        } else {
+            nil
+        }
+        if let parameterError {
+            return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: \(parameterError)")
+        }
+        if message == "Claude transcript page exceeded the safe scan limit" {
+            return Self.errorResponse(
+                req, code: .unavailable, message: "UNAVAILABLE: Claude session item exceeded the size limit")
+        }
+        return Self.errorResponse(
+            req, code: .unavailable, message: "UNAVAILABLE: Claude session catalog is unavailable")
     }
 }
 
@@ -357,20 +396,26 @@ actor MacNodeRuntime {
 extension MacNodeRuntime {
     private func handleCanvasInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         switch req.command {
-        case OpenClawCanvasCommand.present.rawValue:
-            let params = (try? Self.decodeParams(OpenClawCanvasPresentParams.self, from: req.paramsJSON)) ??
-                OpenClawCanvasPresentParams()
-            let urlTrimmed = params.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let url = urlTrimmed.isEmpty ? nil : urlTrimmed
-            let effectiveURL = try await resolveCanvasTarget(url)
-            let placement = params.placement.map {
-                CanvasPlacement(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
+        case OpenClawCanvasCommand.present.rawValue, OpenClawCanvasCommand.navigate.rawValue:
+            let target: String?
+            let placement: CanvasPlacement?
+            if req.command == OpenClawCanvasCommand.present.rawValue {
+                let params = (try? Self.decodeParams(OpenClawCanvasPresentParams.self, from: req.paramsJSON)) ??
+                    OpenClawCanvasPresentParams()
+                target = params.url
+                placement = params.placement.map {
+                    CanvasPlacement(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
+                }
+            } else {
+                target = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON).url
+                placement = nil
             }
+            let effectiveURL = try await resolveCanvasTarget(target)
             let sessionKey = self.mainSessionKey
             try await MainActor.run {
-                _ = try CanvasManager.shared.showDetailed(
+                _ = try CanvasManager.shared.show(
                     sessionKey: sessionKey,
-                    target: effectiveURL,
+                    path: effectiveURL,
                     placement: placement)
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
@@ -378,16 +423,6 @@ extension MacNodeRuntime {
             let sessionKey = self.mainSessionKey
             await MainActor.run {
                 CanvasManager.shared.hide(sessionKey: sessionKey)
-            }
-            return BridgeInvokeResponse(id: req.id, ok: true)
-        case OpenClawCanvasCommand.navigate.rawValue:
-            let params = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON)
-            let effectiveURL = try await resolveCanvasTarget(params.url)
-            let sessionKey = self.mainSessionKey
-            try await MainActor.run {
-                _ = try CanvasManager.shared.show(
-                    sessionKey: sessionKey,
-                    path: effectiveURL)
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
         default:
@@ -421,13 +456,17 @@ private enum MacNodeCanvasTargetError: LocalizedError {
 
 extension MacNodeRuntime {
     private func handleCameraInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        guard Self.cameraEnabled() else {
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "CAMERA_DISABLED: enable Camera in Settings"))
+        let services = await self.mainActorServices()
+        let includeAudio = req.command == OpenClawCameraCommand.clip.rawValue &&
+            ((try? Self.decodeParams(OpenClawCameraClipParams.self, from: req.paramsJSON).includeAudio) ?? true)
+        let cameraEnabled = Self.cameraEnabled()
+        // Enumeration needs only OpenClaw consent; other camera commands also need OS authorization.
+        let capabilities: [Capability] = req.command == OpenClawCameraCommand.list.rawValue
+            ? [.cameraEnabled] : includeAudio ? [.cameraEnabled, .camera, .microphone] : [.cameraEnabled, .camera]
+        if let error = await services.missingPermissions(
+            capabilities, disabled: cameraEnabled ? [] : [.cameraEnabled])
+        {
+            throw error
         }
         switch req.command {
         case OpenClawCameraCommand.snap.rawValue:
@@ -435,7 +474,7 @@ extension MacNodeRuntime {
                 OpenClawCameraSnapParams()
             let delayMs = min(10000, max(0, params.delayMs ?? 2000))
             let res = try await cameraCapture.snap(
-                facing: CameraFacing(rawValue: params.facing?.rawValue ?? "") ?? .front,
+                facing: params.facing ?? .front,
                 maxWidth: params.maxWidth,
                 quality: params.quality,
                 deviceId: params.deviceId,
@@ -456,13 +495,14 @@ extension MacNodeRuntime {
             let params = (try? Self.decodeParams(OpenClawCameraClipParams.self, from: req.paramsJSON)) ??
                 OpenClawCameraClipParams()
             let res = try await cameraCapture.clip(
-                facing: CameraFacing(rawValue: params.facing?.rawValue ?? "") ?? .front,
+                facing: params.facing ?? .front,
                 durationMs: params.durationMs,
                 includeAudio: params.includeAudio ?? true,
-                deviceId: params.deviceId,
-                outPath: nil)
+                deviceId: params.deviceId)
             defer { try? FileManager().removeItem(atPath: res.path) }
-            let data = try Data(contentsOf: URL(fileURLWithPath: res.path))
+            guard let data = try Self.readInlineMedia(atPath: res.path) else {
+                return Self.recordingPayloadTooLarge(req, hint: "reduce durationMs")
+            }
             struct ClipPayload: Encodable {
                 var format: String
                 var base64: String
@@ -474,6 +514,9 @@ extension MacNodeRuntime {
                 base64: data.base64EncodedString(),
                 durationMs: res.durationMs,
                 hasAudio: res.hasAudio))
+            guard try Self.fitsGatewayFrame(payload, for: req) else {
+                return Self.recordingPayloadTooLarge(req, hint: "reduce durationMs")
+            }
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         case OpenClawCameraCommand.list.rawValue:
             let devices = await cameraCapture.listDevices()
@@ -504,30 +547,22 @@ extension MacNodeRuntime {
 
     private func handleLocationInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         let mode = Self.locationMode()
-        guard mode != .off else {
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "LOCATION_DISABLED: enable Location in Settings"))
-        }
         let params = (try? Self.decodeParams(OpenClawLocationGetParams.self, from: req.paramsJSON)) ??
             OpenClawLocationGetParams()
         let desired = params.desiredAccuracy ??
             (Self.locationPreciseEnabled() ? .precise : .balanced)
         let services = await mainActorServices()
+        if let error = await services.missingPermissions([.location], disabled: mode == .off ? [.location] : []) {
+            throw error
+        }
         let status = await services.locationAuthorizationStatus()
         let hasPermission = PermissionManager.isLocationAuthorized(
             status: status,
             requireAlways: mode == .always)
         if !hasPermission {
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "LOCATION_PERMISSION_REQUIRED: grant Location permission"))
+            throw PermissionManager.missingPermission([
+                (.location, status == .notDetermined ? .notDetermined : .denied),
+            ])!
         }
         do {
             let location = try await services.currentLocation(
@@ -548,39 +583,30 @@ extension MacNodeRuntime {
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         } catch MacNodeLocationService.Error.timeout {
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "LOCATION_TIMEOUT: no fix in time"))
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "LOCATION_TIMEOUT: no fix in time")
         } catch {
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "LOCATION_UNAVAILABLE: \(error.localizedDescription)"))
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "LOCATION_UNAVAILABLE: \(error.localizedDescription)")
         }
     }
 
-    private func handleComputerActInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+    private func handleComputerActInvoke(
+        _ req: BridgeInvokeRequest,
+        desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws -> BridgeInvokeResponse
+    {
         guard self.computerControlEnabled() else {
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "COMPUTER_DISABLED: enable Computer Control in Settings"))
+            throw PermissionManager.missingPermission([(.computerControl, .disabledInOpenClaw)])!
         }
         let params: OpenClawComputerActParams
         do {
             params = try Self.decodeParams(OpenClawComputerActParams.self, from: req.paramsJSON)
         } catch {
-            return Self.errorResponse(
-                req,
-                code: .invalidRequest,
-                message: "INVALID_REQUEST: invalid computer.act params")
+            return Self.invalidDesktopParamsResponse(req)
         }
         let releaseGenerationAtStart = self.computerInputReleaseGeneration
         let services = await mainActorServices()
@@ -594,52 +620,41 @@ extension MacNodeRuntime {
         do {
             let result = try await services.performComputerAct(
                 params,
-                lifecycleGeneration: releaseGenerationAtStart)
+                lifecycleGeneration: releaseGenerationAtStart,
+                desktopPermit: desktopPermit)
             let payload = try Self.encodePayload(result)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         } catch let error as ComputerActionService.ComputerActionError {
-            switch error {
+            let (code, message): (OpenClawNodeErrorCode, String) = switch error {
             case .accessibilityNotTrusted:
-                return Self.errorResponse(
-                    req,
-                    code: .unavailable,
-                    message: "ACCESSIBILITY_REQUIRED: grant Accessibility permission to OpenClaw")
+                throw PermissionManager.missingPermission([(.accessibility, .notDetermined)])!
             case .accessibilityGrantMayBeStale:
-                return Self.errorResponse(
-                    req,
-                    code: .unavailable,
-                    message: "ACCESSIBILITY_REQUIRED: "
-                        + ComputerControlPermissionSnapshot.Diagnostic.staleAccessibilityRemediation)
+                throw PermissionManager.missingPermission([(.accessibility, .staleGrant)])!
             case .postEventAccessDenied:
-                return Self.errorResponse(
-                    req,
-                    code: .unavailable,
-                    message: "POST_EVENT_REQUIRED: macOS denied Event Posting access; re-grant OpenClaw "
-                        + "under System Settings → Privacy & Security → Accessibility")
+                throw PermissionManager.missingPermission([(.eventPosting, .denied)])!
             case .noDisplays, .invalidScreenIndex, .missingDisplayFrameId, .displayFrameChanged,
                  .missingCoordinate, .coordinateOutOfBounds, .invalidReferenceWidth, .missingKeys,
                  .emptyText, .invalidScroll, .invalidModifier, .buttonAlreadyHeld, .buttonNotHeld,
                  .invalidRequest, .staleObservation, .unsupportedAction:
-                return Self.errorResponse(
-                    req,
-                    code: .invalidRequest,
-                    message: error.localizedDescription.hasPrefix("COMPUTER_")
+                (
+                    .invalidRequest,
+                    error.localizedDescription.hasPrefix("COMPUTER_")
                         ? error.localizedDescription
                         : "INVALID_REQUEST: \(error.localizedDescription)")
             case .eventCreationFailed, .lifecycleChanged, .refused:
-                return Self.errorResponse(
-                    req,
-                    code: .unavailable,
-                    message: error.localizedDescription.hasPrefix("COMPUTER_")
+                (
+                    .unavailable,
+                    error.localizedDescription.hasPrefix("COMPUTER_")
                         ? error.localizedDescription
                         : "UNAVAILABLE: \(error.localizedDescription)")
             }
+            return Self.errorResponse(req, code: code, message: message)
         }
     }
 
     private func handleScreenRecordInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let params = (try? Self.decodeParams(MacNodeScreenRecordParams.self, from: req.paramsJSON)) ??
-            MacNodeScreenRecordParams()
+        let params = (try? Self.decodeParams(OpenClawScreenRecordParams.self, from: req.paramsJSON)) ??
+            OpenClawScreenRecordParams()
         if let format = params.format?.lowercased(), !format.isEmpty, format != "mp4" {
             return Self.errorResponse(
                 req,
@@ -647,14 +662,16 @@ extension MacNodeRuntime {
                 message: "INVALID_REQUEST: screen format must be mp4")
         }
         let services = await mainActorServices()
+        if let error = await services.missingPermissions([.screenRecording], disabled: []) { throw error }
         let res = try await services.recordScreen(
             screenIndex: params.screenIndex,
             durationMs: params.durationMs,
             fps: params.fps,
-            includeAudio: params.includeAudio,
-            outPath: nil)
+            includeAudio: params.includeAudio)
         defer { try? FileManager().removeItem(atPath: res.path) }
-        let data = try Data(contentsOf: URL(fileURLWithPath: res.path))
+        guard let data = try Self.readInlineMedia(atPath: res.path) else {
+            return Self.recordingPayloadTooLarge(req, hint: "reduce durationMs or fps")
+        }
         struct ScreenPayload: Encodable {
             var format: String
             var base64: String
@@ -670,19 +687,22 @@ extension MacNodeRuntime {
             fps: params.fps,
             screenIndex: params.screenIndex,
             hasAudio: res.hasAudio))
+        guard try Self.fitsGatewayFrame(payload, for: req) else {
+            return Self.recordingPayloadTooLarge(req, hint: "reduce durationMs or fps")
+        }
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 
-    private func handleScreenSnapshotInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+    private func handleScreenSnapshotInvoke(
+        _ req: BridgeInvokeRequest,
+        desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws -> BridgeInvokeResponse
+    {
         let params: MacNodeScreenSnapshotParams
         if let paramsJSON = req.paramsJSON {
             do {
                 params = try Self.decodeParams(MacNodeScreenSnapshotParams.self, from: paramsJSON)
             } catch {
-                return Self.errorResponse(
-                    req,
-                    code: .invalidRequest,
-                    message: "INVALID_REQUEST: invalid screen snapshot params")
+                return Self.invalidDesktopParamsResponse(req)
             }
         } else {
             params = MacNodeScreenSnapshotParams()
@@ -695,32 +715,27 @@ extension MacNodeRuntime {
                 screenIndex: params.screenIndex,
                 maxWidth: params.maxWidth,
                 quality: params.quality,
-                format: params.format)
-        } catch let error as ScreenSnapshotService.ScreenSnapshotError {
-            switch error {
-            case .noDisplays:
-                return Self.errorResponse(
-                    req,
-                    code: .invalidRequest,
-                    message: "INVALID_REQUEST: no displays available for screen snapshot")
-            case let .invalidScreenIndex(idx):
-                return Self.errorResponse(
-                    req,
-                    code: .invalidRequest,
-                    message: "INVALID_REQUEST: invalid screen index \(idx)")
-            case .captureFailed, .encodeFailed:
-                return Self.errorResponse(
-                    req,
-                    code: .unavailable,
-                    message: "UNAVAILABLE: screen snapshot failed")
-            }
+                format: params.format,
+                desktopPermit: desktopPermit)
+        } catch let error as OpenClawNodeError {
+            throw error
+        } catch ScreenSnapshotService.ScreenSnapshotError.noDisplays {
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "INVALID_REQUEST: no displays available for screen snapshot")
+        } catch let ScreenSnapshotService.ScreenSnapshotError.invalidScreenIndex(idx) {
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "INVALID_REQUEST: invalid screen index \(idx)")
         } catch {
             return Self.errorResponse(
                 req,
                 code: .unavailable,
                 message: "UNAVAILABLE: screen snapshot failed")
         }
-        if res.data.count > Self.maxScreenSnapshotRawBytesBeforeBase64 {
+        if res.data.count > Self.maxInlineMediaRawBytes {
             return Self.screenSnapshotPayloadTooLarge(req)
         }
         struct ScreenSnapshotPayload: Encodable {
@@ -740,11 +755,7 @@ extension MacNodeRuntime {
             height: res.height,
             screenIndex: params.screenIndex,
             capturedAtMs: capturedAtMs))
-        if try Self.projectedOuterFrameBytes(
-            forPayloadJSON: payload,
-            requestId: req.id,
-            nodeId: req.nodeId) > Self.maxGatewayPayloadBytes
-        {
+        guard try Self.fitsGatewayFrame(payload, for: req) else {
             return Self.screenSnapshotPayloadTooLarge(req)
         }
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
@@ -766,11 +777,9 @@ extension MacNodeRuntime {
             task = initializationTask
         }
         let services = await task.value
-        if cachedMainActorServices == nil {
-            cachedMainActorServices = services
-            self.mainActorServicesInitializationTask = nil
-        }
-        return cachedMainActorServices ?? services
+        self.cachedMainActorServices = services
+        self.mainActorServicesInitializationTask = nil
+        return services
     }
 
     /// Releases any synthetic input the computer.act service is still holding
@@ -800,22 +809,25 @@ extension MacNodeRuntime {
             return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: empty notification")
         }
 
-        let priority = params.priority.flatMap { NotificationPriority(rawValue: $0.rawValue) }
-        let delivery = params.delivery.flatMap { NotificationDelivery(rawValue: $0.rawValue) } ?? .system
+        let delivery = params.delivery ?? .system
         let manager = NotificationManager()
 
         if delivery != .overlay {
-            let ok = await manager.send(
+            let services = await self.mainActorServices()
+            let missing = await services.missingPermissions([.notifications], disabled: [])
+            if let missing, delivery == .system { throw missing }
+            if missing == nil, await manager.send(
                 title: title,
                 body: body,
                 sound: params.sound,
-                priority: priority)
-            if ok {
+                priority: params.priority,
+                requestPermission: false)
+            {
                 return BridgeInvokeResponse(id: req.id, ok: true)
             }
             try Task.checkCancellation()
             if delivery == .system {
-                return Self.errorResponse(req, code: .unavailable, message: "NOT_AUTHORIZED: notifications")
+                throw PermissionManager.missingPermission([(.notifications, .denied)])!
             }
         }
         try await MainActor.run {
@@ -829,50 +841,41 @@ extension MacNodeRuntime {
 // MARK: - Shared command support
 
 extension MacNodeRuntime {
+    private static func invalidDesktopParamsResponse(_ req: BridgeInvokeRequest) -> BridgeInvokeResponse {
+        if req.command == OpenClawScreenCommand.snapshot.rawValue {
+            return self.errorResponse(
+                req, code: .invalidRequest, message: "INVALID_REQUEST: invalid screen snapshot params")
+        }
+        return self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: invalid computer.act params")
+    }
+
     private static func decodeParams<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {
-        guard let json, let data = json.data(using: .utf8) else {
+        guard let json else {
             throw NSError(domain: "Gateway", code: 20, userInfo: [
                 NSLocalizedDescriptionKey: "INVALID_REQUEST: paramsJSON required",
             ])
         }
-        return try JSONDecoder().decode(type, from: data)
+        return try JSONDecoder().decode(type, from: Data(json.utf8))
     }
 
     private static func encodePayload(_ obj: some Encodable) throws -> String {
-        let data = try JSONEncoder().encode(obj)
-        guard let json = String(bytes: data, encoding: .utf8) else {
-            throw NSError(domain: "Node", code: 21, userInfo: [
-                NSLocalizedDescriptionKey: "Failed to encode payload as UTF-8",
-            ])
-        }
-        return json
+        try String(bytes: JSONEncoder().encode(obj), encoding: .utf8)!
     }
 
-    static func projectedOuterFrameBytes(
-        forPayloadJSON payloadJSON: String,
-        requestId: String,
-        nodeId: String?) throws -> Int
-    {
-        struct InvokeResultFrame: Encodable {
-            let type = "req"
-            let id = "00000000-0000-0000-0000-000000000000"
-            let method = "node.invoke.result"
-            let params: Params
+    /// Stats before reading so oversized recordings never allocate file data plus base64.
+    private static func readInlineMedia(atPath path: String) throws -> Data? {
+        let size = try FileManager().attributesOfItem(atPath: path)[.size] as? Int ?? 0
+        return size > self.maxInlineMediaRawBytes ? nil : try Data(contentsOf: URL(fileURLWithPath: path))
+    }
 
-            struct Params: Encodable {
-                let id: String
-                let nodeId: String
-                let ok: Bool
-                let payloadJSON: String
-            }
-        }
+    /// The Gateway closes the node socket on frames above its limit, losing the result.
+    private static func fitsGatewayFrame(_ payloadJSON: String, for req: BridgeInvokeRequest) throws -> Bool {
+        try self.projectedOuterFrameBytes(forPayloadJSON: payloadJSON, requestId: req.id, nodeId: req.nodeId) <=
+            self.maxGatewayPayloadBytes
+    }
 
-        let frame = InvokeResultFrame(params: InvokeResultFrame.Params(
-            id: requestId,
-            nodeId: nodeId ?? "",
-            ok: true,
-            payloadJSON: payloadJSON))
-        return try JSONEncoder().encode(frame).count
+    private static func recordingPayloadTooLarge(_ req: BridgeInvokeRequest, hint: String) -> BridgeInvokeResponse {
+        self.errorResponse(req, code: .unavailable, message: "UNAVAILABLE: \(req.command) payload too large; \(hint)")
     }
 
     private static func screenSnapshotPayloadTooLarge(_ req: BridgeInvokeRequest) -> BridgeInvokeResponse {
@@ -888,10 +891,6 @@ extension MacNodeRuntime {
 
     private nonisolated static func cameraEnabled() -> Bool {
         AppDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false
-    }
-
-    nonisolated static func computerControlEnabledDefault() -> Bool {
-        isComputerControlEnabled()
     }
 
     private nonisolated static func locationMode() -> OpenClawLocationMode {

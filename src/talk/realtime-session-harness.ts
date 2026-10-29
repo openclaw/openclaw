@@ -1,3 +1,4 @@
+import { rememberBoundedKey } from "../infra/dedupe.js";
 import {
   type RealtimeVoiceAgentTalkbackQueue,
   createRealtimeVoiceAgentTalkbackQueue,
@@ -20,6 +21,7 @@ import type {
   RealtimeVoiceResponseOutcome,
   RealtimeVoiceRole,
 } from "./provider-types.js";
+import { resolveRealtimeVoiceBargeIn } from "./realtime-session-policy.js";
 import {
   extendRealtimeVoiceOutputEchoSuppression,
   getRealtimeVoiceBridgeEventHealth,
@@ -92,15 +94,9 @@ type RealtimeVoiceSessionHarnessHealth = ReturnType<typeof getRealtimeVoiceTrans
     lastInputBytes: number;
     lastOutputBytes: number;
     suppressedInputBytes: number;
-    recentTalkEvents: Array<{
-      id: string;
-      type: TalkEvent["type"];
-      sessionId: string;
-      turnId?: string;
-      seq: number;
-      timestamp: string;
-      final?: boolean;
-    }>;
+    recentTalkEvents: Array<
+      Pick<TalkEvent, "id" | "type" | "sessionId" | "turnId" | "seq" | "timestamp" | "final">
+    >;
   };
 
 export type RealtimeVoiceSessionHarness<TForcedConsultContext = unknown> = {
@@ -141,6 +137,7 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
 }): RealtimeVoiceSessionHarness<TForcedConsultContext> {
   let closed = false;
   let bridge: RealtimeVoiceBridgeSession | undefined;
+  let bridgeCapabilities: RealtimeVoiceBridgeSessionParams["capabilities"];
   let lastInputAt: string | undefined;
   let lastOutputAt: string | undefined;
   let lastSuppressedInputAt: string | undefined;
@@ -153,7 +150,6 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
   let responseOwnerId: string | undefined;
   let suppressNextUnkeyedLegacyTerminal = false;
   const settledResponseIds = new Set<string>();
-  const settledResponseIdOrder: string[] = [];
   const transcript: RealtimeVoiceTranscriptEntry[] = [];
   const bridgeEvents: RealtimeVoiceBridgeEventLogEntry[] = [];
   const outputActivity = createRealtimeVoiceOutputActivityTracker();
@@ -184,20 +180,6 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
     return turnId;
   };
 
-  const rememberSettledResponse = (responseId: string | undefined): void => {
-    if (!responseId || settledResponseIds.has(responseId)) {
-      return;
-    }
-    settledResponseIds.add(responseId);
-    settledResponseIdOrder.push(responseId);
-    if (settledResponseIdOrder.length > MAX_SETTLED_RESPONSE_IDS) {
-      const oldest = settledResponseIdOrder.shift();
-      if (oldest) {
-        settledResponseIds.delete(oldest);
-      }
-    }
-  };
-
   const claimResponseEvent = (event: RealtimeVoiceBridgeEvent): void => {
     if (event.direction === "client" && event.type === "response.create") {
       // A rejected request has no response.created event. Admit its turn now while
@@ -215,7 +197,7 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
 
   const finishResponse = (
     outcome: RealtimeVoiceResponseOutcome,
-    source: "typed" | "legacy" | "manual",
+    source: "typed" | "legacy",
   ): TalkTurnResult => {
     if (outcome.responseId && settledResponseIds.has(outcome.responseId)) {
       return { ok: false, reason: "no_active_turn" };
@@ -248,7 +230,9 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
         ? talk.cancelTurn({ turnId, payload })
         : talk.endTurn({ turnId, payload });
     if (result.ok) {
-      rememberSettledResponse(outcome.responseId);
+      if (outcome.responseId) {
+        rememberBoundedKey(settledResponseIds, outcome.responseId, MAX_SETTLED_RESPONSE_IDS);
+      }
       if (!outcome.responseId && source === "typed") {
         // Current typed providers emit the legacy bridge event in the same dispatch.
         // Suppress that unkeyed twin without treating arbitrary later events as typed.
@@ -299,9 +283,6 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
     talkback,
     transcript,
     close() {
-      if (closed) {
-        return;
-      }
       closed = true;
       talkback?.close();
       forcedConsults.clear();
@@ -309,17 +290,19 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
       responseOwnerId = undefined;
     },
     createBridge(bridgeParams) {
+      bridgeCapabilities = bridgeParams.capabilities;
       bridge = createRealtimeVoiceBridgeSession({
         ...bridgeParams,
         onResponseRequest: () => {
           ensureTurn();
           bridgeParams.onResponseRequest?.();
         },
-        onTranscript: (role, text, isFinal) => {
+        onTranscript: (...args) => {
+          const [role, text, isFinal] = args;
           if (isFinal) {
             harness.recordTranscript(role, text);
           }
-          bridgeParams.onTranscript?.(role, text, isFinal);
+          bridgeParams.onTranscript?.(...args);
         },
         onEvent: (event) => {
           claimResponseEvent(event);
@@ -383,6 +366,16 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
       };
     },
     handleBargeIn(options, fallbackFlush) {
+      if (
+        !resolveRealtimeVoiceBargeIn({
+          configuredBargeIn: true,
+          interruptResponseOnInputAudio: true,
+          capabilities: bridgeCapabilities,
+          outputAudioMode: bridge?.bridge.outputAudioMode,
+        })
+      ) {
+        return;
+      }
       suppressInputUntilMs = 0;
       const flushGeneration = outputFlushGeneration;
       bridge?.handleBargeIn(options);
@@ -421,7 +414,6 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
       if (closed) {
         return;
       }
-      const flushGeneration = outputFlushGeneration;
       // Record admitted audio before observers can clear it and its echo window.
       let audioMs = activity.audioMs;
       if (params.echoSuppression) {
@@ -444,16 +436,10 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
       });
       lastOutputAt = new Date().toISOString();
       const turnId = ensureTurn();
-      if (closed || flushGeneration !== outputFlushGeneration) {
-        return;
-      }
       talk.startOutputAudio({
         turnId,
         payload: params.talkPayloads.outputAudioStarted(),
       });
-      if (closed || flushGeneration !== outputFlushGeneration) {
-        return;
-      }
       harness.emit({
         type: "output.audio.delta",
         turnId,

@@ -1,0 +1,518 @@
+import {
+  spawnSync,
+  type SpawnOptions,
+  type SpawnSyncOptions,
+  type SpawnSyncOptionsWithStringEncoding,
+} from "node:child_process";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { runInNewContext } from "node:vm";
+import { expectDefined } from "@openclaw/normalization-core";
+import { expect } from "vitest";
+import { parse } from "yaml";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
+
+export const CHECKOUT_V6 = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
+export const CACHE_V5 = "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9";
+export const CACHE_SAVE_V5 = "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9";
+export const SETUP_GO_V6 = "actions/setup-go@90ad2b35f69faf97585ad74d28fa006d2739b7af";
+export const UPLOAD_ARTIFACT_V7 =
+  "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9";
+export const DOWNLOAD_ARTIFACT_V8 =
+  "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333";
+const SETUP_ANDROID_TOOLCHAIN_ACTION = ".github/actions/setup-android-toolchain/action.yml";
+export const MATURITY_SCORECARD_WORKFLOW = ".github/workflows/maturity-scorecard.yml";
+export const AMBIGUOUS_MAIN_PUSH_DIAGNOSTIC =
+  "::error title=ambiguous main push::github.event.before is zero; refusing to infer a diff base for a created or recreated main branch.";
+export const testNodeExecPath = resolveTestNodeExecPath();
+export const TSX_IMPORT = import.meta.resolve("tsx");
+const defaultContext = {
+  eventName: "pull_request" as const,
+  repository: "openclaw/openclaw",
+  runAttempt: 1,
+};
+
+export function expectIncludes(actual: unknown, values: readonly unknown[], message?: string) {
+  for (const value of values) {
+    expect(actual, message).toContain(value);
+  }
+}
+
+export function expectExcludes(actual: unknown, values: readonly unknown[], message?: string) {
+  for (const value of values) {
+    expect(actual, message).not.toContain(value);
+  }
+}
+
+export function evaluateWorkflow(
+  expression: unknown,
+  context: Partial<Parameters<typeof evaluateWorkflowExpression>[1]> = {},
+) {
+  return evaluateWorkflowExpression(expression, {
+    ...defaultContext,
+    ...context,
+  });
+}
+
+export type WorkflowStep = {
+  "continue-on-error"?: boolean;
+  "timeout-minutes"?: number | string;
+  env?: Record<string, unknown>;
+  id?: string;
+  if?: string;
+  name?: string;
+  run?: string;
+  uses?: string;
+  with?: Record<string, unknown>;
+  "working-directory"?: string;
+};
+
+export const readCiWorkflow = () => readWorkflow(".github/workflows/ci.yml");
+
+export function requiredWorkflowStep<T extends readonly { name?: string }[]>(
+  steps: T,
+  name: string,
+): T[number];
+export function requiredWorkflowStep(steps: readonly { name?: string }[], name: string) {
+  return expectDefined(
+    steps.find((step) => step.name === name),
+    name,
+  );
+}
+
+type Strings<K extends string> = Partial<Record<K, string>>;
+type Flags<K extends string> = Partial<Record<K, boolean>>;
+type WorkflowContext = Strings<"action" | "actor" | "authorAssociation" | "maintainerCommands"> &
+  Strings<"dispatchId" | "headRepository" | "headSha" | "ref" | "sha"> &
+  Strings<"preflightResult" | "failureReportResult" | "releaseScope"> &
+  Strings<"releaseRunnerGroup" | "releasePublishRunId" | "releasePriorityRun" | "runnerGroup"> &
+  Strings<"runnerTemp" | "ciOnPush" | "targetContextRef" | "targetRef"> &
+  Strings<"testRuntimePolicy" | "workflow" | "workflowSha" | "workflowToken"> &
+  Strings<"windowsCiReplay" | "workspace"> &
+  Flags<"cancelled" | "draft" | "failed" | "frozenTarget" | "hostedRunnerProfileContract"> &
+  Flags<"releaseGate" | "runCheck" | "runWindowsCi" | "includeAndroid"> &
+  Flags<"skipDefenderExclusions" | "useGithubHostedRunners"> & {
+    githubEvent?: Record<string, unknown>;
+    eventName:
+      | "pull_request"
+      | "pull_request_target"
+      | "pull_request_review"
+      | "pull_request_review_comment"
+      | "issue_comment"
+      | "issues"
+      | "push"
+      | "workflow_dispatch"
+      | "workflow_run"
+      | "repository_dispatch"
+      | "schedule";
+    env?: Record<string, string>;
+    secrets?: Record<string, string>;
+    fileHashes?: Record<string, string>;
+    matrix?: Record<string, unknown>;
+    preflightOutputs?: Record<string, string>;
+    additionalNeeds?: Record<
+      string,
+      {
+        outputs: Record<string, string>;
+        result?: "success" | "failure" | "cancelled" | "skipped";
+      }
+    >;
+    jobResults?: Record<string, string>;
+    failureReportOutputs?: Record<string, string>;
+    pullRequestNumber?: number;
+    resolveTargetOutputs?: Record<string, string>;
+    validationTier?: "full" | "main";
+    repository: string;
+    runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson";
+    requestedRunnerBackend?: "default" | "hybrid" | "runson";
+    ciShape?: "default" | "main";
+    inputs?: Record<string, unknown>;
+    runnerEnvironment?: "" | "github-hosted" | "self-hosted";
+    runnerProfile?: "blacksmith" | "github" | "hybrid";
+    runAttempt: number;
+    runId?: number;
+    runNumber?: number;
+    steps?: Record<
+      string,
+      { outputs: Record<string, string>; outcome?: "success" | "failure" | "cancelled" | "skipped" }
+    >;
+  };
+
+export function evaluateWorkflowExpression(expression: unknown, context: WorkflowContext) {
+  if (typeof expression !== "string") {
+    throw new TypeError("workflow expression must be a string");
+  }
+  const match = expression.match(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/u);
+  if (!match) {
+    throw new Error(`invalid workflow expression: ${expression}`);
+  }
+  const source = match[1];
+  if (source === undefined) {
+    throw new Error(`workflow expression has no body: ${expression}`);
+  }
+  // Actions permits dashes in property names; preserve quoted literals while
+  // translating those accesses for the JavaScript fixture evaluator.
+  const evaluableSource = source.replace(
+    /'(?:[^']|'')*'|\.([A-Za-z_][\w-]*)/gu,
+    (token: string, property: string | undefined) =>
+      property?.includes("-") ? `[${JSON.stringify(property)}]` : token,
+  );
+  return runInNewContext(evaluableSource, {
+    always: () => true,
+    success: () => !context.failed && !context.cancelled,
+    failure: () => context.failed ?? false,
+    cancelled: () => context.cancelled ?? false,
+    // GitHub expression builtins the runner-routing clauses use.
+    contains: (haystack: unknown, needle: unknown) =>
+      Array.isArray(haystack)
+        ? haystack.includes(needle)
+        : String(haystack).includes(String(needle)),
+    endsWith: (value: unknown, suffix: unknown) =>
+      String(value).toLowerCase().endsWith(String(suffix).toLowerCase()),
+    fromJSON: (value: string) => JSON.parse(value) as unknown,
+    fromJson: (value: string) => JSON.parse(value) as unknown,
+    format: (value: string, ...args: unknown[]) =>
+      value.replace(/\{\{|\}\}|\{(\d+)\}/gu, (token, index: string | undefined) =>
+        index === undefined ? token[0]! : String(args[Number(index)]),
+      ),
+    hashFiles: (file: string) => context.fileHashes?.[file] ?? "",
+    startsWith: (value: unknown, prefix: unknown) => String(value).startsWith(String(prefix)),
+    toJson: (value: unknown) => JSON.stringify(value),
+    toJSON: (value: unknown) => JSON.stringify(value),
+    github: {
+      actor: context.actor ?? "",
+      event_name: context.eventName,
+      repository: context.repository,
+      repository_owner: context.repository.split("/")[0],
+      server_url: "https://github.com",
+      ref: context.ref ?? "refs/heads/main",
+      run_attempt: context.runAttempt,
+      run_id: context.runId,
+      run_number: context.runNumber,
+      sha: context.sha,
+      workflow: context.workflow,
+      workflow_sha: context.workflowSha,
+      workspace: context.workspace,
+      token: context.workflowToken,
+      event:
+        context.githubEvent ??
+        (context.headRepository || context.eventName === "pull_request"
+          ? {
+              action: context.action,
+              pull_request: {
+                author_association: context.authorAssociation ?? "CONTRIBUTOR",
+                draft: context.draft ?? false,
+                number: context.pullRequestNumber,
+                head: {
+                  sha: context.headSha,
+                  repo: { full_name: context.headRepository ?? context.repository },
+                },
+              },
+            }
+          : {}),
+    },
+    inputs: {
+      dispatch_id: context.dispatchId ?? "",
+      runner_group: context.runnerGroup ?? "",
+      release_publish_run_id: context.releasePublishRunId ?? "",
+      runner_backend: context.requestedRunnerBackend ?? "default",
+      ci_shape: context.ciShape ?? "default",
+      include_android: context.includeAndroid ?? false,
+      release_gate: context.releaseGate ?? false,
+      release_scope: context.releaseScope ?? "full",
+      validation_tier: context.validationTier ?? "full",
+      target_context_ref: context.targetContextRef ?? "",
+      target_ref: context.targetRef ?? "",
+      test_runtime_policy: context.testRuntimePolicy ?? "",
+      use_github_hosted_runners: context.useGithubHostedRunners ?? false,
+      run_windows_ci: context.runWindowsCi ?? false,
+      skip_defender_exclusions: context.skipDefenderExclusions ?? false,
+      windows_ci_replay: context.windowsCiReplay ?? "",
+      ...context.inputs,
+    },
+    env: context.env ?? {},
+    secrets: context.secrets ?? {},
+    matrix: context.matrix ?? {},
+    runner: { environment: context.runnerEnvironment ?? "", temp: context.runnerTemp ?? "" },
+    steps: {
+      runner_profile: { outputs: { node_runner_backend: "" } },
+      qualification_dispatch: { outputs: { eligible: "false" } },
+      ...context.steps,
+    },
+    needs: {
+      "build-artifacts": {
+        result: context.jobResults?.["build-artifacts"] ?? "success",
+        outputs: {},
+      },
+      ...Object.fromEntries(
+        Object.entries(context.additionalNeeds ?? {}).map(([name, need]) => [
+          name,
+          {
+            ...need,
+            // Actions resolves missing output properties to an empty string.
+            outputs: new Proxy(need.outputs, {
+              get: (outputs, key: string) => outputs[key] ?? "",
+            }),
+          },
+        ]),
+      ),
+      resolve_target: { outputs: context.resolveTargetOutputs ?? {} },
+      "checks-baseline-ratchets": {
+        result: context.jobResults?.["checks-baseline-ratchets"] ?? "success",
+      },
+      preflight: {
+        result: context.preflightResult ?? context.jobResults?.preflight ?? "success",
+        outputs: {
+          frozen_target: String(context.frozenTarget ?? false),
+          hosted_runner_profile_contract: String(context.hostedRunnerProfileContract ?? true),
+          run_check: String(context.runCheck ?? true),
+          runner_profile: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",
+          // Preflight defaults the Node planner backend to the logical profile.
+          node_runner_backend: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",
+          ...context.preflightOutputs,
+        },
+      },
+      "pr-failure-report": {
+        result: context.failureReportResult ?? "success",
+        outputs: {
+          failure_job_id: "",
+          summary_json: "",
+          failures_json: "",
+          ...context.failureReportOutputs,
+        },
+      },
+    },
+    vars: {
+      MAINTAINER_COMMAND_REACTIONS: context.maintainerCommands ?? "",
+      OPENCLAW_CI_RUNNER_BACKEND: context.runnerBackend ?? "",
+      OPENCLAW_RELEASE_RUNNER_GROUP: context.releaseRunnerGroup ?? "",
+      OPENCLAW_CI_ON_PUSH: context.ciOnPush ?? "",
+      OPENCLAW_RELEASE_PRIORITY_RUN: context.releasePriorityRun ?? "",
+    },
+  });
+}
+
+export function evaluateWorkflowRunner(
+  selector: unknown,
+  context: Partial<Parameters<typeof evaluateWorkflowExpression>[1]> = {},
+) {
+  return typeof selector === "string" && selector.startsWith("${{")
+    ? evaluateWorkflowExpression(selector, {
+        ...defaultContext,
+        eventName: "workflow_dispatch",
+        ...context,
+      })
+    : selector;
+}
+
+export function evaluateWorkflowCondition(
+  condition: string,
+  context: Parameters<typeof evaluateWorkflowExpression>[1],
+) {
+  return evaluateWorkflowExpression(
+    condition.trim().startsWith("${{") ? condition : `\${{ ${condition} }}`,
+    context,
+  );
+}
+
+export const quoteShell = (value: string): string => `'${value.replaceAll("'", `'"'"'`)}'`;
+
+const WORKFLOW_COMMAND_TIMEOUT_MS = 30_000;
+
+export function runWorkflowCommand(
+  command: string,
+  args: string[],
+  options: Omit<SpawnSyncOptions, "encoding" | "killSignal"> = {},
+) {
+  const timeout = options.timeout ?? WORKFLOW_COMMAND_TIMEOUT_MS;
+  // Node shares detached handling between spawn and spawnSync; its types expose it on spawn only.
+  const childOptions = {
+    ...options,
+    encoding: "utf8",
+    timeout,
+    detached: process.platform !== "win32",
+    // Synchronous fixture children must terminate even if they ignore SIGTERM.
+    killSignal: "SIGKILL",
+  } satisfies SpawnSyncOptionsWithStringEncoding & Pick<SpawnOptions, "detached">;
+  const result = spawnSync(command, args, childOptions);
+  const error: NodeJS.ErrnoException | undefined = result.error;
+  if (error) {
+    if (process.platform !== "win32" && result.pid > 0) {
+      try {
+        // Killing a timed-out shell alone leaves its stalled descendants running.
+        process.kill(-result.pid, "SIGKILL");
+      } catch {
+        // The group is already gone when the command had no surviving children.
+      }
+    }
+    const reason = error.code === "ETIMEDOUT" ? `timed out after ${timeout} ms` : error.message;
+    throw new Error(
+      `Workflow fixture command ${reason}: ${[command, ...args].map(quoteShell).join(" ")}\n${result.stdout ?? ""}${result.stderr ?? ""}`,
+      { cause: error },
+    );
+  }
+  return result;
+}
+
+let linuxWorkflowBash: string | undefined;
+
+export function runWorkflowShellScript(
+  script: string,
+  options: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    linuxWorkflow?: boolean;
+    tempDir?: string;
+    timeout?: number;
+  },
+) {
+  const { linuxWorkflow, tempDir, ...spawnOptions } = options;
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-workflow-shell-"));
+  const childTempDir = tempDir ?? root;
+  try {
+    let moduleIndex = 0;
+    const rewritten = script
+      .replace(
+        /node (?:(--import tsx |"\$\{manifest_node_args\[@\]\}" ))?--input-type=module <<'([A-Z][A-Z0-9_]*)'\n([\s\S]*?)\n\2(?=\n|$)/gu,
+        (_match, nodeOptions: string | undefined, _marker: string, body: string) => {
+          // Keep scratch outside the checkout's compiler namespace. File-backed stdin
+          // avoids Bash heredoc deadlocks and preserves the workflow's cwd-based imports.
+          const modulePath = path.join(root, `module-${moduleIndex}.mjs`);
+          moduleIndex += 1;
+          writeFileSync(modulePath, `${body}\n`, "utf8");
+          const loader =
+            nodeOptions === "--import tsx "
+              ? `--import ${quoteShell(TSX_IMPORT)} `
+              : (nodeOptions ?? "");
+          return `${quoteShell(testNodeExecPath)} ${loader}--input-type=module < ${quoteShell(modulePath)}`;
+        },
+      )
+      .replace(
+        'node "${manifest_node_args[@]}" .ci-harness/scripts/ci-build-manifest.mjs',
+        `${quoteShell(testNodeExecPath)} "\${manifest_node_args[@]}" .ci-harness/scripts/ci-build-manifest.mjs`,
+      )
+      .replaceAll(
+        "manifest_node_args+=(--import tsx)",
+        `manifest_node_args+=(--import ${quoteShell(TSX_IMPORT)})`,
+      );
+    const scriptPath = path.join(root, "run.sh");
+    writeFileSync(scriptPath, rewritten.endsWith("\n") ? rewritten : `${rewritten}\n`, "utf8");
+    const bash =
+      linuxWorkflow && process.platform === "darwin"
+        ? (linuxWorkflowBash ??= resolveWorkflowBash())
+        : "bash";
+    return runWorkflowCommand(bash, [scriptPath], {
+      ...spawnOptions,
+      // Child caches and temporary artifacts share the fixture's cleanup owner.
+      // Inheriting a huge host tsx cache makes startup depend on unrelated runs.
+      env: {
+        ...(options.env ?? process.env),
+        TMPDIR: childTempDir,
+        TMP: childTempDir,
+        TEMP: childTempDir,
+      },
+    });
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
+export const readAndroidToolchainAction = () => readWorkflow(SETUP_ANDROID_TOOLCHAIN_ACTION);
+export const readBuildArtifactsTestboxWorkflow = () =>
+  readWorkflow(".github/workflows/ci-build-artifacts-testbox.yml");
+export const readMaturityScorecardWorkflow = () => readWorkflow(MATURITY_SCORECARD_WORKFLOW);
+export const readReleaseChecksWorkflow = () =>
+  readWorkflow(".github/workflows/openclaw-release-checks.yml");
+
+const parsedWorkflows = new Map<string, { source: string; workflow: ReturnType<typeof parse> }>();
+export function readWorkflow(filePath: string) {
+  const absolutePath = path.resolve(filePath);
+  const source = readFileSync(absolutePath, "utf8");
+  let cached = parsedWorkflows.get(absolutePath);
+  if (cached?.source !== source) {
+    cached = { source, workflow: parse(source) };
+    parsedWorkflows.set(absolutePath, cached);
+  }
+  // Reuse parsing, not mutable fixtures; changed files still invalidate the cache.
+  return structuredClone(cached.workflow);
+}
+
+export function readTrackedText(relativePath: string): string {
+  return existsSync(relativePath)
+    ? readFileSync(relativePath, "utf8")
+    : execGit(process.cwd(), ["show", `:${relativePath}`]);
+}
+
+function execGit(cwd: string, args: string[]): string {
+  const result = runWorkflowCommand("git", args, { cwd });
+  if (result.status !== 0) {
+    throw new Error(
+      `Workflow fixture command failed (${result.status ?? result.signal}): git ${args.map(quoteShell).join(" ")}\n${result.stdout}${result.stderr}`,
+    );
+  }
+  return result.stdout;
+}
+
+export function runGit(cwd: string, args: string[]): string {
+  return execGit(cwd, args).trim();
+}
+
+export function writeExecutable(filePath: string, lines: string[]): void {
+  writeFileSync(filePath, `${lines.join("\n")}\n`, "utf8");
+  chmodSync(filePath, 0o755);
+}
+
+export function readWorkflowOutputs(outputPath: string): Record<string, string> {
+  if (!existsSync(outputPath)) {
+    return {};
+  }
+  const output = readFileSync(outputPath, "utf8").trim();
+  return output
+    ? Object.fromEntries(
+        output.split("\n").map((line) => {
+          const separator = line.indexOf("=");
+          return [line.slice(0, separator), line.slice(separator + 1)];
+        }),
+      )
+    : {};
+}
+
+/** Execute the UI phases with Actions' output/env handoff and stop-on-failure behavior. */
+export function runControlUiE2eWorkflow(options: { cwd: string; env: NodeJS.ProcessEnv }) {
+  const steps = readCiWorkflow().jobs["checks-ui-e2e"].steps as WorkflowStep[];
+  const first = steps.findIndex((step) => step.name === "Decode Control UI E2E selection");
+  const last = steps.findIndex((step) => step.name === "Test Control UI end-to-end");
+  expect(first).toBeGreaterThanOrEqual(0);
+  expect(last).toBeGreaterThan(first);
+  const envFile = path.join(options.cwd, "github-env");
+  const outputFile = path.join(options.cwd, "github-output");
+  const env = { ...options.env, GITHUB_ENV: envFile, GITHUB_OUTPUT: outputFile };
+  writeFileSync(envFile, "");
+  const context = {
+    ...defaultContext,
+    matrix: { task: "control-ui" },
+    steps: {} as Record<string, { outputs: Record<string, string> }>,
+  };
+  let result: ReturnType<typeof runWorkflowShellScript> | undefined;
+  let stdout = "";
+  let stderr = "";
+  for (const step of steps.slice(first, last + 1)) {
+    if (step.if && !evaluateWorkflowCondition(step.if, context)) {
+      continue;
+    }
+    writeFileSync(outputFile, "");
+    result = runWorkflowShellScript(`set -e\n${step.run}`, { cwd: options.cwd, env });
+    stdout += result.stdout;
+    stderr += result.stderr;
+    if (result.status !== 0) {
+      break;
+    }
+    Object.assign(env, readWorkflowOutputs(envFile));
+    if (step.id) {
+      context.steps[step.id] = { outputs: readWorkflowOutputs(outputFile) };
+    }
+  }
+  return { ...expectDefined(result, "Control UI E2E workflow result"), stdout, stderr };
+}

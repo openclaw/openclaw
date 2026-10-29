@@ -1,72 +1,87 @@
 import type { ModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { dedupeByKey } from "../shared/dedupe-by-key.js";
-import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
+import { dedupeByKey, indexFirstByKey } from "../shared/dedupe-by-key.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
-import type { ModelCatalogEntry } from "./model-catalog.js";
-import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
+import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
+import { assignProviderModelOrder } from "./model-catalog-order.js";
+import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
+import { loadManifestModelCatalog } from "./model-catalog.js";
+import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
+import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
+import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import type { PreparedModelRuntimeCatalogFacts } from "./prepared-model-runtime.catalog-contract.js";
-import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.configured.js";
+import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.types.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
-type ConfiguredCatalogAgentFacts = {
-  input: { config: OpenClawConfig };
-  configuredModelRefs: readonly ModelCatalogRef[];
-};
-
-type ConfiguredCatalogWorkspaceFacts = {
-  configuredCatalogEntries: readonly ModelCatalogEntry[];
-  inlineProviderModels: readonly InlineModelEntry[];
-};
-
-function createConfiguredModelCatalogSnapshot(params: {
-  agentFacts: ConfiguredCatalogAgentFacts;
-  workspaceFacts: ConfiguredCatalogWorkspaceFacts;
-  templateModelRegistry: ModelRegistry;
-  configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
-}): ModelCatalogSnapshot {
-  const entries = new Map<string, ModelCatalogEntry>();
-  const addEntry = (entry: ModelCatalogEntry) => {
-    const key = resolveModelCatalogIdentityKey(entry);
-    if (!entries.has(key)) {
-      entries.set(key, entry);
-    }
-  };
-  for (const entry of params.workspaceFacts.configuredCatalogEntries) {
-    addEntry(entry);
-  }
-  for (const configured of params.configuredRuntimeModels) {
-    addEntry(modelCatalogRowToEntry(configured.model));
-  }
-  for (const { provider, modelId } of params.agentFacts.configuredModelRefs) {
-    const model = params.templateModelRegistry.find(provider, modelId);
-    if (model) {
-      addEntry(modelCatalogRowToEntry(model));
-    }
-  }
-  const configuredEntries = [...entries.values()];
-  const staticEntries = params.configuredRuntimeModels.map(({ model }) =>
-    modelCatalogRowToEntry(model),
-  );
-  return {
-    entries: configuredEntries,
-    routeVariants: configuredEntries,
-    ...(staticEntries.length > 0 ? { staticEntries } : {}),
-  };
-}
-
 export function prepareConfiguredRuntimeFacts(params: {
-  agentFacts: ConfiguredCatalogAgentFacts;
-  workspaceFacts: ConfiguredCatalogWorkspaceFacts;
+  agentFacts: {
+    input: { config: OpenClawConfig; env?: NodeJS.ProcessEnv };
+    configuredModelRefs: readonly ModelCatalogRef[];
+  };
+  workspaceFacts: {
+    pluginMetadataSnapshot: PluginMetadataSnapshot;
+  };
   templateModelRegistry: ModelRegistry;
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
 }): PreparedModelRuntimeCatalogFacts {
+  const templateModelRegistry = params.templateModelRegistry;
+  const replace = params.agentFacts.input.config.models?.mode === "replace";
+  const keyOf = createModelCatalogIdentityKeyResolver();
+  const runtimeEntries = (replace ? [] : params.configuredRuntimeModels).map(({ model }) =>
+    modelCatalogRowToEntry(model),
+  );
+  const runtimeByIdentity = groupRecords(runtimeEntries, keyOf);
+  const catalog = [
+    ...(replace ? [] : params.templateModelRegistry.getAll().map(modelCatalogRowToEntry)),
+    ...runtimeEntries,
+  ];
+  const catalogByIdentity = indexFirstByKey(catalog, keyOf);
+  const configuredEntries = dedupeByKey(
+    [
+      ...buildConfiguredModelCatalog({
+        cfg: params.agentFacts.input.config,
+        catalog,
+        manifestPlugins: params.workspaceFacts.pluginMetadataSnapshot,
+      }).map((entry) => {
+        const key = keyOf(entry);
+        const accepted = catalogByIdentity.get(key);
+        if (!accepted || !modelTransportRoutesMatch(accepted, entry)) {
+          return entry;
+        }
+        const donor = accepted.contextWindows
+          ? accepted
+          : runtimeByIdentity
+              .get(key)
+              ?.find((candidate) => modelTransportRoutesMatch(candidate, accepted));
+        return donor?.contextWindows
+          ? overlayCatalogMetadata(entry, {
+              ...entry,
+              contextWindows: donor.contextWindows,
+              contextWindowDefault: donor.contextWindowDefault,
+            })
+          : entry;
+      }),
+      ...runtimeEntries,
+      ...(replace
+        ? []
+        : params.agentFacts.configuredModelRefs.flatMap(({ provider, modelId }) => {
+            const model = params.templateModelRegistry.find(provider, modelId);
+            return model ? [modelCatalogRowToEntry(model)] : [];
+          })),
+    ],
+    keyOf,
+  );
+  const modelCatalog = {
+    entries: configuredEntries,
+    routeVariants: configuredEntries,
+    ...(runtimeEntries.length > 0 ? { staticEntries: runtimeEntries } : {}),
+  };
   return {
-    templateModelRegistry: params.templateModelRegistry,
-    modelCatalog: createConfiguredModelCatalogSnapshot(params),
+    templateModelRegistry,
+    modelCatalog,
     configuredRuntimeModels: params.configuredRuntimeModels,
-    inlineProviderModels: params.workspaceFacts.inlineProviderModels,
   };
 }
 
@@ -78,12 +93,47 @@ export function prepareCapturedRuntimeFacts(
   if (params.agentFacts.input.config.models?.mode === "replace") {
     return facts;
   }
+  const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
+    params.workspaceFacts.pluginMetadataSnapshot,
+    params.agentFacts.input.config,
+    params.agentFacts.input.env,
+  );
+  const manifestCatalog = loadManifestModelCatalog({
+    config: params.agentFacts.input.config,
+    metadataSnapshot: params.workspaceFacts.pluginMetadataSnapshot,
+  });
+  const keyOf = createModelCatalogIdentityKeyResolver();
+  const declaredByIdentity = indexFirstByKey(
+    manifestCatalog.filter((entry) => entry.inference !== undefined),
+    keyOf,
+  );
   const entries = dedupeByKey(
     [
-      ...facts.modelCatalog.entries,
-      ...params.templateModelRegistry.getAll().map(modelCatalogRowToEntry),
+      ...facts.modelCatalog.entries.map((entry) => {
+        const declared = declaredByIdentity.get(keyOf(entry));
+        // Configured membership must retain the exact route's inference contract.
+        // Route changes clear its capabilities without promoting typed rows to chat.
+        return declared
+          ? { ...entry, inference: overlayCatalogMetadata(declared, entry).inference }
+          : entry;
+      }),
+      // Typed-only rows have no conversational registry Model. Carry their canonical
+      // manifest facts into the same prepared generation instead of inventing chat defaults.
+      ...manifestCatalog.filter((entry) => entry.inference?.chat === false),
+      // Static hooks also answer runtime provider aliases; publish canonical rows once.
+      ...params.templateModelRegistry.getAll().map((model) => {
+        const entry = modelCatalogRowToEntry(model);
+        entry.provider = normalizeProvider(entry.provider);
+        return entry;
+      }),
     ],
-    resolveModelCatalogIdentityKey,
+    keyOf,
   );
-  return { ...facts, modelCatalog: { ...facts.modelCatalog, entries, routeVariants: entries } };
+  const orderedEntries = assignProviderModelOrder(entries, manifestCatalog, {
+    appendUnknown: false,
+  });
+  return {
+    ...facts,
+    modelCatalog: { ...facts.modelCatalog, entries: orderedEntries, routeVariants: orderedEntries },
+  };
 }

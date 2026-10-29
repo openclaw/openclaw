@@ -1,5 +1,5 @@
 ---
-summary: "Configuration overview: common tasks, quick setup, and links to the full reference"
+summary: "Configuration overview: common tasks, quick setup, and links to the Configuration reference"
 read_when:
   - Setting up OpenClaw for the first time
   - Looking for common configuration patterns
@@ -17,7 +17,7 @@ Common reasons to add a config:
 - Set models, tools, sandboxing, or automation (cron, hooks)
 - Tune sessions, media, networking, or UI
 
-See the [full reference](/gateway/configuration-reference) for every available field.
+See the [Configuration reference](/gateway/configuration-reference) for every available field.
 
 Configuration follows a two-bucket rule: root siblings hold infrastructure and cross-agent defaults, while `agents.defaults` holds agent-loop behavior. Entries under `agents.entries` may override either bucket where the schema supports a per-agent override.
 
@@ -52,7 +52,7 @@ field map and defaults.
   <Tab title="CLI (one-liners)">
     ```bash
     openclaw config get agents.defaults.workspace
-    openclaw config set agents.defaults.heartbeat.every "2h"
+    openclaw config set agents.defaults.userTimezone "Europe/Vienna"
     openclaw config unset plugins.entries.brave.config.webSearch.apiKey
     ```
   </Tab>
@@ -64,7 +64,7 @@ field map and defaults.
     UIs and other tooling, the gateway also exposes `config.schema.lookup` to
     fetch one path-scoped schema node plus immediate child summaries.
     Settings show common fields first. Each section keeps its advanced fields
-    in a collapsed **Advanced (N)** group; use **Show advanced** to expand all
+    in a collapsed **Advanced (N)** group. Use **Show advanced** to expand all
     groups. Settings search always includes both tiers and opens the matching
     advanced group when needed. Per-channel settings under **Settings ->
     Channels** use the same split and share the **Show advanced** preference,
@@ -78,30 +78,35 @@ field map and defaults.
 ## Strict validation
 
 <Warning>
-OpenClaw only accepts configurations that fully match the schema. Gateway startup first applies safe legacy-key migrations to eligible single-file configs. Unknown keys, malformed types, or invalid values that remain cause the Gateway to **refuse to start**. The only root-level exception is `$schema` (string), so editors can attach JSON Schema metadata.
+OpenClaw only accepts configurations that fully match the schema. Unknown keys, malformed types, or invalid values cause the Gateway to **refuse to start**. Run `openclaw doctor --fix` to repair legacy keys before starting the Gateway. The only root-level exception is `$schema` (string), so editors can attach JSON Schema metadata.
 </Warning>
 
-`openclaw config schema` prints the canonical JSON Schema used by Control UI
+`openclaw config schema` prints the authoritative JSON Schema used by Control UI
 and validation. `config.schema.lookup` fetches a single path-scoped node plus
 child summaries for drill-down tooling. Field `title`/`description` docs metadata
 carries through nested objects, wildcard (`*`), array-item (`[]`), and `anyOf`/
 `oneOf`/`allOf` branches. Runtime plugin and channel schemas merge in when the
 manifest registry is loaded.
 
+Use `config.get` to read a redacted config snapshot without building the form
+schema. Request `config.schema` or `config.schema.lookup` when you need field
+metadata. The Gateway shares these results across clients and refreshes them
+when the active config or plugin generation changes.
+
 Every config leaf has a common or advanced presentation tier in `uiHints`.
 `advanced: false` marks common settings and `advanced: true` marks advanced
-settings. A leaf inherits the nearest ancestor tier when it has no direct hint;
-paths with no declared ancestor default to advanced. This affects presentation
+settings. A leaf inherits the nearest ancestor tier when it has no direct hint.
+Paths with no declared ancestor default to advanced. This affects presentation
 only, not validation, defaults, reload behavior, or whether the key can be set.
 
-Startup migration uses the same deterministic, prompt-free transforms as `openclaw doctor --fix` and writes only when the entire migrated config validates, including plugins. The previous config stays in the `.bak` ring. Configs using `$include`, Nix-managed configs, and configs written by a newer OpenClaw version are not automatically migrated. See [Legacy config key migrations](/gateway/doctor#detailed-behavior-and-rationale) for the conditions and fallback.
+Startup migration uses the same fixed, prompt-free transforms as `openclaw doctor --fix` and writes only when the entire migrated config validates, including plugins. The previous config stays in the `.bak` ring. Configs using `$include`, Nix-managed configs, and configs written by a newer OpenClaw version are not automatically migrated. See [Legacy config key migrations](/gateway/doctor#detailed-behavior-and-rationale) for the conditions and fallback.
 
 When validation still fails:
 
-- The Gateway does not boot
+- `openclaw gateway run` reports the config issues and exits with code `78`, with SQLite or PostgreSQL state
 - Only diagnostic commands work (`openclaw doctor`, `openclaw logs`, `openclaw health`, `openclaw status`)
 - Run `openclaw doctor` to see exact issues
-- Run `openclaw doctor --fix` (`--repair` is the same flag; `--yes` skips prompts) to apply repairs
+- Run `openclaw doctor --fix` (`--repair` is the same flag, and `--yes` skips prompts) to apply repairs
 
 The Gateway keeps a trusted last-known-good copy after each successful startup,
 but startup and hot reload do not restore it automatically - only `openclaw doctor --fix`
@@ -110,12 +115,18 @@ plugin-local validation), Gateway startup fails. An invalid hot reload is skippe
 the current runtime keeps the last accepted config. When a write is blocked as an
 accidental clobber, OpenClaw attempts to save the rejected payload as
 `<path>.rejected.<timestamp>` for inspection. The warning reports whether that save
-succeeded; if it failed, the active config still stays unchanged.
+succeeded. If it failed, the active config still stays unchanged.
 The Gateway blocks writes that look like accidental clobbers - dropping the effective
 `gateway.mode` or shrinking the file by more than half - unless the write explicitly
 allows destructive changes. Mode checks resolve `$include` and environment references
 first. Missing `meta` is recorded as a write anomaly. Promotion to last-known-good is
 skipped when a candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
+Suspicious external reductions and stub-shaped snapshots also leave the trusted
+recovery copy unchanged during startup and hot reload. An ordinary accepted edit
+to an already-truncated file does not approve that earlier loss for replacing the
+backup, so Doctor can still restore the intact configuration.
+The health owner carries that anomaly across automatic metadata stamping and later
+reads; stamping a missing `meta` section does not restore the lost settings.
 
 ## Configuration pages
 
@@ -145,7 +156,7 @@ the page that now holds the content.
 - <a id="configure-sessions-and-resets" />[Configure sessions and resets](/gateway/configuration/common-tasks#configure-sessions-and-resets)
 - <a id="enable-sandboxing" />[Enable sandboxing](/gateway/configuration/common-tasks#enable-sandboxing)
 - <a id="enable-relay-backed-push-for-official-ios-builds" />[Enable relay-backed push for official iOS builds](/gateway/configuration/common-tasks#enable-relay-backed-push-for-official-ios-builds)
-- <a id="set-up-heartbeat-periodic-check-ins" />[Set up heartbeat (periodic check-ins)](/gateway/configuration/common-tasks#set-up-heartbeat-periodic-check-ins)
+- <a id="set-up-heartbeat-periodic-check-ins" />[Set up periodic check-ins](/gateway/configuration/common-tasks#set-up-heartbeat-periodic-check-ins)
 - <a id="configure-cron-jobs" />[Configure cron jobs](/gateway/configuration/common-tasks#configure-cron-jobs)
 - <a id="set-up-webhooks-hooks" />[Set up webhooks (hooks)](/gateway/configuration/common-tasks#set-up-webhooks-hooks)
 - <a id="configure-multi-agent-routing" />[Configure multi-agent routing](/gateway/configuration/common-tasks#configure-multi-agent-routing)
@@ -162,11 +173,11 @@ the page that now holds the content.
 
 ## Full reference
 
-For the complete field-by-field reference, see **[Configuration Reference](/gateway/configuration-reference)**.
+For the complete field-by-field reference, see **[Configuration reference](/gateway/configuration-reference)**.
 
 ---
 
-_Related: [Configuration Examples](/gateway/configuration-examples) · [Configuration Reference](/gateway/configuration-reference) · [Doctor](/gateway/doctor)_
+_Related: [Configuration Examples](/gateway/configuration-examples) · [Configuration reference](/gateway/configuration-reference) · [Doctor](/gateway/doctor)_
 
 ## Related
 
@@ -175,5 +186,6 @@ _Related: [Configuration Examples](/gateway/configuration-examples) · [Configur
 - [Gateway runbook](/gateway)
 - [`openclaw config`](/cli/config) — read and write these settings from the CLI
 - [`openclaw configure`](/cli/configure) — guided editor for these settings
+- [Docker](/install/docker) — container deployment, its environment variables, and the mounted config and state paths
 - [Security audit checks](/gateway/security/audit-checks) — what the audit flags in this configuration
 - [Trusted proxy auth](/gateway/trusted-proxy-auth) — configuring the Gateway behind a reverse proxy

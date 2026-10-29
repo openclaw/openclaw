@@ -3,16 +3,20 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { loadControlUiSessionPullRequests } from "./control-ui-session-prs.js";
+import * as worktreeGit from "../agents/worktrees/git.js";
+import { runGitReadOperation } from "../infra/git-read-cache.js";
 import {
-  evictPullRequestCache,
+  createSessionPullRequestsFixture,
   githubJson,
   pullListItem,
   routedFetch,
   testGitContext as context,
 } from "./control-ui-session-prs.test-support.js";
+
+const { load: loadControlUiSessionPullRequests } = createSessionPullRequestsFixture();
+const branchIdentity = { ...context, branch: "feature" };
 
 describe("session branch diff stats", () => {
   const execFileAsync = promisify(execFile);
@@ -26,23 +30,15 @@ describe("session branch diff stats", () => {
     });
   const git = (...args: string[]) => gitIn(root, ...args);
 
-  const writeFile = (file: string, contents: string | Uint8Array) =>
-    fs.writeFile(path.join(root, file), contents);
-  const appendFile = (file: string, contents: string) =>
-    fs.appendFile(path.join(root, file), contents);
-
+  const writeFile = (file: string, contents: string | Uint8Array, append = false) =>
+    (append ? fs.appendFile : fs.writeFile)(path.join(root, file), contents);
   const commit = async (message: string, ...files: string[]) => {
     await git("add", ...files);
     await git("commit", "-m", message);
   };
 
-  const writeCommit = async (file: string, contents: string, message: string) => {
-    await writeFile(file, contents);
-    await commit(message, file);
-  };
-
-  const appendCommit = async (file: string, contents: string, message: string) => {
-    await appendFile(file, contents);
+  const writeCommit = async (file: string, contents: string, message: string, append = false) => {
+    await writeFile(file, contents, append);
     await commit(message, file);
   };
 
@@ -51,53 +47,33 @@ describe("session branch diff stats", () => {
   const resolveRevision = async (revision: string) =>
     (await git("rev-parse", revision)).stdout.trim();
 
-  const initializeRepoAt = async (repo: string, initialContents = "one\n") => {
+  const initializeRepo = async (initialContents = "one\n", repo = root) => {
+    if (repo === root && initialContents === "one\n") {
+      return fs.cp(templateRepo, root, { recursive: true });
+    }
     await gitIn(repo, "init", "--initial-branch=main", ".");
     await fs.writeFile(path.join(repo, "a.txt"), initialContents);
     await gitIn(repo, "add", "a.txt");
     await gitIn(repo, "commit", "-m", "base");
   };
 
-  const initializeRepo = async (initialContents = "one\n") => {
-    if (initialContents !== "one\n") {
-      await initializeRepoAt(root, initialContents);
-      return;
-    }
-    // Each case owns its .git directory; only the unchanged base history is copied.
-    await fs.cp(templateRepo, root, { recursive: true });
-  };
-
-  const initializeFeatureBranch = async (initialContents = "one\n") => {
-    await initializeRepo(initialContents);
-    await trackRemote("main");
-    await git("checkout", "-b", "feature");
-  };
-
-  type FeatureWorkOptions = {
-    message?: string;
-    trackFeature?: boolean;
-    trackMain?: boolean;
-  };
-
   const initializeFeatureWork = async ({
-    message = "feature work",
     trackMain = true,
     trackFeature = false,
-  }: FeatureWorkOptions = {}) => {
-    await initializeRepo();
+    contents = "one\n",
+    committed = true,
+  } = {}) => {
+    await initializeRepo(contents);
     if (trackMain) {
       await trackRemote("main");
     }
     await git("checkout", "-b", "feature");
-    await appendCommit("a.txt", "two\n", message);
+    if (committed) {
+      await writeCommit("a.txt", "two\n", "feature work", true);
+    }
     if (trackFeature) {
       await trackRemote("feature");
     }
-  };
-
-  const initializeFeatureHead = async (options: FeatureWorkOptions = {}) => {
-    await initializeFeatureWork(options);
-    return resolveRevision(options.trackFeature ? "refs/remotes/origin/feature" : "HEAD");
   };
 
   const mergedPull = (headSha: string, overrides: Record<string, unknown> = {}) =>
@@ -108,13 +84,7 @@ describe("session branch diff stats", () => {
       ...overrides,
     });
 
-  const loadBranchState = async ({
-    pullRequests,
-    defaultBranch = "main",
-  }: {
-    pullRequests?: Array<Record<string, unknown>>;
-    defaultBranch?: string | null;
-  } = {}) => {
+  const stubGithub = (pullRequests?: Array<Record<string, unknown>>) => {
     const routes = [{ match: "/pulls?head=", response: () => githubJson(pullRequests ?? []) }];
     if (pullRequests === undefined) {
       routes.push({
@@ -122,26 +92,40 @@ describe("session branch diff stats", () => {
         response: () => githubJson({ fork: false }),
       });
     }
+    vi.stubGlobal("fetch", routedFetch(routes));
+  };
+  const loadBranchState = (pullRequests?: Array<Record<string, unknown>>) => {
+    stubGithub(pullRequests);
     return loadControlUiSessionPullRequests(
       { sessionKey: "agent:main:main" },
       {
-        fetchImpl: routedFetch(routes),
-        resolveGitContext: async () => ({
-          ...context,
-          branch: "feature",
-          root,
-          ...(defaultBranch === null ? {} : { defaultBranch }),
-        }),
+        resolveGitContext: async () => ({ ...branchIdentity, root, defaultBranch: "main" }),
       },
     );
   };
 
   const loadMergedBranchState = (headSha: string, overrides: Record<string, unknown> = {}) =>
-    loadBranchState({ pullRequests: [mergedPull(headSha, overrides)] });
+    loadBranchState([mergedPull(headSha, overrides)]);
+  const loadCheckout = (sessionKey: string, refresh = false) =>
+    loadControlUiSessionPullRequests(
+      { sessionKey: `agent:main:${sessionKey}`, refresh },
+      { resolveGitRoot: async () => root },
+    );
+  const connectGithub = async () => {
+    await git("remote", "add", "origin", "https://github.com/openclaw/openclaw.git");
+    await git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+  };
+  const expectedBranch = (additions: number, deletions: number, changedFiles: number) => ({
+    ...branchIdentity,
+    additions,
+    deletions,
+    changedFiles,
+    createUrl: "https://github.com/openclaw/openclaw/pull/new/feature",
+  });
 
   beforeAll(async () => {
     templateRepo = templateDirs.make("openclaw-session-prs-template-");
-    await initializeRepoAt(templateRepo);
+    await initializeRepo("one\n", templateRepo);
   });
 
   beforeEach(async () => {
@@ -149,166 +133,193 @@ describe("session branch diff stats", () => {
   });
 
   afterEach(async () => {
-    await evictPullRequestCache();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
     await fs.rm(root, { recursive: true, force: true });
+    vi.unstubAllGlobals();
+  });
+
+  it("discovers GitHub identity locally and skips network for default, non-GitHub, and detached checkouts", async () => {
+    await initializeRepo();
+    await trackRemote("main");
+    await connectGithub();
+    const fetchImpl = routedFetch([]);
+    vi.stubGlobal("fetch", fetchImpl);
+    const load = () => loadCheckout("discovery", true);
+    const expected = {
+      pullRequests: [],
+      rateLimited: false,
+      repository: { owner: "openclaw", repo: "openclaw" },
+    };
+    await expect(load()).resolves.toEqual(expected);
+    const reads = vi.spyOn(worktreeGit, "runGitBytes");
+    const initial = await load();
+    reads.mockClear();
+    await writeCommit("a.txt", "next commit\n", "advance main", true);
+    await trackRemote("main");
+    expect(await load()).toEqual(initial);
+    expect(reads).not.toHaveBeenCalled();
+    reads.mockRestore();
+    await git("remote", "set-url", "origin", "https://gitlab.com/openclaw/openclaw.git");
+    await expect(load()).resolves.toEqual({ pullRequests: [], rateLimited: false });
+    await git("remote", "set-url", "origin", "https://github.com/openclaw/openclaw.git");
+    await git("checkout", "--detach");
+    await expect(load()).resolves.toEqual(expected);
+    expect(fetchImpl.mock.calls).toHaveLength(0);
   });
 
   it("counts committed and uncommitted changes vs the origin default merge base", async () => {
-    await initializeFeatureBranch("one\ntwo\n");
-    // Stand in for the remote default branch without a real remote.
+    await initializeFeatureWork({ contents: "one\ntwo\n", committed: false });
     await writeFile("a.txt", "one\nthree\n");
     await writeFile("b.txt", "committed\n");
     await commit("feature work", "a.txt", "b.txt");
     await trackRemote("feature");
-    // Uncommitted work counts too: the row sizes the PR the push would open.
-    await appendFile("b.txt", "pending\n");
-    // Untracked files count toward additions as well.
+    await writeFile("b.txt", "pending\n", true);
     await writeFile("c.txt", "brand new\n");
 
     const result = await loadBranchState();
-    expect(result.branch).toEqual({
-      owner: "openclaw",
-      repo: "openclaw",
-      branch: "feature",
-      additions: 4,
-      deletions: 1,
-      changedFiles: 3,
-      createUrl: "https://github.com/openclaw/openclaw/pull/new/feature",
-    });
+    expect(result.branch).toEqual(expectedBranch(4, 1, 3));
   });
 
-  it("skips non-regular and binary untracked files without blocking", async () => {
+  it("counts bounded regular untracked text without trimming names, including hardlinks", async () => {
     await initializeFeatureWork({ trackFeature: true });
-    await writeFile("text.txt", "alpha\nbeta\n");
+    await writeFile(" text.txt", "alpha\nbeta\n");
     await writeFile("blob.bin", Buffer.from([0x50, 0x00, 0x4b, 0x03]));
+    await writeFile("empty.txt", "");
+    await writeFile("oversized.txt", "not counted\n");
+    await fs.truncate(path.join(root, "oversized.txt"), 512 * 1024 + 1);
+    await fs.link(path.join(root, " text.txt"), path.join(root, "hardlink.txt"));
     if (process.platform !== "win32") {
       // A named pipe must not block the stats path until the git timeout.
       await execFileAsync("mkfifo", [path.join(root, "pipe")]);
+      await fs.symlink(" text.txt", path.join(root, "symlink.txt"));
     }
 
     const result = await loadBranchState();
-    // 1 committed line + 2 untracked text lines; binary and pipe count 0.
-    expect(result.branch).toMatchObject({ additions: 3, deletions: 0 });
+    // One committed line and two two-line regular files; hardlinks are allowed for counts.
+    expect(result.branch).toMatchObject({ additions: 5, deletions: 0 });
   });
 
-  it("omits the branch payload when the remote branch has nothing to compare", async () => {
-    await initializeFeatureBranch();
+  it("keeps PR facts when unrelated snapshot refs change or refs are packed", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
+    await initializeFeatureWork({ trackFeature: true });
+    await connectGithub();
+    stubGithub();
+    const load = () => loadCheckout("snapshot-refs");
+    const initial = await load();
+    expect(initial.branch).toMatchObject({ additions: 1, changedFiles: 1 });
+    const reads = vi.spyOn(worktreeGit, "runGitBytes");
+    await git("update-ref", "refs/openclaw/snapshots/unrelated", "HEAD");
+    expect(await load()).toEqual(initial);
+    expect(reads.mock.calls.length).toBe(0);
+    await git("pack-refs", "--all", "--prune");
+    expect(await load()).toEqual(initial);
+    expect(reads.mock.calls.length).toBe(0);
+
+    // File-only edits still refresh statistics, without repeating unchanged ancestry.
+    await writeFile("a.txt", "three\n", true);
+    await writeFile("new.txt", "new\n");
+    vi.advanceTimersByTime(5 * 60_000 + 1);
+    const [first, concurrent] = await Promise.all([load(), load()]);
+    expect(first).toEqual(concurrent);
+    expect(first.branch).toMatchObject({ additions: 3, changedFiles: 2 });
+    expect(reads.mock.calls.filter(([, args]) => args[0] === "merge-base")).toHaveLength(0);
+    expect(reads.mock.calls.filter(([, args]) => args.includes("--shortstat"))).toHaveLength(1);
+
+    reads.mockClear();
+    await trackRemote("feature", "refs/remotes/origin/main");
+    const changed = await load();
+    expect(changed.branch).toMatchObject({ additions: 3, changedFiles: 2 });
+    expect(changed.branch?.createUrl).toBeUndefined();
+    expect(reads.mock.calls.some(([, args]) => args[0] === "merge-base")).toBe(true);
+  });
+
+  it("does not refresh stat-dirty binary files in an unowned checkout", async () => {
+    await initializeFeatureWork({ committed: false });
+    await writeFile("image.bin", Buffer.from([0, 1, 2, 3]));
+    await commit("binary fixture", "image.bin");
+    await trackRemote("main");
     await trackRemote("feature");
-
-    const result = await loadBranchState();
-    // origin/feature == origin/main: GitHub would answer "nothing to compare".
-    expect(result.branch).toBeUndefined();
-  });
-
-  it("reports local changes without createUrl until the branch exists on origin", async () => {
-    await initializeFeatureBranch();
-    await appendCommit("a.txt", "two\n", "local only");
-
-    const result = await loadBranchState();
-    // Unpushed branches have no GitHub pull/new page, but changed files still get a row.
-    expect(result.branch).toEqual({
-      owner: "openclaw",
-      repo: "openclaw",
-      branch: "feature",
-      additions: 1,
-      deletions: 0,
-      changedFiles: 1,
+    const indexPath = path.join(root, ".git", "index");
+    const originalIndex = await fs.readFile(indexPath);
+    await fs.utimes(path.join(root, "image.bin"), new Date(0), new Date(0));
+    await runGitReadOperation({
+      type: "pull-request.branch-facts",
+      input: {
+        root,
+        branch: "feature",
+        defaultBranch: "main",
+        mergedHeads: [],
+        refreshIndex: false,
+      },
     });
+    expect(await fs.readFile(indexPath)).toEqual(originalIndex);
   });
 
-  it("reports uncommitted changes when the remote branch has nothing to compare", async () => {
-    await initializeFeatureBranch();
-    await trackRemote("feature");
-    await appendFile("a.txt", "pending\n");
-
-    const result = await loadBranchState();
-    // With equal remote refs, dirty work remains visible without a Create PR link.
-    expect(result.branch).toEqual({
-      owner: "openclaw",
-      repo: "openclaw",
-      branch: "feature",
-      additions: 1,
-      deletions: 0,
-      changedFiles: 1,
+  it("stops dependent comparisons after the second ancestry probe times out", async () => {
+    await initializeFeatureWork({ trackFeature: true });
+    const run = worktreeGit.runGitBytes;
+    let ancestryCalls = 0;
+    vi.spyOn(worktreeGit, "runGitBytes").mockImplementation(async (cwd, args, options) => {
+      if (args[0] === "merge-base" && ++ancestryCalls >= 2) {
+        return {
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.alloc(0),
+          code: null,
+          signal: "SIGTERM",
+          killed: true,
+          termination: "timeout",
+          timeoutMs: 120_000,
+          windowsEncoding: null,
+        };
+      }
+      return run(cwd, args, options);
     });
+    const result = await loadMergedBranchState("1".repeat(40));
+    expect(result.branch).toEqual(branchIdentity);
+    expect(ancestryCalls).toBe(2);
   });
 
-  it("drops the Create PR row once the pushed tip is a merged PR's head", async () => {
-    const mergedHead = await initializeFeatureHead({ trackFeature: true });
-
-    const result = await loadBranchState({ pullRequests: [mergedPull(mergedHead)] });
-    expect(result.pullRequests[0]?.state).toBe("merged");
-    // A squash-merged remote tip must not resurrect a duplicate Create PR invitation.
-    expect(result.branch).toBeUndefined();
+  it("reads missing historical PR heads without transport on older Git", async () => {
+    await initializeFeatureWork({ trackFeature: true });
+    await git("config", "extensions.partialClone", "origin");
+    await git("config", "remote.origin.promisor", "true");
+    await git("config", "remote.origin.url", path.join(root, "unavailable-remote"));
+    const tracePath = path.join(root, ".git", "trace.jsonl");
+    vi.stubEnv("GIT_TRACE2_EVENT", tracePath);
+    const run = worktreeGit.runGitBytes;
+    vi.spyOn(worktreeGit, "runGitBytes").mockImplementation((cwd, args, options) =>
+      run(cwd, args, {
+        ...options,
+        // Older Git ignores this variable; the transport policy must still hold.
+        env: { ...options?.env, GIT_NO_LAZY_FETCH: undefined },
+      }),
+    );
+    const result = await loadMergedBranchState("1".repeat(40));
+    expect(result.branch).toMatchObject({ additions: 1, changedFiles: 1 });
+    const childStarts = (await fs.readFile(tracePath, "utf8"))
+      .split("\n")
+      .filter((line) => line.includes('"event":"child_start"'));
+    expect(childStarts.join("\n")).not.toContain('"child_class":"transport/');
   });
 
   it("suppresses the Create PR row when the merged PR falls outside the display cap", async () => {
-    const mergedHead = await initializeFeatureHead({ trackFeature: true });
-    const closedPull = (n: number) =>
-      pullListItem({ number: n, title: `closed ${n}`, state: "closed" });
-
-    const result = await loadBranchState({
-      // GitHub sorts by updated desc: three fresher closed-unmerged PRs push
-      // the merged PR past the MAX_PULL_REQUESTS display slice.
-      pullRequests: [closedPull(5), closedPull(4), closedPull(3), mergedPull(mergedHead)],
-    });
-    // A merged head that is not displayed still proves the pushed tip landed.
-    expect(result.branch).toBeUndefined();
-  });
-
-  it("sizes only post-merge work, without a create link, once the PR landed", async () => {
-    const mergedHead = await initializeFeatureHead({ trackFeature: true });
-    await appendFile("a.txt", "follow-up\n");
-
-    const result = await loadBranchState({ pullRequests: [mergedPull(mergedHead)] });
-    // Ignore the stale merged +1; only the uncommitted follow-up counts.
-    expect(result.branch).toEqual({
-      owner: "openclaw",
-      repo: "openclaw",
-      branch: "feature",
-      additions: 1,
-      deletions: 0,
-      changedFiles: 1,
-    });
-  });
-
-  it("keeps the Create PR row when the PR merged into a non-default base", async () => {
-    const mergedHead = await initializeFeatureHead({ trackFeature: true });
-
-    const result = await loadMergedBranchState(mergedHead, {
-      base: { ref: "release", repo: { name: "openclaw", owner: { login: "openclaw" } } },
-    });
-    // A release-branch merge leaves the default-branch Create PR available.
-    expect(result.branch?.createUrl).toBe("https://github.com/openclaw/openclaw/pull/new/feature");
-  });
-
-  it("suppresses the row via local HEAD when the merged remote ref was pruned", async () => {
-    // Model a merge-deleted head branch after its remote-tracking ref was pruned.
-    const mergedHead = await initializeFeatureHead();
-
-    const result = await loadBranchState({ pullRequests: [mergedPull(mergedHead)] });
-    // Without this, the stale merge base replays the landed diff forever.
-    expect(result.branch).toBeUndefined();
-  });
-
-  it("suppresses the row when the local checkout trails the merged remote tip", async () => {
-    const staleHead = await initializeFeatureHead();
-    // This checkout's HEAD trails the final commit pushed and merged elsewhere.
-    await appendCommit("a.txt", "review fix\n", "review fix");
-    await trackRemote("feature");
+    await initializeFeatureWork({ trackFeature: true });
     const mergedHead = await resolveRevision("HEAD");
-    await git("reset", "--hard", staleHead);
-
-    const result = await loadBranchState({ pullRequests: [mergedPull(mergedHead)] });
-    // The clean, fully merged stale checkout must not replay a landed subset.
+    const result = await loadBranchState([
+      ...[5, 4, 3].map((number) => pullListItem({ number, state: "closed" })),
+      mergedPull(mergedHead),
+    ]);
     expect(result.branch).toBeUndefined();
   });
 
   it("restores Create PR for a branch rebased past the landing with new work", async () => {
-    const mergedHead = await initializeFeatureHead({ trackMain: false });
+    await initializeFeatureWork({ trackMain: false });
+    const mergedHead = await resolveRevision("HEAD");
     // Reuse the branch after squash-landing it: reset to main, add work, and force-push.
     await git("checkout", "main");
-    await appendCommit("a.txt", "two\n", "squash land");
+    await writeCommit("a.txt", "two\n", "squash land", true);
     const mergeCommit = await resolveRevision("HEAD");
     await trackRemote("main");
     await git("checkout", "feature");
@@ -318,169 +329,80 @@ describe("session branch diff stats", () => {
 
     const result = await loadMergedBranchState(mergedHead, { merge_commit_sha: mergeCommit });
     // A merge base containing the landing proves this new commit is a second PR.
-    expect(result.branch).toEqual({
-      owner: "openclaw",
-      repo: "openclaw",
-      branch: "feature",
-      additions: 1,
-      deletions: 0,
-      changedFiles: 1,
-      createUrl: "https://github.com/openclaw/openclaw/pull/new/feature",
+    expect(result.branch).toEqual(expectedBranch(1, 0, 1));
+  });
+
+  describe("fork head discovery", () => {
+    const forkOwner = "PratikRai0101";
+    const forkContext = () => runGitReadOperation({ type: "checkout.context", input: { root } });
+
+    it("derives bounded candidates from tracking refs and invalidates a renamed remote", async () => {
+      await initializeFeatureWork();
+      await connectGithub();
+      await git("remote", "add", "fork", `https://github.com/${forkOwner}/openclaw.git`);
+      vi.stubGlobal(
+        "fetch",
+        routedFetch([
+          {
+            match: `/pulls?head=${forkOwner}%3A`,
+            response: () =>
+              githubJson([
+                pullListItem({
+                  head: {
+                    sha: "a".repeat(40),
+                    ref: "feature",
+                    repo: { full_name: `${forkOwner}/openclaw` },
+                  },
+                }),
+              ]),
+          },
+          { match: "/pulls?head=", response: () => githubJson([]) },
+          { match: "/pulls/103469", response: () => githubJson({ additions: 1, deletions: 0 }) },
+          { match: "/commits/", response: () => githubJson({ total_count: 0, check_runs: [] }) },
+          { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
+        ]),
+      );
+      const load = () => loadCheckout("fork-discovery");
+      // Prove ref-only invalidation before other remotes also change Git config.
+      expect((await load()).pullRequests).toEqual([]);
+      await git("update-ref", "refs/remotes/fork/feature", "HEAD");
+      await git("pack-refs", "--all", "--prune");
+      const discovered = await load();
+      expect(discovered.repository).toEqual({ owner: "openclaw", repo: "openclaw" });
+      expect(discovered.pullRequests.map((pull) => pull.number)).toEqual([103469]);
+      for (const name of ["zz-a", "zz-b", "zz-c"]) {
+        await git("remote", "add", name, `https://github.com/${name}/openclaw.git`);
+        await git("update-ref", `refs/remotes/${name}/feature`, "HEAD");
+      }
+      await git("remote", "add", "not-github", "https://gitlab.com/someone/openclaw.git");
+      await git("update-ref", "refs/remotes/not-github/feature", "HEAD");
+      await git("remote", "add", "same-owner", "https://github.com/openclaw/openclaw.git");
+      await git("update-ref", "refs/remotes/same-owner/feature", "HEAD");
+      await git("remote", "add", "untracked", "https://github.com/untracked/openclaw.git");
+      // No push or tracking configuration names the fork.
+      const keys = ["branch.feature.pushRemote", "remote.pushDefault", "branch.feature.remote"];
+      for (const key of keys) {
+        await expect(git("config", "--get", key)).rejects.toThrow();
+      }
+
+      expect(await forkContext()).toMatchObject({
+        owner: "openclaw",
+        repo: "openclaw",
+        branch: "feature",
+        defaultBranch: "main",
+        forkHeadCandidates: [
+          { owner: forkOwner, repo: "openclaw" },
+          { owner: "zz-a", repo: "openclaw" },
+          { owner: "zz-b", repo: "openclaw" },
+        ],
+      });
+
+      await git("remote", "set-url", "fork", "https://github.com/lonexreb/paloa-claw.git");
+      expect((await forkContext())?.forkHeadCandidates?.[0]).toEqual({
+        owner: "lonexreb",
+        repo: "paloa-claw",
+      });
+      expect((await load()).pullRequests).toEqual([]);
     });
-  });
-
-  it("counts a release-branch landing once its merge commit reaches main", async () => {
-    const mergedHead = await initializeFeatureHead({ trackMain: false, trackFeature: true });
-    // The PR merged into a release branch whose squash later reached main.
-    await git("checkout", "main");
-    await appendCommit("a.txt", "two\n", "release merge propagated");
-    const mergeCommit = await resolveRevision("HEAD");
-    await trackRemote("main");
-    await git("checkout", "feature");
-
-    const result = await loadMergedBranchState(mergedHead, {
-      merge_commit_sha: mergeCommit,
-      base: { ref: "release", repo: { name: "openclaw", owner: { login: "openclaw" } } },
-    });
-    // Once the release landing reaches main, its non-default base no longer matters.
-    expect(result.branch).toBeUndefined();
-  });
-
-  it("restores Create PR atop a merge-commit landing without a rebase", async () => {
-    const mergedHead = await initializeFeatureHead({ trackMain: false });
-    // A merge-commit landing keeps the head an ancestor of main.
-    await git("checkout", "main");
-    await git("merge", "--no-ff", "feature", "-m", "merge PR");
-    const mergeCommit = await resolveRevision("HEAD");
-    await trackRemote("main");
-    await git("checkout", "feature");
-    await writeCommit("b.txt", "follow-up\n", "follow-up work");
-    await trackRemote("feature");
-
-    const result = await loadMergedBranchState(mergedHead, { merge_commit_sha: mergeCommit });
-    // The merge base contains the merged head, leaving only the follow-up to compare.
-    expect(result.branch).toEqual({
-      owner: "openclaw",
-      repo: "openclaw",
-      branch: "feature",
-      additions: 1,
-      deletions: 0,
-      changedFiles: 1,
-      createUrl: "https://github.com/openclaw/openclaw/pull/new/feature",
-    });
-  });
-
-  it("keeps Create PR off while a newer squash landing is unincorporated", async () => {
-    // PR1: squash-land, then the branch rebases past it.
-    const pr1Head = await initializeFeatureHead({ message: "pr1 work", trackMain: false });
-    await git("checkout", "main");
-    await appendCommit("a.txt", "two\n", "squash pr1");
-    const pr1Merge = await resolveRevision("HEAD");
-    await git("checkout", "feature");
-    await git("reset", "--hard", "main");
-    // PR2 squash-lands, but the branch is not rebased again before its follow-up.
-    await writeCommit("b.txt", "pr2\n", "pr2 work");
-    const pr2Head = await resolveRevision("HEAD");
-    await git("checkout", "main");
-    await writeCommit("b.txt", "pr2\n", "squash pr2");
-    const pr2Merge = await resolveRevision("HEAD");
-    await trackRemote("main");
-    await git("checkout", "feature");
-    await writeCommit("c.txt", "follow-up\n", "follow-up work");
-    await trackRemote("feature");
-
-    const result = await loadBranchState({
-      pullRequests: [
-        mergedPull(pr2Head, {
-          number: 2,
-          merged_at: "2026-07-02T00:00:00Z",
-          merge_commit_sha: pr2Merge,
-        }),
-        mergedPull(pr1Head, { number: 1, merge_commit_sha: pr1Merge }),
-      ],
-    });
-    // Only PR1 is in the merge base, so show the follow-up but keep Create PR off.
-    expect(result.branch).toEqual({
-      owner: "openclaw",
-      repo: "openclaw",
-      branch: "feature",
-      additions: 1,
-      deletions: 0,
-      changedFiles: 1,
-    });
-  });
-
-  it("offers no Create PR from a stale tracking ref behind the merged head", async () => {
-    const staleSha = await initializeFeatureHead();
-    await appendCommit("a.txt", "final fix\n", "final fix");
-    const mergedHead = await resolveRevision("HEAD");
-    // This checkout's tracking ref and HEAD predate a final commit merged elsewhere.
-    await trackRemote("feature", staleSha);
-    await git("reset", "--hard", staleSha);
-
-    const result = await loadBranchState({ pullRequests: [mergedPull(mergedHead)] });
-    // A stale ref is not new work when the merged head already contains it.
-    expect(result.branch).toBeUndefined();
-  });
-
-  it("prefers the newer merge base after the default branch was merged back in", async () => {
-    const mergedHead = await initializeFeatureHead({ trackMain: false, trackFeature: true });
-    // Main advances after the squash landing, then is merged back into the feature.
-    await git("checkout", "main");
-    await appendCommit("a.txt", "two\n", "squash land");
-    await writeCommit("b.txt", "unrelated\n", "unrelated main work");
-    await trackRemote("main");
-    await git("checkout", "feature");
-    await git("merge", "refs/remotes/origin/main", "-m", "merge main");
-
-    const result = await loadBranchState({ pullRequests: [mergedPull(mergedHead)] });
-    // Main's merge-base tip carries the landing; the older head would replay its progress.
-    expect(result.branch).toBeUndefined();
-  });
-
-  it("ignores the merged tip as a diff base when the branch was reset onto main", async () => {
-    const mergedHead = await initializeFeatureHead({ trackMain: false, trackFeature: true });
-    // Squash-land the same content on main, then main moves on.
-    await git("checkout", "main");
-    await appendCommit("a.txt", "two\n", "squash land");
-    await writeCommit("b.txt", "unrelated\n", "unrelated main work");
-    await trackRemote("main");
-    // Reset the branch onto updated main while origin/feature stays on the merged head.
-    await git("checkout", "feature");
-    await git("reset", "--hard", "refs/remotes/origin/main");
-
-    const result = await loadBranchState({ pullRequests: [mergedPull(mergedHead)] });
-    // The merge base excludes unrelated main progress that a stale-tip diff would replay.
-    expect(result.branch).toBeUndefined();
-  });
-
-  it("keeps post-merge commits as a stats-only row until the branch rebases", async () => {
-    const mergedHead = await initializeFeatureHead({ trackFeature: true });
-    await appendCommit("a.txt", "three\n", "post-merge work");
-    await trackRemote("feature");
-
-    const result = await loadBranchState({ pullRequests: [mergedPull(mergedHead)] });
-    // Count the post-merge commit, but hide Create PR until the branch incorporates the landing.
-    expect(result.branch).toEqual({
-      owner: "openclaw",
-      repo: "openclaw",
-      branch: "feature",
-      additions: 1,
-      deletions: 0,
-      changedFiles: 1,
-    });
-  });
-
-  it("omits the branch payload when the default branch is unknown", async () => {
-    await initializeRepo();
-    await git("checkout", "-b", "feature");
-    await trackRemote("feature");
-
-    const result = await loadBranchState({
-      // No defaultBranch: origin/HEAD unresolvable in this checkout.
-      defaultBranch: null,
-    });
-    // Fail closed: without a default branch there is nothing to compare against.
-    expect(result.branch).toBeUndefined();
   });
 });

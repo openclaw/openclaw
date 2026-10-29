@@ -45,7 +45,7 @@ describe("Doctor workspace move ordering", () => {
     const raw = JSON.stringify(milestones);
     const sourceName = "openclaw-workspace-state.json";
     fs.writeFileSync(path.join(context.workspaceDir, sourceName), raw);
-    const source = detect(configured).sources.find((entry) => entry.kind === "setup")!;
+    const source = (await detect(configured)).sources.find((entry) => entry.kind === "setup")!;
     expect((await migrate(configured)).warnings).toEqual([]);
     expect(readReceipt(source, context.env)?.removedSource).toBe(true);
 
@@ -74,7 +74,7 @@ describe("Doctor workspace move ordering", () => {
       expect(fs.existsSync(carriedSource)).toBe(false);
       expect(fs.existsSync(`${carriedSource}.doctor-importing`)).toBe(false);
       const identity = resolveWorkspaceStateIdentity(moved);
-      expect(readWorkspaceStateSnapshot(alias, { env: context.env })).toMatchObject({
+      expect(await readWorkspaceStateSnapshot(alias, { env: context.env })).toMatchObject({
         identity,
         setup: milestones,
       });

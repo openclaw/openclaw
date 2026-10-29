@@ -1,17 +1,15 @@
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
-import {
+  isRealtimeVoiceAudioAudible,
   isRealtimeVoiceWakeNameRequired,
   matchRealtimeVoiceActivationName,
+  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceActivationNameTranscriptResult,
   type RealtimeVoiceBridgeSession,
   type RealtimeVoiceWakeNamePolicy,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { convertDiscordPcm48kStereoToRealtimePcm24kMono } from "./audio.js";
+import { createDiscordPcmToRealtimeConverter } from "./audio.js";
 import type { DiscordRealtimePlaybackPort } from "./realtime-playback.js";
 import { mergeRealtimePartialTranscript } from "./realtime-transcript.js";
 import type {
@@ -19,7 +17,6 @@ import type {
   VoiceRealtimeSpeakerTurn,
   VoiceSessionEntry,
 } from "./session.js";
-import { logVoiceVerbose } from "./session.js";
 
 const logger = createSubsystemLogger("discord/voice");
 const DISCORD_REALTIME_WAKE_NAME_FOLLOWUP_TTL_MS = 10_000;
@@ -30,13 +27,11 @@ const DISCORD_REALTIME_TRAILING_SILENCE_MAX_MS = 3_000;
 export type DiscordRealtimeSpeakerContext = VoiceRealtimeSpeakerContext & { userId: string };
 
 type PendingSpeakerTurn = {
-  inputDiscordBytes: number;
-  inputRealtimeBytes: number;
-  inputChunks: number;
+  bridge: RealtimeVoiceBridgeSession | null;
+  converter: ReturnType<typeof createDiscordPcmToRealtimeConverter>;
+  providerEpoch: number;
   interruptedPlayback: boolean;
   context: DiscordRealtimeSpeakerContext;
-  startedAt: number;
-  lastAudioAt?: number;
   hasAudio: boolean;
   closed: boolean;
 };
@@ -87,24 +82,34 @@ export class DiscordRealtimeTurns {
     ) {
       throw new Error("A Discord realtime connection cannot change speaker authority");
     }
-    this.source ??= Object.freeze({ userId, senderIsOwner: context.senderIsOwner });
+    this.source ??= { userId, senderIsOwner: context.senderIsOwner };
     this.resetPartialWakeNameTracking();
     const turn: PendingSpeakerTurn = {
+      bridge: this.params.bridge(),
+      converter: createDiscordPcmToRealtimeConverter(),
+      providerEpoch: this.params.providerEpoch(),
       context: { ...context, ...this.source },
-      startedAt: Date.now(),
       hasAudio: false,
       closed: false,
-      inputDiscordBytes: 0,
-      inputRealtimeBytes: 0,
-      inputChunks: 0,
       interruptedPlayback: false,
     };
     return {
       sendInputAudio: (discordPcm48kStereo) =>
         this.sendInputAudioForTurn(turn, discordPcm48kStereo),
       close: () => {
-        this.sendRealtimeTrailingSilenceForTurn(turn);
-        this.logSpeakerTurnClosed(turn);
+        if (turn.closed) {
+          return;
+        }
+        if (this.isTurnProviderCurrent(turn)) {
+          const tail = turn.converter.flush();
+          if (tail.length > 0) {
+            this.registerSpeakerTurnAudioStarted(turn);
+            if (this.params.recordInputAudio(tail) && this.isTurnProviderCurrent(turn)) {
+              turn.bridge?.sendAudio(tail);
+            }
+          }
+          this.sendRealtimeTrailingSilenceForTurn(turn);
+        }
         turn.closed = true;
       },
     };
@@ -153,9 +158,6 @@ export class DiscordRealtimeTurns {
         return;
       }
       forcedSpeakerContext = pendingWakeNameFollowup;
-      logger.info(
-        `discord voice: realtime wake-name follow-up accepted chars=${trimmed.length} speaker=${forcedSpeakerContext.speakerLabel} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId}`,
-      );
     }
     const acceptedText = wakeNameResult.allowed ? wakeNameResult.text || trimmed : trimmed;
     if (wakeNameResult.allowed && !wakeNameResult.text.trim()) {
@@ -181,10 +183,8 @@ export class DiscordRealtimeTurns {
   }
 
   clear(): void {
-    this.pendingAudio = false;
-    this.lastSpeakerTurn = undefined;
-    this.resetPartialWakeNameTracking();
-    this.pendingWakeNameFollowup = undefined;
+    this.resetProviderContinuity();
+    this.wakeNameAckedForTurn = false;
   }
 
   consumePendingSpeakerContext(): DiscordRealtimeSpeakerContext | undefined {
@@ -206,62 +206,60 @@ export class DiscordRealtimeTurns {
 
   private sendInputAudioForTurn(turn: PendingSpeakerTurn, discordPcm48kStereo: Buffer): void {
     const bridge = this.params.bridge();
-    if (!bridge || this.params.stopped()) {
+    if (!bridge || this.params.stopped() || turn.closed) {
       return;
     }
-    const realtimePcm = convertDiscordPcm48kStereoToRealtimePcm24kMono(discordPcm48kStereo);
+    const providerEpoch = this.params.providerEpoch();
+    if (turn.bridge !== bridge || turn.providerEpoch !== providerEpoch) {
+      turn.bridge = bridge;
+      turn.providerEpoch = providerEpoch;
+      turn.converter = createDiscordPcmToRealtimeConverter();
+      turn.hasAudio = false;
+      turn.interruptedPlayback = false;
+    }
+    const realtimePcm = turn.converter.process(discordPcm48kStereo);
     if (realtimePcm.length > 0) {
       this.registerSpeakerTurnAudioStarted(turn);
-      turn.inputDiscordBytes += discordPcm48kStereo.length;
-      turn.inputRealtimeBytes += realtimePcm.length;
-      turn.inputChunks += 1;
-      if (turn.inputChunks === 1) {
-        logger.info(
-          `discord voice: realtime input audio started guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} user=${turn.context.userId} speaker=${turn.context.speakerLabel} discordBytes=${discordPcm48kStereo.length} realtimeBytes=${realtimePcm.length} outputAudioMs=${this.params.playback.outputAudioMs()} outputActive=${this.params.playback.isOutputAudioActive()}`,
-        );
-      }
-      if (!turn.interruptedPlayback && this.params.interruptRoomPlayback()) {
+      if (
+        !turn.interruptedPlayback &&
+        // PCM16 amplitude is independent of rate/channels; exclude current
+        // transport silence even when the resampler still emits earlier speech.
+        isRealtimeVoiceAudioAudible(discordPcm48kStereo, REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ) &&
+        isRealtimeVoiceAudioAudible(realtimePcm, REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ) &&
+        this.params.interruptRoomPlayback()
+      ) {
         turn.interruptedPlayback = true;
-        logVoiceVerbose(
-          `realtime barge-in from active speaker audio: guild ${this.params.entry.guildId} channel ${this.params.entry.channelId} user ${turn.context.userId}`,
-        );
-        logger.info(
-          `discord voice: realtime barge-in detected source=active-speaker-audio guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} user=${turn.context.userId} speaker=${turn.context.speakerLabel} discordBytes=${discordPcm48kStereo.length} realtimeBytes=${realtimePcm.length}`,
-        );
       }
-      if (this.params.recordInputAudio(realtimePcm)) {
+      if (this.params.recordInputAudio(realtimePcm) && this.isTurnProviderCurrent(turn)) {
         bridge.sendAudio(realtimePcm);
       }
     }
   }
 
+  private isTurnProviderCurrent(turn: PendingSpeakerTurn): boolean {
+    return (
+      !turn.closed &&
+      !this.params.stopped() &&
+      turn.bridge !== null &&
+      turn.bridge === this.params.bridge() &&
+      turn.providerEpoch === this.params.providerEpoch()
+    );
+  }
+
   private registerSpeakerTurnAudioStarted(turn: PendingSpeakerTurn): void {
     this.pendingAudio = true;
     this.lastSpeakerTurn = turn;
-    turn.lastAudioAt = Date.now();
-    if (turn.hasAudio) {
-      return;
-    }
     turn.hasAudio = true;
-    logger.info(
-      `discord voice: realtime speaker turn opened guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} user=${turn.context.userId} speaker=${turn.context.speakerLabel} owner=${turn.context.senderIsOwner}`,
-    );
-  }
-
-  private logSpeakerTurnClosed(turn: PendingSpeakerTurn): void {
-    if (turn.closed || !turn.hasAudio) {
-      return;
-    }
-    const elapsedMs = Date.now() - turn.startedAt;
-    const sinceLastAudioMs = turn.lastAudioAt ? Date.now() - turn.lastAudioAt : undefined;
-    logger.info(
-      `discord voice: realtime speaker turn closed guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} user=${turn.context.userId} speaker=${turn.context.speakerLabel} owner=${turn.context.senderIsOwner} hasAudio=${turn.hasAudio} chunks=${turn.inputChunks} discordBytes=${turn.inputDiscordBytes} realtimeBytes=${turn.inputRealtimeBytes} elapsedMs=${elapsedMs}${sinceLastAudioMs === undefined ? "" : ` sinceLastAudioMs=${sinceLastAudioMs}`} interruptedPlayback=${turn.interruptedPlayback}`,
-    );
   }
 
   private sendRealtimeTrailingSilenceForTurn(turn: PendingSpeakerTurn): void {
-    const bridge = this.params.bridge();
-    if (!bridge || this.params.stopped() || turn.closed || !turn.hasAudio) {
+    const bridge = turn.bridge;
+    if (
+      !bridge ||
+      !this.isTurnProviderCurrent(turn) ||
+      bridge.bridge.pacesInputAudio ||
+      !turn.hasAudio
+    ) {
       return;
     }
     const providerId =
@@ -279,9 +277,6 @@ export class DiscordRealtimeTurns {
     const silenceBytes = Math.ceil((24_000 * silenceMs) / 1_000) * REALTIME_PCM16_BYTES_PER_SAMPLE;
     const silence = Buffer.alloc(silenceBytes);
     bridge.sendAudio(silence);
-    logger.info(
-      `discord voice: realtime trailing silence sent guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} user=${turn.context.userId} speaker=${turn.context.speakerLabel} silenceMs=${silenceMs} realtimeBytes=${silence.length}`,
-    );
   }
 
   private resolveWakeNameTranscript(
@@ -300,9 +295,6 @@ export class DiscordRealtimeTurns {
     }
     const wakeNameResult = matchRealtimeVoiceActivationName(text, this.params.wakeNames());
     if (wakeNameResult) {
-      logger.info(
-        `discord voice: realtime wake-name gate matched canonical=${wakeNameResult.activationName} heard=${wakeNameResult.heardName} match=${wakeNameResult.match} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId}`,
-      );
       return wakeNameResult;
     }
     return { allowed: false, text };
@@ -322,25 +314,16 @@ export class DiscordRealtimeTurns {
       );
       return;
     }
-    const expiresAt = resolveExpiresAtMsFromDurationMs(DISCORD_REALTIME_WAKE_NAME_FOLLOWUP_TTL_MS);
-    if (expiresAt === undefined) {
-      return;
-    }
     this.pendingWakeNameFollowup = {
       context,
-      expiresAt,
+      expiresAt: Date.now() + DISCORD_REALTIME_WAKE_NAME_FOLLOWUP_TTL_MS,
     };
-    logger.info(
-      `discord voice: realtime wake-name follow-up armed speaker=${context.speakerLabel} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId}`,
-    );
   }
 
   private consumePendingWakeNameFollowup(): DiscordRealtimeSpeakerContext | undefined {
     const pending = this.pendingWakeNameFollowup;
     this.pendingWakeNameFollowup = undefined;
-    const now = asDateTimestampMs(Date.now());
-    const expiresAt = pending ? asDateTimestampMs(pending.expiresAt) : undefined;
-    if (!pending || now === undefined || expiresAt === undefined || now > expiresAt) {
+    if (!pending || Date.now() > pending.expiresAt) {
       return undefined;
     }
     this.consumePendingSpeakerContext();

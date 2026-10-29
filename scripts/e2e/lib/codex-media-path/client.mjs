@@ -4,9 +4,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { PROTOCOL_VERSION } from "../../../../dist/gateway/protocol/index.js";
 import { renderBitmapTextPngBase64 } from "../../../../test/helpers/live-image-probe.ts";
 import { createGatewayWsClient } from "../../../lib/gateway-ws-client.ts";
+import { readPositiveIntEnv, readTcpPortEnv } from "../env-limits.mjs";
 import { resolveGatewaySuccessPayload } from "../gateway-frame-payload.mjs";
 import { createJsonlRequestTailer } from "./jsonl-request-tail.mts";
-import { readPositiveIntEnv, readTcpPortEnv } from "./limits.mjs";
 
 const portText = process.env.PORT;
 const token = process.env.OPENCLAW_GATEWAY_TOKEN;

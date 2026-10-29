@@ -1,4 +1,3 @@
-// Assertions for Bun global install E2E validation.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -16,7 +15,7 @@ const PARENT_TERMINATION_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 
 const usage = () => {
   console.error(
-    "Usage: assertions.mjs <run-with-timeout|assert-bun-version|assert-image-providers|assert-openclaw-trusted|assert-release-versions|configure-runtime|assert-agent-turn> [...]",
+    "Usage: assertions.mjs <run-with-timeout|assert-bun-version|assert-image-providers|assert-openclaw-trusted|assert-release-versions|configure-runtime|assert-gateway-diagnostics|assert-agent-turn> [...]",
   );
   process.exit(2);
 };
@@ -209,8 +208,9 @@ if (mode === "assert-bun-version") {
   }
   const major = Number(match[1]);
   const minor = Number(match[2]);
-  if (major < 1 || (major === 1 && minor < 4)) {
-    throw new Error(`Bun 1.4 or newer is required; found ${version}`);
+  const patch = Number(match[3]);
+  if (major < 1 || (major === 1 && (minor < 4 || (minor === 4 && patch < 4)))) {
+    throw new Error(`Bun 1.4.4 or newer is required; found ${version}`);
   }
   process.exit(0);
 }
@@ -304,6 +304,22 @@ if (mode === "configure-runtime") {
   applyMockOpenAiModelConfig(config, { mockPort });
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  process.exit(0);
+}
+
+if (mode === "assert-gateway-diagnostics") {
+  const [outputPath] = args;
+  if (!outputPath) {
+    usage();
+  }
+  const { eventLoop } = JSON.parse(fs.readFileSync(outputPath, "utf8"));
+  for (const metric of ["cpuCoreRatio", "utilization", "delayP99Ms", "delayMaxMs", "intervalMs"]) {
+    const value = eventLoop?.[metric];
+    if (!Number.isFinite(value) || value < 0 || (metric === "intervalMs" && value === 0)) {
+      throw new Error(`Gateway status is missing a valid eventLoop.${metric} measurement`);
+    }
+  }
+  console.log("bun-global-install-smoke: Gateway CPU and event-loop diagnostics OK");
   process.exit(0);
 }
 

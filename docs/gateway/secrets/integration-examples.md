@@ -55,7 +55,7 @@ For a dedicated 1Password guide covering service accounts, the bundled agent ski
 
   </Accordion>
   <Accordion title="Bitwarden Secrets Manager (`bws`)">
-    Use a resolver wrapper to map SecretRef ids to Bitwarden Secrets Manager item keys. The repository includes `scripts/secrets/openclaw-bws-resolver.mjs`; install or copy it to an absolute trusted path on the host that runs the Gateway.
+    Use a resolver wrapper to map SecretRef ids to Bitwarden Secrets Manager item keys. The repository includes [`scripts/secrets/openclaw-bws-resolver.mjs`](https://github.com/openclaw/openclaw/blob/main/scripts/secrets/openclaw-bws-resolver.mjs); install or copy it to an absolute trusted path on the host that runs the Gateway.
 
     Requirements:
 

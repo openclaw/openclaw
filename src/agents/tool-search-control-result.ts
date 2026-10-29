@@ -13,9 +13,12 @@ export function renderToolSearchControlText(text: string, networkContent: boolea
   if (!networkContent) {
     return { text, truncated: false };
   }
-  const bounded = truncateSanitizedExternalContent(text, 20_000);
-  const modelText = bounded.truncated
-    ? `${truncateSanitizedExternalContent(text, 19_988).text}\n[truncated]`
-    : bounded.text;
-  return { text: wrapExternalContent(modelText, { source: "api" }), truncated: bounded.truncated };
+  const bounded =
+    text.length <= 20_000 ? truncateSanitizedExternalContent(text, 20_000) : undefined;
+  const truncated = bounded?.truncated ?? true;
+  const modelText =
+    !bounded || bounded.truncated
+      ? `${truncateSanitizedExternalContent(text, 19_988).text}\n[truncated]`
+      : bounded.text;
+  return { text: wrapExternalContent(modelText, { source: "api" }), truncated };
 }

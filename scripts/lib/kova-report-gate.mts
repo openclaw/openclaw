@@ -106,7 +106,7 @@ function exactCounts(actualValue: unknown, expected: Record<string, number>, lab
   }
 }
 
-function exactStrings(actualValue: unknown, expected: unknown[], label: string) {
+function exactValues(actualValue: unknown, expected: unknown[], label: string) {
   const actual = array(actualValue, label);
   check(
     actual.length === expected.length && actual.every((value, index) => value === expected[index]),
@@ -263,7 +263,6 @@ function sampledMetric(metrics: JsonRecord, ids: string[], sampleCount: number, 
   for (const id of ids) {
     if (metrics[id] !== undefined) {
       const samples = validateMetric(metrics[id], sampleCount, `${label}.${id}`);
-      check(samples.length === sampleCount, `${label}.${id} did not cover every record`);
       return { id, samples };
     }
   }
@@ -333,16 +332,17 @@ function validatePerformance(report: JsonRecord, records: ValidatedRecord[], rep
     );
     const rss = sampledMetric(metrics, RSS_METRICS, sampleCount, "group RSS");
     const cpu = sampledMetric(metrics, CPU_METRICS, sampleCount, "group CPU");
-    for (const record of matching) {
-      check(
-        rss.samples.includes(measured(record, RSS_METRICS, "record RSS")),
-        "record RSS was not sampled",
-      );
-      check(
-        cpu.samples.includes(measured(record, CPU_METRICS, "record CPU")),
-        "record CPU was not sampled",
-      );
-    }
+    // Repeated measurements each need a sample; membership alone loses multiplicity.
+    exactValues(
+      rss.samples.toSorted((a, b) => a - b),
+      matching.map((entry) => measured(entry, RSS_METRICS, "record RSS")).toSorted((a, b) => a - b),
+      "record RSS samples",
+    );
+    exactValues(
+      cpu.samples.toSorted((a, b) => a - b),
+      matching.map((entry) => measured(entry, CPU_METRICS, "record CPU")).toSorted((a, b) => a - b),
+      "record CPU samples",
+    );
     groupsByKey.set(key, group);
   }
   check(
@@ -706,7 +706,7 @@ function validateProfiledFailure(record: ValidatedRecord, card: JsonRecord, grou
     "blocking card identity was invalid",
   );
   check(card.summary === messages[0], "blocking card summary did not match");
-  exactStrings(card.violations, messages, "blocking card violations");
+  exactValues(card.violations, messages, "blocking card violations");
   const cardMeasurements = object(card.measurements, "blocking card measurements");
   check(
     cardMeasurements.peakRssMb === record.measurements.peakRssMb &&

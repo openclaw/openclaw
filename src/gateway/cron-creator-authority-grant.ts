@@ -1,16 +1,31 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { cloneCronRuntimeAuthority, type CronRuntimeAuthority } from "../cron/runtime-authority.js";
 import {
   normalizeCronScheduledToolCallerOrigin,
   type CronScheduledToolCallerOrigin,
 } from "../cron/scheduled-tool-policy.js";
+import type { CronStreamExecPolicy } from "../cron/stream-exec-authority.js";
+import { normalizeCronAuthenticatedChannelRequester } from "../cron/tools-allow-provenance.js";
 import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
-import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
-import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.types.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
+import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../infra/exec-approvals-core.js";
+import type {
+  CronAuthenticatedChannelRequester,
+  CronCreatorAuthorityGrant,
+} from "./cron-creator-authority-grant.types.js";
+
+/** Resolve the deployment's automation scope when binding model tools or admitting RPCs. */
+export function isCronModelManagementAllowed(
+  config: OpenClawConfig | undefined = getRuntimeConfigSnapshot() ?? undefined,
+): boolean {
+  return config?.tools?.gatewayPolicy?.automations?.scope !== "caller";
+}
 
 export const CRON_MANAGEMENT_METHODS = [
   "cron.list",
@@ -18,19 +33,44 @@ export const CRON_MANAGEMENT_METHODS = [
   "cron.update",
   "cron.run",
   "cron.remove",
+  "cron.bind",
 ] as const;
 type CronManagementBinding = { method: string; authority: AgentRunDelegatedAuthority };
+type CronManagementCaller = {
+  operationalRunInstance: AgentRunDelegatedAuthority["operationalRunInstance"];
+  delegatedAuthority: Pick<AgentRunDelegatedAuthority, "lifecycleGeneration" | "claimId">;
+};
 const activeManagement = new AsyncLocalStorage<{
-  identity: AgentRuntimeIdentity;
+  identity: CronManagementCaller;
   assertActive: () => void;
+  callerOrigin?: CronScheduledToolCallerOrigin;
+  channelRequester?: CronAuthenticatedChannelRequester;
+  execPolicy?: CronStreamExecPolicy;
 }>();
+
+/** Admission fact, independent of a run lifetime so an authorized yield can transfer it. */
+export type CronManagementEntitlement =
+  | Readonly<{ source: "control-ui-admin" }>
+  | Readonly<{ source: "channel-owner"; isCurrent: () => boolean }>;
 
 export type CronCreatorAuthorityRunScope = {
   readonly runId: string;
   readonly callerOrigin: CronScheduledToolCallerOrigin;
   readonly signal: AbortSignal;
   readonly grantTokens: Set<string>;
+  readonly managementEntitlement?: CronManagementEntitlement;
+  /** Separately admitted channel-owner identity, not implied by automation management rights. */
+  readonly requesterOwner?: Readonly<{
+    isCurrent: () => boolean;
+    senderId?: string;
+    channel?: string;
+    accountId?: string;
+  }>;
+  /** Fresh admission only; never transferred with a management continuation. */
+  readonly callerScopedCreation?: true;
+  /** @deprecated Read managementEntitlement. Harness source compatibility lasts through 2026-10-12. */
   readonly controlUiAdmin?: true;
+  readonly isCurrent?: () => boolean;
   active: boolean;
   abort: () => void;
 };
@@ -38,17 +78,25 @@ export type CronCreatorAuthorityRunScope = {
 type CronCreatorAuthorityGrantEntry = {
   scope: CronCreatorAuthorityRunScope;
   runtimeAuthority?: CronRuntimeAuthority;
+  capturesRuntimeAuthority: boolean;
+  creatorProfileId?: string;
+  isCurrent?: () => boolean;
   operationSignal?: AbortSignal;
   onOperationAbort?: () => void;
   management?: CronManagementBinding & { expiresAtMs: number };
+  execPolicy?: CronStreamExecPolicy;
 };
 
 const grantsByToken = new Map<string, CronCreatorAuthorityGrantEntry>();
+const channelRequestersByScope = new WeakMap<
+  CronCreatorAuthorityRunScope,
+  CronAuthenticatedChannelRequester
+>();
 
 function expiredAuthorityError(): Error & { status: number } {
   return Object.assign(
     new TypeError(
-      "Configured MCP cron authority is no longer active for this run. Retry the automation mutation from the active local operator turn.",
+      "Configured MCP cron authority is no longer active for this run. Retry the automation mutation from a fresh authenticated creator turn.",
     ),
     { name: "CronCreatorAuthorityExpiredError", status: 403 },
   );
@@ -57,18 +105,50 @@ function expiredAuthorityError(): Error & { status: number } {
 export function createCronCreatorAuthorityRunScope(
   runId: string,
   callerOrigin: CronScheduledToolCallerOrigin = { kind: "unknown" },
-  controlUiAdmin?: true,
+  managementEntitlement?: CronManagementEntitlement,
+  isCurrent?: () => boolean,
+  channelRequester?: CronAuthenticatedChannelRequester,
+  requesterOwner?: CronCreatorAuthorityRunScope["requesterOwner"],
+  callerScopedCreation?: true,
 ): CronCreatorAuthorityRunScope {
   const abortController = new AbortController();
-  return {
+  const requester = normalizeCronAuthenticatedChannelRequester(channelRequester);
+  const scope: CronCreatorAuthorityRunScope = {
     runId,
     callerOrigin: normalizeCronScheduledToolCallerOrigin(callerOrigin),
     signal: abortController.signal,
     grantTokens: new Set(),
-    ...(controlUiAdmin ? { controlUiAdmin } : {}),
+    ...(managementEntitlement ? { managementEntitlement } : {}),
+    ...(requesterOwner ? { requesterOwner } : {}),
+    ...(callerScopedCreation ? { callerScopedCreation } : {}),
+    get controlUiAdmin(): true | undefined {
+      return managementEntitlement?.source === "control-ui-admin" ? true : undefined;
+    },
+    ...(isCurrent ? { isCurrent } : {}),
     active: true,
-    abort: () => abortController.abort(expiredAuthorityError()),
+    abort: () => {
+      const reason = expiredAuthorityError();
+      materializeErrorStack(reason);
+      abortController.abort(reason);
+    },
   };
+  if (requester) {
+    channelRequestersByScope.set(scope, Object.freeze(requester));
+  }
+  return scope;
+}
+
+/** Keeps native identity out of the capability transported through harness contracts. */
+export function hasCronChannelRequester(scope: CronCreatorAuthorityRunScope): boolean {
+  return channelRequestersByScope.has(scope);
+}
+
+function hasCronAuthenticatedRequester(scope: CronCreatorAuthorityRunScope): boolean {
+  return (
+    scope.callerOrigin.kind === "local" ||
+    hasCronChannelRequester(scope) ||
+    scope.callerScopedCreation === true
+  );
 }
 
 export function mintCronCreatorAuthorityGrant(
@@ -76,18 +156,41 @@ export function mintCronCreatorAuthorityGrant(
   operationSignal?: AbortSignal,
   runtimeAuthority?: CronRuntimeAuthority,
   management?: CronManagementBinding,
+  capture: "runtime" | "requester" = "runtime",
+  isCurrent?: () => boolean,
+  creatorProfileId?: string,
 ): CronCreatorAuthorityGrant {
-  if (!scope.active || scope.signal.aborted || operationSignal?.aborted) {
+  if (
+    !scope.active ||
+    scope.signal.aborted ||
+    operationSignal?.aborted ||
+    scope.isCurrent?.() === false ||
+    isCurrent?.() === false ||
+    (scope.managementEntitlement?.source === "channel-owner" &&
+      !scope.managementEntitlement.isCurrent())
+  ) {
     throw management ? expiredManagementError() : expiredAuthorityError();
   }
-  if (!management && scope.controlUiAdmin && scope.callerOrigin.kind === "unknown") {
+  // Remote admission can prove the requester, never materialize fresh runtime authority.
+  if (
+    !management &&
+    scope.managementEntitlement &&
+    scope.callerOrigin.kind === "unknown" &&
+    !(capture === "requester" && scope.callerScopedCreation)
+  ) {
     throw new TypeError(
       "Automation creation is not granted to this turn. Use the Automations page to create an automation.",
     );
   }
   if (
+    capture === "requester" &&
+    (!hasCronAuthenticatedRequester(scope) || runtimeAuthority || management)
+  ) {
+    throw new TypeError("requester-only cron authority requires authenticated creator facts");
+  }
+  if (
     management &&
-    (!scope.controlUiAdmin ||
+    (!scope.managementEntitlement ||
       !CRON_MANAGEMENT_METHODS.some((method) => method === management.method) ||
       management.authority.operationalRunInstance.runId !== scope.runId ||
       !validateAgentRunDelegatedAuthority(management.authority))
@@ -103,6 +206,9 @@ export function mintCronCreatorAuthorityGrant(
   }
   const entry: CronCreatorAuthorityGrantEntry = {
     scope,
+    capturesRuntimeAuthority: capture === "runtime",
+    ...(creatorProfileId ? { creatorProfileId } : {}),
+    ...(isCurrent ? { isCurrent } : {}),
     operationSignal,
     ...(normalizedRuntimeAuthority ? { runtimeAuthority: normalizedRuntimeAuthority } : {}),
     ...(management ? { management: { ...management, expiresAtMs: Date.now() + 60_000 } } : {}),
@@ -116,6 +222,67 @@ export function mintCronCreatorAuthorityGrant(
     operationSignal.addEventListener("abort", entry.onOperationAbort, { once: true });
   }
   return Object.freeze({ runId: scope.runId, token });
+}
+
+/** Reads private capture facts only for the same live, authenticated run. */
+export function resolveCronCreatorAuthorityGrantProvenance(
+  grant: CronCreatorAuthorityGrant,
+  runId: string,
+):
+  | {
+      capturesRuntimeAuthority: boolean;
+      /** Host-captured causal human; never permission or model input. */
+      creatorProfileId?: string;
+      callerOrigin?: CronScheduledToolCallerOrigin;
+      channelRequester?: CronAuthenticatedChannelRequester;
+    }
+  | undefined {
+  const entry = grantsByToken.get(grant.token);
+  const scope = entry?.scope;
+  if (
+    !entry ||
+    !scope ||
+    entry.management ||
+    !scope.active ||
+    scope.signal.aborted ||
+    entry.operationSignal?.aborted ||
+    entry.isCurrent?.() === false ||
+    scope.isCurrent?.() === false ||
+    (scope.managementEntitlement?.source === "channel-owner" &&
+      !scope.managementEntitlement.isCurrent()) ||
+    scope.runId !== grant.runId ||
+    scope.runId !== runId
+  ) {
+    return undefined;
+  }
+  const channelRequester = channelRequestersByScope.get(scope);
+  return {
+    capturesRuntimeAuthority: entry.capturesRuntimeAuthority,
+    ...(entry.creatorProfileId ? { creatorProfileId: entry.creatorProfileId } : {}),
+    ...(scope.callerOrigin.kind === "local" ? { callerOrigin: { kind: "local" as const } } : {}),
+    ...(channelRequester ? { channelRequester: { ...channelRequester } } : {}),
+  };
+}
+
+/** A requester grant proves identity without claiming a complete executable surface. */
+export function hasCronCreatorGrantProvenance(
+  input: {
+    cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
+    cronToolsAllowCapture?: "final-executable-surface";
+  },
+  runId: string,
+): boolean {
+  if (
+    !input.cronCreatorAuthorityGrant ||
+    input.cronToolsAllowCapture === "final-executable-surface"
+  ) {
+    return true;
+  }
+  const provenance = resolveCronCreatorAuthorityGrantProvenance(
+    input.cronCreatorAuthorityGrant,
+    runId,
+  );
+  return Boolean(provenance?.callerOrigin || provenance?.channelRequester);
 }
 
 function revokeCronCreatorAuthorityGrant(token: string): void {
@@ -136,51 +303,131 @@ export function revokeCronCreatorAuthorityRunScope(scope: CronCreatorAuthorityRu
   }
   scope.active = false;
   scope.abort();
+  channelRequestersByScope.delete(scope);
   for (const token of scope.grantTokens) {
     revokeCronCreatorAuthorityGrant(token);
   }
 }
 
-/** Consumes one live exact-run grant synchronously at the cron commit boundary. */
-export function consumeCronCreatorAuthorityGrant(
-  grant: CronCreatorAuthorityGrant,
-): CronRuntimeAuthority | undefined {
-  const runId = grant.runId.trim();
-  const token = grant.token.trim();
-  const entry = token ? grantsByToken.get(token) : undefined;
-  if (!entry) {
-    throw expiredAuthorityError();
-  }
-  const scope = entry.scope;
+function assertCronGrantCurrent(entry: CronCreatorAuthorityGrantEntry, runId: string): void {
+  const { scope, management } = entry;
   if (
-    entry.management ||
     !scope.active ||
     scope.signal.aborted ||
     entry.operationSignal?.aborted ||
-    scope.runId !== runId
+    entry.isCurrent?.() === false ||
+    scope.isCurrent?.() === false ||
+    scope.runId !== runId ||
+    (scope.managementEntitlement?.source === "channel-owner" &&
+      !scope.managementEntitlement.isCurrent()) ||
+    (management &&
+      (Date.now() >= management.expiresAtMs ||
+        !validateAgentRunDelegatedAuthority(management.authority)))
   ) {
-    if (!scope.active || scope.signal.aborted || entry.operationSignal?.aborted) {
-      revokeCronCreatorAuthorityGrant(token);
-    }
+    throw management ? expiredManagementError() : expiredAuthorityError();
+  }
+}
+
+/** Policy stays with the private, exact-run grant; transport carries only its existing token. */
+export function attachCronStreamExecPolicy(
+  grant: CronCreatorAuthorityGrant,
+  execPolicy: CronStreamExecPolicy,
+): void {
+  const entry = grantsByToken.get(grant.token);
+  if (!entry) {
     throw expiredAuthorityError();
   }
+  assertCronGrantCurrent(entry, grant.runId);
+  if (entry.management?.method === "cron.update" && !entry.execPolicy) {
+    // This exact mutation can wait for human approval; attaching again must
+    // not renew its deadline or the live run authority it still requires.
+    entry.management.expiresAtMs = Date.now() + DEFAULT_EXEC_APPROVAL_TIMEOUT_MS + 10_000;
+  }
+  entry.execPolicy = execPolicy;
+}
+
+export function resolveCronCreatorStreamExecPolicy(
+  grant: CronCreatorAuthorityGrant,
+): CronStreamExecPolicy | undefined {
+  const entry = grantsByToken.get(grant.token);
+  if (!entry || entry.management) {
+    throw expiredAuthorityError();
+  }
+  assertCronGrantCurrent(entry, grant.runId);
+  return bindCronStreamExecPolicyCurrentness(entry.execPolicy, () =>
+    assertCronGrantCurrent(entry, grant.runId),
+  );
+}
+
+function bindCronStreamExecPolicyCurrentness(
+  policy: CronStreamExecPolicy | undefined,
+  assertCurrent: () => void,
+): CronStreamExecPolicy | undefined {
+  if (!policy) {
+    return undefined;
+  }
+  return policy.kind === "resolved"
+    ? {
+        kind: "resolved",
+        sandboxContext: policy.sandboxContext,
+        onApprovalCommitted: policy.onApprovalCommitted,
+        assertCurrentSource: () => {
+          assertCurrent();
+          policy.assertCurrentSource?.();
+        },
+        assertCurrent: (approvedPolicyKey) => {
+          assertCurrent();
+          policy.assertCurrent(approvedPolicyKey);
+        },
+      }
+    : {
+        kind: "needs-approvals",
+        sandboxContext: policy.sandboxContext,
+        onApprovalCommitted: policy.onApprovalCommitted,
+        assertCurrentSource: () => {
+          assertCurrent();
+          policy.assertCurrentSource?.();
+        },
+        assertCurrent: (file, approvedPolicyKey) => {
+          assertCurrent();
+          policy.assertCurrent(file, approvedPolicyKey);
+        },
+      };
+}
+
+/** Consume once; repeated commit checks retain the original issuer and operation lifetime. */
+export function consumeCronCreatorAuthorityGrant(grant: CronCreatorAuthorityGrant): {
+  authority: CronRuntimeAuthority | undefined;
+  assertCurrent: () => void;
+} {
+  const runId = grant.runId.trim();
+  const token = grant.token.trim();
+  const entry = token ? grantsByToken.get(token) : undefined;
+  if (!entry || entry.management) {
+    throw expiredAuthorityError();
+  }
+  const assertCurrent = () => assertCronGrantCurrent(entry, runId);
+  assertCurrent();
   revokeCronCreatorAuthorityGrant(token);
-  return entry.runtimeAuthority ? cloneCronRuntimeAuthority(entry.runtimeAuthority) : undefined;
+  return {
+    authority: entry.runtimeAuthority
+      ? cloneCronRuntimeAuthority(entry.runtimeAuthority)
+      : undefined,
+    assertCurrent,
+  };
 }
 
 function expiredManagementError(): TypeError {
   return new TypeError(
-    "Automation admin grant is missing, expired, or already used. Retry from a fresh authenticated Control UI administrator turn, or use the Automations page.",
+    "Automation admin grant is missing, expired, or already used. Retry from a fresh authenticated configured channel owner or Control UI administrator turn, or use the Automations page.",
   );
 }
 
-/** Redeem once, retaining the exact operational owner through every await and commit. */
-export async function withCronManagementGrant<T>(
+function findCronManagementGrant(
   grant: CronCreatorAuthorityGrant,
-  identity: AgentRuntimeIdentity,
+  identity: CronManagementCaller,
   method: string,
-  run: () => Promise<T>,
-): Promise<T> {
+) {
   const entry = grantsByToken.get(grant.token);
   const management = entry?.management;
   const authority = identity.delegatedAuthority;
@@ -195,29 +442,90 @@ export async function withCronManagementGrant<T>(
     management.authority.lifecycleGeneration !== authority.lifecycleGeneration ||
     management.authority.claimId !== authority.claimId
   ) {
+    return undefined;
+  }
+  return { entry, management };
+}
+
+/**
+ * Lets the method-scope fence admit a caller holding an unredeemed grant bound to this
+ * method. The cron handler still redeems it once and checks it is active.
+ */
+export function holdsCronManagementGrant(
+  grant: CronCreatorAuthorityGrant,
+  identity: CronManagementCaller,
+  method: string,
+): boolean {
+  return findCronManagementGrant(grant, identity, method) !== undefined;
+}
+
+/** Redeem once, retaining the exact operational owner through every await and commit. */
+export async function withCronManagementGrant<T>(
+  grant: CronCreatorAuthorityGrant,
+  identity: CronManagementCaller,
+  method: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const found = findCronManagementGrant(grant, identity, method);
+  if (!found) {
     throw expiredManagementError();
   }
+  const { entry, management } = found;
   revokeCronCreatorAuthorityGrant(grant.token);
   const assertActive = () => {
-    if (
-      !entry.scope.active ||
-      entry.scope.signal.aborted ||
-      entry.operationSignal?.aborted ||
-      Date.now() >= management.expiresAtMs ||
-      !validateAgentRunDelegatedAuthority(management.authority)
-    ) {
-      throw expiredManagementError();
-    }
+    assertCronGrantCurrent(entry, management.authority.operationalRunInstance.runId);
   };
   assertActive();
   // Queue acknowledgement precedes reservation. Its retained guard still
   // belongs to this exact live run, signal, and expiry after the RPC returns.
-  return await activeManagement.run({ identity, assertActive }, run);
+  return await activeManagement.run(
+    {
+      identity,
+      assertActive,
+      ...(entry.scope.callerOrigin.kind === "local"
+        ? { callerOrigin: { kind: "local" as const } }
+        : {}),
+      channelRequester: channelRequestersByScope.get(entry.scope),
+      execPolicy: entry.execPolicy,
+    },
+    run,
+  );
 }
 
 export function getCronManagementAuthority(
-  identity: AgentRuntimeIdentity,
+  identity: CronManagementCaller,
 ): (() => void) | undefined {
   const management = activeManagement.getStore();
   return management?.identity === identity ? management.assertActive : undefined;
+}
+
+export function getCronManagementStreamExecPolicy(
+  identity: CronManagementCaller,
+): CronStreamExecPolicy | undefined {
+  const management = activeManagement.getStore();
+  return management?.identity === identity
+    ? bindCronStreamExecPolicyCurrentness(management.execPolicy, management.assertActive)
+    : undefined;
+}
+
+export function getCronManagementChannelRequester(
+  identity: CronManagementCaller,
+): CronAuthenticatedChannelRequester | undefined {
+  const management = activeManagement.getStore();
+  if (management?.identity !== identity) {
+    return undefined;
+  }
+  management.assertActive();
+  return management.channelRequester ? { ...management.channelRequester } : undefined;
+}
+
+export function getCronManagementCallerOrigin(
+  identity: CronManagementCaller,
+): CronScheduledToolCallerOrigin | undefined {
+  const management = activeManagement.getStore();
+  if (management?.identity !== identity) {
+    return undefined;
+  }
+  management.assertActive();
+  return management.callerOrigin ? { ...management.callerOrigin } : undefined;
 }

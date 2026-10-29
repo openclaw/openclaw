@@ -8,16 +8,23 @@ type LazyColumn = readonly [
 
 // Added after v6 shipped; first-use-only columns stay absent until their feature writes.
 const lazyColumns = [
-  ["claw_installs", "bootstrap_content_digest", "TEXT"],
-  ["claw_installs", "bootstrap_source_path", "TEXT"],
+  ["agent_deletion_journal", "phase", "TEXT", true],
+  ["agent_database_leases", "provenance", "TEXT", true],
+  ["user_profile_identities", "canonical_login", "TEXT"],
+  ["user_profile_identities", "authorization_id", "TEXT"],
+  ["user_profile_identities", "authorization_basis_json", "TEXT"],
+  ["user_profile_identities", "verified_email_json", "TEXT", true],
+  ["template_installs", "bootstrap_content_digest", "TEXT"],
+  ["template_installs", "bootstrap_source_path", "TEXT"],
   ["worker_environments", "desktop_json", "TEXT"],
   ["worker_environments", "bootstrap_install_kind", "TEXT"],
-  ["claw_package_refs", "extension_adapter_identity", "TEXT"],
-  ["claw_package_refs", "extension_detected_format", "TEXT"],
-  ["claw_package_refs", "extension_format", "TEXT"],
-  ["claw_package_refs", "extension_id", "TEXT"],
-  ["claw_package_refs", "extension_mapped_json", "TEXT"],
-  ["claw_package_refs", "extension_unavailable_json", "TEXT"],
+  ["worker_environments", "preparation_purpose", "TEXT"],
+  ["template_package_refs", "extension_adapter_identity", "TEXT"],
+  ["template_package_refs", "extension_detected_format", "TEXT"],
+  ["template_package_refs", "extension_format", "TEXT"],
+  ["template_package_refs", "extension_id", "TEXT"],
+  ["template_package_refs", "extension_mapped_json", "TEXT"],
+  ["template_package_refs", "extension_unavailable_json", "TEXT"],
   ["worker_environments", "shared_host", "INTEGER"],
   ["worker_environments", "node_setup_id", "TEXT"],
   ["worker_environments", "node_device_id", "TEXT"],
@@ -28,6 +35,7 @@ const lazyColumns = [
   ["worker_session_placement_moves", "target_machine_class", "TEXT", true],
   ["worker_session_placement_moves", "target_os", "TEXT", true],
   ["worktrees", "run_end_cleanup_json", "TEXT"],
+  ["worktrees", "gc_protection_json", "TEXT"],
   ["device_bootstrap_tokens", "setup_id", "TEXT", true],
   ["session_groups", "cwd", "TEXT", true],
   ["session_groups", "worktree", "INTEGER", true],
@@ -35,6 +43,15 @@ const lazyColumns = [
   ["web_push_subscriptions", "device_id", "TEXT", true],
   ["web_push_subscriptions", "user_profile_id", "TEXT", true],
   ["web_push_subscriptions", "preferences_json", "TEXT", true],
+  ["task_runs", "execution_owner_host", "TEXT", true],
+  ["task_runs", "execution_owner_pid", "INTEGER", true],
+  ["task_runs", "execution_owner_start_identity", "INTEGER", true],
+  ["session_watch_cursors", "watcher_store_path", "TEXT", true],
+  ["subagent_runs", "requester_store_path", "TEXT", true],
+  ["subagent_runs", "controller_store_path", "TEXT", true],
+  ["cron_jobs", "grant_definition_revision", "TEXT"],
+  ["cron_jobs", "grant_definition_generation", "INTEGER"],
+  ["cron_jobs", "grant_definition_updated_at", "INTEGER"],
 ] as const satisfies readonly LazyColumn[];
 
 function lazyColumnDefinitions(firstUseOnly?: boolean) {
@@ -49,10 +66,10 @@ export const CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS = lazyColumnDefini
 
 // Historical repairs retain these groups at their original backfill boundaries.
 export const ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS = {
-  packageUpdatedAt: [["claw_package_refs", "updated_at_ms INTEGER NOT NULL DEFAULT 0"]],
+  packageUpdatedAt: [["template_package_refs", "updated_at_ms INTEGER NOT NULL DEFAULT 0"]],
   packageIntegrity: [
     [
-      "claw_package_refs",
+      "template_package_refs",
       "package_integrity TEXT NOT NULL DEFAULT 'sha256:0000000000000000000000000000000000000000000000000000000000000000'",
     ],
   ],

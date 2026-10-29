@@ -1,6 +1,5 @@
-// Gateway HTTP session history endpoint.
-// Serves JSON and SSE history snapshots backed by transcript files.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import path from "node:path";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -10,15 +9,21 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-accessor.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+  type CapturedSessionActorStorageOwner,
+} from "../config/sessions/session-actor-storage-binding.js";
+import type { PaginatedSessionHistory } from "../config/sessions/session-history-types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import {
   onInternalSessionTranscriptUpdate,
   readSessionTranscriptUpdateVersion,
 } from "../sessions/transcript-events.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.js";
 import {
   sendInvalidRequest,
@@ -28,6 +33,7 @@ import {
   SSE_CONTENT_TYPE,
 } from "./http-common.js";
 import { hasExplicitAcceptableMediaRange } from "./http-media-range.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import {
   authorizeScopedGatewayHttpRequestOrReply,
   checkGatewayHttpRequestAuth,
@@ -36,24 +42,45 @@ import {
   type AuthorizedGatewayHttpRequest,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
+import { operatorSessionCap } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
+import { resolveSessionHistoryUnavailableMessage } from "./session-history-error.js";
 import {
-  buildSessionHistorySnapshot,
-  readSessionHistoryRawSnapshotAsync,
-  resolveCursorSeq,
+  readSessionHistorySnapshotAsync,
   SessionHistorySseState,
 } from "./session-history-state.js";
-import { createSessionListEntryFilter, resolveSessionSharingTarget } from "./session-sharing.js";
-import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
+import { resolveCursorSeq } from "./session-history-tail.js";
+import {
+  prepareSessionMutationFacts,
+  type PreparedSessionSourceFacts,
+  type SessionFactsRead,
+} from "./session-sharing-preparation.js";
+import { createSessionListEntryFilter } from "./session-sharing.js";
+import { resolveSessionStoreIdentity, resolveSessionStoreKey } from "./session-store-key.js";
+import {
+  resolveTranscriptPathForComparison,
+  resolveTranscriptUpdatePathForComparison,
+} from "./session-transcript-path.js";
+import type { GatewaySessionStoreTargetWithStore } from "./session-utils-store.types.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTargetWithStore,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/sessions-history-sse");
 
 const MAX_SESSION_HISTORY_LIMIT = 1000;
+type HistoryPresentation = ReturnType<typeof prepareOperatorModelPresentation>;
+
+function projectHistory(snapshot: PaginatedSessionHistory, presentation: HistoryPresentation) {
+  if (!presentation) {
+    return snapshot;
+  }
+  const messages = snapshot.messages.map(presentation.message);
+  // Both wire aliases share one projection; retained SSE state stays caller-neutral.
+  return { ...snapshot, items: messages, messages };
+}
 
 // Route misses must remain distinct from matched-invalid keys so fallback
 // stages cannot claim malformed session-history requests.
@@ -62,8 +89,7 @@ type SessionHistoryPathResolution =
   | { error: "invalid-session-key"; matched: true }
   | { matched: true; sessionKey: string };
 
-function resolveSessionHistoryPath(req: IncomingMessage): SessionHistoryPathResolution {
-  const url = new URL(req.url ?? "/", "http://localhost");
+function resolveSessionHistoryPath(url: URL): SessionHistoryPathResolution {
   const match = url.pathname.match(/^\/sessions\/([^/]+)\/history$/);
   if (!match) {
     return { matched: false };
@@ -78,16 +104,8 @@ function resolveSessionHistoryPath(req: IncomingMessage): SessionHistoryPathReso
   }
 }
 
-function shouldStreamSse(req: IncomingMessage): boolean {
-  return hasExplicitAcceptableMediaRange(getHeader(req, "accept"), SSE_CONTENT_TYPE);
-}
-
-function getRequestUrl(req: IncomingMessage): URL {
-  return new URL(req.url ?? "/", "http://localhost");
-}
-
-function resolveLimit(req: IncomingMessage): Result<number | undefined, string> {
-  const raw = getRequestUrl(req).searchParams.get("limit");
+function resolveLimit(url: URL): Result<number | undefined, string> {
+  const raw = url.searchParams.get("limit");
   if (raw == null) {
     return ok(undefined);
   }
@@ -103,8 +121,7 @@ function resolveLimit(req: IncomingMessage): Result<number | undefined, string> 
 }
 
 function sseWrite(res: ServerResponse, event: string, payload: unknown): void {
-  res.write(`event: ${event}\n`);
-  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
 }
 
 function resolveSessionHistoryHttpClient(
@@ -128,6 +145,8 @@ function resolveSessionHistoryHttpClient(
       scopes,
     },
     authenticatedUserProfile: requestAuth.authenticatedUserProfile,
+    preparedSessionProfile: requestAuth.preparedSessionProfile,
+    internal: { operatorRoleActor: requestAuth.operatorRoleActor },
   };
 }
 
@@ -135,15 +154,10 @@ function resolveSessionHistoryHttpClient(
 export async function handleSessionHistoryHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: {
-    auth: ResolvedGatewayAuth;
-    getResolvedAuth?: () => ResolvedGatewayAuth;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
-  },
+  opts: GatewayHttpRequestAuthOptions & { getCommittedRuntimeConfig?: () => OpenClawConfig },
 ): Promise<boolean> {
-  const sessionKeyResolution = resolveSessionHistoryPath(req);
+  const url = new URL(req.url ?? "/", "http://localhost");
+  const sessionKeyResolution = resolveSessionHistoryPath(url);
   if (!sessionKeyResolution.matched) {
     return false;
   }
@@ -157,29 +171,108 @@ export async function handleSessionHistoryHttpRequest(
     return true;
   }
 
+  const canonicalKey = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
   // Session history intentionally uses the shared-secret HTTP trust model:
   // token/password bearer auth grants default operator scopes so simple API key
   // callers can read their own history without a scope header.
   const authResult = await authorizeScopedGatewayHttpRequestOrReply({
+    ...opts,
     req,
     res,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
     operatorMethod: "chat.history",
-    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
   });
   if (!authResult) {
     return true;
   }
-  const { cfg, requestAuth, operatorScopes } = authResult;
+  const assertResponseCurrent = () => {
+    if (res.destroyed || res.writableEnded) {
+      throw new Error("Session history response closed");
+    }
+  };
+  const source = captureSessionActorStorageOwner(
+    { sessionKey: canonicalKey },
+    { assertCurrent: assertResponseCurrent, authorize: assertResponseCurrent },
+  );
+  const assertSessionCurrent = source?.owner?.captureSessionReadGuard(canonicalKey);
+  const assertSourceCurrent = () => {
+    source?.authority.assertCurrent();
+    assertSessionCurrent?.();
+  };
+  return serveAuthorizedSessionHistory(
+    req,
+    res,
+    opts,
+    url,
+    source ? canonicalKey : sessionKey,
+    authResult,
+    source,
+    assertSourceCurrent,
+  );
+}
 
-  let target: ReturnType<typeof resolveGatewaySessionStoreTargetWithStore>;
+async function serveAuthorizedSessionHistory(
+  req: IncomingMessage,
+  res: ServerResponse,
+  opts: GatewayHttpRequestAuthOptions & { getCommittedRuntimeConfig?: () => OpenClawConfig },
+  url: URL,
+  sessionKey: string,
+  authResult: NonNullable<Awaited<ReturnType<typeof authorizeScopedGatewayHttpRequestOrReply>>>,
+  source: CapturedSessionActorStorageOwner | undefined,
+  assertSourceCurrent: () => void,
+): Promise<boolean> {
+  const { cfg, requestAuth, operatorScopes } = authResult;
+  const historyClient = resolveSessionHistoryHttpClient(requestAuth, operatorScopes);
+  let sharing: SessionFactsRead<PreparedSessionSourceFacts> | undefined;
+  using sharingLifetime = {
+    transferred: false,
+    [Symbol.dispose]() {
+      if (!this.transferred) {
+        sharing?.release();
+      }
+    },
+  };
+  let target: GatewaySessionStoreTargetWithStore;
   let entry: ReturnType<typeof resolveCanonicalSessionEntryFromStoreKeys>;
   try {
-    target = resolveGatewaySessionStoreTargetWithStore({ cfg, key: sessionKey });
-    entry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
+    if (source) {
+      assertSourceCurrent();
+      entry = readCapturedSessionActorEntry(source, sessionKey);
+      target = {
+        agentId: source.agentId,
+        canonicalKey: sessionKey,
+        storePath: source.path,
+        storeKeys: [sessionKey],
+        store: entry ? { [sessionKey]: entry } : {},
+        readSource: { agentId: source.agentId, path: source.path },
+      };
+      if (operatorSessionCap(historyClient, cfg) === "invited") {
+        sharing = await prepareSessionMutationFacts({
+          cfg,
+          agentId: source.agentId,
+          sessionKey,
+          allowMissing: true,
+        });
+      }
+    } else {
+      const { agentId } = resolveSessionStoreIdentity({ cfg, sessionKey });
+      sharing = await prepareSessionMutationFacts({
+        cfg,
+        agentId,
+        sessionKey,
+        allowMissing: true,
+      });
+      const current = sharing.readCurrent(getRuntimeConfig());
+      const resolved = current.target;
+      entry = resolved?.entry;
+      target = {
+        ...sharing.storageTarget,
+        storeKeys: resolved?.storeKeys ?? [sharing.storageTarget.canonicalKey],
+        store: entry ? { [resolved!.storeKey]: entry } : {},
+        readSource: current.sourcePath
+          ? { agentId: current.sourceAgentId ?? agentId, path: current.sourcePath }
+          : undefined,
+      };
+    }
   } catch (error) {
     if ((error as { code?: unknown })?.code !== "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED") {
       throw error;
@@ -193,12 +286,7 @@ export async function handleSessionHistoryHttpRequest(
     });
     return true;
   }
-  const historyClient = resolveSessionHistoryHttpClient(requestAuth, operatorScopes);
-  if (
-    !entry?.sessionId ||
-    createSessionListEntryFilter({ cfg, client: historyClient })?.(target.canonicalKey, entry) ===
-      false
-  ) {
+  const sendSessionNotFound = () =>
     sendJson(res, 404, {
       ok: false,
       error: {
@@ -206,15 +294,40 @@ export async function handleSessionHistoryHttpRequest(
         message: `Session not found: ${sessionKey}`,
       },
     });
+  const canReadHistory = (
+    client: GatewayClient | null,
+    currentCfg: OpenClawConfig,
+    selected: {
+      agentId: string;
+      canonicalKey: string;
+      storePath: string;
+      entry: NonNullable<typeof entry>;
+    },
+  ) => {
+    const current = sharing?.readCurrent(currentCfg);
+    const membership =
+      current?.target?.storePath === selected.storePath &&
+      current.target.entry.sessionId === selected.entry.sessionId
+        ? current.membership
+        : undefined;
+    return (
+      createSessionListEntryFilter({ client, cfg: currentCfg, membership })?.(
+        selected.canonicalKey,
+        selected.entry,
+      ) !== false
+    );
+  };
+  if (!entry?.sessionId || !canReadHistory(historyClient, cfg, { ...target, entry })) {
+    sendSessionNotFound();
     return true;
   }
-  const limitResult = resolveLimit(req);
+  const limitResult = resolveLimit(url);
   if (!limitResult.ok) {
     sendInvalidRequest(res, limitResult.error);
     return true;
   }
   const limit = limitResult.value;
-  const cursor = normalizeOptionalString(getRequestUrl(req).searchParams.get("cursor"));
+  const cursor = normalizeOptionalString(url.searchParams.get("cursor"));
   if (cursor !== undefined && resolveCursorSeq(cursor) === undefined) {
     sendInvalidRequest(res, "cursor must be a positive integer");
     return true;
@@ -227,17 +340,107 @@ export async function handleSessionHistoryHttpRequest(
     sessionKey: target.canonicalKey,
     storePath: target.storePath,
   };
+  const streamClosed = createDeferredCore();
+  const publishAuthorizedHistory = async (
+    publish: (presentation: HistoryPresentation) => void,
+  ): Promise<boolean> => {
+    try {
+      const pending = sharing?.prepareRead();
+      if (pending) {
+        await Promise.race([pending, streamClosed.promise]);
+      }
+    } catch {
+      return false;
+    }
+    const cfgLocal = getRuntimeConfig();
+    const currentRequestAuth = await checkGatewayHttpRequestAuth({
+      ...opts,
+      req,
+      auth: opts.getResolvedAuth?.() ?? opts.auth,
+      trustedProxies: cfgLocal.gateway?.trustedProxies,
+      allowRealIpFallback: cfgLocal.gateway?.allowRealIpFallback,
+      cfg: cfgLocal,
+    });
+    if (!currentRequestAuth.ok || !requestAuth.hasCurrentClientAuthority()) {
+      return false;
+    }
+    if (
+      currentRequestAuth.requestAuth.authenticatedUserProfile?.profileId !==
+      requestAuth.authenticatedUserProfile?.profileId
+    ) {
+      return false;
+    }
+    const requestedScopes = resolveSharedSecretHttpOperatorScopes(
+      req,
+      currentRequestAuth.requestAuth,
+    );
+    if (!authorizeOperatorScopesForMethod("chat.history", requestedScopes).allowed) {
+      return false;
+    }
+    const currentClient = resolveSessionHistoryHttpClient(
+      currentRequestAuth.requestAuth,
+      requestedScopes,
+    );
+    const currentConfig = getRuntimeConfig();
+    try {
+      assertSourceCurrent();
+    } catch {
+      return false;
+    }
+    let currentTarget;
+    try {
+      if (source) {
+        const currentEntry = readCapturedSessionActorEntry(source, sessionKey);
+        currentTarget = currentEntry
+          ? {
+              agentId: source.agentId,
+              canonicalKey: sessionKey,
+              storePath: source.path,
+              entry: currentEntry,
+            }
+          : null;
+      } else {
+        currentTarget = sharing!.readCurrent(currentConfig).target;
+      }
+    } catch {
+      return false;
+    }
+    if (
+      currentTarget === null ||
+      currentTarget.agentId !== historyTarget.agentId ||
+      currentTarget.canonicalKey !== historyTarget.sessionKey ||
+      currentTarget.storePath !== historyTarget.storePath ||
+      currentTarget.entry.sessionId !== historyTarget.sessionId ||
+      currentTarget.entry.lifecycleRevision !== entry.lifecycleRevision ||
+      (entry.sessionStartedAt !== undefined &&
+        currentTarget.entry.sessionStartedAt !== entry.sessionStartedAt) ||
+      !canReadHistory(currentClient, currentConfig, currentTarget)
+    ) {
+      return false;
+    }
+    // Keep the final owner check and publication in the same synchronous continuation.
+    publish(
+      prepareOperatorModelPresentation({
+        cfg: currentConfig,
+        policyConfig: opts.getCommittedRuntimeConfig?.() ?? currentConfig,
+        client: currentClient,
+      }),
+    );
+    return true;
+  };
+
   const snapshotVersion = readSessionTranscriptUpdateVersion();
-  let rawSnapshot: Awaited<ReturnType<typeof readSessionHistoryRawSnapshotAsync>>;
+  let historySnapshot: Awaited<ReturnType<typeof readSessionHistorySnapshotAsync>>;
   try {
-    rawSnapshot = await readSessionHistoryRawSnapshotAsync({
+    historySnapshot = await readSessionHistorySnapshotAsync({
       cursor,
       target: historyTarget,
       limit,
       maxChars: effectiveMaxChars,
     });
   } catch (error) {
-    if (!isSessionTranscriptProjectionUnavailableError(error)) {
+    const unavailableMessage = resolveSessionHistoryUnavailableMessage(error);
+    if (unavailableMessage === undefined) {
       throw error;
     }
     res.setHeader("Retry-After", "1");
@@ -245,22 +448,34 @@ export async function handleSessionHistoryHttpRequest(
       ok: false,
       error: {
         type: "unavailable",
-        message: "session history is rebuilding; retry shortly",
+        message: unavailableMessage,
         retryable: true,
       },
     });
     return true;
   }
-  const historySnapshot = { ...rawSnapshot, maxChars: effectiveMaxChars, limit, cursor };
-  if (!shouldStreamSse(req)) {
-    const history = buildSessionHistorySnapshot(historySnapshot).history;
-    sendJson(res, 200, {
-      sessionKey: target.canonicalKey,
-      ...history,
-    });
+  const stream = hasExplicitAcceptableMediaRange(getHeader(req, "accept"), SSE_CONTENT_TYPE);
+  if (
+    !(await publishAuthorizedHistory((presentation) => {
+      if (!stream) {
+        sendJson(res, 200, {
+          sessionKey: target.canonicalKey,
+          ...projectHistory(historySnapshot.history, presentation),
+        });
+      }
+    }))
+  ) {
+    sendSessionNotFound();
+    return true;
+  }
+  if (!stream) {
     return true;
   }
 
+  // Legacy selectors map lexically to SQLite; following a JSON symlink could merge owners.
+  const historyStorePath = path.resolve(target.storePath);
+  const historyLifecycleRevision = normalizeOptionalString(entry.lifecycleRevision);
+  const historyDatabasePath = resolveTranscriptPathForComparison(target.readSource?.path);
   const transcriptCandidates = new Set(
     resolveSessionTranscriptCandidates(
       historyTarget.sessionId,
@@ -272,25 +487,43 @@ export async function handleSessionHistoryHttpRequest(
       .filter((candidate): candidate is string => typeof candidate === "string"),
   );
 
-  const sseState = SessionHistorySseState.fromRawSnapshot({
-    ...historySnapshot,
+  const sseState = SessionHistorySseState.fromSnapshot({
     target: historyTarget,
+    maxChars: effectiveMaxChars,
+    limit,
+    cursor,
+    snapshot: historySnapshot,
   });
   let streamStopped = false;
   let streamQueue = Promise.resolve();
+  let pendingRefresh: (() => Promise<void>) | undefined;
   const streamResources: {
     heartbeat?: ReturnType<typeof setInterval>;
     unsubscribe?: () => void;
   } = {};
 
-  function writeStreamHistory(snapshot: ReturnType<SessionHistorySseState["snapshot"]>) {
+  function writeStreamHistory(
+    snapshot: PaginatedSessionHistory,
+    presentation: HistoryPresentation,
+  ) {
     sseWrite(res, "history", {
       sessionKey: target.canonicalKey,
-      ...snapshot,
+      ...projectHistory(snapshot, presentation),
     });
     // Send the entire requested page before bounding private live state.
-    // Cursor refreshes reread SQLite, so their next page remains complete.
+    // Cursor refreshes reread the owner, so their next page remains complete.
     sseState.retainRecentMessages(MAX_SESSION_HISTORY_LIMIT);
+  }
+
+  async function publishStream(publish: (presentation: HistoryPresentation) => void) {
+    const authorized = await publishAuthorizedHistory((presentation) => {
+      if (!isStreamClosed()) {
+        publish(presentation);
+      }
+    });
+    if (!authorized) {
+      closeStream();
+    }
   }
 
   function releaseStreamResources() {
@@ -298,20 +531,10 @@ export async function handleSessionHistoryHttpRequest(
       return;
     }
     streamStopped = true;
-    if (streamResources.heartbeat) {
-      clearInterval(streamResources.heartbeat);
-    }
-    if (streamResources.unsubscribe) {
-      streamResources.unsubscribe();
-    }
-  }
-
-  function detachStreamListeners() {
-    req.off("close", handleRequestStreamClose);
-    req.off("error", handleRequestStreamError);
-    res.off("close", handleResponseStreamClose);
-    res.off("finish", handleResponseStreamFinish);
-    res.off("error", handleResponseStreamError);
+    clearInterval(streamResources.heartbeat);
+    streamResources.unsubscribe?.();
+    sharing?.release();
+    streamClosed.resolve();
   }
 
   function closeStream() {
@@ -343,7 +566,11 @@ export async function handleSessionHistoryHttpRequest(
 
   function handleResponseStreamClose() {
     releaseStreamResources();
-    detachStreamListeners();
+    // The request can emit its abort error after the response closes. Its own
+    // close handler releases those listeners once request errors have settled.
+    res.off("close", handleResponseStreamClose);
+    res.off("finish", handleResponseStreamFinish);
+    res.off("error", handleResponseStreamError);
   }
 
   function handleResponseStreamError(error: Error) {
@@ -360,19 +587,20 @@ export async function handleSessionHistoryHttpRequest(
   res.on("finish", handleResponseStreamFinish);
   res.on("error", handleResponseStreamError);
 
-  setSseHeaders(res);
-  res.write("retry: 1000\n\n");
+  if (
+    !(await publishAuthorizedHistory(() => {
+      setSseHeaders(res);
+      res.write("retry: 1000\n\n");
+    }))
+  ) {
+    closeStream();
+  }
   if (isStreamClosed()) {
     return true;
   }
   const queueStreamWork = (work: () => Promise<void>) => {
     streamQueue = streamQueue
-      .then(async () => {
-        if (isStreamClosed()) {
-          return;
-        }
-        await work();
-      })
+      .then(() => (isStreamClosed() ? undefined : work()))
       .catch((error: unknown) => {
         // Surface the underlying error so operators can distinguish transient
         // infrastructure failures (for example a `getRuntimeConfig()` read error
@@ -382,125 +610,121 @@ export async function handleSessionHistoryHttpRequest(
       });
   };
 
+  const queueStreamRefresh = () => {
+    if (pendingRefresh) {
+      return;
+    }
+    const refresh = async () => {
+      await publishStream(() => {
+        // Updates after this read starts need one trailing refresh.
+        if (pendingRefresh === refresh) {
+          pendingRefresh = undefined;
+        }
+      });
+      if (!isStreamClosed()) {
+        const snapshot = await sseState.refreshAsync();
+        await publishStream((presentation) => writeStreamHistory(snapshot, presentation));
+      }
+    };
+    pendingRefresh = refresh;
+    queueStreamWork(refresh);
+  };
+
   // The listener is installed before this queued delivery runs. Refresh once if a
   // commit crossed the initial read; subsequent updates queue behind this snapshot.
   queueStreamWork(async () => {
     if (snapshotVersion !== readSessionTranscriptUpdateVersion()) {
       await sseState.refreshAsync();
     }
-    if (!isStreamClosed()) {
-      writeStreamHistory(sseState.snapshot());
-    }
+    await publishStream((presentation) => writeStreamHistory(sseState.snapshot(), presentation));
   });
 
-  const isStreamStillAuthorized = async (): Promise<boolean> => {
-    const cfgLocal = getRuntimeConfig();
-    const currentRequestAuth = await checkGatewayHttpRequestAuth({
-      req,
-      auth: opts.getResolvedAuth?.() ?? opts.auth,
-      trustedProxies: cfgLocal.gateway?.trustedProxies,
-      allowRealIpFallback: cfgLocal.gateway?.allowRealIpFallback,
-      rateLimiter: opts.rateLimiter,
-      cfg: cfgLocal,
-    });
-    if (!currentRequestAuth.ok) {
-      return false;
-    }
-    if (
-      currentRequestAuth.requestAuth.authenticatedUserProfile?.profileId !==
-      requestAuth.authenticatedUserProfile?.profileId
-    ) {
-      return false;
-    }
-    const requestedScopes = resolveSharedSecretHttpOperatorScopes(
-      req,
-      currentRequestAuth.requestAuth,
-    );
-    if (!authorizeOperatorScopesForMethod("chat.history", requestedScopes).allowed) {
-      return false;
-    }
-    const currentClient = resolveSessionHistoryHttpClient(
-      currentRequestAuth.requestAuth,
-      requestedScopes,
-    );
-    if (!currentClient) {
-      return true;
-    }
-    const currentTarget = resolveSessionSharingTarget({
-      cfg: cfgLocal,
-      sessionKey: target.canonicalKey,
-      agentId: target.agentId,
-    });
-    return (
-      currentTarget !== null &&
-      createSessionListEntryFilter({ cfg: cfgLocal, client: currentClient })?.(
-        currentTarget.canonicalKey,
-        currentTarget.entry,
-      ) !== false
-    );
-  };
-
   streamResources.heartbeat = setInterval(() => {
-    queueStreamWork(async () => {
-      if (!(await isStreamStillAuthorized())) {
-        closeStream();
-        return;
-      }
-      if (!res.writableEnded) {
-        res.write(": keepalive\n\n");
-      }
-    });
+    queueStreamWork(() => publishStream(() => res.write(": keepalive\n\n")));
   }, 15_000);
 
   streamResources.unsubscribe = onInternalSessionTranscriptUpdate((update) => {
-    // Filter to candidate sessions synchronously before enqueueing any async
-    // work. Transcript updates use a global fan-out listener, so every
-    // transcript write in the gateway would otherwise append a Promise-chain
-    // entry capturing `update.message` to every open SSE stream's queue —
-    // O(streams × updates) for busy deployments.
+    // Filter the global fan-out before retaining messages or scheduling async work.
+    const updateTarget = update.target;
     const updateMatchesIdentity =
-      update.target?.sessionId === historyTarget.sessionId &&
-      normalizeAgentId(update.target.agentId) === normalizeAgentId(target.agentId);
-    const updatePath = resolveTranscriptPathForComparison(update.sessionFile);
+      updateTarget?.sessionId === historyTarget.sessionId &&
+      normalizeAgentId(updateTarget.agentId) === normalizeAgentId(target.agentId) &&
+      (updateTarget.sessionKey === historyTarget.sessionKey ||
+        resolveSessionStoreKey({
+          cfg: getRuntimeConfig(),
+          sessionKey: updateTarget.sessionKey,
+          storeAgentId: target.agentId,
+        }) === historyTarget.sessionKey);
+    const updateLifecycleRevision = normalizeOptionalString(update.lifecycleRevision);
+    if (updateTarget && !updateMatchesIdentity) {
+      return;
+    }
+    const updatePath = resolveTranscriptUpdatePathForComparison(update);
     if (!updateMatchesIdentity && (!updatePath || !transcriptCandidates.has(updatePath))) {
       return;
     }
+    if (
+      updateLifecycleRevision !== historyLifecycleRevision ||
+      update.message === undefined ||
+      limit !== undefined ||
+      cursor !== undefined
+    ) {
+      queueStreamRefresh();
+      return;
+    }
+    const updateStorePath = updateTarget?.storePath
+      ? path.resolve(updateTarget.storePath)
+      : undefined;
+    const updateMatchesStore = updateStorePath?.endsWith(".sqlite")
+      ? historyDatabasePath !== undefined &&
+        resolveTranscriptUpdatePathForComparison(update, "storePath") === historyDatabasePath
+      : updateStorePath === historyStorePath;
+    if (updateTarget?.sessionKey !== historyTarget.sessionKey || !updateMatchesStore) {
+      // Legacy notifications and unfamiliar aliases can invalidate canonical history,
+      // but their carried payload does not establish physical or lifecycle ownership.
+      queueStreamRefresh();
+      return;
+    }
+    // Inline delivery is an ordering barrier: a later invalidation must still
+    // repair this append even if an earlier refresh already contains its row.
+    pendingRefresh = undefined;
     queueStreamWork(async () => {
-      if (!(await isStreamStillAuthorized())) {
-        closeStream();
-        return;
-      }
-      if (update.message !== undefined && limit === undefined && cursor === undefined) {
-        if (sseState.shouldRefreshForTranscriptPath(updatePath)) {
-          writeStreamHistory(await sseState.refreshAsync());
+      let refresh = false;
+      const append = sseState.shouldRefreshForTranscriptPath(updatePath)
+        ? undefined
+        : await sseState.prepareInlineMessage({
+            message: update.message,
+            messageId: update.messageId,
+            messageSeq: update.messageSeq,
+          });
+      await publishStream((presentation) => {
+        if (!append) {
+          refresh = true;
           return;
         }
-        const nextEvent = sseState.appendInlineMessage({
-          message: update.message,
-          messageId: update.messageId,
-          messageSeq: update.messageSeq,
-        });
-        if (!nextEvent) {
-          return;
-        }
-        if (nextEvent.shouldRefresh) {
-          writeStreamHistory(await sseState.refreshAsync());
-          return;
-        }
-        if (nextEvent.message === undefined) {
+        const nextEvent = append();
+        refresh = nextEvent?.shouldRefresh === true;
+        if (refresh || nextEvent?.message === undefined) {
           return;
         }
         sseState.retainRecentMessages(MAX_SESSION_HISTORY_LIMIT);
         sseWrite(res, "message", {
           sessionKey: target.canonicalKey,
-          message: nextEvent.message,
+          message: presentation ? presentation.message(nextEvent.message) : nextEvent.message,
           ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
           messageSeq: nextEvent.messageSeq,
         });
-        return;
+      });
+      if (refresh && !isStreamClosed()) {
+        const snapshot = await sseState.refreshAsync();
+        await publishStream((presentation) => writeStreamHistory(snapshot, presentation));
       }
-      writeStreamHistory(await sseState.refreshAsync());
     });
   });
+  sharingLifetime.transferred = true;
+  if (source) {
+    await streamClosed.promise;
+    await streamQueue;
+  }
   return true;
 }

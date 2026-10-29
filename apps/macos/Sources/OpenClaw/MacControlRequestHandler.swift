@@ -1,11 +1,13 @@
 import Foundation
 import OpenClawIPC
+import OpenClawNativeState
 
 @MainActor
 protocol MacControlOwner {
+    func credentials(root: URL, operation: ClientCredentialOperation) async throws -> ClientCredentialResult
     func status() async throws -> MacControlStatus
     func setPrimary(_ configuration: PrimaryGatewayControlConfiguration) async throws -> MacControlPrimaryStatus
-    func gateways() async throws -> [MacControlGatewayStatus]
+    func gateways(retryKeychainAccess: Bool) async throws -> [MacControlGatewayStatus]
     func addGateway(_ request: MacControlRequest) async throws -> MacControlGatewayStatus
     func removeGateway(id: String) async throws
     func reconnectGateway(id: String) async throws -> MacControlGatewayStatus
@@ -15,23 +17,37 @@ protocol MacControlOwner {
 @MainActor
 final class MacControlRequestHandler {
     private let owner: any MacControlOwner
+    private let credentialsOnly: Bool
     private var mutationInProgress = false
 
-    init(owner: any MacControlOwner) {
+    init(owner: any MacControlOwner, credentialsOnly: Bool = false) {
         self.owner = owner
+        self.credentialsOnly = credentialsOnly
     }
 
     func handle(_ request: MacControlRequest) async -> Data {
         do {
             try Task.checkCancellation()
+            guard !self.credentialsOnly || request.operation == "client.credentials" else {
+                throw MacControlError(code: "unavailable", message: "This app host serves only local credentials.")
+            }
             switch request.operation {
+            case "client.credentials":
+                guard let root = request.credentialRoot, let operation = request.credentialOperation else {
+                    throw MacControlError(
+                        code: "invalid_request",
+                        message: "A credential root and operation are required.")
+                }
+                return try await Self.encode(self.owner.credentials(
+                    root: URL(fileURLWithPath: root),
+                    operation: operation))
             case "status":
-                var status = try await self.owner.status()
+                var status = try await owner.status()
                 status.primary = Self.redacted(status.primary)
                 status.gateways = status.gateways.map(Self.redacted)
                 return try Self.encode(status)
             case "gateway.list":
-                return try await Self.encode(self.owner.gateways().map(Self.redacted))
+                return try await Self.encode(self.owner.gateways(retryKeychainAccess: false).map(Self.redacted))
             case "primary.set", "primary.clear", "gateway.add", "gateway.remove", "gateway.reconnect":
                 guard !self.mutationInProgress else {
                     throw MacControlError(
@@ -74,8 +90,13 @@ final class MacControlRequestHandler {
             guard let query = request.idOrName, !query.isEmpty else {
                 throw MacControlError(code: "invalid_request", message: "Provide the saved Gateway ID or name.")
             }
-            let profiles = try await self.owner.gateways()
+            let profiles = try await owner.gateways(retryKeychainAccess: true)
             let profile = try Self.resolve(query, in: profiles)
+            guard profile.kind != "local" else {
+                throw MacControlError(
+                    code: "invalid_request",
+                    message: "Manage the hosted local Gateway in the Connection window.")
+            }
             try Task.checkCancellation()
             if request.operation == "gateway.remove" {
                 try await self.owner.removeGateway(id: profile.id)
@@ -93,7 +114,8 @@ final class MacControlRequestHandler {
     }
 
     private static func primaryConfiguration(_ request: MacControlRequest) throws
-    -> PrimaryGatewayControlConfiguration {
+        -> PrimaryGatewayControlConfiguration
+    {
         if request.mode == "local", request.transport == nil, request.url == nil, request.sshTarget == nil,
            request.token == nil, request.password == nil, request.remotePort == nil, request.localPort == nil,
            request.identityPath == nil, request.hostKeyPolicy == nil, request.tlsFingerprint == nil
@@ -149,9 +171,13 @@ final class MacControlRequestHandler {
         _ query: String,
         in profiles: [MacControlGatewayStatus]) throws -> MacControlGatewayStatus
     {
-        if let exact = profiles.first(where: { $0.id == query }) { return exact }
+        if let exact = profiles.first(where: { $0.id == query }) {
+            return exact
+        }
         let matches = profiles.filter { $0.name.caseInsensitiveCompare(query) == .orderedSame }
-        if matches.count == 1, let match = matches.first { return match }
+        if matches.count == 1, let match = matches.first {
+            return match
+        }
         guard !matches.isEmpty else {
             throw MacControlError(code: "not_found", message: "No saved Gateway matches that ID or name.")
         }

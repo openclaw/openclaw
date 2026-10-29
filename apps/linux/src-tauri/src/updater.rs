@@ -1,11 +1,13 @@
 use serde::Serialize;
 use std::ffi::OsString;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, Webview};
 use tauri_plugin_opener::OpenerExt;
-use tauri_plugin_updater::{Update, UpdaterExt};
+use tauri_plugin_updater::Update;
+
+mod builder;
 
 pub(crate) const NOT_AVAILABLE_EVENT: &str = "updater://not-available";
 pub(crate) const AVAILABLE_EVENT: &str = "updater://available";
@@ -15,10 +17,6 @@ pub(crate) const READY_EVENT: &str = "updater://ready";
 pub(crate) const ERROR_EVENT: &str = "updater://error";
 
 const RELEASE_URL: &str = "https://github.com/openclaw/openclaw/releases/latest";
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-// Test desktop builds need a channel that Linux-only releases never replace.
-const DESKTOP_TEST_UPDATE_ENDPOINT: &str =
-    "https://github.com/openclaw/openclaw/releases/download/desktop-test/latest-desktop-test.json";
 const AUTO_CHECK_DELAY: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -73,6 +71,14 @@ pub struct UpdaterState {
     // silent startup auto-check is running still surfaces a result instead of
     // being coalesced away into silence.
     manual_pending: Arc<AtomicBool>,
+}
+
+impl UpdaterState {
+    fn lifecycle(&self) -> MutexGuard<'_, UpdateLifecycle> {
+        self.lifecycle
+            .lock()
+            .expect("updater lifecycle lock poisoned")
+    }
 }
 
 #[derive(Debug)]
@@ -148,16 +154,17 @@ impl<T> UpdateLifecycle<T> {
         if self.operation_in_progress {
             return ClaimedAction::None;
         }
-        if relaunch || self.action() == UpdateAction::RestartToUpdate {
+        if relaunch || self.ready.is_some() {
             self.operation_in_progress = true;
             return match self.ready.take() {
                 Some(ReadyUpdate::Deferred(deferred)) => ClaimedAction::Install(deferred),
                 Some(ReadyUpdate::Installed) | None => ClaimedAction::Restart,
             };
         }
-        match self.action() {
-            UpdateAction::OpenDownloadPage => ClaimedAction::OpenDownloadPage,
-            _ => ClaimedAction::None,
+        if self.download_available {
+            ClaimedAction::OpenDownloadPage
+        } else {
+            ClaimedAction::None
         }
     }
 
@@ -207,8 +214,8 @@ struct UpdateInfo {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ManualUpdateInfo {
-    version: String,
-    notes: Option<String>,
+    #[serde(flatten)]
+    update: UpdateInfo,
     release_url: &'static str,
 }
 
@@ -224,6 +231,9 @@ struct UpdateError {
 }
 
 pub fn schedule_auto_check(app: AppHandle) {
+    if crate::test_profile::enabled() {
+        return;
+    }
     let state = app.state::<UpdaterState>();
     if state.auto_check_started.swap(true, Ordering::AcqRel) {
         return;
@@ -271,9 +281,7 @@ pub(crate) fn perform_action(app: &AppHandle) {
 fn activate(app: &AppHandle, relaunch: bool) {
     let action = app
         .state::<UpdaterState>()
-        .lifecycle
-        .lock()
-        .expect("updater lifecycle lock poisoned")
+        .lifecycle()
         .claim_action(relaunch);
     refresh_action(app);
     match action {
@@ -291,9 +299,7 @@ fn activate(app: &AppHandle, relaunch: bool) {
                 Ok(()) => app.restart(),
                 Err(error) => {
                     app.state::<UpdaterState>()
-                        .lifecycle
-                        .lock()
-                        .expect("updater lifecycle lock poisoned")
+                        .lifecycle()
                         .restore_failed_install(deferred);
                     deliver_error(&app, true, TerminalResultKind::RelaunchFailed, error);
                 }
@@ -310,6 +316,17 @@ fn activate(app: &AppHandle, relaunch: bool) {
 // progress/ready/errors always surface, since the user has been told an update
 // is coming.
 async fn run_check(app: AppHandle, manual: bool) {
+    if crate::test_profile::enabled() {
+        if manual {
+            deliver_error(
+                &app,
+                true,
+                TerminalResultKind::CheckFailed,
+                "Updates are disabled for this isolated AOT test app.",
+            );
+        }
+        return;
+    }
     let manual_pending = Arc::clone(&app.state::<UpdaterState>().manual_pending);
     if manual {
         manual_pending.store(true, Ordering::Release);
@@ -318,28 +335,8 @@ async fn run_check(app: AppHandle, manual: bool) {
         return;
     };
     let manual_requested = || manual_pending.load(Ordering::Acquire);
-    #[cfg(target_os = "linux")]
-    let updater = app.updater();
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    let updater = app
-        .updater_builder()
-        .endpoints(vec![DESKTOP_TEST_UPDATE_ENDPOINT
-            .parse()
-            .expect("desktop test updater endpoint is valid")])
-        .and_then(|builder| builder.build());
-    let updater = match updater {
-        Ok(updater) => updater,
-        Err(error) => {
-            deliver_error(
-                &app,
-                manual_requested(),
-                TerminalResultKind::CheckFailed,
-                error,
-            );
-            return;
-        }
-    };
-    let update = match updater.check().await {
+    let updater = builder::updater_builder(&app).and_then(|builder| builder.build());
+    let update = match async { updater?.check().await }.await {
         Ok(Some(update)) => update,
         Ok(None) => {
             deliver_result(
@@ -367,24 +364,18 @@ async fn run_check(app: AppHandle, manual: bool) {
         notes: update.body.clone(),
     };
 
-    app.state::<UpdaterState>()
-        .lifecycle
-        .lock()
-        .expect("updater lifecycle lock poisoned")
-        .download_started();
+    app.state::<UpdaterState>().lifecycle().download_started();
     refresh_action(&app);
     let install_kind = install_kind();
     if install_kind == InstallKind::NotifyOnly {
-        let version = info.version.clone();
-        let notification_body = manual_notification_body(&version);
+        let notification_body = manual_notification_body(&info.version);
         deliver_result(
             &app,
             manual_requested(),
             TerminalResultKind::PackageUpdateAvailable,
             AVAILABLE_MANUAL_EVENT,
             ManualUpdateInfo {
-                version: info.version,
-                notes: info.notes,
+                update: info,
                 release_url: RELEASE_URL,
             },
             &notification_body,
@@ -393,15 +384,9 @@ async fn run_check(app: AppHandle, manual: bool) {
     }
 
     emit(&app, AVAILABLE_EVENT, info.clone());
-    let result = update.download(progress_callback(app.clone()), || {}).await;
-    let result = match result {
+    let result = match update.download(progress_callback(app.clone()), || {}).await {
         Ok(bytes) if install_kind == InstallKind::SelfInstall => {
-            let admitted = app
-                .state::<UpdaterState>()
-                .lifecycle
-                .lock()
-                .expect("updater lifecycle lock poisoned")
-                .begin_self_install();
+            let admitted = app.state::<UpdaterState>().lifecycle().begin_self_install();
             if !admitted {
                 // A relaunch already owns the process; do not replace files beneath it.
                 return;
@@ -409,17 +394,13 @@ async fn run_check(app: AppHandle, manual: bool) {
             refresh_action(&app);
             let result = update.install(&bytes);
             app.state::<UpdaterState>()
-                .lifecycle
-                .lock()
-                .expect("updater lifecycle lock poisoned")
+                .lifecycle()
                 .finish_self_install(result.is_ok());
             result
         }
         Ok(bytes) => {
             app.state::<UpdaterState>()
-                .lifecycle
-                .lock()
-                .expect("updater lifecycle lock poisoned")
+                .lifecycle()
                 .replace_ready(ReadyUpdate::Deferred(DeferredUpdate { update, bytes }));
             Ok(())
         }
@@ -427,8 +408,7 @@ async fn run_check(app: AppHandle, manual: bool) {
     };
     match result {
         Ok(()) => {
-            let version = info.version.clone();
-            let notification_body = ready_notification_body(&version);
+            let notification_body = ready_notification_body(&info.version);
             deliver_result(
                 &app,
                 manual_requested(),
@@ -476,11 +456,7 @@ fn result_delivery(
 }
 
 pub(crate) fn current_action(app: &AppHandle) -> UpdateAction {
-    app.state::<UpdaterState>()
-        .lifecycle
-        .lock()
-        .expect("updater lifecycle lock poisoned")
-        .action()
+    app.state::<UpdaterState>().lifecycle().action()
 }
 
 fn refresh_action(app: &AppHandle) {
@@ -530,11 +506,7 @@ fn install_kind_from_appimage_env(appimage: Option<OsString>, platform: Platform
     }
 }
 
-fn main_window(app: &AppHandle) -> Option<WebviewWindow> {
-    app.get_webview_window("main")
-}
-
-fn main_content_is_remote(app: &AppHandle, window: Option<&WebviewWindow>) -> bool {
+fn main_content_is_remote(app: &AppHandle, window: Option<&Webview>) -> bool {
     !window.is_some_and(|window| {
         app.state::<crate::DesktopState>()
             .main_window_has_local_content(window)
@@ -550,7 +522,7 @@ fn progress_callback(app: AppHandle) -> impl FnMut(usize, Option<u64>) {
 }
 
 fn emit<S: Serialize + Clone>(app: &AppHandle, event: &str, payload: S) {
-    if let Some(window) = main_window(app) {
+    if let Some(window) = app.get_webview("main") {
         if !main_content_is_remote(app, Some(&window)) {
             let _ = window.emit(event, payload);
         }
@@ -566,12 +538,10 @@ fn deliver_result<S: Serialize + Clone>(
     notification_body: &str,
 ) {
     app.state::<UpdaterState>()
-        .lifecycle
-        .lock()
-        .expect("updater lifecycle lock poisoned")
+        .lifecycle()
         .record_result(result);
     refresh_action(app);
-    let window = main_window(app);
+    let window = app.get_webview("main");
     let destination = result_delivery(manual, main_content_is_remote(app, window.as_ref()), result);
     if matches!(
         destination,
@@ -586,7 +556,7 @@ fn deliver_result<S: Serialize + Clone>(
         ResultDestination::Notification => true,
         ResultDestination::WebviewAndNotificationWhenUnfocused => window
             .as_ref()
-            .is_some_and(|window| matches!(window.is_focused(), Ok(false))),
+            .is_some_and(|view| matches!(view.window().is_focused(), Ok(false))),
     };
     if notify {
         crate::notify::notify(app, "OpenClaw", notification_body);

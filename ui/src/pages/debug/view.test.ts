@@ -1,684 +1,425 @@
-// Control UI tests cover debug behavior.
-import { render, type LitElement } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getQueriesForElement } from "@solidjs/testing-library";
+import { createComponent, flush } from "solid-js";
+import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
 import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import type { EventLogEntry } from "../../api/event-log.ts";
+import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { zh_CN } from "../../i18n/locales/zh-CN.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
-import "./debug-overlay.ts";
-import "./debug-page.ts";
-import type { SparklineSample } from "./sparkline-tile.ts";
-import { renderDebug } from "./view.ts";
+import type { CommandLaneDiagnostics } from "../../lib/gateway-diagnostics.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { DebugPage } from "./debug-page.tsx";
+import {
+  createDebugApplicationContext,
+  diagnosticResponse,
+  normalizedText,
+  useDebugTestEnvironment,
+} from "./debug.test-support.ts";
 
-type DebugProps = Parameters<typeof renderDebug>[0];
-const DIAGNOSTIC_METHODS = [
-  "diagnostics.lanes",
-  "status",
-  "health",
-  "models.list",
-  "last-heartbeat",
-] as const;
-type DiagnosticMethod = (typeof DIAGNOSTIC_METHODS)[number];
+useDebugTestEnvironment();
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
-type TestDebugPage = HTMLElement & {
-  readonly updateComplete: Promise<boolean>;
-  callDebugMethod: () => Promise<void>;
-  context: ApplicationContext;
-  debugCallError: string | null;
-  debugCallMethod: string;
-  debugCallResult: string | null;
-  debugDiagnosticsError: string | null;
-  debugHealth: unknown;
-  debugHeartbeat: unknown;
-  debugLanes: unknown[];
-  debugModels: unknown[];
-  debugStatus: unknown;
-  loadDiagnostics: () => Promise<void>;
-};
-
-type TestDebugOverlay = LitElement & {
-  context: ApplicationContext;
-  toggle: () => void;
-};
-
-type TestSparkline = LitElement & { samples: readonly SparklineSample[] };
-
-async function updateOverlayVitals(overlay: TestDebugOverlay): Promise<void> {
-  await overlay.updateComplete;
-  for (const tile of overlay.querySelectorAll<TestSparkline>("openclaw-debug-sparkline")) {
-    await tile.updateComplete;
-  }
+function gatewaySource(context: ApplicationContext) {
+  const source = createApplicationGateway(context.gateway.snapshot);
+  Object.assign(source.gateway, { eventLog: [], subscribeEventLog: () => () => undefined });
+  return source;
+}
+function hold<T>(fallback: T) {
+  const pending = deferred<T>();
+  onTestFinished(() => pending.resolve(fallback));
+  return pending;
+}
+async function tick(ms = 0) {
+  await vi.advanceTimersByTimeAsync(ms);
+  flush();
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((nextResolve, nextReject) => {
-    resolve = nextResolve;
-    reject = nextReject;
-  });
-  return { promise, resolve, reject };
-}
-
-function createDebugApplicationContext(
-  request: (method: string) => Promise<unknown>,
+function mountPage(
+  responses: Record<string, () => unknown> = {},
   phase: ApplicationGatewaySnapshot["phase"] = "connected",
-): ApplicationContext {
-  const client = { request } as unknown as GatewayBrowserClient;
-  const gateway = {
-    snapshot: {
-      phase,
-      client: phase === "connected" ? client : null,
-      offlineStable: phase === "offline",
-    } as ApplicationGatewaySnapshot,
-    eventLog: [],
-    subscribe: () => () => undefined,
-    subscribeEventLog: () => () => undefined,
-  } as unknown as ApplicationContext["gateway"];
-  const agentSelection = {
-    state: { selectedId: "main" },
-    subscribe: () => () => undefined,
-  } as unknown as ApplicationContext["agentSelection"];
-  return { agentSelection, basePath: "", gateway } as ApplicationContext;
-}
-
-async function mountDebugPage(
-  request: (method: string) => Promise<unknown>,
-): Promise<TestDebugPage> {
-  const page = document.createElement("openclaw-debug-page") as TestDebugPage;
-  page.context = createDebugApplicationContext(request);
-  document.body.append(page);
-  await vi.waitFor(() => expect(page.debugStatus).not.toBeNull());
-  return page;
-}
-
-function diagnosticResponse(method: string, marker = "initial"): unknown {
-  switch (method) {
-    case "status":
-      return { version: marker };
-    case "health":
-      return { marker, ok: true };
-    case "models.list":
-      return { models: [{ id: marker }] };
-    case "last-heartbeat":
-      return { source: marker };
-    case "diagnostics.lanes":
-      return {
-        ts: 1,
-        lanes: [
-          {
-            lane: marker,
-            activeCount: 1,
-            queuedCount: 2,
-            maxConcurrent: 1,
-            draining: false,
-            generation: 0,
-            blockedBy: "lane",
-          },
-        ],
-        dynamic: null,
-      };
-    default:
-      throw new Error(`Unexpected diagnostics method: ${method}`);
-  }
-}
-
-function expectSnapshots(page: TestDebugPage, marker: string): void {
-  expect(page.debugStatus).toEqual({ version: marker });
-  expect(page.debugHealth).toEqual({ marker, ok: true });
-  expect(page.debugModels).toEqual([{ id: marker }]);
-  expect(page.debugHeartbeat).toEqual({ source: marker });
-  expect(page.debugLanes).toEqual([expect.objectContaining({ lane: marker })]);
-}
-
-function createProps(overrides: Partial<DebugProps> = {}): DebugProps {
+  events: readonly EventLogEntry[] = [],
+) {
+  let marker = "initial";
+  const request = vi.fn(
+    async (method: string, _params?: unknown, _options?: { signal?: AbortSignal }) =>
+      responses[method] ? responses[method]() : diagnosticResponse(method, marker),
+  );
+  const initial = createDebugApplicationContext(request, phase);
+  const source = gatewaySource(initial);
+  Object.assign(source.gateway, { eventLog: events });
+  const selection = createAgentSelectionCapability(
+    source.gateway,
+    { state: { agentsList: null }, subscribe: () => () => undefined },
+    { load: () => "main", save: () => undefined },
+  );
+  const context = { ...initial, gateway: source.gateway, settingsAgentSelection: selection };
+  const provider = createSolidApplicationContextProvider(context);
+  const mounted = mountSolid(() => createComponent(DebugPage, {}), { wrapper: provider.wrapper });
+  onTestFinished(() => selection.dispose());
+  const page = mounted.container;
+  const query = (selector: string) => page.querySelector<HTMLElement>(selector);
+  const refreshButton = () => page.querySelector<HTMLButtonElement>(".settings-section button")!;
+  const snapshot = (title: string) => {
+    const block = query(`pre[aria-label="${title}"]`);
+    assert(block);
+    return JSON.parse(block.textContent ?? "null");
+  };
+  const ready = () => waitForSolid(() => expect(refreshButton().disabled).toBe(false));
+  flush();
   return {
-    connected: true,
-    offlineStable: false,
-    loading: false,
-    status: null,
-    health: null,
-    models: [],
-    heartbeat: null,
-    lanes: [],
-    dynamic: null,
-    diagnosticsError: null,
-    eventLog: [],
-    methods: [],
-    callMethod: "",
-    callParams: "{}",
-    callResult: null,
-    callError: null,
-    onCallMethodChange: () => undefined,
-    onCallParamsChange: () => undefined,
-    onRefresh: () => undefined,
-    onOpenOverlay: () => undefined,
-    onCall: () => undefined,
-    ...overrides,
+    ...mounted,
+    page,
+    query,
+    source,
+    context,
+    request,
+    responses,
+    selection,
+    snapshot,
+    ready,
+    setContext: provider.setContext,
+    refreshButton,
+    alert: () => query('.settings-section:first-child [role="alert"]'),
+    mark: (value: string) => {
+      marker = value;
+    },
+    snapshots(expected: string, live = expected) {
+      expect(["Status", "Health", "Models", "Last heartbeat"].map(snapshot)).toEqual([
+        { version: expected },
+        { marker: expected, ok: true },
+        [{ id: expected }],
+        { source: live },
+      ]);
+      expect(normalizedText(query(".command-lane-row"))).toContain(live);
+    },
+    params(value: string) {
+      const input = page.querySelector("textarea")!;
+      input.value = value;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      flush();
+      return input;
+    },
+    call(method = "manual.latest") {
+      const select = page.querySelector<HTMLSelectElement>('select[aria-label="Method"]')!;
+      select.value = method;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      flush();
+      page.querySelector<HTMLButtonElement>("button.primary")!.click();
+      flush();
+    },
+    async refresh() {
+      refreshButton().click();
+      await ready();
+    },
   };
 }
 
-function normalizedText(element: Element | null | undefined): string | undefined {
-  return element?.textContent?.replace(/\s+/gu, " ").trim();
-}
-
-beforeEach(async () => {
-  vi.stubGlobal("localStorage", createStorageMock());
-  await i18n.setLocale("en");
+it("names the page with a level-one heading", async () => {
+  const h = mountPage();
+  await h.ready();
+  expect(getQueriesForElement(h.page).getByRole("heading", { level: 1 }).textContent).toBe("Debug");
 });
 
-afterEach(async () => {
-  document.body.replaceChildren();
-  await i18n.setLocale("en");
-  vi.unstubAllGlobals();
+it("tolerates out-of-range event timestamps", async () => {
+  const h = mountPage({}, "connected", [
+    { ts: 8_640_000_000_000_001, event: "gateway", payload: { message: "newest" } },
+  ]);
+  await h.ready();
+  await waitForSolid(() => expect(h.query(".settings-section:last-child pre span")).not.toBeNull());
+  expect(h.page.textContent).toContain("gateway");
+  expect(h.page.textContent).not.toContain("Invalid Date");
 });
 
-describe("renderDebug", () => {
-  it("disables refresh and explains how to recover while disconnected", () => {
-    const container = document.createElement("div");
-    render(
-      renderDebug(
-        createProps({
-          connected: false,
-          offlineStable: true,
-        }),
-      ),
-      container,
-    );
-    expect(container.querySelector<HTMLButtonElement>("button")?.disabled).toBe(true);
-    expect(normalizedText(container.querySelector(".settings-section"))).toContain(
-      "Offline Connect to the Gateway to refresh diagnostics.",
-    );
+it("updates security audit labels with the locale and keeps the command monospace", async () => {
+  const h = mountPage({
+    status: () => ({ securityAudit: { summary: { critical: 0, warn: 1, info: 2 } } }),
   });
-  it("shows in-card refresh progress without hiding last-good snapshots", () => {
-    const container = document.createElement("div");
-    render(
-      renderDebug(
-        createProps({
-          loading: true,
-          status: { version: "last-good" },
-        }),
-      ),
-      container,
-    );
-    expect(normalizedText(container.querySelector(".settings-section"))).toContain(
-      "Refreshing… Refreshing Gateway diagnostics.",
-    );
-    expect(container.textContent).toContain("last-good");
-  });
-
-  it("keeps the security audit command styled as monospace", async () => {
-    await i18n.setLocale("zh-CN");
-    const container = document.createElement("div");
-
-    render(
-      renderDebug(
-        createProps({
-          status: {
-            securityAudit: {
-              summary: {
-                critical: 0,
-                warn: 1,
-                info: 2,
-              },
-            },
-          },
-        }),
-      ),
-      container,
-    );
-
-    const command = container.querySelector<HTMLElement>(".settings-row__desc .mono");
-    if (!command) {
-      throw new Error("expected debug security audit command");
-    }
-    const status = container.querySelector(".settings-status");
-    const chinese = flattenTranslations(zh_CN);
-    expect(status?.className).toContain("settings-status--warn");
-    expect(normalizedText(status)).toBe(
-      [
-        chinese.get("debug.security.warnings")?.replace("{count}", "1"),
-        chinese.get("debug.security.info")?.replace("{count}", "2"),
-      ].join(" · "),
-    );
-    expect(command.textContent).toBe("openclaw security audit --deep");
-  });
-
-  it("does not render Invalid Date for Date-invalid event timestamps", () => {
-    const container = document.createElement("div");
-
-    render(
-      renderDebug(
-        createProps({
-          eventLog: [
-            {
-              ts: 8_640_000_000_000_001,
-              event: "gateway",
-              payload: { ok: true },
-            },
-          ],
-        }),
-      ),
-      container,
-    );
-
-    expect(container.textContent).toContain("gateway");
-    expect(container.textContent).not.toContain("Invalid Date");
-  });
-
-  it("renders lane diagnostics as an emphasized table", () => {
-    const container = document.createElement("div");
-    render(
-      renderDebug(
-        createProps({
-          lanes: [
-            {
-              lane: "main",
-              activeCount: 2,
-              queuedCount: 3,
-              maxConcurrent: 2,
-              draining: false,
-              generation: 0,
-              group: "interactive",
-              groupActive: 2,
-              groupBudget: 4,
-              blockedBy: "lane",
-            },
-          ],
-          dynamic: {
-            laneCount: 23,
-            activeCount: 9,
-            queuedCount: 4,
-            queuedLaneCount: 3,
-          },
-        }),
-      ),
-      container,
-    );
-
-    const row = container.querySelector(".command-lane-row");
-    expect(row?.classList).toContain("command-lane-row--saturated");
-    expect(row?.classList).toContain("command-lane-row--queued");
-    expect(normalizedText(row)).toContain("main 2/2 3 interactive · 2/4 lane");
-    expect(normalizedText(container.querySelector(".command-lane-row--dynamic"))).toContain(
-      "Session lanes · 23 9 4 —",
-    );
-  });
-});
-
-describe("DebugPage", () => {
-  it("does not report a transient Gateway reconnect as offline", async () => {
-    const request = vi.fn(async (method: string) => diagnosticResponse(method));
-    const page = document.createElement("openclaw-debug-page") as TestDebugPage;
-    page.context = createDebugApplicationContext(request, "reconnecting");
-    document.body.append(page);
-    await page.updateComplete;
-    const refresh = page.querySelector<HTMLButtonElement>("button");
-    expect(refresh?.disabled).toBe(true);
-    expect(normalizedText(page.querySelector(".settings-section"))).not.toContain("Offline");
-  });
-
-  it.each([
-    { label: "response", staleError: false },
-    { label: "error", staleError: true },
-  ])(
-    "ignores an older manual RPC $label after the latest call succeeds",
-    async ({ staleError }) => {
-      const older = deferred<unknown>();
-      const request = vi.fn(async (method: string) => {
-        if (method === "manual.first") {
-          return older.promise;
-        }
-        if (method === "manual.latest") {
-          return { result: "latest response" };
-        }
-        return diagnosticResponse(method);
-      });
-      const page = await mountDebugPage(request);
-
-      page.debugCallMethod = "manual.first";
-      const olderCall = page.callDebugMethod();
-      page.debugCallMethod = "manual.latest";
-      await page.callDebugMethod();
-      if (staleError) {
-        older.reject(new Error("stale manual failure"));
-      } else {
-        older.resolve({ result: "stale response" });
-      }
-      await olderCall;
-
-      expect(page.debugCallResult).toContain("latest response");
-      expect(page.debugCallResult).not.toContain("stale response");
-      expect(page.debugCallError).toBeNull();
-    },
+  await h.ready();
+  expect(h.query(".settings-status")?.textContent).toContain("1 warning");
+  await i18n.setLocale("zh-CN");
+  flush();
+  const chinese = flattenTranslations(zh_CN);
+  expect(h.query(".settings-status")?.className).toContain("settings-status--warn");
+  expect(normalizedText(h.query(".settings-status"))).toBe(
+    [
+      chinese.get("debug.security.warnings")?.replace("{count}", "1"),
+      chinese.get("debug.security.info")?.replace("{count}", "2"),
+    ].join(" · "),
   );
+  expect(h.query(".settings-row__desc .mono")?.textContent).toBe("openclaw security audit --deep");
+});
 
-  it.each(DIAGNOSTIC_METHODS)(
-    "preserves every last-good snapshot and recovers after %s fails",
-    async (failedMethod) => {
-      let failure: DiagnosticMethod | null = null;
-      let marker = "initial";
-      const request = vi.fn(async (method: string) => {
-        if (method === failure) {
-          throw new Error(`${method} unavailable`);
-        }
-        return diagnosticResponse(method, marker);
-      });
-      const page = await mountDebugPage(request);
-      expectSnapshots(page, "initial");
-
-      marker = "uncommitted";
-      failure = failedMethod;
-      await page.loadDiagnostics();
-      await page.updateComplete;
-
-      expect(page.debugDiagnosticsError).toContain(`${failedMethod} unavailable`);
-      expectSnapshots(page, "initial");
-      const alert = page.querySelector<HTMLElement>('[role="alert"]');
-      expect(alert?.closest(".settings-section")?.querySelector("h2")?.textContent.trim()).toBe(
-        "Snapshots",
+it.each(["global", "per-session"] as const)(
+  "renders %s lane capacity and saturation",
+  async (scope) => {
+    const perSession = scope === "per-session";
+    let lane: CommandLaneDiagnostics["lanes"][number] = {
+      lane: perSession ? "subagent" : "main",
+      activeCount: perSession ? 16 : 2,
+      queuedCount: perSession ? 0 : 3,
+      maxConcurrent: perSession ? 8 : 2,
+      draining: false,
+      generation: 0,
+      ...(perSession
+        ? { concurrencyScope: "session", saturatedLaneCount: 0 }
+        : {
+            group: "interactive",
+            groupActive: 2,
+            groupBudget: 4,
+            blockedBy: "lane",
+          }),
+    };
+    const dynamic = perSession
+      ? null
+      : { laneCount: 23, activeCount: 9, queuedCount: 4, queuedLaneCount: 3 };
+    const h = mountPage({ "diagnostics.lanes": () => ({ lanes: [lane], dynamic }) });
+    await h.ready();
+    const row = h.query(".command-lane-row");
+    expect([
+      row?.classList.contains("command-lane-row--saturated"),
+      row?.classList.contains("command-lane-row--queued"),
+    ]).toEqual([!perSession, !perSession]);
+    expect(normalizedText(row)).toContain(
+      perSession ? "subagent 16 · 8/session 0" : "main 2/2 3 interactive · 2/4 lane",
+    );
+    if (dynamic) {
+      expect(normalizedText(h.query(".command-lane-row--dynamic"))).toContain(
+        "Session lanes · 23 9 4 —",
       );
-      expect(alert?.classList).toContain("settings-row");
-      expect(page.querySelector(".callout")).toBeNull();
+    } else {
+      lane = { ...lane, saturatedLaneCount: 1 };
+      await h.refresh();
+      expect(h.query(".command-lane-row")?.classList).toContain("command-lane-row--saturated");
+    }
+  },
+);
 
-      marker = "recovered";
-      failure = null;
-      await page.loadDiagnostics();
-
-      expect(page.debugDiagnosticsError).toBeNull();
-      expectSnapshots(page, "recovered");
-    },
-  );
-
-  it("keeps failed Manual RPC state separate from diagnostics failure and recovery", async () => {
-    let diagnosticsUnavailable = false;
-    const request = vi.fn(async (method: string) => {
-      if (method === "manual.latest") {
-        throw new Error("manual request failed");
-      }
-      if (method === "health" && diagnosticsUnavailable) {
-        throw new Error("background snapshots unavailable");
-      }
-      return diagnosticResponse(method);
-    });
-    const page = await mountDebugPage(request);
-    page.debugCallMethod = "manual.latest";
-    await page.callDebugMethod();
-
-    expect(page.debugCallError).toContain("manual request failed");
-    expect(page.debugDiagnosticsError).toBeNull();
-
-    diagnosticsUnavailable = true;
-    await page.loadDiagnostics();
-
-    expect(page.debugDiagnosticsError).toContain("background snapshots unavailable");
-    expect(page.debugCallError).toContain("manual request failed");
-  });
-});
-
-describe("DebugOverlay", () => {
-  it("graphs bounded status samples without clamping CPU and resets history on reopen", async () => {
+it.each(["reconnect", "source", "agent", "agent with failed models"] as const)(
+  "retires a pending live poll and refreshes snapshots after a %s change",
+  async (change) => {
     vi.useFakeTimers();
-    let sampleCount = 0;
-    let diskResponse: "available" | "single" | "empty" | "legacy" | "missing" | "rejected" =
-      "available";
-    const request = vi.fn(async (method: string) => {
-      if (method === "status") {
-        sampleCount += 1;
-        return {
-          eventLoop: {
-            utilization: 0.42,
-            cpuCoreRatio: 1 + sampleCount / 10,
-            delayP99Ms: 10 + sampleCount,
-            delayMaxMs: 87,
-          },
-          processMemory: {
-            rssBytes: (400 + sampleCount) * 1_048_576,
-            heapUsedBytes: 100 * 1_048_576,
-            heapTotalBytes: 200 * 1_048_576,
-          },
-        };
-      }
-      if (method === "system.info") {
-        if (diskResponse === "rejected") {
-          throw new Error("system info unavailable");
-        }
-        if (diskResponse === "legacy") {
-          return { diskAvailableBytes: 500, diskTotalBytes: 1000, diskPath: "/legacy" };
-        }
-        if (diskResponse === "missing") {
-          return {};
-        }
-        const disks = [
-          {
-            availableBytes: (700 - sampleCount) * 1_073_741_824,
-            totalBytes: 1_000 * 1_073_741_824,
-            path: "/",
-          },
-          {
-            availableBytes: (300 - sampleCount * 2) * 1_073_741_824,
-            totalBytes: 500 * 1_073_741_824,
-            path: "/Volumes/Archive",
-          },
-        ];
-        if (diskResponse === "single") {
-          disks.pop();
-        } else if (diskResponse === "empty") {
-          disks.length = 0;
-        }
-        return { disks: sampleCount % 2 ? disks : disks.toReversed() };
-      }
-      if (method === "sessions.list") {
-        return { sessions: [] };
-      }
-      return diagnosticResponse(method);
-    });
-    const overlay = document.createElement("openclaw-debug-overlay") as TestDebugOverlay;
-    overlay.context = createDebugApplicationContext(request);
-    document.body.append(overlay);
-
-    try {
-      overlay.toggle();
-      await vi.advanceTimersByTimeAsync(0);
-      await overlay.updateComplete;
-
-      const vitalUpdated = () => updateOverlayVitals(overlay);
-      await vitalUpdated();
-      const diskTile = (mountPath: string) =>
-        overlay.querySelector<TestSparkline>(`.debug-overlay__vital--disk[title="${mountPath}"]`);
-      const rootDisk = diskTile("/");
-      const archiveDisk = diskTile("/Volumes/Archive");
-
-      // One sample: tiles show current values, charts wait for a second point.
-      expect(overlay.querySelectorAll(".debug-overlay__vital")).toHaveLength(5);
-      expect(normalizedText(overlay.querySelector(".debug-overlay__vital--cpu"))).toContain(
-        "loop 42%",
-      );
-      expect(overlay.querySelector(".debug-vital__chart")).toBeNull();
-
-      await vi.advanceTimersByTimeAsync(2_000);
-      await vitalUpdated();
-
-      expect(normalizedText(overlay.querySelector(".debug-overlay__vital--cpu"))).toContain("120%");
-      expect(normalizedText(overlay.querySelector(".debug-overlay__vital--memory"))).toContain(
-        "402 MB",
-      );
-      expect(normalizedText(overlay.querySelector(".debug-overlay__vital--memory"))).toContain(
-        "heap 100 MB",
-      );
-      expect(normalizedText(overlay.querySelector(".debug-overlay__vital--delay"))).toContain(
-        "12ms",
-      );
-      expect(normalizedText(overlay.querySelector(".debug-overlay__vital--delay"))).toContain(
-        "max 87ms",
-      );
-      expect(normalizedText(diskTile("/"))).toContain("698 GB free");
-      expect(normalizedText(diskTile("/"))).toContain("1000 GB total");
-      expect(normalizedText(diskTile("/")?.querySelector(".debug-vital__label"))).toBe("Disk /");
-      expect(
-        normalizedText(diskTile("/Volumes/Archive")?.querySelector(".debug-vital__label")),
-      ).toBe("Disk /Volumes/Archive");
-      expect(normalizedText(diskTile("/Volumes/Archive"))).toContain("296 GB free");
-      expect(normalizedText(diskTile("/Volumes/Archive"))).toContain("500 GB total");
-      expect(diskTile("/")).toBe(rootDisk);
-      expect(diskTile("/Volumes/Archive")).toBe(archiveDisk);
-      expect(rootDisk?.samples.map((sample) => sample.value / 1_073_741_824)).toEqual([699, 698]);
-      expect(archiveDisk?.samples.map((sample) => sample.value / 1_073_741_824)).toEqual([
-        298, 296,
-      ]);
-      expect(overlay.querySelectorAll(".debug-vital__chart")).toHaveLength(5);
-      // Healthy event loop: no tile carries the degraded tint.
-      expect(overlay.querySelector(".debug-overlay__vital[data-degraded]")).toBeNull();
-
-      await vi.advanceTimersByTimeAsync(180_000);
-      await vitalUpdated();
-
-      const points = overlay
-        .querySelector(".debug-overlay__vital--cpu polyline")
-        ?.getAttribute("points")
-        ?.split(" ");
-      expect(points).toHaveLength(90);
-
-      overlay.toggle();
-      overlay.toggle();
-      await vi.advanceTimersByTimeAsync(0);
-      await vitalUpdated();
-
-      expect(overlay.querySelectorAll(".debug-overlay__vital")).toHaveLength(5);
-      expect(overlay.querySelector(".debug-vital__chart")).toBeNull();
-
-      diskResponse = "single";
-      await vi.advanceTimersByTimeAsync(2_000);
-      await vitalUpdated();
-      expect(overlay.querySelectorAll(".debug-overlay__vital--disk")).toHaveLength(1);
-      expect(diskTile("/")?.samples).toHaveLength(2);
-      diskResponse = "available";
-      await vi.advanceTimersByTimeAsync(2_000);
-      await vitalUpdated();
-      expect(diskTile("/")?.samples).toHaveLength(3);
-      expect(diskTile("/Volumes/Archive")?.samples).toHaveLength(1);
-
-      for (const response of ["empty", "legacy", "missing", "rejected"] as const) {
-        diskResponse = response;
-        await vi.advanceTimersByTimeAsync(2_000);
-        await vitalUpdated();
-
-        expect(overlay.querySelectorAll(".debug-overlay__vital")).toHaveLength(3);
-        expect(overlay.querySelector(".debug-overlay__vital--disk")).toBeNull();
-        for (const vital of ["cpu", "memory", "delay"]) {
-          expect(overlay.querySelector(`.debug-overlay__vital--${vital}`)).not.toBeNull();
-        }
-      }
-    } finally {
-      overlay.remove();
-      vi.useRealTimers();
+    const pending = hold<void>(undefined);
+    const pendingModels = hold<unknown>({ models: [] });
+    const h = mountPage();
+    await tick();
+    h.snapshots("initial");
+    for (const method of ["last-heartbeat", "diagnostics.lanes"]) {
+      h.responses[method] = async () => {
+        await pending.promise;
+        return diagnosticResponse(method, "stale");
+      };
     }
-  });
-
-  it.each(["same-client reconnect", "client replacement", "Gateway source replacement"])(
-    "discards pending samples and prior disk history on %s",
-    async (transition) => {
-      vi.useFakeTimers();
-      const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
-      const pending = deferred<unknown>();
-      const firstInfo = {
-        disks: [
-          { path: "/", totalBytes: 1000 * 1_073_741_824, availableBytes: 700 * 1_073_741_824 },
-        ],
-        diskPath: "/",
-        diskTotalBytes: 1000 * 1_073_741_824,
-        diskAvailableBytes: 700 * 1_073_741_824,
-      };
-      let infoResponse: unknown = firstInfo;
-      const request = vi.fn(async (method: string) => {
-        if (method === "system.info") {
-          return infoResponse;
-        }
-        if (method === "sessions.list") {
-          return { sessions: [] };
-        }
-        return diagnosticResponse(method);
-      });
-      const context = createDebugApplicationContext(request);
-      let snapshot = context.gateway.snapshot;
-      const gateway = {
-        ...context.gateway,
-        get snapshot() {
-          return snapshot;
-        },
-        subscribe(listener: (snapshot: ApplicationGatewaySnapshot) => void) {
-          listeners.add(listener);
-          return () => {
-            listeners.delete(listener);
-          };
-        },
-      };
-      const publishSnapshot = (next: ApplicationGatewaySnapshot) => {
-        snapshot = next;
-        for (const listener of listeners) {
-          listener(snapshot);
-        }
-      };
-      const overlay = document.createElement("openclaw-debug-overlay") as TestDebugOverlay;
-      overlay.context = { ...context, gateway };
-      document.body.append(overlay);
-      try {
-        overlay.toggle();
-        await vi.advanceTimersByTimeAsync(2_000);
-        await updateOverlayVitals(overlay);
-        expect(
-          overlay.querySelector<TestSparkline>(".debug-overlay__vital--disk")?.samples,
-        ).toHaveLength(2);
-
-        infoResponse = pending.promise;
-        await vi.advanceTimersByTimeAsync(2_000);
-        const callsBeforeTransition = request.mock.calls.filter(
-          ([method]) => method === "system.info",
-        ).length;
-        infoResponse = {
-          disks: [{ ...firstInfo.disks[0], availableBytes: 200 * 1_073_741_824 }],
-          diskPath: "/",
-          diskTotalBytes: firstInfo.diskTotalBytes,
-          diskAvailableBytes: 200 * 1_073_741_824,
-        };
-        if (transition === "same-client reconnect") {
-          publishSnapshot({ ...snapshot, phase: "reconnecting" });
-          await overlay.updateComplete;
-          expect(overlay.querySelector(".debug-overlay__vital--disk")).toBeNull();
-          publishSnapshot({ ...snapshot, phase: "connected" });
-        } else if (transition === "client replacement") {
-          publishSnapshot({
-            ...snapshot,
-            client: createDebugApplicationContext(request).gateway.snapshot.client,
-          });
-        } else {
-          overlay.context = { ...context, gateway: { ...gateway } };
-          overlay.requestUpdate();
-        }
-        await vi.advanceTimersByTimeAsync(0);
-        await updateOverlayVitals(overlay);
-        expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(
-          callsBeforeTransition + 1,
-        );
-
-        pending.resolve(firstInfo);
-        await vi.advanceTimersByTimeAsync(0);
-        await updateOverlayVitals(overlay);
-        const disk = overlay.querySelector<TestSparkline>(".debug-overlay__vital--disk");
-        expect(normalizedText(disk)).toContain("200 GB free");
-        expect(disk?.samples.map((sample) => sample.value / 1_073_741_824)).toEqual([200]);
-        expect(disk?.querySelector("polyline")).toBeNull();
-
-        await vi.advanceTimersByTimeAsync(2_000);
-        await updateOverlayVitals(overlay);
-        expect(disk?.samples.map((sample) => sample.value / 1_073_741_824)).toEqual([200, 200]);
-      } finally {
-        overlay.remove();
-        vi.useRealTimers();
+    await tick(3_000);
+    const heldCalls = h.request.mock.calls.slice(-2);
+    const heldCount = h.request.mock.calls.length;
+    await tick(6_000);
+    expect(h.request).toHaveBeenCalledTimes(heldCount);
+    delete h.responses["last-heartbeat"];
+    delete h.responses["diagnostics.lanes"];
+    h.mark("current");
+    const failed = change === "agent with failed models";
+    if (failed) {
+      h.responses["models.list"] = () => pendingModels.promise;
+    }
+    if (change === "reconnect") {
+      h.source.publish({ ...h.source.gateway.snapshot, phase: "reconnecting" });
+      h.source.publish({ ...h.source.gateway.snapshot, phase: "connected" });
+    } else if (change === "source") {
+      h.setContext({ ...h.context, gateway: gatewaySource(h.context).gateway });
+    } else {
+      h.selection.set("worker");
+    }
+    flush();
+    if (failed) {
+      expect(h.snapshot("Models")).toEqual([]);
+      pendingModels.reject(new Error("worker models unavailable"));
+    }
+    const expectCurrent = () => {
+      if (!failed) {
+        h.snapshots("current");
+        return;
       }
-      expect(listeners.size).toBe(0);
-    },
+      expect(h.snapshot("Models")).toEqual([]);
+      expect(h.page.textContent).toContain("worker models unavailable");
+      expect(h.page.textContent).not.toContain("stale");
+    };
+    await tick();
+    expectCurrent();
+    for (const call of heldCalls) {
+      expect(call[2]?.signal?.aborted).toBe(true);
+    }
+    pending.resolve();
+    await tick();
+    expectCurrent();
+    const count = h.request.mock.calls.length;
+    h.unmount();
+    await tick(6_000);
+    expect(h.request).toHaveBeenCalledTimes(count);
+  },
+);
+
+it("discards pending diagnostics when a replacement provider reuses its client", async () => {
+  const pending = hold<unknown>({});
+  const h = mountPage(
+    Object.fromEntries(
+      ["status", "health", "models.list", "last-heartbeat", "diagnostics.lanes"].map(
+        (method): [string, () => unknown] => [method, () => pending.promise],
+      ),
+    ),
   );
+  expect(h.request).toHaveBeenCalledTimes(5);
+  h.setContext({
+    ...h.context,
+    gateway: { ...h.source.gateway, snapshot: { ...h.source.gateway.snapshot, phase: "stopped" } },
+  });
+  flush();
+  pending.resolve({ models: [{ id: "stale" }], stale: true });
+  await pending.promise;
+  flush();
+  expect(h.request).toHaveBeenCalledTimes(5);
+  expect(["Status", "Health", "Models", "Last heartbeat"].map(h.snapshot)).toEqual([
+    {},
+    {},
+    [],
+    {},
+  ]);
+  expect(h.query(".command-lane-row")).toBeNull();
+  expect(h.page.textContent).not.toContain("stale");
+});
+
+it("keeps a held live poll quiet and recovers without replacing snapshots or drafts", async () => {
+  vi.useFakeTimers();
+  const pending = hold<void>(undefined);
+  const h = mountPage();
+  await tick();
+  const params = h.params('{"draft":true}');
+  params.focus();
+  const status = h.query('pre[aria-label="Status"]');
+  for (const method of ["last-heartbeat", "diagnostics.lanes"]) {
+    h.responses[method] = async () => {
+      await pending.promise;
+      throw new Error("live diagnostics unavailable");
+    };
+  }
+  await tick(3_000);
+  expect(h.refreshButton().disabled).toBe(false);
+  expect(normalizedText(h.refreshButton())).toBe("Refresh");
+  h.snapshots("initial");
+  pending.resolve();
+  await tick();
+  expect(h.alert()?.textContent).toContain("live diagnostics unavailable");
+  h.snapshots("initial");
+  delete h.responses["last-heartbeat"];
+  delete h.responses["diagnostics.lanes"];
+  h.mark("recovered");
+  await tick(3_000);
+  expect(h.alert()).toBeNull();
+  h.snapshots("initial", "recovered");
+  expect(h.query('pre[aria-label="Status"]')).toBe(status);
+  expect(h.query("textarea")).toBe(params);
+  expect(params.value).toBe('{"draft":true}');
+  expect(document.activeElement).toBe(params);
+});
+
+it.each(["reconnecting", "offline"] as const)("disables refresh while %s", async (phase) => {
+  const h = mountPage({}, phase);
+  expect(h.refreshButton().disabled).toBe(true);
+  const text = normalizedText(h.query(".settings-section"));
+  if (phase === "offline") {
+    expect(text).toContain("Offline");
+    expect(text).toContain("Connect to the Gateway to refresh diagnostics.");
+  } else {
+    expect(text).not.toContain("Offline");
+  }
+});
+
+it.each(["response", "error"])("ignores an older manual RPC %s", async (outcome) => {
+  const older = hold<unknown>({});
+  const h = mountPage({
+    "manual.first": () => older.promise,
+    "manual.latest": () => ({ result: "latest response" }),
+  });
+  await h.ready();
+  h.call("manual.first");
+  const olderRequest = h.request.mock.results.at(-1)!.value;
+  h.call();
+  await waitForSolid(() => expect(h.page.textContent).toContain("latest response"));
+  if (outcome === "error") {
+    older.reject(new Error("stale manual failure"));
+  } else {
+    older.resolve({ result: "stale response" });
+  }
+  await olderRequest.catch(() => undefined);
+  flush();
+  expect(h.page.textContent).toContain("latest response");
+  expect(h.page.textContent).not.toContain("stale response");
+  expect(h.query('[role="alert"]')).toBeNull();
+});
+
+it.each(["success", "error"] as const)(
+  "clears completed manual RPC %s on client change",
+  async (outcome) => {
+    const expected = `previous client ${outcome}`;
+    const h = mountPage({
+      "manual.latest": () => {
+        if (outcome === "error") {
+          throw new Error(expected);
+        }
+        return { result: expected };
+      },
+    });
+    await h.ready();
+    const section = h.query("select")!.closest(".settings-section")!;
+    h.call();
+    await waitForSolid(() => expect(section.textContent).toContain(expected));
+    expect(section.querySelector("pre")).not.toBeNull();
+    h.mark("replacement");
+    h.source.publish({
+      ...h.source.gateway.snapshot,
+      client: createDebugApplicationContext(h.request).gateway.snapshot.client,
+    });
+    flush();
+    expect(section.querySelector("pre")).toBeNull();
+    await waitForSolid(() => h.snapshots("replacement"));
+    expect(section.querySelector("pre")).toBeNull();
+  },
+);
+
+it("preserves snapshots and independent RPC errors through model failure and recovery", async () => {
+  vi.useFakeTimers();
+  const h = mountPage({
+    "manual.latest": () => {
+      throw new Error("manual request failed");
+    },
+  });
+  await h.ready();
+  h.snapshots("initial");
+  h.call();
+  await waitForSolid(() => expect(h.page.textContent).toContain("manual request failed"));
+  expect(h.alert()).toBeNull();
+  h.mark("uncommitted");
+  h.responses["models.list"] = () => {
+    throw new Error("models.list unavailable");
+  };
+  await h.refresh();
+  expect(h.alert()?.textContent).toContain("models.list unavailable");
+  expect(h.page.textContent).toContain("manual request failed");
+  h.snapshots("initial");
+  expect(h.alert()?.closest(".settings-section")?.querySelector("h2")?.textContent.trim()).toBe(
+    "Snapshots",
+  );
+  delete h.responses["models.list"];
+  h.mark("recovered");
+  await h.refresh();
+  h.snapshots("recovered");
+  expect(h.alert()).toBeNull();
+  expect(h.page.textContent).toContain("manual request failed");
 });

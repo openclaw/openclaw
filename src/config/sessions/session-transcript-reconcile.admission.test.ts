@@ -1,139 +1,97 @@
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import * as sqlite from "../../infra/node-sqlite.js";
-import * as integrity from "../../infra/sqlite-integrity-worker.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
+import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { persistSessionTranscriptTurn } from "./session-accessor.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
+import { observeNativeSqliteIntegrityChecks } from "./session-accessor.sqlite-native-integrity.test-support.js";
+import * as fixtures from "./session-transcript-reconcile.fixtures.test-support.js";
 import {
   reconcileSessionTranscriptIndexes,
   startSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcile,
-  waitForSessionTranscriptIndexReconcilesInStateDir,
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
-import type { SessionTranscriptReconcileWorkerInput } from "./session-transcript-reconcile.worker.js";
 
-const roots: string[] = [];
-const realOpen = sqlite.openNodeSqliteDatabase;
+afterEach(() => vi.restoreAllMocks());
 
-afterEach(async () => {
-  vi.restoreAllMocks();
-  for (const root of roots) {
-    await waitForSessionTranscriptIndexReconcilesInStateDir(root);
-  }
-  await closeOpenClawAgentDatabasesAsync();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  vi.unstubAllEnvs();
-  for (const root of roots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
-
-async function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "reconcile-admission-"));
-  roots.push(root);
-  vi.stubEnv("OPENCLAW_STATE_DIR", root);
-  const options = { agentId: "main", env: { ...process.env, OPENCLAW_STATE_DIR: root } };
-  const scope = { ...options, sessionId: "cold", sessionKey: "agent:main:cold" };
-  await persistSessionTranscriptTurn(scope, {
-    messages: [{ eventId: "seed", message: { role: "user", content: "cold admission fixture" } }],
-    touchSessionEntry: false,
-  });
+async function seed(root: string) {
+  const { options, scope } = fixtures.reconcileScope(root, "cold");
+  await fixtures.seedTranscript(scope, "seed", "cold admission fixture");
   await waitForSessionTranscriptIndexReconcile(options);
   const database = openOpenClawAgentDatabase(options);
-  database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
-  closeOpenClawAgentDatabaseByPath(database.path);
+  fixtures.markRebuild(database.db);
+  await closeOpenClawAgentDatabaseByPathAsync(database.path);
   return {
-    root,
     options: { ...options, path: database.path },
     scope: { ...scope, storePath: database.path },
   };
 }
 
-it("waits for a cold projection without superseding its native integrity admission", async () => {
-  const { options, scope } = await fixture();
-  let parentChecks = 0;
-  vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, openOptions) => {
-    const database = realOpen(pathname, openOptions);
-    if (pathname === options.path && !openOptions?.readOnly) {
-      const prepare = database.prepare.bind(database);
-      database.prepare = (sql) => {
-        const statement = prepare(sql);
-        if (sql === "PRAGMA integrity_check;") {
-          const all = statement.all.bind(statement);
-          statement.all = () => {
-            parentChecks += 1;
-            return all();
-          };
-        }
-        return statement;
-      };
-    }
-    return database;
+const fixture = (
+  run: (f: Awaited<ReturnType<typeof seed>>, state: OpenClawTestState) => Promise<void>,
+) =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    await run(await seed(state.stateDir), state);
   });
-  const entered = createDeferred();
-  const check = integrity.assertSqliteIntegrityInWorker;
-  vi.spyOn(integrity, "assertSqliteIntegrityInWorker").mockImplementation((...args) => {
-    const result = check(...args);
-    entered.resolve();
-    return result;
-  });
-  startSessionTranscriptIndexReconcile(options);
-  await entered.promise;
-  await waitForSessionTranscriptProjection(scope);
-  await waitForSessionTranscriptIndexReconcile(options);
-  expect(parentChecks).toBe(0);
-  expect(
-    withOpenClawAgentDatabaseReadOnly(
-      ({ db }) => db.prepare("SELECT needs_rebuild FROM session_transcript_index_state").get(),
-      options,
-    ),
-  ).toEqual({ found: true, value: { needs_rebuild: 0 } });
-});
+
+function expectRebuilt(options: Awaited<ReturnType<typeof seed>>["options"]) {
+  expect(withOpenClawAgentDatabaseReadOnly(({ db }) => fixtures.rebuildState(db), options)).toEqual(
+    { found: true, value: { needs_rebuild: 0 } },
+  );
+}
+
+it("waits for a cold projection without superseding its native integrity admission", () =>
+  fixture(async ({ options, scope }) => {
+    revokeSqliteDatabaseAdmissionsForPath(options.path);
+    let parentChecks = 0;
+    observeNativeSqliteIntegrityChecks(options.path, () => {
+      parentChecks++;
+    });
+    const entered = createDeferred();
+    probe.admission(admission, (request, grant, admit) => {
+      if (request.stage === "open") {
+        entered.resolve();
+      }
+      admit(request, grant);
+    });
+    startSessionTranscriptIndexReconcile(options);
+    await entered.promise;
+    await waitForSessionTranscriptProjection(scope);
+    await waitForSessionTranscriptIndexReconcile(options);
+    expect(parentChecks).toBe(0);
+    expectRebuilt(options);
+  }));
 
 it.each(["direct", "deferred"] as const)(
   "retains the operation environment before %s admission",
-  async (mode) => {
-    const { options } = await fixture();
-    const nextRoot = fs.mkdtempSync(path.join(os.tmpdir(), "reconcile-next-owner-"));
-    roots.push(nextRoot);
-    const original = { ...options, env: { ...options.env } };
-    const inputs: SessionTranscriptReconcileWorkerInput[] = [];
-    const params = {
-      ...options,
-      createWorker: (
-        filename: string | URL,
-        workerOptions: import("node:worker_threads").WorkerOptions,
-      ) => {
-        inputs.push(workerOptions.workerData as SessionTranscriptReconcileWorkerInput);
-        return new Worker(filename, workerOptions);
-      },
-    };
-    const task = mode === "direct" ? reconcileSessionTranscriptIndexes(params) : undefined;
-    if (mode === "deferred") {
-      startSessionTranscriptIndexReconcile(params);
-    }
-    options.env.OPENCLAW_STATE_DIR = nextRoot;
-    if (task) {
-      await expect(task).resolves.toEqual({ reconciledSessions: 1 });
-    } else {
-      await waitForSessionTranscriptIndexReconcile(original);
-    }
-    expect(inputs).toContainEqual(
-      expect.objectContaining({ mode: "disk", stateDir: original.env.OPENCLAW_STATE_DIR }),
-    );
-    expect(fs.readdirSync(nextRoot)).toEqual([]);
-  },
+  (mode) =>
+    fixture(async ({ options }, state) => {
+      const nextRoot = state.path("next-owner");
+      fs.mkdirSync(nextRoot);
+      const original = { ...options, env: { ...options.env } };
+      const task = mode === "direct" ? reconcileSessionTranscriptIndexes(options) : undefined;
+      if (mode === "deferred") {
+        startSessionTranscriptIndexReconcile(options);
+      }
+      options.env.OPENCLAW_STATE_DIR = nextRoot;
+      if (task) {
+        await expect(task).resolves.toEqual({ reconciledSessions: 1 });
+      } else {
+        await waitForSessionTranscriptIndexReconcile(original);
+      }
+      expectRebuilt(original);
+      expect(fs.readdirSync(nextRoot)).toEqual([]);
+    }),
 );

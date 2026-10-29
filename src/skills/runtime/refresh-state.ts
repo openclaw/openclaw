@@ -1,15 +1,26 @@
-// Skill refresh state types describe change notifications emitted by runtime reloads.
+import { notifyListeners, registerListener } from "../../shared/listeners.js";
+
 type SkillsChangeEvent = {
   workspaceDir?: string;
-  reason: "watch" | "watch-targets" | "manual" | "remote-node" | "config-change" | "workshop";
-  changedPath?: string;
+  reason:
+    | "watch"
+    | "watch-unavailable"
+    | "watch-available"
+    | "manual"
+    | "remote-node"
+    | "config-change"
+    | "workshop";
 };
 
 const listeners = new Set<(event: SkillsChangeEvent) => void>();
 const workspaceVersions = new Map<string, number>();
+const discoveryVersions = new Map<string, number>();
+const supportingFileVersions = new Map<string, number>();
 const INITIAL_SKILLS_SNAPSHOT_VERSION = Date.now();
+let versionClock = INITIAL_SKILLS_SNAPSHOT_VERSION;
 let globalVersion = INITIAL_SKILLS_SNAPSHOT_VERSION;
-let listenerErrorHandler: ((err: unknown) => void) | undefined;
+let sourceClock = INITIAL_SKILLS_SNAPSHOT_VERSION;
+let globalSourceVersion = sourceClock;
 
 function bumpVersion(current: number): number {
   const now = Date.now();
@@ -17,75 +28,83 @@ function bumpVersion(current: number): number {
 }
 
 function emit(event: SkillsChangeEvent) {
-  for (const listener of listeners) {
-    try {
-      listener(event);
-    } catch (err) {
-      listenerErrorHandler?.(err);
-    }
-  }
+  notifyListeners(listeners, event);
 }
 
-export function setSkillsChangeListenerErrorHandler(handler?: (err: unknown) => void): void {
-  listenerErrorHandler = handler;
+function publishChange(event: SkillsChangeEvent): number {
+  versionClock = bumpVersion(versionClock);
+  if (event.workspaceDir) {
+    workspaceVersions.set(event.workspaceDir, versionClock);
+  } else {
+    globalVersion = versionClock;
+  }
+  emit(event);
+  return versionClock;
 }
 
 export function registerSkillsChangeListener(listener: (event: SkillsChangeEvent) => void) {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+  return registerListener(listeners, listener);
 }
 
+/** Coverage recovery follows content reconciliation; it never creates a source revision. */
+export function notifySkillsWatchAvailable(params: { workspaceDir: string }): void {
+  emit({ ...params, reason: "watch-available" });
+}
+
+/** Publish completed discovery facts without doing filesystem work. */
 export function bumpSkillsSnapshotVersion(params?: {
   workspaceDir?: string;
   reason?: SkillsChangeEvent["reason"];
-  changedPath?: string;
 }): number {
-  const reason = params?.reason ?? "manual";
-  const changedPath = params?.changedPath;
-  if (params?.workspaceDir) {
-    const current = Math.max(globalVersion, workspaceVersions.get(params.workspaceDir) ?? 0);
-    const next = bumpVersion(current);
-    workspaceVersions.set(params.workspaceDir, next);
-    emit({ workspaceDir: params.workspaceDir, reason, changedPath });
-    return next;
+  const event: SkillsChangeEvent = {
+    workspaceDir: params?.workspaceDir,
+    reason: params?.reason ?? "manual",
+  };
+  sourceClock = bumpVersion(sourceClock);
+  if (!params?.workspaceDir) {
+    globalSourceVersion = sourceClock;
+  } else {
+    discoveryVersions.set(params.workspaceDir, sourceClock);
   }
-  globalVersion = bumpVersion(globalVersion);
-  emit({ reason, changedPath });
-  return globalVersion;
+  return publishChange(event);
+}
+
+/** Supporting-file changes refresh copies without rebuilding discovery or publishing snapshots. */
+export function markSkillsSupportingFilesChanged(params: { workspaceDir: string }): void {
+  sourceClock = bumpVersion(sourceClock);
+  supportingFileVersions.set(params.workspaceDir, sourceClock);
+}
+
+/** Source revisions invalidate discovery and in-flight reads, never consumer generation facts. */
+export function getSkillsSourceVersion(workspaceDir: string): number {
+  return Math.max(globalSourceVersion, discoveryVersions.get(workspaceDir) ?? 0);
+}
+
+export function getSkillsResourceVersion(workspaceDir: string): number {
+  return Math.max(
+    getSkillsSourceVersion(workspaceDir),
+    supportingFileVersions.get(workspaceDir) ?? 0,
+  );
 }
 
 export function getSkillsSnapshotVersion(workspaceDir?: string): number {
   if (!workspaceDir) {
     return globalVersion;
   }
-  const local = workspaceVersions.get(workspaceDir) ?? 0;
-  return Math.max(globalVersion, local);
+  return Math.max(globalVersion, workspaceVersions.get(workspaceDir) ?? 0);
 }
 
-export function clearSkillsSnapshotVersionForWorkspace(workspaceDir: string): void {
-  const local = workspaceVersions.get(workspaceDir);
-  if (typeof local === "number" && local > globalVersion) {
-    // Keep pending workspace invalidation visible after dropping the workspace
-    // key; otherwise teardown can hide a skill change from cached snapshots.
-    globalVersion = local;
-  }
-  workspaceVersions.delete(workspaceDir);
-}
-
-export function shouldRefreshSnapshotForVersion(
-  cachedVersion?: number,
-  nextVersion?: number,
-): boolean {
-  const cached = typeof cachedVersion === "number" ? cachedVersion : 0;
-  const next = typeof nextVersion === "number" ? nextVersion : 0;
+export function shouldRefreshSnapshotForVersion(cached = 0, next = 0): boolean {
   return next === 0 ? cached > 0 : cached < next;
 }
 
 export function resetSkillsRefreshStateForTest(): void {
   listeners.clear();
   workspaceVersions.clear();
+  discoveryVersions.clear();
+  supportingFileVersions.clear();
   globalVersion = INITIAL_SKILLS_SNAPSHOT_VERSION;
-  listenerErrorHandler = undefined;
+  versionClock = globalVersion;
+  sourceClock = bumpVersion(sourceClock);
+  globalSourceVersion = sourceClock;
 }

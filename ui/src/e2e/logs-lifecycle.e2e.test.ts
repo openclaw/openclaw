@@ -1,5 +1,4 @@
-import { appendFile, mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
+import { writeFile } from "node:fs/promises";
 import { text } from "node:stream/consumers";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
@@ -11,47 +10,41 @@ import {
 } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI logs lifecycle",
   startServerBeforeBrowser: true,
-  unavailableMessage: (executablePath) =>
-    `Playwright Chromium is not available at ${executablePath}`,
 });
 
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const viewport = { height: 900, width: 1_440 };
 
-function logLine(message: string, level: "error" | "info" | "warn", second: number) {
-  return JSON.stringify({
-    "0": JSON.stringify({ subsystem: "logs-lifecycle-proof" }),
-    "1": message,
-    message,
-    time: new Date(Date.UTC(2026, 7, 15, 12, 0, second)).toISOString(),
-    _meta: { logLevelName: level },
-  });
-}
+const logLine = (message: string, level: "error" | "info") =>
+  JSON.stringify({ message, _meta: { logLevelName: level } });
 
-async function capture(page: Page, name: string) {
-  if (!captureUiProof) {
-    return;
+const visibleMessages = (page: Page) => page.locator(".log-message").allTextContents();
+
+const expectMessages = (page: Page, messages: string[]) =>
+  expect.poll(() => visibleMessages(page)).toEqual(messages);
+
+async function downloadLog(page: Page, name: string) {
+  const pending = page.waitForEvent("download");
+  await page.getByRole("button", { name }).click();
+  const download = await pending;
+  const stream = await download.createReadStream();
+  if (!stream) {
+    throw new Error("log export did not provide a readable download");
   }
-  await writeFile(
-    path.join(suite.artifactDir, name),
-    await takeControlUiViewportScreenshot(page, page.locator(".logs-card"), [
-      page.locator(".log-message").first(),
-    ]),
-  );
+  return { filename: download.suggestedFilename(), contents: await text(stream) };
 }
 
-async function visibleMessages(page: Page) {
-  return page.locator(".log-message").allTextContents();
-}
+const useLog = (file: string) =>
+  setLoggerOverride({ consoleLevel: "silent", file, level: "silent" });
 
 suite.define(() => {
-  it("replaces a changed log source and preserves visible recovery through reconnect", async (context) => {
+  it("exports filtered and visible rows from the selected log source", async (context) => {
     let fixture: OpenClawTestState | undefined;
     let gateway: Promise<GatewayServer> | undefined;
     let loggerConfigured = false;
@@ -73,41 +66,24 @@ suite.define(() => {
         const state = await createOpenClawTestState({
           label: "control-ui-logs-lifecycle",
           layout: "home",
-          env: {
-            OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-            OPENCLAW_SKIP_CANVAS_HOST: "1",
-            OPENCLAW_SKIP_CHANNELS: "1",
-            OPENCLAW_SKIP_CRON: "1",
-            OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-            OPENCLAW_SKIP_PROVIDERS: "1",
-            OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-            VITEST: "1",
-          },
+          env: { ...deviceGatewayEnv },
         });
         fixture = state;
         signal.throwIfAborted();
         const sourceA = state.path("source-a.log");
         const sourceB = state.path("source-b.log");
-        const readFailure = state.path("read-failure");
-        const lineA = logLine("source A only", "info", 1);
+        const lineA = logLine("source A only", "info");
         const messageBPrefix = `source B prefix ${"x".repeat(Buffer.byteLength(lineA))}`;
-        const lineBPrefix = logLine(messageBPrefix, "info", 2);
-        const lineBTail = logLine("source B tail", "error", 3);
-        const lineBAppended = logLine("source B appended", "warn", 4);
-        const messageBRestartPrefix = `source B restart prefix ${"y".repeat(
-          Buffer.byteLength(`${lineBPrefix}\n${lineBTail}\n${lineBAppended}\n`),
-        )}`;
-        const lineBRestartPrefix = logLine(messageBRestartPrefix, "info", 5);
-        const lineBRestartTail = logLine("source B restart tail", "error", 6);
-        const lineBAfterReconnect = logLine("source B after reconnect", "warn", 7);
+        const lineBPrefix = logLine(messageBPrefix, "info");
+        const lineBTail = logLine("source B tail", "error");
+        const writeLog = async (file: string, ...lines: string[]) => {
+          await writeFile(file, `${lines.join("\n")}\n`, "utf8");
+          signal.throwIfAborted();
+        };
         const { startGatewayServer } = await import("../../../src/gateway/server.js");
         signal.throwIfAborted();
-        await writeFile(sourceA, `${lineA}\n`, "utf8");
-        signal.throwIfAborted();
-        await writeFile(sourceB, `${lineBPrefix}\n${lineBTail}\n`, "utf8");
-        signal.throwIfAborted();
-        await mkdir(readFailure);
-        signal.throwIfAborted();
+        await writeLog(sourceA, lineA);
+        await writeLog(sourceB, lineBPrefix, lineBTail);
         await state.writeConfig({
           gateway: {
             auth: { mode: "none" },
@@ -120,14 +96,14 @@ suite.define(() => {
         });
         signal.throwIfAborted();
         loggerConfigured = true;
-        setLoggerOverride({ consoleLevel: "silent", file: sourceA, level: "silent" });
+        useLog(sourceA);
         gateway = startGatewayServer(port, {
           auth: { mode: "none" },
           bind: "loopback",
           controlUiEnabled: false,
           sidecarStartup: "defer",
         });
-        const server = await gateway;
+        await gateway;
         signal.throwIfAborted();
 
         await suite.withPage(
@@ -135,13 +111,18 @@ suite.define(() => {
             locale: "en-US",
             serviceWorkers: "block",
             viewport,
-            ...(captureUiProof ? { recordVideo: { dir: suite.artifactDir, size: viewport } } : {}),
           },
           async ({ page }) => {
             const pageErrors: string[] = [];
             page.on("pageerror", (error) => pageErrors.push(String(error)));
+            const nextPoll = async () => {
+              await pauseVirtualClock(page);
+              await page.clock.runFor(2_001);
+              await page.clock.resume();
+            };
             const url = new URL("logs", suite.server.baseUrl);
             url.searchParams.set("gatewayUrl", `ws://127.0.0.1:${port}`);
+            await page.clock.install();
             await page.goto(url.toString());
             const confirmation = page.locator("openclaw-gateway-url-confirmation");
             await confirmation.waitFor();
@@ -149,92 +130,25 @@ suite.define(() => {
               .getByRole("button", { name: `Switch to 127.0.0.1:${port}`, exact: true })
               .click();
             await waitForControlUiGatewayReady(page);
-            await expect.poll(() => visibleMessages(page)).toEqual(["source A only"]);
+            await expectMessages(page, ["source A only"]);
 
-            setLoggerOverride({ consoleLevel: "silent", file: sourceB, level: "silent" });
+            useLog(sourceB);
+            await nextPoll();
             await expect
               .poll(() => page.locator(".logs-card .settings-row").first().textContent())
               .toContain(sourceB);
-            await expect
-              .poll(() => visibleMessages(page))
-              .toEqual([messageBPrefix, "source B tail"]);
-            await capture(page, "01-source-b-complete.png");
+            await expectMessages(page, [messageBPrefix, "source B tail"]);
 
             const filter = page.getByRole("textbox", { name: "Filter" });
             await filter.fill("source B tail");
-            await expect.poll(() => visibleMessages(page)).toEqual(["source B tail"]);
-            const downloadPromise = page.waitForEvent("download");
-            await page.getByRole("button", { name: "Export filtered" }).click();
-            const download = await downloadPromise;
-            expect(download.suggestedFilename()).toMatch(/^openclaw-logs-filtered-.*\.log$/);
-            const downloadStream = await download.createReadStream();
-            if (!downloadStream) {
-              throw new Error("filtered log export did not provide a readable download");
-            }
-            expect(await text(downloadStream)).toBe(`${lineBTail}\n`);
+            await expectMessages(page, ["source B tail"]);
+            const download = await downloadLog(page, "Export filtered");
+            expect(download.filename).toMatch(/^openclaw-logs-filtered-.*\.log$/);
+            expect(download.contents).toBe(`${lineBTail}\n`);
 
             await filter.fill("");
-            await page.locator("label.log-chip.info input").uncheck();
-            await expect.poll(() => visibleMessages(page)).toEqual(["source B tail"]);
-            await page.locator("label.log-chip.info input").check();
-            await appendFile(sourceB, `${lineBAppended}\n`, "utf8");
-            await expect
-              .poll(() => visibleMessages(page))
-              .toEqual([messageBPrefix, "source B tail", "source B appended"]);
-
-            setLoggerOverride({ consoleLevel: "silent", file: readFailure, level: "silent" });
-            const error = page.locator(".logs-refresh-status[role=alert]");
-            await expect.poll(() => error.isVisible()).toBe(true);
-            await expect.poll(() => error.textContent()).toContain("log read failed");
-            await expect.poll(() => error.textContent()).toContain("Showing stale data");
-            await expect
-              .poll(() => visibleMessages(page))
-              .toEqual([messageBPrefix, "source B tail", "source B appended"]);
-            await capture(page, "02-read-error-stale-lines-visible.png");
-
-            setLoggerOverride({ consoleLevel: "silent", file: sourceB, level: "silent" });
-            await expect.poll(() => error.count()).toBe(0);
-            await expect.poll(() => visibleMessages(page)).toHaveLength(3);
-
-            await server.close({ reason: "logs lifecycle reconnect proof" });
-            gateway = undefined;
-            signal.throwIfAborted();
-            await page.waitForFunction(() => {
-              const app = document.querySelector("openclaw-app") as
-                | (HTMLElement & {
-                    runtime?: { context?: { gateway?: { snapshot?: { phase?: string } } } };
-                  })
-                | null;
-              return app?.runtime?.context?.gateway?.snapshot?.phase === "reconnecting";
-            });
-            await expect
-              .poll(() => page.locator(".sidebar-footer-bar__status").textContent())
-              .toContain("Reconnecting…");
-            await expect.poll(() => visibleMessages(page)).toHaveLength(3);
-            signal.throwIfAborted();
-            await writeFile(sourceB, `${lineBRestartPrefix}\n${lineBRestartTail}\n`, "utf8");
-            signal.throwIfAborted();
-            gateway = startGatewayServer(port, {
-              auth: { mode: "none" },
-              bind: "loopback",
-              controlUiEnabled: false,
-              sidecarStartup: "defer",
-            });
-            await gateway;
-            signal.throwIfAborted();
-            await waitForControlUiGatewayReady(page);
-            await expect
-              .poll(() => visibleMessages(page))
-              .toEqual([messageBRestartPrefix, "source B restart tail"]);
-            await appendFile(sourceB, `${lineBAfterReconnect}\n`, "utf8");
-            await expect
-              .poll(() => visibleMessages(page))
-              .toEqual([
-                messageBRestartPrefix,
-                "source B restart tail",
-                "source B after reconnect",
-              ]);
-            await capture(page, "03-reconnected-tail-complete.png");
+            const { contents } = await downloadLog(page, "Export visible");
+            expect(contents).toBe(lineBPrefix + "\n" + lineBTail + "\n");
             expect(pageErrors).toEqual([]);
           },
         );

@@ -1,15 +1,13 @@
-// Verifies direct agent registry scopes retain root-owned memory corpus sidecars.
-import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, expect, it } from "vitest";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { writeFixtureJson } from "../plugins/loader-fixture-builders.test-support.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
-  useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
 import {
@@ -19,16 +17,13 @@ import {
 } from "../plugins/memory-state.js";
 import { withAgentPluginRegistry } from "./runtime-plugins.js";
 
-afterEach(() => {
-  resetPluginLoaderTestStateForTest();
-});
+afterEach(resetPluginLoaderTestStateForTest);
+afterAll(cleanupPluginLoaderFixturesForTest);
 
-afterAll(() => {
-  cleanupPluginLoaderFixturesForTest();
-});
-
-it("keeps root-owned memory sidecars in a direct agent registry", async () => {
-  useNoBundledPlugins();
+it("keeps auto-enabled bundled root-owned memory sidecars in a direct agent registry", async () => {
+  const bundledRoot = makePluginLoaderTempDir();
+  delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
   const pluginId = "memory-corpus-sidecar";
   const configSchema = {
     type: "object",
@@ -37,34 +32,40 @@ it("keeps root-owned memory sidecars in a direct agent registry", async () => {
   };
   const plugin = writePlugin({
     id: pluginId,
+    dir: path.join(bundledRoot, pluginId),
+    filename: "index.cjs",
     configSchema,
-    body: `module.exports = {
-  id: ${JSON.stringify(pluginId)},
-  register(api) {
+    registration: `
+    api.registerProvider({ id: ${JSON.stringify(pluginId)}, label: "Memory fixture", auth: [] });
+    if (api.registrationMode !== "full") return;
     api.registerMemoryPromptSupplement(() => ["runtime wiki guidance"]);
     api.registerMemoryPromptPreparation(async () => ["runtime wiki digest"]);
     api.registerMemoryCorpusSupplement({
       search: async () => [],
       get: async () => null,
     });
-  },
-};\n`,
+`,
   });
-  fs.writeFileSync(
-    path.join(plugin.dir, "openclaw.plugin.json"),
-    JSON.stringify({ id: pluginId, configSchema, contracts: { tools: ["corpus_probe"] } }),
-    "utf8",
-  );
+  writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+    id: pluginId,
+    configSchema,
+    contracts: { tools: ["corpus_probe"] },
+    providers: [pluginId],
+  });
   const config = {
     plugins: {
       entries: { [pluginId]: { config: { source: "runtime" } } },
-      load: { paths: [plugin.dir] },
     },
   } satisfies OpenClawConfig;
   const workspaceDir = makePluginLoaderTempDir();
+  const scope = {
+    config,
+    workspaceDir,
+    selections: [{ provider: pluginId, modelId: "fixture-model" }],
+  };
   const rootConfig = applyPluginAutoEnable({ config, env: process.env }).config;
   expect(rootConfig.plugins?.entries?.[pluginId]?.enabled).toBe(true);
-  const root = loadAndActivateRootPluginRegistry({
+  const root = await loadAndActivateRootPluginRegistry({
     cache: false,
     config: rootConfig,
     onlyPluginIds: [pluginId],
@@ -74,10 +75,10 @@ it("keeps root-owned memory sidecars in a direct agent registry", async () => {
   expect(root.memoryCorpusSupplements.map((entry) => entry.pluginId)).toEqual([pluginId]);
   const rootSupplement = root.memoryCorpusSupplements[0]?.supplement;
   await withAgentPluginRegistry({
-    config,
-    workspaceDir,
+    ...scope,
     run: async () => {
       expect(listMemoryCorpusSupplements().map((entry) => entry.pluginId)).toEqual([pluginId]);
+      expect(listMemoryCorpusSupplements()[0]?.supplement).toBe(rootSupplement);
       const promptParams = { availableTools: new Set(["memory_search"]) };
       const prepared = await prepareMemoryPromptSection(promptParams);
       expect(buildMemoryPromptSection(promptParams, prepared)).toEqual([
@@ -86,22 +87,16 @@ it("keeps root-owned memory sidecars in a direct agent registry", async () => {
       ]);
     },
   });
-  await withAgentPluginRegistry({
-    config,
-    workspaceDir: makePluginLoaderTempDir(),
-    run: async () => {
-      // A direct scope for a different workspace loads the configured plugin fresh instead
-      // of adopting the root's sidecar instance; adoption only applies on workspace match.
-      const supplements = listMemoryCorpusSupplements();
-      expect(supplements.map((entry) => entry.pluginId)).toEqual([pluginId]);
-      expect(supplements[0]?.supplement).not.toBe(rootSupplement);
-    },
-  });
-  await withAgentPluginRegistry({
-    config: { plugins: { enabled: false } },
-    workspaceDir,
-    run: async () => {
-      expect(listMemoryCorpusSupplements()).toEqual([]);
-    },
-  });
+  for (const overrides of [
+    { workspaceDir: makePluginLoaderTempDir() },
+    { config: { plugins: { enabled: false } } },
+  ]) {
+    await withAgentPluginRegistry({
+      ...scope,
+      ...overrides,
+      run: async () => {
+        expect(listMemoryCorpusSupplements()).toEqual([]);
+      },
+    });
+  }
 });

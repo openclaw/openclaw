@@ -1,3 +1,4 @@
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import {
   arrayItemSchema,
   arrayItemSchemaIndexes,
@@ -20,6 +21,8 @@ export type ConfigSchemaAnalysis = {
   schema: JsonSchema | null;
   unsupportedPaths: string[];
 };
+
+type NormalizedConfigSchema = ConfigSchemaAnalysis & { schema: JsonSchema };
 
 const META_KEYS = new Set([
   "$id",
@@ -67,19 +70,13 @@ const SUPPORTED_FORM_SCHEMA_KEYS = new Set([
   "anyOf",
   "oneOf",
   "allOf",
+  "not",
 ]);
-const RENDERABLE_UNION_TYPES = new Set([
-  "string",
-  "number",
-  "integer",
-  "boolean",
-  "object",
-  "array",
-]);
+const SCALAR_UNION_TYPES = new Set(["string", "number", "integer", "boolean"]);
+const RENDERABLE_UNION_TYPES = new Set([...SCALAR_UNION_TYPES, "object", "array"]);
 
 function isAnySchema(schema: JsonSchema): boolean {
-  const keys = Object.keys(schema ?? {}).filter((key) => !META_KEYS.has(key));
-  return keys.length === 0;
+  return Object.keys(schema ?? {}).every((key) => META_KEYS.has(key));
 }
 
 function normalizeEnum(values: unknown[]): { enumValues: unknown[]; nullable: boolean } {
@@ -98,11 +95,7 @@ function uniqueSchemaValues(values: unknown[]): unknown[] {
   return unique;
 }
 
-function inferredSchemaTypes(schema: JsonSchema, seen = new Set<JsonSchema>()): Set<string> {
-  if (seen.has(schema)) {
-    return new Set();
-  }
-  seen.add(schema);
+function inferredSchemaTypes(schema: JsonSchema): Set<string> {
   const types = new Set<string>();
   const declared = Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : [];
   for (const type of declared) {
@@ -110,17 +103,14 @@ function inferredSchemaTypes(schema: JsonSchema, seen = new Set<JsonSchema>()): 
       types.add(type);
     }
   }
-  if (types.size === 0) {
-    if (schema.properties || schema.additionalProperties) {
-      types.add("object");
-    }
+  if (types.size === 0 && (schema.properties || schema.additionalProperties)) {
+    types.add("object");
   }
   for (const entry of schema.allOf ?? []) {
-    for (const type of inferredSchemaTypes(entry, seen)) {
+    for (const type of inferredSchemaTypes(entry)) {
       types.add(type);
     }
   }
-  seen.delete(schema);
   return types;
 }
 
@@ -153,12 +143,22 @@ function shouldNormalizeAllOfBranch(schema: JsonSchema): boolean {
   );
 }
 
-function hasOnlySupportedConstraintKeywords(schema: JsonSchema): boolean {
-  return hasOnlySupportedKeywords(schema, SUPPORTED_CONSTRAINT_ONLY_KEYS);
-}
-
 function hasOnlySupportedFormKeywords(schema: JsonSchema): boolean {
-  return hasOnlySupportedKeywords(schema, SUPPORTED_FORM_SCHEMA_KEYS);
+  if (!hasOnlySupportedKeywords(schema, SUPPORTED_FORM_SCHEMA_KEYS)) {
+    return false;
+  }
+  if (schema.not === undefined) {
+    return true;
+  }
+  if (inferredSchemaType(schema) !== "object" || !isRecord(schema.not)) {
+    return false;
+  }
+  const required = schema.not.required;
+  return (
+    isStringArray(required) &&
+    required.length > 0 &&
+    Object.keys(schema.not).every((key) => key === "required" || META_KEYS.has(key))
+  );
 }
 
 function hasOnlySupportedKeywords(schema: JsonSchema, supported: ReadonlySet<string>): boolean {
@@ -168,20 +168,14 @@ function hasOnlySupportedKeywords(schema: JsonSchema, supported: ReadonlySet<str
       // Key edits use the same value validator as fields. Admit its supported
       // string constraints without hiding the whole map behind Raw mode.
       (key === "propertyNames" &&
-        typeof schema.propertyNames === "object" &&
-        schema.propertyNames !== null &&
-        !Array.isArray(schema.propertyNames) &&
+        isRecord(schema.propertyNames) &&
         schemaMayAcceptString(schema.propertyNames) &&
         normalizeSchemaNode({ type: "string", ...schema.propertyNames }, []).unsupportedPaths
           .length === 0),
   );
 }
 
-function schemaAllowsNull(schema: JsonSchema, seen = new Set<JsonSchema>()): boolean {
-  if (seen.has(schema)) {
-    return false;
-  }
-  seen.add(schema);
+function schemaAllowsNull(schema: JsonSchema): boolean {
   const declaredTypes = Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : [];
   let allowsNull =
     schema.nullable === true || declaredTypes.length === 0 || declaredTypes.includes("null");
@@ -192,16 +186,14 @@ function schemaAllowsNull(schema: JsonSchema, seen = new Set<JsonSchema>()): boo
     allowsNull = allowsNull && schema.enum.some((entry) => entry === null);
   }
   if (schema.allOf) {
-    allowsNull = allowsNull && schema.allOf.every((entry) => schemaAllowsNull(entry, seen));
+    allowsNull = allowsNull && schema.allOf.every(schemaAllowsNull);
   }
   if (schema.anyOf) {
-    allowsNull = allowsNull && schema.anyOf.some((entry) => schemaAllowsNull(entry, seen));
+    allowsNull = allowsNull && schema.anyOf.some(schemaAllowsNull);
   }
   if (schema.oneOf) {
-    allowsNull =
-      allowsNull && schema.oneOf.filter((entry) => schemaAllowsNull(entry, seen)).length === 1;
+    allowsNull = allowsNull && schema.oneOf.filter(schemaAllowsNull).length === 1;
   }
-  seen.delete(schema);
   return allowsNull;
 }
 
@@ -230,13 +222,42 @@ export function analyzeConfigSchema(raw: unknown): ConfigSchemaAnalysis {
 }
 
 function normalizeSchemaNode(
-  schema: JsonSchema,
+  input: JsonSchema,
   path: Array<string | number>,
   compositionBranch = false,
   inheritedCompositionType?: string,
   inheritedCompositionAllowsNull?: boolean,
-): ConfigSchemaAnalysis {
+): NormalizedConfigSchema {
+  // Plugins and Zod emit unions as type arrays; keep their branch editor and
+  // sibling constraints on the same normalization path as anyOf schemas.
+  let schema = input;
+  if (
+    !compositionBranch &&
+    !input.anyOf &&
+    !input.oneOf &&
+    !input.allOf &&
+    Array.isArray(input.type) &&
+    new Set(input.type.filter((type) => type !== "null")).size > 1 &&
+    (input.type.every((type) => type === "null" || SCALAR_UNION_TYPES.has(type)) ||
+      input.type.every((type) => ["string", "object", "null"].includes(type)))
+  ) {
+    // Retain the declared array for plugin input selection. String-first avoids object drafts.
+    const types = input.type.includes("object")
+      ? ["string", ...input.type.filter((type) => type !== "string")]
+      : input.type;
+    schema = {
+      ...input,
+      type: types.includes("object") ? types : undefined,
+      anyOf: types.map((type) => ({ type })),
+    };
+  }
   const unsupported = new Set<string>();
+  const includeAnalysis = (result: NormalizedConfigSchema): JsonSchema => {
+    for (const unsupportedPath of result.unsupportedPaths) {
+      unsupported.add(unsupportedPath);
+    }
+    return result.schema;
+  };
   const normalized: JsonSchema = { ...schema };
   const pathLabel = pathKey(path) || "<root>";
 
@@ -248,8 +269,8 @@ function normalizeSchemaNode(
     const union = normalizeUnion(schema, path);
     if (union) {
       return {
-        schema: union.schema,
-        unsupportedPaths: Array.from(new Set([...unsupported, ...union.unsupportedPaths])),
+        schema: includeAnalysis(union),
+        unsupportedPaths: Array.from(unsupported),
       };
     }
     return { schema, unsupportedPaths: [pathLabel] };
@@ -292,16 +313,14 @@ function normalizeSchemaNode(
       }
       if (!shouldNormalizeAllOfBranch(entry)) {
         normalizedAllOf.push(entry);
-        if (!hasOnlySupportedConstraintKeywords(entry)) {
+        if (!hasOnlySupportedKeywords(entry, SUPPORTED_CONSTRAINT_ONLY_KEYS)) {
           unsupported.add(pathLabel);
         }
         continue;
       }
-      const result = normalizeSchemaNode(entry, path, true, type, allowsNull);
-      normalizedAllOf.push(result.schema ?? entry);
-      for (const unsupportedPath of result.unsupportedPaths) {
-        unsupported.add(unsupportedPath);
-      }
+      normalizedAllOf.push(
+        includeAnalysis(normalizeSchemaNode(entry, path, true, type, allowsNull)),
+      );
     }
     normalized.allOf = normalizedAllOf;
   }
@@ -324,6 +343,20 @@ function normalizeSchemaNode(
     unsupported.add(pathLabel);
   }
 
+  const normalizeChild = (
+    child: JsonSchema,
+    childPath: Array<string | number>,
+    constraintPath?: string,
+  ): JsonSchema => {
+    if (compositionBranch && constraintPath !== undefined && !shouldNormalizeAllOfBranch(child)) {
+      if (!hasOnlySupportedKeywords(child, SUPPORTED_CONSTRAINT_ONLY_KEYS)) {
+        unsupported.add(constraintPath);
+      }
+      return child;
+    }
+    return includeAnalysis(normalizeSchemaNode(child, childPath, compositionBranch));
+  };
+
   if (type === "object" && (!inheritedCompositionOnly || hasLocalObjectStructure)) {
     const properties = schema.properties ?? {};
     const propertyKeys = new Set(objectPropertyKeys(schema));
@@ -339,20 +372,8 @@ function normalizeSchemaNode(
     }
     const normalizedProps: Record<string, JsonSchema> = {};
     for (const [key, value] of Object.entries(properties)) {
-      if (compositionBranch && !shouldNormalizeAllOfBranch(value)) {
-        normalizedProps[key] = value;
-        if (!hasOnlySupportedConstraintKeywords(value)) {
-          unsupported.add(pathKey([...path, key]) || "<root>");
-        }
-        continue;
-      }
-      const res = normalizeSchemaNode(value, [...path, key], compositionBranch);
-      if (res.schema) {
-        normalizedProps[key] = res.schema;
-      }
-      for (const entry of res.unsupportedPaths) {
-        unsupported.add(entry);
-      }
+      const childPath = [...path, key];
+      normalizedProps[key] = normalizeChild(value, childPath, pathKey(childPath) || "<root>");
     }
     normalized.properties = normalizedProps;
 
@@ -362,10 +383,7 @@ function normalizeSchemaNode(
         if (!effectiveSchema) {
           continue;
         }
-        const result = normalizeSchemaNode(effectiveSchema, [...path, key]);
-        for (const unsupportedPath of result.unsupportedPaths) {
-          unsupported.add(unsupportedPath);
-        }
+        includeAnalysis(normalizeSchemaNode(effectiveSchema, [...path, key]));
       }
     }
 
@@ -376,15 +394,10 @@ function normalizeSchemaNode(
       normalized.additionalProperties = false;
     } else if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
       if (!isAnySchema(schema.additionalProperties)) {
-        const res = normalizeSchemaNode(
-          schema.additionalProperties,
-          [...path, "*"],
-          compositionBranch,
-        );
-        normalized.additionalProperties = res.schema ?? schema.additionalProperties;
-        for (const unsupportedPath of res.unsupportedPaths) {
-          unsupported.add(unsupportedPath);
-        }
+        normalized.additionalProperties = normalizeChild(schema.additionalProperties, [
+          ...path,
+          "*",
+        ]);
       }
     }
   } else if (type === "array" && (!inheritedCompositionOnly || hasLocalArrayStructure)) {
@@ -396,55 +409,22 @@ function normalizeSchemaNode(
           unsupported.add(pathLabel);
           continue;
         }
-        if (compositionBranch && !shouldNormalizeAllOfBranch(itemSchema)) {
-          normalizedItems.push(itemSchema);
-          if (!hasOnlySupportedConstraintKeywords(itemSchema)) {
-            unsupported.add(pathLabel);
-          }
-          continue;
-        }
-        const result = normalizeSchemaNode(itemSchema, [...path, index], compositionBranch);
-        normalizedItems.push(result.schema ?? itemSchema);
-        for (const unsupportedPath of result.unsupportedPaths) {
-          unsupported.add(unsupportedPath);
-        }
+        normalizedItems.push(normalizeChild(itemSchema, [...path, index], pathLabel));
       }
       normalized.items = normalizedItems;
       if (schema.additionalItems && typeof schema.additionalItems === "object") {
-        if (compositionBranch && !shouldNormalizeAllOfBranch(schema.additionalItems)) {
-          normalized.additionalItems = schema.additionalItems;
-          if (!hasOnlySupportedConstraintKeywords(schema.additionalItems)) {
-            unsupported.add(pathLabel);
-          }
-        } else {
-          const result = normalizeSchemaNode(
-            schema.additionalItems,
-            [...path, "*"],
-            compositionBranch,
-          );
-          normalized.additionalItems = result.schema ?? schema.additionalItems;
-          for (const unsupportedPath of result.unsupportedPaths) {
-            unsupported.add(unsupportedPath);
-          }
-        }
+        normalized.additionalItems = normalizeChild(
+          schema.additionalItems,
+          [...path, "*"],
+          pathLabel,
+        );
       } else {
         normalized.additionalItems = schema.additionalItems;
       }
     } else if (!schema.items) {
       unsupported.add(pathLabel);
     } else {
-      if (compositionBranch && !shouldNormalizeAllOfBranch(schema.items)) {
-        normalized.items = schema.items;
-        if (!hasOnlySupportedConstraintKeywords(schema.items)) {
-          unsupported.add(pathLabel);
-        }
-      } else {
-        const res = normalizeSchemaNode(schema.items, [...path, "*"], compositionBranch);
-        normalized.items = res.schema ?? schema.items;
-        for (const unsupportedPath of res.unsupportedPaths) {
-          unsupported.add(unsupportedPath);
-        }
-      }
+      normalized.items = normalizeChild(schema.items, [...path, "*"], pathLabel);
     }
     if (schema.allOf) {
       for (const index of arrayItemSchemaIndexes(schema)) {
@@ -452,10 +432,7 @@ function normalizeSchemaNode(
         if (!effectiveSchema) {
           continue;
         }
-        const result = normalizeSchemaNode(effectiveSchema, [...path, index]);
-        for (const unsupportedPath of result.unsupportedPaths) {
-          unsupported.add(unsupportedPath);
-        }
+        includeAnalysis(normalizeSchemaNode(effectiveSchema, [...path, index]));
       }
     }
   } else if (
@@ -495,48 +472,24 @@ function isSecretRefVariant(entry: JsonSchema): boolean {
 
 function isSecretRefUnion(entry: JsonSchema): boolean {
   const variants = entry.oneOf ?? entry.anyOf;
-  if (!variants || variants.length === 0) {
-    return false;
-  }
-  return variants.every((variant) => isSecretRefVariant(variant));
+  return Boolean(variants?.length && variants.every(isSecretRefVariant));
 }
 
-function normalizeSecretInputUnion(
-  schema: JsonSchema,
-  path: Array<string | number>,
-  remaining: JsonSchema[],
-  nullable: boolean,
-): ConfigSchemaAnalysis | null {
+function secretInputStringVariant(remaining: JsonSchema[]): JsonSchema | undefined {
+  if (remaining.length !== 2) {
+    return undefined;
+  }
   const stringIndex = remaining.findIndex((entry) => schemaType(entry) === "string");
   if (stringIndex < 0) {
-    return null;
+    return undefined;
   }
-  const nonString = remaining.filter((_, index) => index !== stringIndex);
-  const secretRefSchema = nonString[0];
-  const stringSchema = remaining[stringIndex];
-  if (nonString.length !== 1 || !secretRefSchema || !stringSchema) {
-    return null;
-  }
-  if (!isSecretRefUnion(secretRefSchema)) {
-    return null;
-  }
-  return normalizeSchemaNode(
-    {
-      ...schema,
-      ...stringSchema,
-      nullable: nullable || stringSchema.nullable,
-      anyOf: undefined,
-      oneOf: undefined,
-      allOf: undefined,
-    },
-    path,
-  );
+  return isSecretRefUnion(remaining[1 - stringIndex]!) ? remaining[stringIndex] : undefined;
 }
 
 function normalizeUnion(
   schema: JsonSchema,
   path: Array<string | number>,
-): ConfigSchemaAnalysis | null {
+): NormalizedConfigSchema | null {
   // Union normalization replaces the composition keywords, so mixed allOf schemas
   // must stay unsupported instead of silently losing sibling restrictions.
   if (schema.allOf) {
@@ -558,9 +511,7 @@ function normalizeUnion(
     if (Array.isArray(entry.enum)) {
       const { enumValues, nullable: enumNullable } = normalizeEnum(entry.enum);
       literals.push(...enumValues);
-      if (enumNullable) {
-        nullable = true;
-      }
+      nullable ||= enumNullable;
       continue;
     }
     if ("const" in entry) {
@@ -581,9 +532,21 @@ function normalizeUnion(
 
   // Config secrets accept either a raw key string or a structured secret ref object.
   // The form only supports editing the string path for now.
-  const secretInput = normalizeSecretInputUnion(schema, path, remaining, nullable);
-  if (secretInput) {
-    return secretInput;
+  const singleBranch =
+    secretInputStringVariant(remaining) ??
+    (literals.length === 0 && remaining.length === 1 ? remaining[0] : undefined);
+  if (singleBranch) {
+    return normalizeSchemaNode(
+      {
+        ...schema,
+        ...singleBranch,
+        nullable: nullable || singleBranch.nullable,
+        anyOf: undefined,
+        oneOf: undefined,
+        allOf: undefined,
+      },
+      path,
+    );
   }
 
   // An exact boolean branch is finite, except oneOf cannot absorb boolean literals
@@ -598,6 +561,18 @@ function normalizeUnion(
       literals.includes("false") ||
       (schema.anyOf === undefined && literals.some((literal) => typeof literal === "boolean"))
     ) {
+      // The text editor can preserve string and boolean literals, but cannot
+      // recreate numeric, structured, or null sentinels from their displayed text.
+      if (
+        remaining.every((entry) => entry.type === "string") &&
+        literals.every((literal) => typeof literal === "string" || typeof literal === "boolean") &&
+        !schemaAllowsNull(schema)
+      ) {
+        return {
+          schema: { ...schema, nullable },
+          unsupportedPaths: [],
+        };
+      }
       return null;
     }
     remaining.pop();
@@ -617,24 +592,6 @@ function normalizeUnion(
       },
       unsupportedPaths: [],
     };
-  }
-
-  if (remaining.length === 1) {
-    const remainingSchema = remaining[0];
-    if (!remainingSchema) {
-      return null;
-    }
-    return normalizeSchemaNode(
-      {
-        ...schema,
-        ...remainingSchema,
-        nullable: nullable || remainingSchema.nullable,
-        anyOf: undefined,
-        oneOf: undefined,
-        allOf: undefined,
-      },
-      path,
-    );
   }
 
   if (

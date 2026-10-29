@@ -2,6 +2,21 @@ import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 
 /** Boot-stable quarantine state for configured plugins whose payload failed verification. */
 
+export const PLUGIN_AVAILABILITY_POLICY = {
+  state: "configured-unavailable",
+  severity: "warning",
+  repairCommand: "openclaw doctor --fix",
+} as const;
+
+/** Availability findings share one disposition across startup and Doctor lint. */
+export function describePluginAvailabilityFailure(pluginId: string, detail: string) {
+  return {
+    source: pluginId,
+    severity: PLUGIN_AVAILABILITY_POLICY.severity,
+    message: `Plugin "${pluginId}" is unavailable: ${detail} Run \`${PLUGIN_AVAILABILITY_POLICY.repairCommand}\`.`,
+  };
+}
+
 export type PluginVerificationFailureReason =
   | "missing-install-path"
   | "missing-package-dir"
@@ -15,10 +30,10 @@ export type PluginVerificationFailureReason =
   | "missing-openclaw-peer-link";
 
 type PluginVerificationDiagnostic = {
-  kind: "plugin-verification";
-  reason: PluginVerificationFailureReason;
-  detail: string;
-  installPath?: string;
+  readonly kind: "plugin-verification";
+  readonly reason: PluginVerificationFailureReason;
+  readonly detail: string;
+  readonly installPath?: string;
 };
 
 type PublicPluginVerificationDiagnostic = Pick<
@@ -27,26 +42,19 @@ type PublicPluginVerificationDiagnostic = Pick<
 >;
 
 export type DegradedPlugin = {
-  pluginId: string;
-  state: "configured-unavailable";
-  diagnostic: PluginVerificationDiagnostic;
+  readonly pluginId: string;
+  readonly state: typeof PLUGIN_AVAILABILITY_POLICY.state;
+  readonly diagnostic: PluginVerificationDiagnostic;
 };
 
-type PluginVerificationFailure = {
+export type PluginVerificationFailure = {
   pluginId: string;
   installPath?: string;
   reason: PluginVerificationFailureReason;
   detail: string;
 };
 
-let activeDegradedPlugins: DegradedPlugin[] = [];
-
-function cloneDegradedPlugin(plugin: DegradedPlugin): DegradedPlugin {
-  return {
-    ...plugin,
-    diagnostic: { ...plugin.diagnostic },
-  };
-}
+let activeDegradedPlugins: readonly DegradedPlugin[] = [];
 
 /** Converts verified ownership failures into the quarantine state used for this boot. */
 export function buildDegradedPluginsFromVerificationFailures(
@@ -61,7 +69,7 @@ export function buildDegradedPluginsFromVerificationFailures(
     }
     degraded.set(failure.pluginId, {
       pluginId: failure.pluginId,
-      state: "configured-unavailable",
+      state: PLUGIN_AVAILABILITY_POLICY.state,
       diagnostic: {
         kind: "plugin-verification",
         reason: failure.reason,
@@ -75,16 +83,15 @@ export function buildDegradedPluginsFromVerificationFailures(
 
 /** Replaces the process-local quarantine snapshot established before Gateway plugin loading. */
 export function setActiveDegradedPlugins(plugins: readonly DegradedPlugin[]): void {
-  activeDegradedPlugins = plugins.map(cloneDegradedPlugin);
+  activeDegradedPlugins = [...plugins];
 }
 
-export function listActiveDegradedPlugins(): DegradedPlugin[] {
-  return activeDegradedPlugins.map(cloneDegradedPlugin);
+export function listActiveDegradedPlugins(): readonly DegradedPlugin[] {
+  return activeDegradedPlugins;
 }
 
 export function findActiveDegradedPlugin(pluginId: string): DegradedPlugin | undefined {
-  const plugin = activeDegradedPlugins.find((entry) => entry.pluginId === pluginId);
-  return plugin ? cloneDegradedPlugin(plugin) : undefined;
+  return activeDegradedPlugins.find((entry) => entry.pluginId === pluginId);
 }
 
 /** Drops a verification failure that belongs to a different selected plugin root. */

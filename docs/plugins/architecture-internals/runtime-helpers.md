@@ -41,7 +41,7 @@ Notes:
 - `listVoices` is optional per provider. Use it for vendor-owned voice pickers or setup flows.
 - Core passes a resolved request deadline to provider `listVoices` hooks; provider-specific timeout settings may override it.
 - Voice listings can include richer metadata such as locale, gender, and personality tags for provider-aware pickers.
-- OpenAI and ElevenLabs support telephony today. Microsoft does not.
+- Telephony needs a provider that implements `synthesizeTelephony`; core skips providers without it and reports `unsupported_for_telephony`. Bundled providers that implement it: `azure-speech`, `elevenlabs`, `fish-audio-speech`, `google`, `gradium`, `inworld`, `openai`, `tts-local-cli`, and `xai`. `microsoft` does not.
 
 Plugins can also register speech providers via `api.registerSpeechProvider(...)`.
 
@@ -108,9 +108,10 @@ const video = await api.runtime.mediaUnderstanding.describeVideoFile({
   cfg: api.config,
 });
 
+// receiptImageBuffer is your own image bytes, not an SDK-provided value.
 const extraction = await api.runtime.mediaUnderstanding.extractStructuredWithModel({
   provider: "codex",
-  model: "gpt-5.6-sol",
+  model: "gpt-6-astra",
   input: [
     {
       type: "image",
@@ -149,7 +150,7 @@ Notes:
 
 - `api.runtime.mediaUnderstanding.*` is the preferred shared surface for
   image/audio/video understanding.
-- `extractStructuredWithModel(...)` is the plugin-facing seam for bounded
+- `extractStructuredWithModel(...)` is the plugin-facing interface for bounded
   provider-owned image-first extraction. Include at least one image input;
   text inputs are supplemental context. Product plugins own their routes and
   schemas while OpenClaw owns the provider/runtime boundary.
@@ -175,7 +176,7 @@ Notes:
 - `toolsAlsoAllow` accepts exact, uniquely owned tool names registered by the calling plugin. Core and ambiguous names are rejected. It is additive to the normal profile, but operator allowlists and denies remain authoritative.
 - OpenClaw only honors those override fields for trusted callers.
 - For plugin-owned fallback runs, operators must opt in with `plugins.entries.<id>.subagent.allowModelOverride: true`.
-- Use `plugins.entries.<id>.subagent.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets, or `"*"` to allow any target explicitly.
+- Use `plugins.entries.<id>.subagent.allowedModels` to restrict trusted plugins to specific normalized `provider/model` targets, or `"*"` to allow any target explicitly.
 - Untrusted plugin subagent runs still work, but override requests are rejected instead of silently falling back.
 - Plugin-created subagent sessions are tagged with the creating plugin id. Fallback `api.runtime.subagent.deleteSession(...)` may delete those owned sessions only; arbitrary session deletion still requires an admin-scoped Gateway request.
 

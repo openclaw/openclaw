@@ -5,11 +5,13 @@ import type { DiscordVoiceTestHarness } from "./voice-test-harness.test-support.
 
 export function createDiscordRecordingFixture({
   expect,
+  expectDefined,
   vi,
   createClient,
   createManager,
   getSessionEntry,
   getSessionConnection,
+  getVoiceReceive,
   handleSpeakingStart,
   decodeOpusStreamChunksMock,
   transcribeAudioFileMock,
@@ -89,6 +91,18 @@ export function createDiscordRecordingFixture({
     });
     const sink = vi.fn();
     const begin = (userId: string) => handleSpeakingStart(manager, entry, userId);
+    const beginSpeaking = (userId: string) => {
+      const receive = vi.spyOn(getVoiceReceive(manager), "handleSpeakingStart");
+      try {
+        // The SDK marks active speech before delivery; retain the real receive join
+        // while ongoing-input tests await transcription or capture transitions.
+        getSessionConnection(entry).receiver.speaking.emit("start", userId);
+        expect(receive).toHaveBeenCalledExactlyOnceWith(entry, userId);
+        return expectDefined(receive.mock.results[0]?.value, "voice receive promise");
+      } finally {
+        receive.mockRestore();
+      }
+    };
     const audio = async (userId: string, marker: number) => {
       const receiving = begin(userId);
       await vi.waitFor(() => expect(streams.has(userId)).toBe(true));
@@ -97,6 +111,17 @@ export function createDiscordRecordingFixture({
       await entry.processingQueue;
       await Promise.all(conversations.mock.results.map((result) => result.value));
     };
-    return { client, manager, entry, streams, sink, begin, audio, states, conversations };
+    return {
+      client,
+      manager,
+      entry,
+      streams,
+      sink,
+      begin,
+      beginSpeaking,
+      audio,
+      states,
+      conversations,
+    };
   };
 }

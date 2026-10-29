@@ -4,25 +4,35 @@
  * Custom OpenAI-compatible base URLs intentionally bypass Codex-runtime defaults.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type {
+  LegacyAgentListEntry,
+  OpenClawConfigWithLegacyRoster,
+} from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ProviderRouteOverridePresence } from "../plugin-sdk/provider-model-types.js";
+import type {
+  ProviderResolveModelRoutesContext,
+  ProviderRouteOverridePresence,
+} from "../plugin-sdk/provider-model-types.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
-  resolveAgentScopedRuntimeOverride,
+  type EmbeddedAgentRuntime,
 } from "./agent-runtime-id.js";
+import { resolveAgentEntry } from "./agent-scope-config.js";
 import { hasAuthoredProviderRequestParams } from "./model-extra-params.js";
 import {
   resolveAgentRuntimePolicyAgentId,
   resolveModelRuntimePolicy,
+  resolveModelRouteIntent,
   type AgentRuntimePolicyScope,
 } from "./model-runtime-policy.js";
+import { resolveDefaultModelForAgent } from "./model-selection-config.js";
 import { resolveOpenAIModelRoutes } from "./openai-model-routes.js";
 import { canonicalizeProviderModelId } from "./provider-model-route.js";
 
 /** Canonical provider id for OpenAI-hosted model routes. */
 export const OPENAI_PROVIDER_ID = "openai";
-export const OPENAI_CODEX_PROVIDER_ID = OPENAI_PROVIDER_ID;
 
 /** Returns true for provider ids that normalize to OpenAI. */
 export function isOpenAIProvider(provider: string | undefined): boolean {
@@ -47,6 +57,8 @@ export function resolveOpenAIImplicitAgentRuntime(
     config?: OpenClawConfig;
     env?: Readonly<Record<string, string | undefined>>;
     requestTransportOverrides?: ProviderRouteOverridePresence;
+    routeIntent?: ProviderResolveModelRoutesContext["routeIntent"];
+    runtimePolicy?: ReturnType<typeof resolveModelRuntimePolicy>;
   } & AgentRuntimePolicyScope,
 ): "codex" | "openclaw" | null {
   if (!isOpenAIProvider(params.provider)) {
@@ -54,6 +66,14 @@ export function resolveOpenAIImplicitAgentRuntime(
   }
   const modelId = params.modelId;
   const agentId = resolveAgentRuntimePolicyAgentId(params);
+  const primaryModel = params.config
+    ? resolveDefaultModelForAgent({
+        cfg: params.config,
+        agentId,
+        allowManifestNormalization: false,
+        allowPluginNormalization: false,
+      })
+    : undefined;
   const hasConfiguredProviderRequestParams = hasAuthoredProviderRequestParams({
     config: params.config,
     provider: params.provider ?? OPENAI_PROVIDER_ID,
@@ -71,7 +91,10 @@ export function resolveOpenAIImplicitAgentRuntime(
     baseUrl: params.baseUrl,
     config: params.config,
     env: params.env,
+    agentId,
     requestTransportOverrides,
+    primaryModel,
+    routeIntent: params.routeIntent ?? resolveModelRouteIntent({ ...params, primaryModel }),
   });
   if (!resolution) {
     // Endpoint and adapter ownership stays in the provider artifact. Without
@@ -95,10 +118,24 @@ export function parseModelRefProvider(value: unknown): string | undefined {
   return normalizeProviderId(value.trim().slice(0, slashIndex));
 }
 
+/** Reads the retired whole-agent runtime opt-out from pre-admission plugin-setup config. */
+function resolveRetiredAgentRuntimeOptOut(params: {
+  config?: OpenClawConfigWithLegacyRoster;
+  agentId?: string;
+}): EmbeddedAgentRuntime | undefined {
+  const agentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
+  // resolveAgentEntry returns the stored entry object, so retired fields survive on raw input.
+  const entry: LegacyAgentListEntry | undefined =
+    agentId && params.config ? resolveAgentEntry(params.config, agentId) : undefined;
+  return normalizeOptionalAgentRuntimeId(
+    entry?.agentRuntime?.id ?? params.config?.agents?.defaults?.agentRuntime?.id,
+  );
+}
+
 /** Returns true when selected model config should ensure the Codex plugin exists. */
 export function modelSelectionShouldEnsureCodexPlugin(params: {
   model?: string;
-  config?: OpenClawConfig;
+  config?: OpenClawConfigWithLegacyRoster;
   agentId?: string;
 }): boolean {
   const provider = parseModelRefProvider(params.model);
@@ -119,10 +156,7 @@ export function modelSelectionShouldEnsureCodexPlugin(params: {
     return configuredRuntime === "codex";
   }
   if (!configuredPolicy) {
-    const agentRuntime = resolveAgentScopedRuntimeOverride({
-      config: params.config,
-      agentId: params.agentId,
-    });
+    const agentRuntime = resolveRetiredAgentRuntimeOptOut(params);
     // Any explicit model policy wins; without one, the shipped whole-agent
     // opt-out still suppresses implicit Codex installation despite retirement.
     if (agentRuntime && !isDefaultAgentRuntimeId(agentRuntime)) {
@@ -137,52 +171,4 @@ export function modelSelectionShouldEnsureCodexPlugin(params: {
       agentId: params.agentId,
     }) === "codex"
   );
-}
-
-/** Lists auth-profile providers for an OpenAI runtime route. */
-export function listOpenAIAuthProfileProvidersForAgentRuntime(params: {
-  provider: string;
-  harnessRuntime?: string;
-  agentHarnessId?: string;
-  config?: OpenClawConfig;
-}): string[] {
-  if (!isOpenAIProvider(params.provider)) {
-    return [params.provider];
-  }
-  return [OPENAI_PROVIDER_ID];
-}
-
-/** Resolves the provider id passed to OpenAI runtime auth/execution paths. */
-export function resolveOpenAIRuntimeProvider(params: {
-  provider: string;
-  harnessRuntime?: string;
-  agentHarnessId?: string;
-  authProfileProvider?: string;
-  authProfileId?: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-}): string {
-  return isOpenAIProvider(params.provider) ? OPENAI_PROVIDER_ID : params.provider;
-}
-
-/** Resolves the selected provider id displayed for OpenAI runtime routes. */
-export function resolveSelectedOpenAIRuntimeProvider(params: {
-  provider: string;
-  harnessRuntime?: string;
-  agentHarnessId?: string;
-  authProfileProvider?: string;
-  authProfileId?: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-}): string {
-  return isOpenAIProvider(params.provider) ? OPENAI_PROVIDER_ID : params.provider;
-}
-
-/** Resolves the config provider used for context-window lookup. */
-export function resolveContextConfigProviderForRuntime(params: {
-  provider: string;
-  runtimeId?: string;
-  config?: OpenClawConfig;
-}): string {
-  return isOpenAIProvider(params.provider) ? OPENAI_PROVIDER_ID : params.provider;
 }

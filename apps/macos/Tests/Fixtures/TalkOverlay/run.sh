@@ -24,6 +24,7 @@ PLIST
 cd -- "$repo_root"
 sources=(
   apps/macos/Sources/OpenClaw/TalkOverlay.swift
+  apps/macos/Sources/OpenClaw/NotifyOverlay.swift
   apps/macos/Sources/OpenClaw/OverlayPanelFactory.swift
   apps/macos/Tests/Fixtures/TalkOverlay/Fixture.swift
 )

@@ -7,6 +7,7 @@ import {
   createManagedUpdateRequesterAuthority,
   type UpdateRequester,
 } from "../../infra/update-requester-authority.js";
+import { ignoreNonCleanupCommandError } from "../../process/exec-result.js";
 import { waitForGatewayHealthyRestart } from "./restart-health.js";
 
 export async function resolveGatewayLifecycleContext(
@@ -15,7 +16,7 @@ export async function resolveGatewayLifecycleContext(
 ) {
   const command = requireEffective
     ? await service.readCommand(process.env, { requireEffective: true })
-    : await service.readCommand(process.env).catch(() => null);
+    : await service.readCommand(process.env).catch(ignoreNonCleanupCommandError);
   if (requireEffective && !command) {
     throw new Error(
       "Updated gateway service could not be inspected; run `openclaw gateway status --deep`.",
@@ -44,6 +45,7 @@ export async function resolveGatewayConfigPorts() {
 export async function waitForGatewayUpdateRecovery(
   expectedVersion: string,
   expectedBuildId?: string,
+  timeoutMs?: number,
 ) {
   if (!expectedVersion?.trim()) {
     throw new Error("Recovery Gateway version is unavailable.");
@@ -56,8 +58,8 @@ export async function waitForGatewayUpdateRecovery(
     env,
     expectedVersion,
     expectedBuildId,
+    timeoutMs,
     requireRunningService: true,
-    settle: { probes: 12 },
   });
 }
 

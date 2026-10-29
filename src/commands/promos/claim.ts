@@ -1,4 +1,3 @@
-/** Claims a ClawHub promotion: configures provider auth and registers its models. */
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { hasAvailableAuthForProvider } from "../../agents/model-auth.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -9,38 +8,28 @@ import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ClawHubRequestError } from "../../infra/clawhub-client.js";
 import { fetchClawHubPromotion, type ClawHubPromotion } from "../../infra/clawhub-promotions.js";
-import { markPromotionSlugsNotified, recordPromotionClaim } from "../../infra/promotions-feed.js";
 import { enablePluginWithCapabilityConsent } from "../../plugins/enable.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import { applyAuthChoiceLoadedPluginProvider } from "../../plugins/provider-auth-choice.js";
-import {
-  resolveManifestProviderAuthChoice,
-  type ProviderAuthChoiceMetadata,
-} from "../../plugins/provider-auth-choices.js";
-import {
-  resolveProviderInstallCatalogEntry,
-  type ProviderInstallCatalogEntry,
-} from "../../plugins/provider-install-catalog.js";
+import { resolveManifestProviderAuthChoice } from "../../plugins/provider-auth-choices.js";
+import { resolveProviderInstallCatalogEntry } from "../../plugins/provider-install-catalog.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { createPluginCapabilityConsentPrompter } from "../../wizard/plugin-capability-consent.js";
-import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
-import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
 import { normalizeAlias } from "../models/alias-name.js";
 import {
   applyDefaultModelPrimaryUpdate,
   updateConfig,
   upsertCanonicalModelConfigEntry,
 } from "../models/shared.js";
+import { repairModelSelectionRuntimePlugins } from "../runtime-plugin-install.js";
 
 type PromosClaimOptions = {
   apiKey?: string;
   setDefault?: boolean;
 };
 
-// Promo models must belong to the promotion's declared provider. This keeps the
-// payload declarative: a record can never register models under a provider the
-// user did not just validate/authenticate against.
+// Remote offers cannot register models outside the provider being authenticated.
 function resolvePromotionModelTarget(promotion: ClawHubPromotion, modelRef: string) {
   const provider = promotion.provider ?? "";
   const prefix = `${provider}/`;
@@ -66,9 +55,7 @@ async function fetchLivePromotion(slug: string): Promise<ClawHubPromotion> {
   }
 }
 
-// Enforce the window client-side; the server-provided `active` flag is only an
-// additional signal, never a bypass — a stale or hostile payload must not
-// register expired or unlaunched offers.
+// A stale server-provided `active` flag cannot extend the offer window.
 function requireLiveWindow(promotion: ClawHubPromotion) {
   const now = Date.now();
   if (now > promotion.endsAt) {
@@ -97,58 +84,7 @@ function promotionClaimContract(promotion: ClawHubPromotion): string {
   });
 }
 
-function requireUnchangedClaimContract(
-  initial: ClawHubPromotion,
-  revalidated: ClawHubPromotion,
-): void {
-  if (promotionClaimContract(initial) === promotionClaimContract(revalidated)) {
-    return;
-  }
-  throw new Error(
-    `Promotion "${initial.slug}" changed while the claim was in progress; no promotional models were added. Any provider credentials you just configured were kept. Run ${formatCliCommand("openclaw promos list")} and retry.`,
-  );
-}
-
-// Mirrors applyAuthChoiceLoadedPluginProvider's own resolution order: loaded
-// plugin manifests (bundled/installed providers) first, then the install
-// catalog for providers that would need a plugin install. The source matters:
-// only manifest-resolved choices may take the credential-reuse shortcut,
-// because install-catalog choices still need their plugin installed.
-type ResolvedAuthChoice = {
-  entry: ProviderAuthChoiceMetadata;
-  installed: boolean;
-  packageNames: string[];
-};
-
-function resolveManifestPluginPackageNames(pluginId: string, cfg: OpenClawConfig): string[] {
-  const snapshot = loadManifestMetadataSnapshot({ config: cfg });
-  return [
-    ...new Set(
-      snapshot.manifestRegistry.plugins
-        .filter((plugin) => plugin.id === pluginId)
-        .map((plugin) => plugin.packageName?.trim())
-        .filter((name): name is string => Boolean(name)),
-    ),
-  ];
-}
-
-function resolveCatalogPluginPackageNames(entry: ProviderInstallCatalogEntry): string[] {
-  const npmPackage =
-    entry.installSource?.npm?.expectedPackageName ?? entry.installSource?.npm?.packageName;
-  return [
-    ...new Set(
-      [npmPackage, entry.installSource?.clawhub?.packageName].filter((name): name is string =>
-        Boolean(name),
-      ),
-    ),
-  ];
-}
-
-function resolveAuthChoice(
-  promotion: ClawHubPromotion,
-  provider: string,
-  cfg: OpenClawConfig,
-): ResolvedAuthChoice | undefined {
+function resolveAuthChoice(promotion: ClawHubPromotion, provider: string, cfg: OpenClawConfig) {
   const authChoiceId = promotion.authChoiceId?.trim();
   if (!authChoiceId) {
     return undefined;
@@ -174,37 +110,35 @@ function resolveAuthChoice(
       `Promotion "${promotion.slug}" declares provider "${provider}" but its auth choice belongs to "${entry.providerId}"; refusing to configure it.`,
     );
   }
-  const packageNames = manifestEntry
-    ? resolveManifestPluginPackageNames(manifestEntry.pluginId, cfg)
-    : catalogEntry
-      ? resolveCatalogPluginPackageNames(catalogEntry)
-      : [];
+  let packageNames: string[] = [];
+  if (manifestEntry) {
+    const pluginId = manifestEntry.pluginId;
+    const snapshot = loadManifestMetadataSnapshot({ config: cfg });
+    packageNames = [
+      ...new Set(
+        snapshot.manifestRegistry.plugins
+          .filter((plugin) => plugin.id === pluginId)
+          .map((plugin) => plugin.packageName?.trim())
+          .filter((name): name is string => Boolean(name)),
+      ),
+    ];
+  } else if (catalogEntry) {
+    const npmPackage =
+      catalogEntry.installSource?.npm?.expectedPackageName ??
+      catalogEntry.installSource?.npm?.packageName;
+    packageNames = [
+      ...new Set(
+        [npmPackage, catalogEntry.installSource?.clawhub?.packageName].filter(
+          (name): name is string => Boolean(name),
+        ),
+      ),
+    ];
+  }
   return {
     entry,
     installed: Boolean(manifestEntry),
     packageNames,
   };
-}
-
-function requirePromotionPlugins(
-  promotion: ClawHubPromotion,
-  authChoice: ResolvedAuthChoice | undefined,
-): void {
-  const declared = promotion.pluginNames ?? [];
-  if (declared.length === 0) {
-    return;
-  }
-  const knownPackages = new Set(authChoice?.packageNames ?? []);
-  const unsupported = declared.filter((name) => !knownPackages.has(name));
-  if (unsupported.length === 0) {
-    return;
-  }
-  const authChoiceLabel = authChoice
-    ? `auth choice "${authChoice.entry.choiceId}"`
-    : "a missing auth choice";
-  throw new Error(
-    `Promotion "${promotion.slug}" requires plugin package "${unsupported[0]}", but ${authChoiceLabel} does not provide it in this OpenClaw version. Update OpenClaw and retry.`,
-  );
 }
 
 async function readValidConfigWriteSnapshot() {
@@ -217,10 +151,11 @@ async function readValidConfigWriteSnapshot() {
   return prepared;
 }
 
+// Catalog-only choices still need installation, even when credentials are available.
 async function ensureProviderAuth(params: {
   promotion: ClawHubPromotion;
   provider: string;
-  authChoice: ResolvedAuthChoice | undefined;
+  authChoice: ReturnType<typeof resolveAuthChoice> | undefined;
   prepared: Awaited<ReturnType<typeof readValidConfigWriteSnapshot>>;
   opts: PromosClaimOptions;
   runtime: RuntimeEnv;
@@ -230,12 +165,7 @@ async function ensureProviderAuth(params: {
   const catalogEntry = authChoice?.entry;
   const runtimeConfig = snapshot.runtimeConfig ?? snapshot.config;
   const apiKey = opts.apiKey?.trim();
-  // Any working provider auth is deliberately sufficient: the promotion's
-  // authChoiceId describes how to set up auth when none exists, not an
-  // exclusivity requirement. An explicit --api-key overrides reuse because the
-  // user asked for that specific key to be stored. Install-catalog choices
-  // never take the shortcut: their plugin is not installed yet, so the apply
-  // flow must still run to install it.
+  // Any working auth suffices, unless the user supplied a key or installation is still needed.
   const reuseAllowed = !apiKey && (authChoice?.installed ?? true);
   if (reuseAllowed && (await hasAvailableAuthForProvider({ provider, cfg: runtimeConfig }))) {
     runtime.log(`Using your existing ${provider} credentials.`);
@@ -256,28 +186,21 @@ async function ensureProviderAuth(params: {
   }
   const applied = await applyAuthChoiceLoadedPluginProvider({
     authChoice: catalogEntry.choiceId,
-    config: structuredClone(snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig,
+    config: structuredClone(snapshot.sourceConfig ?? snapshot.config),
     prompter: createClackPrompter(),
     runtime,
     setDefaultModel: false,
     opts: apiKey && catalogEntry.optionKey ? { [catalogEntry.optionKey]: apiKey } : undefined,
   });
-  // The apply flow can return success-shaped results without usable auth
-  // (cancelled retrySelection, disabled/unresolvable plugin). Revalidate
-  // before persisting so a claim never registers models the user cannot run.
-  const authCompleted =
-    applied &&
-    !applied.retrySelection &&
-    (await hasAvailableAuthForProvider({ provider, cfg: applied.config }));
-  if (!applied || !authCompleted) {
+  // A returned config does not prove authentication completed or the plugin can load.
+  if (
+    !applied ||
+    applied.retrySelection ||
+    !(await hasAvailableAuthForProvider({ provider, cfg: applied.config }))
+  ) {
     throw new Error(`Authentication for "${provider}" was not completed; nothing was changed.`);
   }
   await replaceConfigFile({ sourceConfig: applied.config, baseHash: snapshot.hash, writeOptions });
-}
-
-function aliasTaken(models: Record<string, AgentModelEntryConfig>, alias: string): boolean {
-  const lowered = alias.toLowerCase();
-  return Object.values(models).some((entry) => entry.alias?.toLowerCase() === lowered);
 }
 
 export async function promosClaimCommand(
@@ -309,7 +232,16 @@ export async function promosClaimCommand(
     provider,
     snapshot.runtimeConfig ?? snapshot.config,
   );
-  requirePromotionPlugins(promotion, authChoice);
+  const knownPackages = new Set(authChoice?.packageNames ?? []);
+  const unsupported = promotion.pluginNames?.find((name) => !knownPackages.has(name));
+  if (unsupported !== undefined) {
+    const authChoiceLabel = authChoice
+      ? `auth choice "${authChoice.entry.choiceId}"`
+      : "a missing auth choice";
+    throw new Error(
+      `Promotion "${promotion.slug}" requires plugin package "${unsupported}", but ${authChoiceLabel} does not provide it in this OpenClaw version. Update OpenClaw and retry.`,
+    );
+  }
 
   await ensureProviderAuth({ promotion, provider, authChoice, prepared, opts, runtime });
 
@@ -321,7 +253,11 @@ export async function promosClaimCommand(
 
   const revalidatedPromotion = await fetchLivePromotion(slug);
   requireLiveWindow(revalidatedPromotion);
-  requireUnchangedClaimContract(promotion, revalidatedPromotion);
+  if (promotionClaimContract(promotion) !== promotionClaimContract(revalidatedPromotion)) {
+    throw new Error(
+      `Promotion "${promotion.slug}" changed while the claim was in progress; no promotional models were added. Any provider credentials you just configured were kept. Run ${formatCliCommand("openclaw promos list")} and retry.`,
+    );
+  }
   promotion = revalidatedPromotion;
 
   const registered: string[] = [];
@@ -329,10 +265,7 @@ export async function promosClaimCommand(
   const invalidAliases: string[] = [];
   const updated = await updateConfig(async (cfg, context) => {
     let base = cfg;
-    // The credential-reuse path skips the auth flow, which is where plugin
-    // enablement normally happens. Enable (or refuse) the provider plugin here
-    // so a claim never registers models the runtime cannot load under the
-    // user's plugin policy. Idempotent when the auth flow already enabled it.
+    // Credential reuse skips auth-flow enablement; plugin policy must still admit the models.
     if (authChoice) {
       const enabled = await enablePluginWithCapabilityConsent(base, authChoice.entry.pluginId, {
         onCapabilityConsent: process.stdin.isTTY
@@ -346,9 +279,9 @@ export async function promosClaimCommand(
       }
       base = enabled.config;
     }
-    const models = {
+    const models: Record<string, AgentModelEntryConfig> = {
       ...base.agents?.defaults?.models,
-    } as Record<string, AgentModelEntryConfig>;
+    };
     for (const model of promotion.models) {
       const target = resolvePromotionModelTarget(promotion, model.modelRef);
       const key = upsertCanonicalModelConfigEntry(models, target);
@@ -361,7 +294,8 @@ export async function promosClaimCommand(
         invalidAliases.push(model.alias ?? "");
       }
       if (alias && !models[key]?.alias) {
-        if (aliasTaken(models, alias)) {
+        const lowered = alias.toLowerCase();
+        if (Object.values(models).some((entry) => entry.alias?.toLowerCase() === lowered)) {
           skippedAliases.push(alias);
         } else {
           models[key] = { ...models[key], alias };
@@ -390,31 +324,13 @@ export async function promosClaimCommand(
     return next;
   });
 
-  // Config entries carry no promo marker, so provenance lives in the state
-  // DB — it powers the `promo`/`promo ended` annotations in `models list`
-  // and future cleanup. Best-effort by design: never fails the claim.
-  recordPromotionClaim({
-    slug: promotion.slug,
-    provider,
-    modelKeys: [...new Set(registered)],
-    endsAtMs: promotion.endsAt,
-    claimedAtMs: Date.now(),
-  });
-  markPromotionSlugsNotified([promotion.slug]);
-
   if (makeDefault && suggested) {
-    // `models set` repairs provider runtime plugin installs (Codex/Copilot)
-    // after a default change; a promo-selected default needs the same repair
-    // or an openai/* default can fail at execution time.
-    const repaired = await repairCodexRuntimePluginInstallForModelSelection({
+    // Keep default-change runtime repair aligned with `models set`.
+    const warnings = await repairModelSelectionRuntimePlugins({
       cfg: updated,
       model: suggested.modelRef,
     });
-    const copilotRepaired = await repairCopilotRuntimePluginInstallForModelSelection({
-      cfg: updated,
-      model: suggested.modelRef,
-    });
-    for (const warning of [...repaired.warnings, ...copilotRepaired.warnings]) {
+    for (const warning of warnings) {
       runtime.error?.(warning);
     }
   }

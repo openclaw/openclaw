@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ProviderPrepareDynamicModelContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   coerceSecretRef,
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   findNormalizedProviderValue,
   listProfilesForProvider,
   normalizeOptionalSecretInput,
@@ -25,19 +25,15 @@ export async function resolveFirstGithubToken(params: {
 }): Promise<{
   githubToken: string;
   githubDomain?: string;
-  hasProfile: boolean;
   profileId?: string;
 }> {
-  const authStore = ensureAuthProfileStore(params.agentDir, {
+  const authStore = await ensureAuthProfileStoreAsync(params.agentDir, {
     allowKeychainPrompt: false,
   });
   const profileIds = listProfilesForProvider(authStore, PROVIDER_ID);
   const hasProfile = profileIds.length > 0;
   const requestedProfileId = params.profileId?.trim();
-  const githubToken =
-    [params.env.COPILOT_GITHUB_TOKEN, params.env.GH_TOKEN, params.env.GITHUB_TOKEN]
-      .map((value) => normalizeOptionalSecretInput(value))
-      .find((value) => value !== undefined) ?? "";
+  const githubToken = normalizeOptionalSecretInput(params.env.COPILOT_GITHUB_TOKEN) ?? "";
   const providerConfig = params.config?.models?.providers?.[PROVIDER_ID];
   const configuredRefCanOwnAuth =
     providerConfig?.auth === undefined ||
@@ -55,10 +51,10 @@ export async function resolveFirstGithubToken(params: {
     // Prepared direct-auth attempts must not borrow a stored profile: model
     // limits and the later runtime exchange must use the same source token.
     if (githubToken && !preferConfiguredToken) {
-      return { githubToken, hasProfile: false };
+      return { githubToken };
     }
     if (!params.config) {
-      return { githubToken: "", hasProfile: false };
+      return { githubToken: "" };
     }
     const resolved = await resolveConfiguredSecretInputWithFallback({
       config: params.config,
@@ -75,7 +71,7 @@ export async function resolveFirstGithubToken(params: {
           `models.providers.${PROVIDER_ID}.apiKey SecretRef is unresolved.`,
       );
     }
-    return { githubToken: resolved.value?.trim() || githubToken, hasProfile: false };
+    return { githubToken: resolved.value?.trim() || githubToken };
   }
 
   const explicitProfileOrder =
@@ -96,18 +92,17 @@ export async function resolveFirstGithubToken(params: {
   if (profile?.type === "oauth") {
     const formatted = formatGithubCopilotApiKey(profile);
     if (!normalizeOptionalSecretInput(profile.refresh)) {
-      return { githubToken: "", hasProfile };
+      return { githubToken: "" };
     }
     const parsed = parseGithubCopilotApiKey(formatted);
     return {
       ...parsed,
       githubDomain: parsed.githubDomain ?? PUBLIC_GITHUB_COPILOT_DOMAIN,
-      hasProfile,
       profileId,
     };
   }
   if (profile?.type !== "token") {
-    return { githubToken: "", hasProfile };
+    return { githubToken: "" };
   }
   const resolved = await resolveRequiredConfiguredSecretRefInputString({
     config: params.config ?? {},
@@ -115,5 +110,5 @@ export async function resolveFirstGithubToken(params: {
     value: profile.tokenRef,
     path: `providers.github-copilot.authProfiles.${profileId ?? "default"}.tokenRef`,
   });
-  return { githubToken: (resolved ?? profile.token ?? "").trim(), hasProfile, profileId };
+  return { githubToken: (resolved ?? profile.token ?? "").trim(), profileId };
 }

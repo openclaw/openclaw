@@ -1,9 +1,9 @@
 // Covers path alias escape guards.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { assertNoPathAliasEscape } from "@openclaw/fs-safe/advanced";
 import { describe, expect, it } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { assertNoPathAliasEscape } from "./path-alias-guards.js";
 
 async function withAliasRoot(cb: (root: string) => Promise<void>): Promise<void> {
   await withTestDir({ prefix: "openclaw-path-alias-", subdir: "root" }, cb);

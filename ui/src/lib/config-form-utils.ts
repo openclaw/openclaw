@@ -1,8 +1,18 @@
-// Control UI controller manages form utils gateway state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConfigUiHint, ConfigUiHints } from "../api/types.ts";
 import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
 import { translateActive } from "../i18n/lib/translate.ts";
+
+export function isEnvPlaceholder(value: string): boolean {
+  return /^\$\{[^}]*\}$/.test(value.trim());
+}
+
+export function isSensitiveLeafValue(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0 && !isEnvPlaceholder(value);
+  }
+  return value !== undefined && value !== null;
+}
 
 export type JsonSchema = {
   type?: string | string[];
@@ -34,6 +44,7 @@ export type JsonSchema = {
   anyOf?: JsonSchema[];
   oneOf?: JsonSchema[];
   allOf?: JsonSchema[];
+  not?: JsonSchema | boolean;
   nullable?: boolean;
 };
 
@@ -135,10 +146,6 @@ export function humanize(raw: string) {
     .replace(/^./, (m) => m.toUpperCase());
 }
 
-export function cloneConfigObject<T>(value: T): T {
-  return structuredClone(value);
-}
-
 export function serializeConfigForm(form: Record<string, unknown>): string {
   return `${JSON.stringify(form, null, 2).trimEnd()}\n`;
 }
@@ -150,165 +157,128 @@ export function containsRedactedSentinel(value: unknown): boolean {
   const children = Array.isArray(value) ? value : isRecord(value) ? Object.values(value) : [];
   return value === REDACTED_SENTINEL || children.some(containsRedactedSentinel);
 }
-type SanitizeResult = { omitted: true } | { omitted: false; value: unknown };
-
-const OMIT_VALUE: SanitizeResult = { omitted: true };
-
-function keepValue(value: unknown): SanitizeResult {
-  return { omitted: false, value };
+function pruneEmptyConfigValue(value: unknown, originalValue: unknown): unknown {
+  if (Array.isArray(value)) {
+    const originalItems = Array.isArray(originalValue) ? originalValue : [];
+    return value.map((item, index) => pruneEmptyConfigValue(item, originalItems[index]));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  const original = isRecord(originalValue) ? originalValue : null;
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([key, item]) => {
+      const existed = original !== null && Object.hasOwn(original, key);
+      const pruned = pruneEmptyConfigValue(item, existed ? original[key] : undefined);
+      if (!existed && isRecord(pruned) && Object.keys(pruned).length === 0) {
+        return [];
+      }
+      return [[key, pruned]];
+    }),
+  );
 }
 
-function sanitizeRedactedValue(params: {
-  value: unknown;
-  originalFormValue: unknown;
-  originalRawValue: unknown;
-  originalRawPathExists: boolean;
-  canOmit: boolean;
-}): SanitizeResult {
-  if (params.value === REDACTED_SENTINEL) {
-    if (params.originalFormValue !== REDACTED_SENTINEL) {
-      return keepValue(params.value);
-    }
-    if (params.originalRawPathExists) {
-      return keepValue(params.value);
-    }
-    return params.canOmit ? OMIT_VALUE : keepValue(params.value);
-  }
-
-  if (Array.isArray(params.value)) {
-    const originalFormItems = Array.isArray(params.originalFormValue)
-      ? params.originalFormValue
-      : [];
-    const originalRawItems = Array.isArray(params.originalRawValue) ? params.originalRawValue : [];
-    return keepValue(
-      params.value.map((item, index) => {
-        const sanitized = sanitizeRedactedValue({
-          value: item,
-          originalFormValue: originalFormItems[index],
-          originalRawValue: originalRawItems[index],
-          originalRawPathExists: index in originalRawItems,
-          canOmit: false,
-        });
-        return sanitized.omitted ? item : sanitized.value;
-      }),
-    );
-  }
-
-  if (!isRecord(params.value)) {
-    return keepValue(params.value);
-  }
-
-  const originalFormRecord = isRecord(params.originalFormValue) ? params.originalFormValue : null;
-  const originalRawRecord = isRecord(params.originalRawValue) ? params.originalRawValue : null;
-  const next: Record<string, unknown> = {};
-  for (const [key, item] of Object.entries(params.value)) {
-    const originalFormValue =
-      originalFormRecord != null && Object.hasOwn(originalFormRecord, key)
-        ? originalFormRecord[key]
-        : undefined;
-    const originalRawPathExists =
-      originalRawRecord != null && Object.hasOwn(originalRawRecord, key);
-    const sanitized = sanitizeRedactedValue({
-      value: item,
-      originalFormValue,
-      originalRawValue: originalRawPathExists ? originalRawRecord?.[key] : undefined,
-      originalRawPathExists,
-      canOmit: true,
-    });
-    if (!sanitized.omitted) {
-      next[key] = sanitized.value;
-    }
-  }
-
-  if (params.canOmit && Object.keys(next).length === 0 && !params.originalRawPathExists) {
-    return OMIT_VALUE;
-  }
-  return keepValue(next);
-}
-
-export function sanitizeRedactedFormForSubmit(
+/** Prune newly empty objects without removing authored empties or array positions. */
+export function pruneEmptyConfigForm(
   form: Record<string, unknown>,
-  originalForm: Record<string, unknown> | null | undefined,
-  parsedOriginalRaw: Record<string, unknown> | null,
+  original: Record<string, unknown> | null | undefined,
 ): Record<string, unknown> {
-  // Callers parse the original raw once at snapshot ingestion so this submit
-  // path stays synchronous and never races the lazy JSON5 parser.
-  if (!originalForm || !parsedOriginalRaw) {
+  if (!original) {
     return form;
   }
-
-  const sanitized = sanitizeRedactedValue({
-    value: form,
-    originalFormValue: originalForm,
-    originalRawValue: parsedOriginalRaw,
-    originalRawPathExists: true,
-    canOmit: false,
-  });
-  return !sanitized.omitted && isRecord(sanitized.value) ? sanitized.value : form;
+  const pruned = pruneEmptyConfigValue(form, original);
+  return isRecord(pruned) ? pruned : form;
 }
 
-const FORBIDDEN_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+type PathPatchResult = { ok: true; value: unknown } | { ok: false };
 
-function isForbiddenKey(key: string | number): boolean {
-  return typeof key === "string" && FORBIDDEN_KEYS.has(key);
-}
-
-type PathContainer = {
-  current: Record<string, unknown> | unknown[];
-  lastKey: string | number;
-};
-
-function resolvePathContainer(
-  obj: Record<string, unknown> | unknown[],
+function patchPathValue(
+  current: unknown,
   path: Array<string | number>,
-  createMissing: boolean,
-): PathContainer | null {
-  if (path.length === 0 || path.some(isForbiddenKey)) {
-    return null;
+  index: number,
+  replacement: unknown,
+  mode: "copy" | "copy-set" | "copy-remove" | "set" | "remove",
+): PathPatchResult {
+  const segment = path[index];
+  if (segment === undefined) {
+    return { ok: false };
+  }
+  const last = index === path.length - 1;
+  const copy = mode === "copy" || mode === "copy-set" || mode === "copy-remove";
+  const remove =
+    mode === "remove" || mode === "copy-remove" || (mode === "copy" && replacement === undefined);
+  if ((mode === "remove" || mode === "copy-remove") && current == null) {
+    return { ok: false };
   }
 
-  let current: Record<string, unknown> | unknown[] = obj;
-  for (let i = 0; i < path.length - 1; i += 1) {
-    const key = path[i];
-    const nextKey = path[i + 1];
-    if (key === undefined) {
-      return null;
+  if (typeof segment === "number") {
+    if (current != null && !Array.isArray(current)) {
+      return { ok: false };
     }
-    if (typeof key === "number") {
-      if (!Array.isArray(current)) {
-        return null;
+    const next = Array.isArray(current) ? (copy ? [...current] : current) : [];
+    if (last) {
+      if (remove) {
+        next.splice(segment, 1);
+      } else {
+        next[segment] = replacement;
       }
-      if (current[key] == null) {
-        if (!createMissing) {
-          return null;
-        }
-        current[key] = typeof nextKey === "number" ? [] : ({} as Record<string, unknown>);
-      }
-      current = current[key] as Record<string, unknown> | unknown[];
-      continue;
+      return { ok: true, value: next };
     }
-
-    if (typeof current !== "object" || current == null) {
-      return null;
+    const child = patchPathValue(
+      Object.hasOwn(next, segment) ? next[segment] : undefined,
+      path,
+      index + 1,
+      replacement,
+      mode,
+    );
+    if (!child.ok) {
+      return child;
     }
-    const record = current as Record<string, unknown>;
-    if (record[key] == null) {
-      if (!createMissing) {
-        return null;
-      }
-      record[key] = typeof nextKey === "number" ? [] : ({} as Record<string, unknown>);
-    }
-    current = record[key] as Record<string, unknown> | unknown[];
+    next[segment] = child.value;
+    return { ok: true, value: next };
   }
 
-  const lastKey = path.at(-1);
-  if (lastKey === undefined) {
-    return null;
+  const record = current ?? {};
+  if (!isRecord(record)) {
+    return { ok: false };
   }
-  return {
-    current,
-    lastKey,
-  };
+  const next = copy ? { ...record } : record;
+  const child: PathPatchResult = last
+    ? { ok: true, value: replacement }
+    : patchPathValue(
+        Object.hasOwn(next, segment) ? next[segment] : undefined,
+        path,
+        index + 1,
+        replacement,
+        mode,
+      );
+  if (!child.ok) {
+    return child;
+  }
+  if (last && remove) {
+    delete next[segment];
+  } else {
+    // Own keys are data: never invoke the inherited __proto__ setter.
+    Object.defineProperty(next, segment, {
+      value: child.value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  }
+  return { ok: true, value: next };
+}
+
+export function copyWithPathPatch(
+  current: unknown,
+  path: Array<string | number>,
+  replacement: unknown,
+  mode: "copy" | "copy-set" | "copy-remove" = "copy",
+): PathPatchResult {
+  if (path.length === 0) {
+    return { ok: true, value: mode === "copy" ? replacement : current };
+  }
+  return patchPathValue(current, path, 0, replacement, mode);
 }
 
 export function setPathValue(
@@ -316,38 +286,12 @@ export function setPathValue(
   path: Array<string | number>,
   value: unknown,
 ) {
-  const container = resolvePathContainer(obj, path, true);
-  if (!container) {
-    return;
-  }
-
-  if (typeof container.lastKey === "number") {
-    if (Array.isArray(container.current)) {
-      container.current[container.lastKey] = value;
-    }
-    return;
-  }
-  if (typeof container.current === "object" && container.current != null) {
-    (container.current as Record<string, unknown>)[container.lastKey] = value;
-  }
+  patchPathValue(obj, path, 0, value, "set");
 }
 
 export function removePathValue(
   obj: Record<string, unknown> | unknown[],
   path: Array<string | number>,
 ) {
-  const container = resolvePathContainer(obj, path, false);
-  if (!container) {
-    return;
-  }
-
-  if (typeof container.lastKey === "number") {
-    if (Array.isArray(container.current)) {
-      container.current.splice(container.lastKey, 1);
-    }
-    return;
-  }
-  if (typeof container.current === "object" && container.current != null) {
-    delete (container.current as Record<string, unknown>)[container.lastKey];
-  }
+  patchPathValue(obj, path, 0, undefined, "remove");
 }

@@ -35,7 +35,10 @@ process.once("message", () => {
       options,
     );
   }
-  closeOpenClawStateDatabase();
-  process.disconnect?.();
+  process.once("message", () => {
+    closeOpenClawStateDatabase();
+    process.disconnect?.();
+  });
+  process.send?.("written");
 });
 process.send?.("ready");

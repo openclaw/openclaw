@@ -1,52 +1,16 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-// Declaration paths are shared metadata; only the runner imports their build values.
-export const runtimeProcessDeclarationEntries = {
-  "infra/runtime-process-entrypoints": "src/infra/runtime-process-entrypoints.ts",
-  "extensions/memory-core/manager-search-knn-entrypoint":
-    "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
-};
-export const vitestWorkerDeclarationEntries = {
-  ...runtimeProcessDeclarationEntries,
-  "infra/update-managed-service-handoff-runtime-assets":
-    "src/infra/update-managed-service-handoff-runtime-assets.ts",
-  "infra/triage-runtime.test-support": "src/infra/triage-runtime.test-support.ts",
-  "cli/cli-entrypoint.test-support": "src/cli/cli-entrypoint.test-support.ts",
-  "commands/doctor-config-runtime.test-support":
-    "src/commands/doctor-config-runtime.test-support.ts",
-  "test-support/channel-ingress-gateway-restart-entrypoint":
-    "test/fixtures/channel-ingress-gateway-restart-entrypoint.ts",
-  "extensions/qa-lab/gateway-child-artifacts-runtime.test-support":
-    "extensions/qa-lab/src/gateway-child-artifacts-runtime.test-support.ts",
-  "plugins/loader-sdk-bridge-artifacts.test-support":
-    "src/plugins/loader-sdk-bridge-artifacts.test-support.ts",
-  "agents/code-mode-retention-entrypoint.test-support":
-    "src/agents/code-mode-retention-entrypoint.test-support.ts",
-  "agents/command/cli-compaction-runtime.test-support":
-    "src/agents/command/cli-compaction-runtime.test-support.ts",
-  "cron/owner-hardening-runtime.test-support": "src/cron/owner-hardening-runtime.test-support.ts",
-  "gateway/server-methods/sessions-list-cache-retention-entrypoint.test-support":
-    "src/gateway/server-methods/sessions-list-cache-retention-entrypoint.test-support.ts",
-  "gateway/session-child-cache-retention-entrypoint.test-support":
-    "src/gateway/session-child-cache-retention-entrypoint.test-support.ts",
-  "gateway/session-title-retention.test-support":
-    "src/gateway/session-title-retention.test-support.ts",
-  "node-host/config-runtime.test-support": "src/node-host/config-runtime.test-support.ts",
-  "skills/library/persistence-runtime.test-support":
-    "src/skills/library/persistence-runtime.test-support.ts",
-  "state/openclaw-state-lease-runtime.test-support":
-    "src/state/openclaw-state-lease-runtime.test-support.ts",
-  "tui/tui-pty-runtime-test-support": "src/tui/tui-pty-runtime-test-support.ts",
-};
+import { vitestWorkerDeclarationEntries } from "./vitest-worker-declarations.mts";
 
-export type VitestWorkerDescriptor = { directory: string };
 export type VitestWorkerManifest = {
   identity: string;
   inputs: Record<string, string>;
   outputs: Record<string, string>;
   durationMs: number;
+  cacheSignature?: string;
 };
 const root = fileURLToPath(new URL("../../", import.meta.url));
 export const hashVitestWorkerArtifact = (bytes: string | Buffer) =>
@@ -62,9 +26,24 @@ const declarations = new Map(
 export const VITEST_WORKER_PREPARE_REQUEST = "openclaw:prepare-test-subprocesses";
 export const VITEST_WORKER_PREPARE_REPLY = "openclaw:test-subprocesses-prepared";
 
+function readArtifact(filename: string): Promise<Buffer> {
+  // Callback reads reduce overhead across the generation's many small files.
+  return new Promise((resolve, reject) => {
+    fs.readFile(filename, (error, bytes) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve(bytes);
+      }
+    });
+  });
+}
+
 export async function verifyVitestWorkerArtifacts(
   directory: string,
   manifest?: VitestWorkerManifest,
+  // Keep the PR wrapper's call shape; byte-identical timestamp changes are best effort.
+  _options: { inputsChangedAfter?: number } = {},
 ) {
   const completed: VitestWorkerManifest =
     manifest ??
@@ -81,24 +60,44 @@ export async function verifyVitestWorkerArtifacts(
       changed: "Compiled subprocess artifact changed",
     },
   ];
-  const batchSize = 32;
+  const concurrency = 32;
   for (const { files, root: baseDir, changed } of groups) {
     const entries = Object.entries(files);
-    for (let offset = 0; offset < entries.length; offset += batchSize) {
-      // Native batches keep pre-install planning dependency-free and signals responsive.
-      // Drain every started read before rejection: the owner may delete files next.
-      const settled = await Promise.allSettled(
-        entries.slice(offset, offset + batchSize).map(async ([name, expected]) => {
-          const filename = baseDir ? path.join(baseDir, name) : name;
-          if (hashVitestWorkerArtifact(await fs.promises.readFile(filename)) !== expected) {
-            throw new Error(`${changed}: ${name}`);
+    let next = 0;
+    let stopped = false;
+    // Refill each reader independently: a large or slow file must not stall its peers.
+    // Drain every started read before rejection: the owner may delete files next.
+    const settled = await Promise.allSettled(
+      Array.from({ length: Math.min(concurrency, entries.length) }, async () => {
+        try {
+          for (;;) {
+            if (stopped) {
+              return;
+            }
+            const index = next++;
+            const entry = entries[index];
+            if (!entry) {
+              return;
+            }
+            const [name, expected] = entry;
+            const filename = baseDir ? path.join(baseDir, name) : name;
+            if (hashVitestWorkerArtifact(await readArtifact(filename)) !== expected) {
+              throw new Error(`${changed}: ${name}`);
+            }
+            // Ready reads can drain as microtasks without giving signals a turn.
+            if ((index + 1) % concurrency === 0) {
+              await nextTurn();
+            }
           }
-        }),
-      );
-      const failed = settled.find((result) => result.status === "rejected");
-      if (failed?.status === "rejected") {
-        throw failed.reason;
-      }
+        } catch (error) {
+          stopped = true;
+          throw error;
+        }
+      }),
+    );
+    const failed = settled.find((result) => result.status === "rejected");
+    if (failed?.status === "rejected") {
+      throw failed.reason;
     }
   }
 }
@@ -118,13 +117,14 @@ export function isVitestWorkerDeclaration(id: string): boolean {
 }
 
 /** One finite request over the already-owned Node IPC channel; never a path/build request. */
-export function requestVitestWorkerArtifacts(): Promise<void> {
+export function requestVitestWorkerArtifacts(signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (!process.send || !process.connected) {
       reject(new Error("Compiled subprocess owner IPC is unavailable"));
       return;
     }
     const finish = (error?: Error) => {
+      signal?.removeEventListener("abort", onAbort);
       process.off("message", onMessage);
       process.off("disconnect", onDisconnect);
       process.channel?.unref();
@@ -134,6 +134,7 @@ export function requestVitestWorkerArtifacts(): Promise<void> {
         resolve();
       }
     };
+    const onAbort = () => finish(new Error("Compiled subprocess preparation request canceled"));
     const onDisconnect = () => finish(new Error("Compiled subprocess owner disconnected"));
     const onMessage = (message: unknown) => {
       if (
@@ -147,6 +148,11 @@ export function requestVitestWorkerArtifacts(): Promise<void> {
     };
     process.on("message", onMessage);
     process.once("disconnect", onDisconnect);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
     process.channel?.ref();
     process.send(VITEST_WORKER_PREPARE_REQUEST, (error) => {
       if (error) {

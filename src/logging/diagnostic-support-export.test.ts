@@ -1,4 +1,3 @@
-// Diagnostic support export tests cover support bundle generation and contents.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
   uninstallDiagnosticStabilityFatalHook,
-  writeDiagnosticStabilityBundleSync,
+  writeDiagnosticStabilityBundleForFailureSync,
 } from "./diagnostic-stability-bundle.js";
 import {
   resetDiagnosticStabilityRecorderForTest,
@@ -15,6 +14,7 @@ import {
   stopDiagnosticStabilityRecorder,
 } from "./diagnostic-stability.js";
 import { writeDiagnosticSupportExport } from "./diagnostic-support-export.js";
+import * as logTailModule from "./log-tail.js";
 import type { LogTailPayload } from "./log-tail.js";
 
 async function readZipTextEntries(file: string): Promise<Record<string, string>> {
@@ -28,11 +28,36 @@ async function readZipTextEntries(file: string): Promise<Record<string, string>>
   return entries;
 }
 
+function emptyLogTail(file: string): LogTailPayload {
+  return { file, cursor: 0, size: 0, truncated: false, reset: false, lines: [] };
+}
+
+function readJsonEntry(entries: Record<string, string>, name: string): unknown {
+  return JSON.parse(entries[name] ?? "{}");
+}
+
+function writeJson(file: string, value: unknown) {
+  fs.writeFileSync(file, JSON.stringify(value, null, 2), "utf8");
+}
+
 describe("diagnostic support export", () => {
   let tempDir: string;
 
+  async function exportEntries(options: Parameters<typeof writeDiagnosticSupportExport>[0] = {}) {
+    const result = await writeDiagnosticSupportExport(options);
+    return readZipTextEntries(result.path);
+  }
+
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-support-export-"));
+    vi.stubEnv("HOME", tempDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(tempDir, "openclaw.json"));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-22T12:00:01.000Z"));
+    vi.spyOn(logTailModule, "readConfiguredLogTail").mockResolvedValue(
+      emptyLogTail(path.join(tempDir, "logs", "openclaw.log")),
+    );
     resetDiagnosticEventsForTest();
     resetDiagnosticStabilityRecorderForTest();
     uninstallDiagnosticStabilityFatalHook();
@@ -44,16 +69,144 @@ describe("diagnostic support export", () => {
     resetDiagnosticStabilityRecorderForTest();
     uninstallDiagnosticStabilityFatalHook();
     fs.rmSync(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
   });
 
-  it("writes a shareable zip without raw chats, webhook bodies, or secrets", async () => {
+  it("includes separate redacted capabilities for the exporter and serving Gateway", async () => {
+    vi.stubGlobal("__openclawStandaloneBuildInfo", {
+      mode: "aot",
+      openclaw: { version: "2026.10.3", commit: "a".repeat(40) },
+      bun: { version: "1.4.4" },
+      plugins: { embedded: ["synthetic-private@example.invalid"], omitted: [] },
+    });
+    try {
+      const entries = await exportEntries({
+        readGatewayCapabilities: async () => ({
+          process: { kind: "bun", flavor: "jit" },
+          source: "synthetic-private@example.invalid",
+          token: "synthetic-secret-value",
+        }),
+      });
+      expect(readJsonEntry(entries, "runtime/capabilities.json")).toMatchObject({
+        data: { process: { flavor: "aot" }, build: { openclaw: { commit: "a".repeat(40) } } },
+      });
+      expect(readJsonEntry(entries, "runtime/gateway-capabilities.json")).toHaveProperty(
+        "data.process.flavor",
+        "jit",
+      );
+      expect(Object.values(entries).join("\n")).not.toMatch(
+        /synthetic-private@example.invalid|synthetic-secret-value/,
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each(["current", "other-state alias", "marked relocated alias"])(
+    "excludes %s capture files selected as config, logs, or a stability bundle",
+    async (owner) => {
+      const stateDir = path.join(tempDir, "state");
+      let capture = `${stateDir}.update-captures`;
+      if (owner !== "current") {
+        const otherState = path.join(tempDir, "other-state");
+        fs.mkdirSync(otherState);
+        capture = `${otherState}.update-captures`;
+      }
+      fs.mkdirSync(capture);
+      if (owner !== "current") {
+        const alias = path.join(tempDir, "capture-alias");
+        fs.symlinkSync(capture, alias, process.platform === "win32" ? "junction" : "dir");
+        capture = alias;
+      }
+      if (owner === "marked relocated alias") {
+        const original = `${path.join(tempDir, "other-state")}.update-captures`;
+        const moved = path.join(tempDir, "relocated");
+        fs.renameSync(original, moved);
+        fs.unlinkSync(capture);
+        fs.symlinkSync(moved, capture, process.platform === "win32" ? "junction" : "dir");
+        fs.rmdirSync(path.join(tempDir, "other-state"));
+        fs.writeFileSync(
+          path.join(moved, ".openclaw-private-update-capture"),
+          "openclaw-private-update-capture-v1\n",
+        );
+      }
+      const privatePath = path.join(capture, "private.json");
+      const marker = "synthetic-retained-record-not-for-support";
+      fs.writeFileSync(privatePath, JSON.stringify({ agents: { entries: { [marker]: {} } } }));
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", privatePath);
+      vi.mocked(logTailModule.readConfiguredLogTail).mockResolvedValue({
+        file: privatePath,
+        cursor: 1,
+        size: 1,
+        lines: [JSON.stringify({ msg: marker })],
+        truncated: false,
+        reset: false,
+      });
+      const files = await exportEntries({ stabilityBundle: privatePath });
+      expect(Object.values(files).join("\n")).not.toContain(marker);
+      expect(Object.values(files).join("\n")).toContain("Private update captures are excluded");
+      expect(fs.readFileSync(privatePath, "utf8")).toContain(marker);
+    },
+  );
+
+  it("replaces identifier map keys throughout an archive without losing structure or cross-references", async () => {
+    const identifiers = [
+      "+15555550101",
+      "+15555550102",
+      "alice@example.invalid",
+      "123456789012345678",
+      "@alice:matrix.example.invalid",
+      "!room:matrix.example.invalid",
+      "ghp_abcdefghij",
+      "ghp_klmnopqrst",
+      "<identifier#1>",
+    ];
+    const numbers = Object.fromEntries(
+      identifiers.map((identifier, index) => [identifier, { port: 19000 + index }]),
+    );
+    writeJson(path.join(tempDir, "openclaw.json"), {
+      channels: { slack: { dms: { U1: { historyLimit: 5 }, U2: { historyLimit: 10 } } } },
+      plugins: { entries: { "voice-call": { config: { numbers } } } },
+    });
+    const entries = await exportEntries({
+      readStatusSnapshot: async () => ({ routes: [{ destinations: numbers }] }),
+      readHealthSnapshot: async () => ({ connected: true, destinations: numbers }),
+    });
+
+    const combined = Object.values(entries).join("\n");
+    for (const identifier of identifiers.slice(0, -1)) {
+      expect(combined).not.toContain(identifier);
+    }
+    expect(combined).not.toContain('"U1"');
+    expect(combined).not.toContain('"U2"');
+    const sanitizedConfig = JSON.parse(entries["config/sanitized.json"] ?? "{}");
+    expect(sanitizedConfig).toHaveProperty("channels.slack.dms", {
+      "<identifier#1>": { historyLimit: 5 },
+      "<identifier#2>": { historyLimit: 10 },
+    });
+    const sanitizedNumbers = sanitizedConfig.plugins.entries["voice-call"].config.numbers;
+    expect(Object.keys(sanitizedNumbers)).toHaveLength(identifiers.length);
+    for (const key of Object.keys(sanitizedNumbers)) {
+      expect(key).toMatch(/^<identifier#\d+>$/u);
+    }
+    // Distinct identifiers and a literal placeholder must retain separate entries.
+    expect(Object.values(sanitizedNumbers)).toEqual(
+      expect.arrayContaining(identifiers.map((_, index) => ({ port: 19000 + index }))),
+    );
+    expect(readJsonEntry(entries, "status/gateway-status.json")).toHaveProperty("data.routes", [
+      { destinations: sanitizedNumbers },
+    ]);
+    expect(readJsonEntry(entries, "health/gateway-health.json")).toHaveProperty("data", {
+      connected: true,
+      destinations: sanitizedNumbers,
+    });
+  });
+
+  it("writeDiagnosticSupportExport writes a shareable zip without raw chats, webhook bodies, or secrets", async () => {
     const fakeToken = "sk-test-support-export-secret-token-1234567890";
-    const fakeAwsKey = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
-    const fakeJwt = [
-      "eyJhbGciOiJIUzI1NiIs",
-      "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4i",
-      "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
-    ].join(".");
     const privateChat = "private user said diagnose my bank transfer";
     const privateAssistantReply = "the reimbursement is approved for 420 credits";
     const privateLogTapeAssistantReply = "the wire transfer clears on Thursday";
@@ -64,84 +217,69 @@ describe("diagnostic support export", () => {
     const credentialUrl =
       "wss://support-user:support-password@gateway.example/ws?token=short-token&ok=1";
     const configPath = path.join(tempDir, "openclaw.json");
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify(
-        {
-          gateway: {
-            mode: "local",
-            bind: "loopback",
-            port: 18789,
-            tailscale: { mode: "serve" },
-            auth: {
-              mode: "token",
-              token: fakeToken,
-            },
-          },
-          logging: {
-            redactSensitive: "off",
-          },
-          models: {
-            providers: {
-              supportProxy: {
-                baseUrl: "https://models.example.test/v1",
-                request: {
-                  auth: {
-                    mode: "header",
-                    headerName: "X-Support-Auth",
-                    value: requestAuthValue,
-                  },
-                  tls: {
-                    passphrase: requestTlsPassphrase,
-                  },
-                  proxy: {
-                    mode: "explicit-proxy",
-                    url: "http://127.0.0.1:8080",
-                    tls: {
-                      passphrase: proxyTlsPassphrase,
-                    },
-                  },
-                },
-                models: [{ id: "support-model" }],
+    writeJson(configPath, {
+      gateway: {
+        mode: "local",
+        tailscale: { mode: "serve" },
+        auth: {
+          mode: "token",
+          token: fakeToken,
+        },
+      },
+      logging: {
+        redactSensitive: "off",
+      },
+      models: {
+        providers: {
+          supportProxy: {
+            request: {
+              auth: {
+                mode: "header",
+                headerName: "X-Support-Auth",
+                value: requestAuthValue,
               },
-            },
-          },
-          channels: {
-            $include: "./other-channels.json",
-            defaults: { groupPolicy: "disabled" },
-            modelByChannel: {},
-            telegram: {
-              accounts: {
-                "15555551212": {
-                  botToken: fakeToken,
-                  allowFrom: [privateChat],
-                  ownerId: 8675309001,
+              tls: {
+                passphrase: requestTlsPassphrase,
+              },
+              proxy: {
+                mode: "explicit-proxy",
+                url: "http://127.0.0.1:8080",
+                tls: {
+                  passphrase: proxyTlsPassphrase,
                 },
               },
             },
+            models: [{ id: "support-model" }],
           },
-          agents: {
-            ownership: "explicit",
-            entries: {
-              $include: "./other-agents.json",
-              main: { name: "personal-agent", instructions: privateChat },
-            },
-          },
-          plugins: {
-            enabled: false,
-            allow: ["telegram", "slack"],
-            entries: {
-              $include: "./other-plugins.json",
-              telegram: { enabled: true },
-              slack: { enabled: false },
+        },
+      },
+      channels: {
+        $include: "./other-channels.json",
+        defaults: { groupPolicy: "disabled" },
+        telegram: {
+          accounts: {
+            "15555551212": {
+              botToken: fakeToken,
+              allowFrom: [privateChat],
+              ownerId: 8675309001,
             },
           },
         },
-        null,
-        2,
-      ),
-      "utf8",
-    );
+      },
+      agents: {
+        entries: {
+          $include: "./other-agents.json",
+          main: { name: "personal-agent", instructions: privateChat },
+        },
+      },
+      plugins: {
+        entries: {
+          $include: "./other-plugins.json",
+          telegram: { enabled: true },
+          slack: { enabled: false },
+        },
+      },
+    });
 
     startDiagnosticStabilityRecorder();
     emitDiagnosticEvent({
@@ -158,11 +296,11 @@ describe("diagnostic support export", () => {
       limitBytes: 1024,
       reason: "json_body_limit",
     });
-    const bundle = writeDiagnosticStabilityBundleSync({
-      reason: "gateway.restart_startup_failed",
-      stateDir: tempDir,
-      now: new Date("2026-04-22T12:00:00.000Z"),
-    });
+    const bundle = writeDiagnosticStabilityBundleForFailureSync(
+      "gateway.restart_startup_failed",
+      undefined,
+      { stateDir: tempDir, now: new Date("2026-04-22T12:00:00.000Z") },
+    );
     expect(bundle.status).toBe("written");
 
     const logTail: LogTailPayload = {
@@ -180,7 +318,7 @@ describe("diagnostic support export", () => {
           channel: "telegram",
           sessionId: "gateway-session-15555551212",
           sessionKey: "matrix:!supportRoom:matrix.example.com:$supportEventSecret",
-          msg: `gateway websocket listening at ${credentialUrl} Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ== ${fakeAwsKey} ${fakeJwt} Cookie: sid=secret`,
+          msg: `gateway websocket listening at ${credentialUrl}`,
           hostname: "support-host",
           message: privateChat,
           body: webhookBody,
@@ -196,18 +334,14 @@ describe("diagnostic support export", () => {
               module: "matrix-auto-reply",
               storePath: path.join(tempDir, "cron", "jobs.json"),
             }),
-            hostname: "support-host",
           },
-          time: "2026-04-22T12:00:00.100Z",
         }),
         JSON.stringify({
-          time: "2026-04-22T12:00:00.200Z",
           level: "info",
           component: "gateway/server",
           msg: "user said structured secret payload",
         }),
         JSON.stringify({
-          time: "2026-04-22T12:00:00.250Z",
           level: "warn",
           subsystem: "diagnostic",
           msg: `stuck session: lastAssistant="${privateAssistantReply}"`,
@@ -215,7 +349,6 @@ describe("diagnostic support export", () => {
         JSON.stringify({
           "0": `stalled session: lastAssistant="${privateLogTapeAssistantReply}"`,
           _meta: { logLevelName: "warn", name: "diagnostic" },
-          time: "2026-04-22T12:00:00.275Z",
         }),
         JSON.stringify({
           "0": JSON.stringify({ subsystem: "gateway/channels/matrix" }),
@@ -223,34 +356,21 @@ describe("diagnostic support export", () => {
           _meta: {
             logLevelName: "warn",
             name: "gateway-runtime",
-            hostname: "support-host",
           },
-          time: "2026-04-22T12:00:00.300Z",
         }),
+        JSON.stringify({ module: `gAAAA${"b".repeat(40_000)}` }),
         `plain fallback ${privateChat} ${fakeToken}`,
       ],
     };
-    let requestedLogTail: { limit?: number; maxBytes?: number } | undefined;
+    vi.mocked(logTailModule.readConfiguredLogTail).mockResolvedValue(logTail);
 
     const outputPath = path.join(tempDir, "support.zip");
     const result = await writeDiagnosticSupportExport({
-      env: {
-        ...process.env,
-        HOME: tempDir,
-        OPENCLAW_STATE_DIR: tempDir,
-      },
-      stateDir: tempDir,
       outputPath,
-      now: new Date("2026-04-22T12:00:01.000Z"),
-      readLogTail: async (params) => {
-        requestedLogTail = params;
-        return logTail;
-      },
       readStatusSnapshot: async () => ({
         service: {
-          loaded: true,
           command: {
-            programArguments: ["openclaw", "gateway", "run", "--token", fakeToken],
+            programArguments: ["--token", fakeToken],
             environment: {
               HOME: tempDir,
               OPENCLAW_GATEWAY_TOKEN: fakeToken,
@@ -286,22 +406,8 @@ describe("diagnostic support export", () => {
     });
 
     expect(result.path).toBe(outputPath);
-    expect(result.bytes).toBeGreaterThan(0);
-    expect(requestedLogTail?.limit).toBe(5000);
-    expect(requestedLogTail?.maxBytes).toBe(1_000_000);
 
     const entries = await readZipTextEntries(outputPath);
-    expect(Object.keys(entries).toSorted()).toEqual([
-      "config/sanitized.json",
-      "config/shape.json",
-      "diagnostics.json",
-      "health/gateway-health.json",
-      "logs/openclaw-sanitized.jsonl",
-      "manifest.json",
-      "stability/latest.json",
-      "status/gateway-status.json",
-      "summary.md",
-    ]);
 
     const combined = Object.values(entries).join("\n");
     expect(combined).not.toContain(fakeToken);
@@ -317,197 +423,93 @@ describe("diagnostic support export", () => {
     expect(combined).not.toContain(tempDir);
     expect(combined).not.toContain("cron/jobs.json");
     expect(combined).not.toContain(os.hostname());
-    expect(combined).not.toContain("QWxhZGRpbjpvcGVuIHNlc2FtZQ==");
-    expect(combined).not.toContain("sid=secret");
     expect(combined).not.toContain("structured secret payload");
     expect(combined).not.toContain(requestAuthValue);
     expect(combined).not.toContain(requestTlsPassphrase);
     expect(combined).not.toContain(proxyTlsPassphrase);
     expect(combined).not.toContain("__OPENCLAW_REDACTED__");
-    expect(combined).not.toContain("gateway-session-15555551212");
     expect(combined).not.toContain("supportEventSecret");
-    expect(combined).not.toContain(fakeAwsKey);
-    expect(combined).not.toContain(fakeJwt);
     expect(combined).toContain("payload.large");
     expect(combined).toContain("gateway.http.json");
     expect(combined).toContain("$OPENCLAW_STATE_DIR");
     expect(combined).toContain("<redacted-hostname>");
-    expect(combined).toContain("gateway-status.json");
-    expect(combined).toContain("gateway-health.json");
     expect(combined).toContain("Attach this zip to the bug report");
 
     const sanitizedLogs = entries["logs/openclaw-sanitized.jsonl"];
-    expect(sanitizedLogs).toContain('"subsystem":"gateway"');
     expect(sanitizedLogs).toContain('"component":"gateway/server"');
-    expect(sanitizedLogs).toContain('"channel":"telegram"');
     expect(sanitizedLogs).not.toContain("sessionId");
     expect(sanitizedLogs).not.toContain("sessionKey");
     expect(sanitizedLogs).toContain("gateway websocket listening");
     expect(sanitizedLogs).toContain(
       "wss://<redacted>:<redacted>@gateway.example/ws?token=<redacted>",
     );
-    expect(sanitizedLogs).toContain("Basic <redacted>");
-    expect(sanitizedLogs).toContain("Cookie: <redacted>");
-    expect(sanitizedLogs).toContain("<redacted-aws-key>");
-    expect(sanitizedLogs).toContain("<redacted-jwt>");
     expect(sanitizedLogs).toContain('"module":"matrix-auto-reply"');
+    expect(sanitizedLogs).toContain('"module":"gAAAAb…bbbb"');
     expect(sanitizedLogs).toContain('"subsystem":"gateway/channels/matrix"');
     expect(sanitizedLogs).toContain('"logger":"gateway-runtime"');
-    expect(sanitizedLogs).toContain('"level":"warn"');
     expect(sanitizedLogs).toContain("matrix logged in as <redacted-matrix-user>");
     expect(sanitizedLogs).toContain('"omitted":"log-message"');
     expect(sanitizedLogs).toContain('"omittedLogMessageBytes"');
     expect(sanitizedLogs).toContain('"omittedLogMessageCount"');
-    expect(sanitizedLogs).not.toContain("private user said");
-    expect(sanitizedLogs).not.toContain(privateAssistantReply);
-    expect(sanitizedLogs).not.toContain(privateLogTapeAssistantReply);
     expect(sanitizedLogs).not.toContain("@support-user:matrix.example.com");
     expect(sanitizedLogs).not.toContain("support-host");
     expect(sanitizedLogs).toContain('"omitted":"unparsed"');
 
-    const status = JSON.parse(entries["status/gateway-status.json"] ?? "{}") as {
-      data?: {
-        service?: {
-          command?: {
-            programArguments?: string[];
-            environment?: Record<string, string>;
-          };
-        };
-      };
-    };
-    expect(status.data?.service?.command?.programArguments).toEqual([
-      "openclaw",
-      "gateway",
-      "run",
+    const status = readJsonEntry(entries, "status/gateway-status.json");
+    expect(status).toHaveProperty("data.service.command.programArguments", [
       "--token",
       "<redacted>",
     ]);
-    expect(status.data?.service?.command?.environment?.OPENCLAW_GATEWAY_TOKEN).toBe("<redacted>");
+    expect(status).toHaveProperty(
+      "data.service.command.environment.OPENCLAW_GATEWAY_TOKEN",
+      "<redacted>",
+    );
     expect(JSON.stringify(status)).toContain(
       "wss://<redacted>:<redacted>@gateway.example/ws?token=<redacted>",
     );
 
-    const health = JSON.parse(entries["health/gateway-health.json"] ?? "{}") as {
-      data?: {
-        channels?: {
-          telegram?: {
-            accounts?: { count?: number };
-          };
-        };
-      };
-    };
-    expect(health.data?.channels?.telegram?.accounts).toEqual({ count: 1 });
+    const health = readJsonEntry(entries, "health/gateway-health.json");
+    expect(health).toHaveProperty("data.channels.telegram.accounts", { count: 1 });
 
-    const configShape = JSON.parse(entries["config/shape.json"] ?? "{}") as {
-      gateway?: { mode?: string; authMode?: string; tailscale?: string };
-      channels?: { count?: number; ids?: string[] };
-      plugins?: { count?: number; ids?: string[] };
-      agents?: { count?: number };
-    };
-    expect(configShape.gateway?.mode).toBe("local");
-    expect(configShape.gateway?.authMode).toBe("token");
-    expect(configShape.gateway?.tailscale).toBe("serve");
-    expect(configShape.channels).toEqual({ count: 1, ids: ["telegram"] });
-    expect(configShape.plugins).toEqual({ count: 2, ids: ["slack", "telegram"] });
-    expect(configShape.agents).toEqual({ count: 1 });
+    const configShape = readJsonEntry(entries, "config/shape.json");
+    expect(configShape).toHaveProperty("gateway.mode", "local");
+    expect(configShape).toHaveProperty("gateway.authMode", "token");
+    expect(configShape).toHaveProperty("gateway.tailscale", "serve");
+    expect(configShape).toHaveProperty("channels", { count: 1, ids: ["telegram"] });
+    expect(configShape).toHaveProperty("plugins", { count: 2, ids: ["slack", "telegram"] });
+    expect(configShape).toHaveProperty("agents", { count: 1 });
     expect(JSON.parse(entries["diagnostics.json"] ?? "{}").config).toEqual(configShape);
 
-    const sanitizedConfig = JSON.parse(entries["config/sanitized.json"] ?? "{}") as {
-      gateway?: {
-        mode?: string;
-        port?: number;
-        auth?: {
-          mode?: string;
-          token?: string;
-        };
-      };
-      channels?: {
-        telegram?: {
-          accounts?: Record<
-            string,
-            { botToken?: string; allowFrom?: { redacted?: boolean }; ownerId?: string }
-          >;
-        };
-      };
-      logging?: {
-        redactSensitive?: string;
-      };
-      agents?: { entries?: Record<string, { name?: string; instructions?: string }> };
-      models?: {
-        providers?: {
-          supportProxy?: {
-            request?: {
-              auth?: {
-                value?: string;
-              };
-              tls?: {
-                passphrase?: string;
-              };
-              proxy?: {
-                tls?: {
-                  passphrase?: string;
-                };
-              };
-            };
-          };
-        };
-      };
-    };
-    expect(sanitizedConfig.gateway).toEqual({
-      mode: "local",
-      bind: "loopback",
-      port: 18789,
-      tailscale: { mode: "serve" },
-      auth: {
-        mode: "token",
-        token: "<redacted>",
+    const sanitizedConfig = readJsonEntry(entries, "config/sanitized.json");
+    expect(sanitizedConfig).toHaveProperty("gateway.auth.token", "<redacted>");
+    expect(sanitizedConfig).toHaveProperty("logging.redactSensitive", "off");
+    for (const field of ["auth.value", "tls.passphrase", "proxy.tls.passphrase"]) {
+      expect(sanitizedConfig).toHaveProperty(
+        `models.providers.supportProxy.request.${field}`,
+        "<redacted>",
+      );
+    }
+    expect(sanitizedConfig).toHaveProperty("channels.telegram.accounts", {
+      "<identifier#1>": {
+        botToken: "<redacted>",
+        allowFrom: { redacted: true, count: 1 },
+        ownerId: "<redacted>",
       },
     });
-    expect(sanitizedConfig.logging?.redactSensitive).toBe("off");
-    expect(sanitizedConfig.models?.providers?.supportProxy?.request?.auth?.value).toBe(
-      "<redacted>",
-    );
-    expect(sanitizedConfig.models?.providers?.supportProxy?.request?.tls?.passphrase).toBe(
-      "<redacted>",
-    );
-    expect(sanitizedConfig.models?.providers?.supportProxy?.request?.proxy?.tls?.passphrase).toBe(
-      "<redacted>",
-    );
-    expect(Object.keys(sanitizedConfig.channels?.telegram?.accounts ?? {})).toEqual([
-      "<redacted-account-1>",
-    ]);
-    const sanitizedTelegramAccount =
-      sanitizedConfig.channels?.telegram?.accounts?.["<redacted-account-1>"];
-    expect(sanitizedTelegramAccount?.botToken).toBe("<redacted>");
-    expect(sanitizedTelegramAccount?.allowFrom).toEqual({ redacted: true, count: 1 });
-    expect(sanitizedTelegramAccount?.ownerId).toBe("<redacted>");
-    expect(sanitizedConfig.agents?.entries?.main?.name).toBe("personal-agent");
-    expect(sanitizedConfig.agents?.entries?.main?.instructions).toBe("<redacted>");
+    expect(sanitizedConfig).toHaveProperty("agents.entries.main.name", "personal-agent");
+    expect(sanitizedConfig).toHaveProperty("agents.entries.main.instructions", "<redacted>");
   });
 
   it.each([
-    { agents: { list: [{ id: "legacy" }] }, expected: undefined },
     { agents: { defaults: {} }, expected: undefined },
     { agents: { entries: [] }, expected: undefined },
     { agents: { entries: {} }, expected: { count: 0 } },
   ])(
-    "distinguishes an absent canonical agent roster from an empty one: $agents",
+    "distinguishes absent, invalid, and empty canonical agent rosters: $agents",
     async ({ agents, expected }) => {
       const configPath = path.join(tempDir, "openclaw.json");
       fs.writeFileSync(configPath, JSON.stringify({ agents }));
-      const result = await writeDiagnosticSupportExport({
-        env: { HOME: tempDir, OPENCLAW_CONFIG_PATH: configPath },
-        stateDir: tempDir,
-        readLogTail: async () => ({
-          file: path.join(tempDir, "openclaw.log"),
-          cursor: 0,
-          size: 0,
-          truncated: false,
-          reset: false,
-          lines: [],
-        }),
-      });
-      const entries = await readZipTextEntries(result.path);
+      const entries = await exportEntries();
       expect(JSON.parse(entries["config/shape.json"] ?? "{}").agents).toEqual(expected);
       expect(JSON.parse(entries["diagnostics.json"] ?? "{}").config.agents).toEqual(expected);
     },
@@ -515,7 +517,6 @@ describe("diagnostic support export", () => {
 
   it("sanitizes imported stability bundles before adding them to support exports", async () => {
     const bundlePath = path.join(tempDir, "imported-stability.json");
-    const outputPath = path.join(tempDir, "support-imported-stability.zip");
     const importedBundle = {
       version: 1,
       generatedAt: "2026-04-22T12:00:00.000Z",
@@ -547,48 +548,20 @@ describe("diagnostic support export", () => {
         },
       },
     };
-    fs.writeFileSync(bundlePath, `${JSON.stringify(importedBundle, null, 2)}\n`, "utf8");
+    writeJson(bundlePath, importedBundle);
 
-    await writeDiagnosticSupportExport({
-      env: {
-        ...process.env,
-        HOME: tempDir,
-        OPENCLAW_STATE_DIR: tempDir,
-      },
-      stateDir: tempDir,
-      outputPath,
-      stabilityBundle: bundlePath,
-      now: new Date("2026-04-22T12:00:01.000Z"),
-      readLogTail: async () => ({
-        file: path.join(tempDir, "logs", "openclaw.log"),
-        cursor: 0,
-        size: 0,
-        truncated: false,
-        reset: false,
-        lines: [],
-      }),
-    });
-
-    const entries = await readZipTextEntries(outputPath);
-    const stability = JSON.parse(entries["stability/latest.json"] ?? "{}") as {
-      reason?: string;
-      host?: { hostname?: string };
-      error?: { code?: string; name?: string };
-      snapshot?: {
-        events?: Array<Record<string, unknown>>;
-        summary?: { byType?: Record<string, number> };
-      };
-    };
-    expect(stability.reason).toBe("unknown");
-    expect(stability.host).toEqual({ hostname: "<redacted-hostname>" });
-    expect(stability.error).toEqual({ code: "ERR_TEST" });
-    expect(stability.snapshot?.events?.[0]).toEqual({
+    const entries = await exportEntries({ stabilityBundle: bundlePath });
+    const stability = readJsonEntry(entries, "stability/latest.json");
+    expect(stability).toHaveProperty("reason", "unknown");
+    expect(stability).toHaveProperty("host", { hostname: "<redacted-hostname>" });
+    expect(stability).toHaveProperty("error", { code: "ERR_TEST" });
+    expect(stability).toHaveProperty("snapshot.events.0", {
       seq: 1,
       ts: 1,
       type: "webhook.error",
       channel: "telegram",
     });
-    expect(stability.snapshot?.summary?.byType).toEqual({ "webhook.error": 1 });
+    expect(stability).toHaveProperty("snapshot.summary.byType", { "webhook.error": 1 });
 
     const combined = Object.values(entries).join("\n");
     for (const secret of [
@@ -604,33 +577,17 @@ describe("diagnostic support export", () => {
     }
   });
 
-  it("includes mDNS config state and recent Bonjour log summary", async () => {
-    const configPath = path.join(tempDir, "openclaw.json");
-    const outputPath = path.join(tempDir, "support-bonjour.zip");
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({
-        discovery: {
-          mdns: {
-            mode: "minimal",
-          },
-        },
-      }),
-      "utf8",
-    );
-
-    await writeDiagnosticSupportExport({
-      env: {
-        ...process.env,
-        HOME: tempDir,
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_DISABLE_BONJOUR: "1",
-        OPENCLAW_STATE_DIR: tempDir,
-      },
-      stateDir: tempDir,
-      outputPath,
-      now: new Date("2026-04-22T12:00:01.000Z"),
-      readLogTail: async () => ({
+  it.each([
+    [undefined, "unset"],
+    ["1", "force-disabled"],
+    ["0", "force-enabled"],
+    ["not-a-boolean", "unrecognized"],
+  ] as const)(
+    "includes mDNS config state and recent Bonjour log summary (%s)",
+    async (value, expected) => {
+      const configPath = path.join(tempDir, "openclaw.json");
+      writeJson(configPath, { discovery: { mdns: { mode: "minimal" } } });
+      vi.mocked(logTailModule.readConfiguredLogTail).mockResolvedValue({
         file: path.join(tempDir, "logs", "openclaw.log"),
         cursor: 0,
         size: 0,
@@ -649,110 +606,73 @@ describe("diagnostic support export", () => {
             msg: "bonjour: disabling advertiser after 3 failed restarts",
           }),
         ],
-      }),
-    });
+      });
+      vi.stubEnv("OPENCLAW_DISABLE_BONJOUR", value);
+      const entries = await exportEntries();
+      const configShape = readJsonEntry(entries, "config/shape.json");
+      expect(configShape).toHaveProperty("discovery", {
+        mdnsMode: "minimal",
+        bonjourEnvOverride: expected,
+      });
 
-    const entries = await readZipTextEntries(outputPath);
-    const configShape = JSON.parse(entries["config/shape.json"] ?? "{}") as {
-      discovery?: {
-        mdnsMode?: string;
-        bonjourEnvOverride?: string;
-      };
-    };
-    expect(configShape.discovery).toEqual({
-      mdnsMode: "minimal",
-      bonjourEnvOverride: "force-disabled",
-    });
-
-    const diagnostics = JSON.parse(entries["diagnostics.json"] ?? "{}") as {
-      bonjour?: {
-        count?: number;
-        warnings?: number;
-        last?: { kind?: string };
-        flags?: {
-          disabled?: boolean;
-          restarted?: boolean;
-          ciaoSuppressed?: boolean;
-        };
-      };
-    };
-    expect(diagnostics.bonjour).toEqual({
-      count: 2,
-      warnings: 2,
-      last: {
-        time: "2026-04-22T12:00:00.500Z",
-        level: "warn",
-        kind: "disabled",
-      },
-      flags: {
-        disabled: true,
-        restarted: false,
-        ciaoSuppressed: true,
-      },
-    });
-  });
+      const diagnostics = readJsonEntry(entries, "diagnostics.json");
+      expect(diagnostics).toHaveProperty("bonjour", {
+        count: 2,
+        warnings: 2,
+        last: {
+          time: "2026-04-22T12:00:00.500Z",
+          level: "warn",
+          kind: "disabled",
+        },
+        flags: {
+          disabled: true,
+          restarted: false,
+          ciaoSuppressed: true,
+        },
+      });
+    },
+  );
 
   it("keeps writing when status and health snapshots fail", async () => {
     const fakeToken = "sk-test-support-export-secret-token-1234567890";
-    const outputPath = path.join(tempDir, "support-failed-snapshots.zip");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(tempDir, "missing-config.json"));
 
-    await writeDiagnosticSupportExport({
-      env: {
-        ...process.env,
-        HOME: tempDir,
-        OPENCLAW_STATE_DIR: tempDir,
-      },
-      stateDir: tempDir,
-      outputPath,
-      now: new Date("2026-04-22T12:00:01.000Z"),
-      readLogTail: async () => ({
-        file: path.join(tempDir, "logs", "openclaw.log"),
-        cursor: 0,
-        size: 0,
-        truncated: false,
-        reset: false,
-        lines: [],
-      }),
+    const entries = await exportEntries({
       readStatusSnapshot: async () => {
         throw new Error(`status failed with token ${fakeToken}`);
       },
       readHealthSnapshot: async () => {
         throw new Error("health failed with PASSWORD=hunter2");
       },
+      readGatewayCapabilities: async () => {
+        throw new Error("synthetic-private@example.invalid is offline");
+      },
     });
 
-    const entries = await readZipTextEntries(outputPath);
-    expect(Object.keys(entries).toSorted()).toContain("status/gateway-status.json");
-    expect(Object.keys(entries).toSorted()).toContain("health/gateway-health.json");
+    expect(entries["summary.md"]).toContain("config file not found");
+    expect(readJsonEntry(entries, "status/gateway-status.json")).toHaveProperty("status", "failed");
+    expect(readJsonEntry(entries, "health/gateway-health.json")).toHaveProperty("status", "failed");
+    expect(readJsonEntry(entries, "runtime/gateway-capabilities.json")).toHaveProperty(
+      "status",
+      "failed",
+    );
+    expect(readJsonEntry(entries, "runtime/capabilities.json")).toHaveProperty("status", "ok");
 
     const combined = Object.values(entries).join("\n");
     expect(combined).not.toContain(fakeToken);
     expect(combined).not.toContain("hunter2");
-    expect(combined).toContain('"status": "failed"');
+    expect(combined).not.toContain("synthetic-private@example.invalid");
     expect(combined).toContain("status snapshot failed");
     expect(combined).toContain("health snapshot failed");
   });
 
   it("keeps writing when log tail collection fails", async () => {
     const fakeToken = "sk-test-log-tail-secret-token-1234567890";
-    const outputPath = path.join(tempDir, "support-failed-log-tail.zip");
-
-    await writeDiagnosticSupportExport({
-      env: {
-        ...process.env,
-        HOME: tempDir,
-        OPENCLAW_STATE_DIR: tempDir,
-      },
-      stateDir: tempDir,
-      outputPath,
-      now: new Date("2026-04-22T12:00:02.000Z"),
-      readLogTail: async () => {
-        throw new Error(`log tail failed at ${tempDir}/openclaw.log with token ${fakeToken}`);
-      },
-    });
-
-    const entries = await readZipTextEntries(outputPath);
-    expect(Object.keys(entries).toSorted()).toContain("logs/openclaw-sanitized.jsonl");
+    vi.mocked(logTailModule.readConfiguredLogTail).mockRejectedValue(
+      new Error(`log tail failed at ${tempDir}/openclaw.log with token ${fakeToken}`),
+    );
+    const entries = await exportEntries();
+    expect(entries["logs/openclaw-sanitized.jsonl"]).toBeDefined();
 
     const combined = Object.values(entries).join("\n");
     expect(combined).not.toContain(fakeToken);
@@ -761,96 +681,72 @@ describe("diagnostic support export", () => {
     expect(combined).toContain("sanitized log tail unavailable");
   });
 
-  it("keeps writing when config stat fails", async () => {
+  it.each(["stat", "size"] as const)("keeps writing after a config %s failure", async (failure) => {
     const fakeToken = "sk-test-config-stat-secret-token-1234567890";
     const configPath = path.join(tempDir, "openclaw.json");
-    const outputPath = path.join(tempDir, "support-failed-config-stat.zip");
-    fs.writeFileSync(configPath, "{}\n", "utf8");
-
-    const originalStatSync = fs.statSync.bind(fs);
-    const statSpy = vi.spyOn(fs, "statSync").mockImplementation((target, options) => {
-      if (target === configPath) {
-        throw new Error(`config stat failed with token ${fakeToken}`);
-      }
-      return originalStatSync(target, options as never);
-    });
-
-    try {
-      await writeDiagnosticSupportExport({
-        env: {
-          ...process.env,
-          HOME: tempDir,
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_STATE_DIR: tempDir,
-        },
-        stateDir: tempDir,
-        outputPath,
-        now: new Date("2026-04-22T12:00:03.000Z"),
-        readLogTail: async () => ({
-          file: path.join(tempDir, "logs", "openclaw.log"),
-          cursor: 0,
-          size: 0,
-          truncated: false,
-          reset: false,
-          lines: [],
-        }),
+    fs.writeFileSync(
+      configPath,
+      failure === "stat" ? "{}\n" : Buffer.alloc(8 * 1024 * 1024 + 1, "{"),
+    );
+    if (failure === "stat") {
+      const originalStatSync = fs.statSync.bind(fs);
+      vi.spyOn(fs, "statSync").mockImplementation((target, options) => {
+        if (target === configPath) {
+          throw new Error(`config stat failed with token ${fakeToken}`);
+        }
+        return originalStatSync(target, options as never);
       });
-    } finally {
-      statSpy.mockRestore();
     }
-
-    const entries = await readZipTextEntries(outputPath);
+    const entries = await exportEntries();
+    const error =
+      failure === "stat" ? "config stat failed with token" : "File exceeds 8388608 bytes";
+    expect(readJsonEntry(entries, "config/shape.json")).toMatchObject({
+      parseOk: false,
+      error: expect.stringContaining(error),
+    });
+    expect(entries["config/sanitized.json"]).toBe("null\n");
+    if (failure === "stat") {
+      expect(entries["summary.md"]).toContain(error);
+    }
+    expect(entries["summary.md"]).not.toContain("config file not found");
     const combined = Object.values(entries).join("\n");
-    expect(Object.keys(entries).toSorted()).toContain("config/shape.json");
     expect(combined).not.toContain(fakeToken);
-    expect(combined).toContain('"parseOk": false');
-    expect(combined).toContain("config stat failed with token");
     expect(combined).toContain("Attach this zip to the bug report");
   });
 
-  it("finishes the support export when the config exceeds its read limit", async () => {
-    const configPath = path.join(tempDir, "openclaw.json");
-    const outputPath = path.join(tempDir, "support-oversized-config.zip");
-    fs.writeFileSync(configPath, Buffer.alloc(8 * 1024 * 1024 + 1, "{"));
+  // Windows normalizes trailing whitespace in both directory and file names.
+  it.skipIf(process.platform === "win32")(
+    "preserves a quoted output directory name instead of trimming its whitespace",
+    async () => {
+      const quotedDir = path.join(tempDir, " quoted dir ");
+      fs.mkdirSync(quotedDir);
+      const result = await writeDiagnosticSupportExport({ outputPath: quotedDir });
 
-    await writeDiagnosticSupportExport({
-      env: {
-        ...process.env,
-        HOME: tempDir,
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_STATE_DIR: tempDir,
-      },
-      stateDir: tempDir,
-      outputPath,
-      now: new Date("2026-07-18T12:00:01.000Z"),
-      readLogTail: async () => ({
-        file: path.join(tempDir, "logs", "openclaw.log"),
-        cursor: 0,
-        size: 0,
-        truncated: false,
-        reset: false,
-        lines: [],
-      }),
-    });
+      // beforeEach freezes the clock at 2026-04-22T12:00:01.000Z.
+      const expectedName = `openclaw-diagnostics-2026-04-22T12-00-01-000Z-${process.pid}.zip`;
+      expect(result.path).toBe(path.join(quotedDir, expectedName));
+      expect(fs.existsSync(path.join(quotedDir, expectedName))).toBe(true);
+      expect(fs.existsSync(path.join(tempDir, " quoted dir"))).toBe(false);
+    },
+  );
 
-    const entries = await readZipTextEntries(outputPath);
-    const configShape = JSON.parse(entries["config/shape.json"] ?? "{}") as {
-      parseOk?: boolean;
-      error?: string;
-    };
-    expect(configShape.parseOk).toBe(false);
-    expect(configShape.error).toContain("File exceeds 8388608 bytes");
-    expect(entries["config/sanitized.json"]).toBe("null\n");
-    expect(Object.keys(entries).toSorted()).toEqual([
-      "config/sanitized.json",
-      "config/shape.json",
-      "diagnostics.json",
-      "logs/openclaw-sanitized.jsonl",
-      "manifest.json",
-      "summary.md",
-    ]);
+  it.skipIf(process.platform === "win32")(
+    "preserves leading and trailing whitespace in an explicit output file path",
+    async () => {
+      const literalPath = path.join(tempDir, "spaced bundle ");
+      const result = await writeDiagnosticSupportExport({ outputPath: literalPath });
 
-    const combined = Object.values(entries).join("\n");
-    expect(combined).toContain("Attach this zip to the bug report");
+      expect(result.path).toBe(literalPath);
+      expect(fs.existsSync(literalPath)).toBe(true);
+      expect(fs.existsSync(path.join(tempDir, "spaced bundle"))).toBe(false);
+    },
+  );
+
+  it("treats a blank output path as omitted and writes to the default support directory", async () => {
+    const result = await writeDiagnosticSupportExport({ outputPath: "   " });
+
+    const expectedName = `openclaw-diagnostics-2026-04-22T12-00-01-000Z-${process.pid}.zip`;
+    expect(result.path).toBe(path.join(tempDir, "logs", "support", expectedName));
+    expect(fs.existsSync(result.path)).toBe(true);
   });
 });

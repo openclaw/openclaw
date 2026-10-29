@@ -45,7 +45,7 @@ export function reattachTerminalSessionHosts(
   if (!viewport) {
     return;
   }
-  // Hiding the panel returns `nothing`, which detaches each session's ghostty
+  // Hiding the panel removes its viewport, which detaches each session's Ghostty
   // host. Re-attach live hosts whenever the viewport is rendered so a
   // hide/show cycle keeps the terminals intact instead of blanking them.
   for (const tab of tabs) {
@@ -59,29 +59,5 @@ export function reattachTerminalSessionHosts(
     // FitAddon skips unchanged dimensions; force dirty-row rendering to
     // repair a canvas that was detached while the panel was hidden.
     forceTerminalRender(activeTab.controller);
-  }
-}
-
-export function fitActiveTerminalSession(
-  tabs: readonly TerminalPanelSessionTab[],
-  activeId: string | null,
-): void {
-  tabs.find((tab) => tab.id === activeId)?.controller.fit();
-}
-
-export function fitAllTerminalSessions(tabs: readonly TerminalPanelSessionTab[]): void {
-  for (const tab of tabs) {
-    tab.controller.fit();
-  }
-}
-
-export function prepareTerminalSessionHostVisibility(
-  tabs: readonly TerminalPanelSessionTab[],
-  activeId: string | null,
-): void {
-  // Keep only the active session's host visible; ghostty renders to a canvas
-  // that must be laid out to measure correctly.
-  for (const tab of tabs) {
-    tab.host.style.display = tab.id === activeId ? "block" : "none";
   }
 }

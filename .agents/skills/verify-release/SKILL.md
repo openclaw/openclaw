@@ -1,6 +1,6 @@
 ---
 name: verify-release
-description: "Verify regular or extended-stable OpenClaw releases against the exact publication surfaces, workflow identities, package provenance, smoke tests, and live Gateway behavior expected for that release track."
+description: "Verify regular or extended-stable OpenClaw releases against the exact publication surfaces, workflow identities, package provenance, and published CLI smoke tests expected for that release track."
 ---
 
 # Verify Release
@@ -13,15 +13,16 @@ publish skill; use `$release-openclaw-maintainer` before changing release state.
 
 - Resolve short suffixes like `.27` to the concrete CalVer version from the
   current date/context, then say the resolved version.
-- Resolve the track first. Regular beta/stable uses a GitHub Release and the
-  platform graph; extended-stable uses its canonical branch, npm selector, and
-  Gateway surfaces. Do not require one track's artifacts from the other.
+- Resolve the track first. Both tracks use the shared GitHub Release evidence
+  ledger. Regular beta/stable also uses the platform graph; extended-stable
+  uses its canonical branch, npm selector, and Gateway surfaces. Do not require
+  one track's native or ClawHub artifacts from the other.
 - Verify live state. Do not trust local checkout state, release notes, or old
   memory as current truth.
 - If the checkout is dirty or divergent, use it only for scripts/reference.
   For version metadata, fetch from GitHub release/tag or unpack the tag tarball
   under `/tmp`.
-- Never print secrets. Use inherited live keys only for scoped smoke commands.
+- Never print secrets.
 - Keep the final terse: `yes/no`, evidence bullets, caveats, cleanup.
 
 ## Regular beta/stable checks
@@ -84,15 +85,21 @@ Use these checks only for the regular orchestrated release track.
 
 ## Extended-stable checks
 
-Extended-stable has no GitHub Release ledger. Verify live tag, workflow,
-registry, provenance, and image state directly.
+Extended-stable has a GitHub Release with shared release evidence but no native
+or ClawHub artifacts. Verify it alongside
+the live tag, workflow, registry, provenance, and image state.
 
 1. **Identity:** require final `v<VERSION>` at patch `33+`, with no suffix,
    contained in `extended-stable/YYYY.M.33`. Only an active candidate must equal
    the tip. Root and every publishable official plugin must declare `<VERSION>`.
-   Require the Git tag and no GitHub Release.
-2. **Workflow chain:** find successful preflight, complete validation, plugin
-   npm, and core publish runs on the canonical branch and SHA. Validation must
+   Require the Git tag and a public, non-prerelease GitHub Release whose title
+   and canonical body match the tag. Require `isLatest=false`, the dependency
+   evidence, immutable Full Release Validation manifest, postpublish evidence,
+   and their checksums. Require no native or ClawHub assets.
+2. **Workflow chain:** find the successful parent release run plus its
+   preflight, complete validation, plugin npm, and core publish children.
+   Require a protected `release-publish/*` parent and canonical `release-ci/*`
+   validation producer with verified workflow SHA provenance. Validation must
    use `rerun_group=all`, `release_profile=stable`, blocking soak/performance,
    and the saved attempt. Core publish must reference all three run IDs and bind
    its manifest, workflow ref, and tarball digest to the release SHA.
@@ -106,32 +113,31 @@ registry, provenance, and image state directly.
    digest binding to the release SHA. Preserve output and workflow URLs.
 5. **Docker:** verify exact default, slim, browser, and architecture images and
    attestations in both registries. Only the three `extended-stable*` aliases may
-   resolve to those digests. Repair aliases through current-main `Docker Channel
-Promotion` for the exact tag, without rebuilding.
-6. **Recovery:** never republish. Use the generated command only for the root
-   selector and approved credential-isolated tooling for others, then repeat
+   resolve to those digests. Require the successful `OpenClaw Release Publish`
+   parent run and its completed Docker verification. The normal route finalizes
+   afterward; an explicitly requested fast path may activate GitHub first. Repair
+   aliases through current-main `Docker Channel Promotion` for the exact tag,
+   without rebuilding.
+6. **Recovery:** never republish. Use `promote_extended_stable` in the
+   `openclaw/releases` dist-tag workflow for the root selector (an unsuffixed
+   final patch `33+`) and approved credential-isolated tooling for others, then repeat
    complete readback. Do not require ClawHub, native/mobile apps, website,
-   private dist-tags, regular `latest`, or a GitHub Release.
+   private dist-tags, or regular `latest`. Require shared release evidence, but
+   do not require regular native or ClawHub assets.
 
-## Shared live smoke
+## Published package smoke
 
-After the track-specific publication checks pass:
+After the track-specific publication checks pass, use a disposable
+installation/cache with isolated OpenClaw state:
 
-1. Published package smoke:
-   - In `/tmp`, isolated HOME:
-     `npm exec --yes --package openclaw@<VERSION> -- openclaw --version`.
-   - Run at least one harmless command that touches the published CLI surface,
-     for example `plugins --help` or `gateway --help`.
-2. Dev Gateway live model smoke:
-   - Use temp HOME/workspace, not the user's normal state:
-     `HOME=/tmp/openclaw-release-smoke/home OPENCLAW_WORKSPACE=/tmp/openclaw-release-smoke/work pnpm openclaw --dev gateway run --auth none --force --verbose`.
-   - Health check via CLI: `openclaw --dev gateway health --json`.
-   - Run one Gateway-backed agent turn with inherited `OPENAI_API_KEY`, short
-     prompt, explicit session key, JSON output, and a known-available model.
-   - If the configured default model fails as unavailable, record that caveat
-     and retry with the newest known-good OpenAI model instead of declaring the
-     release failed.
-   - Stop the gateway and verify the port is not listening.
+- `npm exec --yes --package openclaw@<VERSION> -- openclaw --version`.
+- Run at least one harmless command that touches the published CLI surface,
+  for example `plugins --help` or `gateway --help`.
+
+Do not start an extra local Gateway or run an ad hoc live model turn as a
+preliminary release check. Use the canonical release-validation workflows and
+publication evidence above; this does not remove any of their required lanes.
+Run additional manual live checks only when explicitly requested.
 
 ## Caveats To Report
 
@@ -142,6 +148,3 @@ After the track-specific publication checks pass:
   missing regular-release artifacts an extended-stable failure.
 - Divergent checkout caveat: say when local source SHA differs from release tag
   or origin and which live sources were used instead.
-- Smoke caveat: distinguish Gateway-backed agent success from local embedded
-  fallback. A valid Gateway smoke has health OK plus gateway log/run id for the
-  agent call.

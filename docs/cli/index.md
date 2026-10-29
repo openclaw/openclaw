@@ -7,7 +7,7 @@ title: "CLI reference"
 ---
 
 `openclaw` is the main CLI entry point. Each core command has a dedicated
-reference page or is documented with the command it aliases; this index lists
+reference page or is documented with the command it aliases. This index lists
 the commands, global flags, and output styling rules that apply across the CLI.
 
 Setup commands by intent:
@@ -15,26 +15,29 @@ Setup commands by intent:
 - `openclaw setup` and `openclaw onboard` verify inference first, then start OpenClaw for Gateway, workspace, channels, skills, and health setup.
 - `openclaw setup --baseline` creates the baseline config and workspace without walking the guided onboarding flow.
 - `openclaw configure` changes targeted parts of an existing setup: model auth, gateway, channels, plugins, or skills.
-- `openclaw channels add` configures channel accounts after the baseline exists; a channel selection alone uses guided setup, while account, credential, or channel-config flags use the direct path for scripts.
+- `openclaw channels add` configures channel accounts after the baseline exists. A channel selection alone uses guided setup. Account, credential, or channel-config flags use the direct path for scripts.
+
+<a id="status" />
 
 ## Command pages
 
 | Area                         | Commands                                                                                                                                                                                                                              |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Setup and onboarding         | [`openclaw`](/cli/openclaw) · [`setup`](/cli/setup) · [`onboard`](/cli/onboard) · [`configure`](/cli/configure) · [`config`](/cli/config) · [`completion`](/cli/completion) · [`doctor`](/cli/doctor) · [`dashboard`](/cli/dashboard) |
-| Reset, backup, and migration | [`backup`](/cli/backup) · [`database`](/reference/database-schemas) · [`migrate`](/cli/migrate) · [`reset`](/cli/reset) · [`uninstall`](/cli/uninstall) · [`update`](/cli/update)                                                     |
-| Messaging and agents         | [`message`](/cli/message) · [`agent`](/cli/agent) · [`agents`](/cli/agents) · [`attach`](/cli/attach) · [`acp`](/cli/acp) · [`mcp`](/cli/mcp)                                                                                         |
+| Reset, backup, and migration | [`backup`](/cli/backup) · [`database`](/cli#database) · [`migrate`](/cli/migrate) · [`reset`](/cli/reset) · [`uninstall`](/cli/uninstall) · [`update`](/cli/update)                                                                   |
+| Messaging and agents         | [`message`](/cli/message) · [`agent`](/cli/agent) · [`agents`](/cli/agents) · [`templates`](/cli/templates) · [`attach`](/cli/attach) · [`acp`](/cli/acp) · [`mcp`](/cli/mcp)                                                         |
 | Health and sessions          | [`status`](/cli/status) · [`health`](/cli/health) · [`triage`](/cli/triage) · [`sessions`](/cli/sessions) · [`resume`](/cli/resume) · [`audit`](/cli/audit)                                                                           |
-| Gateway and logs             | [`fleet`](/cli/fleet) · [`gateway`](/cli/gateway) · [`logs`](/cli/logs) · [`system`](/cli/system)                                                                                                                                     |
+| Gateway and logs             | [`gateway`](/cli/gateway) · [`logs`](/cli/logs) · [`system`](/cli/system)                                                                                                                                                             |
 | Models and inference         | [`models`](/cli/models) · [`promos`](/cli/promos) · [`infer`](/cli/infer) · `capability` (alias for [`infer`](/cli/infer)) · [`memory`](/cli/memory) · [`wiki`](/cli/wiki)                                                            |
-| Network and nodes            | [`connect`](/cli/connect) · [`directory`](/cli/directory) · [`nodes`](/cli/nodes) · [`devices`](/cli/devices) · [`node`](/cli/node) · [`worker`](/cli/worker)                                                                         |
+| Network and nodes            | [`connect`](/cli/connect) · [`directory`](/cli/directory) · [`nodes`](/cli/nodes) · [`node`](/cli/node) · [`worker`](/cli/worker)                                                                                                     |
 | Runtime and sandbox          | [`approvals`](/cli/approvals) · `exec-policy` (see [`approvals`](/cli/approvals)) · [`sandbox`](/cli/sandbox) · [`tui`](/cli/tui) · `chat`/`terminal` (aliases for [`tui --local`](/cli/tui)) · [`browser`](/cli/browser)             |
-| Automation                   | [`cron`](/cli/cron) · [`tasks`](/cli/tasks) · [`hooks`](/cli/hooks) · [`webhooks`](/cli/webhooks) · [`transcripts`](/cli/transcripts)                                                                                                 |
+| Worktrees                    | [`worktrees`](/concepts/managed-worktrees)                                                                                                                                                                                            |
+| Automation                   | [`cron`](/cli/cron) (alias `automations`) · [`hooks`](/cli/hooks) · [`webhooks`](/cli/webhooks) · [`transcripts`](/cli/transcripts)                                                                                                   |
 | Discovery and docs           | [`dns`](/cli/dns) · [`docs`](/cli/docs)                                                                                                                                                                                               |
-| Pairing and channels         | [`pairing`](/cli/pairing) · [`qr`](/cli/qr) · [`channels`](/cli/channels)                                                                                                                                                             |
+| Pairing and channels         | [`pairing`](/cli/pairing) · [`qr`](/cli/qr) · [`devices`](/cli/devices) · [`channels`](/cli/channels) · [`users`](/cli/users)                                                                                                         |
 | Security and plugins         | [`security`](/cli/security) · [`secrets`](/cli/secrets) · [`skills`](/cli/skills) · [`plugins`](/cli/plugins) · [`proxy`](/cli/proxy)                                                                                                 |
 | Legacy aliases               | [`daemon`](/cli/daemon) (gateway service) · [`clawbot`](/cli/clawbot) (namespace)                                                                                                                                                     |
-| Plugins (optional)           | [`path`](/cli/path) · [`policy`](/cli/policy) · [`voicecall`](/cli/voicecall) · [`workboard`](/cli/workboard) (if installed)                                                                                                          |
+| Plugins (optional)           | [`file-transfer`](/cli/file-transfer) · [`path`](/cli/path) · [`policy`](/cli/policy) · [`voicecall`](/cli/voicecall) · [`workboard`](/cli/workboard) (if installed)                                                                  |
 
 ## Global flags
 
@@ -50,7 +53,9 @@ Setup commands by intent:
 
 Place command-specific options after their command name, for example `openclaw status --json`. Global options such as `--profile` can precede the command.
 
-A named `--profile` replaces canonical state and config paths inherited from
+Unknown root options fail with an option error and a help hint instead of starting onboarding or the TUI.
+
+A named `--profile` replaces standard state and config paths inherited from
 another profile, including a running Gateway service. Explicitly customized
 state directories and config paths remain unchanged.
 
@@ -61,15 +66,24 @@ Use `--` to stop option parsing. Command words still dispatch after it: for exam
 ## Output modes
 
 - ANSI colors and progress indicators render only in TTY sessions.
-- OSC-8 hyperlinks render as clickable links where supported; otherwise the
-  CLI falls back to plain URLs.
-- On bounded reporting commands, `--json` reserves stdout for one JSON document;
-  styling and progress output are suppressed, and warnings and diagnostics stay on
+- OSC-8 hyperlinks render as clickable links where supported. Otherwise the
+  CLI prints plain URLs.
+- Human-readable report values neutralize terminal escape sequences before styling.
+  Embedded newlines, carriage returns, and tabs appear as `\n`, `\r`, and `\t`
+  instead of changing the report layout. This display formatting does not change
+  the underlying paths, configuration values, or JSON fields.
+  Bidirectional formatting controls are removed from displayed values; ordinary
+  right-to-left letters and emoji are preserved.
+- On bounded reporting commands, `--json` reserves stdout for one JSON document.
+  The CLI suppresses styling and progress output. Warnings and diagnostics stay on
   stderr.
 - Interactive UIs and wizards, long-running servers and streams, shell integration,
   and pure side-effect commands may omit `--json` when they have no meaningful
   report to return.
-- Long-running commands show a progress indicator (OSC 9;4 when supported).
+- Long-running commands show a progress indicator (`OSC 9;4` when supported).
+- Connection failures give a short explanation and a status-check command. If a request may have completed, check its result before retrying. Unexpected failures point to a recovery command; use `OPENCLAW_DEBUG=1` when rerunning to include diagnostics. JSON failures keep their diagnostic fields.
+- Update failures keep their reason on stderr, including in JSON mode.
+- Resource cleanup failures are reported on stderr without replacing the command's result. Cleanup that exceeds its reporting deadline remains tracked and reports any later failure.
 
 ### JSON failures
 
@@ -94,6 +108,10 @@ scripts can report the in-flight run. Failure messages are sanitized. Human-read
 diagnostics may also be written to stderr, so scripts should parse stdout and still
 check the exit status.
 
+Onboarding and setup failures retain `phase` and the top-level `message` beside
+the envelope. Use `error.message` for the shared failure description and `phase`
+for onboarding-specific recovery.
+
 ## Color palette
 
 OpenClaw uses a lobster palette for CLI output:
@@ -117,7 +135,7 @@ Palette source of truth: `packages/terminal-core/src/palette.ts`.
 
 This map covers core commands and their primary subcommands. Plugin-added
 subcommands (for example under `skills`, `plugins`, and `wiki`) evolve
-independently; run `<command> --help` for the authoritative, current list.
+independently. Run `<command> --help` for the authoritative, current list.
 
 ```
 openclaw [--dev] [--profile <name>] <command>
@@ -134,7 +152,10 @@ openclaw [--dev] [--profile <name>] <command>
     schema
     validate
   database
+    port
     preflight
+    preflight-agent
+    verify-preservation
     ownership
       status
       claim
@@ -197,7 +218,7 @@ openclaw [--dev] [--profile <name>] <command>
     install
     update
     verify
-    workshop list|inspect|propose-create|propose-update|revise|apply|reject|quarantine
+    workshop list|changes|show|archive|restore
     list
     info
     check
@@ -321,19 +342,12 @@ openclaw [--dev] [--profile <name>] <command>
     stop
     restart
     run
-  fleet
-    create
-    backup
-    restore
-    doctor
+  worktrees
     list
-    status
-    logs
-    start
-    stop
-    restart
-    upgrade
-    rm
+    create
+    remove
+    restore
+    gc
   daemon
     status
     install
@@ -378,6 +392,7 @@ openclaw [--dev] [--profile <name>] <command>
     status
     list
     get
+    show
     add
     edit
     rm
@@ -385,6 +400,7 @@ openclaw [--dev] [--profile <name>] <command>
     disable
     runs
     run
+    scratch
   nodes
     status
     describe
@@ -408,6 +424,10 @@ openclaw [--dev] [--profile <name>] <command>
     reject
     rotate
     revoke
+  users
+    list
+    link-email <email> --to <profileId>
+    merge <sourceProfileId> --into <targetProfileId>
   node
     run
     status
@@ -492,6 +512,36 @@ Plugins can add additional top-level commands, such as
 
 </Accordion>
 
+## Database
+
+`openclaw database` provides schema preflight, preservation verification,
+shared-state ownership, and offline database-family engine porting. See
+[database schemas](/reference/database-schemas) for compatibility contracts.
+
+```bash
+openclaw database port --to <postgres|sqlite> [--dry-run] [--json]
+openclaw database port --family <state|agent|workboard|logbook|team-reports> --to <postgres|sqlite> [--dry-run] [--json]
+openclaw database port --resume <manifest> [--json]
+openclaw database port --rollback <manifest> [--json]
+```
+
+Stop the Gateway and embedded agents first. `--family` selects all existing
+physical stores of one family and changes only that family's override. Omit it
+to port all eligible families when their engines are homogeneous; mixed
+selections require a family. A scoped agent port cannot put agents on a different
+engine from shared state until PR3 mixed-pair conformance. `--dry-run` checks
+read-only prerequisites without creating migration
+artifacts. Recovery requires the active manifest at
+`<stateDir>/recovery/database-port/manifest.json`; `--resume` and `--rollback` are
+mutually exclusive and cannot be combined with `--family`, `--to`, or `--dry-run`.
+
+Completed ports retain exact original captures and an archived manifest under
+`<stateDir>/recovery/database-port/<operation-id>/`. To keep later writes when
+returning to SQLite, run a new `--to sqlite` port; completed manifests are not an
+undo mechanism. Reverse-port before a raw package-manager downgrade. See the
+[port runbook](/reference/database-engines#port-existing-stores) for
+backup contents, interruption recovery, and restart guidance.
+
 ## Chat slash commands
 
 Chat messages support `/...` commands. See [slash commands](/tools/slash-commands).
@@ -501,7 +551,7 @@ Highlights:
 - `/status` - quick diagnostics.
 - `/trace` - session-scoped plugin trace/debug lines.
 - `/config` - persisted config changes.
-- `/debug` - runtime-only config overrides (memory, not disk; requires `commands.debug: true`).
+- `/debug` - runtime-only config overrides in memory, not on disk. Requires `commands.debug: true`.
 
 ## Usage tracking
 

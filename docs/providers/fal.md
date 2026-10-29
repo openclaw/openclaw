@@ -13,13 +13,16 @@ generation.
 | Property | Value                                                                           |
 | -------- | ------------------------------------------------------------------------------- |
 | Provider | `fal`                                                                           |
-| Auth     | `FAL_KEY` (canonical; `FAL_API_KEY` also works as a fallback)                   |
+| Auth     | `FAL_KEY` (preferred; `FAL_API_KEY` also works as a fallback)                   |
 | API      | fal model endpoints (`https://fal.run`; video jobs use `https://queue.fal.run`) |
 | Base URL | Override with `models.providers.fal.baseUrl`                                    |
 
 ## Getting started
 
 <Steps>
+  <Step title="Get an API key">
+    Create a key at [fal.ai/dashboard/keys](https://fal.ai/dashboard/keys).
+  </Step>
   <Step title="Set the API key">
     ```bash
     openclaw onboard --auth-choice fal-api-key
@@ -204,6 +207,9 @@ The bundled `fal` video-generation provider defaults to
     single reference image; other overrides are not forwarded. Seedance models
     accept `aspectRatio`, `size`, `resolution`, durations of 4-15 seconds, and
     an audio toggle.
+    Unsupported geometry and audio hints for MiniMax Live and HeyGen appear in
+    the CLI's `ignoredOverrides` output. Kling and Wan also report the audio
+    toggle as ignored; Seedance 2.0 supports it.
 
   </Accordion>
 

@@ -1,6 +1,18 @@
 import { expect, vi } from "vitest";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import { buildProjectedAgentRunIndex } from "../infra/agent-run-registry.js";
+import { tryClaimSessionControllerTask } from "../sessions/session-controller.mailbox.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
+import {
+  getRpcSourceIdentity,
+  setRpcSourceProjectSessionActive,
+  type RpcSourceRef,
+} from "../sessions/session-controller.rpc-sources.js";
+import { markReplyOperationExecutionStarted } from "../sessions/session-controller.state.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
+import { createSessionGoalFixture } from "./session-goal.test-support.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
+import { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 const sessionRow = vi.hoisted(() => ({
   key: "agent:main:main",
@@ -14,7 +26,6 @@ const sessionRow = vi.hoisted(() => ({
   thinkingDefault: "medium",
   agentRuntime: { id: "openclaw", source: "model" },
 }));
-const resolveEmbeddedAgentSessionProgressStateMock = vi.hoisted(() => vi.fn());
 const loadGatewaySessionRowMock = vi.hoisted(() => vi.fn());
 const projectChatDisplayMessageMock = vi.hoisted(() => vi.fn((message: unknown) => message));
 const listAccessorSessionEntriesReadOnlyMock = vi.hoisted(() => vi.fn());
@@ -22,8 +33,8 @@ const loadAccessorSessionEntryReadOnlyMock = vi.hoisted(() => vi.fn());
 const loadGatewaySessionEntryReadOnlyMock = vi.hoisted(() => vi.fn());
 const readSessionMessageCountAsyncMock = vi.hoisted(() => vi.fn());
 const readSessionMessageByIdAsyncMock = vi.hoisted(() => vi.fn());
-const resolveTranscriptSessionKeyBySessionIdMock = vi.hoisted(() => vi.fn());
 const runtimeConfigState = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
+const sessionEventStorePath = "/tmp/session-events-fixture.sqlite";
 
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => runtimeConfigState.value }));
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
@@ -32,19 +43,12 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
     ...actual,
     listSessionEntriesReadOnly: listAccessorSessionEntriesReadOnlyMock,
     loadSessionEntryReadOnly: loadAccessorSessionEntryReadOnlyMock,
-    resolveTranscriptSessionKeyBySessionId: resolveTranscriptSessionKeyBySessionIdMock,
   };
 });
 vi.mock("./chat-display-projection.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./chat-display-projection.js")>();
   return { ...actual, projectChatDisplayMessage: projectChatDisplayMessageMock };
 });
-vi.mock("./session-utils.js", () => ({
-  attachOpenClawTranscriptMeta: (message: unknown) => message,
-  loadGatewaySessionRow: loadGatewaySessionRowMock,
-  loadSessionEntry: () => ({ entry: undefined, storePath: "" }),
-  loadGatewaySessionEntryReadOnly: loadGatewaySessionEntryReadOnlyMock,
-}));
 vi.mock("./session-transcript-readers.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-transcript-readers.js")>();
   return {
@@ -53,38 +57,144 @@ vi.mock("./session-transcript-readers.js", async (importOriginal) => {
     readSessionMessageByIdAsync: readSessionMessageByIdAsyncMock,
   };
 });
-vi.mock("../agents/embedded-agent-runner/runs.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/embedded-agent-runner/runs.js")>(
-    "../agents/embedded-agent-runner/runs.js",
-  );
-  return {
-    ...actual,
-    resolveEmbeddedAgentSessionProgressState: (...args: unknown[]) =>
-      resolveEmbeddedAgentSessionProgressStateMock(...args),
-  };
-});
 
-const { createLifecycleEventBroadcastHandler, createTranscriptUpdateBroadcastHandler } =
+const { createLifecycleEventBroadcastHandler: createLifecycleHandler } =
+  await import("./server-session-lifecycle-events.js");
+const { createTranscriptUpdateBroadcastHandler: createTranscriptHandler } =
   await import("./server-session-events.js");
-const { createGatewayBroadcaster } = await import("./server-broadcast.js");
-const { subscribePluginSessionsChanged } = await import("../plugins/gateway-events.js");
+export const { createGatewayBroadcaster } = await import("./server-broadcast.js");
+export const { subscribePluginSessionsChanged } =
+  await import("../plugins/services.test-support.js");
 
-function createActiveRun(
-  projectSessionActive: boolean,
-  executionStarted = true,
-): ChatAbortControllerEntry {
-  return {
-    controller: new AbortController(),
-    sessionId: "sess-main",
-    sessionKey: "agent:main:main",
-    startedAtMs: Date.now(),
-    executionStarted,
-    expiresAtMs: Date.now() + 60_000,
-    projectSessionActive,
-  };
+const projection = {
+  get state() {
+    return {
+      rowContext: { projectedAgentRuns: buildProjectedAgentRunIndex() },
+      scope: () => ({ path: sessionEventStorePath }),
+    };
+  },
+  ensureMaterialized: async () => {},
+  ancestorRows: () => [],
+  prepareMembership: async () => {},
+  needsMembershipPreparation: () => false,
+  withPreparedExactRows: (async (queries, consume) => {
+    queries(runtimeConfigState.value);
+    return consume(projection);
+  }) satisfies SessionRowProjection["withPreparedExactRows"],
+  isCurrent: () => true,
+  selectEntries(query: { key?: string; agentId?: string; storePath?: string }) {
+    if (!query.key) {
+      return (
+        listAccessorSessionEntriesReadOnlyMock({
+          agentId: query.agentId,
+          storePath: query.storePath,
+        }) ?? []
+      ).map((row: { key: string; entry: unknown }) =>
+        Object.assign({}, row, {
+          agentId: query.agentId,
+          storeTarget: { agentId: query.agentId, storePath: query.storePath },
+        }),
+      );
+    }
+    const target = query.storePath
+      ? {
+          entry: loadAccessorSessionEntryReadOnlyMock({
+            agentId: query.agentId,
+            sessionKey: query.key,
+            storePath: query.storePath,
+          }),
+          storePath: query.storePath,
+        }
+      : loadGatewaySessionEntryReadOnlyMock(query.key, { agentId: query.agentId });
+    return target?.entry
+      ? [
+          {
+            key: query.key,
+            agentId: query.agentId,
+            entry: target.entry,
+            storeTarget: { agentId: query.agentId, storePath: target.storePath },
+          },
+        ]
+      : [];
+  },
+  capture(query: { key: string; agentId: string; storePath?: string }) {
+    return projection.selectEntries(query)[0];
+  },
+  findBySessionId(query: { sessionId: string; agentId?: string; storePath?: string }) {
+    return projection
+      .selectEntries({ agentId: query.agentId, storePath: query.storePath })
+      .filter(({ entry }) => entry.sessionId === query.sessionId);
+  },
+  snapshot(query: { key: string; agentId: string }) {
+    return { row: loadGatewaySessionRowMock(query.key, { agentId: query.agentId }) };
+  },
+  describe(query: { key: string; agentId: string; storePath?: string }) {
+    const row = projection.snapshot(query).row;
+    return row
+      ? {
+          materialized: { row },
+          storeTarget: {
+            agentId: query.agentId,
+            storePath: query.storePath ?? sessionEventStorePath,
+          },
+        }
+      : undefined;
+  },
+  present(record: Parameters<SessionRowProjection["present"]>[0]) {
+    return record.materialized.row;
+  },
+} as unknown as SessionRowProjection;
+
+export function createLifecycleEventBroadcastHandler(
+  params: Parameters<typeof createLifecycleHandler>[0],
+) {
+  return createLifecycleHandler({ getSessionRowProjection: () => projection, ...params });
+}
+export function createTranscriptUpdateBroadcastHandler(
+  params: Parameters<typeof createTranscriptHandler>[0],
+) {
+  return createTranscriptHandler({ getSessionRowProjection: () => projection, ...params });
 }
 
-function storedMessage(messageId: string, seq = 1) {
+export function createActiveRun(
+  projectSessionActive: boolean,
+  executionStarted = true,
+  identity: {
+    sessionKey?: string;
+    sessionId?: string;
+    agentId?: string;
+    storePath?: string;
+  } = {},
+): RpcSourceRef {
+  const ref = createRpcSourceForTest(
+    { projectSessionActive },
+    {
+      sessionId: identity.sessionId ?? "sess-main",
+      sessionKey: identity.sessionKey ?? "agent:main:main",
+      agentId: identity.agentId,
+      storeScope: identity.storePath ?? sessionEventStorePath,
+    },
+  );
+  if (executionStarted) {
+    const claim = tryClaimSessionControllerTask(ref.input);
+    if (!claim) {
+      throw new Error("Fixture could not acquire its isolated turn");
+    }
+    const sourceIdentity = getRpcSourceIdentity(ref);
+    const operation = createReplyOperation({
+      sessionId: sourceIdentity.sessionId,
+      sessionKey: sourceIdentity.sessionKey,
+      resetTriggered: false,
+      mailboxClaim: claim,
+      target: ref.input.mailbox.owner.target,
+    });
+    markReplyOperationExecutionStarted(operation);
+    setRpcSourceProjectSessionActive(ref, projectSessionActive);
+  }
+  return ref;
+}
+
+export function storedMessage(messageId: string, seq = 1) {
   return {
     found: true,
     oversized: false,
@@ -93,7 +203,43 @@ function storedMessage(messageId: string, seq = 1) {
   };
 }
 
-function fixedStoreRuntimeConfig(ownerAgentId: string, configuredAgentIds: string[]) {
+export function transcriptTarget(storePath: string) {
+  return { agentId: "main", sessionId: "sess-main", sessionKey: "agent:main:main", storePath };
+}
+
+export function expectBroadcast(
+  broadcast: ReturnType<typeof vi.fn>,
+  payload: object,
+  event = "session.message",
+  recipients: unknown = expect.any(Set),
+) {
+  expect(broadcast).toHaveBeenCalledWith(
+    event,
+    expect.objectContaining(payload),
+    recipients,
+    expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
+  );
+}
+
+export function expectAbsentFields(payload: unknown, fields: string) {
+  for (const field of fields.split(" ")) {
+    expect(payload, field).not.toHaveProperty(field);
+  }
+}
+
+export function resetSessionEventMocks() {
+  vi.clearAllMocks();
+  listAccessorSessionEntriesReadOnlyMock.mockReturnValue([]);
+  loadAccessorSessionEntryReadOnlyMock.mockReturnValue(undefined);
+  loadGatewaySessionEntryReadOnlyMock.mockReturnValue({ entry: undefined, storePath: "" });
+  loadGatewaySessionRowMock.mockReturnValue(sessionRow);
+  readSessionMessageCountAsyncMock.mockReset().mockResolvedValue(undefined);
+  readSessionMessageByIdAsyncMock.mockReset();
+  runtimeConfigState.value = {};
+  sessionRow.key = "agent:main:main";
+}
+
+export function fixedStoreRuntimeConfig(ownerAgentId: string, configuredAgentIds: string[]) {
   return {
     session: { store: "/tmp/shared.sqlite" },
     agents: {
@@ -104,47 +250,36 @@ function fixedStoreRuntimeConfig(ownerAgentId: string, configuredAgentIds: strin
   };
 }
 
-function createHandler(
+export function createHandler(
   projectSessionActive: boolean,
   executionStarted = true,
   getSessionMessageSubscribers: SessionMessageSubscriberRegistry["get"] = () => new Set<string>(),
 ) {
   const broadcastToConnIds = vi.fn();
+  const source = createActiveRun(projectSessionActive, executionStarted);
+  // Preparation has controller custody, but acceptance owns its queued projection.
+  rpcSourceTesting.reset(executionStarted ? [["run-before-finalize", source]] : []);
   const handler = createTranscriptUpdateBroadcastHandler({
     broadcastToConnIds,
     sessionEventSubscribers: { getAll: () => new Set(["conn-1"]) },
     sessionMessageSubscribers: { get: getSessionMessageSubscribers },
-    chatAbortControllers: new Map([
-      ["run-before-finalize", createActiveRun(projectSessionActive, executionStarted)],
-    ]),
   });
   return { broadcastToConnIds, handler };
 }
 
-const ownerGoal = {
-  schemaVersion: 1 as const,
-  id: "goal-ops",
-  objective: "Ops only",
-  status: "active" as const,
-  createdAt: 1,
+export const ownerGoal = createSessionGoalFixture("goal-ops", "Ops only", {
   updatedAt: 2,
-  tokenStart: 0,
   tokensUsed: 3,
-  continuationTurns: 0,
-};
+});
 
-const PRIVATE_SESSION_FIELDS =
-  "agentId session message owner goal status hasActiveRun activeRunIds model responseUsage".split(
-    " ",
+export function expectPrivateSessionInvalidation(payload: unknown) {
+  expectAbsentFields(
+    payload,
+    "agentId session message owner goal status hasActiveRun activeRunIds model responseUsage",
   );
-
-function expectPrivateSessionInvalidation(payload: unknown) {
-  for (const field of PRIVATE_SESSION_FIELDS) {
-    expect(payload, field).not.toHaveProperty(field);
-  }
 }
 
-async function emitAssistantTranscriptUpdate(
+export async function emitAssistantTranscriptUpdate(
   projectSessionActive: boolean,
   message: unknown = { role: "assistant", content: [{ type: "text", text: "Final answer" }] },
   executionStarted = true,
@@ -162,26 +297,13 @@ async function emitAssistantTranscriptUpdate(
 }
 
 export {
-  createActiveRun,
-  createGatewayBroadcaster,
-  createHandler,
-  createLifecycleEventBroadcastHandler,
-  createTranscriptUpdateBroadcastHandler,
-  emitAssistantTranscriptUpdate,
-  expectPrivateSessionInvalidation,
-  fixedStoreRuntimeConfig,
+  sessionRow,
+  loadGatewaySessionRowMock,
+  projectChatDisplayMessageMock,
   listAccessorSessionEntriesReadOnlyMock,
   loadAccessorSessionEntryReadOnlyMock,
   loadGatewaySessionEntryReadOnlyMock,
-  loadGatewaySessionRowMock,
-  ownerGoal,
-  projectChatDisplayMessageMock,
-  readSessionMessageByIdAsyncMock,
   readSessionMessageCountAsyncMock,
-  resolveEmbeddedAgentSessionProgressStateMock,
-  resolveTranscriptSessionKeyBySessionIdMock,
+  readSessionMessageByIdAsyncMock,
   runtimeConfigState,
-  sessionRow,
-  storedMessage,
-  subscribePluginSessionsChanged,
 };

@@ -18,7 +18,7 @@ does not attest per-agent credential stores such as `openclaw-agent.sqlite`.
 
 Policy checks configured channels, MCP servers, model providers, network SSRF
 posture, ingress/channel access, Gateway exposure and node command posture,
-authored message-routing probes,
+authored message-routing checks,
 agent workspace access, sandbox posture, data-handling posture, secret
 provider/auth profile posture, and governed tool metadata (the `## Tools` section of `AGENTS.md`). Use it
 when a workspace needs a durable, checkable statement such as "Telegram must
@@ -82,3 +82,4 @@ execution is fully allowed, and filesystem tools are restricted to `--cwd`.
 
 - [Doctor lint mode](/cli/doctor#lint-mode)
 - [Path CLI](/cli/path)
+- [Policy plugin reference](/plugins/reference/policy) — the plugin that adds these policy-backed doctor checks

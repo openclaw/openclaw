@@ -1,55 +1,37 @@
 import path from "node:path";
 import type {
-  SessionDiffFile,
   SessionFileBrowserEntry,
   SessionFileEntry,
   SessionsDiffParams,
   SessionsDiffResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { readSessionRepositoryCheckpoint } from "../worker-environments/session-repository-checkpoints.js";
+import { gitEnvironment } from "../../agents/worktrees/git.js";
+import { gitCommandArgv, gitReadOnlyEnvironment } from "../../infra/git-exec.js";
+import { spawnCommand } from "../../process/exec-spawn.js";
+import { readSessionRepositoryArtifacts } from "../worker-environments/session-repository-checkpoints.js";
 import type { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace-access.js";
 import { populateSessionFilePreview } from "./workspace-files.js";
-import {
-  normalizeRelativePath,
-  sortWorkspaceEntries,
-  WORKSPACE_PREVIEW_MAX_BYTES,
-} from "./workspace-fs.js";
+import { normalizeRelativePath, sortWorkspaceEntries } from "./workspace-fs.js";
 
 type StoredRepository = Extract<
-  ReturnType<typeof resolveRepositoryWorkspaceAccess>,
+  Awaited<ReturnType<typeof resolveRepositoryWorkspaceAccess>>,
   { kind: "stored" }
 >;
 
-async function readArtifacts(access: StoredRepository) {
+async function readArtifacts(access: StoredRepository, previewPath?: string, download = false) {
   access.assertCurrent();
   if (!access.repository.checkpointRef) {
     return undefined;
   }
-  const snapshot = await readSessionRepositoryCheckpoint({
+  const snapshot = await readSessionRepositoryArtifacts({
     store: access.store,
     workspaceId: access.repository.workspaceId,
     checkpointRef: access.repository.checkpointRef,
+    ...(download ? { downloadPath: previewPath } : { previewPath }),
+    assertCurrent: access.assertCurrent,
   });
   access.assertCurrent();
-  const currentPaths = new Set(snapshot.current.entries.map((entry) => entry.path));
-  const basePaths = new Set(snapshot.base.entries.map((entry) => entry.path));
-  const changes: SessionDiffFile[] = [
-    ...snapshot.changedEntries.map((entry) => ({
-      path: entry.path,
-      status: basePaths.has(entry.path) ? ("modified" as const) : ("added" as const),
-      additions: 0,
-      deletions: 0,
-    })),
-    ...snapshot.base.entries
-      .filter((entry) => !currentPaths.has(entry.path))
-      .map((entry) => ({
-        path: entry.path,
-        status: "deleted" as const,
-        additions: 0,
-        deletions: 0,
-      })),
-  ].toSorted((left, right) => left.path.localeCompare(right.path));
-  return { ...snapshot, changes };
+  return snapshot;
 }
 
 function fileEntry(filePath: string, size: number | undefined): SessionFileEntry {
@@ -63,7 +45,7 @@ function fileEntry(filePath: string, size: number | undefined): SessionFileEntry
   };
 }
 
-function artifactPath(requested: string): string | undefined {
+export function resolveRepositoryArtifactPath(requested: string): string | undefined {
   const normalized = normalizeRelativePath(requested);
   return path.posix.isAbsolute(requested) ||
     path.win32.isAbsolute(requested) ||
@@ -85,37 +67,31 @@ export async function listRepositoryArtifacts(
   );
   const files =
     snapshot?.changes.map((entry) => fileEntry(entry.path, changed.get(entry.path)?.size)) ?? [];
-  const folder = artifactPath(request.path ?? "");
+  const folder = resolveRepositoryArtifactPath(request.path ?? "");
   if (folder === undefined) {
     return { gitCheckout: true, files };
   }
   const entries = new Map<string, SessionFileBrowserEntry>();
-  const query = request.search?.trim().toLowerCase();
+  const query = request.search?.trim().toLowerCase().normalize("NFC");
+  const prefix = folder ? `${folder}/` : "";
   for (const [filePath, entry] of changed) {
-    if (query) {
-      if (filePath.toLowerCase().includes(query)) {
-        entries.set(filePath, {
-          path: filePath,
-          name: path.posix.basename(filePath),
-          kind: "file",
-          size: entry.size,
-          sessionKind: "modified",
-        });
-      }
-      continue;
-    }
-    const prefix = folder ? `${folder}/` : "";
-    if (!filePath.startsWith(prefix)) {
+    if (
+      query
+        ? !filePath.toLowerCase().normalize("NFC").includes(query)
+        : !filePath.startsWith(prefix)
+    ) {
       continue;
     }
     const remainder = filePath.slice(prefix.length);
-    const name = remainder.split("/")[0]!;
-    entries.set(`${prefix}${name}`, {
-      path: `${prefix}${name}`,
+    const name = query ? path.posix.basename(filePath) : remainder.split("/")[0]!;
+    const selectedPath = query ? filePath : `${prefix}${name}`;
+    const directory = !query && remainder.includes("/");
+    entries.set(selectedPath, {
+      path: selectedPath,
       name,
-      kind: remainder.includes("/") ? "directory" : "file",
+      kind: directory ? "directory" : "file",
       sessionKind: "modified",
-      ...(remainder.includes("/") ? {} : { size: entry.size }),
+      ...(directory ? {} : { size: entry.size }),
     });
   }
   const limit = query ? 500 : 250;
@@ -140,8 +116,8 @@ export async function getRepositoryArtifact(
   access: StoredRepository,
   requestedPath: string,
 ): Promise<{ file?: SessionFileEntry }> {
-  const selected = artifactPath(requestedPath);
-  const snapshot = await readArtifacts(access);
+  const selected = resolveRepositoryArtifactPath(requestedPath);
+  const snapshot = await readArtifacts(access, selected);
   const entry = snapshot?.changedEntries.find((candidate) => candidate.path === selected);
   if (!snapshot || entry?.type !== "file") {
     throw new Error(
@@ -149,8 +125,12 @@ export async function getRepositoryArtifact(
     );
   }
   const file = fileEntry(entry.path, entry.size);
-  if (entry.size <= WORKSPACE_PREVIEW_MAX_BYTES) {
-    const content = await snapshot.readEntry(entry);
+  if (snapshot.preview !== undefined) {
+    const content = Buffer.from(
+      snapshot.preview.buffer,
+      snapshot.preview.byteOffset,
+      snapshot.preview.byteLength,
+    );
     access.assertCurrent();
     await populateSessionFilePreview(file, content);
     // Accepted artifacts are immutable; editing resumes with the live worker checkout.
@@ -158,6 +138,73 @@ export async function getRepositoryArtifact(
   }
   access.assertCurrent();
   return { file };
+}
+
+export async function downloadRepositoryArtifact(access: StoredRepository, requestedPath: string) {
+  const selected = resolveRepositoryArtifactPath(requestedPath);
+  if (selected === undefined) {
+    return { status: "missing" as const };
+  }
+  const snapshot = await readArtifacts(access, selected, true);
+  const entry = snapshot?.changedEntries.find((candidate) => candidate.path === selected);
+  if (!snapshot || entry?.type !== "file") {
+    return { status: "missing" as const };
+  }
+  if (!snapshot.downloadObjectId) {
+    return { status: "missing" as const };
+  }
+  return {
+    status: "ok" as const,
+    filename: path.posix.basename(entry.path),
+    size: entry.size,
+    identity: snapshot.downloadObjectId,
+  };
+}
+
+/** Accepted changed blobs are immutable. Never materialize a checkout or a whole blob. */
+export async function* streamRepositoryArtifact(
+  access: StoredRepository,
+  objectId: string,
+  start: number,
+  end: number,
+  signal: AbortSignal,
+) {
+  signal.throwIfAborted();
+  access.assertCurrent();
+  const args = ["cat-file", "blob", objectId];
+  const child = spawnCommand(
+    gitCommandArgv(access.store.artifactPath(access.repository.workspaceId), args),
+    {
+      env: gitReadOnlyEnvironment(args, gitEnvironment()),
+      buffer: false,
+      stdio: ["ignore", "pipe", "ignore"],
+      cancelSignal: signal,
+    },
+  );
+  const completed = child.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  try {
+    let offset = 0;
+    for await (const chunk of child.stdout!) {
+      const bytes: Buffer = chunk;
+      const next = offset + bytes.length;
+      if (next > start && offset < end) {
+        yield bytes.subarray(Math.max(0, start - offset), Math.min(bytes.length, end - offset));
+      }
+      offset = next;
+      if (offset >= end) {
+        break;
+      }
+    }
+    if (offset < end) {
+      throw new Error("Retained file download ended before its expected size.");
+    }
+  } finally {
+    child.kill();
+    await completed;
+  }
 }
 
 export async function loadRepositoryArtifactDiff(

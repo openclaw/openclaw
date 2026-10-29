@@ -1,17 +1,43 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import type {
+  SystemAgentSetupActivateStartParams,
+  WizardNextParams,
+} from "../../packages/gateway-protocol/src/index.js";
 import type { HelloOk } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CallGatewayCliOptions } from "../gateway/call.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { loadOrCreateDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
-import type { GuidedOnboardingDeps } from "./onboard-guided.js";
+import { WizardSession } from "../wizard/session.js";
 import { runRemoteGatewayInferenceOnboarding } from "./onboard-remote-gateway.js";
+import { createTestRuntime as makeRuntime } from "./test-runtime-config-helpers.js";
 
-vi.mock("../infra/device-identity.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/device-identity.js")>()),
-  loadOrCreateDeviceIdentity: vi.fn(() => ({
+const mocks = vi.hoisted(() => ({
+  callGateway: vi.fn<typeof import("../gateway/call.js").callGatewayCli>(),
+  createPrompter: vi.fn<typeof import("../wizard/clack-prompter.js").createClackPrompter>(),
+  runGuidedOnboarding: vi.fn<typeof import("./onboard-guided.js").runGuidedOnboarding>(),
+  runTui: vi.fn<typeof import("../tui/tui.js").runTui>(),
+}));
+
+vi.mock("../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/call.js")>()),
+  callGatewayCli: mocks.callGateway,
+}));
+vi.mock("../wizard/clack-prompter.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../wizard/clack-prompter.js")>()),
+  createClackPrompter: mocks.createPrompter,
+}));
+// mock-isolation: Exercise remote RPC adapters without initializing the local setup and config owners.
+vi.mock("./onboard-guided.js", () => ({ runGuidedOnboarding: mocks.runGuidedOnboarding }));
+// mock-isolation: Remote onboarding records its handoff without loading the local terminal runtime.
+vi.mock("../tui/tui.js", () => ({ runTui: mocks.runTui }));
+
+vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-identity-async.js")>()),
+  loadOrCreateDeviceIdentityAsync: vi.fn(async () => ({
     deviceId: "remote-onboarding-device",
     publicKeyPem: "test-public-key",
     privateKeyPem: "test-private-key",
@@ -19,29 +45,39 @@ vi.mock("../infra/device-identity.js", async (importOriginal) => ({
 }));
 
 type RemoteGatewayInferenceTarget = Parameters<typeof runRemoteGatewayInferenceOnboarding>[0];
-type RemoteGatewayInferenceOnboardingDeps = NonNullable<
-  Parameters<typeof runRemoteGatewayInferenceOnboarding>[2]
->;
+type GatewayCall = typeof import("../gateway/call.js").callGatewayCli;
+type RunGuidedOnboarding = typeof import("./onboard-guided.js").runGuidedOnboarding;
 
-type GatewayCall = NonNullable<RemoteGatewayInferenceOnboardingDeps["callGateway"]>;
-type RunGuidedOnboarding = NonNullable<RemoteGatewayInferenceOnboardingDeps["runGuidedOnboarding"]>;
-
-function makeRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn() as unknown as RuntimeEnv["exit"],
-  };
+function runWithGatewayMocks(dependencies: {
+  callGateway: GatewayCall;
+  target?: RemoteGatewayInferenceTarget;
+  runtime?: RuntimeEnv;
+  createPrompter?: typeof import("../wizard/clack-prompter.js").createClackPrompter;
+  runGuidedOnboarding?: RunGuidedOnboarding;
+  runTui?: typeof import("../tui/tui.js").runTui;
+}) {
+  mocks.callGateway.mockImplementation(dependencies.callGateway);
+  mocks.createPrompter.mockImplementation(
+    dependencies.createPrompter ?? (() => createWizardPrompter()),
+  );
+  mocks.runGuidedOnboarding.mockImplementation(
+    dependencies.runGuidedOnboarding ?? exerciseGuidedAdapters(),
+  );
+  mocks.runTui.mockReset();
+  if (dependencies.runTui) {
+    mocks.runTui.mockImplementation(dependencies.runTui);
+  }
+  return runRemoteGatewayInferenceOnboarding(
+    dependencies.target ?? makeTarget(),
+    dependencies.runtime ?? makeRuntime(),
+  );
 }
 
 function makeLocalConfig(): OpenClawConfig {
   return {
     wizard: { securityAcknowledgedAt: "2026-07-11T00:00:00.000Z" },
     agents: {
-      defaults: {
-        workspace: "/client/workspace",
-        model: { primary: "openai/local-only" },
-      },
+      defaults: { workspace: "/client/workspace", model: { primary: "openai/local-only" } },
     },
     gateway: {
       mode: "remote",
@@ -51,8 +87,8 @@ function makeLocalConfig(): OpenClawConfig {
 }
 
 function makeTarget(
-  config: OpenClawConfig,
-  auth: { token?: string; password?: string },
+  config: OpenClawConfig = makeLocalConfig(),
+  auth: { token?: string; password?: string } = { token: "selected-token" },
 ): RemoteGatewayInferenceTarget {
   return {
     config,
@@ -102,25 +138,15 @@ function detectResult() {
 
 function exerciseGuidedAdapters(): RunGuidedOnboarding {
   const run: RunGuidedOnboarding = async (_opts, runtime, deps) => {
-    const guidedDeps: GuidedOnboardingDeps = deps ?? {};
-    if (!guidedDeps.detect || !guidedDeps.activate || !guidedDeps.runSystemAgentChat) {
-      throw new Error("remote guided adapters missing");
-    }
-    const detection = await guidedDeps.detect();
-    if (detection.unavailableCandidates[0]?.id !== "antigravity-cli") {
-      throw new Error("remote detection dropped unavailable integration metadata");
-    }
-    if (detection.prepareOptions !== undefined) {
-      throw new Error("remote detection replaced an omitted prepare-options field");
-    }
-    const selected = detection.candidates[0];
-    if (!selected) {
-      throw new Error("remote detection returned no candidate");
-    }
-    if (selected.brandId !== "claude") {
-      throw new Error("remote detection dropped bundled brand identity");
-    }
-    const activation = await guidedDeps.activate({
+    const detect = expectDefined(deps?.detect, "remote detection adapter");
+    const activate = expectDefined(deps?.activate, "remote activation adapter");
+    const chat = expectDefined(deps?.runSystemAgentChat, "remote chat adapter");
+    const detection = await detect();
+    expect(detection.unavailableCandidates[0]?.id).toBe("antigravity-cli");
+    expect(detection.prepareOptions).toBeUndefined();
+    const selected = expectDefined(detection.candidates[0], "remote candidate");
+    expect(selected.brandId).toBe("claude");
+    const activation = await activate({
       kind: selected.kind,
       modelRef: selected.modelRef,
       // The adapter must replace this client-side context with Gateway detection.workspace.
@@ -129,7 +155,7 @@ function exerciseGuidedAdapters(): RunGuidedOnboarding {
       runtime,
     });
     if (activation.ok) {
-      await guidedDeps.runSystemAgentChat("/client/workspace", runtime, true);
+      await chat("/client/workspace", runtime, true);
     }
   };
   return vi.fn(run);
@@ -151,53 +177,275 @@ function asGatewayCall(mock: ReturnType<typeof vi.fn>): GatewayCall {
   return mock as unknown as GatewayCall;
 }
 
+function setupReply(options: CallGatewayCliOptions, modelRef = "claude-cli/opus", restart = false) {
+  switch (options.method) {
+    case "openclaw.setup.detect":
+      return detectResult();
+    case "openclaw.setup.activate.start":
+      return {
+        sessionId: (options.params as { sessionId: string }).sessionId,
+        done: false,
+        status: "running",
+      };
+    case "wizard.next":
+      return {
+        done: true,
+        status: "done",
+        modelActivation: { modelRef, ...(restart ? { gatewayRestartRequired: true } : {}) },
+      };
+    case "openclaw.setup.verify":
+      return { ok: true, modelRef, latencyMs: 100 };
+    default:
+      throw new Error(`unexpected Gateway method ${options.method}`);
+  }
+}
+
+const activateCodex: RunGuidedOnboarding = async (_opts, runtime, deps) => {
+  const detection = await deps?.detect?.();
+  const candidate = expectDefined(
+    detection?.candidates.find((entry) => entry.kind === "codex-cli"),
+    "Codex candidate",
+  );
+  const activation = await deps?.activate?.({
+    kind: "codex-cli",
+    modelRef: candidate.modelRef,
+    surface: "cli",
+    runtime,
+  });
+  expect(activation).toMatchObject({ ok: true, gatewayRestartRequired: true });
+};
+
+const activationMethods = ["openclaw.setup.detect", "openclaw.setup.activate.start", "wizard.next"];
+
 describe("runRemoteGatewayInferenceOnboarding", () => {
+  it("preserves utility role through remote setup and rejects role drift", async () => {
+    const call = vi.fn(async (options: CallGatewayCliOptions) => {
+      if (options.method === "openclaw.setup.detect") {
+        return {
+          ...detectResult(),
+          candidates: [
+            {
+              kind: "provider-auto:fixture",
+              label: "Utility",
+              detail: "Setup",
+              modelRef: "fixture/small",
+              modelTarget: "utility",
+              recommended: false,
+            },
+          ],
+          setupModel: "fixture/small",
+          utilityModel: "fixture/small",
+        };
+      }
+      if (options.method === "openclaw.setup.activate.start") {
+        expect(options.params).toMatchObject({
+          modelTarget: "utility",
+          modelRef: "fixture/small",
+        });
+        return {
+          sessionId: "fixture-session",
+          done: true,
+          status: "done",
+          modelActivation: { modelRef: "fixture/small", modelTarget: "utility" },
+        };
+      }
+      if (options.method === "openclaw.setup.verify") {
+        expect(options.params).toEqual({ modelTarget: "utility" });
+        return {
+          ok: true,
+          modelRef: "fixture/small",
+          latencyMs: 10,
+        };
+      }
+      throw new Error(`Unexpected request: ${options.method}`);
+    });
+    const work = runWithGatewayMocks({
+      target: makeTarget(makeLocalConfig(), { token: "synthetic-token" }),
+      callGateway: asGatewayCall(call),
+      runGuidedOnboarding: async (_options, runtime, deps) => {
+        const detection = await deps?.detect?.();
+        expect(detection).toMatchObject({
+          setupComplete: false,
+          setupModel: "fixture/small",
+          utilityModel: "fixture/small",
+        });
+        const choice = detection?.candidates[0];
+        expect(choice?.modelTarget).toBe("utility");
+        const result = await deps?.activate?.({
+          kind: "provider-auto:fixture",
+          modelRef: "fixture/small",
+          modelTarget: choice?.modelTarget,
+          surface: "cli",
+          runtime,
+        });
+        expect(result).toMatchObject({
+          ok: true,
+          modelTarget: "utility",
+          modelRef: "fixture/small",
+        });
+      },
+    });
+    await expect(work).rejects.toThrow("different model role");
+  });
+
+  it.each(["accept", "decline", "cancel"] as const)(
+    "relays saved replacement confirmation through the Gateway wizard: %s",
+    async (choice) => {
+      let session: WizardSession | undefined;
+      let sessionId: string | undefined;
+      let activeKey = "working-key";
+      const savedKey = "replacement-key";
+      const confirmation = "Connection verified. Activate this saved sign-in?";
+      const callGatewayMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
+        if (options.method === "openclaw.setup.activate.start") {
+          const input = options.params as SystemAgentSetupActivateStartParams;
+          sessionId = input.sessionId;
+          expect(input.kind).toBe("saved-auth:openai:setup-replacement");
+          session = new WizardSession(async (prompter, _signal, runnerSession) => {
+            await prompter.note("Connection verified.");
+            const accepted = await prompter.confirm({ message: confirmation, initialValue: false });
+            if (!accepted) {
+              runnerSession.setActivationRejection({
+                disposition: "rejected-before-promotion",
+                status: "unavailable",
+              });
+              throw new Error("Activation declined. Your current connection is unchanged.");
+            }
+            activeKey = savedKey;
+            runnerSession.setModelActivation({ modelRef: "openai/gpt-5.5" });
+          });
+          return { sessionId, done: false, status: "running" };
+        }
+        if (options.method === "wizard.next") {
+          const input = options.params as WizardNextParams;
+          expect(input.sessionId).toBe(sessionId);
+          const running = expectDefined(session, "activation session");
+          if (input.answer) {
+            await running.answer(input.answer.stepId, input.answer.value);
+          }
+          const result = await running.next();
+          if (result.done) {
+            await running.whenSettled();
+          }
+          return result;
+        }
+        if (options.method === "wizard.cancel") {
+          expect(options.params).toEqual({ sessionId, closeInput: true });
+          const running = expectDefined(session, "activation session");
+          running.close(new WizardCancelledError("cancelled"));
+          await running.whenSettled();
+          return { status: running.getStatus() };
+        }
+        if (options.method === "openclaw.setup.verify") {
+          expect(activeKey).toBe(savedKey);
+          return { ok: true, modelRef: "openai/gpt-5.5", latencyMs: 100 };
+        }
+        throw new Error(`unexpected Gateway method ${options.method}`);
+      });
+      const prompter = createWizardPrompter({
+        confirm: vi.fn(async () => {
+          if (choice === "cancel") {
+            throw new WizardCancelledError("cancelled");
+          }
+          return choice === "accept";
+        }),
+      });
+      const runGuidedOnboarding: RunGuidedOnboarding = async (_opts, runtime, deps) => {
+        const activate = expectDefined(deps?.activate, "remote activation adapter");
+        const result = await activate({
+          kind: "saved-auth:openai:setup-replacement",
+          modelRef: "openai/gpt-5.5",
+          surface: "cli",
+          runtime,
+          prompter,
+        });
+        expect(result).toMatchObject(
+          choice === "accept"
+            ? { ok: true, modelRef: "openai/gpt-5.5" }
+            : { ok: false, status: "unavailable" },
+        );
+      };
+      const onboarding = runWithGatewayMocks({
+        callGateway: asGatewayCall(callGatewayMock),
+        runGuidedOnboarding,
+      });
+      if (choice === "cancel") {
+        await expect(onboarding).rejects.toThrow("cancelled");
+      } else {
+        await onboarding;
+      }
+      expect(prompter.confirm).toHaveBeenCalledWith({ message: confirmation, initialValue: false });
+      expect(activeKey).toBe(choice === "accept" ? savedKey : "working-key");
+      expect(
+        callGatewayMock.mock.calls.filter(
+          ([options]) => options.method === "openclaw.setup.verify",
+        ),
+      ).toHaveLength(choice === "accept" ? 1 : 0);
+      expect(expectDefined(session, "activation session").isSettled()).toBe(true);
+    },
+  );
+
   it.each([
-    { label: "token", auth: { token: "selected-token" }, secret: "selected-token" },
     {
       label: "password",
       auth: { password: "selected-password" },
       secret: "selected-password",
+      configuredRemote: false,
+    },
+    {
+      label: "configured SSH token",
+      auth: { token: "selected-token" },
+      secret: "selected-token",
+      configuredRemote: true,
     },
   ])(
     "pins $label across detect, activate, verify, OpenClaw, and in-process TUI",
-    async ({ auth, secret }) => {
+    async ({ auth, secret, configuredRemote }) => {
       const localConfig = makeLocalConfig();
+      const gatewayUrl = configuredRemote ? "ws://127.0.0.1:18789" : "wss://selected.example/ws";
+      if (configuredRemote) {
+        localConfig.gateway = {
+          ...localConfig.gateway,
+          remote: { url: gatewayUrl, transport: "ssh", sshTarget: "me@studio", remotePort: 18789 },
+        };
+      }
       const localConfigBefore = structuredClone(localConfig);
       const order: string[] = [];
       const remoteConfig: { modelRef?: string } = {};
       const callGatewayMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
-        expect(options.url).toBe("wss://selected.example/ws");
+        expect(options.url).toBe(configuredRemote ? undefined : gatewayUrl);
         expect(options.token).toBe(auth.token);
         expect(options.password).toBe(auth.password);
         expect(options.tlsFingerprint).toBe("sha256:selected");
         expect(options.ignoreEnvUrlOverride).toBe(true);
-        expect(options.config?.gateway?.remote?.url).toBe("wss://selected.example/ws");
+        expect(options.config?.gateway?.remote?.url).toBe(gatewayUrl);
+        expect(options.config?.gateway?.remote?.transport).toBe(
+          configuredRemote ? "ssh" : "direct",
+        );
         order.push(options.method);
 
         if (options.method === "openclaw.setup.detect") {
           expect(options.timeoutMs).toBe(40_000);
           return detectResult();
         }
-        if (options.method === "openclaw.setup.activate") {
+        if (options.method === "openclaw.setup.activate.start") {
           expect(options.timeoutMs).toBe(150_000);
           expect(options.params).toEqual({
+            sessionId: expect.any(String),
             kind: "claude-cli",
             modelRef: "claude-cli/opus",
             workspace: "/gateway/workspace",
           });
+          return setupReply(options);
+        }
+        if (options.method === "wizard.next") {
           remoteConfig.modelRef = "claude-cli/opus";
-          return {
-            ok: true,
-            modelRef: remoteConfig.modelRef,
-            latencyMs: 250,
-            lines: ["Default model: claude-cli/opus"],
-          };
+          return setupReply(options);
         }
         if (options.method === "openclaw.setup.verify") {
           expect(options.timeoutMs).toBe(30_000);
           expect(remoteConfig.modelRef).toBe("claude-cli/opus");
-          return { ok: true, modelRef: remoteConfig.modelRef, latencyMs: 100 };
+          return setupReply(options);
         }
         if (options.method === "openclaw.chat") {
           expect(options.timeoutMs).toBe(190_000);
@@ -220,13 +468,14 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
         expect(options).toEqual({
           config: expect.objectContaining({
             gateway: expect.objectContaining({
-              remote: expect.objectContaining({ url: "wss://selected.example/ws" }),
+              remote: expect.objectContaining({ url: gatewayUrl }),
             }),
           }),
           deliver: false,
           message: "Wake up, my friend!",
           boundGateway: {
-            url: "wss://selected.example/ws",
+            url: gatewayUrl,
+            ...(configuredRemote ? { configuredRemote: true } : {}),
             ...auth,
             tlsFingerprint: "sha256:selected",
           },
@@ -237,16 +486,16 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       const prompter = createWizardPrompter({ text });
       const runtime = makeRuntime();
 
-      await runRemoteGatewayInferenceOnboarding(makeTarget(localConfig, auth), runtime, {
+      await runWithGatewayMocks({
+        target: { ...makeTarget(localConfig, auth), gatewayUrl, configuredRemote },
+        runtime,
         callGateway: asGatewayCall(callGatewayMock),
         createPrompter: () => prompter,
-        runGuidedOnboarding: exerciseGuidedAdapters(),
         runTui,
       });
 
       expect(order).toEqual([
-        "openclaw.setup.detect",
-        "openclaw.setup.activate",
+        ...activationMethods,
         "openclaw.setup.verify",
         "openclaw.chat",
         "tui",
@@ -288,53 +537,19 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       );
       options.signal?.throwIfAborted();
       methods.push(options.method);
-      if (options.method === "openclaw.setup.detect") {
-        return detectResult();
-      }
-      if (options.method === "openclaw.setup.activate") {
-        return {
-          ok: true,
-          modelRef: "openai/gpt-5.5",
-          latencyMs: 250,
-          lines: ["Default model: openai/gpt-5.5"],
-          gatewayRestartRequired: true,
-        };
-      }
       if (options.method === "openclaw.setup.verify" && verifyAttempts++ === 0) {
         return await firstVerification();
       }
-      if (options.method === "openclaw.setup.verify") {
-        return { ok: true, modelRef: "openai/gpt-5.5", latencyMs: 100 };
-      }
-      throw new Error(`unexpected Gateway method ${options.method}`);
+      return setupReply(options, "openai/gpt-5.5", true);
     });
-    const runGuidedOnboarding: RunGuidedOnboarding = async (_opts, runtime, deps) => {
-      const detection = await deps?.detect?.();
-      const candidate = detection?.candidates.find((entry) => entry.kind === "codex-cli");
-      if (!candidate) {
-        throw new Error("Codex candidate missing");
-      }
-      const activation = await deps?.activate?.({
-        kind: "codex-cli",
-        modelRef: candidate.modelRef,
-        surface: "cli",
-        runtime,
-      });
-      expect(activation).toMatchObject({ ok: true, gatewayRestartRequired: true });
-    };
 
-    await runRemoteGatewayInferenceOnboarding(
-      makeTarget(makeLocalConfig(), { token: "selected-token" }),
-      makeRuntime(),
-      {
-        callGateway: asGatewayCall(callGatewayMock),
-        runGuidedOnboarding,
-      },
-    );
+    await runWithGatewayMocks({
+      callGateway: asGatewayCall(callGatewayMock),
+      runGuidedOnboarding: activateCodex,
+    });
 
     expect(methods).toEqual([
-      "openclaw.setup.detect",
-      "openclaw.setup.activate",
+      ...activationMethods,
       "openclaw.setup.verify",
       "openclaw.setup.verify",
     ]);
@@ -346,14 +561,17 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
     "missing verification identity",
     "restart timeout",
   ])("gates inference and chat on replacement boot: %s", async (mode, ctx) => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(0);
+    const now = vi.spyOn(performance, "now").mockReturnValue(0);
     ctx.onTestFinished(() => now.mockRestore());
     const sent: string[] = [];
     const verifiedBoots: string[] = [];
     let verificationConnections = 0;
     let bootId: string | undefined = "old-boot";
     const callGatewayMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
-      if (options.method === "openclaw.setup.activate" && mode === "missing activation identity") {
+      if (
+        options.method === "openclaw.setup.activate.start" &&
+        mode === "missing activation identity"
+      ) {
         bootId = undefined;
       }
       if (options.method === "openclaw.setup.verify") {
@@ -366,18 +584,6 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       options.onHelloOk?.(gatewayHello(bootId));
       options.signal?.throwIfAborted();
       sent.push(options.method);
-      if (options.method === "openclaw.setup.detect") {
-        return detectResult();
-      }
-      if (options.method === "openclaw.setup.activate") {
-        return {
-          ok: true,
-          modelRef: "claude-cli/opus",
-          latencyMs: 250,
-          lines: ["Saved inference settings"],
-          gatewayRestartRequired: true,
-        };
-      }
       if (options.method === "openclaw.setup.verify") {
         verifiedBoots.push(bootId ?? "unidentified");
         return { ok: true, modelRef: "claude-cli/opus", latencyMs: 100 };
@@ -386,18 +592,12 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
         expect(bootId).toBe("new-boot");
         return { sessionId: "test-session", reply: "Ready.", action: "exit" };
       }
-      throw new Error(`unexpected Gateway method ${options.method}`);
+      return setupReply(options, "claude-cli/opus", true);
     });
 
-    const onboarding = runRemoteGatewayInferenceOnboarding(
-      makeTarget(makeLocalConfig(), { token: "selected-token" }),
-      makeRuntime(),
-      {
-        callGateway: asGatewayCall(callGatewayMock),
-        createPrompter: () => createWizardPrompter(),
-        runGuidedOnboarding: exerciseGuidedAdapters(),
-      },
-    );
+    const onboarding = runWithGatewayMocks({
+      callGateway: asGatewayCall(callGatewayMock),
+    });
     if (mode !== "replacement") {
       await expect(onboarding).rejects.toThrow(
         mode === "restart timeout"
@@ -405,89 +605,45 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
           : "Inference settings were saved, but the Gateway did not provide a boot identity",
       );
       expect(verifiedBoots).toEqual([]);
-      expect(sent).toEqual(["openclaw.setup.detect", "openclaw.setup.activate"]);
+      expect(sent).toEqual([...activationMethods]);
       return;
     }
     await onboarding;
     expect(verifiedBoots).toEqual(["new-boot"]);
-    expect(sent).toEqual([
-      "openclaw.setup.detect",
-      "openclaw.setup.activate",
-      "openclaw.setup.verify",
-      "openclaw.chat",
-    ]);
+    expect(sent).toEqual([...activationMethods, "openclaw.setup.verify", "openclaw.chat"]);
   });
 
   it("bounds a late restart verification call by the remaining deadline", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(45_500).mockReturnValueOnce(1_000);
+    const now = vi.spyOn(performance, "now").mockReturnValue(45_500).mockReturnValueOnce(1_000);
+    // Wall clock jumps backward 90s -- must not inflate the monotonic remaining budget.
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(-90_000);
     const callGatewayMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
       options.onHelloOk?.(
         gatewayHello(options.method === "openclaw.setup.verify" ? "new-boot" : "old-boot"),
       );
       options.signal?.throwIfAborted();
-      if (options.method === "openclaw.setup.detect") {
-        return detectResult();
-      }
-      if (options.method === "openclaw.setup.activate") {
-        return {
-          ok: true,
-          modelRef: "openai/gpt-5.5",
-          latencyMs: 250,
-          lines: ["Default model: openai/gpt-5.5"],
-          gatewayRestartRequired: true,
-        };
-      }
-      if (options.method === "openclaw.setup.verify") {
-        return { ok: true, modelRef: "openai/gpt-5.5", latencyMs: 100 };
-      }
-      throw new Error(`unexpected Gateway method ${options.method}`);
+      return setupReply(options, "openai/gpt-5.5", true);
     });
-    const runGuidedOnboarding: RunGuidedOnboarding = async (_opts, runtime, deps) => {
-      await deps?.detect?.();
-      await deps?.activate?.({
-        kind: "codex-cli",
-        modelRef: "openai/gpt-5.5",
-        surface: "cli",
-        runtime,
-      });
-    };
 
     try {
-      await runRemoteGatewayInferenceOnboarding(
-        makeTarget(makeLocalConfig(), { token: "selected-token" }),
-        makeRuntime(),
-        {
-          callGateway: asGatewayCall(callGatewayMock),
-          runGuidedOnboarding,
-        },
-      );
+      await runWithGatewayMocks({
+        callGateway: asGatewayCall(callGatewayMock),
+        runGuidedOnboarding: activateCodex,
+      });
     } finally {
       now.mockRestore();
+      dateNow.mockRestore();
     }
 
+    // remaining = 45_000 - 44_500 = 500 (monotonic, despite Date.now at -90_000)
     expect(
       callGatewayMock.mock.calls.find(
         ([options]) => options.method === "openclaw.setup.verify",
       )?.[0].timeoutMs,
     ).toBe(500);
   });
-
   it("hands an auth-free Gateway to the TUI as the exact bound route", async () => {
     const callGatewayMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
-      if (options.method === "openclaw.setup.detect") {
-        return detectResult();
-      }
-      if (options.method === "openclaw.setup.activate") {
-        return {
-          ok: true,
-          modelRef: "claude-cli/opus",
-          latencyMs: 250,
-          lines: ["Default model: claude-cli/opus"],
-        };
-      }
-      if (options.method === "openclaw.setup.verify") {
-        return { ok: true, modelRef: "claude-cli/opus", latencyMs: 100 };
-      }
       if (options.method === "openclaw.chat") {
         return {
           sessionId: (options.params as { sessionId: string }).sessionId,
@@ -495,14 +651,13 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
           action: "open-agent",
         };
       }
-      throw new Error(`unexpected Gateway method ${options.method}`);
+      return setupReply(options);
     });
     const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
 
-    await runRemoteGatewayInferenceOnboarding(makeTarget(makeLocalConfig(), {}), makeRuntime(), {
+    await runWithGatewayMocks({
+      target: makeTarget(makeLocalConfig(), {}),
       callGateway: asGatewayCall(callGatewayMock),
-      createPrompter: () => createWizardPrompter(),
-      runGuidedOnboarding: exerciseGuidedAdapters(),
       runTui,
     });
 
@@ -537,42 +692,22 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
     const methods: string[] = [];
     const callGatewayMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
       methods.push(options.method);
-      if (options.method === "openclaw.setup.detect") {
-        return detectResult();
-      }
-      if (options.method === "openclaw.setup.activate") {
-        return {
-          ok: true,
-          modelRef: "claude-cli/opus",
-          latencyMs: 250,
-          lines: ["Default model: claude-cli/opus"],
-        };
-      }
       if (options.method === "openclaw.setup.verify") {
         return verification;
       }
-      throw new Error(`unexpected Gateway method ${options.method}`);
+      return setupReply(options);
     });
     const runTui = vi.fn();
 
     await expect(
-      runRemoteGatewayInferenceOnboarding(
-        makeTarget(localConfig, { token: "selected-token" }),
-        makeRuntime(),
-        {
-          callGateway: asGatewayCall(callGatewayMock),
-          createPrompter: () => createWizardPrompter(),
-          runGuidedOnboarding: exerciseGuidedAdapters(),
-          runTui,
-        },
-      ),
+      runWithGatewayMocks({
+        target: makeTarget(localConfig),
+        callGateway: asGatewayCall(callGatewayMock),
+        runTui,
+      }),
     ).rejects.toThrow(error);
 
-    expect(methods).toEqual([
-      "openclaw.setup.detect",
-      "openclaw.setup.activate",
-      "openclaw.setup.verify",
-    ]);
+    expect(methods).toEqual([...activationMethods, "openclaw.setup.verify"]);
     expect(runTui).not.toHaveBeenCalled();
     expect(localConfig).toEqual(localConfigBefore);
   });
@@ -584,35 +719,37 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       if (options.method === "openclaw.setup.detect") {
         return detectResult();
       }
-      if (options.method === "openclaw.setup.activate") {
+      if (options.method === "openclaw.setup.activate.start") {
         throw new Error("gateway connection closed after request");
+      }
+      if (options.method === "wizard.cancel") {
+        expect(options.params).toEqual({ sessionId: expect.any(String), closeInput: true });
+        return { status: "cancelled" };
       }
       throw new Error(`unexpected Gateway method ${options.method}`);
     });
     const runTui = vi.fn();
 
     await expect(
-      runRemoteGatewayInferenceOnboarding(
-        makeTarget(makeLocalConfig(), { token: "selected-token" }),
-        makeRuntime(),
-        {
-          callGateway: asGatewayCall(callGatewayMock),
-          createPrompter: () => createWizardPrompter(),
-          runGuidedOnboarding: exerciseGuidedAdapters(),
-          runTui,
-        },
-      ),
+      runWithGatewayMocks({
+        callGateway: asGatewayCall(callGatewayMock),
+        runTui,
+      }),
     ).rejects.toThrow("gateway connection closed after request");
 
-    expect(methods).toEqual(["openclaw.setup.detect", "openclaw.setup.activate"]);
+    expect(methods).toEqual([
+      "openclaw.setup.detect",
+      "openclaw.setup.activate.start",
+      "wizard.cancel",
+    ]);
     expect(runTui).not.toHaveBeenCalled();
   });
 
-  it.each(["device", "profile"])(
-    "keeps remote chat ownership across replies and cancellation: %s",
+  it.each(["device", "unavailable"])(
+    "preserves remote chat identity selection: %s",
     async (identity) => {
-      if (identity === "profile") {
-        vi.mocked(loadOrCreateDeviceIdentity).mockImplementationOnce(() => {
+      if (identity === "unavailable") {
+        vi.mocked(loadOrCreateDeviceIdentityAsync).mockImplementationOnce(() => {
           throw new Error("read-only client state");
         });
       }
@@ -621,27 +758,9 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       let connections = 0;
       const callGatewayMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
         methods.push(options.method);
-        if (options.method === "openclaw.setup.detect") {
-          return detectResult();
-        }
-        if (options.method === "openclaw.setup.activate") {
-          return {
-            ok: true,
-            modelRef: "claude-cli/opus",
-            latencyMs: 250,
-            lines: ["Default model: claude-cli/opus"],
-          };
-        }
-        if (options.method === "openclaw.setup.verify") {
-          return { ok: true, modelRef: "claude-cli/opus", latencyMs: 100 };
-        }
         if (options.method === "openclaw.chat") {
-          // The Gateway falls back to connection ownership when there is no
-          // authenticated profile or device; one-shot calls use new connections.
-          const owner =
-            identity === "profile"
-              ? "authenticated-profile"
-              : (options.deviceIdentity?.deviceId ?? `connection:${++connections}`);
+          // One-shot requests need the same signed device across connections.
+          const owner = options.deviceIdentity?.deviceId ?? `connection:${++connections}`;
           if (chatOwner && chatOwner !== owner) {
             throw new Error("OpenClaw session belongs to another caller.");
           }
@@ -652,7 +771,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
             action: "none",
           };
         }
-        throw new Error(`unexpected Gateway method ${options.method}`);
+        return setupReply(options);
       });
       const prompter = createWizardPrompter({
         text: vi
@@ -663,20 +782,22 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       });
       const runTui = vi.fn();
 
-      await runRemoteGatewayInferenceOnboarding(
-        makeTarget(makeLocalConfig(), { token: "selected-token" }),
-        makeRuntime(),
-        {
-          callGateway: asGatewayCall(callGatewayMock),
-          createPrompter: () => prompter,
-          runGuidedOnboarding: exerciseGuidedAdapters(),
-          runTui,
-        },
-      );
+      const onboarding = runWithGatewayMocks({
+        callGateway: asGatewayCall(callGatewayMock),
+        createPrompter: () => prompter,
+        runTui,
+      });
+
+      if (identity === "unavailable") {
+        await expect(onboarding).rejects.toThrow(/Cannot load device identity.*doctor --fix/);
+        expect(methods).not.toContain("openclaw.chat");
+        expect(runTui).not.toHaveBeenCalled();
+        return;
+      }
+      await onboarding;
 
       expect(methods).toEqual([
-        "openclaw.setup.detect",
-        "openclaw.setup.activate",
+        ...activationMethods,
         "openclaw.setup.verify",
         "openclaw.chat",
         "openclaw.chat",

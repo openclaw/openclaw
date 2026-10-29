@@ -29,6 +29,21 @@ The two side-question contracts are deliberately separate. BTW is a one-shot que
 
 The main run, if one is active, is left untouched.
 
+On direct-provider runtimes with block streaming, a failed block delivery does
+not prevent attempts to send later blocks. The failure is logged and, after
+pending block callbacks finish, the complete answer is returned for final
+delivery. This can repeat blocks that already arrived; it does not restart the
+model request or affect the main run.
+
+Images attached to the `/btw` message are sent with the side question on
+direct-provider runtimes and on the Codex harness. This includes a photo with a
+`/btw` caption, or media from the replied-to message when the channel supplies
+it as reply context. Other harnesses receive the images as an optional input
+and may ignore them. CLI runtimes receive a text note with the number of
+omitted images instead. An image that media understanding already described is
+not attached, because its description lives in the main conversation prompt,
+not in the side question.
+
 When their runtime supplies usage, completed direct-provider and harness side
 questions report it through the configured [diagnostics pipeline](/gateway/opentelemetry).
 This does not add the exchange to session history or session-derived `/usage cost` totals.
@@ -41,6 +56,11 @@ tool surface. The forked thread gets a boundary prompt telling the model that
 everything before it is inherited reference context, not active instructions,
 and that only messages after the boundary are live. `/btw` requires an
 existing Codex thread; send a normal message first.
+
+Eligible Codex side questions can use the same OpenClaw Gateway shell tools as
+the main thread. Canceling a side question or reaching its timeout stops native
+background terminals owned by the side thread before releasing it. Main-thread
+terminals and OpenClaw-managed background jobs keep their existing lifetime.
 
 For CLI runtime aliases, BTW invokes the owning CLI backend in one-shot
 side-question mode: it seeds sanitized conversation context into a fresh CLI
@@ -61,22 +81,22 @@ restart, idle expiry, or the rail's clear button.
 Normal assistant chat uses the Gateway `chat` event. Detached BTW uses a
 separate `chat.side_result` event so clients cannot mistake it for regular
 conversation history. The Control UI does not consume that event; it calls the
-`sessions.companion.*` RPCs and renders their bounded exchange state in the rail.
+`sessions.companion.*` RPCs and renders their bounded exchange state in the Side chat panel.
 
 ## Surface behavior
 
-| Surface           | Behavior                                                                                                                                                                                                                                     |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| TUI               | Rendered inline in the chat log, visibly distinct from a normal reply, dismissible with `Enter` or `Esc`.                                                                                                                                    |
-| External channels | Delivered as a clearly labeled one-off reply (Telegram, WhatsApp, Discord have no local ephemeral overlay).                                                                                                                                  |
-| Control UI / web  | Routes `/btw` and `/side` to the expanded Side chat. The read-only thread is keyed by session, rehydrates from Gateway memory, and preserves a failed question for Retry. It can be cleared with the trash button. `Esc` collapses the rail. |
+| Surface           | Behavior                                                                                                                                                                                                                                                                                                                                                                    |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TUI               | Rendered inline in the chat log, visibly distinct from a normal reply, dismissible with `Enter` or `Esc`.                                                                                                                                                                                                                                                                   |
+| External channels | Delivered as a clearly labeled one-off reply (Telegram, WhatsApp, Discord have no local ephemeral overlay).                                                                                                                                                                                                                                                                 |
+| Control UI / web  | Routes `/btw` and `/side` to Side chat. The read-only thread is private to each person within a session, rehydrates from Gateway memory, and preserves a failed question for Retry. Hiding the panel preserves its thread and draft. Closing its desktop side-panel tab waits for a confirmed reset; **Clear side chat** remains available in the main panel and on mobile. |
 
 ## Selection popup (Control UI)
 
 Highlighting text inside a chat message in the Control UI opens a small
 selection popup with one action:
 
-- **Ask in side chat** opens the rail and pre-fills its composer with a quoted
+- **Ask in side chat** opens Side chat and pre-fills its composer with a quoted
   draft so you can type your own question about the selection.
 
 The action follows normal `/btw` semantics: the question and answer stay out

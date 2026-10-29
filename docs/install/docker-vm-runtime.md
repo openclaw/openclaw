@@ -49,10 +49,17 @@ plaintext in SQLite under `OPENCLAW_CONFIG_DIR`, including access, refresh, and
 ID-token values. Treat the config directory and its backups or copies as
 credentials.
 
+Use a persistent local disk for SQLite state, not an NFS, SMB, or CIFS mount.
+A Docker volume name alone does not guarantee local storage; check its backing
+driver. See [SQLite storage requirements](/install/docker/networking-and-storage#storage-and-persistence)
+for Doctor's network-storage warning and relocation guidance.
+
 The auth-profile secret directory contains only the local key used to recover
 legacy encrypted OAuth sidecar credentials. It must persist for that recovery
 path and remain separate from `OPENCLAW_CONFIG_DIR`, but it does not encrypt
 current SQLite rows or protect a state-only backup or copy.
+
+<a id="build-and-launch" />
 
 ## Run the maintained Docker setup
 
@@ -115,7 +122,7 @@ non-root uid 1000 setup, `tini` entrypoint, health check, and `openclaw` symlink
 
 <Note>
 The repository Dockerfile digest-pins its Node and Bun base images. Keep those
-reviewed pins instead of changing them to floating `FROM node:24-bookworm`
+reviewed pins instead of changing them to floating `FROM node:24-trixie`
 references. For ARM-based VMs, choose `arm64` release assets for extra binaries;
 for reproducible builds, use versioned asset URLs and verify their checksums.
 </Note>
@@ -197,12 +204,15 @@ to the same file in place does not cause this divergence.
 Fix: keep the directory mount from Compose. Edit `openclaw.json` on the host
 inside that directory.
 
+<a id="updates" />
+
 ## Update OpenClaw
 
 For a source-built image:
 
 ```bash
 git pull --ff-only
+docker compose stop openclaw-gateway
 OPENCLAW_SKIP_ONBOARDING=1 ./scripts/docker/setup.sh
 docker compose run --rm openclaw-cli doctor --json
 ```
@@ -211,6 +221,10 @@ For a pinned or prebuilt image, update `OPENCLAW_IMAGE` to the intended tag or
 digest before rerunning the setup script. Routine image upgrades run startup-safe
 migrations against the mounted state; see [Upgrading container images](/install/docker#upgrading-container-images)
 for recovery when a migration cannot complete automatically.
+
+Keep a single Gateway on this state volume and retain a pre-upgrade backup.
+The old container must be stopped before the replacement's entrypoint runs
+Doctor; the same rule applies to [orchestrated rollouts](/install/docker#upgrading-container-images).
 
 ## Related
 

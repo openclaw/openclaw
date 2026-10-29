@@ -10,6 +10,7 @@ struct RootSidebar: View {
     @State private var searchText = ""
     @State private var isSearchActive = false
     @State private var showsPagesEditor = false
+    @State private var presentedAttention: OpenClawChatAttentionPresentation?
     @FocusState private var isSearchFocused: Bool
     @AppStorage("sidebar.pinnedPages") private var pinnedPagesStorage: String = ""
 
@@ -21,7 +22,12 @@ struct RootSidebar: View {
     let hideSidebar: () -> Void
 
     var body: some View {
-        let sessionLayout = Self.sessionLayout(self.visibleSessionSections)
+        let categories = self.sessionCategories
+        let sessionLayout = Self.sessionLayout(self.visibleSessionSections(categories: categories))
+        let rowPass = SessionRowPass(
+            selectedSessionKey: self.resolvedSelectedSessionKey,
+            mainSessionKey: self.resolvedMainSessionKey,
+            categories: categories)
         VStack(spacing: 0) {
             self.brandHeader
             if self.isSearchActive {
@@ -32,10 +38,11 @@ struct RootSidebar: View {
                 // the picker card's clearance all match.
                 LazyVStack(alignment: .leading, spacing: 10) {
                     self.agentsSection
-                    self.pagesSection(pinnedSessionNodes: sessionLayout.pinnedNodes)
+                    self.pagesSection(pinnedSessionNodes: sessionLayout.pinnedNodes, rowPass: rowPass)
                     self.sessionsSection(
                         sections: sessionLayout.sections,
-                        hasPinnedSessions: !sessionLayout.pinnedNodes.isEmpty)
+                        hasPinnedSessions: !sessionLayout.pinnedNodes.isEmpty,
+                        rowPass: rowPass)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 10)
@@ -44,6 +51,12 @@ struct RootSidebar: View {
         }
         .foregroundStyle(OpenClawSidebarPalette.text)
         .background(OpenClawSidebarPalette.background)
+        .onChange(of: self.isDismissButtonEnabled) { _, isVisible in
+            if !isVisible {
+                self.presentedAttention = nil
+                self.isSearchFocused = false
+            }
+        }
         .sheet(isPresented: self.$showsPagesEditor) {
             RootSidebarPagesEditor(
                 destinations: RootTabs.pinnableSidebarPages.filter(self.isDestinationAvailable),
@@ -83,7 +96,8 @@ struct RootSidebar: View {
     private var brandHeader: some View {
         HStack(spacing: 4) {
             HStack(spacing: 8) {
-                OpenClawProMark(size: 26, shadowRadius: 2)
+                // The shell keeps a hidden sidebar mounted; an unpaused mascot would redraw unseen.
+                OpenClawProMark(size: 26, shadowRadius: 2, paused: !self.isDismissButtonEnabled)
                     .accessibilityHidden(true)
                 Text(String(localized: "OpenClaw"))
                     .font(OpenClawType.headline)
@@ -136,33 +150,36 @@ struct RootSidebar: View {
     private var agentsSection: some View {
         VStack(alignment: .leading, spacing: 2) {
             if let selectedAgent = self.selectedAgent {
-                Menu {
-                    Picker(selection: Binding(
-                        get: { selectedAgent.id },
-                        set: { self.appModel.setSelectedAgentId($0) }))
-                    {
-                        ForEach(self.selectableAgents, id: \.id) { agent in
-                            Label {
-                                Text(verbatim: Self.agentDisplayName(agent))
-                                    .font(OpenClawType.subheadSemiBold)
-                            } icon: {
-                                self.agentMenuAvatarImage(agent)
-                                    .renderingMode(.original)
+                HStack(spacing: 0) {
+                    Menu {
+                        Picker(selection: Binding(
+                            get: { selectedAgent.id },
+                            set: { self.appModel.setSelectedAgentId($0) }))
+                        {
+                            ForEach(self.selectableAgents, id: \.id) { agent in
+                                Label {
+                                    Text(verbatim: Self.agentDisplayName(agent))
+                                        .font(OpenClawType.subheadSemiBold)
+                                } icon: {
+                                    self.agentMenuAvatarImage(agent)
+                                        .renderingMode(.original)
+                                }
+                                .tag(agent.id)
                             }
-                            .tag(agent.id)
+                        } label: {
+                            Text(String(localized: "Agent"))
                         }
+                        .pickerStyle(.inline)
                     } label: {
-                        Text(String(localized: "Agent"))
+                        self.agentSelectorLabel(selectedAgent)
                     }
-                    .pickerStyle(.inline)
-                } label: {
-                    self.agentSelectorLabel(selectedAgent)
+                    .menuIndicator(.hidden)
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("RootTabs.Sidebar.AgentSelector")
+                    .accessibilityLabel(String(localized: "Agent"))
+                    .accessibilityValue(Self.agentDisplayName(selectedAgent))
+                    self.attentionBadges(for: self.model.sessions, targetID: "agent:\(selectedAgent.id)")
                 }
-                .menuIndicator(.hidden)
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("RootTabs.Sidebar.AgentSelector")
-                .accessibilityLabel(String(localized: "Agent"))
-                .accessibilityValue(Self.agentDisplayName(selectedAgent))
             }
 
             self.newChatButton
@@ -346,12 +363,11 @@ struct RootSidebar: View {
         .padding(.bottom, 4)
     }
 
-    @ViewBuilder
     private func sessionsSection(
         sections: [ChatSessionSidebarModel.Section],
-        hasPinnedSessions: Bool) -> some View
+        hasPinnedSessions: Bool,
+        rowPass: SessionRowPass) -> some View
     {
-        let selectedSessionKey = self.resolvedSelectedSessionKey
         VStack(alignment: .leading, spacing: 6) {
             if let sessionErrorText = self.model.sessionErrorText {
                 Text(verbatim: sessionErrorText)
@@ -382,9 +398,14 @@ struct RootSidebar: View {
                     let title = section.id == "recent"
                         ? String(localized: "Sessions")
                         : (section.title ?? String(localized: "Sessions"))
-                    self.sectionTitle(title)
+                    HStack(spacing: 0) {
+                        self.sectionTitle(title)
+                        Spacer(minLength: 0)
+                        self.attentionBadges(
+                            for: Self.flattened(section.nodes).map(\.session), targetID: "section:\(section.id)")
+                    }
                     ForEach(self.sessionNodes(for: section)) { node in
-                        self.sessionButton(node, selectedSessionKey: selectedSessionKey)
+                        self.sessionButton(node, rowPass: rowPass)
                     }
                 }
             }
@@ -408,7 +429,10 @@ struct RootSidebar: View {
         }
     }
 
-    private func pagesSection(pinnedSessionNodes: [ChatSessionSidebarModel.Node]) -> some View {
+    private func pagesSection(
+        pinnedSessionNodes: [ChatSessionSidebarModel.Node],
+        rowPass: SessionRowPass) -> some View
+    {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
                 self.sectionTitle(String(localized: "Pages"))
@@ -427,7 +451,7 @@ struct RootSidebar: View {
             }
             self.homeRow
             ForEach(pinnedSessionNodes) { node in
-                self.sessionButton(node, selectedSessionKey: self.resolvedSelectedSessionKey)
+                self.sessionButton(node, rowPass: rowPass)
             }
             ForEach(self.pinnedPages) { destination in
                 self.destinationButton(destination)
@@ -442,43 +466,46 @@ struct RootSidebar: View {
         let isSelected = self.selectedDestination == .chat &&
             self.resolvedSelectedSessionKey.caseInsensitiveCompare(mainKey) == .orderedSame
         let mainSession = self.mainSessionEntry
-        return Button {
-            self.appModel.openChat(sessionKey: mainKey)
-            self.selectSidebarDestination(.chat)
-        } label: {
-            HStack(spacing: 9) {
-                Image(systemName: "house")
-                    .font(OpenClawType.subheadSemiBold)
-                    .frame(width: 18)
-                Text(String(localized: "Home"))
-                    .font(OpenClawType.subheadSemiBold)
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                if mainSession?.hasActiveRun == true {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .tint(OpenClawSidebarPalette.accent)
-                } else if mainSession?.unread == true {
-                    Circle()
-                        .fill(OpenClawSidebarPalette.accent)
-                        .frame(width: 7, height: 7)
-                        .accessibilityHidden(true)
+        return HStack(spacing: 0) {
+            Button {
+                self.appModel.openChat(sessionKey: mainKey)
+                self.selectSidebarDestination(.chat)
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: "house")
+                        .font(OpenClawType.subheadSemiBold)
+                        .frame(width: 18)
+                    Text(String(localized: "Home"))
+                        .font(OpenClawType.subheadSemiBold)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    if mainSession?.hasActiveRun == true {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .tint(OpenClawSidebarPalette.accent)
+                    } else if mainSession?.unread == true {
+                        Circle()
+                            .fill(OpenClawSidebarPalette.accent)
+                            .frame(width: 7, height: 7)
+                            .accessibilityHidden(true)
+                    }
                 }
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .padding(.horizontal, 10)
+                .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .padding(.horizontal, 10)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .foregroundStyle(isSelected ? OpenClawSidebarPalette.accent : OpenClawSidebarPalette.text)
+            .background(isSelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
+                cornerRadius: OpenClawProMetric.controlRadius,
+                style: .continuous))
+            .accessibilityIdentifier("RootTabs.Sidebar.Destination.chat")
+            .overlay(alignment: .leading) {
+                OpenClawSessionColorStripe(color: mainSession?.color)
+            }
+            .accessibilityValue(mainSession?.unread == true ? String(localized: "Unread") : "")
+            self.attentionBadges(for: mainSession.map { [$0] } ?? [], targetID: "home")
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(isSelected ? OpenClawSidebarPalette.accent : OpenClawSidebarPalette.text)
-        .background(isSelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
-            cornerRadius: OpenClawProMetric.controlRadius,
-            style: .continuous))
-        .accessibilityIdentifier("RootTabs.Sidebar.Destination.chat")
-        .overlay(alignment: .leading) {
-            OpenClawSessionColorStripe(color: mainSession?.color)
-        }
-        .accessibilityValue(mainSession?.unread == true ? String(localized: "Unread") : "")
     }
 
     /// Web-parity compact footer: connection state left, Settings gear right.
@@ -486,29 +513,9 @@ struct RootSidebar: View {
         VStack(spacing: 0) {
             self.separator
             HStack(spacing: 4) {
-                Button {
+                RootSidebarGatewayControl(fallbackName: self.gatewayName) {
                     self.selectSidebarDestination(.gateway)
-                } label: {
-                    HStack(spacing: 9) {
-                        // The agent card owns the healthy status; like the web
-                        // footer, a dot appears here only when degraded.
-                        if !self.isGatewayConnected {
-                            Circle()
-                                .fill(self.gatewayStatusColor)
-                                .frame(width: 8, height: 8)
-                                .accessibilityHidden(true)
-                        }
-                        Text(verbatim: self.gatewayName)
-                            .font(OpenClawType.subheadSemiBold)
-                            .lineLimit(1)
-                    }
-                    .frame(minHeight: 44, alignment: .leading)
-                    .padding(.horizontal, 10)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(OpenClawSidebarPalette.text)
-                .accessibilityValue(self.gatewayStatusTitle)
 
                 Spacer(minLength: 4)
 
@@ -534,28 +541,33 @@ struct RootSidebar: View {
     }
 
     private var resolvedMainSessionKey: String {
-        ChatSessionSidebarModel.selectedSessionKey(
-            sessions: self.model.sessions,
-            currentSessionKey: "main",
-            mainSessionKey: self.appModel.defaultChatSessionKey,
-            activeAgentID: self.appModel.chatAgentId)
+        self.model.resolvedSessionKey(
+            current: "main",
+            mainSessionKey: self.appModel.mainSessionKey,
+            activeAgentID: self.appModel.chatAgentId,
+            sessionRoutingContract: self.appModel.chatSessionRoutingContract)
     }
 
     private var resolvedSelectedSessionKey: String {
-        ChatSessionSidebarModel.selectedSessionKey(
-            sessions: self.model.sessions,
-            currentSessionKey: self.appModel.chatSessionKey,
-            mainSessionKey: self.appModel.defaultChatSessionKey,
-            activeAgentID: self.appModel.chatAgentId)
+        self.model.resolvedSessionKey(
+            current: self.appModel.chatSessionKey,
+            mainSessionKey: self.appModel.mainSessionKey,
+            activeAgentID: self.appModel.chatAgentId,
+            sessionRoutingContract: self.appModel.chatSessionRoutingContract)
     }
 
-    private var visibleSessionSections: [ChatSessionSidebarModel.Section] {
-        self.model.sections(
+    private func visibleSessionSections(categories: [String]) -> [ChatSessionSidebarModel.Section] {
+        RootSidebarModel.sections(
+            sessions: self.model.sessions,
             query: self.searchText,
             currentSessionKey: self.appModel.chatSessionKey,
-            mainSessionKey: self.appModel.defaultChatSessionKey,
+            mainSessionKey: self.appModel.mainSessionKey,
             activeAgentID: self.appModel.chatAgentId,
-            groups: self.sessionGroups)
+            groups: categories.enumerated().map { offset, name in
+                OpenClawChatSessionGroup(name: name, position: offset)
+            },
+            sessionRoutingContract: self.appModel.chatSessionRoutingContract,
+            now: self.model.now)
     }
 
     struct SessionLayout: Equatable {
@@ -578,12 +590,6 @@ struct RootSidebar: View {
         CommandSessionGrouping.categories(from: self.model.sessions, knownGroups: SessionGroupStore.load())
     }
 
-    private var sessionGroups: [OpenClawChatSessionGroup] {
-        self.sessionCategories.enumerated().map { offset, name in
-            OpenClawChatSessionGroup(name: name, position: offset)
-        }
-    }
-
     private static func flattened(_ nodes: [ChatSessionSidebarModel.Node]) -> [ChatSessionSidebarModel.Node] {
         nodes.flatMap { [$0] + self.flattened($0.children) }
     }
@@ -600,102 +606,128 @@ struct RootSidebar: View {
         searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 20 : nil
     }
 
+    /// Value inputs are shared within one render pass, never retained across a state change.
+    private struct SessionRowPass {
+        let selectedSessionKey: String
+        let mainSessionKey: String
+        let categories: [String]
+    }
+
     private func sessionButton(
         _ node: ChatSessionSidebarModel.Node,
-        selectedSessionKey: String) -> some View
+        rowPass: SessionRowPass) -> some View
     {
         let session = node.session
-        let isSelected = session.key == selectedSessionKey
-        return Button {
-            self.selectSession(session)
-        } label: {
-            HStack(spacing: 9) {
-                ZStack {
-                    if node.badges.runningCount > 0 {
-                        ProgressView()
-                            .controlSize(.mini)
-                            .tint(OpenClawSidebarPalette.accent)
-                    } else {
-                        Image(systemName: "bubble.left")
-                            .font(OpenClawType.captionSemiBold)
+        let isSelected = session.key == rowPass.selectedSessionKey
+        return HStack(spacing: 0) {
+            Button {
+                self.selectSession(session)
+            } label: {
+                HStack(spacing: 9) {
+                    ZStack {
+                        if node.badges.runningCount > 0 {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .tint(OpenClawSidebarPalette.accent)
+                        } else {
+                            Image(systemName: "bubble.left")
+                                .font(OpenClawType.captionSemiBold)
+                                .foregroundStyle(isSelected
+                                    ? OpenClawSidebarPalette.accent
+                                    : OpenClawSidebarPalette.muted)
+                        }
+                    }
+                    .frame(width: 18)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(verbatim: CommandCenterTab.sessionTitle(session))
+                            .font(OpenClawType.subheadSemiBold)
                             .foregroundStyle(isSelected
                                 ? OpenClawSidebarPalette.accent
-                                : OpenClawSidebarPalette.muted)
-                    }
-                }
-                .frame(width: 18)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(verbatim: CommandCenterTab.sessionTitle(session))
-                        .font(OpenClawType.subheadSemiBold)
-                        .foregroundStyle(isSelected
-                            ? OpenClawSidebarPalette.accent
-                            : OpenClawSidebarPalette.textStrong)
-                        .lineLimit(1)
-                    // Web-parity subtitle: the work line (repo/branch) names the
-                    // session; recency moves to the trailing metadata slot.
-                    if let subtitle = ChatSessionSidebarModel.subtitle(
-                        for: session,
-                        workSubtitle: ChatSessionSidebarModel.workSubtitle(for: session))
-                    {
-                        Text(verbatim: subtitle)
-                            .font(OpenClawType.caption2Medium)
-                            .foregroundStyle(OpenClawSidebarPalette.muted)
+                                : OpenClawSidebarPalette.textStrong)
                             .lineLimit(1)
+                        // Web-parity subtitle: the work line (repo/branch) names the
+                        // session; recency moves to the trailing metadata slot.
+                        if let subtitle = ChatSessionSidebarModel.subtitle(
+                            for: session,
+                            workSubtitle: ChatSessionSidebarModel.workSubtitle(for: session))
+                        {
+                            Text(verbatim: subtitle)
+                                .font(OpenClawType.caption2Medium)
+                                .foregroundStyle(OpenClawSidebarPalette.muted)
+                                .lineLimit(1)
+                        }
+                    }
+
+                    Spacer(minLength: 4)
+                    if session.pinned == true {
+                        Image(systemName: "pin.fill")
+                            .font(OpenClawType.caption2Medium)
+                            .foregroundStyle(OpenClawSidebarPalette.accent)
+                            .accessibilityHidden(true)
+                    }
+                    Text(verbatim: CommandCenterTab.sessionDetail(session))
+                        .font(OpenClawType.caption2Medium)
+                        .foregroundStyle(OpenClawSidebarPalette.muted)
+                        .lineLimit(1)
+                    if session.unread == true {
+                        Circle()
+                            .fill(OpenClawSidebarPalette.accent)
+                            .frame(width: 7, height: 7)
+                            .accessibilityHidden(true)
                     }
                 }
-
-                Spacer(minLength: 4)
-                if session.pinned == true {
-                    Image(systemName: "pin.fill")
-                        .font(OpenClawType.caption2Medium)
-                        .foregroundStyle(OpenClawSidebarPalette.accent)
-                        .accessibilityHidden(true)
-                }
-                Text(verbatim: CommandCenterTab.sessionDetail(session))
-                    .font(OpenClawType.caption2Medium)
-                    .foregroundStyle(OpenClawSidebarPalette.muted)
-                    .lineLimit(1)
-                if session.unread == true {
-                    Circle()
-                        .fill(OpenClawSidebarPalette.accent)
-                        .frame(width: 7, height: 7)
-                        .accessibilityHidden(true)
-                }
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .padding(.horizontal, 10)
+                .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .padding(.horizontal, 10)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .background(isSelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
+                cornerRadius: OpenClawProMetric.controlRadius,
+                style: .continuous))
+            .overlay(alignment: .leading) {
+                OpenClawSessionColorStripe(color: session.color)
+            }
+            .commandSessionActions(
+                session: session,
+                mainSessionKey: rowPass.mainSessionKey,
+                categories: rowPass.categories,
+                isEnabled: self.appModel.isOperatorGatewayConnected,
+                canArchive: ChatSessionSidebarModel.canArchiveSession(
+                    session,
+                    mainSessionKey: rowPass.mainSessionKey),
+                canDelete: ChatSessionSidebarModel.canDeleteSession(
+                    key: session.key,
+                    mainSessionKey: rowPass.mainSessionKey),
+                performMutation: self.performSessionMutation,
+                fork: { self.forkSession(session) })
+            .accessibilityValue(Self.sessionAccessibilityValue(
+                isPinned: session.pinned == true,
+                isUnread: session.unread == true))
+            self.attentionBadges(for: Self.flattened([node]).map(\.session), targetID: "session:\(session.key)")
         }
-        .buttonStyle(.plain)
-        .background(isSelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
-            cornerRadius: OpenClawProMetric.controlRadius,
-            style: .continuous))
-        .overlay(alignment: .leading) {
-            OpenClawSessionColorStripe(color: session.color)
+    }
+
+    private func attentionBadges(for sessions: [OpenClawChatSessionEntry], targetID: String) -> some View {
+        let questions = self.appModel.chatPresentation.isCurrent(appModel: self.appModel)
+            ? self.appModel.chatPresentation.viewModel?.pendingQuestionAttentionRequests ?? []
+            : []
+        let scopedSessions = sessions.filter {
+            ChatSessionSidebarModel.isSessionInActiveAgentScope(
+                key: $0.key, agentID: $0.agentId, activeAgentID: self.appModel.chatAgentId)
         }
-        .commandSessionActions(
-            session: session,
-            categories: self.sessionCategories,
-            isEnabled: self.appModel.isOperatorGatewayConnected,
-            canArchive: ChatSessionSidebarModel.canArchiveSession(
-                session,
-                mainSessionKey: self.resolvedMainSessionKey),
-            canDelete: ChatSessionSidebarModel.canDeleteSession(
-                key: session.key,
-                mainSessionKey: self.resolvedMainSessionKey),
-            actions: CommandSessionActions(
-                rename: { self.patchSession(session, label: .some($0)) },
-                moveToGroup: { self.patchSession(session, category: .some($0)) },
-                setColor: { self.patchSession(session, color: .some($0)) },
-                togglePinned: { self.patchSession(session, pinned: session.pinned != true) },
-                toggleUnread: { self.patchSession(session, unread: session.unread != true) },
-                fork: { self.forkSession(session) },
-                toggleArchived: { self.patchSession(session, archived: true) },
-                delete: { self.deleteSession(session) }))
-        .accessibilityValue(Self.sessionAccessibilityValue(
-            isPinned: session.pinned == true,
-            isUnread: session.unread == true))
+        let summary = ChatSessionSidebarModel.attentionSummary(
+            requests: questions + self.appModel.pendingApprovalAttentionRequests,
+            sessions: scopedSessions,
+            mainSessionKey: self.resolvedMainSessionKey,
+            activeAgentID: self.appModel.chatAgentId,
+            sessionRoutingContract: self.appModel.chatSessionRoutingContract)
+        return HStack(spacing: 0) {
+            if let summary {
+                OpenClawChatAttentionBadge(
+                    summary: summary, targetID: targetID, presentation: self.$presentedAttention)
+            }
+        }
     }
 
     static func sessionAccessibilityValue(isPinned: Bool, isUnread: Bool) -> String {
@@ -785,63 +817,14 @@ struct RootSidebar: View {
         return String(localized: "Connection")
     }
 
-    private var gatewayStatusTitle: String {
-        switch GatewayStatusBuilder.build(appModel: self.appModel) {
-        case .connected: String(localized: "Online")
-        case .connecting: String(localized: "Connecting")
-        case .error: String(localized: "Needs attention")
-        case .disconnected: String(localized: "Offline")
-        }
-    }
-
-    private var isGatewayConnected: Bool {
-        GatewayStatusBuilder.build(appModel: self.appModel) == .connected
-    }
-
-    private var gatewayStatusColor: Color {
-        switch GatewayStatusBuilder.build(appModel: self.appModel) {
-        case .connected: OpenClawBrand.ok
-        case .connecting: OpenClawBrand.accent
-        case .error: OpenClawBrand.warn
-        case .disconnected: OpenClawSidebarPalette.muted
-        }
-    }
-
-    private func patchSession(
-        _ session: OpenClawChatSessionEntry,
-        label: String?? = nil,
-        category: String?? = nil,
-        color: String?? = nil,
-        pinned: Bool? = nil,
-        archived: Bool? = nil,
-        unread: Bool? = nil)
+    private func performSessionMutation(
+        resetActiveSessionKey: String?,
+        _ operation: @escaping CommandSessionActionsModifier.Mutation)
     {
         Task {
             do {
-                try await self.appModel.makeChatTransport().patchSession(
-                    key: session.key,
-                    expectedSessionID: archived == nil ? nil : session.sessionId,
-                    label: label,
-                    category: category,
-                    color: color,
-                    pinned: pinned,
-                    archived: archived,
-                    unread: unread)
-                if archived == true, session.key == self.appModel.chatSessionKey {
-                    self.appModel.focusChatSession(nil)
-                }
-                await self.model.refreshSessions(appModel: self.appModel)
-            } catch {
-                self.model.reportSessionError(error)
-            }
-        }
-    }
-
-    private func deleteSession(_ session: OpenClawChatSessionEntry) {
-        Task {
-            do {
-                try await self.appModel.makeChatTransport().deleteSession(key: session.key)
-                if session.key == self.appModel.chatSessionKey {
+                try await operation(self.appModel.makeChatTransport())
+                if resetActiveSessionKey == self.appModel.chatSessionKey {
                     self.appModel.focusChatSession(nil)
                 }
                 await self.model.refreshSessions(appModel: self.appModel)

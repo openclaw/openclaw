@@ -70,18 +70,27 @@ Amazon Bedrock, Google, Microsoft Foundry, OAuth, proxies, Vertex, and other
 cache-TTL-eligible routes keep client-side pruning. New pruning rounds are gated
 on both a time check and a context-size check:
 
-1. Wait for the cache TTL to expire (default 5 minutes when set manually; see [Smart defaults](#smart-defaults) for the Anthropic auto-default). Each successful model request refreshes the in-memory clock to its request start time, including tool-loop requests before turn settlement. Failed requests do not refresh it. Before the TTL elapses, no new pruning occurs; existing projections still replay unchanged.
+1. Wait for the cache TTL to expire. When you turn on `cache-ttl` mode and set no `ttl`, the TTL is 5 minutes. The bundled Anthropic plugin seeds `1h` instead, see [Smart defaults](#smart-defaults). Each successful model request refreshes the in-memory clock to its request start time, including tool-loop requests before turn settlement. Failed requests do not refresh it. Before the TTL elapses, no new pruning occurs. Existing projections still replay unchanged.
 2. Once the TTL has elapsed, estimate total context size against the model's context window. Below roughly 30% usage, pruning is skipped and the TTL clock keeps running.
 3. **Soft-trim** oversized tool results: results over 4,000 characters keep their first and last 1,500 characters with `...` in between.
-4. If context usage is still at or above roughly 50% and at least 50,000 characters of prunable tool content remain, **hard-clear** those results: replace their content with a placeholder (default `[Old tool result content cleared]`, configurable via `agents.defaults.contextPruning.hardClear.placeholder`; set `hardClear.enabled: false` to skip this step).
+4. If context usage is still at or above roughly 50% and at least 50,000 characters of prunable tool content remain, **hard-clear** those results. A hard clear replaces the content of each result with a placeholder. The default placeholder is `[Old tool result content cleared]`, and `agents.defaults.contextPruning.hardClear.placeholder` changes it. Set `hardClear.enabled: false` to skip this step.
 5. Record each changed result as a session projection and reset the pruning TTL clock. Follow-up requests reuse the same projected bytes, including tool-loop continuations and later turns.
 
 The TTL gates new pruning rounds, not replay of previous projections. Projections
-survive Gateway restarts and eviction from the in-memory session cache through
-the transcript marker. Ordinary tool-result trims and the already-sent boundary
+survive Gateway restarts and idle-session unloading through the transcript
+marker. The last active attempt releases its prompt projections after cleanup;
+the next attempt restores them from the active transcript. Ordinary tool-result trims and the already-sent boundary
 are also saved before model requests when the projection changes, even with TTL
-pruning off. Unchanged projections add no new marker; restart restores the latest
-marker on the active branch. Old results retain their projected bytes through
+pruning off. Changed projections record only added, updated, and removed entries,
+with a full checkpoint after at most 31 deltas or before accumulated delta payload
+reaches 64 KiB. Unchanged projections add no new projection marker. Restart restores
+the latest checkpoint and subsequent deltas on the active branch, stopping at a
+reset. Older full-snapshot markers remain readable as checkpoints; existing
+transcript rows need no migration and are not deleted. Runtimes predating delta
+support cannot replay changes after the last full checkpoint, so preserve a backup
+when rolling back across this format change. Bounded history reads acquire any
+omitted checkpoint as projection metadata without expanding the model's retained
+history. Old results retain their projected bytes through
 tool loops and restarts. Original
 text and non-text content stay in the transcript. Compaction drops projections
 for results no longer in the active history; `/new` and session reset
@@ -92,30 +101,37 @@ Two safety rules apply regardless of thresholds: the last three assistant turns 
 
 Only `toolResult` messages are eligible; normal conversation text is left alone. Use `agents.defaults.contextPruning.tools.{allow,deny}` to scope which tool names are prunable on either path.
 
-## Legacy image cleanup
+<a id="legacy-image-cleanup" />
 
-OpenClaw also builds a separate idempotent replay view for sessions that persist raw image blocks or prompt-hydration media markers in history.
+## Image history
 
-- It preserves the **3 most recent completed turns** byte-for-byte so prompt cache prefixes for recent follow-ups stay stable. This count includes all completed turns, not just image-bearing ones, so text-only turns consume the window too.
-- The window advances only when a new user turn begins, never within a tool loop.
-- In the replay view, older already-processed image blocks from `user` or `toolResult` history are replaced with `[image data removed - already processed by model]`.
-- Older textual media references such as `[media attached: ...]`, `[Image: source: ...]`, and `media://inbound/...` are replaced with `[media reference removed - already processed by model]`. Current-turn attachment markers stay intact so vision models can still hydrate fresh images.
-- The raw session transcript is not rewritten, so history viewers can still render the original message entries and their images.
-- This is separate from normal cache-TTL pruning above. It exists to stop repeated image payloads or stale media refs from busting prompt caches on later turns.
+Image blocks and attachment references stay in retained conversation history as
+new turns arrive. Replacing an already-sent image with a cleanup marker changes
+the prompt prefix and discards the provider's cached context. Compaction and
+explicit history-window limits own removal of old image-bearing turns; there is
+no separate age-based image cleanup. The raw transcript keeps the original
+attachments for history viewers.
 
 ## Smart defaults
 
-The bundled Anthropic plugin auto-configures pruning and heartbeat cadence the first time it resolves an Anthropic (or Claude CLI) auth profile, but only for fields you have not already set explicitly:
+The bundled Anthropic plugin supplies pruning defaults when it resolves an
+Anthropic (or Claude CLI) auth profile, but only for fields you have not set
+explicitly. It also supplies the initial cadence when setup provisions the
+ordinary proactive-check job:
 
-| Auth mode                                | `contextPruning.mode` | `contextPruning.ttl` | `heartbeat.every` |
-| ---------------------------------------- | --------------------- | -------------------- | ----------------- |
-| OAuth/token (including Claude CLI reuse) | `cache-ttl`           | `1h`                 | `1h`              |
-| API key                                  | `cache-ttl`           | `1h`                 | `30m`             |
+| Auth mode                                | `contextPruning.mode` | `contextPruning.ttl` | Initial proactive-check cadence |
+| ---------------------------------------- | --------------------- | -------------------- | ------------------------------- |
+| OAuth/token (including Claude CLI reuse) | `cache-ttl`           | `1h`                 | `1h`                            |
+| API key                                  | `cache-ttl`           | `1h`                 | `30m`                           |
 
-If you set `agents.defaults.contextPruning.mode` or `agents.defaults.heartbeat.every` yourself, OpenClaw does not override them. This auto-default only fires for Anthropic-family auth; other providers get pruning `off` unless you configure it.
+Explicit `agents.defaults.contextPruning.mode` remains authoritative. These
+pruning defaults apply only to Anthropic-family auth; other providers keep
+pruning off unless configured. Job cadence is stored once at provisioning;
+changing auth or provider later does not rewrite the job. Edit it with
+`openclaw automations edit <job-id> --every <duration>`.
 
 The seeded `ttl` applies to client-side pruning. Direct Anthropic API-key requests
-use the token thresholds above while retaining the same heartbeat defaults.
+use the token thresholds above while retaining the same initial job cadence.
 
 ## Enable or disable
 
@@ -135,6 +151,12 @@ To stop new pruning, set `mode: "off"`. Existing client-side projections keep
 replaying, including after a Gateway restart, until compaction removes their
 results or the session is reset.
 
+For a custom OpenAI-compatible provider, set the model's
+`compat.supportsPromptCacheKey` to `true` as well. This opts configured models using
+`openai-responses`, `openai-completions`, or `openai-chatgpt-responses` into
+cache-TTL pruning even when their provider ID is not `openai`. Provider plugins
+with their own cache-TTL policy still control eligibility.
+
 ## Pruning vs compaction
 
 |            | Pruning                                                              | Compaction                                              |
@@ -148,10 +170,11 @@ They complement each other -- pruning keeps tool output lean between compaction 
 ## Further reading
 
 - [Compaction](/concepts/compaction): summarization-based context reduction
-- [Gateway Configuration](/gateway/configuration): all pruning config knobs (`contextPruning.*`)
+- [`agents.defaults.contextPruning`](/gateway/config-agents/heartbeat-compaction-and-streaming#agents.defaults.contextpruning): all pruning config knobs (`contextPruning.*`)
 
 ## Related
 
 - [Session management](/concepts/session)
 - [Session tools](/concepts/session-tool)
 - [Context engine](/concepts/context-engine)
+- [Transcript hygiene](/reference/transcript-hygiene) - in-memory, provider-specific transcript sanitization applied before a run

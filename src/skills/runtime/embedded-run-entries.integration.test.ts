@@ -1,162 +1,94 @@
-// Embedded run entry integration tests cover persisted runtime skill entries.
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  prepareRuntimeSkillEntries,
+  resolveRuntimeSkillsPrompt,
+} from "../../agents/embedded-agent-runner/skills-prompt.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveSkillsPrompt } from "../loading/workspace-skill-prompt.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test-support.js";
-import { resolveEmbeddedRunSkillEntries } from "./embedded-run-entries.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "./session-snapshot.js";
 
-const tempDirs = createTempDirTracker();
-const originalBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.unstubAllEnvs());
 
-function restoreBundledPluginsDir() {
-  if (originalBundledDir === undefined) {
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    return;
+async function workspaceFixture(
+  skills: ["agent" | "execution", string, string, ".agents"?][],
+  config: OpenClawConfig = {},
+) {
+  const workspaceDir = tempDirs.make("openclaw-agent-workspace-");
+  const executionWorkspaceDir = tempDirs.make("openclaw-execution-workspace-");
+  for (const [root, name, description, subdir = ""] of skills) {
+    const base = root === "agent" ? workspaceDir : executionWorkspaceDir;
+    await writeSkill({ dir: path.join(base, subdir, "skills", name), name, description });
   }
-  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledDir;
+  const skillFilter = [...new Set(skills.map(([, name]) => name))];
+  const { snapshot } = await resolveReusableWorkspaceSkillSnapshot({
+    workspaceDir,
+    executionWorkspaceDir,
+    config,
+    skillFilter,
+    watch: false,
+    snapshotVersion: 1,
+  });
+  return {
+    snapshot,
+    skillFilter,
+    params: { skillsAnchorWorkspace: workspaceDir, executionWorkspaceDir, config },
+  };
 }
 
-async function setupBundledDiffsPlugin() {
-  const bundledPluginsDir = tempDirs.make("openclaw-bundled-");
-  const workspaceDir = tempDirs.make("openclaw-workspace-");
-  const pluginRoot = path.join(bundledPluginsDir, "diffs");
+it("matches snapshot skill roots when a snapshot-less run uses a different execution directory", async () => {
+  const { snapshot, params, skillFilter } = await workspaceFixture([
+    ["agent", "fallback-agent", "Agent only"],
+    ["agent", "fallback-shared", "Agent wins"],
+    ["execution", "fallback-execution", "Execution only"],
+    ["execution", "fallback-shared", "Execution loses"],
+  ]);
+  const { skillEntries } = await prepareRuntimeSkillEntries(params);
+  const skills = skillEntries
+    .map((entry) => entry.skill)
+    .filter((skill) => skillFilter.includes(skill.name));
+  expect(skills.map((skill) => skill.name)).toEqual(snapshot.skills.map((skill) => skill.name));
+  expect(skills.find((skill) => skill.name === "fallback-shared")).toMatchObject({
+    description: "Agent wins",
+    filePath: path.join(params.skillsAnchorWorkspace, "skills", "fallback-shared", "SKILL.md"),
+  });
+});
 
+it("keeps agent skills ahead of execution skills in a constrained fallback prompt", async () => {
+  const agent = "z-agent-priority",
+    execution = "a-execution-priority";
+  const { snapshot, params } = await workspaceFixture(
+    [
+      ["agent", agent, "Agent priority"],
+      ["execution", execution, "Execution priority", ".agents"],
+    ],
+    {
+      skills: { limits: { maxSkillsInPrompt: 1 } },
+      agents: { defaults: { skills: [agent, execution] } },
+    },
+  );
+  const { prompt } = await resolveRuntimeSkillsPrompt({ ...params, agentId: "main" });
+  expect(prompt).toBe(snapshot.prompt);
+  expect(prompt).toContain(agent);
+  expect(prompt).not.toContain(execution);
+});
+
+it.each([false, true])("loads bundled diffs only when explicitly enabled (%s)", async (enabled) => {
+  const bundledPluginsDir = tempDirs.make("openclaw-bundled-");
   await writePluginWithSkill({
-    pluginRoot,
+    pluginRoot: path.join(bundledPluginsDir, "diffs"),
     pluginId: "diffs",
     skillId: "diffs",
     skillDescription: "runtime integration test",
   });
-
-  return { bundledPluginsDir, workspaceDir };
-}
-
-async function resolveBundledDiffsSkillEntries(config?: OpenClawConfig) {
-  const { bundledPluginsDir, workspaceDir } = await setupBundledDiffsPlugin();
-  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
-
-  return resolveEmbeddedRunSkillEntries({ workspaceDir, ...(config ? { config } : {}) });
-}
-
-afterEach(() => {
-  restoreBundledPluginsDir();
-  tempDirs.cleanup();
-});
-
-describe("resolveEmbeddedRunSkillEntries (integration)", () => {
-  it("matches snapshot skill roots when a snapshot-less run uses a different execution directory", async () => {
-    const agentWorkspaceDir = tempDirs.make("openclaw-agent-workspace-");
-    const executionWorkspaceDir = tempDirs.make("openclaw-execution-workspace-");
-    for (const [workspaceDir, name, description] of [
-      [agentWorkspaceDir, "fallback-agent", "Agent only"],
-      [agentWorkspaceDir, "fallback-shared", "Agent wins"],
-      [executionWorkspaceDir, "fallback-execution", "Execution only"],
-      [executionWorkspaceDir, "fallback-shared", "Execution loses"],
-    ] as const) {
-      await writeSkill({
-        dir: path.join(workspaceDir, "skills", name),
-        name,
-        description,
-      });
-    }
-    const skillNames = ["fallback-agent", "fallback-shared", "fallback-execution"];
-    const snapshot = resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: agentWorkspaceDir,
-      executionWorkspaceDir,
-      config: {},
-      skillFilter: skillNames,
-      watch: false,
-      snapshotVersion: 1,
-    }).snapshot;
-
-    const fallback = resolveEmbeddedRunSkillEntries({
-      workspaceDir: agentWorkspaceDir,
-      executionWorkspaceDir,
-      config: {},
-    });
-    const fallbackSkills = fallback.skillEntries.filter((entry) =>
-      skillNames.includes(entry.skill.name),
-    );
-
-    expect(fallbackSkills.map((entry) => entry.skill.name)).toEqual(
-      snapshot.skills.map((skill) => skill.name),
-    );
-    expect(
-      fallbackSkills.find((entry) => entry.skill.name === "fallback-shared")?.skill,
-    ).toMatchObject({
-      description: "Agent wins",
-      filePath: path.join(agentWorkspaceDir, "skills", "fallback-shared", "SKILL.md"),
-    });
+  vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledPluginsDir);
+  const result = await prepareRuntimeSkillEntries({
+    skillsAnchorWorkspace: tempDirs.make("openclaw-workspace-"),
+    ...(enabled ? { config: { plugins: { entries: { diffs: { enabled: true } } } } } : {}),
   });
-
-  it("keeps agent skills ahead of execution skills in a constrained fallback prompt", async () => {
-    const agentWorkspaceDir = tempDirs.make("openclaw-agent-workspace-");
-    const executionWorkspaceDir = tempDirs.make("openclaw-execution-workspace-");
-    const agentSkillName = "z-agent-priority";
-    const executionSkillName = "a-execution-priority";
-    await writeSkill({
-      dir: path.join(agentWorkspaceDir, "skills", agentSkillName),
-      name: agentSkillName,
-      description: "Agent priority",
-    });
-    await writeSkill({
-      dir: path.join(executionWorkspaceDir, ".agents", "skills", executionSkillName),
-      name: executionSkillName,
-      description: "Execution priority",
-    });
-    const config: OpenClawConfig = {
-      skills: { limits: { maxSkillsInPrompt: 1 } },
-      agents: { defaults: { skills: [agentSkillName, executionSkillName] } },
-    };
-    const snapshotPrompt = resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir: agentWorkspaceDir,
-      executionWorkspaceDir,
-      config,
-      skillFilter: [agentSkillName, executionSkillName],
-      watch: false,
-      snapshotVersion: 1,
-    }).snapshot.prompt;
-    const fallback = resolveEmbeddedRunSkillEntries({
-      workspaceDir: agentWorkspaceDir,
-      executionWorkspaceDir,
-      config,
-      agentId: "main",
-    });
-    const fallbackPrompt = resolveSkillsPrompt({
-      entries: fallback.skillEntries,
-      workspaceDir: agentWorkspaceDir,
-      config,
-      preserveEntryOrder: fallback.preserveEntryOrder,
-    });
-
-    expect(fallbackPrompt).toBe(snapshotPrompt);
-    expect(fallbackPrompt).toContain(agentSkillName);
-    expect(fallbackPrompt).not.toContain(executionSkillName);
-  });
-
-  it("loads bundled diffs skill when explicitly enabled in config", async () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          diffs: { enabled: true },
-        },
-      },
-    };
-
-    const result = await resolveBundledDiffsSkillEntries(config);
-
-    expect(result.shouldLoadSkillEntries).toBe(true);
-    expect(result.skillEntries.map((entry) => entry.skill.name)).toContain("diffs");
-  });
-
-  it("skips bundled diffs skill when config is missing", async () => {
-    const result = await resolveBundledDiffsSkillEntries();
-
-    expect(result.shouldLoadSkillEntries).toBe(true);
-    expect(result.skillEntries.map((entry) => entry.skill.name)).not.toContain("diffs");
-  });
+  expect(result.shouldLoadSkillEntries).toBe(true);
+  expect(result.skillEntries.some((entry) => entry.skill.name === "diffs")).toBe(enabled);
 });

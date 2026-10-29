@@ -1,12 +1,13 @@
 {
   "id": "fish-audio-speech",
+  "categories": ["voice"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "legacyPluginIds": ["fish-audio"],
   "activation": {
     "onStartup": false
   },
   "name": "Fish Audio",
-  "description": "Fish Audio S2.1 hosted text-to-speech with streaming, voice notes, and telephony output.",
+  "description": "Fish Audio hosted text-to-speech with streaming, voice notes, and telephony output.",
   "setup": {
     "providers": [
       {

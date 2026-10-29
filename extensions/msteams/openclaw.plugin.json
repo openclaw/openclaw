@@ -1,5 +1,6 @@
 {
   "id": "msteams",
+  "categories": ["channels"],
   "doctorContract": {
     "configRepair": true,
     "stateMigrations": [

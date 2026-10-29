@@ -4,7 +4,12 @@
 // independent of the Kysely value graph.
 import type { DatabaseSync, SQLInputValue, StatementSync } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { pruneMapToMaxSize } from "./map-size.js";
+import { registerListener } from "../shared/listeners.js";
+import {
+  isPostgresSqlConnection,
+  type EngineConnection,
+  type SqlStatement,
+} from "./sql-connection.js";
 
 export const { kyselyByDatabase, queryErrorHandlerByDatabase } = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteKyselyCacheState"),
@@ -19,12 +24,15 @@ const statementCacheSymbol = Symbol.for("openclaw.kyselySyncStatementCache");
 const statementInvalidationSymbol = Symbol.for("openclaw.kyselySyncStatementInvalidation");
 const statementCacheEnabledSymbol = Symbol.for("openclaw.kyselySyncStatementCacheEnabled");
 const authorizerActiveSymbol = Symbol.for("openclaw.kyselySyncAuthorizerActive");
-// Bound SQL plus variable-size bindings to about 2 MiB per enabled database.
-// Process-wide retention scales with open handles; repeated variable SQL can enter.
-const statementCacheCapacity = 32;
+const disposeCallbacksSymbol = Symbol.for("openclaw.sqliteDisposeCallbacks");
+const disposeGuardsSymbol = Symbol.for("openclaw.sqliteDisposeGuards");
+// Admit up to 4 MiB of SQL plus variable-size bindings per enabled database.
+// Candidate SQL and native/JS overhead are additional; retention scales with open handles.
+const statementCacheCapacity = 64;
 const statementCacheEntryBytes = 64 * 1024;
 
 type SqliteAuthorizer = Parameters<DatabaseSync["setAuthorizer"]>[0];
+type SqliteDisposeReason = "close" | "replace";
 
 type StatementCache = {
   statements: Map<string, StatementSync>;
@@ -37,7 +45,62 @@ type StatementCacheOwner = DatabaseSync & {
   [statementInvalidationSymbol]?: true;
   [statementCacheEnabledSymbol]?: true;
   [authorizerActiveSymbol]?: boolean;
+  [disposeCallbacksSymbol]?: Set<(reason: SqliteDisposeReason) => void>;
+  [disposeGuardsSymbol]?: Set<() => void>;
 };
+
+/** Node 26.8+ can release bindings without waiting for an unrelated V8 collection. */
+export function disposeSqliteStatement(statement: StatementSync & Partial<Disposable>): void {
+  // Supported older Node releases and Bun still own finalization through GC/connection close.
+  statement[Symbol.dispose]?.();
+}
+
+function clearStatementCache(owner: StatementCacheOwner): void {
+  const cache = owner[statementCacheSymbol];
+  delete owner[statementCacheSymbol];
+  if (!cache) {
+    return;
+  }
+  for (const statement of cache.statements.values()) {
+    if (!cache.active.has(statement)) {
+      disposeSqliteStatement(statement);
+    }
+  }
+}
+
+/** Retire dependent native resources before this connection closes or is replaced. */
+export function registerNodeSqliteDisposeCallback(
+  db: DatabaseSync,
+  callback: (reason: SqliteDisposeReason) => void,
+): () => void {
+  const owner: StatementCacheOwner = db;
+  installStatementInvalidation(owner);
+  return registerListener((owner[disposeCallbacksSymbol] ??= new Set()), callback);
+}
+
+/** Pending native work must settle before any dependent identity or lease is released. */
+export function registerNodeSqliteDisposeGuard(db: DatabaseSync, guard: () => void): () => void {
+  const owner: StatementCacheOwner = db;
+  installStatementInvalidation(owner);
+  return registerListener((owner[disposeGuardsSymbol] ??= new Set()), guard);
+}
+
+/** Lifecycle owners check before preparing cleanup that would revoke retained admission. */
+export function assertNodeSqliteDisposalAllowed(owner: StatementCacheOwner): void {
+  for (const guard of owner[disposeGuardsSymbol] ?? []) {
+    guard();
+  }
+}
+
+export function disposeNodeSqliteDependents(
+  owner: StatementCacheOwner,
+  reason: SqliteDisposeReason = "close",
+): void {
+  assertNodeSqliteDisposalAllowed(owner);
+  for (const callback of owner[disposeCallbacksSymbol] ?? []) {
+    callback(reason);
+  }
+}
 
 /** Register the lifecycle owner's handler for synchronous Kysely query failures. */
 export function registerNodeSqliteKyselyQueryErrorHandler(
@@ -51,7 +114,7 @@ export function registerNodeSqliteKyselyQueryErrorHandler(
 export function clearNodeSqliteKyselyCacheForDatabase(db: DatabaseSync): void {
   // Delete the database-owned cache before close so statements release their
   // native database backreferences instead of recreating the WeakMap leak.
-  delete (db as DatabaseSync & { [statementCacheSymbol]?: unknown })[statementCacheSymbol];
+  clearStatementCache(db);
   kyselyByDatabase.delete(db);
   queryErrorHandlerByDatabase.delete(db);
 }
@@ -70,7 +133,7 @@ export function installStatementInvalidation(owner: StatementCacheOwner): void {
         this[authorizerActiveSymbol] = callback !== null;
         // Authorization is decided while compiling SQL. Drop all statements
         // after every successful transition, including removing an authorizer.
-        delete this[statementCacheSymbol];
+        clearStatementCache(this);
       },
     });
   }
@@ -80,37 +143,30 @@ export function installStatementInvalidation(owner: StatementCacheOwner): void {
       configurable: true,
       writable: true,
       value(this: StatementCacheOwner, ...args: Parameters<DatabaseSync["deserialize"]>): void {
+        disposeNodeSqliteDependents(this, "replace");
         try {
           deserialize(...args);
         } finally {
           // Node finalizes all statements before attempting deserialization,
           // including failed attempts, so no cached object remains usable.
-          delete this[statementCacheSymbol];
+          clearStatementCache(this);
         }
       },
     });
   }
-  if (typeof owner.close === "function") {
-    const close = owner.close.bind(owner);
-    Object.defineProperty(owner, "close", {
-      configurable: true,
-      writable: true,
-      value(this: StatementCacheOwner): void {
-        clearNodeSqliteKyselyCacheForDatabase(this);
-        return close();
-      },
-    });
-  }
-  if (typeof owner[Symbol.dispose] === "function") {
-    const dispose = owner[Symbol.dispose].bind(owner);
-    Object.defineProperty(owner, Symbol.dispose, {
-      configurable: true,
-      writable: true,
-      value(this: StatementCacheOwner): void {
-        clearNodeSqliteKyselyCacheForDatabase(this);
-        return dispose();
-      },
-    });
+  for (const method of ["close", Symbol.dispose] as const) {
+    if (typeof owner[method] === "function") {
+      const dispose = owner[method].bind(owner);
+      Object.defineProperty(owner, method, {
+        configurable: true,
+        writable: true,
+        value(this: StatementCacheOwner): void {
+          disposeNodeSqliteDependents(this);
+          clearNodeSqliteKyselyCacheForDatabase(this);
+          return dispose();
+        },
+      });
+    }
   }
   Object.defineProperty(owner, statementInvalidationSymbol, {
     configurable: true,
@@ -150,21 +206,43 @@ function queryFitsStatementCache(sql: string, parameters: readonly SQLInputValue
   return true;
 }
 
-// The callback must consume the statement synchronously; active-use protection
-// ends when it returns. Only the existing database owner enables retention.
+// The callback consumes the statement synchronously. A terminal writer can stage
+// the same active lease's release with its settlement owner before execution.
+// Only the existing database owner enables retention.
 export function executeWithCachedStatement<Result>(
-  db: DatabaseSync,
+  db: EngineConnection,
   sql: string,
   parameters: readonly SQLInputValue[],
-  execute: (statement: StatementSync) => Result,
+  execute: (statement: SqlStatement) => Result,
+  scheduleRelease?: (release: () => void) => void,
 ): Result {
+  if (isPostgresSqlConnection(db)) {
+    return execute(db.prepare(sql));
+  }
   const owner: StatementCacheOwner = db;
+  const executeLeased = (statement: StatementSync, release: () => void): Result => {
+    if (scheduleRelease) {
+      try {
+        scheduleRelease(release);
+      } catch (error) {
+        release();
+        throw error;
+      }
+      return execute(statement);
+    }
+    try {
+      return execute(statement);
+    } finally {
+      release();
+    }
+  };
   if (
     !owner[statementCacheEnabledSymbol] ||
     owner[authorizerActiveSymbol] ||
     !queryFitsStatementCache(sql, parameters)
   ) {
-    return execute(db.prepare(sql));
+    const statement = db.prepare(sql);
+    return executeLeased(statement, () => disposeSqliteStatement(statement));
   }
   let cache = owner[statementCacheSymbol];
   if (!cache) {
@@ -191,7 +269,13 @@ export function executeWithCachedStatement<Result>(
     statement = db.prepare(sql);
     if (!cached && cache.candidates.delete(sql)) {
       cache.statements.set(sql, statement);
-      pruneMapToMaxSize(cache.statements, statementCacheCapacity);
+      if (cache.statements.size > statementCacheCapacity) {
+        const oldest = cache.statements.entries().next().value!;
+        cache.statements.delete(oldest[0]);
+        if (!cache.active.has(oldest[1])) {
+          disposeSqliteStatement(oldest[1]);
+        }
+      }
     } else if (!cached) {
       // Admit only on second use so variable placeholder counts cannot fill
       // the native statement cache with one-shot SQL strings.
@@ -206,9 +290,11 @@ export function executeWithCachedStatement<Result>(
   }
 
   cache.active.add(statement);
-  try {
-    return execute(statement);
-  } finally {
+  return executeLeased(statement, () => {
     cache.active.delete(statement);
-  }
+    // Reentrant queries may evict or invalidate an active outer statement.
+    if (owner[statementCacheSymbol] !== cache || cache.statements.get(sql) !== statement) {
+      disposeSqliteStatement(statement);
+    }
+  });
 }

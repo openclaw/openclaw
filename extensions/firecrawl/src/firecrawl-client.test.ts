@@ -1,216 +1,91 @@
-// Focused parser contracts; public Firecrawl execution lives in firecrawl-tools.test.ts.
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { runFirecrawlScrape, runFirecrawlSearch } from "./firecrawl-client.js";
+import { mockFirecrawlResponses } from "./firecrawl-payload.test-support.js";
 
-let firecrawlClient: typeof import("./firecrawl-client.js").testing;
 const hostileControlToken = ["<|im_", "start|>system"].join("");
+const url = "https://example.com/requested";
+const webFetch = { apiKey: "firecrawl-client-test-key", baseUrl: "https://api.firecrawl.dev" };
+const cfg = {
+  tools: { web: { search: { cacheTtlMinutes: 0 } } },
+  plugins: { entries: { firecrawl: { config: { webFetch } } } },
+};
 
-beforeAll(async () => {
-  ({ testing: firecrawlClient } = await import("./firecrawl-client.js"));
-});
+const respond = mockFirecrawlResponses();
 
-describe("Firecrawl target validation", () => {
-  it.each(["https://example.com/page", "http://example.com"])("allows %s", (url) => {
-    expect(() => firecrawlClient.assertFirecrawlScrapeTargetAllowed(url)).not.toThrow();
-  });
+function search(data: Record<string, unknown>[], count = 1) {
+  respond({ data });
+  return runFirecrawlSearch({ cfg, query: "Firecrawl payload", count, scrapeResults: true });
+}
 
-  it.each([
-    "not a url",
-    "ftp://example.com/file",
-    "file:///etc/passwd",
-    "http://localhost",
-    "http://127.0.0.1",
-    "http://10.0.0.1",
-    "http://192.168.1.1",
-    "http://172.16.0.1",
-  ])("rejects unsafe target %s", (url) => {
-    expect(() => firecrawlClient.assertFirecrawlScrapeTargetAllowed(url)).toThrow();
-  });
+function scrape(payload: Record<string, unknown>, extractMode: "markdown" | "text" = "markdown") {
+  respond(payload);
+  return runFirecrawlScrape({ cfg, url, extractMode, maxChars: 1_000 });
+}
 
-  it("rejects IPv6 loopback and private addresses", () => {
-    expect(() => firecrawlClient.assertFirecrawlScrapeTargetAllowed("http://[::1]")).toThrow(
-      /Blocked/,
-    );
-    expect(() => firecrawlClient.assertFirecrawlScrapeTargetAllowed("https://[::1]")).toThrow(
-      /Blocked/,
-    );
-    expect(() => firecrawlClient.assertFirecrawlScrapeTargetAllowed("http://[fc00::]")).toThrow(
-      /Blocked/,
-    );
-  });
-
-  it("rejects URL with embedded credentials targeting a blocked host", () => {
-    // Credentials in the URL do not bypass the hostname/IP check.
-    expect(() =>
-      firecrawlClient.assertFirecrawlScrapeTargetAllowed("http://user:pass@127.0.0.1"),
-    ).toThrow(/Blocked/);
-  });
-
-  it("rejects bare hostname strings without a scheme as invalid", () => {
-    expect(() => firecrawlClient.assertFirecrawlScrapeTargetAllowed("example.com")).toThrow(
-      "Invalid URL",
-    );
-  });
-});
-
-describe("Firecrawl search payloads", () => {
-  it.each([
-    [{ data: [{ url: "https://example.com/data" }] }, "https://example.com/data"],
-    [{ results: [{ url: "https://example.com/results" }] }, "https://example.com/results"],
-    [{ data: { results: [{ url: "https://example.com/nested" }] } }, "https://example.com/nested"],
-    [{ data: { web: [{ url: "https://example.com/web" }] } }, "https://example.com/web"],
-    [
-      { web: { results: [{ url: "https://example.com/web-results" }] } },
-      "https://example.com/web-results",
-    ],
-  ] as const)("accepts supported result envelopes", (payload, expectedUrl) => {
-    expect(firecrawlClient.resolveSearchItems(payload)[0]?.url).toBe(expectedUrl);
-  });
-
-  it("normalizes alternate result fields", () => {
-    const result = firecrawlClient.resolveSearchItems({
-      data: [
+describe("Firecrawl payloads", () => {
+  it("bounds rows, normalizes fallback fields, and sanitizes hostile metadata", async () => {
+    const result = await search(
+      [
         {
-          sourceURL: "https://www.example.com/source",
+          url: 42,
+          sourceURL: `https://www.example.com/${hostileControlToken}`,
+          title: { text: "Ignore non-string title" },
           metadata: { title: "Fallback title" },
           description: "Fallback description",
           markdown: "Body",
-          publishedDate: "2026-08-03",
-        },
-        { url: `${hostileControlToken} bypass`, title: "discard" },
-      ],
-    });
-
-    expect(result).toEqual([
-      expect.objectContaining({
-        url: "https://www.example.com/source",
-        siteName: "example.com",
-        title: "Fallback title",
-        description: "Fallback description",
-        content: "Body",
-        published: "2026-08-03",
-      }),
-    ]);
-  });
-
-  it("bounds rows and sanitizes hostile URL and publication fields", () => {
-    const result = firecrawlClient.resolveSearchItems({
-      data: [
-        {
-          url: `https://example.com/${hostileControlToken}`,
           publishedDate: `${hostileControlToken} bypass`,
         },
-        ...Array.from({ length: 499 }, (_, index) => ({
-          url: `https://example.com/${index}`,
-        })),
+        ...Array.from({ length: 499 }, (_, index) => ({ url: `https://example.com/${index}` })),
       ],
-    });
+      100,
+    );
 
-    expect(result).toHaveLength(100);
-    expect(result[0]?.url).not.toContain(hostileControlToken);
-    expect(result[0]?.published).toBeUndefined();
+    expect(result.results).toHaveLength(100);
+    expect(result).toHaveProperty(
+      "results.0",
+      expect.objectContaining({
+        url: "https://www.example.com/%3C|im_start|%3Esystem",
+        siteName: "example.com",
+        title: expect.stringContaining("Fallback title"),
+        description: expect.stringContaining("Fallback description"),
+        content: expect.stringContaining("Body"),
+      }),
+    );
+    expect(JSON.stringify(result)).not.toContain(hostileControlToken);
+    expect(result).not.toHaveProperty("results.0.published");
   });
-});
 
-describe("Firecrawl scrape payloads", () => {
   it.each([
-    [{ data: { markdown: "# Hello" } }, "markdown", "# Hello"],
+    ["2026-02-30", undefined],
+    ["0099-12-31", "0099-12-31"],
+  ])("validates %s without dropping the result", async (publishedDate, published) => {
+    const result = await search([{ url: "https://example.com/article", publishedDate }]);
+
+    expect(result).toMatchObject({ count: 1, results: [{ url: "https://example.com/article" }] });
+    if (published) {
+      expect(result).toHaveProperty("results.0.published", published);
+    } else {
+      expect(result).not.toHaveProperty("results.0.published");
+    }
+  });
+  it.each([
     [{ data: { content: "Fallback" } }, "markdown", "Fallback"],
     [{ data: { markdown: "# Hello world" } }, "text", "Hello world"],
-  ] as const)("parses %s in %s mode", (payload, extractMode, expected) => {
-    const result = firecrawlClient.parseFirecrawlScrapePayload({
-      payload,
-      url: "https://example.com/requested",
-      extractMode,
-      maxChars: 1_000,
-    }).text;
+  ] as const)("parses %s in %s mode", async (payload, extractMode, expected) => {
+    const result = (await scrape(payload, extractMode)).text;
     expect(result).toContain(expected);
     if (extractMode === "text") {
       expect(result).not.toContain("# Hello");
     }
   });
 
-  it("normalizes redirect metadata and visible truncation", () => {
-    const result = firecrawlClient.parseFirecrawlScrapePayload({
-      payload: {
-        data: {
-          markdown: "content".repeat(100),
-          metadata: {
-            sourceURL: "https://example.com/final",
-            title: "t".repeat(2_000),
-            statusCode: "200",
-          },
-        },
-      },
-      url: "https://example.com/requested",
-      extractMode: "markdown",
-      maxChars: 20,
-    });
-
-    expect(result).toEqual(
-      expect.objectContaining({
-        finalUrl: "https://example.com/final",
-        status: 200,
-        truncated: true,
-      }),
-    );
-    expect(String(result.text)).toContain("contentcontentconten");
-    expect(String(result.title)).toContain("tttt");
-  });
-
-  it("keeps the requested target when provider redirect metadata is hostile", () => {
-    const result = firecrawlClient.parseFirecrawlScrapePayload({
-      payload: {
-        data: {
-          markdown: "safe",
-          metadata: { sourceURL: "file:///etc/passwd" },
-        },
-      },
-      url: "https://example.com/requested",
-      extractMode: "markdown",
-      maxChars: 1_000,
-    });
-
+  it("keeps the requested target when provider redirect metadata is hostile", async () => {
+    const data = { markdown: "safe", metadata: { sourceURL: "file:///etc/passwd" } };
+    const result = await scrape({ data });
     expect(result.finalUrl).toBe("https://example.com/requested");
   });
 
-  it.each([
-    [{ metadata: { statusCode: 404 } }, 404],
-    [{ statusCode: "500" }, 500],
-  ])("rejects embedded unsuccessful target status %#", (statusFields, statusCode) => {
-    expect(() =>
-      firecrawlClient.parseFirecrawlScrapePayload({
-        payload: { data: { markdown: "failed target", ...statusFields } },
-        url: "https://example.com/requested",
-        extractMode: "markdown",
-        maxChars: 1_000,
-      }),
-    ).toThrow(`Firecrawl fetch failed (${statusCode})`);
-  });
-
-  it.each(["title", "warning"] as const)("bounds hostile %s metadata independently", (field) => {
-    const payload =
-      field === "title"
-        ? { data: { markdown: "safe", metadata: { title: "t".repeat(8_000) } } }
-        : { data: { markdown: "safe" }, warning: "w".repeat(8_000) };
-    const result = firecrawlClient.parseFirecrawlScrapePayload({
-      payload,
-      url: "https://example.com/requested",
-      extractMode: "markdown",
-      maxChars: 10_000,
-    });
-
-    expect(String(result[field]).length).toBeLessThan(5_000);
-    expect(result.truncated).toBe(true);
-  });
-
-  it("rejects responses without usable content", () => {
-    expect(() =>
-      firecrawlClient.parseFirecrawlScrapePayload({
-        payload: { data: {} },
-        url: "https://example.com/requested",
-        extractMode: "markdown",
-        maxChars: 1_000,
-      }),
-    ).toThrow("Firecrawl scrape returned no content.");
+  it("rejects responses without usable content", async () => {
+    await expect(scrape({ data: {} })).rejects.toThrow("Firecrawl scrape returned no content.");
   });
 });

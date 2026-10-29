@@ -4,11 +4,13 @@
  * Installs targeted Vitest module mocks for tests that do not need live plugin/runtime boot.
  */
 import { vi } from "vitest";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type { ContextEngine } from "../../context-engine/types.js";
+import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import { preparedModelRuntimeConfigsMatch } from "../prepared-model-runtime.owner.js";
 import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimeSnapshot,
@@ -30,52 +32,6 @@ type EmbeddedRunnerBackoffMockOptions = {
   sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => unknown;
 };
 
-export function createEmptyPluginMetadataSnapshot(workspaceDir?: string): PluginMetadataSnapshot {
-  const index: PluginMetadataSnapshot["index"] = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "",
-    generatedAtMs: 1,
-    installRecords: {},
-    plugins: [],
-    diagnostics: [],
-  };
-  return {
-    policyHash: "",
-    ...(workspaceDir !== undefined ? { workspaceDir } : {}),
-    index,
-    registryIndex: index,
-    registryDiagnostics: [],
-    manifestRegistry: { plugins: [], diagnostics: [] },
-    plugins: [],
-    diagnostics: [],
-    byPluginId: new Map(),
-    normalizePluginId: (pluginId) => pluginId,
-    declaredProviderOwners: new Map(),
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      modelIdNormalizationPolicies: new Map(),
-    },
-    metrics: {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
-      indexPluginCount: 0,
-      manifestPluginCount: 0,
-    },
-  };
-}
-
 function createEmptyPreparedModelRuntimeSnapshot(
   input: PreparedModelRuntimeInput,
   pluginRegistry?: PreparedModelRuntimeSnapshot["pluginRegistry"],
@@ -96,6 +52,7 @@ function createEmptyPreparedModelRuntimeSnapshot(
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
     modelCatalog: { entries: [], routeVariants: [] },
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     createStores: () => ({
       authStorage: { setRuntimeApiKey: vi.fn() } as never,
@@ -126,7 +83,11 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
   vi.doMock("../../context-engine/init.js", () => ({
     ensureContextEnginesInitialized: vi.fn(),
   }));
+  // mock-isolation: Synthetic context engines keep live registry state outside runner fixtures.
   vi.doMock("../../context-engine/registry.js", () => ({
+    hasSameContextEngineInstance: vi.fn(
+      (left: ContextEngine, right: ContextEngine) => left === right,
+    ),
     resolveContextEngine: vi.fn(async () => ({
       dispose: async () => undefined,
     })),
@@ -141,7 +102,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
           return { messages, estimatedTokens: 0 };
         },
         async compact() {
-          return { ok: true, compacted: false };
+          return { ok: true, compacted: false, reason: "nothing to compact" };
         },
         async dispose() {},
       };
@@ -166,10 +127,11 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
       }
       return {
         snapshot: createEmptyPreparedModelRuntimeSnapshot(input, options?.pluginRegistry),
-        release: vi.fn(),
+        [Symbol.asyncDispose]: vi.fn(async () => {}),
       };
     };
     return {
+      preparedModelRuntimeConfigsMatch,
       acquireAgentRunPreparedModelRuntime: vi.fn(acquire),
       acquireReadOnlyPreparedModelRuntime: vi.fn(acquire),
       prepareModelRuntimeSnapshot: vi.fn(async (input: PreparedModelRuntimeInput) =>
@@ -213,15 +175,13 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     };
   };
   vi.doMock("../harness/selection.js", () => ({
-    agentHarnessBuildsOpenClawTools: vi.fn(
-      (harnessId: string) => harnessId === "codex" || harnessId === "copilot",
-    ),
     selectAgentHarness: vi.fn(createMockAgentHarness),
     selectAgentHarnessForPreparedModelProviders: vi.fn(createMockAgentHarness),
     resolveAgentHarnessPolicy: vi.fn(() => ({ runtime: "openclaw" })),
     runAgentHarnessAttempt: (params: EmbeddedRunAttemptParams) =>
       options.runEmbeddedAttempt(params),
   }));
+  // mock-isolation: harness fixtures supply runtime plans without loading live plugin or auth catalogs.
   vi.doMock("../runtime-plan/build.js", () => ({
     buildAgentRuntimePlan: vi.fn(
       (params: {
@@ -268,7 +228,6 @@ export function installEmbeddedRunnerFastRunE2eMocks(
           resolvePolicy: vi.fn(() => undefined),
         },
         delivery: {
-          isSilentPayload: vi.fn(() => false),
           resolveFollowupRoute: vi.fn(() => undefined),
         },
         outcome: {
@@ -376,6 +335,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
   vi.doMock("../../plugins/provider-external-auth.js", () => ({
     resolveExternalAuthProfilesWithPlugins: vi.fn(() => []),
   }));
+  // mock-isolation: runner fixtures exercise core preparation without loading installed plugins.
   vi.doMock("../../plugins/provider-runtime.js", () => ({
     applyProviderResolvedTransportWithPlugin: vi.fn(() => undefined),
     augmentModelCatalogWithProviderPlugins: vi.fn(async () => []),
@@ -385,6 +345,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     normalizeProviderTransportWithPlugin: vi.fn(() => undefined),
     prepareProviderDynamicModel: vi.fn(async () => undefined),
     prepareProviderRuntimeAuth: options.prepareProviderRuntimeAuth ?? vi.fn(async () => undefined),
+    prepareProviderSyntheticAuthWithPlugin: vi.fn(async () => undefined),
     resolveProviderAuthProfileId: vi.fn(() => undefined),
     resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
     resolveProviderDeprecatedAuthProfileIds: vi.fn(() => []),

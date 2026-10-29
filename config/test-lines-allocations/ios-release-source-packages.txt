@@ -1,0 +1,2 @@
+# Extend the workflow cache-write guard to cover release SwiftPM downloads.
+3

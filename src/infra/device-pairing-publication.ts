@@ -1,0 +1,250 @@
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
+import type { OpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-async-lifecycle.js";
+import {
+  registerOpenClawStateDatabaseAsyncResource,
+  registerOpenClawStateDatabaseLifecycleListener,
+} from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import type {
+  DevicePairingBinding,
+  DevicePairingBindingFact,
+  DevicePairingCommitReceipt,
+  DevicePairingNodeSnapshot,
+} from "./device-pairing-read.types.js";
+import type { PairedDevice } from "./device-pairing.types.js";
+
+type Publication = {
+  identity: string;
+  canonicalPath: string;
+  epoch: number;
+  revision?: string;
+  blocked: boolean;
+  mutation?: object;
+  complete: boolean;
+  rows: Map<string, DevicePairingBinding | null>;
+  devices: Record<string, PairedDevice | null>;
+  nodes?: DevicePairingNodeSnapshot;
+  pending: Set<() => void>;
+};
+
+const publications = resolveGlobalSingleton(
+  Symbol.for("openclaw.devicePairingPublications"),
+  () => {
+    const state = new Map<string, Publication>();
+    registerOpenClawStateDatabaseAsyncResource({
+      phase: "after-resources",
+      async close(identity) {
+        for (const [path, publication] of state) {
+          if (
+            !identity ||
+            publication.identity === identity.key ||
+            publication.canonicalPath === identity.canonicalPath
+          ) {
+            state.delete(path);
+          }
+        }
+      },
+    });
+    registerOpenClawStateDatabaseLifecycleListener((event) => {
+      if (event.kind === "opened") {
+        return;
+      }
+      for (const [path, publication] of state) {
+        if (path === event.path || publication.identity === event.identity?.key) {
+          state.delete(path);
+        }
+      }
+    });
+    return state;
+  },
+);
+
+/** Native pairing writers retire the node projection after their transaction commits. */
+export function invalidateDevicePairingNodeSnapshot(path: string): void {
+  const publication = publications.get(path);
+  if (publication) {
+    publication.epoch++;
+    publication.nodes = undefined;
+    publication.devices = Object.create(null);
+    publication.complete = false;
+  }
+}
+
+export function captureDevicePairingPublication(admission: OpenClawStateDatabaseReadAdmission) {
+  const path = admission.databasePath;
+  const { identity } = admission;
+  let publication = publications.get(identity.key) ?? publications.get(identity.canonicalPath);
+  if (publication && publication.identity !== identity.key) {
+    for (const [alias, current] of publications) {
+      if (current === publication) {
+        publications.delete(alias);
+      }
+    }
+    publication = undefined;
+  }
+  if (!publication) {
+    publication = {
+      identity: identity.key,
+      canonicalPath: identity.canonicalPath,
+      epoch: 0,
+      blocked: false,
+      complete: false,
+      rows: new Map(),
+      devices: Object.create(null),
+      pending: new Set(),
+    };
+  }
+  publications.set(path, publication);
+  publications.set(identity.canonicalPath, publication);
+  publications.set(identity.key, publication);
+  const captured = publication;
+  const epoch = captured.epoch;
+  const install = (rows: readonly DevicePairingBindingFact[]) => {
+    for (const row of rows) {
+      captured.rows.set(row.deviceId, row.binding ? { ...row.binding } : null);
+      captured.devices[row.deviceId] = structuredClone(row.device);
+    }
+  };
+  return {
+    readDevice(deviceId: string) {
+      for (const service of captured.pending) {
+        service();
+      }
+      if (publications.get(path) !== captured || captured.blocked) {
+        return undefined;
+      }
+      const device = captured.devices[deviceId];
+      // Public callers own mutable rows; never lend them the authorization publication.
+      return device === undefined && !captured.complete
+        ? undefined
+        : structuredClone(device ?? null);
+    },
+    isCurrent: () =>
+      publications.get(path) === captured && captured.epoch === epoch && !captured.mutation,
+    completeRevision: () =>
+      !captured.blocked && captured.complete ? captured.revision : undefined,
+    readNodes() {
+      for (const service of captured.pending) {
+        service();
+      }
+      if (publications.get(path) !== captured || captured.blocked || !captured.complete) {
+        return undefined;
+      }
+      if (!captured.nodes) {
+        const bindings = new Map<string, DevicePairingBinding>();
+        for (const [deviceId, binding] of captured.rows) {
+          if (binding) {
+            bindings.set(deviceId, Object.freeze({ ...binding }));
+          }
+        }
+        // Complete receipts already carry the committed rows; discovery must not reread them.
+        const paired = Object.values(captured.devices)
+          .filter((device) => device !== null)
+          .toSorted((a, b) => b.approvedAtMs - a.approvedAtMs);
+        captured.nodes = Object.freeze({ paired: freezeTrustedJsonSnapshot(paired), bindings });
+      }
+      return captured.nodes;
+    },
+    fail() {
+      if (publications.get(path) === captured && captured.epoch === epoch) {
+        captured.blocked = true;
+        captured.nodes = undefined;
+      }
+    },
+    publish(
+      revision: string,
+      rows: readonly DevicePairingBindingFact[] | undefined,
+      complete = false,
+    ) {
+      if (publications.get(path) !== captured || captured.epoch !== epoch || captured.mutation) {
+        return false;
+      }
+      if (!rows) {
+        if (captured.revision !== revision || !captured.complete) {
+          throw new Error("Pairing publication cannot reuse an unknown revision");
+        }
+        captured.blocked = false;
+        return true;
+      }
+      // Rows are per-device facts: receipts and each device's own lookup refresh them, so a
+      // revision this cache missed leaves unrelated nodes known; only a full list replaces all.
+      if (captured.revision !== revision) {
+        captured.epoch++;
+        captured.nodes = undefined;
+        captured.complete = false;
+      }
+      if (complete) {
+        captured.rows.clear();
+        captured.devices = Object.create(null);
+      }
+      captured.revision = revision;
+      install(rows);
+      captured.complete ||= complete;
+      captured.blocked = false;
+      return true;
+    },
+    beginMutation() {
+      captured.epoch++;
+      const mutation = {};
+      captured.mutation = mutation;
+      return {
+        publish(receipt: DevicePairingCommitReceipt) {
+          if (publications.get(path) !== captured || captured.mutation !== mutation) {
+            return;
+          }
+          captured.complete &&= receipt.beforeRevision === captured.revision;
+          if (receipt.revision !== captured.revision) {
+            captured.nodes = undefined;
+          }
+          install(receipt.changed);
+          captured.revision = receipt.revision;
+          captured.blocked = false;
+          captured.mutation = undefined;
+          // A reader admitted during this transaction cannot republish its older snapshot.
+          captured.epoch++;
+        },
+        finish(settled: boolean) {
+          if (settled && captured.mutation === mutation) {
+            captured.mutation = undefined;
+            captured.epoch++;
+          } else if (!settled && captured.mutation === mutation) {
+            captured.blocked = true;
+          }
+        },
+      };
+    },
+    servicePending(service: () => void) {
+      captured.pending.add(service);
+      return () => captured.pending.delete(service);
+    },
+  };
+}
+
+/**
+ * Unknown facts suppress use without declaring an otherwise live node revoked.
+ * In-flight writes are not unknown: rows stay authoritative until COMMIT, and the pending
+ * services below install a committed receipt before this read. Gateway revocations also
+ * retire live clients directly.
+ */
+export function getPublishedPairedDeviceBinding(
+  deviceId: string,
+  baseDir?: string,
+): DevicePairingBinding | null {
+  const path = resolveOpenClawStateSqlitePath(
+    baseDir ? { ...process.env, OPENCLAW_STATE_DIR: baseDir } : process.env,
+  );
+  const publication = publications.get(path);
+  for (const service of publication?.pending ?? []) {
+    service();
+  }
+  if (
+    !publication ||
+    publication.blocked ||
+    (!publication.complete && !publication.rows.has(deviceId))
+  ) {
+    throw new Error("Device pairing authority requires a current worker publication");
+  }
+  const binding = publication.rows.get(deviceId);
+  return binding ? { ...binding } : null;
+}

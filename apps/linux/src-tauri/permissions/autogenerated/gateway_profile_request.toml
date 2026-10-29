@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-gateway-profile-request"
+description = "Enables the gateway_profile_request command without any pre-configured scope."
+commands.allow = ["gateway_profile_request"]
+
+[[permission]]
+identifier = "deny-gateway-profile-request"
+description = "Denies the gateway_profile_request command without any pre-configured scope."
+commands.deny = ["gateway_profile_request"]

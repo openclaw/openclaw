@@ -88,31 +88,6 @@ elif [[ "$normalized_context_ref" =~ ^v([0-9]{4}\.[0-9]+\.[0-9]+(-(alpha|beta)\.
   context_release_tag="$normalized_context_ref"
 fi
 
-repository_owner="${GITHUB_REPOSITORY%%/*}"
-repository_name="${GITHUB_REPOSITORY#*/}"
-candidate_metadata_json="$(
-  # GraphQL expands these variables server-side, not in the shell.
-  # shellcheck disable=SC2016
-  gh_with_retry api graphql \
-    -f query='query($owner:String!,$name:String!,$oid:GitObjectID!){repository(owner:$owner,name:$name){object(oid:$oid){... on Commit{oid signature{isValid state signer{login}} associatedPullRequests(first:100){nodes{state headRefOid headRepository{nameWithOwner} baseRefName baseRepository{nameWithOwner} mergeCommit{oid} mergedBy{login}}}}}}}' \
-    -f owner="$repository_owner" \
-    -f name="$repository_name" \
-    -f oid="$candidate_sha"
-)"
-pr_head_count="$(
-  jq -er \
-    --arg repo "$GITHUB_REPOSITORY" \
-    --arg sha "$candidate_sha" \
-    '[.data.repository.object.associatedPullRequests.nodes[] |
-      select(.state == "OPEN" and .headRepository.nameWithOwner == $repo and
-        .headRefOid == $sha)] | length' \
-    <<<"$candidate_metadata_json"
-)"
-if [[ "$pr_head_count" != "0" ]]; then
-  echo "Telegram candidate ${candidate_sha} is an open same-repository PR head." >&2
-  exit 1
-fi
-
 compare_status="$(
   gh_with_retry api \
     "repos/${GITHUB_REPOSITORY}/compare/${candidate_sha}...main" \
@@ -120,70 +95,49 @@ compare_status="$(
 )"
 trusted_reason=""
 trusted_release_branch=""
-if [[ -n "$context_release_branch" ]]; then
-  branch_sha="$(
-    git -C "$remote_git_dir" ls-remote --exit-code --refs origin \
-      "refs/heads/${context_release_branch}" |
-      awk 'NR == 1 { print $1 } END { if (NR != 1) exit 1 }' ||
-      true
-  )"
-  if [[ "$branch_sha" == "$candidate_sha" ]]; then
-    trusted_reason="release-branch-head"
-    trusted_release_branch="$context_release_branch"
+release_ref="${context_release_branch:-$context_release_tag}"
+relationship=exact
+if [[ -n "$release_ref" ]]; then
+  if [[ "$TARGET_REF" =~ ^[a-f0-9]{40}$ && "$TARGET_REF" == "$candidate_sha" ]]; then
+    relationship=ancestor
   fi
-elif [[ -n "$context_release_tag" ]]; then
-  tag_refs="$(
-    git -C "$remote_git_dir" ls-remote --exit-code origin \
-      "refs/tags/${context_release_tag}" "refs/tags/${context_release_tag}^{}"
-  )"
-  awk -v sha="$candidate_sha" '$1 == sha { found = 1 } END { exit(found ? 0 : 1) }' \
-    <<<"$tag_refs"
-  trusted_reason="release-tag"
 elif [[ "$compare_status" == "ahead" || "$compare_status" == "identical" ]]; then
   trusted_reason="main-ancestor"
 else
-  normalized_ref="${TARGET_REF#refs/heads/}"
-  if [[ "$normalized_ref" =~ ^(release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*|extended-stable/[0-9]{4}\.[1-9][0-9]*\.33)$ ]]; then
-    branch_sha="$(
-      git -C "$remote_git_dir" ls-remote --exit-code --refs origin \
-        "refs/heads/${normalized_ref}" |
-        awk 'NR == 1 { print $1 } END { if (NR != 1) exit 1 }'
-    )"
-    [[ "$branch_sha" == "$candidate_sha" ]]
-    trusted_reason="release-branch-head"
-    trusted_release_branch="$normalized_ref"
-  elif [[ "$TARGET_REF" =~ ^refs/tags/v ]] || [[ "$TARGET_REF" =~ ^v ]]; then
-    normalized_tag="${TARGET_REF#refs/tags/}"
-    tag_refs="$(
-      git -C "$remote_git_dir" ls-remote --exit-code origin \
-        "refs/tags/${normalized_tag}" "refs/tags/${normalized_tag}^{}"
-    )"
-    awk -v sha="$candidate_sha" '$1 == sha { found = 1 } END { exit(found ? 0 : 1) }' \
-      <<<"$tag_refs"
-    trusted_reason="release-tag"
-  elif [[ "$TARGET_REF" =~ ^[a-f0-9]{40}$ && "$TARGET_REF" == "$candidate_sha" ]]; then
-    matching_release_branches="$(
+  release_ref="${TARGET_REF#refs/heads/}"
+  release_ref="${release_ref#refs/tags/}"
+  if [[ "$TARGET_REF" =~ ^[a-f0-9]{40}$ && "$TARGET_REF" == "$candidate_sha" ]]; then
+    release_ref="$(
       gh_with_retry api --paginate \
         "repos/${GITHUB_REPOSITORY}/commits/${candidate_sha}/branches-where-head" \
         --jq '.[].name' |
         awk '$0 ~ /^release\/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$/ ||
-             $0 ~ /^extended-stable\/[0-9]{4}\.[1-9][0-9]*\.33$/ { print }'
+             $0 ~ /^extended-stable\/[0-9]{4}\.[1-9][0-9]*\.33$/ { refs[++n] = $0 }
+             END { if (n == 1) print refs[1] }'
     )"
-    if [[ "$(wc -l <<<"$matching_release_branches" | tr -d ' ')" == "1" &&
-          -n "$matching_release_branches" ]]; then
-      trusted_reason="release-branch-head"
-      trusted_release_branch="$matching_release_branches"
-    else
-      matching_release_tags="$(
+    if [[ -z "$release_ref" ]]; then
+      release_ref="$(
         git -C "$remote_git_dir" ls-remote origin 'refs/tags/v*' |
           awk -v sha="$candidate_sha" '$1 == sha { sub(/\^\{\}$/, "", $2); print $2 }' |
-          sort -u
+          sort -u | head -n 1
       )"
-      if [[ -n "$matching_release_tags" ]]; then
-        trusted_reason="release-tag"
-      fi
+      release_ref="${release_ref#refs/tags/}"
     fi
   fi
+fi
+
+fetch_ref=""
+if [[ "$release_ref" =~ ^(release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*|extended-stable/[0-9]{4}\.[1-9][0-9]*\.33)$ ]]; then
+  fetch_ref="refs/heads/${release_ref}"
+  reason=release-branch
+elif [[ "$release_ref" == v* ]]; then
+  fetch_ref="refs/tags/${release_ref}"
+  reason=release-tag
+fi
+if [[ -n "$fetch_ref" ]] && bash "${GITHUB_WORKSPACE}/scripts/release-context-contains.sh" \
+  "https://github.com/${GITHUB_REPOSITORY}.git" "$fetch_ref" "$candidate_sha" "$relationship" 2>/dev/null; then
+  trusted_reason="$reason"
+  trusted_release_branch="$release_ref"
 fi
 
 if [[ -z "$trusted_reason" && -n "$frozen_release_branch_pattern" &&
@@ -206,63 +160,9 @@ if [[ -z "$trusted_reason" ]]; then
   exit 1
 fi
 
-if [[ "$trusted_reason" != "main-ancestor" ]]; then
-  signature_status="$(
-    jq -er \
-      --arg sha "$candidate_sha" \
-      '.data.repository.object |
-       select(.oid == $sha) |
-       if .signature == null then "missing"
-       elif .signature.isValid == true and .signature.state == "VALID" and
-         (.signature.signer.login // "") != "" then "valid"
-       else "invalid"
-       end' \
-      <<<"$candidate_metadata_json"
-  )"
-  if [[ "$signature_status" == "invalid" ]]; then
-    echo "Release candidate ${candidate_sha} has an invalid commit signature." >&2
-    exit 1
-  fi
-  signer="$(jq -r '.data.repository.object.signature.signer.login // ""' <<<"$candidate_metadata_json")"
-  if [[ "$trusted_reason" == "frozen-release-branch-head" &&
-        ( "$signature_status" != "valid" || "$signer" == "web-flow" ) ]]; then
-    echo "Frozen release candidate ${candidate_sha} requires a valid maintainer signature." >&2
-    exit 1
-  fi
-  permission_actor="$signer"
-  if [[ "$signature_status" == "missing" || "$signer" == "web-flow" ]]; then
-    if [[ "$trusted_reason" != "release-branch-head" || -z "$trusted_release_branch" ]]; then
-      echo "Unsigned or GitHub web-flow candidates require an exact release branch head." >&2
-      exit 1
-    fi
-    matching_merge_prs="$(
-      jq -c \
-        --arg repo "$GITHUB_REPOSITORY" \
-        --arg sha "$candidate_sha" \
-        '[.data.repository.object.associatedPullRequests.nodes[] |
-          select(.state == "MERGED" and .baseRepository.nameWithOwner == $repo and
-            .mergeCommit.oid == $sha)]' \
-        <<<"$candidate_metadata_json"
-    )"
-    if [[ "$(jq 'length' <<<"$matching_merge_prs")" != "1" ]]; then
-      echo "Unsigned or GitHub web-flow candidate ${candidate_sha} requires one exact merged same-repository PR." >&2
-      exit 1
-    fi
-    permission_actor="$(
-      jq -er '.[0].mergedBy.login | select(type == "string" and length > 0)' \
-        <<<"$matching_merge_prs"
-    )"
-  fi
-  permission_json="$(
-    gh_with_retry api \
-      "repos/${GITHUB_REPOSITORY}/collaborators/${permission_actor}/permission"
-  )"
-  permission="$(jq -r '.permission // ""' <<<"$permission_json")"
-  role_name="$(jq -r '.role_name // ""' <<<"$permission_json")"
-  if [[ "$permission" != "admin" && "$role_name" != "maintain" ]]; then
-    echo "Release candidate actor ${permission_actor} lacks maintain/admin access." >&2
-    exit 1
-  fi
-fi
+node "${GITHUB_WORKSPACE}/scripts/release-candidate-provenance.mjs" \
+  --repository "$GITHUB_REPOSITORY" \
+  --sha "$candidate_sha" \
+  --provenance-kind "$trusted_reason"
 
 echo "Telegram candidate trust reason: ${trusted_reason}"

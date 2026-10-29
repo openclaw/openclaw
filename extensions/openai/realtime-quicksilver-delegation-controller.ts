@@ -4,33 +4,42 @@ import type {
   RealtimeVoiceGatewayControl,
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
-  buildRealtimeVoiceAgentControlSpeechMessage,
-  canonicalizeBase64,
   extractErrorCode,
   readErrorName,
   rawDataToString,
   toErrorObject,
   truncateUtf16Safe,
+  type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "openclaw/plugin-sdk/realtime-voice-provider";
 import type { RawData } from "ws";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
-import {
-  buildOpenAIQuicksilverDelegationPrompt,
-  type OpenAIQuicksilverTranscriptEntry,
-} from "./realtime-quicksilver-instructions.js";
+import { OpenAILiveDelegationQueue } from "./realtime-live-delegation-queue.js";
+import { buildOpenAIQuicksilverDelegationPrompt } from "./realtime-quicksilver-instructions.js";
+import { buildOpenAIQuicksilverContextAppend } from "./realtime-quicksilver-protocol.js";
 import { projectOpenAIQuicksilverErrorMessage } from "./realtime-quicksilver-redaction.js";
-import type { OpenAIQuicksilverSocket } from "./realtime-quicksilver-sideband.js";
+import type { OpenAIQuicksilverSocket } from "./realtime-quicksilver-socket.shared.js";
+import { OpenAIQuicksilverTranscript } from "./realtime-quicksilver-transcript.js";
 import {
-  boundOpenAIQuicksilverContextItems,
   boundOpenAIQuicksilverDelegationResult,
   chunkOpenAIQuicksilverAppendText,
   parseOpenAIQuicksilverEvent,
   type OpenAIQuicksilverInboundEvent,
 } from "./realtime-quicksilver-wire.js";
+import { isOpenAIGptLiveApiModel } from "./realtime-quicksilver.js";
 
 const WEBSOCKET_OPEN = 1;
 const CONSULT_FAILURE_TEXT =
   "The agent task failed. Tell the user it did not complete and offer to try again.";
+// Keep the launch note in one append; it does not establish consultation admission.
+const NATURAL_DELEGATION_ACK_MESSAGE = [
+  "Internal OpenClaw voice control note.",
+  "Do not delegate this note or call tools.",
+  "The request may not be accepted yet.",
+  "For this launch acknowledgment only, confirm hearing the request; never imply checking or doing it.",
+  "Reply in your own words and the user's language, under 8 words; vary naturally and avoid repeating recent acknowledgments.",
+  'Do not imply acceptance, work begun, or completion: no "on it", "taking that", "accepted", or equivalents in any language.',
+  "Do not guess an answer or promise one.",
+].join("\n");
 
 type PendingDelegation = {
   id: string;
@@ -58,8 +67,10 @@ type OpenAIQuicksilverDelegationControllerOptions = {
   model: string;
   onError?: (error: Error) => void;
   onFatalError: (error: Error) => void;
-  onAudio?: (audio: Buffer) => void;
   onSessionStarted?: (expiresAt: number | undefined) => void;
+  onSessionClosed?: (
+    reason: Extract<OpenAIQuicksilverInboundEvent, { kind: "session-closed" }>["reason"],
+  ) => void;
   onTranscript?: (role: "user" | "assistant", text: string, done: boolean) => void;
   handleDelegationInput?: RealtimeVoiceGatewayControl["handleDelegationInput"];
   onWireEventType?: (eventType: string) => void;
@@ -67,20 +78,30 @@ type OpenAIQuicksilverDelegationControllerOptions = {
   signal: AbortSignal;
 };
 
-function projectWireEventType(event: OpenAIQuicksilverInboundEvent): string | undefined {
+function projectWireEventType(
+  event: OpenAIQuicksilverInboundEvent,
+  model: string,
+): string | undefined {
+  const live = isOpenAIGptLiveApiModel(model);
   switch (event.kind) {
     case "session-started":
       return "session.started";
+    case "session-closed":
+      return "session.closed";
     case "audio-cleared":
       return "output_audio_buffer.cleared";
     case "audio":
-      return "output_audio.delta";
+      return live ? "session.output_audio.delta" : "output_audio.delta";
     case "transcript-delta":
-      return event.role === "user" ? "input_transcript.added" : "output_transcript.added";
+      return live
+        ? `session.${event.role === "user" ? "input" : "output"}_transcript.delta`
+        : event.role === "user"
+          ? "input_transcript.added"
+          : "output_transcript.added";
     case "transcript-done":
       return "turn.done";
     case "delegation":
-      return "delegation.created";
+      return live ? "session.delegation.created" : "delegation.created";
     case "error":
       return "error";
     case "ignored":
@@ -101,17 +122,31 @@ export class OpenAIQuicksilverDelegationController {
     const reason = this.options.signal.reason;
     this.stop(reason instanceof Error ? reason : new Error("GPT-Live session stopped"));
   };
-  private partialTranscriptRole: "user" | "assistant" | undefined;
   private pendingDelegation: PendingDelegation | undefined;
   private requesterFinalOwner: { delegationId: string; generation: number } | undefined;
   private steeringPromise: Promise<void> | undefined;
   private stopped = false;
-  private transcript: OpenAIQuicksilverTranscriptEntry[] = [];
+  private drainDisposition: "abort" | "detach" | undefined;
+  private readonly transcript = new OpenAIQuicksilverTranscript();
+  private readonly delegations: OpenAILiveDelegationQueue;
 
   constructor(
     private readonly options: OpenAIQuicksilverDelegationControllerOptions,
     private readonly formatErrorMessage: OpenAIRealtimeHost["formatErrorMessage"],
   ) {
+    this.delegations = new OpenAILiveDelegationQueue({
+      isActive: () => !this.stopped && !this.drainDisposition && !options.signal.aborted,
+      readInput: () => this.transcript.latestUserInput(),
+      dispatch: (id, input) => this.startDelegation(id, input),
+      onExpired: (id) => {
+        this.sendAppend(
+          "Ask the user to repeat their request; no user transcript was received.",
+          "speakable",
+          id,
+        );
+      },
+      onError: (error) => this.fail(error),
+    });
     this.completionClaimsAdopted = options.runAgentConsult.adoptCompletionClaims !== undefined;
     options.runAgentConsult.adoptCompletionClaims?.();
     if (options.signal.aborted) {
@@ -130,9 +165,15 @@ export class OpenAIQuicksilverDelegationController {
       return;
     }
     const payload = rawDataToString(data);
-    const event = parseOpenAIQuicksilverEvent(payload);
+    const event = parseOpenAIQuicksilverEvent(payload, this.options.model);
     if (event) {
-      const eventType = projectWireEventType(event);
+      if (event.kind === "session-closed") {
+        this.handleEvent(event);
+        return;
+      }
+      const eventType = this.drainDisposition
+        ? undefined
+        : projectWireEventType(event, this.options.model);
       if (eventType) {
         this.options.onWireEventType?.(eventType);
       }
@@ -141,7 +182,21 @@ export class OpenAIQuicksilverDelegationController {
   }
 
   handleEvent(event: OpenAIQuicksilverInboundEvent): void {
-    if (this.stopped || event.kind === "ignored" || event.kind === "audio-cleared") {
+    // Media workers and browser WebRTC own audio; this controller owns delegation events.
+    if (
+      this.stopped ||
+      event.kind === "ignored" ||
+      event.kind === "audio-cleared" ||
+      event.kind === "audio"
+    ) {
+      return;
+    }
+    if (
+      this.drainDisposition &&
+      event.kind !== "transcript-delta" &&
+      event.kind !== "transcript-done" &&
+      event.kind !== "session-closed"
+    ) {
       return;
     }
     if (event.kind === "unknown") {
@@ -152,9 +207,29 @@ export class OpenAIQuicksilverDelegationController {
       this.options.onSessionStarted?.(event.expiresAt);
       return;
     }
+    if (event.kind === "session-closed") {
+      try {
+        this.options.onSessionClosed?.(event.reason);
+      } finally {
+        if (this.drainDisposition === "detach") {
+          this.detach();
+        } else {
+          this.stop(new Error("GPT-Live session closed"));
+        }
+      }
+      return;
+    }
     if (event.kind === "transcript-delta" || event.kind === "transcript-done") {
-      this.appendTranscript(event);
-      this.options.onTranscript?.(event.role, event.text, event.kind === "transcript-done");
+      if (isOpenAIGptLiveApiModel(this.options.model)) {
+        this.transcript.appendPublic(event, {
+          onTranscript: this.options.onTranscript,
+          canAppend: () => !this.stopped,
+        });
+        this.delegations.resume();
+      } else {
+        this.transcript.append(event);
+        this.options.onTranscript?.(event.role, event.text, event.kind === "transcript-done");
+      }
       return;
     }
     if (event.kind === "error") {
@@ -167,71 +242,72 @@ export class OpenAIQuicksilverDelegationController {
       }
       return;
     }
-    if (event.kind === "audio") {
-      if (!this.options.onAudio) {
-        // Browser and OAuth Gateway sessions negotiate audio over WebRTC.
+    if (isOpenAIGptLiveApiModel(this.options.model)) {
+      this.delegations.enqueue(event.id);
+    } else {
+      if (!this.delegations.claim(event.id)) {
         return;
       }
-      const audio = canonicalizeBase64(event.data);
-      if (!audio) {
-        this.fail(new Error("OpenAI GPT-Live returned malformed base64 audio"));
+      const input = event.prompt ?? this.transcript.latestUserInput();
+      if (event.prompt === undefined && !input.trim()) {
+        this.sendAppend(
+          "Ask the user to repeat their request; no user transcript was received.",
+          "speakable",
+          event.id,
+        );
         return;
       }
-      this.options.onAudio(Buffer.from(audio, "base64"));
-      return;
+      this.startDelegation(event.id, input);
     }
-    this.startDelegation(event.id, event.prompt);
   }
 
   sendSessionContext(text: string, channel: "speakable" | "commentary"): void {
     const content = text.trim();
     if (content) {
       // Standalone speech must not become the result of whichever delegation is active.
-      this.sendAppend({ type: "session.context.append" }, content, channel);
+      this.sendAppend(content, channel);
+    }
+  }
+
+  beginTranscriptDrain(disposition: "abort" | "detach"): void {
+    if (this.stopped || this.drainDisposition) {
+      return;
+    }
+    this.drainDisposition = disposition;
+    this.delegations.stop();
+    this.revokeRequesterFinal();
+    this.pendingDelegation = undefined;
+    if (disposition === "abort") {
+      this.consultController?.abort(new Error("GPT-Live session closing"));
     }
   }
 
   stop(reason: Error): void {
-    if (this.stopped) {
-      return;
+    if (this.retire()) {
+      this.consultController?.abort(reason);
+      this.consultController = undefined;
     }
-    this.markStopped();
-    this.consultController?.abort(reason);
-    this.consultController = undefined;
   }
 
   /** Releases sideband ownership without canceling work already accepted by the host. */
   detach(): void {
-    if (this.stopped) {
-      return;
-    }
-    this.markStopped();
+    this.retire();
   }
 
-  private appendTranscript(
-    event: Extract<OpenAIQuicksilverInboundEvent, { kind: "transcript-delta" | "transcript-done" }>,
-  ): void {
-    const last = this.transcript.at(-1);
-    if (event.kind === "transcript-delta") {
-      if (last?.role === event.role && this.partialTranscriptRole === event.role) {
-        last.text += event.text;
-      } else {
-        this.transcript.push({ role: event.role, text: event.text });
-      }
-      this.partialTranscriptRole = event.role;
-    } else {
-      if (last?.role === event.role && this.partialTranscriptRole === event.role) {
-        last.text = event.text;
-      } else {
-        this.transcript.push({ role: event.role, text: event.text });
-      }
-      this.partialTranscriptRole = undefined;
+  flushTranscript(): void {
+    if (isOpenAIGptLiveApiModel(this.options.model)) {
+      this.consumeTranscript();
     }
-    this.transcript = boundOpenAIQuicksilverContextItems(this.transcript);
+  }
+
+  private consumeTranscript(): RealtimeVoiceAgentConsultTranscriptEntry[] {
+    const snapshot = this.transcript.consume();
+    this.transcript.publish(snapshot.publication, { onTranscript: this.options.onTranscript });
+    return snapshot.context;
   }
 
   private startDelegation(id: string, input: string): void {
-    if (this.stopped || this.options.signal.aborted || !input.trim()) {
+    if (this.stopped || this.drainDisposition || this.options.signal.aborted || !input.trim()) {
       return;
     }
     const handleInput = this.options.handleDelegationInput;
@@ -248,18 +324,14 @@ export class OpenAIQuicksilverDelegationController {
           return;
         }
         try {
-          this.sendAppend(
-            { type: "delegation.context.append", delegation_item_id: id },
-            message,
-            "speakable",
-            socket,
-          );
+          this.sendAppend(message, "speakable", id, socket);
         } catch (error) {
           this.fail(toErrorObject(error, "OpenAI GPT-Live control response failed"));
         }
       };
       try {
         if (handleInput(input, respond) === "control") {
+          this.transcript.clearPendingUserInput();
           return;
         }
       } catch (error) {
@@ -268,9 +340,13 @@ export class OpenAIQuicksilverDelegationController {
       }
     }
     // Transcript is a once-delivered delta. Empty delegations must not consume it.
-    const transcript = this.transcript;
-    this.transcript = [];
-    this.partialTranscriptRole = undefined;
+    if (this.stopped || this.drainDisposition || this.options.signal.aborted) {
+      return;
+    }
+    const transcript = this.consumeTranscript();
+    if (this.stopped || this.drainDisposition || this.options.signal.aborted) {
+      return;
+    }
     const delegation = {
       id,
       prompt: buildOpenAIQuicksilverDelegationPrompt({ input, transcript }),
@@ -377,13 +453,18 @@ export class OpenAIQuicksilverDelegationController {
     this.steeringPromise = completion;
   }
 
-  private markStopped(): void {
+  private retire(): boolean {
+    if (this.stopped) {
+      return false;
+    }
+    this.delegations.stop();
+    this.flushTranscript();
     this.stopped = true;
     this.revokeRequesterFinal();
     this.options.signal.removeEventListener("abort", this.onSessionAbort);
     this.pendingDelegation = undefined;
-    this.partialTranscriptRole = undefined;
-    this.transcript = [];
+    this.transcript.clear();
+    return true;
   }
 
   private async runDelegation(
@@ -397,10 +478,7 @@ export class OpenAIQuicksilverDelegationController {
     try {
       // Host-classified sessions disable vendor filler. Receipt is launch-only, not run admission.
       if (this.options.handleDelegationInput) {
-        this.sendSessionContext(
-          buildRealtimeVoiceAgentControlSpeechMessage("I’ll check that request."),
-          "speakable",
-        );
+        this.sendSessionContext(NATURAL_DELEGATION_ACK_MESSAGE, "speakable");
       }
       const result = await runner({
         prompt: delegation.prompt,
@@ -464,13 +542,7 @@ export class OpenAIQuicksilverDelegationController {
       this.revokeRequesterFinal();
       return;
     }
-    if (
-      !this.sendAppend(
-        { type: "delegation.context.append", delegation_item_id: delegationId },
-        text,
-        "speakable",
-      )
-    ) {
+    if (!this.sendAppend(text, "speakable", delegationId)) {
       this.revokeRequesterFinal();
     }
   }
@@ -482,9 +554,9 @@ export class OpenAIQuicksilverDelegationController {
     }
     this.requesterFinalOwner = undefined;
     return this.sendAppend(
-      { type: "delegation.context.append", delegation_item_id: owner.delegationId },
       boundOpenAIQuicksilverDelegationResult(text),
       "speakable",
+      owner.delegationId,
     );
   }
 
@@ -494,17 +566,16 @@ export class OpenAIQuicksilverDelegationController {
   }
 
   private sendAppend(
-    target:
-      | { type: "session.context.append" }
-      | { type: "delegation.context.append"; delegation_item_id: string },
     text: string,
     channel: "speakable" | "commentary",
+    delegationId?: string,
     socket = this.options.getSocket(),
   ): boolean {
     for (const chunk of chunkOpenAIQuicksilverAppendText(text)) {
       // A control reply belongs to this call/socket, not the task it may have cancelled.
       if (
         this.stopped ||
+        this.drainDisposition ||
         this.options.signal.aborted ||
         !socket ||
         socket !== this.options.getSocket() ||
@@ -513,11 +584,14 @@ export class OpenAIQuicksilverDelegationController {
         return false;
       }
       socket.send(
-        JSON.stringify({
-          ...target,
-          channel,
-          content: [{ type: "input_text", text: chunk }],
-        }),
+        JSON.stringify(
+          buildOpenAIQuicksilverContextAppend({
+            model: this.options.model,
+            text: chunk,
+            channel,
+            delegationId,
+          }),
+        ),
       );
     }
     return true;

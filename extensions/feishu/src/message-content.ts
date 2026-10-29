@@ -1,8 +1,12 @@
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseStrictNonNegativeInteger,
+  timestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
 import { escapeHtml, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { parseInteractiveCardContent } from "./interactive-message-content.js";
-import { parsePostContent } from "./post.js";
+import { normalizeMentions, type FeishuTextMention } from "./mention.js";
+import { renderPostContent } from "./post.js";
 
 export function formatFeishuMediaContent(
   parsed: Record<string, unknown>,
@@ -22,14 +26,18 @@ export function formatFeishuMediaContent(
   return "";
 }
 
-function formatSubMessageContent(content: string, contentType: string): string {
+function formatSubMessageContent(
+  content: string,
+  contentType: string,
+  mentions?: ReadonlyArray<FeishuTextMention>,
+): string {
   try {
     const parsed = JSON.parse(content);
     switch (contentType) {
       case "text":
-        return parsed.text || content;
+        return normalizeMentions(parsed.text || content, mentions);
       case "post":
-        return parsePostContent(content).textContent;
+        return renderPostContent(parsed).textContent;
       case "interactive":
         return parseInteractiveCardContent(parsed);
       case "image":
@@ -52,22 +60,19 @@ function formatSubMessageContent(content: string, contentType: string): string {
   }
 }
 
-export function parseMergeForwardContent(params: { content: string }): string {
-  const { content } = params;
-  const maxMessages = 50;
-
-  let items: Array<{
+export async function parseMergeForwardContent(
+  items: ReadonlyArray<{
     msg_type?: string;
     body?: { content?: string };
     upper_message_id?: string;
     create_time?: string;
-  }>;
-  try {
-    items = JSON.parse(content);
-  } catch {
-    return "[Merged and Forwarded Message - parse error]";
-  }
-  if (!Array.isArray(items) || items.length === 0) {
+    sender?: { id?: string };
+    mentions?: ReadonlyArray<FeishuTextMention>;
+  }>,
+  resolveSenderName?: (senderId: string) => Promise<string | undefined>,
+): Promise<string> {
+  const maxMessages = 50;
+  if (items.length === 0) {
     return "[Merged and Forwarded Message - no sub-messages]";
   }
   const container = items.find(
@@ -86,8 +91,21 @@ export function parseMergeForwardContent(params: { content: string }): string {
   );
 
   const lines = ["[Merged and Forwarded Messages]"];
+  const senderNames = new Map<string, string>();
   for (const item of subMessages.slice(0, maxMessages)) {
-    lines.push(`- ${formatSubMessageContent(item.body?.content || "", item.msg_type || "text")}`);
+    const body = formatSubMessageContent(
+      item.body?.content || "",
+      item.msg_type || "text",
+      item.mentions,
+    );
+    const ms = parseStrictNonNegativeInteger(item.create_time);
+    const timestamp = ms === undefined ? undefined : timestampMsToIsoString(ms);
+    const senderId = item.sender?.id;
+    if (senderId && resolveSenderName && !senderNames.has(senderId)) {
+      senderNames.set(senderId, (await resolveSenderName(senderId)) ?? senderId);
+    }
+    const sender = senderId ? (senderNames.get(senderId) ?? senderId) : undefined;
+    lines.push(`- ${timestamp ? `[${timestamp}] ` : ""}${sender ? `${sender}: ` : ""}${body}`);
   }
   if (subMessages.length > maxMessages) {
     lines.push(`... and ${subMessages.length - maxMessages} more messages`);

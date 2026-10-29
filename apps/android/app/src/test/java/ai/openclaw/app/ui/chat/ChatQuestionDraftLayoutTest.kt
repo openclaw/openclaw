@@ -48,6 +48,8 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
@@ -201,6 +203,14 @@ class ChatQuestionDraftLayoutTest {
     answer.assertTextContains("Mention the keyboard fix")
     composeRule.onNodeWithText("Submit").assertIsEnabled()
     composeRule.onNode(hasSetTextAction() and hasText("Other answer").not()).performClick()
+    assertQuestionUnchanged()
+
+    val worked = hasText("Worked", substring = true) and hasClickAction()
+    history.performScrollToNode(worked)
+    composeRule.onNode(worked).performClick()
+    history.performScrollToIndex(0)
+    repeat(3) { history.performTouchInput { swipeUp(durationMillis = 500) } }
+    answer.assertIsDisplayed().assertTextContains("Mention the keyboard fix")
     assertQuestionUnchanged()
 
     val visitedMessages = mutableSetOf<String>()

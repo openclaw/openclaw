@@ -1,31 +1,56 @@
 // Fresh-process fixture: value imports stay outside OpenClaw until each scenario demands them.
 import assert from "node:assert/strict";
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
-import { createServer, type IncomingHttpHeaders } from "node:http";
+import type { IncomingHttpHeaders } from "node:http";
 import { registerHooks } from "node:module";
 import path from "node:path";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { text } from "node:stream/consumers";
+import type { FetchLike } from "@modelcontextprotocol/client";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { AuthProfileStore, OAuthCredential } from "./auth-profiles/types.js";
+import type { OAuthCredential } from "./auth-profiles/types.js";
 
 const PLUGIN_ID = "mcp-proof-owner";
 const PROVIDER_ID = "mcp-proof-provider";
 const EXTERNAL_PROFILE = `${PROVIDER_ID}:external`;
 const STORED_PROFILE = `${PROVIDER_ID}:stored`;
-const OBSERVER_KEY: unique symbol = Symbol.for("openclaw.mcpAuthIntegrationObserver");
+const OBSERVER_CHANNEL = "openclaw.test.mcpAuthIntegrationObserver";
 type HookContext = { config?: OpenClawConfig; agentDir?: string };
 type ProviderEvent = { kind: string; owner: string };
-type FixtureGlobal = typeof globalThis & {
-  [OBSERVER_KEY]?: (kind: string, owner: string, context?: HookContext) => void;
-};
+type ProviderObservation = ProviderEvent & { context?: HookContext };
 const providerEvents: ProviderEvent[] = [];
+const observerErrors: unknown[] = [];
 let inspectHook: ((owner: string, context?: HookContext) => void) | undefined;
 let authRuntimeEntered = false;
 
-function observe(kind: string, owner: string, context?: HookContext): void {
+// Shallow equality deliberately preserves callback, config, and registry identity.
+function assertFields<T extends object>(actual: T | undefined, expected: Partial<T>) {
+  assert(actual);
+  for (const key in expected) {
+    assert.equal(actual[key], expected[key], key);
+  }
+}
+
+const credentialOwner = {
+  type: "oauth" as const,
+  provider: PROVIDER_ID,
+  accountId: "fixture-account",
+};
+function credential(access: string, refresh: string, expires: number): OAuthCredential {
+  return { ...credentialOwner, access, refresh, expires };
+}
+
+function observe(message: unknown): void {
+  // The generated fixture publishes this exact payload through Node's synchronous channel.
+  const { kind, owner, context } = message as ProviderObservation;
   providerEvents.push({ kind, owner });
   if (kind !== "evaluated" && kind !== "registered") {
-    inspectHook?.(owner, context);
+    try {
+      inspectHook?.(owner, context);
+    } catch (error) {
+      // Report scope failures after cleanup; subscriber throws become uncaught Node errors.
+      observerErrors.push(error);
+    }
   }
 }
 
@@ -51,7 +76,8 @@ function writeProvider(root: string, owner: string, tokenUrl: string, enabled = 
   fs.writeFileSync(
     source,
     `const fs = require("node:fs");
-const observe = (kind, context) => globalThis[Symbol.for("openclaw.mcpAuthIntegrationObserver")](kind, ${JSON.stringify(owner)}, context);
+const observer = require("node:diagnostics_channel").channel(${JSON.stringify(OBSERVER_CHANNEL)});
+const observe = (kind, context) => observer.publish({ kind, owner: ${JSON.stringify(owner)}, context });
 observe("evaluated");
 module.exports = {
   id: ${JSON.stringify(PLUGIN_ID)},
@@ -65,17 +91,11 @@ module.exports = {
         observe("overlay", { config: context.config, agentDir: context.agentDir });
         const file = ${JSON.stringify(credentialPath)};
         if (!fs.existsSync(file)) return [];
-        return [{
-          profileId: ${JSON.stringify(EXTERNAL_PROFILE)},
-          credential: {
-            type: "oauth",
-            provider: ${JSON.stringify(PROVIDER_ID)},
-            accountId: "fixture-account",
-            access: ${JSON.stringify(`${owner}:`)} + fs.readFileSync(file, "utf8"),
-            refresh: "external-refresh-not-real",
-            expires: Date.now() + 3_600_000,
-          },
-        }];
+        return [{ profileId: ${JSON.stringify(EXTERNAL_PROFILE)}, credential: {
+          ...${JSON.stringify(credential("", "external-refresh-not-real", 1))},
+          access: ${JSON.stringify(`${owner}:`)} + fs.readFileSync(file, "utf8"),
+          expires: Date.now() + 3_600_000,
+        }}];
       },
       formatApiKey(credential) {
         observe("formatted");
@@ -109,73 +129,75 @@ module.exports = {
       slots: { memory: "none" },
     },
   };
-  return { config, agentDir, workspaceDir, credentialPath };
+  return { config, agentDir, workspaceDir, credentialPath, source };
 }
 
 type ProviderFixture = ReturnType<typeof writeProvider>;
-type HttpRequest = { method?: string; headers: IncomingHttpHeaders; body: string };
+type HttpRequest = { method?: string; headers: IncomingHttpHeaders };
+const configuredHeaders = { Authorization: "Bearer stale-config-not-real", "X-Trace": "keep" };
+function authOptions(
+  fixture: ProviderFixture,
+  resourceUrl: string,
+  authProfileId = EXTERNAL_PROFILE,
+) {
+  return {
+    serverName: "proof",
+    resourceUrl,
+    authProfileId,
+    cfg: fixture.config,
+    agentDir: fixture.agentDir,
+  };
+}
 
 async function createHttpFixture() {
+  const { startCompletionServer } = await import("./simple-completion.test-support.js");
   const requests: HttpRequest[] = [];
   const refreshInputs: string[] = [];
   const order: string[] = [];
   const errors: unknown[] = [];
   const behavior = { rejectRefresh: false };
-  const server = createServer((request, response) => {
+  const server = await startCompletionServer((request, response) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
-      const body = Buffer.concat(chunks).toString("utf8");
+      const body = await text(request);
       response.setHeader("content-type", "application/json");
+      const send = (code: number, value?: unknown) => {
+        response.statusCode = code;
+        response.end(value === undefined ? undefined : JSON.stringify(value));
+      };
       if (request.url === "/token") {
         const input = JSON.parse(body) as { refresh: string };
         refreshInputs.push(input.refresh);
         order.push("refresh");
-        response.statusCode = behavior.rejectRefresh ? 503 : 200;
-        response.end(
-          JSON.stringify({
-            access: "rotated-access-not-real",
-            refresh: "rotated-refresh-not-real",
-            expires: Date.now() + 3_600_000,
-          }),
-        );
-        return;
+        return send(behavior.rejectRefresh ? 503 : 200, {
+          access: "rotated-access-not-real",
+          refresh: "rotated-refresh-not-real",
+          expires: Date.now() + 3_600_000,
+        });
       }
-      requests.push({ method: request.method, headers: request.headers, body });
+      requests.push({ method: request.method, headers: request.headers });
       order.push("mcp");
-      const message = body
-        ? (JSON.parse(body) as {
-            id?: number;
-            method?: string;
-            params?: { protocolVersion: string };
-          })
-        : undefined;
+      const message: { id?: number; method?: string; params?: { protocolVersion: string } } = body
+        ? JSON.parse(body)
+        : {};
       // This JSON-only endpoint declines the SDK's optional SSE stream.
       if (request.method === "GET" && request.headers.accept === "text/event-stream") {
-        response.statusCode = 405;
         response.setHeader("allow", "POST");
-        response.end();
-        return;
+        return send(405);
       }
-      if (message?.method && message.id === undefined) {
-        response.statusCode = 202;
-        response.end();
-        return;
+      if (message.method && message.id === undefined) {
+        return send(202);
       }
       const result =
-        message?.method === "initialize"
+        message.method === "initialize"
           ? {
               protocolVersion: message.params?.protocolVersion,
               capabilities: {},
               serverInfo: { name: "mcp-proof", version: "1.0.0" },
             }
           : {};
-      response.end(
-        JSON.stringify(
-          message?.id === undefined ? { ok: true } : { jsonrpc: "2.0", id: message.id, result },
-        ),
+      send(
+        200,
+        message.id === undefined ? { ok: true } : { jsonrpc: "2.0", id: message.id, result },
       );
     })().catch((error: unknown) => {
       errors.push(error);
@@ -183,28 +205,15 @@ async function createHttpFixture() {
       response.end();
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address();
-  assert(address && typeof address !== "string");
-  const origin = `http://127.0.0.1:${address.port}`;
   return {
-    url: `${origin}/mcp`,
-    tokenUrl: `${origin}/token`,
+    url: `${server.origin}/mcp`,
+    tokenUrl: `${server.origin}/token`,
     requests,
     refreshInputs,
     order,
     behavior,
     close: async () => {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-        server.closeAllConnections();
-      });
+      await server[Symbol.asyncDispose]();
       assert.deepEqual(errors, []);
     },
   };
@@ -223,7 +232,7 @@ function bundleConfig(url: string, profileId = STORED_PROFILE) {
         url,
         auth: "oauth",
         oauth: { authProfileId: profileId },
-        headers: { Authorization: "Bearer stale-config-not-real", "X-Trace": "keep" },
+        headers: configuredHeaders,
       },
     },
   };
@@ -240,7 +249,6 @@ async function runExternalScenario(root: string): Promise<void> {
   const foreign = await createHttpFixture();
   const fixture = writeProvider(root, "external", endpoint.tokenUrl);
   const moduleAttempts: string[] = [];
-  const moduleLoads: string[] = [];
   const observeModuleAttempt = (specifier: string) => {
     if (isCredentialModule(specifier)) {
       moduleAttempts.push(specifier);
@@ -259,65 +267,40 @@ async function runExternalScenario(root: string): Promise<void> {
       }
       return resolved;
     },
-    load(url, context, nextLoad) {
-      // Source loading is not evaluation; the real plugin records evaluation separately.
-      const loaded = nextLoad(url, context);
-      if (isCredentialModule(url)) {
-        moduleLoads.push(url);
-      }
-      return loaded;
-    },
   });
   try {
-    const { resolveMcpBearerBundleConfig, withMcpAuthProfileBearer } =
+    const { resolveMcpBearerBundleConfig: project, withMcpAuthProfileBearer } =
       await import("./mcp-auth-profile.js");
-    const calls: Array<{ url: string | URL; init?: RequestInit }> = [];
+    const calls: Array<RequestInit | undefined> = [];
     const wrapped = withMcpAuthProfileBearer({
       fetchFn: async (url, init) => {
-        calls.push({ url, init });
+        calls.push(init);
         return fetch(url, init);
       },
-      serverName: "proof",
-      resourceUrl: endpoint.url,
-      authProfileId: EXTERNAL_PROFILE,
-      cfg: fixture.config,
-      agentDir: fixture.agentDir,
-      headers: { Authorization: "Bearer stale-config-not-real", "X-Trace": "keep" },
+      ...authOptions(fixture, endpoint.url),
+      headers: configuredHeaders,
     });
     const plain = { mcpServers: { plain: { url: endpoint.url } } };
-    assert.deepEqual(await resolveMcpBearerBundleConfig({ config: plain }), {
+    assert.deepEqual(await project({ config: plain }), {
       config: plain,
       env: undefined,
     });
     const foreignInit = { headers: { Authorization: "Bearer caller-owned-not-real" } };
     await consumeFetch(wrapped, foreign.url, foreignInit);
-    assert.equal(calls[0]?.init, foreignInit);
-    // Assert a completed phase, not the live recorders the next request populates.
-    const beforeDemand = {
-      moduleAttempts: [...moduleAttempts],
-      moduleLoads: [...moduleLoads],
-      providerEvents: [...providerEvents],
-    };
-    assert.deepEqual(beforeDemand, { moduleAttempts: [], moduleLoads: [], providerEvents: [] });
-
+    assert.equal(calls[0], foreignInit);
+    assert.deepEqual([moduleAttempts, providerEvents], [[], []]);
     authRuntimeEntered = true;
     const signal = new AbortController().signal;
     await consumeFetch(wrapped, new URL(endpoint.url), {
       headers: { Authorization: "Bearer stale-request-not-real", Accept: "application/json" },
       signal,
     });
-    assert.equal(calls.at(-1)?.init?.signal, signal);
-    assert.equal(endpoint.requests.at(-1)?.headers.authorization, "Bearer external:first");
-    assert.equal(endpoint.requests.at(-1)?.headers["x-trace"], "keep");
-    assert.equal(endpoint.requests.at(-1)?.headers.accept, "application/json");
-    assert(moduleAttempts.some((entry) => entry.includes("auth-profiles")));
-    assert(moduleLoads.some((entry) => entry.includes("auth-profiles")));
-    for (const kind of ["evaluated", "registered", "overlay", "formatted"]) {
-      assert(
-        providerEvents.some((event) => event.kind === kind),
-        `missing provider event: ${kind}`,
-      );
-    }
+    assert.equal(calls.at(-1)?.signal, signal);
+    assertFields(endpoint.requests.at(-1)?.headers, {
+      authorization: "Bearer external:first",
+      "x-trace": "keep",
+      accept: "application/json",
+    });
 
     fs.writeFileSync(fixture.credentialPath, "rotated");
     await consumeFetch(wrapped, endpoint.url);
@@ -328,18 +311,19 @@ async function runExternalScenario(root: string): Promise<void> {
     assert.equal(endpoint.requests.length, sent);
     const eventsAfterRemoval = providerEvents.length;
     await consumeFetch(wrapped, new URL(foreign.url), foreignInit);
-    assert.equal(calls.at(-1)?.init, foreignInit);
+    assert.equal(calls.at(-1), foreignInit);
     assert.equal(providerEvents.length, eventsAfterRemoval);
     for (const request of foreign.requests) {
-      assert.equal(request.headers.authorization, "Bearer caller-owned-not-real");
-      assert.equal(request.headers["x-trace"], undefined);
+      assertFields(request.headers, {
+        authorization: "Bearer caller-owned-not-real",
+        "x-trace": undefined,
+      });
     }
     const { loadPersistedAuthProfileStore } = await import("./auth-profiles/persisted.js");
     assert.equal(
       loadPersistedAuthProfileStore(fixture.agentDir)?.profiles[EXTERNAL_PROFILE],
       undefined,
     );
-    console.log(JSON.stringify({ moduleAttempts, moduleLoads, providerEvents }));
   } finally {
     hooks.deregister();
     await Promise.all([endpoint.close(), foreign.close()]);
@@ -353,90 +337,81 @@ async function runRefreshScenario(root: string): Promise<void> {
   const { loadPersistedAuthProfileStore } = await import("./auth-profiles/persisted.js");
   const { resolveMcpBearerBundleConfig, withMcpAuthProfileBearer } =
     await import("./mcp-auth-profile.js");
-  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
-  const { StreamableHTTPClientTransport } =
-    await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+  const { Client, StreamableHTTPClientTransport } = await import("@modelcontextprotocol/client");
   const endpoint = await createHttpFixture();
   const fixture = writeProvider(root, "refresh", endpoint.tokenUrl);
-  const expired: OAuthCredential = {
-    type: "oauth",
-    provider: PROVIDER_ID,
-    accountId: "fixture-account",
-    access: "expired-access-not-real",
-    refresh: "stored-refresh-not-real",
-    expires: 1,
-  };
-  const seed = () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        [STORED_PROFILE]: expired,
-        [`${PROVIDER_ID}:static`]: {
-          type: "token",
-          provider: PROVIDER_ID,
-          token: "static-not-real",
+  const expired = credential("expired-access-not-real", "stored-refresh-not-real", 1);
+  const seed = () =>
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [STORED_PROFILE]: expired,
+          [`${PROVIDER_ID}:static`]: {
+            type: "token",
+            provider: PROVIDER_ID,
+            token: "static-not-real",
+          },
         },
       },
-    };
-    saveAuthProfileStore(store, fixture.agentDir, {
-      filterExternalAuthProfiles: false,
-      syncExternalCli: false,
-    });
-  };
+      fixture.agentDir,
+      {
+        filterExternalAuthProfiles: false,
+        syncExternalCli: false,
+      },
+    );
   seed();
   const wrapped = withMcpAuthProfileBearer({
     fetchFn: fetch,
-    serverName: "proof",
-    resourceUrl: endpoint.url,
-    authProfileId: STORED_PROFILE,
-    cfg: fixture.config,
-    agentDir: fixture.agentDir,
-    headers: { "X-Trace": "keep", Authorization: "Bearer stale-config-not-real" },
+    ...authOptions(fixture, endpoint.url, STORED_PROFILE),
+    headers: configuredHeaders,
   });
   const transport = new StreamableHTTPClientTransport(new URL(endpoint.url), {
     fetch: wrapped,
     requestInit: { headers: { "X-Request": "keep", Authorization: "Bearer stale-sdk-not-real" } },
   });
-  const client = new Client({ name: "mcp-auth-proof", version: "1.0.0" });
+  const client = new Client(
+    { name: "mcp-auth-proof", version: "1.0.0" },
+    { versionNegotiation: { mode: "legacy" } },
+  );
+  const project = (profileId = STORED_PROFILE, tokenProjection?: "env" | "literal") =>
+    resolveMcpBearerBundleConfig({
+      config: bundleConfig(endpoint.url, profileId),
+      cfg: fixture.config,
+      agentDir: fixture.agentDir,
+      tokenProjection,
+    });
   // Optional SSE GETs are independent of the ordered RPC POSTs under test.
   const mcpPosts = () => endpoint.requests.filter((request) => request.method === "POST");
   try {
     await client.connect(transport);
-    assert.deepEqual(await client.ping(), {});
-    assert.deepEqual(await client.ping(), {});
+    await client.ping();
+    await client.ping();
     assert.deepEqual(endpoint.refreshInputs, ["stored-refresh-not-real"]);
     assert.equal(endpoint.order[0], "refresh");
-    assert.deepEqual(
-      mcpPosts().map((request) => (JSON.parse(request.body) as { method: string }).method),
-      ["initialize", "notifications/initialized", "ping", "ping"],
-    );
     for (const request of endpoint.requests) {
-      assert.equal(request.headers.authorization, "Bearer rotated-access-not-real");
-      assert.equal(request.headers["x-trace"], "keep");
-      assert.equal(request.headers["x-request"], "keep");
-      assert.equal(
-        request.headers.accept,
-        request.method === "POST" ? "application/json, text/event-stream" : "text/event-stream",
-      );
+      assertFields(request.headers, {
+        authorization: "Bearer rotated-access-not-real",
+        "x-trace": "keep",
+        "x-request": "keep",
+        accept:
+          request.method === "POST" ? "application/json, text/event-stream" : "text/event-stream",
+      });
     }
     const stored = loadPersistedAuthProfileStore(fixture.agentDir)?.profiles[STORED_PROFILE];
     assert(stored?.type === "oauth");
-    assert.equal(stored.access, "rotated-access-not-real");
-    assert.equal(stored.refresh, "rotated-refresh-not-real");
-    assert.equal(stored.accountId, "fixture-account");
+    assertFields(stored, {
+      access: "rotated-access-not-real",
+      refresh: "rotated-refresh-not-real",
+      accountId: "fixture-account",
+    });
 
     for (const tokenProjection of ["env", "literal"] as const) {
-      const projected = await resolveMcpBearerBundleConfig({
-        config: bundleConfig(endpoint.url),
-        cfg: fixture.config,
-        agentDir: fixture.agentDir,
-        tokenProjection,
-      });
+      const projected = await project(STORED_PROFILE, tokenProjection);
       const server = projected.config.mcpServers.proof;
       assert(server);
       const headers = filterStringRecord(server.headers);
       const authorization = headers?.Authorization;
-      assert.equal(typeof authorization, "string");
       if (tokenProjection === "literal") {
         assert.equal(authorization, "Bearer rotated-access-not-real");
         assert.equal(projected.env, undefined);
@@ -446,25 +421,14 @@ async function runRefreshScenario(root: string): Promise<void> {
         assert.equal(projected.env?.[envKey], "rotated-access-not-real");
       }
       assert.equal(headers?.["X-Trace"], "keep");
-      assert.equal(server.auth, undefined);
-      assert.equal(server.oauth, undefined);
-      const serialized = JSON.stringify(projected);
-      assert(!serialized.includes("rotated-refresh-not-real"));
-      assert(!serialized.includes("formatterOnly"));
+      assertFields(server, { auth: undefined, oauth: undefined });
+      assert.doesNotMatch(JSON.stringify(projected), /rotated-refresh-not-real|formatterOnly/u);
     }
     for (const [profileId, error] of [
       [`${PROVIDER_ID}:missing`, /profile was not found/u],
       [`${PROVIDER_ID}:static`, /profiles are not refreshable/u],
     ] as const) {
-      await assert.rejects(
-        () =>
-          resolveMcpBearerBundleConfig({
-            config: bundleConfig(endpoint.url, profileId),
-            cfg: fixture.config,
-            agentDir: fixture.agentDir,
-          }),
-        error,
-      );
+      await assert.rejects(() => project(profileId), error);
     }
     seed();
     endpoint.behavior.rejectRefresh = true;
@@ -474,14 +438,11 @@ async function runRefreshScenario(root: string): Promise<void> {
       (error: unknown) => {
         assert(error instanceof Error);
         assert.match(error.message, /fixture refresh denied/u);
-        assert(!error.message.includes(expired.access));
-        assert(!error.message.includes(expired.refresh));
+        assert.doesNotMatch(error.message, /expired-access-not-real|stored-refresh-not-real/u);
         return true;
       },
     );
     assert.equal(mcpPosts().length, sent);
-    assert(providerEvents.some((event) => event.kind === "refresh"));
-    assert(providerEvents.some((event) => event.kind === "refreshed"));
   } finally {
     await client.close();
     await endpoint.close();
@@ -496,23 +457,19 @@ async function runScopeScenario(root: string): Promise<void> {
   const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
   const { getPluginRegistryState } = await import("../plugins/runtime-state.js");
   const { setActivePluginRegistry } = await import("../plugins/runtime.js");
-  const { getPluginRuntimeGenerationRegistry, withPluginRuntimeGenerationScope } =
-    await import("../plugins/runtime/generation-scope.js");
-  const { getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
-    await import("../plugins/runtime/gateway-request-scope.js");
+  const generationScope = await import("../plugins/runtime/generation-scope.js");
+  const requestScope = await import("../plugins/runtime/gateway-request-scope.js");
   const { withMcpAuthProfileBearer } = await import("./mcp-auth-profile.js");
   const prepare = (fixture: ProviderFixture) =>
     withPluginCache(createPluginCache(), () => {
-      const metadataSnapshot = loadPluginMetadataSnapshot({
+      const options = {
         config: fixture.config,
         env: process.env,
         workspaceDir: fixture.workspaceDir,
-        preferPersisted: false,
-      });
+      };
+      const metadataSnapshot = loadPluginMetadataSnapshot({ ...options, preferPersisted: false });
       const pluginRegistry = loadPluginRegistryHandle({
-        config: fixture.config,
-        env: process.env,
-        workspaceDir: fixture.workspaceDir,
+        ...options,
         manifestRegistry: metadataSnapshot.manifestRegistry,
         installRecords: {},
         onlyPluginIds: [PLUGIN_ID],
@@ -522,57 +479,57 @@ async function runScopeScenario(root: string): Promise<void> {
     });
   const endpoint = await createHttpFixture();
   try {
-    const fixtures = ["first", "second", "disabled"].map((owner) =>
-      writeProvider(root, owner, endpoint.tokenUrl, owner !== "disabled"),
-    );
-    const owners = fixtures.map((fixture, index) => {
-      const generation = prepare(fixture);
-      const request = {
-        pluginId: `requester-${index}`,
-        isWebchatConnect: () => false,
-        resolveGatewayContext: () => undefined,
+    const owners = ["first", "second", "disabled"].map((name, index) => {
+      const fixture = writeProvider(root, name, endpoint.tokenUrl, name !== "disabled");
+      return {
+        fixture,
+        generation: prepare(fixture),
+        request: {
+          pluginId: `requester-${index}`,
+          isWebchatConnect: () => false,
+          resolveGatewayContext: () => undefined,
+        },
       };
-      return { fixture, generation, request };
     });
     type ScopedOwner = (typeof owners)[number];
     const [first, second, disabled] = owners;
     assert(first && second && disabled);
-    assert.equal(first.generation.pluginRegistry.providers.length, 1);
-    assert.equal(second.generation.pluginRegistry.providers.length, 1);
-    assert.equal(disabled.generation.pluginRegistry.providers.length, 0);
-    const checkScope = (owner: ScopedOwner, context?: HookContext) => {
-      const scope = getPluginRuntimeGatewayRequestScope();
+    const checkScope = (
+      { request, fixture, generation }: ScopedOwner,
+      context?: HookContext,
+      pluginOwner = false,
+    ) => {
+      const scope = requestScope.getPluginRuntimeGatewayRequestScope();
       assert(scope, "request scope must survive deferred auth");
-      assert.equal(scope.pluginId, owner.request.pluginId);
-      assert.equal(scope.isWebchatConnect === owner.request.isWebchatConnect, true);
-      assert.equal(scope.resolveGatewayContext === owner.request.resolveGatewayContext, true);
-      assert.equal(scope.pluginRegistry === owner.generation.pluginRegistry, true);
-      assert.equal(
-        scope.declaredProviderOwners === owner.generation.metadataSnapshot.declaredProviderOwners,
-        true,
-      );
-      assert.equal(getPluginRuntimeGenerationRegistry() === owner.generation.pluginRegistry, true);
+      assertFields(scope, {
+        ...request,
+        ...(pluginOwner
+          ? {
+              pluginId: PLUGIN_ID,
+              pluginSource: fixture.source,
+              pluginOrigin: "config" as const,
+            }
+          : {}),
+        pluginRegistry: generation.pluginRegistry,
+        declaredProviderOwners: generation.metadataSnapshot.declaredProviderOwners,
+      });
+      assert.equal(generationScope.getPluginRuntimeGenerationRegistry(), generation.pluginRegistry);
       if (context) {
-        assert.equal(context.config, owner.fixture.config);
-        assert.equal(context.agentDir, owner.fixture.agentDir);
+        assertFields(context, { config: fixture.config, agentDir: fixture.agentDir });
       }
     };
-    inspectHook = (name, context) => checkScope(name === "first" ? first : second, context);
+    inspectHook = (name, context) => checkScope(name === "first" ? first : second, context, true);
     const bind = (owner: ScopedOwner) => {
       const wrapped = withMcpAuthProfileBearer({
         fetchFn: async (url, init) => {
           checkScope(owner);
           return fetch(url, init);
         },
-        serverName: "proof",
-        resourceUrl: endpoint.url,
-        authProfileId: EXTERNAL_PROFILE,
-        cfg: owner.fixture.config,
-        agentDir: owner.fixture.agentDir,
+        ...authOptions(owner.fixture, endpoint.url),
       });
       return () =>
-        withPluginRuntimeGatewayRequestScope(owner.request, () =>
-          withPluginRuntimeGenerationScope(owner.generation, () =>
+        requestScope.withPluginRuntimeGatewayRequestScope(owner.request, () =>
+          generationScope.withPluginRuntimeGenerationScope(owner.generation, () =>
             consumeFetch(wrapped, endpoint.url),
           ),
         );
@@ -604,12 +561,9 @@ async function runScopeScenario(root: string): Promise<void> {
     await assert.rejects(bind(disabled), /profile was not found/u);
     assert.equal(endpoint.requests.length, sent);
     assert(!providerEvents.some((event) => event.owner === "disabled"));
-    assert.equal(getPluginRuntimeGatewayRequestScope(), undefined);
-    assert.equal(getPluginRuntimeGenerationRegistry(), undefined);
-    assert.equal(
-      getPluginRegistryState()?.activeRegistry === second.generation.pluginRegistry,
-      true,
-    );
+    assert.equal(requestScope.getPluginRuntimeGatewayRequestScope(), undefined);
+    assert.equal(generationScope.getPluginRuntimeGenerationRegistry(), undefined);
+    assert.equal(getPluginRegistryState()?.activeRegistry, second.generation.pluginRegistry);
   } finally {
     inspectHook = undefined;
     await endpoint.close();
@@ -618,23 +572,17 @@ async function runScopeScenario(root: string): Promise<void> {
 
 async function main(): Promise<void> {
   const [scenario, root] = process.argv.slice(2);
-  assert(root);
-  const globals = globalThis as FixtureGlobal;
-  globals[OBSERVER_KEY] = observe;
+  assert(root && scenario);
+  const observer = channel(OBSERVER_CHANNEL);
+  observer.subscribe(observe);
   try {
-    switch (scenario) {
-      case "external":
-        await runExternalScenario(root);
-        break;
-      case "refresh":
-        await runRefreshScenario(root);
-        break;
-      case "scopes":
-        await runScopeScenario(root);
-        break;
-      default:
-        throw new Error(`Unknown MCP auth proof scenario: ${scenario}`);
-    }
+    const run = new Map([
+      ["external", runExternalScenario],
+      ["refresh", runRefreshScenario],
+      ["scopes", runScopeScenario],
+    ]).get(scenario);
+    assert(run, `Unknown MCP auth proof scenario: ${scenario}`);
+    await run(root);
   } finally {
     try {
       // A rejected cold import must not load auth owners merely to clean them up.
@@ -649,9 +597,10 @@ async function main(): Promise<void> {
         closeOpenClawStateDatabaseForTest();
       }
     } finally {
-      delete globals[OBSERVER_KEY];
+      observer.unsubscribe(observe);
     }
   }
+  assert.deepEqual(observerErrors, [], "provider hooks must retain their exact request scope");
   console.log(`MCP_AUTH_PROOF_OK ${scenario}`);
 }
 

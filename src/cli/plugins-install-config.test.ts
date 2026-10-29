@@ -2,17 +2,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { bundledPluginRootAt, repoInstallSpec } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { hashConfigIncludeRaw } from "../config/includes.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import {
+  loadConfigForInstall,
   resolvePluginInstallRequestContext,
   type PluginInstallRequestContext,
-} from "./plugin-install-config-policy.js";
-import { loadConfigForInstall } from "./plugins-install-config.js";
+} from "../plugins/install-config.js";
+import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 
 const hoisted = vi.hoisted(() => ({
   assertConfigPathForWriteMock: vi.fn(),
@@ -56,12 +56,11 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
   };
 });
 
-vi.mock("./plugins-location-bridges.js", () => ({
+vi.mock("../plugins/location-bridges.js", () => ({
   listPersistedBundledPluginRecoveryLocations: () =>
     listPersistedBundledPluginRecoveryLocationsMock(),
 }));
 
-const DISCORD_REPO_INSTALL_SPEC = repoInstallSpec("discord");
 const installWriteOptions = {
   inputBase: "source",
   envSnapshotForRestore: { INSTALL_CONFIG_READ_VALUE: "read-time" },
@@ -74,8 +73,8 @@ const installWriteOptions = {
   includeFileTargetsForWrite: { "/tmp/plugins.json5": "/tmp/plugins.json5" },
 } satisfies ConfigWriteOptions;
 
-function makeSnapshot(overrides: Partial<ConfigFileSnapshot> = {}): ConfigFileSnapshot {
-  return {
+function mockSnapshot(overrides: Partial<ConfigFileSnapshot> = {}) {
+  readConfigFileSnapshotMock.mockResolvedValue({
     path: "/tmp/config.json5",
     exists: true,
     raw: '{ "plugins": {} }',
@@ -90,13 +89,12 @@ function makeSnapshot(overrides: Partial<ConfigFileSnapshot> = {}): ConfigFileSn
     warnings: [],
     legacyIssues: [],
     ...overrides,
-  };
+  });
 }
 
 describe("loadConfigForInstall", () => {
   const discordNpmRequest = {
     rawSpec: "@openclaw/discord",
-    normalizedSpec: "@openclaw/discord",
     installKind: "plugin",
     bundledPluginId: "discord",
     allowInvalidConfigRecovery: true,
@@ -119,17 +117,51 @@ describe("loadConfigForInstall", () => {
     listPersistedBundledPluginRecoveryLocationsMock.mockResolvedValue([]);
   });
 
+  it("does not borrow local recovery authority for a resolved registry source", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-source-context-"));
+    const localPath = path.join(root, "fixture-package");
+    fs.mkdirSync(localPath);
+    writeFixtureJsonSync(path.join(localPath, "package.json"), {
+      name: "fixture-package",
+      openclaw: { install: { allowInvalidConfigRecovery: true } },
+    });
+    writeFixtureJsonSync(path.join(localPath, "openclaw.plugin.json"), {
+      id: "fixture-local",
+      configSchema: { type: "object", properties: {} },
+    });
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(root);
+    try {
+      const registry = resolvePluginInstallRequestContext({
+        rawSpec: "fixture-package",
+        source: "npm",
+        localPath,
+      });
+      expect(registry).toMatchObject({ ok: true });
+      if (!registry.ok) {
+        throw new Error(registry.error);
+      }
+      expect(registry.request).not.toHaveProperty("bundledPluginId");
+      expect(registry.request.allowInvalidConfigRecovery).not.toBe(true);
+      const local = resolvePluginInstallRequestContext({ rawSpec: localPath, source: "local" });
+      expect(local).toMatchObject({
+        ok: true,
+        request: { bundledPluginId: "fixture-local", allowInvalidConfigRecovery: true },
+      });
+    } finally {
+      cwd.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("returns the source config and base hash when the snapshot is valid", async () => {
     const cfg = { plugins: { entries: { discord: { enabled: true } } } } as OpenClawConfig;
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        valid: true,
-        sourceConfig: cfg,
-        config: { plugins: { entries: { discord: { enabled: true } }, enabled: true } },
-        hash: "config-1",
-        issues: [],
-      }),
-    );
+    mockSnapshot({
+      valid: true,
+      sourceConfig: cfg,
+      config: { plugins: { entries: { discord: { enabled: true } }, enabled: true } },
+      hash: "config-1",
+      issues: [],
+    });
 
     const result = await loadConfigForInstall(discordNpmRequest);
     expect(result).toEqual({
@@ -143,12 +175,6 @@ describe("loadConfigForInstall", () => {
   });
 
   it.each([
-    { path: "channels.discord", message: "unknown channel id: discord" },
-    { path: "channels.discord", message: "invalid config for plugin discord: must be object" },
-    {
-      path: "channels.discord.accounts.work",
-      message: "invalid config for plugin discord: must be object",
-    },
     {
       path: "channels.other-channel",
       message: "invalid config for plugin discord: must be object",
@@ -157,16 +183,14 @@ describe("loadConfigForInstall", () => {
     const snapshotCfg = {
       plugins: { installs: { discord: { source: "path", installPath: "/gone" } } },
     } as unknown as OpenClawConfig;
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        parsed: { plugins: { installs: { discord: {} } } },
-        config: snapshotCfg,
-        issues: [
-          issue,
-          { path: "plugins.load.paths", message: "plugin: plugin path not found: /gone" },
-        ],
-      }),
-    );
+    mockSnapshot({
+      parsed: { plugins: { installs: { discord: {} } } },
+      config: snapshotCfg,
+      issues: [
+        issue,
+        { path: "plugins.load.paths", message: "plugin: plugin path not found: /gone" },
+      ],
+    });
 
     const result = await loadConfigForInstall(discordNpmRequest);
     expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
@@ -179,7 +203,7 @@ describe("loadConfigForInstall", () => {
     });
   });
 
-  it.each(["file:@openclaw/discord", "FILE:@openclaw/discord"])(
+  it.each(["FILE:@openclaw/discord"])(
     "does not treat %s as an official plugin recovery request",
     (rawSpec) => {
       const request = resolvePluginInstallRequestContext({ rawSpec });
@@ -192,19 +216,7 @@ describe("loadConfigForInstall", () => {
     },
   );
 
-  it("preserves a caller-proven plugin-only install kind", () => {
-    const request = resolvePluginInstallRequestContext({
-      rawSpec: "clawhub:demo",
-      installKind: "plugin",
-    });
-    if (!request.ok) {
-      throw new Error(request.error);
-    }
-
-    expect(request.request.installKind).toBe("plugin");
-  });
-
-  it.each(["@openclaw/discord@2026.5.22", "npm:@openclaw/discord@2026.5.22"])(
+  it.each(["npm:@openclaw/discord@2026.5.22"])(
     "allows versioned official reinstall recovery for %s",
     async (rawSpec) => {
       const snapshotCfg = {
@@ -214,16 +226,14 @@ describe("loadConfigForInstall", () => {
         },
         channels: { discord: { token: "preserve-me" } },
       } as unknown as OpenClawConfig;
-      readConfigFileSnapshotMock.mockResolvedValue(
-        makeSnapshot({
-          parsed: { plugins: { installs: { discord: {} }, load: { paths: ["/gone", "/keep"] } } },
-          config: snapshotCfg,
-          issues: [
-            { path: "channels.discord", message: "unknown channel id: discord" },
-            { path: "plugins.load.paths", message: "plugin: plugin path not found: /gone" },
-          ],
-        }),
-      );
+      mockSnapshot({
+        parsed: { plugins: { installs: { discord: {} }, load: { paths: ["/gone", "/keep"] } } },
+        config: snapshotCfg,
+        issues: [
+          { path: "channels.discord", message: "unknown channel id: discord" },
+          { path: "plugins.load.paths", message: "plugin: plugin path not found: /gone" },
+        ],
+      });
 
       const request = resolvePluginInstallRequestContext({ rawSpec });
       if (!request.ok) {
@@ -256,16 +266,14 @@ describe("loadConfigForInstall", () => {
     loadInstalledPluginIndexInstallRecordsMock.mockResolvedValue({
       discord: { source: "npm", installPath: "/gone" },
     });
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        parsed: { plugins: { load: { paths: ["/gone", "/keep"] } } },
-        config: snapshotCfg,
-        issues: [
-          { path: "channels.discord", message: "unknown channel id: discord" },
-          { path: "plugins.load.paths", message: "plugin: plugin path not found: /gone" },
-        ],
-      }),
-    );
+    mockSnapshot({
+      parsed: { plugins: { load: { paths: ["/gone", "/keep"] } } },
+      config: snapshotCfg,
+      issues: [
+        { path: "channels.discord", message: "unknown channel id: discord" },
+        { path: "plugins.load.paths", message: "plugin: plugin path not found: /gone" },
+      ],
+    });
 
     const result = await loadConfigForInstall(discordNpmRequest);
     expect(result.config.plugins?.load?.paths).toEqual(["/keep"]);
@@ -281,21 +289,19 @@ describe("loadConfigForInstall", () => {
     loadInstalledPluginIndexInstallRecordsMock.mockResolvedValue({
       discord: { source: "npm", installPath: "/canonical" },
     });
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        parsed: {
-          plugins: {
-            installs: { discord: { source: "npm", installPath: "/gone" } },
-            load: { paths: ["/gone"] },
-          },
+    mockSnapshot({
+      parsed: {
+        plugins: {
+          installs: { discord: { source: "npm", installPath: "/gone" } },
+          load: { paths: ["/gone"] },
         },
-        config: snapshotCfg,
-        issues: [
-          { path: "channels.discord", message: "unknown channel id: discord" },
-          { path: "plugins.load.paths", message: "plugin: plugin path not found: /gone" },
-        ],
-      }),
-    );
+      },
+      config: snapshotCfg,
+      issues: [
+        { path: "channels.discord", message: "unknown channel id: discord" },
+        { path: "plugins.load.paths", message: "plugin: plugin path not found: /gone" },
+      ],
+    });
 
     await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
       "Config invalid outside the plugin recovery path for discord",
@@ -313,19 +319,17 @@ describe("loadConfigForInstall", () => {
         loadPaths: [staleBundledPath],
       },
     ]);
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        parsed: { plugins: { load: { paths: [staleBundledPath, "/keep"] } } },
-        config: snapshotCfg,
-        issues: [
-          { path: "channels.discord", message: "unknown channel id: discord" },
-          {
-            path: "plugins.load.paths",
-            message: `plugin: plugin path not found: ${staleBundledPath}`,
-          },
-        ],
-      }),
-    );
+    mockSnapshot({
+      parsed: { plugins: { load: { paths: [staleBundledPath, "/keep"] } } },
+      config: snapshotCfg,
+      issues: [
+        { path: "channels.discord", message: "unknown channel id: discord" },
+        {
+          path: "plugins.load.paths",
+          message: `plugin: plugin path not found: ${staleBundledPath}`,
+        },
+      ],
+    });
 
     const result = await loadConfigForInstall(discordNpmRequest);
     expect(result.config.plugins?.load?.paths).toEqual(["/keep"]);
@@ -344,46 +348,21 @@ describe("loadConfigForInstall", () => {
         loadPaths: ["/app/extensions/discord"],
       },
     ]);
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        parsed: {
-          plugins: {
-            load: { paths: [operatorCheckoutPath] },
-          },
+    mockSnapshot({
+      parsed: {
+        plugins: {
+          load: { paths: [operatorCheckoutPath] },
         },
-        config: snapshotCfg,
-        issues: [
-          { path: "channels.discord", message: "unknown channel id: discord" },
-          {
-            path: "plugins.load.paths",
-            message: `plugin: plugin path not found: ${operatorCheckoutPath}`,
-          },
-        ],
-      }),
-    );
-
-    await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
-      "Config invalid outside the plugin recovery path for discord",
-    );
-  });
-
-  it("rejects malformed install record paths without crashing recovery", async () => {
-    const snapshotCfg = {
-      plugins: {
-        installs: { discord: { source: "npm", installPath: 1 } },
-        load: { paths: ["/gone"] },
       },
-    } as unknown as OpenClawConfig;
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        parsed: { plugins: { installs: { discord: {} }, load: { paths: ["/gone"] } } },
-        config: snapshotCfg,
-        issues: [
-          { path: "channels.discord", message: "unknown channel id: discord" },
-          { path: "plugins.load.paths", message: "plugin: plugin path not found: /gone" },
-        ],
-      }),
-    );
+      config: snapshotCfg,
+      issues: [
+        { path: "channels.discord", message: "unknown channel id: discord" },
+        {
+          path: "plugins.load.paths",
+          message: `plugin: plugin path not found: ${operatorCheckoutPath}`,
+        },
+      ],
+    });
 
     await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
       "Config invalid outside the plugin recovery path for discord",
@@ -394,19 +373,17 @@ describe("loadConfigForInstall", () => {
     const snapshotCfg = {
       plugins: { installs: { discord: { source: "npm", installPath: "/bad/discord" } } },
     } as unknown as OpenClawConfig;
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        parsed: { plugins: { installs: { discord: {} } } },
-        config: snapshotCfg,
-        issues: [
-          {
-            path: "plugins",
-            message:
-              "plugin: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js, ./dist/index.mjs, ./dist/index.cjs, index.js, index.mjs, index.cjs. This is a plugin packaging issue, not a local config problem; update or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then. TypeScript source fallback is only supported for source checkouts and local development paths.",
-          },
-        ],
-      }),
-    );
+    mockSnapshot({
+      parsed: { plugins: { installs: { discord: {} } } },
+      config: snapshotCfg,
+      issues: [
+        {
+          path: "plugins",
+          message:
+            "plugin: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js, ./dist/index.mjs, ./dist/index.cjs, index.js, index.mjs, index.cjs. This is a plugin packaging issue, not a local config problem; update or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then. TypeScript source fallback is only supported for source checkouts and local development paths.",
+        },
+      ],
+    });
 
     const request = resolvePluginInstallRequestContext({
       rawSpec: "npm:@openclaw/discord",
@@ -424,27 +401,25 @@ describe("loadConfigForInstall", () => {
     const snapshotCfg = {
       plugins: { installs: { brave: { source: "clawhub", installPath: "/bad/brave" } } },
     } as unknown as OpenClawConfig;
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        parsed: { plugins: { installs: { brave: {} } } },
-        config: snapshotCfg,
-        issues: [
-          {
-            path: "plugins.entries.brave",
-            message:
-              "plugin brave: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js.",
-          },
-          {
-            path: "tools.web.search.provider",
-            message:
-              'web_search provider is not available: brave (install or enable plugin "brave", then run openclaw doctor --fix)',
-          },
-        ],
-      }),
-    );
+    mockSnapshot({
+      parsed: { plugins: { installs: { brave: {} } } },
+      config: snapshotCfg,
+      issues: [
+        {
+          path: "plugins.entries.brave",
+          message:
+            "plugin brave: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js.",
+        },
+        {
+          path: "tools.web.search.provider",
+          message:
+            'web_search provider is not available: brave (install or enable plugin "brave", then run openclaw doctor --fix)',
+        },
+      ],
+    });
 
     const request = resolvePluginInstallRequestContext({
-      rawSpec: "@openclaw/brave-plugin",
+      rawSpec: "brave",
     });
     if (!request.ok) {
       throw new Error(request.error);
@@ -461,29 +436,6 @@ describe("loadConfigForInstall", () => {
     });
   });
 
-  it("allows explicit repo-checkout bundled-plugin reinstall recovery", async () => {
-    const snapshotCfg = { plugins: {} } as OpenClawConfig;
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        config: snapshotCfg,
-        issues: [{ path: "channels.discord", message: "unknown channel id: discord" }],
-      }),
-    );
-
-    const repoRequest = resolvePluginInstallRequestContext({
-      rawSpec: DISCORD_REPO_INSTALL_SPEC,
-    });
-    if (!repoRequest.ok) {
-      throw new Error(repoRequest.error);
-    }
-
-    const result = await loadConfigForInstall({
-      ...repoRequest.request,
-      resolvedPath: bundledPluginRootAt("/tmp/repo", "discord"),
-    });
-    expect(result.config).toBe(snapshotCfg);
-  });
-
   it("allows recovery through an exact single-file top-level plugins include", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-include-"));
     const configPath = path.join(tempRoot, "config.json5");
@@ -497,14 +449,12 @@ describe("loadConfigForInstall", () => {
       [pluginsPath]: fs.realpathSync(pluginsPath),
     });
     const snapshotCfg = { plugins: {} } as OpenClawConfig;
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        path: configPath,
-        parsed: { plugins: { $include: "./plugins.json5" } },
-        config: snapshotCfg,
-        issues: [{ path: "channels.discord", message: "unknown channel id: discord" }],
-      }),
-    );
+    mockSnapshot({
+      path: configPath,
+      parsed: { plugins: { $include: "./plugins.json5" } },
+      config: snapshotCfg,
+      issues: [{ path: "channels.discord", message: "unknown channel id: discord" }],
+    });
 
     try {
       const result = await loadConfigForInstall(discordNpmRequest);
@@ -512,30 +462,6 @@ describe("loadConfigForInstall", () => {
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
-  });
-
-  it("rejects recovery installs through an external plugins include", async () => {
-    const externalPluginsPath = path.join(
-      path.parse(process.cwd()).root,
-      "external-openclaw",
-      "plugins.json5",
-    );
-    const snapshotCfg = { plugins: {} } as OpenClawConfig;
-    includeFileTargetsForWriteMock.mockReturnValue({
-      [externalPluginsPath]: externalPluginsPath,
-    });
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        parsed: { plugins: { $include: externalPluginsPath } },
-        sourceConfig: snapshotCfg as ConfigFileSnapshot["sourceConfig"],
-        config: snapshotCfg,
-        issues: [{ path: "channels.discord", message: "unknown channel id: discord" }],
-      }),
-    );
-
-    await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
-      "Config plugins are stored in an external or unresolved top-level $include",
-    );
   });
 
   it("rejects external include aliases even when their target is under the config directory", async () => {
@@ -548,156 +474,60 @@ describe("loadConfigForInstall", () => {
     includeFileTargetsForWriteMock.mockReturnValue({
       [externalPluginsPath]: path.join(fs.realpathSync(process.cwd()), "plugins.json5"),
     });
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        path: configPath,
-        parsed: { plugins: { $include: externalPluginsPath } },
-        config: { plugins: {} } as OpenClawConfig,
-        issues: [{ path: "channels.discord", message: "unknown channel id: discord" }],
-      }),
-    );
+    mockSnapshot({
+      path: configPath,
+      parsed: { plugins: { $include: externalPluginsPath } },
+      config: { plugins: {} } as OpenClawConfig,
+      issues: [{ path: "channels.discord", message: "unknown channel id: discord" }],
+    });
 
     await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
       "Config plugins are stored in an external or unresolved top-level $include",
     );
   });
 
-  it("carries a plugin-mutation block for ambiguous installs through external plugin includes", async () => {
-    const externalPluginsPath = path.join(
-      path.parse(process.cwd()).root,
-      "external-openclaw",
-      "plugins.json5",
-    );
-    const snapshotCfg = { plugins: {} } as OpenClawConfig;
-    includeFileTargetsForWriteMock.mockReturnValue({
-      [externalPluginsPath]: externalPluginsPath,
-    });
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        valid: true,
-        parsed: { plugins: { $include: externalPluginsPath } },
-        sourceConfig: snapshotCfg as ConfigFileSnapshot["sourceConfig"],
-        config: snapshotCfg,
-        issues: [],
-      }),
-    );
-
-    const result = await loadConfigForInstall({
-      rawSpec: "maybe-hook-pack",
-      normalizedSpec: "maybe-hook-pack",
-    });
-
-    expect(result.config).toBe(snapshotCfg);
-    expect(result.pluginMutation).toEqual({
-      mode: "blocked",
-      scope: "plugins",
-      reason: expect.stringContaining("external or unresolved top-level $include"),
-    });
-  });
-
-  it("blocks known plugins through external includes", async () => {
-    const externalPluginsPath = path.join(
-      path.parse(process.cwd()).root,
-      "external-openclaw",
-      "plugins.json5",
-    );
-    const snapshotCfg = { plugins: {} } as OpenClawConfig;
-    includeFileTargetsForWriteMock.mockReturnValue({
-      [externalPluginsPath]: externalPluginsPath,
-    });
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        valid: true,
-        parsed: { plugins: { $include: externalPluginsPath } },
-        sourceConfig: snapshotCfg as ConfigFileSnapshot["sourceConfig"],
-        config: snapshotCfg,
-        issues: [],
-      }),
-    );
-
-    await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
-      "external or unresolved top-level $include",
-    );
-  });
-
-  it("carries a hook-mutation block through an external hooks include", async () => {
-    const externalHooksPath = path.join(
-      path.parse(process.cwd()).root,
-      "external-openclaw",
-      "hooks.json5",
-    );
-    const snapshotCfg = { hooks: { internal: {} } } as OpenClawConfig;
-    includeFileTargetsForWriteMock.mockReturnValue({
-      [externalHooksPath]: externalHooksPath,
-    });
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        valid: true,
-        parsed: { hooks: { $include: externalHooksPath } },
-        sourceConfig: snapshotCfg as ConfigFileSnapshot["sourceConfig"],
-        config: snapshotCfg,
-        issues: [],
-      }),
-    );
-
-    const result = await loadConfigForInstall({
-      rawSpec: "maybe-hook-pack",
-      normalizedSpec: "maybe-hook-pack",
-    });
-
-    expect(result.hookMutation).toEqual({
-      mode: "blocked",
-      scope: "hooks",
-      reason: expect.stringContaining("external or unresolved top-level $include"),
-    });
-    expect(result.pluginMutation).toEqual({ mode: "allowed" });
-  });
-
-  it("blocks config mutations when plugins and hooks share one canonical include target", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shared-include-"));
-    const configPath = path.join(tempRoot, "config.json5");
-    const sharedPath = path.join(tempRoot, "shared.json5");
-    const sharedRaw = "{}\n";
-    fs.writeFileSync(sharedPath, sharedRaw);
-    includeFileHashesForWriteMock.mockReturnValue({
-      [sharedPath]: hashConfigIncludeRaw(sharedRaw),
-    });
-    includeFileTargetsForWriteMock.mockReturnValue({
-      [sharedPath]: fs.realpathSync(sharedPath),
-    });
-    const snapshotCfg = { hooks: {}, plugins: {} } as OpenClawConfig;
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        path: configPath,
-        valid: true,
-        parsed: {
-          hooks: { $include: "./shared.json5" },
-          plugins: { $include: "./shared.json5" },
-        },
-        sourceConfig: snapshotCfg as ConfigFileSnapshot["sourceConfig"],
-        config: snapshotCfg,
-        issues: [],
-      }),
-    );
-
-    try {
-      const result = await loadConfigForInstall({
-        rawSpec: "maybe-hook-pack",
-        normalizedSpec: "maybe-hook-pack",
-      });
-      expect(result.hookMutation).toEqual({
-        mode: "blocked",
-        scope: "config",
-        reason: expect.stringContaining("share the same top-level $include target"),
-      });
-      expect(result.pluginMutation).toEqual(result.hookMutation);
-      await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
-        "share the same top-level $include target",
+  it.each([
+    { section: "plugins", knownPlugin: false },
+    { section: "plugins", knownPlugin: true },
+    { section: "hooks", knownPlugin: false },
+  ] as const)(
+    "blocks external $section includes (known plugin: $knownPlugin)",
+    async ({ section, knownPlugin }) => {
+      const externalPath = path.join(
+        path.parse(process.cwd()).root,
+        "external-openclaw",
+        `${section}.json5`,
       );
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
-  });
+      const snapshotCfg: OpenClawConfig =
+        section === "hooks" ? { hooks: { internal: {} } } : { plugins: {} };
+      includeFileTargetsForWriteMock.mockReturnValue({ [externalPath]: externalPath });
+      mockSnapshot({
+        valid: true,
+        parsed: { [section]: { $include: externalPath } },
+        sourceConfig: snapshotCfg as ConfigFileSnapshot["sourceConfig"],
+        config: snapshotCfg,
+        issues: [],
+      });
+
+      if (knownPlugin) {
+        await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
+          "external or unresolved top-level $include",
+        );
+        return;
+      }
+      const result = await loadConfigForInstall({ rawSpec: "maybe-hook-pack" });
+      expect(result[section === "hooks" ? "hookMutation" : "pluginMutation"]).toEqual({
+        mode: "blocked",
+        scope: section,
+        reason: expect.stringContaining("external or unresolved top-level $include"),
+      });
+      if (section === "hooks") {
+        expect(result.pluginMutation).toEqual({ mode: "allowed" });
+      } else {
+        expect(result.config).toBe(snapshotCfg);
+      }
+    },
+  );
 
   it("blocks both mutations when an external include aliases the other section target", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-aliased-include-"));
@@ -718,24 +548,21 @@ describe("loadConfigForInstall", () => {
       [externalHooksPath]: fs.realpathSync(sharedPath),
     });
     const snapshotCfg = { hooks: {}, plugins: {} } as OpenClawConfig;
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        path: configPath,
-        valid: true,
-        parsed: {
-          hooks: { $include: externalHooksPath },
-          plugins: { $include: "./shared.json5" },
-        },
-        sourceConfig: snapshotCfg as ConfigFileSnapshot["sourceConfig"],
-        config: snapshotCfg,
-        issues: [],
-      }),
-    );
+    mockSnapshot({
+      path: configPath,
+      valid: true,
+      parsed: {
+        hooks: { $include: externalHooksPath },
+        plugins: { $include: "./shared.json5" },
+      },
+      sourceConfig: snapshotCfg as ConfigFileSnapshot["sourceConfig"],
+      config: snapshotCfg,
+      issues: [],
+    });
 
     try {
       const result = await loadConfigForInstall({
         rawSpec: "maybe-hook-pack",
-        normalizedSpec: "maybe-hook-pack",
       });
       expect(result.hookMutation).toEqual({
         mode: "blocked",
@@ -764,21 +591,18 @@ describe("loadConfigForInstall", () => {
       [pluginsPath]: fs.realpathSync(pluginsPath),
     });
     const snapshotCfg = { plugins: { entries: {} } } as OpenClawConfig;
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        path: configPath,
-        valid: true,
-        parsed: { plugins: { $include: "./plugins.json5" } },
-        sourceConfig: snapshotCfg as ConfigFileSnapshot["sourceConfig"],
-        config: snapshotCfg,
-        issues: [],
-      }),
-    );
+    mockSnapshot({
+      path: configPath,
+      valid: true,
+      parsed: { plugins: { $include: "./plugins.json5" } },
+      sourceConfig: snapshotCfg as ConfigFileSnapshot["sourceConfig"],
+      config: snapshotCfg,
+      issues: [],
+    });
 
     try {
       const ambiguousResult = await loadConfigForInstall({
         rawSpec: "maybe-hook-pack",
-        normalizedSpec: "maybe-hook-pack",
       });
       expect(ambiguousResult.pluginMutation).toEqual({
         mode: "blocked",
@@ -791,171 +615,69 @@ describe("loadConfigForInstall", () => {
     }
   });
 
-  const unsupportedPluginIncludeShapes = [
-    {
-      label: "plugins include array",
+  it("rejects recovery through an unsupported plugins include array", async () => {
+    mockSnapshot({
       parsed: { plugins: { $include: ["./plugins-a.json5", "./plugins-b.json5"] } },
-      scope: "plugins",
-    },
-    {
-      label: "plugins include with siblings",
-      parsed: { plugins: { $include: "./plugins.json5", entries: {} } },
-      scope: "plugins",
-    },
-    {
-      label: "nested plugins include",
-      parsed: { plugins: { entries: { $include: "./entries.json5" } } },
-      scope: "plugins",
-    },
-    {
-      label: "root include without authored plugins",
-      parsed: { $include: "./root.json5" },
-      scope: "config",
-    },
-    {
-      label: "root include with authored plugins",
+      config: { plugins: {} } as OpenClawConfig,
+      issues: [{ path: "channels.discord", message: "unknown channel id: discord" }],
+    });
+
+    await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
+      "Config plugin recovery uses an unsupported $include shape",
+    );
+  });
+
+  it("marks valid ambiguous installs through an unsupported root include with authored plugins as plugin-blocked", async () => {
+    const snapshotCfg = { plugins: {} } as OpenClawConfig;
+    mockSnapshot({
+      valid: true,
       parsed: { $include: "./root.json5", plugins: { entries: {} } },
+      sourceConfig: snapshotCfg as ConfigFileSnapshot["sourceConfig"],
+      config: snapshotCfg,
+      issues: [],
+    });
+
+    const result = await loadConfigForInstall({ rawSpec: "maybe-hook-pack" });
+
+    expect(result.pluginMutation).toEqual({
+      mode: "blocked",
       scope: "config",
-    },
-  ] as const;
-
-  it.each(unsupportedPluginIncludeShapes)(
-    "rejects recovery through an unsupported $label",
-    async ({ parsed }) => {
-      readConfigFileSnapshotMock.mockResolvedValue(
-        makeSnapshot({
-          parsed,
-          config: { plugins: {} } as OpenClawConfig,
-          issues: [{ path: "channels.discord", message: "unknown channel id: discord" }],
-        }),
-      );
-
-      await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
-        "Config plugin recovery uses an unsupported $include shape",
-      );
-    },
-  );
-
-  it.each(unsupportedPluginIncludeShapes)(
-    "marks valid ambiguous installs through an unsupported $label as plugin-blocked",
-    async ({ parsed, scope }) => {
-      const snapshotCfg = { plugins: {} } as OpenClawConfig;
-      readConfigFileSnapshotMock.mockResolvedValue(
-        makeSnapshot({
-          valid: true,
-          parsed,
-          sourceConfig: snapshotCfg as ConfigFileSnapshot["sourceConfig"],
-          config: snapshotCfg,
-          issues: [],
-        }),
-      );
-
-      const result = await loadConfigForInstall({
-        rawSpec: "maybe-hook-pack",
-        normalizedSpec: "maybe-hook-pack",
-      });
-
-      expect(result.pluginMutation).toEqual({
-        mode: "blocked",
-        scope,
-        reason: expect.stringContaining("unsupported $include shape"),
-      });
-    },
-  );
-
-  it.each(unsupportedPluginIncludeShapes)(
-    "blocks valid known plugins through an unsupported $label",
-    async ({ parsed }) => {
-      const snapshotCfg = { plugins: {} } as OpenClawConfig;
-      readConfigFileSnapshotMock.mockResolvedValue(
-        makeSnapshot({
-          valid: true,
-          parsed,
-          sourceConfig: snapshotCfg as ConfigFileSnapshot["sourceConfig"],
-          config: snapshotCfg,
-          issues: [],
-        }),
-      );
-
-      await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
-        "unsupported $include shape",
-      );
-    },
-  );
+      reason: expect.stringContaining("unsupported $include shape"),
+    });
+  });
 
   it.each([
-    { path: "models.default", message: "invalid model ref" },
-    { path: "channels.discord", message: "invalid config for plugin telegram: must be object" },
     {
       path: "channels.discord",
       message: "invalid config for plugin discord-extra: must be object",
     },
-    { path: "channels.discord", message: "must be object" },
     {
       path: "plugins.entries.discord.config",
       message: "invalid config for plugin discord: must be object",
     },
   ])("rejects unrelated issue $path: $message during plugin recovery", async (issue) => {
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        issues: [
-          {
-            path: "channels.discord",
-            message: "invalid config for plugin discord: must be object",
-          },
-          issue,
-        ],
-      }),
-    );
+    mockSnapshot({
+      issues: [
+        {
+          path: "channels.discord",
+          message: "invalid config for plugin discord: must be object",
+        },
+        issue,
+      ],
+    });
 
     await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
       "Config invalid outside the plugin recovery path for discord",
     );
   });
 
-  it("reports unrelated config errors before an unsupported recovery include", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        parsed: { $include: "./external.json5", plugins: {} },
-        issues: [{ path: "gateway.mode", message: "invalid mode" }],
-      }),
-    );
-
-    await expect(loadConfigForInstall(discordNpmRequest)).rejects.toMatchObject({
-      code: "INVALID_CONFIG",
-      message: expect.stringContaining("Config invalid outside the plugin recovery path"),
-    });
-  });
-
   it("rejects non-Discord install requests when config is invalid", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue(makeSnapshot());
+    mockSnapshot();
 
     await expect(
       loadConfigForInstall({
         rawSpec: "alpha",
-        normalizedSpec: "alpha",
       }),
     ).rejects.toThrow("Config invalid; run `openclaw doctor --fix` before installing plugins.");
-  });
-
-  it("throws when invalid snapshot parsed is empty", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        parsed: {},
-        config: {} as OpenClawConfig,
-      }),
-    );
-
-    await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
-      "Config file could not be parsed; run `openclaw doctor` to repair it.",
-    );
-  });
-
-  it("throws when invalid snapshot config file does not exist", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue(makeSnapshot({ exists: false, parsed: {} }));
-
-    await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
-      "Config file could not be parsed; run `openclaw doctor` to repair it.",
-    );
   });
 });

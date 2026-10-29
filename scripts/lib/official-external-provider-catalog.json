@@ -1,6 +1,50 @@
 {
   "entries": [
     {
+      "name": "@openclaw/abliteration-provider",
+      "description": "OpenClaw Abliteration provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "abliteration",
+          "label": "Abliteration"
+        },
+        "providers": [
+          {
+            "id": "abliteration",
+            "name": "Abliteration",
+            "docs": "/providers/abliteration",
+            "categories": ["cloud", "llm"],
+            "envVars": ["ABLITERATION_API_KEY", "ABLIT_KEY"],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "abliteration-api-key",
+                "appGuidedSecret": true,
+                "choiceLabel": "Abliteration API key",
+                "choiceHint": "OpenAI-compatible abliterated open-weight models",
+                "groupId": "abliteration",
+                "groupLabel": "Abliteration",
+                "groupHint": "OpenAI-compatible abliterated open-weight models",
+                "optionKey": "abliterationApiKey",
+                "cliFlag": "--abliteration-api-key",
+                "cliOption": "--abliteration-api-key <key>",
+                "cliDescription": "Abliteration API key",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/abliteration-provider",
+          "npmSpec": "@openclaw/abliteration-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.10.6"
+        }
+      }
+    },
+    {
       "name": "@openclaw/amazon-bedrock-provider",
       "description": "OpenClaw Amazon Bedrock provider plugin",
       "source": "official",
@@ -19,6 +63,7 @@
           }
         ],
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/amazon-bedrock-provider",
           "npmSpec": "@openclaw/amazon-bedrock-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.12-beta.1"
@@ -44,6 +89,7 @@
           }
         ],
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/amazon-bedrock-mantle-provider",
           "npmSpec": "@openclaw/amazon-bedrock-mantle-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.12-beta.1"
@@ -69,6 +115,7 @@
           }
         ],
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/anthropic-vertex-provider",
           "npmSpec": "@openclaw/anthropic-vertex-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.12-beta.1"
@@ -655,6 +702,30 @@
             ]
           }
         ],
+        "contracts": {
+          "webSearchProviders": [
+            "deepseek"
+          ]
+        },
+        "webSearchProviders": [
+          {
+            "id": "deepseek",
+            "label": "DeepSeek",
+            "hint": "Structured search results from DeepSeek's search engine",
+            "onboardingScopes": [
+              "text-inference"
+            ],
+            "credentialLabel": "DeepSeek API key",
+            "envVars": [
+              "DEEPSEEK_API_KEY"
+            ],
+            "placeholder": "sk-...",
+            "signupUrl": "https://platform.deepseek.com/api_keys",
+            "docsUrl": "https://docs.openclaw.ai/providers/deepseek#web-search",
+            "credentialPath": "plugins.entries.deepseek.config.webSearch.apiKey",
+            "autoDetectOrder": 80
+          }
+        ],
         "install": {
           "clawhubSpec": "clawhub:@openclaw/deepseek-provider",
           "npmSpec": "@openclaw/deepseek-provider",
@@ -761,6 +832,65 @@
           "npmSpec": "@openclaw/gmi-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/liquid-ai-provider",
+      "description": "OpenClaw Liquid AI provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "liquid-ai",
+          "label": "Liquid AI"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "liquid-ai-native",
+            "hosts": [
+              "api.liquid.ai"
+            ]
+          }
+        ],
+        "providers": [
+          {
+            "id": "liquid-ai",
+            "name": "Liquid AI",
+            "docs": "/providers/liquid-ai",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "LIQUIDAI_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "liquid-ai-api-key",
+                "choiceLabel": "Liquid AI API key",
+                "groupId": "liquid-ai",
+                "groupLabel": "Liquid AI",
+                "groupHint": "Native Decision models",
+                "optionKey": "liquidAiApiKey",
+                "cliFlag": "--liquid-ai-api-key",
+                "cliOption": "--liquid-ai-api-key <key>",
+                "cliDescription": "Liquid AI API key"
+              }
+            ]
+          }
+        ],
+        "contracts": {
+          "decisionProviders": [
+            "liquid-ai"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/liquid-ai-provider",
+          "npmSpec": "@openclaw/liquid-ai-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.10.6"
         }
       }
     },
@@ -974,7 +1104,10 @@
             "endpointClass": "opencode-native",
             "baseUrls": [
               "https://opencode.ai/zen",
-              "https://opencode.ai/zen/v1"
+              "https://opencode.ai/zen/v1",
+              "https://opencode.ai/inference/openai/v1",
+              "https://opencode.ai/inference/anthropic/v1",
+              "https://opencode.ai/inference/google/v1beta"
             ]
           }
         ],
@@ -1203,7 +1336,11 @@
             "endpointClass": "opencode-go-native",
             "baseUrls": [
               "https://opencode.ai/zen/go",
-              "https://opencode.ai/zen/go/v1"
+              "https://opencode.ai/zen/go/v1",
+              "https://opencode.ai/inference/go/openai/v1",
+              "https://opencode.ai/inference/go/anthropic",
+              "https://opencode.ai/inference/go/anthropic/v1",
+              "https://opencode.ai/inference/go/google/v1beta"
             ]
           }
         ],
@@ -1537,6 +1674,66 @@
       }
     },
     {
+      "name": "@openclaw/radius-provider",
+      "description": "OpenClaw Radius model gateway provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "radius",
+          "label": "Radius"
+        },
+        "providers": [
+          {
+            "id": "radius",
+            "name": "Radius",
+            "docs": "/providers/radius",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "RADIUS_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "oauth",
+                "choiceId": "radius",
+                "choiceLabel": "Radius (browser sign-in)",
+                "groupId": "radius",
+                "groupLabel": "Radius",
+                "groupHint": "Browser sign-in or API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              },
+              {
+                "method": "api-key",
+                "choiceId": "radius-api-key",
+                "choiceLabel": "Radius API key",
+                "groupId": "radius",
+                "groupLabel": "Radius",
+                "groupHint": "Browser sign-in or API key",
+                "optionKey": "radiusApiKey",
+                "cliFlag": "--radius-api-key",
+                "cliOption": "--radius-api-key <key>",
+                "cliDescription": "Radius organization API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/radius-provider",
+          "npmSpec": "@openclaw/radius-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.4"
+        }
+      }
+    },
+    {
       "name": "@openclaw/fireworks-provider",
       "description": "OpenClaw Fireworks provider plugin",
       "source": "official",
@@ -1778,6 +1975,57 @@
       }
     },
     {
+      "name": "@telnyx/openclaw-provider",
+      "description": "Official Telnyx AI inference provider plugin for OpenClaw.",
+      "source": "external",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "telnyx",
+          "label": "Telnyx"
+        },
+        "providers": [
+          {
+            "id": "telnyx",
+            "name": "Telnyx",
+            "docs": "/providers/telnyx",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "TELNYX_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "telnyx-api-key",
+                "choiceLabel": "Telnyx API key",
+                "choiceHint": "OpenAI-compatible Telnyx AI inference endpoint",
+                "groupId": "telnyx",
+                "groupLabel": "Telnyx",
+                "groupHint": "OpenAI-compatible Telnyx AI inference endpoint",
+                "optionKey": "telnyxApiKey",
+                "cliFlag": "--telnyx-api-key",
+                "cliOption": "--telnyx-api-key <key>",
+                "cliDescription": "Telnyx API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@telnyx/openclaw-provider@0.2.0",
+          "npmSpec": "@telnyx/openclaw-provider@0.2.0",
+          "defaultChoice": "npm",
+          "expectedIntegrity": "sha512-htqOJfPx+TlLWE/nmpdJJVgrg8zDqRIX87smzY3CnKcdJPlx51Rc1kWzarvE+2hvhpm2lzD5sKkxRSIWKz2AaA==",
+          "minHostVersion": ">=2026.8.1"
+        }
+      }
+    },
+    {
       "name": "@openclaw/venice-provider",
       "description": "OpenClaw Venice provider plugin",
       "source": "official",
@@ -1837,6 +2085,14 @@
           "id": "vercel-ai-gateway",
           "label": "Vercel AI Gateway"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "vercel-ai-gateway",
+            "hosts": [
+              "ai-gateway.vercel.sh"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "vercel-ai-gateway",
@@ -2083,7 +2339,8 @@
           {
             "endpointClass": "zai-native",
             "hosts": [
-              "api.z.ai"
+              "api.z.ai",
+              "open.bigmodel.cn"
             ]
           }
         ],

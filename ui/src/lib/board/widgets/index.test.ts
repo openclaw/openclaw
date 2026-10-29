@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BoardWidget } from "../types.ts";
+import { createBoardWidget } from "../widget.test-support.ts";
 import {
   getPluginWidgetKindContribution,
   isPassiveBoardWidget,
@@ -16,7 +17,6 @@ describe("plugin board widget registry", () => {
     expect(getPluginWidgetKindContribution("session:progress", active)).toMatchObject({
       kind: "session:progress",
       tagName: "openclaw-session-progress-widget",
-      loadModule: expect.any(Function),
     });
     expect(getPluginWidgetKindContribution("session:progress", [])).toBeNull();
     expect(
@@ -34,22 +34,21 @@ describe("plugin board widget registry", () => {
   });
 
   it("limits passive previews to advertised pure core widgets and saved HTML", () => {
-    const widget: BoardWidget = {
+    const widget: BoardWidget = createBoardWidget({
       name: "report",
-      tabId: "main",
       contentKind: "plugin",
       pluginKind: "session:report",
-      sizeW: 6,
-      sizeH: 4,
-      position: 0,
-      grantState: "none",
-      revision: 1,
-    };
+    });
     const active = [{ pluginId: "session", kind: "session:report", label: "Report" }];
     expect(isPassiveBoardWidget(widget, active)).toBe(true);
     expect(isPassiveBoardWidget(widget, [])).toBe(false);
     expect(isPassiveBoardWidget({ ...widget, frameUrl: "/widget.html" }, active)).toBe(false);
-    for (const kind of ["session:progress", "custom:report"]) {
+    for (const kind of [
+      "session:progress",
+      "session:website",
+      "browser:dashboard",
+      "custom:report",
+    ]) {
       expect(
         isPassiveBoardWidget({ ...widget, pluginKind: kind }, [
           { pluginId: kind.split(":")[0]!, kind, label: "Widget" },

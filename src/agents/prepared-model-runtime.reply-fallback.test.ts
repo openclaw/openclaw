@@ -1,10 +1,6 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import {
-  cleanupPreparedModelRuntimeHarness,
-  getPreparedModelRuntimeMocks,
-  resetPreparedModelRuntimeHarness,
-} from "./prepared-model-runtime.test-harness.js";
+import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveModelFallbackOptions } from "../auto-reply/reply/agent-runner-run-params.js";
 import { runPreparedReply } from "../auto-reply/reply/get-reply-run.js";
@@ -17,22 +13,27 @@ import { listRuntimePluginIdsFromRegistry } from "../plugins/active-runtime-regi
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
 import * as agentScope from "./agent-scope.js";
+import type { RunEmbeddedAgentParamsWithSessionFile } from "./embedded-agent-runner/run/internal-params.js";
+import { resolvePreparedRuntimeWorkspaces } from "./embedded-agent-runner/run/prepared-runtime-context.js";
+import { createContextEngineLogicalTurnLease } from "./harness/context-engine-logical-turn.js";
 import {
   resolveAgentRuntimePluginLoadPlan,
   resolveAgentRuntimePluginSelections,
 } from "./harness/runtime-plugin-load-plan.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
-import { getPreparedModelRuntimePluginGeneration } from "./prepared-model-runtime-generation-scope.js";
+import * as modelSelectionConfig from "./model-selection-config.js";
+import {
+  getPreparedModelRuntimeBorrowedSnapshot,
+  getPreparedModelRuntimePluginGeneration,
+} from "./prepared-model-runtime-generation-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   loadPublishedGatewayReplyDispatchRuntime,
   refreshPreparedModelRuntimeSnapshots,
+  type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
 
 const reply = vi.hoisted(() => ({ context: vi.fn(), execute: vi.fn() }));
@@ -46,24 +47,24 @@ vi.mock("../auto-reply/reply/get-reply-run-execute.js", () => ({
   executePreparedReplyRun: reply.execute,
 }));
 
-const mocks = getPreparedModelRuntimeMocks();
-let state: OpenClawTestState;
+const { mocks } = usePreparedModelRuntimeHarness();
 
 describe("prepared reply fallback ownership", () => {
   beforeEach(async () => {
-    state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-    await resetPreparedModelRuntimeHarness(state);
     vi.clearAllMocks();
     const actual = await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
     vi.spyOn(agentScope, "resolveAgentConfig").mockImplementation(actual.resolveAgentConfig);
     vi.spyOn(agentScope, "resolveAgentModelFallbacksOverride").mockImplementation(
       actual.resolveAgentModelFallbacksOverride,
     );
-    vi.spyOn(agentScope, "resolveEffectiveModelFallbacks").mockImplementation(
-      actual.resolveEffectiveModelFallbacks,
+    const actualSelection = await vi.importActual<typeof modelSelectionConfig>(
+      "./model-selection-config.js",
     );
-    vi.spyOn(agentScope, "resolveModelFallbackAvailability").mockImplementation(
-      actual.resolveModelFallbackAvailability,
+    vi.spyOn(modelSelectionConfig, "resolveEffectiveModelFallbacks").mockImplementation(
+      actualSelection.resolveEffectiveModelFallbacks,
+    );
+    vi.spyOn(modelSelectionConfig, "resolveModelFallbackAvailability").mockImplementation(
+      actualSelection.resolveModelFallbackAvailability,
     );
     vi.spyOn(agentScope, "resolveSubagentSpawnModelFallbacksOverride").mockImplementation(
       actual.resolveSubagentSpawnModelFallbacksOverride,
@@ -71,9 +72,215 @@ describe("prepared reply fallback ownership", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
+  it("publishes healthy configured runtimes while a divergent agent is refused", async () => {
+    mocks.configuredAgentIds = ["main", "cleaner"];
+    recordAgentDatabaseAdmissions([
+      {
+        agentId: "cleaner",
+        paths: ["/synthetic/agents/cleaner/openclaw-agent.cleaner.sqlite"],
+        embeddedOwnerId: "main",
+        code: "agent-database-ownership-mismatch",
+        reason: "Refused agent cleaner: its database belongs to main.",
+        repairHint: "Quarantine the cleaner copy and restart.",
+      },
+    ]);
+    await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+    await expect(
+      loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" }),
+    ).resolves.toMatchObject({ agentId: "main" });
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("prepares a reply on the current generation when its captured dispatch generation was replaced", async () => {
+    const previous = { messages: { responsePrefix: "before" } };
+    const current = { messages: { responsePrefix: "after" } };
+    mocks.configuredAgentIds = ["default"];
+    const options = { gatewayLifecycle: true, catalogMode: "static" as const };
+    await refreshPreparedModelRuntimeSnapshots(previous, options);
+    const captured = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+    await refreshPreparedModelRuntimeSnapshots(current, options);
+    const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+    reply.context.mockResolvedValue({
+      kind: "ready",
+      workspaceDir: captured.workspaceDir,
+      thinkingRuntime: "openclaw",
+    });
+    reply.execute.mockImplementation(async () => {
+      const pluginGeneration = getPreparedModelRuntimePluginGeneration()!;
+      expect(pluginGeneration).not.toBe(captured.pluginGeneration);
+      await using nested = await acquireAgentRunPreparedModelRuntime(
+        {
+          config: current,
+          agentId: published.agentId,
+          agentDir: published.agentDir,
+          workspaceDir: published.workspaceDir,
+        },
+        { pluginGeneration },
+      );
+      expect(nested.snapshot.config).toEqual(current);
+      return { text: "reply completed after reload" };
+    });
+    const execute = bindPreparedReplyDispatchRuntime(captured, () =>
+      runPreparedReply({
+        provider: "custom",
+        model: "model",
+        ctx: {},
+        sessionCtx: {},
+        cfg: previous,
+        agentId: captured.agentId,
+      } as RunPreparedReplyParams),
+    );
+    await expect(execute()).resolves.toEqual({ text: "reply completed after reload" });
+    expect(reply.execute).toHaveBeenCalledOnce();
+  });
+
+  it("admits a nested reply after its configured context engine falls back to legacy", async () => {
+    const config: OpenClawConfig = {
+      agents: { defaults: { model: "initial/model" } },
+      plugins: {
+        allow: ["initial", "selected", "unavailable-context"],
+        slots: { memory: "none", contextEngine: "unavailable-context" },
+        entries: { "unavailable-context": { enabled: true } },
+      },
+    };
+    const metadata = createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    });
+    mocks.configuredAgentIds = ["default", "secondary"];
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() =>
+      createEmptyPluginRegistry(),
+    );
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+      allowGatewaySubagentBinding: true,
+      pluginMetadataSnapshot: metadata,
+    });
+    const dispatch = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "secondary" }))!;
+    reply.context.mockResolvedValue({
+      kind: "run",
+      workspaceDir: dispatch.workspaceDir,
+      thinkingRuntime: "openclaw",
+    });
+    using warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    reply.execute.mockImplementation(async () => {
+      const pluginGeneration = getPreparedModelRuntimePluginGeneration()!;
+      expect(pluginGeneration).not.toBe(dispatch.pluginGeneration);
+      const contextEngine = await createContextEngineLogicalTurnLease({
+        config,
+        identity: { runId: "reply-context-fallback", sessionId: "reply-context-fallback" },
+        agentDir: dispatch.agentDir,
+        workspaceDir: dispatch.workspaceDir,
+      });
+      try {
+        expect(contextEngine.effectiveEngineId).toBe("legacy");
+        expect(contextEngine.degradedReason).toBe(
+          'context engine "unavailable-context" is not registered',
+        );
+        await using nested = await acquireAgentRunPreparedModelRuntime(
+          {
+            config,
+            agentId: dispatch.agentId,
+            agentDir: dispatch.agentDir,
+            workspaceDir: dispatch.workspaceDir,
+            allowGatewaySubagentBinding: true,
+            runtimePluginSelections: [
+              { provider: "selected", modelId: "model", runtime: "openclaw" },
+            ],
+          },
+          { pluginGeneration },
+        );
+        expect(nested.pluginGeneration).toBe(pluginGeneration);
+        return { text: "reply admitted with legacy context" };
+      } finally {
+        await contextEngine.dispose();
+      }
+    });
+    const execute = bindPreparedReplyDispatchRuntime(dispatch, () =>
+      runPreparedReply({
+        provider: "selected",
+        model: "model",
+        ctx: {},
+        sessionCtx: {},
+        cfg: config,
+        agentId: dispatch.agentId,
+      } as RunPreparedReplyParams),
+    );
+
+    await expect(execute()).resolves.toEqual({ text: "reply admitted with legacy context" });
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining('Context engine "unavailable-context" degraded to "legacy"'),
+    );
+    expect(config.plugins?.slots?.contextEngine).toBe("unavailable-context");
+  });
+
+  it("shares selected model preparation across fresh reply execution workspaces", async () => {
+    const config: OpenClawConfig = {
+      agents: { entries: { default: {} }, defaults: { model: "initial/model" } },
+      plugins: { slots: { memory: "none" } },
+    };
+    mocks.configuredAgentIds = ["default"];
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() =>
+      createEmptyPluginRegistry(),
+    );
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+      allowGatewaySubagentBinding: true,
+    });
+    const dispatch = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+    const snapshots = new Set<PreparedModelRuntimeSnapshot>();
+    reply.execute.mockImplementation(async (context: { workspaceDir: string }) => {
+      const pluginGeneration = getPreparedModelRuntimePluginGeneration()!;
+      const prepared = getPreparedModelRuntimeBorrowedSnapshot(pluginGeneration)!;
+      snapshots.add(prepared);
+      // Embedded runs receive an equivalent config projection, not the published object.
+      const runConfig = structuredClone(config);
+      const workspaces = resolvePreparedRuntimeWorkspaces({
+        config: runConfig,
+        agentId: dispatch.agentId,
+        agentDir: dispatch.agentDir,
+        workspaceDir: context.workspaceDir,
+        pluginGeneration,
+      } as RunEmbeddedAgentParamsWithSessionFile);
+      await using nested = await acquireAgentRunPreparedModelRuntime(
+        {
+          config: runConfig,
+          agentId: dispatch.agentId,
+          agentDir: dispatch.agentDir,
+          workspaceDir: workspaces.runtimeWorkspaceResolution.workspaceDir,
+          allowGatewaySubagentBinding: true,
+          runtimePluginSelections: [
+            { provider: "selected", modelId: "model", runtime: "openclaw" },
+          ],
+        },
+        { pluginGeneration },
+      );
+      expect(nested.snapshot).toBe(prepared);
+      return { text: context.workspaceDir };
+    });
+    const execute = bindPreparedReplyDispatchRuntime(dispatch, () =>
+      runPreparedReply({
+        provider: "selected",
+        model: "model",
+        ctx: {},
+        sessionCtx: {},
+        cfg: config,
+        agentId: dispatch.agentId,
+      } as RunPreparedReplyParams),
+    );
+    let buildsAfterFirst: number | undefined;
+    for (const workspaceDir of ["/synthetic/fresh-a", "/synthetic/fresh-b", "/synthetic/fresh-a"]) {
+      reply.context.mockResolvedValue({ kind: "run", workspaceDir, thinkingRuntime: "openclaw" });
+      await expect(execute()).resolves.toEqual({ text: workspaceDir });
+      buildsAfterFirst ??= mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.length;
+      expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(buildsAfterFirst);
+    }
+    expect(snapshots.size).toBe(1);
+  });
+
   it.each([
-    { scope: "agent", source: "auto", locked: false },
-    { scope: "subagent", source: "auto", locked: false },
     { scope: "per-agent subagent", source: "auto", locked: false },
     { scope: "fallback-only subagent", source: "auto", locked: false },
     { scope: "subagent", source: "user", locked: false },
@@ -234,19 +441,22 @@ describe("prepared reply fallback ownership", () => {
             }),
           ).rejects.toThrow("reason=owner-plugin-degraded, ownerPluginId=broken-harness");
         }
-        nested.release();
+        await nested[Symbol.asyncDispose]();
         return { text: "fallback admitted" };
       });
       const execute = bindPreparedReplyDispatchRuntime(dispatch, () =>
-        runPreparedReply({ provider: run.provider, model: run.model } as RunPreparedReplyParams),
+        runPreparedReply({
+          provider: run.provider,
+          model: run.model,
+          ctx: {},
+          sessionCtx: {},
+          cfg: config,
+          agentId: dispatch.agentId,
+        } as RunPreparedReplyParams),
       );
 
       await expect(execute()).resolves.toEqual({ text: "fallback admitted" });
       expect(reply.execute).toHaveBeenCalledOnce();
     },
   );
-});
-
-afterEach(async ({ task }) => {
-  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });

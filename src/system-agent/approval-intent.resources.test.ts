@@ -9,8 +9,10 @@ import {
   acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel,
 } from "../agents/simple-completion-runtime.js";
+import { makeConfiguredModel } from "../agents/test-helpers/provider-model-fixture.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { fetchWithRuntimeDispatcher } from "../infra/net/runtime-fetch.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
@@ -95,15 +97,13 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
                   api: "openai-completions",
                   baseUrl: `http://127.0.0.1:${address.port}/v1`,
                   models: [
-                    {
+                    makeConfiguredModel({
                       id: "approval-model",
                       name: "Approval model",
                       reasoning: false,
-                      input: ["text"],
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                       contextWindow: 8192,
                       maxTokens: 1024,
-                    },
+                    }),
                   ],
                 },
               },
@@ -183,13 +183,13 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
                 },
               });
             } finally {
-              probe.release();
+              await probe[Symbol.asyncDispose]();
             }
           })();
           expect(
             (await resolveSystemAgentVerifiedInferenceRoute(verifiedInference))?.provider,
           ).toBe(fixture.providerId);
-          const builds = vi.spyOn(ModelRegistry, "create");
+          const builds = vi.spyOn(ModelRegistry, "fromCapturedSources");
           spies.push(builds);
           if (mode === "cancel-drain") {
             const plugin = getAiTransportHost().plugin;
@@ -211,7 +211,7 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
                   });
               }),
             );
-            const fetch = globalThis.fetch;
+            const fetch = process.versions.bun ? fetchWithRuntimeDispatcher : globalThis.fetch;
             let wrapped = false;
             spies.push(
               vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {

@@ -1,4 +1,3 @@
-// Resolves config and metadata before publishing prepared plugin runtime load facts.
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "../../config/io.plugin-metadata.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
@@ -13,9 +12,8 @@ import {
 } from "../plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
 import type { PluginLogger } from "../types.js";
-import { createPluginRuntimeLoaderLogger, type PluginRuntimeLoadContext } from "./load-context.js";
+import { pluginRuntimeLoaderLogger, type PluginRuntimeLoadContext } from "./load-context.js";
 
-/** Options accepted while resolving plugin runtime load context. */
 type PluginRuntimeLoadContextOptions = {
   config?: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
@@ -26,9 +24,9 @@ type PluginRuntimeLoadContextOptions = {
   manifestRegistry?: PluginManifestRegistry;
   metadataSnapshot?: PluginMetadataSnapshot;
   preferBuiltPluginArtifacts?: boolean;
+  expectedSourceDigests?: PluginRuntimeLoadContext["expectedSourceDigests"];
 };
 
-/** Resolves config, manifests, install records, and auto-enable state for runtime loads. */
 export function resolvePluginRuntimeLoadContext(
   options?: PluginRuntimeLoadContextOptions,
 ): PluginRuntimeLoadContext {
@@ -82,10 +80,11 @@ export function resolvePluginRuntimeLoadContext(
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir,
     env,
-    logger: options?.logger ?? createPluginRuntimeLoaderLogger(),
+    logger: options?.logger ?? pluginRuntimeLoaderLogger,
     ...(manifestRegistry ? { manifestRegistry } : {}),
     ...(metadataSnapshot ? { metadataSnapshot } : {}),
     installRecords,
     preferBuiltPluginArtifacts: options?.preferBuiltPluginArtifacts,
+    expectedSourceDigests: options?.expectedSourceDigests,
   };
 }

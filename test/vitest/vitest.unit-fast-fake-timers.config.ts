@@ -1,8 +1,9 @@
 // Vitest unit fast fake timers config wires the unit fast fake timers test shard.
 import { defineConfig } from "vitest/config";
+import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
 import {
-  intersectIncludePatterns,
   loadPatternListFromEnv,
+  matchesVitestGlob,
   narrowIncludePatternsForCli,
 } from "./vitest.pattern-file.ts";
 import {
@@ -23,7 +24,11 @@ export function createUnitFastFakeTimersVitestConfig(
   const discoveryPatterns =
     selectedPatterns ?? narrowIncludePatternsForCli(unitTestIncludePatterns, options.argv);
   const unitFastTimerTestFiles = getUnitFastTimerTestFiles(discoveryPatterns);
-  const includeFromEnv = intersectIncludePatterns(unitFastTimerTestFiles, selectedPatterns);
+  const includeFromEnv = intersectIncludePatterns(
+    unitFastTimerTestFiles,
+    selectedPatterns,
+    matchesVitestGlob,
+  );
   const cliInclude = narrowIncludePatternsForCli(unitFastTimerTestFiles, options.argv);
 
   return defineConfig({

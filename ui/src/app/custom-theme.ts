@@ -16,8 +16,10 @@ const FORBIDDEN_CSS_VALUE_PARTS = [
   "paint(",
   "@import",
   "expression(",
+  "/*",
+  "*/",
+  "\\",
 ] as const;
-const SAFE_FONT_FAMILY_PUNCTUATION = new Set([",", "'", '"', ".", "_", "-"]);
 
 const MODE_TOKEN_ORDER = [
   "bg",
@@ -94,66 +96,32 @@ export function requireThemeId(value: string) {
 
 export function requireSafeCssValue(value: unknown, label: string) {
   const normalized = normalizeOptionalString(value);
-  if (!normalized) {
-    throw new Error(`Unsupported tweakcn token: ${label}`);
-  }
-  if (normalized.length > MAX_CSS_TOKEN_LENGTH) {
+  if (!normalized || normalized.length > MAX_CSS_TOKEN_LENGTH) {
     throw new Error(`Unsupported tweakcn token: ${label}`);
   }
   const lowered = normalized.toLowerCase();
   if (FORBIDDEN_CSS_VALUE_PARTS.some((part) => lowered.includes(part))) {
     throw new Error(`Unsupported tweakcn token: ${label}`);
   }
-  if (normalized.includes("/*") || normalized.includes("*/") || normalized.includes("\\")) {
-    throw new Error(`Unsupported tweakcn token: ${label}`);
-  }
   for (const char of normalized) {
     const code = char.charCodeAt(0);
-    if (
-      code < 0x20 ||
-      code === 0x7f ||
-      char === "{" ||
-      char === "}" ||
-      char === ";" ||
-      char === "<" ||
-      char === ">" ||
-      char === "`"
-    ) {
+    if (code < 0x20 || code === 0x7f || "{};<>`".includes(char)) {
       throw new Error(`Unsupported tweakcn token: ${label}`);
     }
   }
   return normalized;
 }
 
-function isSafeFontFamilyCharacter(char: string) {
-  const code = char.charCodeAt(0);
-  return (
-    (code >= 0x30 && code <= 0x39) ||
-    (code >= 0x41 && code <= 0x5a) ||
-    (code >= 0x61 && code <= 0x7a) ||
-    char === " " ||
-    SAFE_FONT_FAMILY_PUNCTUATION.has(char)
-  );
-}
-
 export function requireSafeFontFamilyValue(value: unknown, label: string) {
   const normalized = requireSafeCssValue(value, label);
-  if (
-    normalized.includes("(") ||
-    normalized.includes(")") ||
-    !Array.from(normalized).every(isSafeFontFamilyCharacter)
-  ) {
+  if (/[^A-Za-z0-9 ,'"._-]/.test(normalized)) {
     throw new Error(`Unsupported tweakcn token: ${label}`);
   }
   return normalized;
 }
 
-export function makeTokenMap(entries: Array<[ModeTokenName, string]>): ThemeTokenMap {
-  return Object.fromEntries(entries) as ThemeTokenMap;
-}
-
 function normalizeStoredTokenMap(value: Record<string, unknown> | undefined): ThemeTokenMap | null {
-  if (!value || typeof value !== "object") {
+  if (!value) {
     return null;
   }
   const entries: Array<[ModeTokenName, string]> = [];
@@ -164,15 +132,13 @@ function normalizeStoredTokenMap(value: Record<string, unknown> | undefined): Th
         : requireSafeCssValue(value[key], key);
     entries.push([key, normalized]);
   }
-  return makeTokenMap(entries);
+  // The ordered token list visits every required key above.
+  return Object.fromEntries(entries) as ThemeTokenMap;
 }
 
 export function describeThemeLabel(value: string | undefined) {
   const normalized = normalizeOptionalString(value);
-  if (!normalized) {
-    return "Custom";
-  }
-  return truncateUtf16Safe(normalized, 80);
+  return normalized ? truncateUtf16Safe(normalized, 80) : "Custom";
 }
 
 export function parseImportedCustomTheme(value: unknown): ImportedCustomTheme | null {
@@ -209,25 +175,9 @@ export function parseImportedCustomTheme(value: unknown): ImportedCustomTheme | 
   }
 }
 
-function buildCustomThemeStyles(theme: ImportedCustomTheme) {
-  const light = normalizeStoredTokenMap(theme.light);
-  const dark = normalizeStoredTokenMap(theme.dark);
-  if (!light || !dark) {
-    throw new Error("Stored custom theme is missing required tokens.");
-  }
-  const renderDeclarations = (modeTokens: ThemeTokenMap) =>
-    MODE_TOKEN_ORDER.map((key) => `  --${key}: ${modeTokens[key]};`).join("\n");
-  return [
-    `:root[data-theme="custom"] {`,
-    renderDeclarations(dark),
-    `}`,
-    `:root[data-theme="custom-light"] {`,
-    renderDeclarations(light),
-    `}`,
-  ].join("\n");
-}
-
-export function syncCustomThemeStyleTag(theme: ImportedCustomTheme | null | undefined) {
+export function syncCustomThemeStyleTag(
+  theme: Pick<ImportedCustomTheme, "light" | "dark"> | null | undefined,
+) {
   if (typeof document === "undefined") {
     return;
   }
@@ -238,12 +188,22 @@ export function syncCustomThemeStyleTag(theme: ImportedCustomTheme | null | unde
   }
   let cssText;
   try {
-    cssText = buildCustomThemeStyles(theme);
+    const light = normalizeStoredTokenMap(theme.light);
+    const dark = normalizeStoredTokenMap(theme.dark);
+    if (!light || !dark) {
+      throw new Error("Stored custom theme is missing required tokens.");
+    }
+    const renderDeclarations = (modeTokens: ThemeTokenMap) =>
+      MODE_TOKEN_ORDER.map((key) => `  --${key}: ${modeTokens[key]};`).join("\n");
+    cssText = [
+      `:root[data-theme="custom"] {`,
+      renderDeclarations(dark),
+      `}`,
+      `:root[data-theme="custom-light"] {`,
+      renderDeclarations(light),
+      `}`,
+    ].join("\n");
   } catch {
-    style?.remove();
-    return;
-  }
-  if (!cssText) {
     style?.remove();
     return;
   }

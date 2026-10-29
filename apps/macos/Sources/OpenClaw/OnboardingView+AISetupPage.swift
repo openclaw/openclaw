@@ -5,7 +5,6 @@ struct GatewayAuthenticationReturnDecision: Equatable {
     let authIssue: RemoteGatewayAuthIssue
     let probeState: RemoteOnboardingProbeState
     let showRemoteChoices: Bool
-    let showAdvancedConnection: Bool
 }
 
 extension OnboardingView {
@@ -82,14 +81,13 @@ extension OnboardingView {
     @discardableResult
     func resumePendingSystemAgent(
         modelRef: String,
+        modelTarget: OnboardingAISetupModel.ModelTarget? = nil,
         intent: OnboardingAISetupModel.SetupIntent = .resumePending) -> Task<Void, Never>
     {
         self.prepareSystemAgentHandoff()
         let expectedRouteIdentity = self.aiSetupRouteIdentityProvider()
-        aiSetup.resumeConfiguredInference(modelRef: modelRef)
-        if let page = pageOrder.firstIndex(of: aiPageIndex) {
-            currentPage = page
-        }
+        aiSetup.resumeConfiguredInference(modelRef: modelRef, modelTarget: modelTarget)
+        self.selectAISetupPage()
         return Task {
             let outcome = await self.aiSetup.verifyPendingConfiguredInference()
             if case let .freshSetupAllowed(context) = outcome {
@@ -111,9 +109,7 @@ extension OnboardingView {
 
     func waitForPendingInferenceSetup() {
         self.prepareSystemAgentHandoff()
-        if let page = pageOrder.firstIndex(of: aiPageIndex) {
-            currentPage = page
-        }
+        self.selectAISetupPage()
         aiSetup.waitForPendingActivationDeadline()
     }
 
@@ -141,7 +137,6 @@ extension OnboardingView {
         remoteAuthIssue = decision.authIssue
         remoteProbeState = decision.probeState
         showRemoteChoices = decision.showRemoteChoices
-        showAdvancedConnection = decision.showAdvancedConnection
         withAnimation { currentPage = decision.connectionPage }
     }
 
@@ -160,15 +155,18 @@ extension OnboardingView {
             connectionPage: connectionPage,
             authIssue: authIssue,
             probeState: .failed(probeInput, authIssue.statusMessage),
-            showRemoteChoices: true,
-            showAdvancedConnection: true)
+            showRemoteChoices: true)
     }
 
     func resumePendingInferenceSetup() {
         self.prepareSystemAgentHandoff()
+        self.selectAISetupPage()
+        aiSetup.resumeSetup()
+    }
+
+    private func selectAISetupPage() {
         if let page = pageOrder.firstIndex(of: aiPageIndex) {
             currentPage = page
         }
-        aiSetup.resumeSetup()
     }
 }

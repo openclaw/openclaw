@@ -1,4 +1,3 @@
-// Resolves plugin enablement state from config and channel context.
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
@@ -11,6 +10,21 @@ import { setPluginEnabledInConfig } from "./toggle-config.js";
 type PluginEnableOptions = {
   updateChannelConfig?: boolean;
 };
+
+/** Keep install policy while staging a plugin whose required settings are not configured yet. */
+export function prepareConfigForDisabledInstall(
+  config: OpenClawConfig,
+  pluginId: string,
+): OpenClawConfig {
+  // Reuse the disable toggle so the staged entry lands on the canonical policy key.
+  const next = setPluginEnabledInConfig(config, pluginId, false, { updateChannelConfig: false });
+  const resolvedId = normalizePluginId(normalizeChatChannelId(pluginId) ?? pluginId);
+  const entries = { ...next.plugins?.entries };
+  const policy = { ...entries[resolvedId] };
+  delete policy.config;
+  entries[resolvedId] = policy;
+  return { ...next, plugins: { ...next.plugins, entries } };
+}
 
 /** Result of enabling a plugin in config. */
 export type PluginEnableResult = {
@@ -75,7 +89,9 @@ export async function enablePluginWithCapabilityConsent(
     env?: NodeJS.ProcessEnv;
     workspaceDir?: string;
     onCapabilityConsent?: PluginCapabilityConsentHandler;
+    recordOfficialCapabilities?: boolean;
     beforePersistentEffect?: () => void | Promise<void>;
+    beforePersistentApply?: () => void;
   } = {},
 ): Promise<PluginEnableResult> {
   const result = enableExplicitlySelectedPluginInConfig(cfg, pluginId, options);
@@ -83,8 +99,8 @@ export async function enablePluginWithCapabilityConsent(
     return result;
   }
   try {
-    const { withPluginLifecycleLease } = await import("./plugin-lifecycle-lease.js");
-    return await withPluginLifecycleLease({ env: options.env }, async () => {
+    const { withPluginLifecycleLeaseAsync } = await import("./plugin-lifecycle-lease.js");
+    return await withPluginLifecycleLeaseAsync({ env: options.env }, async () => {
       const { loadInstalledPluginIndexInstallRecords } =
         await import("./installed-plugin-index-records.js");
       const records = await loadInstalledPluginIndexInstallRecords({ env: options.env });
@@ -102,7 +118,11 @@ export async function enablePluginWithCapabilityConsent(
       const installed = metadata.index.plugins.find((plugin) => plugin.pluginId === id);
       // Compare the original state, never the synthetic enabled config. Legacy
       // plugins already running remain available without retroactive consent.
-      if (installed && !installed.enabled && installed.origin !== "bundled") {
+      if (
+        installed &&
+        (!installed.enabled || options.recordOfficialCapabilities) &&
+        installed.origin !== "bundled"
+      ) {
         const { resolvePluginCapabilityConsent } = await import("./capability-consent.js");
         await resolvePluginCapabilityConsent({
           config: cfg,
@@ -110,7 +130,9 @@ export async function enablePluginWithCapabilityConsent(
           env: options.env,
           metadata,
           onCapabilityConsent: options.onCapabilityConsent,
+          recordOfficialCapabilities: options.recordOfficialCapabilities,
           beforePersistentEffect: options.beforePersistentEffect,
+          beforePersistentApply: options.beforePersistentApply,
         });
       }
       return result;

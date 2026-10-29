@@ -1,6 +1,4 @@
-/* ── Settings design language ──────────────────────────────────────────────
- *
- * One structural pattern for every settings surface:
+/* One structural pattern for every settings surface:
  *   .settings-page > .settings-section > .settings-group > .settings-row
  *
  * Rules (see ui/docs/design-system/settings-design.md):
@@ -10,34 +8,257 @@
  * - Spacing uses --space-* tokens only.
  *
  * Templates should be built through the helpers in
- * ui/src/components/settings-ui.ts rather than hand-rolled markup.
+ * ui/src/components/solid/settings-ui.tsx rather than hand-rolled markup.
  */
 
-/* ── Workspace shell (shared by every settings takeover page) ── */
+/* Personal backgrounds use the shared settings rows; samples are controls, not panels. */
+openclaw-appearance-background {
+  display: block;
+  min-width: 0;
+}
 
-.settings-workspace {
+.settings-background-artwork {
+  display: grid;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+}
+
+.settings-background-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
   width: 100%;
 }
 
+.settings-background-option {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  overflow: hidden;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  text-align: start;
+  cursor: var(--cursor-action);
+}
+
+.settings-background-option[aria-pressed="true"] {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.settings-background-option:disabled {
+  opacity: 0.5;
+}
+
+.settings-background-option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: var(--space-1);
+}
+
+.settings-background-option__sample {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  background: var(--bg-content, var(--bg));
+}
+
+.settings-background-option--theme .settings-background-option__sample {
+  background-image: var(--app-background-image);
+  background-size: cover;
+  background-position: center;
+}
+
+.settings-background-option__sample img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.settings-background-option__sample svg {
+  width: 24px;
+  height: 24px;
+}
+
+.settings-background-option__label {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  justify-content: space-between;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: 0;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.settings-background-option__label svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+}
+
+.settings-background-actions,
+.settings-background-visibility {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.settings-background-actions {
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.settings-background-formats {
+  margin-inline-end: auto;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+@media (max-width: 640px) {
+  .settings-background-option {
+    flex-direction: column;
+  }
+
+  .settings-background-option__label {
+    justify-content: center;
+  }
+
+  .settings-background-formats {
+    flex-basis: 100%;
+  }
+}
+
+.settings-background-visibility {
+  flex-wrap: nowrap;
+  width: 100%;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.settings-background-visibility input {
+  width: clamp(120px, 20vw, 224px);
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.settings-background-visibility__value {
+  min-width: 4ch;
+  color: var(--text);
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The preview stays in its local DOM and paints within the measured Settings
+   canvas, not the narrow column. Fixed placement keeps it beside controls below
+   the fold. Isolation keeps its negative layer above the canvas and below the
+   controls; the sidebar stays outside it. Nothing fades or changes layout. */
+.content[data-background-preview] {
+  isolation: isolate;
+
+  .settings-group {
+    background: var(--card);
+    background-color: oklch(from var(--card) l c h / 1);
+  }
+
+  .settings-section__header,
+  .settings-section__desc,
+  .settings-status,
+  .content-header {
+    color: var(--text);
+    text-shadow:
+      0 1px 1px var(--bg-content, var(--bg)),
+      0 0 4px var(--bg-content, var(--bg)),
+      0 0 12px var(--bg-content, var(--bg));
+  }
+}
+
+openclaw-appearance-background > .settings-background-preview {
+  display: none;
+  pointer-events: none;
+}
+
+.content[data-background-preview] openclaw-appearance-background > .settings-background-preview {
+  position: fixed;
+  display: block;
+  z-index: -1;
+  inset: auto;
+  top: var(--settings-background-preview-top);
+  left: var(--settings-background-preview-left);
+  width: var(--settings-background-preview-width);
+  height: var(--settings-background-preview-height);
+}
+
+/* The preview deliberately has no enter/exit animation or opacity transition,
+   including with reduced motion: values track the range directly. */
+openclaw-appearance-background .settings-background-preview,
+openclaw-appearance-background .settings-background-preview .session-background__image {
+  animation: none;
+  transition: none;
+}
+
+.settings-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-3);
+  margin: 0 0 var(--space-5);
+}
+
+.settings-summary__tile {
+  padding: var(--space-3) var(--space-4);
+}
+
+.settings-summary dt {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.settings-summary dd {
+  margin: var(--space-2) 0 0;
+  font-size: var(--control-ui-text-lg);
+  font-weight: 600;
+}
+
+.settings-workspace,
 .settings-workspace__body {
   width: 100%;
 }
 
-.content-header + .settings-workspace {
+.content-header + .settings-workspace,
+.settings-workspace__body > :where(:not(:first-child)) {
   margin-top: var(--space-5);
 }
 
-.settings-workspace__body > * + * {
-  margin-top: var(--space-5);
+.content-header--settings {
+  flex-wrap: wrap;
+  max-height: none;
 }
 
-.settings-workspace--fill-height {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
+.content-header--settings .page-header-actions {
+  flex-wrap: wrap;
+  max-width: 100%;
 }
 
+.content-header--settings .page-header-actions > * {
+  flex-shrink: 0;
+  max-width: 100%;
+}
+
+.settings-workspace--fill-height,
 .settings-workspace--fill-height > .settings-workspace__body {
   flex: 1 1 auto;
   min-height: 0;
@@ -48,19 +269,17 @@
 /* The page headline adopts the column of the page below it; without this the
    shell caps headers at 1120px while narrow pages use a 760px column, leaving
    the title floating left of the content. */
-.shell--settings .content:has(.settings-page) .content-header,
-.content:has(.settings-page) .content-header--settings {
+.shell--settings .content.content--settings-page .content-header,
+.content.content--settings-page .content-header--settings {
   max-width: 760px;
   margin-inline: auto;
   padding-inline: var(--space-4);
 }
 
-.shell--settings .content:has(.settings-page--wide) .content-header,
-.content:has(.settings-page--wide) .content-header--settings {
+.shell--settings .content.content--settings-wide .content-header,
+.content.content--settings-wide .content-header--settings {
   max-width: 1120px;
 }
-
-/* ── Page ── */
 
 /* Section separation stays generous (--space-8) so group surfaces read as
    distinct blocks; headings bind to their own group via the tighter
@@ -129,9 +348,8 @@
   font: 400 var(--control-ui-text-sm) / 1.5 var(--mono);
 }
 
-/* ── Section ── */
-
-.settings-section {
+.settings-section,
+.config-tier-groups {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -227,16 +445,14 @@
   cursor: var(--cursor-action);
 }
 
-.settings-section__help-button > span {
+.settings-section__help-button > span,
+.settings-section__help-button svg {
   display: block;
   width: 100%;
   height: 100%;
 }
 
 .settings-section__help-button svg {
-  display: block;
-  width: 100%;
-  height: 100%;
   stroke-width: 1.75;
 }
 
@@ -245,9 +461,9 @@
   color: var(--accent);
 }
 
-.settings-section__help-popover::part(body) {
-  max-width: 280px;
-  padding: var(--space-3) var(--space-4);
+.settings-section__help-popover {
+  --oc-overlay-max-width: 280px;
+  --oc-popover-padding: var(--space-3) var(--space-4);
 }
 
 .settings-section__help-panel {
@@ -267,8 +483,6 @@
   font-weight: 600;
 }
 
-/* ── Group (the only surface) ── */
-
 .settings-group {
   background: var(--card);
   border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
@@ -281,16 +495,8 @@
   border-color: color-mix(in srgb, var(--danger) 35%, var(--border) 65%);
 }
 
-/* ── Advanced tier ──
- * Lives here rather than config.css because every schema-driven surface
+/* Lives here rather than config.css because every schema-driven surface
  * (config pages and the channel detail forms) renders the same split. */
-
-.config-tier-groups {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  min-width: 0;
-}
 
 .config-advanced-disclosure {
   margin-top: var(--space-5);
@@ -308,8 +514,6 @@
   margin-top: var(--space-3);
 }
 
-/* ── Row ── */
-
 .settings-row {
   display: flex;
   align-items: center;
@@ -319,10 +523,16 @@
   min-height: 48px;
 }
 
+.settings-row-mount + .settings-row-mount > .settings-row,
 .settings-row + .settings-row,
 .settings-row + .settings-subrows,
 .settings-subrows + .settings-row {
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.settings-row--nested {
+  margin-inline-start: var(--space-4);
+  border-inline-start: 2px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
 .settings-row__text {
@@ -366,7 +576,6 @@
   margin-left: auto;
 }
 
-/* Plain right-aligned value text ("Default", "v2026.7.1", …). */
 .settings-row__value {
   font-size: var(--control-ui-text-sm);
   color: var(--muted);
@@ -412,6 +621,99 @@
   }
 }
 
+.settings-tab-icon .settings-segmented > .settings-segmented__btn {
+  padding-inline: var(--space-2);
+}
+
+.settings-tab-icon__option,
+.settings-permission-control .settings-status > span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.settings-tab-icon__lobsters,
+.settings-tab-icon__shapes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.settings-tab-icon__pick {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+
+.settings-tab-icon__pick:hover,
+.settings-tab-icon__pick[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.settings-tab-icon__pick:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.settings-tab-icon .settings-tab-icon__lobster {
+  display: block;
+  position: relative;
+  left: auto;
+  bottom: auto;
+  width: 30px;
+  height: 30px;
+  transform: none;
+  pointer-events: none;
+}
+
+.settings-tab-icon__lobster,
+.settings-tab-icon__lobster * {
+  animation: none !important;
+  transition: none !important;
+}
+
+.settings-tab-icon__preview .settings-tab-icon__lobster {
+  width: 16px;
+  height: 16px;
+}
+
+.settings-tab-icon__preview,
+.settings-tab-icon__preview img,
+.settings-tab-icon__preview.identity-avatar--agent img,
+.settings-tab-icon__preview svg {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
+.settings-tab-icon__preview[data-avatar-shape] {
+  border-radius: 0;
+}
+
+.settings-tab-icon__preview[data-avatar-shape="rounded"] {
+  clip-path: inset(0 round 25%);
+}
+
+.settings-tab-icon__preview[data-avatar-shape="circle"] {
+  clip-path: circle(50%);
+}
+
+.settings-tab-icon__preview:not([data-avatar-shape="square"]) img {
+  object-fit: cover;
+}
+
+.settings-tab-icon__pick .settings-tab-icon__preview,
+.settings-tab-icon__pick .settings-tab-icon__preview img {
+  width: 30px;
+  height: 30px;
+}
+
 /* Trailing action rows hold only a button cluster: give it the full row
    (definite width, see the wrap note on .settings-row__control) so nowrap
    button labels wrap as whole buttons instead of squeezing into 60%. */
@@ -426,11 +728,6 @@
   cursor: var(--cursor-action);
 }
 
-.settings-row--toggle:has(wa-switch[disabled]) {
-  cursor: not-allowed;
-}
-
-/* Clickable drill-in row. */
 .settings-row--nav {
   width: 100%;
   border: none;
@@ -472,7 +769,10 @@
   stroke-linejoin: round;
 }
 
-/* Indented child rows (e.g. per-item options under a parent toggle). */
+.cfg-object[open] > .cfg-object__summary .cfg-object__chevron {
+  transform: rotate(90deg);
+}
+
 .settings-subrows .settings-row {
   padding-left: var(--space-7);
 }
@@ -481,46 +781,11 @@
   border-top: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
 }
 
-/* ── Controls ── */
-
-/* One control height inside settings clusters. Buttons, inputs, selects, and
-   segmented controls share 32px so mixed rows never show ragged heights.
-   Multi-select list boxes and textareas keep their natural height. */
-.settings-row__control .btn,
-.settings-section__actions .btn,
-.settings-group .data-table-search input {
-  height: var(--settings-control-height);
-  padding-block: 0;
-  box-sizing: border-box;
-}
-
-.settings-row__control .btn--icon,
-.settings-section__actions .btn--icon {
-  width: var(--settings-control-height);
-  min-width: var(--settings-control-height);
-  padding-inline: 0;
-}
-
-.settings-section__actions .btn--xs.btn--icon {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-}
-
-.settings-section__actions .btn--xs.btn--icon svg {
-  width: 16px;
-  height: 16px;
-}
-
 .settings-toggle {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
   cursor: var(--cursor-action);
-}
-
-wa-switch.settings-toggle {
-  flex: none;
 }
 
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select {
@@ -532,6 +797,10 @@ wa-switch.settings-toggle {
    paired media pickers aligned instead of letting native intrinsic width win. */
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select--media-device {
   width: 340px;
+}
+
+.settings-row__control input.settings-input:not(.picker-select__search) {
+  text-align: right;
 }
 
 /* Lone value inputs share one width so stacked rows in a group read as a
@@ -577,7 +846,6 @@ wa-switch.settings-toggle {
   .settings-row__control
   > input[type="number"].settings-input {
   width: 110px;
-  text-align: center;
 }
 
 /* Time inputs hold HH:MM; the shared 340px text width would stretch the paired
@@ -587,8 +855,6 @@ wa-switch.settings-toggle {
   > input[type="time"].settings-input {
   width: auto;
 }
-
-/* ── Secret input (inset reveal toggle; no trailing button) ── */
 
 /* Stacked rows (config form arrays/maps) give the control full width; the
    wrapper must grow or the inner 100% resolves against fit-content. */
@@ -618,8 +884,6 @@ textarea.settings-input {
     font-size: 16px;
   }
 }
-
-/* ── Status (dot + text — replaces status pills) ── */
 
 .settings-status {
   display: inline-flex;
@@ -658,6 +922,39 @@ textarea.settings-input {
   background: var(--accent);
 }
 
+.settings-permission-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 11rem;
+  align-items: center;
+  gap: var(--space-3);
+  width: 20rem;
+  max-width: 100%;
+}
+
+.settings-permission-control .settings-status {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.settings-permission-check {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.settings-permission-check svg {
+  width: 14px;
+  height: 14px;
+}
+
+.settings-permission-control > .btn {
+  width: 100%;
+  white-space: normal;
+}
+
+.settings-permission-recovery {
+  grid-column: 2;
+}
+
 .updates-status-control {
   display: inline-flex;
   align-items: center;
@@ -669,6 +966,31 @@ textarea.settings-input {
     white-space: normal;
     overflow-wrap: anywhere;
   }
+}
+
+/* Narrow screens stack the Recovery row, so its actions get the full width.
+   Whole buttons wrap and grow to fill each line; the primary retry leads on
+   its own line. Wide screens keep the single right-aligned row. */
+@media (max-width: 768px) {
+  .updates-recovery-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+
+    > .btn {
+      flex: 1 1 auto;
+      min-height: 40px;
+    }
+
+    > .btn.primary {
+      flex-basis: 100%;
+      order: -1;
+    }
+  }
+}
+
+.updates-status-check-failed .settings-status {
+  color: var(--warn);
 }
 
 .updates-attempt-details {
@@ -721,8 +1043,6 @@ textarea.settings-input {
   overflow-wrap: anywhere;
 }
 
-/* ── Empty state ── */
-
 .settings-empty {
   padding: var(--space-5) var(--space-4);
   font-size: var(--control-ui-text-sm);
@@ -769,8 +1089,6 @@ textarea.settings-input {
   width: 104px;
 }
 
-/* ── Key/value facts (About build info, agent facts) ── */
-
 .settings-kv {
   display: grid;
   grid-template-columns: minmax(120px, max-content) minmax(0, 1fr);
@@ -797,7 +1115,8 @@ textarea.settings-input {
 /* Identity composes existing row controls; these wrappers only keep the
    avatar/file action and name/save action aligned as one control cluster. */
 .identity-avatar-control,
-.identity-name-control {
+.identity-name-control,
+.settings-account {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -810,15 +1129,6 @@ textarea.settings-input {
 
 .identity-error .settings-row__desc {
   color: var(--danger);
-}
-
-/* ── Account value (small round avatar + handle inside a row control) ── */
-
-.settings-account {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
 }
 
 .settings-account__avatar {
@@ -836,17 +1146,16 @@ textarea.settings-input {
   user-select: all;
 }
 
-/* ── Mobile ── */
-
 .shell--embed-settings {
   --settings-control-height: 44px;
 
-  :is(button, .btn, summary, wa-switch, .settings-segmented__btn) {
+  :is(button, .btn, summary, .settings-toggle, .settings-segmented__btn):where(:not([role="tab"])) {
     min-width: 44px;
     min-height: 44px;
   }
 
-  :is(input, select, textarea, wa-select) {
+  :is(input, select, textarea),
+  .settings-select .picker-select__trigger {
     font-size: max(16px, var(--control-ui-touch-input-size, 1em));
   }
 
@@ -868,12 +1177,17 @@ textarea.settings-input {
   :is(.shell--settings, openclaw-skills-page, openclaw-cron-page) {
     --settings-control-height: 44px;
 
-    :is(button, .btn, summary, wa-switch, .settings-segmented__btn) {
+    /* The shell topbar keeps one size on every route; resizing it here shifts
+       the page when navigation enters or leaves Settings. */
+    :is(button, .btn, summary, .settings-toggle, .settings-segmented__btn):where(
+      :not([role="tab"], .topbar *)
+    ) {
       min-width: 44px;
       min-height: 44px;
     }
 
-    :is(input, select, textarea, wa-select) {
+    :is(input, select, textarea),
+    .settings-select .picker-select__trigger {
       font-size: max(16px, var(--control-ui-touch-input-size, 1em));
     }
 
@@ -897,17 +1211,15 @@ textarea.settings-input {
     padding-inline: var(--space-3);
   }
 
-  .shell--settings .content:not(.content--custodian),
-  .content:has(.plugins-hub-header) {
+  .shell--settings .content:not(.content--custodian) {
     --content-inline-padding: var(--space-3);
     --settings-header-inline-padding: 0;
     padding: var(--space-3) var(--space-3) var(--space-4);
   }
 
-  .shell--settings .content:has(.settings-workspace) .content-header,
-  .content:has(.plugins-hub-header) .content-header,
+  .shell--settings .content.content--settings-workspace .content-header,
   .shell--settings .settings-page,
-  .content:has(.plugins-hub-header) .settings-page,
+  .content.content--hub-header .settings-page,
   .shell--settings .config-content,
   .shell--settings .config-lead,
   .shell--settings .config-content-callout {
@@ -1072,4 +1384,283 @@ textarea.settings-input {
     min-height: 44px;
     white-space: normal;
   }
+}
+
+/* Quiet-hours details stay connected to their toggle without changing row controls. */
+.settings-row + .quiet-hours-window,
+.quiet-hours-window .settings-row + .settings-row {
+  border-top: 0;
+}
+
+.quiet-hours-window .settings-row {
+  padding-top: 0;
+}
+
+/* Full Settings navigation loads with the sidebar; fallback geometry stays in layout.css. */
+.settings-sidebar__esc {
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--card) 70%, transparent);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: calc(10px * var(--control-ui-text-scale));
+  font-weight: 550;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Inside the drawer there is no Escape key to hint at. */
+.shell--mobile-nav .settings-sidebar__esc {
+  display: none;
+}
+
+.settings-sidebar__agent openclaw-agent-select {
+  display: block;
+  min-width: 0;
+}
+
+.settings-sidebar__agent .agent-select__trigger {
+  min-width: 0;
+  min-height: 40px;
+  padding: 6px 8px;
+  border-color: transparent;
+  background: transparent;
+  font-size: 14px;
+}
+
+:root[data-theme-mode="light"] .settings-sidebar__agent .agent-select__trigger {
+  background: transparent;
+}
+
+.settings-sidebar__agent .agent-select__trigger:hover:not(:disabled),
+.settings-sidebar__agent .agent-select__trigger[aria-expanded="true"],
+:root[data-theme-mode="light"] .settings-sidebar__agent .agent-select__trigger:hover:not(:disabled),
+:root[data-theme-mode="light"]
+  .settings-sidebar__agent
+  .agent-select__trigger[aria-expanded="true"] {
+  background: var(--bg-hover);
+}
+
+@media (pointer: coarse) {
+  .settings-sidebar__agent .agent-select__trigger {
+    min-height: 44px;
+  }
+}
+
+.settings-sidebar__search::after {
+  content: "";
+  position: absolute;
+  inset-inline: -12px;
+  bottom: 0;
+  height: 1px;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--border) 62%, transparent);
+  box-shadow: 0 6px 12px color-mix(in srgb, var(--text) 14%, transparent);
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.settings-sidebar__search--scrolled::after {
+  opacity: 1;
+}
+
+.settings-sidebar__search-icon {
+  position: absolute;
+  inset-inline-start: 10px;
+  z-index: 1;
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  pointer-events: none;
+}
+
+.settings-sidebar__search-icon svg,
+.settings-sidebar__search-clear svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.7px;
+}
+
+.settings-sidebar__search-input {
+  --control-ui-touch-input-size: calc(12.5px * var(--control-ui-text-scale));
+
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding-block: 0;
+  padding-inline: 32px 34px;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--card) 72%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
+  outline: none;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.settings-sidebar__search-input::placeholder {
+  color: color-mix(in srgb, var(--muted) 82%, transparent);
+}
+
+.settings-sidebar__search-input:focus {
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
+  background: color-mix(in srgb, var(--card) 88%, transparent);
+  box-shadow: var(--focus-ring);
+}
+
+/* Forced colors suppress the normal shadow-only focus indicator. */
+@media (forced-colors: active) {
+  .settings-sidebar__search-input:focus-visible {
+    outline: 2px solid Highlight;
+  }
+}
+
+.settings-sidebar__search-input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.settings-sidebar__search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  position: absolute;
+  inset-inline-end: 5px;
+  border-radius: var(--radius-sm);
+}
+
+.settings-sidebar__group-label {
+  padding: 0 9px;
+  margin: 0 0 4px;
+  font-size: calc(10.5px * var(--control-ui-text-scale));
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.settings-sidebar__item-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  opacity: 0.72;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.settings-sidebar__item:hover .settings-sidebar__item-icon,
+.settings-sidebar__item--active .settings-sidebar__item-icon {
+  opacity: 1;
+}
+
+.settings-sidebar__item--active .settings-sidebar__item-icon {
+  color: var(--navigation-selected-icon, var(--accent));
+}
+
+.settings-sidebar__item-label {
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settings-sidebar__subitem {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  margin-inline-start: 24px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+
+.settings-sidebar__subitem:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.settings-sidebar__subitem--active {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent-subtle) 72%, transparent);
+}
+
+.settings-sidebar__subitem-label {
+  font-size: calc(12.5px * var(--control-ui-text-scale));
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settings-sidebar__footer {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  min-height: var(--shell-sidebar-footer-height);
+  padding: 12px 21px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  font-size: calc(11.5px * var(--control-ui-text-scale));
+  color: var(--muted);
+}
+
+.settings-sidebar__footer > openclaw-sidebar-build-chip {
+  display: contents;
+}
+
+.settings-sidebar__connection {
+  min-height: 1lh;
+}
+
+openclaw-settings-save-indicator {
+  min-width: 0;
+}
+
+openclaw-settings-save-indicator:empty {
+  display: none;
+}
+
+.settings-save-indicator {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.settings-save-indicator--recovery,
+.settings-save-indicator--rejected {
+  flex-direction: column;
+  align-items: flex-start;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.settings-save-indicator--danger {
+  color: var(--danger);
+}
+
+.settings-save-indicator svg {
+  width: 15px;
+  height: 15px;
+}
+
+.settings-sidebar__footer .sidebar-footer-build {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
 }

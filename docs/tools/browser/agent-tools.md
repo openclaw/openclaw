@@ -13,6 +13,13 @@ The agent gets **one tool** for browser automation:
 
 How it maps:
 
+- On Playwright-backed profiles, `browser open` honors `timeoutMs` for opening
+  navigation, capped at 120 seconds, with a 30-second default. If the load event times
+  out after a page commits, `open` returns the usable tab after navigation safety
+  checks; it may still be loading. Use `snapshot` or `act` with `kind: "wait"` to
+  inspect or wait for the content you need. Uncommitted or blocked pages still
+  fail and are cleaned up. Cancelling an in-progress open closes its newly created
+  tab without waiting for the navigation timeout; existing tabs remain open.
 - `browser snapshot` returns a stable UI tree (AI or ARIA).
 - Snapshot `query` keeps lines containing **all** whitespace-separated query tokens, ignoring case. Matching lines retain element refs; the result reports the match count and respects `maxChars`. It searches the returned snapshot, so increase the snapshot scope if the source was truncated.
 - `browser requests` reads the collected network log. Optional `filter` matches a substring in the URL or resource type; `limit` keeps the most recent entries (default 50). Results report `total` matching collected requests and `returned` entries; the output budget may reduce that count further. `clear=true` clears the entire collected log after reading, including entries omitted by filtering or limits.
@@ -25,7 +32,11 @@ How it maps:
   cross-document navigation include the same fresh page state. Navigations
   that resolve to a download skip it.
 - `browser act` uses the snapshot `ref` IDs to click/type/drag/select.
+  When a captured control disappears, its bound ref fails. Take a new snapshot
+  before retrying the action.
 - `browser screenshot` captures pixels (full page, element, or labeled refs).
+  Attached-browser workspace artifacts keep the normalized image's extension;
+  a PNG request can produce a `.jpg` artifact when normalization converts it to JPEG.
 - If a screenshot times out while the browser is still capturing or restoring
   page settings, further screenshots, resizing, and device changes on that tab
   return a recovery error. Retry after the capture finishes. If it stays stuck,
@@ -34,11 +45,13 @@ How it maps:
 - `browser` accepts:
   - `profile` to choose a named browser profile (openclaw, chrome, or remote CDP).
   - `target` (`sandbox` | `host` | `node`) to select where the browser lives.
-  - In sandboxed sessions, `target: "host"` requires `agents.defaults.sandbox.browser.allowHostControl=true`.
-  - If `target` is omitted: sandboxed sessions default to `sandbox`, non-sandbox sessions default to `host`.
-  - If a browser-capable node is connected, the tool may auto-route to it unless you pin `target="host"` or `target="node"`.
+  - Omit `target` and `node` to use configured routing. When a sandbox browser bridge is available, managed profiles use it. Without a sandbox bridge, an enabled `gateway.nodes.browser.node` pin selects that node, including in manual routing mode; an unavailable pinned node fails rather than switching to the host.
+  - Without a pin, automatic routing prefers an available host browser and can select a single connected browser node when node routing is available. Manual routing without a pin and disabled node routing use the host. Standalone runs use the host unless a Gateway or node route is selected; see [Remote and hosted browsers](/tools/browser/remote#node-browser-proxy-zero-config-default).
+  - Explicit `target="host"` selects the Gateway host and bypasses configured node routing. Explicit `target="node"` or a `node` selector requests node routing; `gateway.nodes.browser.mode="off"` rejects it.
+  - In sandboxed sessions, both host and node control require `agents.defaults.sandbox.browser.allowHostControl=true`. Existing-session profiles cannot use the sandbox browser. When a bridge is available, they use the host unless a node is explicitly selected, subject to the same host-control policy.
+  - With an enabled node pin, no sandbox bridge, and host control allowed, the tool description identifies the configured node as the default. Other configurations retain the existing tool description; the guidance does not depend on live node connectivity.
 
-This keeps the agent deterministic and avoids brittle selectors.
+This lets the agent reuse captured element references instead of brittle selectors.
 
 Example agent tool arguments (reuse a `targetId` from `tabs` or `open`):
 
@@ -53,6 +66,22 @@ Example agent tool arguments (reuse a `targetId` from `tabs` or `open`):
 ```json
 { "action": "snapshot", "targetId": "t1", "query": "sign in", "maxChars": 4000 }
 ```
+
+For a [Browser dashboard](/web/dashboards#share-a-browser-dashboard-with-your-agent),
+use its stable widget name instead of a tab ID:
+
+```json
+{ "action": "snapshot", "dashboard": "service-status", "refs": "aria" }
+```
+
+The `dashboard` selector applies to the current session. Create the saved
+`browser:dashboard` widget with the `dashboard` tool first; its props choose
+the URL and optional managed profile. `browser` resolves the same page shown
+in the dashboard for snapshots, clicks, typing, and navigation. Do not combine
+the selector with an explicit profile, node, or target ID. `open` explicitly
+resumes a stopped dashboard, and `close` stops its running browser. Other
+actions leave a stopped dashboard stopped. Ordinary raw-tab closing cannot
+close a dashboard-owned tab.
 
 ```json
 {

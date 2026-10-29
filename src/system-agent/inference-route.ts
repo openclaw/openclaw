@@ -1,6 +1,6 @@
-// Resolves the configured default agent route shared by OpenClaw inference calls.
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   listAgentEntries,
   resolveAmbientOwnerAgentId,
@@ -10,6 +10,8 @@ import {
   cliBackendAcceptsAuthProfileForwarding,
   resolveCliExecutionAuthProfileId,
 } from "../agents/cli-execution-auth.js";
+import { resolveConfiguredSetupModelForAgent } from "../agents/utility-model.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
 import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,6 +20,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { SYSTEM_AGENT_ID } from "./agent-id.js";
 
 export type SystemAgentConfiguredRoute = {
+  modelTarget?: "utility";
   /** Unprojected input, kept separate from prepared execution credentials. */
   sourceConfig: OpenClawConfig;
   runConfig: OpenClawConfig;
@@ -36,15 +39,10 @@ export type SystemAgentConfiguredRoute = {
 );
 
 export type SystemAgentConfiguredRouteDeps = {
-  readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-  loadAuthProfileStoreForRuntime?: typeof import("../agents/auth-profiles/store-runtime.js").loadAuthProfileStoreForRuntime;
+  /** Explicit role selection; primary callers must not use setup-only utility inference. */
+  modelTarget?: "primary" | "utility";
   pluginMetadataPlugins?: PluginMetadataSnapshot["plugins"];
 };
-type SystemAgentRouteProjectionDeps = Pick<
-  SystemAgentConfiguredRouteDeps,
-  "loadAuthProfileStoreForRuntime" | "pluginMetadataPlugins"
->;
-
 /** The canonical source and default-materialized view from one authoritative read. */
 export type SystemAgentConfigSnapshot = Pick<
   ConfigFileSnapshot,
@@ -55,7 +53,7 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
 
 export type DefaultInferenceRouteProjection = {
   route: DistributiveOmit<SystemAgentConfiguredRoute, "runConfig" | "sourceConfig"> | null;
-  defaultSelection: { explicitIds: string[]; fallbackId?: string };
+  defaultSelection: { explicitIds: string[] };
   auth: unknown;
   models: unknown;
   defaults: unknown;
@@ -70,23 +68,28 @@ export type DefaultInferenceRouteProjection = {
 function projectSystemAgentExecutionConfig(
   config: OpenClawConfig,
   routeAgentId: string,
+  allowProspectiveAgent: boolean,
 ): OpenClawConfig {
   const agents = listAgentEntries(config);
   const routeAgent = agents.find((agent) => normalizeAgentId(agent.id) === routeAgentId);
   const retainedAgents = agents.filter((agent) => normalizeAgentId(agent.id) !== SYSTEM_AGENT_ID);
   const projectedAgents = [
     ...retainedAgents,
+    // Primary preflight runs before agent creation. Admit its empty candidate
+    // only in this isolated execution view; source config stays authoritative.
+    ...(allowProspectiveAgent && !routeAgent && routeAgentId !== SYSTEM_AGENT_ID
+      ? [{ id: routeAgentId }]
+      : []),
     {
       id: SYSTEM_AGENT_ID,
       ...(routeAgent?.params !== undefined ? { params: structuredClone(routeAgent.params) } : {}),
       ...(routeAgent?.tools !== undefined ? { tools: structuredClone(routeAgent.tools) } : {}),
     },
   ];
-  const { list: _legacyList, ...agentsConfig } = config.agents ?? {};
   const projected = {
     ...config,
     agents: {
-      ...agentsConfig,
+      ...config.agents,
       entries: toAgentEntriesRecord(projectedAgents),
     },
   };
@@ -97,7 +100,7 @@ function projectSystemAgentExecutionConfig(
 export async function resolveSystemAgentConfiguredRouteFromConfig(
   runConfig: OpenClawConfig,
   requestedAgentId?: string,
-  deps: SystemAgentRouteProjectionDeps = {},
+  deps: SystemAgentConfiguredRouteDeps = {},
   configSnapshot?: SystemAgentConfigSnapshot,
 ): Promise<SystemAgentConfiguredRoute | null> {
   // Match before adding the reserved execution agent changes the source shape.
@@ -110,21 +113,27 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
       : runConfig;
   const prepared = createRuntimeConfigReader(source)();
   const preparedConfig = prepared === source ? runConfig : prepared;
-  const [agentScope, modelSelection, modelRuntimeAliases, simpleCompletion, harnessPolicy] =
-    await Promise.all([
-      import("../agents/agent-scope.js"),
-      import("../agents/model-selection.js"),
-      import("../agents/model-runtime-aliases.js"),
-      import("../agents/simple-completion-runtime.js"),
-      import("../agents/harness/policy.js"),
-    ]);
+  const [modelSelection, modelRuntimeAliases, simpleCompletion, harnessPolicy] = await Promise.all([
+    import("../agents/model-selection.js"),
+    import("../agents/model-runtime-aliases.js"),
+    import("../agents/simple-completion-selection.js"),
+    import("../agents/harness/policy.js"),
+  ]);
   const modelOwnerAgentId = resolveAmbientOwnerAgentId(runConfig, requestedAgentId);
-  if (!agentScope.resolveAgentEffectiveModelPrimary(runConfig, modelOwnerAgentId)) {
+  const configuredSelection = resolveConfiguredSetupModelForAgent({
+    cfg: runConfig,
+    agentId: modelOwnerAgentId,
+    modelTarget: deps.modelTarget,
+  });
+  if (!configuredSelection) {
     return null;
   }
   const selection = simpleCompletion.resolveSimpleCompletionSelectionForAgent({
     cfg: runConfig,
     agentId: modelOwnerAgentId,
+    // Catalog IDs can contain @ without naming an auth profile. Keep implicit
+    // selection on the completion resolver's structured provider/model path.
+    modelRef: configuredSelection.implicitPrimary ? undefined : configuredSelection.modelRef,
     manifestPlugins: deps.pluginMetadataPlugins,
   });
   if (!selection) {
@@ -151,7 +160,7 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
       agentId: modelOwnerAgentId,
     });
   const cliAuthProfileId = allowCliAuthProfileForwarding
-    ? resolveCliExecutionAuthProfileId({
+    ? await resolveCliExecutionAuthProfileId({
         cliExecutionProvider: executionProvider,
         authProfileProvider: selection.provider,
         config: runConfig,
@@ -164,17 +173,24 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
               },
             }
           : {}),
-        ...(deps.loadAuthProfileStoreForRuntime
-          ? { loadAuthProfileStoreForRuntime: deps.loadAuthProfileStoreForRuntime }
-          : {}),
       })
     : undefined;
   const authProfileId = allowCliAuthProfileForwarding ? cliAuthProfileId : selection.profileId;
-  const executionConfig = projectSystemAgentExecutionConfig(preparedConfig, modelOwnerAgentId);
+  const executionConfig = projectSystemAgentExecutionConfig(
+    preparedConfig,
+    modelOwnerAgentId,
+    deps.modelTarget === "primary",
+  );
+  const modelLabel = modelSelection.resolveConfiguredRouteModelLabel({
+    configuredRef: configuredSelection.modelRef,
+    resolved: { provider: selection.provider, model: selection.modelId },
+    ...(selection.profileId ? { profileId: selection.profileId } : {}),
+  });
   const base = {
+    ...(configuredSelection.modelTarget ? { modelTarget: configuredSelection.modelTarget } : {}),
     sourceConfig: runConfig,
     runConfig: executionConfig,
-    modelLabel: `${selection.provider}/${selection.modelId}`,
+    modelLabel,
     provider: executionProvider,
     model: selection.modelId,
     agentDir: selection.agentDir,
@@ -221,19 +237,11 @@ function projectRelevantModelMap(params: {
   return Object.keys(relevant).length > 0 ? relevant : undefined;
 }
 
-/** Project every config input that can change the configured default-agent route. */
-export async function projectDefaultInferenceRoute(
-  config: OpenClawConfig,
-  deps: SystemAgentRouteProjectionDeps = {},
-): Promise<DefaultInferenceRouteProjection> {
-  return await projectInferenceRoute(config, undefined, deps);
-}
-
 /** Project every config input that can change one configured agent route. */
 export async function projectInferenceRoute(
   config: OpenClawConfig,
   requestedAgentId?: string,
-  deps: SystemAgentRouteProjectionDeps = {},
+  deps: SystemAgentConfiguredRouteDeps = {},
   sourceConfig: OpenClawConfig = config,
 ): Promise<DefaultInferenceRouteProjection> {
   const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
@@ -280,13 +288,19 @@ export async function projectInferenceRoute(
       .map(([provider, providerConfig]) => [provider, structuredClone(providerConfig)]),
   );
   const rawModel =
-    typeof agent?.model === "string"
-      ? agent.model
-      : agent?.model?.primary ||
-        (typeof defaults?.model === "string" ? defaults.model : defaults?.model?.primary);
+    route?.modelTarget === "utility"
+      ? (resolveAgentModelPrimaryValue(agent?.utilityModel) ??
+        resolveAgentModelPrimaryValue(defaults?.utilityModel))
+      : typeof agent?.model === "string"
+        ? agent.model
+        : agent?.model?.primary ||
+          (typeof defaults?.model === "string" ? defaults.model : defaults?.model?.primary);
   const agentRouteOverrides = agent
     ? {
         model: structuredClone(agent.model),
+        ...(route?.modelTarget === "utility"
+          ? { utilityModel: structuredClone(agent.utilityModel) }
+          : {}),
         params: structuredClone(agent.params),
         tools: structuredClone(agent.tools),
         models: projectRelevantModelMap({
@@ -295,7 +309,6 @@ export async function projectInferenceRoute(
           modelId: route?.model,
           rawModel,
         }),
-        agentRuntime: structuredClone(agent.agentRuntime),
       }
     : undefined;
   const hasAgentRouteOverrides =
@@ -321,6 +334,9 @@ export async function projectInferenceRoute(
     },
     defaults: {
       model: structuredClone(defaults?.model),
+      ...(route?.modelTarget === "utility"
+        ? { utilityModel: structuredClone(defaults?.utilityModel) }
+        : {}),
       params: structuredClone(defaults?.params),
       models: projectRelevantModelMap({
         models: defaults?.models,
@@ -328,7 +344,6 @@ export async function projectInferenceRoute(
         modelId: route?.model,
         rawModel,
       }),
-      agentRuntime: structuredClone(defaults?.agentRuntime),
     },
     ...(agent && hasAgentRouteOverrides
       ? {
@@ -356,9 +371,39 @@ export async function projectInferenceRoute(
   };
 }
 
-export function sameDefaultInferenceRoute(
+function withoutAgentIdentity(projection: DefaultInferenceRouteProjection): unknown {
+  const agent = isRecord(projection.agent)
+    ? { ...projection.agent, id: "<agent>" }
+    : projection.agent;
+  return {
+    ...projection,
+    route: projection.route
+      ? { ...projection.route, agentId: "<agent>", agentDir: "<agent-dir>" }
+      : null,
+    defaultSelection: { explicitIds: [] },
+    ...(agent ? { agent } : {}),
+  };
+}
+
+export function sameSetupInferenceRoute(
   left: DefaultInferenceRouteProjection,
   right: DefaultInferenceRouteProjection,
+  ignoreAgentIdentity: boolean,
 ): boolean {
-  return isDeepStrictEqual(left, right);
+  return ignoreAgentIdentity
+    ? isDeepStrictEqual(withoutAgentIdentity(left), withoutAgentIdentity(right))
+    : isDeepStrictEqual(left, right);
+}
+
+export function sameSetupConfiguredRoute(
+  left: DefaultInferenceRouteProjection["route"],
+  right: DefaultInferenceRouteProjection["route"],
+  ignoreAgentIdentity: boolean,
+): boolean {
+  if (!ignoreAgentIdentity) {
+    return isDeepStrictEqual(left, right);
+  }
+  const normalize = (route: DefaultInferenceRouteProjection["route"]) =>
+    route ? { ...route, agentId: "<agent>", agentDir: "<agent-dir>" } : null;
+  return isDeepStrictEqual(normalize(left), normalize(right));
 }

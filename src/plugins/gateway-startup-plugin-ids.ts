@@ -1,5 +1,4 @@
 /** Public facade for deterministic Gateway startup plugin planning. */
-export type { GatewayStartupPluginPlan } from "./gateway-startup-plugin-contracts.js";
 export {
   collectConfiguredMemoryEmbeddingProviderIds,
   collectConfiguredMemoryEmbeddingStartupProviderOwners,
@@ -10,13 +9,9 @@ export {
   createGatewayStartupMetadataPluginIdScope,
   resolveGatewayStartupMetadataPluginIds,
 } from "./gateway-startup-plugin-metadata.js";
-export {
-  resolveChannelPluginIdsFromRegistry,
-  resolveGatewayStartupPluginPlanFromRegistry,
-} from "./gateway-startup-plugin-plan.js";
+export { resolveGatewayStartupPluginPlanFromRegistry } from "./gateway-startup-plugin-plan.js";
 export {
   loadGatewayStartupPluginPlan,
   loadGatewayStartupPluginPlanWithMetadata,
   resolveChannelPluginIds,
-  resolveGatewayStartupPluginIdsFromRegistry,
 } from "./gateway-startup-plugin-loader.js";

@@ -43,7 +43,7 @@ openclaw plugins install @openclaw/zalouser
 }
 ```
 
-4. Restart the Gateway (or finish setup).
+4. Check `openclaw channels status --probe`; start the Gateway if it is offline. Config changes follow [hot reload](/gateway/configuration/hot-reload).
 5. DM access defaults to pairing; approve the pairing code on first contact.
 
 ## What it is
@@ -55,7 +55,7 @@ openclaw plugins install @openclaw/zalouser
 
 ## Naming
 
-Channel id is `zalouser` to make it explicit this automates a **personal Zalo user account** (unofficial). `zalo` is reserved for a potential future official Zalo API integration.
+Channel id is `zalouser` to make it explicit this automates a **personal Zalo user account** (unofficial). `zalo` is the separate [Zalo Bot API](/channels/zalo) integration.
 
 ## Finding IDs (directory)
 
@@ -68,8 +68,9 @@ openclaw directory groups list --channel zalouser --query "work"
 ## Limits
 
 - Outbound text is chunked to 2000 characters (Zalo client limit).
+- Canceling or replacing a send stops its later requests after preparation. Messages already submitted may still arrive, and previously reported message IDs remain recorded when a later chunk or audio step fails.
 - `channels.zalouser.mediaMaxMb` limits each outbound attachment in MiB. The selected channel account's `mediaMaxMb` overrides the root, then `agents.defaults.mediaMaxMb` supplies the fallback. Images may be optimized; omitted limits preserve the shared loader defaults.
-- Streaming is not supported.
+- Block streaming is off by default. Set `agents.defaults.blockStreamingDefault` to `"on"` to send completed reply blocks as separate messages; see [Streaming and chunking](/concepts/streaming).
 - Completed inbound message ids are retained for 30 days, bounded to the 1000 most recent entries per account.
 
 The optional `zalouser` tool selects a credential profile, not a channel account.
@@ -217,10 +218,14 @@ For multi-account setups, prefer setting `profile` on each account in config so 
 
 - Remove any external `zca` process assumptions; the channel now runs fully in-process via `zca-js`, with no external CLI binary.
 
+**DM history is missing after an upgrade:**
+
+- Run `openclaw doctor --fix` to repair supported legacy DM session keys. Doctor checks every configured agent, including named agents, and preserves genuine group sessions.
+
 ## Related
 
 - [Channels Overview](/channels) - all supported channels
 - [Pairing](/channels/pairing) - DM authentication and pairing flow
 - [Groups](/channels/groups) - group chat behavior and mention gating
-- [Channel Routing](/channels/channel-routing) - session routing for messages
+- [Channel routing](/channels/channel-routing) - session routing for messages
 - [Security](/gateway/security) - access model and hardening

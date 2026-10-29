@@ -19,10 +19,9 @@ openclaw devices list
 openclaw devices approve <deviceRequestId>
 ```
 
-Restart the installed node with `openclaw node restart`, or stop and rerun its
-foreground `openclaw node run` command. For an app node paused for manual pairing,
-restart node mode or the app. This reconnect creates a separate command-surface
-request. Back on the Gateway:
+Headless node hosts keep reconnecting while device approval is pending, with
+exponential backoff capped at 30 seconds. After approval, the next reconnect
+creates a separate command-surface request. Back on the Gateway:
 
 ```bash
 openclaw nodes pending
@@ -30,6 +29,11 @@ openclaw nodes approve <nodeRequestId>
 openclaw nodes status
 openclaw nodes describe --node <idOrNameOrIp>
 ```
+
+If an older client already reports that reconnect is paused, restart the
+installed node with `openclaw node restart`, or stop and rerun its foreground
+`openclaw node run` command once. For an app node paused for manual pairing,
+restart node mode or the app.
 
 The two request IDs are distinct. Use `openclaw devices reject <deviceRequestId>`
 to reject device admission instead of approving it. An initial unapproved surface
@@ -49,15 +53,16 @@ Pending command-surface requests do not expire merely with time; they follow the
 [capability approval lifecycle](/gateway/pairing#how-capability-approval-works).
 
 - `nodes status` marks a node as **paired** when its device pairing role includes `node`.
-- A connected native Mac can opt in to coalesced physical-input activity from
-  **Settings -> Permissions -> Active computer detection**. Accessibility is
-  also required. The Gateway marks the freshest eligible Mac as
+- A connected native Mac reports coalesced activity from interaction with
+  OpenClaw without extra permissions. Optional **Settings -> Permissions ->
+  System-wide presence detection** also includes physical input in other apps
+  and requires Accessibility. The Gateway marks the freshest eligible Mac as
   `active`, gives the agent a stable node-id hint, and routes node connection
   alerts there before a delayed fallback. See
   [Active computer presence](/nodes/presence) for setup, privacy, timing, and
   troubleshooting.
 - The device pairing record is the durable approved-role contract. Token rotation stays inside that contract; it cannot upgrade a paired node into a role that pairing approval never granted.
-- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) manages the node's approved command/capability surface on its canonical paired-device record. Device pairing owns both transport authentication and the durable node surface; there is no separate node pairing store.
+- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) manages the node's approved command/capability surface on its paired-device record. Device pairing owns both transport authentication and the durable node surface; there is no separate node pairing store.
 - `openclaw nodes remove --node <id|name|ip>` revokes the device's `node` role in the paired-device store and disconnects that device's node-role sessions: a mixed-role device keeps its row and only loses the `node` role, while a node-only device row is deleted. `operator.pairing` may remove non-operator node rows on other devices; a device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
 - Approval scope follows the pending request's declared commands:
   - commandless request: `operator.pairing`
@@ -69,12 +74,21 @@ Headless node hosts report the hardware model on macOS and Linux.
 Connected CLI node hosts and the macOS app report CPU count, load averages,
 memory, and home-volume disk capacity every 60 seconds, starting on connection.
 The Gateway exposes the latest snapshot as `hostStats` in `node.list` and
-`node.describe`. When received, it saves the snapshot on the paired node
-record, so offline nodes keep showing last-known stats with the original
-`updatedAtMs`. Connected nodes use live session stats. `openclaw nodes status`
-and `openclaw nodes describe` show a compact stats summary with a last-known age
-for offline nodes. Windows omits load averages, and unavailable disk capacity is
-omitted. See
+`node.describe`. Connected nodes use live session stats. The first snapshot is
+saved immediately on the paired node record; later snapshots are coalesced until
+five minutes after the last saved snapshot's receipt time. Disconnect and orderly
+Gateway shutdown save the final snapshot. A crash can lose roughly the last five
+minutes of telemetry while reports continue and writes succeed; delayed writes,
+storage failures, or missing reports can leave older stats.
+The five-minute checkpoint budget uses monotonic elapsed time, so wall-clock
+corrections do not move an armed deadline. Saved `updatedAtMs` values remain
+wall-clock timestamps.
+
+Offline nodes show the saved snapshot with its original `updatedAtMs`, including
+briefly showing the previous saved snapshot while a disconnect write completes.
+`openclaw nodes status` and `openclaw nodes describe` show a compact stats summary
+with a last-known age for offline nodes. Windows omits load averages, and
+unavailable disk capacity is omitted. See
 [Node host stats](/gateway/protocol/presence#node-host-stats) for the wire contract.
 
 ## Version skew and upgrade order

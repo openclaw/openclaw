@@ -1,84 +1,83 @@
-/**
- * Browser-local SDK bridge for gateway, plugin runtime, and timeout helpers.
- */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { clampTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 
-export {
-  ensureGatewayStartupAuth,
-  ErrorCodes,
-  errorShape,
-  isNodeCommandAllowed,
-  respondUnavailableOnNodeInvokeError,
-  resolveGatewayAuth,
-  resolveNodeCommandAllowlist,
-  safeParseJson,
-} from "openclaw/plugin-sdk/gateway-runtime";
-export type { GatewayRequestHandlers, NodeSession } from "openclaw/plugin-sdk/gateway-runtime";
-export type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
-export {
-  startLazyPluginServiceModule,
-  type LazyPluginServiceHandle,
-} from "openclaw/plugin-sdk/plugin-runtime";
+const requestBudget = new AsyncLocalStorage<{ pause: () => () => void }>();
 
-function normalizeTimeoutMs(timeoutMs: number | undefined): number | undefined {
-  return clampTimerTimeoutMs(timeoutMs);
-}
-
-function createTimeoutAbortSignal(timeoutMs: number, label: string | undefined) {
-  const controller = new AbortController();
-  const error = new Error(`${label ?? "request"} timed out`);
-  const timer = setTimeout(() => controller.abort(error), timeoutMs);
-  timer.unref?.();
-  return { controller, error, timer };
-}
-
-function waitForAbort(
-  signal: AbortSignal,
-  fallback: Error,
-): {
-  promise: Promise<never>;
-  cleanup: () => void;
-} {
-  if (signal.aborted) {
-    return {
-      promise: Promise.reject(toErrorObject(signal.reason ?? fallback, "Non-Error rejection")),
-      cleanup: () => undefined,
-    };
+/** Startup is shared service work; only the requesting wait belongs to this deadline. */
+export async function waitForBrowserStartup<T>(work: () => Promise<T>): Promise<T> {
+  const resume = requestBudget.getStore()?.pause();
+  try {
+    return await work();
+  } finally {
+    resume?.();
   }
-  let listener: (() => void) | undefined;
-  const promise = new Promise<never>((_, reject) => {
-    listener = () => reject(toErrorObject(signal.reason ?? fallback, "Non-Error rejection"));
-    signal.addEventListener("abort", listener, { once: true });
-  });
-  return {
-    cleanup: () => {
-      if (listener) {
-        signal.removeEventListener("abort", listener);
-      }
-    },
-    promise,
-  };
 }
 
-/** Runs async work with an optional aborting timeout signal. */
 export async function withTimeout<T>(
   work: (signal: AbortSignal | undefined) => Promise<T>,
   timeoutMs?: number,
   label?: string,
+  upstreamSignal?: AbortSignal | null,
 ): Promise<T> {
-  const resolved = normalizeTimeoutMs(timeoutMs);
+  upstreamSignal?.throwIfAborted();
+  const parentBudget = requestBudget.getStore();
+  const resolved = clampTimerTimeoutMs(timeoutMs);
   if (!resolved) {
-    return await work(undefined);
+    return await work(upstreamSignal ?? undefined);
   }
 
-  const timeout = createTimeoutAbortSignal(resolved, label);
-  const abort = waitForAbort(timeout.controller.signal, timeout.error);
+  const controller = new AbortController();
+  const error = new Error(`${label ?? "request"} timed out`);
+  const timeout = createDeferred<never>();
+  let remaining = resolved;
+  let startedAt = performance.now();
+  let paused = 0;
+  let finished = false;
+  const expire = () => {
+    // Timeout wins even when work resolves from its abort listener.
+    timeout.reject(error);
+    controller.abort(error);
+  };
+  const arm = () => {
+    startedAt = performance.now();
+    const timer = setTimeout(expire, remaining);
+    timer.unref?.();
+    return timer;
+  };
+  let timer = arm();
+  const signal = upstreamSignal
+    ? AbortSignal.any([controller.signal, upstreamSignal])
+    : controller.signal;
 
   try {
-    return await Promise.race([work(timeout.controller.signal), abort.promise]);
+    return await requestBudget.run(
+      {
+        pause: () => {
+          const resumeParent = parentBudget?.pause();
+          if (paused++ === 0) {
+            clearTimeout(timer);
+            remaining = Math.max(1, remaining - (performance.now() - startedAt));
+          }
+          return () => {
+            if (--paused === 0 && !finished) {
+              timer = arm();
+            }
+            resumeParent?.();
+          };
+        },
+      },
+      () =>
+        racePromiseWithAbortSignal(
+          Promise.race([work(signal), timeout.promise]),
+          upstreamSignal ?? undefined,
+          ({ reason }) => toErrorObject(reason ?? new Error("aborted"), "Non-Error rejection"),
+        ),
+    );
   } finally {
-    clearTimeout(timeout.timer);
-    abort.cleanup();
+    finished = true;
+    clearTimeout(timer);
   }
 }

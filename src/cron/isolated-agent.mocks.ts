@@ -6,10 +6,10 @@ import { vi } from "vitest";
 
 const readPreparedModelCatalog = vi.hoisted(() => vi.fn());
 
-vi.mock("../agents/embedded-agent.js", () => ({
+vi.mock("../agents/embedded-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/embedded-agent.js")>()),
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   runEmbeddedAgent: vi.fn(),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", async () => {
@@ -65,9 +65,18 @@ vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
 }));
 
-vi.mock("../agents/runtime-plugins.js", () => ({
-  loadAgentRuntimePluginRegistryHandle: vi.fn(),
-}));
+vi.mock("../agents/runtime-plugins.js", async () => {
+  const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
+  return {
+    loadAgentRuntimePluginRegistryHandle: vi.fn(),
+    acquireAgentRuntimePluginRegistry: vi.fn<
+      typeof import("../agents/runtime-plugins.js").acquireAgentRuntimePluginRegistry
+    >(async () => {
+      const registry = createEmptyPluginRegistry();
+      return { registry, primaryRegistry: registry };
+    }),
+  };
+});
 
 vi.mock("../agents/subagents/announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(),

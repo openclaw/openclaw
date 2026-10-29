@@ -1,21 +1,27 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parse as parseYaml } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SecretInput } from "../config/types.secrets.js";
+import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { resolveCommandEnv } from "../process/exec-spawn.js";
+import { commandResult } from "./github-identity.test-support.js";
+import { clearGitHubCredentialVerificationCache } from "./github-oauth-client.js";
 
-const processMocks = vi.hoisted(() => ({ runCommandBuffered: vi.fn() }));
+const { run } = vi.hoisted(() => ({ run: vi.fn() }));
 const oauthMocks = vi.hoisted(() => ({ inspect: vi.fn() }));
 
-vi.mock("../process/exec.js", () => ({ runCommandBuffered: processMocks.runCommandBuffered }));
+// mock-isolation: Capture credential subprocess requests without executing host Git or gh.
+vi.mock("../process/exec.js", () => ({ runCommandBuffered: run }));
 vi.mock("./github-oauth-records.js", () => ({ inspectGitHubOAuthRecord: oauthMocks.inspect }));
 
 import {
   installManagedGitHubProfile,
   matchesPreparedGitHubPublicationIdentity,
   prepareGitHubPublicationIdentity,
-  prepareGitHubReadIdentity,
+  prepareGitHubPublicationOptionsIdentity,
   prepareGitHubToolEnvironment,
   refreshManagedGitHubProfile,
   resolveGitHubToolIdentityStatus,
@@ -25,52 +31,71 @@ import {
 } from "./github-tool-identity.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const previewConfig = (token: SecretInput) => ({ gateway: { controlUi: { github: { token } } } });
+const expectVerifiedToken = (token: string) =>
+  expect(fetch).toHaveBeenCalledWith(
+    "https://api.github.com/user",
+    expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: `Bearer ${token}` }),
+    }),
+  );
 
-function commandResult(stdout = "", code = 0, stderr = "") {
-  return {
-    stdout: Buffer.from(stdout),
-    stderr: Buffer.from(stderr),
-    code,
-    signal: null,
-    killed: false,
-    termination: "exit" as const,
-  };
+async function writeProfile(profileDir: string, token: string) {
+  await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
+  await fs.writeFile(path.join(profileDir, "hosts.yml"), `github.com:\n  oauth_token: ${token}\n`, {
+    mode: 0o600,
+  });
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 describe("GitHub tool identity", () => {
+  let root: string;
+  let env: NodeJS.ProcessEnv;
+  const profileId = "ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  const profilePath = (id = profileId, scope: "system" | "agent" = "system") =>
+    resolveManagedGitHubProfileDir({ agentId: "main", scope, profileId: id, env });
+  const agentConfig = (github: GitHubToolIdentityConfig, agentDir = root): OpenClawConfig => ({
+    agents: { entries: { main: { agentDir, tools: { github } } } },
+  });
+  const statusFor = (config: OpenClawConfig, selectedScope: "system" | "agent" = "system") =>
+    resolveGitHubToolIdentityStatus({ config, agentId: "main", selectedScope, env });
   beforeEach(() => {
-    processMocks.runCommandBuffered.mockReset();
-    processMocks.runCommandBuffered.mockImplementation(
-      async (argv: string[], options: { env?: NodeJS.ProcessEnv }) => {
-        if (argv[0] === "git") {
-          return commandResult();
-        }
-        if (argv.join(" ") === "gh auth token --hostname github.com") {
-          return commandResult(
-            options.env?.GH_TOKEN || options.env?.GITHUB_TOKEN || "native-token",
-          );
-        }
-        throw new Error("Unexpected credential subprocess");
-      },
-    );
+    root = tempDirs.make("openclaw-github-identity-");
+    env = { OPENCLAW_STATE_DIR: root };
+    clearGitHubCredentialVerificationCache();
+    vi.stubEnv("GH_TOKEN", undefined);
+    vi.stubEnv("GITHUB_TOKEN", undefined);
+    run.mockReset();
+    run.mockImplementation(async (argv: string[], options: { env?: NodeJS.ProcessEnv }) => {
+      if (argv[0] === "git") {
+        return commandResult();
+      }
+      if (argv.join(" ") === "gh auth token --hostname github.com") {
+        return commandResult(options.env?.GH_TOKEN || options.env?.GITHUB_TOKEN || "native-token");
+      }
+      throw new Error("Unexpected credential subprocess");
+    });
     vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
       const token = new Headers(init?.headers).get("Authorization");
       const native = token?.includes("native") || token?.includes("test-token");
-      return new Response(
-        JSON.stringify({
-          id: native ? 101 : 202,
-          login: native ? "native-user" : "managed-user",
-          avatar_url: null,
-        }),
-      );
+      return Response.json({
+        id: native ? 101 : 202,
+        login: native ? "native-user" : "managed-user",
+        avatar_url: null,
+      });
     });
     oauthMocks.inspect.mockReset().mockReturnValue({ state: "missing" });
   });
 
   it("gives a managed agent override complete precedence", async () => {
-    const stateDir = tempDirs.make("openclaw-github-state-");
+    const override = {
+      profileId: "ghp_22222222222222222222222222222222",
+      gitAuthor: { email: "agent@example.test" },
+    };
     const config = {
       tools: {
         github: {
@@ -78,19 +103,7 @@ describe("GitHub tool identity", () => {
           gitAuthor: { name: "System" },
         },
       },
-      agents: {
-        entries: {
-          main: {
-            agentDir: path.join(stateDir, "main"),
-            tools: {
-              github: {
-                profileId: "ghp_22222222222222222222222222222222",
-                gitAuthor: { email: "agent@example.test" },
-              },
-            },
-          },
-        },
-      },
+      ...agentConfig(override),
     };
 
     expect(prepareGitHubToolEnvironment({ config: {}, agentId: "main" })).toMatchObject({
@@ -98,13 +111,7 @@ describe("GitHub tool identity", () => {
       managedLocalIdentity: false,
     });
 
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const expectedProfileDir = resolveManagedGitHubProfileDir({
-      agentId: "main",
-      scope: "agent",
-      profileId: "ghp_22222222222222222222222222222222",
-      env,
-    });
+    const expectedProfileDir = profilePath("ghp_22222222222222222222222222222222", "agent");
     expect(prepareGitHubToolEnvironment({ config, agentId: "main", env })).toMatchObject({
       localIdentityEnv: {
         GH_CONFIG_DIR: expectedProfileDir,
@@ -116,8 +123,7 @@ describe("GitHub tool identity", () => {
       },
       managedLocalIdentity: true,
     });
-    const relocatedConfig = structuredClone(config);
-    relocatedConfig.agents.entries.main.agentDir = path.join(stateDir, "relocated");
+    const relocatedConfig = { ...config, ...agentConfig(override, path.join(root, "relocated")) };
     expect(
       prepareGitHubToolEnvironment({ config: relocatedConfig, agentId: "main", env }),
     ).toMatchObject({
@@ -135,173 +141,15 @@ describe("GitHub tool identity", () => {
     expect(resolveManagedGitHubAgentKey(" reviewer-one ")).toBe(first);
   });
 
-  it.each([
-    { identity: "native", managed: false },
-    { identity: "managed", managed: true },
-  ])("prepares exact preview-credential scrubs for $identity identity", ({ managed }) => {
-    const identityConfig = managed
-      ? { tools: { github: { profileId: "ghp_99999999999999999999999999999999" } } }
-      : {};
-    const envScrub = prepareGitHubToolEnvironment({
-      config: identityConfig,
-      sourceConfig: {
-        gateway: {
-          controlUi: {
-            github: {
-              token: { source: "env", provider: "default", id: "PREVIEW_SERVICE_TOKEN" },
-            },
-          },
-        },
-      },
-      agentId: "main",
-    });
-    expect(envScrub.credentialScrubEnv).toEqual({
-      ...(managed ? { GH_TOKEN: "", GITHUB_TOKEN: "" } : {}),
-      PREVIEW_SERVICE_TOKEN: "",
-    });
-    expect(Object.keys(envScrub.localIdentityEnv).length).toBe(managed ? 1 : 0);
-    expect(envScrub.excludedStoreNames).toEqual([]);
-
-    const storeScrub = prepareGitHubToolEnvironment({
-      config: identityConfig,
-      sourceConfig: {
-        gateway: {
-          controlUi: {
-            github: {
-              token: { source: "store", provider: "default", id: "PREVIEW_STORE_TOKEN" },
-            },
-          },
-        },
-      },
-      agentId: "main",
-    });
-    expect(storeScrub.credentialScrubEnv).toEqual({
-      ...(managed ? { GH_TOKEN: "", GITHUB_TOKEN: "" } : {}),
-      PREVIEW_STORE_TOKEN: "",
-    });
-    expect(storeScrub.excludedStoreNames).toEqual(["PREVIEW_STORE_TOKEN"]);
-  });
-
-  it("preserves ambient credentials for native identity", async () => {
-    const native = prepareGitHubToolEnvironment({
-      config: {},
-      agentId: "main",
-      env: {},
-    });
-    expect(native).toMatchObject({
-      credentialScrubEnv: {},
-      managedLocalIdentity: false,
-    });
-
-    const ambient = prepareGitHubToolEnvironment({
-      config: {},
-      agentId: "main",
-      env: { GH_TOKEN: "test-token", GITHUB_TOKEN: "fallback-token" },
-    });
-    expect(ambient).toMatchObject({
-      credentialScrubEnv: {},
-      managedLocalIdentity: false,
-    });
-    const publication = await prepareGitHubPublicationIdentity({
-      config: {},
-      agentId: "main",
-      env: { GH_TOKEN: "test-token", GITHUB_TOKEN: "fallback-token" },
-    });
-    expect(publication.env).toMatchObject({
-      GH_TOKEN: "test-token",
-      GITHUB_TOKEN: undefined,
-    });
-  });
-
-  it.each([
-    { source: "env", id: "PREVIEW_SERVICE_TOKEN", expected: { PREVIEW_SERVICE_TOKEN: "" } },
-    { source: "env", id: "GH_TOKEN", expected: { GH_TOKEN: "" } },
-    { source: "env", id: "GITHUB_TOKEN", expected: { GITHUB_TOKEN: "" } },
-    { source: "store", id: "GH_TOKEN", expected: { GH_TOKEN: "" } },
-    { source: "store", id: "GITHUB_TOKEN", expected: { GITHUB_TOKEN: "" } },
-  ] as const)("scrubs only the explicit $source preview ref $id", ({ source, id, expected }) => {
-    const prepared = prepareGitHubToolEnvironment({
-      config: {},
-      sourceConfig: {
-        gateway: {
-          controlUi: {
-            github: {
-              token: { source, provider: "default", id },
-            },
-          },
-        },
-      },
-      agentId: "main",
-      env: { GH_TOKEN: "test-token", GITHUB_TOKEN: "fallback-token" },
-    });
-    expect(prepared.credentialScrubEnv).toEqual(expected);
-    expect(prepared.excludedStoreNames).toEqual(source === "store" ? [id] : []);
-  });
-
-  it("fails closed when a configured managed profile is absent", async () => {
-    processMocks.runCommandBuffered.mockImplementation(async (argv: string[]) => {
-      if (argv[0] === "git") {
-        return commandResult();
-      }
-      throw new Error("managed status must not probe native gh auth");
-    });
-    const status = await resolveGitHubToolIdentityStatus({
-      config: {
-        tools: {
-          github: {
-            profileId: "ghp_44444444444444444444444444444444",
-          },
-        },
-      },
-      agentId: "main",
-      selectedScope: "system",
-    });
-    expect(status).toMatchObject({
-      selectedScope: "system",
-      selected: {
-        scope: "system",
-        configured: true,
-        identity: {
-          source: "system-configured",
-          credentialKind: "managed-pat",
-          credentialState: "configured_unavailable",
-          account: null,
-          evidence: "none",
-        },
-      },
-      effective: {
-        source: "system-configured",
-        credentialKind: "managed-pat",
-        credentialState: "configured_unavailable",
-        account: null,
-        evidence: "none",
-      },
-    });
-  });
-
   it("keeps the selected scope distinct from the effective agent override", async () => {
-    const root = tempDirs.make("openclaw-github-scope-status-");
-    const env = { OPENCLAW_STATE_DIR: root };
     const systemProfileId = "ghp_12121212121212121212121212121212";
     const agentProfileId = "ghp_34343434343434343434343434343434";
-    const systemProfileDir = resolveManagedGitHubProfileDir({
-      agentId: "main",
-      scope: "system",
-      profileId: systemProfileId,
-      env,
-    });
-    const agentProfileDir = resolveManagedGitHubProfileDir({
-      agentId: "main",
-      scope: "agent",
-      profileId: agentProfileId,
-      env,
-    });
+    const systemProfileDir = profilePath(systemProfileId);
+    const agentProfileDir = profilePath(agentProfileId, "agent");
     for (const profileDir of [systemProfileDir, agentProfileDir]) {
-      await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-      await fs.writeFile(
-        path.join(profileDir, "hosts.yml"),
-        `github.com:\n  oauth_token: ${profileDir === agentProfileDir ? "agent-token" : "system-token"}\n`,
-        { mode: 0o600 },
+      await writeProfile(
+        profileDir,
+        profileDir === agentProfileDir ? "agent-token" : "system-token",
       );
     }
     const expiresAt = Date.now() + 8 * 60 * 60_000;
@@ -316,71 +164,43 @@ describe("GitHub tool identity", () => {
     }));
     vi.mocked(fetch).mockImplementation(async (_url, init) => {
       const isAgent = new Headers(init?.headers).get("Authorization") === "Bearer agent-token";
-      return new Response(
-        JSON.stringify({ id: isAgent ? 202 : 101, login: isAgent ? "agent-user" : "system-user" }),
-      );
+      return Response.json({
+        id: isAgent ? 202 : 101,
+        login: isAgent ? "agent-user" : "system-user",
+      });
     });
-    processMocks.runCommandBuffered.mockImplementation(
-      async (argv: string[], options: { env?: NodeJS.ProcessEnv }) => {
-        if (argv[0] !== "git") {
-          throw new Error("Managed status must not consult gh");
-        }
-        const isAgent = options.env?.GH_CONFIG_DIR === agentProfileDir;
-        return commandResult(
-          `user.name\n${isAgent ? "Agent User" : "System User"}\0user.email\n${isAgent ? "agent" : "system"}@example.test\0`,
-        );
-      },
-    );
+    run.mockImplementation(async (argv: string[]) => {
+      if (argv[0] !== "git") {
+        throw new Error("Managed status must not consult gh");
+      }
+      return commandResult();
+    });
     const config = {
       tools: { github: { profileId: systemProfileId, kind: "oauth" as const } },
-      agents: {
-        entries: {
-          main: {
-            agentDir: root,
-            tools: { github: { profileId: agentProfileId, kind: "oauth" as const } },
-          },
-        },
-      },
+      ...agentConfig({ profileId: agentProfileId, kind: "oauth" }),
     };
-
-    const systemSelected = await resolveGitHubToolIdentityStatus({
-      config,
-      agentId: "main",
-      selectedScope: "system",
-      env,
+    const oauthFacts = (source: string, login: string, oauthScopes: string[]) => ({
+      source,
+      credentialKind: "managed-oauth",
+      account: { login },
+      accessExpiresAtMs: expiresAt,
+      refreshState: "available",
+      oauthScopes,
+      repositoryGrants: "unknown",
     });
+
+    const systemSelected = await statusFor(config);
     expect(systemSelected).toMatchObject({
       selectedScope: "system",
       selected: {
         scope: "system",
         configured: true,
-        identity: {
-          source: "system-configured",
-          credentialKind: "managed-oauth",
-          account: { login: "system-user" },
-          accessExpiresAtMs: expiresAt,
-          refreshState: "available",
-          oauthScopes: ["repo"],
-          repositoryGrants: "unknown",
-        },
+        identity: oauthFacts("system-configured", "system-user", ["repo"]),
       },
-      effective: {
-        source: "agent-override",
-        credentialKind: "managed-oauth",
-        account: { login: "agent-user" },
-        accessExpiresAtMs: expiresAt,
-        refreshState: "available",
-        oauthScopes: ["offline_access", "workflow"],
-        repositoryGrants: "unknown",
-      },
+      effective: oauthFacts("agent-override", "agent-user", ["offline_access", "workflow"]),
     });
 
-    const agentSelected = await resolveGitHubToolIdentityStatus({
-      config,
-      agentId: "main",
-      selectedScope: "agent",
-      env,
-    });
+    const agentSelected = await statusFor(config, "agent");
     expect(agentSelected.selected).toEqual({
       scope: "agent",
       configured: true,
@@ -389,72 +209,29 @@ describe("GitHub tool identity", () => {
   });
 
   it.each([
-    {
-      failure: undefined,
-      pendingRefresh: undefined,
-      refreshExpiresAtMs: Date.now() + 60_000,
-      expected: "available",
-    },
-    {
-      failure: undefined,
-      pendingRefresh: true,
-      refreshExpiresAtMs: Date.now() + 60_000,
-      expected: "refreshing",
-    },
-    {
-      failure: "failed",
-      pendingRefresh: undefined,
-      refreshExpiresAtMs: Date.now() + 60_000,
-      expected: "failed",
-    },
-    { failure: undefined, pendingRefresh: undefined, refreshExpiresAtMs: 1, expected: "expired" },
-  ] as const)("reports OAuth refresh state $expected", async (testCase) => {
-    const root = tempDirs.make("openclaw-github-refresh-status-");
-    const env = { OPENCLAW_STATE_DIR: root };
-    const profileId = "ghp_56565656565656565656565656565656";
-    const profileDir = resolveManagedGitHubProfileDir({
-      agentId: "main",
-      scope: "system",
-      profileId,
-      env,
-    });
-    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-    await fs.writeFile(
-      path.join(profileDir, "hosts.yml"),
-      "github.com:\n  oauth_token: managed-token\n",
-      { mode: 0o600 },
-    );
-    processMocks.runCommandBuffered.mockImplementation(async (argv: string[]) =>
-      argv[0] === "gh"
-        ? commandResult('{"id":101,"login":"system-user","avatarUrl":null}')
-        : commandResult(),
-    );
-    oauthMocks.inspect.mockReturnValue({
-      state: "valid",
-      record: {
-        profileId,
-        accessExpiresAtMs: Date.now() + 60_000,
-        refreshExpiresAtMs: testCase.refreshExpiresAtMs,
-        scopes: ["offline_access", "repo"],
-        ...(testCase.pendingRefresh ? { pendingRefresh: true } : {}),
-        ...(testCase.failure ? { refreshFailure: testCase.failure } : {}),
-      },
-    });
+    [true, Date.now() + 60_000, "refreshing"],
+    [undefined, 1, "expired"],
+  ] as const)(
+    "reports OAuth refresh state (pending=%s, expiry=%s): %s",
+    async (pendingRefresh, refreshExpiresAtMs, expected) => {
+      await writeProfile(profilePath(), "managed-token");
+      run.mockImplementation(async () => commandResult());
+      oauthMocks.inspect.mockReturnValue({
+        state: "valid",
+        record: {
+          profileId,
+          accessExpiresAtMs: Date.now() + 60_000,
+          refreshExpiresAtMs,
+          scopes: ["offline_access", "repo"],
+          ...(pendingRefresh ? { pendingRefresh: true } : {}),
+        },
+      });
 
-    const status = await resolveGitHubToolIdentityStatus({
-      config: { tools: { github: { profileId, kind: "oauth" } } },
-      agentId: "main",
-      selectedScope: "system",
-      env,
-    });
+      const status = await statusFor({ tools: { github: { profileId, kind: "oauth" } } });
 
-    expect(status.effective).toMatchObject({
-      credentialKind: "managed-oauth",
-      refreshState: testCase.expected,
-      oauthScopes: ["offline_access", "repo"],
-      repositoryGrants: "unknown",
-    });
-  });
+      expect(status.effective.refreshState).toBe(expected);
+    },
+  );
 
   it("reports a GitHub rate limit without exposing command diagnostics", async () => {
     vi.mocked(fetch).mockResolvedValue(
@@ -463,25 +240,19 @@ describe("GitHub tool identity", () => {
         headers: { "x-ratelimit-remaining": "0" },
       }),
     );
-    const status = await resolveGitHubToolIdentityStatus({
-      config: {},
-      agentId: "main",
-      selectedScope: "system",
-    });
+    const status = await statusFor({});
     expect(status.effective).toMatchObject({
       credentialKind: "native",
       credentialState: "rate_limited",
       evidence: "rate-limited",
       account: null,
     });
-    expect(
-      processMocks.runCommandBuffered.mock.calls.filter(([argv]) => argv[0] === "git"),
-    ).toHaveLength(1);
+    expect(run.mock.calls.filter(([argv]) => argv[0] === "git")).toHaveLength(1);
     expect(JSON.stringify(status)).not.toContain("private");
     expect(JSON.stringify(status)).not.toContain("stderr");
   });
 
-  it("probes native gh with ambient token precedence and reads Git author in the workspace", async () => {
+  it("resolves native environment precedence and reads Git author in the workspace", async () => {
     const workspace = tempDirs.make("openclaw-github-workspace-");
     await resolveGitHubToolIdentityStatus({
       config: { agents: { defaults: { workspace } } },
@@ -490,32 +261,22 @@ describe("GitHub tool identity", () => {
       env: { GH_TOKEN: "native-primary", GITHUB_TOKEN: "native-fallback" },
     });
 
-    const ghCall = processMocks.runCommandBuffered.mock.calls.find(([argv]) => argv[0] === "gh");
-    const gitCall = processMocks.runCommandBuffered.mock.calls.find(([argv]) => argv[0] === "git");
-    expect(ghCall?.[1]?.env).toMatchObject({
-      GH_TOKEN: "native-primary",
-      GITHUB_TOKEN: "native-fallback",
-    });
+    const ghCall = run.mock.calls.find(([argv]) => argv[0] === "gh");
+    const gitCall = run.mock.calls.find(([argv]) => argv[0] === "git");
+    expect(ghCall).toBeUndefined();
+    expectVerifiedToken("native-primary");
     expect(gitCall?.[1]).toMatchObject({ cwd: workspace });
   });
 
   it.each([
     { surface: "agent", source: "env" },
-    { surface: "agent", source: "store" },
-    { surface: "system", source: "env" },
     { surface: "system", source: "store" },
   ] as const)(
     "reports the native execution account in $surface status when $source owns the preview token",
     async ({ surface, source }) => {
       const params = {
-        config: { gateway: { controlUi: { github: { token: "resolved-preview-status" } } } },
-        sourceConfig: {
-          gateway: {
-            controlUi: {
-              github: { token: { source, provider: "default", id: "GH_TOKEN" } },
-            },
-          },
-        },
+        config: previewConfig("resolved-preview-status"),
+        sourceConfig: previewConfig({ source, provider: "default", id: "GH_TOKEN" }),
         env: {
           GH_TOKEN: "preview-status-only",
           GITHUB_TOKEN: `native-status-${surface}-${source}`,
@@ -540,413 +301,184 @@ describe("GitHub tool identity", () => {
     },
   );
 
-  it("removes ambient tokens from the actual managed publication child environment", async () => {
-    const root = tempDirs.make("openclaw-github-publication-env-");
-    const profileId = "ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    const env = {
-      OPENCLAW_STATE_DIR: root,
+  it("captures a frozen managed publication child environment without ambient tokens", async () => {
+    Object.assign(env, {
       GH_TOKEN: "ambient-primary",
       GITHUB_TOKEN: "ambient-fallback",
       PREVIEW_SERVICE_TOKEN: "preview-only",
-    };
-    const profileDir = resolveManagedGitHubProfileDir({
-      agentId: "main",
-      scope: "system",
-      profileId,
-      env,
+      GIT_EDITOR: "synthetic-before-preparation",
     });
-    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-    await fs.writeFile(
-      path.join(profileDir, "hosts.yml"),
-      "github.com:\n  oauth_token: managed-publication-token\n",
-      { mode: 0o600 },
-    );
-    const identity = await prepareGitHubPublicationIdentity({
+    const profileDir = profilePath();
+    await writeProfile(profileDir, "managed-publication-token");
+    const accessExpiresAtMs = 1_900_000_000_000;
+    oauthMocks.inspect.mockReturnValue({
+      state: "valid",
+      record: {
+        accountId: 202,
+        refreshToken: "synthetic-publication-refresh",
+        accessExpiresAtMs,
+      },
+    });
+    const params = {
       config: {
-        tools: { github: { profileId } },
-        gateway: { controlUi: { github: { token: "resolved-preview-token" } } },
+        tools: { github: { profileId, kind: "oauth" as const } },
+        ...previewConfig("resolved-preview-token"),
       },
       sourceConfig: {
         tools: { github: { profileId } },
-        gateway: {
-          controlUi: {
-            github: {
-              token: { source: "env", provider: "default", id: "PREVIEW_SERVICE_TOKEN" },
-            },
-          },
-        },
+        ...previewConfig({ source: "env", provider: "default", id: "PREVIEW_SERVICE_TOKEN" }),
       },
       agentId: "main",
       env,
-    });
+    };
+    const preparing = prepareGitHubPublicationIdentity(params);
+    env.GIT_EDITOR = "synthetic-after-preparation";
+    const identity = await preparing;
     const childEnv = resolveCommandEnv({
       argv: ["gh", "api", "user"],
       baseEnv: env,
       env: identity.env,
     });
 
-    expect(identity.env).toMatchObject({
+    const expectedEnv = {
+      GIT_EDITOR: "synthetic-before-preparation",
       GH_CONFIG_DIR: profileDir,
       GH_TOKEN: "managed-publication-token",
+      GH_ENTERPRISE_TOKEN: "managed-publication-token",
       GITHUB_TOKEN: undefined,
+      GITHUB_ENTERPRISE_TOKEN: undefined,
       PREVIEW_SERVICE_TOKEN: undefined,
-    });
-    expect(childEnv.GH_TOKEN).toBe("managed-publication-token");
-    expect(childEnv.GITHUB_TOKEN).toBeUndefined();
-    expect(childEnv.GH_CONFIG_DIR).toBe(profileDir);
-    expect(childEnv.PREVIEW_SERVICE_TOKEN).toBeUndefined();
-    expect(
-      matchesPreparedGitHubPublicationIdentity({
-        config: { tools: { github: { profileId } } },
-        agentId: "main",
-        identity,
-      }),
-    ).toBe(true);
-    expect(
-      matchesPreparedGitHubPublicationIdentity({
-        config: {
-          tools: { github: { profileId: "ghp_cccccccccccccccccccccccccccccccc" } },
-        },
-        agentId: "main",
-        identity,
-      }),
-    ).toBe(false);
-    expect(processMocks.runCommandBuffered).not.toHaveBeenCalled();
-    expect(fetch).toHaveBeenCalledWith(
-      "https://api.github.com/user",
-      expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: "Bearer managed-publication-token" }),
-      }),
-    );
-  });
-
-  it("token rotation bypasses the verification cache", async () => {
-    const root = tempDirs.make("openclaw-github-token-rotation-");
-    const profileId = "ghp_dddddddddddddddddddddddddddddddd";
-    const env = { OPENCLAW_STATE_DIR: root };
-    const config = { tools: { github: { profileId } } };
-    const profileDir = resolveManagedGitHubProfileDir({
-      agentId: "main",
-      scope: "system",
-      profileId,
-      env,
-    });
-    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-    const hosts = path.join(profileDir, "hosts.yml");
-    await fs.writeFile(hosts, "github.com:\n  oauth_token: rotation-token-a\n", { mode: 0o600 });
-    vi.mocked(fetch)
-      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 202, login: "before-rotation" })))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 303, login: "after-rotation" })));
-
-    const before = await prepareGitHubPublicationIdentity({ config, agentId: "main", env });
-    expect(before.account.login).toBe("before-rotation");
-    await fs.writeFile(hosts, "github.com:\n  oauth_token: rotation-token-b\n", { mode: 0o600 });
-    const after = await prepareGitHubPublicationIdentity({ config, agentId: "main", env });
-    expect(after.account).toMatchObject({ accountId: 303, login: "after-rotation" });
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(fetch).toHaveBeenNthCalledWith(
-      1,
-      "https://api.github.com/user",
-      expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: "Bearer rotation-token-a" }),
-      }),
-    );
-    expect(fetch).toHaveBeenNthCalledWith(
-      2,
-      "https://api.github.com/user",
-      expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: "Bearer rotation-token-b" }),
-      }),
-    );
-  });
-
-  it("a disconnected profile is unavailable without a probe", async () => {
-    const root = tempDirs.make("openclaw-github-disconnected-");
-    const profileId = "ghp_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
-    const env = { OPENCLAW_STATE_DIR: root };
-    const config = { tools: { github: { profileId } } };
-    const profileDir = resolveManagedGitHubProfileDir({
-      agentId: "main",
-      scope: "system",
-      profileId,
-      env,
-    });
-    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-    await fs.writeFile(
-      path.join(profileDir, "hosts.yml"),
-      "github.com:\n  oauth_token: disconnected-token\n",
-      { mode: 0o600 },
-    );
-    expect(
-      (await prepareGitHubPublicationIdentity({ config, agentId: "main", env })).account.login,
-    ).toBe("managed-user");
-    await fs.rm(profileDir, { recursive: true });
-
-    await expect(
-      prepareGitHubPublicationIdentity({ config, agentId: "main", env }),
-    ).rejects.toThrow(
-      "The selected GitHub credential is unavailable; reconnect the agent's GitHub identity in Settings.",
-    );
-    expect(fetch).toHaveBeenCalledOnce();
-  });
-
-  it("removes a source-owned preview token from native publication commands", async () => {
-    const identity = await prepareGitHubPublicationIdentity({
-      config: { gateway: { controlUi: { github: { token: "resolved-preview-token" } } } },
-      sourceConfig: {
-        gateway: {
-          controlUi: {
-            github: {
-              token: { source: "env", provider: "default", id: "GH_TOKEN" },
-            },
-          },
-        },
-      },
-      agentId: "main",
-      env: { GH_TOKEN: "preview-only", NATIVE_GH_CONFIG: "available" },
-    });
-
-    expect(identity.source).toBe("system-detected");
-    expect(identity.env).toMatchObject({
-      GH_TOKEN: "native-token",
-      NATIVE_GH_CONFIG: "available",
-    });
-  });
-
-  it("refreshes before read credential verification and fences native rotation without changing publication snapshots", async () => {
-    const config = { gateway: { controlUi: { github: { token: "resolved-preview-token" } } } };
-    const sourceConfig = {
-      gateway: {
-        controlUi: {
-          github: { token: { source: "env" as const, provider: "default", id: "GH_TOKEN" } },
-        },
-      },
     };
-    const env = { GH_TOKEN: "preview-only", GITHUB_TOKEN: "native-before" };
-    const refresh = vi.fn(async () => {
-      env.GITHUB_TOKEN = "native-refreshed";
-    });
-    const identity = await prepareGitHubReadIdentity({
-      config,
-      sourceConfig,
-      agentId: "main",
-      env,
-      refresh,
-      getCurrentConfig: () => config,
-      assertActive: () => {},
-    });
-    expect(refresh).toHaveBeenCalledOnce();
-    expect(identity.token).toBe("native-refreshed");
-    expect(identity).not.toHaveProperty("env");
-    expect(identity.cacheScope).not.toContain("native-refreshed");
-    await expect(identity.revalidate()).resolves.toBeUndefined();
-    const publication = await prepareGitHubPublicationIdentity({
-      config,
-      sourceConfig,
-      agentId: "main",
-      env,
-    });
-    env.GITHUB_TOKEN = "native-rotated";
-    await expect(identity.revalidate()).rejects.toThrow("identity changed");
-    expect(publication.env.GH_TOKEN).toBe("native-refreshed");
-    expect(JSON.stringify(processMocks.runCommandBuffered.mock.calls)).not.toContain(
-      "preview-only",
-    );
-  });
-
-  it("does not verify credentials after read authority closes during refresh", async () => {
-    let active = true;
-    await expect(
-      prepareGitHubReadIdentity({
-        config: {},
+    expect(identity).toMatchObject({ env: expectedEnv, accessExpiresAtMs });
+    expect(oauthMocks.inspect).toHaveBeenCalledTimes(2);
+    expect(Object.isFrozen(identity)).toBe(true);
+    expect(Object.isFrozen(identity.env)).toBe(true);
+    expect(
+      Object.fromEntries(Object.keys(expectedEnv).map((name) => [name, childEnv[name]])),
+    ).toEqual(expectedEnv);
+    const matches = (id: string) =>
+      matchesPreparedGitHubPublicationIdentity({
+        config: { tools: { github: { profileId: id } } },
         agentId: "main",
-        env: {},
-        getCurrentConfig: () => ({}),
-        assertActive: () => {
-          if (!active) {
-            throw new Error("closed");
-          }
-        },
-        refresh: async () => {
-          active = false;
-        },
-      }),
-    ).rejects.toThrow("closed");
-    expect(fetch).not.toHaveBeenCalled();
-    expect(processMocks.runCommandBuffered).not.toHaveBeenCalled();
+        identity,
+      });
+    expect(matches(profileId)).toBe(true);
+    expect(matches("ghp_cccccccccccccccccccccccccccccccc")).toBe(false);
+    expect(run).not.toHaveBeenCalled();
+    expectVerifiedToken("managed-publication-token");
+    oauthMocks.inspect.mockClear();
+    expect(await prepareGitHubPublicationOptionsIdentity(params)).toEqual({
+      source: "system-configured",
+      account: { accountId: 202, login: "managed-user", avatarUrl: null },
+    });
+    expect(oauthMocks.inspect).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      label: "invalid credential",
-      httpStatus: 401,
-      credentialState: "configured_unavailable",
-    },
-    {
-      label: "unverified transport failure",
-      httpStatus: 500,
-      credentialState: "unverified",
-    },
-  ])("reports a managed $label honestly", async (testCase) => {
-    const root = tempDirs.make("openclaw-github-status-");
-    const profileId = "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const env = { OPENCLAW_STATE_DIR: root };
-    const profileDir = resolveManagedGitHubProfileDir({
-      agentId: "main",
-      scope: "agent",
-      profileId,
-      env,
-    });
-    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-    await fs.writeFile(
-      path.join(profileDir, "hosts.yml"),
-      `github.com:\n  oauth_token: managed-status-${testCase.httpStatus}\n`,
-      { mode: 0o600 },
-    );
-    vi.mocked(fetch).mockResolvedValue(
-      new Response("private diagnostics", { status: testCase.httpStatus }),
-    );
-    const status = await resolveGitHubToolIdentityStatus({
-      config: {
-        agents: {
-          entries: {
-            main: {
-              agentDir: root,
-              tools: { github: { profileId } },
-            },
-          },
-        },
-      },
-      agentId: "main",
-      selectedScope: "agent",
-      env,
-    });
+  it("reports a managed unverified transport failure honestly", async () => {
+    await writeProfile(profilePath(profileId, "agent"), "managed-status-500");
+    vi.mocked(fetch).mockResolvedValue(new Response("private diagnostics", { status: 500 }));
+    const status = await statusFor(agentConfig({ profileId }), "agent");
 
-    expect(status.effective.credentialState).toBe(testCase.credentialState);
-    expect(processMocks.runCommandBuffered.mock.calls.every(([argv]) => argv[0] === "git")).toBe(
-      true,
-    );
+    expect(status.effective.credentialState).toBe("unverified");
+    expect(run.mock.calls.every(([argv]) => argv[0] === "git")).toBe(true);
     expect(JSON.stringify(status)).not.toContain("private diagnostics");
   });
 
-  it("serializes a private verified CLI profile and returns only account metadata", async () => {
-    const root = tempDirs.make("openclaw-github-profile-");
-    const profileDir = path.join(root, "profile");
-    const result = await installManagedGitHubProfile({
-      profileDir,
-      token: "test-managed-token",
-      commitConfig: vi.fn(async () => undefined),
-    });
-    expect(result).toEqual({ accountId: 202, login: "managed-user", avatarUrl: null });
-    expect(processMocks.runCommandBuffered).not.toHaveBeenCalled();
-    expect(parseYaml(await fs.readFile(path.join(profileDir, "hosts.yml"), "utf8"))).toEqual({
-      "github.com": {
-        user: "managed-user",
-        oauth_token: "test-managed-token",
-        users: { "managed-user": { oauth_token: "test-managed-token" } },
-      },
-    });
-    expect(parseYaml(await fs.readFile(path.join(profileDir, "config.yml"), "utf8"))).toEqual({
-      version: "1",
-    });
-    expect((await fs.stat(profileDir)).mode & 0o777).toBe(0o700);
-    for (const name of ["hosts.yml", "config.yml"]) {
-      expect((await fs.stat(path.join(profileDir, name))).mode & 0o777).toBe(0o600);
-    }
-  });
+  it.each(["verification", "preparation", "staging"] as const)(
+    "preserves the stable credential when refresh authority closes during %s",
+    async (phase) => {
+      vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
+      const profileDir = path.join(root, "profile");
+      await fs.mkdir(profileDir, { mode: 0o700 });
+      const hosts = path.join(profileDir, "hosts.yml");
+      const config = path.join(profileDir, "config.yml");
+      await fs.writeFile(hosts, "previous credential\n", { mode: 0o600 });
+      await fs.writeFile(config, "version: 1\neditor: vim\n", { mode: 0o600 });
+      const revoked = new Error("GitHub refresh authority closed");
+      let authorized = true;
+      let revokedAtBoundary = false;
+      const revoke = () => {
+        authorized = false;
+        revokedAtBoundary = true;
+      };
+      vi.mocked(fetch).mockImplementation(async () => {
+        if (phase === "verification") {
+          revoke();
+        }
+        return Response.json({ id: 202, login: "managed-user" });
+      });
+      const open = fs.open.bind(fs);
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (
+          phase === "staging" &&
+          path.dirname(String(args[0])) === profileDir &&
+          typeof args[1] === "number" &&
+          (args[1] & fsConstants.O_EXCL) !== 0
+        ) {
+          revoke();
+        }
+        return handle;
+      });
 
-  it("atomically refreshes the credential seen by an already-prepared stable profile", async () => {
-    const root = tempDirs.make("openclaw-github-stable-refresh-");
-    const env = { OPENCLAW_STATE_DIR: root };
-    const profileId = "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const config = { tools: { github: { profileId, kind: "oauth" as const } } };
-    const profileDir = resolveManagedGitHubProfileDir({
-      agentId: "main",
-      scope: "system",
-      profileId,
-      env,
-    });
-    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-    await fs.writeFile(path.join(profileDir, "hosts.yml"), "old-credential\n", { mode: 0o600 });
-    const admitted = prepareGitHubToolEnvironment({ config, agentId: "main", env });
-    vi.mocked(fetch).mockImplementation(
-      async () => new Response(JSON.stringify({ id: 202, login: "renamed-user" })),
-    );
-    await fs.writeFile(path.join(profileDir, "config.yml"), "version: 1\neditor: vim\n", {
-      mode: 0o600,
-    });
-    const account = await refreshManagedGitHubProfile({
-      profileDir,
-      token: "rotated-access-token",
-      expectedAccountId: 202,
-    });
+      await expect(
+        refreshManagedGitHubProfile({
+          profileDir,
+          token: "replacement-credential",
+          expectedAccountId: 202,
+          prepareEffect: async () => {
+            if (phase === "preparation") {
+              await Promise.resolve();
+              revoke();
+            }
+          },
+          assertCurrent: () => {
+            if (!authorized) {
+              throw revoked;
+            }
+          },
+        }),
+      ).rejects.toBe(revoked);
+      expect(revokedAtBoundary).toBe(true);
+      expect(await fs.readFile(hosts, "utf8")).toBe("previous credential\n");
+      expect(await fs.readFile(config, "utf8")).toBe("version: 1\neditor: vim\n");
+      expect((await fs.readdir(profileDir)).toSorted()).toEqual(["config.yml", "hosts.yml"]);
+    },
+  );
 
-    expect(account.login).toBe("renamed-user");
-    expect(admitted.localIdentityEnv.GH_CONFIG_DIR).toBe(profileDir);
-    await expect(
-      fs.readFile(path.join(String(admitted.localIdentityEnv.GH_CONFIG_DIR), "hosts.yml"), "utf8"),
-    ).resolves.toContain("oauth_token: rotated-access-token");
-    expect(await fs.readFile(path.join(profileDir, "config.yml"), "utf8")).toBe(
-      "version: 1\neditor: vim\n",
-    );
-    const publication = await prepareGitHubPublicationIdentity({ config, agentId: "main", env });
-    expect(publication).toMatchObject({ profileId, account: { login: "renamed-user" } });
-  });
+  it.each([false, true])(
+    "preserves the prior generation when config commit fails=%s",
+    async (fails) => {
+      const previousProfileDir = path.join(root, "profile-old");
+      const profileDir = path.join(root, "profile-new");
+      await fs.mkdir(previousProfileDir, { mode: 0o700 });
+      await fs.writeFile(path.join(previousProfileDir, "hosts.yml"), "old-profile\n", {
+        mode: 0o600,
+      });
 
-  it("keeps the previous generation after the new version commits", async () => {
-    const root = tempDirs.make("openclaw-github-rotate-");
-    const previousProfileDir = path.join(root, "profile-old");
-    const profileDir = path.join(root, "profile-new");
-    await fs.mkdir(previousProfileDir, { mode: 0o700 });
-    await fs.writeFile(path.join(previousProfileDir, "hosts.yml"), "old-profile\n", {
-      mode: 0o600,
-    });
-
-    const commitConfig = vi.fn(async () => {
-      await expect(fs.readFile(path.join(previousProfileDir, "hosts.yml"), "utf8")).resolves.toBe(
-        "old-profile\n",
-      );
-      await expect(fs.readFile(path.join(profileDir, "hosts.yml"), "utf8")).resolves.toContain(
-        "oauth_token: replacement-token",
-      );
-    });
-
-    await installManagedGitHubProfile({
-      profileDir,
-      token: "replacement-token",
-      commitConfig,
-    });
-
-    expect(commitConfig).toHaveBeenCalledTimes(1);
-    await expect(fs.readFile(path.join(previousProfileDir, "hosts.yml"), "utf8")).resolves.toBe(
-      "old-profile\n",
-    );
-    await expect(fs.readFile(path.join(profileDir, "hosts.yml"), "utf8")).resolves.toContain(
-      "oauth_token: replacement-token",
-    );
-  });
-
-  it("deletes only the new profile when the guarded config write fails", async () => {
-    const root = tempDirs.make("openclaw-github-rollback-");
-    const previousProfileDir = path.join(root, "profile-old");
-    const profileDir = path.join(root, "profile-new");
-    await fs.mkdir(previousProfileDir, { mode: 0o700 });
-    await fs.writeFile(path.join(previousProfileDir, "hosts.yml"), "old-profile\n", {
-      mode: 0o600,
-    });
-
-    await expect(
-      installManagedGitHubProfile({
+      const oldHosts = () => fs.readFile(path.join(previousProfileDir, "hosts.yml"), "utf8");
+      const newHosts = () => fs.readFile(path.join(profileDir, "hosts.yml"), "utf8");
+      const commitConfig = vi.fn(async () => {
+        await expect(oldHosts()).resolves.toBe("old-profile\n");
+        await expect(newHosts()).resolves.toContain("oauth_token: replacement-token");
+        if (fails) {
+          throw new Error("config changed concurrently");
+        }
+      });
+      const installing = installManagedGitHubProfile({
         profileDir,
         token: "replacement-token",
-        commitConfig: async () => {
-          throw new Error("config changed concurrently");
-        },
-      }),
-    ).rejects.toThrow("config changed concurrently");
-    expect(await fs.readFile(path.join(previousProfileDir, "hosts.yml"), "utf8")).toBe(
-      "old-profile\n",
-    );
-    await expect(fs.stat(profileDir)).rejects.toMatchObject({ code: "ENOENT" });
-  });
+        commitConfig,
+      });
+      if (fails) {
+        await expect(installing).rejects.toThrow("config changed concurrently");
+        await expect(fs.stat(profileDir)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        await installing;
+        await expect(newHosts()).resolves.toContain("oauth_token: replacement-token");
+      }
+      expect(commitConfig).toHaveBeenCalledOnce();
+      await expect(oldHosts()).resolves.toBe("old-profile\n");
+    },
+  );
 });

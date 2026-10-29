@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 
 const CODEX_AGENT_RUNTIME_ID = "codex";
-const CODEX_CATALOG_DEFAULT_MODEL_REF = "openai/gpt-5.6-sol";
+const CODEX_CATALOG_DEFAULT_MODEL_REF = "openai/gpt-6-astra";
 
 export function resolveCodexCatalogCreateSession(
   modelConfig: Pick<
@@ -18,15 +18,19 @@ export function resolveCodexCatalogCreateSession(
   }
   const agentId = requestedAgentId ?? resolveDefaultAgentId(config);
   const defaultModel = modelConfig.resolveDefaultModelForAgent({ cfg: config, agentId });
+  const modelRef =
+    defaultModel.provider === "openai"
+      ? `${defaultModel.provider}/${defaultModel.model}`
+      : CODEX_CATALOG_DEFAULT_MODEL_REF;
   const allowed = modelConfig.resolveAllowedModelRef({
     cfg: config,
     catalog: [],
-    raw: CODEX_CATALOG_DEFAULT_MODEL_REF,
+    raw: modelRef,
     defaultProvider: defaultModel.provider,
     defaultModel: defaultModel.model,
     agentId,
   });
   return "error" in allowed
     ? undefined
-    : { model: CODEX_CATALOG_DEFAULT_MODEL_REF, agentRuntime: CODEX_AGENT_RUNTIME_ID };
+    : { model: allowed.key, agentRuntime: CODEX_AGENT_RUNTIME_ID };
 }

@@ -92,8 +92,8 @@ if (!hasHarness) {
 }
 
 const primaryModel = cfg.agents?.defaults?.model?.primary;
-if (primaryModel !== "openai/gpt-5.6-sol") {
-  throw new Error(`expected OpenAI onboarding model openai/gpt-5.6-sol, got ${primaryModel}`);
+if (primaryModel !== "openai/gpt-6-astra") {
+  throw new Error(`expected OpenAI onboarding model openai/gpt-6-astra, got ${primaryModel}`);
 }
 const providerRuntime = cfg.models?.providers?.openai?.agentRuntime?.id;
 if (providerRuntime && providerRuntime !== "codex") {

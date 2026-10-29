@@ -9,22 +9,113 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
-import type { SessionEntry } from "../config/sessions.js";
 import {
+  resolveSessionCreatorActor,
   sessionCreatorProfileId,
   type SessionActor,
 } from "../config/sessions/session-entry-provenance.js";
+import { mergeSessionProfileInvolvement } from "../config/sessions/session-involvement.js";
+import type {
+  InternalSessionEntry as SessionEntry,
+  SessionProfileInvolvement,
+} from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { looksLikeAvatarPath } from "../shared/avatar-policy.js";
 import { SESSIONS_LIST_OWNER_LIMIT } from "../shared/session-list-limits.js";
 import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
+import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { resolveUserProfileReference } from "../state/user-profile-list.js";
+import type { UserProfileIdentity } from "../state/user-profiles.types.js";
 import { buildControlUiResourcePath } from "./control-ui-contract.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
-import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
+import {
+  resolveCurrentUserProfileDisplay,
+  type CurrentUserProfileDisplay,
+} from "./current-user-profile-display.js";
 import type { SessionEntryPair } from "./session-list-order.js";
-import type { SessionActorProfileIdentity } from "./session-utils-contracts.js";
+
+export type SessionActorProfileIdentity = Extract<CurrentUserProfileDisplay, { kind: "resolved" }>;
+export type SessionIdentityProjection = ReturnType<typeof createSessionIdentityProjection>;
+
+/** The row owner invalidates these facts on profile/config publication; entry replacement is exact. */
+export function createSessionIdentityProjection() {
+  let revision = {};
+  let owners = new WeakMap<SessionEntry, ReturnType<typeof projectSessionOwner> | null>();
+  let participants = new WeakMap<SessionEntry, ReadonlyMap<string, SessionParticipant>>();
+  let people = new WeakMap<SessionEntry, readonly SessionPerson[]>();
+  let involvement = new WeakMap<SessionEntry, Map<string, SessionProfileInvolvement>>();
+  return {
+    get revision() {
+      return revision;
+    },
+    invalidate() {
+      revision = {};
+      owners = new WeakMap();
+      participants = new WeakMap();
+      people = new WeakMap();
+      involvement = new WeakMap();
+    },
+    involvement(
+      this: void,
+      entry: SessionEntry,
+      profiles: Parameters<typeof projectSessionProfileInvolvements>[1],
+    ): ReadonlyMap<string, SessionProfileInvolvement> {
+      let projected = involvement.get(entry);
+      if (!projected) {
+        projected = projectSessionProfileInvolvements(entry, profiles);
+        involvement.set(entry, projected);
+      }
+      return projected;
+    },
+    owner: ((entry, profiles, cfg, configuredAgentIds) => {
+      if (!entry) {
+        return undefined;
+      }
+      let projected = owners.get(entry);
+      if (projected === undefined) {
+        projected = projectSessionOwner(entry, profiles, cfg, configuredAgentIds) ?? null;
+        owners.set(entry, projected);
+      }
+      return projected ?? undefined;
+    }) satisfies typeof projectSessionOwner,
+    participants(
+      this: void,
+      ...args: Parameters<typeof projectSessionParticipants>
+    ): ReadonlyMap<string, SessionParticipant> {
+      const [entry] = args;
+      if (!entry) {
+        return projectSessionParticipants(...args);
+      }
+      let projected = participants.get(entry);
+      if (!projected) {
+        projected = projectSessionParticipants(...args);
+        participants.set(entry, projected);
+      }
+      return projected;
+    },
+    people(this: void, ...args: Parameters<typeof projectSessionPeople>): readonly SessionPerson[] {
+      const [entry] = args;
+      let projected = people.get(entry);
+      if (!projected) {
+        projected = projectSessionPeople(...args);
+        people.set(entry, projected);
+      }
+      return projected;
+    },
+  };
+}
+
+export function resolveSessionProfileId(
+  id: string,
+  profiles: Map<string, SessionActorProfileIdentity | undefined>,
+): string {
+  if (!profiles.has(id)) {
+    const display = resolveCurrentUserProfileDisplay(id);
+    profiles.set(id, display.kind === "resolved" ? display : undefined);
+  }
+  return profiles.get(id)?.profileId ?? id;
+}
 
 export function projectSessionParticipant(
   identity: SessionParticipantIdentity,
@@ -52,16 +143,29 @@ export function projectSessionParticipant(
   if (identity.type !== "profile") {
     return { identity };
   }
-  if (!profiles.has(identity.id)) {
-    const display = resolveCurrentUserProfileDisplay(identity.id);
-    profiles.set(identity.id, display.kind === "resolved" ? display : undefined);
-  }
+  const id = resolveSessionProfileId(identity.id, profiles);
   const profile = profiles.get(identity.id);
   return {
-    identity: { type: "profile", id: profile?.profileId ?? identity.id },
+    identity: { type: "profile", id },
     ...(profile?.label ? { label: profile.label } : {}),
     ...(profile?.hasUploadedAvatar ? { avatarUrl: profile.avatarUrl } : {}),
   };
+}
+
+/** Resolve merged profiles without rewriting personal choices in other agent stores. */
+export function projectSessionProfileInvolvements(
+  entry: SessionEntry,
+  profiles: Map<string, SessionActorProfileIdentity | undefined>,
+): Map<string, SessionProfileInvolvement> {
+  const projected = new Map<string, SessionProfileInvolvement>();
+  for (const [id, state] of Object.entries(entry.profileInvolvement?.profiles ?? {})) {
+    const canonical = resolveSessionProfileId(id, profiles);
+    const merged = mergeSessionProfileInvolvement([projected.get(canonical), state]);
+    if (merged) {
+      projected.set(canonical, merged);
+    }
+  }
+  return projected;
 }
 
 export function projectSessionActor(
@@ -125,7 +229,7 @@ export function projectSessionOwner(
   const persisted = entry?.owner;
   const identities = userProfileIdentityById ?? new Map();
   const actor = projectAssignableSessionOwner(
-    persisted?.actor ?? entry?.createdActor,
+    persisted?.actor ?? resolveSessionCreatorActor(entry?.createdActor),
     identities,
     cfg,
     configuredAgentIds,
@@ -156,25 +260,39 @@ export function projectSessionParticipants(
   return participants;
 }
 
+/** Match canonical owners or profile participants, never mentions or display-reference prefixes. */
+export function filterSessionEntriesByProfile<T extends { entry: SessionEntry }>(params: {
+  entries: T[];
+  profile: UserProfileIdentity | undefined;
+}): T[] {
+  const profile = params.profile;
+  if (!profile) {
+    return [];
+  }
+  return params.entries.filter(({ entry }) => {
+    const owner = entry.owner?.actor;
+    const ownerId = owner
+      ? owner.type === "human"
+        ? normalizeOptionalString(owner.id)
+        : undefined
+      : sessionCreatorProfileId(entry.createdActor);
+    return (
+      (ownerId !== undefined && profile.aliases.has(ownerId)) ||
+      (entry.participants ?? []).some(
+        ({ identity }) => identity.type === "profile" && profile.aliases.has(identity.id),
+      )
+    );
+  });
+}
+
 /** Participation, creation, and responsibility are associations, never access grants. */
 export function projectSessionPeople(
   entry: SessionEntry,
   identities: Map<string, SessionActorProfileIdentity | undefined>,
-  cfg: OpenClawConfig,
   owner?: SessionOwnerFacetIdentity,
 ): SessionPerson[] {
-  const participants = projectSessionParticipants(entry, identities, cfg);
-  const actors = [
-    owner,
-    projectSessionActor(
-      entry.createdActor,
-      identities,
-      cfg,
-      Boolean(sessionCreatorProfileId(entry.createdActor)),
-    ),
-  ];
   const people = new Map<string, SessionPerson>();
-  for (const participant of [...participants.values(), ...actors]) {
+  const addPerson = (participant: SessionParticipant | SessionOwnerFacetIdentity | undefined) => {
     const identity = participant?.identity;
     if (identity?.type === "profile") {
       people.set(identity.id, {
@@ -184,6 +302,16 @@ export function projectSessionPeople(
         sessionCount: 1,
       });
     }
+  };
+  for (const { identity } of entry.participants ?? []) {
+    if (identity.type === "profile") {
+      addPerson(projectSessionParticipant(identity, identities));
+    }
+  }
+  addPerson(owner);
+  const creatorId = normalizeOptionalString(sessionCreatorProfileId(entry.createdActor));
+  if (creatorId) {
+    addPerson(projectSessionParticipant({ type: "profile", id: creatorId }, identities));
   }
   return [...people.values()];
 }
@@ -195,31 +323,31 @@ export function resolveSessionListProfileReference(
   identities: Map<string, SessionActorProfileIdentity | undefined>,
   allowedProfileIds: ReadonlySet<string> | undefined,
 ): Result<string | undefined, "ambiguous"> {
-  const exact = projectSessionParticipant({ type: "profile", id: reference }, identities);
-  if (
-    identities.get(reference) &&
-    (!allowedProfileIds || allowedProfileIds.has(exact.identity.id))
-  ) {
-    return ok(exact.identity.id);
+  const exact = resolveSessionProfileId(reference, identities);
+  if (identities.get(reference) && (!allowedProfileIds || allowedProfileIds.has(exact))) {
+    return ok(exact);
   }
-  const prefix = /^[0-9a-f]{8,32}$/.test(reference);
+  // Compare retained IDs directly; normalizing each association allocates per visible row.
+  const prefix = /^[0-9a-f]{8,32}$/.test(reference)
+    ? new RegExp(`^-*${reference.split("").join("-*")}`, "i")
+    : undefined;
   const matches = new Set<string>();
+  const matchesReference = (id: string | undefined) => {
+    if (id && prefix?.test(id)) {
+      matches.add(resolveSessionProfileId(id, identities));
+    }
+    return id === reference;
+  };
+  const matchesParticipant = ({ identity }: SessionParticipant) =>
+    identity.type === "profile" && matchesReference(identity.id);
   // Qualified associations outlive profile rows. Resolve over caller-visible identities
   // before time/search filters so hidden associations cannot affect the result.
   for (const [, entry] of entries) {
-    const ids = [
-      sessionCreatorProfileId(entry.createdActor),
-      ...(entry.participants ?? []).flatMap(({ identity }) =>
-        identity.type === "profile" ? [identity.id] : [],
-      ),
-    ];
-    for (const id of ids) {
-      if (id === reference) {
-        return ok(exact.identity.id);
-      }
-      if (id && prefix && id.replaceAll("-", "").toLowerCase().startsWith(reference)) {
-        matches.add(projectSessionParticipant({ type: "profile", id }, identities).identity.id);
-      }
+    if (
+      matchesReference(sessionCreatorProfileId(entry.createdActor)) ||
+      entry.participants?.some(matchesParticipant)
+    ) {
+      return ok(exact);
     }
   }
   const durable = resolveUserProfileReference(
@@ -236,23 +364,20 @@ export function resolveSessionListProfileReference(
 }
 
 export function projectSessionPeopleFacet(
-  people: Iterable<SessionPerson>,
+  people: ReadonlyMap<string, SessionPerson>,
   selectedProfileId?: string,
 ) {
-  const sortedPeople = [...people].toSorted(
-    (a, b) =>
-      b.sessionCount - a.sessionCount ||
-      (a.label ?? a.identity.id).localeCompare(b.label ?? b.identity.id) ||
-      a.identity.id.localeCompare(b.identity.id),
-  );
-  const visiblePeople = sortedPeople.slice(0, SESSIONS_LIST_OWNER_LIMIT);
-  const selected = selectedProfileId
-    ? sortedPeople.find((person) => person.identity.id === selectedProfileId)
-    : undefined;
+  const entries = [...people.values()];
+  const compare = (a: SessionPerson, b: SessionPerson) =>
+    b.sessionCount - a.sessionCount ||
+    (a.label ?? a.identity.id).localeCompare(b.label ?? b.identity.id) ||
+    a.identity.id.localeCompare(b.identity.id);
+  const visiblePeople = sortAndLimitBy(entries, SESSIONS_LIST_OWNER_LIMIT, compare);
+  const selected = selectedProfileId ? people.get(selectedProfileId) : undefined;
   if (selected && !visiblePeople.includes(selected)) {
     visiblePeople.splice(-1, 1, selected);
   }
-  return { people: visiblePeople, selected, overflow: sortedPeople.length > visiblePeople.length };
+  return { people: visiblePeople, selected, overflow: entries.length > visiblePeople.length };
 }
 
 export function addSessionOwnerFacetIdentity(
