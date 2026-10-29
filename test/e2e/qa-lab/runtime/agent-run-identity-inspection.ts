@@ -39,6 +39,7 @@ import {
 } from "./agent-run-identity-hot-reload.js";
 import { connectHotReloadClient } from "./gateway-config-hot-reload-fixtures.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
+import { parseQaProducerOptions, type QaProducerOptions } from "./script-options.js";
 
 const SCENARIO_ID = "agent-run-identity-inspection";
 const SNAPSHOT_FILE = `${SCENARIO_ID}-summary.json`;
@@ -63,11 +64,6 @@ const IDENTITY_FIELDS = [
   "Assurance",
 ] as const;
 const FRAME_TIMEOUT_MS = 20_000;
-
-type ProducerOptions = {
-  artifactBase: string;
-  repoRoot: string;
-};
 
 type ProofResult = {
   artifacts?: Array<{ filePath: string; kind: string }>;
@@ -140,21 +136,6 @@ async function assertSharedOwnerReadOnlyScope(gateway: QaGatewayChild, sessionKe
   } finally {
     await reader.stop();
   }
-}
-
-function parseOptions(argv: readonly string[]): ProducerOptions {
-  const readValue = (name: string) => {
-    const index = argv.indexOf(name);
-    return index >= 0 ? argv[index + 1] : undefined;
-  };
-  const artifactBase = readValue("--artifact-base");
-  if (!artifactBase) {
-    throw new Error("--artifact-base is required");
-  }
-  return {
-    artifactBase: path.resolve(artifactBase),
-    repoRoot: path.resolve(readValue("--repo-root") ?? process.cwd()),
-  };
 }
 
 function parseJson(raw: string, label: string): unknown {
@@ -458,7 +439,7 @@ async function runRepeatedIngressTurns(
   }
 }
 
-async function runProof(options: ProducerOptions): Promise<string> {
+async function runProof(options: QaProducerOptions): Promise<string> {
   const mock = await startQaMockOpenAiServer();
   const gatewayOwner = createQaGatewayChild();
   let gateway: QaGatewayChild | undefined;
@@ -764,7 +745,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
   }
 }
 
-async function produceProof(options: ProducerOptions): Promise<ProofResult> {
+async function produceProof(options: QaProducerOptions): Promise<ProofResult> {
   const startedAt = Date.now();
   try {
     const details = await runProof(options);
@@ -783,7 +764,7 @@ async function produceProof(options: ProducerOptions): Promise<ProofResult> {
   }
 }
 
-async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJson> {
+async function runProducer(options: QaProducerOptions): Promise<QaEvidenceSummaryJson> {
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
     logFileName: `${SCENARIO_ID}.log`,
@@ -812,7 +793,7 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
 }
 
 async function main(argv: readonly string[]) {
-  const evidence = await runProducer(parseOptions(argv));
+  const evidence = await runProducer(parseQaProducerOptions(argv));
   const status = evidence.entries[0]?.result.status;
   console.log(`Agent-run identity evidence: ${QA_EVIDENCE_FILENAME}`);
   console.log(`Agent-run identity status: ${status}`);
