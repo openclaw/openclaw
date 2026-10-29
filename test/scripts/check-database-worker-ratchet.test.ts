@@ -3,12 +3,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { main } from "../../scripts/check-database-worker-ratchet.mts";
-import { inventory } from "../../scripts/database-worker-inventory.mjs";
+import { inventory, loadInventorySources } from "../../scripts/database-worker-inventory.mjs";
 import * as databaseWorkerCompat from "../../scripts/lib/database-worker-compat.mts";
+import { baseInventory } from "../../scripts/lib/database-worker-inventory-cache.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 it.each([
   ["session-cold-storage-chunks.ts", "readSessionColdChunks", "executeSqliteQuerySync"],
@@ -145,9 +149,73 @@ function fixture(sources: Record<string, string>) {
 const expectError = (errors: ReturnType<typeof fixture>["errors"], text: string) =>
   expect(errors).toHaveBeenCalledWith(expect.stringContaining(text));
 
+it("discovers matching portable current, staged and historical sources without user ripgrep config", () => {
+  const sources: Record<string, string> = {
+    "src/z-runtime.ts": "export const value = 1;\n",
+    "src/.boundary-stubs/protocol.d.ts": "export declare const version: string;\n",
+    "extensions/example/alpha.ts": "export {};\n",
+  };
+  const { root, write } = fixture(sources);
+  write("ripgrep-config", "--glob=!src/**\n--path-separator=!\n--sort=modified\n");
+  vi.stubEnv("RIPGREP_CONFIG_PATH", path.join(root, "ripgrep-config"));
+  const expected = [
+    "extensions/example/alpha.ts",
+    "src/.boundary-stubs/protocol.d.ts",
+    "src/z-runtime.ts",
+  ].map((file) => [file, sources[file]]);
+  for (const actual of [
+    loadInventorySources(root),
+    loadInventorySources(root, "", true),
+    loadInventorySources(root, "HEAD"),
+  ]) {
+    expect([...actual].toSorted(([left], [right]) => left.localeCompare(right))).toEqual(expected);
+  }
+});
+
+it("includes untracked ordinary and hidden sources while respecting ignored generated files", () => {
+  const { root, write } = fixture({
+    ".gitignore": "src/generated/\n",
+    "src/runtime.ts": "export {};\n",
+  });
+  write("src/untracked.ts", "export {};\n");
+  write("src/.hidden/untracked.ts", "export {};\n");
+  write("src/generated/ignored.ts", "export {};\n");
+  expect([...loadInventorySources(root).keys()].toSorted()).toEqual([
+    "src/.hidden/untracked.ts",
+    "src/runtime.ts",
+    "src/untracked.ts",
+  ]);
+});
+
+it("reuses equal source maps across insertion order while validating fresh current sources", () => {
+  const { root, write, errors } = fixture({
+    "src/a-runtime.ts": "executeSqliteQueryTakeFirstSync(query);\n",
+    "src/z-runtime.ts": "executeSqliteQuerySync(query);\n",
+  });
+  const historical = loadInventorySources(root, "HEAD");
+  const reversed = new Map([...historical].toReversed());
+  expect([...reversed.keys()]).not.toEqual([...historical.keys()]);
+  const rows = inventory(root, "", false, reversed);
+  expect(rows).toEqual(inventory(root, "", false, historical));
+  const inspect = vi.spyOn(databaseWorkerCompat, "inspectDatabaseWorkerBoundaries");
+  expect(baseInventory(root, "HEAD", { sources: reversed, rows })).toEqual(rows);
+  expect(inspect).not.toHaveBeenCalled();
+
+  write(
+    "src/.hidden/writer.ts",
+    "export function write() { scope.execute({ type: 'machineState.write' }); }",
+  );
+  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expectError(errors, "machineState.write credential writes require the host publication adapter");
+});
+
 it("reuses identical source snapshots while keeping head analysis fresh and invalidating changed bases", () => {
   const source = "executeSqliteQuerySync(query);\n";
-  const { root, git, write } = fixture({ "src/runtime.ts": source });
+  vi.stubEnv("RIPGREP_CONFIG_PATH", "");
+  const { root, git, write } = fixture({
+    "src/runtime.ts": source,
+    "src/.boundary-stubs/protocol.d.ts": "export declare const version: string;\n",
+  });
   const inspect = vi.spyOn(databaseWorkerCompat, "inspectDatabaseWorkerBoundaries");
 
   expect(main(root, ["--base", "HEAD"])).toBe(0);
@@ -176,24 +244,27 @@ it("reuses identical source snapshots while keeping head analysis fresh and inva
   expect(inspect).toHaveBeenCalledTimes(7);
 });
 
-it.each(["contents", "added path", "renamed path"])(
-  "analyzes both complete snapshots after a source change: %s",
-  (change) => {
-    const { root } = fixture({ "src/runtime.ts": "export const value = 1;\n" });
-    vi.restoreAllMocks();
-    const file = path.join(root, "src/runtime.ts");
-    if (change === "contents") {
-      fs.writeFileSync(file, "export const value = 2;\n");
-    } else if (change === "added path") {
-      fs.writeFileSync(path.join(root, "src/added.ts"), "export const value = 1;\n");
-    } else {
-      fs.renameSync(file, path.join(root, "src/renamed.ts"));
-    }
-    const inspect = vi.spyOn(databaseWorkerCompat, "inspectDatabaseWorkerBoundaries");
-    expect(main(root, ["--base", "HEAD"])).toBe(0);
-    expect(inspect).toHaveBeenCalledTimes(2);
-  },
-);
+it.each(
+  ["contents", "added path", "deleted path", "renamed path"].flatMap((change) =>
+    ["src/runtime.ts", "src/.boundary-stubs/runtime.d.ts"].map((file) => ({ change, file })),
+  ),
+)("analyzes both complete snapshots after $file $change", ({ change, file }) => {
+  const { root } = fixture({ [file]: "export const value = 1;\n" });
+  vi.restoreAllMocks();
+  const target = path.join(root, file);
+  if (change === "contents") {
+    fs.writeFileSync(target, "export const value = 2;\n");
+  } else if (change === "added path") {
+    fs.writeFileSync(path.join(path.dirname(target), "added.ts"), "export const value = 1;\n");
+  } else if (change === "deleted path") {
+    fs.unlinkSync(target);
+  } else {
+    fs.renameSync(target, path.join(path.dirname(target), "renamed.ts"));
+  }
+  const inspect = vi.spyOn(databaseWorkerCompat, "inspectDatabaseWorkerBoundaries");
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(inspect).toHaveBeenCalledTimes(2);
+});
 
 it("excludes the reviewed Vitest suite without exempting arbitrary suite-named runtime files", () => {
   const { root } = sourceFixture({
@@ -364,14 +435,16 @@ export function hasAnyMatrixAuth(database, query) {
 
 it("validates credential writers in current and staged sources while comparing historical counts", () => {
   const unreviewed = "export function write() { scope.execute({ type: 'machineState.write' }); }";
-  const { root, write, errors } = fixture({ "src/writer.ts": unreviewed });
-  write("src/writer.ts", "export function read() {} ");
+  const file = "src/.hidden/writer.ts";
+  vi.stubEnv("RIPGREP_CONFIG_PATH", "");
+  const { root, write, errors } = fixture({ [file]: unreviewed });
+  write(file, "export function read() {} ");
   expect(main(root, ["--base", "HEAD"])).toBe(0);
   expect(main(root, ["--base", "HEAD", "--staged"])).toBe(1);
   const diagnostic = "machineState.write credential writes require the host publication adapter";
   expectError(errors, diagnostic);
   errors.mockClear();
-  write("src/writer.ts", unreviewed);
+  write(file, unreviewed);
   expect(main(root, ["--base", "HEAD"])).toBe(1);
   expectError(errors, diagnostic);
 });
