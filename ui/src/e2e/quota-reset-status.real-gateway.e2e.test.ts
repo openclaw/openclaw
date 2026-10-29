@@ -383,17 +383,9 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
             expect(beforeRecoveryReply?.blockedUntil, evidence()).toBeUndefined();
             const refreshed = await catalogRefresh;
             observations.push({ action: "held-catalog-refresh", result: refreshed });
-            // Recovery changes availability, so the held generation must not publish stale facts.
-            expect(refreshed, evidence()).toMatchObject({
-              ok: false,
-              error: {
-                name: "GatewayClientRequestError",
-                code: "UNAVAILABLE",
-                retryable: true,
-                retryAfterMs: 0,
-                message: expect.stringContaining("catalog generation was superseded"),
-              },
-            });
+            // Quota-only updates keep the catalog owner, so the held refresh completes;
+            // availability must stay recovered after its response publishes.
+            expect(refreshed, evidence()).toMatchObject({ ok: true });
             let published: ModelsListResult | undefined;
             await expect
               .poll(async () => {
