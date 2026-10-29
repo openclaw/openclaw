@@ -9,6 +9,7 @@ import * as launchd from "../../daemon/launchd.js";
 import * as scheduledTasks from "../../daemon/schtasks-control.js";
 import * as gatewayService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
+import * as databaseEngine from "../../infra/database-engine/config.js";
 import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import { resolvePackageActivationAnchor } from "../../infra/package-update-activation-journal.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
@@ -228,8 +229,27 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
       serviceDrift: true,
       malformedPreview: true,
     },
+    {
+      name: "malformed preview with existing service recovery",
+      serviceDrift: true,
+      malformedPreview: true,
+      pendingBeforeDiscovery: true,
+    },
+    {
+      name: "readable preview with existing service recovery",
+      serviceDrift: true,
+      readablePreview: true,
+      pendingBeforeDiscovery: true,
+    },
+    {
+      name: "readable preview after service discovery",
+      serviceDrift: true,
+      readablePreview: true,
+    },
   ])("refuses $name before writable preparation or run admission", async (params) => {
     const f = pendingPackageInvocation(params);
+    const dryRun = params.malformedPreview || params.readablePreview;
+    const engineSelection = vi.spyOn(databaseEngine, "resolveDatabaseEngineSelection");
     try {
       f.writers.manager.mockRejectedValue(
         new Error("Package manager selection reached before retained recovery admission"),
@@ -240,7 +260,11 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
         before = materialSnapshot(f.home);
       };
       if (params.malformedPreview) {
+        fs.mkdirSync(path.join(f.home, "tmp"));
+        vi.stubEnv("TMPDIR", path.join(f.home, "tmp"));
         fs.writeFileSync(path.join(f.state, "openclaw.json"), "{");
+      }
+      if (dryRun && !params.pendingBeforeDiscovery) {
         const prepare = commandRun.prepareUpdateCommand;
         vi.spyOn(commandRun, "prepareUpdateCommand").mockImplementation(async (opts) => {
           const prepared = await prepare(opts);
@@ -250,9 +274,9 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
       } else {
         retainPending();
       }
-      await expect(
-        updateCommand({ json: true, yes: true, dryRun: params.malformedPreview }),
-      ).rejects.toMatchObject({ code: 1 });
+      await expect(updateCommand({ json: true, yes: true, dryRun })).rejects.toMatchObject({
+        code: 1,
+      });
       expectPendingReport({
         status: "error",
         reason: "update-recovery-pending",
@@ -262,8 +286,18 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
         expect.stringMatching(/recovery artifacts|publication recovery/i),
       );
       expectNoCalls(...Object.values(f.writers));
+      if (params.malformedPreview) {
+        expect(engineSelection).not.toHaveBeenCalled();
+      } else if (params.readablePreview && !params.pendingBeforeDiscovery) {
+        expect(engineSelection).toHaveBeenCalled();
+      }
       expect(before).toBeDefined();
       expect(materialSnapshot(f.home)).toEqual(before);
+      if (params.readablePreview) {
+        expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+          expect.objectContaining({ reportPath: expect.any(String) }),
+        );
+      }
     } finally {
       f.restore();
     }

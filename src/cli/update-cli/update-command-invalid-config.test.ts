@@ -12,12 +12,10 @@ import * as updateRuns from "../../infra/update-run-reader.js";
 import * as installSurface from "../../infra/update-runner-install-surface.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
+import { withUpdateAdmissionReporting } from "./update-command-admission-report.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
 import { installFreshUpdateFixture } from "./update-command-fresh.test-support.js";
-import {
-  resolveMutableUpdateFailure,
-  withUpdateAdmissionReporting,
-} from "./update-command-result.js";
+import { resolveMutableUpdateFailure } from "./update-command-result.js";
 import { updateCommand } from "./update-command.js";
 
 const { fixture } = installFreshUpdateFixture();
