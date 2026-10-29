@@ -193,16 +193,17 @@ export async function runGatewayConversationList(params: {
     ));
   const currentConfig = params.readCurrentConfig?.() ?? params.config;
   const normalizedQuery = query?.toLowerCase() ?? "";
+  // Canonically equivalent labels/targets may arrive in either Unicode form; compare on NFC.
   const searchQuery =
     normalizedQuery.startsWith("@") && normalizedQuery.length > 1
-      ? normalizedQuery.slice(1)
-      : normalizedQuery;
+      ? normalizedQuery.slice(1).normalize("NFC")
+      : normalizedQuery.normalize("NFC");
   const candidates = conversations.filter(
     (entry) =>
       !query ||
       discoveredConversationRefs.has(entry.conversationRef) ||
       [entry.conversationRef, entry.target, entry.label].some((value) =>
-        value?.toLowerCase().includes(searchQuery),
+        value?.toLowerCase().normalize("NFC").includes(searchQuery),
       ),
   );
   const eligibility = await resolveConversationRouteEligibilitiesForAgent({
