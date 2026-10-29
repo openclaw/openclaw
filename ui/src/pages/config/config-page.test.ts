@@ -803,7 +803,9 @@ it.each(["countdown", "waiting-for-idle"] as const)(
   "parks the %s clock while hidden and catches up when visible",
   async (state) => {
     vi.useFakeTimers({ now: 1_000, toFake: ["Date", "setInterval", "clearInterval"] });
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const show = mockDocumentVisibility();
     const context = configContext({
       gateway: connectedGateway([]),
