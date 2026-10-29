@@ -372,7 +372,9 @@ describe.each(anthropicTransports)("guarded Anthropic $name observations", (tran
         });
         const guard = vi.fn(() => {
           if (scenario === "refusal") {
-            throw new Error("fixture egress refused");
+            throw Object.assign(new Error("fixture egress refused"), {
+              code: "FIXTURE_EGRESS_REFUSED",
+            });
           }
         });
         const consuming = withModelTransportContext({ runId: "fixture", requestId }, async () => {
@@ -418,7 +420,8 @@ describe.each(anthropicTransports)("guarded Anthropic $name observations", (tran
               : "stop",
         );
         if (scenario === "refusal") {
-          expect(result.errorMessage).toContain("fixture egress refused");
+          // The SDK wraps fetch errors; the terminal projection preserves the cause's code.
+          expect(result.errorCode).toBe("FIXTURE_EGRESS_REFUSED");
         } else {
           await withinTest(terminalsReceived.promise, signal);
         }
