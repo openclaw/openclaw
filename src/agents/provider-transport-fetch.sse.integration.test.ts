@@ -232,12 +232,17 @@ describe.each(transports)("guarded $api SSE liveness integration", (transport) =
       abort.abort();
       bodyChunks.unsubscribe(onBodyChunk);
       server.listener.closeAllConnections();
-      await settleStream?.();
-      vi.useRealTimers();
       try {
-        await server.releaseListener();
+        await settleStream?.();
+        // Finish the shared transport turn before discarding its fake-clock callback.
+        await vi.advanceTimersByTimeAsync(0);
       } finally {
-        await server.claim.release();
+        vi.useRealTimers();
+        try {
+          await server.releaseListener();
+        } finally {
+          await server.claim.release();
+        }
       }
     }
   });
@@ -453,7 +458,7 @@ describe.each(anthropicTransports)("guarded Anthropic $name observations", (tran
       expect([...observed.values()].map((value) => value.sends)).toEqual(
         Array.from({ length: expectedRequests }, () => 1),
       );
-      expect([...observed.values()].map((value) => [...value.terminals])).toEqual(
+      expect([...observed.values()].map((value) => Array.from(value.terminals))).toEqual(
         Array.from({ length: expectedRequests }, () => [
           scenario === "abort after headers" ? "error" : "trailers",
         ]),
