@@ -62,10 +62,66 @@ type NavigationSnapshot = {
   pairing: ReturnType<typeof createModelContextPairing>;
 };
 
-const navigationCache = createSqliteQueryCache((database) => {
-  const cache: { snapshot?: NavigationSnapshot } = {};
+/** One retained read-only connection can serve several sessions; keep a bounded warm set. */
+export const NAVIGATION_CACHE_MAX_SESSIONS = 4;
+export const NAVIGATION_CACHE_MAX_BYTES = 16 * 1024 * 1024;
+
+type NavigationCacheEntry = { snapshot: NavigationSnapshot; bytes: number };
+export type NavigationSnapshotCache = {
+  entries: Map<string, NavigationCacheEntry>;
+  bytes: number;
+};
+
+export function navigationSnapshotBytes(snapshot: NavigationSnapshot): number {
+  let bytes = snapshot.prefixBytes;
+  for (const row of snapshot.rows.values()) {
+    bytes += row.bytes;
+  }
+  return bytes;
+}
+
+/** Inserts a snapshot as most-recent and evicts least-recent entries past the budget. */
+export function storeNavigationSnapshot(
+  cache: NavigationSnapshotCache,
+  key: string,
+  snapshot: NavigationSnapshot,
+): void {
+  const previous = cache.entries.get(key);
+  if (previous) {
+    cache.bytes -= previous.bytes;
+    cache.entries.delete(key);
+  }
+  const bytes = navigationSnapshotBytes(snapshot);
+  cache.entries.set(key, { snapshot, bytes });
+  cache.bytes += bytes;
+  while (
+    cache.entries.size > NAVIGATION_CACHE_MAX_SESSIONS ||
+    (cache.bytes > NAVIGATION_CACHE_MAX_BYTES && cache.entries.size > 1)
+  ) {
+    const oldest = cache.entries.keys().next().value;
+    if (oldest === undefined) {
+      return;
+    }
+    const evicted = cache.entries.get(oldest)!;
+    cache.entries.delete(oldest);
+    cache.bytes -= evicted.bytes;
+  }
+}
+
+export function touchNavigationSnapshot(cache: NavigationSnapshotCache, key: string): void {
+  const entry = cache.entries.get(key);
+  if (!entry) {
+    return;
+  }
+  cache.entries.delete(key);
+  cache.entries.set(key, entry);
+}
+
+const navigationCache = createSqliteQueryCache((database): NavigationSnapshotCache => {
+  const cache: NavigationSnapshotCache = { entries: new Map(), bytes: 0 };
   registerNodeSqliteDisposeCallback(sqlPublicationAnchor(database), () => {
-    cache.snapshot = undefined;
+    cache.entries.clear();
+    cache.bytes = 0;
   });
   return cache;
 });
@@ -189,14 +245,11 @@ export function readModelContextNavigationPages(params: {
   const { database, sessionId, generation, through, anchorId, maxEvents, readRows } = params;
   const cache = navigationCache(database);
   const cacheable =
-    generation !== null &&
-    maxEvents !== undefined &&
-    !hasUncommittedSqliteWrites(database) &&
-    // A historical read must not evict the current branch's warmed prefix facts.
-    (anchorId === undefined ||
-      cache.snapshot?.sessionId !== sessionId ||
-      cache.snapshot.anchorId !== undefined);
-  let snapshot = cacheable ? cache.snapshot : undefined;
+    generation !== null && maxEvents !== undefined && !hasUncommittedSqliteWrites(database);
+  // Historical anchors keep their own entry, so an anchored read cannot evict the
+  // current branch's warmed prefix facts and alternating sessions share the budget.
+  const cacheKey = anchorId === undefined ? sessionId : `${sessionId}\u0000${anchorId}`;
+  let snapshot = cacheable ? cache.entries.get(cacheKey)?.snapshot : undefined;
   if (
     snapshot?.sessionId !== sessionId ||
     snapshot.generation !== generation ||
@@ -233,6 +286,9 @@ export function readModelContextNavigationPages(params: {
     }
   }
   if (snapshot) {
+    if (cacheable) {
+      touchNavigationSnapshot(cache, cacheKey);
+    }
     const appended: ModelContextNavigationRow[] = [];
     for (const range of refresh) {
       const prefixBytes = new Map<number, number>();
@@ -323,7 +379,7 @@ export function readModelContextNavigationPages(params: {
       pairing: createModelContextPairing(messages(requests), messages(requests.slice(-maxEvents))),
     };
     trimRequests(snapshot);
-    cache.snapshot = snapshot;
+    storeNavigationSnapshot(cache, cacheKey, snapshot);
   }
   return { rows, entries, anchorFound, prepared: undefined };
 }
