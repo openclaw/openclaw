@@ -7,6 +7,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { fireStreamJob } from "../gateway/server-cron-event-dispatch.js";
 import {
   createAgentDatabaseInspectionRefusal,
   readAgentDatabaseAdmissionRefusal,
@@ -777,6 +778,41 @@ it("keeps a committed manual run for the next drain when its drain meets a locke
     expect(runCommandJob).toHaveBeenCalledOnce();
   } finally {
     drains.mockRestore();
+    await stopServices(cron);
+  }
+});
+
+it("reports a stream batch as consumed when its completion write meets a locked database", async ({
+  signal,
+}) => {
+  const job = commandJob("locked-finalize");
+  const storePath = await storeJobs([job]);
+  const runCommandJob = successfulCommand();
+  const { cron } = service(storePath, { runCommandJob });
+  const execute = stateWorker.executeOpenClawStateWorker;
+  let finalization: { mockRestore(): void } | undefined;
+  try {
+    await cron.start();
+    finalization = vi
+      .spyOn(stateWorker, "executeOpenClawStateWorker")
+      .mockImplementation((context, command) =>
+        command.type === "cron.finalizeRuns"
+          ? Promise.reject(
+              Object.assign(new Error("database is locked"), {
+                code: "ERR_SQLITE_ERROR",
+                errcode: 5,
+              }),
+            )
+          : execute(context, command),
+      );
+    const fired = fireStreamJob(job, {
+      run: (jobId, onDisposition) =>
+        cron.run(jobId, "force", { onTriggerDisposition: onDisposition }),
+    });
+    await expect(withinTest(fired, signal)).resolves.toBe("fired");
+    expect(runCommandJob).toHaveBeenCalledOnce();
+  } finally {
+    finalization?.mockRestore();
     await stopServices(cron);
   }
 });

@@ -157,9 +157,19 @@ export async function fireStreamJob(
   },
 ): Promise<CronStreamFireDisposition> {
   let disposition: Exclude<CronStreamFireDisposition, "not-run"> | undefined;
-  const result = await deps.run(job.id, (value) => {
-    disposition = value;
-  });
+  let result: Awaited<ReturnType<typeof deps.run>>;
+  try {
+    result = await deps.run(job.id, (value) => {
+      disposition = value;
+    });
+  } catch (error) {
+    // The payload already ran, so the batch is consumed. A failed completion write
+    // stays with cron's receipt recovery; the stream must not replay the batch.
+    if (disposition) {
+      return disposition;
+    }
+    throw error;
+  }
   if (!disposition && result.ok && result.ran === false && result.reason === "already-running") {
     return "busy";
   }
