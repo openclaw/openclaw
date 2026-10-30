@@ -1,0 +1,2 @@
+# Quiet trigger terminal events stay silent in chat; real unstarted notices and webhooks remain.
+68
