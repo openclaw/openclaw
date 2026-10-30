@@ -171,6 +171,19 @@ describe("Code Mode catalog and model-visible surface", () => {
     );
   });
 
+  it("names only the bound file tools beside the module-access limit", () => {
+    const files = ["read", "write", "edit"].map((name) => fakeTool(name, `File ${name}`));
+    expect(catalog(files).catalogPrompt()).toContain(
+      "Programs cannot use `import()` or `require`; use `read`/`write`/`edit` for files.",
+    );
+    expect(catalog([files[0]!, fakeTool("lookup", "Look up a value")]).catalogPrompt()).toContain(
+      "Programs cannot use `import()` or `require`; use `read` for files.",
+    );
+    const lookupOnly = catalog([fakeTool("lookup", "Look up a value")]).catalogPrompt();
+    expect(lookupOnly).toContain("Programs cannot use `import()` or `require`.");
+    expect(lookupOnly).not.toContain("for files");
+  });
+
   it("restates the calling contract per turn only while catalog tools sit behind exec", () => {
     const { catalogRef } = catalog([fakeTool("lookup", "Look up a value")]);
     const entries = catalogRef.current?.entries ?? [];

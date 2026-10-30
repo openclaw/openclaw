@@ -213,8 +213,16 @@ export function buildCodeModeCatalogPrompt(
   const shellGuidance = shellTool
     ? ` Inside \`${CODE_MODE_EXEC_TOOL_NAME}\`, run shell commands with \`await ${shellTool.callableName}({ command })\`; use it for heavier computation.`
     : "";
+  // Stray loader calls reject the whole program before any tool runs; name only bound file tools.
+  const fileTools = ["read", "write", "edit"].flatMap((name) => {
+    const binding = bindings.find((entry) => entry.id === `openclaw:core:${name}`);
+    return binding ? [`\`${binding.callableName}\``] : [];
+  });
+  const moduleGuidance = ` Programs cannot use \`import()\` or \`require\`${
+    fileTools.length > 0 ? `; use ${fileTools.join("/")} for files` : ""
+  }.`;
   return [
-    catalogIndex ? CODE_MODE_CATALOG_CONTRACT : "",
+    catalogIndex ? CODE_MODE_CATALOG_CONTRACT + moduleGuidance : "",
     [shellGuidance, apiGuidance, mcpGuidance, swarmGuidance, nodesGuidance, skillsGuidance]
       .join("")
       .trim(),
