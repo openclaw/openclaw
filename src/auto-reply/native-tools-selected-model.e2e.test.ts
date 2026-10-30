@@ -9,7 +9,7 @@ import {
   withTempHome,
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import type { GatewayRequestContext } from "../plugins/runtime/gateway-request-scope.js";
+import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import type { MsgContext } from "./templating.js";
 
@@ -89,7 +89,7 @@ describe("native /tools selected-model inventory (#188285)", () => {
         CommandAuthorized: true,
       };
       // SAFETY: only the host's runtime identity is read off this stub; no Gateway method executes.
-      const gateway = { localEmbedded: false } as GatewayRequestContext;
+      const gateway = { localEmbedded: false } as unknown as GatewayRequestContext;
       const reply = await withPluginRuntimeGatewayContextResolver(
         () => gateway,
         () => getReplyFromConfig(message, {}, cfg),
