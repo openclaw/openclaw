@@ -651,7 +651,12 @@ it.each([
   },
 );
 
-it("lifts tool images into user content for OpenAI while preserving result associations", async () => {
+it.each([
+  "us.openai.gpt-5.6-sol",
+  "global.openai.gpt-6-sol",
+  "global.openai.gpt-6.1-sol",
+  "global.moonshotai.kimi-k3",
+])("lifts %s tool images into user content, keeping result associations", async (id) => {
   const image = { type: "image" as const, mimeType: "image/png", data: png };
   const context = {
     messages: [
@@ -662,10 +667,7 @@ it("lifts tool images into user content for OpenAI while preserving result assoc
     tools: [readTool],
   };
   const before = structuredClone(context);
-  const input = await capturePayload(
-    bedrockModel({ id: "us.openai.gpt-5.6-sol", input: ["text", "image"] }),
-    context,
-  );
+  const input = await capturePayload(bedrockModel({ id, input: ["text", "image"] }), context);
   const expectedImage = {
     image: { format: "png", source: { bytes: new Uint8Array(Buffer.from(png, "base64")) } },
   };
