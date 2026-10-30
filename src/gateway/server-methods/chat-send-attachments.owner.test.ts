@@ -272,9 +272,9 @@ it("stages managed session follow-ups in their projection and rejects unrelated 
       const spy = vi
         .spyOn(workspaceStore, "withLocalWorkspaceStore")
         .mockImplementation((params, run) => {
-          const result = withStore(params, run);
+          const pendingStore = withStore(params, run);
           queued.resolve();
-          return result;
+          return pendingStore;
         });
       const controller = new AbortController();
       const reason = createAgentRunDirectAbortError();

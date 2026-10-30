@@ -84,7 +84,6 @@ import {
   getMessage,
   getMessageContent,
   mockCallAt,
-  responseErrorMessage,
   INLINE_PNG_BASE64,
   OFFLOAD_PNG_BASE64,
   TINY_JPEG_BASE64,
