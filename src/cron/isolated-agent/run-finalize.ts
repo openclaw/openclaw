@@ -22,6 +22,7 @@ import {
   mergeCronRunDiagnostics,
 } from "../run-diagnostics.js";
 import type { CronDeliveryTrace, CronRunTelemetry } from "../types.js";
+import type { CronWatchdogFailure } from "../watchdog-failure.js";
 import { resolveCronChannelOutputPolicy } from "./channel-output-policy.js";
 import type { DispatchCronDeliveryState } from "./delivery-dispatch-types.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
@@ -49,6 +50,7 @@ export async function finalizeCronRun(params: {
   execution: CronExecutionResult;
   abortReason: () => string;
   isAborted: () => boolean;
+  watchdogFailure?: CronWatchdogFailure;
   settleUsage: (contextTokens: number) => Promise<CronRunTelemetry["usage"]>;
   markCronRunSessionCleanupHandled: () => void;
   beforeSessionDelete: () => void;
@@ -179,6 +181,21 @@ export async function finalizeCronRun(params: {
         prepared.preflightDiagnostics,
         createCronRunDiagnosticsFromAgentResult(finalRunResult, { finalStatus: "error" }),
         createCronRunDiagnosticsFromError("cron-setup", params.abortReason()),
+      ),
+      ...telemetry,
+    });
+  }
+  if (params.watchdogFailure) {
+    await cleanupRunSession("cron-delete-after-run-watchdog");
+    return prepared.withRunSession({
+      status: "error",
+      ...params.watchdogFailure,
+      replyDisposition,
+      diagnostics: mergeCronRunDiagnostics(
+        prepared.preflightDiagnostics,
+        createCronRunDiagnosticsFromAgentResult(finalRunResult, { finalStatus: "error" }),
+        // Equal-severity summaries select the last fact; the classified stop is primary.
+        createCronRunDiagnosticsFromError("agent-run", params.watchdogFailure.error),
       ),
       ...telemetry,
     });

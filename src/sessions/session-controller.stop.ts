@@ -392,7 +392,9 @@ function applySessionControllerStop(
           if (!isCurrentSessionControllerOperation(operation)) {
             return false;
           }
-          return params.source === "watchdog" ? operation.abortForStall() : operation.abort(reason);
+          return params.source === "watchdog"
+            ? operation.abortForStall(reason)
+            : operation.abort(reason);
         },
         () =>
           !hadResult &&

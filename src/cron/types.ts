@@ -198,6 +198,7 @@ export type CronRunErrorClassification =
 export type CronFailureNotificationDetail =
   | { kind: "command-exit"; exitCode: number }
   | { kind: "command-timeout"; mode: "wall-clock" | "no-output" }
+  | { kind: "agent-watchdog"; reason: "execution_deadline" | "semantic_stall" }
   | {
       kind: "script-failure";
       source: "payload" | "trigger";

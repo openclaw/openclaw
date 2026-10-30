@@ -327,9 +327,11 @@ export function applyJobResult(
     if (
       result.status === "error" &&
       result.errorClassification?.kind === "permanent" &&
-      (isPluginCommandCronJob(job) || job.operatorSource)
+      (isPluginCommandCronJob(job) ||
+        (job.operatorSource && result.failureNotificationDetail?.kind !== "agent-watchdog"))
     ) {
       // A retired plugin or unusable continuation source cannot recover through retries.
+      // Watchdogs end an occurrence, not its source; permanent still prevents one-shot replay.
       job.enabled = false;
       job.state.nextRunAtMs = undefined;
       job.state.startupCatchupAtMs = undefined;

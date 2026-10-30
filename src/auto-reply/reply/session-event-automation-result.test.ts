@@ -16,7 +16,10 @@ import {
 import { readTranscriptEventMessage } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-writable.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
-import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
+import {
+  TEST_SCHEDULED_OCCURRENCE,
+  TEST_SCHEDULED_TURN,
+} from "../../cron/scheduled-occurrence.test-support.js";
 import { runCronSessionTurn } from "../../cron/session-run.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
 import {
@@ -24,6 +27,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
+import { getCurrentSessionControllerOwner } from "../../sessions/session-controller.lifecycle.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
@@ -228,5 +232,83 @@ it.for([
         }
       },
     );
+  },
+);
+
+it.for([false, true])(
+  "retains a scheduled watchdog cause unless upstream cancellation wins (%s)",
+  async (cancelUpstream, { signal }) => {
+    await withOpenClawTestState({ label: "scheduled-watchdog-cause" }, async (state) => {
+      const config = completionConfig(state.workspaceDir);
+      setRuntimeConfigSnapshot(config);
+      await state.writeConfig(config);
+      openOpenClawStateDatabase();
+      const scope = { agentId: "main", sessionKey: "agent:main:scheduled-watchdog" };
+      await replaceSessionEntry(scope, {
+        sessionId: "scheduled-watchdog",
+        lifecycleRevision: "original",
+        updatedAt: Date.now(),
+      });
+      const upstream = new AbortController();
+      model.mockReset().mockImplementation(async (params) => {
+        await admitModelTurn(params);
+        // A wrongly admitted recovery must settle, rather than recursively stalling the fixture.
+        if (model.mock.calls.length > 1) {
+          return { payloads: [], meta: { durationMs: 1 } };
+        }
+        const operation = expectDefined(getCurrentSessionControllerOwner(), "scheduled owner");
+        operation.setPhase("running");
+        operation.attachBackend({ kind: "embedded", cancel() {} });
+        const execution = operation.watchdog.beginExecution(() => Date.now() - 1);
+        try {
+          await operation.watchdog.tick();
+          expect(operation.abortSignal.aborted).toBe(true);
+          if (cancelUpstream) {
+            upstream.abort(new Error("Operator cancelled this occurrence"));
+          }
+          return {
+            payloads: [],
+            meta: {
+              durationMs: 1,
+              aborted: true,
+              error: { kind: "incomplete_turn", message: "PRIVATE late cleanup detail" },
+            },
+          };
+        } finally {
+          execution.close();
+        }
+      });
+      try {
+        const result = await runCronSessionTurn({
+          ...TEST_SCHEDULED_TURN,
+          ...scope,
+          cfg: config,
+          job: makeCronJob({
+            sessionTarget: `session:${scope.sessionKey}`,
+            delivery: { mode: "none" },
+          }),
+          text: "Run the scheduled task once",
+          deliveryAttemptFence: null,
+          abortSignal: AbortSignal.any([signal, upstream.signal]),
+        });
+        expect(result.status).toBe("error");
+        if (cancelUpstream) {
+          expect(result.failureNotificationDetail).toBeUndefined();
+          expect(result.error).not.toContain("Session watchdog");
+        } else {
+          expect(result).toMatchObject({
+            error: "Session watchdog stopped the run after its execution deadline.",
+            errorClassification: { kind: "permanent" },
+            failureNotificationDetail: { kind: "agent-watchdog", reason: "execution_deadline" },
+            diagnostics: {
+              summary: "Session watchdog stopped the run after its execution deadline.",
+            },
+          });
+        }
+      } finally {
+        await drainGlobalSingletonLifecycleState("restart");
+        resetSystemEventsForTest();
+      }
+    });
   },
 );

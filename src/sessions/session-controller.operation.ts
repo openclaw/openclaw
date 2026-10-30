@@ -633,13 +633,21 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
     abort: (reason) => abortIfAbortable(() => reason ?? createAgentRunDirectAbortError()),
     abortByUser: () => abortIfAbortable(createAgentRunDirectAbortError),
     abortForRestart: () => abortIfAbortable(createAgentRunRestartAbortError),
-    abortForStall() {
+    abortForStall(reason) {
       if (!isReplyOperationAbortable(operation)) {
         return false;
       }
       const backend = getAttachedBackend(operation);
       // Read before aborting: the abort closes the retry wait that explains the stop.
       const stop = watchdog.describeStop();
+      // Keep provider retry stops outside watchdog failure attribution.
+      if (stop.staleReason === "no_activity") {
+        Object.defineProperty(stop.error, "cause", {
+          value: reason,
+          writable: true,
+          configurable: true,
+        });
+      }
       staleExpiryReason ??= stop.staleReason;
       apply({ type: "freeze" });
       setResult({ kind: "failed", code: "run_stalled" });

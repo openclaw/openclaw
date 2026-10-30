@@ -92,6 +92,7 @@ it.for([
   "retained-ceiling",
   "allow-control",
   "revoked-producer",
+  "readmission-refused",
   "publication-storm",
   "scheduled-control",
   "scheduled-revoked",
@@ -206,8 +207,11 @@ it.for([
           sessionStartedAt: Date.now(),
         });
         let sourceReferences = 1;
+        let acceptingNewCustody = true;
         const operatorAuthority =
-          scenario === "allow-control" || scenario.startsWith("scheduled-")
+          scenario === "allow-control" ||
+          scenario === "readmission-refused" ||
+          scenario.startsWith("scheduled-")
             ? createAdmittedRunOperatorAuthority({
                 profileId: "original-guest",
                 scopes: ["operator.write"],
@@ -217,6 +221,9 @@ it.for([
                   }
                 },
                 retain() {
+                  if (!acceptingNewCustody) {
+                    throw new Error("Background producer no longer accepts work");
+                  }
                   sourceReferences++;
                   return () => {
                     sourceReferences--;
@@ -403,12 +410,15 @@ it.for([
           });
           storming = scenario === "publication-storm";
           revoked = scenario === "revoked-producer" || scenario === "scheduled-revoked";
+          // A retiring producer honors held custody but refuses a new admission.
+          acceptingNewCustody = scenario !== "readmission-refused";
           releaseFirst.resolve();
           await expect(first.settled).resolves.toMatchObject({ status: "completed" });
           const executes =
             scenario !== "publication-storm" &&
             !scenario.startsWith("scheduled-model-") &&
             scenario !== "scheduled-subagent-locked" &&
+            acceptingNewCustody &&
             !revoked;
           const completedOutcome = await completion.settled;
           expect(completedOutcome, completedOutcome.error).toMatchObject({
@@ -426,6 +436,9 @@ it.for([
             expect(completedOutcome.error).toContain(
               "automation model override 'mock-openai/gpt-5.6-sol' rejected by agents.defaults.modelPolicy.allow",
             );
+          }
+          if (scenario === "readmission-refused") {
+            expect(completedOutcome.error).toContain("Background producer no longer accepts work");
           }
           if (scenario === "scheduled-model-malformed") {
             expect(completedOutcome.error).toContain('Invalid model override "openai/"');

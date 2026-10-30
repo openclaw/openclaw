@@ -288,7 +288,7 @@ export type ReplyOperation = {
   abortByUser(): boolean;
   abortForRestart(): boolean;
   /** Watchdog-only terminal attribution; committed outcomes require cleanup, not Stop. */
-  abortForStall(): boolean;
+  abortForStall(reason?: unknown): boolean;
   supersede(beforeSupersede?: () => void): boolean;
 };
 

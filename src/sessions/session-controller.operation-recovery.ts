@@ -231,6 +231,7 @@ export function createReplyOperationRecovery(context: ReplyOperationRecoveryCont
         stopSession({
           capture: captureSessionControllerStop({ operations: [operation] }),
           source: "watchdog",
+          reason: effect.reason,
           assertCurrent,
         });
       }

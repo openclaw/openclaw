@@ -1,5 +1,6 @@
 import type { FailoverReason } from "../agents/failover/signal.js";
 import type { CronFailureNotificationDetail, CronTriggerFailureCode } from "./types.js";
+import { formatCronWatchdogFailure } from "./watchdog-failure.js";
 
 const GENERIC_FAILURE_DETAIL = "Check automation history for details.";
 
@@ -39,6 +40,12 @@ export function cronFailureDetailLines(
       failureNotificationDetail.mode === "wall-clock"
         ? "Cause: command timed out"
         : "Cause: command stopped after producing no output",
+    ];
+  }
+  if (failureNotificationDetail.kind === "agent-watchdog") {
+    return [
+      `Cause: ${formatCronWatchdogFailure(failureNotificationDetail.reason)}`,
+      "Open automation history and inspect the stalled step before retrying.",
     ];
   }
   const label =

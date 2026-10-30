@@ -1,7 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
-import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-termination.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { SessionWorkStartError } from "../../config/sessions/session-work-start.js";
@@ -26,6 +25,7 @@ import {
   prepareCronRunContinuationCleanup,
   prepareScheduledAutomationStart,
   resolveScheduledSessionReplyOptions,
+  resolveSessionEventTerminalOutcome,
   settleSessionEventTurn,
   type ScheduledAutomationAdmission,
 } from "./session-event-automation.js";
@@ -281,16 +281,6 @@ function enqueueSessionEventAttempt(
         configPublicationChanged && !started && !deliveryAttempted && !signal.aborted && !abandoned;
       const attempt = readmissionAttempt;
       const canReadmit = configChangeRetention && attempt < MAX_CONFIG_READMISSION_ATTEMPTS;
-      const status = signal.aborted ? "cancelled" : failure ? "failed" : "completed";
-      if (status === "failed" && !canReadmit) {
-        log.error("session event execution failed", {
-          source: options.source,
-          agentId,
-          sessionKey,
-          eventId: occurrenceId,
-          error: String(failure),
-        });
-      }
       signal.removeEventListener("abort", onAbort);
       generationLease?.release();
       if (canReadmit) {
@@ -332,10 +322,31 @@ function enqueueSessionEventAttempt(
             error: String(failure),
           });
         }
-      } else if (options.preserveOccurrenceOnRejection && !adopted && !started) {
-        ownership.release();
-      } else {
-        ownership.cancel();
+      }
+      // Re-admission may replace the failure; project it before releasing custody
+      // can abort the signal of an otherwise failed or completed occurrence.
+      const terminal = resolveSessionEventTerminalOutcome({
+        failure,
+        signal,
+        operationSignal: operation?.abortSignal,
+        automation: options.scheduledAutomation,
+        automationResult,
+      });
+      if (terminal.status === "failed" && !canReadmit) {
+        log.error("session event execution failed", {
+          source: options.source,
+          agentId,
+          sessionKey,
+          eventId: occurrenceId,
+          error: terminal.error,
+        });
+      }
+      if (!canReadmit) {
+        if (options.preserveOccurrenceOnRejection && !adopted && !started) {
+          ownership.release();
+        } else {
+          ownership.cancel();
+        }
       }
       releaseOperatorAuthority?.();
       releaseOperatorAuthority = undefined;
@@ -352,12 +363,8 @@ function enqueueSessionEventAttempt(
         return;
       }
       resolve({
-        status,
+        ...terminal,
         executionStarted: started,
-        interruptedByRestart:
-          status !== "completed" &&
-          resolveAgentRunErrorLifecycleFields(failure, operation?.abortSignal ?? signal)
-            .stopReason === "restart",
         delivered,
         deliveryAttempted,
         deliveryAmbiguous,
@@ -372,8 +379,6 @@ function enqueueSessionEventAttempt(
         summary,
         nextCheckMs,
         sourceDeliveryOutcome,
-        automationResult,
-        ...(failure ? { error: String(failure) } : {}),
         ...(failure instanceof SessionWorkStartError ? { retryable: failure.retryable } : {}),
       });
       cleanupContinuation?.();

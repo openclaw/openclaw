@@ -49,6 +49,7 @@ import {
 } from "../service/execution-errors.js";
 import { isCronOneShotContinuationJob } from "../service/one-shot-schedule.js";
 import type { CronAgentExecutionPhaseUpdate } from "../types.js";
+import { resolveCronWatchdogFailure } from "../watchdog-failure.js";
 import { resolveCronActiveRuntimeConfig } from "./run-config.js";
 import type { CronRunExecutionParams } from "./run-execution.types.js";
 import { finalizeCronRun } from "./run-finalize.js";
@@ -465,6 +466,7 @@ async function runCronIsolatedAgentTurnInTrace(
                 execution,
                 abortReason,
                 isAborted,
+                watchdogFailure: resolveCronWatchdogFailure(ownReplyOperation?.abortSignal),
                 settleUsage,
                 markCronRunSessionCleanupHandled: () => {
                   cronRunSessionCleanupHandled = true;
@@ -498,12 +500,20 @@ async function runCronIsolatedAgentTurnInTrace(
               }
               const isCronLaneTimeout =
                 isAborted() || isCommandLaneTaskTimeoutError(err, CommandLane.CronNested);
-              const error = isCronLaneTimeout ? abortReason() : normalizeCronRunErrorText(err);
+              const watchdogFailure =
+                isAborted() || interruptedByRestart
+                  ? undefined
+                  : resolveCronWatchdogFailure(ownReplyOperation?.abortSignal);
+              const error =
+                watchdogFailure?.error ??
+                (isCronLaneTimeout ? abortReason() : normalizeCronRunErrorText(err));
               // Preserve the provider's closed reason before user-facing text replaces the error object.
-              const errorReason = resolveCronRunErrorReason(
-                isCronLaneTimeout ? error : err,
-                prepared.context.liveSelection.provider,
-              );
+              const errorReason = watchdogFailure
+                ? undefined
+                : resolveCronRunErrorReason(
+                    isCronLaneTimeout ? error : err,
+                    prepared.context.liveSelection.provider,
+                  );
               outcome = "error";
               outcomeError = error;
               const admissionDisposition =
@@ -529,11 +539,13 @@ async function runCronIsolatedAgentTurnInTrace(
                 interruptedByRestart,
                 errorClassification: interruptedByRestart
                   ? { kind: "aborted" }
-                  : err instanceof CronOperatorSourceError
-                    ? { kind: "permanent" }
-                    : errorReason
-                      ? { kind: "reason", reason: errorReason }
-                      : undefined,
+                  : (watchdogFailure?.errorClassification ??
+                    (err instanceof CronOperatorSourceError
+                      ? { kind: "permanent" }
+                      : errorReason
+                        ? { kind: "reason", reason: errorReason }
+                        : undefined)),
+                failureNotificationDetail: watchdogFailure?.failureNotificationDetail,
                 executionStarted,
                 usage,
                 ...(admissionDisposition ? { admissionDisposition } : {}),
@@ -549,6 +561,9 @@ async function runCronIsolatedAgentTurnInTrace(
                     isCronLaneTimeout ? "cron-setup" : "agent-run",
                     isCronLaneTimeout ? error : err,
                   ),
+                  watchdogFailure
+                    ? createCronRunDiagnosticsFromError("agent-run", watchdogFailure.error)
+                    : undefined,
                 ),
               });
             } finally {

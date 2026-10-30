@@ -392,6 +392,18 @@ describe("CronService failure alerts", () => {
     ["arbitrary permanent error", undefined, "Check automation history for details."],
     ["command exit", { kind: "command-exit", exitCode: 23 }, "Cause: command exited with code 23"],
     [
+      "semantic-stall watchdog",
+      { kind: "agent-watchdog", reason: "semantic_stall" },
+      "Cause: Session watchdog stopped the run after no semantic progress.\n" +
+        "Open automation history and inspect the stalled step before retrying.",
+    ],
+    [
+      "execution-deadline watchdog",
+      { kind: "agent-watchdog", reason: "execution_deadline" },
+      "Cause: Session watchdog stopped the run after its execution deadline.\n" +
+        "Open automation history and inspect the stalled step before retrying.",
+    ],
+    [
       "script failure",
       { kind: "script-failure", source: "payload", code: "tool_budget_exceeded" },
       "Cause: automation script exceeded its tool budget",
