@@ -24,6 +24,8 @@ async function runSentinelOperation(operation) {
   if (!ownsManagedUpdateLease()) throw new Error("Managed handoff sentinel lease lost");
   if (params.stateEngine !== "postgres") {
     const db = openStateDatabase();
+    // Unavailable inspection adds no context; a failed query still ends triage.
+    if (!db && operation.kind === "inspect") return { kind: "unavailable" };
     if (!db) throw new Error("Managed handoff sentinel database unavailable");
     try {
       if (operation.kind === "inspect") return inspectManagedHandoffSentinelRowSync(db, operation.input);

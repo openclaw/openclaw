@@ -128,7 +128,10 @@ async function captureManagedUpdateResult() {
     const payload = result.sentinel.payload;
     triageFailure = { ...triageFailure, payload, reason: payload.stats?.reason || "managed-service-handoff-failed" };
     return true;
-  } catch {
+  } catch (error) {
+    // SQLite read failures end diagnostics at their cleanup boundary. Remote
+    // transport failure keeps the direct child's bounded diagnostic context.
+    if (params.stateEngine !== "postgres") throw error;
     appendLog("Update notice could not be inspected; service recovery retains its local lease.");
     return false;
   }
@@ -171,8 +174,11 @@ async function recordManagedUpdateOutcome(reason, restored, completedStatus, exp
     }
     if (result.sentinel && triageFailure) triageFailure.payload = result.sentinel.payload;
     return result.sentinel?.revision ?? true;
-  } catch {
-    appendLog("Update notice could not be recorded; service recovery retains its local lease. Inspect the state database and Gateway availability.");
+  } catch (error) {
+    // Remote transport errors can contain connection details; keep those private.
+    appendLog(params.stateEngine === "postgres"
+      ? "Update notice could not be recorded; service recovery retains its local lease. Inspect PostgreSQL and Gateway availability."
+      : "failed to write update sentinel failure: " + (error && error.stack ? error.stack : String(error)));
     return null;
   }
 }
