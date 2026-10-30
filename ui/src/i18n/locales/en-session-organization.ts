@@ -237,6 +237,7 @@ const enSessionOrganization = {
     space: "Space",
     sessionId: "Session ID",
     activeRun: en.sessionsView.activeRun,
+    backgroundWorkRunning: en.sessionsView.backgroundWorkRunning,
     subagentsWorking: en.sessionsView.subagentsWorking,
     showChildSessions: en.sessionsView.showChildSessions,
     hideChildSessions: en.sessionsView.hideChildSessions,

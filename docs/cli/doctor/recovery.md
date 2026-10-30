@@ -141,6 +141,16 @@ configuration. Pending approval prompts cancel without interrupting admitted
 writes. Concrete data risks, lost service authority, and unverified child
 cleanup still prevent unsafe activation and report the recovery action.
 
+Doctor prints recovery instructions when it stops a managed Gateway, before
+starting repair work. On Windows, maintenance temporarily disables the Scheduled
+Task's autostart; a completing repair restores it before activating the Gateway.
+Forced termination cannot run that restoration. A blocked kernel I/O operation
+can also delay signal handling. Wait for Doctor and its repair children to exit,
+resolve the storage or cleanup failure, then rerun `openclaw doctor --fix` with
+the same profile to finish and verify repairs. After repair succeeds, inspect
+`openclaw gateway status --deep`; if still stopped, run `openclaw gateway start`.
+That command also re-enables a verified Windows Scheduled Task.
+
 For legacy services or conflicting systemd scopes, run `openclaw doctor`
 interactively to review the findings and confirm supported cleanup. Cleanup
 reports what it removed or skipped; it does not guarantee a replacement service

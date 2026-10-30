@@ -428,6 +428,18 @@ describe("usage archive identity", () => {
       summaries: [{ totalTokens: 17, totalCost: 0.017 }],
       cacheStatus: { status: "fresh" },
     });
+    expect(
+      await cachedSessions({
+        ...main,
+        sessions: [{ sessionFile: before.filePath }],
+        startMs: archiveTime - 1,
+        endMs: archiveTime + 1,
+        requestRefresh: false,
+      }),
+    ).toMatchObject({
+      summaries: [{ totalTokens: 17, totalCost: 0.017 }],
+      cacheStatus: { status: "fresh" },
+    });
     const rollups = readRollups("main");
     await refreshCostUsageCacheForAgent(main);
     expect(readRollups("main")).toEqual(rollups);

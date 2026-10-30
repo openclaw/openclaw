@@ -224,6 +224,15 @@ type CommandProcessScope = {
 
 const commandProcessScope = new AsyncLocalStorage<CommandProcessScope>();
 
+/** Reserve custody before an existing spawn owner starts its asynchronous admission. */
+export function reserveCommandProcessCustody(argv: readonly string[]) {
+  const scope = commandProcessScope.getStore();
+  if (scope?.signal.aborted) {
+    throw new Error("Command process scope is closed");
+  }
+  return scope?.custody?.reserve(argv);
+}
+
 export function resolveCommandProcessSignal(signal?: AbortSignal): AbortSignal | undefined {
   const inherited = commandProcessScope.getStore()?.signal;
   return inherited && signal ? AbortSignal.any([inherited, signal]) : (inherited ?? signal);
@@ -616,7 +625,7 @@ export function spawnCommandWithInvocation<
     // The 1s margin absorbs broker scheduling lag; the execution-only check cannot relabel an exited root.
     remoteOptions.executionDeadlineMs = executionTimeoutMs + 1_000;
   }
-  const reservation = scope?.custody?.reserve([invocation.command, ...invocation.args]);
+  const reservation = reserveCommandProcessCustody([invocation.command, ...invocation.args]);
   const child: CommandSubprocess<CommandSpawnOptions> =
     broker && remoteOptions
       ? spawnBrokerCommand(

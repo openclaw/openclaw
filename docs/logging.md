@@ -128,6 +128,9 @@ scroll position. Filter and Export cover the entire retained history; browser
 Find and native text selection cover the rendered window. Use Filter to find an
 older retained line, or Export to copy all matching lines.
 
+Scroll to the bottom, or focus the log stream and press End, to reach the newest
+line. Turn on Auto-follow to keep following new lines as they arrive.
+
 ### Channel-only logs
 
 To filter channel activity (WhatsApp/Telegram/etc), use:

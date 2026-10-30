@@ -16,10 +16,8 @@ import { revokeMessageActionTurnCapability } from "../../gateway/message-action-
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
-import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
-import { lifecycleAdmissionByOperation } from "../../sessions/session-controller.state.js";
 import { readUserTurnPromptReactionSource } from "../../sessions/user-turn-transcript-admission.js";
 import { formatThinkingLevelClampNotice } from "../thinking.shared.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
@@ -58,11 +56,6 @@ import {
 /** Runs the provider/model fallback candidates while preserving cross-candidate delivery state. */
 export async function runAgentFallbackCandidates(params: AgentFallbackCycleParams) {
   const turn = params.turn;
-  const adoptInput = async () => {
-    if (turn.replyOperation) {
-      await lifecycleAdmissionByOperation.get(turn.replyOperation)?.adoptInput?.();
-    }
-  };
   const sourceReplyDeliveryRuntimeOptions = turn.opts as
     | SourceReplyDeliveryRuntimeOptions
     | undefined;
@@ -153,16 +146,13 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         images: params.currentTurnImages.images,
         cwd: turn.followupRun.run.cwd,
         modelSelectionLocked: turn.followupRun.run.modelSelectionLocked,
-        context: withClaimingHookAdmission(
-          buildModelResolveContext({
-            run: turn.followupRun.run,
-            replyRoute: turn.followupRun,
-            sessionCtx: turn.sessionCtx,
-            hasRepliedRef: turn.opts?.hasRepliedRef,
-            trigger: resolveReplyRunTrigger(turn),
-          }),
-          { prepare: adoptInput },
-        ),
+        context: buildModelResolveContext({
+          run: turn.followupRun.run,
+          replyRoute: turn.followupRun,
+          sessionCtx: turn.sessionCtx,
+          hasRepliedRef: turn.opts?.hasRepliedRef,
+          trigger: resolveReplyRunTrigger(turn),
+        }),
       },
       selection: buildRunEntrySelection(selection, turn.followupRun.run),
       identity: {
@@ -374,7 +364,6 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           } satisfies AgentFallbackCandidateCommonParams;
           let result: EmbeddedAgentRunResult;
           if (runtime.useCliExecution) {
-            await adoptInput();
             result = await runCliFallbackCandidate({
               ...common,
               cliExecutionProvider: runtime.cliExecutionProvider,

@@ -29,6 +29,9 @@ function summarizeChildren(
   const unreadHiddenRuns: SidebarRecentSession[] = [];
   for (const child of children) {
     if (onlySubagents && !isSubagentSessionKey(child.key)) {
+      // Persistent children keep their own activity, but their hidden runs still fold upward.
+      runningChildCount += child.subagentSummary?.runningChildCount ?? 0;
+      queuedChildCount += child.subagentSummary?.queuedChildCount ?? 0;
       continue;
     }
     const descendants = onlySubagents ? child.subagentSummary : child;
@@ -41,7 +44,9 @@ function summarizeChildren(
     childAttention.push(attention);
     unreadChildCount += Number(child.unread) + (descendants?.unreadChildCount ?? 0);
     const visuallyActive = child.isRunVisuallyActive ?? child.hasActiveRun;
-    runningChildCount += (visuallyActive ? 1 : 0) + (descendants?.runningChildCount ?? 0);
+    runningChildCount +=
+      Number(visuallyActive || (child.backgroundProcessCount ?? 0) > 0) +
+      (descendants?.runningChildCount ?? 0);
     queuedChildCount +=
       Number(visuallyActive && child.status === "queued") + (descendants?.queuedChildCount ?? 0);
     workspaceConflictCount += onlySubagents

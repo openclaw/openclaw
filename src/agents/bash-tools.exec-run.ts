@@ -35,6 +35,7 @@ import {
 } from "./bash-tools.exec-output.js";
 import {
   assertSupportedExecParams,
+  assertDurableExecAvailable,
   createExecRequestPreparation,
   type ExecToolArgs,
   resolveExecPreparedRunEnvironment,
@@ -161,6 +162,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
     resolveSubagentSession,
     notifyDeliveryContext,
   } = resolveExecNotificationDefaults(defaults);
+  const durableNotifications = { notifyOnExit, notifyOnExitEmptySuccess };
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
@@ -287,6 +289,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         );
       }
       const host = resolveExecHost(params, defaults);
+      assertDurableExecAvailable(params, host, allowBackground);
       const foregroundFallbackWarning =
         (host === "node" || !backgroundAvailable) &&
         (params.background === true || typeof params.yieldMs === "number")
@@ -418,15 +421,16 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         // The proxy is loopback-owned by the Gateway. Sandbox and node hosts
         // cannot use its sentinels, so both sides of the contract stay absent.
         const useSecretEgress = secretEgressEnabled && host === "gateway";
+        const secretEgressBindings = useSecretEgress
+          ? (storeEnv.secretEgressBindings ?? [])
+          : undefined;
+        assertDurableExecAvailable(params, host, allowBackground, secretEgressBindings?.length);
         if (useSecretEgress) {
           if (!defaults?.operationalRunInstance) {
             throw new Error("Secret egress proxy requires an admitted agent run instance");
           }
           assertSourceActive();
         }
-        const secretEgressBindings = useSecretEgress
-          ? (storeEnv.secretEgressBindings ?? [])
-          : undefined;
         const { env, requestedEnv, executionContext } = resolvePreparedExecEnvironment({
           execParams: params,
           host,
@@ -505,6 +509,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             ...hostApprovalParams(),
             workdir,
             secretEgressBindings,
+            durable: params.durable ? durableNotifications : undefined,
             githubProfileDir,
             pathPrepend: defaultPathPrepend,
             pty: params.pty === true && !sandbox,
@@ -561,6 +566,8 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           workdir,
           env,
           secretEgressBindings,
+          durable: params.durable ? durableNotifications : undefined,
+          sessionId: defaults?.sessionId,
           githubProfileDir,
           pathPrepend: defaultPathPrepend,
           sandbox,
