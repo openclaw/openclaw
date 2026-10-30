@@ -481,7 +481,11 @@ function publishFact<T>(
     return;
   }
   state.registry.publish(record);
-  exchange(record);
+  // Reconstructible physical facts ride the next custody exchange; a blocked
+  // parent must not stall the connection that just captured its own catalog.
+  if (key.writer !== "connection") {
+    exchange(record);
+  }
 }
 
 /** Publish one row-cache revision when a local native write settles. */

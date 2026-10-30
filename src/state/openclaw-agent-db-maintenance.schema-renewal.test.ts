@@ -83,7 +83,7 @@ function hasProvenance(database: DatabaseSync): boolean {
 }
 
 it.each([true, false])(
-  "observes maintenance renewal with provenance present=%s",
+  "renews maintenance across schema preparation with provenance present=%s",
   async (present) => {
     await withOpenClawTestState({ label: "maintenance-schema-renewal" }, async (state) => {
       const seeded = openOpenClawStateDatabase({ env: state.env });
@@ -167,7 +167,7 @@ it.each([true, false])(
                 new Int32Array(new SharedArrayBuffer(4)),
                 0,
                 0,
-                Number(before.expires_at) - Date.now() + 250,
+                Number(before.expires_at) - Date.now() + 10_000 + 250,
               );
               const observedAt = Date.now();
               const requests = takeRequests(observations.port1);
@@ -205,35 +205,20 @@ it.each([true, false])(
           expect(snapshot.schemaChanged).toBe(!present);
           expect(snapshot.before).toBeDefined();
           expect(snapshot.after).toBeDefined();
-          const { before, after, requests, blockedAt, observedAt } = snapshot;
-          if (present) {
-            expect(requests).toEqual([]);
-            expect(Number(after!.heartbeat_at)).toBeGreaterThan(Number(before!.heartbeat_at));
-            expect(Number(after!.expires_at)).toBeGreaterThan(observedAt);
-          } else {
-            const pending = requests.filter((request) => request.decision === 0);
-            expect(pending).toHaveLength(1);
-            expect(pending[0]!.requestedAt).toBeGreaterThanOrEqual(blockedAt);
-            expect(pending[0]!.requestedAt).toBeLessThan(Number(before!.expires_at));
-            expect(after).toEqual(before);
-            expect(Number(after!.expires_at)).toBeLessThan(observedAt);
-          }
+          const { before, after, requests, observedAt } = snapshot;
+          expect(observedAt).toBeGreaterThan(Number(before!.heartbeat_at) + 20_000);
+          expect(requests).toEqual([]);
+          // More than two original TTLs rules out one renewal followed by a
+          // blocked cache-publication acknowledgement on the next interval.
+          expect(Number(after!.heartbeat_at)).toBeGreaterThan(Number(before!.expires_at));
+          expect(Number(after!.expires_at)).toBeGreaterThan(observedAt);
           console.log(
             "maintenance-schema-renewal-settlement",
             present,
             outcome.status,
             outcome.status === "rejected" ? String(outcome.error) : "",
           );
-          if (present) expect(outcome.status).toBe("fulfilled");
-          else if (
-            outcome.status === "rejected" &&
-            !(
-              outcome.error instanceof Error &&
-              "code" in outcome.error &&
-              outcome.error.code === "OPENCLAW_STATE_LEASE_LOST"
-            )
-          )
-            throw outcome.error;
+          if (outcome.status === "rejected") throw outcome.error;
         } finally {
           observations.port1.close();
           observations.port2.close();

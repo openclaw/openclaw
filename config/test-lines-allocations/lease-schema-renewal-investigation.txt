@@ -1,2 +1,2 @@
-# Real-worker A/B investigation of maintenance renewal after first-use schema preparation.
-244
+# Real-worker renewal plus physical schema, encoding and authority regression coverage.
+296
