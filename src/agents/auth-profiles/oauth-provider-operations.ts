@@ -8,7 +8,7 @@ import {
 } from "../../plugins/provider-runtime.runtime.js";
 import type { OAuthCredential } from "./types.js";
 
-const OAUTH_PROVIDER_IDS = new Set<string>(getOAuthProviders().map((provider) => provider.id));
+const OAUTH_PROVIDER_IDS = new Set(getOAuthProviders().map((provider) => provider.id));
 
 export async function refreshOAuthCredential(
   credential: OAuthCredential,
@@ -30,9 +30,11 @@ export async function refreshOAuthCredential(
   if (!OAUTH_PROVIDER_IDS.has(credential.provider)) {
     return null;
   }
-  const result = await getOAuthApiKey(credential.provider, {
-    [credential.provider]: credential,
-  });
+  const result = await getOAuthApiKey(
+    credential.provider,
+    { [credential.provider]: credential },
+    { forceRefresh: true },
+  );
   return result?.newCredentials ?? null;
 }
 

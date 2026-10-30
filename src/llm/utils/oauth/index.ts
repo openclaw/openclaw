@@ -13,13 +13,14 @@ type OAuthApiKeyResult = { newCredentials: OAuthCredentials; apiKey: string } | 
 async function resolveOAuthApiKey(
   provider: OAuthProviderInterface,
   credentials: Record<string, OAuthCredentials>,
+  options: { forceRefresh?: boolean } = {},
 ): Promise<OAuthApiKeyResult> {
   let creds = credentials[provider.id];
   if (!creds) {
     return null;
   }
 
-  if (Date.now() >= creds.expires) {
+  if (options.forceRefresh || Date.now() >= creds.expires) {
     try {
       creds = await provider.refreshToken(creds);
     } catch (error) {
@@ -83,10 +84,11 @@ export function getOAuthProviders(): OAuthProviderInterface[] {
 export async function getOAuthApiKey(
   providerId: OAuthProviderId,
   credentials: Record<string, OAuthCredentials>,
+  options?: { forceRefresh?: boolean },
 ): Promise<{ newCredentials: OAuthCredentials; apiKey: string } | null> {
   const provider = BUILT_IN_OAUTH_PROVIDERS.find((entry) => entry.id === providerId);
   if (!provider) {
     throw new Error(`Unknown OAuth provider: ${providerId}`);
   }
-  return resolveOAuthApiKey(provider, credentials);
+  return resolveOAuthApiKey(provider, credentials, options);
 }

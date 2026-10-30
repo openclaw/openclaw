@@ -13,6 +13,7 @@ vi.mock("../../../infra/oauth-loopback-callback.js", async (importOriginal) => {
 });
 
 import { anthropicOAuthProvider } from "./anthropic.js";
+import { getOAuthApiKey } from "./index.js";
 import type { OAuthLoginCallbacks } from "./types.js";
 
 const ANTHROPIC_REDIRECT_URI = "http://localhost:53692/callback";
@@ -52,6 +53,17 @@ afterEach(() => {
 });
 
 describe("Anthropic OAuth", () => {
+  it("honors an explicit refresh request before raw expiry", async () => {
+    const fetch = stubResponse(tokenResponse);
+    const result = await getOAuthApiKey(
+      "anthropic",
+      { anthropic: { access: "stale", refresh: "old", expires: Date.now() + 4 * 60_000 } },
+      { forceRefresh: true },
+    );
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(result?.newCredentials).toMatchObject({ access: "access", refresh: "refresh" });
+  });
+
   it.each([
     ["manual", "manual-code", null],
     ["timeout", "manual-code", null],
