@@ -12,6 +12,13 @@ import { prepareSessionRowSelection } from "../session-utils-list.js";
 
 export type MemoryProjectStores = ReturnType<typeof readMemoryProjectStores>;
 
+/** A listing read raced a config, projection, or disclosure change; a fresh read can succeed. */
+export class ProjectListingChangedError extends Error {
+  constructor() {
+    super("Projects changed while loading. Try again.");
+  }
+}
+
 export function readMemoryProjectStores(assertCurrent: () => void) {
   assertCurrent();
   const binding = getSessionActorStorageBinding({});
@@ -61,7 +68,7 @@ export function assertMemoryProjectStoresCurrent(
         fields.some((field) => !isDeepStrictEqual(selected.entry[field], latest.entry?.[field])) ||
         !isDeepStrictEqual(selected.members, latest.members)
       ) {
-        throw new Error("Project access changed while preparing the listing. Retry the request.");
+        throw new ProjectListingChangedError();
       }
     }
   }
@@ -168,7 +175,7 @@ function assertProjectEntryCurrent(
     "incognito",
   ] as const;
   if (!current || fields.some((field) => !isDeepStrictEqual(entry?.[field], current[field]))) {
-    throw new Error("Project access changed while preparing the listing. Retry the request.");
+    throw new ProjectListingChangedError();
   }
 }
 

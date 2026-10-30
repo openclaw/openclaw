@@ -218,11 +218,9 @@ test("projects.list returns only the caller's deterministic resolved recents", a
         return result;
       });
     try {
-      expect(await list()).toMatchObject({
-        ok: false,
-        error: { message: expect.stringContaining("Project access changed") },
-      });
-      expect(repositoryRead).toHaveBeenCalled();
+      // The changed read restarts against current facts instead of surfacing the race.
+      expectRecents(await list(), tiedRecents);
+      expect(repositoryRead).toHaveBeenCalledTimes(2);
     } finally {
       repositoryRead.mockRestore();
     }
