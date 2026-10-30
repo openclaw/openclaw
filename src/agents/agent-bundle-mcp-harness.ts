@@ -22,6 +22,8 @@ import {
   mergeMcpConnectCatalog,
 } from "./agent-bundle-mcp-requester-connect.js";
 import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
+import { createMcpRunView } from "./agent-bundle-mcp-run-view.js";
+import { readWebchatMcpRequester } from "./agent-bundle-mcp-webchat-requester.js";
 import type { CodexMcpServersConfig } from "./codex-mcp-config.types.js";
 import {
   prepareConversationCapabilityProfile,
@@ -375,6 +377,18 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
 export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
   params: MaterializeRequesterScopedMcpToolsForHarnessRunParams,
 ): Promise<RequesterScopedHarnessMcpTools | undefined> {
+  const webchatRequester = !params.requesterSenderId?.trim()
+    ? readWebchatMcpRequester(params)
+    : undefined;
+  let closed = false;
+  const assertRequesterCurrent =
+    webchatRequester &&
+    (() => {
+      if (closed) {
+        throw new Error("Requester MCP harness view has been released.");
+      }
+      webchatRequester.assertCurrent();
+    });
   const policyParams = {
     ...params,
     conversationCapabilityProfile: await resolveHarnessCapabilityProfile(params),
@@ -388,7 +402,8 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     cfg: params.cfg,
     manifestRegistry: params.manifestRegistry,
     toolOverrides: params.toolOverrides,
-    requesterSenderId: params.requesterSenderId,
+    requesterSenderId: params.requesterSenderId?.trim() || webchatRequester?.requesterSenderId,
+    assertRequesterCurrent,
     agentAccountId: params.agentAccountId,
     messageChannel: params.messageChannel,
     toolDenylist: policyParams.conversationCapabilityProfile?.policy.explicitToolDenylist,
@@ -402,10 +417,13 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
       liveRuntime = await materializeBundleMcpToolsForRun({
         runtime: scopedRuntime,
         releaseLease: scopedRuntimeHandle?.releaseLease,
+        assertRequesterCurrent,
         agentId: params.agentId,
         reservedToolNames: params.reservedToolNames,
       });
-      liveCatalog = scopedRuntime.peekCatalog() ?? (await scopedRuntime.getCatalog());
+      const view = createMcpRunView(scopedRuntime, assertRequesterCurrent);
+      liveCatalog = view.peekCatalog() ?? (await view.getCatalog());
+      assertRequesterCurrent?.();
       if (liveCatalog.tools.length > 0 && scopedRuntimeHandle) {
         rememberAdvertisedScopedMcpCatalog(scopedRuntimeHandle, liveCatalog);
       }
@@ -420,6 +438,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
           ? undefined
           : buildSenderlessConnectCatalog(params));
     if (!advertisedCatalog || advertisedCatalog.tools.length === 0) {
+      closed = true;
       await liveRuntime?.dispose();
       return undefined;
     }
@@ -427,7 +446,8 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     const reservedToolNames = params.reservedToolNames
       ? Array.from(params.reservedToolNames)
       : undefined;
-    const requesterConnect = scopedRuntime?.requesterConnect;
+    const requesterConnect =
+      scopedRuntime && createMcpRunView(scopedRuntime, assertRequesterCurrent).requesterConnect;
     const advertisedTools = buildBundleMcpToolsFromCatalog({
       catalog: advertisedCatalog,
       reservedToolNames,
@@ -458,9 +478,13 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     return {
       tools: executableTools,
       advertisedTools: filteredAdvertised,
-      dispose: liveRuntime?.dispose ?? (async () => {}),
+      dispose: async () => {
+        closed = true;
+        await liveRuntime?.dispose();
+      },
     };
   } catch (error) {
+    closed = true;
     await liveRuntime?.dispose();
     throw error;
   }

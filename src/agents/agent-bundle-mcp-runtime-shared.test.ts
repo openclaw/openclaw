@@ -36,6 +36,22 @@ describe("requester-scoped MCP harness preflight", () => {
     ).toBe(true);
   });
 
+  it("loads Webchat profile candidates without requiring a configured-server declaration", () => {
+    delete globalStore[SESSION_MCP_RUNTIME_MANAGER_KEY];
+    expect(
+      shouldLoadRequesterScopedMcpHarnessRuntime({
+        sessionId: "webchat",
+        policyContext: { operatorProfileId: "ada", messageChannel: "webchat" },
+      }),
+    ).toBe(true);
+    expect(
+      shouldLoadRequesterScopedMcpHarnessRuntime({
+        sessionId: "webchat",
+        policyContext: { messageChannel: "webchat" },
+      }),
+    ).toBe(false);
+  });
+
   it("loads advertised stubs for an unauthenticated requester", () => {
     globalStore[SESSION_MCP_RUNTIME_MANAGER_KEY] = {
       getAdvertisedScopedCatalog: (sessionId: string) =>
