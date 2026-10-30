@@ -1,8 +1,11 @@
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { SessionScope } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationInventory,
 } from "../plugins/doctor-contract-registry.js";
+import type { PreparedLegacySessionSurfaces } from "../plugins/legacy-session-surfaces.types.js";
 import type { StateLeaseLoss } from "../shared/state-lease-loss.js";
 import type { EngineConnection } from "./sql-connection.js";
 import type { LegacyAuditLogsDetection } from "./state-migrations.audit-logs.types.js";
@@ -10,6 +13,7 @@ import type { LegacyChannelPairingStateDetection } from "./state-migrations.chan
 import type { LegacyDeviceIdentityDetection } from "./state-migrations.device-identity.types.js";
 import type { LegacyExecApprovalsDetection } from "./state-migrations.exec-approvals.types.js";
 import type { LegacyMcpOAuthDetection } from "./state-migrations.mcp-oauth.types.js";
+import type { PreparedAgentDatabaseMigrationDiscovery } from "./state-migrations.media-persistence-targets.js";
 import type { LegacyMeetingTranscriptsDetection } from "./state-migrations.meeting-transcripts.types.js";
 import type { SharedAuthStoreMigrationDetection } from "./state-migrations.shared-auth-store.types.js";
 import type { LegacyWorkspaceStateDetection } from "./state-migrations.workspace-setup.types.js";
@@ -248,4 +252,24 @@ export type LegacyStateMigrationStep = Omit<LegacyStateMigrationStepPlan, "outco
     migration: PreparedPostSessionPluginMigration;
   };
   run: () => MigrationMessages | Promise<MigrationMessages>;
+};
+
+export type AutoMigrateLegacyStateParams = {
+  cfg: OpenClawConfigWithLegacyRoster;
+  sourceConfigBeforeMigrations?: OpenClawConfigWithLegacyRoster;
+  invocationPurpose?: LegacyStateMigrationInvocationPurpose;
+  integrityCheck?: "quick" | "full";
+  inspectedSessionEntryPaths?: readonly string[];
+  agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
+  pluginDoctorConfig?: OpenClawConfig;
+  /** Include inputs captured by the config snapshot that produced cfg. */
+  configIncludedPaths?: readonly string[];
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+  log?: MigrationLogger;
+  now?: () => number;
+  doctorOnlyStateMigrations?: boolean;
+  legacySessionSurfaces?: PreparedLegacySessionSurfaces;
+  onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
+  beforeWorkspaceStateMigration?: (config: OpenClawConfig) => Promise<void>;
 };
