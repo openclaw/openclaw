@@ -123,7 +123,8 @@ vi.mock("../../daemon/systemd-user-transport.js", async (original) => ({
   ...(await original<typeof import("../../daemon/systemd-user-transport.js")>()),
   resolveSystemdUserTransport: async () => undefined,
 }));
-vi.mock("../../daemon/exec-file.js", () => ({
+vi.mock("../../daemon/exec-file.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/exec-file.js")>()),
   execFileUtf8: async (
     ...[command, args, options]: Parameters<typeof import("../../daemon/exec-file.js").execFileUtf8>
   ) => {

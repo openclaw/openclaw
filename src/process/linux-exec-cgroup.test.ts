@@ -42,7 +42,8 @@ vi.mock("node:fs", async (importOriginal) => {
     },
   };
 });
-vi.mock("../daemon/systemd-exec.js", () => ({
+vi.mock("../daemon/systemd-exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/systemd-exec.js")>()),
   execSystemctl: fixture.inspect,
   execSystemctlUser: fixture.inspectUser,
 }));
