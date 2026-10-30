@@ -87,6 +87,8 @@ describe("check-deadcode-exports", () => {
       "scripts/generate-runtime-script-assets.mjs!",
       "scripts/generate-static-validators.mts!",
       "scripts/perf/cron-delivery-gateway-entry.ts!",
+      "scripts/perf/doctor-retirement-measure.mts!",
+      "scripts/perf/github-readiness-state-bench.ts!",
       "scripts/perf/plugin-policy-read-measure.mjs!",
       "scripts/perf/prompt-cache-observation-measure.ts!",
       "scripts/perf/reconnect-read-wave-measure.ts!",
