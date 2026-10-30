@@ -860,6 +860,10 @@
     "target": "NVIDIA"
   },
   {
+    "source": "NVIDIA Jetson",
+    "target": "NVIDIA Jetson"
+  },
+  {
     "source": "NVIDIA API key",
     "target": "NVIDIA API key"
   },
