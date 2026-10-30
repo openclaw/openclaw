@@ -313,8 +313,7 @@ async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<st
     max: MAX_SESSION_LIMIT,
   });
   // Canonical forms compare equal here; sessions keep their original spelling.
-  const filter =
-    typeof params.filter === "string" ? params.filter.trim().toLowerCase().normalize("NFC") : "";
+  const filter = normalizeLowercaseStringOrEmpty(params.filter).normalize("NFC");
   const codexHome = resolveCodexAppServerUserHomeDir();
   const summaries = await readHistorySessions(codexHome);
   await hydrateSessionsFromSessionFiles(codexHome, summaries);
