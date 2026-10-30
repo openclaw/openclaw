@@ -47,9 +47,14 @@ describe("readAttachmentText", () => {
     vi.stubGlobal("fetch", (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       handedSignal = init?.signal ?? null;
       return new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
-          once: true,
-        });
+        init?.signal?.addEventListener(
+          "abort",
+          () => {
+            const reason: unknown = init.signal?.reason;
+            reject(reason instanceof Error ? reason : new Error("aborted"));
+          },
+          { once: true },
+        );
       });
     });
 
