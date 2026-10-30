@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
-import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
+import * as nodeSqlite from "./node-sqlite.js";
 import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
 import { openSqliteReadOnlyDatabase } from "./sqlite-snapshot-source.js";
 
@@ -12,13 +12,13 @@ const directories = useAutoCleanupTempDirTracker(afterEach);
 it("keeps one private WAL image across independent readers until the inspection ends", () => {
   const root = directories.make("sqlite-inspection-scope-");
   const source = path.join(root, "source.sqlite");
-  using writer = openNodeSqliteDatabase(source);
+  using writer = nodeSqlite.openNodeSqliteDatabase(source);
   writer.exec(
     "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES ('first');",
   );
   const otherSource = path.join(root, "other.sqlite");
   {
-    using other = openNodeSqliteDatabase(otherSource);
+    using other = nodeSqlite.openNodeSqliteDatabase(otherSource);
     other.exec("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES ('other')");
   }
   const artifacts = () =>
@@ -81,22 +81,24 @@ it("keeps one private WAL image across independent readers until the inspection 
 
 it("retains the image when native close fails and preserves the inspection failure", async () => {
   const source = path.join(directories.make("sqlite-inspection-close-"), "source.sqlite");
-  using writer = openNodeSqliteDatabase(source);
+  using writer = nodeSqlite.openNodeSqliteDatabase(source);
   writer.exec("CREATE TABLE probe(value TEXT)");
   const operationFailure = new Error("inspection failed");
   const closeFailure = new Error("native close failed");
-  const prototype = requireNodeSqlite().DatabaseSync.prototype;
-  const nativeClose = prototype.close;
+  const openNative = nodeSqlite.openNodeSqliteDatabase;
   let reader: ReturnType<typeof openSqliteReadOnlyDatabase> | undefined;
   let failed = false;
-  const close = vi.spyOn(prototype, "close").mockImplementation(function (
-    this: ReturnType<typeof openNodeSqliteDatabase>,
-  ) {
-    if (this === reader && !failed) {
-      failed = true;
-      throw closeFailure;
-    }
-    nativeClose.call(this);
+  const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+    const db = openNative(...args);
+    const nativeClose = db.close.bind(db);
+    db.close = () => {
+      if (db === reader && !failed) {
+        failed = true;
+        throw closeFailure;
+      }
+      nativeClose();
+    };
+    return db;
   });
   try {
     expect(() =>
@@ -116,7 +118,7 @@ it("retains the image when native close fails and preserves the inspection failu
     expect(reader?.isOpen).toBe(true);
     expect(fs.existsSync(reader!.location()!)).toBe(true);
   } finally {
-    close.mockRestore();
+    open.mockRestore();
     reader?.close();
     await cleanupSnapshotOperations();
   }
