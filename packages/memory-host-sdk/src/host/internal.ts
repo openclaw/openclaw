@@ -345,7 +345,6 @@ export async function listMemoryFiles(
       }
       if (
         stat.isFile() &&
-        !shouldSkipWorkspaceMemoryPath(inputPath) &&
         (isExplicitExtraMarkdownFilePath(inputPath) ||
           isAllowedMemoryFilePath(inputPath, multimodal))
       ) {

@@ -153,8 +153,8 @@ export class MemoryWatchPolicy {
   }
 
   selectionKeys(group: MemoryObservation): string[] {
-    // A shared watcher baseline must refresh when a subscriber changes which
-    // workspace paths it excludes, even if its scopes are otherwise identical.
+    // Exclusion depends on selections, enabled file kinds, and workspace exclusions, not
+    // indexing limits; a changed key rebaselines the shared watcher.
     const modalities = this.settings.multimodal.enabled ? this.settings.multimodal.modalities : [];
     const excludePaths = this.settings.excludePaths ?? [];
     return group.selections.flatMap(({ scope, resolved, lexical, alias }) =>

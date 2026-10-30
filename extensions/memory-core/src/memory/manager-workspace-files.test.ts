@@ -70,22 +70,33 @@ describe("Gateway index over Harness workspace files", () => {
     release = undefined;
   });
 
-  it("indexes adjacent canonical memory without admitting generated Dream reports", async () => {
+  it("drops generated Dream reports once excluded and keeps curated edits fresh", async () => {
     const dreamingDir = path.join(fixture.paths.memory, "dreaming", "light");
+    const current = path.join(fixture.paths.memory, "current.md");
     await fs.mkdir(dreamingDir, { recursive: true });
     await fs.writeFile(path.join(dreamingDir, "report.md"), "generatedmarker only in dream");
-    await fs.writeFile(path.join(fixture.paths.memory, "current.md"), "canonicalmarker in memory");
-    const manager = await fixture.getFreshManager(
-      createConfig({ excludePaths: ["memory/dreaming/**"] }),
-      "cli",
+    await fs.writeFile(current, "canonicalmarker in memory");
+    const { manager: unscoped } = await createIndexedManager();
+    expect(await search(unscoped, "generatedmarker")).not.toEqual([]);
+
+    // Each step mirrors one unforced `openclaw memory index` run.
+    const cfg = createConfig({ excludePaths: ["memory/dreaming/**"] });
+    const index = async () => {
+      const manager = await fixture.getFreshManager(cfg, "cli", true);
+      await manager.sync({ reason: "cli" });
+      return manager;
+    };
+    const excluded = await index();
+    expect(await search(excluded, "generatedmarker")).toEqual([]);
+    expect((await search(excluded, "canonicalmarker")).map((hit) => hit.path)).toContain(
+      "memory/current.md",
     );
-    await manager.sync({ reason: "generated-dream-exclusion", force: true });
-    expect(await manager.search("generatedmarker", { minScore: 0 })).toEqual([]);
-    expect(
-      (await manager.search("canonicalmarker", { minScore: 0 })).some(
-        (hit) => hit.path === "memory/current.md",
-      ),
-    ).toBe(true);
+
+    await fs.writeFile(current, "refreshedmarker in memory");
+    const edited = await index();
+    expect((await search(edited, "refreshedmarker")).map((hit) => hit.path)).toContain(
+      "memory/current.md",
+    );
   });
 
   async function registerHarness() {
