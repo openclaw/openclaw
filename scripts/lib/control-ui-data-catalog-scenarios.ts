@@ -1023,6 +1023,9 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
       await countRows(page, ".agent-skill-row", inventorySize);
       await page.locator('input[name="agent-skills-filter"]').fill(skillQuery);
       await countRows(page, ".agent-skill-row:not([hidden])", 1);
+      if (await page.locator(".shell--mobile-nav:not(.shell--nav-drawer-open)").count()) {
+        await openNavigationDrawer(page);
+      }
       await page.locator(".settings-sidebar__agent .agent-select__trigger").click();
       await countRows(page, "[data-agent-option]", agentCount);
       await countRows(
