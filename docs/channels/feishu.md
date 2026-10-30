@@ -96,7 +96,7 @@ Feishu/Lark does not support native slash-command menus, so send these as plain 
 
 Control commands bypass Feishu's message batching and ordinary chat queue, so you can check status or interrupt a running reply. Ordinary chat messages are handled in order.
 
-When work is active, `/followup <message>` reports queue acceptance without waiting for that work to finish. It keeps the submitting sender's identity and leaves the conversation's queue mode unchanged.
+When work is active, `/followup <message>` reports queue acceptance without waiting for that work to finish, including when another followup is already waiting. Each followup keeps the submitting sender's identity and leaves the conversation's queue mode unchanged. The durable ingress claim remains held for recovery until the queued turn is adopted; it does not block later inputs from reaching admission. Ordinary buffered messages retain their chat ordering.
 
 ## Related
 
