@@ -911,7 +911,7 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     route: controlUiSessionPath(sessionKey),
     expected:
       "Focusing an offscreen report reveals its content and an unclipped, dismissible menu.",
-    fixtureOverrides: createDataBoardFixture,
+    fixtureOverrides: () => createDataBoardFixture(),
     prepare: prepareBoard,
     run: async (page) => {
       const card = page.locator(`${boardHost} openclaw-board-widget-cell`).filter({
