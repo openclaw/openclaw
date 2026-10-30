@@ -28,7 +28,9 @@ export function dashboardsRouteData(
 }
 
 async function loadDashboardsRoute(context: ApplicationContext): Promise<DashboardsRouteData> {
-  const query = dashboardSessionListQuery(context.agentSelection.state.scopeId);
+  // The gallery browses every agent's boards; the selected agent only scopes the
+  // sidebar catalog, so keep `agentId` out of the listing query.
+  const query = dashboardSessionListQuery();
   let snapshot = context.sessions.listSnapshot(query);
   if (!snapshot.result && !snapshot.loading) {
     await context.sessions.refreshList(query);

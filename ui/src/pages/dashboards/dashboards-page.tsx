@@ -17,7 +17,8 @@ export function DashboardsPage(props: { routeData?: DashboardsRouteData }) {
   const initialData = untrack(() => props.routeData);
   const gateway = projectGateway(context.gateway);
 
-  let scope = dashboardSessionListQuery(context.agentSelection.state.scopeId);
+  // Galleries span every agent; selecting an agent must not replace the listing source.
+  const scope = dashboardSessionListQuery();
   const list = projectSessionList({ sessions: context.sessions, scope });
   const data = createMemo<DashboardsRouteData>((previous) => {
     const snapshot = list.read();
@@ -58,21 +59,10 @@ export function DashboardsPage(props: { routeData?: DashboardsRouteData }) {
         void context.sessions.refreshList(scope);
       }
     };
-    const synchronizeScope = () => {
-      const next = dashboardSessionListQuery(context.agentSelection.state.scopeId);
-      if (next.agentId !== scope.agentId) {
-        scope = next;
-        list.replaceSource({ sessions: context.sessions, scope });
-      }
-    };
-    // Selection receipts replace the list scope before it can request another agent's page.
-    const stopScope = context.agentSelection.subscribe(synchronizeScope);
-    synchronizeScope();
     // Append during the owner's completion notification, before its request drain settles.
     const stopList = list.subscribe(apply);
     apply();
     return () => {
-      stopScope();
       stopList();
       publication.resolve();
     };

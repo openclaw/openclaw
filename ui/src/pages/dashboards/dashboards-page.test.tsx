@@ -154,7 +154,7 @@ it("keeps the gallery skeleton through a held first read and an error retry", as
   await waitForSolid(() => expect(mounted.status()).toMatchObject({ empty: true, busy: false }));
 });
 
-it("preserves owner rows through agent-scope and route updates", async () => {
+it("keeps every agent's rows through agent selection and route updates", async () => {
   const selectionState = { selectedId: "main", scopeId: null as string | null };
   const selectionListeners = new Set<(state: typeof selectionState) => void>();
   const listListeners = new Map<string, (snapshot: SessionListSnapshot) => void>();
@@ -198,40 +198,43 @@ it("preserves owner rows through agent-scope and route updates", async () => {
 
   selectionState.scopeId = "writer";
   selectionListeners.forEach((listener) => listener(selectionState));
-  await waitForSolid(() => expect(listListeners.has("writer")).toBe(true));
+  flush();
+  // Selecting another agent must not narrow the gallery to that agent's boards.
+  expect(listListeners.has("writer")).toBe(false);
+  expect(listListeners.has("all")).toBe(true);
   expect(element.textContent).toContain("Before");
 
-  const publishWriter = (title: string | null, error: string | null = null) => {
-    const next = snapshot(title, "writer", error);
-    snapshots.set("writer", next);
-    listListeners.get("writer")?.(next);
+  const publishAll = (title: string | null, error: string | null = null) => {
+    const next = snapshot(title, null, error);
+    snapshots.set("all", next);
+    listListeners.get("all")?.(next);
     flush();
   };
-  publishWriter(null, "Writer initial load failed");
-  await waitForSolid(() => expect(mounted.status().error).toContain("Writer initial load failed"));
+  publishAll(null, "Gallery initial load failed");
+  await waitForSolid(() => expect(mounted.status().error).toContain("Gallery initial load failed"));
   expect(mounted.status().busy).toBe(false);
 
-  publishWriter("Writer dashboard");
+  publishAll("Writer dashboard");
   await waitForSolid(() => expect(element.textContent).toContain("Writer dashboard"));
   mounted.setData(routeData(row("agent:main:stale-route", "Stale route")));
   flush();
   expect(element.textContent).toContain("Writer dashboard");
   expect(element.textContent).not.toContain("Stale route");
-  retiredListener(snapshot("Retired", null, "Retired scope refresh failed", "agent:main:retired"));
+  retiredListener(snapshot("Retired", null, "Retired refresh failed", "agent:main:retired"));
   flush();
   expect(element.textContent).not.toContain("Retired");
 
-  const writerListener = listListeners.get("writer")!;
-  publishWriter("Writer dashboard", "Writer refresh failed");
+  const allListener = listListeners.get("all")!;
+  publishAll("Writer dashboard", "Gallery refresh failed");
   expect(element.textContent).toContain("Writer dashboard");
-  await waitForSolid(() => expect(mounted.status().error).toContain("Writer refresh failed"));
+  await waitForSolid(() => expect(mounted.status().error).toContain("Gallery refresh failed"));
   expect(element.querySelector('[role="alert"] button')).toBeNull();
-  publishWriter("Recovered dashboard");
+  publishAll("Recovered dashboard");
   await waitForSolid(() => expect(element.textContent).toContain("Recovered dashboard"));
   expect(mounted.status().error).toBeNull();
 
   mounted.unmount();
-  writerListener(snapshot(null, "writer", "Detached refresh failed"));
+  allListener(snapshot(null, null, "Detached refresh failed"));
   flush();
   expect(element.textContent).not.toContain("Detached refresh failed");
 });

@@ -75,4 +75,35 @@ describe("dashboards route", () => {
       expect(list).not.toHaveBeenCalled();
     },
   );
+
+  it("loads every agent's boards regardless of the selected agent", async () => {
+    const result = sessionListResult(1, []);
+    const listSnapshot = vi.fn(() => ({
+      result,
+      agentId: null,
+      loading: false,
+      error: null,
+    }));
+    const refreshList = vi.fn(async () => undefined);
+    const context = {
+      basePath: "",
+      sessions: { listSnapshot, refreshList },
+      agentSelection: { state: { selectedId: "finance-agent", scopeId: "finance-agent" } },
+      agents: { state: { agentsList: null } },
+      gateway: { snapshot: { hello: null } },
+    } as unknown as ApplicationContext;
+
+    await loadDashboards(context, loaderOptions);
+
+    const expected = {
+      limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+      rowMode: "dashboard",
+      source: "dashboard",
+      excludeDock: true,
+      hasBoard: true,
+      archivedFilter: "all",
+    };
+    expect(listSnapshot).toHaveBeenCalledWith(expected);
+    expect(refreshList).not.toHaveBeenCalled();
+  });
 });
