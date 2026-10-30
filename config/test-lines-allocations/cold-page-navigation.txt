@@ -1,0 +1,2 @@
+# Approved schema 39: cold page ordering/visibility, resumable migration, and affected consumer/upgrade regressions.
+853

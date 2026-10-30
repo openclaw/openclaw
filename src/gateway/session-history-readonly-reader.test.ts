@@ -47,6 +47,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { expectMessageIds, messageEvent } from "./session-history-events.test-support.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
+import { readChatHistoryAnchorPage } from "./session-history-tail.js";
 import { readSessionHistoryRequest } from "./session-history-worker-reader.js";
 
 type HistoryTarget = PreparedSessionHistoryReadTarget & { transcript: { sessionKey: string } };
@@ -228,6 +229,66 @@ it("pages retained cold branches and resets without changing cursor identity or 
       kind: "page",
       events: [],
     });
+  });
+});
+
+it("continues byte-limited cold anchors in both directions across current and closed reset intervals", async () => {
+  await withHistory(async ({ target, database, reader }) => {
+    const transcript = target.transcript;
+    let parentId: string | null = null;
+    const events: unknown[] = [{ type: "session", version: 3, id: transcript.sessionId }];
+    for (const interval of ["old", "current"]) {
+      if (interval === "current") {
+        events.push({ type: "reset", id: "reset", parentId });
+        parentId = "reset";
+      }
+      for (let index = 0; index < 3; index++) {
+        const id = `${interval}-${index}`;
+        events.push(messageEvent(id, { role: "user", content: "x".repeat(700) }, parentId));
+        parentId = id;
+      }
+    }
+    await replaceTranscriptEvents(transcript, events);
+    await waitForSessionTranscriptProjection(transcript);
+    await replaceSessionEntry(transcript, { sessionId: "successor", updatedAt: 1 });
+    runOpenClawAgentWriteTransaction(({ db }) => {
+      db.prepare(
+        "UPDATE session_windows SET previous_session_id = NULL, updated_at = 1, transcript_updated_at = 1 WHERE session_id = ?",
+      ).run(transcript.sessionId);
+    }, target.database);
+    expect(
+      await runSessionColdStorageMaintenance({ config: maintenanceConfig(database.path) }),
+    ).toMatchObject({ archivedTranscripts: 1 });
+    const archive = readSessionColdTranscript(database.db, transcript.sessionId);
+    expect(archive).toBeDefined();
+    for (const interval of ["old", "current"]) {
+      for (const direction of ["older", "newer"] as const) {
+        const options = {
+          messageId: `${interval}-1`,
+          direction,
+          maxMessages: 2,
+          maxBytes: 1024,
+          captureReadWindow: true,
+        };
+        const anchor = await reader.readSessionMessagesAroundIdWithStatsAsync(transcript, options);
+        expectMessageIds(anchor.messages, [options.messageId]);
+        expect(anchor.readWindow).toBeDefined();
+        const neighbor = await reader.readSessionMessagesAroundIdWithStatsAsync(transcript, {
+          ...options,
+          excludeAnchor: true,
+          expectedReadWindow: anchor.readWindow,
+        });
+        expect(neighbor.windowReset).not.toBe(true);
+        expectMessageIds(neighbor.messages, [`${interval}-${direction === "older" ? 0 : 2}`]);
+        const continued = await readChatHistoryAnchorPage(reader, transcript, options);
+        expect(continued.windowReset).not.toBe(true);
+        expectMessageIds(
+          continued.messages,
+          (direction === "older" ? [0, 1] : [1, 2]).map((index) => `${interval}-${index}`),
+        );
+        expect(readSessionColdTranscript(database.db, transcript.sessionId)).toEqual(archive);
+      }
+    }
   });
 });
 

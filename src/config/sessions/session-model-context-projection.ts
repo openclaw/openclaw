@@ -297,9 +297,12 @@ export function projectModelContextNavigationSql(
         db,
         entry,
         sql.lit("$.data"),
-        jsonPickObject(db, jsonPathValue(db, event, sql.lit("$.data")), [
-          "afterEntryId",
-          "resultEntryIds",
+        // The scalar subquery loses SQLite's JSON subtype before embedding its object.
+        getNodeSqliteKysely(db).fn<string>("json", [
+          jsonPickObject(db, jsonPathValue(db, event, sql.lit("$.data")), [
+            "afterEntryId",
+            "resultEntryIds",
+          ]),
         ]),
         true,
       )}
