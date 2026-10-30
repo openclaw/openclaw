@@ -33,7 +33,7 @@ import {
 const modelId = "decision-models/baseten-elephant-9b-latest";
 const profileId = "baseten:fixture";
 const agentId = "decision-agent";
-const nativeUrl = "https://decision.fixture.invalid/v1/systemone";
+const nativeUrl = "https://inference.baseten.co/v1/systemone";
 const input: DecisionBatchV2 = {
   state: { type: "json", value: { incident: "synthetic outage" } },
   questions: {
@@ -76,7 +76,7 @@ it.each(["allowed", "auth-reflection", "header-reflection", "replaced", "abort-r
           models: {
             providers: {
               baseten: {
-                baseUrl: "https://decision.fixture.invalid/v1",
+                baseUrl: "https://inference.baseten.co/v1",
                 models: [],
                 request: {
                   auth: {
@@ -139,7 +139,7 @@ it.each(["allowed", "auth-reflection", "header-reflection", "replaced", "abort-r
             const guarded = await originalFetch({
               ...params,
               lookupFn: async (hostname) => {
-                expect(hostname).toBe("decision.fixture.invalid");
+                expect(hostname).toBe("inference.baseten.co");
                 dnsEntered.resolve();
                 await allowDns.promise;
                 return [{ address: "93.184.216.34", family: 4 }];
