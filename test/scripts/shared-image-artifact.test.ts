@@ -169,7 +169,8 @@ if (tool === "docker") {
   }
 } else if (tool === "gh") {
   if (args.shift() !== "api") fail("unexpected gh invocation");
-  let method, endpoint;
+  let method = "GET";
+  let endpoint;
   while (args.length) {
     const arg = args.shift();
     if (arg === "--method") method = args.shift();
