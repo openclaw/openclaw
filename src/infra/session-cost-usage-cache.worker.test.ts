@@ -17,7 +17,10 @@ import {
 import { createWorkerPlacementSessionEvidenceResolver } from "../gateway/server-worker-placement-session-evidence.js";
 import { createWorkerSessionPlacementStore } from "../gateway/worker-environments/placement-store.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -220,7 +223,7 @@ function waitForHost(gate: Promise<void>, operation: Promise<unknown>, message: 
   return withTestTimeout(awaitGateBeforeSettlement(gate, operation, message), 10_000, message);
 }
 
-it("batches full-refresh snapshots within payload bounds and preserves targeted refreshes and later writes", async () => {
+it("bounds prune writer batches and recovers partial cleanup after restart without changing live totals", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const agentId = "usage-prune-refresh";
     const sessionsDir = state.sessionsDir(agentId);
@@ -228,56 +231,67 @@ it("batches full-refresh snapshots within payload bounds and preserves targeted 
     await fs.mkdir(sessionsDir, { recursive: true });
     await fs.writeFile(sessionFile, usageLine("first"));
     await refresh(agentId, [sessionFile]);
-    const staleKeys = Array.from({ length: 97 }, (_, index) =>
-      path.join(sessionsDir, `removed-${index}.jsonl`),
+    const staleKeys = Array.from({ length: 1_089 }, (_, index) =>
+      path.join(sessionsDir, `removed-${String(index).padStart(4, "0")}.jsonl`),
     );
     {
       await using owner = await acquireUsageLock(agentId);
-      expect(
-        await owner.writeRollup(
-          staleKeys.map((rollupId, index) => ({
-            ...createUsageCacheWrite(
-              rollupId,
-              index === 3
-                ? { padding: "x".repeat(1024 * 1024) }
-                : index === 1 || index === 2
-                  ? { padding: "x".repeat(600 * 1024) }
-                  : {},
-            ),
-            partitions: [{ date: "2026-09-01", valueJson: "{}", blob: new Uint8Array([1]) }],
-          })),
-        ),
-      ).toBe(true);
+      await owner.writeRollup(
+        staleKeys.map((rollupId, index) => ({
+          ...createUsageCacheWrite(rollupId, {
+            padding: "x".repeat(([0, 600, 600, 1024][index] ?? 0) * 1024),
+          }),
+          partitions: [{ date: "2026-09-01", valueJson: "{}", blob: new Uint8Array([1]) }],
+        })),
+      );
     }
     await fs.appendFile(sessionFile, usageLine("second"));
     await refresh(agentId, [sessionFile]);
-    expect(readSessionCostUsageRollupRows(agentId)).toHaveLength(98);
+    expect(readSessionCostUsageRollupRows(agentId)).toHaveLength(staleKeys.length + 1);
 
     const batches: Array<{ keys: string[]; bytes: number }> = [];
-    const observer = observeHostRequests((value, next) => {
-      if (isRecord(value) && value.kind === "prune-rows" && Array.isArray(value.input)) {
-        const keys: string[] = [];
-        let bytes = 0;
-        for (const row of value.input) {
-          if (!isRecord(row) || typeof row.key !== "string" || !(row.value instanceof Uint8Array)) {
-            throw new Error("Expected a transferred usage prune snapshot");
-          }
-          keys.push(row.key);
-          bytes += row.value.byteLength + 2 * row.key.length;
-        }
-        batches.push({ keys, bytes });
-      }
-      return next();
-    });
+    const committedKeys: string[] = [];
+    const failure = new Error("Prune batch interrupted");
+    const prepareLock = usageCacheSqlite.prepareSessionCostUsageRefreshLock;
+    const observer = vi
+      .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")
+      .mockImplementation((...args) => {
+        const lock = prepareLock(...args);
+        return {
+          ...lock,
+          pruneRows: async (rows, signal) => {
+            const keys = rows.map((row) => row.key);
+            const bytes = rows.reduce(
+              (sum, row) => sum + Buffer.byteLength(row.valueJson) + 2 * row.key.length,
+              0,
+            );
+            batches.push({ keys, bytes });
+            if (batches.length === 2) {
+              throw failure;
+            }
+            await lock.pruneRows(rows, signal);
+            committedKeys.push(...keys);
+          },
+        };
+      });
     try {
+      const outcome = await refresh(agentId).catch((error: unknown) => error);
+      expect(Math.max(...batches.map((batch) => batch.keys.length))).toBeLessThanOrEqual(1_024);
+      expect(outcome).toBe(failure);
+      expect(committedKeys.length).toBeGreaterThan(0);
+      expect(readSessionCostUsageRollupRows(agentId)).toHaveLength(
+        staleKeys.length + 1 - committedKeys.length,
+      );
+      await closeOpenClawAgentDatabasesAsync();
+      await closeStateDatabaseForTest();
       await refresh(agentId);
     } finally {
       observer.mockRestore();
     }
-    expect(batches.flatMap((batch) => batch.keys).toSorted()).toEqual(staleKeys.toSorted());
+    expect(committedKeys.toSorted()).toEqual(staleKeys.toSorted());
     expect(batches.some((batch) => batch.bytes > 1024 * 1024)).toBe(true);
     for (const batch of batches) {
-      expect(batch.keys.length).toBeLessThanOrEqual(64);
+      expect(batch.keys.length).toBeLessThanOrEqual(1_024);
       expect(batch.bytes <= 1024 * 1024 || batch.keys.length === 1).toBe(true);
     }
     expect(readSessionCostUsageRollupRows(agentId).map((row) => row.key)).toEqual([sessionFile]);

@@ -2567,9 +2567,11 @@ The host retains refresh locks, current write authority, and pricing context.
 Incognito usage reads committed memory actor facts and allocates no database
 worker; its namespace is never reopened as a database.
 Cancellation and database closure join native worker work, accepted host effects,
-and refresh-lock cleanup before releasing custody. Atomic pruning retains all
-obsolete-row comparison bytes on the host until its transaction settles; bounded
-SQL batches do not impose an aggregate memory limit. Cache formats, schemas,
+and refresh-lock cleanup before releasing custody. Pruning retains only the current
+bounded snapshot batch on the host until its transaction settles, releasing the
+ordinary writer between batches. Each obsolete row and its partitions remain
+atomic; interrupted cleanup rediscovers remaining rows on the next refresh.
+Cache formats, schemas,
 retention, and update behavior are unchanged.
 
 Shared-state database drainage also joins resources registered while an earlier
