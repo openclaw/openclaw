@@ -1,3 +1,7 @@
+import {
+  buildOutgoingVariantUrl,
+  parseManagedOutgoingArtifactId,
+} from "../../../../../src/gateway/managed-outgoing-artifact-id.ts";
 import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
@@ -6,6 +10,8 @@ import { pathDisplayName } from "../../../lib/path-display.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import { sessionWorkspaceFileKey } from "../../../lib/sessions/workspace.ts";
+import { showToast } from "../../../lib/toast.ts";
+import { isManagedOutgoingMediaSource } from "./chat-message-attachment-availability.ts";
 import { resolveSessionWorkspaceDiff } from "./chat-session-workspace-diff.ts";
 import { workspaceBrowserFilePath } from "./chat-session-workspace-file-content.ts";
 import { openWorkspaceItem } from "./chat-session-workspace-preview.ts";
@@ -16,6 +22,7 @@ import {
   getSessionWorkspace,
   isCurrentSessionWorkspace,
   loadSessionWorkspace,
+  loadSessionWorkspaceArtifacts,
   refreshSessionWorkspaceState,
   selectSessionWorkspacePreview,
   sessionWorkspaceForHost,
@@ -184,6 +191,65 @@ export function openSessionWorkspaceFile(
     messageEntryId: source?.messageEntryId ?? target.messageEntryId,
     relativeTo: document,
   });
+}
+
+/** Resolve a chat reference without moving the original attachment's history ownership. */
+export function openSessionWorkspaceManagedArtifact(state: SessionWorkspaceHost, href: string) {
+  if (!isManagedOutgoingMediaSource(href)) {
+    return false;
+  }
+  if (!state.connected || !state.client) {
+    showToast({ message: t("chat.detailPanel.attachmentOffline"), severity: "error" });
+    return true;
+  }
+  const pathname = new URL(href, window.location.origin).pathname;
+  const workspace = getSessionWorkspace(state);
+  const client = state.client;
+  void openWorkspaceItem(
+    state,
+    workspace,
+    `managed-reference:${pathname}`,
+    async (signal) => {
+      await loadSessionWorkspaceArtifacts(state);
+      if (
+        signal.aborted ||
+        !state.connected ||
+        state.client !== client ||
+        !isCurrentSessionWorkspace(state, workspace)
+      ) {
+        return null;
+      }
+      if (workspace.artifacts?.error) {
+        throw new Error(workspace.artifacts.error);
+      }
+      // The locator omits the media family. Current metadata supplies the exact ID;
+      // neither a filename nor a guessed image/media prefix can select saved bytes.
+      const artifact = workspace.artifacts?.loaded
+        ? workspace.artifacts.items.find((item) => {
+            const managed = parseManagedOutgoingArtifactId(item.id);
+            return (
+              managed &&
+              buildOutgoingVariantUrl(workspace.sessionKey, managed.attachmentId, "full") ===
+                pathname
+            );
+          })
+        : undefined;
+      return artifact
+        ? readWorkspaceContent(state, workspace, (runtime) =>
+            runtime.loadSessionWorkspaceArtifactContent(state, workspace, artifact.id, signal),
+          )
+        : null;
+    },
+    (result) => result.content,
+    t("chat.detailPanel.attachmentUnavailable"),
+    {
+      label: t("chat.workspaceFiles.artifacts"),
+      revalidate: true,
+      resolveLabel: (result) => result.artifact?.title,
+      resolveKey: (result) => `artifact:${result.artifact.id}`,
+    },
+  );
+  return true;
 }
 
 /** Deliver a mode only to the exact retained preview settled by this native open. */
@@ -489,6 +555,7 @@ export function createSessionWorkspaceProps(
             workspace.list?.artifacts?.find((artifact) => artifact.id === artifactId)?.title ||
             t("chat.workspaceFiles.artifacts"),
           resolveLabel: (result) => result.artifact?.title,
+          resolveKey: (result) => `artifact:${result.artifact.id}`,
         },
       );
     },
