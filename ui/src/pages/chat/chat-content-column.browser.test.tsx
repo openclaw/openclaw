@@ -133,10 +133,10 @@ async function assertColumn(
   expect(ownName).not.toBeNull();
   const boundary = edge(own);
   // A saved width widens agent content; the viewer's bubble keeps its default share.
-  const ownGroup = own.closest<HTMLElement>(".chat-group")!;
-  const ownStyle = getComputedStyle(ownGroup);
+  const ownRow = own.closest<HTMLElement>(".chat-group")!;
+  const ownStyle = getComputedStyle(ownRow);
   const ownColumn =
-    ownGroup.getBoundingClientRect().width -
+    ownRow.getBoundingClientRect().width -
     Number.parseFloat(ownStyle.paddingLeft) -
     Number.parseFloat(ownStyle.paddingRight);
   const ownCap =
