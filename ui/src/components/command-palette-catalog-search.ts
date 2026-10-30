@@ -142,6 +142,11 @@ function getCommandPaletteBaseItems(
   ];
 }
 
+/** Comparison copies only: a query and the stored label may differ in Unicode form alone. */
+function normalizePaletteMatchText(value: unknown): string {
+  return normalizeLowercaseStringOrEmpty(value).normalize("NFC");
+}
+
 export function filterCommandPaletteItems(params: {
   query: string;
   includeSlashCommands: boolean;
@@ -158,9 +163,9 @@ export function filterCommandPaletteItems(params: {
   if (!params.query) {
     return baseItems;
   }
-  const query = normalizeLowercaseStringOrEmpty(params.query);
+  const query = normalizePaletteMatchText(params.query);
   const matchRank = (item: CommandPaletteItem) => {
-    const label = normalizeLowercaseStringOrEmpty(item.label);
+    const label = normalizePaletteMatchText(item.label);
     if (label === query) {
       return 3;
     }
@@ -168,10 +173,9 @@ export function filterCommandPaletteItems(params: {
       return 2;
     }
     return label.includes(query) ||
-      normalizeLowercaseStringOrEmpty(item.description).includes(query) ||
-      normalizeLowercaseStringOrEmpty(item.searchText).includes(query) ||
-      (params.primaryModelSearch &&
-        normalizeLowercaseStringOrEmpty(item.primaryModel).includes(query))
+      normalizePaletteMatchText(item.description).includes(query) ||
+      normalizePaletteMatchText(item.searchText).includes(query) ||
+      (params.primaryModelSearch && normalizePaletteMatchText(item.primaryModel).includes(query))
       ? 1
       : 0;
   };

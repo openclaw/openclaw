@@ -35,3 +35,37 @@ it("exposes app cards and permission-filtered settings sections without RPCs", (
     search: "?section=transcripts",
   });
 });
+it("matches canonically equivalent catalog text in either Unicode form", () => {
+  const name = "Đặng Café";
+  const nfc = name.normalize("NFC");
+  const nfd = name.normalize("NFD");
+  const catalogItems: CommandPaletteItem[] = [
+    {
+      id: "plugin-nfd",
+      label: nfd,
+      icon: "plug",
+      category: "plugins",
+      action: "nav:plugins",
+    },
+    {
+      id: "skill-nfc",
+      label: "Skill",
+      icon: "zap",
+      category: "skills",
+      action: "nav:skills",
+      description: nfd,
+    },
+  ];
+  const idsFor = (query: string) =>
+    filterCommandPaletteItems({
+      query,
+      includeSlashCommands: false,
+      sessionItems: [],
+      catalogItems,
+      desktopAvailable: false,
+      custodianAvailable: false,
+    }).map((item) => item.id);
+  expect(idsFor(nfc)).toContain("plugin-nfd");
+  expect(idsFor(nfd)).toContain("plugin-nfd");
+  expect(idsFor(nfd)).toContain("skill-nfc");
+});
