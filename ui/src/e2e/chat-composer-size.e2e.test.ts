@@ -43,8 +43,19 @@ suite.define(() => {
       await editor.fill("A mobile follow-up");
       const send = composer.getByRole("button", { name: "Send message", exact: true });
       await send.waitFor({ state: "visible" });
-      const composerBox = await composer.boundingBox();
-      const sendBox = await send.boundingBox();
+      await using sendElement = await send.elementHandle();
+      // Responsive layout can move between protocol calls; read both boxes in one observation.
+      const [composerBox, sendBox] = await composer.evaluate(
+        (element, sendControl) =>
+          [element, sendControl].map((target) => {
+            if (!target || target.getClientRects().length === 0) {
+              return null;
+            }
+            const { x, y, width, height: boxHeight } = target.getBoundingClientRect();
+            return { x, y, width, height: boxHeight };
+          }),
+        sendElement,
+      );
       expect(composerBox).not.toBeNull();
       expect(sendBox).not.toBeNull();
       if (!composerBox || !sendBox) {
