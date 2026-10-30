@@ -230,7 +230,9 @@ main model can read the screenshot directly.
 - OpenClaw-managed local CDP readiness checks and DevTools WebSocket connections bypass the managed network proxy for the exact launched loopback endpoint, so `openclaw browser start` still works when an operator proxy blocks loopback egress.
 - To proxy the managed browser itself, pass explicit Chrome proxy flags through `browser.extraArgs`, such as `--proxy-server=...` or `--proxy-pac-url=...`. Strict SSRF mode blocks explicit browser proxy routing unless private-network browser access is intentionally enabled.
 - When `browser.ssrfPolicy` is absent, unrestricted same-host agents may open any loopback port in OpenClaw-owned local Chrome. Any explicit policy, including `{}`, disables this automatic exception. See [Local preview access](/tools/browser/security#local-preview-access).
-- `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` is off by default; enable only when private-network browser access is intentionally trusted.
+- Leave `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` unset (the default) to allow public hostname URLs while keeping private destinations blocked, apart from the local preview exception above.
+- Setting `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork: false` explicitly enables stricter checks: `http(s)` navigation requires an IP address in the URL unless the hostname is listed in `allowedHostnames`. Destination checks still apply.
+- Set `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork: true` only when private-network browser access is intentionally trusted.
 - `browser.ssrfPolicy.allowedHostnames` grants exact hosts while the rest of the private network remains blocked.
 - `browser.ssrfPolicy.allowRfc2544BenchmarkRange` and `browser.ssrfPolicy.allowIpv6UniqueLocalRange` narrowly allow trusted fake-IP proxy ranges.
 

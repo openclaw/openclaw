@@ -240,8 +240,9 @@ it.for(["inspection", "preparation"] as const)(
           state,
           async (admission, activate) => {
             const joining = createDeferredCore();
-            const wait = admission.waitForAgentPreparation.bind(admission);
-            vi.spyOn(admission, "waitForAgentPreparation").mockImplementation((...args) => {
+            const observer = admission.observation;
+            const wait = observer.waitForAgentPreparation.bind(observer);
+            vi.spyOn(observer, "waitForAgentPreparation").mockImplementation((...args) => {
               expect(getAgentDatabaseStartupAdmission()).toBeUndefined();
               const preparation = wait(...args);
               joining.resolve();
@@ -454,9 +455,10 @@ it.for([
         state,
         async (admission, activate) => {
           const joined = createDeferredCore();
-          const wait = admission.waitForAgentPreparation.bind(admission);
+          const observer = admission.observation;
+          const wait = observer.waitForAgentPreparation.bind(observer);
           let joinedPreparation = false;
-          vi.spyOn(admission, "waitForAgentPreparation").mockImplementation((...args) => {
+          vi.spyOn(observer, "waitForAgentPreparation").mockImplementation((...args) => {
             const preparation = wait(...args);
             joinedPreparation ||= preparation !== undefined;
             joined.resolve();

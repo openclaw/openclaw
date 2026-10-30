@@ -16,6 +16,8 @@ describe("filterBrowserEntries", () => {
     { name: "package-tools", path: "/workspace/package-tools" },
     { name: "my-packages", path: "/workspace/my-packages" },
     { name: ".packages", path: "/workspace/.packages", hidden: true },
+    { name: "Cafe\u0301-notes", path: "/workspace/Cafe\u0301-notes" },
+    { name: "Résumé", path: "/workspace/Résumé" },
   ] satisfies FsDirEntry[];
 
   const filteredEntries = (prefix: string) =>
@@ -28,6 +30,8 @@ describe("filterBrowserEntries", () => {
   it.each([
     ["PA", ["Packages", "package-tools", "old-packages", "my-packages"]],
     ["app", ["app", "App", "app-old"]],
+    ["CAFÉ", ["Cafe\u0301-notes"]],
+    ["Re\u0301sume\u0301", ["Résumé"]],
   ])("ranks spelled, exact, prefix, then substring matches for %s", (prefix, expectedNames) => {
     expect(filteredEntries(prefix).map((entry) => entry.name)).toEqual(expectedNames);
   });
@@ -36,16 +40,12 @@ describe("filterBrowserEntries", () => {
 describe("resolvePlaceBrowserView", () => {
   const entries = [{ name: "packages", path: "/workspace/packages" }];
   const listing = { path: "/workspace", home: "/home/user", entries } satisfies FsListDirResult;
-
-  it.each([["unmatched prefix", listing, "/workspace/zzz", false, [], "no-matches"]])(
-    "resolves %s",
-    (_name, currentListing, draft, loading, expectedEntries, empty) => {
-      expect(resolvePlaceBrowserView({ listing: currentListing, draft, loading })).toEqual({
-        entries: expectedEntries,
-        empty,
-      });
-    },
-  );
+  it("resolves an unmatched prefix", () => {
+    expect(resolvePlaceBrowserView({ listing, draft: "/workspace/zzz", loading: false })).toEqual({
+      entries: [],
+      empty: "no-matches",
+    });
+  });
 
   it("matches Windows directory spellings before filtering", () => {
     const windowsListing = { path: "C:\\Workspace\\", home: "C:\\", entries };

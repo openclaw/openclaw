@@ -62,6 +62,9 @@ function renderCard(input: SessionHovercardInput, container = document.createEle
         const [current, setCurrent] = createSignal(input);
         updateCards.set(container, (next) => setCurrent(next));
         return createComponent(SessionHovercard, {
+          get connected() {
+            return current().connected;
+          },
           get row() {
             return current().row;
           },
@@ -659,7 +662,15 @@ describe("session hovercard", () => {
           ...(mode === "active" ? { lastMessagePreview: "This must not appear." } : {}),
           ...(mode === "completed" ? { status: "done" } : {}),
         }),
-        progressCard: { ...card, steps: mode === "markdown-only" ? undefined : card.steps },
+        progressCard: {
+          ...card,
+          steps:
+            mode === "markdown-only"
+              ? undefined
+              : mode === "completed"
+                ? [{ step: "Verify", status: "completed" }]
+                : card.steps,
+        },
       });
 
       const plan = container.querySelector(".session-hovercard__plan-row");
@@ -702,6 +713,32 @@ describe("session hovercard", () => {
     expect(plan?.getAttribute("aria-label")).toBe("Verify, paused");
     expect(plan?.querySelector(".session-run-spinner")).toBeNull();
     expect(plan?.querySelector("polyline")).not.toBeNull();
+  });
+
+  it("keeps delegated activity in the plan without a separate runtime status line", () => {
+    const card = { ...progressCard(), updatedAt: 101 };
+    const session = row({
+      startedAt: 100,
+      endedAt: 110,
+      status: "done",
+      hasActiveRun: false,
+      hasActiveSubagentRun: true,
+    });
+    const container = renderCard({ row: session, progressCard: card, connected: true });
+    expect(container.querySelector(".session-progress-card__runtime")).toBeNull();
+    expect(
+      container.querySelector(".session-hovercard__plan-row")?.getAttribute("aria-label"),
+    ).toBe("Verify, in progress");
+    expect(container.querySelector(".session-run-spinner")).not.toBeNull();
+    expect(container.querySelector(".session-hovercard__notepad")?.textContent).toContain(
+      "Release is ready.",
+    );
+    renderCard({ row: session, progressCard: card, connected: false }, container);
+    expect(container.querySelector(".session-progress-card__runtime")).toBeNull();
+    expect(container.querySelector(".session-run-spinner")).toBeNull();
+    expect(
+      container.querySelector(".session-hovercard__plan-row")?.getAttribute("aria-label"),
+    ).toBe("Verify, paused");
   });
 
   it("pins a labeled markdown progress bar above the Task progress copy", () => {

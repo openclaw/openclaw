@@ -110,6 +110,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
     },
   );
   const projectsReady = createMemo(() => props.params.place.browser.projectsReady);
+  const projectCatalogError = createMemo(() => props.params.place.browser.projectCatalogError);
   const projects = createDeferred<readonly ProjectRecord[]>((previous) => {
     const source = projectSource();
     // A picker mounted during a shared refresh starts with the accepted rows.
@@ -178,10 +179,12 @@ export function ProjectPickerContent(props: ProjectChipProps) {
   const localProjects = createMemo(() => {
     // Retired catalogs clear immediately; a live refresh keeps local filtering responsive.
     const accepted = !props.nativeTerminal && projectsReady() ? projects() : [];
-    const query = view().query.toLowerCase();
+    const query = view().query.toLowerCase().normalize("NFC");
     // Match the visible name, not shared Git owners or parent checkout directories.
     return query
-      ? accepted.filter((project) => project.displayName.toLowerCase().includes(query))
+      ? accepted.filter((project) =>
+          project.displayName.toLowerCase().normalize("NFC").includes(query),
+        )
       : accepted;
   });
   const projectSearchRead = createMemo(() => props.params.place.browser.projectSearchRead);
@@ -347,6 +350,23 @@ export function ProjectPickerContent(props: ProjectChipProps) {
               })}
             />
           </label>
+          <Show when={projectCatalogError()}>
+            <div class="new-session-page__project-error" role="alert">
+              {formatUiError(projectCatalogError())}
+              <button
+                type="button"
+                class="btn btn--sm"
+                disabled={
+                  props.params.submitting ||
+                  props.params.pendingPlacement ||
+                  props.params.place.browser.projectsLoading
+                }
+                onClick={() => void props.params.place.browser.refreshProjects()}
+              >
+                {t("common.retry")}
+              </button>
+            </div>
+          </Show>
           <Loading on={projectsReady()}>
             <For each={localProjects()} keyed={(project) => project.id}>
               {(project) => {

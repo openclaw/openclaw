@@ -7,6 +7,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { HealthFinding } from "../../flows/health-checks.js";
 import {
+  DEFERRED_UPDATE_MODEL_RETIREMENT_WARNING,
   hasDeferredUpdateModelRetirement,
   recordUpdateModelRetirement,
 } from "../../infra/update-deferred-model-retirement.js";
@@ -406,7 +407,7 @@ export async function runDoctorRepairSequence(params: {
     modelRetirementOnly = onlyRetirementPending && modelRetirementRepairRan;
   } else if (packageSwapInProgress) {
     recordUpdateModelRetirement("deferred", env);
-    warningNotes.push("Model retirement deferred until configured plugin installation converges.");
+    warningNotes.push(DEFERRED_UPDATE_MODEL_RETIREMENT_WARNING);
   }
   const authProfilesRepaired =
     authFieldRepair.changes.length > 0 ||

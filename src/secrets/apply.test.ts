@@ -258,7 +258,7 @@ describe("secrets apply", () => {
   it("preflights and applies one-way scrub without plaintext backups", async () => {
     await fs.appendFile(
       fixture.envPath,
-      "GH_TOKEN=sk-openai-plaintext\nGITHUB_TOKEN=unmigrated-github-token\n", // pragma: allowlist secret
+      "GH_TOKEN=sk-openai-plaintext\nGITHUB_TOKEN=unmigrated-github-token\nNOTE=合法 😀 �\n", // pragma: allowlist secret
     );
     fixture.env.OPENAI_KEY_NEXT = fixture.env.OPENAI_API_KEY;
     const plan = createPlan({
@@ -311,7 +311,7 @@ describe("secrets apply", () => {
     expect((await readJsonFile(fixture.authJsonPath)).openai).toBeDefined();
 
     expect(await readText(fixture.envPath)).toBe(
-      "UNRELATED=value\nGITHUB_TOKEN=unmigrated-github-token\n",
+      "UNRELATED=value\nGITHUB_TOKEN=unmigrated-github-token\nNOTE=合法 😀 �\n",
     );
   });
 
@@ -578,6 +578,8 @@ describe("secrets apply", () => {
   });
 
   it("is idempotent on repeated write applies", async () => {
+    const envBefore = Buffer.from([0xff]);
+    await fs.writeFile(fixture.envPath, envBefore);
     const plan = scrubPlan();
 
     const first = await apply(plan);
@@ -592,6 +594,7 @@ describe("secrets apply", () => {
       config: stripVolatileConfigMeta(before.config),
     });
     expect(JSON.stringify(await readAuthStore(fixture))).toBe(storeBefore);
+    expect(await fs.readFile(fixture.envPath)).toEqual(envBefore);
   });
 
   it("rejects prototype-like plan target paths", async () => {
@@ -716,19 +719,43 @@ describe("secrets apply", () => {
     expect(nextConfig.plugins?.entries?.vault).toEqual({ enabled: true });
   });
 
-  it("scrubs config and state .env files when the config path is external", async () => {
-    const configDir = path.join(fixture.rootDir, "config");
-    const configPath = path.join(configDir, "openclaw.json");
-    const configEnvPath = path.join(configDir, ".env");
-    await fs.mkdir(configDir, { recursive: true });
-    await fs.copyFile(fixture.configPath, configPath);
-    await fs.copyFile(fixture.envPath, configEnvPath);
-    fixture.env.OPENCLAW_CONFIG_PATH = configPath;
+  it.each(["valid", "config", "config-env", "state-env"])(
+    "safely rewrites config and external env files (%s bytes)",
+    async (encoding) => {
+      const configDir = path.join(fixture.rootDir, "config");
+      const configPath = path.join(configDir, "openclaw.json");
+      const configEnvPath = path.join(configDir, ".env");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.copyFile(fixture.configPath, configPath);
+      await fs.copyFile(fixture.envPath, configEnvPath);
+      fixture.env.OPENCLAW_CONFIG_PATH = configPath;
+      if (encoding !== "valid") {
+        const file =
+          encoding === "config"
+            ? configPath
+            : encoding === "config-env"
+              ? configEnvPath
+              : fixture.envPath;
+        const bytes = await fs.readFile(file);
+        const marker = encoding === "config" ? "sk-openai-plaintext" : "UNRELATED=value";
+        const index = bytes.indexOf(marker);
+        expect(index).toBeGreaterThanOrEqual(0);
+        bytes[index + (encoding === "config" ? 0 : "UNRELATED=".length)] = 0xff;
+        await fs.writeFile(file, bytes);
+        const paths = [configPath, configEnvPath, fixture.envPath];
+        const before = await Promise.all(paths.map((pathname) => fs.readFile(pathname)));
+        await expect(apply(scrubPlan())).rejects.toThrow("valid UTF-8");
+        expect(await Promise.all(paths.map((pathname) => fs.readFile(pathname)))).toEqual(before);
+        return;
+      }
 
-    const applied = await apply(scrubPlan());
+      const applied = await apply(scrubPlan());
 
-    expect(applied.changedFiles).toEqual(expect.arrayContaining([configEnvPath, fixture.envPath]));
-    await expect(fs.readFile(configEnvPath, "utf8")).resolves.toBe("UNRELATED=value\n");
-    await expect(fs.readFile(fixture.envPath, "utf8")).resolves.toBe("UNRELATED=value\n");
-  });
+      expect(applied.changedFiles).toEqual(
+        expect.arrayContaining([configEnvPath, fixture.envPath]),
+      );
+      await expect(fs.readFile(configEnvPath, "utf8")).resolves.toBe("UNRELATED=value\n");
+      await expect(fs.readFile(fixture.envPath, "utf8")).resolves.toBe("UNRELATED=value\n");
+    },
+  );
 });

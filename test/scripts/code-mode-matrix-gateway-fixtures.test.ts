@@ -488,6 +488,15 @@ it.each([
       expect(result.executor).toBe(executor);
       const gateway = expectDefined(result.gateway, "producer Gateway evidence");
       expect(gateway.settings.executor).toBe(executor);
+      // Successful fixture effects cannot certify an uninstrumented process's model lifetime.
+      expect(gateway.modelAccounting).toMatchObject({
+        complete: false,
+        physicalHttpAttempts: null,
+        internalRetries: null,
+      });
+      expect(gateway.modelAccounting.issues).toContain(
+        "Gateway capture start or terminal receipt is missing.",
+      );
       if (autoTier) {
         expect(Object.values(gateway.behavior).every(Boolean)).toBe(true);
         expect(Object.values(gateway.interview.checks).every(Boolean)).toBe(true);

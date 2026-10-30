@@ -6,6 +6,8 @@ import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { PreparedRepositoryWorkspace } from "../state/session-repository-workspaces.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
+import type { createSessionRowChildActivity } from "./session-row-child-activity.js";
+import type { createSessionRowChildVisibility } from "./session-row-child-visibility.js";
 import * as records from "./session-row-projection-record.js";
 import type { SessionSharingTarget } from "./session-sharing-policy.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
@@ -73,6 +75,8 @@ export function toProjectedSessionSharingTarget(
 export type SessionRowSelectionPreparationOptions = {
   metadataOnly?: boolean;
   includeCatalog?: boolean;
+  requireCurrentCatalog?: boolean;
+  catalogSignal?: AbortSignal;
 };
 
 export type SessionRowPreparationOptions = {
@@ -89,6 +93,13 @@ export class SessionRowFactsPending extends Error {
 }
 
 export type SessionRowReadView = {
+  readChildVisibility: ReturnType<typeof createSessionRowChildVisibility>["read"];
+  readChildActivity(
+    record: records.MaterializedRow,
+    now: number,
+    excluded?: ReadonlySet<string>,
+    exclusionRevision?: object,
+  ): ReturnType<ReturnType<typeof createSessionRowChildActivity>["read"]>;
   describe(
     query: records.Lookup,
     captured?: records.Row,
@@ -198,6 +209,14 @@ export function readPreparedSessionRows<T>(
     }
   };
   const read: SessionRowReadView = {
+    readChildVisibility(...args) {
+      assertActive();
+      return owner.readChildVisibility(...args);
+    },
+    readChildActivity(...args) {
+      assertActive();
+      return owner.readChildActivity(...args);
+    },
     readSource(row) {
       assertActive();
       return owner.readSource(row);

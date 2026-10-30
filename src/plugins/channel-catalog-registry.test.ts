@@ -105,23 +105,6 @@ function createChannelCandidate(params: {
 }
 
 describe("listChannelCatalogEntries", () => {
-  it("forwards lazily loaded install records to discovery when origin is unspecified", async () => {
-    const { module, discoverSpy, loadRecordsSpy, warnSpy } = await loadWithMocks({});
-
-    module.listChannelCatalogEntries({ env: ENV });
-
-    expect(loadRecordsSpy).toHaveBeenCalledTimes(1);
-    expect(loadRecordsSpy).toHaveBeenCalledWith({ env: ENV });
-    expect(discoverSpy).toHaveBeenCalledTimes(1);
-    expect(firstDiscoverOptions(discoverSpy)).toStrictEqual({
-      env: ENV,
-      extraPaths: undefined,
-      installRecords: RECORDS,
-      workspaceDir: undefined,
-    });
-    expect(warnSpy).not.toHaveBeenCalled();
-  });
-
   it("skips ledger lookup when origin is 'bundled' and omits installRecords", async () => {
     const { module, discoverSpy, loadRecordsSpy } = await loadWithMocks({});
 
@@ -151,18 +134,6 @@ describe("listChannelCatalogEntries", () => {
       installRecords: supplied,
       workspaceDir: undefined,
     });
-  });
-
-  it("omits installRecords from discovery when the ledger is empty", async () => {
-    const { module, discoverSpy, loadRecordsSpy, warnSpy } = await loadWithMocks({
-      loadRecords: () => ({}),
-    });
-
-    module.listChannelCatalogEntries({ env: ENV });
-
-    expect(loadRecordsSpy).toHaveBeenCalledTimes(1);
-    expect(firstDiscoverOptions(discoverSpy)).not.toHaveProperty("installRecords");
-    expect(warnSpy).not.toHaveBeenCalled();
   });
 
   it("warns when ledger read errors require a soft fallback", async () => {

@@ -33,6 +33,10 @@ Completion follow-up turns retain the requester's authority, including
 session-scoped write access. Gateway admission still checks access to the selected
 requester session; a child completion does not grant global write access.
 
+Model fallback and other model-routing updates do not invalidate prepared
+completion or child follow-up authority. Changes to session identity, lifecycle,
+spawn lineage, tool policy, sandbox, or execution host still reject stale work.
+
 The requester turn's captured origin owns completion routing, including after
 `sessions_yield` and for child pause notices. A WebChat origin does not inherit a
 previous external destination from the session. Without a captured origin, the

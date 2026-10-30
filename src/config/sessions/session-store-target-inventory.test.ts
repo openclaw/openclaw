@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  createAgentDatabaseInspectionRefusal,
+  recordAgentDatabaseAdmissions,
+} from "../../state/agent-database-admission.js";
 import { prepareConfigRuntimeEnv } from "../config-env-vars.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -50,6 +54,37 @@ test("discovers canonical recovery stores without waiting for the shared ownersh
     expect(
       inventory.agents.flatMap(({ result }) => (result.available ? result.targets : [])),
     ).toEqual(expect.arrayContaining(targets));
+  }
+});
+
+test("configured discovery excludes refused stores while retaining healthy agents", () => {
+  cfg = { agents: { entries: { main: {}, helper: {} } } };
+  const refusedPath = path.join(root, "agents", "helper", "agent", "openclaw-agent.sqlite");
+  fs.mkdirSync(path.dirname(refusedPath), { recursive: true });
+  fs.writeFileSync(refusedPath, "unavailable database");
+  recordAgentDatabaseAdmissions(
+    [
+      createAgentDatabaseInspectionRefusal({
+        agentId: "helper",
+        paths: [refusedPath],
+        reason: "fixture inspection failed",
+      }),
+    ],
+    { env },
+  );
+  try {
+    const request = prepareSessionStoreTargetInventory(cfg, ["main", "helper"], env, "configured");
+    expect(request.candidates.some((candidate) => candidate.path === refusedPath)).toBe(false);
+    const inventory = readSessionStoreTargetInventory({
+      ...request,
+      registeredDatabases: { status: "deferred" },
+    });
+    expect(inventory.kind).toBe("session-target-inventory");
+    if (inventory.kind === "session-target-inventory") {
+      expect(inventory.agents.map(({ agentId }) => agentId)).toEqual(["main"]);
+    }
+  } finally {
+    recordAgentDatabaseAdmissions([], { env });
   }
 });
 

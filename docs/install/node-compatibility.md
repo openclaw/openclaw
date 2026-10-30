@@ -13,13 +13,13 @@ This reference covers supported Node.js lines, why the minimum versions exist, a
 | Line    | Status      | Minimum         | Notes                                                                                                              |
 | ------- | ----------- | --------------- | ------------------------------------------------------------------------------------------------------------------ |
 | Node 27 | Development | `>=27.0.0`      | Releases and well-formed HEAD, nightly, and other prerelease labels are accepted, subject to SQLite safety checks. |
-| Node 26 | Recommended | `>=26.12.1`     | Faster Gateway startup and lower memory use than Node 24.                                                          |
-| Node 24 | Supported   | `>=24.22.1 <25` | LTS line used by CI and the Linux installer.                                                                       |
+| Node 26 | Recommended | `>=26.1.0`      | Faster Gateway startup and lower memory use than Node 24.                                                          |
+| Node 24 | Supported   | `>=24.16.0 <25` | LTS line used by CI and the Linux installer.                                                                       |
 | Node 25 | Unsupported | —               | Excluded by the current TEXT decoder floor.                                                                        |
 | Node 23 | Unsupported | —               | Excluded earlier for incompatible `node:sqlite` behavior.                                                          |
 | Node 22 | Unsupported | —               | Unsupported since the 24.16.0/26.1.0 floor.                                                                        |
 
-The exact engines expression is `>=24.22.1 <25 || >=26.12.1`. It remains the documented support policy and the `package.json` engine range used by package managers.
+The exact engines expression is `>=24.16.0 <25 || >=26.1.0`. It remains the documented support policy and the `package.json` engine range used by package managers.
 
 For majors newer than the highest supported floor (currently Node 26), OpenClaw
 checks well-formed prerelease labels using their numeric core: `27.0.0-head`
@@ -34,13 +34,13 @@ The Bun opt-in runtime requires **Bun 1.4.4+** or the pinned OpenClaw fork; see 
 
 Startup, doctor, Gateway runtime selection, update preflight, and installer runtime validation check the actual `node:sqlite` binding: it must be present, load a WAL-safe SQLite library, and preserve embedded and trailing NULs through TEXT, BLOB, and JSON round trips. The check uses an in-memory database and caches the current process result; checks of another executable run the same check in that executable with a bounded timeout. A build within the supported version table is refused if the check fails.
 
-Startup and Gateway runtime selection also enforce the release floors above. Node 24.22.1 and 26.12.1 reject the public keys compromised in the October 2026 eMudhra incident, including when older roots are supplied explicitly. A passing SQLite capability check cannot establish TLS key rejection, so older vendor builds no longer bypass the numeric floor. Read-only diagnostics and the existing update recovery path remain available on eligible older runtimes. Node 22, 23 and 25 remain unsupported.
+Startup and Gateway runtime selection enforce the compatibility floors above. Node 24.22.1 and 26.12.1 are strongly recommended because they reject the public keys compromised in the October 2026 eMudhra incident, including when older roots are supplied explicitly. Compatible Node 24.16.0+ and 26.1.0+ releases below those security patch levels remain accepted when their SQLite checks pass. `openclaw update` and its candidate Doctor print a prominent security warning rather than refusing solely for this recommendation. Plain `openclaw security audit` reports `runtime.node_security_patch` for the Node running the audit; it does not infer the Node used by a different Gateway service. Bun is checked under its own policy. Node 22, 23 and 25 remain unsupported.
 
 Installers retain the numeric Node requirement and add the check as a second gate. Package and Git update preflight also require the selected target's `engines.node` range numerically, including any fallback runtime. A passing check cannot relax another package's requirements: an older release may still enforce its version table at startup.
 
 Update recovery recommends the lowest standard release satisfying both the
 candidate's engine range and this updater's supported range above. For example,
-an older candidate requiring `>=22.19.0` still needs a recommendation of 24.22.1
+an older candidate requiring `>=22.19.0` still needs a recommendation of 24.16.0
 so the updater can run. If the ranges have no common supported release, the
 message identifies both ranges and asks you to select a compatible target.
 After selecting the runtime, continue through the retained absolute launcher so
@@ -97,7 +97,7 @@ Rows identify the first effective release, including a beta when applicable. Rec
 
 | Release                              | Node requirement                                 | What changed and why                                                                                                                                                                                                                                             |
 | ------------------------------------ | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Unreleased (main)                    | Node floors unchanged                            | Raises the independent stock Bun floor to 1.4.4; see Bun compatibility for remaining session/QUIC limits. The OpenClaw fork pin is unchanged.                                                                                                                    |
+| Unreleased (main)                    | `>=24.16.0 <25 \|\| >=26.1.0`                    | Restores the pre-security compatibility floors. Node 24.22.1/26.12.1 remain strongly recommended; update and security audit warn instead of refusing compatible older Node. SQLite safety checks and Bun 1.4.4 remain unchanged.                                 |
 | v2026.10.6 and v2026.9.34            | `>=24.22.1 <25 \|\| >=26.12.1`                   | Requires the eMudhra compromised-key rejection releases, including for builds whose SQLite capability check passes. Preserves diagnostics/update recovery, SQLite safety checks, and well-formed future-major development labels. Node 22/23/25 remain excluded. |
 | v2026.9.3                            | `>=24.16.0 <25 \|\| >=26.1.0`                    | Raises the Node 24 floor and drops Node 22 and 25 to prevent embedded-NUL TEXT truncation; Node 23 remains excluded. Official Node-based support for macOS 11–13.4 and Linux ARMv7 provisioning ends. #140672                                                    |
 | v2026.8.2                            | `>=22.22.3 <23 \|\| >=24.15.0 <25 \|\| >=25.9.0` | Preserves supported RPM-owned Node packages with unsafe system SQLite and provisions a separate user-space runtime. The numeric range and loaded-library safety requirement stay unchanged. #134166                                                              |

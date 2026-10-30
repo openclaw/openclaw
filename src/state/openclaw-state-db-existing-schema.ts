@@ -6,6 +6,7 @@ import {
 } from "../infra/sqlite-schema-contract.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
+import type { SqliteSchemaErrorContext } from "../infra/sqlite-user-version.js";
 import {
   getStateRuntimeSchemaAdmission,
   getStateSchemaVersionAdmission,
@@ -32,6 +33,7 @@ import type { DB } from "./openclaw-state-db.generated.js";
 function assertExistingOpenClawStateRuntimeMetadata(
   database: DatabaseSync,
   pathname: string,
+  context: SqliteSchemaErrorContext,
 ): number {
   if (getStateRuntimeSchemaAdmission(database)) {
     const version = getStateSchemaVersionAdmission(database)?.userVersion;
@@ -39,7 +41,13 @@ function assertExistingOpenClawStateRuntimeMetadata(
       return version;
     }
   }
-  const version = assertSupportedStateSchemaVersion(database, pathname);
+  const version = assertSupportedStateSchemaVersion(
+    database,
+    pathname,
+    undefined,
+    undefined,
+    context,
+  );
   if (readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
     throw new Error(
       `Existing shared-state database ${pathname} requires schema migration by its owning installation; run openclaw doctor --fix there before using it.`,
@@ -77,6 +85,7 @@ export function assertExistingOpenClawStateRuntimeSchema(
   pathname: string,
   integrity?: OpenClawStateIntegrityAdmission,
   integrityPolicy?: OpenClawStateIntegrityPolicy,
+  context: SqliteSchemaErrorContext = "runtime",
 ): void {
   const admitted = getStateRuntimeSchemaAdmission(database)
     ? getAdmittedSqliteSchemaFacts(database)
@@ -96,7 +105,7 @@ export function assertExistingOpenClawStateRuntimeSchema(
   runSqliteReadSnapshotSync(
     database,
     () => {
-      const userVersion = assertExistingOpenClawStateRuntimeMetadata(database, pathname);
+      const userVersion = assertExistingOpenClawStateRuntimeMetadata(database, pathname, context);
       const currentCookie = readSqliteSchemaCookie(database);
       if (typeof currentCookie !== "number") {
         throw new Error(

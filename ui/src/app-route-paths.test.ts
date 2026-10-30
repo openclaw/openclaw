@@ -9,14 +9,14 @@ import {
   agentRouteFromPath,
   APP_ROUTE_IDS,
   APP_ROUTE_OFFLINE_PREFIXES,
-  clawCatalogPackageNameFromPath,
+  templateCatalogPackageNameFromPath,
   CONTROL_UI_DOCUMENT_ROUTE_PATHS,
   dynamicRouteFromPath,
   inferBasePathFromPathname,
   memoryTabFromPath,
   pathForMemoryTab,
   pathForAgentPanel,
-  pathForClawCatalogEntry,
+  pathForTemplateCatalogEntry,
   pathForPluginSettings,
   pathForPluginCatalogEntry,
   pluginCatalogIdFromPath,
@@ -304,9 +304,9 @@ describe("Route path contracts", () => {
     [pluginCatalogIdFromPath, "/plugins/openclaw/..", ""],
     [pluginSettingsIdFromPath, "/settings/plugins/discover", ""],
     [pluginSettingsIdFromPath, "/settings/plugins/calendar/extra", ""],
-    [clawCatalogPackageNameFromPath, "/claws/@openclaw/workflow-operator/extra", ""],
-    [clawCatalogPackageNameFromPath, "/claws/packages/@maker/travel-planner", ""],
-    [clawCatalogPackageNameFromPath, "/claws/packages/%ZZ", ""],
+    [templateCatalogPackageNameFromPath, "/templates/@openclaw/workflow-operator/extra", ""],
+    [templateCatalogPackageNameFromPath, "/templates/packages/@maker/travel-planner", ""],
+    [templateCatalogPackageNameFromPath, "/templates/packages/%ZZ", ""],
     [routeIdFromPath, "/agents", ""],
     [terminalSessionIdFromPath, "/terminal/%ZZ", ""],
     [routeIdFromPath, "/terminal/%ZZ", ""],
@@ -391,20 +391,20 @@ describe("Route path contracts", () => {
   it.each(["@openclaw/workflow-operator", "@community/travel-planner", "personal-claw"])(
     "round trips the public package identity %s",
     (packageName) => {
-      const pathname = pathForClawCatalogEntry(packageName, "/ui");
-      expect(pathname).toBe(`/ui/claws/packages/${encodeURIComponent(packageName)}`);
-      expect(clawCatalogPackageNameFromPath(pathname, "/ui")).toBe(packageName);
-      expect(routeIdFromPath(pathname, "/ui")).toBe("claws");
+      const pathname = pathForTemplateCatalogEntry(packageName, "/ui");
+      expect(pathname).toBe(`/ui/templates/packages/${encodeURIComponent(packageName)}`);
+      expect(templateCatalogPackageNameFromPath(pathname, "/ui")).toBe(packageName);
+      expect(routeIdFromPath(pathname, "/ui")).toBe("templates");
       expect(dynamicRouteFromPath(pathname, "/ui")).toEqual([
-        "claws",
-        "__openclawClawsPath",
+        "templates",
+        "__openclawTemplatesPath",
         pathname,
       ]);
     },
   );
 
   it("preserves existing official detail links", () => {
-    expect(clawCatalogPackageNameFromPath("/claws/workflow-operator")).toBe(
+    expect(templateCatalogPackageNameFromPath("/templates/workflow-operator")).toBe(
       "@openclaw/workflow-operator",
     );
   });
@@ -412,9 +412,13 @@ describe("Route path contracts", () => {
   it.each(["@maker/../private", "@Maker/claw", "../private", "@maker/claw/extra"])(
     "rejects invalid package identity %s",
     (packageName) => {
-      expect(() => pathForClawCatalogEntry(packageName)).toThrow("Invalid Claw package name");
+      expect(() => pathForTemplateCatalogEntry(packageName)).toThrow(
+        "Invalid Template package name",
+      );
       expect(
-        clawCatalogPackageNameFromPath(`/claws/packages/${encodeURIComponent(packageName)}`),
+        templateCatalogPackageNameFromPath(
+          `/templates/packages/${encodeURIComponent(packageName)}`,
+        ),
       ).toBeNull();
     },
   );

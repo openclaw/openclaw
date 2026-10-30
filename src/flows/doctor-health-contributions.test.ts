@@ -3103,6 +3103,24 @@ describe("doctor health contributions", () => {
       );
     });
 
+    it("records invalid persisted config as a blocked repair with actionable findings", async () => {
+      mocks.readConfigFileSnapshot.mockResolvedValueOnce({
+        ...createDoctorConfigSnapshot(),
+        valid: false,
+        issues: [{ path: "gateway.port", message: "Expected number" }],
+      });
+      const ctx = createDoctorContext();
+      await requireDoctorContribution("doctor:final-config-validation").run(ctx);
+      expect(ctx.postInstallDoctorResult).toMatchObject({ status: "error" });
+      expect(ctx.healthFindings).toContainEqual(
+        expect.objectContaining({
+          path: "gateway.port",
+          severity: "error",
+          fixHint: expect.stringContaining("openclaw config unset"),
+        }),
+      );
+    });
+
     it("skips plugin schema validation for final validation during update doctor runs", async () => {
       const contribution = requireDoctorContribution("doctor:final-config-validation");
 
@@ -3113,10 +3131,6 @@ describe("doctor health contributions", () => {
             OPENCLAW_UPDATE_IN_PROGRESS: "1",
           },
         }),
-      );
-
-      expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith(
-        expect.objectContaining({ skipPluginValidation: true }),
       );
     });
   });

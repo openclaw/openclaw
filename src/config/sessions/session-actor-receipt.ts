@@ -22,17 +22,17 @@ export type SessionActorCommittedWireOutcome<Value> = Extract<
 };
 
 /** The command retains this exact preimage until native settlement completes. */
-export function projectSessionActorCommittedOutcome<Value>(
+export function projectSessionActorCommittedOutcome<
+  Value extends SessionActorPhaseResults[SessionActorPhase],
+>(
   outcome: Extract<SessionActorOutcome<Value>, { kind: "committed" }>,
   reference: SessionActorHotState | undefined,
 ): SessionActorCommittedWireOutcome<Value> {
-  const { receipt } = outcome;
+  const { receipt, value } = outcome;
   // Turn/initialization results can also expose the entry; preserve their graph aliases.
-  const append =
-    receipt.phase === "appendTranscriptEvent" ||
-    (receipt.phase === "appendToolResult" && receipt.transcript.append !== undefined);
   if (
-    (!append && receipt.phase !== "patch") ||
+    (value &&
+      (("kind" in value && value.kind === "session-turn") || ("turn" in value && value.turn))) ||
     receipt.transcript.append?.initialEntry ||
     !reference ||
     (receipt.postimage.entry !== reference.entry && (!receipt.postimage.entry || !reference.entry))
@@ -45,8 +45,8 @@ export function projectSessionActorCommittedOutcome<Value>(
     entry && base && entry !== base
       ? {
           values: Object.entries(entry).filter(
-            ([key, value]) =>
-              !Object.hasOwn(base, key) || !isDeepStrictEqual(value, Reflect.get(base, key)),
+            ([key, field]) =>
+              !Object.hasOwn(base, key) || !isDeepStrictEqual(field, Reflect.get(base, key)),
           ),
           removed: Object.keys(base).filter((key) => !Object.hasOwn(entry, key)),
         }

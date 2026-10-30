@@ -18,6 +18,8 @@ With Claude CLI, a successful `sessions_yield` closes the current subprocess aft
 its tool result is consumed and suppresses later reply text. The next child-completion
 turn resumes the same saved Claude session in a new subprocess. This avoids recording
 the yield as a user interruption; it adds process startup time after a yield.
+An intentional yield is not a failed completion and does not trigger model fallback,
+even when it has no final answer. Genuine CLI failures remain eligible for fallback.
 
 A CLI backend can be an agent's primary runtime or a fallback. Choosing **Claude CLI** during onboarding keeps `anthropic/*` model refs and runs them through Claude Code. For ACP session controls, background tasks, thread/conversation binding, and persistent external coding sessions, use [ACP Agents](/tools/acp-agents) instead. CLI backends are not ACP.
 
@@ -169,9 +171,19 @@ tool contracts.
 
 ### Keeping Claude Code orchestration tools on managed turns
 
-Managed turns expose no Claude-native tools by default. Operators who want
-Claude Code's native subagents or workflows can opt in per agent, or for every
-agent, through the Anthropic plugin config:
+Managed turns keep Claude's read-only `ToolSearch` available by default. OpenClaw
+passes only the authorized MCP catalog, and Claude loads full tool definitions
+when it discovers them instead of placing every schema in the initial prompt.
+`tools.toolSearch: false` (or `{ enabled: false }`) keeps definitions upfront.
+On this native route the setting controls deferral; OpenClaw's search modes and
+catalog selectors apply to the embedded Tool Search surface, not Claude's search.
+
+Discovery grants no tool execution authority. Discovered calls still pass through
+OpenClaw's MCP policy and approvals. Tool-free turns do not receive `ToolSearch`.
+Reading a schema does not require permission to execute a shell command.
+
+Operators who want Claude Code's native subagents or workflows can opt in per
+agent, or for every agent, through the Anthropic plugin config:
 
 ```json5
 {
@@ -190,7 +202,7 @@ agent, through the Anthropic plugin config:
 }
 ```
 
-Only `Agent` and `Workflow` are accepted: they add orchestration without
+Only `Agent` and `Workflow` are accepted in this opt-in: they add orchestration without
 granting file, shell, or network authority, so descendants act through the same
 policy-filtered OpenClaw tools as the parent. File and shell tools stay with
 OpenClaw. `Skill` is not offered because managed turns load no Claude skills.
@@ -206,7 +218,8 @@ a project's `.claude/agents/` are not loaded.
   commands, Chrome, and Claude-only MCP servers remain excluded, and scheduled
   wake-ups, cron creation, background shell commands, and monitors stay blocked.
 - Restricted senders, delegated execution, turns with an explicit tool cap, and
-  `tools.fs.workspaceOnly` still receive no native tools. A capped turn in an
+  `tools.fs.workspaceOnly` still receive no native execution tools. Read-only
+  discovery can remain available for their authorized MCP tools. A capped turn in an
   opted-in session therefore launches with different tool definitions.
 - Each native call still passes `before_tool_call` and exec policy: ask
   `on-miss` or `always` routes it through approval, and exec security `deny`,
@@ -755,6 +768,11 @@ CLI backends do not receive OpenClaw tool calls directly, but a backend can opt 
 - `claude-cli`: generated strict MCP config file.
 - `google-gemini-cli`: generated Gemini system settings file.
 
+If Claude Code reports the `openclaw` MCP server as not connected during startup,
+OpenClaw fails the current CLI turn and retires that process. A later turn starts
+a fresh process instead of reusing one without the Gateway tools. Failed optional
+MCP servers do not trigger this check.
+
 When bundle MCP is enabled, OpenClaw:
 
 - spawns a loopback HTTP MCP server that exposes Gateway tools to the CLI process, authenticated with a per-run context grant (`OPENCLAW_MCP_TOKEN`) active only for the current execution attempt
@@ -853,7 +871,13 @@ Backends without an exact translation still refuse to run.
 
 If no MCP servers are enabled, OpenClaw still injects a strict config when a backend opts into bundle MCP, so background runs stay isolated.
 
-Session-scoped bundled MCP runtimes are cached for reuse within a session, then reaped after 10 minutes of idle time. One-shot embedded runs such as auth checks, slug generation, and active-memory recall request cleanup at run end. Stdio children and Streamable HTTP or SSE streams therefore do not outlive the run.
+Session-scoped bundled MCP runtimes stay alive between turns. Idle TTL eviction is
+opt-in: `mcp.sessionIdleTtlMs` unset or `0` keeps the session lifetime unless
+capacity eviction or explicit cleanup retires the runtime. A positive value enables
+idle TTL eviction. Detached one-shot runs without a surviving runtime session
+retire their MCP runtimes at run end; a retained transcript alone does not extend
+that lifetime. See [MCP configuration](/gateway/config-extensions#mcp) for cleanup
+triggers, capacity limits, and idle-sweep behavior.
 
 A fresh CLI session must wait for its predecessor's cleanup. If cleanup fails or
 exceeds its deadline, OpenClaw refuses replacement, including from a later run.

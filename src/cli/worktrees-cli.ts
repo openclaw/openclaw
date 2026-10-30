@@ -56,10 +56,20 @@ async function readExactStateRequest(filename: string | undefined) {
   if (!filename) {
     return undefined;
   }
-  const { readFile } = await import("node:fs/promises");
+  const { readRegularFile } = await import("../infra/fs-safe.js");
   const { exactStateRetirementSchema } =
     await import("../agents/worktrees/snapshot-exact-state-contract.js");
-  return exactStateRetirementSchema.parse(JSON.parse(await readFile(filename, "utf8")));
+  let buffer: Buffer;
+  try {
+    // Follow selected symlinks while refusing special files before owner admission can hang.
+    ({ buffer } = await readRegularFile({ filePath: realpathSync(filename) }));
+  } catch (cause) {
+    throw new Error(
+      `Cannot read exact-state request ${filename}. Choose a readable regular JSON file and retry.`,
+      { cause },
+    );
+  }
+  return exactStateRetirementSchema.parse(JSON.parse(buffer.toString("utf8")));
 }
 
 function printRecord(record: ManagedWorktreeRecord, json: boolean): void {

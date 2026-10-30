@@ -568,7 +568,7 @@ describe("Slack relay proxy environment", () => {
         }
       });
       try {
-        // The second disconnect is the backoff retry after the first 407.
+        // The first 407 and its backoff retry share one outage.
         await secondDisconnect.promise;
         expect(fixture.connects).toEqual([
           { target: fixture.target, authorizationPresent: false, proxyAuthorization: "invalid" },
@@ -580,6 +580,7 @@ describe("Slack relay proxy environment", () => {
             lastError: expect.stringContaining("HTTP/1.1 407 Proxy Authentication Required"),
           });
         }
+        expect(disconnects[1]?.lastDisconnect).toEqual(disconnects[0]?.lastDisconnect);
         expect(fixture.relayConnections()).toBe(0);
         expect(fixture.upgrades).toEqual([]);
         expect(monitor.acceptRelayEvent).not.toHaveBeenCalled();

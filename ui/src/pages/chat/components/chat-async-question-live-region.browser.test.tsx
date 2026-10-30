@@ -55,7 +55,7 @@ const twoQuestions: AsyncQuestions = {
 };
 
 function liveRegions(): HTMLElement[] {
-  return Array.from(container.querySelectorAll<HTMLElement>('[aria-live="polite"]'));
+  return Array.from(container.querySelectorAll<HTMLElement>('[role="status"][aria-live="polite"]'));
 }
 
 function draw(questions: AsyncQuestions, overrides: Partial<AsyncQuestionPresentation> = {}) {

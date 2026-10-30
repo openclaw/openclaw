@@ -1,3 +1,4 @@
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import {
@@ -110,7 +111,7 @@ function warnUnavailableCleanupOwners(
   );
   if (excluded.length > 0) {
     runtime.error(
-      `Warning: native session resources were not cleaned for unavailable harness owners: ${excluded
+      terminalText`Warning: native session resources were not cleaned for unavailable harness owners: ${excluded
         .map((plugin) => plugin.id)
         .toSorted()
         .join(", ")}. ` +
@@ -230,5 +231,9 @@ export async function runLocalSessionsCleanup(
 
 function cleanupOwnerRefusal(owner: string): ExpectedCliError {
   const message = `Cannot run local sessions cleanup: ${owner} owns this state; run Gateway-delegated cleanup without --store, or stop the Gateway and other owners first.`;
-  return new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
+  return new ExpectedCliError({
+    message,
+    humanOutput: terminalText`${message}`,
+    machineOutput: message,
+  });
 }

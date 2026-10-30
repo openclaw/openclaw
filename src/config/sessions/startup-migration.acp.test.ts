@@ -336,7 +336,7 @@ it.each(["running", "queued", "duplicate"] as const)(
         expect(persisted).toBe(raw);
       } else {
         expect(JSON.parse(String(persisted))).toMatchObject({
-          status: "interrupted",
+          status: "killed",
           abortedLastRun: true,
           acp: acpMeta("main"),
         });

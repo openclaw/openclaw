@@ -525,19 +525,18 @@ it.each([{ maxChars: 32 }, { maxChars: 8_000, toolResultMaxChars: 32 }])(
 );
 
 it("retains complete structured tool previews and tool arguments under a smaller text cap", () => {
-  const payload = JSON.stringify({
-    kind: "canvas",
-    view: { id: "preview", title: "x".repeat(3_000) },
-  });
+  const payload = JSON.stringify({ view: { title: "x".repeat(3_000) } });
   const call = { type: "toolCall", id: "structured", name: "exec", arguments: { input: payload } };
-  const result = { type: "toolResult", toolCallId: "structured", content: [text(payload)] };
+  const readText = vi.fn(() => payload);
+  const output = Object.defineProperty(text(payload), "text", { get: readText });
+  const result = { type: "toolResult", toolCallId: "structured", content: [output] };
   const messages = [
     { role: "toolResult", content: result.content },
     { role: "assistant", content: [call, result] },
   ];
-  expect(sanitizeChatHistoryMessages(messages, 8_000, { toolResultMaxChars: 2_000 })).toEqual(
-    messages,
-  );
+  const projected = sanitizeChatHistoryMessages(messages, 8_000, { toolResultMaxChars: 2_000 });
+  expect(readText).toHaveBeenCalledTimes(2);
+  expect(projected).toEqual(messages);
 });
 
 const user = userRow("hello", { seq: 1 });
@@ -560,6 +559,75 @@ const terminal = (runId = "run-a") => ({
 });
 const projectedIds = (messages: unknown[]) =>
   projectChatDisplayMessages(messages).map((message) => message["__openclaw"]);
+
+it.each(["length", "stop"])("hides empty %s attempts when no recovery is pending", (stopReason) => {
+  const empty = assistant([text("")], { stopReason, __openclaw: { runId: "run-empty" } });
+  const thinking = { ...empty, content: [text(""), { type: "thinking", thinking: "" }] };
+  const toolMessage = assistant([tool], { stopReason });
+  expect(projectStable([user, empty, thinking, toolMessage, answer])).toEqual([
+    user,
+    toolMessage,
+    answer,
+  ]);
+  expect(projectStable([empty], { assistantErrorPending: true })).toEqual([empty]);
+});
+
+it.each(["length", "stop"])("retains keyed commentary from a %s attempt", (stopReason) => {
+  const commentary = assistant([phasedText("Running it now.", "commentary")], { stopReason });
+  const options = { includeCommentaryFallbacks: true };
+  const projected = projectStable([user, commentary, terminal()], options);
+  expect(projected).toHaveLength(3);
+  expect(projected[1]).toMatchObject({
+    content: [text("Running it now.")],
+    openclawStreamFallback: { source: "segment", itemId: "commentary" },
+  });
+  expect(readRunFailureNotice(projected[2])).toEqual({
+    runId: "run-a",
+    summary: "Recovery exhausted.",
+  });
+  expect(projectStable([commentary])).toEqual([]);
+  expect(projectStable([{ ...commentary, display: false }], options)).toEqual([]);
+  expect(projectChatDisplayMessage({ ...commentary, display: false }, options)).toBeUndefined();
+  expect(
+    projectStable([assistant([phasedText("", "commentary")], { stopReason })], options),
+  ).toEqual([]);
+});
+
+it.each([
+  ["length", undefined],
+  ["length", false],
+  ["length", true],
+  ["stop", undefined],
+  ["stop", false],
+  ["stop", true],
+] as const)("honors source silence before %s commentary (display=%s)", (stopReason, display) => {
+  const progress = "Running it now.";
+  const final = phasedText("NO_REPLY", "final_answer");
+  const source = assistant([phasedText(progress, "commentary"), final], {
+    stopReason,
+    ...(display === undefined ? {} : { display }),
+  });
+  const expected =
+    display === true
+      ? [
+          {
+            role: "assistant",
+            content: [text(progress)],
+            openclawStreamFallback: {
+              source: "segment",
+              itemId: "commentary",
+              replacementText: progress,
+            },
+          },
+          { ...source, content: [final] },
+        ]
+      : [];
+  for (const assistantErrorPending of [false, true]) {
+    expect(
+      projectStable([source], { includeCommentaryFallbacks: true, assistantErrorPending }),
+    ).toEqual(expected);
+  }
+});
 
 const legacyGuidance = "The provider stopped this request as a safety precaution (misalignment).";
 it.each([

@@ -164,7 +164,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Verify release source
@@ -219,6 +219,32 @@ jobs:
           watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
           test -n "$watch_toolchain"
           rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
+
+      - name: Identify Watch RTC release cache inputs
+        id: watch-rtc-inputs
+        run: |
+          echo "xcode=$(xcodebuild -version | shasum -a 256 | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "OPENCLAW_WATCH_RTC_CACHE_DIR=$RUNNER_TEMP/openclaw-watch-rtc-release-libraries" >> "$GITHUB_ENV"
+
+      - name: Restore Watch RTC release libraries
+        id: watch-rtc-cache
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: &watch_rtc_release_cache_path ${{ runner.temp }}/openclaw-watch-rtc-release-libraries
+          key: watch-rtc-release-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.watch-rtc-inputs.outputs.xcode }}-${{ hashFiles('apps/shared/OpenClawWatchRTC/Cargo.lock', 'apps/shared/OpenClawWatchRTC/Cargo.toml', 'apps/shared/OpenClawWatchRTC/rust-toolchain.toml', 'apps/shared/OpenClawWatchRTC/build.sh', 'apps/shared/OpenClawWatchRTC/src/**', 'apps/ios/project.yml') }}
+
+      # Release sources use a different project path from ordinary CI. Keep the
+      # default DerivedData package directory in its own cache namespace.
+      - name: Restore iOS release source packages
+        id: ios-packages-cache
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: &ios_release_packages_cache_path ~/Library/Developer/Xcode/DerivedData/OpenClaw-*/SourcePackages
+          key: ios-release-packages-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.watch-rtc-inputs.outputs.xcode }}-${{ hashFiles('apps/ios/**/Package.resolved', 'apps/ios/project.yml', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}
 
       - name: Create apps-signing read token
         id: apps-signing-token
@@ -278,6 +304,24 @@ jobs:
             pnpm ios:release:upload -- \
             --destination "$IOS_RELEASE_DESTINATION" \
             --recovery-dir "$RUNNER_TEMP/ios-release-recovery"
+
+      - name: Save Watch RTC release libraries
+        if: steps.watch-rtc-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *watch_rtc_release_cache_path
+          key: ${{ steps.watch-rtc-cache.outputs.cache-primary-key }}
+
+      - name: Save iOS release source packages
+        if: steps.ios-packages-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *ios_release_packages_cache_path
+          key: ${{ steps.ios-packages-cache.outputs.cache-primary-key }}
 
       - name: Retain release plan and notes
         if: always() && steps.release.outcome != 'skipped'

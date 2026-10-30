@@ -75,18 +75,20 @@ export async function readLocalWorkspaceRuntimes(
   ];
 }
 
-/** Inspect existing allocation custody; image reads never provision a runtime. */
-export async function prepareLocalWorkspaceImageRead(params: {
+/** Inspect existing allocation custody; file reads never provision a runtime. */
+export async function prepareLocalWorkspaceFileRead(params: {
   workspaceDir: string;
+  /** Read-only /agent backing can differ from the allocation's private workspace. */
+  runtimeWorkspaceDir?: string;
   containerRoot: string;
   targets: readonly string[];
   assertCurrent: () => void;
 }) {
-  // Stream children are writers to quiesce, not session image namespace authorities.
+  // Stream children are writers to quiesce, not session file namespace authorities.
   // A retained child cannot replace the registered parent after its runtime retires.
-  const runtimes = (await readLocalWorkspaceRuntimes(params.workspaceDir)).filter(
-    (runtime) => runtime.kind !== "persistent",
-  );
+  const runtimes = (
+    await readLocalWorkspaceRuntimes(params.runtimeWorkspaceDir ?? params.workspaceDir)
+  ).filter((runtime) => runtime.kind !== "persistent");
   const assertCurrent = () => {
     params.assertCurrent();
     for (const runtime of runtimes) {
@@ -99,7 +101,7 @@ export async function prepareLocalWorkspaceImageRead(params: {
   };
   assertCurrent();
   if (!runtimes.length) {
-    throw new Error("Sandbox image backing is unavailable");
+    throw new Error("Sandbox file backing is unavailable");
   }
   const { sandboxContainerShowsWorkspacePaths } = await import("./mount-plan.js");
   for (const runtime of runtimes) {
@@ -114,7 +116,7 @@ export async function prepareLocalWorkspaceImageRead(params: {
         assertCurrent,
       }))
     ) {
-      throw new Error("Sandbox image backing is unavailable");
+      throw new Error("Sandbox file backing is unavailable");
     }
   }
   assertCurrent();
@@ -209,6 +211,10 @@ export async function quiesceLocalWorkspace(params: {
   const releases: Array<() => Promise<void>> = [];
   const retirements: Array<() => Promise<void>> = [];
   for (const { runtime, bridges } of selected) {
+    // Stopped custody proves removal of this exact child, but still blocks retirement.
+    if (runtime.kind === "persistent" && runtime.record.phase === "stopped") {
+      continue;
+    }
     const { engine, backendTarget, containerName, expectedId } =
       localWorkspaceRuntimeEngine(runtime);
     // Stopped allocations remain owned resources, but were never live writers.

@@ -26,6 +26,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
+import {
+  collectUnusedDependencyCaches,
+  withDependencyCacheLock,
+} from "../../scripts/pr-lib/cache-lifetime.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
@@ -40,6 +44,8 @@ import { createMainRefreshFixture } from "./pr-main-refresh.test-support.js";
 import { createProcessGroupTimingPreload } from "./pr-operation-lock.test-support.js";
 import {
   copyPrWrapperSources,
+  createSettledPrCacheEntry,
+  readPrCacheState,
   createIndependentPrFixtureEnv,
   linkPrWrapperDependencies,
 } from "./pr-wrapper.test-support.js";
@@ -298,11 +304,32 @@ function writeOperationFixture(repoDir: string, name: string, commands: string[]
 }
 
 function writeEscapedPipeHolderLauncher(repoDir: string, pidFile: string) {
-  const holderScript = writeFixtureFile(
-    repoDir,
-    "escaped-pipe-holder.mjs",
-    "setInterval(() => {}, 1000);\n",
-  );
+  const holderScript = writeFixtureFile(repoDir, "escaped-pipe-holder.mjs", [
+    'import fs from "node:fs";',
+    'import { spawnSync } from "node:child_process";',
+    'import { dirname } from "node:path";',
+    'import { pathToFileURL } from "node:url";',
+    fixtureReceiptClientSource(receipts.endpoint),
+    "if (process.env.PR_TEST_DEPENDENCY_REQUEST) {",
+    "  const request = process.env.PR_TEST_DEPENDENCY_REQUEST;",
+    "  const proof = process.env.PR_TEST_DEPENDENCY_PROOF;",
+    "  let reading = false;",
+    "  const watcher = fs.watch(dirname(request), async () => {",
+    "    if (reading || !fs.existsSync(request)) return;",
+    "    reading = true;",
+    "    const dependency = await import(pathToFileURL(process.env.PR_TEST_DEPENDENCY_PATH).href);",
+    "    if (process.env.PR_TEST_GIT_PROOF) {",
+    '      const result = spawnSync(process.env.OPENCLAW_PR_GIT, ["--version"], { encoding: "utf8" });',
+    "      fs.writeFileSync(process.env.PR_TEST_GIT_PROOF, JSON.stringify({ status: result.status, error: result.error?.code, stdout: result.stdout, snapshot: process.env.OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT }));",
+    "    }",
+    "    fs.writeFileSync(proof, dependency.value);",
+    '    sendReceipt(proof, "ready");',
+    "    watcher.close();",
+    "  });",
+    '  sendReceipt(proof + ".listening", "ready");',
+    "}",
+    "setInterval(() => {}, 1000);",
+  ]);
   return writeFixtureFile(repoDir, "escaped-pipe-holder-launcher.mjs", [
     'import { spawn } from "node:child_process";',
     'import fs from "node:fs";',
@@ -354,6 +381,7 @@ interface SupervisedFixtureOptions {
   accelerateTimeouts?: boolean;
   env?: NodeJS.ProcessEnv;
   materializedAnchor?: boolean;
+  dependencyEntry?: string;
   terminateWhenReady?: string;
 }
 
@@ -365,11 +393,20 @@ async function runSupervisedFixture(
   // Entry bookkeeping is fixture-owned, not an untracked checkout transition input.
   const entryDir = tempDirs.make("openclaw-pr-supervised-entry-");
   const anchorDir = options.materializedAnchor
-    ? realpathSync(tempDirs.make("openclaw-pr-anchor."))
+    ? realpathSync(tempDirs.make("openclaw-pr-anchor-v3."))
     : undefined;
   if (anchorDir) {
     copyPrWrapperSources(anchorDir);
   }
+  const cacheBootstrap =
+    options.dependencyEntry && anchorDir
+      ? writeFixtureFile(entryDir, "cache-bootstrap.mjs", [
+          'import { fstatSync } from "node:fs";',
+          `import { dependencyCacheRoot, withDependencyCacheLock, holdDependencyCache } from ${JSON.stringify(pathToFileURL(join(anchorDir, "scripts/pr-lib/cache-lifetime.mjs")).href)};`,
+          `const anchor = { path: ${JSON.stringify(anchorDir)}, ...fstatSync(9, { bigint: true }) };`,
+          `withDependencyCacheLock(dependencyCacheRoot(), (lock) => holdDependencyCache(lock, ${JSON.stringify(options.dependencyEntry)}, anchor));`,
+        ])
+      : "";
   const groupFile = writeFixtureFile(entryDir, "supervised-fixture.pgid", "");
   const entry = writeFixtureFile(
     anchorDir ?? entryDir,
@@ -398,7 +435,7 @@ async function runSupervisedFixture(
       anchorDir
         ? [
             "-c",
-            'exec 9< "$1"; export OPENCLAW_PR_ANCHOR_CREATOR_PID=$$ OPENCLAW_PR_ANCHOR_FD=9; shift; exec "$@"',
+            'exec 9< "$1"; export OPENCLAW_PR_ANCHOR_CREATOR_PID=$$ OPENCLAW_PR_ANCHOR_FD=9; shift; if [ -n "$PR_TEST_CACHE_BOOTSTRAP" ]; then "$1" "$PR_TEST_CACHE_BOOTSTRAP"; fi; exec "$@"',
             "anchor-fixture",
             anchorDir,
             process.execPath,
@@ -407,7 +444,12 @@ async function runSupervisedFixture(
         : nodeArgs,
       {
         cwd: repoDir,
-        env: { ...createIndependentPrFixtureEnv(), ...options.env },
+        env: {
+          ...createIndependentPrFixtureEnv(),
+          HOME: entryDir,
+          ...options.env,
+          PR_TEST_CACHE_BOOTSTRAP: cacheBootstrap,
+        },
         stdio: ["ignore", "pipe", "pipe"],
       },
     ),
@@ -967,6 +1009,34 @@ describePosix("scripts/pr per-PR operation lock", () => {
     expect(result.stdout.trim()).toBe("Recovered the stale operation lock for PR #42.");
     expect(refExists(repoDir)).toBe(false);
   });
+  it("keeps selected policy Git for minimal recovery reads and exact-OID deletion", () => {
+    const repoDir = createRepo();
+    const { binDir, cli } = installPrCliFixture(repoDir);
+    const ownerOid = gitOutput(repoDir, ["rev-parse", "HEAD"]).trim();
+    execFileSync("git", ["update-ref", lockRef, ownerOid], { cwd: repoDir });
+    const calls = join(repoDir, "selected-git-calls");
+    const selected = writeFixtureFile(repoDir, "selected-policy-git", [
+      "#!/bin/sh",
+      `printf '%s\\n' "$*" >> ${shellQuote(calls)}`,
+      `exec ${shellQuote(realpathSync(join(binDir, "git")))} "$@"`,
+    ]);
+    chmodSync(selected, 0o755);
+    const result = spawnSync(
+      cli,
+      ["lock-recover", "42", ownerOid, "--confirmed-no-running-tools"],
+      {
+        cwd: repoDir,
+        encoding: "utf8",
+        env: { ...createIndependentPrFixtureEnv(), PATH: binDir, OPENCLAW_PR_GIT: selected },
+      },
+    );
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(refExists(repoDir)).toBe(false);
+    expect(readFileSync(calls, "utf8")).toContain(
+      `update-ref --no-deref -d ${lockRef} ${ownerOid}`,
+    );
+    expect(readFileSync(calls, "utf8")).toContain(`rev-parse --verify ${lockRef}`);
+  });
   it("does not trust an ambient dedicated-process-group marker", () => {
     const repoDir = createRepo();
     const { binDir, cli, wrapperSources } = installPrCliFixture(repoDir);
@@ -1212,6 +1282,7 @@ exec ${shellQuote(mktemp)} "$@"
         timeout: 120_000,
         env: {
           ...createIndependentPrFixtureEnv(),
+          HOME: repoDir,
           canonical_repo_root: join(repoDir, "untrusted-root"),
           OPENCLAW_GH_BIN: gh,
           GH_REPO: "fixture/repo",
@@ -1413,6 +1484,14 @@ exec ${shellQuote(mktemp)} "$@"
     signal,
   }) => {
     const repoDir = createRepo();
+    const home = realpathSync(tempDirs.make("pr-escaped-cache-home-"));
+    const cache = join(home, ".cache/openclaw/pr-dependencies/v3");
+    const dependencyEntry = createSettledPrCacheEntry(cache, "0".repeat(64));
+    const dependency = join(dependencyEntry, "package.mjs");
+    writeFileSync(dependency, 'export const value = "still available";\n');
+    const request = join(home, "import-request");
+    const proof = join(home, "import-proof");
+    const gitProof = join(home, "git-proof");
     const operationPgidFile = join(repoDir, "clean-pipe-holder-operation-pgid");
     const holderPidFile = join(repoDir, "clean-pipe-holder-pgid");
     escapedPipeHolderPidFiles.add(holderPidFile);
@@ -1426,7 +1505,21 @@ exec ${shellQuote(mktemp)} "$@"
         "acquire_pr_operation_lock 42",
         `node '${launcherScript}'`,
       ],
-      { signal, accelerateTimeouts: true, materializedAnchor: true },
+      {
+        signal,
+        accelerateTimeouts: true,
+        materializedAnchor: true,
+        dependencyEntry,
+        env: {
+          HOME: home,
+          PR_TEST_DEPENDENCY_REQUEST: request,
+          PR_TEST_DEPENDENCY_PROOF: proof,
+          PR_TEST_DEPENDENCY_PATH: dependency,
+          PR_TEST_GIT_PROOF: gitProof,
+          TMPDIR: home,
+          OPENCLAW_PR_GIT: execFileSync("which", ["git"], { encoding: "utf8" }).trim(),
+        },
+      },
     );
 
     const operationPgid = requireProcessId(operationPgidFile);
@@ -1440,7 +1533,54 @@ exec ${shellQuote(mktemp)} "$@"
     expect(result.stderr).toContain("group=dead, pipe=open");
     expect(result.stderr).toContain("#124583");
     expect(existsSync(join(result.anchorDir!, "scripts/pr"))).toBe(true);
+    await withinTest(receipts.waitFor(proof + ".listening", "ready"), signal);
+    for (let index = 1; index <= 6; index++) {
+      createSettledPrCacheEntry(cache, String(index).repeat(64));
+    }
+    const retired = withDependencyCacheLock(cache, (lock) => collectUnusedDependencyCaches(lock));
+    for (const path of retired) {
+      rmSync(path, { recursive: true });
+    }
+    writeFileSync(request, "import now");
+    await withinTest(receipts.waitFor(proof, "ready"), signal);
+    expect(readFileSync(proof, "utf8")).toBe("still available");
+    expect(readPrCacheState(dependencyEntry).anchors).toHaveLength(1);
+    const inheritedGit = JSON.parse(readFileSync(gitProof, "utf8"));
+    try {
+      expect(inheritedGit.status).toBe(0);
+      expect(inheritedGit.error).toBeUndefined();
+      expect(inheritedGit.stdout).toMatch(/^git version /);
+      expect(dirname(inheritedGit.snapshot)).toBe(home);
+      expect(existsSync(inheritedGit.snapshot)).toBe(true);
+    } finally {
+      await cleanupRecordedProcessGroup(holderPidFile, holderPgid);
+      escapedPipeHolderPidFiles.delete(holderPidFile);
+      rmSync(inheritedGit.snapshot, { recursive: true, force: true });
+    }
   }, 15_000);
+
+  it.for([0, 1])(
+    "retires Git snapshots after a complete drain with exit %s",
+    async (status, { signal }) => {
+      const repoDir = createRepo();
+      const temporaryRoot = tempDirs.make("pr-drained-snapshots-");
+      const result = await runSupervisedOperation(
+        repoDir,
+        "drained-snapshot-operation.sh",
+        [
+          "acquire_pr_operation_lock 42",
+          "mark_pr_operation_side_effects_started",
+          `exit ${status}`,
+        ],
+        { signal, materializedAnchor: true, env: { TMPDIR: temporaryRoot } },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(status);
+      expect(existsSync(result.anchorDir!)).toBe(false);
+      expect(
+        readdirSync(temporaryRoot).filter((name) => name.startsWith("openclaw-pr-lock-release-")),
+      ).toEqual([]);
+    },
+  );
   it("retains a clean-exit lock when the leader completion marker is suppressed", async ({
     signal,
   }) => {

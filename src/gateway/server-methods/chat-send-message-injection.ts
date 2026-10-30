@@ -1,7 +1,4 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
@@ -28,6 +25,7 @@ import { prepareSteeringDelivery } from "../../auto-reply/reply/steering-deliver
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { QueueConfig } from "../../config/types.messages.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { logMessageProcessed, logMessageReceived } from "../../logging/diagnostic.js";
 import type { InboundDocumentContext } from "../../media-understanding/file-context.js";
@@ -110,8 +108,6 @@ export function createChatSendMessageInjectionStarter(params: {
       agentId,
       sessionKey,
       storePath,
-      sessionId: entry?.sessionId,
-      sourceTurnId: normalizeOptionalString(target.sourceTurnId),
       entry,
       assertCurrent,
     });
@@ -289,6 +285,7 @@ export function createChatSendMessageInjectionStarter(params: {
           inboundAudio: hasInboundAudio(ctx),
           steeringMode: "all",
           isInboundUserMessage: true,
+          allowPendingUserInputAnswer: preparedJoin?.allowPendingUserInputAnswer,
           allowCollaborativeSteering:
             cfg.messages?.queue?.allowCollaborativeSteering === true &&
             (!ctx.InputProvenance || ctx.InputProvenance.kind === "external_user"),
@@ -306,7 +303,11 @@ export function createChatSendMessageInjectionStarter(params: {
           ...(!isProgressCardRefreshInputProvenance(ctx.InputProvenance) && debounceMs !== undefined
             ? { debounceMs }
             : {}),
-          taskSuggestionDeliveryMode: supportsTaskSuggestions ? "gateway" : undefined,
+          // A prepared continuation keeps the incumbent's negotiated tool
+          // surface, so this connection's capability must not retarget it.
+          ...(preparedJoin
+            ? {}
+            : { taskSuggestionDeliveryMode: supportsTaskSuggestions ? "gateway" : undefined }),
           userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
         },
       });
@@ -327,21 +328,25 @@ export function createChatSendMessageInjectionStarter(params: {
 /** Keep a terminal injection decision through detached preparation and reply dispatch. */
 export function createChatSendInjectionDisposition(
   run: Parameters<typeof refuseCollaborativeSteering>[0],
+  queue: QueueConfig | undefined,
 ) {
-  let refused = false;
+  let collaborationBlocked = false;
   const runState: ReplyOperationRunState = {};
   const isRefused = () =>
-    refused ||
+    (collaborationBlocked && queue?.collaborativeSteeringFallback === "reject") ||
     (runState.admission?.status === "skipped" &&
       runState.admission.reason === "collaborative-steering-disabled");
   return {
     runState,
     isRefused,
+    isCollaborationBlocked: () => collaborationBlocked,
     async observe(attempt: ReplyMessageInjectionAttempt | undefined) {
       const outcome = await attempt?.outcome;
       if (outcome?.status === "rejected" && outcome.reason === "collaborative_steering_disabled") {
-        refused = true;
-        runState.admission = { status: "skipped", reason: "collaborative-steering-disabled" };
+        collaborationBlocked = true;
+        if (queue?.collaborativeSteeringFallback === "reject") {
+          runState.admission = { status: "skipped", reason: "collaborative-steering-disabled" };
+        }
         return undefined;
       }
       return attempt;
@@ -426,7 +431,6 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
       channel,
       chatId,
       messageId,
-      sessionId: entry?.sessionId,
       sessionKey,
       durationMs: Math.max(0, Date.now() - params.startedAt),
       outcome: indeterminate ? "error" : "completed",

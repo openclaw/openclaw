@@ -23,7 +23,10 @@ import {
 } from "../server-model-catalog-auth.js";
 import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import { buildModelsListResult, prepareModelsListResult } from "./models-list-result.js";
-import { createModelsListTestContext } from "./models-list-result.openai-routes.test-support.js";
+import {
+  createModelsListTestContext,
+  providerCatalogEntry,
+} from "./models-list-result.openai-routes.test-support.js";
 
 afterEach(() => vi.useRealTimers());
 
@@ -358,5 +361,43 @@ it("publishes provider tier restrictions through the model catalog projection", 
       supportsFastMode,
       serviceTiers,
     });
+  }
+});
+
+it("asks speed policy about the implicit OpenClaw runtime a row will use", async () => {
+  const provider = "example-router";
+  const ids = ["synthetic-priority-route", "synthetic-standard-route"];
+  const pluginRegistry = createEmptyPluginRegistry();
+  // Bundled speed policies answer only for the runtime that maps the request.
+  pluginRegistry.providers.push({
+    pluginId: provider,
+    source: "test",
+    provider: {
+      id: provider,
+      label: "Example router",
+      auth: [],
+      resolveFastModeSupport: ({ modelId, runtimeId }) =>
+        runtimeId === "openclaw" ? modelId === ids[0] : undefined,
+    },
+  });
+  const context = createModelsListTestContext({
+    pluginRegistry,
+    cfg: { agents: { defaults: { model: `${provider}/${ids[0]}` } } },
+    catalog: ids.map((id) => providerCatalogEntry(provider, id)),
+    preparedAuthStore: {
+      version: 1,
+      profiles: {
+        [`${provider}:fixture`]: { type: "api_key", provider, key: "synthetic-api-key" },
+      },
+    },
+  });
+  const models = (await preparePublic(context)).read().models;
+  for (const [index, supportsFastMode] of [
+    [0, true],
+    [1, false],
+  ] as const) {
+    const row = models.find((candidate) => candidate.id === ids[index]);
+    expect(row?.agentRuntime).toBeUndefined();
+    expect(row?.supportsFastMode).toBe(supportsFastMode);
   }
 });

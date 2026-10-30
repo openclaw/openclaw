@@ -6,6 +6,10 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { prepareAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
+import {
+  resolveRequesterPrincipalKey,
+  requesterCreatorProfileId,
+} from "../../agents/requester-origin.js";
 import { createRuntimeToolMatcher } from "../../agents/tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,
@@ -30,6 +34,7 @@ import {
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deletion-journal.read.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
+import type { PreparedCommandOwnerAuthority } from "../command-auth.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { SessionEventTarget } from "./session-event-contract.js";
 import { narrowSessionEventSettings } from "./session-event-policy.js";
@@ -42,6 +47,15 @@ const targetScopes = resolveGlobalSingleton(
       {
         env?: NodeJS.ProcessEnv;
         operatorAuthority?: AdmittedRunOperatorAuthority;
+        ownerContinuation?: true;
+        hasOriginatingCaller?: true;
+        /** The captured requester keys the authority, whose source label is shared by owners. */
+        commandOwner?: {
+          authority: PreparedCommandOwnerAuthority;
+          requester: CommandOwnerRequester;
+        };
+        /** A scheduled job's recorded requester; see `requesterOwner` on capture. */
+        requesterOwner?: SessionEventRequesterOwner;
         deletion?: { agentId: string; isBlocked: () => boolean };
       }
     >(),
@@ -87,6 +101,19 @@ export async function captureSessionEventTargetForHost(
     producerPolicy?: Readonly<Pick<SessionEventTarget, "toolsAllow" | "settings">>;
     /** Original host-issued source; the producer owns its lifetime until enqueue. */
     operatorAuthority?: AdmittedRunOperatorAuthority;
+    /** The producing turn held command-owner authority under `operatorAuthority`. */
+    ownerContinuation?: true;
+    /**
+     * Continue the producing turn's requester as command owner while they remain one.
+     * The identity comes from the host-owned caller, never from the producer.
+     */
+    retainRequesterOwner?: true;
+    /**
+     * The host names the work's originating requester from its own record (a scheduled
+     * job's requester). The turn holds owner tools only while `assertCurrent` passes; a
+     * requester without it is a known non-owner caller, so no session-principal fallback.
+     */
+    requesterOwner?: SessionEventRequesterOwner;
   } = {},
 ): Promise<SessionEventTarget> {
   const operatorAuthority = options.operatorAuthority;
@@ -174,6 +201,24 @@ export async function captureSessionEventTargetForHost(
       options.producerPolicy?.settings && callerSettings
         ? narrowSessionEventSettings(options.producerPolicy.settings, callerSettings)
         : (options.producerPolicy?.settings ?? callerSettings);
+    const requester =
+      options.retainRequesterOwner && callerAgentMatches ? caller?.requesterOrigin : undefined;
+    const commandOwner =
+      requester?.messageProvider && requester.senderId
+        ? await (
+            await import("../command-auth.js")
+          ).prepareCommandOwnerAuthority(
+            cfg,
+            {
+              channel: requester.messageProvider,
+              accountId: requester.accountId ?? undefined,
+              senderId: requester.senderId,
+              senderE164: requester.senderE164 ?? undefined,
+            },
+            { env },
+          )
+        : undefined;
+    assertCaptureCurrent();
     const target: SessionEventTarget = {
       agentId,
       sessionKey,
@@ -192,7 +237,35 @@ export async function captureSessionEventTargetForHost(
         ? narrowSessionEventSettings(producerSettings, destinationSettings)
         : structuredClone(destinationSettings),
     };
-    targetScopes.set(target, { env, operatorAuthority, deletion });
+    targetScopes.set(target, {
+      env,
+      operatorAuthority,
+      ...(options.requesterOwner ||
+      (callerAgentMatches &&
+        (resolveRequesterPrincipalKey(caller) ||
+          requesterCreatorProfileId(caller?.requesterOrigin)))
+        ? { hasOriginatingCaller: true as const }
+        : {}),
+      ...(options.requesterOwner ? { requesterOwner: options.requesterOwner } : {}),
+      ...(operatorAuthority && options.ownerContinuation ? { ownerContinuation: true } : {}),
+      ...(requester?.messageProvider &&
+      requester.senderId &&
+      commandOwner?.source &&
+      commandOwner.isCurrent(cfg)
+        ? {
+            commandOwner: {
+              authority: commandOwner,
+              requester: Object.freeze({
+                channel: requester.messageProvider,
+                accountId: requester.accountId ?? undefined,
+                senderId: requester.senderId,
+                senderE164: requester.senderE164 ?? undefined,
+              }),
+            },
+          }
+        : {}),
+      deletion,
+    });
     return target;
   } finally {
     preparedCaller?.release();
@@ -330,6 +403,54 @@ export function readSessionEventTargetOperatorAuthority(
   return targetScopes.get(target)?.operatorAuthority;
 }
 
+/** A host-recorded requester; owner tools last only while `assertCurrent` passes. */
+export type SessionEventRequesterOwner = Readonly<{ assertCurrent?: () => void }>;
+
+export function readSessionEventTargetRequesterOwner(
+  target: SessionEventTarget,
+): SessionEventRequesterOwner | undefined {
+  return targetScopes.get(target)?.requesterOwner;
+}
+
+/** A captured channel guest still has a caller even without a profile grant. */
+export function hasSessionEventOriginatingCaller(target: SessionEventTarget): boolean {
+  return Boolean(
+    targetScopes.get(target)?.hasOriginatingCaller ||
+    readSessionEventTargetOperatorAuthority(target),
+  );
+}
+
+/** Whether the producing turn was an owner under the target's captured operator source. */
+export function readSessionEventTargetOwnerContinuation(target: SessionEventTarget): boolean {
+  return targetScopes.get(target)?.ownerContinuation === true;
+}
+
+export type CommandOwnerRequester = Readonly<{
+  channel: string;
+  accountId?: string;
+  senderId: string;
+  senderE164?: string;
+}>;
+
+/** The retained owner authority and the host-captured requester it belongs to. */
+export function readSessionEventTargetCommandOwner(
+  target: SessionEventTarget,
+): { authority: PreparedCommandOwnerAuthority; requester: CommandOwnerRequester } | undefined {
+  return targetScopes.get(target)?.commandOwner;
+}
+
+function commandOwnerRequesterKey(target: SessionEventTarget): string | undefined {
+  const requester = targetScopes.get(target)?.commandOwner?.requester;
+  return requester
+    ? JSON.stringify([
+        requester.channel,
+        requester.accountId ?? null,
+        requester.senderId,
+        requester.senderE164 ?? null,
+      ])
+    : undefined;
+}
+
 /** Coalesced work retains every producer's original destination and permission bound. */
 export function combineSessionEventTargetsForHost(
   targets: readonly SessionEventTarget[],
@@ -350,6 +471,12 @@ export function combineSessionEventTargetsForHost(
       target.chatType !== first.chatType ||
       readSessionEventTargetOperatorAuthority(target) !==
         readSessionEventTargetOperatorAuthority(first) ||
+      readSessionEventTargetOwnerContinuation(target) !==
+        readSessionEventTargetOwnerContinuation(first) ||
+      hasSessionEventOriginatingCaller(target) !== hasSessionEventOriginatingCaller(first) ||
+      commandOwnerRequesterKey(target) !== commandOwnerRequesterKey(first) ||
+      readSessionEventTargetRequesterOwner(target) !==
+        readSessionEventTargetRequesterOwner(first) ||
       channelRouteDedupeKey(target.deliveryContext) !== route
     ) {
       throw new Error(

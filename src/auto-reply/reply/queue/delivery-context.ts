@@ -155,8 +155,6 @@ export function resolveFollowupDeliveryStorageKey(run: FollowupRun): string {
       run.toolsAllow ? (readToolAllowlistIntersection(run.toolsAllow) ?? null) : null,
     ),
     run.disableTools === true,
-    run.forceRestartSafeTools === true,
-    run.forceCodeModeTools === true,
     execution.extraSystemPrompt ?? "",
     execution.extraSystemPromptStatic ?? "",
     execution.sourceReplyDeliveryMode ?? "",
@@ -253,7 +251,9 @@ export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined
   return hasRoutedThread ? undefined : normalizeOptionalString(run.messageId);
 }
 
-function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["currentInboundContext"] {
+export function collectCurrentInboundContext(
+  items: FollowupRun[],
+): FollowupRun["currentInboundContext"] {
   const contexts = items.flatMap((item, index) =>
     item.currentInboundContext ? [{ context: item.currentInboundContext, index }] : [],
   );
@@ -370,8 +370,6 @@ export function collectRuntimeMetadata(items: FollowupRun[], abortSignal?: Abort
     ),
     toolsAllow: authoritySource?.toolsAllow,
     disableTools: authoritySource?.disableTools,
-    forceRestartSafeTools: authoritySource?.forceRestartSafeTools,
-    forceCodeModeTools: authoritySource?.forceCodeModeTools,
     abortSignal,
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
@@ -431,8 +429,6 @@ export function createOverflowSummaryRetrySource(source: InternalFollowupRun): I
     explicitSkillSelections: source.explicitSkillSelections,
     toolsAllow: source.toolsAllow,
     disableTools: source.disableTools,
-    forceRestartSafeTools: source.forceRestartSafeTools,
-    forceCodeModeTools: source.forceCodeModeTools,
     currentTurnImagesPrepared: source.currentTurnImagesPrepared,
     images: source.images,
     imageOrder: source.imageOrder,
@@ -454,6 +450,7 @@ export function createOverflowSummaryRetrySource(source: InternalFollowupRun): I
     ...(source.currentInboundEventKind === "room_event"
       ? { currentInboundEventKind: "room_event" }
       : {}),
+    currentInboundContext: source.currentInboundContext,
     run: source.run,
   };
 }

@@ -311,6 +311,9 @@ importers:
       '@trycua/cua-driver':
         specifier: 0.36.0
         version: 0.36.0
+      '@types/pg':
+        specifier: 8.23.1
+        version: 8.23.1
       acorn:
         specifier: 8.19.0
         version: 8.19.0
@@ -516,9 +519,6 @@ importers:
       '@types/node':
         specifier: 26.6.5
         version: 26.6.5
-      '@types/pg':
-        specifier: 8.23.1
-        version: 8.23.1
       '@types/semver':
         specifier: 7.8.0
         version: 7.8.0
@@ -2113,6 +2113,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/particle:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/perplexity:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -2870,6 +2876,9 @@ importers:
 
   packages/gateway-client:
     dependencies:
+      '@noble/hashes':
+        specifier: 2.4.0
+        version: 2.4.0
       '@openclaw/gateway-protocol':
         specifier: workspace:*
         version: link:../gateway-protocol

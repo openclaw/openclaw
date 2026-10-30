@@ -29,7 +29,6 @@ import {
   resolveGatewaySessionKind,
   resolveGatewaySessionGoal,
 } from "./session-utils-display.js";
-import { resolveSessionSelectedModelRef } from "./session-utils-model-selection.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 
 const now = 1_800_000_000_000;
@@ -144,36 +143,18 @@ test("non-status vocabulary misses skip per-row run state and model facts", () =
     source: "fixture.ts",
     provider: { id: "fixture", label: "Fixture", auth: [], normalizeModelId },
   });
-  const getModelFacts = vi.fn<SessionListModelFactsLookup>((key) => {
-    const entry = params.getTarget(key)!.entry;
-    const selectedModel = resolveSessionSelectedModelRef({
-      cfg: params.cfg,
-      agentId: "main",
-      sessionKey: key,
-      rowContext,
-      source: { entry, readSourceEntry: () => undefined },
-      preparedRuntimeOwnership: null,
-      manifestPlugins: [],
-    });
-    return {
-      selectedModel,
-      rowModelIdentity: selectedModel,
-      thinkingProjection: {
-        agentRuntime: { id: "openclaw", source: "implicit" },
-        acpMeta: undefined,
-      },
-    };
-  });
   const { params, rowContext } = searchFixture(rows, {
     cfg: { agents: { defaults: { model: "openai/gpt-4.1" }, entries: { main: {} } } },
     opts: { search: "zz-no-match" },
-    getModelFacts,
     modelCatalog: [{ provider: "fixture", id: "raw-alias", name: "Fixture" }],
     projectActiveRun,
   });
+  using getModelFacts = vi.spyOn(params, "getModelFacts");
   const display = vi.spyOn(rowContext.subagentRuns, "getDisplaySubagentRun");
   withPluginRuntimeRegistryScope(registry, () => {
+    using probe = vi.spyOn(String.prototype, "includes");
     expect(filterSessionEntries(params).entries).toEqual([]);
+    expect(probe.mock.contexts.filter((field) => field === "").length).toBe(0);
     expect(projectActiveRun).not.toHaveBeenCalled();
     expect(getModelFacts).not.toHaveBeenCalled();
     expect(normalizeModelId).toHaveBeenCalledOnce();

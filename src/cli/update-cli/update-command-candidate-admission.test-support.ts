@@ -404,6 +404,19 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     expectNoSideEffects(serviceStop, serviceStart, serviceRestart, candidateValidation);
   });
 
+  it("candidate admission: stages the package with the managed service Node on PATH", async () => {
+    const { pkgRoot, stages } = await prepare();
+    const serviceNode = path.join(makeTempDir("candidate-service-node-"), "bin", "node");
+    primeServiceCommand([serviceNode, path.join(pkgRoot, "dist", "index.js"), "gateway", "run"]);
+
+    await update().catch(() => undefined);
+
+    expect(stages).toHaveLength(1);
+    const [, options] = expectDefined(packageInstallCommandCall(), "staged package install");
+    const env = options.env as NodeJS.ProcessEnv | undefined;
+    expect(env?.PATH?.split(path.delimiter)[0]).toBe(path.dirname(serviceNode));
+  });
+
   it("candidate admission: refuses managed ancestry before spawning candidate code and disposes staging", async () => {
     const { pkgRoot, stages, contexts } = await prepare();
     primeServiceCommand(["node", path.join(pkgRoot, "dist", "index.js"), "gateway", "run"]);
@@ -538,7 +551,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
         `${refusal}Update install root: ${fsSync.realpathSync(root)}`,
         `${refusal}Update binary: ${path.join(root, "openclaw.mjs")}`,
         `${refusal}Gateway install root: unresolved`,
-        `${refusal}${runtimeRecovery.expectedPlainRecovery("2026.3.23-2", "24.22.1", "absent", undefined, root)}`,
+        `${refusal}${runtimeRecovery.expectedPlainRecovery("2026.3.23-2", "24.16.0", "absent", undefined, root)}`,
       ].join("\n"),
     );
   });

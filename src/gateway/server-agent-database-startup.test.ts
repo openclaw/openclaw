@@ -15,7 +15,6 @@ import {
   markPreparedModelRuntimeSnapshotsStale,
   refreshPreparedModelRuntimeSnapshots,
 } from "../agents/prepared-model-runtime.js";
-import * as subagents from "../agents/subagents/registry/subagent-registry.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -64,8 +63,6 @@ import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflig
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 // Keep cold module evaluation outside the lifecycle and RPC behavior deadlines.
-import * as early from "./server-startup-early.js";
-import * as postAttach from "./server-startup-post-attach.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import "./server-methods/chat-send-external-entry.js";
 import { gatewayReplyMock, testState } from "./test-helpers.runtime-state.js";
@@ -195,46 +192,8 @@ it.for([
 ] as const)(
   "applies startup admission while $agentId follows its $outcome lifecycle",
   async ({ outcome, agentId }, { signal }) => {
-    const holdSubagentRestoration = outcome === "recover" && agentId === "worker";
-    const checkHostJournalReads = outcome === "recover" && !holdSubagentRestoration;
-    const restorationEntered = createDeferredCore();
-    const restorationRelease = createDeferredCore();
-    const initialRecoveryReady = createDeferredCore();
-    let startupSettled = false;
+    const checkHostJournalReads = outcome === "recover";
     let recoverySource: OpenClawConfig | undefined;
-    let bootstrapSecrets: ReturnType<typeof getActiveSecretsRuntimeSnapshot> | undefined;
-    let subagentRecoverySettled: Promise<void> | undefined;
-    if (holdSubagentRestoration) {
-      vi.stubEnv("OPENCLAW_TEST_MINIMAL_GATEWAY", undefined);
-      const startPostAttach = postAttach.startGatewayPostAttachRuntime;
-      vi.spyOn(postAttach, "startGatewayPostAttachRuntime").mockImplementation(async (params) => {
-        const unlockStartupMethods = params.unlockStartupMethods;
-        const runtime = await startPostAttach({
-          ...params,
-          unlockStartupMethods: (options) => {
-            unlockStartupMethods(options);
-            if (!options?.keepChatSendUnavailable) {
-              initialRecoveryReady.resolve();
-            }
-          },
-        });
-        subagentRecoverySettled = runtime.subagentRecoverySettled;
-        return runtime;
-      });
-      const startEarly = early.startGatewayEarlyRuntime;
-      vi.spyOn(early, "startGatewayEarlyRuntime").mockImplementation((params) => {
-        bootstrapSecrets = getActiveSecretsRuntimeSnapshot();
-        return startEarly(params);
-      });
-      vi.spyOn(subagents, "activateSubagentRegistry").mockImplementation(() => {
-        restorationEntered.resolve();
-        return {
-          initial: Promise.resolve(),
-          pending: new Map([["worker", restorationRelease.promise]]),
-          settled: restorationRelease.promise,
-        };
-      });
-    }
     const nativeBroker = process.platform === "linux" && !process.versions.bun;
     const brokerExpected =
       nativeBroker ||
@@ -397,15 +356,15 @@ it.for([
       vi.spyOn(session, "prepareGatewayStartupSessions").mockImplementation(async (params) => {
         const databases = await prepare(params);
         if (params.agentIds?.has(agentId)) {
+          sessionPrepared = true;
           if (outcome === "recover") {
             const result = await runExec(process.execPath, ["-e", "console.log(process.ppid)"], {
               logOutput: false,
             });
             preparationParent = Number(result.stdout);
+            preparationEntered.resolve();
+            await preparationRelease.promise;
           }
-          sessionPrepared = true;
-          preparationEntered.resolve();
-          await preparationRelease.promise;
         }
         return databases;
       });
@@ -471,7 +430,7 @@ it.for([
         await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: cfg });
         inspectionSettled = admission.pendingPreparation;
         waitForHealthyAgent = () =>
-          admission.waitForAgentPreparation(healthyAgentId, { env, signal });
+          admission.waitForAgentPreparation(healthyAgentId, { env, signal, forWrite: true });
         // Other Unix hosts exercise the broker context without pretending their OS is Linux.
         if (brokerExpected && !nativeBroker) {
           suppliedBroker = await spawnBroker.startGatewaySpawnBroker({
@@ -486,7 +445,6 @@ it.for([
           return startTestGatewayServer(portClaim, {
             bind: "loopback",
             auth: { mode: "none" },
-            ...(holdSubagentRestoration ? { sidecarStartup: "defer" as const } : {}),
           });
         });
       }).then((started) => {
@@ -503,12 +461,6 @@ it.for([
         return;
       }
       server = await startup;
-      void server.startupSettled.then(
-        () => {
-          startupSettled = true;
-        },
-        () => {},
-      );
       await server.startupSettled;
       if (brokerExpected) {
         expect(brokerPid).toBeTypeOf("number");
@@ -530,10 +482,6 @@ it.for([
       // Sidecar settlement can precede the unpaused sibling's database admission.
       await waitForHealthyAgent();
       expect(readAgentDatabaseAdmissionRefusal(healthyAgentId, { env })).toBeUndefined();
-      if (holdSubagentRestoration) {
-        // startupSettled does not join the independent initial-recovery admission signal.
-        await withinTest(initialRecoveryReady.promise, signal);
-      }
       const readiness = await probeGateway(port, "/readyz");
       expect(readiness.status).toBe(agentId === "main" && paused ? 503 : 200);
       if (agentId === "main" && paused) {
@@ -566,9 +514,7 @@ it.for([
       if (outcome === "recover") {
         // Full post-attach model preparation can republish auth-store containers;
         // assert the bootstrap fence before that independent publication.
-        const snapshot = holdSubagentRestoration
-          ? bootstrapSecrets
-          : getActiveSecretsRuntimeSnapshot();
+        const snapshot = getActiveSecretsRuntimeSnapshot();
         expect(snapshot?.authStores.some((entry) => entry.databasePath === agentPath)).toBe(false);
         expect(snapshot?.degradedOwners?.some((owner) => owner.paths.includes(agentPath))).toBe(
           false,
@@ -623,21 +569,6 @@ it.for([
         expect(inspectionAlive(preparationEnteredPath)).toBe(false);
         expect(fs.readFileSync(agentPath)).toEqual(agentBytes);
       } else if (outcome === "recover" || outcome === "superseded") {
-        fs.writeFileSync(releasePath, "resume");
-        await withinTest(
-          Promise.race([
-            preparationEntered.promise,
-            hostJournalRead.promise.then(() => expect(hostJournalReads).toBe(0)),
-          ]),
-          signal,
-        );
-        expect(sessionPrepared).toBe(true);
-        if (outcome === "recover") {
-          expect(preparationParent).toBe(brokerExpected ? brokerPid : process.pid);
-        }
-        expect(refusal()).toMatchObject({
-          code: "agent-database-inspection-pending",
-        });
         if (outcome === "recover") {
           chatClient = await connectWebchatClient({ port });
           gatewayReplyMock.mockImplementationOnce(async () => {
@@ -683,7 +614,7 @@ it.for([
             source,
           );
         }
-        preparationRelease.resolve();
+        fs.writeFileSync(releasePath, "resume");
         if (outcome === "superseded") {
           await vi.waitFor(
             () =>
@@ -693,8 +624,21 @@ it.for([
               }),
             { timeout: 10000 },
           );
+          expect(sessionPrepared).toBe(false);
           return;
         }
+        await withinTest(
+          Promise.race([
+            preparationEntered.promise,
+            hostJournalRead.promise.then(() => expect(hostJournalReads).toBe(0)),
+          ]),
+          signal,
+        );
+        expect(preparationParent).toBe(brokerExpected ? brokerPid : process.pid);
+        expect(refusal()).toMatchObject({
+          code: "agent-database-inspection-pending",
+        });
+        preparationRelease.resolve();
         await waitForRecovery();
         await withinTest(maintenanceCompleted.promise, signal);
         expect(
@@ -718,30 +662,6 @@ it.for([
         expect(snapshot?.degradedOwners?.some((owner) => owner.paths.includes(agentPath))).toBe(
           false,
         );
-        if (holdSubagentRestoration) {
-          // The optional worker stays gated without making the healthy Gateway unready.
-          await withinTest(restorationEntered.promise, signal);
-          expect(startupSettled).toBe(true);
-          const recoveringReadiness = await probeGateway(port, "/readyz");
-          expect(recoveringReadiness.status).toBe(200);
-          await expect(recoveringReadiness.json()).resolves.toMatchObject({
-            ready: true,
-            coreReady: true,
-            failing: [],
-            agentRecovery: ["worker"],
-          });
-          expect(await rpcReq(chatClient!, "chat.send", chatParams)).toMatchObject({
-            ok: false,
-            error: {
-              code: "UNAVAILABLE",
-              message: "chat.send unavailable during gateway startup",
-              details: { reason: "startup-sidecars", method: "chat.send" },
-            },
-          });
-          restorationRelease.resolve();
-          expect(subagentRecoverySettled).toBeDefined();
-          await withinTest(subagentRecoverySettled!, signal);
-        }
         expect((await probeGateway(port, "/readyz")).status).toBe(200);
         expect(await rpcReq(chatClient!, "chat.send", chatParams)).toMatchObject({ ok: true });
         await withinTest(dispatched.promise, signal);
@@ -763,7 +683,6 @@ it.for([
       }
     } finally {
       pendingFixtureCleanup = (async () => {
-        restorationRelease.resolve();
         preparationRelease.resolve();
         fs.writeFileSync(releasePath, "resume");
         if (pause) {
@@ -819,7 +738,8 @@ it("admits an unsealed fleet including reserved system agents while skipping an 
   for (const pathname of paths) {
     const database = new DatabaseSync(pathname);
     try {
-      database.exec("PRAGMA journal_mode=DELETE");
+      // Index repair retains late publication, after all native generations have opened.
+      database.exec("PRAGMA journal_mode=DELETE; DROP INDEX idx_agent_session_nodes_active");
     } finally {
       database.close();
     }

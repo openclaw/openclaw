@@ -180,13 +180,17 @@ export function SkillDiscovery(props: SkillsProps) {
         });
       }
     }
-    const filter = queryValue.trim().toLowerCase();
+    // Canonical-form comparison: a composed (NFC) query must match decomposed (NFD) copy.
+    const filter = queryValue.trim().toLowerCase().normalize("NFC");
     // Remote matches retain the registry's semantic ranking, even if their copy lacks the query.
     return items.filter(
       (entry) =>
         entry.remote ||
         !filter ||
-        `${entry.name} ${entry.description} ${entry.attribution}`.toLowerCase().includes(filter),
+        `${entry.name} ${entry.description} ${entry.attribution}`
+          .toLowerCase()
+          .normalize("NFC")
+          .includes(filter),
     );
   });
   onSettled(() => {

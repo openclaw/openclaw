@@ -414,6 +414,7 @@ export async function writeRuntime(directory: string, sha: string, store: string
   const virtualPackage = path.join(virtualStore, sha, "node_modules", "virtual-runtime");
   const identity = `module.exports = ${JSON.stringify(sha)};`;
   await writeFixtureTree(root, {
+    [path.relative(root, path.join(external, "package.json"))]: '{"type":"commonjs"}',
     [path.relative(root, path.join(external, "index.js"))]: identity,
     [path.relative(root, path.join(virtualPackage, "index.js"))]: identity,
     "node_modules/identity.cjs": identity,

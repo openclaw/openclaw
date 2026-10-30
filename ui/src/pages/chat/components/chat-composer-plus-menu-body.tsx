@@ -124,11 +124,9 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
     const mediaOption = menu.attachments.imagesOnly
       ? (["photo", "image", t("chat.composer.attachPhoto")] as const)
       : (["media", "image", t("chat.composer.attachMedia")] as const);
-    for (const [id, icon, label] of useNativeAttachmentSourceMenu()
-      ? ([
-          ...(!menu.attachments.imagesOnly ? [mediaOption] : []),
-          ["file", "paperclip", t("chat.composer.attach")],
-        ] as const)
+    const nativeSourceMenu = useNativeAttachmentSourceMenu();
+    for (const [id, icon, label] of nativeSourceMenu
+      ? ([["file", "paperclip", t("chat.composer.attach")]] as const)
       : ([
           ["camera", "camera", t("chat.composer.cameraInput")],
           mediaOption,
@@ -140,14 +138,16 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
       sources.push({
         id,
         label,
-        class: "agent-chat__attach-menu-option",
+        class: nativeSourceMenu
+          ? "agent-chat__attach-menu-option agent-chat__capability-menu-item"
+          : "agent-chat__attach-menu-option",
         icon: <Icon name={icon} />,
       });
     }
     entries.push({
       kind: "group",
       id: "attachment-sources",
-      class: "agent-chat__attachment-sources",
+      class: sources.length === 1 ? undefined : "agent-chat__attachment-sources",
       items: sources,
     });
   }

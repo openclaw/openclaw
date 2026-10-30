@@ -37,6 +37,17 @@ describe("execCommand process-tree cleanup", () => {
     cleanupPids.clear();
   });
 
+  it.each([2 ** 31, Number.MAX_SAFE_INTEGER])(
+    "allows a command to finish with a long timeout of %s ms",
+    async (timeout) => {
+      await expect(
+        execCommand(process.execPath, ["-e", 'process.stdout.write("completed")'], process.cwd(), {
+          timeout,
+        }),
+      ).resolves.toMatchObject({ stdout: "completed", stderr: "", code: 0, killed: false });
+    },
+  );
+
   it("does not resolve a timeout while a SIGTERM-resistant descendant is alive", async ({
     signal,
   }) => {

@@ -296,7 +296,7 @@ suite.define(() => {
     );
   });
 
-  it("uses narrow subagent panel width without empty avatar gutters", async () => {
+  it("keeps narrow subagent reports inside the panel and scrollable", async () => {
     await suite.withPage(
       { viewport: { width: 1440, height: 1000 }, colorScheme: "dark" },
       async ({ page }) => {
@@ -365,22 +365,50 @@ suite.define(() => {
         );
         expect(stopInk.fill, "Stop paints its destructive glyph foreground").toBe(stopInk.label);
 
-        const geometry = await copy.evaluate((element) => {
-          const thread = element.closest<HTMLElement>(".chat-thread")!;
-          const column = element.closest(".chat-group-messages")!;
-          const outer = thread.getBoundingClientRect();
-          const inner = column.getBoundingClientRect();
+        const thread = detail.locator(".chat-thread");
+        const initialWidth = (await thread.boundingBox())!.width;
+        expect(initialWidth).toBeLessThanOrEqual(560);
+        await page.setViewportSize({ width: 1440, height: 600 });
+        await page.getByRole("separator", { name: "Resize side panel", exact: true }).press("End");
+        await expect
+          .poll(async () => (await panel.boundingBox())!.width)
+          .toBeLessThan(initialWidth);
+        const geometry = await thread.evaluate((element) => {
+          const outer = element.closest("openclaw-chat-subagents-panel")!.getBoundingClientRect();
+          const inner = element.getBoundingClientRect();
           return {
-            width: outer.width,
             left: inner.left - outer.left,
-            right: outer.right - inner.right,
-            overflow: thread.scrollWidth - thread.clientWidth,
+            right: inner.right - outer.right,
+            overflow: element.scrollWidth - element.clientWidth,
           };
         });
-        expect(geometry.width).toBeLessThanOrEqual(560);
-        expect(geometry.left).toBeLessThanOrEqual(24);
-        expect(geometry.right).toBeLessThanOrEqual(24);
+        expect(geometry.left).toBeGreaterThanOrEqual(-1);
+        expect(geometry.right).toBeLessThanOrEqual(1);
         expect(geometry.overflow).toBeLessThanOrEqual(1);
+        const bounds = (await panel.boundingBox())!;
+        await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+        await page.mouse.wheel(0, -2000);
+        await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
+        await page.mouse.wheel(0, 2000);
+        await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+        const last = detail.getByText(
+          "Confirmed that narrow panels keep long paths and reports readable.",
+          { exact: true },
+        );
+        await expect
+          .poll(() =>
+            last.evaluate((element) => {
+              const text = element.getBoundingClientRect();
+              const viewport = element.closest(".chat-thread")!.getBoundingClientRect();
+              return text.top >= viewport.top && text.bottom <= viewport.bottom;
+            }),
+          )
+          .toBe(true);
+        await panel.getByRole("button", { name: "Back to Subagents", exact: true }).click();
+        await panel
+          .locator(".subagents-desktop__open")
+          .filter({ has: page.getByText(child.label, { exact: true }) })
+          .waitFor();
       },
     );
   });

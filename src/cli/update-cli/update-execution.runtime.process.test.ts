@@ -23,7 +23,7 @@ it("captures databases after the updater's old lazy import chunks are replaced",
         const oldDist = path.join(root, "old-dist");
         const targets = [
           ["./backup-sqlite-snapshot.js", new URL("../../infra/backup-sqlite-snapshot.ts", preparationModule).href, "backup-sqlite-snapshot-old.mjs"],
-          ["../snapshot/database-backup.js", new URL("../../snapshot/database-backup.ts", preparationModule).href, "database-backup-old.mjs"],
+          ["./database-engine/physical-store.js", new URL("../../infra/database-engine/physical-store.ts", preparationModule).href, "physical-store-old.mjs"],
         ];
         await fs.mkdir(oldDist);
         for (const [, target, name] of targets) {

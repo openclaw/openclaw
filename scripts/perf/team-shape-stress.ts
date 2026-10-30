@@ -35,6 +35,7 @@ const headlineMetrics = new Set([
   "sampledSurvivorMiBPerSecond",
   "gcSecondsPerMinute",
   "eventLoopP99Ms",
+  "eventLoopP999Ms",
   "sessionsListP99Ms",
   "rssMiB",
   "heapMiB",

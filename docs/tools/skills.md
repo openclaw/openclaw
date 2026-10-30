@@ -908,6 +908,11 @@ instead of returning partial instructions as a successful read.
 An existing `read` policy grant also permits `skills_read`. An explicit
 `skills_read` denial still wins; search permission alone does not grant reads.
 
+For embedded runs, finite runtime tool allowlists retain the Skills catalog when
+the final callable tool set supports reading instructions. Missing readers are
+not added automatically, and an explicit `toolsAllow: []` remains tool-less.
+Skill and reference files must also be accessible in the run's execution environment.
+
 List and search results cap descriptions at 512 UTF-16 code units without splitting
 surrogate pairs. The source `SKILL.md` and complete skill instructions stay unchanged.
 

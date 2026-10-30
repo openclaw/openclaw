@@ -38,7 +38,7 @@ const routes: Array<{ id: RouteId; ready?: string }> = [
   { id: "meetings" },
   { id: "apps" },
   { id: "portals" },
-  { id: "claws", ready: ".agents-home__claw-empty" },
+  { id: "templates", ready: ".agents-home__template-empty" },
   { id: "agents" },
   { id: "channels" },
   { id: "appearance", ready: "openclaw-config-page" },
@@ -56,7 +56,7 @@ const routes: Array<{ id: RouteId; ready?: string }> = [
 ];
 
 export function createEngineMemoryScenarios(): EngineScenario[] {
-  const clawsConfig = { gateway: { controlUi: { experimental: { claws: true } } } };
+  const templatesConfig = { gateway: { controlUi: { experimental: { templates: true } } } };
   const routeScenarios: EngineScenario[] = routes.map(({ id, ready }) => ({
     id: `memory-route-${id}`,
     route: "/new",
@@ -71,19 +71,19 @@ export function createEngineMemoryScenarios(): EngineScenario[] {
             featureMethods: [...parityBaseScenario.featureMethods!, "terminal.open"],
           }
         : {}),
-      ...(id === "claws"
+      ...(id === "templates"
         ? {
-            featureMethods: [...parityBaseScenario.featureMethods!, "claws.catalog.search"],
+            featureMethods: [...parityBaseScenario.featureMethods!, "templates.catalog.search"],
             methodResponses: {
               ...parityBaseScenario.methodResponses,
               "config.get": {
-                config: clawsConfig,
-                raw: JSON.stringify(clawsConfig),
-                hash: "memory-claws",
+                config: templatesConfig,
+                raw: JSON.stringify(templatesConfig),
+                hash: "memory-templates",
                 valid: true,
                 issues: [],
               },
-              "claws.catalog.search": { entries: [] },
+              "templates.catalog.search": { entries: [] },
             },
           }
         : {}),

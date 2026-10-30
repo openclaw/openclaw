@@ -17,8 +17,8 @@ import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { getGatewayContextResolver } from "../plugins/runtime/gateway-context-binding.js";
 import { captureEnv } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { getGatewayLifecycleRuntime } from "./server-lifecycle-runtime-context.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
-import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
 import { runDirectSessionReplyScenario } from "./server.sessions-send.direct-reply.test-support.js";
 import {
   agentCommandMock,
@@ -190,7 +190,7 @@ beforeAll(async () => {
   process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
   server = await startTestGatewayServer(portClaim);
   resolveGatewayContext = expectDefined(
-    getGatewayContextResolver(expectDefined(getGatewayRecoveryRuntime(), "Gateway runtime")),
+    getGatewayContextResolver(expectDefined(getGatewayLifecycleRuntime(), "Gateway runtime")),
     "Gateway context resolver",
   );
   // Prepare real handlers before RPC deadlines; cold module loading is fixture setup.

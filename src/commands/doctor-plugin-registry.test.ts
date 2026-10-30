@@ -127,6 +127,29 @@ async function createStaleLocalFixture() {
   };
 }
 
+async function createManagedNpmPeerLinkFixture() {
+  const stateDir = makeTempDir();
+  const managed = createManagedNpmPlugin({
+    stateDir,
+    id: "codex",
+    packageName: "codex-plugin",
+    version: "2026.5.3",
+    peerDependencies: {
+      openclaw: ">=2026.5.3",
+    },
+  });
+  await writePersistedInstalledPluginIndex(
+    createCurrentIndexWithNpmRecord({
+      pluginId: "codex",
+      packageName: "codex-plugin",
+      packageDir: managed.packageDir,
+      version: "2026.5.3",
+    }),
+    { stateDir },
+  );
+  return { stateDir, managed };
+}
+
 describe("maybeRepairPluginRegistryState", () => {
   it.each([false, true])(
     "builds missing registry state only with repair enabled (%s)",
@@ -653,23 +676,7 @@ describe("maybeRepairPluginRegistryState", () => {
   it.each([false, true])(
     "handles managed npm openclaw peer links with repair=%s",
     async (shouldRepair) => {
-      const stateDir = makeTempDir();
-      const managed = createManagedNpmPlugin({
-        stateDir,
-        id: "codex",
-        packageName: "codex-plugin",
-        version: "2026.5.3",
-        peerDependencies: { openclaw: ">=2026.5.3" },
-      });
-      await writePersistedInstalledPluginIndex(
-        createCurrentIndexWithNpmRecord({
-          pluginId: "codex",
-          packageName: "codex-plugin",
-          packageDir: managed.packageDir,
-          version: "2026.5.3",
-        }),
-        { stateDir },
-      );
+      const { stateDir, managed } = await createManagedNpmPeerLinkFixture();
 
       await maybeRepairPluginRegistryState({
         stateDir,

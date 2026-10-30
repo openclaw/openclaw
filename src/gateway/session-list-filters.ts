@@ -316,8 +316,9 @@ export function filterSessionEntries(
           }
           fields = {
             key: storeKey,
-            literal: rawFields.map(normalizeLowercaseStringOrEmpty),
-            titles: titles.map(normalizeSessionSearchText),
+            // Both matchers run only for nonempty queries; empty fields can never match.
+            literal: rawFields.map(normalizeLowercaseStringOrEmpty).filter(Boolean),
+            titles: titles.map(normalizeSessionSearchText).filter(Boolean),
           };
           staticSearchFields.set(entry, fields);
         }
