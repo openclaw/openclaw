@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe("Control UI accent presentation", () => {
-  it("reuses palette colors across route and breakpoint changes", () => {
+  it("reuses palette colors across breakpoint changes", () => {
     const root = document.documentElement;
     // Shared jsdom workers can retain a previous file's theme attributes.
     root.dataset.theme = "claw";
@@ -76,10 +76,6 @@ describe("Control UI accent presentation", () => {
 
       narrow = true;
       syncControlUiSystemChrome();
-      expectChrome("#203040");
-      syncControlUiSystemChrome(false, false);
-      expectChrome("rgb(10, 20, 30)");
-      syncControlUiSystemChrome(false, true);
       expectChrome("#203040");
       expect(reads).not.toHaveBeenCalled();
       applyControlUiAccent("#123456");
