@@ -204,6 +204,26 @@ it("recovers an aggregate payload of individually valid artifacts without losing
   await proveAggregateWorkspaceRecovery({ owner, canonical, stateRoot });
 });
 
+it.skipIf(process.platform === "win32")(
+  "lets a fresh turn correct an unstaged filename without replacing accepted canonical edits",
+  async () => {
+    const { proveUnsafePathWorkspaceRecovery } =
+      await import("./local-workspace-recovery.test-support.js");
+    await proveUnsafePathWorkspaceRecovery(owner, (value) => {
+      revoked = value;
+    });
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "retains a canonical destination collision after an explicit filename correction",
+  async () => {
+    const { proveUnsafePathWorkspaceCollision } =
+      await import("./local-workspace-recovery.test-support.js");
+    await proveUnsafePathWorkspaceCollision(owner);
+  },
+);
+
 it.each([false, true])(
   "settles old runtime-file results (source already copied: %s)",
   async (copied) => {
@@ -515,6 +535,7 @@ it("retains both sides and a durable pending result when edits conflict", async 
   await writeText(projection, "source.txt", "guest conflict\n");
   await writeText(canonical, "source.txt", "human conflict\n");
   await expect(synchronize()).rejects.toThrow("conflict");
+  await expect(prepare()).rejects.toThrow("conflict");
   expect((await readProjection())?.pending_ref).toBeTruthy();
   await expectText(projection, "source.txt", "guest conflict\n");
   await expectText(canonical, "source.txt", "human conflict\n");
