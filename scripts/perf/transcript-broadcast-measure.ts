@@ -3893,6 +3893,10 @@ async function controlAuthorityCounters(child: ChildProcess, action: "start" | "
 }
 async function controlTeamStressTelemetry(child: ChildProcess, action: "start" | "stop") {
   await new Promise<void>((resolve, reject) => {
+    const pending = new Set([
+      "team-shape-stress",
+      ...(action === "stop" && values["exec-io-storm"] ? ["agent-exec-io"] : []),
+    ]);
     const finish = (error?: Error) => {
       clearTimeout(timeout);
       child.off("message", onMessage);
@@ -3907,16 +3911,20 @@ async function controlTeamStressTelemetry(child: ChildProcess, action: "start" |
     const onMessage = (message: unknown) => {
       if (
         !isRecord(message) ||
-        message.channel !== "team-shape-stress" ||
+        typeof message.channel !== "string" ||
+        !pending.has(message.channel) ||
         message.action !== action
       ) {
         return;
       }
-      finish(
-        message.ok === true
-          ? undefined
-          : new Error(`Team stress telemetry ${action}: ${String(message.error)}`),
-      );
+      if (message.ok !== true) {
+        finish(new Error(`Team stress telemetry ${action}: ${String(message.error)}`));
+      } else {
+        pending.delete(message.channel);
+        if (pending.size === 0) {
+          finish();
+        }
+      }
     };
     const onExit = () => finish(new Error(`Gateway exited during Team stress telemetry ${action}`));
     const timeout = setTimeout(

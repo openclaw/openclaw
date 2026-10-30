@@ -3,6 +3,7 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { execCommand, type ExecOptions } from "./exec.js";
 
 const { spawnMock, terminateMock, settleTerminationMock, windowsLegacyOutput } = vi.hoisted(() => ({
@@ -309,4 +310,19 @@ describe("execCommand", () => {
 
     await expect(resultPromise).resolves.toMatchObject({ code: 0 });
   });
+
+  it.each([false, true])(
+    "classifies rejected native cleanup without a command result (ready=%s)",
+    async (ready) => {
+      const failure = new Error("native owner lost extinction evidence");
+      settleTerminationMock.mockRejectedValue(failure);
+      const { started, wait, resultPromise } = await startCommand(undefined, !ready);
+      const rejected = expect(resultPromise).rejects.toSatisfy(
+        (error: unknown) =>
+          hasCommandProcessCleanupError(error) && error instanceof Error && error.cause === failure,
+      );
+      (ready ? wait : started).reject(new Error("native process failed"));
+      await rejected;
+    },
+  );
 });

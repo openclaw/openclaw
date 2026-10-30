@@ -8,10 +8,13 @@ import { resolveExecIoDevices } from "./linux-exec-cgroup-device.js";
 const cgroupMount = "/sys/fs/cgroup";
 const budgetKeys = ["rbps", "wbps", "riops", "wiops"] as const;
 type IoBudget = Record<(typeof budgetKeys)[number], number>;
-const state = resolveGlobalSingleton(Symbol.for("openclaw.agentExecCgroup"), () => ({
-  discovered: false,
-  directory: undefined as string | undefined,
-}));
+const state = resolveGlobalSingleton<{ discovered: boolean; directory: string | undefined }>(
+  Symbol.for("openclaw.agentExecCgroup"),
+  () => ({
+    discovered: false,
+    directory: undefined,
+  }),
+);
 
 function serviceDirectory(): string | undefined {
   const relative = /^0::(.+)$/mu.exec(fs.readFileSync("/proc/self/cgroup", "utf8"))?.[1];

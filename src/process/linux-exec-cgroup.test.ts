@@ -31,7 +31,8 @@ vi.mock("node:fs", async (importOriginal) => {
     },
   };
 });
-vi.mock("./linux-exec-cgroup-device.js", () => ({
+vi.mock("./linux-exec-cgroup-device.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./linux-exec-cgroup-device.js")>()),
   resolveExecIoDevices: () => fixture.devices,
 }));
 

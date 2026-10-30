@@ -2,7 +2,10 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isErrno } from "../../infra/errno.js";
 import { createWindowsOutputDecoder } from "../../infra/windows-encoding.js";
 import { createChildProcessOutputRelease } from "../../process/child-process.js";
-import { CommandProcessCleanupError } from "../../process/exec-result.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../../process/exec-result.js";
 import {
   reserveCommandProcessCustody,
   resolveCommandEnv,
@@ -94,10 +97,11 @@ export async function execCommand(
   void cleanupDone.promise.catch(() => {});
   let adapter: SpawnProcessAdapter<NodeJS.Signals | null> | undefined;
   let startupCleanup: Promise<ProcessExtinctionResult> | undefined;
+  let completedResult: ExecResult | undefined;
   let waitingForSpawn = true;
   let acceptingOutput = true;
   let killed = false;
-  let startupFailed = false;
+  let commandFailed = false;
   let terminationStarted = false;
   const stopAdapter = () => {
     if (adapter && !terminationStarted) {
@@ -220,7 +224,7 @@ export async function execCommand(
           true,
         );
       }
-      return {
+      completedResult = {
         stdout: captures.stdout.text,
         stderr: captures.stderr.text,
         stdoutTruncatedChars: captures.stdout.truncatedChars || undefined,
@@ -229,11 +233,12 @@ export async function execCommand(
         code: outputLimitExceeded ? 1 : (exit.code ?? 1),
         killed,
       };
+      return completedResult;
     } catch (error) {
-      startupFailed = waitingForSpawn;
+      commandFailed = true;
       stopAdapter();
       if (
-        startupFailed &&
+        waitingForSpawn &&
         isErrno(error) &&
         /^(?:spawn|posix_spawn)(?: |$)/u.test(error.syscall ?? "")
       ) {
@@ -248,13 +253,16 @@ export async function execCommand(
         try {
           const cleanup = await (adapter?.waitForExtinction?.() ?? startupCleanup);
           if (cleanup && cleanup.status === "uncertain") {
-            throw new CommandProcessCleanupError();
+            throw new CommandProcessCleanupError({ cause: completedResult ?? cleanup.cause });
           }
           custody?.settled();
           cleanupDone.resolve();
         } catch (error) {
-          cleanupDone.reject(error);
-          throw error;
+          const failure = hasCommandProcessCleanupError(error)
+            ? error
+            : new CommandProcessCleanupError({ cause: completedResult ?? error });
+          cleanupDone.reject(failure);
+          throw failure;
         } finally {
           inheritedSignal?.removeEventListener("abort", killProcess);
           adapter?.dispose();
@@ -262,7 +270,7 @@ export async function execCommand(
       };
       const cleanup = settle();
       // A successful root may leave background work; custody follows its retained anchor.
-      if (killed || startupFailed) {
+      if (killed || commandFailed) {
         await cleanup;
       } else {
         void cleanup.catch((error: unknown) =>

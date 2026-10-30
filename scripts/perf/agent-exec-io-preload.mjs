@@ -7,6 +7,10 @@ import { createHistogram, performance } from "node:perf_hooks";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { findSqlCharacter, normalizeSqlWhitespace } from "../../src/infra/sqlite-schema-sql.ts";
+import {
+  startWorkerCommitMeasurement,
+  stopWorkerCommitMeasurement,
+} from "./agent-exec-io-workers.mjs";
 
 function isDirectDml(sql) {
   const normalized = normalizeSqlWhitespace(sql);
@@ -18,8 +22,11 @@ function isDirectDml(sql) {
 }
 
 if (isMainThread) {
-  const originalExec = DatabaseSync.prototype.exec;
-  const originalPrepare = DatabaseSync.prototype.prepare;
+  // Captured native functions require an explicit database receiver at invocation.
+  /** @type {{ exec: (this: DatabaseSync, sql: string) => void; prepare: (this: DatabaseSync, sql: string) => StatementSync }} */
+  const nativePrototype = DatabaseSync.prototype;
+  const originalExec = nativePrototype.exec;
+  const originalPrepare = nativePrototype.prepare;
   const histogram = createHistogram();
   const autocommit = createHistogram();
   const statements = new WeakMap();
@@ -161,7 +168,7 @@ if (isMainThread) {
     p99Ms: metric.count ? metric.percentile(99) / 1000 : null,
     maxMs: metric.count ? metric.max / 1000 : null,
   });
-  process.on("message", (message) => {
+  process.on("message", async (message) => {
     if (message?.channel !== "team-shape-stress") {
       return;
     }
@@ -175,43 +182,65 @@ if (isMainThread) {
       failures = 0;
       before = snapshot();
       startedAtEpochMs = Date.now();
+      startWorkerCommitMeasurement();
       active = true;
     } else if (message.action === "stop" && active) {
       active = false;
-      writeFileSync(
-        path.join(output, "agent-exec-io-commits.json"),
-        JSON.stringify(
-          {
-            scope:
-              "Gateway main-thread DatabaseSync.exec explicit COMMIT attempts (including failures); excludes workers and implicit/multi-statement commits",
-            startedAtEpochMs,
-            endedAtEpochMs: Date.now(),
-            ...summary(histogram),
-            failures,
-            autocommitMutations: {
+      const endedAtEpochMs = Date.now();
+      const cgroupsAfter = snapshot();
+      const workerCommits = await stopWorkerCommitMeasurement();
+      try {
+        writeFileSync(
+          path.join(output, "agent-exec-io-commits.json"),
+          JSON.stringify(
+            {
               scope:
-                "Successful main-thread native exec/run/get/all single-statement INSERT/UPDATE/DELETE/REPLACE calls outside explicit transactions; includes statement execution and automatic commit, may include temp-table mutations; not isolated COMMIT duration. Excludes workers, WITH/CTEs, batches, and streaming iteration.",
-              ...summary(autocommit),
+                "Gateway main-thread DatabaseSync.exec explicit COMMIT attempts (including failures); excludes workers and implicit/multi-statement commits",
+              startedAtEpochMs,
+              endedAtEpochMs,
+              ...summary(histogram),
+              failures,
+              workerCommits,
+              autocommitMutations: {
+                scope:
+                  "Successful main-thread native exec/run/get/all single-statement INSERT/UPDATE/DELETE/REPLACE calls outside explicit transactions; includes statement execution and automatic commit, may include temp-table mutations; not isolated COMMIT duration. Excludes workers, WITH/CTEs, batches, and streaming iteration.",
+                ...summary(autocommit),
+              },
+              coverage,
+              wrappersInstalled: {
+                exec: DatabaseSync.prototype.exec === exec,
+                prepare: DatabaseSync.prototype.prepare === prepare,
+                ...Object.fromEntries(
+                  Object.entries(wrappers).map(([method, wrapper]) => [
+                    method,
+                    StatementSync.prototype[method] === wrapper,
+                  ]),
+                ),
+              },
+              cgroupsBefore: before,
+              cgroupsAfter,
             },
-            coverage,
-            wrappersInstalled: {
-              exec: DatabaseSync.prototype.exec === exec,
-              prepare: DatabaseSync.prototype.prepare === prepare,
-              ...Object.fromEntries(
-                Object.entries(wrappers).map(([method, wrapper]) => [
-                  method,
-                  StatementSync.prototype[method] === wrapper,
-                ]),
-              ),
-            },
-            cgroupsBefore: before,
-            cgroupsAfter: snapshot(),
-          },
-          null,
-          2,
-        ),
-        { flag: "wx", mode: 0o600 },
-      );
+            null,
+            2,
+          ),
+          { flag: "wx", mode: 0o600 },
+        );
+        process.send?.({
+          channel: "agent-exec-io",
+          action: "stop",
+          ok: workerCommits.complete,
+          ...(workerCommits.complete
+            ? {}
+            : { error: "Worker COMMIT calls did not settle within 45 seconds" }),
+        });
+      } catch (error) {
+        process.send?.({
+          channel: "agent-exec-io",
+          action: "stop",
+          ok: false,
+          error: String(error),
+        });
+      }
     }
   });
 }

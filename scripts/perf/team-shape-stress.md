@@ -50,6 +50,18 @@ for stalls and host context; zero commit samples cannot establish commit latency
 Writer byte receipts have ten-second granularity, whereas commit timing follows the
 measurement start/stop messages. Allocation passes retain their usual traced scope.
 
+`workerCommits` pools actual native explicit COMMIT samples from the Gateway's Node
+workers, separately from the main-thread metrics. Shared histograms retain samples
+after workers retire and compute percentiles from pooled samples. A shared gate
+excludes setup and teardown; COMMIT calls entering within the window retain their
+full duration even if they finish after its end. Stop waits up to 45 seconds for
+these calls and rejects an incomplete capture. Coverage records instrumented worker
+counts plus thread and dynamically loaded backend basenames (including the session
+writer). Identities mark workers observed entering a measured COMMIT. Construction
+and preload counts are cumulative, including retired workers. CommonJS eval workers
+(which skip Node import preloads) are counted as excluded; subprocess-backed database
+owners are also outside this metric.
+
 Defaults are 10,800 deterministic sessions, 65 permanent operator WebSocket
 clients (plus brief reconnect probes), four concurrent mock-provider turns per
 round, and 40 enabled bundled plugins, including `acpx`, `codex`,

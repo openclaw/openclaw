@@ -573,7 +573,9 @@ describe.skipIf(process.platform === "win32")("service definition repair", () =>
     const before = await fs.readdir(path.dirname(f.source));
     native.systemctl.mockImplementation(async (_env, args: string[]) => {
       if (
-        args.includes("After,Wants,RestartUSec,KillMode,LoadState,TimeoutStopUSec,ControlGroup")
+        args.includes(
+          "After,Wants,RestartUSec,KillMode,LoadState,TimeoutStopUSec,ControlGroup,Delegate,DelegateSubgroup",
+        )
       ) {
         await fs.writeFile(f.source, edited);
       }
