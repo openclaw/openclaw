@@ -16,6 +16,7 @@ import {
   disableDependencyShrinkwrapOverrideConflictSources,
   validationOverrideRulesFromOverrides,
   normalizeNpmVersionDrift,
+  normalizeNpmRegistryIntegrities,
   normalizeOverrides,
   packageJsonForNpmLock,
   pnpmLockOverrideVersionForVersions,
@@ -1366,6 +1367,151 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
       expect(installedVersions(inferredBranches.packages, "leaf")).toEqual(["1.0.0", "2.0.0"]);
     } finally {
       registry.kill();
+    }
+  });
+
+  it.each([
+    "missing-pin",
+    "ambiguous-pin",
+    "wrong-version",
+    "wrong-alias",
+    "strong-mismatch",
+    "local-artifact",
+  ])(
+    "does not repair registry integrity by guessing or replacing conflicting hashes (%s)",
+    (scenario) => {
+      const sha512 = `sha512-${Buffer.alloc(64, 1).toString("base64")}`;
+      const sha1 = `sha1-${Buffer.alloc(20, 2).toString("base64")}`;
+      const metadata = {
+        name: scenario === "wrong-alias" ? "other" : "@borewit/text-codec",
+        version: scenario === "wrong-version" ? "0.2.3" : "0.2.2",
+        resolved:
+          scenario === "local-artifact" ? "file:./codec.tgz" : "https://mirror.invalid/codec.tgz",
+        integrity:
+          scenario === "strong-mismatch"
+            ? `sha512-${Buffer.alloc(64, 3).toString("base64")}`
+            : sha1,
+      };
+      const lock = { packages: { "node_modules/codec": metadata } };
+      const pins = new Map([["@borewit/text-codec@0.2.2", new Set([sha512])]]);
+      if (scenario === "missing-pin") {
+        pins.clear();
+      }
+      if (scenario === "ambiguous-pin") {
+        pins
+          .get("@borewit/text-codec@0.2.2")!
+          .add(`sha512-${Buffer.alloc(64, 4).toString("base64")}`);
+      }
+      const original = metadata.integrity;
+      if (scenario === "strong-mismatch" || scenario === "local-artifact") {
+        normalizeNpmRegistryIntegrities(lock, pins);
+        expect(
+          collectPnpmLockViolations(lock, new Set(["@borewit/text-codec@0.2.2"]), pins),
+        ).toHaveLength(1);
+      } else {
+        expect(() => normalizeNpmRegistryIntegrities(lock, pins)).toThrow(
+          "expected one pnpm SHA512 pin",
+        );
+      }
+      expect(metadata.integrity).toBe(original);
+    },
+  );
+
+  it("carries pnpm SHA512 pins into locks generated from SHA1-only registry metadata", async () => {
+    const root = tempDirs.make("openclaw-npm-sha1-registry-");
+    mkdirSync(path.join(root, "package"));
+    const manifest = { name: "@borewit/text-codec", version: "0.2.2", main: "index.js" };
+    writeFileSync(path.join(root, "package/package.json"), JSON.stringify(manifest));
+    writeFileSync(path.join(root, "package/index.js"), "module.exports = 42;\n");
+    const archive = path.join(root, "codec.tgz");
+    createTar({ cwd: root, file: archive, sync: true, gzip: true }, ["package"]);
+    const bytes = readFileSync(archive);
+    const integrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
+    const shasum = createHash("sha1").update(bytes).digest("hex");
+    writeFileSync(path.join(root, "pnpm-workspace.yaml"), "{}\n");
+    writeFileSync(
+      path.join(root, "pnpm-lock.yaml"),
+      JSON.stringify({
+        packages: { "@borewit/text-codec@0.2.2": { resolution: { integrity } } },
+        snapshots: { "@borewit/text-codec@0.2.2": {} },
+      }),
+    );
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        name: "registry-fixture",
+        version: "1.0.0",
+        dependencies: { "@borewit/text-codec": "0.2.2", codec: "npm:@borewit/text-codec@0.2.2" },
+      }),
+    );
+    const registry = spawn(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `
+import { createServer } from 'node:http';
+import { readFileSync } from 'node:fs';
+const manifest = ${JSON.stringify(manifest)};
+const server = createServer((req, res) => {
+  if (req.url === '/codec.tgz') { res.end(readFileSync(${JSON.stringify(archive)})); return; }
+  if (decodeURIComponent(req.url) !== '/@borewit/text-codec') { res.writeHead(404); res.end(); return; }
+  res.setHeader('content-type', 'application/json');
+  res.end(JSON.stringify({ name: manifest.name, 'dist-tags': { latest: manifest.version },
+    versions: { [manifest.version]: { ...manifest, dist: { shasum: ${JSON.stringify(shasum)},
+      tarball: 'http://127.0.0.1:' + server.address().port + '/codec.tgz' } } } }));
+});
+server.listen(0, '127.0.0.1', () => process.stdout.write(String(server.address().port)));
+process.on('SIGTERM', () => server.close(() => process.exit(0)));
+`,
+      ],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    try {
+      const port = await new Promise<number>((resolve, reject) => {
+        registry.once("error", reject);
+        registry.once("exit", (code) => reject(new Error(`fixture registry exited ${code}`)));
+        registry.stdout.once("data", (chunk) => resolve(Number(String(chunk))));
+      });
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          import.meta.resolve("tsx"),
+          "--input-type=module",
+          "-e",
+          `
+import { generateNpmPackageLock } from ${JSON.stringify(new URL("../../scripts/generate-npm-package-lock.mts", import.meta.url).href)};
+console.log(generateNpmPackageLock(${JSON.stringify(root)}));
+`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: root,
+            npm_config_registry: `http://127.0.0.1:${port}`,
+            npm_config_cache: path.join(root, "cache"),
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const lock = JSON.parse(result.stdout);
+      expect(lock.packages["node_modules/@borewit/text-codec"]).toMatchObject({
+        version: "0.2.2",
+        integrity,
+      });
+      expect(lock.packages["node_modules/codec"]).toMatchObject({
+        name: "@borewit/text-codec",
+        version: "0.2.2",
+        integrity,
+      });
+    } finally {
+      const exited = new Promise((resolve) => {
+        registry.once("exit", resolve);
+      });
+      registry.kill();
+      await exited;
     }
   });
 
