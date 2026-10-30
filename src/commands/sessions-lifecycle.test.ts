@@ -205,6 +205,22 @@ describe("sessions lifecycle commands", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
+  it("reports partial bound automation cleanup after a successful deletion", async () => {
+    const key = "agent:main:cleanup-report";
+    const automationCleanup = {
+      disabledJobIds: ["reminder-disabled"],
+      failures: [{ jobId: "reminder-failed", message: "synthetic cleanup failure" }],
+    };
+    prepareDelete(key, { automationCleanup });
+
+    await run("delete", { keys: [key], yes: true, json: true });
+
+    expectJson(
+      failedDelete([{ key, ok: false, status: "deleted", archived: [], automationCleanup }]),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("keeps requested owners when described sessions share a canonical key", async () => {
     respond(
       described("global", "work-session", { agentId: "work" }),

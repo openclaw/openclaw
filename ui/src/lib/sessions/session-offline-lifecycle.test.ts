@@ -571,6 +571,31 @@ it("reports a preserved worktree after deferred deletion without removing it", a
   );
 });
 
+it("reports automation cleanup failures after deferred deletion", async () => {
+  const h = await setup();
+  const request = h.current().request.getMockImplementation()!;
+  h.current().request.mockImplementation(async (method, params) => {
+    const result = await request(method, params);
+    return method === "sessions.delete"
+      ? {
+          ...result,
+          automationCleanup: {
+            disabledJobIds: ["reminder-disabled"],
+            failures: [{ jobId: "reminder-failed", message: "store unavailable" }],
+          },
+        }
+      : result;
+  });
+  h.offline();
+  await h.delete();
+  h.reconnect();
+  await vi.waitFor(() => expect(h.gateway.snapshot.deferredIntentDraining).toBe(false));
+  expect(showToast).toHaveBeenCalledExactlyOnceWith({
+    message:
+      "Paused automations: reminder-disabled.\nCould not pause automations: reminder-failed: store unavailable.",
+  });
+});
+
 it.each([false, true])(
   "does not publish a retired delete's absence-check error (missing incarnation=%s)",
   async (missingIncarnation) => {

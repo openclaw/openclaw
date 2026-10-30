@@ -370,6 +370,7 @@ and remain selected.
 | `curatedWrites`                    | Files to review, with `relativePath` and `observedAt` (Unix milliseconds). Includes supported recorded write attempts, which may not have succeeded. |
 | `artifacts`                        | Counts of matching files, entries, lines, and store rows described below.                                                                            |
 | `refusals`                         | Historical consolidation highlights needing manual review. An empty list does not establish complete deletion coverage.                              |
+| `automationCleanup`                | On apply, disabled automation IDs and failures for selected sessions whose exact session key was resolved.                                           |
 
 Preview and apply use the same matching logic, but each reads current state;
 a preview is not an immutable plan or a lock on subsequent writes. Apply
@@ -381,6 +382,12 @@ rerun an index command that reports a source change. Direct agent edits and
 external writers do not share that lock, so pause them during a sensitive
 cleanup. Rerun the preview afterward. An empty selection or zero counts do not
 prove that no related data remains.
+
+Apply also disables enabled automations bound to each resolved session key,
+without deleting their records. Unresolved selectors have no exact automation
+binding to clean up. A cleanup failure is included in the report and makes the
+command exit non-zero; memory changes already committed are not rolled back.
+`--dry-run` does not change automations.
 
 ### If deletion fails
 

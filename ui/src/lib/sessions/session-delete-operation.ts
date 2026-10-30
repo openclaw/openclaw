@@ -3,6 +3,7 @@ import type { SessionsDeleteResult } from "../../../../packages/gateway-protocol
 import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../../src/shared/session-archive-timeout.ts";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { reportAutomationCleanupOutcome } from "../../components/session-automation-confirm.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../format-error.ts";
@@ -102,6 +103,7 @@ function performSessionDelete(
       return {
         deleted: true,
         ...(response.worktreePreserved ? { worktreePreserved: response.worktreePreserved } : {}),
+        ...(response.automationCleanup ? { automationCleanup: response.automationCleanup } : {}),
       };
     } catch (error) {
       if (!host.owns(deletion)) {
@@ -152,6 +154,7 @@ export async function runDeferredSessionDelete(
       }
     }
     if (outcome.deleted && host.connection.isCurrent(scope)) {
+      reportAutomationCleanupOutcome(outcome.automationCleanup, host.reportError);
       await host.reconcileMutation(deletion.target.agentId);
     }
   } catch (error) {
@@ -194,6 +197,11 @@ export async function settleSessionDeleteBatch(
         result.deleted.push(...callerTargets.keys());
         if (outcome.worktreePreserved) {
           result.preservedWorktrees.push(outcome.worktreePreserved);
+        }
+        if (outcome.automationCleanup) {
+          const cleanup = (result.automationCleanup ??= { disabledJobIds: [], failures: [] });
+          cleanup.disabledJobIds.push(...outcome.automationCleanup.disabledJobIds);
+          cleanup.failures.push(...outcome.automationCleanup.failures);
         }
       }
     } catch (error) {

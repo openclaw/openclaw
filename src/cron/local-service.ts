@@ -4,14 +4,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { getChildLogger, getResolvedLoggerSettings, toPinoLikeLogger } from "../logging/logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import {
+  disableCronJobsBoundToSessions,
+  type CronSessionCleanupIdentity,
+  type DisableCronJobsBoundToSessionsResult,
+} from "./job-session-bindings.js";
 import { CronService } from "./service.js";
 import { resolveCronJobsStorePathAsync } from "./store.js";
 
-export async function withLocalAgentCronJobsRemoved<T>(
-  agentId: string,
-  getRuntimeConfig: () => OpenClawConfig,
-  commit: () => Promise<T>,
-): Promise<T> {
+async function createLocalCronService(getRuntimeConfig: () => OpenClawConfig) {
   const cfg = getRuntimeConfig();
   const storePath = await resolveCronJobsStorePathAsync();
   const scheduler = new GatewayScheduler();
@@ -36,8 +37,35 @@ export async function withLocalAgentCronJobsRemoved<T>(
       throw new Error("Cron execution is unavailable in local service context.");
     },
   });
+  return { scheduler, service };
+}
+
+export async function withLocalAgentCronJobsRemoved<T>(
+  agentId: string,
+  getRuntimeConfig: () => OpenClawConfig,
+  commit: () => Promise<T>,
+): Promise<T> {
+  const { scheduler, service } = await createLocalCronService(getRuntimeConfig);
   try {
     return await service.removeAgentJobsTransactional(agentId, commit);
+  } finally {
+    service.stop();
+    await scheduler.stop();
+  }
+}
+
+/** Disables jobs for a caller that already owns local OpenClaw state. */
+export async function disableLocalCronJobsBoundToSessions(params: {
+  cfg: OpenClawConfig;
+  sessions: readonly CronSessionCleanupIdentity[];
+}): Promise<DisableCronJobsBoundToSessionsResult> {
+  const { scheduler, service } = await createLocalCronService(() => params.cfg);
+  try {
+    return await disableCronJobsBoundToSessions({
+      cron: service,
+      cfg: params.cfg,
+      sessions: params.sessions,
+    });
   } finally {
     service.stop();
     await scheduler.stop();

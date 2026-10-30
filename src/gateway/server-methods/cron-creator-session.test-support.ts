@@ -90,6 +90,28 @@ export function registerCronCreatorSessionTests(fixture: {
     );
   });
 
+  it("retains the creator incarnation for main-session reminders", async () => {
+    loadGatewaySessionEntry.mockReturnValue({
+      canonicalKey: sourceConversation.sessionKey,
+      entry: { ...sourceConversation, createdActor: creator },
+    });
+    const { options, payload } = await create(
+      agentTurnCronParams({
+        agentId: "ops",
+        sessionKey: "conversation",
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "Synthetic reminder" },
+      }),
+      { client: callerClient("ops", undefined, sourceConversation.sessionKey) },
+    );
+
+    expect(options.ownerSessionId).toBe(sourceConversation.sessionId);
+    expect(options.payloadSourceConversation).toEqual(sourceConversation);
+    expect(options).not.toHaveProperty("sourceConversation");
+    expect(payload).not.toHaveProperty("ownerSessionId");
+    expect(payload).not.toHaveProperty("payloadSourceConversation");
+  });
+
   it.each([undefined, "missing-conversation"])(
     "leaves isolated jobs unbound without an existing creating session: %s",
     async (sessionKey) => {
@@ -123,6 +145,12 @@ export function registerCronCreatorSessionTests(fixture: {
 
   it.each([
     { createdActor: { type: "human", source: "profile", id: "spoofed-profile" } },
+    {
+      payloadSourceConversation: {
+        sessionKey: "agent:main:other",
+        sessionId: "spoofed-session",
+      },
+    },
     { sourceConversation: { sessionKey: "agent:main:other", sessionId: "spoofed-session" } },
     { operatorSource: { source: { profileId: "spoofed-profile" } } },
   ])("rejects caller-supplied private cron creator facts: %j", async (privateFields) => {

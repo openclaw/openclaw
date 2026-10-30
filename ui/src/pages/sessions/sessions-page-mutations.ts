@@ -6,6 +6,7 @@ import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import {
   confirmWithBoundAutomations,
+  reportAutomationCleanupOutcome,
   withBoundAutomationNotice,
 } from "../../components/session-automation-confirm.ts";
 import {
@@ -268,12 +269,12 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
         host.onDeleted(scope, requests, result.deleted);
       }
       await refreshSessionList(scope);
-      return result.errors.length > 0
+      const errors = result.errors.map(({ error }) => formatBatchSessionRemovalError(error));
+      reportAutomationCleanupOutcome(result.automationCleanup, (message) => errors.push(message));
+      return errors.length > 0
         ? {
             status: "failed",
-            error: result.errors
-              .map(({ error }) => formatBatchSessionRemovalError(error))
-              .join("; "),
+            error: errors.join("; "),
           }
         : "completed";
     });

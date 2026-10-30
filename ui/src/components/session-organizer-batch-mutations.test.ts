@@ -554,6 +554,29 @@ describe("session organizer destructive confirmations", () => {
     alertSpy.mockRestore();
   });
 
+  it("reports partial automation cleanup after a completed deletion", async () => {
+    const h = createHarness(destructiveHarness);
+    const row = sessionRow(0);
+    h.deleteMany.mockResolvedValueOnce({
+      deleted: [row.key],
+      errors: [],
+      preservedWorktrees: [],
+      automationCleanup: {
+        disabledJobIds: ["reminder-disabled"],
+        failures: [{ jobId: "reminder-failed", message: "store unavailable" }],
+      },
+    });
+
+    const pending = deleteSessionsBatch(h.host, [row], h.scope);
+    await answer();
+    await pending;
+
+    expectError(
+      h,
+      "Paused automations: reminder-disabled.\nCould not pause automations: reminder-failed: store unavailable.",
+    );
+  });
+
   it.each(
     destructiveOperations.flatMap((operation) =>
       [false, true].map((retired) => ({ operation, retired })),

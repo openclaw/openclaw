@@ -19,6 +19,9 @@ export type CronAddOptions = {
   operatorSource?: NonNullable<CronStoredJob["operatorSource"]>["source"];
   operatorSourceExecutionRevision?: string;
   inferenceBinding?: CronStoredJob["inferenceBinding"];
+  /** Exact creator incarnation captured with the public owner key. */
+  ownerSessionId?: string;
+  payloadSourceConversation?: CronStoredJob["payloadSourceConversation"];
   sourceConversation?: CronStoredJob["sourceConversation"];
   /** Logical sandbox target captured from the admitted creator, never public input. */
   streamSandbox?: CronStoredJob["streamSandbox"];

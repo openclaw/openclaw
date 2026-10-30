@@ -329,6 +329,7 @@ export function createSessionDeletions(host: DeletionHost) {
         ...(result.preservedWorktrees[0]
           ? { worktreePreserved: result.preservedWorktrees[0] }
           : {}),
+        ...(result.automationCleanup ? { automationCleanup: result.automationCleanup } : {}),
       };
     },
     applyRetained(

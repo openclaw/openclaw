@@ -197,6 +197,13 @@ export function createDirectChatContext(
     nodeSendToSession: vi.fn(),
     registerToolEventRecipient: vi.fn(),
     getRuntimeConfig,
+    cron: {
+      getDefaultAgentId: () => "main",
+      list: vi.fn(async () => []),
+      updateWithPrecondition: vi.fn(async () => {
+        throw new Error("No cron jobs are available in this test context");
+      }),
+    },
     trackExecution: trackAsyncWork,
     readChatMetadata: vi.fn(async () => {
       throw new Error("prepared chat metadata is unavailable in direct handler tests");

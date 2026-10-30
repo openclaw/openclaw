@@ -23,6 +23,7 @@ import { showConfirmDialog, type ConfirmDialogSkipPreference } from "./confirm-d
 import { showInputDialog } from "./input-dialog.tsx";
 import {
   confirmWithBoundAutomations,
+  reportAutomationCleanupOutcome,
   withBoundAutomationNotice,
 } from "./session-automation-confirm.ts";
 import type { SessionMenuAction } from "./session-menu-solid.tsx";
@@ -166,6 +167,7 @@ export async function deleteSessionsBatch(
       if (result.preservedWorktrees.length > 0) {
         showToast({ message: formatPreservedWorktreesNotice(result.preservedWorktrees) });
       }
+      reportAutomationCleanupOutcome(result.automationCleanup, (message) => showToast({ message }));
       return;
     }
     if (deps.sidebarSessionStatusFilter() !== "active") {
@@ -180,11 +182,10 @@ export async function deleteSessionsBatch(
         return;
       }
     }
-    if (result.errors.length > 0) {
-      deps.sessionData.publishSessionMutationError(
-        scope,
-        result.errors.map(({ error }) => formatBatchSessionRemovalError(error)).join("; "),
-      );
+    const errors = result.errors.map(({ error }) => formatBatchSessionRemovalError(error));
+    reportAutomationCleanupOutcome(result.automationCleanup, (message) => errors.push(message));
+    if (errors.length > 0) {
+      deps.sessionData.publishSessionMutationError(scope, errors.join("; "));
     }
   } catch (error) {
     deps.sessionData.publishSessionMutationError(scope, error);
@@ -611,6 +612,9 @@ export async function deleteSession(
       if (outcome.worktreePreserved) {
         showToast({ message: formatPreservedWorktreesNotice([outcome.worktreePreserved]) });
       }
+      reportAutomationCleanupOutcome(outcome.automationCleanup, (message) =>
+        showToast({ message }),
+      );
       return;
     }
     if (deps.sidebarSessionStatusFilter() !== "active") {
@@ -653,6 +657,9 @@ export async function deleteSession(
         }
       }
     }
+    reportAutomationCleanupOutcome(outcome.automationCleanup, (message) =>
+      deps.sessionData.publishSessionMutationError(scope, message),
+    );
   } catch (error) {
     deps.sessionData.publishSessionMutationError(scope, error);
   }

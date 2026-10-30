@@ -136,6 +136,14 @@ export function planCronJobMutation(
           enabledExplicit: options.enabledExplicit === true,
           nowMs: now,
         });
+        if (!isDeepStrictEqual(previousJob.payload, nextJob.payload)) {
+          if (options.payloadSourceConversation) {
+            nextJob.payloadSourceConversation = { ...options.payloadSourceConversation };
+          }
+          if (options.sourceConversation) {
+            nextJob.sourceConversation = { ...options.sourceConversation };
+          }
+        }
         applyCronStreamSandboxTarget(nextJob, options.streamSandbox);
         finalizeUpdatedJob({
           job: previousJob,
@@ -176,6 +184,12 @@ export function planCronJobMutation(
         }
         if (options.createdActor) {
           nextJob.createdActor = options.createdActor;
+        }
+        if (options.ownerSessionId && nextJob.owner?.sessionKey) {
+          nextJob.ownerSessionId = options.ownerSessionId;
+        }
+        if (options.payloadSourceConversation) {
+          nextJob.payloadSourceConversation = options.payloadSourceConversation;
         }
         if (options.sourceConversation) {
           nextJob.sourceConversation = options.sourceConversation;

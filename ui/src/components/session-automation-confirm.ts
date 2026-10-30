@@ -1,9 +1,11 @@
+import type { SessionAutomationCleanup } from "../../../packages/gateway-protocol/src/index.js";
 import type { CronCompactJob, CronJobsListResult } from "../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { resolveUiConversationIdentity } from "../lib/sessions/session-key.ts";
+import { showToast } from "../lib/toast.ts";
 import type { ConfirmDialogOptions } from "./confirm-dialog.ts";
 
 registerSessionOrganizationEnglish();
@@ -165,6 +167,39 @@ export function withBoundAutomationNotice<T extends ConfirmDialogOptions>(
       notice.action === "archive" ? "sessionsView.archiveAnyway" : "sessionsView.deleteAnyway",
     ),
   };
+}
+
+export function reportAutomationCleanupOutcome(
+  cleanup: SessionAutomationCleanup | undefined,
+  reportFailure: (message: string) => void,
+): void {
+  if (!cleanup) {
+    return;
+  }
+  const messages: string[] = [];
+  if (cleanup.disabledJobIds.length > 0) {
+    messages.push(
+      t("sessionsView.automationPauseCompleted", { ids: cleanup.disabledJobIds.join(", ") }),
+    );
+  }
+  if (cleanup.failures.length > 0) {
+    messages.push(
+      t("sessionsView.automationPauseFailed", {
+        failures: cleanup.failures
+          .map(({ jobId, message }) => (jobId ? `${jobId}: ${message}` : message))
+          .join("; "),
+      }),
+    );
+  }
+  const message = messages.join("\n");
+  if (!message) {
+    return;
+  }
+  if (cleanup.failures.length > 0) {
+    reportFailure(message);
+  } else {
+    showToast({ message });
+  }
 }
 
 // Counts only; job names and session labels stay out of the console record.

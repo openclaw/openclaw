@@ -5,6 +5,7 @@ import {
   errorShape,
   type ErrorShape,
   type PreservedSessionWorktree,
+  type SessionAutomationCleanup,
   type SessionsDeleteParams,
   type SessionsDeleteResult,
   validateSessionsDeleteParams,
@@ -24,6 +25,7 @@ import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-
 import { assertCapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
+import { disableCronJobsBoundToSessions } from "../../cron/job-session-bindings.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
@@ -336,6 +338,7 @@ async function deleteGatewaySessionInScope(
     ];
     let drain: SessionLifecycleDrain | undefined;
     let worktreePreserved: PreservedSessionWorktree | undefined;
+    let automationCleanup: SessionAutomationCleanup | undefined;
     let published = false;
     const publishDeletion = (deletion: Awaited<ReturnType<typeof deleteSessionEntryLifecycle>>) => {
       const response: SessionsDeleteResult = {
@@ -344,6 +347,7 @@ async function deleteGatewaySessionInScope(
         deleted: deletion.deleted,
         archived: deletion.archivedTranscripts.map((entry) => entry.archivedPath),
         ...(worktreePreserved ? { worktreePreserved } : {}),
+        ...(automationCleanup ? { automationCleanup } : {}),
       };
       if (published) {
         return response;
@@ -538,6 +542,36 @@ async function deleteGatewaySessionInScope(
               // this fence opens, so a same-key successor cannot be mistaken for it.
               const deletedSessionKey = target.canonicalKey ?? key;
               await handleSessionStateSessionDeleted(deletedSessionKey, requestedAgentId);
+              try {
+                const cleanup = await disableCronJobsBoundToSessions({
+                  cron: context.cron,
+                  cfg,
+                  sessions: [
+                    {
+                      sessionKey: deletedSessionKey,
+                      agentId: target.agentId,
+                      ...(result.deletedSessionId ? { sessionId: result.deletedSessionId } : {}),
+                    },
+                  ],
+                });
+                const disabledJobIds = cleanup.disabledBySession.get(deletedSessionKey) ?? [];
+                automationCleanup = { disabledJobIds, failures: cleanup.failures };
+                if (disabledJobIds.length > 0) {
+                  sessionLog.info(
+                    `sessions.delete: disabled cron jobs bound to deleted session ${deletedSessionKey}: ${disabledJobIds.join(", ")}`,
+                  );
+                }
+              } catch (error) {
+                automationCleanup = {
+                  disabledJobIds: [],
+                  failures: [{ message: formatErrorMessage(error) }],
+                };
+              }
+              if (automationCleanup.failures.length > 0) {
+                sessionLog.warn(
+                  `sessions.delete: failed to disable ${automationCleanup.failures.length} cron job(s) for deleted session ${deletedSessionKey}: ${automationCleanup.failures.map(({ jobId, message }) => `${jobId ?? "unknown"}: ${message}`).join("; ")}`,
+                );
+              }
               // The absent session plus its retained registry binding survive a crash.
               // Keep this mutation and request lifetime through lossless cleanup, but
               // acknowledge archived cleanup once the visible deletion is committed.

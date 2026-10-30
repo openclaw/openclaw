@@ -1,4 +1,5 @@
 import path from "node:path";
+import { disableLocalCronJobsBoundToSessions } from "openclaw/plugin-sdk/cron-store-runtime";
 import { readMemorySearchManagerStatus } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   defaultRuntime,
@@ -193,8 +194,30 @@ export async function runMemoryForget(opts: MemoryForgetCommandOptions) {
       since: opts.since,
       dryRun: Boolean(opts.dryRun),
     });
+    const sessions = report.sessionResolutions.flatMap(({ sessionId, sessionKey }) =>
+      sessionKey ? [{ agentId: report.agentId, sessionId, sessionKey }] : [],
+    );
+    const automationCleanup =
+      !report.dryRun && sessions.length > 0
+        ? await disableLocalCronJobsBoundToSessions({ cfg, sessions }).catch((error: unknown) => ({
+            disabledBySession: new Map<string, string[]>(),
+            failures: [{ jobId: undefined, message: formatErrorMessage(error) }],
+          }))
+        : undefined;
+    const cleanupReport = automationCleanup
+      ? {
+          disabledJobIds: [
+            ...new Set([...automationCleanup.disabledBySession.values()].flat()),
+          ].toSorted(),
+          failures: automationCleanup.failures,
+        }
+      : undefined;
+    const output = cleanupReport ? { ...report, automationCleanup: cleanupReport } : report;
     if (opts.json) {
-      defaultRuntime.writeJson(report);
+      defaultRuntime.writeJson(output);
+      if (cleanupReport?.failures.length) {
+        process.exitCode = 1;
+      }
       return;
     }
     const lines = [
@@ -242,10 +265,23 @@ export async function runMemoryForget(opts: MemoryForgetCommandOptions) {
     for (const refusal of report.refusals) {
       lines.push(warn(terminalText`Refused: ${refusal}`));
     }
+    for (const jobId of cleanupReport?.disabledJobIds ?? []) {
+      lines.push(`${muted("Disabled bound automation:")} ${terminalText`${jobId}`}`);
+    }
+    for (const failure of cleanupReport?.failures ?? []) {
+      lines.push(
+        warn(
+          terminalText`Bound automation cleanup${failure.jobId ? ` (${failure.jobId})` : ""}: ${failure.message}`,
+        ),
+      );
+    }
     if (report.dryRun) {
       lines.push(muted("Dry run: no memory files, index rows, or plugin state were changed."));
     }
     defaultRuntime.log(lines.join("\n"));
+    if (cleanupReport?.failures.length) {
+      process.exitCode = 1;
+    }
   } catch (error) {
     throw new Error(`Memory forget failed: ${formatErrorMessage(error)}`, { cause: error });
   }

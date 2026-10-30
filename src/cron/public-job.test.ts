@@ -48,6 +48,11 @@ describe("toPublicCronJob", () => {
     const fields: Partial<CronStoredJob> = {
       runtimeAuthority: { version: 1, runtimeId: "test", namespace: "test", payload: {} },
       runtimeAuthorityRecoveryRequired: true,
+      ownerSessionId: "creating-session",
+      payloadSourceConversation: {
+        sessionKey: "agent:main:conversation",
+        sessionId: "creating-session",
+      },
       toolsAllowProvenance: { version: 1, source: "final-executable-surface" },
       toolsAllowExecTarget: target,
       toolsAllowExecTargetRequirement: { version: 1, target, grantIndex: 0 },

@@ -168,6 +168,20 @@ describe("optimistic session deletion", () => {
     },
   );
 
+  it("returns automation cleanup outcomes to deletion callers", async () => {
+    const h = createSessionDeletionHarness();
+    const automationCleanup = {
+      disabledJobIds: ["reminder-disabled"],
+      failures: [{ jobId: "reminder-failed", message: "store unavailable" }],
+    };
+    await h.sessions.refresh({ force: true });
+    const operation = h.sessions.delete(h.alpha.key);
+    const response = await h.waitForDeleteRequest(h.alpha.key);
+    response.resolve({ deleted: true, automationCleanup });
+
+    await expect(operation).resolves.toEqual({ deleted: true, automationCleanup });
+  });
+
   it("lets an unloaded local RPC confirm without trusting a key-only event", async () => {
     const h = createSessionDeletionHarness();
     const facts: string[] = [];

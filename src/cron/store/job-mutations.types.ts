@@ -16,6 +16,8 @@ type CronJobMutationOptions = Pick<
   | "systemOwned"
   | "createdActor"
   | "inferenceBinding"
+  | "ownerSessionId"
+  | "payloadSourceConversation"
   | "sourceConversation"
   | "operatorSource"
   | "operatorSourceExecutionRevision"

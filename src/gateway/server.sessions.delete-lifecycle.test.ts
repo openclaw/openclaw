@@ -23,6 +23,7 @@ import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sql
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { CronJob, CronStoredJob } from "../cron/types.js";
 import { readAttachedSessionEndTranscriptSourceForTest } from "../plugins/session-end-transcript.test-support.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import {
@@ -214,6 +215,98 @@ test("sessions.delete rejects main and aborts active runs", async () => {
     { childSessionKey: key },
   );
   expect(unbind).toHaveBeenCalledExactlyOnceWith({ targetSessionKey: key, reason });
+});
+
+test("sessions.delete reports bound automation cleanup for both authorized deletion paths", async () => {
+  const archivedKey = "agent:main:archived-context";
+  const adminKey = "agent:main:admin-context";
+  const unrelatedKey = "agent:main:other";
+  await seedSessions(
+    [archivedKey, "sess-archived", { archivedAt: Date.now() }],
+    [adminKey, "sess-admin"],
+    [unrelatedKey, "sess-other"],
+  );
+  const job = (id: string, sessionKey: string, ownerSessionId: string): CronStoredJob => ({
+    id,
+    name: id,
+    enabled: true,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+    schedule: { kind: "at", at: "2027-01-01T00:00:00.000Z" },
+    sessionTarget: "main",
+    wakeMode: "now",
+    payload: { kind: "systemEvent", text: "Synthetic reminder with copied context" },
+    owner: { agentId: "main", sessionKey },
+    ownerSessionId,
+    state: {},
+  });
+  const jobs = [
+    job("archived-bound", archivedKey, "sess-archived"),
+    job("admin-bound", adminKey, "sess-admin"),
+    job("fails", adminKey, "sess-admin"),
+    job("unrelated", unrelatedKey, "sess-other"),
+    job("old-incarnation", adminKey, "sess-old"),
+  ];
+  const updateWithPrecondition = vi.fn(
+    async (
+      id: string,
+      patch: { enabled?: boolean },
+      precondition: (currentJob: CronJob, nowMs: number) => void | Promise<void>,
+    ) => {
+      const currentJob = jobs.find((candidate) => candidate.id === id);
+      if (!currentJob) {
+        throw new Error(`cron job not found: ${id}`);
+      }
+      if (id === "fails") {
+        throw new Error("synthetic disable failure");
+      }
+      await precondition(currentJob, Date.now());
+      currentJob.enabled = patch.enabled ?? currentJob.enabled;
+      return currentJob;
+    },
+  );
+  const context = {
+    cron: {
+      getDefaultAgentId: () => "main",
+      list: async () => jobs,
+      updateWithPrecondition,
+    },
+  };
+  const writeScopedClient = { connect: { scopes: ["operator.write"] } } as never;
+  const archivedDeleted = await deleteSession(
+    { key: archivedKey, archivedOnly: true },
+    { context, client: writeScopedClient },
+  );
+  expect(archivedDeleted).toMatchObject({
+    ok: true,
+    payload: {
+      deleted: true,
+      automationCleanup: { disabledJobIds: ["archived-bound"], failures: [] },
+    },
+  });
+
+  const deleted = await deleteSession(
+    { key: adminKey },
+    { context, client: { connect: { scopes: ["operator.admin"] } } as never },
+  );
+
+  expect(deleted).toMatchObject({
+    ok: true,
+    payload: {
+      deleted: true,
+      automationCleanup: {
+        disabledJobIds: ["admin-bound"],
+        failures: [{ jobId: "fails", message: "synthetic disable failure" }],
+      },
+    },
+  });
+  expect(jobs.map(({ id, enabled }) => ({ id, enabled }))).toEqual([
+    { id: "archived-bound", enabled: false },
+    { id: "admin-bound", enabled: false },
+    { id: "fails", enabled: true },
+    { id: "unrelated", enabled: true },
+    { id: "old-incarnation", enabled: true },
+  ]);
 });
 
 test("sessions.delete preserves locked archived sessions and deletes ordinary archived sessions", async () => {

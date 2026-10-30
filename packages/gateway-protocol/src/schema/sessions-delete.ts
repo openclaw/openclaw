@@ -42,6 +42,16 @@ export const PreservedSessionWorktreeSchema = closedObject({
   reason: WorktreePreservationReasonSchema,
 });
 
+export const SessionAutomationCleanupSchema = closedObject({
+  disabledJobIds: Type.Array(NonEmptyString),
+  failures: Type.Array(
+    closedObject({
+      jobId: Type.Optional(NonEmptyString),
+      message: NonEmptyString,
+    }),
+  ),
+});
+
 /** Durable deletion result; archivedOnly requests may acknowledge before owned worktree cleanup. */
 export const SessionsDeleteResultSchema = closedObject({
   ok: Type.Literal(true),
@@ -49,9 +59,11 @@ export const SessionsDeleteResultSchema = closedObject({
   deleted: Type.Boolean(),
   archived: Type.Array(NonEmptyString),
   worktreePreserved: Type.Optional(PreservedSessionWorktreeSchema),
+  automationCleanup: Type.Optional(SessionAutomationCleanupSchema),
 });
 
 export type SessionsDeleteParams = Static<typeof SessionsDeleteParamsSchema>;
 export type WorktreePreservationReason = Static<typeof WorktreePreservationReasonSchema>;
 export type PreservedSessionWorktree = Static<typeof PreservedSessionWorktreeSchema>;
+export type SessionAutomationCleanup = Static<typeof SessionAutomationCleanupSchema>;
 export type SessionsDeleteResult = Static<typeof SessionsDeleteResultSchema>;

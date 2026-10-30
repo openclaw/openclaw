@@ -1,6 +1,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type {
   PreservedSessionWorktree,
+  SessionAutomationCleanup,
   SessionRow,
   SessionsDeleteResult,
   SessionsPatchResult,
@@ -48,6 +49,7 @@ type SessionsLifecycleResult = {
   error?: string;
   archived?: string[];
   worktreePreserved?: PreservedSessionWorktree;
+  automationCleanup?: SessionAutomationCleanup;
 };
 
 type SessionsListRow = Pick<SessionRow, "key" | "sessionId" | "agentId" | "archived" | "isMain">;
@@ -178,6 +180,14 @@ function outputLifecycleResults(
             const preserved = result.worktreePreserved;
             runtime.error(
               `Worktree ${sanitizeTerminalText(preserved.branch)} at ${sanitizeTerminalText(preserved.path)} needs attention: ${WORKTREE_PRESERVATION_REASON_COPY[preserved.reason]}. Inspect it with ${formatCliCommand("openclaw worktrees list")}.`,
+            );
+          }
+          for (const jobId of result.automationCleanup?.disabledJobIds ?? []) {
+            runtime.log(`Disabled bound automation: ${sanitizeTerminalText(jobId)}`);
+          }
+          for (const failure of result.automationCleanup?.failures ?? []) {
+            runtime.error(
+              `Bound automation cleanup${failure.jobId ? ` (${sanitizeTerminalText(failure.jobId)})` : ""}: ${sanitizeTerminalText(failure.message)}`,
             );
           }
           break;
@@ -328,10 +338,11 @@ export async function sessionsLifecycleCommand(
         }
         const result: SessionsLifecycleResult = {
           key: response.key ?? session.key,
-          ok: true,
+          ok: (response.automationCleanup?.failures.length ?? 0) === 0,
           status: "deleted",
           archived: response.archived ?? [],
           ...(response.worktreePreserved ? { worktreePreserved: response.worktreePreserved } : {}),
+          ...(response.automationCleanup ? { automationCleanup: response.automationCleanup } : {}),
         };
         results[index] = result;
         // Distinct listed aliases can return the same canonical key after deletion.

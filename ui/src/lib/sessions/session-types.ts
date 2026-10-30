@@ -1,6 +1,7 @@
 import type { GatewaySessionMessageSubscription } from "@openclaw/gateway-client/browser";
 import type {
   PreservedSessionWorktree,
+  SessionAutomationCleanup,
   SessionsDeleteResult,
   SessionsListParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
@@ -128,15 +129,17 @@ export type SessionDeleteTarget = SessionDeleteOptions & {
   key: string;
 };
 
-export type SessionDeleteOutcome = Pick<SessionsDeleteResult, "deleted" | "worktreePreserved"> & {
-  queued?: true;
-};
+export type SessionDeleteOutcome = Pick<
+  SessionsDeleteResult,
+  "deleted" | "worktreePreserved" | "automationCleanup"
+> & { queued?: true };
 
 export type SessionDeleteBatchResult = {
   deleted: string[];
   queued?: string[];
   errors: { target: SessionDeleteTarget; error: unknown }[];
   preservedWorktrees: PreservedSessionWorktree[];
+  automationCleanup?: SessionAutomationCleanup;
 };
 
 export type SessionCompactResult = {

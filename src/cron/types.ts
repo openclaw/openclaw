@@ -450,6 +450,14 @@ export type CronToolsAllowProvenance =
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
 export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource"> & {
+  /** Exact creator-session incarnation retained privately for lifecycle cleanup. */
+  ownerSessionId?: string;
+  /** Conversation whose text was copied into the current payload. */
+  payloadSourceConversation?: {
+    sessionKey: string;
+    sessionId: string;
+    lifecycleRevision?: string;
+  };
   /** Immutable host-captured scheduled command invocation; never public create/patch input. */
   pluginCommand?: PluginCommandSchedule;
   /** Original authenticated source for a same-conversation continuation, never a public grant. */

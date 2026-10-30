@@ -355,6 +355,8 @@ const enSessionOrganization = {
       "Automations are bound to {count} of these conversations. Deleting a conversation pauses its automations.",
     automationPauseUnlisted: "Automation names are unavailable right now.",
     automationPauseMore: "+{count} more",
+    automationPauseCompleted: "Paused automations: {ids}.",
+    automationPauseFailed: "Could not pause automations: {failures}.",
     archiveAnyway: "Archive anyway",
     deleteAnyway: "Delete anyway",
     moveToTopLevel: en.sessionsView.moveToTopLevel,

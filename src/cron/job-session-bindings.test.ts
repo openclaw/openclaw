@@ -94,6 +94,23 @@ test("refreshes binding facts after job edits and agent/session routing changes"
   check(["agent:ops:cron:replaced"]);
   definition.sessionTarget = "session: ";
   check([]);
+  delete cfg.session!.scope;
+  definition.sessionTarget = "main";
+  definition.owner = { agentId: "ops", sessionKey: "creator" };
+  check(["agent:ops:inbox", "agent:ops:creator"]);
+  definition.owner = { agentId: "research", sessionKey: "replacement" };
+  check(["agent:ops:inbox", "agent:research:replacement"]);
+});
+
+test("refreshes a changed payload-source binding", () => {
+  const definition = job({
+    id: "changing-payload-source",
+    payloadSourceConversation: { sessionKey: "first", sessionId: "first-session" },
+  });
+  const opts = { cfg: {}, defaultAgentId: "ops" };
+  expect([...resolveCronJobSessionBindings(definition, opts).keys()]).toContain("agent:ops:first");
+  definition.payloadSourceConversation = { sessionKey: "second", sessionId: "second-session" };
+  expect([...resolveCronJobSessionBindings(definition, opts).keys()]).toContain("agent:ops:second");
 });
 
 function job(partial: Partial<CronStoredJob> & Pick<CronJob, "id">): CronStoredJob {
@@ -123,16 +140,16 @@ async function disable(
   defaultAgentId: string | null = "main",
 ) {
   const sessionKey = "agent:main:cron:bound";
-  const disabled = await disableCronJobsBoundToSessions({
+  const result = await disableCronJobsBoundToSessions({
     cron: {
       list: async () => jobs,
       updateWithPrecondition,
       getDefaultAgentId: () => defaultAgentId ?? undefined,
     },
     cfg: {},
-    sessionKeys: [sessionKey],
+    sessions: [{ sessionKey, agentId: "main" }],
   });
-  return disabled.get(sessionKey) ?? [];
+  return { disabled: result.disabledBySession.get(sessionKey) ?? [], failures: result.failures };
 }
 
 test("disables only enabled jobs bound to the archived session", async () => {
@@ -140,20 +157,25 @@ test("disables only enabled jobs bound to the archived session", async () => {
     job({ id: "bound" }),
     job({
       id: "created-here",
-      sourceConversation: { sessionKey: "agent:main:cron:bound", sessionId: "creator" },
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "Synthetic reminder with copied context" },
+      owner: { agentId: "main", sessionKey: "agent:main:cron:bound" },
     }),
     job({ id: "other", sessionTarget: "session:agent:main:other" }),
     job({ id: "already-off", enabled: false, sessionKey: "cron:bound" }),
   ];
   const update = fakeUpdateWithPrecondition(() => jobs);
-  expect(await disable(jobs, update)).toEqual(["bound", "created-here"]);
+  expect(await disable(jobs, update)).toEqual({
+    disabled: ["bound", "created-here"],
+    failures: [],
+  });
   expect(update.mock.calls[0]?.slice(0, 2)).toEqual(["bound", { enabled: false }]);
 });
 
 test("leaves ownerless jobs unchanged when no canonical default is configured", async () => {
   const jobs = [job({ id: "bound" })];
   const update = fakeUpdateWithPrecondition(() => jobs);
-  expect(await disable(jobs, update, null)).toEqual([]);
+  expect(await disable(jobs, update, null)).toEqual({ disabled: [], failures: [] });
   expect(update).not.toHaveBeenCalled();
 });
 
@@ -162,14 +184,17 @@ test("skips jobs retargeted between the list snapshot and the locked update", as
   const update = fakeUpdateWithPrecondition(() => [
     job({ id: "bound", sessionTarget: "session:agent:main:elsewhere" }),
   ]);
-  expect(await disable(listed, update)).toEqual([]);
+  expect(await disable(listed, update)).toEqual({ disabled: [], failures: [] });
   expect(update).toHaveBeenCalledTimes(1);
 });
 
 test("a failing job does not abort the remaining bound jobs", async () => {
   const listed = [job({ id: "vanished", sessionKey: "cron:bound" }), job({ id: "bound" })];
   const update = fakeUpdateWithPrecondition(() => [job({ id: "bound" })]);
-  await expect(disable(listed, update)).rejects.toThrow(AggregateError);
+  expect(await disable(listed, update)).toEqual({
+    disabled: ["bound"],
+    failures: [{ jobId: "vanished", message: "cron job not found: vanished" }],
+  });
   expect(update.mock.calls.map((call) => call[0])).toEqual(["vanished", "bound"]);
 });
 
@@ -193,4 +218,73 @@ test.each([
       ["agent:research:global", "research"],
     ]),
   );
+});
+
+test("scopes cleanup to the binding agent and session incarnation", async () => {
+  const jobs = [
+    job({
+      id: "current",
+      agentId: "ops",
+      sourceConversation: { sessionKey: "global", sessionId: "current-session" },
+    }),
+    job({
+      id: "old-incarnation",
+      agentId: "ops",
+      sourceConversation: { sessionKey: "global", sessionId: "old-session" },
+    }),
+    job({
+      id: "payload-current",
+      agentId: "ops",
+      payloadSourceConversation: { sessionKey: "global", sessionId: "current-session" },
+    }),
+    job({
+      id: "payload-old",
+      agentId: "ops",
+      payloadSourceConversation: { sessionKey: "global", sessionId: "old-session" },
+    }),
+    job({
+      id: "other-agent",
+      agentId: "research",
+      sourceConversation: { sessionKey: "global", sessionId: "current-session" },
+    }),
+    {
+      ...job({
+        id: "owner-current",
+        agentId: "ops",
+        sessionTarget: "main",
+        owner: { agentId: "ops", sessionKey: "global" },
+      }),
+      ownerSessionId: "current-session",
+    },
+    {
+      ...job({
+        id: "owner-old",
+        agentId: "ops",
+        sessionTarget: "main",
+        owner: { agentId: "ops", sessionKey: "global" },
+      }),
+      ownerSessionId: "old-session",
+    },
+  ];
+  const update = fakeUpdateWithPrecondition(() => jobs);
+  const result = await disableCronJobsBoundToSessions({
+    cron: {
+      list: async () => jobs,
+      updateWithPrecondition: update,
+      getDefaultAgentId: () => "main",
+    },
+    cfg: { session: { scope: "global" } },
+    sessions: [{ sessionKey: "global", agentId: "ops", sessionId: "current-session" }],
+  });
+
+  expect(result.disabledBySession.get("global")).toEqual([
+    "current",
+    "payload-current",
+    "owner-current",
+  ]);
+  expect(update.mock.calls.map((call) => call[0])).toEqual([
+    "current",
+    "payload-current",
+    "owner-current",
+  ]);
 });

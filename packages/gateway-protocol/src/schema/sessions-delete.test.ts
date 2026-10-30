@@ -3,6 +3,21 @@ import { describe, expect, it } from "vitest";
 import { SessionsDeleteResultSchema } from "./sessions-delete.js";
 
 describe("SessionsDeleteResultSchema", () => {
+  it("accepts caller-visible automation cleanup outcomes", () => {
+    expect(
+      Value.Check(SessionsDeleteResultSchema, {
+        ok: true,
+        key: "agent:main:deleted",
+        deleted: true,
+        archived: [],
+        automationCleanup: {
+          disabledJobIds: ["reminder-1"],
+          failures: [{ jobId: "reminder-2", message: "store unavailable" }],
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("rejects unknown and missing worktree preservation reasons", () => {
     const preserved = {
       id: "wt-1",

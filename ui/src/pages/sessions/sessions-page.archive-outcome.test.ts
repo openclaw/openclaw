@@ -651,4 +651,34 @@ describe("sessions command outcomes", () => {
     page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
     await waitForFast(() => expect(page.querySelector('[role="alert"]')).toBeNull());
   });
+
+  it("reports partial automation cleanup after a completed deletion", async () => {
+    const row = sessionRow("cleanup-outcome");
+    let deleted = false;
+    const { context } = liveSessions({
+      "sessions.list": () => sessionsResult(deleted ? [] : [row], 1),
+      "sessions.delete": () => {
+        deleted = true;
+        return {
+          deleted: true,
+          automationCleanup: {
+            disabledJobIds: ["reminder-disabled"],
+            failures: [{ jobId: "reminder-failed", message: "store unavailable" }],
+          },
+        };
+      },
+    });
+    const page = await createRenderedPage(context, sessionsResult([row], 1), "all");
+    await waitForFast(() => expect(page.loading).toBe(false));
+    selectRows(page, row);
+    vi.spyOn(confirmDialog, "showConfirmDialog").mockResolvedValue(true);
+
+    await page.deleteSelected();
+
+    expect(
+      (page.querySelector('[role="alert"]')?.textContent ?? "").replace(/\s+/gu, " "),
+    ).toContain(
+      "Paused automations: reminder-disabled. Could not pause automations: reminder-failed: store unavailable.",
+    );
+  });
 });

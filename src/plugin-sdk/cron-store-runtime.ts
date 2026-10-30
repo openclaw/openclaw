@@ -7,3 +7,4 @@ export {
   resolveCronStorePathAsync,
   saveCronStore,
 } from "../cron/store.js";
+export { disableLocalCronJobsBoundToSessions } from "../cron/local-service.js";

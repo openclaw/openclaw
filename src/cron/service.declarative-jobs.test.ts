@@ -215,7 +215,7 @@ it.each(["auto-disabled", "stream-exhausted"] as const)(
   },
 );
 
-it("keeps the first creator across declaration convergence and restart", async () => {
+it("keeps creator facts while converging payload provenance and restart", async () => {
   const { cron: writer, storePath } = await setup();
   const sourceConversation = {
     sessionKey: "agent:ops:conversation",
@@ -230,13 +230,17 @@ it("keeps the first creator across declaration convergence and restart", async (
       ownerProfileId: "profile-ada",
     },
   ];
-  const provenance = { createdActor: { type: "human", id: "profile-ada" }, sourceConversation };
+  const creatorProvenance = {
+    createdActor: { type: "human", id: "profile-ada" },
+    ownerSessionId: sourceConversation.sessionId,
+  };
   const created = await add(writer, declaration({ id: "reserved-id" }), {
     createdActor: { type: "human", source: "profile", id: "profile-ada" },
+    ownerSessionId: sourceConversation.sessionId,
     sourceConversation,
     skillLibrarySelections: selections,
   });
-  expect(created.job).toMatchObject(provenance);
+  expect(created.job).toMatchObject({ ...creatorProvenance, sourceConversation });
   expect(
     await add(writer, declaration(), {
       sourceConversation: { ...sourceConversation, lifecycleRevision: "generation-2" },
@@ -247,19 +251,37 @@ it("keeps the first creator across declaration convergence and restart", async (
     sourceConversation: { sessionKey: "agent:ops:other", sessionId: "other-session" },
     skillLibrarySelections: [],
   });
-  expectUpdate(converged, created.id, provenance);
+  expectUpdate(converged, created.id, { ...creatorProvenance, sourceConversation });
+  const replacementSource = {
+    sessionKey: "agent:ops:other",
+    sessionId: "other-session",
+  };
+  const payloadConverged = await add(
+    writer,
+    declaration({
+      displayName: "Updated report",
+      payload: { kind: "agentTurn", message: "updated report" },
+    }),
+    { sourceConversation: replacementSource },
+  );
+  expectUpdate(payloadConverged, created.id, {
+    ...creatorProvenance,
+    sourceConversation: replacementSource,
+  });
   await writer.update(created.id, { sessionKey: "agent:ops:other" });
   writer.stop();
   const reader = createCronService(storePath, false);
   await expect(reader.readJob(created.id)).resolves.toMatchObject({
     id: "reserved-id",
-    ...provenance,
+    ...creatorProvenance,
+    sourceConversation: replacementSource,
     skillLibrarySelections: selections,
     declarationKey: "agent:ops:daily-report",
     displayName: "Updated report",
     owner: { agentId: "ops", sessionKey: "agent:ops:main" },
   });
   const job = await storedJob(storePath, created.id);
+  expect(toPublicCronJob(job)).not.toHaveProperty("ownerSessionId");
   expect(toPublicCronJob(job)).not.toHaveProperty("skillLibrarySelections");
   const session = {
     cfg: {},
@@ -275,6 +297,46 @@ it("keeps the first creator across declaration convergence and restart", async (
     skillLibrarySelections: job.skillLibrarySelections,
   });
   expect(first.sessionEntry.skillLibrarySelections).toEqual(selections);
+});
+
+it("moves copied reminder payload provenance without changing its creator", async () => {
+  const { cron, storePath } = await setup();
+  const first = { sessionKey: "agent:ops:first", sessionId: "first-session" };
+  const second = { sessionKey: "agent:ops:second", sessionId: "second-session" };
+  const reminder = (text: string) =>
+    declaration({
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text },
+      delivery: { mode: "none" },
+    });
+  const created = await add(cron, reminder("Original\n\nRecent context:\n- User: first"), {
+    ownerSessionId: first.sessionId,
+    payloadSourceConversation: first,
+  });
+  expect(created.job).toMatchObject({
+    ownerSessionId: first.sessionId,
+    payloadSourceConversation: first,
+  });
+  expect(
+    await add(cron, reminder("Original\n\nRecent context:\n- User: first"), {
+      payloadSourceConversation: second,
+    }),
+  ).toMatchObject({
+    created: false,
+    updated: false,
+    job: { payloadSourceConversation: first },
+  });
+
+  const converged = await add(cron, reminder("Updated\n\nRecent context:\n- User: second"), {
+    payloadSourceConversation: second,
+  });
+  expectUpdate(converged, created.id, {
+    ownerSessionId: first.sessionId,
+    payloadSourceConversation: second,
+  });
+  expect(toPublicCronJob(await storedJob(storePath, created.id))).not.toHaveProperty(
+    "payloadSourceConversation",
+  );
 });
 
 it("keeps declaration-key uniqueness local to the caller visibility predicate", async () => {

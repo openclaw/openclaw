@@ -1,6 +1,7 @@
 /** Maps cron jobs to the physical conversations they are bound to. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { tryResolveCronJobEffectiveAgentId } from "./agent-id.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import type { CronServiceContract } from "./service-contract.js";
@@ -9,31 +10,59 @@ import type { CronJob, CronStoredJob } from "./types.js";
 
 type CronJobSessionBinding = Pick<
   CronStoredJob,
-  "id" | "agentId" | "sessionKey" | "sessionTarget" | "sourceConversation"
+  | "id"
+  | "agentId"
+  | "sessionKey"
+  | "sessionTarget"
+  | "payloadSourceConversation"
+  | "sourceConversation"
+  | "owner"
+  | "ownerSessionId"
 >;
 
-type PreparedBinding = Omit<CronJobSessionBinding, "sourceConversation"> & {
+type PreparedBinding = Omit<
+  CronJobSessionBinding,
+  "payloadSourceConversation" | "sourceConversation" | "owner"
+> & {
+  payloadSourceSessionKey: string | undefined;
+  payloadSourceSessionId: string | undefined;
   sourceSessionKey: string | undefined;
+  sourceSessionId: string | undefined;
+  ownerAgentId: string | undefined;
+  ownerSessionKey: string | undefined;
   defaultAgentId: string | undefined;
   mainKey: string | undefined;
   scope: NonNullable<OpenClawConfig["session"]>["scope"];
   bindings: ReadonlyMap<string, string>;
+  identities: readonly CronSessionCleanupIdentity[];
 };
 const preparedBindings = new WeakMap<CronJobSessionBinding, PreparedBinding[]>();
 
+export type CronSessionCleanupIdentity = {
+  sessionKey: string;
+  agentId: string;
+  sessionId?: string;
+};
+
 /**
- * Maps each canonical session key to its owning agent: the session the run
+ * Resolves each canonical session key with its owning agent: the session the run
  * joins (main/isolated/session:<key>) plus the explicit wake/delivery lane in
- * job.sessionKey and the creating conversation. Keys compare equal to physical
- * Gateway session-store rows; values retain ownership when the key is unqualified.
+ * job.sessionKey and the creating conversation retained by source or owner.
+ * Keys compare equal to physical Gateway session-store rows; values retain
+ * ownership when the key is unqualified.
  */
-export function resolveCronJobSessionBindings(
+function prepareCronJobSessionBindings(
   job: CronJobSessionBinding,
   opts: { cfg: OpenClawConfig; defaultAgentId?: string },
-): ReadonlyMap<string, string> {
+): PreparedBinding {
   const mainKey = opts.cfg.session?.mainKey;
   const scope = opts.cfg.session?.scope;
+  const payloadSourceSessionKey = job.payloadSourceConversation?.sessionKey;
+  const payloadSourceSessionId = job.payloadSourceConversation?.sessionId;
   const sourceSessionKey = job.sourceConversation?.sessionKey;
+  const sourceSessionId = job.sourceConversation?.sessionId;
+  const ownerAgentId = job.owner?.agentId;
+  const ownerSessionKey = job.owner?.sessionKey;
   const prepared = preparedBindings.get(job);
   // These scalar facts are the binding revision, including in-place edits.
   // Keep separate bounded slots for interleaved callers with different routing.
@@ -43,25 +72,39 @@ export function resolveCronJobSessionBindings(
       entry.agentId === job.agentId &&
       entry.sessionKey === job.sessionKey &&
       entry.sessionTarget === job.sessionTarget &&
+      entry.payloadSourceSessionKey === payloadSourceSessionKey &&
+      entry.payloadSourceSessionId === payloadSourceSessionId &&
       entry.sourceSessionKey === sourceSessionKey &&
+      entry.sourceSessionId === sourceSessionId &&
+      entry.ownerAgentId === ownerAgentId &&
+      entry.ownerSessionKey === ownerSessionKey &&
+      entry.ownerSessionId === job.ownerSessionId &&
       entry.defaultAgentId === opts.defaultAgentId &&
       entry.mainKey === mainKey &&
       entry.scope === scope
     ) {
-      return entry.bindings;
+      return entry;
     }
   }
   const bindings = new Map<string, string>();
+  const identities: CronSessionCleanupIdentity[] = [];
   const entry: PreparedBinding = {
     id: job.id,
     agentId: job.agentId,
     sessionKey: job.sessionKey,
     sessionTarget: job.sessionTarget,
+    payloadSourceSessionKey,
+    payloadSourceSessionId,
     sourceSessionKey,
+    sourceSessionId,
+    ownerAgentId,
+    ownerSessionKey,
+    ownerSessionId: job.ownerSessionId,
     defaultAgentId: opts.defaultAgentId,
     mainKey,
     scope,
     bindings,
+    identities,
   };
   if (prepared) {
     if (prepared.length === 4) {
@@ -73,13 +116,14 @@ export function resolveCronJobSessionBindings(
   }
   const agentId = tryResolveCronJobEffectiveAgentId(job, opts.defaultAgentId);
   if (!agentId) {
-    return bindings;
+    return entry;
   }
-  const add = (sessionKey: string | undefined) => {
+  const add = (sessionKey: string | undefined, bindingAgentId = agentId, sessionId?: string) => {
     const trimmed = sessionKey?.trim();
     if (!trimmed) {
       return;
     }
+    const normalizedBindingAgentId = normalizeAgentId(bindingAgentId);
     // Literal global names the selected agent's physical row; a qualified
     // named target remains distinct. Queue-key qualification has other owners.
     const key =
@@ -87,11 +131,26 @@ export function resolveCronJobSessionBindings(
         ? trimmed
         : resolveCronAgentSessionKey({
             sessionKey: trimmed,
-            agentId,
+            agentId: normalizedBindingAgentId,
             mainKey,
             cfg: opts.cfg,
           });
-    bindings.set(key, parseAgentSessionKey(key)?.agentId ?? agentId);
+    const binding = {
+      sessionKey: key,
+      agentId: parseAgentSessionKey(key)?.agentId ?? normalizedBindingAgentId,
+      ...(sessionId ? { sessionId } : {}),
+    };
+    bindings.set(binding.sessionKey, binding.agentId);
+    if (
+      !identities.some(
+        (existing) =>
+          existing.sessionKey === binding.sessionKey &&
+          existing.agentId === binding.agentId &&
+          existing.sessionId === binding.sessionId,
+      )
+    ) {
+      identities.push(binding);
+    }
   };
   try {
     if (job.sessionTarget === "main") {
@@ -106,13 +165,23 @@ export function resolveCronJobSessionBindings(
       add(resolveCronSessionTargetSessionKey(job.sessionTarget));
     }
     add(job.sessionKey);
-    add(job.sourceConversation?.sessionKey);
+    add(job.payloadSourceConversation?.sessionKey, agentId, payloadSourceSessionId);
+    add(job.sourceConversation?.sessionKey, agentId, sourceSessionId);
+    add(ownerSessionKey, ownerAgentId?.trim() || agentId, job.ownerSessionId);
   } catch {
     // Malformed persisted targets are quarantined by the store loader; a job
     // that slips through must not break session listing, so bind nothing.
     bindings.clear();
+    identities.length = 0;
   }
-  return bindings;
+  return entry;
+}
+
+export function resolveCronJobSessionBindings(
+  job: CronJobSessionBinding,
+  opts: { cfg: OpenClawConfig; defaultAgentId?: string },
+): ReadonlyMap<string, string> {
+  return prepareCronJobSessionBindings(job, opts).bindings;
 }
 
 /** Signals a locked re-check found the job no longer bound; a per-job no-op. */
@@ -122,31 +191,62 @@ class CronJobBindingStaleError extends Error {
   }
 }
 
-/** Disables enabled jobs bound to any archived session with one job-list scan. */
+export type DisableCronJobsBoundToSessionsResult = {
+  disabledBySession: Map<string, string[]>;
+  failures: Array<{ jobId?: string; message: string }>;
+};
+
+/** Disables enabled jobs bound to any specified session with one job-list scan. */
 export async function disableCronJobsBoundToSessions(params: {
   cron: Pick<CronServiceContract, "list" | "updateWithPrecondition" | "getDefaultAgentId">;
   cfg: OpenClawConfig;
-  sessionKeys: readonly string[];
-}): Promise<Map<string, string[]>> {
-  const sessionKeys = [...new Set(params.sessionKeys.map((key) => key.trim()).filter(Boolean))];
+  sessions: readonly CronSessionCleanupIdentity[];
+}): Promise<DisableCronJobsBoundToSessionsResult> {
+  const sessions = params.sessions
+    .map((session) => ({
+      sessionKey: session.sessionKey.trim(),
+      agentId: normalizeAgentId(session.agentId),
+      ...(session.sessionId?.trim() ? { sessionId: session.sessionId.trim() } : {}),
+    }))
+    .filter((session) => session.sessionKey);
+  const sessionKeys = [...new Set(sessions.map((session) => session.sessionKey))];
   const disabledBySession = new Map(sessionKeys.map((sessionKey) => [sessionKey, [] as string[]]));
   if (sessionKeys.length === 0) {
-    return disabledBySession;
+    return { disabledBySession, failures: [] };
   }
-  const targetKeys = new Set(sessionKeys);
-  const jobs = await params.cron.list();
-  const defaultAgentId = params.cron.getDefaultAgentId();
+  let jobs: CronJob[];
+  let defaultAgentId: string | undefined;
+  try {
+    jobs = await params.cron.list();
+    defaultAgentId = params.cron.getDefaultAgentId();
+  } catch (error) {
+    return { disabledBySession, failures: [{ message: formatErrorMessage(error) }] };
+  }
   const matchingSessionKeys = (job: CronJobSessionBinding & Pick<CronJob, "enabled">) => {
     if (!job.enabled) {
       return [];
     }
-    const boundKeys = resolveCronJobSessionBindings(job, {
+    const bindings = prepareCronJobSessionBindings(job, {
       cfg: params.cfg,
       defaultAgentId,
-    });
-    return [...boundKeys.keys()].filter((sessionKey) => targetKeys.has(sessionKey));
+    }).identities;
+    return [
+      ...new Set(
+        sessions
+          .filter((session) => {
+            const matchingBindings = bindings.filter(
+              (binding) =>
+                binding.sessionKey === session.sessionKey && binding.agentId === session.agentId,
+            );
+            return session.sessionId && matchingBindings.some((binding) => binding.sessionId)
+              ? matchingBindings.some((binding) => binding.sessionId === session.sessionId)
+              : matchingBindings.length > 0;
+          })
+          .map((session) => session.sessionKey),
+      ),
+    ];
   };
-  const failures: unknown[] = [];
+  const failures: DisableCronJobsBoundToSessionsResult["failures"] = [];
   for (const job of jobs) {
     if (matchingSessionKeys(job).length === 0) {
       continue;
@@ -169,18 +269,8 @@ export async function disableCronJobsBoundToSessions(params: {
       if (error instanceof CronJobBindingStaleError) {
         continue;
       }
-      failures.push(error);
+      failures.push({ jobId: job.id, message: formatErrorMessage(error) });
     }
   }
-  if (failures.length > 0) {
-    const subject =
-      sessionKeys.length === 1
-        ? `bound to ${sessionKeys[0]}`
-        : `bound to ${sessionKeys.length} archived sessions`;
-    throw new AggregateError(
-      failures,
-      `failed to disable ${failures.length} cron job(s) ${subject}`,
-    );
-  }
-  return disabledBySession;
+  return { disabledBySession, failures };
 }

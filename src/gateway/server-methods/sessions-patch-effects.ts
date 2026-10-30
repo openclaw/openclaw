@@ -31,7 +31,7 @@ export async function publishSessionPatchEffects(params: {
     };
   }>;
 }): Promise<boolean> {
-  const archivedSessionKeys = new Set<string>();
+  const archivedSessions: Array<{ sessionKey: string; agentId: string; sessionId?: string }> = [];
   for (const { target, entry, accessChanged } of params.targets) {
     triggerSessionPatchHook({
       cfg: params.cfg,
@@ -67,24 +67,33 @@ export async function publishSessionPatchEffects(params: {
       });
     }
     if (target.fullPatch.archived === true) {
-      archivedSessionKeys.add(target.canonicalKey);
+      archivedSessions.push({
+        sessionKey: target.canonicalKey,
+        agentId: target.targetAgentId,
+        ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
+      });
     }
   }
 
-  if (params.callerCanManageCron && archivedSessionKeys.size > 0) {
+  if (params.callerCanManageCron && archivedSessions.length > 0) {
     const timing = params.diagnostics?.scope("cronEffects");
     try {
-      const disabledBySession = await disableCronJobsBoundToSessions({
+      const cleanup = await disableCronJobsBoundToSessions({
         cron: params.context.cron,
         cfg: params.cfg,
-        sessionKeys: [...archivedSessionKeys],
+        sessions: archivedSessions,
       });
-      for (const [sessionKey, disabledJobIds] of disabledBySession) {
+      for (const [sessionKey, disabledJobIds] of cleanup.disabledBySession) {
         if (disabledJobIds.length > 0) {
           sessionLog.info(
             `sessions.patch: disabled cron jobs bound to archived session ${sessionKey}: ${disabledJobIds.join(", ")}`,
           );
         }
+      }
+      if (cleanup.failures.length > 0) {
+        sessionLog.warn(
+          `sessions.patch: failed to disable ${cleanup.failures.length} cron job(s) for archived sessions: ${cleanup.failures.map(({ jobId, message }) => `${jobId ?? "unknown"}: ${message}`).join("; ")}`,
+        );
       }
     } catch (error) {
       sessionLog.warn(
@@ -94,7 +103,7 @@ export async function publishSessionPatchEffects(params: {
       timing?.finish();
     }
   }
-  return archivedSessionKeys.size > 0;
+  return archivedSessions.length > 0;
 }
 
 /** Only applied assignments may repair the catalog; detached and status-model no-ops cannot. */
