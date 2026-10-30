@@ -181,7 +181,6 @@ it.each([
   "consolidates healthy pack batches independently of missing snapshot objects (%s)",
   async (damage, expectedFetches) => {
     const { root, source, repo, env, materialize } = await fixture("partial");
-    // Fixture materialization is an explicit checkout, not a Gateway inspection.
     await git(repo, "config", "gc.auto", "0");
     await git(repo, "config", "maintenance.auto", "false");
     const records = await materialize(["partial-a", "partial-b"], { stateDir: root });
@@ -285,7 +284,8 @@ it.each([
     const traceOutput = await fs.readFile(trace, "utf8");
     expect(traceOutput).not.toContain('"fsck"');
     const fetches = traceOutput.match(/"name":"fetch"/g)?.length ?? 0;
-    expect(fetches).toBe(expectedFetches);
+    // Git may detect checksum damage before hydration or after its single batch.
+    expect(damage === "checksum" ? [0, 1] : [expectedFetches]).toContain(fetches);
     if (damage === "unpromised") {
       await git(repo, "remote", "set-url", "origin", source);
       const repaired = await service.gc({ retryDeferred: true });
