@@ -1,5 +1,17 @@
 [
   {
+    "source": "Particle",
+    "target": "Particle"
+  },
+  {
+    "source": "particle",
+    "target": "particle"
+  },
+  {
+    "source": "Particle plugin reference",
+    "target": "Particle 插件参考"
+  },
+  {
     "source": "Get support",
     "target": "获取支持"
   },

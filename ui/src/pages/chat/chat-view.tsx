@@ -29,6 +29,7 @@ import {
   renderChatTopbarNotices as ChatTopbarNotices,
 } from "./chat-view-notices.tsx";
 import type { ChatActivityPillsProps } from "./components/chat-activity-pills-types.ts";
+import { publicationOutsidePills } from "./components/chat-activity-pills-visibility.ts";
 import { ChatCommentController } from "./components/chat-comment-controller.ts";
 import {
   ComposerQuestionDock,
@@ -190,7 +191,7 @@ function ChatFooterContent(
           onDismiss={(pullRequest) => input.props.onDismissPullRequest?.(pullRequest)}
           onDismissBranch={input.props.onDismissPullRequestsBranch}
           onOpenSessionDiff={input.props.onOpenSessionDiff}
-          publication={input.activities?.publication ? undefined : input.props.githubPublication}
+          publication={publicationOutsidePills(input.activities, input.props.githubPublication)}
         />
       </Show>
       <Show when={input.props.sessionSuggestions?.length}>

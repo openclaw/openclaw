@@ -128,6 +128,7 @@ export async function performSessionGitHubPreparation(
       pullRequest: inspected.result,
       identity,
       assertCurrent,
+      requirePublicRepositories: inspected.requirePublicRepositories,
     });
     return { inspected, identity, assertCurrent };
   };
@@ -155,6 +156,7 @@ export async function performSessionGitHubPreparation(
             pullRequest: eligibility.inspected.result,
             identity: eligibility.identity,
             assertCurrent: eligibility.assertCurrent,
+            requirePublicRepositories: eligibility.inspected.requirePublicRepositories,
           });
         },
         signal: options.signal,
@@ -354,6 +356,7 @@ export async function performSessionGitHubPreparation(
           pullRequest: inspected.result,
           identity,
           assertCurrent,
+          requirePublicRepositories: inspected.requirePublicRepositories,
         });
       }
       assertReserved();
