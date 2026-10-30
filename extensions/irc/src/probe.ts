@@ -23,14 +23,16 @@ export async function probeIrc(
     };
   }
 
-  const started = Date.now();
+  // Latency is a duration: read the monotonic clock so a wall-clock step during the
+  // connect cannot skew or negate the reported value.
+  const started = performance.now();
   try {
     const client = await connectIrcClient(
       buildIrcConnectOptions(account, {
         connectTimeoutMs: opts?.timeoutMs ?? 8000,
       }),
     );
-    const elapsed = Date.now() - started;
+    const elapsed = performance.now() - started;
     client.quit("probe");
     return {
       ...base,

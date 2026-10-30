@@ -385,7 +385,7 @@ describe("IRC outbound and probing", () => {
   });
 
   it("returns probe latency, forwards timeout and quits on success", async () => {
-    const clock = vi.spyOn(Date, "now").mockReturnValueOnce(100).mockReturnValueOnce(145);
+    const clock = vi.spyOn(performance, "now").mockReturnValueOnce(100).mockReturnValueOnce(145);
     onTestFinished(() => clock.mockRestore());
     await expect(probeIrc(cfg, { timeoutMs: 5000 })).resolves.toEqual({
       ok: true,
