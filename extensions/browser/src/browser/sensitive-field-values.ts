@@ -29,6 +29,29 @@ export type FieldDescriptor = {
   autocomplete?: string | null;
 };
 
+type SnapshotValueNode = {
+  role?: string;
+  name?: string;
+  value?: string | number | boolean;
+  children?: SnapshotValueNode[];
+};
+
+export function parseFieldDescriptor(value: unknown): FieldDescriptor | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const { tagName, type, autocomplete } = record;
+  if (
+    typeof tagName !== "string" ||
+    (typeof type !== "string" && type !== null) ||
+    (typeof autocomplete !== "string" && autocomplete !== null)
+  ) {
+    return null;
+  }
+  return { tagName, type, autocomplete };
+}
+
 export function isSensitiveFieldDescriptor(field: FieldDescriptor): boolean {
   if (field.tagName.toLowerCase() === "input" && field.type?.toLowerCase() === "password") {
     return true;
@@ -38,6 +61,46 @@ export function isSensitiveFieldDescriptor(field: FieldDescriptor): boolean {
     .toLowerCase()
     .split(/\s+/)
     .some((token) => SENSITIVE_AUTOCOMPLETE_TOKENS.has(token));
+}
+
+/** Return valued form fields from a structured snapshot in snapshot order. */
+export function findValuedSnapshotFields<T extends SnapshotValueNode>(root: T): T[] {
+  const fields: T[] = [];
+  const pending = [root];
+  for (let node = pending.pop(); node; node = pending.pop()) {
+    if (
+      node.value !== undefined &&
+      String(node.value).trim() &&
+      VALUE_FIELD_ROLES.has(node.role?.trim().toLowerCase() ?? "")
+    ) {
+      fields.push(node);
+    }
+    for (const child of node.children?.toReversed() ?? []) {
+      pending.push(child as T);
+    }
+  }
+  return fields;
+}
+
+/** Mask a structured snapshot field value and accessibility text descendants. */
+export function redactSnapshotFieldValue(field: SnapshotValueNode): void {
+  const pending = [field];
+  const seen = new Set<SnapshotValueNode>();
+  for (let node = pending.pop(); node; node = pending.pop()) {
+    if (seen.has(node)) {
+      continue;
+    }
+    seen.add(node);
+    if (node.value !== undefined && String(node.value).trim()) {
+      node.value = REDACTED_FIELD_VALUE;
+    }
+    if (node !== field && node.name?.trim()) {
+      node.name = REDACTED_FIELD_VALUE;
+    }
+    for (const child of node.children ?? []) {
+      pending.push(child);
+    }
+  }
 }
 
 async function describeFieldViaCdp(
