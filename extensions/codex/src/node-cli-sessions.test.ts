@@ -618,3 +618,15 @@ it("reports malformed node session payloadJSON with an owned error", async () =>
   );
   expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ scopes: ["operator.write"] }));
 });
+
+it("matches canonically equivalent filters over stored session text", async () => {
+  await writeHistory([
+    { session_id: "nfc-session", ts: 1778678322, text: "Cafe\u0301 backlog notes" },
+  ]);
+
+  const listed = await listLocalSessions({ filter: "CAF\u00c9" });
+
+  expect(listed.sessions).toMatchObject([
+    { sessionId: "nfc-session", lastMessage: "Cafe\u0301 backlog notes" },
+  ]);
+});
