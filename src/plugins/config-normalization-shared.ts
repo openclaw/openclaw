@@ -177,7 +177,9 @@ export function normalizePluginsConfigWithResolverCore(
     enabled: config?.enabled ?? DEFAULT_PLUGINS_ENABLED,
     allow: normalizePluginConfigList(config?.allow, resolvePolicyId),
     deny: normalizePluginConfigList(config?.deny, resolvePolicyId),
-    loadPaths: normalizePluginConfigList(config?.load?.paths, identityNormalizePluginId),
+    // Load paths are filesystem locators, not plugin ids: keep their literal text
+    // (quoted leading/trailing whitespace belongs to the name) and drop only blanks.
+    loadPaths: filterStringEntries(config?.load?.paths).filter((entry) => entry.trim()),
     slots: {
       memory: memorySlot.kind === "off" ? null : memorySlot.pluginId,
       contextEngine: normalizeSlotValue(config?.slots?.contextEngine),

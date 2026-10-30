@@ -20,8 +20,13 @@ import { withInstallWorkspace } from "./install-source-utils.js";
  * Local install specs select a host path, so quoted leading or trailing whitespace
  * belongs to the directory or archive name. Blank values keep the default resolution.
  */
-export function resolveLiteralInstallPath(inputPath: string): string {
-  return inputPath.trim() ? path.resolve(expandHomePrefix(inputPath)) : resolveUserPath(inputPath);
+export function resolveLiteralInstallPath(
+  inputPath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return inputPath.trim()
+    ? path.resolve(expandHomePrefix(inputPath, { env }))
+    : resolveUserPath(inputPath, env);
 }
 
 export async function resolveExistingInstallPath(inputPath: string): Promise<

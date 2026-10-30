@@ -115,3 +115,37 @@ it("excludes marketplace requests from catalog recovery", () => {
   expect(request?.bundledPluginId).toBeUndefined();
   expect(resolvePluginInstallInvalidConfigPolicy(request)).toBe("deny");
 });
+
+it.skipIf(process.platform === "win32")(
+  "reads recovery metadata from the literal sibling, not the trimmed neighbor",
+  () => {
+    catalog();
+    const siblingRoot = tempDirs.make("openclaw-literal-recovery-");
+    const trimmedDir = path.join(siblingRoot, "plug");
+    const literalDir = `${trimmedDir} `;
+    for (const [dir, id, allowed] of [
+      [trimmedDir, "probe-beta", false],
+      [literalDir, "probe-alpha", true],
+    ] as const) {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({ openclaw: { install: { allowInvalidConfigRecovery: allowed } } }),
+      );
+      fs.writeFileSync(
+        path.join(dir, "openclaw.plugin.json"),
+        JSON.stringify({ id, configSchema: { type: "object" } }),
+      );
+    }
+
+    const result = resolvePluginInstallRequestContext({ rawSpec: literalDir, source: "local" });
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+    expect(result.request).toMatchObject({
+      bundledPluginId: "probe-alpha",
+      allowInvalidConfigRecovery: true,
+    });
+    expect(resolvePluginInstallInvalidConfigPolicy(result.request)).toBe("allow-plugin-recovery");
+  },
+);

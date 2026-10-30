@@ -86,6 +86,13 @@ describe("normalizePluginsConfig", () => {
     expect(normalizePluginsConfig(mutable)).not.toBe(normalizePluginsConfig(mutable));
   });
 
+  it("keeps load path whitespace literal while dropping blank entries", () => {
+    const normalized = normalizePluginsConfig({
+      load: { paths: ["/plugins/alpha ", "  ", "/plugins/beta"] },
+    });
+    expect(normalized.loadPaths).toEqual(["/plugins/alpha ", "/plugins/beta"]);
+  });
+
   it("keeps targeted authored plugin state identical across JSON persistence", () => {
     const normalized = normalizePluginTargetConfig(
       { plugins: { entries: { CODEX: { enabled: true, config: { appServer: {} } } } } },

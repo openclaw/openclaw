@@ -5,6 +5,7 @@ import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginsInstallParams } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { readConfigFileSnapshotForWrite } from "../config/config.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveLiteralInstallPath } from "../infra/install-flow.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { resolveUserPath } from "../utils.js";
@@ -374,7 +375,7 @@ export function resolvePluginInstallRequestContext(params: {
     return fileSpec;
   }
   const normalizedSpec = fileSpec?.path ?? params.rawSpec;
-  const resolvedPath = resolveUserPath(params.localPath ?? normalizedSpec);
+  const resolvedPath = resolveLiteralInstallPath(params.localPath ?? normalizedSpec);
   const localPath = params.source
     ? params.source === "local" || params.source === "bundled"
       ? resolvedPath

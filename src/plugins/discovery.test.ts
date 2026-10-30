@@ -1064,4 +1064,21 @@ describe("discoverOpenClawPlugins", () => {
     expect(bundledOnly.candidates.map((candidate) => candidate.idHint)).toEqual(["bundled-plugin"]);
     expect(bundledOnly.diagnostics).toEqual([]);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "discovers the literal configured path beside its trimmed neighbor",
+    () => {
+      const siblingRoot = path.join(testRoot, "probe-dirs");
+      const trimmedDir = path.join(siblingRoot, "plug");
+      const literalDir = `${trimmedDir} `;
+      createPlugin(trimmedDir, "probe-beta", "probe-beta", "index.js");
+      createPlugin(literalDir, "probe-alpha", "probe-alpha", "index.js");
+
+      const result = discover({ extraPaths: [literalDir] });
+
+      const ids = result.candidates.map((candidate) => candidate.idHint);
+      expect(ids).toContain("probe-alpha");
+      expect(ids).not.toContain("probe-beta");
+    },
+  );
 });

@@ -9,6 +9,7 @@ import {
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveIsNixMode } from "../config/paths.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { resolveLiteralInstallPath } from "../infra/install-flow.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
@@ -243,7 +244,9 @@ function prepareInstalledPluginPaths(
   const installedPluginDirKeys = new Set<string>();
   const managedPluginDirs = new Set<string>();
   const resolveRecordPath = (rawPath: string | undefined) =>
-    typeof rawPath === "string" && rawPath.trim() ? resolveUserPath(rawPath, env) : undefined;
+    typeof rawPath === "string" && rawPath.trim()
+      ? resolveLiteralInstallPath(rawPath, env)
+      : undefined;
   for (const [installOwner, record] of Object.entries(installRecords ?? {})) {
     const installPath = resolveRecordPath(record.installPath);
     const sourcePath = resolveRecordPath(record.sourcePath);
@@ -808,7 +811,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv) {
       rawPath: string;
     },
   ) {
-    const resolved = resolveUserPath(params.rawPath, env);
+    const resolved = resolveLiteralInstallPath(params.rawPath, env);
     const stat = inspectPluginLoadPath(resolved, params.origin, diagnostics);
     if (!stat) {
       return;
@@ -873,7 +876,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv) {
     const firstConfigured = candidates.length;
     for (const loadPath of loadPaths) {
       if (typeof loadPath === "string" && loadPath.trim()) {
-        discoverFromPath({ rawPath: loadPath.trim(), origin: "config", workspaceDir });
+        discoverFromPath({ rawPath: loadPath, origin: "config", workspaceDir });
       }
     }
     // Explicit operator selection is its own fact: host-owned aliases keep bundled
