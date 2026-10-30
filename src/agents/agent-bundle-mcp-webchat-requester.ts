@@ -66,6 +66,7 @@ export function captureWebchatMcpRequester(
   const admitted = run.admittedRunContext;
   const operation = run.replyOperation;
   const target = run.gatewayUiCommandTarget;
+  const turnKind = readSessionControllerOperationState(operation)?.turnKind;
   if (
     run.senderId?.trim() ||
     (run.messageChannel ?? run.messageProvider) !== "webchat" ||
@@ -73,7 +74,7 @@ export function captureWebchatMcpRequester(
     admitted.admissionSource ||
     admitted.operationalRunInstance.runId !== run.runId ||
     !operation ||
-    readSessionControllerOperationState(operation)?.turnKind !== "direct" ||
+    (turnKind !== "direct" && turnKind !== "visible") ||
     !hasOperationBackendRunId(operation, run.runId) ||
     operation.sessionId !== run.sessionId ||
     operation.key !== run.sessionKey ||

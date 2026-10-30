@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { prepareReplyToolAuthority } from "../auto-reply/reply/reply-tool-authority.js";
 import { captureGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { materializeRequesterScopedMcpToolsForHarnessRun } from "../plugin-sdk/agent-harness-runtime.js";
+import { createReplyOperation } from "../sessions/session-controller.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { disposeAllSessionMcpRuntimes } from "./agent-bundle-mcp-manager-api.js";
 import {
@@ -56,6 +58,7 @@ afterEach(async () => {
 async function withTurn<T>(
   profileId: string,
   run: (context: { turn: WebchatMcpRequesterContext; revoke: () => void }) => Promise<T>,
+  turnKind: "visible" | "queued_followup" = "visible",
 ) {
   let revoked = false;
   const authority = createAdmittedRunOperatorAuthority({
@@ -69,16 +72,35 @@ async function withTurn<T>(
       }
     },
   });
-  return admitted(
-    async ({ admittedRunContext }) =>
-      withPreparedEmbeddedRunToolAuthority(
-        { admittedRunContext },
-        {
-          ...attempt,
-          senderId: undefined,
-          messageChannel: "webchat",
-          gatewayUiCommandTarget: { connId: `${profileId}-connection`, profileId },
-        },
+  return admitted(async ({ admittedRunContext }) => {
+    const input = {
+      ...attempt,
+      senderId: undefined,
+      messageChannel: "webchat",
+      gatewayUiCommandTarget: { connId: `${profileId}-connection`, profileId },
+    };
+    // Real chat.send owns a visible reply before its native backend is selected.
+    const operation = createReplyOperation({
+      sessionId: input.sessionId,
+      sessionKey: input.sessionKey,
+      resetTriggered: false,
+      turnKind,
+    });
+    await operation.bindToolAuthoritySnapshotAsync(
+      prepareReplyToolAuthority({
+        originatingChannel: "webchat",
+        operatorAuthority: authority,
+        run: { ...input, model: input.modelId },
+      }),
+    );
+    const fingerprint = await operation.bindToolAuthorityRouteAsync({
+      provider: input.provider,
+      model: input.modelId,
+    });
+    try {
+      return await withPreparedEmbeddedRunToolAuthority(
+        { admittedRunContext, replyOperation: operation },
+        { ...input, toolAuthorityFingerprint: fingerprint },
         undefined,
         async (prepared) =>
           run({
@@ -87,9 +109,11 @@ async function withTurn<T>(
               revoked = true;
             },
           }),
-      ),
-    authority,
-  );
+      );
+    } finally {
+      operation.complete();
+    }
+  }, authority);
 }
 
 it("creates separate personal OAuth links for two people in the same Webchat session", async () => {
@@ -97,7 +121,7 @@ it("creates separate personal OAuth links for two people in the same Webchat ses
   for (const profileId of ["ada-profile", "grace-profile", "ada-profile"]) {
     await withTurn(profileId, async ({ turn }) => {
       const requester = captureWebchatMcpRequester(turn)!;
-      expect(requester.requesterSenderId).toBe(profileId);
+      expect(requester?.requesterSenderId).toBe(profileId);
       expect(turn.senderId).toBeUndefined();
       const acquisition = await manager.acquire({
         sessionId: turn.sessionId,
@@ -304,4 +328,14 @@ it("rechecks requester authority after awaited preparation before the next netwo
     await expect(pending).rejects.toThrow();
     expect(effect).not.toHaveBeenCalled();
   });
+});
+
+it("does not borrow a person's credentials for a queued follow-up", async () => {
+  await withTurn(
+    "ada-profile",
+    async ({ turn }) => {
+      expect(captureWebchatMcpRequester(turn)).toBeUndefined();
+    },
+    "queued_followup",
+  );
 });
