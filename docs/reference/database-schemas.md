@@ -11,6 +11,11 @@ title: "Database schemas"
 
 OpenClaw stores control-plane state in the shared state database and agent data in one database per agent. SQLite is the default; agent stores also support the [PostgreSQL engine](/reference/database-engines). SQLite schema migrations run forward when a database opens. Doctor supports owner-supplied consecutive forward migrations for PostgreSQL state and agent schemas, with exact predecessor backups. Older OpenClaw builds refuse databases written by a newer schema.
 
+Linux [durable background exec](/gateway/background-process) stores its restart
+ownership facts in the first-use `durable_background_processes` shared-state table.
+See [durable process storage](/reference/database-schemas/layout#durable-background-processes)
+for fields, retention, and upgrade behavior.
+
 For runtime contributors, start with
 [database access in workers](/reference/database-schemas/worker-access): execution
 owners, admission once per load, scoped write receipts, memory-only final

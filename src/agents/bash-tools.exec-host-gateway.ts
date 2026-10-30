@@ -43,20 +43,18 @@ import { hasPosixShellStartupBeforeInlineCommand } from "../infra/exec-wrapper-r
 import { LruCache } from "../infra/lru-cache.js";
 import {
   prepareSystemRunMutableFileBinding,
-  revalidateSystemRunMutableFileBinding,
   type SystemRunMutableFileBinding,
 } from "../infra/system-run-approval-binding.js";
-import {
-  APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
-  type ApprovedCwdSnapshot,
-  captureApprovedCwdSnapshotSync,
-  revalidateApprovedCwdSnapshot,
-} from "../infra/system-run-cwd-binding.js";
+import { captureApprovedCwdSnapshotSync } from "../infra/system-run-cwd-binding.js";
 import {
   GatewayDrainingError,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { markBackgrounded } from "./bash-process-registry.js";
+import {
+  resolveGatewayExecApprovalDrift,
+  revalidateGatewayExecApprovalBinding,
+} from "./bash-tools.exec-approval-binding.js";
 import {
   buildExecApprovalFollowupTarget,
   buildExecApprovalDeniedToolResult,
@@ -86,9 +84,7 @@ import {
   sendExecApprovalFollowupResult,
 } from "./bash-tools.exec-host-shared.js";
 import { createApprovalSlug, runExecProcess } from "./bash-tools.exec-runtime.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
-import type { AgentToolResult } from "./runtime/index.js";
 
 const ONE_SHOT_ALLOW_ALWAYS: AllowAlwaysPersistenceDecision = {
   kind: "one-shot",
@@ -110,43 +106,6 @@ function recordAutoReviewDenial(sessionKey: string | undefined): number {
   );
   consecutiveAutoReviewDenials.set(sessionKey, count);
   return count;
-}
-
-async function resolveGatewayExecApprovalDrift(params: {
-  binding?: SystemRunMutableFileBinding;
-  cwdSnapshot?: ApprovedCwdSnapshot;
-  cwd: string;
-}): Promise<string | undefined> {
-  if (params.binding) {
-    const current = await revalidateSystemRunMutableFileBinding({
-      binding: params.binding,
-      cwd: params.cwd,
-    });
-    if (!current.ok) {
-      return current.message;
-    }
-  }
-  if (params.cwdSnapshot && !revalidateApprovedCwdSnapshot(params.cwdSnapshot)) {
-    return APPROVAL_CWD_DRIFT_DENIED_MESSAGE;
-  }
-  return undefined;
-}
-
-/** Rechecks a gateway approval binding at the caller's final spawn boundary. */
-async function revalidateGatewayExecApprovalBinding(params: {
-  binding?: SystemRunMutableFileBinding;
-  cwdSnapshot?: ApprovedCwdSnapshot;
-  command: string;
-  cwd: string;
-}): Promise<AgentToolResult<ExecToolDetails> | undefined> {
-  const deniedReason = await resolveGatewayExecApprovalDrift(params);
-  return deniedReason
-    ? buildGatewayExecApprovalDeniedToolResult({
-        deniedReason,
-        command: params.command,
-        cwd: params.cwd,
-      })
-    : undefined;
 }
 
 /** Processes gateway exec policy and returns execution/approval/denial outcome. */
@@ -1141,6 +1100,8 @@ export async function processGatewayAllowlist(
               workdir: params.workdir,
               env: params.env,
               secretEgressBindings: params.secretEgressBindings,
+              durable: params.durable,
+              sessionId: params.sessionId,
               githubProfileDir: params.githubProfileDir,
               pathPrepend: params.pathPrepend,
               sandbox: undefined,
@@ -1154,6 +1115,7 @@ export async function processGatewayAllowlist(
               notifyOnExitEmptySuccess: false,
               scopeKey: params.scopeKey,
               sessionKey: params.notifySessionKey ?? params.sessionKey,
+              agentId: params.agentId,
               timeoutSec: effectiveTimeout,
               startupSignal: params.signal,
               assertCurrent,
