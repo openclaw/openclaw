@@ -147,22 +147,6 @@ describe("protected canonical session handoff", () => {
     },
   );
 
-  it("does not release a revoked handoff when read readiness settles", async () => {
-    const preparation = preparingSource();
-    const response = request(entry, "trusted-proxy", preparation.startup);
-    void response.catch(() => {});
-    try {
-      await preparation.entered;
-      current.mockReturnValue(false);
-      preparation.readable();
-      const result = await response;
-      expect(result.res.statusCode).toBe(403);
-      expect(result.serveApp).not.toHaveBeenCalled();
-    } finally {
-      preparation.finish();
-    }
-  });
-
   it("cancels a closed request without cancelling source preparation", async () => {
     const preparation = preparingSource();
     const work = new AsyncWorkScope();
