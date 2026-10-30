@@ -161,9 +161,7 @@ it("reads ranked plugins and categories from the overview", async () => {
     categories: [remoteCategory],
     items: [{ ...remotePlugin, ...ranking }],
   });
-
   const result = await fetchClawHubPluginOverview(registry);
-
   expect(fetchImpl.url().pathname).toBe("/api/v1/plugins/overview");
   expect(result.categories).toEqual([remoteCategory]);
   expect(result.items).toMatchObject([
@@ -260,14 +258,12 @@ it("batch-reads current and legacy categories for exact package versions", async
     { ...packages[1], categories: null },
   ];
   const request = mockResponse({ packages: response });
-
   const result = await fetchClawHubPluginVersionCategories({
     ...registry,
     token: "private-token",
     skipAuth: true,
     packages,
   });
-
   expect(request.init()?.method).toBe("POST");
   expect(new Headers(request.init()?.headers).has("authorization")).toBe(false);
   expect(request.url().pathname).toBe("/api/v1/packages/categories:batch");
@@ -365,7 +361,6 @@ it.each([
     },
     readme: "# Memory Plus\n\nLong-term memory.",
   });
-
   const detail = await fetchClawHubPluginDetail({
     ...registry,
     packageName: "memory-plus",
