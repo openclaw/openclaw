@@ -60,9 +60,28 @@ function run(cmd: string, args: string[], opts?: RunOpts): string {
   return typeof res.stdout === "string" ? res.stdout : "";
 }
 
-/** Resolve the real directory so a symlinked Homebrew prefix publishes to the same file. */
-function resolveConfigDir(dirPath: string): string {
-  return fs.realpathSync.native(dirPath);
+/**
+ * Resolve the publication destination the plain write replaced.
+ *
+ * writeFileSync follows symlinks, so an operator's Corefile may be a link to a
+ * managed file elsewhere. Resolve the whole chain to the final target — the
+ * atomic publisher rejects destination symlinks — while leaving the operator's
+ * link itself in place. A dangling link resolves to its missing target, which
+ * the plain write would have created.
+ */
+function resolvePublicationTarget(filePath: string): string {
+  let current = path.resolve(filePath);
+  for (let hops = 0; hops < 32; hops += 1) {
+    const stats = fs.lstatSync(current, { throwIfNoEntry: false });
+    if (!stats?.isSymbolicLink()) {
+      return path.join(fs.realpathSync.native(path.dirname(current)), path.basename(current));
+    }
+    const target = fs.readlinkSync(current);
+    current = path.isAbsolute(target) ? target : path.join(path.dirname(current), target);
+  }
+  throw new Error(
+    `CoreDNS configuration symlink chain is too deep to publish through: ${filePath}`,
+  );
 }
 
 function isPermissionFailure(error: unknown): boolean {
@@ -83,16 +102,24 @@ function isPermissionFailure(error: unknown): boolean {
  * write leaves the operator's Corefile empty or partial with no recovery copy.
  */
 function publishConfigFile(filePath: string, content: string): void {
-  const resolvedDir = resolveConfigDir(path.dirname(filePath));
-  const target = path.join(resolvedDir, path.basename(filePath));
+  const target = resolvePublicationTarget(filePath);
+  const existing = fs.statSync(target, { throwIfNoEntry: false });
   replaceFileAtomicSync({
     filePath: target,
     content,
     // The atomic writer applies dirMode to the parent directory, so pass the
     // operator's own mode instead of tightening the CoreDNS directory.
-    dirMode: fs.statSync(resolvedDir).mode & 0o7777,
-    mode: 0o644,
-    preserveExistingMode: true,
+    dirMode: fs.statSync(path.dirname(target)).mode & 0o7777,
+    // A fresh file keeps the umask-sensitive creation contract of the plain
+    // write it replaced (0666 filtered by the operator's umask).
+    ...(existing ? { preserveExistingMode: true } : { mode: 0o666 & ~process.umask() }),
+    // A rename publishes a new inode: hand the staged file the operator's
+    // ownership before it replaces theirs. Setting a group outside the
+    // invoking account's memberships fails EPERM and routes the publication
+    // through the privileged path below.
+    beforeRename: existing
+      ? ({ tempPath }) => fs.chownSync(tempPath, existing.uid, existing.gid)
+      : undefined,
     syncTempFile: true,
     syncParentDir: true,
     tempPrefix: ".openclaw-dns-config",
@@ -102,16 +129,18 @@ function publishConfigFile(filePath: string, content: string): void {
 
 /** Publish through a privileged staging file when the operator's path is not writable. */
 function publishConfigFileWithSudo(filePath: string, content: string): void {
-  const resolvedDir = resolveConfigDir(path.dirname(filePath));
-  const target = path.join(resolvedDir, path.basename(filePath));
+  const target = resolvePublicationTarget(filePath);
   const existing = fs.statSync(target, { throwIfNoEntry: false });
   const tempPath = path.join(
-    resolvedDir,
-    `.${path.basename(filePath)}.openclaw-${process.pid}.tmp`,
+    path.dirname(target),
+    `.${path.basename(target)}.openclaw-${process.pid}.tmp`,
   );
   try {
-    // Stage the content next to the destination so the rename below is the only
-    // step that can replace the operator's file.
+    // Stage privately before any configuration byte exists: the staging file
+    // is created exclusive and mode 0600, so an interrupted publication never
+    // leaves restricted configuration readable by other local accounts.
+    run("sudo", ["rm", "-f", tempPath]);
+    run("sudo", ["install", "-m", "600", "/dev/null", tempPath]);
     const staged = spawnSync("sudo", ["tee", tempPath], {
       input: content,
       encoding: "utf-8",
@@ -123,7 +152,7 @@ function publishConfigFileWithSudo(filePath: string, content: string): void {
       run("sudo", ["chown", `${existing.uid}:${existing.gid}`, tempPath]);
       run("sudo", ["chmod", (existing.mode & 0o7777).toString(8), tempPath]);
     } else {
-      run("sudo", ["chmod", "644", tempPath]);
+      run("sudo", ["chmod", (0o666 & ~process.umask()).toString(8), tempPath]);
     }
     const published = spawnSync("sudo", ["mv", "-f", tempPath, target], {
       encoding: "utf-8",

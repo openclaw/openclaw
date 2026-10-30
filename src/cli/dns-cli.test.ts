@@ -100,6 +100,16 @@ describe("dns-cli probe bounds", () => {
       // The privileged publish fallback stages and renames through the real
       // filesystem so its staged-rename contract holds in tests; sudo itself
       // is unavailable on CI hosts, so only the file effects are simulated.
+      // chown is a no-op: an unprivileged simulator cannot change ownership,
+      // and the fixtures keep the invoking account's uid and gid.
+      if (cmd === "sudo" && args[0] === "install") {
+        const [, modeFlag, mode, , staged] = args;
+        if (modeFlag === "-m" && typeof mode === "string" && typeof staged === "string") {
+          fs.writeFileSync(staged, "");
+          fs.chmodSync(staged, Number.parseInt(mode, 8));
+        }
+        return spawnOk();
+      }
       if (cmd === "sudo" && args[0] === "tee" && typeof opts?.input === "string") {
         const staged = args[1];
         if (typeof staged !== "string") {
@@ -111,6 +121,13 @@ describe("dns-cli probe bounds", () => {
         } catch (error) {
           return { ...spawnOk(), status: 1, error: error as Error };
         }
+      }
+      if (cmd === "sudo" && args[0] === "chmod") {
+        const [mode, target] = args.slice(1);
+        if (typeof mode === "string" && typeof target === "string") {
+          fs.chmodSync(target, Number.parseInt(mode, 8));
+        }
+        return spawnOk();
       }
       if (cmd === "sudo" && args[0] === "mv") {
         const [source, destination] = args.slice(1).filter((arg) => !arg.startsWith("-"));
@@ -209,6 +226,87 @@ describe("dns-cli probe bounds", () => {
     );
     expect(fs.statSync(corefilePath).mode & 0o777).toBe(0o640);
   });
+
+  unix("publishes through a symlinked Corefile to its managed target", async () => {
+    const etcDir = path.join(brewPrefix, "etc", "coredns");
+    const corefilePath = path.join(etcDir, "Corefile");
+    const importGlob = path.join(etcDir, "conf.d", "*.server");
+    fs.mkdirSync(etcDir, { recursive: true });
+    const managedPath = path.join(etcDir, "managed-Corefile");
+    fs.writeFileSync(managedPath, ".:53 {\n  errors\n}\n");
+    fs.symlinkSync("managed-Corefile", corefilePath);
+
+    await runDnsSetupApply();
+
+    expect(fs.readFileSync(managedPath, "utf-8")).toBe(
+      `.:53 {\n  errors\n}\n\nimport ${importGlob}\n`,
+    );
+    // The operator's link survives; the target's content was replaced.
+    expect(fs.lstatSync(corefilePath).isSymbolicLink()).toBe(true);
+  });
+
+  unix("creates a dangling Corefile link's target like the plain write did", async () => {
+    const etcDir = path.join(brewPrefix, "etc", "coredns");
+    const corefilePath = path.join(etcDir, "Corefile");
+    const importGlob = path.join(etcDir, "conf.d", "*.server");
+    fs.mkdirSync(etcDir, { recursive: true });
+    fs.symlinkSync("managed-Corefile", corefilePath);
+
+    await runDnsSetupApply();
+
+    expect(fs.readFileSync(path.join(etcDir, "managed-Corefile"), "utf-8")).toContain(
+      `import ${importGlob}`,
+    );
+    expect(fs.lstatSync(corefilePath).isSymbolicLink()).toBe(true);
+  });
+
+  unix(
+    "publishes through the privileged path when ownership hand-off is refused",
+    { timeout: 30_000 },
+    async () => {
+      const etcDir = path.join(brewPrefix, "etc", "coredns");
+      const corefilePath = path.join(etcDir, "Corefile");
+      const importGlob = path.join(etcDir, "conf.d", "*.server");
+      fs.mkdirSync(etcDir, { recursive: true });
+      fs.writeFileSync(corefilePath, ".:53 {\n  errors\n}\n");
+      fs.chmodSync(corefilePath, 0o640);
+      // Model a Corefile whose group the invoking account cannot set (a real
+      // POSIX refusal that unprivileged CI cannot arrange): the ordinary
+      // publisher's ownership hand-off fails EPERM and publication routes
+      // through the privileged staged path.
+      const chownSpy = vi.spyOn(fs, "chownSync").mockImplementation(() => {
+        throw Object.assign(new Error("EPERM: operation not permitted, chown"), {
+          code: "EPERM",
+        });
+      });
+
+      try {
+        await runDnsSetupApply();
+      } finally {
+        chownSpy.mockRestore();
+      }
+
+      expect(fs.readFileSync(corefilePath, "utf-8")).toBe(
+        `.:53 {\n  errors\n}\n\nimport ${importGlob}\n`,
+      );
+      // The privileged publisher restored the operator's metadata before the
+      // rename published the staged file.
+      expect(fs.statSync(corefilePath).mode & 0o777).toBe(0o640);
+      // Staging stayed private: the 0600 sibling was created before any
+      // configuration byte was written into it.
+      const commands = spawnSyncMock.mock.calls.map((call) =>
+        [call[0], ...(call[1] as string[])].join(" "),
+      );
+      const installIndex = commands.findIndex((command) =>
+        command.includes("install -m 600 /dev/null"),
+      );
+      const teeIndex = commands.findIndex((command) => command.includes(" sudo tee "));
+      expect(installIndex).toBeGreaterThanOrEqual(0);
+      expect(teeIndex).toBeGreaterThan(installIndex);
+      // No staging sibling survived publication.
+      expect(fs.readdirSync(etcDir).filter((entry) => entry.startsWith(".Corefile"))).toEqual([]);
+    },
+  );
 
   it.each([true, false])(
     "finishes setup for an existing Corefile with the import already present: %s",
