@@ -4901,6 +4901,22 @@ class ChatController internal constructor(
     chatMetadataNeedsStatusRefresh = false
   }
 
+  /** Retries `chat.metadata` when the Gateway explicitly reports a transient superseded read. */
+  private suspend fun <T> retryTransientChatMetadata(block: suspend () -> T): T {
+    var attempt = 0
+    while (true) {
+      try {
+        return block()
+      } catch (error: Throwable) {
+        if (error is CancellationException) throw error
+        val transient = error.message?.contains("Retry the request", ignoreCase = true) == true
+        if (!transient || attempt >= 2) throw error
+        attempt += 1
+        delay(400L * attempt)
+      }
+    }
+  }
+
   private suspend fun fetchChatMetadata(refresh: ChatMetadataRefresh) {
     val requestSequence = refresh.sequence
     val requestCacheScope = refresh.cacheScope
@@ -4923,12 +4939,17 @@ class ChatController internal constructor(
         }
       var requestedSwarmState: Boolean? = null
       runCatchingCancellable {
+        // A metadata read that overlaps a send can be superseded by the Gateway ("Session changed while
+        // preparing its metadata. Retry the request."). That reply is transient, so retry it briefly instead
+        // of surfacing the models refresh error.
         val root =
-          requestGatewayJson(
-            requestCacheScope?.gatewayId,
-            "chat.metadata",
-            metadataScope.params(gatewayAdvertisesCapability(SESSION_SCOPED_CHAT_METADATA_CAPABILITY) == true),
-          ).asObjectOrNull()
+          retryTransientChatMetadata {
+            requestGatewayJson(
+              requestCacheScope?.gatewayId,
+              "chat.metadata",
+              metadataScope.params(gatewayAdvertisesCapability(SESSION_SCOPED_CHAT_METADATA_CAPABILITY) == true),
+            )
+          }.asObjectOrNull()
         val metadataSwarmEnabled = root?.get("swarmEnabled").asBooleanOrNull() == true
         synchronized(gatewayScopeApplyLock) {
           if (!isCurrent()) return
@@ -4966,6 +4987,9 @@ class ChatController internal constructor(
               } else if (!refreshFailed && _errorText.value == chatMetadataRefreshError) {
                 updateErrorText(null)
               }
+            } else if (!refreshFailed && _errorText.value == chatMetadataRefreshError) {
+              // A later successful background load also retires a stale refresh error.
+              updateErrorText(null)
             }
           }
         }
