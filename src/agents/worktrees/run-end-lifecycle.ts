@@ -10,8 +10,8 @@ import { GatewayRetainedWorkScope, trackAsyncWork } from "../../shared/async-wor
 import { registerOpenClawStatePathAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
-import type { WorktreeWarmPoolRequest } from "./checkout-pool.js";
 import { createPreparedWorktreePathIndex } from "./gc-dependencies.js";
+import type { WorktreeWarmPoolRequest } from "./template-registry.js";
 
 type RunEndOperation = {
   context: OpenClawStateWorkerContext;

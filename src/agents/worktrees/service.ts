@@ -16,8 +16,6 @@ import {
   requireAllocationSpace,
   retryWorktreeCapacityReleases,
 } from "./capacity.js";
-import { prepareWarmWorktree } from "./checkout-pool.js";
-import type { WorktreeWarmPoolRequest } from "./checkout.js";
 import { ensureEmptyWorktreeSource, removeUnusedEmptyWorktreeSource } from "./empty-source.js";
 import { hasWorktreeUnknownOutcome, WorktreePendingContentionError } from "./errors.js";
 import { collectRetiredWorktreeArtifacts } from "./gc-artifacts.js";
@@ -63,6 +61,7 @@ import {
 import {
   completeRepositoryWorktreeSetup,
   materializeRepositoryWorktree,
+  prepareWarmWorktree,
 } from "./repository-setup.js";
 import {
   captureWorktreeRunEndContext,
@@ -97,6 +96,7 @@ import {
 } from "./snapshot-restore.js";
 import { collectWorktreeTemplates } from "./template-cache.js";
 import { hasTemplatesAsync } from "./template-registry-async.js";
+import type { WorktreeWarmPoolRequest } from "./template-registry.js";
 import type {
   CreateEmptyManagedWorktreeParams,
   CreateManagedWorktreeParams,

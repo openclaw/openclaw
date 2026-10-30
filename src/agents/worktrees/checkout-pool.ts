@@ -1,26 +1,19 @@
-import type { WorktreeAllocationGuard } from "./allocation.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { resolveWorktreeCheckoutKey } from "./checkout-policy-key.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
 import { resolveGitMetadataPath } from "./git.js";
-import { prepareWorktreeTemplate, retainWorktreeTemplate } from "./template-cache.js";
+import { retainWorktreeTemplate } from "./template-cache.js";
 import { readTemplateAsync } from "./template-registry-async.js";
-import type { WorktreeTemplateRecord } from "./template-registry.js";
+import type { WorktreeTemplateRecord, WorktreeWarmPoolRequest } from "./template-registry.js";
 
-export type WorktreeWarmPoolRequest = {
-  template: WorktreeTemplateRecord;
-  sourceOnly: boolean;
-  cloneBytes?: number;
-};
-
-const selection = (template: WorktreeTemplateRecord) => ({
+export const selectWarmWorktree = (template: WorktreeTemplateRecord) => ({
   cacheKey: `warm:${template.cacheKey}`,
   contentKey: `${template.id}:${template.contentKey}`,
   backend: `warm-${template.backend}`,
 });
 
-async function isClean(
+export async function isWarmWorktreeClean(
   record: WorktreeTemplateRecord,
   options: WorktreeFilesystemOptions,
   sourceOnly: boolean,
@@ -65,7 +58,7 @@ export async function takeWarmWorktree(
   request: WorktreeWarmPoolRequest,
   options: WorktreeFilesystemOptions,
 ) {
-  const wanted = selection(request.template);
+  const wanted = selectWarmWorktree(request.template);
   const record = await readTemplateAsync(env, wanted.cacheKey, options.commitGuard);
   if (
     !record ||
@@ -84,7 +77,12 @@ export async function takeWarmWorktree(
   try {
     if (
       retained.status === "ready" &&
-      (await isClean(retained, options, request.sourceOnly, request.template.contentKey))
+      (await isWarmWorktreeClean(
+        retained,
+        options,
+        request.sourceOnly,
+        request.template.contentKey,
+      ))
     ) {
       return {
         record: retained,
@@ -105,64 +103,4 @@ export async function takeWarmWorktree(
   }
   await retained.release();
   return undefined;
-}
-
-export async function prepareWarmWorktree(
-  env: NodeJS.ProcessEnv,
-  request: WorktreeWarmPoolRequest,
-  guard: WorktreeAllocationGuard,
-  requireSpace: (bytes?: number) => Promise<void>,
-): Promise<void> {
-  const { template, sourceOnly } = request;
-  const current = await readTemplateAsync(env, template.cacheKey, guard.commitGuard);
-  if (current?.id !== template.id || current.contentKey !== template.contentKey) {
-    return;
-  }
-  const prepared = await prepareWorktreeTemplate({
-    ...template,
-    ...selection(template),
-    env,
-    now: Date.now,
-    options: guard,
-    requireSpace: () => requireSpace(request.cloneBytes),
-    validate: (record, options) => isClean(record, options, sourceOnly, template.contentKey),
-    prepare: async (record, options) => {
-      const { addManagedWorktree } = await import("./checkout.js");
-      const result = await addManagedWorktree({
-        ...options,
-        env,
-        now: Date.now,
-        enabled: true,
-        repoRoot: template.repoRoot,
-        commonDir: template.commonDir,
-        worktreeRoot: template.worktreeRoot,
-        destination: record.path,
-        base: template.sourceCommit,
-        sourceOnly,
-        useWarmPool: false,
-        requireSpace,
-      });
-      if (result.code !== 0) {
-        throw new Error("Warm worktree preparation failed");
-      }
-      const gitOptions = {
-        signal: options.signal,
-        beforeRun: options.commitGuard,
-        killProcessTree: true,
-      };
-      const contentKey = await withWorktreeGitConfig(record.path, sourceOnly, gitOptions, (git) =>
-        resolveWorktreeCheckoutKey({
-          destination: record.path,
-          commonDir: template.commonDir,
-          commit: template.sourceCommit,
-          gitOptions,
-          git,
-        }),
-      );
-      if (contentKey !== template.contentKey) {
-        throw new Error("Warm worktree checkout policy changed during preparation");
-      }
-    },
-  });
-  await prepared?.release();
 }

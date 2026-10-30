@@ -7,10 +7,10 @@ import {
   tryResolveLegacyCompatibilityAgentId,
   tryResolveLegacyDataOwnerAgentId,
 } from "../agents/agent-scope-config.js";
-import type { WorktreeWarmPoolRequest } from "../agents/worktrees/checkout.js";
 import { WorktreeGcProgress } from "../agents/worktrees/gc-progress.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import { managedWorktrees, WORKTREE_GC_INTERVAL_MS } from "../agents/worktrees/service.js";
+import type { WorktreeWarmPoolRequest } from "../agents/worktrees/template-registry.js";
 import type {
   ManagedWorktreeGcReceipt,
   ManagedWorktreeGcResult,

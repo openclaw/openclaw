@@ -12,7 +12,7 @@ import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { prepareWorktreePromptFiles } from "./checkout-inputs.js";
 import { materializeManagedWorktree, prepareClonedWorktreeIndex } from "./checkout-materialize.js";
 import { resolveWorktreeCheckoutKey } from "./checkout-policy-key.js";
-import { takeWarmWorktree, type WorktreeWarmPoolRequest } from "./checkout-pool.js";
+import { takeWarmWorktree } from "./checkout-pool.js";
 import type { WorktreeSourceProfile } from "./checkout-profiles.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
@@ -31,10 +31,10 @@ import {
   timeWorktreePreparationPhase,
 } from "./preparation-timing.js";
 import { prepareWorktreeTemplate } from "./template-cache.js";
+import type { WorktreeWarmPoolRequest } from "./template-registry.js";
 import type { WorktreeWaitBudget } from "./types.js";
 
 const log = createSubsystemLogger("agents/worktrees");
-export type { WorktreeWarmPoolRequest } from "./checkout-pool.js";
 
 type CheckoutOptions = WorktreeFilesystemOptions & {
   waitBudget?: WorktreeWaitBudget;

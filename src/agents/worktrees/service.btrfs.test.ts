@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
-import { addManagedWorktree, type WorktreeWarmPoolRequest } from "./checkout.js";
+import { addManagedWorktree } from "./checkout.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
@@ -9,6 +9,7 @@ import { git, useManagedWorktreeTestRepository } from "./service.test-support.js
 import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 import { collectWorktreeTemplates } from "./template-cache.js";
 import { listTemplatesAsync } from "./template-registry-async.js";
+import type { WorktreeWarmPoolRequest } from "./template-registry.js";
 
 // mock-isolation: exercise Btrfs selection on every host without native filesystem probes.
 vi.mock("./filesystem-backend.js", () => ({ detectWorktreeFilesystemBackend: vi.fn() }));

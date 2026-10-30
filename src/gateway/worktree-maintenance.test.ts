@@ -1,9 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import type { WorktreeWarmPoolRequest } from "../agents/worktrees/checkout.js";
 import { WorktreeGcProgress } from "../agents/worktrees/gc-progress.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import type { WorktreeWarmPoolRequest } from "../agents/worktrees/template-registry.js";
 import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
 import {
   getRuntimeConfigSnapshot,
