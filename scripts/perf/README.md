@@ -1,5 +1,21 @@
 # Team-shaped synthetic state
 
+## Slack shutdown retirement
+
+`slack-shutdown-retirement-measure.ts` runs a real Slack SDK startup with a synthetic
+recoverable API error under the channel monitor's plugin custody. Stopping the
+account then retiring a 44-plugin registry must settle the monitor and release all
+instances within the existing five-second grace. No network, credentials, database,
+or workspace data is used: this owner waits on promises, not state-size-dependent I/O.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/slack-shutdown-retirement-measure.ts
+```
+
+Run serial baseline/candidate samples with A/A controls. Add `--allocations` in a
+separate pass for sampled allocation including collected objects. JSON reports
+stop/retirement latency, CPU, retained consumers, memory deltas, and host load.
+
 ## Update state I/O
 
 `update-state-io-measure.ts` measures candidate inventory and snapshot creation,
