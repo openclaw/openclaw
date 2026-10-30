@@ -108,6 +108,7 @@ type JoinCase = {
     | "owner-revoke"
     | "shared-revoke";
   crossSurface?: "incoming" | "outgoing" | "different" | "shared" | "delegated" | "initiator";
+  linkedBot?: "incoming" | "incumbent";
   sharedOwner?: {
     direction: "incoming" | "outgoing";
     channelOwner?: false;
@@ -159,6 +160,16 @@ it.each<[string, Outcome, JoinCase?]>([
   ["delivery closed before final submission", "rejected", { after: "delivery" }],
   ["linked channel guides WebUI authority", "accepted", { crossSurface: "incoming" }],
   ["WebUI guides linked channel authority", "accepted", { crossSurface: "outgoing" }],
+  [
+    "linked bot cannot guide human authority",
+    "deferred",
+    { crossSurface: "incoming", linkedBot: "incoming" },
+  ],
+  [
+    "linked bot execution cannot use human continuation",
+    "deferred",
+    { crossSurface: "outgoing", linkedBot: "incumbent" },
+  ],
   ["different linked human", "deferred", { crossSurface: "different" }],
   [
     "different linked human with changed model",
@@ -377,6 +388,10 @@ it.each<[string, Outcome, JoinCase?]>([
             delegatedCreatorProfileId: "initiator",
           };
         }
+        bindReplyInputChannel(
+          run.run,
+          c.linkedBot === "incumbent" ? undefined : run.run.messageProvider,
+        );
       }
       if (c.sharedOwner) {
         bindReplyInputChannel(
@@ -553,7 +568,12 @@ it.each<[string, Outcome, JoinCase?]>([
           ...caller
         } = toolAuthorityOverlay(incoming);
         if (c.crossSurface) {
-          const incomingContext = {};
+          const incomingContext = finalizeInboundContext({
+            Provider: incoming.run.messageProvider,
+            SenderId: incoming.run.senderId,
+            SessionKey: key,
+            SenderIsBot: c.linkedBot === "incoming",
+          });
           bindRequesterProfile(incomingContext, {
             id:
               c.crossSurface === "shared"
@@ -566,7 +586,17 @@ it.each<[string, Outcome, JoinCase?]>([
             displayName: null,
             isCurrent: () => incomingIdentityCurrent,
           });
-          Object.assign(caller, incomingContext);
+          Object.assign(
+            caller,
+            resolveInboundReplyToolAuthorityOverlay({
+              ctx: incomingContext,
+              sessionEntry: currentEntry,
+              operatorAuthority: incoming.operatorAuthority,
+              senderIsOwner: incoming.run.senderIsOwner === true,
+              toolsAllow: incoming.toolsAllow,
+              disableTools: false,
+            }),
+          );
         }
         if (c.sharedOwner) {
           if (c.sharedOwner.bot) {
@@ -623,7 +653,11 @@ it.each<[string, Outcome, JoinCase?]>([
           },
         });
         expect(joined.kind).toBe(outcome === "deferred" ? "deferred" : "prepared");
-        if ((c.crossSurface === "different" && c.mismatch === "model") || c.sharedOwner?.bot) {
+        if (
+          (c.crossSurface === "different" && c.mismatch === "model") ||
+          c.sharedOwner?.bot ||
+          c.linkedBot
+        ) {
           expect(joined).toMatchObject({ kind: "deferred", reason: "requester-mismatch" });
         }
         if (c.crossSurface === "incoming" && c.mismatch === "model") {

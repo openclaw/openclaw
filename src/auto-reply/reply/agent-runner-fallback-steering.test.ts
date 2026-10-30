@@ -6,6 +6,7 @@ import { steerActiveSessionWithOptionalDeliveryWait } from "../../agents/embedde
 import { FailoverError } from "../../agents/failover-error.js";
 import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
 import {
+  bindReplyInputChannel,
   createAgentQuestionAnswerAuthority,
   prepareReplyToolAuthorityCallerRead,
   withAgentQuestionAnswerAuthority,
@@ -100,6 +101,7 @@ describe("ordinary steering into automatic model fallback", () => {
         isCurrent: () => true,
       });
       transferRequesterProfile(ownerContext, run);
+      bindReplyInputChannel(run.run, ownerContext.Provider);
       const operation = createReplyOperation({
         sessionKey: key,
         sessionId: run.run.sessionId,

@@ -7,6 +7,7 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { bindReplyInputChannel } from "../../agents/harness/host-private-capabilities.js";
 import { resolveRequesterPrincipalKey } from "../../agents/requester-origin.js";
 import { emitInboundMessageAuditTerminal } from "../../auto-reply/reply/dispatch-from-config.audit.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
@@ -335,6 +336,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
           },
         );
         transferRequesterProfile(params.turn.ctx, run);
+        bindReplyInputChannel(run.run, run.run.messageProvider);
         await operation.bindToolAuthoritySnapshotAsync(
           legacy
             ? actualToolAuthority.prepareReplyToolAuthority(run)
@@ -602,6 +604,8 @@ describe("gateway steer contract after the injection-start fence", () => {
             ? {
                 kind: "prepared",
                 fingerprint: "steer-authority",
+                continuationKind: undefined,
+                allowPendingUserInputAnswer: undefined,
                 read: () => "steer-authority",
                 prepareCurrent: async () => {},
                 release() {},

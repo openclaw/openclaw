@@ -481,7 +481,7 @@ it.each([
         const host = createHostIngressFixture(channel, cfg);
         using _ = { [Symbol.dispose]: host.retire };
         const context = async (
-          sender = senderId,
+          sender: string = senderId,
           overrides: Parameters<typeof ingressInput>[1] = {},
           exposedSender = sender,
         ) => {

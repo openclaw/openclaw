@@ -75,7 +75,12 @@ export function captureReplyToolAuthorityContinuation({
       ? caller
       : undefined;
   const incomingProfile = continuation && readTransferredRequesterProfile(continuation.caller);
+  // A profile link records attribution; only host-attested human ingress can
+  // use it to continue another transport's execution.
   const matchingProfile =
+    continuation &&
+    inputChannel &&
+    readReplyInputChannel(continuation.caller) &&
     incomingProfile &&
     incomingProfile.id !== GATEWAY_OWNER_PROFILE_ID &&
     (incomingProfile.id === requesterProfileId ||
