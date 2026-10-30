@@ -561,9 +561,14 @@ describe("interrupted canonical user replay", () => {
     },
   );
 
-  it.each([false, true])(
-    "resends a rate-limited request without output unchanged after completed tools (carrier=%s)",
-    async (appendOnly) => {
+  it.each(
+    [false, true].flatMap((appendOnly) => [
+      { appendOnly, errorMessage: "Rate limit reached on tokens per min (TPM)." },
+      { appendOnly, errorMessage: "401 Unauthorized" },
+    ]),
+  )(
+    "resends a failed request without output unchanged after completed tools (carrier=$appendOnly, error=$errorMessage)",
+    async ({ appendOnly, errorMessage }) => {
       await withInterruptedTurn(
         appendOnly,
         async (fixture) => {
@@ -575,15 +580,13 @@ describe("interrupted canonical user replay", () => {
                 ? {
                     ...createAssistant(model, [], "error"),
                     usage: createZeroUsageFixture(),
-                    errorMessage: "Rate limit reached on tokens per min (TPM).",
+                    errorMessage,
                   }
                 : createAssistant(model, "Continued from completed work"),
             );
           });
           // The provider rejects the first request; the retry builds a fresh session boundary.
-          await withReplaySession(fixture, appendOnly, async (_session, submit) => {
-            await submit();
-          });
+          await withReplaySession(fixture, appendOnly, (_session, submit) => submit());
           await withReplaySession(fixture, appendOnly, async (session, submit) => {
             await submit();
             expect(session.getLastAssistantText()).toBe("Continued from completed work");

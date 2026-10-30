@@ -27,7 +27,6 @@ import {
   isSessionWorkStartInvalidatedError,
   SessionWorkStartChangedError,
 } from "../../../config/sessions/work-start-error.js";
-import { isRetryableAssistantError } from "../../../llm/utils/retry.js";
 import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import type {
   PersistedUserTurnMessage,
@@ -408,14 +407,14 @@ export async function preparePersistedCurrentUserTurn(params: {
     );
     const current = currentId ? sessionManager.getEntry(currentId) : undefined;
     // A retry can retain the keyed current user with a newer prompt projection.
-    // Lack of an exact replay witness does not make that input historical.
+    // A same-run failed attempt remains recovery-owned; retryability is not completion.
     if (
       current?.type === "message" &&
       ((current.message.role === "user" &&
         Reflect.get(current.message, "idempotencyKey") === message.idempotencyKey) ||
         (current.message.role === "assistant" &&
           Reflect.get(current.message, "__openclaw")?.runId === runId &&
-          isRetryableAssistantError(current.message)))
+          current.message.stopReason === "error"))
     ) {
       return undefined;
     }
