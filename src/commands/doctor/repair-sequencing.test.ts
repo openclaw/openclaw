@@ -13,7 +13,8 @@ import { registerSharedRuntimeReaderDoctorTests } from "./repair-sequencing.shar
 
 const hasDeferredRetirement = vi.hoisted(() => vi.fn(() => false));
 // mock-isolation: Sequencing fixtures own the deferred receipt; never read or write the process update ledger.
-vi.mock("../../infra/update-deferred-model-retirement.js", () => ({
+vi.mock(import("../../infra/update-deferred-model-retirement.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   hasDeferredUpdateModelRetirement: hasDeferredRetirement,
   recordUpdateModelRetirement: vi.fn(),
 }));
