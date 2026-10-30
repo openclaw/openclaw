@@ -198,9 +198,8 @@ export function openSessionWorkspaceManagedArtifact(state: SessionWorkspaceHost,
   if (!isManagedOutgoingMediaSource(href)) {
     return false;
   }
-  const unavailable = t("chat.detailPanel.unavailable");
   if (!state.connected || !state.client) {
-    showToast({ message: unavailable, severity: "error" });
+    showToast({ message: t("chat.detailPanel.attachmentOffline"), severity: "error" });
     return true;
   }
   const pathname = new URL(href, window.location.origin).pathname;
@@ -242,7 +241,7 @@ export function openSessionWorkspaceManagedArtifact(state: SessionWorkspaceHost,
         : null;
     },
     (result) => result.content,
-    unavailable,
+    t("chat.detailPanel.attachmentUnavailable"),
     {
       label: t("chat.workspaceFiles.artifacts"),
       revalidate: true,

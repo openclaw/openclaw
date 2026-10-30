@@ -1,6 +1,7 @@
 import { Blob as NodeBlob } from "node:buffer";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import * as toast from "../../../lib/toast.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import {
   clearSessionWorkspacePreviews,
@@ -143,6 +144,18 @@ describe("session workspace artifacts", () => {
   const managedHref =
     "/api/chat/media/outgoing/agent%3Amain%3Acurrent/12345678-1234-4234-8234-123456789abc/full";
 
+  it("tells an offline reader to reconnect and retry without requesting artifacts", () => {
+    const fixture = createArtifactHost("application/json", "", { id: managedId });
+    fixture.state.connected = false;
+    const show = vi.spyOn(toast, "showToast").mockReturnValue(true);
+    openSessionWorkspaceManagedArtifact(fixture.state, managedHref);
+    expect(show).toHaveBeenCalledWith({
+      message: "You're offline. Reconnect, then open this attachment link again.",
+      severity: "error",
+    });
+    expect(fixture.request).not.toHaveBeenCalled();
+  });
+
   it("reuses the original artifact tab when a later link selects the same saved file", async () => {
     vi.stubGlobal("Blob", NodeBlob);
     const fixture = createArtifactHost("application/json", btoa('{"original":true}'), {
@@ -176,7 +189,13 @@ describe("session workspace artifacts", () => {
       expect(openSessionWorkspaceManagedArtifact(fixture.state, href)).toBe(true);
       const preview = fixture.state.sessionWorkspaceState!.previews[0]!;
       await preview.readResult;
-      expect(preview.content).toMatchObject({ kind: "unavailable" });
+      expect(preview.content).toMatchObject({
+        kind: "unavailable",
+        message:
+          condition === "denied"
+            ? "Access denied"
+            : "This attachment is unavailable in this chat. Ask the sender to share it again.",
+      });
       expect(
         fixture.request.mock.calls.filter(([method]) => method === "artifacts.download"),
       ).toEqual([]);

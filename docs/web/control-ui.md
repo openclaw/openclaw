@@ -436,6 +436,8 @@ artifact in the file reader. Click the link or focus it and press **Enter** or
 artifact, even when its attachment card is outside the loaded history window.
 It does not recreate the file or read a same-named workspace file. If the artifact
 is no longer available or your access has changed, the reader shows an error.
+Reconnect and retry an offline link. If the attachment is unavailable in the chat,
+ask the sender to share it again.
 
 Opening a file collapses the file tree to make room for its preview. Use **Toggle
 file tree** to browse another file, or **Show in Files** to reveal the current file
