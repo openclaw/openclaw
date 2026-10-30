@@ -1,2 +1,2 @@
-# LogsView resize/scroll regression and bounded Subagents layout assertions.
-142
+# LogsView resize/scroll/visibility regressions and bounded Subagents layout assertions.
+281

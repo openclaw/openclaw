@@ -126,12 +126,21 @@ export function LogsView(props: LogsProps) {
     const staticRows = filtered();
     return (index: number) => staticRows[index]!.id;
   });
-  const [window, setWindow] = createSignal<{ items: VirtualItem[]; height: number }>({
+  const [window, setWindow] = createSignal<{
+    items: VirtualItem[];
+    height: number;
+    getItemKey: ((index: number) => VirtualItem["key"]) | null;
+  }>({
     items: [],
     height: 0,
+    getItemKey: null,
   });
   const publish = () =>
-    setWindow({ items: virtualizer.getVirtualItems(), height: virtualizer.getTotalSize() });
+    setWindow({
+      items: virtualizer.getVirtualItems(),
+      height: virtualizer.getTotalSize(),
+      getItemKey: virtualizer.options.getItemKey,
+    });
   const scrollRequest = {};
   let readerScrollPending = false;
   let synchronizeScrollOffset: ((scrolling: boolean) => void) | undefined;
@@ -198,17 +207,16 @@ export function LogsView(props: LogsProps) {
         getItemKey: next.getItemKey,
         followOnAppend: next.autoFollow,
       });
-      const { _willUpdate: updateVirtualizer } = virtualizer;
-      updateVirtualizer();
       publish();
     },
     { targets: () => [stream], changeTiming: "sync", fonts: true },
   );
   const windowHeight = createMemo(() => window().height);
+  const windowItemKey = createMemo(() => window().getItemKey);
   createLayoutMeasurement(
-    windowHeight,
+    () => [windowHeight(), windowItemKey()],
     () => {
-      // Retry when Solid commits the spacer, before another queued row measurement.
+      // Apply append/trim anchors after Solid commits their spacer and row window.
       const { _willUpdate: updateVirtualizer } = virtualizer;
       updateVirtualizer();
       // A retried compensation must be read back before another row measures from the old offset.

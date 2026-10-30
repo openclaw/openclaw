@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, flush } from "solid-js";
+import { createSignal, flush, onSettled } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { pt_BR } from "../../i18n/locales/pt-BR.ts";
+import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { installLogsViewport } from "./logs-layout.test-support.ts";
 import { LogsView, type LogsProps } from "./view.tsx";
@@ -31,6 +32,33 @@ function createProps(overrides: Partial<LogsProps> = {}): LogsProps {
       element.scrollTo = () => undefined;
     },
     ...overrides,
+  };
+}
+
+function installClampedLogsViewport(
+  element: HTMLDivElement,
+  clientHeight: number,
+  onScroll?: () => void,
+) {
+  let top = 0;
+  const height = () =>
+    Number.parseFloat(element.querySelector<HTMLElement>('[role="list"]')?.style.height ?? "0");
+  Object.defineProperties(element, {
+    clientHeight: { get: () => clientHeight },
+    scrollHeight: { get: height },
+    scrollTop: {
+      get: () => (top = Math.min(top, Math.max(0, height() - clientHeight))),
+      set: (value: number) => {
+        top = Math.max(0, Math.min(value, height() - clientHeight));
+      },
+    },
+  });
+  element.scrollTo = (options?: ScrollToOptions | number, y?: number) => {
+    const previous = element.scrollTop;
+    element.scrollTop = typeof options === "number" ? (y ?? 0) : (options?.top ?? 0);
+    if (previous !== element.scrollTop) {
+      onScroll?.();
+    }
   };
 }
 
@@ -177,7 +205,6 @@ it.each([false, true])(
     const [entries, setEntries] = createSignal(lines(500));
     let stream!: HTMLDivElement;
     let jump!: () => void;
-    let top = 0;
     const view = mountSolid(() => (
       <LogsView
         {...createProps({
@@ -185,23 +212,7 @@ it.each([false, true])(
           onStreamRef: (element, scroll) => {
             stream = element;
             jump = scroll;
-            const height = () =>
-              Number.parseFloat(
-                element.querySelector<HTMLElement>('[role="list"]')?.style.height ?? "0",
-              );
-            Object.defineProperties(element, {
-              clientHeight: { get: () => 378 },
-              scrollHeight: { get: height },
-              scrollTop: {
-                get: () => (top = Math.min(top, Math.max(0, height() - 378))),
-                set: (value: number) => {
-                  top = Math.max(0, Math.min(value, height() - 378));
-                },
-              },
-            });
-            element.scrollTo = (options?: ScrollToOptions | number, y?: number) => {
-              element.scrollTop = typeof options === "number" ? (y ?? 0) : (options?.top ?? 0);
-            };
+            installClampedLogsViewport(element, 378);
           },
         })}
         entries={entries()}
@@ -274,3 +285,131 @@ it.each([false, true])(
     }
   },
 );
+
+it("keeps an in-flight hidden append at the end when the page becomes visible", async () => {
+  vi.useFakeTimers({ toFake: ["performance", "setInterval", "clearInterval"] });
+  let visibility: DocumentVisibilityState = "visible";
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+  // Browsers suspend RAF while hidden, but an in-flight response can still settle.
+  const callbacks = new Map<number, FrameRequestCallback>();
+  let nextCallback = 0;
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    const id = ++nextCallback;
+    callbacks.set(id, callback);
+    return id;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => callbacks.delete(id));
+  const frame = () => {
+    vi.advanceTimersByTime(16);
+    // eslint-disable-next-line unicorn/no-useless-spread -- Newly scheduled callbacks belong to the next frame.
+    for (const [id, callback] of [...callbacks]) {
+      if (callbacks.delete(id)) {
+        callback(performance.now());
+      }
+    }
+    flush();
+  };
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return this.classList.contains("log-stream")
+      ? 636
+      : Number(this.dataset.index) % 7 === 0
+        ? 92
+        : 42;
+  });
+  const lines = (count: number) =>
+    Array.from({ length: count }, (_, id) => ({ id, raw: `line ${id}` }));
+  const [entries, setEntries] = createSignal<LogsProps["entries"]>([]);
+  const [loaded, setLoaded] = createSignal(false);
+  let stream!: HTMLDivElement;
+  let jump!: () => void;
+  let scrollFrame: number | undefined;
+  const responses: Array<ReturnType<typeof Promise.withResolvers<LogsProps["entries"]>>> = [];
+  const view = mountSolid(() => {
+    const polling = useVisiblePoll(2_000, () => {
+      const response = Promise.withResolvers<LogsProps["entries"]>();
+      responses.push(response);
+      void response.promise.then(setEntries);
+    });
+    onSettled(() => {
+      polling.start();
+    });
+    return (
+      <LogsView
+        {...createProps({
+          onStreamRef: (element, scroll) => {
+            stream = element;
+            jump = scroll;
+            installClampedLogsViewport(element, 634, () => {
+              if (scrollFrame === undefined) {
+                scrollFrame = requestAnimationFrame(() => {
+                  scrollFrame = undefined;
+                  element.dispatchEvent(new Event("scroll"));
+                });
+              }
+            });
+          },
+        })}
+        status={{ error: null, hasLoaded: loaded(), stale: false, awaitingGateway: false }}
+        entries={entries()}
+      />
+    );
+  });
+  try {
+    flush();
+    setEntries(lines(500));
+    setLoaded(true);
+    flush();
+    // Match the real page: the first successful load requests its initial end jump.
+    jump();
+    for (let index = 0; index < 8; index++) {
+      frame();
+    }
+    expect(stream.querySelector('[aria-posinset="500"]')).not.toBeNull();
+    expect(stream.scrollHeight - stream.scrollTop - stream.clientHeight).toBeLessThan(2);
+
+    // The visible poll starts one request, then the page becomes hidden.
+    vi.advanceTimersByTime(2_000 - performance.now());
+    expect(responses).toHaveLength(1);
+    visibility = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+    responses[0]!.resolve(lines(1_000));
+    await Promise.resolve();
+    flush();
+    const followArmedAt = stream.ownerDocument.defaultView!.performance.now();
+    expect(callbacks.size).toBeGreaterThan(0);
+
+    // The real visibility owner suspends polling; only the in-flight append commits.
+    vi.advanceTimersByTime(5_001);
+    expect(responses).toHaveLength(1);
+    expect(stream.ownerDocument.defaultView!.performance.now() - followArmedAt).toBe(5_001);
+    visibility = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(responses).toHaveLength(2);
+
+    frame();
+    for (let index = 0; index < 8; index++) {
+      frame();
+    }
+    const geometry = {
+      top: stream.scrollTop,
+      height: stream.scrollHeight,
+      viewport: stream.clientHeight,
+      first: stream.querySelector(".log-row")?.getAttribute("aria-posinset"),
+      last: stream.querySelector(".log-row:last-child")?.getAttribute("aria-posinset"),
+      elapsed: stream.ownerDocument.defaultView!.performance.now() - followArmedAt,
+      requests: responses.length,
+    };
+    expect(stream.querySelector('[aria-posinset="1000"]'), JSON.stringify(geometry)).not.toBeNull();
+    expect(
+      stream.scrollHeight - stream.scrollTop - stream.clientHeight,
+      JSON.stringify(geometry),
+    ).toBeLessThan(2);
+  } finally {
+    if (scrollFrame !== undefined) {
+      cancelAnimationFrame(scrollFrame);
+    }
+    view.unmount();
+  }
+});
