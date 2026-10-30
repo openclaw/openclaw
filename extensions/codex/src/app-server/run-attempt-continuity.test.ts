@@ -172,7 +172,15 @@ it("retains a protected parent through private completion and owner reentry", as
     const changed = createParams(sessionFile, tempDir, { runId: "changed-policy" });
     changed.agentDir = agentDir;
     changed.extraSystemPrompt = "Changed persistent operator policy.";
-    await expect(runCodexAppServerAttempt(changed)).rejects.toThrow(/claimed by active work/);
+    await expect(runCodexAppServerAttempt(changed)).rejects.toMatchObject({
+      name: "AgentHarnessPreflightError",
+      message:
+        "Codex thread thread-1 still has background work after waiting for cleanup; stop its running work and retry.",
+    });
+    expect(clientRuntime.isCodexAppServerLiveThreadProtected(harness.client, "thread-1")).toBe(
+      true,
+    );
+    expect(harness.requests.filter(({ method }) => method === "thread/unsubscribe")).toEqual([]);
   } finally {
     release();
     harness.close();

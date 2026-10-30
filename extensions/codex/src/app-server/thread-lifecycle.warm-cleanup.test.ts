@@ -1,5 +1,4 @@
 import path from "node:path";
-import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   claimCodexAppServerLiveThread,
@@ -223,6 +222,61 @@ describe("Codex warm subscription cleanup", () => {
     },
   );
 
+  it("waits for native background cleanup before a cold resume", { timeout: 15_000 }, async () => {
+    const sessionFile = path.join(tempDir, "background-cold-resume.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const threadId = "background-cold-resume";
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond: async (method) => {
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
+        if (method === "configRequirements/read") {
+          return { requirements: null };
+        }
+        if (method === "thread/start" || method === "thread/resume") {
+          return threadStartResult(threadId);
+        }
+        throw new Error(`unexpected method: ${method}`);
+      },
+    });
+    const common = {
+      client: fixture.client,
+      params,
+      userMcpServersEnabled: false,
+      developerInstructions: "original policy",
+    };
+    const started = await startOrResumeThread(common);
+    expect(await retainThread(fixture.client, started)).toBe(true);
+    const releaseProtection = protectCodexAppServerLiveThread(fixture.client, threadId);
+    fixture.request.mockClear();
+    const resumed = startOrResumeThread({
+      ...common,
+      developerInstructions: "updated policy",
+    });
+    const outcome = resumed.catch((error: unknown) => error);
+    try {
+      await vi.waitFor(() =>
+        expect(fixture.request.mock.calls.map(([method]) => method)).toContain("thread/read"),
+      );
+      expect(fixture.request.mock.calls.map(([method]) => method)).not.toContain(
+        "thread/unsubscribe",
+      );
+      releaseProtection();
+      await expect(outcome).resolves.toMatchObject({
+        threadId,
+        lifecycle: { action: "resumed" },
+      });
+      expect(fixture.request.mock.calls.map(([method]) => method)).toContain("thread/unsubscribe");
+      expect(fixture.request.mock.calls.map(([method]) => method)).toContain("thread/resume");
+    } finally {
+      releaseProtection();
+      await outcome;
+    }
+  });
+
   it("keeps the original warm policy usable after rejecting rotation during native background work", async () => {
     const sessionFile = path.join(tempDir, "warm-background-policy-session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -275,7 +329,6 @@ describe("Codex warm subscription cleanup", () => {
     fixture.request.mockClear();
     try {
       pluginFingerprint = "changed-plugin-policy";
-      await expect(startOrResumeThread(common)).rejects.toBeInstanceOf(AgentHarnessPreflightError);
       await expect(startOrResumeThread(common)).rejects.toThrow(
         `Codex thread ${threadId} is claimed by active work; stop it first.`,
       );

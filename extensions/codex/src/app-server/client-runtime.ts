@@ -159,6 +159,7 @@ export function ensureCodexAppServerClientRuntime(
     runtime.sessionMetadata.clear();
     runtime.workspaceReferences.clear();
     forgetCodexClientForkSettings(client);
+    updateThreadOwnership(client, runtime);
   });
   client.addRequestHandler(async (request) => {
     if (request.method !== "account/chatgptAuthTokens/refresh") {
@@ -246,6 +247,9 @@ export function ensureCodexAppServerClientRuntime(
 function updateThreadOwnership(client: CodexAppServerClient, runtime: ClientRuntime): void {
   clearTimeout(runtime.evictionTimer);
   runtime.evictionTimer = undefined;
+  for (const listener of runtime.threadOwnershipListeners ?? []) {
+    listener();
+  }
   if (runtime.closed) {
     return;
   }
@@ -615,23 +619,11 @@ export function revertCodexAppServerLiveThreadInstructions(
   client: CodexAppServerClient,
   threadId: string,
 ): void {
-  const runtime = configuredClients.get(client);
-  if (runtime && !runtime.closed) {
-    revertRetainedThreadInstructions(runtime, threadId);
-  }
+  revertRetainedThreadInstructions(configuredClients.get(client), threadId);
 }
 
-/** Native subscriptions, including ephemeral history and releases, pin their physical client. */
 export function hasCodexAppServerThreadOwnership(client: CodexAppServerClient): boolean {
-  const runtime = configuredClients.get(client);
-  return Boolean(
-    runtime &&
-    !runtime.closed &&
-    (runtime.retainedThreads.size > 0 ||
-      runtime.claimedThreads.size > 0 ||
-      runtime.releasingThreads.size > 0 ||
-      runtime.protectedThreads.size > 0),
-  );
+  return hasThreadOwnership(configuredClients.get(client));
 }
 
 /** Distinguish active claimed ownership from an already-evicted idle subscription. */
