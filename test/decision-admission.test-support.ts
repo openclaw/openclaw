@@ -59,6 +59,7 @@ export async function withAdmissionFixture(
   provider: "levanto" | "subq" | "typesafe" | "baseten",
   responseBody: unknown,
   run: (fixture: AdmissionFixture) => Promise<void>,
+  beforeReply?: (requestNumber: number) => Promise<void>,
 ) {
   const state = await createOpenClawTestState({ label: `${provider}-authority`, applyEnv: false });
   const bundledPluginsDir = state.path("bundled");
@@ -74,10 +75,13 @@ export async function withAdmissionFixture(
           headers: request.headers,
           body: undefined,
         };
-        received.push(incoming);
+        const requestNumber = received.push(incoming);
         void json(request)
-          .then((body) => {
+          .then(async (body) => {
             incoming.body = body;
+            if (beforeReply) {
+              await beforeReply(requestNumber);
+            }
             respondJson(response, responseBody);
           })
           .catch((error: unknown) => {
