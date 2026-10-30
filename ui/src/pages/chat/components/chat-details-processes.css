@@ -167,6 +167,8 @@
 
 .chat-details-processes__view-all {
   border: 0;
+  border-radius: calc(10px * var(--openclaw-corner-radius-scale));
+  corner-shape: superellipse(1.5);
   background: none;
   color: var(--muted);
   font: inherit;

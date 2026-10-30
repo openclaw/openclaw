@@ -465,9 +465,15 @@ suite.define(() => {
               });
               await gateway.resolveDeferred("sessions.processes.stop", { requested: true });
               await first.waitFor({ state: "detached" });
-              await processGroup
-                .getByRole("button", { name: "View all processes", exact: true })
-                .waitFor();
+              const viewAll = processGroup.getByRole("button", {
+                name: "View all processes",
+                exact: true,
+              });
+              await viewAll.hover();
+              // The shared Details button hover paints a background; it must not be square.
+              expect(
+                await viewAll.evaluate((element) => getComputedStyle(element).borderRadius),
+              ).not.toBe("0px");
               expect(await first.locator(".chat-details-processes__stop").count()).toBe(0);
               await page.mouse.move(0, 0);
               await subagents.locator(":scope > summary").scrollIntoViewIfNeeded();
