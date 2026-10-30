@@ -353,7 +353,7 @@ it("keeps authorized resume execution available while native discovery is disabl
 });
 
 it.each([
-  { scenario: "hydrated cwd", text: "latest ask", ts: 1778678322 },
+  { scenario: "hydrated cwd", text: "Cafe\u0301 latest ask", ts: 1778678322 },
   { scenario: "empty rollout", text: "history prompt", ts: 1778678322 },
   { scenario: "Date-invalid timestamp", text: "bad timestamp", ts: 8_700_000_000_000 },
 ])("keeps history usable with $scenario", async ({ scenario, text, ts }) => {
@@ -375,7 +375,7 @@ it.each([
     await fs.writeFile(path.join(sessionsDir, `rollout-${sessionId}.jsonl`), "");
   }
   const parsed = await listLocalSessions({
-    filter: scenario === "empty rollout" ? sessionId : hydrated ? "latest" : text,
+    filter: scenario === "empty rollout" ? sessionId : hydrated ? "CAFÉ latest" : text,
     limit: 5,
   });
   expect(parsed.sessions).toEqual([
@@ -617,16 +617,4 @@ it("reports malformed node session payloadJSON with an owned error", async () =>
     "Codex CLI node command returned malformed payloadJSON.",
   );
   expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ scopes: ["operator.write"] }));
-});
-
-it("matches canonically equivalent filters over stored session text", async () => {
-  await writeHistory([
-    { session_id: "nfc-session", ts: 1778678322, text: "Cafe\u0301 backlog notes" },
-  ]);
-
-  const listed = await listLocalSessions({ filter: "CAF\u00c9" });
-
-  expect(listed.sessions).toMatchObject([
-    { sessionId: "nfc-session", lastMessage: "Cafe\u0301 backlog notes" },
-  ]);
 });

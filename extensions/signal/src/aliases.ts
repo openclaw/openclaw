@@ -150,8 +150,8 @@ export function listSignalAliasDirectoryEntries(params: {
   limit?: number | null;
 }): ChannelDirectoryEntry[] {
   const aliases = resolveAliasMap(params);
-  // Canonical forms compare equal here; aliases keep their original spelling.
-  const query = normalizeLowercaseStringOrEmpty(params.query).normalize("NFC");
+  const query = normalizeLowercaseStringOrEmpty(params.query);
+  const aliasQuery = query.normalize("NFC");
   const limit = params.limit != null && params.limit > 0 ? params.limit : undefined;
   const exactAlias = params.query ? normalizeAliasKey(params.query) : undefined;
   if (exactAlias && aliases.has(exactAlias)) {
@@ -179,7 +179,7 @@ export function listSignalAliasDirectoryEntries(params: {
     }
     if (
       query &&
-      !normalizeLowercaseStringOrEmpty(alias).normalize("NFC").includes(query) &&
+      !normalizeLowercaseStringOrEmpty(alias).normalize("NFC").includes(aliasQuery) &&
       !normalizeLowercaseStringOrEmpty(target.to).includes(query)
     ) {
       continue;
