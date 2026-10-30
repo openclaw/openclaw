@@ -13,6 +13,7 @@ import {
   retainCommandProcessCleanup,
 } from "../../process/exec-spawn.js";
 import { createChildAdapter } from "../../process/supervisor/adapters/child.js";
+import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../../process/supervisor/cancellation-policy.js";
 import type {
   SpawnProcessAdapter,
   ProcessExtinctionResult,
@@ -103,10 +104,19 @@ export async function execCommand(
   let killed = false;
   let commandFailed = false;
   let terminationStarted = false;
+  let cancelForceKill: (() => void) | undefined;
   const stopAdapter = () => {
     if (adapter && !terminationStarted) {
       terminationStarted = true;
       adapter.kill("SIGTERM");
+      if (process.platform === "win32") {
+        // The ordinary Windows child fallback has no native graceful-stop escalation.
+        cancelForceKill = scheduleAbsoluteDeadline(
+          performance.now() + GRACEFUL_CANCEL_TIMEOUT_MS,
+          () => adapter?.kill("SIGKILL"),
+          () => performance.now(),
+        );
+      }
     }
   };
   let releaseOutput: (() => void) | undefined;
@@ -264,6 +274,7 @@ export async function execCommand(
           cleanupDone.reject(failure);
           throw failure;
         } finally {
+          cancelForceKill?.();
           inheritedSignal?.removeEventListener("abort", killProcess);
           adapter?.dispose();
         }

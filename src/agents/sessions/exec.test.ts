@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
+import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { execCommand, type ExecOptions } from "./exec.js";
 
 const { spawnMock, terminateMock, settleTerminationMock, windowsLegacyOutput } = vi.hoisted(() => ({
@@ -238,6 +239,42 @@ describe("execCommand", () => {
     const result = await resultPromise;
     expect(result.killed).toBe(true);
   });
+
+  it.each([false, true])(
+    "bounds Windows fallback cancellation until tree cleanup (cooperative=%s)",
+    async (cooperative) => {
+      mockProcessPlatform("win32");
+      vi.useFakeTimers();
+      const cleanup = createDeferred();
+      settleTerminationMock.mockReturnValue(cleanup.promise);
+      terminateMock.mockImplementation((signal) => {
+        if (signal === "SIGKILL") {
+          cleanup.resolve();
+        }
+      });
+      const { wait, resultPromise } = await startCommand({ timeout: 10 });
+      try {
+        await vi.advanceTimersByTimeAsync(10);
+        // Root completion does not certify that its descendants have stopped.
+        wait.resolve(null);
+        if (cooperative) {
+          cleanup.resolve();
+          await resultPromise;
+        }
+        await vi.advanceTimersByTimeAsync(4999);
+        expect(terminateMock.mock.calls).toEqual([["SIGTERM"]]);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(terminateMock.mock.calls).toEqual(
+          cooperative ? [["SIGTERM"]] : [["SIGTERM"], ["SIGKILL"]],
+        );
+        await expect(resultPromise).resolves.toMatchObject({ killed: true });
+      } finally {
+        wait.resolve(null);
+        cleanup.resolve();
+        await resultPromise;
+      }
+    },
+  );
 
   it.each(["abort", "timeout"] as const)(
     "settles %s while startup is pending and retains cleanup for a late process",
