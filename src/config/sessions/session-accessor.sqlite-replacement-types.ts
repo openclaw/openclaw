@@ -20,6 +20,10 @@ export type SqliteSessionEntryReplacement = SessionEntryReplacement & {
 };
 
 export type SessionEntryReplacementCommit = {
+  fieldPatch?: {
+    fields: readonly (keyof SessionEntry)[];
+    guardFields: readonly (keyof SessionEntry)[];
+  };
   sources?: SessionSourcePredicate[];
   nativeBindings?: SessionNativeBindingParticipants;
   expectedRows: Map<string, ResolvedSessionEntryRow>;
@@ -62,4 +66,5 @@ export type SessionEntryWorkerLifecycle<T = unknown> = {
   ) => void;
   afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
   onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
+  onCommittedEntries?: (entries: ReadonlyMap<string, SessionEntry>) => void;
 };

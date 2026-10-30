@@ -55,6 +55,15 @@ make active runtime read JSONL files again.
 
 Gateway history readers avoid materializing the whole transcript unless the surface needs arbitrary historical access. First-page history, embedded chat history, restart recovery, and token/usage checks use bounded tail reads from SQLite.
 
+For existing canonical sessions, unread and fast-mode patches prepare from committed
+metadata without reserving the database writer or loading saved prompt snapshots.
+The final write stays ordered, validates the session identity and relevant fields,
+and preserves concurrent activity. It retains the complete-entry publication
+contract; marking a session read does not restore its transcript or change recency.
+Creation, alias consolidation, and patches with additional preconditions retain
+their complete replacement path. Viewer presence is connection-owned and does not
+read session snapshots or acquire lifecycle admission.
+
 Disk-backed history pages run their SQLite reads and display preparation in a dedicated session-transcript worker. Equivalent requests can share a queued read until worker execution starts; completed pages are not cached. The Gateway applies current profile display and rechecks session identity and access before publishing. Cold restoration and projection rebuilds remain with the existing Gateway storage owner. Incognito history stays in the Gateway process, and bound external CLI imports retain their local import owner. The HTTP history endpoint still returns the complete history when no limit is supplied.
 
 The [proposed transcript working-set design](/reference/session-management-compaction/resident-history)
