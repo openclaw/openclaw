@@ -1,9 +1,13 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import * as snapshots from "../../infra/sqlite-readonly-location.js";
 import { UpdateCampaignController } from "../../infra/update-campaign.js";
+import { resolveUpdateCaptureRoot } from "../../infra/update-capture-paths.js";
+import { UPDATE_CAPTURE_PRIVACY_MARKER } from "../../infra/update-capture-privacy-marker.js";
 import {
   createGatewayUpdateLifecycle,
   type UpdateCheckLifecycle,
@@ -26,7 +30,10 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
@@ -502,4 +509,43 @@ it("watches a valid active update when newer terminal history is malformed", asy
       expect.stringContaining("update run watcher stopped:"),
     );
   });
+});
+
+it("reads explicit recovery storage off the Gateway thread without changing retained bytes", async () => {
+  const directory = path.join(home.home, ".openclaw", "state");
+  fs.mkdirSync(directory, { recursive: true });
+  const original = path.join(directory, "openclaw.sqlite.pre-startup-migration-old.bak");
+  fs.writeFileSync(original, "retained");
+  expectReply(await read("update.status"), emptyStatus);
+  const run = finishUpdateRun(createUpdateRun({ trigger: "cli" }).runId, { status: "succeeded" });
+  const capture = path.join(resolveUpdateCaptureRoot(path.dirname(directory)), run.runId);
+  fs.mkdirSync(capture, { recursive: true });
+  fs.writeFileSync(path.join(capture, UPDATE_CAPTURE_PRIVACY_MARKER), "");
+  fs.writeFileSync(path.join(capture, "original"), "capture");
+  await closeOpenClawStateDatabaseAsync();
+  const lock = await acquireGatewayLock({ role: "gateway", allowInTests: true });
+  expect(lock).toBeTruthy();
+  const sql = observeMainThreadSql();
+  sql.calibrate();
+  try {
+    const response = await read("update.status", { includeRecoveryCopies: true });
+    sql.expectIdle();
+    expectPartial(response, {
+      recoveryCopies: expect.objectContaining({
+        byReason: expect.arrayContaining([
+          {
+            reason: "unmanifested-recovery-original",
+            outcome: "protected",
+            count: 1,
+            logicalBytes: 8,
+          },
+        ]),
+      }),
+    });
+    expect(fs.readFileSync(original, "utf8")).toBe("retained");
+    expect(fs.readFileSync(path.join(capture, "original"), "utf8")).toBe("capture");
+  } finally {
+    sql.restore();
+    await lock?.release();
+  }
 });

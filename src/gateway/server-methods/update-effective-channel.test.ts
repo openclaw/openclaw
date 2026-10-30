@@ -326,6 +326,7 @@ it.each([
         identity: 30,
         reconciliation: 0,
         history: 0,
+        recovery: 0,
         response: 0,
       },
     });

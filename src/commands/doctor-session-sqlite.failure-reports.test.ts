@@ -321,7 +321,7 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it.each([3] as const)(
+  it.each([3, 5] as const)(
     "persists one support issue receipt on a historical v%s manifest",
     (manifestVersion) => {
       const store = createLegacyStore();
@@ -369,11 +369,11 @@ describe("runDoctorSessionSqlite", () => {
       const receiptManifest = readMigrationManifest(manifestPath);
       expect(receiptManifest).toMatchObject({
         failureReports: { githubIssue: { ...issue, status: "attempted" } },
-        manifestVersion: 4,
+        manifestVersion: Math.max(4, manifestVersion),
       });
       fs.writeFileSync(
         manifestPath,
-        `${JSON.stringify({ ...receiptManifest, manifestVersion }, null, 2)}\n`,
+        `${JSON.stringify({ ...receiptManifest, manifestVersion: 3 }, null, 2)}\n`,
         { mode: 0o600 },
       );
       expect(migrationRun.readSessionSqliteMigrationManifest(manifestPath)).toBeUndefined();
@@ -403,7 +403,7 @@ describe("runDoctorSessionSqlite", () => {
         clearSessionSqliteMigrationGithubIssueClaim(manifestPath, issue.marker, authority),
       ).toBe(true);
       const clearedManifest = readMigrationManifest(manifestPath);
-      expect(clearedManifest.manifestVersion).toBe(4);
+      expect(clearedManifest.manifestVersion).toBe(Math.max(4, manifestVersion));
       expect(clearedManifest.failureReports).not.toHaveProperty("githubIssue");
       expect(authority.assertCurrent).toHaveBeenCalledTimes(4);
     },

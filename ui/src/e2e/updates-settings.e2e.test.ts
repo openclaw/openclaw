@@ -1,6 +1,10 @@
 // Control UI tests cover the routed Updates settings page through a mocked Gateway.
+import { writeFileSync } from "node:fs";
+import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import {
@@ -36,6 +40,99 @@ async function expectRadiosDisabled(page: Page) {
 }
 
 suite.define(() => {
+  it("shows retained recovery storage and incomplete inventory without deletion controls", async () => {
+    await suite.withPage(
+      { ...pageOptions, viewport: { width: 1280, height: 1200 } },
+      async ({ page }) => {
+        const group = {
+          count: 2,
+          logicalBytes: 22069751403,
+          retirable: { count: 0, logicalBytes: 0 },
+          protected: { count: 2, logicalBytes: 22069751403 },
+          unmanifestedOrOrphan: { count: 0, logicalBytes: 0 },
+        };
+        const emptyGroup = {
+          count: 0,
+          logicalBytes: 0,
+          retirable: { count: 0, logicalBytes: 0 },
+          protected: { count: 0, logicalBytes: 0 },
+          unmanifestedOrOrphan: { count: 0, logicalBytes: 0 },
+        };
+        const recoveryCopies = {
+          scope: "local",
+          measurement: "partial",
+          incomplete: true,
+          incompleteReasons: ["metadata-byte-limit"],
+          total: group,
+          byKind: {
+            migrationOriginals: group,
+            updateCaptures: emptyGroup,
+            doctorCaptures: emptyGroup,
+          },
+          byReason: [
+            {
+              reason: "historical-import-proof-unavailable",
+              outcome: "protected",
+              count: 1,
+              logicalBytes: 7301812847,
+            },
+            {
+              reason: "artifact-metadata-changed",
+              outcome: "blocked",
+              count: 1,
+              logicalBytes: 14767938556,
+            },
+          ],
+        };
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["config.get", "update.status"],
+          operatorScopes: ["operator.read", "operator.admin"],
+          methodResponses: {
+            "update.status": { sentinel: null, updateAvailable: null, recoveryCopies },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/updates`);
+        await gateway.waitForRequest("update.status");
+        const policy = page.getByRole("heading", { name: "Update policy", exact: true });
+        await policy.waitFor();
+        const artifacts = createControlUiE2eArtifactDir("recovery-storage");
+        const frame = await takeControlUiScreenshotFrame(page, policy, [policy], {
+          animations: "disabled",
+          scrollTo: policy,
+        });
+        writeFileSync(path.join(artifacts, "updates-settings.png"), frame.png);
+        const storage = page
+          .locator(".settings-section")
+          .filter({ has: page.getByRole("heading", { name: "Recovery storage", exact: true }) });
+        await expect.poll(() => storage.textContent()).toContain("Incomplete inventory");
+        expect(await storage.textContent()).toContain("historical-import-proof-unavailable");
+        expect(await storage.textContent()).toContain("artifact-metadata-changed");
+        expect(await storage.textContent()).toContain("21 GB in 2 copies");
+        expect(await storage.textContent()).toContain("Preserve the current bytes");
+        const after = await takeControlUiScreenshotFrame(page, storage, [storage], {
+          animations: "disabled",
+          scrollTo: storage,
+        });
+        writeFileSync(path.join(artifacts, "recovery-storage.png"), after.png);
+        expect(await storage.textContent()).toContain(
+          "Logical bytes are not physical space reclaimed",
+        );
+        expect(
+          await storage
+            .getByRole("link", { name: "Safe recovery and retirement guidance" })
+            .getAttribute("href"),
+        ).toBe(
+          "https://docs.openclaw.ai/cli/update/repair-and-recovery#retained-session-import-archives",
+        );
+        expect(await storage.getByRole("button").count()).toBe(0);
+        expect(
+          await gateway.getRequests("update.status", { includeRecoveryCopies: true }),
+        ).not.toHaveLength(0);
+        expect(await gateway.getRequests("update.run")).toHaveLength(0);
+      },
+    );
+  });
+
   it("locks update policy while an automatic apply runs and shows readable recovery guidance", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
       const config = { update: { auto: { enabled: true }, channel: "stable" } };

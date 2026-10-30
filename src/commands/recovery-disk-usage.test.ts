@@ -195,3 +195,61 @@ it("keeps originals protected after incomplete dependency discovery skips anothe
     },
   );
 });
+
+it("reports retained archive reasons without opening the archived payloads", async () => {
+  await withOpenClawTestState({ label: "recovery-reasons", applyEnv: true }, async (state) => {
+    const storePath = path.join(state.sessionsDir(), "sessions.json");
+    const target = {
+      agentId: "main",
+      storePath,
+      sqlitePath: resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath).path,
+    };
+    const archiveDir = state.statePath("agents", "main", "session-sqlite-import-archive");
+    fs.mkdirSync(archiveDir, { recursive: true });
+    const historical = path.join(archiveDir, "historical.jsonl.imported-1");
+    const changed = path.join(archiveDir, "changed.jsonl.imported-1");
+    fs.writeFileSync(historical, "history");
+    fs.writeFileSync(changed, "original");
+    const moves: SessionSqliteMigrationMove[] = [
+      {
+        kind: "transcript",
+        sourcePath: path.join(state.sessionsDir(), "old.jsonl"),
+        archivePath: historical,
+      },
+      {
+        kind: "transcript",
+        sourcePath: path.join(state.sessionsDir(), "changed.jsonl"),
+        archivePath: changed,
+        artifact: {
+          identity: readMigrationArtifactIdentity(changed),
+          classification: "imported",
+          reason: "verified-import",
+          dependencies: [],
+          disposal: { state: "retained" },
+        },
+      },
+    ];
+    const run = createSessionSqliteMigrationRun(state.env, [target]);
+    recordPlannedMigrationMoves(run, target, moves);
+    recordCompletedMigrationMoves(run, target, moves);
+    updateMigrationManifestTarget(run, target, [], { validationBeforeArchive: "passed" });
+    run.manifest.completedAt = run.manifest.startedAt;
+    writeSessionSqliteMigrationManifest(run);
+    fs.appendFileSync(changed, " changed");
+    using opened = vi.spyOn(fs, "openSync");
+    using clock = vi.spyOn(performance, "now");
+    clock.mockReturnValue(0);
+    const usage = collectRecoveryDiskUsage({ cfg: {}, env: state.env });
+    expect(usage.byReason).toEqual([
+      { reason: "artifact-metadata-changed", outcome: "blocked", count: 1, logicalBytes: 16 },
+      {
+        reason: "historical-manifest-without-import-proof",
+        outcome: "verification-required",
+        count: 1,
+        logicalBytes: 7,
+      },
+    ]);
+    expect(opened.mock.calls.some(([file]) => file === historical || file === changed)).toBe(false);
+    expect(usage.total).toMatchObject({ count: 2, logicalBytes: 23, protected: { count: 2 } });
+  });
+});

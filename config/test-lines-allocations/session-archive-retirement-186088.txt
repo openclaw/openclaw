@@ -1,0 +1,2 @@
+# Issue 186088: distinct retirement safety/recovery or read-only visibility regressions.
+799

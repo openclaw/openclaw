@@ -104,9 +104,17 @@ describe.runIf(browserMode)("Review layout", () => {
       for (const width of [480, 1100]) {
         panel.style.width = `${width}px`;
         split.scrollLeft = 0;
-        await expect
-          .poll(() => panel.querySelector(".session-diff__disclosure")?.getAnimations().length ?? 0)
-          .toBe(0);
+        const disclosure = panel.querySelector(".session-diff__disclosure");
+        // ResizeObserver queues disclosure measurement into the next layout frame.
+        // Let that work start before treating an empty animation list as settled.
+        await new Promise<void>((resolve) => {
+          const observer = new ResizeObserver(() => {
+            observer.disconnect();
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          });
+          observer.observe(disclosure?.firstElementChild ?? split);
+        });
+        await expect.poll(() => disclosure?.getAnimations().length ?? 0).toBe(0);
         const sides = [...split.querySelectorAll<HTMLElement>(".session-diff-split__side")];
         expect(
           sides.map((side) => side.querySelector(".session-diff-split__text")!.textContent),

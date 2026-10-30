@@ -59,6 +59,7 @@ export function createApplicationUpdateOverlays(
   let snapshot: ApplicationUpdateOverlaySnapshot = {
     updateAvailable: null,
     updateSchedule: null,
+    recoveryCopies: null,
     heldUpdateCampaignId: null,
     updateRunning: false,
     updateStatusRefreshing: false,
@@ -428,6 +429,7 @@ export function createApplicationUpdateOverlays(
         updateStatusBanner: null,
         updateStatusCheckBanner: null,
         recordedUpdateAttempt: null,
+        recoveryCopies: null,
         heldUpdateCampaignId: null,
       };
     }
@@ -444,7 +446,7 @@ export function createApplicationUpdateOverlays(
     connectedSource = nextConnectedSource;
     if (connectedSourceChanged) {
       updateFailureReporter.invalidate();
-      snapshot = { ...snapshot, updateFailureReportBusy: false };
+      snapshot = { ...snapshot, updateFailureReportBusy: false, recoveryCopies: null };
       if (
         updateAttempt?.requestSent &&
         !runId &&
@@ -462,6 +464,7 @@ export function createApplicationUpdateOverlays(
         ...snapshot,
         updateAvailable: null,
         updateSchedule: null,
+        recoveryCopies: null,
         updateStatusRefreshing: false,
         updateCampaignStatusHydrated: true,
       };

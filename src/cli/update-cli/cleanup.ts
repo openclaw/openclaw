@@ -6,6 +6,10 @@ import {
   type RecoveryCleanupReport,
 } from "../../commands/doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "../../commands/doctor-session-sqlite-retirement.js";
+import {
+  assertSessionArchiveRetirementOptions,
+  selectSessionArchiveRetirement,
+} from "../../commands/update-cleanup-session-archives.js";
 import { selectUnmanifestedRecovery } from "../../commands/update-cleanup-unmanifested.js";
 import { readConfigFileSnapshot, readSourceConfigBestEffort } from "../../config/io.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.js";
@@ -47,6 +51,20 @@ function renderCleanup(report: RecoveryCleanupReport): void {
   defaultRuntime.log(
     "Retiring originals permanently loses rollback, including pre-repair branches and metadata. Logical bytes are not a promise of physical space reclaimed.",
   );
+  if (
+    report.artifacts.some((item) =>
+      [
+        "historical-manifest-without-import-proof",
+        "historical-import-proof-unavailable",
+        "artifact-metadata-changed",
+        "explicit-history-retirement-pending",
+      ].includes(item.reason),
+    )
+  ) {
+    defaultRuntime.log(
+      "Retained session-import archives: https://docs.openclaw.ai/cli/update/repair-and-recovery#retained-session-import-archives",
+    );
+  }
   if (report.artifacts.length === 0) {
     defaultRuntime.log("No recorded recovery artifacts found.");
   }
@@ -62,25 +80,40 @@ export async function updateCleanupCommand(options: {
   json?: boolean;
   yes?: boolean;
   includeUnmanifested?: string[];
+  retireSessionArchive?: string[];
+  archiveBackup?: string;
+  acceptHistoryLoss?: boolean;
 }): Promise<void> {
   let report: RecoveryCleanupReport | undefined;
   try {
-    const readConfig = options.includeUnmanifested?.length
-      ? async () => {
-          const snapshot = await readConfigFileSnapshot({
-            observe: false,
-            pluginValidation: "core-only",
-          });
-          if (!snapshot.valid) {
-            throw new Error(
-              "Cannot include unmanifested recovery: configuration and includes must resolve successfully before selection or removal.",
-            );
+    assertSessionArchiveRetirementOptions(options);
+    const readConfig =
+      options.includeUnmanifested?.length || options.retireSessionArchive?.length
+        ? async () => {
+            const snapshot = await readConfigFileSnapshot({
+              observe: false,
+              pluginValidation: "core-only",
+            });
+            if (!snapshot.valid) {
+              throw new Error(
+                "Cannot explicitly retire recovery: configuration and includes must resolve successfully before selection or removal.",
+              );
+            }
+            return snapshot.sourceConfig;
           }
-          return snapshot.sourceConfig;
-        }
-      : readSourceConfigBestEffort;
+        : readSourceConfigBestEffort;
     const cfg = await readConfig();
-    if (options.includeUnmanifested?.length) {
+    if (options.retireSessionArchive?.length && options.archiveBackup) {
+      const inventory = collectUpdateCleanupInventory({ cfg, env: process.env });
+      selectSessionArchiveRetirement({
+        inventory,
+        cfg,
+        env: process.env,
+        paths: options.retireSessionArchive,
+        backupDirectory: options.archiveBackup,
+      });
+      report = inventory.report;
+    } else if (options.includeUnmanifested?.length) {
       const inventory = collectUpdateCleanupInventory({ cfg, env: process.env });
       selectUnmanifestedRecovery({
         inventory,
@@ -102,6 +135,9 @@ export async function updateCleanupCommand(options: {
           env: process.env,
           preview: report,
           includeUnmanifested: options.includeUnmanifested,
+          retireSessionArchive: options.retireSessionArchive,
+          archiveBackup: options.archiveBackup,
+          acceptHistoryLoss: options.acceptHistoryLoss,
           readConfig,
           onProgress: ({ phase, path, index, total, bytes }) => {
             const label = {
@@ -118,7 +154,9 @@ export async function updateCleanupCommand(options: {
             }
             renderCleanup(verified);
             const answer = await confirm({
-              message: "Permanently retire these rollback originals?",
+              message: options.retireSessionArchive?.length
+                ? "Permanently retire these selected archives, including potentially unique session history?"
+                : "Permanently retire these rollback originals?",
               initialValue: false,
               output: process.stderr,
             });

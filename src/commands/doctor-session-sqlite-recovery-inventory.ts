@@ -33,10 +33,10 @@ import {
   collectUpdateCaptureInventory,
   readCompletedUpdateHistory,
 } from "./update-capture-cleanup.js";
-import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
+import type { RecoveryCleanupArtifact, RecoveryCleanupReport } from "./update-cleanup-types.js";
 
 type Outcome = RecoveryCleanupArtifact["outcome"];
-export type RecoveryCleanupReport = ReturnType<typeof summarizeRecoveryCleanup>;
+export type { RecoveryCleanupReport } from "./update-cleanup-types.js";
 export type RecoveryArtifactReference = {
   run: ActiveSessionSqliteMigrationRun;
   target: SessionSqliteMigrationTargetManifest;
@@ -209,6 +209,9 @@ export function collectRecoveryInventory(params: {
       );
     } else if (refs.some((ref) => ref.consumedByRestore)) {
       classify("protected", "archive-consumed-by-restore");
+    } else if (refs.some((ref) => ref.move.retirement)) {
+      // Explicit loss of unverified history is never resumed by automatic cleanup.
+      classify("protected", "explicit-history-retirement-pending");
     } else if (
       hasSymbolicLinkInDirectoryPath(path.dirname(archivePath)) ||
       (stat &&
@@ -458,9 +461,9 @@ export function protectRecoveryDependencies(
 export function summarizeRecoveryCleanup(
   stateDir: string,
   artifacts: RecoveryCleanupArtifact[],
-  status: "preview" | "refused" | "complete" | "blocked",
+  status: RecoveryCleanupReport["status"],
   missingOriginals = 0,
-) {
+): RecoveryCleanupReport {
   const totals = {
     candidateBytes: 0,
     verificationRequiredBytes: 0,

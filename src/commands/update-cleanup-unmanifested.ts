@@ -101,6 +101,35 @@ function assertNotDatabase(file: string, livePaths: readonly string[]): void {
   }
 }
 
+/** Both explicit cleanup modes preserve configured live files and unfinished recovery. */
+export function assertExplicitRecoveryPathsInactive(params: {
+  inventory: Inventory;
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  paths: readonly string[];
+  relatedPaths?: readonly string[];
+}): void {
+  withSynchronousArtifactPreservingStateSnapshot(
+    () => {
+      const live = activePaths(params.cfg, params.env, params.inventory);
+      for (const file of params.paths) {
+        assertNotDatabase(file, live);
+      }
+      const recoveryPaths = [...params.paths, ...(params.relatedPaths ?? [])];
+      if (
+        pendingRecoveryRoots(params.env).some((root) =>
+          recoveryPaths.some((file) => overlaps(file, root)),
+        )
+      ) {
+        throw new Error(
+          "Pending recovery references the selected history; settle recovery before retirement.",
+        );
+      }
+    },
+    { current: { env: params.env } },
+  );
+}
+
 /** No following links and no recursive rm over uninspected files. */
 function inspectSelection(
   item: RecoveryCleanupArtifact,

@@ -1120,6 +1120,80 @@ ownership, file identity, or dependency checks. Applicable flags (`--dry-run`,
 `--channel`, `--tag`, `--timeout`, `--no-restart`, and `--accept-capabilities`
 are rejected.
 
+### Retained session import archives
+
+Archives in `agents/<agent>/session-sqlite-import-archive/` can remain protected
+because their import cannot be proved, or blocked because their bytes changed
+after import. These are different from verified redundant copies: trajectories,
+old branches, and changed transcripts may contain history absent from SQLite.
+Neither a healthy Gateway nor an old timestamp proves that history is redundant.
+Automatic cleanup and ordinary `update cleanup --yes` leave these files alone.
+
+The Updates page shows retained session-archive totals and reasons, with guidance
+for this CLI-only operation. To deliberately give up that history, first preserve
+an independent raw backup of the selected archives **and their original migration
+manifests**. Keep the same paths relative to the selected state directory:
+
+```text
+/independent-backup/
+  agents/<agent>/session-sqlite-import-archive/<archive>
+  session-sqlite-migration-runs/<run-id>.json
+```
+
+Use a directory outside the state directory and its cleanup/capture roots; a tar
+file, symlink, or hardlink to an original is not an independent backup. Cleanup
+does not create this backup. Preserve all manifests referring to the selected
+files, including older runs. Copy files while maintenance writers are stopped,
+and keep the backup unchanged until cleanup finishes.
+
+Select exact archive paths from `openclaw update cleanup --dry-run`, repeating the
+option for **every retained member of the session target across all recorded runs**.
+Cleanup does not expand a partial selection or select files by age or wildcard.
+The preview hashes the current archives, backup copies, and original manifests;
+it does not import history or change receipts:
+
+```bash
+openclaw update cleanup --dry-run \
+  --retire-session-archive /path/to/state/agents/main/session-sqlite-import-archive/history.trajectory.jsonl.imported-1 \
+  --retire-session-archive /path/to/state/agents/main/session-sqlite-import-archive/session.jsonl.imported-1 \
+  --archive-backup /independent-backup
+```
+
+Review each selected path, byte total, and loss consequence. Stop the selected
+Gateway and database readers as described above before applying. Run the same
+command without `--dry-run`, adding `--accept-history-loss`; interactive
+confirmation still defaults to **No**. Automation also requires `--yes`:
+
+```bash
+openclaw update cleanup --yes --accept-history-loss \
+  --retire-session-archive /path/to/state/agents/main/session-sqlite-import-archive/history.trajectory.jsonl.imported-1 \
+  --retire-session-archive /path/to/state/agents/main/session-sqlite-import-archive/session.jsonl.imported-1 \
+  --archive-backup /independent-backup
+```
+
+`--accept-history-loss` is separate from ordinary deletion consent: `--yes` alone
+never authorizes loss of unverified session history. This mode retires only the
+explicitly selected group, not other eligible cleanup artifacts, and cannot be
+combined with `--include-unmanifested`. Pending recovery, unreadable manifests,
+unresolved configuration, active database paths, aliases, and changed files or
+backups still block retirement. The owner rechecks the selection after confirmation
+and before removal.
+
+The retained manifest records this as explicit history retirement, not successful
+import or duplicate verification. It preserves the previous evidence and identifies
+the backup. Doctor does not restore or re-import retired sources. Current SQLite
+history stays unchanged. Keep the manifests in place; after an interrupted
+retirement, rerun the same explicit command with the same independent backup so
+cleanup can reconcile its durable disposal receipts. Do not recreate files at
+retired paths to make a retry pass.
+
+Backup comparison proves that the copy matches the **current** selected bytes, not
+that changed bytes match the original import or form a usable conversation.
+Recovery requires manual, offline source restoration using the preserved matching
+manifests; there is no automatic restore from this backup and no guarantee that
+an older binary can consume the retirement receipts. These files are not a full
+pre-upgrade backup. Preserve them until you no longer need their history.
+
 ### Explicitly retire an unmanifested original
 
 For an old `.pre-startup-migration-*.bak` original that predates manifest

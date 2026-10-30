@@ -86,7 +86,7 @@ export function collectHistoricalArchiveSources(params: {
   const claims = new Map<string, RecoveryArtifactReference[][]>();
   const completedArchives = new Map<SessionSqliteMigrationTargetManifest, Set<string>>();
   for (const refs of inventory.references.values()) {
-    if (refs.some((ref) => !ref.trusted || ref.consumedByRestore)) {
+    if (refs.some((ref) => !ref.trusted || ref.consumedByRestore || ref.move.retirement)) {
       continue;
     }
     const first = refs[0]!;

@@ -27,6 +27,13 @@ export function collectRecoveryDiskUsage(params: { cfg: OpenClawConfig; env: Nod
   const scan = new RecoveryInventoryScan();
   const byKind = { updateCaptures: group(), doctorCaptures: group(), migrationOriginals: group() };
   const total = group();
+  const reasons = new Map<
+    string,
+    UsageCount & {
+      reason: string;
+      outcome: Exclude<RecoveryCleanupArtifact["outcome"], "disposed" | "removed">;
+    }
+  >();
   let artifacts: RecoveryCleanupArtifact[] = [];
   try {
     const database = resolveDatabasePath({ env: params.env });
@@ -54,6 +61,16 @@ export function collectRecoveryDiskUsage(params: { cfg: OpenClawConfig; env: Nod
     if (item.outcome === "disposed" || item.outcome === "removed") {
       continue;
     }
+    const key = `${item.reason}:${item.outcome}`;
+    const reason = reasons.get(key) ?? {
+      reason: item.reason,
+      outcome: item.outcome,
+      count: 0,
+      logicalBytes: 0,
+    };
+    reason.count++;
+    reason.logicalBytes += item.bytes;
+    reasons.set(key, reason);
     const kind =
       item.kind !== "update-capture"
         ? "migrationOriginals"
@@ -79,6 +96,9 @@ export function collectRecoveryDiskUsage(params: { cfg: OpenClawConfig; env: Nod
     incompleteReasons: [...scan.reasons],
     total,
     byKind,
+    byReason: [...reasons.values()].toSorted(
+      (a, b) => a.reason.localeCompare(b.reason) || a.outcome.localeCompare(b.outcome),
+    ),
   };
 }
 

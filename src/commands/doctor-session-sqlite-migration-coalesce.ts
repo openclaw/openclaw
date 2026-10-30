@@ -57,7 +57,7 @@ export function coalesceSessionSqliteArchiveReferences(
         const moves = new Map<string, SessionSqliteMigrationMove>();
         for (const move of target[list]) {
           const survivor = replacements.get(move.archivePath);
-          if (survivor && move.artifact?.disposal.state === "disposed") {
+          if (survivor && !move.retirement && move.artifact?.disposal.state === "disposed") {
             move.archivePath = survivor.archivePath;
             move.artifact = {
               ...move.artifact,

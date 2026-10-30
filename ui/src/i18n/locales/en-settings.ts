@@ -1290,6 +1290,28 @@ const enSettings = {
     },
   },
   updates: {
+    recovery: {
+      title: "Recovery storage",
+      description:
+        "Local recovery copies retained by this Gateway. Logical bytes are not physical space reclaimed.",
+      total: "Observed recovery copies",
+      amount: "{bytes} in {count} copies",
+      incomplete: "Incomplete inventory — observed copies only",
+      incompleteDescription:
+        "Some recovery metadata could not be inspected. Totals may be lower than actual usage, and eligibility may be unverified.",
+      candidate: "Eligible for normal cleanup",
+      protected: "Protected",
+      blocked: "Blocked",
+      verificationRequired: "Verification required",
+      failed: "Inspection failed",
+      historicalGuidance:
+        "Import proof is unavailable or has not been checked. Keep these archives until you have reviewed recovery dependencies and the retirement guidance.",
+      changedGuidance:
+        "The archive no longer matches its recorded identity. Preserve the current bytes and review the mismatch before considering retirement.",
+      genericGuidance:
+        "Inspect the recovery inventory and its dependencies before changing these copies.",
+      guidance: "Safe recovery and retirement guidance",
+    },
     device: {
       title: "This Mac",
       version: "App version",

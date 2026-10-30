@@ -42,6 +42,7 @@ import { formatDateTimeMs, formatTimeAgo } from "../../lib/format.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { RecordedAttempt } from "./updates-recorded-attempt.tsx";
+import { RecoveryStorage } from "./updates-recovery-storage.tsx";
 import { UpdatesStatus } from "./updates-status.tsx";
 import {
   UPDATES_CHANNELS,
@@ -637,6 +638,9 @@ function GatewayUpdates(props: UpdatesViewProps) {
           {t("updates.page.troubleshoot")}
         </a>
       </p>
+      <Show when={props.canAdmin && props.update.recoveryCopies}>
+        <RecoveryStorage usage={props.update.recoveryCopies!} />
+      </Show>
       <Errored
         fallback={(error, reset) => (
           <div class="callout danger" role="alert">

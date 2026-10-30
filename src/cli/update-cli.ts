@@ -366,6 +366,17 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       (value: string, previous: string[]) => [...previous, value],
       [],
     )
+    .option(
+      "--retire-session-archive <path>",
+      "Explicitly retire backed-up session history; select every target member (repeatable)",
+      (value: string, previous: string[]) => [...previous, value],
+      [],
+    )
+    .option(
+      "--archive-backup <directory>",
+      "Independent raw backup of selected archives and manifests",
+    )
+    .option("--accept-history-loss", "Accept loss of potentially unique session history", false)
     .action(
       createUpdateLeafAction(
         async (opts, command) => {
@@ -390,6 +401,15 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
             opts.includeUnmanifested.length > 0
               ? { includeUnmanifested: opts.includeUnmanifested }
               : {}),
+            ...(Array.isArray(opts.retireSessionArchive) &&
+            opts.retireSessionArchive.every((value) => typeof value === "string") &&
+            opts.retireSessionArchive.length > 0
+              ? { retireSessionArchive: opts.retireSessionArchive }
+              : {}),
+            ...(typeof opts.archiveBackup === "string"
+              ? { archiveBackup: opts.archiveBackup }
+              : {}),
+            ...(opts.acceptHistoryLoss === true ? { acceptHistoryLoss: true } : {}),
           });
         },
         { supportsDryRun: true },
