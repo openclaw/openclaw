@@ -52,6 +52,7 @@ export function recordPluginUpdateFailure(params: {
   params.outcomes.push({
     pluginId: params.pluginId,
     status: "error",
+    code: options.code,
     message: params.message,
   });
   return { config: params.config, changed: false };
