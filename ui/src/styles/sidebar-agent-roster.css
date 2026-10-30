@@ -125,11 +125,6 @@ openclaw-sidebar-agent-roster {
   text-decoration: none;
 }
 
-.sidebar-agent-roster__row {
-  border-radius: 10px;
-  corner-shape: superellipse(1.5);
-}
-
 .sidebar-agent-roster__link:hover {
   background: var(--bg-hover);
 }
@@ -191,6 +186,8 @@ openclaw-sidebar-agent-roster {
   grid-template-columns: var(--roster-avatar-size) minmax(0, 1fr);
   align-items: center;
   gap: 10px;
+  border-radius: 10px;
+  corner-shape: superellipse(1.5);
   flex: 1;
   align-self: stretch;
   padding: 0;
