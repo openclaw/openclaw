@@ -16,10 +16,7 @@ import {
   stripInlineDirectiveTagsForDelivery,
 } from "../../utils/directive-tags.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
-import {
-  combineNonStreamingReplyParts,
-  sanitizeAssistantDisplayText,
-} from "./chat-assistant-content.js";
+import { sanitizeAssistantDisplayText } from "./chat-assistant-content.js";
 
 export type DeliveredChatSendReply = {
   input: ReplyDispatchOperation;
