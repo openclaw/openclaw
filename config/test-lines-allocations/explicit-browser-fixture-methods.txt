@@ -1,0 +1,2 @@
+# Explicit method advertisements in three existing positive browser fixtures.
+7
