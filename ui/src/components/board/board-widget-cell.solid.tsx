@@ -96,10 +96,6 @@ function BoardWidgetCellContent(
   let actionInFlight = false;
   let menu: MenuHandle | undefined;
   let connected = true;
-  // Retain the MCP renderer until its teardown acknowledgement releases it.
-  const [renderedMcp, setRenderedMcp] = createSignal(
-    (previous = false) => props.widget?.contentKind === "mcp-app" || previous,
-  );
   const active = () => props.active !== false;
   const canMutate = () => props.canMutate !== false;
   const canGrant = () => props.canGrant !== false;
@@ -152,6 +148,10 @@ function BoardWidgetCellContent(
       if (!needsResources()) {
         return undefined;
       }
+      // Retain the MCP renderer until its teardown acknowledgement releases it.
+      const [renderedMcp, setRenderedMcp] = createSignal(
+        (previous = false) => props.widget?.contentKind === "mcp-app" || previous,
+      );
       const appView = createBoardMcpAppLifecycle({
         active,
         connected: () => connected,
@@ -172,7 +172,13 @@ function BoardWidgetCellContent(
         widget: () => props.widget,
       });
       disconnectFrame = () => frame.disconnect();
-      return { appView, frame, frameState: projectOwner(frame, (owner) => owner) };
+      return {
+        appView,
+        frame,
+        frameState: projectOwner(frame, (owner) => owner),
+        renderedMcp,
+        setRenderedMcp,
+      };
     },
     { lazy: false },
   );
@@ -185,7 +191,6 @@ function BoardWidgetCellContent(
   const fixedReport = () =>
     props.widget?.heightMode === "fixed" && contribution()?.kind === "session:report";
   const [reportEntered, setReportEntered] = createSignal(false);
-  const reportReady = () => !fixedReport() || reportEntered();
   // Fixed reports already reserve their full height. Build nearby bodies once,
   // then let the existing core-widget latch retain them across tab switches.
   // Observe the card because the display:contents host has no intersection box.
@@ -418,7 +423,7 @@ function BoardWidgetCellContent(
               contribution={core}
               widget={props.widget}
               session={props.session}
-              active={active() && reportReady()}
+              active={active() && (!fixedReport() || reportEntered())}
             />
           )}
         </Match>
@@ -465,7 +470,7 @@ function BoardWidgetCellContent(
       <Match when={resources()?.frameState.read().error}>
         <BoardWidgetError error={resources()?.frameState.read().error} />
       </Match>
-      <Match when={renderedMcp() && resources()}>
+      <Match when={resources()?.renderedMcp() && resources()}>
         {(current) => (
           <BoardMcpAppContent
             accessNotice={<AccessNotice />}
@@ -484,7 +489,7 @@ function BoardWidgetCellContent(
             }}
             retired={() => {
               if (props.widget?.contentKind !== "mcp-app") {
-                setRenderedMcp(false);
+                current().setRenderedMcp(false);
               }
             }}
           />
@@ -627,7 +632,7 @@ function BoardWidgetCellContent(
                     : t("board.widget.kindHtml")}
               </span>
               <BoardGrantedCapabilities widget={props.widget!} />
-              <Show when={canMutate() && reportReady()}>
+              <Show when={canMutate() && (!fixedReport() || reportEntered())}>
                 <BoardWidgetMenu
                   widget={props.widget!}
                   tabs={props.tabs ?? []}
