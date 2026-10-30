@@ -389,9 +389,8 @@ function supportsResolvedCrabboxProjectPreparation(resolved: CrabboxProfile): bo
 
 export function resolveCrabboxPreparedIdleTimeoutMs(profile: WorkerProfile): number | undefined {
   const parsed = parseCrabboxProfile(profile);
-  return (parsed.warmImage === false &&
-    !(parsed.azureSandboxDiskId && supportsResolvedCrabboxProjectPreparation(parsed))) ||
-    parsed.target !== "linux"
+  // The pool passes original settings; placement may supply the required machine class.
+  return (parsed.warmImage === false && !parsed.azureSandboxDiskId) || parsed.target !== "linux"
     ? undefined
     : parsed.idleTimeoutMs;
 }
