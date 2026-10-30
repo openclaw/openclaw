@@ -171,6 +171,41 @@ describe("nextcloud-talk inbound authz", () => {
     expect(core.channel.inbound.dispatch).toHaveBeenCalledOnce();
   });
 
+  it("admits a room access group when the outer group allowlist is set", async () => {
+    const core = createPluginRuntimeMock();
+    core.channel.pairing.readAllowFromStore = vi.fn(async () => []);
+    setNextcloudTalkRuntime(core);
+    const account = {
+      ...createAccount({
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["accessGroup:staff"],
+        rooms: { "room-1": { requireMention: false, allowFrom: ["accessGroup:staff"] } },
+      }),
+      baseUrl: "https://cloud.example.com",
+    };
+
+    await handleNextcloudTalkInbound({
+      message: baseMessage({
+        messageId: "m-access-group",
+        roomToken: "room-1",
+        senderId: "users/alice",
+        senderName: "Alice",
+        isGroupChat: true,
+        text: "hello",
+      }),
+      account,
+      config: {
+        channels: { "nextcloud-talk": account.config },
+        accessGroups: {
+          staff: { type: "message.senders", members: { "nextcloud-talk": ["users/alice"] } },
+        },
+      },
+      runtime: createTestRuntimeEnv(),
+    });
+
+    expect(core.channel.inbound.dispatch).toHaveBeenCalledOnce();
+  });
+
   it.each<[string, Partial<NextcloudTalkInboundMessage>, ResolvedNextcloudTalkAccount["config"]]>([
     ["DM pairing does not authorize groups", {}, {}],
     [
