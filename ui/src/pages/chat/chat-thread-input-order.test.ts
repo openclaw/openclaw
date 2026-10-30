@@ -231,6 +231,62 @@ describe("transcript input order", () => {
     },
   );
 
+  it.each([undefined, "old-run"])(
+    "keeps live commentary before unrelated input when its prompt is paged out (observed=%s)",
+    (afterUserSendId) => {
+      const original = makeMessage("user", "Original", 1, {
+        idempotencyKey: "old-run:user",
+        seq: 1,
+      });
+      const answer = makeMessage("assistant", "Complete", 3, { runId: "old-run", seq: 3 });
+      const later = makeMessage("user", "Unrelated", 4, { idempotencyKey: "new-run:user", seq: 4 });
+      const props = {
+        runId: "old-run",
+        streamSegments: [
+          { text: "Progress", itemId: "progress", runId: "old-run", ts: 2, afterUserSendId },
+        ],
+      };
+      expect(visibleRows({ ...props, messages: [original, answer, later] })).toEqual([
+        "Original",
+        "Progress",
+        "Complete",
+        "Unrelated",
+      ]);
+      expect(visibleRows({ ...props, messages: [answer, later] })).toEqual([
+        "Progress",
+        "Complete",
+        "Unrelated",
+      ]);
+    },
+  );
+
+  it.each(["notice", "automation", "forwarded"] as const)(
+    "preserves the %s execution boundary during missing-input recovery",
+    (kind) => {
+      const boundary = {
+        role: kind === "notice" ? "user" : "assistant",
+        content: "Boundary",
+        timestamp: 4,
+        __openclaw: { id: "boundary", seq: 4, runId: "new-run" },
+        ...(kind === "notice"
+          ? { provenance: { kind: "internal_system", sourceTool: "cron" } }
+          : kind === "automation"
+            ? { openclawAutomation: { kind: "cron", jobId: "job", runId: "automation" } }
+            : { provenance: { kind: "inter_session", sourceTool: "sessions_send" } }),
+      };
+      const rows = visibleRows({
+        runId: "new-run",
+        messages: [makeMessage("assistant", "Complete", 3, { runId: "old-run", seq: 3 }), boundary],
+        streamSegments: [{ text: "Progress", itemId: "progress", runId: "old-run", ts: 9 }],
+      });
+      expect(rows).toEqual(
+        kind === "forwarded"
+          ? ["Complete", "Boundary", "Progress"]
+          : ["Complete", "Progress", "Boundary"],
+      );
+    },
+  );
+
   it("keeps retained activity before a steer when its observed prompt is paged out", () => {
     expect(
       visibleRows({

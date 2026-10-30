@@ -151,6 +151,64 @@ it("retains commentary boundaries with a paged input", () => {
   expectTexts(materialize(messages, state), "Before", "Steer", "After");
 });
 
+it.each([undefined, "old-run"])(
+  "keeps paged-out commentary with retained run output (observed input=%s)",
+  (afterUserSendId) => {
+    const prompt = user("Original", 1, "old-run:user");
+    const answer = { ...assistant("Complete", 3), __openclaw: { runId: "old-run" } };
+    const later = user("Unrelated", 4, "new-run:user");
+    const state = idle({
+      chatStreamSegments: [
+        streamSegment("Progress", 2, { runId: "old-run", itemId: "progress", afterUserSendId }),
+      ],
+    });
+    expectTexts(
+      materialize([prompt, answer, later], state),
+      "Original",
+      "Progress",
+      "Complete",
+      "Unrelated",
+    );
+    expectTexts(materialize([answer, later], state), "Progress", "Complete", "Unrelated");
+  },
+);
+
+it.each([undefined, "old-input"])(
+  "distinguishes a missing observed input from unanchored commentary (input=%s)",
+  (afterUserSendId) => {
+    const messages = [assistant("Earlier", 3), user("Unrelated", 4, "new-run:user")];
+    const state = idle({
+      chatStreamSegments: [
+        streamSegment("Progress", 2, { runId: "old-run", itemId: "progress", afterUserSendId }),
+      ],
+    });
+    expectTexts(
+      materialize(messages, state),
+      ...(afterUserSendId
+        ? ["Progress", "Earlier", "Unrelated"]
+        : ["Earlier", "Unrelated", "Progress"]),
+    );
+  },
+);
+
+it("keeps observed input identity when multiple inputs share an execution run", () => {
+  const first = {
+    ...user("Original", 10, "first:user"),
+    __openclaw: { idempotencyKey: "first:user", runId: "run" },
+  };
+  const second = {
+    ...user("Continuation", 20, "second:user"),
+    __openclaw: { idempotencyKey: "second:user", runId: "run" },
+  };
+  const state = idle({
+    chatStreamSegments: [
+      streamSegment("Before", 100, { runId: "run", itemId: "before", afterUserSendId: "first" }),
+      streamSegment("After", 0, { runId: "run", itemId: "after", afterUserSendId: "second" }),
+    ],
+  });
+  expectTexts(materialize([first, second], state), "Original", "Before", "Continuation", "After");
+});
+
 it("preserves reused commentary from another run before the user boundary loads", () => {
   const persisted = {
     ...assistant("Saved commentary", 1),
