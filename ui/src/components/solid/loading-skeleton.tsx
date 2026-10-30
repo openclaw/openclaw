@@ -54,8 +54,8 @@ export function LoadingSkeleton(
             <div class="loading-skeleton__message">
               <div class="skeleton loading-skeleton__avatar" />
               <div class="skeleton skeleton-line" />
-              <div class="skeleton skeleton-line--long" />
-              <div class="skeleton skeleton-line--medium" />
+              <div class="skeleton skeleton-line skeleton-line--long" />
+              <div class="skeleton skeleton-line skeleton-line--medium" />
             </div>
           </>
         )}
