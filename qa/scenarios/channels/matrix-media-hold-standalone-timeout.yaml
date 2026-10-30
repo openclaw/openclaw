@@ -1,0 +1,31 @@
+title: Matrix media hold answers a lone captionless attachment once the hold ends
+scenario:
+  id: matrix-media-hold-standalone-timeout
+  surface: channels
+  coverage:
+    primary:
+      - matrix.media-and-rich-content
+  execution:
+    kind: flow
+    channel: matrix
+    providerMode: mock-openai
+    timeoutMs: 90000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        mediaHoldMs: 8000
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - key: driver-dm
+            kind: dm
+            members:
+              - driver
+              - sut
+            name: Matrix QA Driver/SUT DM
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-media-hold.js
+  call: runMediaHoldStandaloneTimeoutScenario
+  args:
+    - expr: "scenarioContext"
