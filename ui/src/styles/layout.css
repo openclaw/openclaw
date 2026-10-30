@@ -1723,10 +1723,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   margin-top: 2px;
 }
 
-.sidebar-session-catalog-project__sessions {
-  margin-left: calc(var(--sidebar-lead) + 5px);
-}
-
 .sidebar-session-catalog-project__sessions[hidden] {
   display: none;
 }
