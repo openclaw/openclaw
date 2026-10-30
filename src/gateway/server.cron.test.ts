@@ -14,6 +14,7 @@ import { readCronRunRecordsForTests } from "../cron/run-history.test-support.js"
 import { loadCronStore, saveCronStore } from "../cron/store.js";
 import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store/paths.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
+import { getGatewayContextResolver } from "../plugins/runtime/gateway-context-binding.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
@@ -792,6 +793,12 @@ describe("gateway server cron", () => {
     await setupCronTestRun();
 
     const ws = await startCronClient();
+
+    // Minimal Gateway startup skips cron recovery; finish it before the timed requests.
+    const { getGatewayRecoveryRuntime } = await import("./server-recovery-runtime-context.js");
+    const runtime = expectDefined(getGatewayRecoveryRuntime(), "Gateway runtime");
+    const resolveContext = expectDefined(getGatewayContextResolver(runtime), "Gateway context");
+    await expectDefined(resolveContext(), "Gateway context").cron.start();
 
     const jobId = await addWebhookCronJob({
       ws,
