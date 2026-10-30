@@ -37,7 +37,7 @@ export type PluginNodeCapabilityClient = {
 };
 
 /** Prepare credentials before publication; the returned commit only swaps owned records. */
-export function prepareClientPluginNodeCapabilities(params: {
+function prepareClientPluginNodeCapabilities(params: {
   client: PluginNodeCapabilityClient;
   surfaces: readonly PluginNodeCapabilitySurface[];
   changedPluginIds: ReadonlySet<string>;
