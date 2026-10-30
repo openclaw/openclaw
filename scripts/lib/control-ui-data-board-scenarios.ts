@@ -265,8 +265,9 @@ async function waitForBoard(page: Page, tab = 0, expectedWidgets = widgetsPerTab
     .waitFor();
   await page.waitForFunction(
     ({ selector, count }) =>
-      document.querySelectorAll(`${selector} openclaw-board-widget-cell:not([hidden])`).length ===
-      count,
+      [...document.querySelectorAll(`${selector} [data-widget-name]`)].filter(
+        (widget) => !widget.closest("[hidden]"),
+      ).length === count,
     { selector: boardHost, count: expectedWidgets },
   );
   await settle(page);
@@ -276,6 +277,7 @@ async function boardReportCounts(page: Page) {
   return page.locator(boardHost).evaluate((host) => ({
     mountedReports: host.querySelectorAll("openclaw-report-widget").length,
     widgetCells: host.querySelectorAll("openclaw-board-widget-cell").length,
+    deferredCards: host.querySelectorAll(".board-widget--deferred").length,
     scrollHeight: host.scrollHeight,
   }));
 }
@@ -838,7 +840,7 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     id: "data-board-tab-switch",
     dataPage: "board",
     route: controlUiSessionPath(sessionKey),
-    expected: "Switching tabs retains the previous 250 widget instances and presents the next 250.",
+    expected: "Switching tabs retains visited reports and presents the next 250 logical cards.",
     fixtureOverrides: () => createDataBoardFixture(),
     rowSelector: "openclaw-board-widget-cell",
     prepare: prepareBoard,
@@ -914,10 +916,10 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     fixtureOverrides: () => createDataBoardFixture(),
     prepare: prepareBoard,
     run: async (page) => {
+      await page.locator(`${boardHost} .board-widget[data-widget-name="data-widget-249"]`).focus();
       const card = page.locator(`${boardHost} openclaw-board-widget-cell`).filter({
         has: page.locator('[data-widget-name="data-widget-249"]'),
       });
-      await card.locator(".board-widget").focus();
       await card.locator("openclaw-report-widget svg").waitFor();
       const trigger = card.locator(".board-widget__menu-trigger");
       await trigger.click();

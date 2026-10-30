@@ -10,6 +10,7 @@ import {
 } from "../../lib/board/grid.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { createIntersectionObserver } from "../../lib/reactive/observers.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import "../../styles/board.css";
@@ -37,11 +38,105 @@ type CellEntry = {
   options: BoardWidgetCellProps;
 };
 
+function BoardCellSlot(props: {
+  entry: CellEntry;
+  visible: boolean;
+  registerCell: (
+    key: string,
+    element: SolidBridgeElement<BoardWidgetCellProps, BoardWidgetCellMethods>,
+  ) => void;
+}) {
+  let placeholder: HTMLElement | undefined;
+  let cell: SolidBridgeElement<BoardWidgetCellProps, BoardWidgetCellMethods> | undefined;
+  // Only fixed native reports have known geometry and no foreign runtime to start.
+  // Admission is permanent for this key: scrolling never retires a report or its focus.
+  const [admitted, setAdmitted] = createSignal((previous = false) => {
+    const options = props.entry.options;
+    const widget = options.widget;
+    return (
+      previous ||
+      widget?.contentKind !== "plugin" ||
+      widget.pluginKind !== "session:report" ||
+      widget.heightMode !== "fixed" ||
+      Boolean(widget.frameUrl) ||
+      Boolean(widget.viewTicket) ||
+      options.pageChrome ||
+      options.focusTabIndex === 0
+    );
+  });
+  createIntersectionObserver(
+    () => (!admitted() && placeholder ? [placeholder] : []),
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        setAdmitted(true);
+      }
+    },
+    { rootMargin: "300px" },
+  );
+  const key = createMemo(() => props.entry.key);
+  const cellRef = createMemo(() => {
+    const register = props.registerCell;
+    const initialKey = key();
+    return (element: SolidBridgeElement<BoardWidgetCellProps, BoardWidgetCellMethods>) => {
+      cell = element;
+      register(initialKey, element);
+    };
+  });
+  return (
+    <Show
+      when={admitted()}
+      fallback={
+        <div
+          ref={(element) => {
+            placeholder = element;
+          }}
+          class="board-widget board-widget--deferred"
+          hidden={!props.visible}
+          inert={!props.visible}
+          style={{
+            "grid-column": `${props.entry.options.rect!.x + 1} / span ${props.entry.options.rect!.w}`,
+            "grid-row": `${props.entry.options.rect!.y + 1} / span ${props.entry.options.rect!.h}`,
+            "--board-widget-rows": props.entry.options.rect!.h,
+            "--board-widget-order": props.entry.options.positionInSet ?? 1,
+          }}
+          role="listitem"
+          aria-label={props.entry.options.widget!.title || props.entry.options.widget!.name}
+          aria-posinset={props.entry.options.positionInSet ?? 1}
+          aria-setsize={props.entry.options.setSize ?? 1}
+          tabindex={-1}
+          onFocus={() => {
+            setAdmitted(true);
+            onSettled(() => cell?.focusWidget());
+          }}
+          data-widget-name={props.entry.options.widget!.name}
+          data-test-id="board-widget"
+        />
+      }
+    >
+      <BoardWidgetCell
+        {...props.entry.options}
+        ref={cellRef()}
+        hidden={!props.visible}
+        inert={!props.visible}
+      />
+    </Show>
+  );
+}
+
 function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
   const [layoutRevision, setLayoutRevision] = createSignal(0, { ownedWrite: true });
   const invalidateLayout = () => setLayoutRevision((value) => value + 1);
   // Grid coordinates change; map insertion order keeps iframe nodes in place.
   const entries = new Map<string, CellEntry>();
+  const registerCell = (
+    key: string,
+    element: SolidBridgeElement<BoardWidgetCellProps, BoardWidgetCellMethods>,
+  ) => {
+    const current = entries.get(key);
+    if (current) {
+      current.element = element;
+    }
+  };
   const owner = createBoardViewState(props, host, () =>
     [...entries.values()].flatMap(({ element }) => (element ? [element] : [])),
   );
@@ -232,16 +327,10 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
           >
             <For each={view().cells} keyed={(entry) => entry.key}>
               {(entry) => (
-                <BoardWidgetCell
-                  {...entry().options}
-                  ref={(element) => {
-                    const current = entries.get(entry().key);
-                    if (current) {
-                      current.element = element;
-                    }
-                  }}
-                  hidden={!entry().present || !view().activeNames.has(entry().options.widget!.name)}
-                  inert={!entry().present || !view().activeNames.has(entry().options.widget!.name)}
+                <BoardCellSlot
+                  entry={entry()}
+                  visible={entry().present && view().activeNames.has(entry().options.widget!.name)}
+                  registerCell={registerCell}
                 />
               )}
             </For>

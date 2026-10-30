@@ -161,6 +161,7 @@ openclaw-board-view {
 }
 
 .board-grid[hidden],
+.board-widget--deferred[hidden],
 openclaw-board-widget-cell[hidden] {
   display: none;
 }

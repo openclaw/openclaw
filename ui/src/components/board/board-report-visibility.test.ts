@@ -2,16 +2,17 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createBoardWidget } from "../../lib/board/widget.test-support.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { gatewayContext } from "./board-view.test-support.ts";
-import { cleanupCells, mountCell } from "./board-widget-cell.test-support.ts";
+import { gatewayContext, mount, settleCells, snapshot } from "./board-view.test-support.ts";
+import { cleanupCells } from "./board-widget-cell.test-support.ts";
 import "./board-widget-cell.solid.tsx";
+import "./board-view.tsx";
 
 afterEach(() => {
   cleanupCells();
   vi.unstubAllGlobals();
 });
 
-it("defers fixed reports until nearby, then retains their body and current content across tabs", async () => {
+function mockIntersections() {
   const observers: { targets: Set<Element>; deliver: (target: Element) => void }[] = [];
   vi.stubGlobal(
     "IntersectionObserver",
@@ -40,6 +41,11 @@ it("defers fixed reports until nearby, then retains their body and current conte
       }
     },
   );
+  return observers;
+}
+
+it("defers fixed reports until nearby, then retains their body and current content across tabs", async () => {
+  const observers = mockIntersections();
   const widget = createBoardWidget({
     contentKind: "plugin",
     pluginKind: "session:report",
@@ -51,46 +57,95 @@ it("defers fixed reports until nearby, then retains their body and current conte
     ...gatewayHelloForMethods([]),
     controlUiWidgetKinds: [{ pluginId: "session", kind: "session:report", label: "Report" }],
   };
-  const cell = mountCell(widget, { context });
-  await cell.updateComplete;
+  const initial = snapshot({
+    widgets: [
+      { ...widget, name: "first", position: 0 },
+      { ...widget, position: 1 },
+      { ...widget, name: "ops-report", tabId: "ops" },
+    ],
+  });
+  const view = await mount({ snapshot: initial, context });
   await vi.dynamicImportSettled();
-  const target = cell.querySelector(".board-widget")!;
+  const target = view.querySelector(`[data-widget-name="${widget.name}"]`)!;
   expect(target.getAttribute("style")).toContain("grid-row: 1 / span 4");
-  expect(cell.querySelector("openclaw-report-widget")).toBeNull();
-  expect(cell.querySelector(".board-widget__menu-trigger")).toBeNull();
-  expect(cell.querySelector(".board-widget__chrome")).not.toBeNull();
-  expect(cell.querySelector(".board-widget__resize-handle")).not.toBeNull();
+  expect(target.classList.contains("board-widget--deferred")).toBe(true);
   const observer = observers.find(({ targets }) => targets.has(target));
   observer!.deliver(target);
-  await cell.updateComplete;
+  await settleCells(view);
   await vi.dynamicImportSettled();
+  const cell = view.querySelector(`[data-widget-name="${widget.name}"]`)!.parentElement!;
   await waitForSolid(() => expect(cell.textContent).toContain("Initial report"));
   expect(cell.querySelector(".board-widget__menu-trigger")).not.toBeNull();
   const report = cell.querySelector("openclaw-report-widget");
   expect(observer!.targets.has(target)).toBe(false);
-  cell.active = false;
-  cell.hidden = true;
-  cell.widget = {
-    ...widget,
+  view.activeTabId = "ops";
+  view.snapshot = {
+    ...initial,
     revision: 2,
-    props: { blocks: [{ type: "text", text: "Updated while hidden" }] },
+    widgets: initial.widgets.map((current) =>
+      current.name === widget.name
+        ? Object.assign({}, current, {
+            revision: 2,
+            props: { blocks: [{ type: "text", text: "Updated while hidden" }] },
+          })
+        : current,
+    ),
   };
   await waitForSolid(() => expect(report?.textContent).toContain("Updated while hidden"));
-  cell.active = true;
-  cell.hidden = false;
-  await cell.updateComplete;
+  view.activeTabId = "main";
+  await settleCells(view);
   expect(cell.querySelector("openclaw-report-widget")).toBe(report);
-  const auto = mountCell({ ...widget, name: "auto-report", heightMode: "auto" }, { context });
-  await waitForSolid(() => expect(auto.textContent).toContain("Initial report"));
-  expect(observers.some(({ targets }) => targets.has(auto.querySelector(".board-widget")!))).toBe(
-    false,
-  );
-  const autoReport = auto.querySelector("openclaw-report-widget");
-  auto.active = false;
-  auto.hidden = true;
-  auto.widget = { ...auto.widget!, heightMode: "fixed", revision: 2, props: cell.widget!.props };
-  await waitForSolid(() => expect(autoReport?.textContent).toContain("Updated while hidden"));
-  expect(auto.querySelector("openclaw-report-widget")).toBe(autoReport);
   cleanupCells();
   await waitForSolid(() => expect(observers.every(({ targets }) => targets.size === 0)).toBe(true));
+});
+
+it("admits offscreen fixed cards for visibility or keyboard focus and retains admitted identities", async () => {
+  const observers = mockIntersections();
+  const widgets = Array.from({ length: 20 }, (_, index) =>
+    createBoardWidget({
+      name: `report-${index}`,
+      tabId: index === 19 ? "ops" : "main",
+      position: index,
+      contentKind: "plugin",
+      pluginKind: "session:report",
+      heightMode: "fixed",
+    }),
+  );
+  const view = await mount({ snapshot: snapshot({ widgets }) });
+  expect(view.querySelectorAll("openclaw-board-widget-cell")).toHaveLength(1);
+  const first = view.querySelector("openclaw-board-widget-cell")!;
+  const placeholder = view.querySelector<HTMLElement>('[data-widget-name="report-18"]')!;
+  expect(placeholder.style.gridRow).toBeTruthy();
+  observers.find(({ targets }) => targets.has(placeholder))!.deliver(placeholder);
+  await settleCells(view);
+  expect(view.querySelectorAll("openclaw-board-widget-cell")).toHaveLength(2);
+  const admitted = view.querySelector('[data-widget-name="report-18"]')!.parentElement;
+
+  first
+    .querySelector(".board-widget")!
+    .dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+  await waitForSolid(() =>
+    expect(document.activeElement?.getAttribute("data-widget-name")).toBe("report-1"),
+  );
+  expect(view.querySelectorAll("openclaw-board-widget-cell")).toHaveLength(3);
+  view.activeTabId = "ops";
+  await settleCells(view);
+  view.activeTabId = "main";
+  await settleCells(view);
+  expect(view.querySelector('[data-widget-name="report-18"]')!.parentElement).toBe(admitted);
+  expect(view.querySelector("openclaw-board-widget-cell")).toBe(first);
+
+  view.snapshot = snapshot({
+    revision: 2,
+    widgets: widgets.map((widget) =>
+      widget.name === "report-17"
+        ? Object.assign({}, widget, { heightMode: "auto" as const, revision: 2 })
+        : widget,
+    ),
+  });
+  await waitForSolid(() =>
+    expect(view.querySelector('[data-widget-name="report-17"]')!.parentElement?.localName).toBe(
+      "openclaw-board-widget-cell",
+    ),
+  );
 });
