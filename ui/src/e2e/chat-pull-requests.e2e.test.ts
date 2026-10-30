@@ -162,6 +162,71 @@ suite.define(() => {
     await pollText(pill).toContain("Publish failed");
   });
 
+  it("keeps one mobile pill across a PR's publication lifecycle", async () => {
+    const published = {
+      requestId: "publication-lifecycle",
+      publisher: sharedPublisher,
+      status: "published",
+      url: "https://github.com/openclaw/openclaw/pull/4321",
+      repository: "openclaw/openclaw",
+      branch: "openclaw/lifecycle",
+      headCommit: "a".repeat(40),
+    };
+    const { page, gateway, watchedKey } = await openPublicationChat(
+      { "sessions.github.publish": published },
+      {},
+      { viewport: { width: 393, height: 852 } },
+    );
+    await closeChatDetails(page);
+    await gateway.waitForRequest("sessions.github.options");
+    const pills = page.locator(".activity-pill");
+    const publication = page.locator('.activity-pill[data-family="publication"]');
+    const pullRequestPill = page.locator('.activity-pill[data-family="pull-request"]');
+
+    await emitPullRequests(gateway, watchedKey, publicationState("openclaw/lifecycle"));
+    await pollText(publication).toContain("Publish PR");
+    await publication.click();
+    await page.getByRole("button", { name: "Publish PR", exact: true }).click();
+    await closeChatDetails(page);
+    // Until the PR snapshot lists it, the receipt bridges as that PR's number.
+    await pollText(publication).toContain("#4321");
+    await pollCount(pills).toBe(1);
+
+    // The Gateway omits branch facts once the checkout has a live PR.
+    const listed = pullRequest(4321, {
+      branch: "openclaw/lifecycle",
+      state: "open",
+      additions: 2,
+      deletions: 1,
+    });
+    await emitPullRequests(gateway, watchedKey, {
+      pullRequests: [listed],
+      rateLimited: false,
+      status: "ready",
+    });
+    await pollCount(publication).toBe(0);
+    await pollCount(pullRequestPill).toBe(1);
+    await pollCount(pills).toBe(1);
+    await pollAttr(pullRequestPill, "data-tone").toBe("ok");
+
+    await emitPullRequests(gateway, watchedKey, {
+      pullRequests: [{ ...listed, state: "merged" }],
+      rateLimited: false,
+      status: "ready",
+    });
+    await pollAttr(pullRequestPill, "data-tone").toBe("purple");
+    await pollCount(pills).toBe(1);
+
+    // Another session PR still gets its own pill.
+    await emitPullRequests(gateway, watchedKey, {
+      pullRequests: [{ ...listed, state: "merged" }, pullRequest(4400, { state: "draft" })],
+      rateLimited: false,
+      status: "ready",
+    });
+    await pollCount(pullRequestPill).toBe(2);
+    await pollCount(publication).toBe(0);
+  });
+
   it("shows detected PRs in Details with rate-limit staleness", async () => {
     const context = await newBrowserContext();
     const page = await context.newPage();
