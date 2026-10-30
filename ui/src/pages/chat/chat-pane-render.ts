@@ -502,8 +502,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         : undefined,
       ...composerAvailability,
       disabledReasonAction: catalogReason?.action,
-      modelSetupRequired: modelSetupRequired && !selectedSessionArchived,
-      onModelSetup: () => this.context.navigate("model-setup"),
       error: providerPaused ? null : state.lastError,
       diskSpace: placementComposer.diskSpace,
       workerRuntimeInstall: placementComposer.workerRuntimeInstall,
@@ -532,7 +530,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       },
       contextGateway: this.context.gateway,
       onOpenContext: this.openContextPanel,
-      operatorAuth: state.hello?.auth ?? null,
       providerUsage: {
         basePath: state.basePath,
         modelAuthStatusResult: state.modelAuthStatusResult,

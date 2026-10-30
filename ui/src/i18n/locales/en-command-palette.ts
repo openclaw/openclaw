@@ -129,8 +129,6 @@ const enCommandPalette = {
   },
   chat: {
     welcome: {
-      hintBeforeShortcut: "Type a message below ·",
-      hintAfterShortcut: "for commands",
       recentSessions: "Recent chats",
       suggestions: {
         whatCanYouDo: en.chat.welcome.suggestions.whatCanYouDo,
