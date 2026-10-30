@@ -1,0 +1,3 @@
+191
+# Source 2f504abebddca671613ede82dee5a704fd4d9478; Acknowledge Feishu follow-ups after actual deferred/adopted ingress handoff instead of full turn completion, preserving early slash handling and broadcast observation without a second execution. Take helper movement only if necessary for that handoff. Runtime scope: extensions/feishu/src/bot-broadcast.ts, extensions/feishu/src/bot.ts, extensions/feishu/src/feishu-ingress.ts, extensions/feishu/src/policy.ts. Include corresponding focused regression tests only.
+# Exact net LF growth of independently justified retained regressions against frozen LOCAL11.8 baseline; no removed assertions or scalar change.
