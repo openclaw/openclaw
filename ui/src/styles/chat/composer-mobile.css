@@ -98,8 +98,6 @@
   --chat-composer-control-size: 32px;
   --chat-composer-chip-height: 32px;
   --chat-composer-send-size: 36px;
-  --chat-composer-row-inset-block: 7px;
-  --chat-composer-row-inset-inline: 8px;
 
   display: grid;
   grid-template-columns: 32px minmax(0, 1fr) auto;
@@ -107,7 +105,7 @@
   align-content: start;
   align-items: center;
   gap: 0 2px;
-  padding: var(--chat-composer-row-inset-block) var(--chat-composer-row-inset-inline);
+  padding: 7px 8px;
   border-radius: calc(28px * var(--openclaw-corner-radius-scale));
 }
 
@@ -128,28 +126,24 @@
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
   .agent-chat__composer-lede
   > .composer-context-strip {
-  margin-inline: calc(-1 * var(--chat-composer-row-inset-inline));
+  margin-inline: -8px;
   margin-block-end: 6px;
 }
 
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
   .agent-chat__composer-lede
   > .composer-context-strip:first-child {
-  margin-block-start: calc(-1 * var(--chat-composer-row-inset-block));
+  margin-block-start: -7px;
 }
 
-/* The attachment rail already carries the editor inset and remove-target slop
-   from composer.css. Cancel the one-line row's padding so that inset is not
-   applied twice, and the chips stay where editing places them. */
+/* The rail already carries the editor inset and remove-target slop; cancel
+   the one-line row padding so the chips sit where editing places them. */
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
   .agent-chat__composer-lede
   > .chat-attachments-preview {
-  width: calc(100% + 2 * var(--chat-composer-row-inset-inline));
+  width: calc(100% + 16px);
   max-width: none;
-  margin-block-start: calc(
-    -1 * (var(--chat-composer-row-inset-block) + var(--chat-attachment-hit-slop))
-  );
-  margin-inline: calc(-1 * var(--chat-composer-row-inset-inline));
+  margin: calc(-7px - var(--chat-attachment-hit-slop)) -8px 0;
 }
 
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
