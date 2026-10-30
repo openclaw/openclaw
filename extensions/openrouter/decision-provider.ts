@@ -5,22 +5,16 @@ import type {
   ProviderDecisionOutcomeV2,
 } from "openclaw/plugin-sdk/decisions";
 import {
-  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
-  decodeOpenRouterDecisionResult,
   encodeOpenRouterDecisionRequest,
   isOpenRouterDecisionModel,
   supportsOpenRouterDecisionBatch,
 } from "./decision-codec.js";
-import {
-  OPENROUTER_BASE_URL,
-  resolveOpenRouterApiBaseUrl,
-  resolveOpenRouterSsrfPolicy,
-} from "./provider-catalog.js";
+import { executeOpenRouterDecision } from "./decision-execution.js";
+import { OPENROUTER_BASE_URL, resolveOpenRouterApiBaseUrl } from "./provider-catalog.js";
 import {
   resolveOpenRouterConfiguredExtraParams,
   resolveOpenRouterExtraParamsForTransport,
@@ -73,106 +67,51 @@ export function buildOpenRouterDecisionProvider(): DecisionProviderV2 {
         return { status: "unavailable", reason: "credentials-unavailable" };
       }
       const providerConfig = context.config.models?.providers?.openrouter;
-      let release: (() => Promise<void>) | undefined;
-      let admissionError: { error: unknown } | undefined;
-      const assertActive = () => {
-        context.signal.throwIfAborted();
-        let admitted: boolean;
-        try {
-          admitted = context.isAdmissible();
-        } catch (error) {
-          admissionError = { error };
-          throw error;
-        }
-        if (!admitted || performance.now() >= context.deadlineMonotonicMs) {
-          throw new Error("OpenRouter decision is no longer admitted.");
-        }
-      };
-      try {
-        // Auth and effective headers are prepared by the host. Only proxy/TLS/SSRF
-        // policy is read here; never select a second credential or auth profile.
-        const configuredRequest = providerConfig?.request;
-        const request = sanitizeConfiguredModelProviderRequest(
-          configuredRequest
-            ? {
-                proxy: configuredRequest.proxy,
-                tls: configuredRequest.tls,
-                allowPrivateNetwork: configuredRequest.allowPrivateNetwork,
-              }
-            : undefined,
-        );
-        const requestConfig = resolveProviderHttpRequestConfig({
-          provider: "openrouter",
-          capability: "llm",
-          transport: "http",
-          baseUrl: resolveOpenRouterApiBaseUrl(context.model.baseUrl ?? providerConfig?.baseUrl),
-          defaultBaseUrl: OPENROUTER_BASE_URL,
-          defaultHeaders: {
-            "Content-Type": "application/json",
-            // The host already applied an explicit auth override to its private headers.
-            // Do not restore the provider-default bearer after a custom header replaced it.
-            ...(context.auth.apiKey &&
-            (!configuredRequest?.auth || configuredRequest.auth.mode === "provider-default")
-              ? { Authorization: `Bearer ${context.auth.apiKey}` }
-              : {}),
-          },
-          headers: context.model.headers,
-          request,
-        });
-        const timeoutMs = context.deadlineMonotonicMs - performance.now();
-        context.signal.throwIfAborted();
-        if (timeoutMs <= 0) {
-          return { status: "unavailable", reason: "transport" };
-        }
-        const guarded = await fetchWithSsrFGuard({
-          // Append to the effective API prefix; custom proxies must never escape to the canonical host.
-          url: requestConfig.baseUrl + "/systemone",
-          init: { method: "POST", headers: requestConfig.headers, body: JSON.stringify(body) },
-          signal: context.signal,
-          timeoutMs,
-          // DNS, proxy and capture preparation can yield after the host handed us
-          // this context. Recheck its live authority at each physical dispatch.
-          beforeRequest: assertActive,
-          policy: resolveOpenRouterSsrfPolicy(requestConfig, configuredRequest),
-          dispatcherPolicy: requestConfig.dispatcherPolicy,
-          auditContext: "openrouter-decisions",
-        });
-        release = guarded.release;
-        const response = guarded.response;
-        if (!response.ok) {
-          return {
-            status: "unavailable",
-            reason:
-              response.status === 401 || response.status === 403
-                ? "authentication"
-                : response.status === 429 || response.status === 529
-                  ? "rate-limited"
-                  : [400, 413, 422].includes(response.status)
-                    ? "unsupported-input"
-                    : "transport",
-          };
-        }
-        let value: unknown;
-        try {
-          value = await readProviderJsonResponse(response, "OpenRouter decisions", {
-            maxBytes: 1_048_576,
-            timeoutMs: Math.max(1, context.deadlineMonotonicMs - performance.now()),
+      return executeOpenRouterDecision(batch, {
+        body,
+        signal: context.signal,
+        deadlineMonotonicMs: context.deadlineMonotonicMs,
+        isAdmissible: context.isAdmissible,
+        capabilities: context.model.inference?.decision,
+        prepareTransport: () => {
+          // Auth and effective headers are prepared by the host. Only proxy/TLS/SSRF
+          // policy is read here; never select a second credential or auth profile.
+          const configuredRequest = providerConfig?.request;
+          const request = sanitizeConfiguredModelProviderRequest(
+            configuredRequest
+              ? {
+                  proxy: configuredRequest.proxy,
+                  tls: configuredRequest.tls,
+                  allowPrivateNetwork: configuredRequest.allowPrivateNetwork,
+                }
+              : undefined,
+          );
+          const requestConfig = resolveProviderHttpRequestConfig({
+            provider: "openrouter",
+            capability: "llm",
+            transport: "http",
+            baseUrl: resolveOpenRouterApiBaseUrl(context.model.baseUrl ?? providerConfig?.baseUrl),
+            defaultBaseUrl: OPENROUTER_BASE_URL,
+            defaultHeaders: {
+              "Content-Type": "application/json",
+              // The host already applied an explicit auth override to its private headers.
+              // Do not restore the provider-default bearer after a custom header replaced it.
+              ...(context.auth.apiKey &&
+              (!configuredRequest?.auth || configuredRequest.auth.mode === "provider-default")
+                ? { Authorization: `Bearer ${context.auth.apiKey}` }
+                : {}),
+            },
+            headers: context.model.headers,
+            request,
           });
-        } catch {
-          context.signal.throwIfAborted();
-          return { status: "unavailable", reason: "invalid-response" };
-        }
-        context.signal.throwIfAborted();
-        return decodeOpenRouterDecisionResult(batch, value, context.model.inference?.decision);
-      } catch {
-        context.signal.throwIfAborted();
-        if (admissionError) {
-          throw admissionError.error;
-        }
-        return { status: "unavailable", reason: "transport" };
-      } finally {
-        await release?.();
-      }
+          return {
+            requestConfig,
+            configuredRequest: configuredRequest
+              ? { allowPrivateNetwork: configuredRequest.allowPrivateNetwork }
+              : undefined,
+          };
+        },
+      });
     },
   };
 }
