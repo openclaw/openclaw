@@ -1126,7 +1126,8 @@ files. Ordinary documents without an authored CSP retain their existing preview
 behavior.
 
 Authored in-page HTML links such as `href="#section"` scroll within the preview, including
-in `strict` mode. This leaves the original file and **Source** unchanged; authored
+in `strict` mode. Fragment navigation does not depend on the relative-resource CSP
+subset above. This leaves the original file and **Source** unchanged; authored
 base URLs, links targeting another window, and download links keep their behavior.
 
 Workspace file reads and edits retain their existing 256 KiB limit. After a successful save, Files refreshes its metadata and Review refreshes its diff without switching the active panel or clearing the current Files search.
