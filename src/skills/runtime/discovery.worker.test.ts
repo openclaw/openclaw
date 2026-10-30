@@ -320,7 +320,9 @@ it("fingerprints precedence winners without resolving paths for discarded collis
   )!;
   expect(extra).toBeDefined();
   expect(result!.fingerprint).toBe(
-    sha256Hex(JSON.stringify([[winner, extra], result!.sources.runtime])),
+    sha256Hex(
+      JSON.stringify([[winner, extra], result!.sources.runtime, { items: [], omitted: 0 }]),
+    ),
   );
   expect(canonicalize).not.toHaveBeenCalled();
 });

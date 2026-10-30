@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { getTrackedWorkerPoolSnapshot } from "../../infra/worker-cpu.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
@@ -20,6 +20,7 @@ import {
   prepareSkillSourcePlan,
   projectSkillSnapshot,
   refreshSkillsDiscovery,
+  registerSkillsChangeListener,
 } from "./refresh.js";
 
 const temporary = useAutoCleanupTempDirTracker((cleanup) =>
@@ -165,21 +166,64 @@ it("does no discovery work during five unchanged minutes", async () => {
   expect(tasks).not.toHaveBeenCalled();
 });
 
-it("discovers external edits without waiting for a periodic scan and shares one worker", async () => {
+it("publishes external skill and diagnostic edits without a periodic scan", async ({ signal }) => {
   vi.useRealTimers();
   const other = temporary.make("skills-discovery-other-");
   await write("Original");
   await write("Other original", other);
-  expect(await descriptions()).toEqual(["Original"]);
+  const brokenFile = path.join(workspace, "skills", "broken", "SKILL.md");
+  await fs.mkdir(path.dirname(brokenFile), { recursive: true });
+  await fs.writeFile(brokenFile, "---\nname: broken\n---\n", "utf8");
+  const input = request();
+  expect(await descriptions(input)).toEqual(["Original"]);
   expect(await descriptions(request(other))).toEqual(["Other original"]);
+  expect((await prepareLocalSkillSources(input)).diagnostics).toEqual({
+    items: [{ kind: "invalid", path: brokenFile, message: "description is required" }],
+    omitted: 0,
+  });
   await waitForLiveWatch(path.join(workspace, "skills"));
   await waitForLiveWatch(path.join(other, "skills"), other);
   expect(discoveryPools()).toEqual([expect.objectContaining({ workerCount: 1 })]);
   await write("First");
   await write("Final");
   await write("Other", other);
-  await expect.poll(() => descriptions(), { timeout: 10_000 }).toEqual(["Final"]);
+  await expect.poll(() => descriptions(input), { timeout: 10_000 }).toEqual(["Final"]);
   await expect.poll(() => descriptions(request(other)), { timeout: 10_000 }).toEqual(["Other"]);
+
+  const diagnosticChange = async (mutate: () => Promise<void>) => {
+    const before = getSkillsSnapshotVersion(workspace);
+    const published = createDeferred();
+    const unsubscribe = registerSkillsChangeListener((event) => {
+      if (event.workspaceDir === workspace && event.reason === "watch") {
+        published.resolve();
+      }
+    });
+    try {
+      await mutate();
+      await withinTest(published.promise, signal);
+      const sources = await prepareLocalSkillSources(input);
+      expect(sources.entries.map(({ skill }) => skill.description)).toEqual(["Final"]);
+      expect(getSkillsSnapshotVersion(workspace)).toBeGreaterThan(before);
+      return sources.diagnostics;
+    } finally {
+      unsubscribe();
+    }
+  };
+  expect(
+    await diagnosticChange(() =>
+      fs.writeFile(brokenFile, "---\nname: broken\ndescription: Still rejected\n", "utf8"),
+    ),
+  ).toEqual({
+    items: [
+      {
+        kind: "invalid",
+        path: brokenFile,
+        message: "invalid frontmatter: UNTERMINATED_FRONTMATTER: missing closing --- delimiter",
+      },
+    ],
+    omitted: 0,
+  });
+  expect(await diagnosticChange(() => fs.rm(brokenFile))).toEqual({ items: [], omitted: 0 });
 });
 
 it("observes edits inside an admitted external symlink target", async () => {
@@ -224,14 +268,22 @@ it("applies config refresh on the healthy worker and drops departed sources", as
 
 it("batches fresh agent discovery without separate root-planning passes", async () => {
   const other = temporary.make("skills-batch-agent-");
-  vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", temporary.make("skills-batch-bundled-"));
+  const bundled = temporary.make("skills-batch-bundled-");
+  vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", bundled);
+  const brokenFile = path.join(bundled, "broken", "SKILL.md");
+  await fs.mkdir(path.dirname(brokenFile), { recursive: true });
+  await fs.writeFile(brokenFile, "---\nname: broken\n---\n", "utf8");
   const config = agentConfig({ main: { workspace }, second: { workspace: other } });
   await Promise.all([write("Original"), write("Other", other)]);
   const tasks = vi.spyOn(WorkerTaskPool.prototype, "run");
   const instructions = async (workspaceDir: string, agentId: string) => {
     const prepared = await plannedSource(workspaceDir, { config, agentId });
-    return (await prepared.read()).entries.find((entry) => entry.skill.name === "guide")?.skill
-      .description;
+    const sources = await prepared.read();
+    expect(sources.diagnostics).toEqual({
+      items: [{ kind: "invalid", path: brokenFile, message: "description is required" }],
+      omitted: 0,
+    });
+    return sources.entries.find((entry) => entry.skill.name === "guide")?.skill.description;
   };
   for (const description of ["Original", "Edited"]) {
     await write(description);
@@ -386,10 +438,13 @@ it("invalidates an evicted workspace before accepting its next snapshot", async 
   expect(await descriptions(input)).toEqual(["Changed while evicted"]);
 });
 
-it("discovers new agent-plugin children during the passive worker pass", async () => {
+it("discovers agent-plugin additions and rejected files during the passive worker pass", async () => {
   const pluginRoot = path.join(workspace, "plugin");
   const skillRoot = path.join(pluginRoot, "skills");
   await write("First", skillRoot, "first");
+  const brokenFile = path.join(skillRoot, "broken", "SKILL.md");
+  await fs.mkdir(path.dirname(brokenFile), { recursive: true });
+  await fs.writeFile(brokenFile, "---\nname: broken\n---\n", "utf8");
   const input = request();
   const prepared = await prepareSkillSourcePlan(workspace, {
     config: { plugins: { enabled: false } },
@@ -411,8 +466,21 @@ it("discovers new agent-plugin children during the passive worker pass", async (
       ],
     },
   };
-  const names = async () =>
-    (await prepareLocalSkillSources(input, { plan })).entries.map((entry) => entry.skill.name);
+  const names = async () => {
+    const sources = await prepareLocalSkillSources(input, { plan });
+    expect(sources.diagnostics).toEqual({
+      items: [
+        { kind: "invalid", path: brokenFile, message: "description is required" },
+        {
+          kind: "invalid",
+          path: path.join(workspace, "plugin-links", "broken", "SKILL.md"),
+          message: "description is required",
+        },
+      ],
+      omitted: 0,
+    });
+    return sources.entries.map((entry) => entry.skill.name);
+  };
   expect(await names()).toContain("first");
   expect(await names()).not.toContain("second");
   await write("Second", skillRoot, "second");

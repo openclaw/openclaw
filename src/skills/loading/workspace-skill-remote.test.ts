@@ -13,6 +13,7 @@ import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import { resolveSkillDiscoveryLimits } from "./skill-root-discovery.js";
 import {
   loadWorkspaceSkills,
+  prepareWorkspaceSkillEntries,
   prepareWorkspaceSkills,
   resolveWorkspaceSkillPromptEntries,
 } from "./workspace-skill-loader.js";
@@ -142,11 +143,22 @@ describe("remote skill discovery", () => {
     ] as const) {
       await writeNamedSkill(dir, name, description);
     }
-    sources.entries = readWorkspaceSkillSources({
+    const gatewayFailure = path.join(options.managedSkillsDir, "bad-gateway", "SKILL.md");
+    const remoteFailure = path.join(remote, "skills", "bad-remote", "SKILL.md");
+    for (const [file, name] of [
+      [gatewayFailure, "bad-gateway"],
+      [remoteFailure, "bad-remote"],
+    ] as const) {
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, `---\nname: ${name}\n---\n`);
+    }
+    const discovered = readWorkspaceSkillSources({
       sourcePlan: resolveWorkspaceSkillSourcePlan(remote, { workspaceOnly: true }),
       limits: resolveSkillDiscoveryLimits(),
       additionalBins: [],
-    }).entries;
+    });
+    sources.entries = discovered.entries;
+    sources.diagnostics = discovered.diagnostics;
     const loadSkills = vi.fn(async (_request: WorkspaceSkillSourceRequest) => sources);
     bind(loadSkills);
     const params = { ...options, config, agentId: "main" };
@@ -183,6 +195,14 @@ describe("remote skill discovery", () => {
     expect(status.files.find((file) => file.name === "workshop-wins")?.skillCard?.content).toBe(
       "Workshop card",
     );
+    expect(status.report.diagnostics).toEqual({
+      items: [gatewayFailure, remoteFailure].map((file) => ({
+        kind: "invalid",
+        path: file,
+        message: "description is required",
+      })),
+      omitted: 0,
+    });
   });
 
   it("keeps canonical execution entries and their binary requirements on the right hosts", async () => {
@@ -195,6 +215,9 @@ describe("remote skill discovery", () => {
     });
     const loadSkills = vi.fn(async (_request: WorkspaceSkillSourceRequest) => sources);
     bind(loadSkills);
+    const invalidFile = path.join(options.executionWorkspaceDir, "skills", "invalid", "SKILL.md");
+    await fs.mkdir(path.dirname(invalidFile), { recursive: true });
+    await fs.writeFile(invalidFile, "---\nname: invalid\n---\n");
     const params = { ...options, executionWorkspaceFileHost: "gateway" as const };
     const entries = (await resolveWorkspaceSkillPromptEntries(gateway, params)).eligible;
     expect(entries.map((entry) => entry.skill.name)).toEqual(["available", "project", "pinned"]);
@@ -203,6 +226,11 @@ describe("remote skill discovery", () => {
     expect(project).toMatchObject({ description: "Gateway canonical instructions" });
     expect(resolveSkillFileHost(project!)).toBe("gateway");
     expect(resolveSkillFileHost(available!)).toBe("workspace");
+    const prepared = await prepareWorkspaceSkillEntries(gateway, params);
+    expect(prepared.diagnostics).toEqual({
+      items: [{ kind: "invalid", path: invalidFile, message: "description is required" }],
+      omitted: 0,
+    });
     expect(loadSkills.mock.calls[0]![0]).toMatchObject({
       executionWorkspaceDir: undefined,
       additionalBins: expect.arrayContaining(["remote-tool", "library-tool"]),
