@@ -60,6 +60,13 @@ keeps its own current-source and commit-authority checks.
 
 ## Choose the execution owner
 
+Shared-state worker contexts carry installed-service migration restrictions only
+for the admitted database. An unrelated older global installation does not change
+an isolated Gateway's actor policy during cron startup or configuration reload.
+The admission owner supplies known path aliases without repeated filesystem reads;
+matching-service restrictions and refusal to replace an actor with active work
+remain in effect.
+
 Actor-backed session managers serialize append preparation and committed view
 adoption on their manager queue. Only each actor storage command reserves the
 agent database writer, so unrelated sessions can write between commands. Native

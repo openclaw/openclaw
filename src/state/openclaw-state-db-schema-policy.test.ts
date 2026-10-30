@@ -406,7 +406,11 @@ describe("existing shared-state schema admission", () => {
         using sibling = openTrackedStateDatabase(options.path, { readOnly: true });
         admitSqliteSchema(sibling);
         const context = captureSqliteWorkerStateContext(
-          captureOpenClawStateReadWorkerContextWithAdmission(options, host.capture),
+          captureOpenClawStateReadWorkerContextWithAdmission(
+            options,
+            host.capture,
+            host.knownIdentity,
+          ),
         );
         const lifetime = context.stateIntegrity?.lifetime;
         assert(lifetime);
