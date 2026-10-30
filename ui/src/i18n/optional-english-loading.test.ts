@@ -90,6 +90,40 @@ beforeEach(() => {
 });
 afterEach(() => restoreElementRegistration?.());
 
+it.each([false, true])(
+  "preserves context inspector copy in either registration order (optional first=%s)",
+  async (optionalFirst) => {
+    const { en, manager } = await loadI18n({
+      chat: { sessionDetails: { context: "Kontext", contextSearch: "Suchen {category}" } },
+    });
+    const { registerEnglishCatalog } = await import("../lib/reactive/i18n.ts");
+    const { registerChatDetailsEnglish } = await import("./locales/en-chat-details.ts");
+    const { registerChatSessionEnglish } = await import("./locales/en-chat-session.ts");
+    const { registerChatSessionOptionalEnglish } =
+      await import("./locales/en-chat-session-optional.ts");
+    await manager.setLocale("de");
+    const registrars = [registerChatDetailsEnglish, registerChatSessionOptionalEnglish];
+    const ordered = optionalFirst ? registrars.toReversed() : registrars;
+    registerEnglishCatalog(ordered[0]!);
+    const details = en.chat.sessionDetails;
+    registerEnglishCatalog(ordered[1]!);
+    registerChatDetailsEnglish();
+    registerChatSessionEnglish();
+
+    expect(manager.t("chat.sessionDetails.contextProject")).toBe("Project");
+    expect(manager.t("chat.sessionDetails.contextCompactShort")).toBe("Compact");
+    expect(manager.t("chat.sessionDetails.contextSearch", { category: "Skills" })).toBe(
+      "Suchen Skills",
+    );
+    expect(manager.t("chat.sessionDetails.context")).toBe("Kontext");
+    expect(manager.t("chat.sessionDetails.contextMessages")).toBe("Messages & other");
+    expect(manager.t("chat.sessionDetails.contextLoading")).toBe("Loading context breakdown…");
+    expect(manager.t("chat.sessionDetails.title")).toBe("Details");
+    expect(manager.getLocale()).toBe("de");
+    expect(en.chat.sessionDetails).toBe(details);
+  },
+);
+
 it.each([
   [
     "chat.sessionSharing.copyPublicLink",
