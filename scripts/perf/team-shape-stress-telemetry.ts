@@ -121,7 +121,7 @@ async function captureRetainedHeap(inspector: Session, output: string, measuredE
 }
 
 /** CPU is the main OS thread; memory is main-isolate heap plus process-wide RSS. */
-export async function startTeamStressTelemetry(options: Options) {
+async function startTeamStressTelemetry(options: Options) {
   if (!isMainThread) {
     throw new Error("Team stress telemetry must run in the Gateway main isolate");
   }

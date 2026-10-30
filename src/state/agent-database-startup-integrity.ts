@@ -28,7 +28,7 @@ const pending = new Map<
 >();
 
 /** This Gateway lifetime permits recovery before the background full-file verdict. */
-export function prepareAgentDatabaseStartupIntegrity(pathname: string, agentId: string) {
+function prepareAgentDatabaseStartupIntegrity(pathname: string, agentId: string) {
   const identity = readDatabasePathIdentitySync(pathname);
   if (!identity.key.startsWith("file:")) {
     throw new Error("Deferred agent integrity requires an existing database");

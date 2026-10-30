@@ -634,5 +634,16 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
     addNamedImport([...names], targetFile);
   }
 
+  const broadcastPath = "scripts/perf/transcript-broadcast-measure.ts";
+  const broadcastSource = fs.readFileSync(broadcastPath, "utf8");
+  for (const [, bindings, specifier] of broadcastSource.matchAll(
+    /(?:\\n|\b)import\s*\{([^}]+)\}\s*from\s*\$\{JSON\.stringify\(new URL\("([^"\r\n]+)", import\.meta\.url\)\.href\)\}/gu,
+  )) {
+    addNamedImport(
+      importedNames(`import {${bindings}} from "${specifier}"`, specifier),
+      path.resolve(path.dirname(broadcastPath), specifier),
+    );
+  }
+
   return `${source}\n${imports.join("\n")}`;
 }

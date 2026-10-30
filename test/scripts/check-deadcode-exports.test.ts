@@ -86,14 +86,7 @@ describe("check-deadcode-exports", () => {
       "config/knip.scripts-exports.config.ts!",
       "scripts/generate-runtime-script-assets.mjs!",
       "scripts/generate-static-validators.mts!",
-      "scripts/perf/cron-delivery-gateway-entry.ts!",
-      "scripts/perf/doctor-retirement-measure.mts!",
-      "scripts/perf/github-readiness-state-bench.ts!",
-      "scripts/perf/plugin-policy-read-measure.mjs!",
-      "scripts/perf/prompt-cache-observation-measure.ts!",
-      "scripts/perf/reconnect-read-wave-measure.ts!",
-      "scripts/perf/session-actor-retention-measure.ts!",
-      "scripts/perf/session-row-churn-probe.ts!",
+      "scripts/perf/**/*.{js,mjs,cjs,ts,mts,cts}!",
       "tsdown.config.ts!",
     ]);
     expect(knipConfig.workspaces["."].project).toContain("config/**/*.{ts,mts,cts}!");
@@ -109,6 +102,9 @@ describe("check-deadcode-exports", () => {
       "test/scripts/service-relay-artifact.test-support.mjs!",
     );
     for (const extension of ["js", "mjs", "cjs", "ts", "tsx", "mts", "cts"]) {
+      expect(isEntry(knipConfig.workspaces["."].entry, `scripts/perf/x.${extension}`)).toBe(
+        extension !== "tsx",
+      );
       for (const directory of ["src", "scripts", "test"]) {
         expect(isEntry(fullRootWorkspace.entry, `${directory}/x.test.${extension}`)).toBe(true);
       }
@@ -336,21 +332,7 @@ const catalog = module.loadControlUiSourceCatalog();`;
     );
   });
 
-  it("roots benchmark parents and follows only their live computed child launches", () => {
-    const entries = knipConfig.workspaces["."].entry;
-    for (const parent of [
-      "scripts/perf/archive-worker-churn-measure.ts!",
-      "scripts/perf/session-create-measure.ts!",
-      "scripts/perf/session-create-repository-measure.ts!",
-    ]) {
-      expect(
-        entries.filter((entry) => entry === parent),
-        parent,
-      ).toHaveLength(1);
-    }
-    expect(entries).not.toContain("scripts/perf/archive-worker-churn-preload.mjs!");
-    expect(entries).not.toContain("scripts/perf/session-create-measure-loader.mjs!");
-
+  it("follows only live computed benchmark child launches", () => {
     const archivePath = path.resolve("scripts/perf/archive-worker-churn-measure.ts");
     const sessionCreatePath = path.resolve("scripts/perf/session-create-measure.ts");
     const archiveSource = fs.readFileSync(archivePath, "utf8");
@@ -433,6 +415,9 @@ const unrelatedArgs = [
       /import \{ recordTrajectoryFlush as __dynamic\d+_0 \} from "\.\.\/scripts\/perf\/trajectory-flush-preload\.mts";/u,
     );
 
+    expect(compiled).toMatch(
+      /import \{ installTeamStressTelemetryIpc as __dynamic\d+_0 \} from "\.\.\/scripts\/perf\/team-shape-stress-telemetry\.ts";/u,
+    );
     const readFileSync = fs.readFileSync.bind(fs);
     const doctorConsumerPath = path.resolve("src/commands/config-preflight-snapshot.ts");
     const directDoctorConsumer = `const addIssues = (
@@ -448,6 +433,14 @@ const unrelatedArgs = [
 
     readFile.mockImplementation((file, options) => {
       const source = readFileSync(file, options);
+      if (
+        path.resolve(String(file)) === path.resolve("scripts/perf/transcript-broadcast-measure.ts")
+      ) {
+        return String(source).replace(
+          "import { installTeamStressTelemetryIpc } from",
+          "import {} from",
+        );
+      }
       if (path.resolve(String(file)) === path.resolve("tsdown.config.ts")) {
         return String(source).replace(
           `import {
@@ -488,13 +481,18 @@ const unrelatedArgs = [
       return source;
     });
     const withoutConsumers = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
-    expect(withoutConsumers).not.toContain("runtimeProcessDeployManifest");
-    expect(withoutConsumers).not.toContain("runtimeProcessHelperManifest");
-    expect(withoutConsumers).not.toContain("runtimeProcessWorkerDependencies");
-    expect(withoutConsumers).not.toContain("gatewayBenchTaskOperation");
-    expect(withoutConsumers).not.toContain("fetchWithSsrFGuard");
-    expect(withoutConsumers).not.toContain("addDoctorLegacyIssues");
-    expect(withoutConsumers).not.toContain("recordTrajectoryFlush");
+    for (const name of [
+      "runtimeProcessDeployManifest",
+      "runtimeProcessHelperManifest",
+      "runtimeProcessWorkerDependencies",
+      "gatewayBenchTaskOperation",
+      "fetchWithSsrFGuard",
+      "addDoctorLegacyIssues",
+      "recordTrajectoryFlush",
+      "installTeamStressTelemetryIpc",
+    ]) {
+      expect(withoutConsumers).not.toContain(name);
+    }
   });
 
   it("models Codex lazy runtime members only from their live loaders and consumers", () => {
