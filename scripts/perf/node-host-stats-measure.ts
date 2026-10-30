@@ -1,4 +1,9 @@
-/** Four synthetic nodes, real Gateway/WebSocket admission, real one-minute host-stat cadence. */
+/**
+ * Four synthetic nodes, real Gateway/WebSocket admission, real one-minute host-stat cadence.
+ * Run after a qaRuntime build:
+ * node --import ./scripts/tsx.mjs scripts/perf/node-host-stats-measure.ts \
+ *   --out /path/to/fresh-output --observer /path/to/frozen/observer.cjs
+ */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
