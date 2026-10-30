@@ -19,7 +19,7 @@ import {
   buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
 } from "../../bootstrap-budget.js";
-import { buildCodeModeCatalogPrompt } from "../../code-mode.js";
+import { buildCodeModeCatalogPrompt, buildCodeModeTurnFragments } from "../../code-mode.js";
 import { resolveOpenClawReferencePaths } from "../../docs-path.js";
 import {
   splitExtraSystemPrompt,
@@ -529,6 +529,13 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         });
       }
       return fragments;
+    },
+    // Read after prompt-build tool policy; an emptied catalog drops exec and wait.
+    get codeModeTurnFragments(): RuntimeContextFragment[] {
+      return buildCodeModeTurnFragments(
+        params.codeModeActive,
+        params.toolSearchCatalogRef?.current?.entries,
+      );
     },
     prepareToolPrompt: (
       effectiveTools: PromptTools = params.effectiveTools,

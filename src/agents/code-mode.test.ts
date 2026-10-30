@@ -27,6 +27,7 @@ import { resolveCodeModeSkills } from "./code-mode-skills.js";
 import {
   applyCodeModeCatalog,
   buildCodeModeCatalogPrompt,
+  buildCodeModeTurnFragments,
   runCodeModeScriptHeadless,
 } from "./code-mode.js";
 import {
@@ -163,10 +164,39 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(resultDetails(await read()).value).toEqual([]);
   });
 
+  it("states the calling contract above a non-empty catalog index", () => {
+    const { catalogPrompt } = catalog([fakeTool("lookup", "Look up a value")]);
+    expect(catalogPrompt()).toMatch(
+      /^Code Mode: every name in the index below is an async function inside an `exec` program\. Unless the same name is also in your provider tool list, calling it as a tool fails;/,
+    );
+  });
+
+  it("restates the calling contract per turn only while catalog tools sit behind exec", () => {
+    const { catalogRef } = catalog([fakeTool("lookup", "Look up a value")]);
+    const entries = catalogRef.current?.entries ?? [];
+    expect(entries.some((entry) => !entry.directVisible)).toBe(true);
+    expect(buildCodeModeTurnFragments(true, entries)).toEqual([
+      {
+        kind: "runtime-instruction",
+        text: expect.stringContaining(
+          "Code Mode is on for this turn: only tools in your provider tool list",
+        ),
+      },
+    ]);
+    expect(buildCodeModeTurnFragments(false, entries)).toEqual([]);
+    expect(buildCodeModeTurnFragments(undefined, entries)).toEqual([]);
+    expect(buildCodeModeTurnFragments(true, [])).toEqual([]);
+    expect(buildCodeModeTurnFragments(true, undefined)).toEqual([]);
+    const [entry] = entries;
+    expect(buildCodeModeTurnFragments(true, [{ ...entry!, directVisible: true }])).toEqual([]);
+  });
+
   it("removes shell-computation guidance when a client shadows the shell tool", () => {
     const { ctx, exec, catalogPrompt } = catalog([fakeTool("exec", "Run shell command")]);
     const description = exec.description;
-    expect(catalogPrompt()).toContain("Use the shell tool `exec` for heavier computation");
+    expect(catalogPrompt()).toContain(
+      "Inside `exec`, run shell commands with `await exec({ command })`; use it for heavier computation",
+    );
     addClientToolsToToolCatalog({
       enabled: true,
       ...ctx,

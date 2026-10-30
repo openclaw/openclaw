@@ -388,6 +388,8 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   replaceSessionMessages: (messages: AgentMessage[]) => void;
   sessionAgentId: string;
   systemPromptRuntimeContextFragments?: readonly RuntimeContextFragment[];
+  /** Turn facts, not producer context: they never make a blank turn runtime-only. */
+  codeModeTurnFragments?: readonly RuntimeContextFragment[];
   systemPromptReport?: SessionSystemPromptReport;
   systemPromptText: string;
   toolResultPromptProjectionState: ToolResultPromptProjectionState;
@@ -485,20 +487,21 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
         }
       : undefined;
   const systemPromptForHook = input.systemPromptText;
-  const runtimeFacts =
-    input.isRawModelRun || attempt.operation === "settled-tool-finalization"
-      ? []
-      : await buildRuntimeFactsContext({
-          capabilityToolNames: input.capabilityToolNames,
-          executionHost: input.executionHost,
-          cfg: attempt.config ?? {},
-          sessionKey: attempt.sessionKey,
-          sessionId: attempt.sessionId,
-          sessionTarget: attempt.sessionTarget,
-          runId: attempt.runId,
-          agentId: input.sessionAgentId,
-          includeEmptySnapshots: input.appendOnlyRuntimeContext === true,
-        });
+  const includeTurnFacts =
+    !input.isRawModelRun && attempt.operation !== "settled-tool-finalization";
+  const runtimeFacts = !includeTurnFacts
+    ? []
+    : await buildRuntimeFactsContext({
+        capabilityToolNames: input.capabilityToolNames,
+        executionHost: input.executionHost,
+        cfg: attempt.config ?? {},
+        sessionKey: attempt.sessionKey,
+        sessionId: attempt.sessionId,
+        sessionTarget: attempt.sessionTarget,
+        runId: attempt.runId,
+        agentId: input.sessionAgentId,
+        includeEmptySnapshots: input.appendOnlyRuntimeContext === true,
+      });
   // A dispatched user's projection is frozen. Fresh fallback hooks belong to
   // the continuation context, never a second copy of the user or their images.
   const fallbackHookFragments: RuntimeContextFragment[] = isDispatchedCanonicalFallback
@@ -506,7 +509,12 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
         .filter((text): text is string => Boolean(text?.trim()))
         .map((text) => ({ kind: "runtime-instruction", text }))
     : [];
-  const contextFragments = [...fragments, ...runtimeFacts, ...fallbackHookFragments];
+  const contextFragments = [
+    ...fragments,
+    ...runtimeFacts,
+    ...(includeTurnFacts ? (input.codeModeTurnFragments ?? []) : []),
+    ...fallbackHookFragments,
+  ];
   const runtimeContextForHook = joinPresentTextSegments(
     contextFragments.map((fragment) => fragment.text),
   );

@@ -223,6 +223,7 @@ export async function runEmbeddedAttemptPromptPhase(
       sessionVersion: sessionManager.getHeader()?.version,
       attempt,
       systemPromptRuntimeContextFragments: prepared.systemPrompt.runtimeContextFragments,
+      codeModeTurnFragments: prepared.systemPrompt.codeModeTurnFragments,
       capabilityToolNames: prepared.toolCatalog.toolSearchRunPlan.capabilityToolNames,
       messages: activeSession.messages,
       prompt: promptAssembly,

@@ -28,6 +28,7 @@ import {
   resolveCodeModeConfig,
 } from "./code-mode-runtime.js";
 import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
+import type { RuntimeContextFragment } from "./internal-runtime-context.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { executionTitleSchema } from "./schema/typebox.js";
@@ -148,6 +149,24 @@ function formatCodeModeCatalogIndex(bindings: readonly CodeModeCatalogBinding[])
   return renderCodeModeCatalogIndex(included, lines.length);
 }
 
+const CODE_MODE_CATALOG_CONTRACT = `Code Mode: every name in the index below is an async function inside an \`${CODE_MODE_EXEC_TOOL_NAME}\` program. Unless the same name is also in your provider tool list, calling it as a tool fails; call \`${CODE_MODE_EXEC_TOOL_NAME}\` with code such as \`return await name({ ... })\`. Prefer one program for dependent steps that need no user input.`;
+
+const CODE_MODE_TURN_CONTRACT = `Code Mode is on for this turn: only tools in your provider tool list can be called directly. Call any other tool from the Code Mode index inside an \`${CODE_MODE_EXEC_TOOL_NAME}\` program, and put dependent steps that need no user input in one program.`;
+
+/**
+ * Restates the calling contract beside each turn while catalog tools sit behind exec. On Claude
+ * routes the per-turn runtime context outranks the cached catalog prompt, so the catalog
+ * contract alone does not stop native calls to catalog names.
+ */
+export function buildCodeModeTurnFragments(
+  codeModeActive: boolean | undefined,
+  entries: readonly ToolSearchCatalogEntry[] | undefined,
+): RuntimeContextFragment[] {
+  return codeModeActive && entries?.some((entry) => !entry.directVisible)
+    ? [{ kind: "runtime-instruction", text: CODE_MODE_TURN_CONTRACT }]
+    : [];
+}
+
 /** Current catalog facts belong after the stable prompt, never in the control schemas. */
 export function buildCodeModeCatalogPrompt(
   ctx: CodeModeToolContext,
@@ -192,9 +211,10 @@ export function buildCodeModeCatalogPrompt(
   // Only the effective core binding proves shell capability after client overrides.
   const shellTool = bindings.find((entry) => entry.id === "openclaw:core:exec");
   const shellGuidance = shellTool
-    ? ` Use the shell tool \`${shellTool.callableName}\` for heavier computation.`
+    ? ` Inside \`${CODE_MODE_EXEC_TOOL_NAME}\`, run shell commands with \`await ${shellTool.callableName}({ command })\`; use it for heavier computation.`
     : "";
   return [
+    catalogIndex ? CODE_MODE_CATALOG_CONTRACT : "",
     [shellGuidance, apiGuidance, mcpGuidance, swarmGuidance, nodesGuidance, skillsGuidance]
       .join("")
       .trim(),
