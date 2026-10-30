@@ -17,6 +17,7 @@ import { parseConfiguredProjectGitUrl } from "../../projects/project-git-url.run
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { requestCurrentGitHubOAuthRefresh } from "../github-oauth-lifecycle.js";
 import { gitHubPublicApi } from "../github-public-api.js";
+import { assertRepositoryDispatchAdmission } from "../repository-dispatch.js";
 import {
   resolveEnvironmentRecipe,
   type EnvironmentRecipe,
@@ -101,7 +102,9 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
   }
   const getConfig = params.getConfig;
   const assertAgent = () => {
-    if (!matchesAgentLifecycleBinding(getConfig(), agent)) {
+    const currentConfig = getConfig();
+    assertRepositoryDispatchAdmission(params.readNativeCredential, currentConfig);
+    if (!matchesAgentLifecycleBinding(currentConfig, agent)) {
       sourceChanged();
     }
   };
