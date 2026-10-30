@@ -1,7 +1,9 @@
 import { spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { afterEach, expect, it, vi } from "vitest";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { observeMainThreadReads } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
@@ -11,8 +13,12 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { stateLeaseProcessExitRuntimeEntrypoint } from "./openclaw-state-lease-runtime.test-support.js";
-import { readOpenClawStateLease } from "./openclaw-state-lease-store.js";
-import { withOpenClawStateLease } from "./openclaw-state-lease.js";
+import {
+  acquireOpenClawStateLeaseInTransaction,
+  readOpenClawStateLease,
+  releaseOpenClawStateLeaseInTransaction,
+} from "./openclaw-state-lease-store.js";
+import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
 
 type LeaseDatabase = Pick<OpenClawStateKyselyDatabase, "state_leases">;
 
@@ -151,6 +157,134 @@ it("rechecks exact ownership inside the caller's write transaction", () =>
         });
       }),
     ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+  }));
+
+it("retains verified Gateway lease facts until their writer epoch changes", () =>
+  withOpenClawTestState({ label: "lease-owner-facts" }, async (state) => {
+    const database = openOpenClawStateDatabase({ env: state.env });
+    const owner = acquireGatewayStateOwner({
+      databasePath: database.path,
+      payload: {
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath: state.configPath,
+        role: "gateway",
+      },
+    });
+    let retired: OpenClawStateLeaseContext | undefined;
+    try {
+      await withOpenClawStateLease(
+        { ...leaseOptions("facts", state.env), leaseMs: 60_000 },
+        async (lease, identity) => {
+          retired = lease;
+          const reads = observeMainThreadReads();
+          try {
+            lease.assertOwned();
+            lease.assertOwned();
+            reads.expectIdle();
+            runOpenClawStateWriteTransaction(
+              ({ db }) => {
+                const sibling = { ...identity, key: "sibling" };
+                acquireOpenClawStateLeaseInTransaction(db, sibling, 60_000);
+                releaseOpenClawStateLeaseInTransaction(db, sibling);
+              },
+              { env: state.env },
+            );
+            reads.clear();
+            lease.assertOwned();
+            reads.expectIdle();
+            for (const mutation of ["replace", "delete", "shorten"] as const) {
+              const { db } = database;
+              const original = readOpenClawStateLease(db, identity)!;
+              if (mutation === "delete") {
+                db.prepare("DELETE FROM state_leases WHERE scope=? AND lease_key=?").run(
+                  identity.scope,
+                  identity.key,
+                );
+              } else {
+                db.prepare(
+                  `UPDATE state_leases SET ${mutation === "replace" ? "owner=?" : "expires_at=?"} WHERE scope=? AND lease_key=?`,
+                ).run(
+                  mutation === "replace" ? "successor" : Date.now() + 10_000,
+                  identity.scope,
+                  identity.key,
+                );
+              }
+              reads.clear();
+              if (mutation === "shorten") {
+                lease.assertOwned();
+                expect(reads.count()).toBeGreaterThan(0);
+                const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 20_000);
+                try {
+                  expect(() => lease.assertOwned()).toThrowError(
+                    expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_LOST" }),
+                  );
+                } finally {
+                  clock.mockRestore();
+                }
+              } else {
+                expect(() => lease.assertOwned()).toThrowError(
+                  expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_LOST" }),
+                );
+              }
+              db.prepare(
+                "INSERT OR REPLACE INTO state_leases(scope,lease_key,owner,expires_at,heartbeat_at,created_at,updated_at,payload_json) VALUES(?,?,?,?,?,?,?,NULL)",
+              ).run(
+                identity.scope,
+                identity.key,
+                identity.owner,
+                original.expiresAt,
+                original.heartbeatAt,
+                original.createdAt,
+                Date.now(),
+              );
+              lease.assertOwned();
+            }
+            runOpenClawStateWriteTransaction(
+              ({ db }) => {
+                db.prepare("UPDATE state_leases SET updated_at=updated_at WHERE scope=?").run(
+                  identity.scope,
+                );
+                reads.clear();
+                lease.assertOwned();
+                const pendingReads = reads.count();
+                lease.assertOwned();
+                expect(reads.count()).toBeGreaterThan(pendingReads);
+                reads.clear();
+                lease.assertOwnedInTransaction(db);
+                expect(reads.count()).toBeGreaterThan(0);
+              },
+              { env: state.env },
+            );
+          } finally {
+            reads.restore();
+          }
+        },
+      );
+      expect(() => retired!.assertOwned()).toThrow();
+      await expect(
+        withOpenClawStateLease(
+          { ...leaseOptions("closed-handle", state.env), leaseMs: 60_000 },
+          async (lease) => {
+            lease.assertOwned();
+            database.db.close();
+            lease.assertOwned();
+          },
+        ),
+      ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED" });
+      await expect(
+        withOpenClawStateLease(
+          { ...leaseOptions("owner-close", state.env), leaseMs: 60_000 },
+          async (lease) => {
+            lease.assertOwned();
+            owner.release();
+            lease.assertOwned();
+          },
+        ),
+      ).rejects.toThrow("state process owner is no longer current");
+    } finally {
+      owner.release();
+    }
   }));
 
 it("records expiry and timer lateness when the native owner cannot run its heartbeat", () =>

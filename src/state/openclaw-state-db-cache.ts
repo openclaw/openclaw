@@ -5,8 +5,7 @@ import {
 } from "../infra/gateway-state-owner.js";
 import { registerNodeSqliteKyselyQueryErrorHandler } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
-import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import {
   isSqliteCorruptionError,
   isSqliteLockError,
@@ -459,29 +458,28 @@ function recordOpenClawStateDatabaseLifecycleOpenError(pathname: string, error: 
   notifyOpenClawStateDatabaseLifecycle({ kind: "open-error", path: resolvedPath, error });
 }
 
-/** Reject a fresh shared-state open after known corruption until repair clears it. */
 function assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
   pathname: string,
   env: NodeJS.ProcessEnv,
   onNativeCleanupFailure?: (error: OpenClawQuarantineReadCleanupError) => void,
+  refreshQuarantineIdentity?: true,
 ): void {
   assertOpenClawStateDatabaseOpenAllowed(pathname);
   let quarantineFailure: Error | undefined;
   try {
-    quarantineFailure = readOpenClawDatabaseQuarantineFailure("state", pathname, { env });
+    const options = { env, refreshIdentity: refreshQuarantineIdentity };
+    quarantineFailure = readOpenClawDatabaseQuarantineFailure("state", pathname, options);
   } catch (error) {
     if (!(error instanceof OpenClawQuarantineReadCleanupError)) {
       throw error;
     }
     onNativeCleanupFailure?.(error);
-    return;
   }
   if (quarantineFailure?.cause instanceof OpenClawQuarantineReadCleanupError) {
     onNativeCleanupFailure?.(quarantineFailure.cause);
   }
   if (quarantineFailure) {
-    // Another process can record quarantine. Revoke admitted owners without a
-    // process-local latch that could outlive the durable decision's generation.
+    // Revoke owners without a process-local latch that could outlive the durable decision.
     cacheAdmission.closeTerminalFailure(pathname, quarantineFailure);
     throw quarantineFailure;
   }

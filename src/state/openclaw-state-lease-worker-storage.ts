@@ -1,3 +1,4 @@
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import {
@@ -24,6 +25,12 @@ import type {
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
+export type OpenClawStateLeaseNativeSource = {
+  context: OpenClawStateWorkerContext;
+  identity: DatabasePathIdentity;
+  database?: EngineConnection;
+};
+
 export async function acquireLease(
   database: OpenClawStateLeaseDatabase,
   input: {
@@ -34,7 +41,7 @@ export async function acquireLease(
   },
   assertCurrent: () => void,
   signal?: AbortSignal,
-  captureSource?: (context: OpenClawStateWorkerContext, identity: DatabasePathIdentity) => void,
+  captureSource?: (source: OpenClawStateLeaseNativeSource) => void,
 ) {
   if (database.options?.readOnly) {
     throw new Error("State lease acquisition requires writable storage");
@@ -84,7 +91,7 @@ export async function acquireLease(
   }
   if (result.kind === "acquired") {
     assertAdmission();
-    captureSource?.(context, sourceIdentity);
+    captureSource?.({ context, identity: sourceIdentity, database: opened?.db });
   }
   return result;
 }
