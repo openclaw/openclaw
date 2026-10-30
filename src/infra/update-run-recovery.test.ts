@@ -262,6 +262,8 @@ describe("retained recovery read-only compatibility", () => {
     const f = setup();
     const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(f.options).db);
     const raw = JSON.stringify(f.record);
+    const selectedBytes =
+      Buffer.byteLength(raw) + Buffer.byteLength("update.recovery." + f.run.runId);
     db.prepare("UPDATE config_machine_state SET value_json=? WHERE state_key=?").run(
       raw,
       "update.recovery." + f.run.runId,
@@ -279,11 +281,11 @@ describe("retained recovery read-only compatibility", () => {
       expect(readRecovery(db, f.run.runId)).toEqual(f.record);
       expect(counter.counts.recovery).toBe(1);
       expect(counter.rowCounts.recovery).toBe(1);
-      expect(counter.textBytes.recovery).toBe(Buffer.byteLength(raw));
+      expect(counter.textBytes.recovery).toBe(selectedBytes);
       expect(readRecovery(db, "missing-run")).toBeUndefined();
       expect(counter.counts.recovery).toBe(2);
       expect(counter.rowCounts.recovery).toBe(1);
-      expect(counter.textBytes.recovery).toBe(Buffer.byteLength(raw));
+      expect(counter.textBytes.recovery).toBe(selectedBytes);
     } finally {
       counter.restore();
     }
