@@ -1,7 +1,4 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -65,18 +62,6 @@ suite.define(() => {
                 requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
               }),
           );
-          if (nativeMobile && process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-            const frame = await takeControlUiScreenshotFrame(
-              page,
-              page.locator("body"),
-              [page.locator("openclaw-chat-pane").first()],
-              { animations: "disabled" },
-            );
-            await fs.writeFile(
-              path.join(suite.artifactDir, (process.env.OPENCLAW_PROOF_STAGE ?? "after") + ".png"),
-              frame.png,
-            );
-          }
           expect(await page.locator('[data-panel-slot="browser"]:visible').count()).toBe(
             nativeMobile ? 0 : 1,
           );
