@@ -54,6 +54,23 @@ async function inputOptions(config: UserConfig) {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("tsdown config", () => {
+  it("builds the public runtime-artifacts export and its declarations", () => {
+    const manifest = JSON.parse(readFileSync("package.json", "utf8"));
+    expect(manifest.exports["./runtime-artifacts"]).toEqual({
+      types: "./dist/runtime-artifacts.d.ts",
+      default: "./dist/runtime-artifacts.js",
+    });
+    expect(entrySources(runtimeGraph("runtime-artifacts"))["runtime-artifacts"]).toBe(
+      "src/runtime-artifacts.ts",
+    );
+    const declarations = tsdownConfig.filter(
+      (config) => typeof config.dts === "object" && config.dts.emitDtsOnly,
+    );
+    expect(declarations.flatMap((config) => Object.keys(entrySources(config)))).toContain(
+      "runtime-artifacts",
+    );
+  });
+
   it("keeps isolated and unselected plugin workers out of the host build graph", async () => {
     vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "0");
     const { default: selectedConfigs } = await importFreshModule<

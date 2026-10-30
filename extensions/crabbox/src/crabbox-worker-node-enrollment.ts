@@ -1,6 +1,11 @@
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import { createCrabboxXfceSessionEnvironment } from "./crabbox-worker-desktop-setup.js";
 import { createCrabboxNodeProcessRuntime } from "./crabbox-worker-node-process.js";
+import {
+  CRABBOX_LOCAL_RUNTIME_ARCHIVE_SOURCE,
+  validateCrabboxOfflineRuntimeArchives,
+  type CrabboxOfflineRuntimeSetupOptions,
+} from "./crabbox-worker-offline-archives.js";
 import type { CrabboxOperatingSystem } from "./crabbox-worker-profile.js";
 import {
   createCrabboxWorkerStateDirScript,
@@ -45,23 +50,44 @@ export function createCrabboxNodeRuntimeSetup(params: {
   return createCrabboxNodeSetup(params);
 }
 
-function createCrabboxNodeSetup(params: {
-  nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"];
-  leaseId: string;
-  enrollment?: CrabboxWorkerNodeEnrollment;
-  workerBundle?: CrabboxWorkerNodeRuntimePreparation["workerBundle"];
-  desktop?: boolean;
-  desktopSetup?: string;
-  target?: CrabboxOperatingSystem;
-}): { command: string; forwardedEnv: Record<string, string> } {
+/** Install verified local runtime archives without enrollment or a logical lease. */
+export function createCrabboxOfflineRuntimeSetup(params: CrabboxOfflineRuntimeSetupOptions): {
+  command: string;
+  forwardedEnv: Record<string, string>;
+} {
+  validateCrabboxOfflineRuntimeArchives(params);
+  return createCrabboxNodeSetup({ ...params, offline: true });
+}
+
+function createCrabboxNodeSetup(
+  params: {
+    enrollment?: CrabboxWorkerNodeEnrollment;
+    desktop?: boolean;
+    desktopSetup?: string;
+    target?: CrabboxOperatingSystem;
+  } & (
+    | ({ offline: true; leaseId?: never } & Parameters<typeof createCrabboxOfflineRuntimeSetup>[0])
+    | {
+        offline?: false;
+        nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"];
+        leaseId: string;
+        workerBundle?: CrabboxWorkerNodeRuntimePreparation["workerBundle"];
+      }
+  ),
+): { command: string; forwardedEnv: Record<string, string> } {
   const { enrollment, leaseId } = params;
-  const { token, linuxToolchainSetup, installLock, ...nodeBootstrap } = params.nodeBootstrap;
+  const { token, linuxToolchainSetup, installLock } = params.offline ? {} : params.nodeBootstrap;
+  const nodeBootstrap = params.offline
+    ? params.nodeBootstrap
+    : (({ token: _token, linuxToolchainSetup: _setup, installLock: _lock, ...artifact }) =>
+        artifact)(params.nodeBootstrap);
   const lockArtifact = installLock
     ? (({ token: _token, ...artifact }) => artifact)(installLock)
     : undefined;
-  const workerBundle = params.workerBundle
-    ? (({ token: _token, ...artifact }) => artifact)(params.workerBundle)
-    : undefined;
+  const workerBundle =
+    !params.offline && params.workerBundle
+      ? (({ token: _token, ...artifact }) => artifact)(params.workerBundle)
+      : params.workerBundle;
   const desktopTarget = params.desktop ? (params.target ?? "linux") : undefined;
   const desktopEnvironment =
     desktopTarget === "linux"
@@ -92,9 +118,9 @@ const displayName = ${JSON.stringify(enrollment?.displayName)};
 const mode = ${JSON.stringify(enrollment?.mode)};
 const desktopEnvironment = ${JSON.stringify(desktopEnvironment)};
 const desktopSetup = ${JSON.stringify(params.desktopSetup)};
-const credentials = process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
-const setupCode = process.env.${CLOUD_SETUP_CODE_ENV};
-const workerCodexBase64 = process.env.${CLOUD_WORKER_CODEX_ENV};
+const credentials = ${params.offline ? "undefined" : `process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV}`};
+const setupCode = ${params.offline ? "undefined" : `process.env.${CLOUD_SETUP_CODE_ENV}`};
+const workerCodexBase64 = ${params.offline ? "undefined" : `process.env.${CLOUD_WORKER_CODEX_ENV}`};
 delete process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
 delete process.env.${CLOUD_SETUP_CODE_ENV};
 delete process.env.${CLOUD_WORKER_CODEX_ENV};
@@ -116,7 +142,7 @@ setPhase("preparation");
   try { tokens = JSON.parse(credentials || "{}"); }
   catch { throw new Error("Cloud worker bootstrap credential format is invalid"); }
   const home = fs.realpathSync(os.homedir());
-  const stateDir = ${createCrabboxWorkerStateDirScript(leaseId)};
+  const stateDir = ${leaseId === undefined ? "undefined" : createCrabboxWorkerStateDirScript(leaseId)};
   const stageWorkerCodex = () => {
     if (!workerCodexBase64) return;
     let settings;
@@ -154,10 +180,10 @@ setPhase("preparation");
   const runtimeRoot = path.join(home, ".openclaw-worker", "node-runtimes");
   const runtimeDir = path.join(runtimeRoot, bootstrap.sha256);
   const cli = path.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
-  const pidFile = path.join(stateDir, "node.pid");
-  const launchFile = path.join(stateDir, "node-launch.json");
-  const setupFile = path.join(stateDir, "setup-code");
-  const runtimeLink = path.join(stateDir, "runtime");
+  const pidFile = stateDir && path.join(stateDir, "node.pid");
+  const launchFile = stateDir && path.join(stateDir, "node-launch.json");
+  const setupFile = stateDir && path.join(stateDir, "setup-code");
+  const runtimeLink = stateDir && path.join(stateDir, "runtime");
   const nodeEnv = { ...process.env, ...(mode ? { OPENCLAW_STATE_DIR: stateDir } : {}) };
   // Tools travel inside the verified full-node artifact and share its preparation identity.
   if (process.platform !== "win32") {
@@ -198,7 +224,7 @@ setPhase("preparation");
   // overlaps that with SSH readiness. Best effort: images without cron keep the cold start.
   // Only a Crabbox run on this lease edits the crontab; local executions (tests) never do.
   const installRuntimePrefetch = () => {
-    if (process.platform !== "linux" || process.env.CRABBOX_LEASE_ID !== leaseId) return;
+    if (!leaseId || process.platform !== "linux" || process.env.CRABBOX_LEASE_ID !== leaseId) return;
     try {
       const script = path.join(runtimeRoot, ".prefetch.sh");
       const nodeDir = path.dirname(path.dirname(fs.realpathSync(process.execPath)));
@@ -231,11 +257,11 @@ setPhase("preparation");
       if (result.error || result.status !== 0) throw subprocessError("Cloud worker state directory permissions could not be secured", result);
     }
   }
-  ${createCrabboxNodeProcessRuntime(desktopTarget, leaseId)}
+  ${leaseId === undefined ? "const desktopTarget = undefined;" : createCrabboxNodeProcessRuntime(desktopTarget, leaseId)}
   // Lease-private settings are never part of runtime-only preparation or its captured image.
   if (mode) stageWorkerCodex();
   if (desktopTarget === "macos") finishDesktopSetup();
-  if (reuseNodeProcess()) {
+  if (mode && reuseNodeProcess()) {
     if (desktopTarget !== "macos") finishDesktopSetup();
     setPhase("complete");
     return;
@@ -372,6 +398,7 @@ setPhase("preparation");
     let retainedAnyBytes = false;
     const partial = archive + ".partial";
     try {
+      ${CRABBOX_LOCAL_RUNTIME_ARCHIVE_SOURCE}
       origin = new URL(artifact.url).origin;
       for (;;) {
         try {
@@ -649,20 +676,24 @@ setPhase("preparation");
         "CRABBOX_NODE_ENROLLMENT_SCRIPT",
         "bootstrap",
       ),
-    forwardedEnv: {
-      ...(enrollment?.workerCodex
-        ? {
-            [CLOUD_WORKER_CODEX_ENV]: Buffer.from(JSON.stringify(enrollment.workerCodex)).toString(
-              "base64",
-            ),
-          }
-        : {}),
-      [CLOUD_BOOTSTRAP_TOKEN_ENV]: JSON.stringify({
-        nodeBootstrap: token,
-        workerBundle: params.workerBundle?.token,
-        installLock: installLock?.token,
-      }),
-      ...(enrollment?.mode === "connect" ? { [CLOUD_SETUP_CODE_ENV]: enrollment.setupCode } : {}),
-    },
+    forwardedEnv: params.offline
+      ? {}
+      : {
+          ...(enrollment?.workerCodex
+            ? {
+                [CLOUD_WORKER_CODEX_ENV]: Buffer.from(
+                  JSON.stringify(enrollment.workerCodex),
+                ).toString("base64"),
+              }
+            : {}),
+          [CLOUD_BOOTSTRAP_TOKEN_ENV]: JSON.stringify({
+            nodeBootstrap: token,
+            workerBundle: params.workerBundle?.token,
+            installLock: installLock?.token,
+          }),
+          ...(enrollment?.mode === "connect"
+            ? { [CLOUD_SETUP_CODE_ENV]: enrollment.setupCode }
+            : {}),
+        },
   };
 }
