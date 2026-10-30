@@ -99,6 +99,7 @@ import {
   registerNativeSubagentParent,
   type NativeParentRegistration,
 } from "./native-subagent-parent-owner.js";
+import { releaseSettledNativeParentThread } from "./native-subagent-parent-retention.js";
 import { matchesNativeAssignmentLifecycle } from "./native-subagent-pending-assignments.js";
 import {
   CodexNativeSubagentRecoveryCoordinator,
@@ -197,6 +198,7 @@ class Monitor {
       settleNestedCompletion: (state, child, assertCurrent) =>
         this.assignments.settleNestedCompletion(state, child, assertCurrent),
       releaseClientRetentionIfIdle: () => this.releaseClientRetentionIfIdle(),
+      parentThreadRetentions: this.parentThreadRetentions,
     });
     this.turnObservation = new CodexNativeSubagentTurnObservation({
       emitTaskEvent: (child, event) => this.admissionCustody.emitEvent(child, event),
@@ -2337,20 +2339,13 @@ class Monitor {
   }
 
   private releaseParentThreadIfChildrenSettled(parentThreadId: string): void {
-    for (const childState of this.childStates.values()) {
-      if (
-        childState.parentThreadId === parentThreadId &&
-        !childState.terminal &&
-        !childState.settledWithoutCompletion
-      ) {
-        return;
-      }
-    }
-    // Pending completion delivery keeps its own custody, but must not block
-    // the parent from resuming to receive those results.
-    const releaseParentThread = this.parentThreadRetentions.get(parentThreadId);
-    this.parentThreadRetentions.delete(parentThreadId);
-    releaseParentThread?.();
+    releaseSettledNativeParentThread({
+      parentThreadId,
+      children: this.childStates,
+      parents: this.parentStates,
+      retentions: this.parentThreadRetentions,
+      resumeDetached: (state) => this.completionDelivery.deliverDetached(state),
+    });
   }
 
   private hasChildrenForParent(parentThreadId: string): boolean {

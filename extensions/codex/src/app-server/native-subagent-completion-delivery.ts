@@ -10,6 +10,7 @@ import type {
   NativeSubagentMonitorRuntime,
   ParentState,
 } from "./native-subagent-monitor-types.js";
+import { holdsNativeParentThreadForSibling } from "./native-subagent-parent-retention.js";
 import { delayForAttempt } from "./native-subagent-retry.js";
 
 type CompletionDeliveryDependencies = {
@@ -25,6 +26,8 @@ type CompletionDeliveryDependencies = {
     assertCurrent: () => void,
   ) => Promise<boolean>;
   releaseClientRetentionIfIdle: () => void;
+  /** A retained parent thread refuses the release an announce turn needs. */
+  parentThreadRetentions: ReadonlyMap<string, () => void>;
 };
 
 const COMPLETION_DELIVERY_RETRY_DELAYS_MS = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
@@ -62,7 +65,7 @@ export class CodexNativeSubagentCompletionDelivery {
     if (childState.completionDeliveryTimer) {
       return;
     }
-    let deferredToForeground = false;
+    let deferredWithoutAttempt = false;
     try {
       if (childState.cancellationRequested) {
         // Stop settles owned processes before acknowledging cancellation or
@@ -94,8 +97,19 @@ export class CodexNativeSubagentCompletionDelivery {
       }
       // Foreground parents receive native completion input. Only wake a detached
       // parent after its last owner leaves; native receipts deduplicate both paths.
-      if (state.owners.size > 0 || !state.completionScope) {
-        deferredToForeground = state.owners.size > 0;
+      // A detached parent that a running sibling still protects cannot admit an
+      // announce either: the release it needs throws while protection is held, so
+      // hold the accepted result instead of spending the bounded retry budget on
+      // refusals that retire it undelivered. Settlement of the last sibling
+      // releases the protection and resumes delivery.
+      const siblingProtected = holdsNativeParentThreadForSibling(
+        this.dependencies.parentThreadRetentions,
+        this.dependencies.children,
+        state,
+        childState,
+      );
+      if (state.owners.size > 0 || !state.completionScope || siblingProtected) {
+        deferredWithoutAttempt = state.owners.size > 0 || siblingProtected;
         return;
       }
       const historyOwner = childState.historyOwner;
@@ -161,7 +175,7 @@ export class CodexNativeSubagentCompletionDelivery {
         error: message,
       });
     } finally {
-      if (!deferredToForeground) {
+      if (!deferredWithoutAttempt) {
         // Keep the root through the first handoff, including a foreground parent's
         // pending unregister. Once attempted, sleeping retries retain only delivery authority.
         childState.completionCustody?.settleExecution();

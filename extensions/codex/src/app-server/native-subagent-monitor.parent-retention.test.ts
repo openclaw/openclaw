@@ -1,6 +1,7 @@
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import {
   ensureCodexAppServerClientRuntime,
+  isCodexAppServerLiveThreadProtected,
   protectCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
@@ -123,6 +124,51 @@ it("keeps an interrupted assignment resumable without pinning its restored paren
   );
   await expect(releaseForResume()).resolves.toBe(true);
   expect(await store.readNativeSubagentAssignments?.(identity, historyOwner)).toHaveLength(1);
+  await continued.unregister();
+});
+
+it("holds a finished child's result while a running sibling protects the parent, then delivers it once", async () => {
+  vi.useFakeTimers();
+  const { client, runtime, monitor, releaseForResume } = await setupParentRetention(
+    "/tmp/codex-sibling-protected-delivery",
+  );
+  const delivered: string[] = [];
+  // An announce turn must release the protected parent first. Real core reports that
+  // refusal as a blocked recovery for the same source run, which retires the result.
+  runtime.deliverAgentHarnessCompletion.mockImplementation(async ({ result }) => {
+    if (isCodexAppServerLiveThreadProtected(client.client, "parent-thread")) {
+      return {
+        delivered: false,
+        path: "none",
+        recoveryBlocked: true,
+        error: "Codex thread parent-thread is claimed by active work; stop it first.",
+      };
+    }
+    delivered.push(result);
+    return { delivered: true, path: "direct" };
+  });
+  const parent = await registerParent(monitor);
+  await notifyChildStarted(client, "parent-thread", "child-a");
+  await notifyChildStarted(client, "parent-thread", "child-b");
+  await parent.unregister();
+
+  await client.notify(
+    nativeCompletionNotification({ agentPath: "child-a", result: "first result" }),
+  );
+  expect(isCodexAppServerLiveThreadProtected(client.client, "parent-thread")).toBe(true);
+  await expect(releaseForResume()).rejects.toThrow("claimed by active work; stop it first");
+  // Holding the accepted result must not attempt, charge, or retire it.
+  expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+  expect(delivered).toEqual([]);
+
+  await client.notify(
+    nativeCompletionNotification({ agentPath: "child-b", result: "second result" }),
+  );
+  await expect(releaseForResume()).resolves.toBe(true);
+  expect(delivered).toEqual(["first result", "second result"]);
+  expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(2);
+  const continued = await registerParent(monitor);
+  expect(continued.listPendingChildren()).toEqual([]);
   await continued.unregister();
 });
 
