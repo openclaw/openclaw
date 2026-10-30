@@ -52,6 +52,7 @@ export function addPluginGenerationMetrics(
   source: PluginGenerationMetrics,
 ): void {
   if (target) {
+    // SAFETY: These module-owned metrics records contain only the declared numeric fields.
     for (const key of Object.keys(source) as Array<keyof PluginGenerationMetrics>) {
       target[key] += source[key];
     }
