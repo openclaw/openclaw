@@ -355,6 +355,10 @@ end
 
 def with_screenshot_simulator(template = nil, watch_name: nil, diagnostics: nil)
   require_idle_screenshot_simulators!
+  # A deleted simulator can leave the host busy with first-launch work.
+  screenshot_phase(diagnostics, "headroom", device: watch_name || template.fetch("name")) do
+    sh("node", File.join(repo_root, "scripts", "lib", "ios-simulator-headroom.ts"))
+  end
   udid = screenshot_phase(diagnostics, "create", device: watch_name || template.fetch("name")) do
     if watch_name
       template, identifier = create_watch_screenshot_simulator(watch_name)
