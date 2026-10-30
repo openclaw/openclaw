@@ -455,3 +455,6 @@ it("windows a large catalog while keeping keyboard choices and accessible positi
   search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   expect(params.onModelSelect).toHaveBeenCalledWith("example/model-999", "main", undefined);
 });
+
+// Claimed for #188469 by scripts/claim-window.sh; replaced by the real regression.
+it.todo('Control UI model picker shows "All models (1)" instead of the single remaining model');
