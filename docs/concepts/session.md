@@ -18,6 +18,12 @@ configured model metadata while other sessions remain available. Native metadata
 is refreshed when that row is next invalidated; an unchanged list read does not
 retry it.
 
+Conversation branch listing (`sessions.branches.list`) has a ten-second request
+deadline, including access checks and cold-transcript restoration. If it expires,
+the Gateway returns a retryable `UNAVAILABLE` error instead of an empty branch
+list. Retry after database preparation finishes. Required integrity checks and
+already-admitted storage cleanup keep their own lifetimes.
+
 Reading a compressed transcript file allows at most its stored size plus 1 MiB of
 decompressed output. Archives exceeding that budget fail with a visible error and
 remain unchanged. This includes valid archives with larger expansion; export
