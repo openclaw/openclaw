@@ -33,6 +33,7 @@ it.runIf(process.platform === "linux").each([
 
 it("supplies the accepted artifact record without depending on the bundled module path", async () => {
   vi.resetModules();
+  mocks.inspect.mockClear();
   const { verifyInstalledCuaDriverArtifacts } = await import("./driver-artifacts.js");
   verifyInstalledCuaDriverArtifacts();
 
