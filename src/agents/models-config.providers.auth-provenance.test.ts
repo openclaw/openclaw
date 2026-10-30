@@ -964,3 +964,8 @@ describe("models-config catalog runtime headers", () => {
     );
   });
 });
+
+// Claimed for #188534 by scripts/claim-window.sh; replaced by the real regression.
+it.todo(
+  "Stale apiKey in agent models.json silently overrides newer auth profile; provider usage panel shows HTTP 401",
+);
