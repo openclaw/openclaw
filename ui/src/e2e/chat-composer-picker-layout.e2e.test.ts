@@ -3,6 +3,7 @@ import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { thinkingLevels } from "./chat-flow.test-support.ts";
+import { layoutBox } from "./chat-presentation.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -170,6 +171,8 @@ suite.define(() => {
               }),
             )
             .toBe(true);
+          await layoutBox(trigger);
+          // Mobile editing animates the footer after focus; resolve its current hit target.
           await trigger.click();
           await expect.poll(() => composer.locator(menuSelector).isVisible()).toBe(true);
           expect(await composer.locator(otherMenuSelector).isVisible()).toBe(false);

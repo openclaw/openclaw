@@ -95,7 +95,7 @@ it("refreshes active-node authority before projecting a prompt after external re
   expect(registry.listConnected()).toEqual([]);
 });
 
-describe("host stats checkpoints", () => {
+describe("host stats persistence", () => {
   const stats = { cpuCount: 8, memoryTotalBytes: 1_024, memoryFreeBytes: 512 };
   const pairingA = { pairingIdentity: "identity-a", pairingGeneration: "generation-a" };
 
@@ -123,53 +123,33 @@ describe("host stats checkpoints", () => {
     });
   }
 
-  it.each([
-    { label: "unchanged clock", receipt: 60_000, step: 0, later: false },
-    { label: "quiet node after rollback", receipt: 60_000, step: -56_000, later: false },
-    { label: "reporting node after rollback", receipt: 60_000, step: -56_000, later: true },
-    { label: "buffered receipt before rollback", receipt: 240_000, step: -120_000, later: false },
-    { label: "reporting node after forward step", receipt: 60_000, step: 30_000, later: true },
-  ])("checkpoints by monotonic receipt age ($label)", async ({ receipt, step, later }) => {
+  it("persists only the first of fifteen minutes of reports until shutdown", async () => {
     const { registry, persistHostStats, closeHostStats } = fixture();
-    const firstWrite = createDeferred<boolean>();
-    const secondWrite = createDeferred<boolean>();
-    persistHostStats
-      .mockImplementationOnce(() => firstWrite.promise)
-      .mockImplementationOnce(() => secondWrite.promise);
     report(registry);
-    const expected = (memoryFreeBytes: number, updatedAtMs: number) => ({
+    await vi.advanceTimersByTimeAsync(0);
+    expect(persistHostStats).toHaveBeenCalledExactlyOnceWith({
       nodeId: "node-1",
-      hostStats: { ...stats, memoryFreeBytes, updatedAtMs },
+      hostStats: { ...stats, updatedAtMs: 1_000 },
       expectedPairingGeneration: { nodeId: "node-1", key: "generation-a" },
     });
-    expect(persistHostStats).toHaveBeenCalledExactlyOnceWith(expected(512, 1_000));
-    await vi.advanceTimersByTimeAsync(receipt);
-    report(registry, 400);
-    firstWrite.resolve(true);
-    await vi.advanceTimersByTimeAsync(30_000);
-    vi.setSystemTime(Date.now() + step);
-    const savedReceipt = later ? receipt + 30_000 : receipt;
-    const savedEpoch = later ? Date.now() : receipt + 1_000;
-    if (later) {
-      report(registry, 300);
+    for (let minute = 1; minute <= 15; minute++) {
+      await vi.advanceTimersByTimeAsync(60_000);
+      report(registry, 512 - minute);
     }
-    await vi.advanceTimersByTimeAsync(300_000 - receipt - 30_000 - 1);
+    await vi.advanceTimersByTimeAsync(0);
     expect(persistHostStats).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(persistHostStats).toHaveBeenNthCalledWith(2, expected(later ? 300 : 400, savedEpoch));
-    await vi.advanceTimersByTimeAsync(30_000);
-    report(registry, 200);
-    const latestEpoch = Date.now();
-    secondWrite.resolve(true);
-    await vi.advanceTimersByTimeAsync(savedReceipt - 30_000 - 1);
-    expect(persistHostStats).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(persistHostStats).toHaveBeenNthCalledWith(3, expected(200, latestEpoch));
+    const latest = { ...stats, memoryFreeBytes: 497, updatedAtMs: 901_000 };
+    expect(registry.get("node-1")?.hostStats).toEqual(latest);
     await closeHostStats();
-    expect(persistHostStats).toHaveBeenCalledTimes(3);
+    expect(persistHostStats).toHaveBeenCalledTimes(2);
+    expect(persistHostStats).toHaveBeenLastCalledWith({
+      nodeId: "node-1",
+      hostStats: latest,
+      expectedPairingGeneration: { nodeId: "node-1", key: "generation-a" },
+    });
   });
 
-  it("logs a failed checkpoint without retrying it on another node's timer", async () => {
+  it("logs a failed first save and retries on a later report", async () => {
     const { registry, persistHostStats, closeHostStats } = fixture();
     const capture = createDiagnosticLogRecordCapture();
     setLoggerOverride({
@@ -177,38 +157,28 @@ describe("host stats checkpoints", () => {
       consoleLevel: "silent",
       file: path.join(resolvePreferredOpenClawTmpDir(), `node-host-stats-${process.pid}.log`),
     });
-    persistHostStats.mockRejectedValueOnce(new Error("fixture checkpoint failure"));
+    persistHostStats.mockRejectedValueOnce(new Error("fixture persistence failure"));
     try {
       report(registry);
       await vi.advanceTimersByTimeAsync(0);
-      registerNodeSession(registry, makeClient("conn-2", "node-2"), pairingA);
-      report(registry, 512, "node-2", "conn-2");
-      await vi.advanceTimersByTimeAsync(60_000);
-      report(registry, 400, "node-2", "conn-2");
-      await vi.advanceTimersByTimeAsync(540_000);
-      expect(persistHostStats.mock.calls.map(([params]) => params.nodeId)).toEqual([
-        "node-1",
-        "node-2",
-        "node-2",
-      ]);
       await capture.flush();
       expect(capture.records).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            message: expect.stringContaining("fixture checkpoint failure"),
+            message: expect.stringContaining("fixture persistence failure"),
           }),
         ]),
       );
-
       report(registry, 300);
       await vi.advanceTimersByTimeAsync(0);
+      expect(persistHostStats).toHaveBeenCalledTimes(2);
       expect(persistHostStats).toHaveBeenLastCalledWith({
         nodeId: "node-1",
-        hostStats: { ...stats, memoryFreeBytes: 300, updatedAtMs: 601_000 },
+        hostStats: { ...stats, memoryFreeBytes: 300, updatedAtMs: 1_000 },
         expectedPairingGeneration: { nodeId: "node-1", key: "generation-a" },
       });
-      expect(persistHostStats).toHaveBeenCalledTimes(4);
       await closeHostStats();
+      expect(persistHostStats).toHaveBeenCalledTimes(2);
     } finally {
       capture.cleanup();
       setLoggerOverride(null);
