@@ -50,6 +50,7 @@
               "cacheWrite": 0
             },
             "compat": {
+              "requiresReasoningContentOnAssistantMessages": true,
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
               "maxTokensField": "max_tokens",
@@ -72,6 +73,7 @@
               "cacheWrite": 0
             },
             "compat": {
+              "requiresReasoningContentOnAssistantMessages": true,
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
               "maxTokensField": "max_tokens",
@@ -94,6 +96,7 @@
               "cacheWrite": 0
             },
             "compat": {
+              "requiresReasoningContentOnAssistantMessages": true,
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
               "maxTokensField": "max_tokens",
@@ -116,6 +119,7 @@
               "cacheWrite": 0
             },
             "compat": {
+              "requiresReasoningContentOnAssistantMessages": true,
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
               "maxTokensField": "max_tokens",
