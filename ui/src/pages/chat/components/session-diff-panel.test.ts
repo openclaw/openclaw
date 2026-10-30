@@ -139,7 +139,7 @@ describe("SessionDiffPanel", () => {
       setNativeGatewayTestState(null);
       setupDesktopResizeObserver();
       const { panel, update } = mountPanel();
-      const paths = ["first.ts", "second.ts"].map((name) => `${directory}/${name}`);
+      const paths = ["first.ts", "Cafe\u0301.ts"].map((name) => `${directory}/${name}`);
       update({ mobile: false, loader: async () => namedFileResult(paths) });
       await waitForSolid(() =>
         expect(panel.querySelectorAll(".session-diff__file")).toHaveLength(2),
@@ -160,7 +160,7 @@ describe("SessionDiffPanel", () => {
       panel.querySelector<HTMLButtonElement>('button[aria-label="Search changed files"]')!.click();
       flush();
       const search = panel.querySelector<HTMLInputElement>('input[type="search"]')!;
-      search.value = "second";
+      search.value = "CAFÉ";
       search.dispatchEvent(new Event("input", { bubbles: true }));
       await waitForSolid(() => {
         expect(folder.getAttribute("aria-expanded")).toBe("true");
@@ -168,25 +168,6 @@ describe("SessionDiffPanel", () => {
       });
     },
   );
-
-  it("matches an NFC search against an NFD changed-file path", async () => {
-    setNativeGatewayTestState(null);
-    setupDesktopResizeObserver();
-    const { panel, update } = mountPanel();
-    // NFC "ü" is U+00FC; NFD is "u" + combining diaeresis U+0308.
-    const nfdPath = "src/Mu\u0308ller.ts";
-    update({ mobile: false, loader: async () => namedFileResult([nfdPath]) });
-    await settlePanel(panel);
-    panel.querySelector<HTMLButtonElement>('button[aria-label="Changed files tree"]')!.click();
-    panel.querySelector<HTMLButtonElement>('button[aria-label="Search changed files"]')!.click();
-    flush();
-    const search = panel.querySelector<HTMLInputElement>('input[type="search"]')!;
-    search.value = "M\u00fcller";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-    await waitForSolid(() =>
-      expect(panel.querySelector(`.session-diff__tree-row[title="${nfdPath}"]`)).not.toBeNull(),
-    );
-  });
 
   it.each([
     { saved: { split: true, wrap: false }, mode: "split", split: true },

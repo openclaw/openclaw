@@ -34,6 +34,7 @@ import {
   renderCapabilityMenuState,
   renderCapabilityToggleRow,
   menuDivider,
+  menuSection,
 } from "./chat-composer-menu-rows.tsx";
 import { connectorItems } from "./chat-composer-plugins-menu.tsx";
 import type {
