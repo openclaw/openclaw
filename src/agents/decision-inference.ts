@@ -34,7 +34,6 @@ import { applyLocalNoAuthHeaders } from "./model-auth-markers.js";
 import { resolveApiKeyForProviderCore } from "./model-auth-provider.js";
 import { isProviderAuthError, type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 import { applyAuthHeaderOverride, applySecretRefHeaderSentinels } from "./model-auth.js";
-import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { withPreparedModelInference } from "./prepared-model-inference.js";
