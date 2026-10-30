@@ -1,2 +1,2 @@
-5
-# Register Darwin proof in the shared supersession and passive-draft regression.
+28
+# Cover Darwin supersession and the shared workflow shell's pipe-backed redirection.

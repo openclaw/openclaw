@@ -270,9 +270,7 @@ function runCiGateFixture(jobResults: string, env: Record<string, string> = {}) 
     readCiWorkflow().jobs["ci-gate"].steps,
     "Verify selected CI lanes",
   );
-  // Homebrew Bash 5.3 can block writing this here-string before its reader starts.
-  const bash = process.platform === "darwin" ? "/bin/bash" : "bash";
-  return runWorkflowCommand(bash, ["-c", gateStep.run], {
+  return runWorkflowCommand("bash", ["-c", gateStep.run], {
     env: {
       ...process.env,
       JOB_RESULTS: jobResults,
@@ -375,9 +373,7 @@ function runPreflightNodeInvocation(
     '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$OPENCLAW_NODE_ARGS"\ncat >/dev/null\n',
   );
   chmodSync(nodePath, 0o755);
-  // Avoid Darwin Bash 5.3 heredoc deadlocks while preserving the PATH node spy.
-  const bash = process.platform === "darwin" ? "/bin/bash" : "bash";
-  const result = runWorkflowCommand(bash, ["-c", script], {
+  const result = runWorkflowCommand("bash", ["-c", script], {
     env: {
       ...process.env,
       GITHUB_EVENT_NAME: options.eventName,
