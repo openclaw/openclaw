@@ -341,7 +341,7 @@ export function createQaDockerRuntime(params: {
       let response: QaDockerFetchResponse | undefined;
       const requestTimeoutMs = Math.max(
         1,
-        Math.min(DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS, remainingMs),
+        Math.min(DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS, Math.floor(remainingMs)),
       );
       const requestSignal = AbortSignal.timeout(requestTimeoutMs);
       try {
