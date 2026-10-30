@@ -300,9 +300,9 @@ describe("createChildAdapter", () => {
         if (observation === "event") {
           emitExit(0);
         } else if (observation === "exitCode") {
-          child.exitCode = 0;
+          Object.defineProperty(child, "exitCode", { value: 0 });
         } else {
-          child.signalCode = "SIGTERM";
+          Object.defineProperty(child, "signalCode", { value: "SIGTERM" });
         }
         adapter.kill("SIGKILL");
         expect(signalMock).toHaveBeenCalledExactlyOnceWith(
