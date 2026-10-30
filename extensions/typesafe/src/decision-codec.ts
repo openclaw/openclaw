@@ -12,9 +12,7 @@ import {
 import type { Evaluation, EvaluationInput } from "./schema-definition.js";
 import type { ImageAssets } from "./schema.js";
 
-export function encodeTypeSafeDecisionQuestions(
-  batch: DecisionBatch,
-): EvaluationInput["questions"] {
+export function encodeTypeSafeDecisionQuestions(batch: DecisionBatch) {
   return Object.fromEntries(
     Object.entries(batch.questions).map(([id, q]) => [
       id,
