@@ -466,10 +466,10 @@ try {
     };
     try {
       for (let index = 0; index < 4; index++) {
-        enqueue({ method: "models.list" }, `held-${index}`, held.promise);
+        void enqueue({ method: "models.list" }, `held-${index}`, held.promise);
       }
       await Promise.all(starts);
-      enqueue(
+      void enqueue(
         { method: "sessions.messages.subscribe", params: { includeApprovals: true } },
         "catalog-client",
         Promise.resolve(),
