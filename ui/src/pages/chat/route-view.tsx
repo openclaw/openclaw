@@ -117,9 +117,10 @@ export function ChatRouteView(props: { data?: unknown; presented?: boolean }) {
   return (
     <Show when={routeData() && !session() && bootComposerElement()} fallback={renderRoute()}>
       {/* A terminal route result has no chat pane to take the early input. */}
-      <div class="lazy-view-state lazy-view-state--route" data-chat="">
+      <div class="lazy-view-state lazy-view-state--loading lazy-view-state--route" data-chat="">
         <LoadingSkeleton
           composer
+          header={false}
           renderContent={() => (
             <>
               {renderRoute()}

@@ -20,12 +20,13 @@ export function LoadingSkeleton(
   props: {
     messagesOnly?: boolean;
     composer?: boolean;
+    header?: boolean;
     renderContent?: () => SolidJSX.Element;
   } = {},
 ) {
   return (
     <div class="loading-skeleton">
-      <Show when={!props.messagesOnly}>
+      <Show when={!props.messagesOnly && props.header !== false}>
         <div class="loading-skeleton__header" aria-hidden="true">
           <div class="skeleton loading-skeleton__avatar" />
           <div class="skeleton skeleton-line loading-skeleton__title" />
