@@ -174,7 +174,7 @@ it.each([
   ["promised", 1],
   ["promised-retry", 2],
   ["unpromised", 0],
-  ["checksum", 0],
+  ["checksum", 1],
   ["byte-limited", 1],
   ["index-limited", 1],
 ] as const)(
