@@ -89,6 +89,23 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
     (previous) => previous === true || Boolean(props.mobileHost),
   );
   const mobileVisible = () => Boolean(props.mobileHost?.open && !props.mobileHost.suspended);
+  // Direction of the latest in-sheet navigation: deeper pushes, shallower pops.
+  const mobileNavigation = createMemo<{ depth: number; motion?: "forward" | "back" } | undefined>(
+    (previous) => {
+      const destination = props.mobileHost?.destination;
+      if (!destination || !mobileVisible()) {
+        return undefined;
+      }
+      let depth = destination.page ? 1 : 0;
+      for (let entry = destination.backTo; entry; entry = entry.backTo) {
+        depth += 1;
+      }
+      if (!previous || depth === previous.depth) {
+        return { depth };
+      }
+      return { depth, motion: depth > previous.depth ? "forward" : "back" };
+    },
+  );
   const panelsVisible = () => props.mobileHost?.destination.area === "panels";
   const detailsChild = () => Boolean(props.mobileHost?.destination.page);
   const column = () => props.layout.columns[0];
@@ -302,6 +319,7 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
         data-mode={props.mobileHost?.mode}
         data-presentation={props.mobileHost?.destination.page?.presentation}
         data-mobile-page={props.mobileHost?.destination.page?.key}
+        data-mobile-motion={mobileNavigation()?.motion}
         hidden={Boolean(props.mobileHost) && !mobileVisible()}
         inert={Boolean(props.mobileHost) && !mobileVisible()}
         aria-label={props.mobileHost ? t("chat.sessionHeader.panels") : undefined}

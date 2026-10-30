@@ -61,8 +61,9 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   transform: translateX(-100%);
   opacity: 0;
   pointer-events: none;
+  /* The drawer slides on the sheet spring; opacity only softens its leading edge. */
   transition:
-    transform 160ms cubic-bezier(0.32, 0.72, 0, 1),
+    transform var(--motion-spring-sheet-duration) var(--motion-spring-sheet),
     opacity 100ms ease-out;
 }
 
@@ -86,8 +87,8 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   background: rgb(0 0 0 / 44%);
   opacity: 0;
   transition:
-    opacity 160ms cubic-bezier(0.32, 0.72, 0, 1),
-    visibility 0s linear 160ms;
+    opacity var(--motion-spring-sheet-duration) var(--motion-spring-sheet),
+    visibility 0s linear var(--motion-spring-sheet-duration);
   touch-action: none;
 }
 
@@ -96,7 +97,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   visibility: visible;
   opacity: 1;
   transition:
-    opacity 200ms cubic-bezier(0.32, 0.72, 0, 1),
+    opacity var(--motion-spring-sheet-duration) var(--motion-spring-sheet),
     visibility 0s;
 }
 
@@ -105,7 +106,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   transform: translateX(0);
   opacity: 1;
   pointer-events: auto;
-  transition-duration: 200ms, 140ms;
+  transition-duration: var(--motion-spring-sheet-duration), 140ms;
 }
 
 @media (prefers-reduced-motion: reduce) {

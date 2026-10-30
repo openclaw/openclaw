@@ -368,6 +368,40 @@
   --duration-fast: 100ms;
   --duration-normal: 180ms;
   --duration-slow: 300ms;
+  /* Sheet spring sampled from ui/src/lib/motion/spring.ts: SwiftUI duration/bounce model,
+     0.3 s, no bounce, fitted to the iOS sheet curve. The duration includes the settle
+     tail; spring.test.ts keeps both values in sync with the solver. */
+  --motion-spring-sheet: linear(
+    0,
+    0.0467,
+    0.1503,
+    0.2739,
+    0.3972,
+    0.51,
+    0.608,
+    0.6904,
+    0.7579,
+    0.8123,
+    0.8555,
+    0.8894,
+    0.9158,
+    0.9362,
+    0.9518,
+    0.9638,
+    0.9728,
+    0.9797,
+    0.9848,
+    0.9887,
+    0.9916,
+    0.9938,
+    0.9954,
+    0.9966,
+    0.9975,
+    0.9982,
+    0.9986,
+    1
+  );
+  --motion-spring-sheet-duration: 441ms;
   --cursor-action: default;
   --safe-area-top: env(safe-area-inset-top, 0px);
   --safe-area-right: env(safe-area-inset-right, 0px);
