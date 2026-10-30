@@ -36,6 +36,26 @@ function classify(config: OpenClawConfig, native = true) {
   );
 }
 describe("native context management tuning", () => {
+  it.each([true, false])(
+    "keeps the OpenAI-only Flex runtime flag %s out of native provider params",
+    (value) => {
+      const config = configuration("model", { flexProcessing: value });
+      expect(classify(config)).toBe(false);
+      expect(
+        hasAuthoredProviderRequestParams({
+          provider: "custom",
+          modelId: "fixture-model",
+          config: {
+            agents: {
+              defaults: {
+                models: { "custom/fixture-model": { params: { flexProcessing: value } } },
+              },
+            },
+          },
+        }),
+      ).toBe(true);
+    },
+  );
   it.each(sources)(
     "tolerates only compaction in %s parameters without changing shared config",
     (source) => {

@@ -21,6 +21,7 @@ import { SESSION_WATCHDOG_WARNING_MS } from "../../../sessions/session-controlle
 import type { SessionControllerWatchdogAttempt } from "../../../sessions/session-controller.watchdog.js";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
 import { getLastToolActivityMs, onToolActivity } from "../../../shared/tool-activity-heartbeat.js";
+import { FLEX_PROCESSING_LLM_TIMEOUT_MS } from "../../flex-processing.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
@@ -120,8 +121,10 @@ function hasLocalProviderAuthMarker(apiKey: unknown): boolean {
 
 type LlmTimeoutParams = {
   cfg?: OpenClawConfig;
+  trigger?: EmbeddedRunTrigger;
   runTimeoutMs?: number;
   modelRequestTimeoutMs?: number;
+  flexProcessing?: boolean;
   model?: { baseUrl?: string; id?: string; provider?: string };
 };
 
@@ -172,13 +175,24 @@ function resolveLlmTimeoutBounds(params?: LlmTimeoutParams) {
 
 const clampTimeoutMs = (valueMs: number) => clampTimerTimeoutMs(valueMs) ?? 1;
 
-function resolveLlmTimeoutMs(
-  phase: "idle" | "first-event",
-  params?: LlmTimeoutParams & { trigger?: EmbeddedRunTrigger },
-): number {
+function resolveLlmTimeoutMs(phase: "idle" | "first-event", params?: LlmTimeoutParams): number {
   const { boundedRunTimeoutMs, agentTimeoutMs, timeoutBounds } = resolveLlmTimeoutBounds(params);
   const { isLocalRuntimeModel, isSelfHostedRuntimeModel } = resolveRuntimeModelLocality(params);
   const modelRequestTimeoutMs = asPositiveFiniteNumber(params?.modelRequestTimeoutMs);
+  if (params?.flexProcessing) {
+    // The caller gates Flex on the effective request. Extend liveness without
+    // overriding shorter operator budgets or cron's cloud fallback opportunity.
+    const cloudCron =
+      params.trigger === "cron" && !isLocalRuntimeModel && !isSelfHostedRuntimeModel;
+    return clampTimeoutMs(
+      Math.min(
+        FLEX_PROCESSING_LLM_TIMEOUT_MS,
+        modelRequestTimeoutMs ?? Infinity,
+        cloudCron ? CRON_LLM_IDLE_TIMEOUT_MS : Infinity,
+        ...timeoutBounds,
+      ),
+    );
+  }
   // Provider opt-ins can exceed class defaults, while finite run/agent budgets still win.
   // An unlimited run does not disable this independent request-liveness budget.
   if (modelRequestTimeoutMs !== undefined) {
@@ -210,9 +224,7 @@ function resolveLlmTimeoutMs(
   );
 }
 
-export function resolveLlmIdleTimeoutMs(
-  params?: LlmTimeoutParams & { trigger?: EmbeddedRunTrigger },
-): number {
+export function resolveLlmIdleTimeoutMs(params?: LlmTimeoutParams): number {
   return resolveLlmTimeoutMs("idle", params);
 }
 

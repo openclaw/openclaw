@@ -31,6 +31,28 @@ it.each(["serviceTier", "service_tier"])("keeps %s inherited until a speed is se
 });
 
 it.each([
+  ["openai", true, undefined, undefined],
+  ["openai", false, undefined, false],
+  ["openai", "true", undefined, false],
+  ["openai", true, false, false],
+  ["anthropic", true, undefined, false],
+] as const)(
+  "scopes implicit Flex speed to %s opt-in=%s with agent override=%s",
+  (provider, flexProcessing, agentOverride, requestMode) => {
+    const cfg = modelConfig({ flexProcessing }, `${provider}/speed-fixture`);
+    if (agentOverride !== undefined) {
+      cfg.agents = {
+        ...cfg.agents,
+        entries: { main: { params: { flexProcessing: agentOverride } } },
+      };
+    }
+    expect(resolve({ cfg, provider, model: "speed-fixture", agentId: "main" }).requestMode).toBe(
+      requestMode,
+    );
+  },
+);
+
+it.each([
   [true, false, "auto", undefined, true, "session"],
   ["auto", undefined, undefined, undefined, "auto", "session"],
   ["ultrafast", undefined, undefined, undefined, "ultrafast", "session"],

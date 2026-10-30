@@ -26,7 +26,7 @@ export type { FastModeAutoProgressState } from "../shared/fast-mode.js";
 // default. Callers keep the source for diagnostics and prompt explanations.
 type FastModeState = {
   mode: FastMode;
-  /** Undefined preserves an inherited provider tier instead of manufacturing Standard. */
+  /** Undefined leaves inherited or automatic provider tiers to the transport. */
   requestMode: FastMode | undefined;
   enabled: boolean;
   source: FastModeSource;
@@ -79,7 +79,13 @@ export function resolveFastModeState(params: {
           ),
         )
       : undefined;
-  const requestMode = mode ?? (tier ? undefined : false);
+  const flexProcessing =
+    params.provider === "openai" &&
+    resolveAliasedParamValue(
+      [defaultParams, modelParams, agentModelParams, agentParams],
+      ["flexProcessing"],
+    ) === true;
+  const requestMode = mode ?? (tier || flexProcessing ? undefined : false);
   if (mode === undefined && tier) {
     mode = tier === "ultrafast" ? "ultrafast" : tier === "priority";
     source = "config";

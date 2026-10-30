@@ -10,8 +10,12 @@ import { streamSimple } from "../llm/stream.js";
 import type { Model } from "../llm/types.js";
 import { buildProviderStreamFamilyHooks } from "../plugin-sdk/provider-stream.js";
 import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
-import { applyExtraParamsToAgent } from "./embedded-agent-runner/extra-params.js";
+import {
+  applyExtraParamsToAgent,
+  resolveExtraParams,
+} from "./embedded-agent-runner/extra-params.js";
 import { resolveFastModeState } from "./fast-mode.js";
+import { prepareFlexProcessingParams } from "./flex-processing.js";
 import type { StreamFn } from "./runtime/index.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
@@ -110,6 +114,30 @@ async function checkSpeeds(cfg: OpenClawConfig, inherited?: string, key?: string
 }
 
 describe("fast-mode request assembly", () => {
+  it("lets automatic Flex reach the request while honoring explicit session speeds", async () => {
+    const cfg = config({ models: models({ flexProcessing: true }) });
+    for (const [fastMode, tier] of [[undefined, "flex"], ...selections] as const) {
+      const requestMode = resolveFastModeState({
+        cfg,
+        provider: model.provider,
+        model: model.id,
+        sessionEntry: { fastMode },
+      }).requestMode;
+      const prepared = prepareFlexProcessingParams({
+        model,
+        thinkingLevel: "high",
+        extraParams: {
+          ...resolveExtraParams({ cfg, provider: model.provider, modelId: model.id }),
+          fastMode: requestMode,
+        },
+      });
+      expect(await captureRequest(cfg, undefined, prepared.extraParams, true)).toMatchObject({
+        service_tier: tier,
+      });
+      expect(prepared.isFlexProcessing()).toBe(fastMode === undefined);
+    }
+  });
+
   it.each(["serviceTier", "service_tier"])(
     "inherits %s without pinning it and honors session selections",
     async (key) => {

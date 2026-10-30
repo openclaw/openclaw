@@ -385,6 +385,8 @@ export type EmbeddedRunAttemptResult = {
   providerRequestTimeoutExplicit?: boolean;
   /** Saved retry.provider.maxRetryDelayMs from the same owner; 0 disables the cap. */
   providerRetryMaxDelayMs?: number;
+  /** Flex policy selected by the prepared transport, including request speed overrides. */
+  providerFlexProcessing?: boolean;
   messagesSnapshot: AgentMessage[];
   pluginRuntimeRefreshMessages?: AgentMessage[];
   /** Owner-eligible settled finalization, with frozen evidence or an unavailable projection. */

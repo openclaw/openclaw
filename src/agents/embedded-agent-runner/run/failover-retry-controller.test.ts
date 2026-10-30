@@ -195,21 +195,27 @@ it("waits for the provider floor before exhausting recovery and rotating credent
   expect(advance).toHaveBeenCalledTimes(1);
 });
 
-it.each([-90_000, 0, 90_000])(
-  "bounds shared TPM recovery across a %sms wall-clock step by retries and elapsed waiting",
-  async (wallStepMs) => {
+it.each(
+  [-90_000, 0, 90_000].flatMap((wallStepMs) =>
+    [false, true].map((flexProcessing) => ({ wallStepMs, flexProcessing })),
+  ),
+)(
+  "bounds shared TPM recovery across $wallStepMs clock step (Flex=$flexProcessing)",
+  async ({ wallStepMs, flexProcessing }) => {
     const advanceTime = clock();
     vi.spyOn(Math, "random").mockReturnValue(0.5);
     sleep.mockImplementation(async (delayMs) => advanceTime(delayMs));
     const advance = vi.fn(async () => true);
     controller = createRetryController({
       fallbackConfigured: true,
+      runParams: { timeoutMs: 20 * 60_000 },
       runtime: { advanceAttemptAuthProfile: advance },
     });
     const retry = {
       reason: "rate_limit" as const,
       message: "429 Rate limit reached in organization org-example on tokens per min (TPM).",
       retryAfterMs: 48,
+      flexProcessing,
     };
     await checkRetry(retry);
     advanceTime(0, wallStepMs);
@@ -219,9 +225,9 @@ it.each([-90_000, 0, 90_000])(
     await expect(rotate()).resolves.toBe(false);
     expect(advance).not.toHaveBeenCalled();
     expect(sleep.mock.calls.map(([delay]) => delay)).toEqual([1_000, 2_000]);
-    // A later attempt that cannot safely switch models retains ordinary recovery.
+    // A later attempt that cannot safely switch models keeps its full same-model recovery.
     await checkRetry({ ...retry, failoverEligible: false });
-    expect(sleep).toHaveBeenLastCalledWith(4_000, undefined);
+    expect(sleep).toHaveBeenLastCalledWith(flexProcessing ? 240_000 : 4_000, undefined);
 
     controller.observeAttempt({ hasSuccessfulModelResponse: true });
     await checkRetry({ ...retry, retryAfterMs: 10_000 });
@@ -229,6 +235,122 @@ it.each([-90_000, 0, 90_000])(
     expect(sleep).toHaveBeenCalledTimes(4);
   },
 );
+
+it("backs off Flex resource unavailability and mixed transient failures in minutes", async () => {
+  const advanceTime = clock();
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+  sleep.mockImplementation(async (delayMs) => advanceTime(delayMs));
+  for (const reason of ["rate_limit", "overloaded", "server_error", "timeout"] as const) {
+    await checkRetry({
+      reason,
+      message: "429 Resource unavailable",
+      flexProcessing: true,
+      retryAfterMs: reason === "rate_limit" ? 90_000 : undefined,
+      onRetry,
+    });
+  }
+  await checkRetry({ reason: "rate_limit", flexProcessing: true }, false);
+  expect(sleep.mock.calls.map(([delay]) => delay)).toEqual([90_000, 120_000, 240_000, 480_000]);
+  expect(controller.transientRetryCount).toBe(4);
+  expect(onRetry.mock.calls.map(([status]) => [status.attempt, status.maxRetries])).toEqual([
+    [1, 4],
+    [2, 4],
+    [3, 4],
+    [4, 4],
+  ]);
+});
+
+it.each(["rate_limit", "timeout"] as const)(
+  "bounds Flex %s recovery by elapsed failed-request time without truncating backoff",
+  async (reason) => {
+    const advanceTime = clock();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    sleep.mockImplementation(async (delayMs) => advanceTime(delayMs));
+    await checkRetry({ reason, flexProcessing: true });
+    advanceTime(1_720_000);
+    await checkRetry({ reason, flexProcessing: true, onRetry }, false);
+    expect(sleep.mock.calls.map(([delay]) => delay)).toEqual([60_000]);
+    expect(onRetry).not.toHaveBeenCalled();
+    expect(controller.transientRetryCount).toBe(1);
+  },
+);
+
+it("does not wait beyond the Flex window for a provider Retry-After floor", async () => {
+  clock();
+  await checkRetry({ reason: "rate_limit", flexProcessing: true, retryAfterMs: 1_800_001 }, false);
+  expectNoRetry();
+});
+
+it.each([0, 2, 5])("honors saved maxRetries=%s for Flex", async (maxRetries) => {
+  const advanceTime = clock();
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+  sleep.mockImplementation(async (delayMs) => advanceTime(delayMs));
+  controller.observeAttempt({ providerRetryMaxRetries: maxRetries });
+  for (let retry = 0; retry < maxRetries; retry += 1) {
+    await checkRetry({ reason: "rate_limit", flexProcessing: true, onRetry });
+  }
+  await checkRetry({ reason: "rate_limit", flexProcessing: true }, false);
+  expect(controller.transientRetryCount).toBe(maxRetries);
+  expect(sleep.mock.calls.map(([delay]) => delay)).toEqual(
+    [60_000, 120_000, 240_000, 480_000, 600_000].slice(0, maxRetries),
+  );
+});
+
+it("preserves the saved provider-floor cap for replay-safe Flex fallback", async () => {
+  controller = createRetryController({ fallbackConfigured: true });
+  await checkRetry(
+    { reason: "rate_limit", flexProcessing: true, retryAfterMs: 120_000, maxRetryDelayMs: 90_000 },
+    false,
+  );
+  expectNoRetry();
+  await checkRetry({
+    reason: "rate_limit",
+    flexProcessing: true,
+    retryAfterMs: 120_000,
+    maxRetryDelayMs: 90_000,
+    failoverEligible: false,
+  });
+  expect(sleep).toHaveBeenCalledExactlyOnceWith(120_000, undefined);
+});
+
+it.each([
+  { reason: "auth", message: "Invalid API key" },
+  { reason: "billing", message: "insufficient_quota" },
+  { reason: "rate_limit", message: "429 daily request limit reached" },
+] as const)("does not retry permanent Flex failure $reason", async (retry) => {
+  await checkRetry({ ...retry, flexProcessing: true, onRetry }, false);
+  expectNoRetry();
+});
+
+it("keeps output-limit continuation separate from Flex backoff", async () => {
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+  await checkRetry({ reason: "output_limit", flexProcessing: true, onRetry });
+  await checkRetry({ reason: "output_limit", flexProcessing: true }, false);
+  expect(sleep).toHaveBeenCalledExactlyOnceWith(1_000, undefined);
+  expect(onRetry).toHaveBeenCalledWith(
+    expect.objectContaining({ attempt: 1, maxRetries: 1, delayMs: 1_000 }),
+  );
+});
+
+it("cancels a minute-long Flex wait without admitting another attempt", async () => {
+  await useRealSleep();
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+  const cancellation = new AbortController();
+  const closeRetryWait = vi.fn();
+  controller = createRetryController({
+    runParams: { abortSignal: cancellation.signal, onRetryWait: () => closeRetryWait },
+  });
+  const pending = controller.maybeRetryTransient({ reason: "timeout", flexProcessing: true });
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(controller.transientRetryCount).toBe(0);
+  const reason = new Error("Operator stopped Flex recovery");
+  const rejected = expect(pending).rejects.toBe(reason);
+  cancellation.abort(reason);
+  await rejected;
+  expect(controller.transientRetryCount).toBe(0);
+  expect(closeRetryWait).toHaveBeenCalledExactlyOnceWith(false);
+  expect(vi.getTimerCount()).toBe(0);
+});
 
 it.each([
   ["fallback", undefined, 30_000, "rate_limit", 9_897_000, false],

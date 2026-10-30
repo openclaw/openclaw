@@ -235,7 +235,7 @@ function collectCodexModelParamHits(
     ];
     for (const source of paramSources) {
       for (const [key, paramValue] of Object.entries(source.params ?? {})) {
-        if (source.modelScoped && isAgentRuntimeModelParam(key, paramValue)) {
+        if (source.modelScoped && isAgentRuntimeModelParam(key, paramValue, "openai")) {
           continue;
         }
         const path = `${source.path}.${key}`;

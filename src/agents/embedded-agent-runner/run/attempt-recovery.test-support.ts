@@ -51,6 +51,9 @@ export const outputLimitScenarios = [
 ];
 
 export type TransportDropScenario = {
+  attempt?: EmbeddedRunAttemptWithReceiptEvidence;
+  sessionPromptState?: Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
+  failoverRetryController?: ReturnType<typeof createEmbeddedRunFailoverRetryController>;
   continueFromCurrentTranscript?: Awaited<
     ReturnType<typeof createEmbeddedRunSessionPromptState>
   >["continueFromCurrentTranscript"];
@@ -112,6 +115,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
   });
   const erroredAssistant =
     scenario.assistant ??
+    scenario.attempt?.currentAttemptAssistant ??
     buildEmbeddedRunnerAssistant({
       stopReason: scenario.terminal?.kind === "timeout" ? "aborted" : "error",
       errorMessage:
@@ -189,7 +193,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
       : {}),
   });
   rawAttempt.answerSegments = scenario.answerSegments;
-  const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
+  const attempt = normalizeEmbeddedRunAttemptResult(scenario.attempt ?? rawAttempt);
   const terminalState = resolveEmbeddedRunAttemptTerminalState({
     attempt,
     assistant: erroredAssistant,
@@ -197,7 +201,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
   const markOwnedTranscriptRetry = vi.fn();
   const continueFromCurrentTranscript = vi.fn(scenario.continueFromCurrentTranscript);
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
-  const failoverRetryController = createEmbeddedRunFailoverRetryController({
+  const defaultFailoverRetryController = createEmbeddedRunFailoverRetryController({
     runInput: {
       runParams: {
         runId: "run:transport-drop",
@@ -223,6 +227,8 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
     },
     getSessionId: () => "session:transport-drop",
   });
+  const failoverRetryController =
+    scenario.failoverRetryController ?? defaultFailoverRetryController;
   if (scenario.retryAvailable === false) {
     failoverRetryController.observeAttempt({ providerRetryMaxRetries: 0 });
   }
@@ -285,7 +291,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
         canRestartForLiveSwitch: false,
       },
       runtimePlan: { auth: {} },
-      sessionPromptState: {
+      sessionPromptState: scenario.sessionPromptState ?? {
         sessionFile: "/tmp/session.jsonl",
         withSessionWriterContext: (run: () => Promise<unknown>) => run(),
         recordOutputLimitNotice: vi.fn(async () => {}),
