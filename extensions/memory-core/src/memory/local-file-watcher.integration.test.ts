@@ -23,6 +23,68 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (original) => {
   };
 });
 
+it("watches a newly eligible report when an agent without exclusions joins", async ({ signal }) => {
+  const state = await createOpenClawTestState({ label: "local-memory-exclusion-join" });
+  const owners: LocalMemoryFileWatcher[] = [];
+  const baseline = createDeferred<void>();
+  const edited = createDeferred<void>();
+  vi.stubEnv("CHOKIDAR_USEPOLLING", "true");
+  vi.stubEnv("CHOKIDAR_INTERVAL", "40");
+  vi.stubEnv("FS_SAFE_NATIVE_MODE", "require");
+  try {
+    const report = path.join(state.workspaceDir, "memory", "dreaming", "light", "report.md");
+    await fs.mkdir(path.dirname(report), { recursive: true });
+    await fs.writeFile(report, "initial report");
+    const makeOwner = (agentId: string, excludePaths: string[], onChange: () => Promise<void>) => {
+      const watcher = new LocalMemoryFileWatcher({
+        workspaceDir: state.workspaceDir,
+        agentId,
+        runInBackgroundContext: AsyncLocalStorage.snapshot(),
+        settings: {
+          extraPaths: [],
+          excludePaths,
+          multimodal: { enabled: false, modalities: [], maxFileBytes: 10485760 },
+          sync: { watchDebounceMs: 0 },
+        },
+        onDirty: vi.fn(),
+        onUnavailable: vi.fn(),
+        onChange,
+      });
+      owners.push(watcher);
+      return watcher;
+    };
+    await withinTest(
+      makeOwner("excluding", ["memory/dreaming/**"], async () => {}).start(),
+      signal,
+    );
+    await withinTest(
+      makeOwner("including", [], async () => {
+        const contents = await fs.readFile(report, "utf8");
+        if (contents === "initial report") {
+          baseline.resolve();
+        } else if (contents === "new report") {
+          edited.resolve();
+        }
+      }).start(),
+      signal,
+    );
+    await withinTest(baseline.promise, signal);
+    expect(workers).toHaveLength(1);
+    await fs.writeFile(report, "new report");
+    await withinTest(edited.promise, signal);
+  } finally {
+    const closing = Promise.allSettled(owners.map((owner) => owner.close()));
+    try {
+      await withinTest(closing, signal);
+    } finally {
+      await Promise.all(workers.splice(0).map((worker) => worker.terminate()));
+      await closing;
+      vi.unstubAllEnvs();
+      await state.cleanup();
+    }
+  }
+});
+
 it("restores shared subscriptions after a worker crash and joins its final exit", async ({
   signal,
 }) => {

@@ -73,3 +73,24 @@ export function shouldSkipRootMemoryAuxiliaryPath(params: {
     normalized.startsWith(`${ROOT_MEMORY_REPAIR_RELATIVE_DIR}/`)
   );
 }
+
+/** Match workspace-relative paths only; outside extra roots are not governed by workspace globs. */
+export function shouldSkipConfiguredMemorySearchPath(params: {
+  workspaceDir: string;
+  absPath: string;
+  excludePaths?: readonly string[];
+}): boolean {
+  if (!params.excludePaths?.length) {
+    return false;
+  }
+  const relative = path.relative(params.workspaceDir, params.absPath);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    return false;
+  }
+  const normalized = relative.replace(/\\/g, "/");
+  return params.excludePaths.some(
+    (pattern) =>
+      (pattern.endsWith("/**") && normalized === pattern.slice(0, -3)) ||
+      path.posix.matchesGlob(normalized, pattern),
+  );
+}

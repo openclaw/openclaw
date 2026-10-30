@@ -24,12 +24,14 @@ import {
 } from "./multimodal.js";
 import {
   resolveCanonicalRootMemoryFile,
+  shouldSkipConfiguredMemorySearchPath,
   shouldSkipRootMemoryAuxiliaryPath,
 } from "./openclaw-runtime-paths.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
 import type { MemoryExtraPath } from "./types.js";
 
 export const hashText: (value: string) => string = sha256Hex;
+export { shouldSkipConfiguredMemorySearchPath };
 export { encodeMemoryEmbedding, decodeMemoryEmbedding } from "./embedding-vector.js";
 export {
   chunkMarkdown,
@@ -259,16 +261,18 @@ export async function listMemoryFiles(
   extraPaths?: MemoryExtraPath[],
   multimodal?: MemoryMultimodalSettings,
   onSkippedSymlinkRoot?: (root: string) => void,
+  excludePaths?: readonly string[],
 ): Promise<string[]> {
   const result: string[] = [];
   const memoryDir = path.join(workspaceDir, "memory");
 
   const shouldSkipWorkspaceMemoryPath = (absPath: string): boolean =>
-    shouldSkipRootMemoryAuxiliaryPath({ workspaceDir, absPath });
+    shouldSkipRootMemoryAuxiliaryPath({ workspaceDir, absPath }) ||
+    shouldSkipConfiguredMemorySearchPath({ workspaceDir, absPath, excludePaths });
 
   const addMarkdownFile = async (absPath: string) => {
     const stat = await scanMemorySource(absPath, () => statEnumerableMemoryFile(absPath));
-    if (!stat || !absPath.endsWith(".md")) {
+    if (!stat || !absPath.endsWith(".md") || shouldSkipWorkspaceMemoryPath(absPath)) {
       return;
     }
     result.push(absPath);
@@ -321,6 +325,7 @@ export async function listMemoryFiles(
       }
       if (
         stat.isFile() &&
+        !shouldSkipWorkspaceMemoryPath(inputPath) &&
         (isExplicitExtraMarkdownFilePath(inputPath) ||
           isAllowedMemoryFilePath(inputPath, multimodal))
       ) {

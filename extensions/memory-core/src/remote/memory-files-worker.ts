@@ -39,6 +39,7 @@ type FileCommand =
       operation: "list";
       extraPaths?: Parameters<MemoryWorkspaceFiles["listFiles"]>[1];
       multimodal?: Parameters<MemoryWorkspaceFiles["listFiles"]>[2];
+      excludePaths?: Parameters<MemoryWorkspaceFiles["listFiles"]>[4];
     }
   | {
       operation: "inspect";
@@ -156,6 +157,7 @@ export async function serveMemoryFiles(options: {
           request.extraPaths,
           request.multimodal,
           (p) => skipped.push(p),
+          request.excludePaths,
         );
         result = { files, skipped };
         break;
