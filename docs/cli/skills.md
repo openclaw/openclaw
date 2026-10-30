@@ -140,6 +140,9 @@ Gateway.
 Git and local directory installs expect `SKILL.md` at the source root. The
 install slug comes from `SKILL.md` frontmatter `name` when it is valid, then
 the source directory or repository name; use `--as <slug>` to override it.
+Git installs preserve relative links to companion files and directories, so
+those links remain usable after the temporary clone is removed. Reinstall an
+affected skill with `--force` to replace links left by an earlier install.
 `--version` is ClawHub-only. Skill installs do not support npm package specs
 or zip/archive paths, and `openclaw skills update` updates ClawHub-tracked
 installs only.
