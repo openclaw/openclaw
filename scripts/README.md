@@ -156,6 +156,7 @@ observe native worker messages, including the first synchronous task, without
 retaining or rewriting their payloads.
 Synthetic state uses the system temp directory so secure temporary-state discovery
 keeps its normal protection; `--out` owns the retained proof artifacts separately.
+The driver fixes one UTC end date for every fixture, including runs crossing midnight.
 All roles use the invoking driver's seed, RTT, and dispatch-observer helpers,
 whose hashes are recorded separately from the per-checkout runtime. The seed
 helper must remain compatible with both checkouts' database schemas. No
@@ -218,7 +219,7 @@ Add `--screenshots` to capture each role's first model pair after action timing,
 resource probes, and any trace shutdown. These synthetic full-page PNGs identify
 the role, engine, CPU rate, RTT, and model in their names. Inspect them before
 publishing. Screenshot work is outside the recorded action interval.
-After the full localhost sequence, it also captures the overview and session
+After the full localhost sequence, it also captures the overview, cost-window, and session
 panels, then the session panel at a 390 px viewport. These lower-panel captures
 do not change the viewport or scroll position during any timed action.
 

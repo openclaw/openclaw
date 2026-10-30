@@ -122,6 +122,7 @@ const helperHashes = async () =>
   );
 const pairs = Number(values.pairs);
 const population = Number(values.sessions);
+const fixtureEndDate = new Date().toISOString().slice(0, 10);
 const warmSetup =
   !values.cold && !values["cold-backend"] && !values.diagnostic && !values.structure;
 const MANAGED_CHILD_TIMEOUT_MS = 30 * 60_000;
@@ -402,7 +403,12 @@ async function prepareFixture(
       claim = await acquireGatewayE2ePortBlock();
       await writeFile(
         setup,
-        JSON.stringify({ uiRoot: roleUiBuilds[role].root, sessions: population, port: claim.port }),
+        JSON.stringify({
+          uiRoot: roleUiBuilds[role].root,
+          sessions: population,
+          port: claim.port,
+          endDate: fixtureEndDate,
+        }),
       );
       const seeded = Promise.withResolvers<UsageBenchFixture>();
       const seedStarted = performance.now();
@@ -1868,6 +1874,7 @@ try {
             const prefix = `${owner.role}-${engine}-${cpu}x`;
             for (const [name, selector] of [
               ["overview", ".usage-overview-card"],
+              ["cost-windows", ".usage-summary-strip--windows"],
               ["sessions", ".sessions-card"],
             ] as const) {
               await page
