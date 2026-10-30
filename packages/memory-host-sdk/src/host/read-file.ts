@@ -60,11 +60,11 @@ export async function readMemoryFile(params: {
           try {
             return await filesystem.read(`./${path.relative(directory, absPath)}`);
           } catch (err) {
-            // Keep read-time I/O errors visible to the existing retry predicate.
+            // Keep native I/O errors visible to memory callers and the retry predicate.
             if (
               err instanceof Error &&
               "code" in err &&
-              err.code === "outside-workspace" &&
+              (err.code === "outside-workspace" || err.code === "permission-denied") &&
               err.cause instanceof Error &&
               "code" in err.cause &&
               !isFileMissingError(err.cause) &&
