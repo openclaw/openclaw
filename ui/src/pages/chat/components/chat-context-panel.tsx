@@ -505,13 +505,16 @@ function ChatContextPage(props: {
               when={result().report || result().loading}
               fallback={
                 <ContextEmpty
-                  message={t(
-                    result().offline
-                      ? "chat.sessionDetails.contextOffline"
-                      : result().failed
-                        ? "chat.sessionDetails.contextError"
-                        : "chat.sessionDetails.contextUnavailable",
-                  )}
+                  message={
+                    result().blockedReason ??
+                    t(
+                      result().offline
+                        ? "chat.sessionDetails.contextOffline"
+                        : result().failed
+                          ? "chat.sessionDetails.contextError"
+                          : "chat.sessionDetails.contextUnavailable",
+                    )
+                  }
                   onRetry={result().failed ? () => void refresh() : undefined}
                 />
               }

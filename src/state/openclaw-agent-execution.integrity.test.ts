@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, assert, expect, it, vi } from "vitest";
+import { waitForFile } from "../../test/helpers/process-wait.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -28,6 +29,7 @@ import {
   readSqliteDatabaseCleanClose,
 } from "../infra/sqlite-database-admission.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import * as sqliteWorkerStore from "../infra/sqlite-worker-store.js";
 import type { FixtureOperations } from "../infra/sqlite-worker-store.test-support.js";
 import {
@@ -88,7 +90,6 @@ import * as stateWorkerStore from "./openclaw-state-worker-store.js";
 const counter = vi.hoisted(() => ({
   path: "",
   checks: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2),
-  gate: undefined as SharedArrayBuffer | undefined,
   workers: new Set<Worker>(),
 }));
 vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
@@ -104,12 +105,6 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
         for (const method of ["all", "get", "iterate", "run"]) {
           const execute = statement[method].bind(statement);
           statement[method] = (...args) => {
-            if (workerData.testIntegrityGate) {
-              const gate = new Int32Array(workerData.testIntegrityGate);
-              Atomics.store(gate, 1, 1);
-              Atomics.notify(gate, 1);
-              while (Atomics.load(gate, 0) === 1) Atomics.wait(gate, 0, 1);
-            }
             Atomics.add(new Int32Array(workerData.testIntegrityChecks),
               match[1].toLowerCase() === "integrity_check" ? 0 : 1, 1);
             return execute(...args);
@@ -136,7 +131,6 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
           ...options?.workerData,
           testIntegrityPath: counter.path,
           testIntegrityChecks: counter.checks,
-          testIntegrityGate: counter.gate,
         },
       });
       if (String(filename).includes("sqlite-store.worker")) {
@@ -177,16 +171,38 @@ const initialized = (scope: AgentDatabaseExecutionScope, sessionId: string, agen
   });
 
 function holdIntegrity(pathname: string) {
-  const gate = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2));
-  Atomics.store(gate, 0, 1);
+  const directory = tempDirs.make("startup-integrity-gate-");
+  const entered = `${directory}/entered`,
+    released = `${directory}/released`;
+  const preload = `${directory}/pause.cjs`;
+  const waiting = new AbortController();
+  fs.writeFileSync(
+    preload,
+    `
+const fs = require('node:fs'), { DatabaseSync } = require('node:sqlite');
+const { isMainThread } = require('node:worker_threads');
+const prepare = DatabaseSync.prototype.prepare;
+DatabaseSync.prototype.prepare = function(sql) {
+  if ((!isMainThread || process.argv[1]?.includes('sqlite-integrity.worker')) &&
+      this.location() === ${JSON.stringify(pathname)} && /^PRAGMA integrity_check/i.test(sql)) {
+    fs.writeFileSync(${JSON.stringify(entered)}, 'entered');
+    const gate = new Int32Array(new SharedArrayBuffer(4));
+    while (!fs.existsSync(${JSON.stringify(released)})) Atomics.wait(gate, 0, 0, 10);
+  }
+  return prepare.call(this, sql);
+};`,
+  );
+  const env = sqliteWorkerPreloadEnv(preload);
+  for (const [key, value] of Object.entries(env)) {
+    vi.stubEnv(key, value);
+  }
   counter.path = pathname;
-  counter.gate = gate.buffer;
   return {
-    entered: () => Promise.resolve(Atomics.waitAsync(gate, 1, 0).value),
+    env,
+    entered: () => waitForFile(entered, waiting.signal),
     release() {
-      Atomics.store(gate, 0, 0);
-      Atomics.notify(gate, 0);
-      counter.gate = undefined;
+      fs.writeFileSync(released, "release");
+      waiting.abort();
     },
   };
 }
@@ -214,13 +230,14 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
     }
     invalidateValidation(pathname);
     revokeSqliteDatabaseAdmissionsForPath(pathname);
+    const integrity = holdIntegrity(pathname);
+    Object.assign(env, integrity.env);
     await withAgentDatabaseStartupAdmission(async (admission) => {
       await withOpenClawStateDatabaseReadSnapshot(
         () => assertOpenClawDatabasesReady({ env, config, operation: "gateway-startup" }),
         { env },
       );
       const owner = admission.adopt();
-      const integrity = holdIntegrity(pathname);
       let current = true;
       const assertWrite = captureAgentDatabaseAdmission("main", { env });
       let publicationWrite = assertWrite;

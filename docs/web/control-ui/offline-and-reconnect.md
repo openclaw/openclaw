@@ -44,6 +44,12 @@ including failures: subsequent reads back off from 500 ms to 5 seconds and honor
 longer Gateway retry hints. Reconnecting clears the retry wait so identity reads
 can resume on the new connection.
 
+The sidebar also keeps its display-only account identity during reconnects.
+Solo-owned sessions in **Involving me** or **My sessions** keep redundant owner
+avatars hidden when the live profile becomes temporarily unavailable;
+shared-session attribution remains visible. This retained identity does not
+authorize Gateway requests.
+
 ## Queued session changes
 
 While the same Gateway connection is recovering, changes to a session's name,

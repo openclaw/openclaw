@@ -339,42 +339,40 @@ function getCachedOpenClawStateDatabase(
   if (runtimeFailure) {
     throw runtimeFailure;
   }
-  return readCachedOpenClawStateDatabase(resolvedPath, options);
+  const database = readCachedOpenClawStateDatabase(resolvedPath, options?.readOnly === true);
+  if (database) {
+    touchStateDatabase(database);
+  }
+  return database;
 }
 
 function readCachedOpenClawStateDatabase(
   resolvedPath: string,
-  options?: { readOnly: true },
+  readOnly: boolean,
 ): OpenClawStateDatabase | undefined {
   const maintenance = getOpenClawDatabaseMaintenanceScope();
-  if (options?.readOnly) {
+  if (readOnly) {
     maintenance?.assertReadAdmission();
   } else {
     maintenance?.assertAdmission();
   }
   assertExistingOpenClawStateSchemaCacheAdmission(resolvedPath, stateDatabaseLifecycle);
   const database = cachedDatabases.get(resolvedPath);
-  if (database) {
-    if (borrowers.get(database.db)?.retiring) {
-      throw new Error(
-        `OpenClaw state database native borrower cleanup is pending: ${resolvedPath}`,
-      );
-    }
-    touchStateDatabase(database);
+  if (database && borrowers.get(database.db)?.retiring) {
+    throw new Error(`OpenClaw state database native borrower cleanup is pending: ${resolvedPath}`);
   }
   return database;
 }
 
-/** Prepared host facts retain admission; native transactions still expose their staged facts. */
+/** Fact checks retain admission, not idle handles; native transactions expose staged facts. */
 export function prepareOpenClawStateCachedRead(pathname: string) {
   const resolvedPath = resolveDatabasePath({ path: pathname });
-  const options = { readOnly: true } as const;
-  getCachedOpenClawStateDatabase(resolvedPath, options);
+  getCachedOpenClawStateDatabase(resolvedPath, { readOnly: true });
   // Terminal failures invalidate this admission before closing the native owner.
   const admission = asyncResources.capture(resolvedPath);
   return () => {
     admission.assertCurrent();
-    return readCachedOpenClawStateDatabase(resolvedPath, options);
+    return readCachedOpenClawStateDatabase(resolvedPath, true);
   };
 }
 

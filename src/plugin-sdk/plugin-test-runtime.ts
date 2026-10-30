@@ -246,7 +246,7 @@ export {
 } from "../plugins/registry.js";
 export {
   providerContractLoadError,
-  pluginRegistrationContractRegistry,
+  getPluginRegistrationContracts,
   resolveProviderContractProvidersForPluginIds,
   resolveWebFetchProviderContractEntriesForPluginId,
   resolveWebSearchProviderContractEntriesForPluginId,

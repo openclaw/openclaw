@@ -169,6 +169,7 @@ export function clearOpenClawAgentDatabaseOpenFailure(
 export type { OpenClawAgentDatabaseWriteAdmission } from "./openclaw-agent-db-admission.js";
 export const {
   openOpenClawAgentDatabase,
+  openOpenClawAgentDatabaseInWorker,
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
   withOpenClawAgentDatabaseRuntime,

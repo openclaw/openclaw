@@ -381,16 +381,17 @@ describe("loadSessionDiff", () => {
   });
 
   it.each([
-    { kind: "tracked", flag: "--numstat" },
-    { kind: "untracked", flag: "ls-files" },
-  ])("reports a failed $kind inventory instead of an empty diff", async ({ kind, flag }) => {
+    { kind: "tracked", flags: ["--numstat"] },
+    { kind: "untracked", flags: ["status", "ls-files"] },
+  ])("reports a failed $kind inventory instead of an empty diff", async ({ kind, flags }) => {
     seedRepo({ "tracked.txt": "before\n" }, "init");
     write("tracked.txt", "after\n");
     const runCommand = execRunner.runCommandBuffersWithTimeout;
     vi.spyOn(execRunner, "runCommandBuffersWithTimeout").mockImplementation(
       async (argv, options) => {
         const result = await runCommand(argv, options);
-        return argv[argv.indexOf("-C") + 1] === repoRoot && argv.includes(flag)
+        return argv[argv.indexOf("-C") + 1] === repoRoot &&
+          flags.some((flag) => argv.includes(flag))
           ? { ...result, code: 1, stdout: Buffer.alloc(0) }
           : result;
       },

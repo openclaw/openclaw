@@ -56,10 +56,6 @@ function SessionAttentionIcon(props: { attention: SidebarSessionAttention; size:
           class={[
             "sidebar-session-attention__icon",
             `sidebar-session-attention__icon--${props.attention.kind}`,
-            {
-              "sidebar-session-attention__icon--inherited":
-                props.attention.kind === "error" && props.attention.childLabel !== undefined,
-            },
           ]}
           data-session-attention={props.attention.kind}
           role={label() ? "img" : undefined}
@@ -331,8 +327,7 @@ export function summarizeTeamSessionSlots(
     active += Number(visuallyActive) + (children?.runningChildCount ?? 0);
     queued += Number(visuallyActive && row.status === "queued") + (children?.queuedChildCount ?? 0);
     unread += Number(row.unread) + (children?.unreadChildCount ?? 0);
-    failed ||=
-      row.status === "failed" || row.status === "timeout" || (children?.failedChildCount ?? 0) > 0;
+    failed ||= row.status === "failed" || row.status === "timeout";
   }
   return { attention, active, queued, unread, failed };
 }

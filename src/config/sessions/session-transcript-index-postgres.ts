@@ -24,6 +24,8 @@ export type TranscriptWindowUpdate = UpdateQueryBuilder<
   UpdateResult
 >;
 
+export type TranscriptWindowPostimage = { sessionKey: string; updatedAt: number | null };
+
 /** Writes each bounded PG projection chunk within the caller's existing transaction. */
 export function createPostgresProjectionFlusher(db: EngineConnection, sessionId: string) {
   type Chunk = {
@@ -41,76 +43,94 @@ export function createPostgresProjectionFlusher(db: EngineConnection, sessionId:
     watermarkMode: "none" | "insert" | "update",
     windowUpdate?: TranscriptWindowUpdate,
   ) =>
-    prepareSqliteQuerySync<Chunk>(db, (parameter) => {
-      const query =
-        ftsCount > 0
-          ? withPostgresSessionTranscriptFtsRows(
-              db,
-              sessionId,
-              /* kysely-allow-raw: Bounded prepared FTS rows share the existing allocation owner. */
-              sql<SessionTranscriptFtsSourceRow>`(values ${sql.join(
-                Array.from(
-                  { length: ftsCount },
-                  (_, index) =>
-                    sql`(${sql.lit(index)}, ${parameter((chunk) => chunk.ftsRows[index]!.messageId)}, ${parameter((chunk) => chunk.ftsRows[index]!.text)}, ${parameter((chunk) => chunk.ftsRows[index]!.role)}, ${parameter((chunk) => chunk.ftsRows[index]!.timestamp)})`,
-                ),
-              )})`,
+    prepareSqliteQuerySync<Chunk, { sessionKey: string | null; updatedAt: number | null }>(
+      db,
+      (parameter) => {
+        const query =
+          ftsCount > 0
+            ? withPostgresSessionTranscriptFtsRows(
+                db,
+                sessionId,
+                /* kysely-allow-raw: Bounded prepared FTS rows share the existing allocation owner. */
+                sql<SessionTranscriptFtsSourceRow>`(values ${sql.join(
+                  Array.from(
+                    { length: ftsCount },
+                    (_, index) =>
+                      sql`(${sql.lit(index)}, ${parameter((chunk) => chunk.ftsRows[index]!.messageId)}, ${parameter((chunk) => chunk.ftsRows[index]!.text)}, ${parameter((chunk) => chunk.ftsRows[index]!.role)}, ${parameter((chunk) => chunk.ftsRows[index]!.timestamp)})`,
+                  ),
+                )})`,
+              )
+            : kysely;
+        const withActive =
+          activeCount > 0
+            ? query.with("projection_active", () =>
+                kysely
+                  .insertInto("session_transcript_active_events")
+                  .values(
+                    Array.from({ length: activeCount }, (_, index) => ({
+                      session_id: sessionId,
+                      active_position: parameter(
+                        (chunk) => chunk.activeRows[index]!.activePosition,
+                      ),
+                      context_eligible: parameter(
+                        (chunk) => chunk.activeRows[index]!.contextEligible,
+                      ),
+                      event_seq: parameter((chunk) => chunk.activeRows[index]!.eventSeq),
+                      message_position: parameter(
+                        (chunk) => chunk.activeRows[index]!.messagePosition,
+                      ),
+                    })),
+                  )
+                  .returning("event_seq"),
+              )
+            : query;
+        const withWatermark =
+          watermarkMode !== "none"
+            ? withActive.with("projection_watermark", () => {
+                const values = {
+                  active_event_count: parameter((chunk) => chunk.watermark!.activeEventCount),
+                  active_message_count: parameter((chunk) => chunk.watermark!.activeMessageCount),
+                  indexed_seq: parameter((chunk) => chunk.watermark!.indexedSeq),
+                  leaf_event_id: parameter((chunk) => chunk.watermark!.leafEventId),
+                  needs_rebuild: parameter((chunk) => (chunk.watermark!.needsRebuild ? 1 : 0)),
+                  updated_at: parameter((chunk) => chunk.watermark!.updatedAt),
+                };
+                return watermarkMode === "update"
+                  ? kysely
+                      .updateTable("session_transcript_index_state")
+                      .set(values)
+                      .where("session_id", "=", sessionId)
+                      .returning("session_id")
+                  : kysely
+                      .insertInto("session_transcript_index_state")
+                      .values({ session_id: sessionId, ...values })
+                      .onConflict((conflict) => conflict.column("session_id").doUpdateSet(values))
+                      .returning("session_id");
+              })
+            : withActive;
+        // All writes target distinct tables and use prepared values. Only FTS content
+        // depends on a sibling write, through the allocation owner's RETURNING rows.
+        if (windowUpdate) {
+          return withWatermark
+            .with("projection_window", () =>
+              windowUpdate.returning(["session_key", "transcript_updated_at"]),
             )
-          : kysely;
-      const withActive =
-        activeCount > 0
-          ? query.with("projection_active", () =>
-              kysely
-                .insertInto("session_transcript_active_events")
-                .values(
-                  Array.from({ length: activeCount }, (_, index) => ({
-                    session_id: sessionId,
-                    active_position: parameter((chunk) => chunk.activeRows[index]!.activePosition),
-                    context_eligible: parameter(
-                      (chunk) => chunk.activeRows[index]!.contextEligible,
-                    ),
-                    event_seq: parameter((chunk) => chunk.activeRows[index]!.eventSeq),
-                    message_position: parameter(
-                      (chunk) => chunk.activeRows[index]!.messagePosition,
-                    ),
-                  })),
-                )
-                .returning("event_seq"),
-            )
-          : query;
-      const withWatermark =
-        watermarkMode !== "none"
-          ? withActive.with("projection_watermark", () => {
-              const values = {
-                active_event_count: parameter((chunk) => chunk.watermark!.activeEventCount),
-                active_message_count: parameter((chunk) => chunk.watermark!.activeMessageCount),
-                indexed_seq: parameter((chunk) => chunk.watermark!.indexedSeq),
-                leaf_event_id: parameter((chunk) => chunk.watermark!.leafEventId),
-                needs_rebuild: parameter((chunk) => (chunk.watermark!.needsRebuild ? 1 : 0)),
-                updated_at: parameter((chunk) => chunk.watermark!.updatedAt),
-              };
-              return watermarkMode === "update"
-                ? kysely
-                    .updateTable("session_transcript_index_state")
-                    .set(values)
-                    .where("session_id", "=", sessionId)
-                    .returning("session_id")
-                : kysely
-                    .insertInto("session_transcript_index_state")
-                    .values({ session_id: sessionId, ...values })
-                    .onConflict((conflict) => conflict.column("session_id").doUpdateSet(values))
-                    .returning("session_id");
-            })
-          : withActive;
-      const withWindow = windowUpdate
-        ? withWatermark.with("projection_window", () => windowUpdate.returning("session_id"))
-        : withWatermark;
-      // All writes target distinct tables and use prepared values. Only FTS content
-      // depends on a sibling write, through the allocation owner's RETURNING rows.
-      return withWindow.selectNoFrom(sql.lit(1).as("written"));
-    });
+            .selectFrom("projection_window")
+            .select(["session_key as sessionKey", "transcript_updated_at as updatedAt"]);
+        }
+        return withWatermark.selectNoFrom([
+          sql.lit(null).as("sessionKey"),
+          sql.lit(null).as("updatedAt"),
+        ]);
+      },
+    );
   const writes = new Map<string, ReturnType<typeof prepare>>();
-  return (pending: Chunk, persisted: boolean, windowUpdate?: TranscriptWindowUpdate) => {
+  return (
+    pending: Chunk,
+    persisted: boolean,
+    windowUpdate?: TranscriptWindowUpdate,
+  ): TranscriptWindowPostimage | undefined => {
+    let postimage: TranscriptWindowPostimage | undefined;
     const count = Math.max(
       pending.activeRows.length,
       pending.ftsRows.length,
@@ -133,7 +153,14 @@ export function createPostgresProjectionFlusher(db: EngineConnection, sessionId:
         write = prepare(chunk.activeRows.length, chunk.ftsRows.length, mode);
         writes.set(key, write);
       }
-      withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () => write(chunk));
+      const result = withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () =>
+        write(chunk),
+      );
+      const row = result.rows[0];
+      if (finalWindow && row?.sessionKey) {
+        postimage = { sessionKey: row.sessionKey, updatedAt: row.updatedAt };
+      }
     }
+    return postimage;
   };
 }

@@ -313,6 +313,7 @@ it("keeps sidebar and chat actions readable until the session management dialog 
     import("../lib/chat/complete-history.ts"),
     import("../lib/sessions/session-archive-reason.ts"),
     import("../lib/sessions/session-menu-navigation.ts"),
+    import("../pages/chat/components/chat-model-account-control.ts"),
     import("../pages/chat/chat-pane-native-session-actions.ts"),
     import("../pages/chat/chat-pane-placement.ts"),
   ]);
@@ -326,6 +327,13 @@ it("keeps sidebar and chat actions readable until the session management dialog 
   );
   expect(manager.t("sessionsView.goal")).toBe("Ziel");
   expect(en.sessionsView).toBe(sessionsView);
+  expect(manager.t("profilePage.modelAccounts.loadMore")).toBe("Load more saved accounts");
+  expect(manager.t("profilePage.modelAccounts.inventoryFailed")).toBe(
+    "Could not load saved accounts. Refresh to retry.",
+  );
+  expect(manager.t("profilePage.modelAccounts.connectAction")).toBe(
+    "profilePage.modelAccounts.connectAction",
+  );
 
   await import("../components/personal-session-group-dialog-view.tsx");
   expect(manager.t("sessionsView.searchGroups")).toBe("Search groups");
@@ -333,6 +341,9 @@ it("keeps sidebar and chat actions readable until the session management dialog 
   expect(manager.t("sessionsView.goal")).toBe("Ziel");
   expect(manager.getLocale()).toBe("de");
   expect(en.sessionsView).toBe(sessionsView);
+
+  await import("../pages/profile/model-accounts.tsx");
+  expect(manager.t("profilePage.modelAccounts.connectAction")).toBe("Sign in");
 });
 
 it("keeps a cold roster metadata failure readable before its view catalog loads", async () => {

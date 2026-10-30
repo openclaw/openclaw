@@ -38,6 +38,7 @@ const repositoryScriptEntries = [
   "scripts/bench-duplicate-paragraphs.mts!",
   "scripts/perf/anthropic-request-construction.ts!",
   "scripts/perf/auth-file-watch-events-measure.ts!",
+  "scripts/perf/board-read-admission-measure.ts!",
   "scripts/perf/catalog-worker-churn-measure.mjs!",
   "scripts/perf/code-mode-control-schema-measure.ts!",
   "scripts/perf/code-mode-result-load-measure.ts!",
@@ -45,7 +46,10 @@ const repositoryScriptEntries = [
   "scripts/perf/connect-profile-binding-measure.ts!",
   "scripts/perf/cron-reader-reuse-measure.ts!",
   "scripts/perf/cron-registry-read-measure.ts!",
+  "scripts/perf/doctor-retirement-measure.mts!",
   "scripts/perf/doctor-session-manifests.ts!",
+  "scripts/perf/doctor-sqlite-inspection.mjs!",
+  "scripts/perf/github-readiness-state-bench.ts!",
   "scripts/perf/history-model-projection-measure.ts!",
   "scripts/perf/inspection-read-admission.ts!",
   "scripts/perf/local-workspace-refresh-measure.ts!",
@@ -54,6 +58,7 @@ const repositoryScriptEntries = [
   "scripts/perf/placement-retirement-replies.mjs!",
   "scripts/perf/plugin-state-authority-receipts.ts!",
   "scripts/perf/plugin-state-claims-measure.ts!",
+  "scripts/perf/prometheus-cardinality-measure.ts!",
   "scripts/perf/reef-state-request-bytes.ts!",
   "scripts/perf/schema-crossing-measure.ts!",
   "scripts/perf/session-append-reload-measure.ts!",
@@ -67,6 +72,7 @@ const repositoryScriptEntries = [
   "scripts/perf/trajectory-record-event-measure.ts!",
   "scripts/perf/transcript-json-array-measure.mjs!",
   "scripts/perf/transcript-pool-idle-measure.ts!",
+  "scripts/perf/update-state-io-measure.ts!",
   "scripts/perf/worktree-creation-measure.ts!",
   // The source header documents this matched Code Mode engine probe by path.
   "scripts/perf/code-mode-engine-measure.ts!",
@@ -754,6 +760,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-entry-patch-payload.ts!",
   "scripts/perf/session-event-envelope-measure.ts!",
   "scripts/perf/session-transcript-path-measure.ts!",
+  "scripts/perf/skill-directory-modes-measure.ts!",
   "scripts/perf/skill-search-copies-measure.ts!",
   "scripts/perf/skill-snapshot-hydration-measure.ts!",
   "scripts/perf/skill-collision-diagnostics-measure.ts!",
@@ -1907,6 +1914,8 @@ const config = {
       ],
       // Platform tools, installed CLIs, and shell builtins used by scripts and boundary tests.
       ignoreBinaries: [
+        // doctor-sqlite-inspection.mjs compiles its native read counter with the host compiler.
+        "cc",
         "ffmpeg",
         "lsattr",
         "mint",

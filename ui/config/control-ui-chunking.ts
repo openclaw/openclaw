@@ -318,6 +318,10 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/route-entry.ts":
       // Pending New Session previews must render while the Chat route entry waits.
       return "chat-route-entry";
+    case "ui/src/i18n/locales/en-command-palette.ts":
+      return "command-discovery-english";
+    case "ui/src/i18n/locales/en-model-accounts.ts":
+      return "model-account-settings-english";
     case "ui/src/i18n/locales/en-session-organization-shared.ts":
       // Settings, New Session, and Chat share this English copy.
       return "chat-english";

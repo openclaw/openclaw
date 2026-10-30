@@ -51,6 +51,57 @@ describe("config writes through a symlinked state root", () => {
     expect(JSON.parse(await fs.readFile(io.configPath, "utf8")).gateway.port).toBe(19001);
   });
 
+  it.skipIf(process.platform === "win32")(
+    "reads a config-file alias and its includes without allowing publication through it",
+    async () => {
+      const { io, home, env, configPath } = await fixture();
+      const sourcePath = path.join(home, "external.json");
+      const includePath = path.join(home, "gateway.json");
+      const raw = JSON.stringify({ $include: includePath });
+      env.OPENCLAW_INCLUDE_ROOTS = home;
+      await fs.writeFile(includePath, JSON.stringify({ gateway: { mode: "local", port: 19001 } }));
+      await fs.unlink(configPath);
+      await fs.writeFile(sourcePath, raw);
+      await fs.symlink(sourcePath, configPath);
+
+      const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
+
+      expect(snapshot.path).toBe(configPath);
+      expect(snapshot.valid).toBe(true);
+      expect(snapshot.config.gateway?.port).toBe(19001);
+      expect(writeOptions.includeFileTargetsForWrite?.[includePath]).toBe(
+        await fs.realpath(includePath),
+      );
+      await expect(
+        io.writeConfigFile(
+          { gateway: { mode: "local", port: 19002 } },
+          { ...writeOptions, baseSnapshot: snapshot },
+        ),
+      ).rejects.toMatchObject({ name: "ConfigMutationConflictError" });
+      expect(await fs.readlink(configPath)).toBe(sourcePath);
+      expect(await fs.readFile(sourcePath, "utf8")).toBe(raw);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "rejects a config-file alias retarget after reading identical bytes",
+    async () => {
+      const { io, home, configPath, raw } = await fixture();
+      const sourcePath = path.join(home, "external.json");
+      const alternatePath = path.join(home, "alternate.json");
+      await fs.rename(configPath, sourcePath);
+      await fs.symlink(sourcePath, configPath);
+      const { writeOptions } = await io.readConfigFileSnapshotForWrite();
+      await fs.writeFile(alternatePath, raw);
+      await fs.unlink(configPath);
+      await fs.symlink(alternatePath, configPath);
+
+      expect(() => writeOptions.assertConfigPathForWrite?.()).toThrow(
+        "included config target changed since last load",
+      );
+    },
+  );
+
   it.each([true, false])(
     "rejects an alias retarget between snapshot read and write even when bytes match (initial link: %s)",
     async (symlinkedState) => {

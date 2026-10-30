@@ -1,10 +1,7 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import { startGitOperationTiming } from "../../infra/git-operation-timing.js";
 import { runGitReadOperation } from "../../infra/git-read-cache.js";
-import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { acquireManagedWorktree } from "./activity.js";
 import {
@@ -12,21 +9,13 @@ import {
   withWorktreeMutationLease,
   type WorktreeAllocationGuard,
 } from "./allocation.js";
-import {
-  logWorktreeBase,
-  resolveWorktreeCreationBase,
-  withWorktreeBasePreparation,
-} from "./base-ref.js";
+import { withWorktreeBasePreparation } from "./base-ref.js";
 import { createWorktreeCapacityOwner } from "./capacity-owner.js";
 import {
-  directorySizeBytes,
   estimateWorktreeGitBytes,
   requireAllocationSpace,
   retryWorktreeCapacityReleases,
-  WORKTREE_SETUP_HEADROOM_BYTES,
 } from "./capacity.js";
-import { resolveWorktreeSourceProfile } from "./checkout-profiles.js";
-import { addManagedWorktree } from "./checkout.js";
 import { ensureEmptyWorktreeSource, removeUnusedEmptyWorktreeSource } from "./empty-source.js";
 import { hasWorktreeUnknownOutcome, WorktreePendingContentionError } from "./errors.js";
 import { collectRetiredWorktreeArtifacts } from "./gc-artifacts.js";
@@ -71,9 +60,15 @@ import {
 } from "./repository-paths.js";
 import {
   completeRepositoryWorktreeSetup,
-  type MaterializedRepositoryWorktree,
+  materializeRepositoryWorktree,
+  prepareWarmWorktree,
 } from "./repository-setup.js";
-import { captureWorktreeRunEndContext, withWorktreeRunEnd } from "./run-end-lifecycle.js";
+import {
+  captureWorktreeRunEndContext,
+  withWorktreeRunEnd,
+  onWorktreeWarmPoolNeeded,
+  requestWorktreeWarmPool,
+} from "./run-end-lifecycle.js";
 import { worktreeRunLeaseScope } from "./run-lease-owner.js";
 import { reapWorktreeRunLeases } from "./run-lease-store.js";
 import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
@@ -101,6 +96,7 @@ import {
 } from "./snapshot-restore.js";
 import { collectWorktreeTemplates } from "./template-cache.js";
 import { hasTemplatesAsync } from "./template-registry-async.js";
+import type { WorktreeWarmPoolRequest } from "./template-registry.js";
 import type {
   CreateEmptyManagedWorktreeParams,
   CreateManagedWorktreeParams,
@@ -185,6 +181,48 @@ export class ManagedWorktreeService {
       env: this.env,
       getConfig: this.getConfig,
     });
+  }
+
+  onWarmPoolNeeded(listener: (request: WorktreeWarmPoolRequest) => void): () => void {
+    return onWorktreeWarmPoolNeeded(this.env, listener);
+  }
+
+  /** Maintenance reacquires source and disk custody; request authority never escapes. */
+  async prewarm(request: WorktreeWarmPoolRequest, params: WorktreeMutationGuard): Promise<void> {
+    if (this.getConfig?.().worktreeAcceleration === false) {
+      return;
+    }
+    await withWorktreeRunEnd(this.env, () =>
+      withWorktreeMutationLease(
+        { ...params, env: this.env, id: `prewarm:${request.template.cacheKey}` },
+        (guard) =>
+          withWorktreeSources(this.env, async (retainRepository) => {
+            const repository = await resolveRepository(request.template.repoRoot);
+            if (repository.commonDir !== request.template.commonDir) {
+              return;
+            }
+            await retainRepository({ ...guard, repository });
+            const bytes = await estimateWorktreeGitBytes(
+              repository.repoRoot,
+              request.template.sourceCommit,
+              {
+                signal: guard.signal,
+                assertCurrent: guard.commitGuard,
+                preparationKey: request.template.sourceCommit,
+              },
+            );
+            await prepareWarmWorktree(this.env, request, guard, (cloneBytes) =>
+              requireAllocationSpace(
+                guard,
+                this.env,
+                request.template.worktreeRoot,
+                repository,
+                cloneBytes ?? 2 * bytes,
+              ),
+            );
+          }),
+      ),
+    );
   }
 
   async create(params: CreateManagedWorktreeParams): Promise<ManagedWorktreeRecord> {
@@ -502,11 +540,13 @@ export class ManagedWorktreeService {
     let prepared = false;
     try {
       const materialized = await withWorktreeSource(params, async (current) => {
-        const created = await this.materializeRepositoryWorktree(
+        const created = await materializeRepositoryWorktree(
           { ...current, retainSources: params.retainSources, prepareBase: params.prepareBase },
+          this.env,
           repository,
           destination,
           publication.id,
+          () => this.getConfig?.().worktreeAcceleration !== false,
         );
         prepared = true;
         return created;
@@ -515,7 +555,7 @@ export class ManagedWorktreeService {
         completeRepositoryWorktreeSetup(params, this.env, repository, materialized),
       );
       // Pending → live preserves the slot count; retained checkout custody owns publication.
-      return await timeWorktreePreparationPhase("publication", () =>
+      const result = await timeWorktreePreparationPhase("publication", () =>
         withWorktreeSource(params, async (current) => {
           current.signal?.throwIfAborted();
           current.commitGuard?.();
@@ -533,6 +573,14 @@ export class ManagedWorktreeService {
           return { record, materialized: true };
         }),
       );
+      if (materialized.warmPool) {
+        try {
+          requestWorktreeWarmPool(this.env, materialized.warmPool);
+        } catch (error) {
+          log.warn(`worktree warm refill unavailable: ${String(error)}`);
+        }
+      }
+      return result;
     } catch (error) {
       const failures = [error];
       if (prepared && !publication.record && !hasWorktreeUnknownOutcome(error)) {
@@ -576,136 +624,6 @@ export class ManagedWorktreeService {
       }
       throw error;
     }
-  }
-
-  private async materializeRepositoryWorktree(
-    params: Omit<RepositoryCreationParams, "gitInventory">,
-    repository: ResolvedRepository,
-    destination: Awaited<ReturnType<typeof prepareWorktreeDestination>>,
-    worktreeId: string,
-  ): Promise<MaterializedRepositoryWorktree> {
-    const { root, worktreePath, branch } = destination;
-    // Default-base resolution fetches remote refs; it is an effect, not just discovery.
-    params.signal?.throwIfAborted();
-    params.commitGuard?.();
-    await requireAllocationSpace(params, this.env, worktreePath, repository);
-    params.commitGuard?.();
-    const base = await timeWorktreePreparationPhase("base", () =>
-      resolveWorktreeCreationBase(repository.repoRoot, params),
-    );
-    params.onProgress?.("checkout");
-    let gitBytes = 0;
-    const provisionedBytes =
-      params.provisionIgnoredFiles === false
-        ? 0
-        : (
-            await runGitWorkerOperation(
-              {
-                type: "worktree.provisioning-inspection",
-                input: { sourceRoot: repository.sourceRoot },
-              },
-              { signal: params.signal, assertCurrent: params.commitGuard },
-            )
-          ).estimatedBytes;
-    const setupStat =
-      params.runSetupScript === false
-        ? undefined
-        : await fs
-            .stat(path.join(repository.sourceRoot, ".openclaw", "worktree-setup.sh"))
-            .catch(() => undefined);
-    const runRepositorySetup = setupStat?.isFile() === true && (setupStat.mode & 0o111) !== 0;
-    const onPromptReady =
-      params.onPromptReady &&
-      !runRepositorySetup &&
-      !(await worktreePathExists(path.join(repository.sourceRoot, ".worktreeinclude")))
-        ? params.onPromptReady
-        : undefined;
-    const setupBytes = runRepositorySetup
-      ? Math.max(
-          WORKTREE_SETUP_HEADROOM_BYTES,
-          await directorySizeBytes(repository.sourceRoot, {
-            signal: params.signal,
-            assertCurrent: params.commitGuard,
-          }),
-        )
-      : 0;
-    params.signal?.throwIfAborted();
-    params.commitGuard?.();
-    const gitBase = params.profiles?.length ? base.commit : base.gitOperand;
-    const addCheckout = async () => {
-      const sourceProfile = params.profiles?.length
-        ? await resolveWorktreeSourceProfile(repository.repoRoot, gitBase, params.profiles, {
-            signal: params.signal,
-            commitGuard: () => params.commitGuard?.(),
-          })
-        : undefined;
-      params.signal?.throwIfAborted();
-      params.commitGuard?.();
-      await fs.mkdir(root, { recursive: true });
-      return await addManagedWorktree({
-        env: this.env,
-        now: Date.now,
-        waitBudget: params.waitBudget,
-        enabled: this.getConfig?.().worktreeAcceleration !== false,
-        repoRoot: repository.repoRoot,
-        commonDir: repository.commonDir,
-        worktreeRoot: path.dirname(root),
-        destination: worktreePath,
-        sourceOnly: params.provisionIgnoredFiles === false,
-        branch,
-        base: sourceProfile?.commit ?? gitBase,
-        sourceProfile,
-        ...(onPromptReady
-          ? {
-              onPromptReady: async (commit: string) =>
-                onPromptReady({
-                  id: worktreeId,
-                  path: worktreePath,
-                  branch,
-                  repoRoot: repository.repoRoot,
-                  commit,
-                }),
-            }
-          : {}),
-        prepareCommit: async (commit) => {
-          const guard = { signal: params.signal, assertCurrent: params.commitGuard };
-          await logWorktreeBase(repository.repoRoot, base, commit, {
-            worktreePath,
-            ownerId: params.ownerId,
-            now: Date.now(),
-            ...guard,
-          });
-          return (gitBytes = await estimateWorktreeGitBytes(repository.repoRoot, commit, {
-            ...guard,
-            preparationKey: base.preparationKey,
-          }));
-        },
-        requireSpace: (cloneBytes) =>
-          requireAllocationSpace(
-            params,
-            this.env,
-            worktreePath,
-            repository,
-            (cloneBytes ?? 2 * gitBytes) + 2 * provisionedBytes + setupBytes,
-          ),
-        signal: params.signal,
-        commitGuard: () => params.commitGuard?.(),
-        rollbackGuard: params.rollbackGuard,
-      });
-    };
-    const added = await timeWorktreePreparationPhase("checkout", addCheckout);
-    params.signal?.throwIfAborted();
-    params.commitGuard?.();
-    if (added.code !== 0) {
-      throw commandError("git worktree add", added);
-    }
-    return {
-      worktreePath,
-      recordBase: base.recordRef,
-      provisionedBytes,
-      setupBytes,
-      runRepositorySetup,
-    };
   }
 
   async list(): Promise<ManagedWorktreeRecord[]> {
