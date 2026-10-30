@@ -8,7 +8,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
-import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type {
   SessionTranscriptBoundedActiveContext,
@@ -449,7 +448,18 @@ export function readSessionTranscriptBoundedActiveContextCore(
         truncated = true;
       }
     }
-    const dependencyNavigation = transcriptEventModelNavigationSql(projection.database.db, "event");
+    const dependencyType = transcriptPredicateSql(
+      projection.database.db,
+      "navigation_type",
+      "event",
+    );
+    const dependencyRole = transcriptPredicateSql(projection.database.db, "message_role", "event");
+    // CASE fences payload projection: an ordinary old row may be outside this bounded read.
+    const dependencyNavigation = /* kysely-allow-raw: recorded event classifications gate model navigation before any payload parser can run. */ sql<string>`CASE
+      WHEN ${dependencyType} IN ('custom', 'reset') OR ${dependencyType} IS NULL
+        OR (${dependencyType} = 'message' AND active.context_eligible = 0 AND ${dependencyRole} = 'assistant')
+      THEN ${transcriptEventModelNavigationSql(projection.database.db, "event")}
+      ELSE '{}' END`;
     const dependencyField = (path: string) =>
       jsonPathValue(projection.database.db, dependencyNavigation, sql.val(path));
     const dependencyCandidates = Array.from(
@@ -477,7 +487,11 @@ export function readSessionTranscriptBoundedActiveContextCore(
                     sql.val("$.message.excludeFromContext"),
                   ),
                   "=",
-                  isPostgresSqlConnection(projection.database.db) ? "true" : 1,
+                  jsonPathValue<string | number>(
+                    projection.database.db,
+                    sql.lit('{"value":true}'),
+                    sql.lit("$.value"),
+                  ),
                 ),
                 eb(dependencyField("$.type"), "=", "message"),
                 eb(dependencyField("$.message.role"), "=", "assistant"),

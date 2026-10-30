@@ -276,7 +276,16 @@ export function projectModelContextNavigationSql(
       THEN json_set(${entry}, '$.data', json_object('restart', json(CASE
         WHEN json_type(${event}, '$.data.restart') = 'true' THEN 'true' ELSE 'false' END)))
       WHEN ${jsonPathValue(db, event, sql.lit("$.customType"))} = ${BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE}
-      THEN json_set(${entry}, '$.data', json(${jsonPickObject(db, jsonPathValue(db, event, sql.lit("$.data")), ["afterEntryId", "resultEntryIds"])}))
+      THEN ${jsonSetPath(
+        db,
+        entry,
+        sql.lit("$.data"),
+        jsonPickObject(db, jsonPathValue(db, event, sql.lit("$.data")), [
+          "afterEntryId",
+          "resultEntryIds",
+        ]),
+        true,
+      )}
       ELSE ${entry} END
     WHEN 'compaction' THEN json_set(${entry}, '$.summary', '')
     WHEN 'branch_summary' THEN json_set(${entry}, '$.summary', '')

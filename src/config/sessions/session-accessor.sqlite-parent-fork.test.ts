@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { expect, it } from "vitest";
 import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { buildSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
@@ -112,7 +113,9 @@ it("forks only placed background results and keeps their payload through a manua
   });
   const messages = buildSessionContext(child.filter(isIndexedSessionEntry)).messages;
   expect(messages).toHaveLength(3);
-  expect(messages.at(-1)?.content).toEqual(pending.message.content);
+  const result = messages.at(-1);
+  assert(result?.role === "assistant");
+  expect(result.content).toEqual(pending.message.content);
   expect(estimateParentForkPromptTokens(source)).toBeGreaterThan(unplacedTokens);
 
   const trimmed = selectManualCompactTranscriptLines(

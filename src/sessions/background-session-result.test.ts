@@ -388,11 +388,9 @@ it.each(["live", "full", "bounded", "model", "bounded-model"] as const)(
     await withSessionTurn(target, () => session.prompt("Start"));
     stop();
     const accepted = await loadTranscriptEvents(target.scope);
-    expect(
-      accepted.some(
-        (event) => Reflect.get(event, "customType") === "openclaw.background-result-placement",
-      ),
-    ).toBe(false);
+    expect(accepted).not.toContainEqual(
+      expect.objectContaining({ customType: "openclaw.background-result-placement" }),
+    );
     if (reopen !== "live") {
       session.dispose();
       if (reopen === "bounded") {

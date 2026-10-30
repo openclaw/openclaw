@@ -42,7 +42,11 @@ export function prepareResolvedToolCall(
     preparedToolCall =
       preparedArguments === toolCall.arguments
         ? toolCall
-        : { ...toolCall, arguments: preparedArguments as Record<string, unknown> };
+        : {
+            ...toolCall,
+            // SAFETY: The validator below checks this value before returning execution arguments.
+            arguments: preparedArguments as Record<string, unknown>,
+          };
   } catch (error) {
     return immediateToolPreparationError(error);
   }

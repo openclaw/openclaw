@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
@@ -112,7 +113,12 @@ it("remaps both placement references while retaining the original marker bytes",
     data: { afterEntryId: branch[2]?.id, resultEntryIds: [branch[1]?.id] },
   });
   expect(JSON.stringify(manager.getEntry(marker))).toBe(original);
-  expect(manager.buildSessionContext().messages.map((message) => message.content)).toEqual([
+  expect(
+    manager.buildSessionContext().messages.map((message) => {
+      assert(message.role === "user" || message.role === "assistant");
+      return message.content;
+    }),
+  ).toEqual([
     "replacement",
     [{ type: "text", text: "signed output" }],
     [{ type: "text", text: "background" }],

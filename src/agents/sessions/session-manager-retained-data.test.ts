@@ -126,7 +126,9 @@ describe("bounded cleanup retaining opaque custom data", () => {
         data: data?.type === "custom" ? data.data : undefined,
       });
       expect(reopened.buildSessionContext()).toEqual(f.manager.buildSessionContext());
-      expect(reopened.buildSessionContext().messages.at(-1)?.content).toEqual(pending.content);
+      const result = reopened.buildSessionContext().messages.at(-1);
+      assert(result?.role === "assistant");
+      expect(result.content).toEqual(pending.content);
     },
   );
 

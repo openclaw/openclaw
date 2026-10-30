@@ -219,7 +219,7 @@ it("does not acquire unrelated excluded history while selecting background depen
   const marker = "unrelated-excluded-history";
   const excluded = Array.from({ length: 16 }, (_, index) =>
     transcriptMessage(`${marker}-${index}`, index === 0 ? null : `${marker}-${index - 1}`, {
-      ...makeAgentAssistantMessage(),
+      ...makeAgentAssistantMessage({ content: [] }),
       excludeFromContext: true,
     }),
   );
