@@ -4,6 +4,20 @@ import { flattenMarkdownToPlainText } from "./markdown-plain-text.js";
 describe("flattenMarkdownToPlainText", () => {
   it.each([
     ["fenced code blocks", "Before\n```ts\nconst hidden = true;\n```\nAfter", "Before After"],
+    ["unfinished long fence", "Before\n````md\nhidden", "Before `md hidden"],
+    ["unfinished triple fence", "Before\n```ts\nhidden", "Before ts hidden"],
+    ["inline long backticks", "Before ````literal```` After", "Before ` After"],
+    ["tilde fence", "Before\n~~~ts\nhidden\n~~~\nAfter", "Before ~ts hidden ~ After"],
+    [
+      "long markers inside a tilde fence",
+      "Before\n~~~md\n````ts\nhidden\n````\n~~~\nAfter",
+      "Before ~md ` ~ After",
+    ],
+    [
+      "long marker inside a triple-backtick fence",
+      "Before\n```md\n````not a closer\nhidden\n```\nAfter",
+      "Before `not a closer hidden After",
+    ],
     ["inline code", "Use `pnpm test` now", "Use pnpm test now"],
     [
       "links and escaped image markers",

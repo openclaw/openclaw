@@ -1,3 +1,39 @@
+function stripCompletedLongBacktickFences(text: string): string {
+  if (!text.includes("````")) {
+    return text;
+  }
+  let open: { start: number; marker: string } | undefined;
+  let cursor = 0;
+  let output = "";
+  // Keep complete marker runs from backtracking into the trailing text.
+  const fenceLines = /(?:^|\n) {0,3}(`{3,}(?!`)|~{3,}(?!~))([^\r\n\u2028\u2029]*)\r?(?=\n|$)/g;
+  for (const match of text.matchAll(fenceLines)) {
+    const [, marker, trailing] = match;
+    if (marker === undefined || trailing === undefined) {
+      continue;
+    }
+    if (!open) {
+      if (marker[0] === "`" && trailing.includes("`")) {
+        continue;
+      }
+      open = { start: match.index, marker };
+    } else if (
+      marker[0] === open.marker[0] &&
+      marker.length >= open.marker.length &&
+      /^[ \t]*$/.test(trailing)
+    ) {
+      // Track other fences so their literal long markers cannot consume later prose.
+      // Triple, tilde, and unfinished fences retain the existing flattening behavior.
+      if (open.marker.startsWith("````")) {
+        output += text.slice(cursor, open.start) + " ";
+        cursor = match.index + match[0].length;
+      }
+      open = undefined;
+    }
+  }
+  return output + text.slice(cursor);
+}
+
 /**
  * Flattens Markdown into a single line of readable plain text.
  *
@@ -7,7 +43,7 @@
  * link/image text, so it must not be used where the Markdown is rendered.
  */
 export function flattenMarkdownToPlainText(text: string): string {
-  const withoutCode = text
+  const withoutCode = stripCompletedLongBacktickFences(text)
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/```/g, " ")
     .replace(/`([^`]*)`/g, "$1");

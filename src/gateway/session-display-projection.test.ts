@@ -165,4 +165,18 @@ describe("projectSessionDisplayMessage", () => {
 
     expect(preview?.text).toBe("Read the report and then deploy.");
   });
+
+  test.each([
+    ["four backticks", "````md\n```ts\nhidden\n```\n````"],
+    ["five backticks and a longer closer", "`````md\n````ts\nhidden\n```\n``````"],
+    ["indented CRLF fences", "   ````md\r\nhidden\r\n  ````\t"],
+    ["closing marker with text", "````md\nhidden\n````not a closer\nstill hidden\n````"],
+  ])("omits completed longer fences before bounding a preview: %s", (_label, block) => {
+    const content = `Before\n${block.replace("hidden", "hidden ".repeat(40))}\nAfter`;
+    const message = assistant(content);
+    expect(projectSessionDisplayMessage(message, { flattenMarkdown: true })?.text).toBe(
+      "Before After",
+    );
+    expect(projectSessionDisplayMessage(message, { maxChars: 800 })?.text).toBe(content);
+  });
 });
