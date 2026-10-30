@@ -440,8 +440,7 @@ describe("irc client liveness", () => {
         const peer = await connectToQuietServer(answerPing);
         vi.setSystemTime(Date.now() + step);
         await vi.advanceTimersByTimeAsync(120_000);
-        const received = answerPing ? peer.pongReceived : peer.pingReceived;
-        await withTimeout(received, 1000, "IRC PING");
+        await withTimeout(answerPing ? peer.pongReceived : peer.pingReceived, 1000, "PING");
         expect(peer.client.isReady()).toBe(true);
         await vi.advanceTimersByTimeAsync(120_000);
         if (answerPing) {
