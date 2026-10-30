@@ -1261,6 +1261,7 @@
         var input = document.getElementById("openclaw-boot-composer");
         if (!input || !root.hasAttribute("data-openclaw-boot-chat")) return;
         var nav = navigator;
+        // Touch Return keeps native editing, matching the chat composer.
         var touch =
           /iPad|iPhone|iPod|Android/.test(nav.userAgent) ||
           (nav.platform === "MacIntel" && nav.maxTouchPoints > 1);
@@ -1298,8 +1299,6 @@
             }
           }, 0);
         });
-        // Touch keyboards open only on an explicit tap, matching the chat composer.
-        if (!touch) input.focus({ preventScroll: true });
       })();
     </script>
     <section

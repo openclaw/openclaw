@@ -25,10 +25,9 @@ suite.define(() => {
       });
       const boot = page.locator(".connect-splash #openclaw-boot-composer");
       await boot.waitFor({ state: "visible" });
-      // The composer is focused and nothing is drawn over it.
-      await expect
-        .poll(() => page.evaluate(() => document.activeElement?.id))
-        .toBe("openclaw-boot-composer");
+      // Like the chat composer, it takes focus only from the operator; nothing covers it.
+      expect(await boot.evaluate((el) => el === document.activeElement)).toBe(false);
+      await boot.click();
       const status = await page.locator(".connect-splash__status").boundingBox();
       const frame = await page.locator(".loading-skeleton__composer").boundingBox();
       expect(status!.y + status!.height).toBeLessThanOrEqual(frame!.y);
@@ -80,10 +79,12 @@ suite.define(() => {
         });
         const boot = page.locator("#openclaw-boot-composer");
         await boot.waitFor({ state: "visible" });
+        // Like the chat composer, it takes focus only from the operator.
+        expect(await boot.evaluate((el) => el === document.activeElement)).toBe(false);
         if (name === "phone") {
-          // Touch keyboards open only on an explicit tap.
-          expect(await boot.evaluate((el) => el === document.activeElement)).toBe(false);
           await boot.tap();
+        } else {
+          await boot.click();
         }
         const text = "Draft, not yet sent, long enough to wrap onto another line of the composer";
         await page.keyboard.type(text);
@@ -169,7 +170,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat/main/deadbeef`, {
         waitUntil: "domcontentloaded",
       });
-      await page.locator("#openclaw-boot-composer").waitFor({ state: "visible" });
+      await page.locator("#openclaw-boot-composer").click();
       await page.keyboard.type("Send this only if the session opens");
       await page.keyboard.press("Enter");
       await gateway.waitForRequest("connect");
