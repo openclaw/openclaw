@@ -69,26 +69,19 @@ vi.mock("../channels/plugins/tts-capabilities.js", () => ({
   },
 }));
 
-vi.mock("./provider-registry.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./provider-registry.js")>("./provider-registry.js");
-  installSpeechProviders([createMockSpeechProvider("mock", { label: "Mock" })]);
-  const normalizeId = (id: string | undefined) => id?.trim().toLowerCase() || undefined;
-  return {
-    ...actual,
-    canonicalizeSpeechProviderId: normalizeId,
-    normalizeSpeechProviderId: normalizeId,
-    getSpeechProvider: getSpeechProviderMock,
-    listSpeechProviders: listSpeechProvidersMock,
-  };
-});
-
 vi.mock("../plugins/capability-provider-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/capability-provider-runtime.js")>(
     "../plugins/capability-provider-runtime.js",
   );
   return {
     ...actual,
+    resolvePluginCapabilityProvider: ({
+      providerId,
+      cfg,
+    }: Parameters<typeof actual.resolvePluginCapabilityProvider>[0]) =>
+      getSpeechProviderMock(providerId, cfg) ?? undefined,
+    resolvePluginCapabilityProviders: ({ cfg }: { cfg?: OpenClawConfig }) =>
+      listSpeechProvidersMock(cfg),
     preparePluginCapabilityProviderResolution: ({ cfg }: { cfg?: OpenClawConfig }) => ({
       load: undefined,
       resolve: () => listSpeechProvidersMock(cfg),
@@ -107,6 +100,8 @@ vi.mock("./tts-core.js", async () => {
   const actual = await vi.importActual<typeof import("./tts-core.js")>("./tts-core.js");
   return { ...actual, scheduleCleanup: vi.fn() };
 });
+
+installSpeechProviders([createMockSpeechProvider("mock", { label: "Mock" })]);
 
 export const {
   testApi,
