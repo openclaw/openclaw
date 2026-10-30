@@ -165,7 +165,8 @@ export async function handleChatSendSetupError(params: {
 }): Promise<void> {
   const { cleanupAdmittedRun, lifecycleGeneration } = params.admission;
   const { agentId, clientRunId, sessionKey } = params.session;
-  const hidden = getAgentRunContext(clientRunId)?.projectSessionMessages === false;
+  const visibility = getAgentRunContext(clientRunId);
+  const hidden = visibility?.projectSessionMessages === false;
   if (params.error instanceof ExpectedProfileMismatchError) {
     // Selection failure belongs to this request, not the run's recorded outcome.
     // Release only this admission; never poison a receipt or replay cache.
@@ -189,7 +190,7 @@ export async function handleChatSendSetupError(params: {
   if (
     params.committedInput &&
     failureDisposition !== "client-retry" &&
-    getAgentRunContext(clientRunId)?.projectSessionLifecycle !== false
+    visibility?.projectSessionLifecycle !== false
   ) {
     const endedAt = Date.now();
     try {
@@ -202,6 +203,10 @@ export async function handleChatSendSetupError(params: {
           sessionId: params.committedInput.sessionId,
           lifecycleGeneration,
           ts: endedAt,
+          controlUiVisible:
+            !hidden &&
+            visibility?.isControlUiVisible !== false &&
+            params.admission.activeRunAbort.entry.adapter.controlUiVisible !== false,
           data: {
             phase: "error",
             startedAt: getRpcSourceStartedAt(params.admission.activeRunAbort.entry),
@@ -565,6 +570,10 @@ export function createChatSendDispatchErrorLifecycle(params: {
             sessionId: dispatchError.sessionId,
             lifecycleGeneration,
             ts: dispatchError.endedAt,
+            controlUiVisible:
+              !hidden &&
+              visibility?.isControlUiVisible !== false &&
+              activeRunAbort.entry.adapter.controlUiVisible !== false,
             data: {
               phase: "error",
               startedAt: dispatchError.startedAt,

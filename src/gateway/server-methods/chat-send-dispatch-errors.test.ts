@@ -54,6 +54,55 @@ const policyMessage =
   "OpenCode cannot run with this chat's tool restrictions. Choose a different model provider or update the tool settings.";
 
 describe("handleChatSendSetupError", () => {
+  it.each([true, false])(
+    "records setup failure activity only for visible work (%s)",
+    async (visible) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
+        const target = {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          sessionId: "setup-failure-session",
+          storePath: path.join(state.sessionsDir(), "sessions.json"),
+        };
+        const runId = "setup-failure-run";
+        await upsertSessionEntryCore(target, {
+          sessionId: target.sessionId,
+          updatedAt: 1_000,
+          lastActivityAt: 1_000,
+          lifecycleRunId: runId,
+        });
+        const activeRunAbort = registerRpcSourceForTest({
+          runId,
+          ...target,
+          storeScope: target.storePath,
+          controlUiVisible: visible,
+        });
+        const context = createDirectChatContext();
+        await handleChatSendSetupError({
+          admission: {
+            activeRunAbort,
+            cleanupAdmittedRun: vi.fn(),
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          },
+          committedInput: { sessionId: target.sessionId },
+          context,
+          error: new Error("setup failed"),
+          respond: vi.fn(),
+          session: { agentId: target.agentId, clientRunId: runId, sessionKey: target.sessionKey },
+        });
+        expect(context.logGateway.warn).not.toHaveBeenCalled();
+        const entry = loadSessionEntry(target);
+        expect(entry?.status).toBe("failed");
+        if (visible) {
+          expect(entry?.lastActivityAt).toBeGreaterThan(1_000);
+        } else {
+          expect(entry?.lastActivityAt).toBe(1_000);
+        }
+      });
+    },
+  );
+
   it.each([false, true])("preserves an uncertain setup outcome (cleanup: %s)", async (cleanup) => {
     const primary = new SqliteWorkerError("PRIVATE_WRITE_DETAIL", "outcome-unknown");
     const error = cleanup
@@ -182,7 +231,8 @@ describe("handleChatSendSetupError", () => {
 describe("createChatSendDispatchErrorLifecycle", () => {
   it.each([
     { missingProfile: false, policyFailure: false, sessionChanged: false },
-    { unstarted: true },
+    { unstarted: true, controlUiVisible: true },
+    { unstarted: true, controlUiVisible: false },
     { stateContention: true },
     { restartFailure: true },
     { missingProfile: true, policyFailure: false, sessionChanged: false },
@@ -197,6 +247,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       stateContention,
       restartFailure,
       unstarted,
+      controlUiVisible,
     }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         setRuntimeConfigSnapshot({});
@@ -214,6 +265,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           sessionId: target.sessionId,
           updatedAt: 1_000,
           startedAt: 1_000,
+          lastActivityAt: 1_000,
           ...(unstarted ? {} : { lifecycleRunId: runId }),
         });
         let userPersisted = false;
@@ -242,6 +294,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
               runId,
               ...target,
               storeScope: target.storePath,
+              controlUiVisible,
             }),
             cleanupAdmittedRun: vi.fn(),
             lifecycleGeneration,
@@ -325,6 +378,14 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           status: restartFailure ? "killed" : "failed",
           lastRunId: runId,
         });
+        if (unstarted) {
+          const activity = loadSessionEntry(target)?.lastActivityAt;
+          if (controlUiVisible) {
+            expect(activity).toBeGreaterThan(1_000);
+          } else {
+            expect(activity).toBe(1_000);
+          }
+        }
         const messages = (await loadTranscriptEvents(target)).filter(
           (entry) =>
             isRecord(entry) && (entry.type === "message" || entry.type === "custom_message"),
