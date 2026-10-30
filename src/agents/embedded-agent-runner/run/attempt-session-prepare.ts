@@ -617,11 +617,13 @@ export async function prepareEmbeddedAttemptSessionManager(
     }),
   );
   const prepareInitialUserTurnReplay: InitialUserTurnReplayPreparation | undefined =
-    preparedReplay &&
-    (async (signal) => {
-      const consume = await input.withOwnedTranscriptWrite(() => preparedReplay(signal));
-      return consume && ((onAdmitted) => input.withOwnedTranscriptWrite(() => consume(onAdmitted)));
-    });
+    typeof preparedReplay === "function"
+      ? async (signal) => {
+          const apply = await input.withOwnedTranscriptWrite(() => preparedReplay(signal));
+          return apply && ((admitted) => input.withOwnedTranscriptWrite(() => apply(admitted)));
+        }
+      : undefined;
+  attempt.inputAlreadyDelivered = preparedReplay === "already-delivered" ? true : undefined;
   const sessionManager = guardSessionManager(unguardedSessionManager, {
     agentId: input.sessionAgentId,
     runId: attempt.runId,

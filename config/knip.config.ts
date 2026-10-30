@@ -72,6 +72,7 @@ const repositoryScriptEntries = [
   "scripts/perf/tool-loop-outcome-measure.ts!",
   "scripts/perf/tool-search-snapshot-measure.ts!",
   "scripts/perf/trajectory-record-event-measure.ts!",
+  "scripts/perf/transcript-anchor-page-measure.ts!",
   "scripts/perf/transcript-json-array-measure.mjs!",
   "scripts/perf/transcript-pool-idle-measure.ts!",
   "scripts/perf/transcript-turn-gateway.mts!",
