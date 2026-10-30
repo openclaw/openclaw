@@ -28,6 +28,7 @@ const contractsConfig = "test/vitest/vitest.contracts-plugin.config.ts";
 const channelsConfig = "test/vitest/vitest.channels.config.ts";
 const gatewayMethodsConfig = "test/vitest/vitest.gateway-methods.config.ts";
 const gatewaySubscriptions = "src/gateway/server-runtime-subscriptions.test.ts";
+const gatewayRuntimeConfig = "src/gateway/server-runtime-config.test.ts";
 const gatewayServerConfig = "test/vitest/vitest.gateway-server.config.ts";
 const codeModeWorker = "src/agents/code-mode.import-boundary.test.ts";
 const agentsCoreConfig = agentVitestProjectOwners.core.config;
@@ -89,7 +90,7 @@ subprocess.for([
       : [
           "code-mode",
           "capture",
-          "gateway-subscriptions",
+          "gateway-runtime-config",
           "failure",
           "cancel",
           "excluded",
@@ -116,8 +117,8 @@ subprocess.for([
             ? [codeModeWorker, agentsCoreConfig]
             : mode === "capture"
               ? [discordCapture, e2eConfig]
-              : mode === "gateway-subscriptions"
-                ? [gatewaySubscriptions, gatewayServerConfig]
+              : mode === "gateway-runtime-config"
+                ? [gatewayRuntimeConfig, gatewayServerConfig]
                 : [coreWorker, infraConfig];
         const compiled = path.join(directory, "compiled.jsonl");
         const launched = path.join(directory, "launched.json");
@@ -272,7 +273,7 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
           "gateway-methods",
           "code-mode",
           "capture",
-          "gateway-subscriptions",
+          "gateway-runtime-config",
         ].includes(mode);
         const prepared = ready || mode === "failure" || mode === "cancel";
         expect(fs.existsSync(compilerReceipt)).toBe(prepared);
