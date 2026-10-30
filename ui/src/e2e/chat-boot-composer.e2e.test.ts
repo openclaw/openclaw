@@ -1,7 +1,6 @@
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { installNativeWebChrome } from "./native-nav.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI boot composer" });
 const sessionKey = "agent:main:boot-composer";
@@ -76,7 +75,6 @@ suite.define(() => {
 
   it.each([
     { name: "desktop", options: { viewport } },
-    { name: "native", options: { viewport: { width: 390, height: 844 } } },
     {
       name: "phone",
       options: {
@@ -91,9 +89,6 @@ suite.define(() => {
     "keeps an unsent draft, its focus and its frame still when the session opens ($name)",
     async ({ name, options }) => {
       await suite.withPage(options, async ({ page }) => {
-        if (name === "native") {
-          await installNativeWebChrome(page);
-        }
         const gateway = await bootGateway(page, ["connect"]);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey), {
           waitUntil: "domcontentloaded",

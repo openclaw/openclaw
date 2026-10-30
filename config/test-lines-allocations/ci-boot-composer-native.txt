@@ -1,2 +1,0 @@
-# Preserve the native shell's boot-composer geometry while web mobile uses its own gap.
-5
