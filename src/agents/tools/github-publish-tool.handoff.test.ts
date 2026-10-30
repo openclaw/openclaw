@@ -204,7 +204,7 @@ it.for([
           [
             ["sessions.github.action", "operator.sessions.write", "sessions", endpoint],
             ["sessions.github.publish", "operator.sessions.write", "sessions", publish],
-            ["config.get", "operator.read", "config", forbidden],
+            ["tools.catalog", "operator.read", "tools", forbidden],
             ["plugins.reload", "operator.admin", "plugins", forbidden],
           ],
           () => config,
@@ -230,11 +230,10 @@ it.for([
               expect(
                 (await createGitHubPublishTool().execute("resumed-publish", {})).details,
               ).toMatchObject({ status: "requested", requestId: "synthetic-publication" });
-              // Use a Gateway-wide read; session-scoped previews are allowed for this caller.
               await expect(
                 callAgentToolGatewayRequest({
-                  method: "config.get",
-                  params: {},
+                  method: "tools.catalog",
+                  params: scope,
                 }),
               ).rejects.toThrow("operator.read");
             }
