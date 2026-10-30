@@ -317,6 +317,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "visibleReasoningDetailTypes",
     "supportedReasoningEfforts",
     "unsupportedToolSchemaKeywords",
+    "thinkingLevels",
   ] as const;
   for (const field of stringListFields) {
     const normalized = normalizeTrimmedStringList(value[field]);

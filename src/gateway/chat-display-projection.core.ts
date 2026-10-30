@@ -29,6 +29,7 @@ import {
   isOpenClawMessageToolMirrorAssistantMessage,
   isTranscriptOnlyOpenClawAssistantMessage,
 } from "../shared/transcript-only-openclaw-assistant.js";
+import { projectAssistantCommentaryFallbacks } from "./chat-display-projection.commentary.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   extractAssistantTextForSilentCheck,
@@ -397,7 +398,11 @@ export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecover
       (message.stopReason === "stop" || message.stopReason === "length") &&
       !hasVisibleAssistant &&
       !unseenPending &&
-      pendingIndexes.length === 0
+      pendingIndexes.length === 0 &&
+      // Commentary is not a final answer, but its fallback owner may retain it.
+      (!options?.includeCommentaryFallbacks ||
+        projectAssistantCommentaryFallbacks(message, Number.MAX_SAFE_INTEGER).fallbacks.length ===
+          0)
     ) {
       messages.pop();
       return;
@@ -514,7 +519,11 @@ function projectEmptyAssistantErrorMessages(
 
 type ChatHistoryRecoveryOptions = Pick<
   ChatDisplayProjectionOptions,
-  "maxChars" | "stripEnvelope" | "assistantErrorPending" | "subagentCoordination"
+  | "maxChars"
+  | "stripEnvelope"
+  | "assistantErrorPending"
+  | "subagentCoordination"
+  | "includeCommentaryFallbacks"
 >;
 
 export function prepareChatHistoryRecoveryMessages(

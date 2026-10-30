@@ -57,8 +57,8 @@ const startRelay = (
   > = {},
 ) => createServiceChildRelayAdapter({ ...relayDefaults, ...params });
 
-function mockWritableRelay() {
-  const stub = buildRelay((child) => mocks.spawn.mockReturnValue(child));
+function mockWritableRelay(platform: "darwin" | "linux" = "darwin") {
+  const stub = buildRelay((child) => mocks.spawn.mockReturnValue(child), platform);
   cleanups.push(() => {
     closeStub(stub);
     stub.stdout.destroy();
@@ -612,50 +612,50 @@ it.each(["before", "after", "queued", "short"] as const)(
   },
 );
 
-it.each(["before", "after"])(
-  "joins forced stdio cleanup when control closes %s the force request",
-  async (controlCloses) => {
-    const f = await createRelay();
-    f.completeRoot();
-    await f.adapter.wait();
-    f.lineage.end();
-    f.groupProbe.mockReturnValue(true);
+it.each(["darwin", "linux", "uncertified"] as const)(
+  "retires %s stdio owner only after certified channel closure",
+  async (platform) => {
+    const f = mockWritableRelay(platform === "darwin" ? "darwin" : "linux");
+    const starting = startRelay();
+    const { emit } = relayPeer(f);
+    emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
+    const adapter = await starting;
+    const groupProbe = vi.spyOn(process, "kill").mockReturnValue(true);
+    emit({ type: "root-result", ...rootResult });
+    f.stdout.end();
+    f.stderr.end();
+    await adapter.wait();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    f.emit({ type: "closing", reason: "lineage-closed" });
-    await nextTurn();
-    expect(f.acknowledgements).toContainEqual(expect.objectContaining({ type: "closing-ack" }));
-    const [, extinct] = observeSettlement(f.adapter.waitForExtinction());
-    if (controlCloses === "before") {
-      f.closeControl();
-      await nextTurn();
-    }
     const [closing, finished] = observeSettlement(
-      closeOwnedStdioProcess(f.adapter, { force: true }),
+      closeOwnedStdioProcess(adapter, { force: platform === "darwin" }),
     );
-    await vi.advanceTimersByTimeAsync(500);
-    expect(finished).not.toHaveBeenCalled();
-    expect(extinct).not.toHaveBeenCalled();
-    expect(f.killSpy).not.toHaveBeenCalled();
-    if (controlCloses === "after") {
-      f.closeControl();
-      await nextTurn();
+    const descendantsReaped = platform === "linux" ? true : undefined;
+    emit({ type: "closing", reason: "lineage-closed", descendantsReaped });
+    f.control.destroy();
+    await nextTurn();
+    expect(f.killMock).not.toHaveBeenCalled();
+    f.lineage.end();
+    await nextTurn();
+    if (platform === "uncertified") {
+      await expect(closing).rejects.toThrow("without kernel descendant extinction");
+      expect(f.killMock).not.toHaveBeenCalled();
+      return;
     }
-    f.groupProbe.mockImplementation(() => {
-      throw Object.assign(new Error("synthetic absent group"), { code: "ESRCH" });
-    });
+    if (platform === "darwin") {
+      expect(f.killMock).not.toHaveBeenCalled();
+      groupProbe.mockImplementation(failGroup("ESRCH"));
+    }
     await vi.advanceTimersByTimeAsync(100);
-    expect(f.killSpy).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-    expect(f.cancellations).toHaveLength(0);
+    expect(f.killMock).toHaveBeenCalledExactlyOnceWith("SIGKILL");
     expect(finished).not.toHaveBeenCalled();
-    expect(extinct).not.toHaveBeenCalled();
-    f.exitRelay();
+    f.disconnectMock();
+    f.emitExit(0);
     await expect(closing).resolves.toMatchObject({
       reason: "forced-relay-exit",
       signalRequested: "SIGKILL",
       exit: { code: 0, signal: null },
     });
-    expect(f.groupProbe.mock.calls.every(([, signal]) => signal === 0)).toBe(true);
-    expect(f.cancellations).toHaveLength(0);
+    expect(platform === "linux" ? groupProbe.mock.calls : []).toEqual([]);
   },
 );
 

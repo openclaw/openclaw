@@ -6,57 +6,12 @@ import {
   settlePluginInstallTransactions,
   type PluginInstallTransaction,
 } from "./install-transaction.js";
-import { PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
-import {
-  disablePluginAfterUpdateFailure,
-  repairOpenClawPeerLinksForNpmInstalls,
-} from "./update-config.js";
+import { repairOpenClawPeerLinksForNpmInstalls } from "./update-config.js";
 import type {
   PluginUpdateLogger,
   PluginUpdateOutcome,
   PluginUpdateSummary,
 } from "./update-source.js";
-
-export function recordPluginUpdateFailure(params: {
-  config: OpenClawConfig;
-  disableOnFailure?: boolean;
-  dryRun?: boolean;
-  logger: PluginUpdateLogger;
-  outcomes: PluginUpdateOutcome[];
-  pluginId: string;
-  message: string;
-  options?: {
-    code?: string;
-    installedPayloadRunnable?: boolean;
-  };
-}): { config: OpenClawConfig; changed: boolean } {
-  const options = params.options ?? {};
-  const preserveInstalledPayload =
-    options.code === PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE &&
-    options.installedPayloadRunnable === true;
-  if (params.disableOnFailure && !params.dryRun && !preserveInstalledPayload) {
-    const message =
-      `Disabled "${params.pluginId}" after plugin update failure; OpenClaw will continue without it. ` +
-      params.message;
-    params.logger.warn?.(message);
-    params.outcomes.push({
-      pluginId: params.pluginId,
-      status: "skipped",
-      message,
-    });
-    return {
-      config: disablePluginAfterUpdateFailure(params.config, params.pluginId),
-      changed: true,
-    };
-  }
-  params.outcomes.push({
-    pluginId: params.pluginId,
-    status: "error",
-    code: options.code,
-    message: params.message,
-  });
-  return { config: params.config, changed: false };
-}
 
 export function createPluginUpdateTransactionState(params: object) {
   return {

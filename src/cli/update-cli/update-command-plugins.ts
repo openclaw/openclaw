@@ -63,14 +63,6 @@ function formatMissingPluginPayloadReason(entry: MissingPluginInstallPayload): s
       : `package directory is missing: ${entry.installPath}`;
 }
 
-function isDisabledAfterFailureOutcome(outcome: PluginUpdateOutcome): boolean {
-  return outcome.status === "skipped" && outcome.message.includes("after plugin update failure");
-}
-
-function isActionableSkippedPostUpdateOutcome(outcome: PluginUpdateOutcome): boolean {
-  return isDisabledAfterFailureOutcome(outcome) || isClawHubTrustSkippedOutcome(outcome);
-}
-
 export async function updatePluginsAfterCoreUpdate(params: {
   root: string;
   assertCurrent?: () => void;
@@ -184,7 +176,7 @@ async function updatePluginsAfterCoreUpdateWithLease(
       });
     }
     pluginUpdateOutcomes.push(outcome);
-    if (outcome.status !== "error" && !isActionableSkippedPostUpdateOutcome(outcome)) {
+    if (outcome.status !== "error" && !isClawHubTrustSkippedOutcome(outcome)) {
       return;
     }
     const includeWarningInReason =
