@@ -34,6 +34,9 @@ export function ReviewFilename(props: { name: string }) {
   );
 }
 
+/** Canonical NFC so NFD Git paths (macOS) still match NFC queries. */
+const matchPath = (path: string) => path.toLocaleLowerCase().normalize("NFC");
+
 /** Projection of the current Git scope only; never loads or owns the Files catalog. */
 function reviewTree(files: readonly SessionDiffFile[], query: string): ReviewNode[] {
   const root: ReviewDirectory = {
@@ -43,9 +46,9 @@ function reviewTree(files: readonly SessionDiffFile[], query: string): ReviewNod
     path: "",
     children: [],
   };
-  const filter = query.trim().toLocaleLowerCase();
+  const filter = matchPath(query.trim());
   for (const file of files) {
-    if (filter && !file.path.toLocaleLowerCase().includes(filter)) {
+    if (filter && !matchPath(file.path).includes(filter)) {
       continue;
     }
     const parts = file.path.replace(/\/$/, "").split("/");
