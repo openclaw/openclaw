@@ -131,6 +131,7 @@ export function createMatrixReplyDispatcher(config: {
     logVerboseMessage,
   } = config;
   const quietDraftStreaming = streaming === "quiet" || streaming === "progress";
+  const progressDraftStreaming = streaming === "progress";
   // Tool, block, and final payloads are delivered separately but share one first-reply slot.
   let hasReplied = false;
   const deliverPayload = async (reply: ReplyPayload): Promise<MatrixReplyDeliveryResult> => {
@@ -276,7 +277,7 @@ export function createMatrixReplyDispatcher(config: {
                   !payload.isError &&
                   !payloadReplyMismatch &&
                   !draftStream.mustDeliverFinalNormally() &&
-                  !(hasMedia && !ttsSupplement && streaming === "progress")
+                  !(hasMedia && !ttsSupplement && progressDraftStreaming)
                     ? { text: payloadText }
                     : undefined,
                 editFinal: async (draftEventId, edit) => {
