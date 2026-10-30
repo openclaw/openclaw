@@ -215,6 +215,8 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
   account: ResolvedAccount;
   runtime: RuntimeEnv;
   abortSignal: AbortSignal;
+  /** Fires when the gateway begins draining for shutdown or restart. */
+  shutdownSignal?: AbortSignal;
   log?: ChannelLogSink;
   getStatus: () => ChannelAccountSnapshot;
   setStatus: (next: ChannelAccountSnapshot) => void;

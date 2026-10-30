@@ -58,7 +58,10 @@ import type { PluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { PluginRuntimeChannel } from "../plugins/runtime/types-channel.js";
-import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
+import {
+  getGatewayRestartDrainSignal,
+  runOutsideGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
@@ -499,6 +502,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     accountId,
     account,
     abortSignal,
+    shutdownSignal: getGatewayRestartDrainSignal(),
     runtime: ensureChannelRuntime(channelId),
     log: ensureChannelLog(channelId),
     getStatus: () => getRuntime(channelId, accountId),

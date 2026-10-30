@@ -583,9 +583,9 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             runtime: ctx.runtime,
             channelRuntime: ctx.channelRuntime as PluginRuntime["channel"],
             abortSignal: ctx.abortSignal,
-            // During gateway shutdown the account abortSignal fires; treat it as
-            // the drain signal so signal-cli is never respawned once teardown begins.
-            shutdownSignal: ctx.abortSignal,
+            // shutdownSignal fires as soon as the gateway begins draining for
+            // shutdown or restart, before the per-account abortSignal aborts.
+            shutdownSignal: ctx.shutdownSignal,
             mediaMaxMb: account.config.mediaMaxMb,
             statusSink,
           });
