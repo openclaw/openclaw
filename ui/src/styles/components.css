@@ -69,7 +69,7 @@ openclaw-session-progress-hovercard-provider {
   margin: 24px auto 0;
 }
 
-.loading-skeleton__messages--interactive {
+.loading-skeleton__content {
   min-height: 0;
   overflow: auto;
 }

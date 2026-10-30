@@ -162,7 +162,7 @@ suite.define(() => {
         await boot.click();
         await expect.poll(() => visibleHitTarget(boot)).toBe(true);
         const recovery = error.getByRole("button", { name: "Reload", exact: true });
-        await page.locator(".loading-skeleton__messages--interactive").hover();
+        await page.locator(".loading-skeleton__content").hover();
         await page.mouse.wheel(0, 500);
         await expect.poll(() => visibleHitTarget(recovery)).toBe(true);
         expect(await visibleHitTarget(boot)).toBe(true);

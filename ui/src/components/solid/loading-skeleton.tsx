@@ -34,7 +34,7 @@ export function LoadingSkeleton(
       <div
         class={[
           "loading-skeleton__messages",
-          { "loading-skeleton__messages--interactive": Boolean(props.renderContent) },
+          { "loading-skeleton__content": Boolean(props.renderContent) },
         ]}
         aria-hidden={props.renderContent ? undefined : "true"}
         onMouseDown={(event) => {
