@@ -408,6 +408,48 @@ exercise native plugin loading. See [macOS signing](/platforms/mac/signing).
 
 ## Update the complete artifact
 
+### Desktop app artifacts
+
+The Tauri companion in `apps/linux` can embed a prebuilt AOT standalone artifact
+on glibc Linux x64/arm64 or Apple silicon macOS. Its build input defaults to
+`OPENCLAW_DESKTOP_RUNTIME=jit`; select AOT explicitly:
+
+```sh
+cd apps/linux/src-tauri
+OPENCLAW_DESKTOP_RUNTIME=aot \
+OPENCLAW_DESKTOP_AOT_ARTIFACT=/absolute/path/to/standalone-aot \
+  pnpm dlx @tauri-apps/cli@2.11.4 build --bundles app \
+  --config '{"bundle":{"createUpdaterArtifacts":false}}'
+```
+
+This command packages a macOS Tauri app. Linux builds use `--bundles deb,appimage`
+with the [AppImage preparation steps](https://github.com/openclaw/openclaw/blob/main/apps/linux/README.md#packaging).
+The normal app workflow never builds the AOT compiler. Produce and qualify the
+standalone artifact separately, then supply the directory containing its
+`manifest.json`, executable, and `runtime/` sidecar. Its OpenClaw version and
+target must match the app build. Keep the recorded source and compiler identity;
+a matching version number alone does not establish qualification.
+
+The desktop manifest embeds the standalone facts alongside `runtime.flavor` and
+an inventory of the staged files. Seeding verifies those bytes; launch selection,
+CLI installation, and Gateway activation follow that manifest. Changing the
+input back to `jit` packages the pinned Bun and matching OpenClaw package. After
+updating an existing app, use **Use bundled runtime…** to activate its runtime.
+The service and CLI retain their current selection until that action succeeds.
+
+AOT remains experimental. Qualify native addons, fetched plugins, and child
+processes against the exact signed executable and sidecar. Linux payloads must
+meet the app's glibc 2.35 and GLIBCXX_3.4.30 floor; packaging cannot lower a
+payload's ABI requirement. macOS Tauri builds require macOS 26.2 or later, with
+hardened runtime and no `allow-jit` or unsigned executable-memory entitlement
+for AOT. macOS Intel uses JIT.
+
+The native macOS app is not switched by this Tauri input. A future native adapter
+can consume the same standalone executable, sidecar, target, source/compiler
+identity, and hashes: select AOT for `darwin-arm64`, keep JIT for `darwin-x64`,
+and let its existing runtime owner handle seeding, launch, and updates. That
+adoption is a separate reviewed app change; all current app defaults remain JIT.
+
 ### Managed Gateway service
 
 Install a complete standalone artifact as the managed Gateway runtime with:

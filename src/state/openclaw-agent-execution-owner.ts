@@ -2,6 +2,7 @@ import { addAbortListener } from "node:events";
 import path from "node:path";
 import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { sleepWithAbort } from "../infra/backoff.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { resolveAgentDatabaseIdleHandleTtlMs } from "../infra/sqlite-handle-lifecycle.js";
@@ -184,6 +185,7 @@ export function createAgentDatabaseExecution(
           }
         },
         (error: unknown) => {
+          materializeErrorStack(error);
           cleanupFailure = { error };
           throw error;
         },

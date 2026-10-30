@@ -148,7 +148,7 @@ const MEMORY_WORDS: Record<MemorySource, string> = {
 };
 
 /** "Runs weekly, Sundays at 3:45 AM UTC (cron `45 3 * * 0`)." for a cron schedule. */
-export function scheduleLine(expr: string, timezone: string) {
+function scheduleLine(expr: string, timezone: string) {
   const words = SCHEDULE_WORDS[expr];
   return words
     ? `Runs ${words} ${timezone} (cron \`${expr}\`).`
@@ -246,7 +246,7 @@ const runMessageBlock = (message: string) => ["Run message:", "", "```text", mes
  * The message an ongoing scribe's automation sends each run: the work settings, the work step
  * and the closing line. Editing it on the automation changes what later runs do.
  */
-export function runPrompt(setup: ScribeSetup) {
+function runPrompt(setup: ScribeSetup) {
   const scribe = scribeById(setup.scribe)!;
   const settings = workSettings(setup);
   return [

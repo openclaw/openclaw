@@ -671,21 +671,20 @@ describe("chat transcript rendering", () => {
     );
   }
 
-  function searchFor(container: HTMLElement, query: string) {
-    const input = requireElement(container, "input") as HTMLInputElement;
+  async function searchFor(container: HTMLElement, query: string) {
+    const input = await waitForSolid(() => requireElement(container, "input") as HTMLInputElement);
     input.value = query;
     input.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
-  it("projects search changes without redraw callbacks or replacing its input", () => {
+  it("projects search changes without redraw callbacks or replacing its input", async () => {
     const paneId = "native-search-revision";
     const state = getTranscriptState(paneId);
     const container = transcriptContainer();
     render(renderTranscriptSearch(paneId), container);
     expect(container.querySelector("input")).toBeNull();
     state.search.toggle();
-    flush();
-    const input = requireElement(container, "input") as HTMLInputElement;
+    const input = await waitForSolid(() => requireElement(container, "input") as HTMLInputElement);
     input.focus();
     state.search.setQuery("updated query");
     flush();
@@ -869,7 +868,7 @@ describe("chat transcript rendering", () => {
       toggleTranscriptSearch(paneId);
       flush();
       transcript.start();
-      searchFor(searchContainer, text);
+      await searchFor(searchContainer, text);
       await flushDeferredRowPrune();
 
       const bubble = requireElement(container, ".chat-group.assistant .chat-bubble");
@@ -915,7 +914,7 @@ describe("chat transcript rendering", () => {
       transcript.start();
       rerender();
       if (search) {
-        searchFor(searchContainer, "workspace layout");
+        await searchFor(searchContainer, "workspace layout");
       }
       await flushDeferredRowPrune();
 

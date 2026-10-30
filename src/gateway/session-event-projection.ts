@@ -18,7 +18,10 @@ import {
   type ConnectionSessionRows,
 } from "./session-ancestor-references.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
-import { createSessionRowDeltaDiffer } from "./session-row-delta-fields.js";
+import {
+  createSessionRowDeltaDiffer,
+  prepareSessionRowDeltaFields,
+} from "./session-row-delta-fields.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -251,6 +254,9 @@ export function prepareSessionEventProjection(
       let delivery = deliveries.get(references.history);
       if (!delivery) {
         const { row } = audience;
+        if (rowDeltas) {
+          prepareSessionRowDeltaFields(row, record.materialized.row);
+        }
         const plan = references.prepareDelivery(
           row,
           audience.ancestors,

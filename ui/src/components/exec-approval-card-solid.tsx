@@ -34,7 +34,6 @@ import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
 import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 import { KeyboardShortcut } from "./solid/kbd.tsx";
-import "./kbd.css";
 
 registerEnglishCatalog(registerApprovalsEnglish);
 

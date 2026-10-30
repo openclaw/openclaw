@@ -667,7 +667,11 @@ type ReplyOperationAdmissionSnapshot =
   | {
       status: "accepted";
       mode: "steer" | "followup";
-      reason?: "requester-mismatch" | "steering-unavailable" | "explicit-followup";
+      reason?:
+        | "requester-mismatch"
+        | "steering-unavailable"
+        | "explicit-followup"
+        | "collaborative-steering-disabled";
     }
   | {
       status: "skipped";

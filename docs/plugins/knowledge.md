@@ -55,7 +55,10 @@ are globally disabled, if `knowledge` is in `plugins.deny`, or if
 `plugins.entries.knowledge.enabled` is `false`. When the slot points elsewhere,
 the memory-slot gate keeps Knowledge disabled.
 
-Slot changes reload the plugin runtime without a Gateway restart. Verify the
+Slot changes reload the plugin runtime without a Gateway restart. Knowledge
+declares `reload.turnHandover`, so a reload does not wait for running agent
+turns: each turn moves to the new version at its next model step
+([reload-safe plugins](/plugins/sdk-runtime#reload-safe-plugins)). Verify the
 runtime registration and the live service:
 
 ```bash

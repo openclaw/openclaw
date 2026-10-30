@@ -37,8 +37,9 @@ export function memoryIndexCutoff(messages: readonly unknown[], now: number): nu
 // Edits keep a record's recorded_at, so re-rendering current records could
 // change the system prompt between turns; the pin keeps it byte-stable until
 // compaction or a new session moves the cutoff. Authority is still checked live
-// on every turn before a pinned text is reused. A Gateway restart re-renders
-// once (accepted: one prefix change per restart).
+// on every turn before a pinned text is reused. A Gateway restart or plugin
+// reload starts with no pins and re-renders once, including mid-turn when a
+// reload hands a running turn over (accepted: one prefix change per reload).
 const MAX_PINNED_INDEXES = 512;
 const pinnedIndexes = new Map<string, string>();
 

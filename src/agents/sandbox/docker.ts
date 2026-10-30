@@ -360,7 +360,7 @@ async function ensureSandboxContainerLifecycle(
       }
       params.assertCurrent?.();
       phases.mark("attempt.setup.sandbox.backend.container_start");
-      await execContainer(engine, ["start", containerId]);
+      await execContainer(engine, ["start", containerId], { assertCurrent: params.assertCurrent });
       const setupCommand = params.cfg.docker.setupCommand;
       if (setupCommand?.trim()) {
         params.assertCurrent?.();
@@ -424,7 +424,7 @@ async function ensureSandboxContainerLifecycle(
     params.assertCurrent?.();
     if (!running) {
       phases.mark("attempt.setup.sandbox.backend.container_start");
-      await execContainer(engine, ["start", containerId]);
+      await execContainer(engine, ["start", containerId], { assertCurrent: params.assertCurrent });
     }
   }
   phases.mark("attempt.setup.sandbox.backend.registry_publish");

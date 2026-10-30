@@ -89,6 +89,11 @@ the nested shape before starting the Gateway. See the
   output. Still uses the chunker if the buffered text exceeds `maxChars`, so it
   can emit multiple chunks at the end.
 
+Final-answer blocks wait while trailing tool syntax or Markdown ownership is still
+ambiguous. Recognized calls are hidden; literal examples and unfinished text are
+released when the text ends. Ordinary prose keeps streaming, and preview updates
+retain their existing replacement behavior.
+
 <a id="pending-text-phases" />
 
 ### Text phases and final replies

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
@@ -9,6 +10,12 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import type { SandboxBackendHandle } from "../../agents/sandbox/backend-handle.types.js";
+import { requireGit } from "../../agents/worktrees/git.js";
+import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
+import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../../infra/diagnostic-events.js";
 import { stagedInputDirectory, STAGED_INPUT_GITIGNORE } from "../../media/staged-inputs.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import {
@@ -19,7 +26,10 @@ import {
 import { localWorkspaceDigestBytes } from "./local-workspace-cas.js";
 import { readLocalWorkspaceTree } from "./local-workspace-cas.kernel.js";
 import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-manifest-scan.js";
-import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
+import {
+  checkpointLocalWorkspacePath,
+  withLocalWorkspaceProjection,
+} from "./local-workspace-projection.js";
 import * as workspaceStore from "./local-workspace-store.js";
 import { withLocalWorkspaceStore } from "./local-workspace-store.js";
 import {
@@ -134,10 +144,7 @@ export async function proveWorkerOwnedIncrementalWorkspace(owner: LocalWorkspace
   await withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) => {
     expect(store.get()!.baseline_json).toBeNull();
     const baseline = await store.manifest(store.get()!, { kind: "materialize" });
-    expect(baseline.kind).toBe("materialize");
-    if (baseline.kind !== "materialize") {
-      throw new Error("Expected complete baseline at the publication boundary");
-    }
+    assert(baseline.kind === "materialize", "Expected complete baseline at publication");
     const manifest = parseWorkerWorkspaceManifest(baseline.rawManifest, baseline.manifestRef);
     expect(manifest.entries.find((entry) => entry.path === "source.txt")).toMatchObject({
       type: "file",
@@ -180,6 +187,56 @@ export async function proveIncrementalWorkspaceEdits(owner: LocalWorkspaceOwner)
   await expectText(projection, "source.txt", "modified\n");
 }
 
+export async function proveHostAdmittedBuildInputs(owner: LocalWorkspaceOwner) {
+  const canonical = owner.worktree.path;
+  const inputs = [
+    ".artifacts/build-all-cache/compile/outputs/dist/authored.txt",
+    ".artifacts/build-cache-inputs/authored.json",
+  ];
+  await writeText(canonical, ".gitignore", ".env.local\n.artifacts/\n");
+  for (const entryPath of inputs) {
+    await fs.mkdir(path.dirname(path.join(canonical, entryPath)), { recursive: true });
+    await writeText(canonical, entryPath, "original input\n");
+  }
+  await requireGit(canonical, ["add", "--force", "--", ...inputs]);
+  const projection = await prepare(owner);
+  for (const entryPath of inputs) {
+    await expectText(projection, entryPath, "original input\n");
+    await writeText(projection, entryPath, "guest input edit\n");
+  }
+  const cache = ".artifacts/build-all-cache/other/outputs/generated.js";
+  await fs.mkdir(path.dirname(path.join(projection, cache)), { recursive: true });
+  await writeText(projection, cache, "disposable cache\n");
+  // The guest's independent index cannot turn generated outputs into host-admitted inputs.
+  await requireGit(projection, ["add", "--force", "--", cache]);
+  if (process.platform !== "win32" && process.getuid?.() !== 0) {
+    await fs.chmod(path.join(projection, cache), 0);
+  }
+  await synchronize(owner);
+  await closeOpenClawStateDatabaseAsync();
+  await prepare(owner);
+  for (const entryPath of inputs) {
+    await expectText(canonical, entryPath, "guest input edit\n");
+    await expectText(projection, entryPath, "guest input edit\n");
+  }
+  await expectMissing(canonical, cache);
+  await writeText(canonical, inputs[0]!, "human input edit\n");
+  await writeText(projection, inputs[0]!, "conflicting guest edit\n");
+  await expect(synchronize(owner)).rejects.toThrow("conflict");
+  await expectText(canonical, inputs[0]!, "human input edit\n");
+  await writeText(canonical, inputs[0]!, "guest input edit\n");
+  await withLocalWorkspaceProjection(owner, (state) => state.settle());
+  await expectText(canonical, inputs[0]!, "conflicting guest edit\n");
+  if (process.platform !== "win32" && process.getuid?.() !== 0) {
+    await fs.chmod(path.join(projection, inputs[1]!), 0);
+    try {
+      await expect(synchronize(owner)).rejects.toThrow("EACCES");
+    } finally {
+      await fs.chmod(path.join(projection, inputs[1]!), 0o644);
+    }
+  }
+}
+
 export async function proveStagedInputCheckpointOwnership(owner: LocalWorkspaceOwner) {
   const projection = await prepare(owner);
   const directory = stagedInputDirectory(randomUUID());
@@ -195,44 +252,47 @@ export async function proveStagedInputCheckpointOwnership(owner: LocalWorkspaceO
   await expectText(projection, input, "edited input\n");
 }
 
-export async function proveSharedSandboxCheckpoints(
-  owner: LocalWorkspaceOwner,
-  signal: AbortSignal,
+export async function prepareSandboxCheckpointFixture(
+  owner: LocalWorkspaceOwner & Partial<Disposable>,
+  assertCurrent?: () => void,
 ) {
-  const [projectionOwner, { prepareLocalSandboxWorkspace }, { resolveSandboxConfigForAgent }] =
-    await Promise.all([
-      import("./local-workspace-projection.js"),
-      import("../../agents/sandbox/local-workspace.js"),
-      import("../../agents/sandbox/config.js"),
-    ]);
-  let joinedAuthorityRevoked = false;
-  vi.spyOn(projectionOwner, "resolveLocalWorkspaceOwner")
-    .mockResolvedValueOnce({ ...owner, [Symbol.dispose]() {} })
-    .mockResolvedValueOnce({
-      ...owner,
-      workerAuthority: {
-        ...owner.workerAuthority,
-        assertCurrent: () => {
-          owner.workerAuthority?.assertCurrent?.();
-          if (joinedAuthorityRevoked) {
-            throw new Error("Joined checkpoint authority revoked");
-          }
-        },
-      },
-      [Symbol.dispose]() {},
-    });
-  const preparation = {
+  const projectionOwner = await import("./local-workspace-projection.js");
+  const { prepareLocalSandboxWorkspace } = await import("../../agents/sandbox/local-workspace.js");
+  const { resolveSandboxConfigForAgent } = await import("../../agents/sandbox/config.js");
+  vi.spyOn(projectionOwner, "resolveLocalWorkspaceOwner").mockResolvedValue({
+    ...owner,
+    [Symbol.dispose]: owner[Symbol.dispose] ?? (() => {}),
+  });
+  const projection = await prepareLocalSandboxWorkspace({
     cfg: { worktreeAcceleration: false },
     agentId: owner.agentId,
     sessionKey: owner.sessionKey,
     workspaceDir: owner.worktree.path,
     sandbox: resolveSandboxConfigForAgent({}, owner.agentId),
-  };
-  using first = await prepareLocalSandboxWorkspace(preparation);
-  using second = await prepareLocalSandboxWorkspace(preparation);
-  if (!first || !second) {
-    throw new Error("Expected managed projections");
-  }
+    assertCurrent,
+  });
+  assert(projection, "Expected managed projection");
+  return projection;
+}
+
+export async function proveSharedSandboxCheckpoints(
+  owner: LocalWorkspaceOwner,
+  signal: AbortSignal,
+) {
+  let joinedAuthorityRevoked = false;
+  using first = await prepareSandboxCheckpointFixture(owner);
+  using second = await prepareSandboxCheckpointFixture({
+    ...owner,
+    workerAuthority: {
+      ...owner.workerAuthority,
+      assertCurrent: () => {
+        owner.workerAuthority?.assertCurrent?.();
+        if (joinedAuthorityRevoked) {
+          throw new Error("Joined checkpoint authority revoked");
+        }
+      },
+    },
+  });
   const withStore = workspaceStore.withLocalWorkspaceStore;
   let scans = 0;
   let beforeRun: (() => Promise<void>) | undefined;
@@ -301,37 +361,13 @@ export async function proveSharedSandboxCheckpoints(
 }
 
 export async function proveSandboxMutationCheckpoints(owner: LocalWorkspaceOwner) {
-  const [
-    projectionOwner,
-    { prepareLocalSandboxWorkspace, bindLocalSandboxWorkspace },
-    { resolveSandboxConfigForAgent },
-    { createSandboxTestContext },
-    { createHostSandboxFsBridge },
-    { createSandboxedWriteTool },
-    { createApplyPatchTool },
-  ] = await Promise.all([
-    import("./local-workspace-projection.js"),
-    import("../../agents/sandbox/local-workspace.js"),
-    import("../../agents/sandbox/config.js"),
-    import("../../agents/sandbox/test-fixtures.js"),
-    import("../../agents/test-helpers/host-sandbox-fs-bridge.js"),
-    import("../../agents/agent-tools.read.js"),
-    import("../../agents/apply-patch.js"),
-  ]);
-  vi.spyOn(projectionOwner, "resolveLocalWorkspaceOwner").mockResolvedValue({
-    ...owner,
-    [Symbol.dispose]() {},
-  });
-  using projection = await prepareLocalSandboxWorkspace({
-    cfg: { worktreeAcceleration: false },
-    agentId: owner.agentId,
-    sessionKey: owner.sessionKey,
-    workspaceDir: owner.worktree.path,
-    sandbox: resolveSandboxConfigForAgent({}, owner.agentId),
-  });
-  if (!projection) {
-    throw new Error("Expected managed projection");
-  }
+  const { bindLocalSandboxWorkspace } = await import("../../agents/sandbox/local-workspace.js");
+  const { createSandboxTestContext } = await import("../../agents/sandbox/test-fixtures.js");
+  const { createHostSandboxFsBridge } =
+    await import("../../agents/test-helpers/host-sandbox-fs-bridge.js");
+  const { createSandboxedWriteTool } = await import("../../agents/agent-tools.read.js");
+  const { createApplyPatchTool } = await import("../../agents/apply-patch.js");
+  using projection = await prepareSandboxCheckpointFixture(owner);
   const backend: SandboxBackendHandle = {
     id: "docker",
     runtimeId: "file-checkpoint-fixture",
@@ -524,12 +560,10 @@ export async function proveInterruptedWorkspaceCheckpoint(
   if (phase.startsWith("v31 rejected")) {
     await withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) => {
       const baseline = await store.manifest(store.get()!, { kind: "materialize" });
-      expect(baseline.kind).toBe("materialize");
-      if (baseline.kind === "materialize") {
-        expect(JSON.parse(baseline.rawManifest).entries).toContainEqual(
-          expect.objectContaining({ path: ".gitignore" }),
-        );
-      }
+      assert(baseline.kind === "materialize");
+      expect(JSON.parse(baseline.rawManifest).entries).toContainEqual(
+        expect.objectContaining({ path: ".gitignore" }),
+      );
     });
   }
   expect(await readLocalWorkspaceProjection(owner.worktree.id)).toMatchObject({
@@ -538,4 +572,46 @@ export async function proveInterruptedWorkspaceCheckpoint(
     checkpoint_json: null,
     baseline_json: null,
   });
+}
+
+export async function proveAbsentProjectionCheckpoints(owner: LocalWorkspaceOwner) {
+  await insertRegistryWorktree(process.env, owner.worktree);
+  expect(await readLocalWorkspaceProjection(owner.worktree.id)).toBeUndefined();
+  await waitForDiagnosticEventsDrained();
+  const requests: string[] = [];
+  const stop = onInternalDiagnosticEvent(
+    (event) => {
+      if (
+        event.type === "worker.request" &&
+        event.kind === "sqlite_writer" &&
+        event.phase === "completed" &&
+        event.requestClass.startsWith("stateLease.")
+      ) {
+        requests.push(event.requestClass);
+      }
+    },
+    { include: ["worker.request"] },
+  );
+  const checkpoint = () =>
+    checkpointLocalWorkspacePath({ cwd: owner.worktree.path, assertCurrent: owner.assertCurrent });
+  try {
+    for (let poll = 0; poll < 4; poll++) {
+      await checkpoint();
+    }
+    await waitForDiagnosticEventsDrained();
+    expect(requests).toEqual([]);
+
+    const projection = await prepare(owner);
+    await writeText(projection, "source.txt", "later guest edit\n");
+    await waitForDiagnosticEventsDrained();
+    requests.length = 0;
+    await checkpoint();
+    await waitForDiagnosticEventsDrained();
+    await expectText(owner.worktree.path, "source.txt", "later guest edit\n");
+    expect(requests).toEqual(
+      expect.arrayContaining(["stateLease.acquire", "stateLease.verify", "stateLease.release"]),
+    );
+  } finally {
+    stop();
+  }
 }

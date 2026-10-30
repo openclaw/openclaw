@@ -399,3 +399,8 @@ export function requireGitCommandOutput(
 export function gitNullConfigPath(): string {
   return process.platform === "win32" ? "NUL" : "/dev/null";
 }
+
+/** Quote a Git config value without treating its contents as config syntax. */
+export function quoteGitConfig(value: string): string {
+  return `"${value.replace(/\\/gu, "\\\\").replace(/"/gu, '\\"').replace(/\n/gu, "\\n").replace(/\t/gu, "\\t").replaceAll("\b", "\\b")}"`;
+}

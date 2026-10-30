@@ -20,6 +20,7 @@ import { STORAGE_FIELD_LABELS } from "./zod-schema.storage.js";
 import { TELEMETRY_FIELD_LABELS } from "./zod-schema.telemetry.js";
 
 export const FIELD_LABELS: Record<string, string> = {
+  "security.preset": "Security Preset",
   ...META_FIELD_LABELS,
   ...BROWSER_FIELD_LABELS,
   ...ENVIRONMENT_FIELD_LABELS,

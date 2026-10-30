@@ -148,6 +148,7 @@ function handleCliSignal(signal: CliExitSignal): void {
     detachCliSignalExitHandlers();
     return;
   }
+  process.stderr.write(`Command interrupted by ${signal}. Waiting for cleanup before exiting.\n`);
   cliSignalExit = waitForSignalExitBarriers(signal)
     .catch(() => {
       process.stderr.write(

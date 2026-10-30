@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import path from "node:path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Check } from "typebox/value";
 import { annotationEvidence } from "./annotations.js";
 import { ATTACHMENT_DOWNLOAD_CHUNK_BYTES } from "./attachment-contract.js";
@@ -278,7 +279,7 @@ export class SampleVault extends VaultScanner {
         return [...outgoing, ...incoming].map(({ link, incoming: isIncoming }) => {
           const source = current.find((record) => record.id === other.metadata.source_page);
           return Object.assign(
-            { record: summary(other), text: other.body.slice(0, 4000) },
+            { record: summary(other), text: truncateUtf16Safe(other.body, 4000) },
             other.metadata.attribution ? { attribution: other.metadata.attribution } : {},
             other.metadata.assertion_origin
               ? { assertionOrigin: other.metadata.assertion_origin }

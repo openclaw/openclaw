@@ -15,6 +15,10 @@ import {
   createOpenAiResponsesTextEvent,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
+import {
+  createAssistantVisibleStreamText,
+  sanitizeAssistantVisibleStreamText,
+} from "./embedded-agent-utils.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { markCoreTtsToolResult } from "./tools/tts-tool-result-provenance.js";
@@ -101,26 +105,75 @@ function emitOrphanedVoice(emit: (event: unknown) => void) {
   });
 }
 
-it("delivers intact graphemes from 1-character provider deltas", async () => {
-  const cluster = "👨‍👩‍👧‍👦";
-  const source = `${"x".repeat(1195)}${cluster}done`;
+it.each([
+  { name: "graphemes", source: `${"x".repeat(1195)}👨‍👩‍👧‍👦done`, minChars: 800, maxChars: 1200 },
+  { name: "empty tool payloads", source: "[tool:read] {}\n[tool:read] {}\n", hidden: true },
+  {
+    name: "write payloads",
+    source:
+      '[tool:write]\n{"path":"notes.txt","content":"SECRET CONTENT"}\n[tool:read]\n{"path":"b"}\n',
+    hidden: true,
+  },
+  {
+    name: "literal inline code",
+    source:
+      '`\n[tool:write]\n{"content":"a` This literal example stays visible and keeps streaming as ordinary block replies without any structural terminator.',
+    minChars: 64,
+    maxChars: 128,
+    visible: ["ordinary block replies"],
+    // Markdown ownership can still change, so only settled or terminal delivery is promised.
+  },
+  {
+    name: "next message after an unfinished hold",
+    source: "Hello there, this is visible prose without newlines",
+    prefix: "[a]\n{",
+    visible: ["Hello there"],
+    beforeEnd: "Hello there",
+  },
+])("streams $name at the block-delivery boundary", async (test) => {
+  const { minChars = 8, maxChars = 24 } = test;
   const { emit, subscription, onBlockReply } = blockReplyHarness({
     blockReplyBreak: "text_end",
-    blockReplyChunking: { minChars: 800, maxChars: 1200, breakPreference: "paragraph" },
+    blockReplyChunking: { minChars, maxChars, breakPreference: "paragraph" },
   });
-  let text = "";
-  for (const delta of Array.from(source)) {
-    text += delta;
-    emitResponsesText(emit, "text_delta", text, "grapheme-answer", delta);
+  if (test.prefix) {
+    emitMessage(emit, "message_start");
+    emitResponsesText(emit, "text_delta", test.prefix, "prior");
+    emitResponsesText(emit, "text_end", test.prefix, "prior");
+    emitMessage(emit, "message_end", textAssistant(test.prefix));
+    await subscription.waitForPendingEvents();
+    onBlockReply.mockClear();
   }
-  emitResponsesText(emit, "text_end", source, "grapheme-answer");
+  emitMessage(emit, "message_start");
+  let text = "";
+  for (const delta of Array.from(test.source)) {
+    text += delta;
+    emitResponsesText(emit, "text_delta", text, "answer", delta);
+  }
+  const chunks = () => onBlockReply.mock.calls.map(([reply]) => reply.text ?? "");
+  await subscription.waitForPendingEvents();
+  if (test.beforeEnd) {
+    expect(chunks().join("").replace(/\s/gu, "")).toContain(test.beforeEnd.replace(/\s/gu, ""));
+  }
+  emitResponsesText(emit, "text_end", test.source, "answer");
   emit({ type: "agent_end", messages: [], willRetry: false });
   await subscription.waitForPendingEvents();
-  const chunks = onBlockReply.mock.calls.map(([reply]) => reply.text ?? "");
-  expect(chunks.length).toBeGreaterThan(1);
-  expect(chunks.join("")).toBe(source);
-  expect(chunks.filter((chunk) => chunk.includes(cluster))).toHaveLength(1);
-  expect(chunks.every((chunk) => chunk.length <= 1200)).toBe(true);
+  if (test.hidden) {
+    expect(chunks()).toEqual([]);
+  }
+  const source = onBlockReply.mock.calls
+    .map(([reply]) => getReplyPayloadMetadata(reply)?.blockSourceText ?? reply.text ?? "")
+    .join("");
+  expect(source.trimEnd()).toBe(test.hidden ? "" : test.source);
+  for (const visible of test.visible ?? []) {
+    expect(chunks().join("").replace(/\s/gu, "")).toContain(visible.replace(/\s/gu, ""));
+  }
+  if (test.name === "graphemes") {
+    expect(chunks().length).toBeGreaterThan(1);
+    expect(chunks().join("")).toBe(test.source);
+    expect(chunks().filter((chunk) => chunk.includes("👨‍👩‍👧‍👦"))).toHaveLength(1);
+    expect(chunks().every((chunk) => chunk.length <= maxChars)).toBe(true);
+  }
 });
 
 function createAgentEventHarness(
@@ -146,14 +199,6 @@ function createToolErrorHarness(runId: string) {
 
 function emitAssistantTextDelta(emit: (evt: unknown) => void, delta: string) {
   emitUpdate(emit, { role: "assistant" }, { type: "text_delta", delta });
-}
-
-function emitThinkingEvent(
-  emit: (evt: unknown) => void,
-  thinking: string,
-  assistantMessageEvent: { type: "thinking_delta"; delta: string } | { type: "thinking_end" },
-) {
-  emitUpdate(emit, thinkingMessage(thinking), assistantMessageEvent);
 }
 
 async function createGeneratedImageHarness(
@@ -373,7 +418,10 @@ it.each([false, true])("gates off-mode reasoning streaming with opt-in=%s", (ena
     streamReasoningInNonStreamModes: enabled,
     onReasoningStream,
   });
-  emitThinkingEvent(emit, "Checking files", { type: "thinking_delta", delta: "Checking files" });
+  emitUpdate(emit, thinkingMessage("Checking files"), {
+    type: "thinking_delta",
+    delta: "Checking files",
+  });
   if (enabled) {
     expect(onReasoningStream).toHaveBeenCalledWith({
       text: "Checking files",
@@ -426,7 +474,7 @@ it("emits reasoning end once when native and tagged reasoning end overlap", () =
   });
   emitMessage(emit, "message_start");
   emitAssistantTextDelta(emit, "<think>Checking");
-  emitThinkingEvent(emit, "Checking", { type: "thinking_end" });
+  emitUpdate(emit, thinkingMessage("Checking"), { type: "thinking_end" });
   emitAssistantTextDelta(emit, " files</think>\nFinal answer");
   expect(onReasoningEnd).toHaveBeenCalledTimes(1);
 });
@@ -605,5 +653,129 @@ it.each([
         replayInvalid: true,
       }),
     );
+  },
+);
+
+const SENTINEL = "SECRET CONTENT";
+const call = `[tool:block_reply_proof]\n{"path":"notes.txt","content":"${SENTINEL}"}\n`;
+const ordinaryProse =
+  "First sentence stays visible. Second sentence stays visible. Third sentence stays visible.";
+const documents = {
+  "late image reference":
+    "![example `x\n<tool_call><function=read>{}</function></tool_call>\nx`][id]\n\n[id]: /url\n",
+  "late link title":
+    '[label](/url "title\n`x\n<tool_call><function=read>{}</function></tool_call>\nx` trailing\n")\n',
+  "late table delimiter":
+    "| Example | `x\n<tool_call><function=read>{}</function></tool_call>\nx` |\n| --- | --- |\n",
+  "two-space fence": '  Example\n  ```text\n  [tool:read] {"path":"x"}\n  ```\n  Tail.',
+  "four-space code": "    <tool_call><function=read>{}</function></tool_call>",
+  "argument payload": call,
+  "prose around a call": `Intro paragraph stays visible.\n${call}Tail paragraph stays visible.`,
+  "ordinary prose": ordinaryProse,
+  "less-than literal": "The expression a < b && c > d remains ordinary prose.",
+  "partial tool literal": "Ordinary prose mentions <tool_ as a literal token.",
+  "inline XML example": "Use `<tool_call><function=read>{}</function></tool_call>` as an example.",
+  "fenced XML example":
+    "Example:\n```xml\n<tool_call><function=read>{}</function></tool_call>\n```\nTail.",
+  "fenced call example": 'Example:\n```text\n[tool:read] {"path":"x"}\n```\nTail.',
+  "multiline inline code":
+    '`\n[tool:write]\n{"content":"literal"` followed by ordinary visible text.',
+  "unfinished header": "[tool:block_reply_proof",
+  "unfinished payload": '[tool:block_reply_proof]\n{"content":"unfinished',
+} as const;
+
+function chunkings(text: string): string[][] {
+  return [
+    ...Array.from({ length: text.length + 1 }, (_, at) => [text.slice(0, at), text.slice(at)]),
+    ...[1, 4].map((size) =>
+      Array.from({ length: Math.ceil(text.length / size) }, (_, at) =>
+        text.slice(at * size, (at + 1) * size),
+      ),
+    ),
+  ];
+}
+
+async function streamReply(params: {
+  chunks: readonly string[];
+  emit: (evt: unknown) => void;
+  beforeEnd?: () => Promise<void>;
+}) {
+  emitMessage(params.emit, "message_start");
+  const projection = createAssistantVisibleStreamText("final_answer");
+  let prefix = "";
+  for (const delta of params.chunks) {
+    prefix += delta;
+    emitResponsesText(params.emit, "text_delta", prefix, "canonical-answer", delta);
+    expect(projection.append(delta).text, JSON.stringify(prefix)).toBe(
+      sanitizeAssistantVisibleStreamText(prefix, "final_answer"),
+    );
+  }
+  await params.beforeEnd?.();
+  emitResponsesText(params.emit, "text_end", prefix, "canonical-answer");
+  emitMessage(params.emit, "message_end", { ...textAssistant(prefix), phase: "final_answer" });
+}
+
+it.each(Object.entries(documents))(
+  "preserves canonical delivered bytes across every split: %s",
+  async (_name, doc) => {
+    const expected = sanitizeAssistantVisibleStreamText(doc, "final_answer");
+    expect(expected).not.toContain(SENTINEL);
+    for (const chunks of chunkings(doc)) {
+      const blocks: string[] = [];
+      const sources: string[] = [];
+      const { emit, subscription } = createSubscribedSessionHarness({
+        runId: "block-parity",
+        onBlockReply: (payload) => {
+          blocks.push(payload.text ?? "");
+          sources.push(getReplyPayloadMetadata(payload)?.blockSourceText ?? payload.text ?? "");
+        },
+        blockReplyBreak: "text_end",
+        blockReplyChunking: { minChars: 12, maxChars: 40 },
+      });
+      try {
+        await streamReply({
+          chunks,
+          emit,
+          beforeEnd: async () => {
+            await subscription.waitForPendingEvents();
+            if (_name === "ordinary prose") {
+              expect(blocks.length).toBeGreaterThan(1);
+            }
+            if (_name.startsWith("unfinished") || _name === "multiline inline code") {
+              expect(blocks).toEqual([]);
+            }
+          },
+        });
+        await subscription.waitForPendingEvents();
+        // Source metadata excludes the chunker's synthetic close/reopen fences and retains
+        // separators consumed at message boundaries, so compare original visible bytes.
+        if (_name === "prose around a call") {
+          // Separate channel messages own their boundary whitespace.
+          expect(blocks.map((text) => text.trim())).toEqual(expected.split("\n"));
+        } else {
+          expect(sources.join("").trimEnd(), JSON.stringify({ chunks, blocks, sources })).toBe(
+            expected,
+          );
+        }
+        if (!expected) {
+          expect(blocks).toEqual([]);
+        }
+        if (_name === "unfinished payload") {
+          // A held candidate must not delay the next assistant message.
+          blocks.length = 0;
+          await streamReply({
+            chunks: [ordinaryProse],
+            emit,
+            beforeEnd: async () => {
+              await subscription.waitForPendingEvents();
+              expect(blocks.length).toBeGreaterThan(0);
+            },
+          });
+          await subscription.waitForPendingEvents();
+        }
+      } finally {
+        subscription.unsubscribe();
+      }
+    }
   },
 );

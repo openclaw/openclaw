@@ -1,5 +1,8 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
 import type { SessionsCreateResult } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import { persistColdLoadWarmState } from "../../../scripts/lib/control-ui-bench-warm-state.ts";
 import { createCanvasDocument } from "../../../src/canvas/documents.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { appendTranscriptMessage } from "../../../src/config/sessions/session-accessor.js";
@@ -15,6 +18,10 @@ import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  installWarmConnectIdentityGate,
+  installWarmConnectSocketTrace,
+} from "./warm-connect-socket.test-support.ts";
 
 let instance: OpenClawTestInstance | undefined;
 let client: Awaited<ReturnType<typeof connectChatGateway>> | undefined;
@@ -118,6 +125,106 @@ async function cliJson(args: string[]): Promise<Record<string, unknown>> {
 }
 
 suite.define(() => {
+  it.each(["chat", "dashboard"] as const)(
+    "keeps one signed-in connection across warm %s reloads",
+    { timeout: 120_000 },
+    async (face) => {
+      const key = `agent:main:dashboard:warm-connect-${face}`;
+      const sessionId = await createSession(key, `Warm ${face} connection`);
+      await rpc("sessions.patch", { key, boardFace: "dashboard" });
+      await rpc("board.widget.put", {
+        sessionKey: key,
+        name: "warm-connect",
+        title: "Warm connection proof",
+        placement: { size: "full" },
+        content: {
+          kind: "html",
+          html: buildWidgetDocument("Warm connection proof", "<h1>Cached connection proof</h1>"),
+        },
+      });
+      for (let index = 0; index < 9; index++) {
+        await appendAssistant(key, sessionId, [
+          {
+            type: "text",
+            text:
+              index === 8
+                ? `Cached warm connection transcript.\n\n| Item | Value |\n| --- | --- |\n${Array.from({ length: 24 }, (_, row) => `| Synthetic ${row} | Stored value |`).join("\n")}\n\n[Linked mission](/chat/main/d0effac9)\n\n![Synthetic image](/apple-touch-icon.png)`
+                : `Synthetic tall row ${index}.\n\n${"Cached paragraph.\n\n".repeat(12)}`,
+          },
+        ]);
+      }
+      const url = await sessionUrl(key, face);
+      const observations: unknown[] = [];
+      await suite.withPage(browserOptions, async ({ page }) => {
+        await page.addInitScript(installWarmConnectSocketTrace);
+        await page.addInitScript(installWarmConnectIdentityGate);
+        await page.goto(url);
+        if (await page.getByRole("link", { name: "Log in", exact: true }).isVisible()) {
+          await enterControlUiSession(page);
+        }
+        await waitForControlUiGatewayReady(page);
+        const transcript = page
+          .getByText("Cached warm connection transcript.", { exact: false })
+          .first();
+        await transcript.waitFor();
+        if (face === "dashboard") {
+          await page
+            .locator(".board-widget__frame")
+            .contentFrame()
+            .frameLocator("iframe")
+            .getByRole("heading", { name: "Cached connection proof" })
+            .waitFor();
+        }
+        await page.waitForFunction(() =>
+          Object.keys(localStorage).some((storageKey) =>
+            storageKey.startsWith("openclaw.control.bootRecord.v1:"),
+          ),
+        );
+        const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
+          sessionKey: key,
+          sidebarView: "sessions",
+        };
+        for (let reload = 0; reload < 2; reload++) {
+          await page.evaluate(persistColdLoadWarmState, warmInput);
+          if (reload === 0) {
+            await page.evaluate(() => sessionStorage.setItem("warm-connect-hold-identity", "1"));
+          }
+          await page.reload();
+          if (reload === 0) {
+            try {
+              await page.waitForFunction(() => window.warmConnectIdentityPending === true);
+              await transcript.waitFor();
+              await page.getByRole("link", { name: "Linked mission", exact: true }).waitFor();
+              observations.push({
+                face,
+                reload,
+                stage: "cached-before-connect",
+                trace: await page.evaluate(() => window.warmConnectSocketTrace),
+              });
+            } finally {
+              await page.evaluate(() => window.releaseWarmConnectIdentity?.());
+            }
+          }
+          await waitForControlUiGatewayReady(page);
+          await transcript.waitFor();
+          const trace = await page.evaluate(() => window.warmConnectSocketTrace);
+          observations.push({ face, reload, trace });
+          await writeFile(
+            path.join(suite.artifactDir, `warm-connect-${face}.json`),
+            JSON.stringify(observations, null, 2),
+          );
+          expect(trace, JSON.stringify(trace)).toMatchObject({
+            sockets: 1,
+            connects: 1,
+            closeRequests: 0,
+            closes: 0,
+            dropped: 0,
+          });
+          expect(trace?.events.find((event) => event.direction === "send")?.method).toBe("connect");
+        }
+      });
+    },
+  );
   it("reads persisted Canvas bytes through an authenticated browser connection", async () => {
     const sessionKey = "agent:main:widget-live-proof";
     const sessionId = await createSession(sessionKey, "Synthetic widget proof");

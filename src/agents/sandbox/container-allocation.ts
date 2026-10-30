@@ -249,7 +249,7 @@ export async function allocateSandboxContainer(params: {
     args.push("--env-file", envFile, cfg.image, ...command);
     params.assertCurrent?.();
     try {
-      return await execContainer(engine, args);
+      return await execContainer(engine, args, { assertCurrent: params.assertCurrent });
     } catch (error) {
       if (engine.id === "docker") {
         // Retain image/daemon guidance while preserving unrelated creation failures.

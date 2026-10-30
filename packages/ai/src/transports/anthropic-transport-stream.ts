@@ -31,6 +31,7 @@ import {
   type AnthropicTransportOptions,
 } from "./anthropic-transport-options.js";
 import { buildGuardedModelFetch } from "./host-policy.js";
+import { withModelRequestBodyBytes } from "./model-request-body.js";
 import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import {
   createWritableTransportEventStream,
@@ -182,11 +183,13 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           (transportOptions.interleavedThinking ?? true) && !supportsClaudeAdaptiveThinking(model);
         // Kimi's Anthropic thinking SSE is already well-formed for this parser, but
         // the OpenAI SDK compatibility sanitizer can stall before the text block.
-        const fetch =
+        const fetch = withModelRequestBodyBytes(
+          options,
           /^kimi(?:-|$)/.test(normalizeLowercaseStringOrEmpty(model.provider ?? "")) &&
-          transportOptions.thinkingEnabled === true
+            transportOptions.thinkingEnabled === true
             ? buildGuardedModelFetch(model, undefined, { sanitizeSse: false })
-            : buildGuardedModelFetch(model);
+            : buildGuardedModelFetch(model),
+        );
         const copilot = model.provider === "github-copilot";
         const bearerAuth = copilot || usesFoundryBearerAuth(resolveModelHeaderSentinels(model));
         const isOAuthToken = !bearerAuth && isAnthropicOAuthApiKey(apiKey);

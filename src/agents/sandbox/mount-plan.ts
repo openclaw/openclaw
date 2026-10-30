@@ -1,6 +1,8 @@
 import path from "node:path";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { MATERIALIZED_SANDBOX_SKILLS_WORKSPACE } from "../../shared/sandbox-workspace-paths.js";
@@ -76,12 +78,29 @@ export async function prepareSandboxMountPlan(params: {
     // Engine-created nested mountpoints can be owned by a different user namespace.
     // Allocate the empty scaffold as its workspace owner before mounting read-only
     // instructions, so normal workspace retention can later remove it without chmod.
-    const workspace = await openFsSafeRoot(params.workspaceDir, {
-      mode: 0o755,
-      mutationSymlinks: "reject",
-      assertBeforeMutation: params.assertCurrent,
-    });
-    await workspace.mkdir(relativeSkillMount);
+    try {
+      const workspace = await openFsSafeRoot(params.workspaceDir, {
+        mode: 0o755,
+        mutationSymlinks: "reject",
+        assertBeforeMutation: params.assertCurrent,
+      });
+      await workspace.mkdir(relativeSkillMount);
+    } catch (error) {
+      // Older fs-safe versions wrap traversal denials as path-alias failures.
+      const permissionError = collectNestedErrorCandidates(error).find(
+        (candidate) => hasErrnoCode(candidate, "EACCES") || hasErrnoCode(candidate, "EPERM"),
+      );
+      if (!permissionError) {
+        throw error;
+      }
+      const target = path.join(params.workspaceDir, relativeSkillMount);
+      throw new Error(
+        `Cannot prepare sandbox skills mountpoint "${target}": permission denied. ` +
+          "Fix ownership or ACLs on the existing directory and its parents so the gateway user " +
+          "has search (execute) and write access, then retry.",
+        { cause: error },
+      );
+    }
   }
   // A Gateway read-only bind under the workspace is already projected as its own
   // mountpoint (with its writable children intact), so it needs no extra pin.

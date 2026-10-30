@@ -27,13 +27,22 @@
  * internal row visits. Fixture generation and imports are outside measurement.
  * CPU/allocation cover this isolate, not a Gateway or reclamation-worker transport.
  * Cold markers are synthetic metadata: this fixture must never be used for restoration.
+ * --entry measures retained-window entry deletion instead of cold selection. Prepare
+ * with --entry --sessions 10000 --hot 1 --events 1 --windows 16 --body-bytes 1024;
+ * measure with --entry [--entry-module <frozen-entry-store.ts>]. Each operation deletes
+ * the final logical entry with its retained generations, then rolls back. This measures
+ * the real deletion owner and SQL hold, excluding worker transport and durable commit.
+ * --history uses that same fixture to reclaim one unreferenced historical window;
+ * the commit callback rolls back before commit, preserving the fixture for every run.
  */
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
+import { PerformanceObserver } from "node:perf_hooks";
 import { DatabaseSync, StatementSync } from "node:sqlite";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
@@ -54,6 +63,10 @@ const { values } = parseArgs({
     allocation: { type: "boolean" },
     sql: { type: "boolean" },
     holds: { type: "boolean" },
+    entry: { type: "boolean" },
+    history: { type: "boolean" },
+    windows: { type: "string", default: "16" },
+    "entry-module": { type: "string" },
   },
 });
 assert(values["state-dir"], "--state-dir is required");
@@ -62,6 +75,11 @@ assert(
   "Use separate allocation, SQL, and transaction-hold passes",
 );
 assert(!(values.mutation && values.protection), "Choose one measured operation");
+assert(!(values.entry && (values.mutation || values.protection)), "Choose one measured operation");
+assert(
+  !(values.history && (values.entry || values.mutation || values.protection)),
+  "Choose one measured operation",
+);
 const root = path.resolve(values["state-dir"]);
 const options = { agentId: "main", path: path.join(root, "agent.sqlite") };
 const manifestPath = path.join(root, "fixture.json");
@@ -70,7 +88,13 @@ const positive = (input: string) => {
   assert(Number.isSafeInteger(value) && value > 0, "Expected a positive integer");
   return value;
 };
-type Fixture = { sessions: number; hot: number; events: number; bodyBytes: number };
+type Fixture = {
+  sessions: number;
+  hot: number;
+  events: number;
+  bodyBytes: number;
+  windows?: number;
+};
 process.env.OPENCLAW_STATE_DIR = root;
 process.env.OPENCLAW_HOME = path.join(root, "home");
 process.env.OPENCLAW_CONFIG_PATH = path.join(root, "openclaw.json");
@@ -97,6 +121,7 @@ try {
       hot: positive(values.hot),
       events: positive(values.events),
       bodyBytes: positive(values["body-bytes"]),
+      ...(values.entry ? { windows: positive(values.windows) } : {}),
     };
     assert(fixture.hot <= fixture.sessions);
     agent.runOpenClawAgentWriteTransaction(({ db }) => {
@@ -123,7 +148,17 @@ try {
       for (let index = 0; index < fixture.sessions; index++) {
         const sessionId = id(index);
         const key = `agent:main:${sessionId}`;
-        node.run(key, sessionId, JSON.stringify({ sessionId, updatedAt: 1 }));
+        node.run(
+          key,
+          sessionId,
+          JSON.stringify({
+            sessionId,
+            updatedAt: 1,
+            ...(values.entry
+              ? { label: "synthetic metadata ".repeat(Math.ceil(fixture.bodyBytes / 19)) }
+              : {}),
+          }),
+        );
         window.run(sessionId, key);
         watermark.run(sessionId, `generation-${index}`);
         if (index < fixture.sessions - fixture.hot) {
@@ -134,6 +169,10 @@ try {
             event.run(sessionId, seq, payload, Buffer.byteLength(payload));
           }
         }
+      }
+      for (let index = 1; index < (fixture.windows ?? 1); index++) {
+        const target = id(fixture.sessions - 1);
+        window.run(`${target}-history-${index}`, `agent:main:${target}`);
       }
     }, options);
     writeFileSync(manifestPath, JSON.stringify(fixture));
@@ -184,8 +223,87 @@ try {
       assert.equal(prepared.prepared.length, 1);
     }
     const rollback = new Error("benchmark rollback");
+    const entryOwner:
+      | typeof import("../../src/config/sessions/session-accessor.sqlite-entry-store.js")
+      | undefined = values.entry
+      ? await import(
+          values["entry-module"]
+            ? pathToFileURL(path.resolve(values["entry-module"])).href
+            : "../../src/config/sessions/session-accessor.sqlite-entry-store.js"
+        )
+      : undefined;
+    if (entryOwner) {
+      assert(fixture.windows, "Prepare the fixture with --entry");
+    }
+    const reclaim = values.history
+      ? await import("../../src/config/sessions/session-accessor.sqlite-reclamation.js")
+      : undefined;
+    const historyId = `${id(fixture.sessions - 1)}-history-1`;
+    const historySnapshot = reclaim
+      ? (
+          await import("../../src/config/sessions/session-accessor.sqlite-delete-snapshot.js")
+        ).readSessionStateDeleteSnapshot(database.db, historyId)
+      : undefined;
+    if (reclaim) {
+      assert(
+        (fixture.windows ?? 0) > 1,
+        "Prepare historical windows with --entry --windows 2 or more",
+      );
+    }
     const run = () => {
-      if (prepared && worker) {
+      if (reclaim && historySnapshot) {
+        try {
+          reclaim.reclaimSqliteSessionInTransaction(
+            {
+              kind: "history-eviction",
+              databaseOptions: reclaim.resolveSessionReclamationDatabaseOptions(options),
+              sessionId: historyId,
+              protectedSessionIds: [],
+              diskBudget: { preserveRecentMs: 0 },
+              materializedPlans: [
+                {
+                  agentId: options.agentId,
+                  databasePath: options.path,
+                  archiveDirectory: root,
+                  archiveTranscript: false,
+                  reason: "deleted",
+                  sessionId: historyId,
+                  snapshot: historySnapshot,
+                  archive: null,
+                  archivedTranscript: null,
+                },
+              ],
+            },
+            {
+              onCommit: () => {
+                throw rollback;
+              },
+            },
+          );
+          assert.fail("Historical reclamation did not reach its commit edge");
+        } catch (error) {
+          if (error !== rollback) {
+            throw error;
+          }
+        }
+      } else if (entryOwner) {
+        try {
+          agent.runOpenClawAgentWriteTransaction(
+            (current) => {
+              entryOwner.deleteSessionEntryRows(current, `agent:main:${id(fixture.sessions - 1)}`, {
+                deleteOwnedWindows: true,
+              });
+              throw rollback;
+            },
+            options,
+            { operationLabel: "session.reclaim.entry benchmark rollback" },
+          );
+        } catch (error) {
+          if (error !== rollback) {
+            throw error;
+          }
+        }
+      } else if (prepared && worker) {
         try {
           agent.runOpenClawAgentWriteTransaction(
             () => {
@@ -348,6 +466,18 @@ try {
     const iterations = values.sql ? 1 : positive(values.iterations);
     const before = process.memoryUsage();
     const hostLoad = loadavg();
+    const collections: { start: number; ms: number; kind: string }[] = [];
+    const gcObserver = new PerformanceObserver((list) => {
+      for (const event of list.getEntries()) {
+        const detail: unknown = "detail" in event ? event.detail : undefined;
+        const kind =
+          detail && typeof detail === "object" && "kind" in detail
+            ? String(detail.kind)
+            : "unknown";
+        collections.push({ start: event.startTime, ms: event.duration, kind });
+      }
+    });
+    gcObserver.observe({ entryTypes: ["gc"] });
     const cpu = process.threadCpuUsage();
     const start = performance.now();
     const operationMs: number[] = [];
@@ -359,6 +489,10 @@ try {
     const wallMs = performance.now() - start;
     const used = process.threadCpuUsage(cpu);
     const after = process.memoryUsage();
+    await yieldToEventLoop();
+    await yieldToEventLoop();
+    gcObserver.disconnect();
+    const gc = collections.filter((event) => event.start >= start && event.start < start + wallMs);
     let sampledAllocationBytes: number | undefined;
     if (values.allocation) {
       const { profile } = await inspector.post("HeapProfiler.stopSampling");
@@ -391,11 +525,15 @@ try {
       JSON.stringify(
         {
           fixture,
-          mode: values.mutation
-            ? "mutation-rollback"
-            : values.protection
-              ? "protection"
-              : "selection",
+          mode: values.history
+            ? "history-eviction-rollback"
+            : values.entry
+              ? "entry-rollback"
+              : values.mutation
+                ? "mutation-rollback"
+                : values.protection
+                  ? "protection"
+                  : "selection",
           iterations,
           instrumented: values.allocation
             ? "allocation"
@@ -411,6 +549,8 @@ try {
           before,
           after,
           hostLoad,
+          hostLoadAfter: loadavg(),
+          gc,
           sql,
           holds: values.holds ? holds : undefined,
         },

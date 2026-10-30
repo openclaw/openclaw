@@ -39,6 +39,7 @@ import {
   type UpdateCheckResult,
 } from "../../infra/update-check.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
+import { projectUpdateRunHistory } from "../../infra/update-run-history-projection.js";
 import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { readUpdateRunStatus } from "../../infra/update-run-status.js";
@@ -603,10 +604,14 @@ async function inspectUpdateStatus(
         run,
         run.status === "failed" ? { currentHealth: currentRunHealth } : {},
       );
+      const historical =
+        currentRunHealth?.kind === "responding"
+          ? projectUpdateRunHistory(run, currentRunHealth)
+          : null;
       if (!abandonedRun && !staleRun) {
-        defaultRuntime.log(report.headline);
+        defaultRuntime.log(historical ?? report.headline);
       }
-      for (const line of report.lines) {
+      for (const line of historical ? [] : report.lines) {
         defaultRuntime.log(line);
       }
       defaultRuntime.log("");

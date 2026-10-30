@@ -115,7 +115,6 @@ export async function performSessionGitHubPreparation(
       inspected.assertCurrent,
     );
     const assertCurrent = () => {
-      assertWorkspace();
       inspected.assertCurrent();
       if (!matchesCurrentGitHubPublicationIdentity({ agentId: session.agentId, identity })) {
         throw new Error("The GitHub publisher changed; retry PR preparation.");
@@ -183,15 +182,7 @@ export async function performSessionGitHubPreparation(
         "PR preparation requires this conversation's existing local managed workspace.",
       );
     }
-    const assertWorkspace = () => {
-      assertPlacement();
-      owner.assertCurrent();
-    };
-    const {
-      inspected,
-      identity,
-      assertCurrent: assertPullRequestCurrent,
-    } = await inspectCurrent(assertWorkspace);
+    const { inspected, identity, assertCurrent } = await inspectCurrent(owner.assertCurrent);
     const { url, host, number, base, head } = inspected.result;
     if (!head) {
       throw new Error("The original PR head is unavailable; saved work was preserved.");
@@ -202,12 +193,6 @@ export async function performSessionGitHubPreparation(
     const signal = options.signal;
     const conflictsResolved = params.conflictsResolved;
     const baseCommit = params.expectedHeadCommit;
-    // The caller retains current PR eligibility and session-action exclusion through this operation.
-    const assertCurrent = () => {
-      signal?.throwIfAborted();
-      assertPullRequestCurrent();
-      owner.assertCurrent();
-    };
     const assertEntry = (entry: SessionEntry) => {
       assertCurrent();
       if (
@@ -276,6 +261,11 @@ export async function performSessionGitHubPreparation(
     ) {
       throw new Error(
         "This workspace already continues another PR or head branch. Its original association and saved work were preserved.",
+      );
+    }
+    if (previous && previous.base.branch !== pullRequest.base.branch) {
+      throw new Error(
+        `The original PR base branch changed. Have the PR author restore its base branch to ${JSON.stringify(previous.base.branch)} on GitHub, then retry prepare_pr. Its original association and saved work were preserved.`,
       );
     }
     if (!previous) {
@@ -349,7 +339,7 @@ export async function performSessionGitHubPreparation(
         await assertExistingPullRequestWriteAccess({
           pullRequest: inspected.result,
           identity,
-          assertCurrent: assertPullRequestCurrent,
+          assertCurrent,
         });
       }
       assertReserved();

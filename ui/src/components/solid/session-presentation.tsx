@@ -583,7 +583,6 @@ export function renderSessionLeadingState(props: {
   return {
     running,
     leadingIndicator,
-    hasContent,
     renderedIdentities,
   };
 }

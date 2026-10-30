@@ -12,6 +12,8 @@ type ComposerTextareaResizeObserverState = {
   height: number;
   nativeInputPending: boolean;
   hasScrollbarGutter: boolean;
+  // Width a forced scrollbar takes from this textarea; null until first overflow.
+  scrollbarWidth: number | null;
   editing: boolean;
   getTranscriptElement: () => HTMLElement | null;
 };
@@ -162,6 +164,38 @@ function scheduleNativeTextareaOverflow(el: HTMLTextAreaElement) {
   });
 }
 
+// Scrollable drafts trade end padding for a native gutter of the same width,
+// keeping text width constant. WebKit reserves `scrollbar-gutter: stable` only
+// while a scrollbar is shown, and overlay scrollbars reserve nothing, so the
+// trade would widen the text, remove the overflow and undo itself every frame.
+// A forced scrollbar makes the gutter real; overlay platforms keep the padding.
+function setTextareaScrollbarGutter(
+  el: HTMLTextAreaElement,
+  scrollable: boolean,
+  state: ComposerTextareaResizeObserverState | undefined,
+) {
+  const reserveGutter = scrollable && state?.scrollbarWidth !== 0;
+  const overflow = reserveGutter ? "scroll" : scrollable ? "auto" : "hidden";
+  if (el.style.overflowY !== overflow) {
+    el.style.overflowY = overflow;
+  }
+  el.toggleAttribute("data-composer-scrollable", reserveGutter);
+  if (!reserveGutter || !state || state.scrollbarWidth !== null) {
+    return;
+  }
+  // The scrollbar width is fixed per platform and stylesheet: measure it once.
+  const style = getComputedStyle(el);
+  state.scrollbarWidth =
+    el.offsetWidth -
+    el.clientWidth -
+    Number.parseFloat(style.borderLeftWidth) -
+    Number.parseFloat(style.borderRightWidth);
+  if (state.scrollbarWidth === 0) {
+    el.style.overflowY = "auto";
+    el.removeAttribute("data-composer-scrollable");
+  }
+}
+
 function updateTextareaOverflow(
   el: HTMLTextAreaElement,
   deferNativeEditing = true,
@@ -186,14 +220,10 @@ function updateTextareaOverflow(
     scrollable && clientHeight >= 64 && !composerTextareaResizeObservers.get(el)?.editing;
   const fadeTop = canFade && el.scrollTop > 1;
   const fadeBottom = canFade && el.scrollTop + clientHeight < scrollHeight - 1;
-  const overflow = scrollable ? "auto" : "hidden";
-  if (el.style.overflowY !== overflow) {
-    el.style.overflowY = overflow;
-  }
-  el.toggleAttribute("data-composer-scrollable", scrollable);
+  const state = composerTextareaResizeObservers.get(el);
+  setTextareaScrollbarGutter(el, scrollable, state);
   el.toggleAttribute("data-scroll-fade-top", fadeTop);
   el.toggleAttribute("data-scroll-fade-bottom", fadeBottom);
-  const state = composerTextareaResizeObservers.get(el);
   if (state) {
     state.hasScrollbarGutter = false;
     if (scrollable && hasNativeTextareaContentSizing(el)) {
@@ -340,6 +370,7 @@ export function observeTextareaOverflow(
     height: el.clientHeight,
     nativeInputPending: false,
     hasScrollbarGutter: false,
+    scrollbarWidth: null,
     editing: false,
     getTranscriptElement,
   };

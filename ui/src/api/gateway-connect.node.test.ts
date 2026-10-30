@@ -161,6 +161,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       await vi.advanceTimersByTimeAsync(60_000);
       expect(wsInstances).toHaveLength(1);
       expect(client.needsWakeReconnect).toBe(false);
+      expect(client.needsReachabilityReconnect).toBe(false);
       expect(onClose).toHaveBeenLastCalledWith(
         expect.objectContaining({
           willRetry: false,
@@ -276,6 +277,8 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     });
     expect(onReconnectScheduled).toHaveBeenCalledExactlyOnceWith(delayMs);
     expect(wsInstances).toHaveLength(1);
+    expect(client.needsWakeReconnect).toBe(false);
+    expect(client.needsReachabilityReconnect).toBe(false);
     await vi.advanceTimersByTimeAsync(delayMs - 1);
     expect(wsInstances).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1);

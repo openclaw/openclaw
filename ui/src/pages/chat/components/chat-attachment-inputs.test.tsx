@@ -87,9 +87,19 @@ function mountInputs(initial: ChatAttachmentControlsProps, composerClass?: strin
   };
 }
 
-it.each([false, true])(
-  "selects existing media through the real menu and draft owner (imagesOnly=%s)",
-  async (imagesOnly) => {
+it.each(
+  [false, true].flatMap((imagesOnly) =>
+    [false, true].map((iosSafari) => ({ imagesOnly, iosSafari })),
+  ),
+)(
+  "selects existing media through the real menu and draft owner (imagesOnly=$imagesOnly, iOS Safari=$iosSafari)",
+  async ({ imagesOnly, iosSafari }) => {
+    if (iosSafari) {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue("iPhone");
+      vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+      );
+    }
     const draft = createAttachmentDraft({
       maxBytes: 1024,
       maxImageBytes: 1024,
@@ -98,16 +108,24 @@ it.each([false, true])(
     onTestFinished(draft.dispose);
     const props = { ...draft.props, imagesOnly };
     mountInputs(props, undefined, true);
-    const kind = imagesOnly ? "photo" : "media";
+    const kind = iosSafari ? "file" : imagesOnly ? "photo" : "media";
     await waitForSolid(() => expect(host.querySelector(`[data-value="${kind}"]`)).not.toBeNull());
     const action = host.querySelector<HTMLButtonElement>(`[data-value="${kind}"]`)!;
-    expect(action.textContent).toBe(imagesOnly ? "Photo" : "Media");
+    if (iosSafari) {
+      expect(
+        [...host.querySelectorAll(".agent-chat__attach-menu-option")].map(
+          (item) => item.textContent,
+        ),
+      ).toEqual(["Add attachment…"]);
+    } else {
+      expect(action.textContent).toBe(imagesOnly ? "Photo" : "Media");
+    }
     const picker = input(kind);
     const open = clickSpy(picker);
     action.click();
     expect(open).toHaveBeenCalledOnce();
     expect(picker).toMatchObject({
-      accept: imagesOnly ? "image/*" : "image/*,video/*",
+      accept: imagesOnly ? "image/*" : iosSafari ? "" : "image/*,video/*",
       multiple: true,
     });
     expect(picker.hasAttribute("capture")).toBe(false);

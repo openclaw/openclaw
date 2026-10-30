@@ -28,7 +28,7 @@ export type GitReadOptions = {
 };
 
 type ReadEntry<T> = {
-  revision: string;
+  revision: string | null | undefined;
   expiresAt: number;
   promise: Promise<T>;
   controller: AbortController;
@@ -55,12 +55,13 @@ function gitEnvironment() {
     .map((key) => [key, process.env[key]]);
 }
 
-function diffRevisionMissReason(previous: string, current: string): DiffReadCacheMissReason {
+function diffRevisionMissReason(
+  previous: ReadEntry<unknown>["revision"],
+  current: ReadEntry<unknown>["revision"],
+): DiffReadCacheMissReason {
   try {
-    const previousKey: [unknown, string | null] = JSON.parse(previous);
-    const currentKey: [unknown, string | null] = JSON.parse(current);
-    const before: Record<string, unknown> | null = JSON.parse(previousKey[1] ?? "null");
-    const after: Record<string, unknown> | null = JSON.parse(currentKey[1] ?? "null");
+    const before: Record<string, unknown> | null = JSON.parse(previous ?? "null");
+    const after: Record<string, unknown> | null = JSON.parse(current ?? "null");
     if (before && after) {
       for (const [component, reason] of [
         ["head", "revision-changed-head"],
@@ -146,7 +147,7 @@ function createReadCache<Input, Output>(
     const key = preparedKey ?? JSON.stringify([input, environment]);
     let entry = entries.get(key)?.entry;
     const waitingToRetry = !options.refresh && (entry?.retryAt ?? 0) > Date.now();
-    let currentRevision: string | null | undefined;
+    let currentRevision = waitingToRetry ? entry!.revision : undefined;
     let preparedRevision: GitReadOperations["checkout.revision"]["output"] | undefined;
     if (revision && !waitingToRetry) {
       // Share only overlapping checks of identical inputs, never a settled revision.
@@ -181,7 +182,6 @@ function createReadCache<Input, Output>(
       typeof freshness !== "number" && typeof currentRevision === "string"
         ? Number.POSITIVE_INFINITY
         : freshnessMs;
-    const revisionKey = waitingToRetry ? entry!.revision : JSON.stringify([input, currentRevision]);
     options.signal?.throwIfAborted();
     if (closed) {
       throw new Error("Git reads are unavailable while the Gateway is restarting");
@@ -193,7 +193,7 @@ function createReadCache<Input, Output>(
     if (
       (options.refresh && (currentRevision === null || entry?.retryAt !== undefined)) ||
       !entry ||
-      entry.revision !== revisionKey ||
+      entry.revision !== currentRevision ||
       (entry.expiresAt <= Date.now() && (!(snapshot || joinPending) || !entry.pending))
     ) {
       if (snapshot && pending.size >= MAX_CACHED_CHECKOUTS) {
@@ -204,7 +204,7 @@ function createReadCache<Input, Output>(
       const previousRefresh = refreshTail;
       const controller = new AbortController();
       const next: ReadEntry<Output> = {
-        revision: revisionKey,
+        revision: currentRevision,
         expiresAt:
           retainedFreshnessMs === 0
             ? Number.POSITIVE_INFINITY
@@ -306,8 +306,8 @@ function createReadCache<Input, Output>(
             ? wasEvicted
               ? "evicted"
               : "cold"
-            : previous.revision !== revisionKey
-              ? diffRevisionMissReason(previous.revision, revisionKey)
+            : previous.revision !== currentRevision
+              ? diffRevisionMissReason(previous.revision, currentRevision)
               : "pending";
       if (!cacheHit && entry.timing) {
         addDiffReadDurations(timing, entry.timing);

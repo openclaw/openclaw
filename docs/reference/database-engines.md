@@ -126,7 +126,8 @@ The supported PostgreSQL families are:
   Rebuildable memory search projections are omitted; canonical memory origins,
   tombstones, the embedding cache, and stored chunk vectors with their identity metadata
   remain intact in the verified copy. After publication and port-owner release,
-  the selected memory plugin rebuilds ported agents under fresh offline ownership.
+  the selected memory plugin rebuilds ported agents under fresh offline ownership,
+  several agents at a time when the host's CPUs and free memory allow it.
   Unchanged chunks reuse cached or stored embeddings only when provider, model,
   provider settings, input format, hash, and dimensions match. Output and `--json` report
   per-agent results; a failure leaves the port successful and warns to retry
@@ -636,6 +637,10 @@ do not restrict a role's access.
 
 One Gateway owns each store. PostgreSQL does not enable multiple active owners of one store,
 external writers, replication management, or connection-pool management.
+
+Session-state history pruning compares sequence watermarks as integers on both
+engines. PostgreSQL batches explicitly cast bound watermark values to `bigint`;
+this does not change the schema or the existing history retention limits.
 
 Writers use `READ COMMITTED` and a transaction-scoped advisory lock derived from
 the store identity. Every PostgreSQL write, including a single statement, uses

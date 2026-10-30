@@ -747,13 +747,27 @@ it.each([false, true])(
   },
 );
 
-it("leaves an already stopped Gateway with its legacy update parent after repair", async () => {
-  vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
-  boundary.stop.mockImplementation(async () => ({ ...settlement.stopped, stopped: false }));
-  const maintenance = await begin();
-  await maintenance!.finish({});
-  expectCalls(0, "restart", "health");
-});
+it.each([false, true])(
+  "leaves an already stopped Gateway stopped after update repair (public repair: %s)",
+  async (reportStoppedService) => {
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+    boundary.stop.mockImplementation(async () => ({ ...settlement.stopped, stopped: false }));
+    const maintenance = await beginDoctorMaintenance({
+      root,
+      options: { repair: true, nonInteractive: true },
+      runtime: { log: boundary.log, error: vi.fn(), exit: vi.fn() },
+      reportStoppedService,
+    });
+    await maintenance!.finish({});
+    expectCalls(0, "restart", "health");
+    // A legacy update parent restarts its own stop; only public repair names the next step.
+    expect(maintenance!.warnings).toEqual(
+      reportStoppedService
+        ? [expect.stringMatching(/Gateway service is stopped.*openclaw gateway start/)]
+        : [],
+    );
+  },
+);
 
 const leaseGuidance =
   "Doctor could not enter maintenance. An agent database is in use. Stop the Gateway and other OpenClaw processes or reboot, then rerun openclaw doctor --fix.";

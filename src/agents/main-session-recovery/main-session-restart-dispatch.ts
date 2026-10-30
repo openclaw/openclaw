@@ -56,7 +56,6 @@ import {
 } from "./main-session-restart-dispatch-start.js";
 import type { ResumeMainSessionParams } from "./main-session-restart-dispatch.types.js";
 import {
-  announceRestartRecoveryResumption,
   hasRestartRecoveryMessageActionAuthority,
   requiresRestartRecoveryMessageActionAuthority,
   prepareRestartRecoveryDeliveryCurrent,
@@ -586,7 +585,7 @@ async function resumeMainSessionWithinAdmission(
         shouldContinue: params.shouldContinue,
       }).catch((error: unknown) => {
         log.warn(
-          `failed to prepare restart recovery notice ${params.sessionKey}: ${String(error)}`,
+          `failed to prepare restart recovery typing ${params.sessionKey}: ${String(error)}`,
         );
         return undefined;
       });
@@ -601,19 +600,6 @@ async function resumeMainSessionWithinAdmission(
           });
           retainDeliveryCurrent = stopTyping !== undefined;
         }
-        await announceRestartRecoveryResumption({
-          ...target,
-          isCurrent: (cfg) => !dispatchSettled && taskRemainsOwed() && isDeliveryCurrent(cfg),
-          sessionKey: dispatchSessionKey,
-          sessionId: params.entry.sessionId,
-          recoveryRunId,
-          lifecycleGeneration,
-          deliveryContext,
-          cfg: params.cfg,
-          shouldContinue: () =>
-            !dispatchSettled && taskRemainsOwed() && params.shouldContinue?.() !== false,
-          gatewayRuntime: params.gatewayRuntime,
-        });
       }
     }
     log.info(

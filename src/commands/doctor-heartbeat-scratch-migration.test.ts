@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeCronJobScratchForMaintenance } from "../../test/helpers/cron/scratch-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readDefaultProactiveJobReceiptInDatabase } from "../cron/proactive-job-receipt.js";
@@ -19,7 +19,6 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import { captureEnv } from "../test-utils/env.js";
 import { ensureHeartbeatMonitorJobs } from "./doctor-heartbeat-cadence-migration.js";
 import {
   maybeMigrateHeartbeatCadenceToCron,
@@ -33,17 +32,12 @@ import { assertHeartbeatScratchMigrationUnambiguous } from "./doctor-heartbeat-s
 import { maybeMigrateHeartbeatTasksToCron } from "./doctor-heartbeat-task-migration.js";
 
 const tempDirs: string[] = [];
-let savedEnv: ReturnType<typeof captureEnv>;
-
-beforeEach(() => {
-  savedEnv = captureEnv(["HOME", "OPENCLAW_STATE_DIR"]);
-});
 
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
-  savedEnv.restore();
+  vi.unstubAllEnvs();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -54,8 +48,8 @@ async function createFixture(content?: string) {
   const stateDir = path.join(root, "state");
   const workspace = path.join(root, "workspace");
   await fs.mkdir(workspace, { recursive: true });
-  process.env.HOME = home;
-  process.env.OPENCLAW_STATE_DIR = stateDir;
+  vi.stubEnv("HOME", home);
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const cfg = {
     agents: {
       defaults: { heartbeat: { every: "30m" } },
@@ -69,9 +63,8 @@ async function createFixture(content?: string) {
   return { root, stateDir, workspace, cfg, heartbeatPath };
 }
 
-function migrate(cfg: OpenClawConfig, shouldRepair = true) {
-  return maybeMigrateHeartbeatFilesToScratch({ cfg, shouldRepair });
-}
+const migrate = (cfg: OpenClawConfig, shouldRepair = true) =>
+  maybeMigrateHeartbeatFilesToScratch({ cfg, shouldRepair });
 
 function receipt(storePath: string, agentId = "main") {
   return withExistingOpenClawStateDatabaseReadOnly(({ db }) =>
@@ -179,21 +172,33 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     },
   );
 
-  it.each(["admission", "repair"])(
-    "preserves differing legacy scratch and its source during %s",
+  it.each(["admission", "repair", "unset"])(
+    "preserves operator-owned scratch and its source during %s",
     async (phase) => {
       const source = "# Original instructions\r\nKeep the deployment healthy.\r\n";
       const fixture = await createFixture(source);
-      const runtimeScratch = "Runtime notes from the last heartbeat\n";
       const storePath = resolveCronJobsStorePathFromConfig(fixture.cfg);
       const monitors = await ensureHeartbeatMonitorJobs(fixture.cfg, storePath);
       const monitor = monitors.get("main")!;
       writeCronJobScratchForMaintenance({
         storePath,
         jobId: monitor.id,
-        content: runtimeScratch,
+        content: "Runtime notes from the last heartbeat\n",
         expectedRevision: 0,
       });
+      if (phase === "unset") {
+        expect(
+          writeCronJobScratchForMaintenance({
+            storePath,
+            jobId: monitor.id,
+            content: null,
+            expectedRevision: 1,
+          }).ok,
+        ).toBe(true);
+        expect((await migrate(fixture.cfg)).notices?.join("\n")).toContain(
+          "scratch was explicitly unset",
+        );
+      }
       const originalScratch = readCronJobScratchState(storePath, monitor.id);
       expect(originalScratch.scratch?.sourceSha256).toBeUndefined();
 
@@ -291,9 +296,7 @@ describe("HEARTBEAT.md cron scratch migration", () => {
       await fs.writeFile(fixture.heartbeatPath, content);
 
       await expect(migrate(cfg)).resolves.toEqual({ changes: [], warnings: [] });
-      await expect(
-        assertHeartbeatScratchMigrationUnambiguous(cfg, process.env),
-      ).resolves.toBeUndefined();
+      expect(await assertHeartbeatScratchMigrationUnambiguous(cfg, process.env)).toBeUndefined();
       cfg.agents!.entries![pendingId] = {
         workspace: pendingWorkspace,
         heartbeat: { every: "30m" },
@@ -419,29 +422,6 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     },
   );
 
-  it("does not resurrect a legacy file after scratch was explicitly unset", async () => {
-    const fixture = await createFixture("initial\n");
-    await migrate(fixture.cfg);
-    const { monitor, storePath } = await loadMonitor();
-    const state = readCronJobScratchState(storePath, monitor.id);
-    const unset = writeCronJobScratchForMaintenance({
-      storePath,
-      jobId: monitor.id,
-      content: null,
-      expectedRevision: state.currentRevision,
-    });
-    expect(unset.ok).toBe(true);
-    await fs.writeFile(fixture.heartbeatPath, "recreated\n", "utf8");
-
-    const result = await migrate(fixture.cfg);
-
-    expect(result.changes).toEqual([]);
-    expect(result.warnings).toEqual([]);
-    expect(result.notices?.join("\n")).toContain("scratch was explicitly unset");
-    await expectFile(fixture.heartbeatPath, "recreated\n");
-    expect(readCronJobScratchState(storePath, monitor.id).scratch).toBeUndefined();
-  });
-
   it("preserves a concurrent file replacement acquired by the atomic claim", async () => {
     const fixture = await createFixture("planned content\n");
     const rename = fs.rename.bind(fs);
@@ -525,34 +505,49 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     await expectFile(claimPath, "in-flight migration\n");
   });
 
-  it("migrates a contained symlinked HEARTBEAT.md and removes the link", async () => {
-    const fixture = await createFixture();
-    const targetPath = path.join(fixture.workspace, "real-heartbeat.md");
-    await fs.writeFile(targetPath, "linked checklist\n", "utf8");
-    await fs.symlink("real-heartbeat.md", fixture.heartbeatPath);
-
-    const result = await migrate(fixture.cfg);
-
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toHaveLength(1);
+  it.each([
+    ["contained symlink", false],
+    ["external symlink", false],
+    ["hard link", false],
+    ["external symlink", true],
+    ["hard link", true],
+  ] as const)("handles %s (completed cutover: %s)", async (shape, complete) => {
+    const fixture = await createFixture(complete ? "original checklist\n" : undefined);
+    const cfg = complete ? await retireHeartbeatWithDoctor(fixture.cfg) : fixture.cfg;
+    const targetPath = path.join(
+      shape === "contained symlink" ? fixture.workspace : fixture.root,
+      "notes.md",
+    );
+    const content = "linked checklist\n";
+    await fs.writeFile(targetPath, content);
+    const linkTarget = shape === "contained symlink" ? "notes.md" : targetPath;
+    await fs[shape === "hard link" ? "link" : "symlink"](linkTarget, fixture.heartbeatPath);
+    const findings = await collectHeartbeatScratchMigrationFindings(cfg);
+    const blocked = !complete && shape !== "contained symlink";
+    expect(findings[0]?.severity).toBe(blocked ? "error" : "warning");
+    const admission = assertHeartbeatScratchMigrationUnambiguous(cfg, process.env);
+    if (blocked) {
+      await expect(admission).rejects.toThrow(/escapes|multiple hard links/);
+    } else {
+      await expect(admission).resolves.toBeUndefined();
+    }
+    const result = await migrate(cfg);
+    expect(result.warnings.length).toBe(blocked ? 1 : 0);
+    expect(result.changes).toHaveLength(!blocked && !complete ? 1 : 0);
+    if (complete) {
+      expect((await migrate(cfg, false)).warnings).toEqual([]);
+      expect(result.notices?.join("\n")).toContain("retained for review");
+      await expect(retireHeartbeatWithDoctor(cfg)).resolves.toEqual(cfg);
+    }
     const { monitor, storePath } = await loadMonitor();
     expect(readCronJobScratchState(storePath, monitor.id).scratch?.content).toBe(
-      "linked checklist\n",
+      complete ? "original checklist\n" : blocked ? undefined : content,
     );
-    // The symlink is removed; the contained target file itself is untouched.
-    await expect(fs.lstat(fixture.heartbeatPath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expectFile(targetPath, "linked checklist\n");
-  });
-
-  it("rejects external symlink targets without importing or removing them", async () => {
-    const fixture = await createFixture();
-    const external = path.join(fixture.root, "outside.md");
-    await fs.writeFile(external, "outside\n", "utf8");
-    await fs.symlink(external, fixture.heartbeatPath);
-
-    const result = await migrate(fixture.cfg);
-    expect(result.changes).toEqual([]);
-    expect(result.warnings.join("\n")).toContain("escapes the agent workspace");
-    await expect(fs.lstat(fixture.heartbeatPath)).resolves.toMatchObject({});
+    if (complete || blocked) {
+      expect((await fs.lstat(fixture.heartbeatPath)).isSymbolicLink()).toBe(shape !== "hard link");
+    } else {
+      await expect(fs.lstat(fixture.heartbeatPath)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    await expectFile(targetPath, content);
   });
 });

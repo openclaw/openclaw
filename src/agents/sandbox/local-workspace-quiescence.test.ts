@@ -344,6 +344,14 @@ it("fences a dedicated stream writer and requires settlement before retiring its
   expect(mocks.custodyCurrent).toHaveBeenCalledWith(record);
   expect(persistCustody).toHaveBeenLastCalledWith([]);
 
+  record.phase = "stopped";
+  mocks.command.mockClear();
+  const stopped = await quiesce({ persist: persistCustody });
+  expect(mocks.command.mock.calls.some(([, args]) => args.at(-1) === childId)).toBe(false);
+  await expect(stopped.retire()).rejects.toThrow("Settle persistent streams");
+  await stopped.resume();
+  expect(persistCustody).toHaveBeenLastCalledWith([]);
+
   const imageRead = {
     workspaceDir: entry.workspaceDir,
     containerRoot: "/workspace",

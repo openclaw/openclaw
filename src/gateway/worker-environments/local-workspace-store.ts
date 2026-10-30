@@ -51,6 +51,7 @@ export type LocalWorkspaceStore = {
   signal: AbortSignal;
   workerAuthority: WorktreeWorkerAuthority;
   assertCurrent: () => void;
+  /** Custody-owned row; projection callers separately check their selected session/worktree owner. */
   get: () => LocalWorkspaceProjection | undefined;
   manifest: (
     row: LocalWorkspaceProjection,
@@ -113,12 +114,15 @@ export function withLocalWorkspaceStore<T>(
           const assertOwner = params.workerAuthority
             ? params.workerAuthority.assertCurrent
             : params.assertCurrent;
-          const assertHost = () => {
+          const assertCustody = () => {
             captured.admission.assertCurrent();
             authority.assertCurrent();
             if (!active) {
               throw new Error("Local workspace custody has ended");
             }
+          };
+          const assertHost = () => {
+            assertCustody();
             assertOwner?.();
           };
           const assertCurrent = () => {
@@ -360,7 +364,7 @@ export function withLocalWorkspaceStore<T>(
                     assertCurrent: assertHost,
                   },
                   get: () => {
-                    assertHost();
+                    assertCustody();
                     return row;
                   },
                   manifest: readManifest,

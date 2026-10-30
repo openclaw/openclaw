@@ -439,9 +439,9 @@ These controls are sparse session overrides, like the model and thinking setting
 
 When `tools.web.search.enabled` is `false`, **Web search** stays off in Chat and New Session. The disabled control explains the global setting. If a session has an older enable override, selecting the control clears that override while search stays off. An explicit session disable remains saved.
 
-Choose **Media** in Chat or New Session to select existing images and videos together where the browser supports mixed selection. Image-only composers keep their existing image-only picker and reject video attachments; on iPhone and iPad Safari its label remains **Attach…** rather than **Photo**. Selecting media stages it in the draft; it does not send the message.
+Choose **Media** in Chat or New Session to select existing images and videos together where the browser supports mixed selection. On iPhone and iPad Safari, choose the single **Add attachment…** row instead; Safari’s native source menu offers library, camera, and file access. Image-only composers keep their image-only picker and reject video attachments. Selecting media stages it in the draft; it does not send the message.
 
-Camera and general-file behavior are unchanged: Android Chrome, Edge, Firefox, and Samsung Internet send **Camera** straight to the device capture input, without opening a web-camera preview first. Desktop browsers keep the preview, capture, and retake flow; iPhone and iPad Safari show **Media** beside the existing **Attach…** action, which retains native capture and general file access. Embedded native hosts keep their existing capture behavior. Canceling capture leaves the message draft unchanged.
+Camera and general-file behavior are unchanged: Android Chrome, Edge, Firefox, and Samsung Internet send **Camera** straight to the device capture input, without opening a web-camera preview first. Desktop browsers keep the preview, capture, and retake flow. iPhone and iPad Safari use their native source menu without a duplicate **Media** choice. Embedded native hosts keep their existing capture behavior. Canceling capture leaves the message draft unchanged.
 
 Video files selected in Chat or New Session show a small local frame preview with a play badge beside the filename. The slot keeps its size while loading. If the browser cannot decode the video promptly, the play icon remains. Removing the attachment releases its preview; generating the preview does not upload the video.
 
@@ -1130,7 +1130,8 @@ in the top-right corner still lets you switch between the diagram and source
 or choose **Expand diagram**.
 The copy button appears on hover or keyboard focus and stays visible on touch
 screens. It copies the original Mermaid text.
-Diagram colors and fonts follow the current UI theme.
+Diagram colors and fonts follow the current UI theme. Mermaid source is rendered
+by Pele in the Control UI and native apps; its layout can differ from Mermaid.js.
 
 An unfinished streaming fence stays readable as code. Rendering starts when the
 closing fence arrives or the response finishes. Invalid or overly complex
@@ -1140,7 +1141,7 @@ images, or add custom CSS to the Control UI.
 
 Renderer loading or timeout errors instead suggest reloading the dashboard and
 checking proxy authentication. The renderer runs in an isolated frame, so its
-`assets/mermaid.min-*.js` and `assets/frame-*.js` requests do not send `SameSite=Lax`
+`assets/pele.min-*.js` and `assets/frame-*.js` requests do not send `SameSite=Lax`
 or `SameSite=Strict` cookies. Behind a cookie-authenticated reverse proxy, those
 static asset URLs must be reachable without those cookies, including under any
 configured `gateway.controlUi.basePath`. Check the browser Network panel for

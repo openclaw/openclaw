@@ -6,7 +6,10 @@ import {
   readAssistantTextBlocksForPhase,
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
-import { toolCallXmlTextFilter } from "../shared/text/assistant-visible-text.js";
+import {
+  hasUnsettledPlainTextToolCall,
+  toolCallXmlTextFilter,
+} from "../shared/text/assistant-visible-text.js";
 import { downgradedToolCallTextFilter } from "../shared/text/downgraded-tool-call-text.js";
 import { findNativeToolMarkerTextBlocks } from "../shared/text/native-tool-marker.js";
 import { createTextProjection, trimTextFilter } from "../shared/text/text-projection.js";
@@ -450,8 +453,11 @@ export function handleMessageUpdate(
     });
   }
   if (next !== undefined) {
-    // Held fence fragments change this delta before the visible projection trims it.
-    const unchangedBlockAppend = textIsAppend && visibleDelta === chunk;
+    // A prior projection can hold bytes that this append must restore through a snapshot.
+    const unchangedBlockAppend =
+      textIsAppend &&
+      visibleDelta === chunk &&
+      ctx.state.assistantStream?.projection?.projector.matchesTrimmedSource !== false;
     if (!hasSnapshotText) {
       const kind =
         deliveryPhase !== "final_answer"
@@ -546,6 +552,7 @@ export function handleMessageUpdate(
       (priorBlockIndex === streamContentIndex ||
         (priorBlockIndex === undefined && !priorBlockText)) &&
       projection?.projector.matchesTrimmedSource &&
+      (previousText.length > 0 || appendDelta === chunk) &&
       ((previousText === previousCleaned && next === cleanedText) ||
         (appendDelta !== null && replyDelta === appendDelta));
     // Block snapshots only serve the optional block-delivery consumer.
@@ -610,7 +617,20 @@ export function handleMessageUpdate(
     return undefined;
   }
   if (ctx.params.onBlockReply && ctx.blockChunking) {
-    ctx.blockChunker.drain({ force: false, emit: ctx.emitBlockChunk });
+    // Delivered messages cannot retract mutable Markdown or tool-call prefixes. The
+    // projection owns settlement after activation; the raw grammar covers short prefixes.
+    const projector = projection?.projector;
+    const unsettled =
+      deliveryPhase === "final_answer" &&
+      !finalText &&
+      ((projector
+        ? projector.settledLength < projector.text.length
+        : ctx.state.blockReplyTextUnsettled) ||
+        hasUnsettledPlainTextToolCall(ctx.blockChunker.bufferedText));
+    ctx.state.blockReplyTextUnsettled = unsettled;
+    if (!unsettled) {
+      ctx.blockChunker.drain({ force: false, emit: ctx.emitBlockChunk });
+    }
   }
   if (evtType === "text_end") {
     const assistantMessageIndex = ctx.state.assistantMessageIndex;

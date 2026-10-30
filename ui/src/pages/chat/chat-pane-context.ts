@@ -127,7 +127,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     super.dispose();
   }
 
-  protected async changeHeaderPlacement(
+  async changeHeaderPlacement(
     row: GatewaySessionRow,
     mode: "move" | "recover" | "reclaim",
     presentation?: SessionPlacementPresentation,

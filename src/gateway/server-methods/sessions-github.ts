@@ -244,10 +244,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
             identity,
             sandbox,
             signal: options.signal,
-            assertCurrent: () => {
-              assertCurrent();
-              assertOwned();
-            },
+            assertCurrent: assertOwned,
             conflictsResolved: params.conflictsResolved,
             baseCommit: params.baseCommit,
           }),

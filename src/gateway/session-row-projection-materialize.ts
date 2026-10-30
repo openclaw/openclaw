@@ -9,6 +9,13 @@ import {
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
 } from "../config/sessions/session-actor-storage-binding.js";
+import { getProviderRegistryIndex } from "../plugins/provider-registry-index.js";
+import {
+  getPluginRegistryForContext,
+  getPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
+import { getPluginRuntimeLoadContextState } from "../plugins/runtime/load-context-state.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
@@ -16,7 +23,7 @@ import { readSessionRowFacts } from "./server-methods/session-placement-read-pro
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
 import { materializeSessionRowIfChanged } from "./session-row-materialization.js";
 import {
-  mayMatchSessionRowModelSearch,
+  prepareSessionRowModelSearch,
   readSessionRowModelFacts,
 } from "./session-row-model-facts.js";
 import { SessionRowFactsPending } from "./session-row-prepared-read.js";
@@ -39,12 +46,19 @@ export function createSessionRowModelFactsReader(params: {
   rows: () => Iterable<records.Row>;
   lookup: (query: records.Lookup) => records.Row | undefined;
   dirty: ReadonlySet<string>;
+  onFactsChange: (listener: () => void) => void;
   readSourceEntry: (row: records.Row, key: string, prepared: boolean) => records.Row["storedEntry"];
   state: () => Pick<
     Parameters<typeof readSessionRowModelFacts>[0],
     "cfg" | "modelCatalog" | "rowContext"
   >;
 }) {
+  let searchVocabulary:
+    | { dependencies: unknown[]; matches: ReturnType<typeof prepareSessionRowModelSearch> }
+    | undefined;
+  params.onFactsChange(() => {
+    searchVocabulary = undefined;
+  });
   const read = (query: records.Lookup, metadataPrepared = false) => {
     const row = params.lookup(query);
     if (!row?.entry) {
@@ -69,8 +83,31 @@ export function createSessionRowModelFactsReader(params: {
   };
   return {
     modelFacts: read,
-    modelSearchMayMatch: (search: string) =>
-      mayMatchSessionRowModelSearch({ ...params.state(), rows: params.rows() }, search),
+    modelSearchMayMatch(search: string) {
+      const state = params.state();
+      const scope = getPluginRuntimeGatewayRequestScope();
+      const registry = getPluginRuntimeGenerationRegistry() ?? getPluginRegistryForContext();
+      const dependencies = [
+        state.cfg,
+        state.modelCatalog,
+        state.rowContext,
+        readPreparedGatewayModelMetadata(state.cfg),
+        registry,
+        registry && getProviderRegistryIndex(registry.providers),
+        (scope?.pluginRegistry === registry ? scope?.declaredProviderOwners : undefined) ??
+          (registry && getPluginRuntimeLoadContextState(registry)?.declaredProviderOwners),
+      ];
+      if (
+        !searchVocabulary ||
+        dependencies.some((value, index) => value !== searchVocabulary!.dependencies[index])
+      ) {
+        searchVocabulary = {
+          dependencies,
+          matches: prepareSessionRowModelSearch({ ...state, rows: params.rows() }),
+        };
+      }
+      return searchVocabulary.matches(search);
+    },
   };
 }
 

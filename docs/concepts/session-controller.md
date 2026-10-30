@@ -160,13 +160,13 @@ attempt, and generation. Live permission checks run again at the final effect.
 Queue settings retain the existing debounce, cap, drop, and route-isolation
 contracts in [Command queue](/concepts/queue#queue-options).
 
-| Policy      | Contract                                                                                                                                                                                                                          |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `steer`     | Attempt injection into the captured active owner. A definite capability rejection leaves the input queued. Disabled cross-human collaboration refuses the input without queueing. An uncertain commitment does not permit replay. |
-| `followup`  | Keep FIFO order among waiting inputs and start a later turn after admission barriers permit it.                                                                                                                                   |
-| `collect`   | Combine compatible waiting inputs after the quiet window; preserve individual custody and routing.                                                                                                                                |
-| `interrupt` | Cancel the captured active turn, prioritize the interrupting input next, and preserve older waiting inputs in relative order after it.                                                                                            |
-| heartbeat   | Drop a heartbeat while competing session work owns admission; do not create a duplicate turn.                                                                                                                                     |
+| Policy      | Contract                                                                                                                                                                                                                                                                               |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `steer`     | Attempt injection into the captured active owner. A definite capability rejection leaves the input queued. Disabled cross-human collaboration queues a separate requester-owned turn by default; strict opt-in refusal does not queue. An uncertain commitment does not permit replay. |
+| `followup`  | Keep FIFO order among waiting inputs and start a later turn after admission barriers permit it.                                                                                                                                                                                        |
+| `collect`   | Combine compatible waiting inputs after the quiet window; preserve individual custody and routing.                                                                                                                                                                                     |
+| `interrupt` | Cancel the captured active turn, prioritize the interrupting input next, and preserve older waiting inputs in relative order after it.                                                                                                                                                 |
+| heartbeat   | Drop a heartbeat while competing session work owns admission; do not create a duplicate turn.                                                                                                                                                                                          |
 
 An interrupt reserves its priority synchronously before cancellation or any
 settlement wait can wake an older drain. Priority belongs to that exact input;
@@ -198,8 +198,10 @@ and prepared permissions. The message retains its author's identity; it does not
 change the execution's requester or imply that the requester approved its content.
 This opt-in tradeoff does not broaden cross-session `sessions_send(mode="steer")`.
 
-With collaboration disabled, a cross-human steering attempt receives a runtime
-refusal and cannot later execute through queue draining, retry, or recovery.
+With collaboration disabled, cross-human input queues quietly for a separate
+execution by default. With `messages.queue.collaborativeSteeringFallback: "reject"`,
+it instead receives a runtime refusal and cannot later execute through queue
+draining, retry, or recovery.
 `/followup <message>` explicitly requests a separate execution under its submitter's
 identity and policy resolved at admission. Neither option bypasses conversation
 access, backend compatibility, cancellation, or current-owner checks.
@@ -311,6 +313,11 @@ retry deadlines, and backend-owned work are not interchangeable with missing
 progress. Watchdogs consume owner-held progress and deadlines, preserve healthy
 waits, and target the exact operation observed. Incoming user messages alone must
 not perpetually renew a stuck run's progress clock.
+
+Embedded-attempt watchdog bookkeeping checks the captured run lifecycle and
+controller ownership without re-entering person-access plugins on each progress
+event. Admission, tool execution, and effect commits still check the current
+access policy, so a revoked grant cannot authorize the next effect.
 
 A bounded recovery claim assumes the scheduler and clock can run. The watchdog
 requests Stop for stalled execution through the captured cancellation kernel.

@@ -168,12 +168,15 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     armOperatorRunCancellation: admission.armOperatorRunCancellation,
     retireOperatorRunCancellation: admission.retireOperatorRunCancellation,
   });
-  const injectionDisposition = createChatSendInjectionDisposition({
-    controllerInput: admission.sourceRef.input,
-    operatorAuthority: admission.operatorAuthority,
-    turnAdoptionLifecycle: queuedFollowup.lifecycle,
-    userTurnTranscriptRecorder: userTurnRecorder,
-  });
+  const injectionDisposition = createChatSendInjectionDisposition(
+    {
+      controllerInput: admission.sourceRef.input,
+      operatorAuthority: admission.operatorAuthority,
+      turnAdoptionLifecycle: queuedFollowup.lifecycle,
+      userTurnTranscriptRecorder: userTurnRecorder,
+    },
+    cfg.messages?.queue,
+  );
   let acceptedMessageInjection = false;
   const dispatchDisposition = {
     isSteered: () => acceptedMessageInjection || queuedFollowup.isSteered(),
@@ -407,7 +410,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   fastModeOverride: p.fastMode,
                   queueModeOverride: p.queueMode,
                   userTurnTranscriptRecorder: userTurnRecorder,
-                  ...(injectionDisposition.isRefused()
+                  ...(injectionDisposition.isCollaborationBlocked()
                     ? { messageInjectionDisposition: "collaborative-steering-disabled" as const }
                     : p.queueMode === "steer" && messageInjectionTarget
                       ? { messageInjectionDisposition: "rejected" as const }

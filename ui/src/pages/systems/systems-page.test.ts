@@ -3,6 +3,7 @@ import type {
   BackupRunRecord,
   BackupStatusResult,
   EnvironmentSummary,
+  SessionPlacement,
   SystemInfoResult,
 } from "@openclaw/gateway-protocol";
 import { createRouter, definePage } from "@openclaw/uirouter";
@@ -24,6 +25,7 @@ import {
 } from "../../test-helpers/app-sidebar.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { cleanupSolid as cleanup, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { renderSidebar, renderSolid } from "./systems-route-view.tsx";
 import { createSystems, type Systems, type SystemsRouteData } from "./systems-state.ts";
@@ -760,6 +762,63 @@ describe("Systems workspace", () => {
     );
     expect(readings()[0]).toBe("3.00");
     expect(page.querySelector('.systems-metrics[data-stale="true"]')).not.toBeNull();
+  });
+
+  it("re-reads worker lifecycle when a session placement changes", async () => {
+    const cloud = (state: "attached" | "destroying" | "destroyed") =>
+      environment("worker:cloud", "worker", "Cloud worker", {
+        worker: {
+          providerId: "crabbox",
+          state,
+          ageMs: 1,
+          attachedSessionIds: [],
+          tunnelStatus: "stopped",
+        },
+      });
+    let environments = [host, cloud("attached")];
+    const { controller, gateway, request } = harness(async () => environments);
+    const { sidebar, unmount } = await mount(controller);
+    expect(sidebar.textContent).toContain("Cloud worker");
+    const reads = () => calls(request, "environments.list").length;
+    const initialReads = reads();
+    // The session need not be in the loaded session list; events alone carry placement.
+    const place = (placement: SessionPlacement | null, reason = "placement") =>
+      gateway.publishEvent("sessions.changed", {
+        sessionKey: "agent:main:cloud",
+        reason,
+        placement,
+      });
+
+    place(null, "activity-summary");
+    gateway.publishEvent("sessions.changed", { sessionKey: "agent:main:cloud", reason: "send" });
+    expect(reads()).toBe(initialReads);
+
+    const active = createActiveSessionPlacement({ environmentId: "worker:cloud" });
+    place(active, "dispatch");
+    await waitForSolid(() => expect(reads()).toBe(initialReads + 1));
+    place({ ...active, updatedAtMs: 2 }, "activity-summary");
+    await waitForSolid(() => expect(controller.loading()).toBe(false));
+    expect(reads()).toBe(initialReads + 1);
+
+    environments = [host, { ...cloud("destroying"), status: "stopping" }];
+    const { generation, createdAtMs, environmentId } = active;
+    const reclaimed = {
+      generation,
+      createdAtMs,
+      environmentId,
+      updatedAtMs: 3,
+      stateChangedAtMs: 3,
+    };
+    place({ ...reclaimed, state: "reclaimed" }, "reclaim");
+    await waitForSolid(() => expect(sidebar.textContent).toContain("Stopping"));
+    expect(reads()).toBe(initialReads + 2);
+    // Teardown completes without another session event; the page tick re-reads it.
+    expect(controller.needsInventoryRefresh()).toBe(true);
+    environments = [host, cloud("destroyed")];
+    await controller.refresh();
+    await waitForSolid(() => expect(sidebar.textContent).not.toContain("Cloud worker"));
+    expect(controller.needsInventoryRefresh()).toBe(false);
+    unmount();
   });
 
   it("shares inventory, keeps a single view-only connection through presentation changes, and retains a removed selection", async () => {

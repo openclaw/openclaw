@@ -3,6 +3,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import * as modelSelection from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
@@ -270,6 +271,7 @@ describe("gateway sessions patch", () => {
   });
 
   test("keeps a custom SVG icon through store normalization, unrelated patches, and clearing", async () => {
+    using defaults = vi.spyOn(modelSelection, "resolveDefaultModelForAgent");
     const svg =
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>';
     const icon = `data:image/svg+xml,${encodeURIComponent(svg)}`;
@@ -284,6 +286,7 @@ describe("gateway sessions patch", () => {
     expect(store[MAIN_SESSION_KEY].icon).toBe(icon);
     expect(expectPatchOk(await patch({ icon: null })).icon).toBeUndefined();
     expect(store[MAIN_SESSION_KEY].color).toBe("purple");
+    expect(defaults).not.toHaveBeenCalled();
   });
 
   test("keeps manual renames independent of automatic device-label writes and clears", async () => {
@@ -340,51 +343,46 @@ describe("gateway sessions patch", () => {
     });
   });
 
-  test("attributes the archive transition and clears attribution on restore", async () => {
-    const archivedBy = { type: "human" as const, id: "profile-ada", label: "Ada" };
-    const archived = await patchOk({
-      mainEntry: { pinnedAt: 10 },
-      archived: true,
-      expectedSessionId: "sess",
-      archivedBy,
-    });
-    expect(archived.archivedAt).toEqual(expect.any(Number));
-    expect(archived.archivedBy).toEqual(archivedBy);
-    expect(archived.archiveReason).toBe("manual");
-    expect(archived.pinnedAt).toBeUndefined();
-
-    const idempotent = await patchOk({
-      mainEntry: {
-        archivedAt: archived.archivedAt,
+  test.each([undefined, { type: "human" as const, id: "profile-ada", label: "Ada" }])(
+    "attributes the archive transition and clears attribution on restore: %j",
+    async (archivedBy) => {
+      const archived = await patchOk({
+        mainEntry: { pinnedAt: 10 },
+        archived: true,
+        expectedSessionId: "sess",
         archivedBy,
-        archiveReason: "manual",
-      },
-      archived: true,
-      expectedSessionId: "sess",
-      archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
-    });
-    expect(idempotent.archivedAt).toBe(archived.archivedAt);
-    expect(idempotent.archivedBy).toEqual(archivedBy);
-    expect(idempotent.archiveReason).toBe("manual");
+      });
+      expect(archived.archivedAt).toEqual(expect.any(Number));
+      expect(archived.archivedBy).toEqual(archivedBy);
+      expect(archived.archiveReason).toBe("manual");
+      expect(archived.pinnedAt).toBeUndefined();
 
-    const restored = await patchOk({
-      store: { [MAIN_SESSION_KEY]: idempotent },
-      archived: false,
-      expectedSessionId: "sess",
-    });
-    expect([restored.archivedAt, restored.archivedBy, restored.archiveReason]).toEqual([
-      undefined,
-      undefined,
-      undefined,
-    ]);
-  });
+      const idempotent = await patchOk({
+        mainEntry: {
+          archivedAt: archived.archivedAt,
+          archivedBy,
+          archiveReason: "manual",
+        },
+        archived: true,
+        expectedSessionId: "sess",
+        archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
+      });
+      expect(idempotent.archivedAt).toBe(archived.archivedAt);
+      expect(idempotent.archivedBy).toEqual(archivedBy);
+      expect(idempotent.archiveReason).toBe("manual");
 
-  test("does not fabricate archive attribution without an actor", async () => {
-    const archived = await patchOk({ mainEntry: {}, archived: true, expectedSessionId: "sess" });
-
-    expect(archived.archivedAt).toEqual(expect.any(Number));
-    expect(archived.archivedBy).toBeUndefined();
-  });
+      const restored = await patchOk({
+        store: { [MAIN_SESSION_KEY]: idempotent },
+        archived: false,
+        expectedSessionId: "sess",
+      });
+      expect([restored.archivedAt, restored.archivedBy, restored.archiveReason]).toEqual([
+        undefined,
+        undefined,
+        undefined,
+      ]);
+    },
+  );
 
   const childPinError = "cannot pin a child session; pin its parent session instead";
   test.each<[string, Partial<SessionEntry>, boolean, string?]>([

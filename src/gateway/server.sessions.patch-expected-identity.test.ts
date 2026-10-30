@@ -301,6 +301,80 @@ test("sessions.patch keeps explicit unread markers strictly advancing", async ()
   }
 });
 
+test("sessions.patchMany preserves a manual unread marker set after the acknowledgement snapshot", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const markedKey = "agent:main:subagent:marked-after-snapshot";
+  const readKey = "agent:main:subagent:acknowledged";
+  await writeSessionStore({
+    entries: Object.fromEntries([markedKey, readKey].map((key) => [key, sessionStoreEntry(key)])),
+  });
+  const targets = [markedKey, readKey].map((key) => ({ key, expectedMarkedUnreadAt: null }));
+  expect(await directSessionReq("sessions.patch", { key: markedKey, unread: true })).toMatchObject({
+    ok: true,
+  });
+  const markedBefore = loadSessionEntry({ sessionKey: markedKey, storePath });
+
+  const result = await directSessionReq("sessions.patchMany", {
+    targets,
+    patch: { unread: false },
+  });
+
+  expect(result).toMatchObject({
+    ok: true,
+    payload: { outcomes: targets.map(({ key }) => ({ key, ok: true })) },
+  });
+  expect(loadSessionEntry({ sessionKey: markedKey, storePath })).toEqual(markedBefore);
+  expect(loadSessionEntry({ sessionKey: readKey, storePath })).toMatchObject({
+    lastReadAt: expect.any(Number),
+  });
+});
+
+test.each([
+  { name: "unread=true", patch: { unread: true }, identity: {} },
+  { name: "another mutation", patch: { unread: false, label: "Explicit change" }, identity: {} },
+  {
+    name: "incompatible expectations",
+    patch: { unread: false },
+    identity: { expectedCategory: null },
+  },
+])(
+  "sessions.patchMany rejects a conditional acknowledgement with $name per target",
+  async ({ patch, identity }) => {
+    const { storePath } = await createSessionStoreDir();
+    const guardedKey = "agent:main:guarded-unread-target";
+    const plainKey = "agent:main:plain-unread-target";
+    await writeSessionStore({
+      entries: Object.fromEntries(
+        [guardedKey, plainKey].map((key) => [key, sessionStoreEntry(key)]),
+      ),
+    });
+    const guardedBefore = loadSessionEntry({ sessionKey: guardedKey, storePath });
+    const result = await directSessionReq("sessions.patchMany", {
+      targets: [{ key: guardedKey, expectedMarkedUnreadAt: null, ...identity }, { key: plainKey }],
+      patch,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      payload: {
+        outcomes: [
+          {
+            key: guardedKey,
+            ...invalid("expectedMarkedUnreadAt requires unread=false as the only mutation."),
+          },
+          { key: plainKey, ok: true },
+        ],
+      },
+    });
+    expect(loadSessionEntry({ sessionKey: guardedKey, storePath })).toEqual(guardedBefore);
+    expect(loadSessionEntry({ sessionKey: plainKey, storePath })).toMatchObject(
+      patch.unread
+        ? { markedUnreadAt: expect.any(Number) }
+        : { lastReadAt: expect.any(Number), ...(patch.label ? { label: patch.label } : {}) },
+    );
+  },
+);
+
 describe("plugin session ownership", () => {
   const sessionKey = "agent:main:dreaming-narrative-owned";
   const sessionId = "plugin-session";

@@ -30,7 +30,7 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { errorShapeFromError } from "../error-shape.js";
-import { hasOperatorBoundary } from "../operator-role-policy.js";
+import { hasOperatorBoundary, operatorSessionCap } from "../operator-role-policy.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
@@ -39,6 +39,7 @@ import {
   requireSessionRowProjection,
 } from "../session-row-projection-access.js";
 import type { MaterializedRow } from "../session-row-projection-record.js";
+import { hasSessionReadAccessChanged } from "../session-sharing-policy.js";
 import {
   authorizeIncognitoSessionTarget,
   createSessionListEntryFilter,
@@ -112,23 +113,18 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       const { agentId, configured, requestedAgentId, sessionKeys } = scope;
       const restrictIncognito =
         Boolean(gatewayClientSessionCreator(client)) && !isGatewayAdmin(client);
-      const roleVisibilityFilter = hasOperatorBoundary(client, policyConfig)
-        ? createSessionListEntryFilter({ client, cfg: policyConfig })
-        : undefined;
-      const restrictVisibility = restrictIncognito || Boolean(roleVisibilityFilter);
-      const canSearchSessionKey = (sessionKey: string, entry?: SessionEntry) => {
-        if (
-          isIncognitoSessionKey(sessionKey) &&
-          authorizeIncognitoSessionTarget({ client: client ?? null, sessionKey, target: null }) !==
-            null
-        ) {
-          return false;
-        }
-        if (!roleVisibilityFilter) {
-          return true;
-        }
-        return Boolean(entry && roleVisibilityFilter(sessionKey, entry));
-      };
+      const restrictRoleVisibility =
+        hasOperatorBoundary(client, policyConfig) &&
+        Boolean(createSessionListEntryFilter({ client, cfg: policyConfig }));
+      const membershipProjection =
+        operatorSessionCap(client, policyConfig) === "invited"
+          ? requireSessionRowProjection(context)
+          : undefined;
+      if (membershipProjection) {
+        await membershipProjection.prepareSelection();
+        await membershipProjection.prepareMembership();
+      }
+      const restrictVisibility = restrictIncognito || restrictRoleVisibility;
       if (requestedAgentId && !params.sessionKeys && configured) {
         respond(
           false,
@@ -174,66 +170,118 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             ),
           )
         : undefined;
-      const entries = new Map<string, SessionEntry>();
-      if (roleVisibilityFilter) {
-        for (const rows of entriesByTarget ?? []) {
-          for (const { sessionKey, entry } of rows) {
-            const parsed = parseAgentSessionKey(sessionKey);
-            if (
-              isIncognitoSessionKey(sessionKey) ||
-              (parsed && normalizeAgentId(parsed.agentId) !== agentId)
-            ) {
-              continue;
+      // Selection runs in the caller's synchronous publication frame, after all worker waits.
+      return () => {
+        const currentPolicyConfig =
+          context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig();
+        const roleVisibilityFilter = hasOperatorBoundary(client, currentPolicyConfig)
+          ? createSessionListEntryFilter({ client, cfg: currentPolicyConfig })
+          : undefined;
+        const entries = new Map<string, SessionEntry>();
+        // Role checks need one canonical metadata row. Unrestricted retired-store
+        // searches retain copied-transcript deduplication below.
+        if (roleVisibilityFilter) {
+          for (const rows of entriesByTarget ?? []) {
+            for (const { sessionKey, entry } of rows) {
+              const parsed = parseAgentSessionKey(sessionKey);
+              if (
+                isIncognitoSessionKey(sessionKey) ||
+                (parsed && normalizeAgentId(parsed.agentId) !== agentId)
+              ) {
+                continue;
+              }
+              if (entries.has(sessionKey)) {
+                throw canonicalSessionKeyMigrationRequiredError(
+                  `duplicate rows resolve to canonical session key ${sessionKey}`,
+                );
+              }
+              entries.set(sessionKey, entry);
             }
-            if (entries.has(sessionKey)) {
-              throw canonicalSessionKeyMigrationRequiredError(
-                `duplicate rows resolve to canonical session key ${sessionKey}`,
-              );
-            }
-            entries.set(sessionKey, entry);
           }
         }
-      }
-      return searchTargets.flatMap((target, index) => {
-        const candidateKeys =
-          scopedSessionKeys ?? entriesByTarget?.[index]?.map(({ sessionKey }) => sessionKey);
-        const targetSessionKeys = candidateKeys?.filter((sessionKey) => {
-          // A shared physical store can include rows owned by another agent.
-          const parsed = parseAgentSessionKey(sessionKey);
-          return (
-            (!parsed || normalizeAgentId(parsed.agentId) === agentId) &&
-            canSearchSessionKey(sessionKey, entries.get(sessionKey))
+        const profileId = gatewayClientSessionCreator(client)?.id;
+        const canSearchSessionKey = (
+          sessionKey: string,
+          entry: SessionEntry | undefined,
+          target: SessionStoreTarget,
+        ) => {
+          if (
+            isIncognitoSessionKey(sessionKey) &&
+            authorizeIncognitoSessionTarget({
+              client: client ?? null,
+              sessionKey,
+              target: null,
+            }) !== null
+          ) {
+            return false;
+          }
+          if (!roleVisibilityFilter) {
+            return true;
+          }
+          const lookup = { key: sessionKey, agentId: target.agentId, storePath: target.storePath };
+          // Worker results can predate a committed visibility or incarnation change.
+          if (membershipProjection) {
+            const current = membershipProjection.sharingTargetState(lookup);
+            if (
+              current.status !== "ready" ||
+              hasSessionReadAccessChanged(entry, current.target.entry)
+            ) {
+              return false;
+            }
+          }
+          const membership = membershipProjection?.readMembership(lookup);
+          return Boolean(
+            entry &&
+            roleVisibilityFilter(
+              sessionKey,
+              entry,
+              Boolean(profileId && membership?.has(profileId)),
+            ),
           );
+        };
+        return searchTargets.flatMap((target, index) => {
+          const candidateKeys =
+            scopedSessionKeys ?? entriesByTarget?.[index]?.map(({ sessionKey }) => sessionKey);
+          const targetSessionKeys = candidateKeys?.filter((sessionKey) => {
+            // A shared physical store can include rows owned by another agent.
+            const parsed = parseAgentSessionKey(sessionKey);
+            return (
+              (!parsed || normalizeAgentId(parsed.agentId) === agentId) &&
+              canSearchSessionKey(sessionKey, entries.get(sessionKey), target)
+            );
+          });
+          if (targetSessionKeys?.length === 0) {
+            return [];
+          }
+          return [
+            {
+              ...target,
+              query,
+              // Over-fetch retired multi-store searches so deduplication can still fill the caller's
+              // requested page when the same transcript was copied during a store migration.
+              limit: configured ? params.limit : 25,
+              ...(targetSessionKeys ? { sessionKeys: targetSessionKeys } : {}),
+            },
+          ];
         });
-        if (targetSessionKeys?.length === 0) {
-          return [];
-        }
-        return [
-          {
-            ...target,
-            query,
-            // Over-fetch retired multi-store searches so deduplication can still fill the caller's
-            // requested page when the same transcript was copied during a store migration.
-            limit: configured ? params.limit : 25,
-            ...(targetSessionKeys ? { sessionKeys: targetSessionKeys } : {}),
-          },
-        ];
-      });
+      };
     };
     try {
       for (let attempt = 0; attempt < 2; attempt++) {
-        const requests = await prepareSearch();
-        if (!requests) {
+        const selectRequests = await prepareSearch();
+        if (!selectRequests) {
           return;
         }
+        const requests = selectRequests();
         const targetResults = await Promise.all(
           requests.map((request) => searchSessionTranscripts(request)),
         );
         // Current configuration, identity, and sharing must authorize the whole result page.
-        const current = await prepareSearch();
-        if (!current) {
+        const selectCurrent = await prepareSearch();
+        if (!selectCurrent) {
           return;
         }
+        const current = selectCurrent();
         if (JSON.stringify(current) !== JSON.stringify(requests)) {
           continue;
         }
@@ -393,7 +441,11 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             }
             const current = read.describe({ key, agentId: currentAgent.agentId });
             const visibilityFilter = hasOperatorBoundary(client, policyConfig)
-              ? createSessionListEntryFilter({ client, cfg: policyConfig })
+              ? createSessionListEntryFilter({
+                  client,
+                  cfg: policyConfig,
+                  membership: current?.membership,
+                })
               : undefined;
             return current?.entry.sessionId &&
               visibilityFilter?.(current.key, current.entry) !== false
@@ -437,9 +489,6 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         (read) => {
           sessionMutationAuthorization?.assertCurrent();
           const { cfg, policyConfig } = read.state;
-          const visibilityFilter = hasOperatorBoundary(client, policyConfig)
-            ? createSessionListEntryFilter({ client, cfg: policyConfig })
-            : undefined;
           for (const previous of buffered) {
             const agent = resolveRequestedGlobalAgentId(cfg, previous.preview.key);
             const current = agent.ok
@@ -447,6 +496,13 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                   { key: previous.preview.key, agentId: agent.agentId },
                   previous.record,
                 )
+              : undefined;
+            const visibilityFilter = hasOperatorBoundary(client, policyConfig)
+              ? createSessionListEntryFilter({
+                  client,
+                  cfg: policyConfig,
+                  membership: current?.membership,
+                })
               : undefined;
             if (
               !current ||

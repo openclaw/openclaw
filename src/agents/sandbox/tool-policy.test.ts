@@ -7,7 +7,7 @@ import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { ToolAllowDenyPolicyConfig } from "../../config/types.tools.js";
 import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import { resolveSandboxConfigForAgent as resolveSandboxConfigForAgentBase } from "./config.js";
+import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   formatSandboxToolPolicyBlockedMessage as formatSandboxToolPolicyBlockedMessageBase,
   resolvePreparedSandboxRuntimeStatus,
@@ -37,10 +37,6 @@ function policyConfig(
 
 function loadedConfig(config: OpenClawConfig | undefined): OpenClawConfig {
   return createCanonicalAgentConfigFixture(config).config;
-}
-
-function resolveSandboxConfigForAgent(config: OpenClawConfig, agentId: string) {
-  return resolveSandboxConfigForAgentBase(loadedConfig(config), agentId);
 }
 
 function resolveSandboxToolPolicyForAgent(config: OpenClawConfig, agentId: string) {
@@ -118,22 +114,19 @@ describe("sandbox/tool-policy", () => {
   });
 
   it("keeps canonical sandbox config and runtime status aligned with the effective resolver", () => {
-    const cfg = policyConfig({ allow: ["browser"] }, { alsoAllow: ["message", "tts"] });
+    const cfg = loadedConfig(
+      policyConfig({ allow: ["browser"] }, { alsoAllow: ["message", "tts"] }),
+    );
 
     const sandbox = resolveSandboxConfigForAgent(cfg, "tavern");
-    expect(sandbox.tools.allow).toContain("browser");
-    expect(sandbox.tools.allow).toContain("message");
-    expect(sandbox.tools.allow).toContain("tts");
-    expect(sandbox.tools.deny).not.toContain("browser");
-
     const runtime = resolveSandboxRuntimeStatus({
       cfg,
       sessionKey: "agent:tavern:main",
     });
-    expect(runtime.toolPolicy.allow).toContain("browser");
-    expect(runtime.toolPolicy.allow).toContain("message");
-    expect(runtime.toolPolicy.allow).toContain("tts");
-    expect(runtime.toolPolicy.deny).not.toContain("browser");
+    for (const policy of [sandbox.tools, runtime.toolPolicy]) {
+      expect(policy.allow).toEqual(expect.arrayContaining(["browser", "message", "tts"]));
+      expect(policy.deny).not.toContain("browser");
+    }
     expect(
       formatSandboxToolPolicyBlockedMessage({
         cfg,
@@ -142,6 +135,33 @@ describe("sandbox/tool-policy", () => {
         preparedRuntimeStatus: runtime,
       }),
     ).toBeUndefined();
+  });
+
+  it("classifies a session without materializing container settings", () => {
+    const cfg = loadedConfig(policyConfig({ allow: ["browser"] }));
+    const sandbox = cfg.agents!.defaults!.sandbox!;
+    let containerReads = 0;
+    for (const key of ["docker", "browser", "prune"]) {
+      Object.defineProperty(sandbox, key, {
+        get: () => {
+          containerReads += 1;
+          return undefined;
+        },
+      });
+    }
+    const request = {
+      cfg,
+      sessionKey: "agent:main:guest",
+      preparedSessionEntry: { sandbox: "required" as const },
+    };
+    const runtime = resolvePreparedSandboxRuntimeStatus(request);
+    expect(runtime).toMatchObject({ sandboxed: true, workspaceAccess: "none", mode: "all" });
+    expect(runtime.toolPolicy.allow).toContain("browser");
+    expect(containerReads).toBe(0);
+    sandbox.ssh = { workspaceRoot: "relative/path" };
+    expect(() => resolvePreparedSandboxRuntimeStatus(request)).toThrow(
+      "Sandbox SSH workspaceRoot must be an absolute POSIX path",
+    );
   });
 
   it("forces a persisted sandbox requirement even when the agent sandbox mode is off", async () => {
@@ -179,61 +199,41 @@ describe("sandbox/tool-policy", () => {
     expect(blockedMessage).not.toContain("sandbox.mode=off");
   });
 
-  it("classifies a borrowed runtime key under its own sandbox agent", () => {
-    const cfg = {
-      agents: {
-        ownership: "explicit",
-        entries: {
-          main: {},
-          worker: {
-            sandbox: { mode: "non-main", scope: "agent" },
-            tools: { sandbox: { tools: { deny: ["sessions_list"] } } },
+  it.each([
+    ["agent:worker:discord:default:direct:peer-42", true],
+    ["agent:worker:main", false],
+  ] as const)(
+    "classifies borrowed %s under its own sandbox agent (sandboxed=%s)",
+    (classificationSessionKey, sandboxed) => {
+      const cfg = {
+        agents: {
+          ownership: "explicit",
+          entries: {
+            main: {},
+            worker: {
+              sandbox: { mode: "non-main", scope: "agent" },
+              tools: { sandbox: { tools: { deny: ["sessions_list"] } } },
+            },
           },
         },
-      },
-    } satisfies OpenClawConfig;
-
-    const runtime = resolveSandboxRuntimeStatus({
-      cfg,
-      sessionKey: "agent:main:main",
-      agentId: "main",
-      classificationSessionKey: "agent:worker:discord:default:direct:peer-42",
-      classificationAgentId: "worker",
-    });
-
-    expect(runtime).toMatchObject({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      classificationAgentId: "worker",
-      classificationSessionKey: "agent:worker:discord:default:direct:peer-42",
-      sandboxed: true,
-    });
-    expect(runtime.toolPolicy.deny).toContain("sessions_list");
-  });
-
-  it("recognizes the classification agent's main session in non-main mode", () => {
-    const cfg = {
-      agents: {
-        ownership: "explicit",
-        entries: {
-          main: {},
-          worker: { sandbox: { mode: "non-main", scope: "agent" } },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const runtime = resolveSandboxRuntimeStatus({
-      cfg,
-      sessionKey: "agent:main:main",
-      agentId: "main",
-      classificationSessionKey: "agent:worker:main",
-      classificationAgentId: "worker",
-    });
-
-    expect(runtime.agentId).toBe("main");
-    expect(runtime.classificationAgentId).toBe("worker");
-    expect(runtime.sandboxed).toBe(false);
-  });
+      } satisfies OpenClawConfig;
+      const runtime = resolveSandboxRuntimeStatus({
+        cfg,
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        classificationSessionKey,
+        classificationAgentId: "worker",
+      });
+      expect(runtime).toMatchObject({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        classificationAgentId: "worker",
+        classificationSessionKey,
+        sandboxed,
+      });
+      expect(runtime.toolPolicy.deny).toContain("sessions_list");
+    },
+  );
 
   it.each([
     { classificationSessionKey: "agent:worker:main", classificationAgentId: "main" },

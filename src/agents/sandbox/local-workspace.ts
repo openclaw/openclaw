@@ -121,7 +121,11 @@ export async function prepareLocalSandboxWorkspace(params: {
             allocated();
             phases.mark("attempt.setup.sandbox.workspace_selection.prepare.acquire");
             return withLocalWorkspaceProjection(
-              { ...executionOwner, workerAuthority: allocation.workerAuthority },
+              {
+                ...executionOwner,
+                assertCurrent: allocation.commitGuard,
+                workerAuthority: allocation.workerAuthority,
+              },
               async (state) => {
                 phases.mark("attempt.setup.sandbox.workspace_selection.prepare.reconcile");
                 try {

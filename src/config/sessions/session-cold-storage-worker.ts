@@ -60,7 +60,10 @@ import {
   sqliteSessionTranscriptTurnRebound,
 } from "./session-turn.kernel.js";
 import { resolveSessionWorkStartError } from "./session-work-start.js";
-import { prepareTranscriptPayload, TRANSCRIPT_INSERT_BATCH_SIZE } from "./transcript-payload.js";
+import {
+  createTranscriptEventInserter,
+  TRANSCRIPT_INSERT_BATCH_SIZE,
+} from "./transcript-payload.js";
 
 export type SessionColdMutationPlan = { databaseOptions: SessionColdPlan["databaseOptions"] } & (
   | { kind: "cold-maintain" }
@@ -312,39 +315,69 @@ export function mutateSessionColdTranscriptInWorker(
           throw new Error("Cold transcript changed during restoration");
         }
         const session_id = plan.sessionId;
+        const insertEvents = createTranscriptEventInserter(database.db, session_id);
+        const eventRows: Parameters<typeof insertEvents.batch>[0][number][] = [];
+        const identityRows: DB["transcript_event_identities"][] = [];
+        const activeRows: DB["session_transcript_active_events"][] = [];
+        let eventCharacters = 0;
+        const flushRows = () => {
+          if (eventRows.length) {
+            insertEvents.batch(eventRows);
+            eventRows.length = 0;
+            eventCharacters = 0;
+          }
+          if (identityRows.length) {
+            executeSqliteQuerySync(
+              database.db,
+              db.insertInto("transcript_event_identities").values(identityRows),
+            );
+            identityRows.length = 0;
+          }
+          if (activeRows.length) {
+            executeSqliteQuerySync(
+              database.db,
+              db.insertInto("session_transcript_active_events").values(activeRows),
+            );
+            activeRows.length = 0;
+          }
+        };
         const insertFts = createSessionTranscriptFtsInserter(database.db, session_id);
         const ftsRows: Parameters<typeof insertFts>[0][number][] = [];
         withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(session_id)], () => {
+          let previousKind: SessionColdRecord["kind"] | undefined;
           for (const record of records(database)) {
+            // Keep archive order and immediate foreign keys, including across chunk boundaries.
+            if (record.kind !== previousKind) {
+              flushRows();
+              previousKind = record.kind;
+            }
             switch (record.kind) {
               case "header":
                 break;
               case "event":
-                executeSqliteQuerySync(
-                  database.db,
-                  db.insertInto("transcript_events").values({
-                    session_id,
-                    seq: record.row.seq,
-                    created_at: record.row.created_at,
-                    ...prepareTranscriptPayload(database.db, record.row.event_json),
-                  }),
-                );
+                eventRows.push({
+                  seq: record.row.seq,
+                  createdAt: record.row.created_at,
+                  eventJson: record.row.event_json,
+                });
+                eventCharacters += record.row.event_json.length;
+                // Bound retained decoded text to about 1 MiB, plus one oversized event.
+                // Smaller payload batches also fit the native statement cache's binding budget.
+                if (eventRows.length === 64 || eventCharacters >= 524_288) {
+                  flushRows();
+                }
                 break;
               case "identity":
-                executeSqliteQuerySync(
-                  database.db,
-                  db
-                    .insertInto("transcript_event_identities")
-                    .values({ session_id, ...record.row }),
-                );
+                identityRows.push({ session_id, ...record.row });
+                if (identityRows.length === TRANSCRIPT_INSERT_BATCH_SIZE) {
+                  flushRows();
+                }
                 break;
               case "active":
-                executeSqliteQuerySync(
-                  database.db,
-                  db
-                    .insertInto("session_transcript_active_events")
-                    .values({ session_id, ...record.row }),
-                );
+                activeRows.push({ session_id, ...record.row });
+                if (activeRows.length === TRANSCRIPT_INSERT_BATCH_SIZE) {
+                  flushRows();
+                }
                 break;
               case "index":
                 executeSqliteQuerySync(
@@ -368,6 +401,7 @@ export function mutateSessionColdTranscriptInWorker(
                 break;
             }
           }
+          flushRows();
           insertFts(ftsRows);
           executeSqliteQuerySync(
             database.db,

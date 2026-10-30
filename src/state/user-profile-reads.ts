@@ -1,8 +1,13 @@
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { captureUserProfileAuthorityRead } from "./user-profile-events.js";
-import { prepareUserProfileCatalog, readUserProfileSnapshot } from "./user-profile-list.js";
+import {
+  isUserProfileCatalogReady,
+  prepareUserProfileCatalog,
+  readUserProfileSnapshot,
+} from "./user-profile-list.js";
 import type { CachedGitHubIdentity, CachedGitHubIdentityBinding } from "./user-profiles.types.js";
 
 type ProfileReadOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env">;
@@ -62,6 +67,16 @@ export async function resolveCanonicalCachedGitHubIdentity(
   binding: CachedGitHubIdentityBinding,
   options: ProfileReadOptions = {},
 ): Promise<CachedGitHubIdentity | undefined> {
+  const pathname = resolveDatabasePath(options);
+  if ("email" in binding && isUserProfileCatalogReady(pathname)) {
+    const catalog = await prepareUserProfileCatalog(options);
+    try {
+      return catalog.readCurrentGitHubEmailIdentity(binding.accountId, binding.email);
+    } finally {
+      catalog.release();
+    }
+  }
+  // Standalone callers and login aliases still need the worker's exact binding lookup.
   const reply = await executeExistingOpenClawStateRead(options, {
     type: "userProfiles.githubIdentity.cached",
     ...binding,

@@ -327,18 +327,30 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `807211511f81e0a6639bc9eb41d67120f6b85316` with WebKit
-`a2976f02e69fde8ccc45dc8fb346173f9d63f8a1` in prerelease
-`openclaw-v1.4.4-20261024-807211511f-webkit-a2976f02e6`.
+The pinned build pairs Bun `191755ec115ece3dd642eba3cb0143cecb5e5d7a` with WebKit
+`b82bc917e99110b61c3a21202d6def7457aa194c` in prerelease
+`openclaw-v1.4.4-20261026-191755ec11-webkit-b82bc917e9`.
+
+It includes the eMudhra compromised-key blocklist and checks current trust before
+accepting saved TLS sessions. QUIC clients recheck saved-session authorization,
+and QUIC servers defer early application data until current client-certificate
+authorization succeeds ([fork change #213](https://github.com/openclaw/bun/pull/213)).
+These checks retain rejection when an affected certificate is added as an extra
+or explicit CA. Stock Bun 1.4.4's full-handshake blocklist alone does not provide
+these session and early-data repairs. Native incident/session/product proof is
+macOS ARM64; the other release targets have build and smoke qualification, with
+the shared Windows compatibility selection on x64 and ARM64.
 
 It restores SNI set with `tlsSocket.setServername()` before connecting, including
 with `autoSelectFamily` ([fork change #197](https://github.com/openclaw/bun/pull/197)).
-The Buffer copy reduction was withdrawn pending a container-neutral design;
-serialization remains unchanged from the previous `ef37c31de3` pin.
+Large single-recipient Worker Buffer messages avoid redundant serialized copies
+while preserving ordinary cloning and multi-recipient behavior
+([fork change #211](https://github.com/openclaw/bun/pull/211)).
 
-It includes 58 upstream Bun commits through `ad4089bf`, including native
+It includes the upstream Bun sync through `a8fcd319`, including native
 lint/format performance improvements and `--no-script` to bypass package scripts.
-The engine replays the 16 fork patches onto upstream WebKit `87ee10da`.
+It uses the separately published WebKit pairing above; this pin does not rebase
+WebKit or complete the independent WebKit remediation qualification.
 It retains disabled source-map handling in the transpiler cache and shares
 identical `node:vm` source buffers and source-map URIs.
 This build preserves `DONT_CONTEXTIFY` global receiver identity for jsdom, keeps

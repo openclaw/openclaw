@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { serialize } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import {
@@ -12,11 +13,6 @@ import {
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import type {
-  SqliteWorkerOperations,
-  SqliteWorkerStore,
-} from "../../infra/sqlite-worker-contract.js";
-import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
@@ -34,6 +30,7 @@ import { readPendingInputHistoryInDatabase } from "./session-pending-input-histo
 import {
   createUserPendingInput,
   createPendingHistoryFixture,
+  interceptPendingInputWorker,
 } from "./session-pending-input.test-support.js";
 import * as historyRuntime from "./session-transcript-worker-runtime.js";
 
@@ -434,59 +431,37 @@ it("keeps concurrent history readers consistent after one reconciles orphaned in
 it("publishes an acknowledged interruption after the ordinary worker reply is lost", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { scope, database } = createPendingHistoryFixture("lost-history-reply");
-    const receipt = await stageSessionPendingInput(scope, {
-      runId: "lost",
-      message: {
-        role: "user",
-        content: "Synthetic lost reply",
-        timestamp: 1,
-        idempotencyKey: "lost:user",
-      },
-      assertCurrent: () => {},
-    });
-    if (!receipt) {
-      throw new Error("Expected retained input");
-    }
+    const receipt = expectDefined(
+      await stageSessionPendingInput(
+        scope,
+        createUserPendingInput("lost", "Synthetic lost reply", "lost:user"),
+      ),
+      "Expected retained input",
+    );
     receipt.finish("interrupted");
     await receipt.settled?.();
     database.db
       .prepare("UPDATE session_pending_inputs SET state = 'queued' WHERE input_id = ?")
       .run(receipt.inputId);
-    const original = workerStore.runSqliteWorkerStoreOperation;
     let executions = 0;
-    const spy = vi
-      .spyOn(workerStore, "runSqliteWorkerStoreOperation")
-      .mockImplementation(
-        <Operations extends SqliteWorkerOperations, T>(
-          store: SqliteWorkerStore<Operations>,
-          operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
-          stateContext?: Parameters<typeof original>[2],
-          assertOperationCurrent?: Parameters<typeof original>[3],
-          createAdmission?: Parameters<typeof original>[4],
-        ) =>
-          original(
-            store,
-            (worker) =>
-              operation({
-                execute: async (command, options) => {
-                  const value = await worker.execute(command, options);
-                  if (command.type === "session.pendingInputs.interruptHistory") {
-                    executions++;
-                    throw new Error("Synthetic result delivery failure");
-                  }
-                  return value;
-                },
-              }),
-            stateContext,
-            assertOperationCurrent,
-            createAdmission,
-          ),
-      );
+    let replyBytes: number | undefined;
+    const spy = interceptPendingInputWorker((worker) => ({
+      execute: async (command, options) => {
+        const value = await worker.execute(command, options);
+        if (command.type === "session.pendingInputs.interruptHistory") {
+          executions++;
+          replyBytes = serialize(value).byteLength;
+          throw new Error("Synthetic result delivery failure");
+        }
+        return value;
+      },
+    }));
     try {
       expect(await readSessionPendingInput(scope, receipt.inputId)).toMatchObject({
         state: "interrupted",
       });
       expect(executions).toBe(1);
+      expect(replyBytes).toBeLessThan(32);
       expect(
         database.db
           .prepare("SELECT state FROM session_pending_inputs WHERE input_id = ?")

@@ -4,7 +4,7 @@ import { removePairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import { projectChatMessageReactions } from "./chat-message-reactions-snapshot.ts";
 import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 
-export const CHAT_SNAPSHOT_PROJECTION_VERSION = 5;
+export const CHAT_SNAPSHOT_PROJECTION_VERSION = 6;
 const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
 
 export function createSnapshotRecord(

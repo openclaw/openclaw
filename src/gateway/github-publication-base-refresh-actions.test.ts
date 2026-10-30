@@ -4,6 +4,7 @@ import {
   publicationCheckpoint as checkpoint,
   withPublicationToolTransport,
 } from "./github-publication-actions.test-support.js";
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -13,6 +14,8 @@ import { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createGitHubPublishTool } from "../agents/tools/github-publish-tool.js";
 import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.js";
+import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { createRequesterPublicationFixture } from "./github-publication-requester.test-support.js";
 import {
   commandResult,
@@ -58,10 +61,7 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   await git("add", "--force", "--", unchangedInput);
   await write(cwd, ".gitignore", ".env.local\n.guest-cache\n");
   const first = await f.coordinator.requestForSessionV2(f.request("first-draft", f.guest));
-  expect(first.status).toBe("published");
-  if (first.status !== "published") {
-    throw new Error("Fixture publication failed");
-  }
+  assert(first.status === "published", "Fixture publication failed");
   const created = mocks.runCommand.mock.calls.findLast(
     ([argv]) => argv.includes("POST") && argv.some((arg: string) => arg.endsWith("/pulls")),
   )!;
@@ -187,9 +187,7 @@ it("recovers one guest integration, retains saved data and publishes the resolve
     cfg: f.config,
     assertCurrent: f.guest.assertCurrent,
   });
-  if (!owner) {
-    throw new Error("Fixture managed workspace unavailable");
-  }
+  assert(owner, "Fixture managed workspace unavailable");
   const baseline = () =>
     workspaceStore.withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) =>
       store.get(),
@@ -238,9 +236,7 @@ it("recovers one guest integration, retains saved data and publishes the resolve
               },
             },
           );
-          if (result.code === null) {
-            throw new Error("Fixture sandbox command did not exit");
-          }
+          assert(result.code !== null, "Fixture sandbox command did not exit");
           return { code: result.code, stdout: result.stdout, stderr: result.stderr };
         },
       },
@@ -248,9 +244,7 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   });
   const guestGit = async (...args: string[]) => {
     const result = await sandbox.backend!.runShellCommand({ script: 'git "$@"', args });
-    if (result.code !== 0) {
-      throw new Error(result.stderr.toString());
-    }
+    assert.equal(result.code, 0, result.stderr.toString());
     return result.stdout.toString().trim();
   };
   const guestHead = await guestGit("rev-parse", "HEAD");
@@ -336,20 +330,17 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   cancelAfterScan = undefined;
   rejectContentFetch = false;
   const stage = workerWorkspaceResultStaging.stageWorkerWorkspaceResult;
-  let stagedRefresh = "";
   const stageInterruption = vi
     .spyOn(workerWorkspaceResultStaging, "stageWorkerWorkspaceResult")
     .mockImplementation(async (params) => {
       const result = await stage(params);
       if (isLocalWorkspaceBaseRefreshRef(params.stagedResultRef)) {
-        stagedRefresh = params.stagedResultRef;
         throw new Error("interrupted before refresh reservation");
       }
       return result;
     });
   await expect(refresh()).rejects.toThrow("interrupted before refresh reservation");
   stageInterruption.mockRestore();
-  expect(stagedRefresh).not.toBe("");
   const stagedHead = await git("rev-parse", "HEAD");
   const stagedBaseline = await baseline();
   expect(stagedBaseline?.pending_ref).toBeNull();
@@ -397,9 +388,8 @@ it("recovers one guest integration, retains saved data and publishes the resolve
     }
     return result;
   });
-  const interruptionFailure = await refresh().catch((error: unknown) => error);
-  expect(interrupted, String(interruptionFailure)).toBe(true);
-  expect(interruptionFailure).toBeInstanceOf(Error);
+  await expect(refresh()).rejects.toThrow("Accepted workspace publication is indeterminate");
+  expect(interrupted).toBe(true);
   interruption.mockRestore();
   const pendingRefresh = await baseline();
   expect(pendingRefresh).toMatchObject({ pending_target: "projection", journal_json: null });
@@ -480,10 +470,30 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   await git("commit", "-m", "Advance base without conflicts");
   baseCommit = await git("rev-parse", "HEAD");
   await git("checkout", first.branch);
+  const reservationCommands: string[] = [];
+  const reservationProbe = interceptUpdate((update) => async (row, patch, authority, manifest) => {
+    const commandProbe = sqliteWorkerOwnerProbe.command(stateWorker, (command, args, scope) => {
+      if (
+        patch.pending_target === "canonical" &&
+        isLocalWorkspaceBaseRefreshRef(patch.pending_ref ?? null) &&
+        command.type.startsWith("localWorkspace.")
+      ) {
+        reservationCommands.push(command.type);
+      }
+      return scope.execute(command, args);
+    });
+    try {
+      return await update(row, patch, authority, manifest);
+    } finally {
+      commandProbe.mockRestore();
+    }
+  });
   expect(await refresh()).toMatchObject({
     status: "refreshed",
     review: { mode: "local", base: baseCommit },
   });
+  reservationProbe.mockRestore();
+  expect(reservationCommands).toEqual(["localWorkspace.mutate"]);
   expect(await guestGit("rev-parse", "HEAD")).toBe(guestHead);
   expect((await guestGit("diff", "--cached", "--name-only", baseCommit)).split("\n")).not.toContain(
     "later-upstream.txt",

@@ -67,12 +67,17 @@ function isValidPid(pid: number): boolean {
   return Number.isInteger(pid) && pid > 0;
 }
 
+// Android (Termux) runs the Linux kernel and reports its own process.platform.
+function hasLinuxProcfs(): boolean {
+  return process.platform === "linux" || process.platform === "android";
+}
+
 /**
  * Reject recycled worker TIDs and terminal leaders without live sibling threads.
  * Missing or reaped procfs snapshots require a fresh existence probe.
  */
 function isExitedLinuxProcess(pid: number): boolean {
-  if (process.platform !== "linux") {
+  if (!hasLinuxProcfs()) {
     return false;
   }
   try {
@@ -178,7 +183,7 @@ function getDarwinProcessStartTime(
 
 /** Read the Linux procfs start identity used by Linux-owned runtime state. */
 export function getProcessStartTime(pid: number): number | null {
-  if (!isValidPid(pid) || process.platform !== "linux") {
+  if (!isValidPid(pid) || !hasLinuxProcfs()) {
     return null;
   }
   try {
@@ -204,7 +209,7 @@ export function getProcessInstanceStartTime(pid: number): number | null {
   if (!isValidPid(pid)) {
     return null;
   }
-  if (process.platform === "linux") {
+  if (hasLinuxProcfs()) {
     const startedAt = getProcessStartTime(pid);
     return Number.isSafeInteger(startedAt) ? startedAt : null;
   }

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { EarlyGateway, takeEarlyGatewaySubscription } from "./gateway-boot.ts";
 import { useHandshakeHarness } from "./gateway-handshake.test-support.ts";
 import { getLatestWebSocket, wsInstances } from "./gateway-socket.test-support.ts";
+import type { GatewayHelloOk } from "./gateway.ts";
 
 let nextRequestId = 0;
 useHandshakeHarness({ randomUUID: () => `boot-request-${++nextRequestId}` });
@@ -28,22 +29,32 @@ async function handshake() {
     .map((value) => JSON.parse(value))
     .find((frame) => frame.method === "connect");
   expect(connect).toBeDefined();
+  expect(socket.sent.map((value) => JSON.parse(value).method)).toEqual(["connect"]);
   return { socket, connect };
 }
 
-it("hands off one connection, initial history, and ordered events without loss or duplication", async () => {
-  const { socket, connect } = await handshake();
-  const subscription = socket.sent
-    .map((value) => JSON.parse(value))
-    .find((frame) => frame.method === "sessions.messages.subscribe");
-  // Read-only subscription is already queued behind connect admission.
-  expect(subscription).toBeDefined();
+async function acceptHello(
+  { socket, connect }: Awaited<ReturnType<typeof handshake>>,
+  auth?: GatewayHelloOk["auth"],
+) {
   socket.emitMessage({
     type: "res",
     id: connect.id,
     ok: true,
-    payload: { type: "hello-ok", protocol: PROTOCOL_VERSION },
+    payload: { type: "hello-ok", protocol: PROTOCOL_VERSION, ...(auth ? { auth } : {}) },
   });
+  await vi.advanceTimersByTimeAsync(0);
+  const subscription = socket.sent
+    .map((value) => JSON.parse(value))
+    .find((frame) => frame.method === "sessions.messages.subscribe");
+  expect(subscription).toBeDefined();
+  return subscription;
+}
+
+it("hands off one connection, initial history, and ordered events without loss or duplication", async () => {
+  const connection = await handshake();
+  const { socket } = connection;
+  const subscription = await acceptHello(connection);
   socket.emitMessage({ type: "event", event: "boot-proof", payload: 1, seq: 1 });
   socket.emitMessage({
     type: "res",
@@ -79,16 +90,9 @@ it("hands off one connection, initial history, and ordered events without loss o
 });
 
 it("keeps live delivery when the pane needs a different initial history request", async () => {
-  const { socket, connect } = await handshake();
-  const subscribe = socket.sent
-    .map((value) => JSON.parse(value))
-    .find((frame) => frame.method === "sessions.messages.subscribe");
-  socket.emitMessage({
-    type: "res",
-    id: connect.id,
-    ok: true,
-    payload: { type: "hello-ok", protocol: PROTOCOL_VERSION },
-  });
+  const connection = await handshake();
+  const { socket } = connection;
+  const subscribe = await acceptHello(connection);
   socket.emitMessage({
     type: "res",
     id: subscribe.id,
@@ -111,19 +115,13 @@ it("keeps live delivery when the pane needs a different initial history request"
 });
 
 it("prepares authorized approval replay on the same observer before the pane attaches", async () => {
-  const { socket, connect } = await handshake();
+  const connection = await handshake();
+  const { socket } = connection;
   const request = (method: string) =>
     socket.sent.map((value) => JSON.parse(value)).filter((frame) => frame.method === method);
-  const initial = request("sessions.messages.subscribe")[0];
-  socket.emitMessage({
-    type: "res",
-    id: connect.id,
-    ok: true,
-    payload: {
-      type: "hello-ok",
-      protocol: PROTOCOL_VERSION,
-      auth: { role: "operator", scopes: ["operator.approvals"] },
-    },
+  const initial = await acceptHello(connection, {
+    role: "operator",
+    scopes: ["operator.approvals"],
   });
   socket.emitMessage({
     type: "res",
@@ -165,16 +163,9 @@ it("prepares authorized approval replay on the same observer before the pane att
 });
 
 it("leaves the foreground handoff available to unrelated narration consumers", async () => {
-  const { socket, connect } = await handshake();
-  const initial = socket.sent
-    .map((value) => JSON.parse(value))
-    .find((frame) => frame.method === "sessions.messages.subscribe");
-  socket.emitMessage({
-    type: "res",
-    id: connect.id,
-    ok: true,
-    payload: { type: "hello-ok", protocol: PROTOCOL_VERSION },
-  });
+  const connection = await handshake();
+  const { socket } = connection;
+  const initial = await acceptHello(connection);
   expect(boot.adopt(options)).toBe(boot.client);
   expect(
     await takeEarlyGatewaySubscription(boot.client, "agent:main:other", { mode: "narration" }),
@@ -192,20 +183,15 @@ it("leaves the foreground handoff available to unrelated narration consumers", a
 });
 
 it("counts approval replay against the retained byte bound", async () => {
-  const { socket, connect } = await handshake();
+  const connection = await handshake();
+  const { socket } = connection;
   const request = () =>
     socket.sent
       .map((value) => JSON.parse(value))
       .findLast((frame) => frame.method === "sessions.messages.subscribe");
-  socket.emitMessage({
-    type: "res",
-    id: connect.id,
-    ok: true,
-    payload: {
-      type: "hello-ok",
-      protocol: PROTOCOL_VERSION,
-      auth: { role: "operator", scopes: ["operator.approvals"] },
-    },
+  await acceptHello(connection, {
+    role: "operator",
+    scopes: ["operator.approvals"],
   });
   socket.emitMessage({
     type: "res",
@@ -348,16 +334,9 @@ it("abandons a transient pre-attach disconnect for normal startup", async () => 
 });
 
 it("delivers a rejected early subscription to the existing read-retry owner", async () => {
-  const { socket, connect } = await handshake();
-  const subscribe = socket.sent
-    .map((value) => JSON.parse(value))
-    .find((frame) => frame.method === "sessions.messages.subscribe");
-  socket.emitMessage({
-    type: "res",
-    id: connect.id,
-    ok: true,
-    payload: { type: "hello-ok", protocol: PROTOCOL_VERSION },
-  });
+  const connection = await handshake();
+  const { socket } = connection;
+  const subscribe = await acceptHello(connection);
   const error = {
     code: "INVALID_REQUEST",
     message: "session changed",

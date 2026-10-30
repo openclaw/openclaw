@@ -437,7 +437,7 @@ suite.define(() => {
     }
   }, 120_000);
 
-  it("shows acquisition failures in Automations while keeping model search quiet and usable", async () => {
+  it("shows acquisition failures in automation editors while keeping model search quiet and usable", async () => {
     const outcomes: unknown[] = [];
     const refresh = async () => {
       const payload = requireRecord(
@@ -481,6 +481,12 @@ suite.define(() => {
           expect.objectContaining({ provider: "ollama", id: "refresh-fixture:latest" }),
         );
         expect(JSON.stringify(failed)).not.toContain("private upstream error body");
+        await automations.locator('[data-test-id="cron-new-task"]').click();
+        await automations.getByText(warning, { exact: true }).waitFor({ state: "visible" });
+        await automations.locator('[data-test-id="cron-back"]').click();
+        await automations.locator('[data-test-id="cron-new-task"]').waitFor({ state: "visible" });
+        expect(await automations.getByText(warning, { exact: true }).count()).toBe(0);
+        await automations.locator('[data-test-id="cron-new-task"]').click();
         await automations.getByText(warning, { exact: true }).waitFor({ state: "visible" });
         await page.keyboard.press("ControlOrMeta+K");
         await page.locator(".cmd-palette__input").fill("refresh-fixture");
@@ -516,7 +522,7 @@ suite.define(() => {
           JSON.stringify({
             providerTraffic,
             outcomes,
-            automationsWarning: true,
+            automationEditorWarning: true,
             paletteWarning: false,
             retainedModelCount: 1,
             successfulEmptyClearedModelAndWarnings: true,

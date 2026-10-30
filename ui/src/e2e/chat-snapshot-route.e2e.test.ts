@@ -22,7 +22,9 @@ async function openCachedRoute(page: Page) {
     authMode: "trusted-proxy",
     sessions: [],
     heldMethods: ["sessions.resolve", "chat.startup", "chat.send"],
-    historyMessages: [{ role: "assistant", content: transcript }],
+    sessionTranscripts: {
+      [sessionKey]: { messages: [{ role: "assistant", content: transcript }] },
+    },
     methodResponses: {
       "sessions.describe": { session: row },
       "sessions.resolve": { ok: true, ...row },
@@ -244,6 +246,10 @@ suite.define(() => {
               (url) =>
                 url.pathname.startsWith(`/chat/${movedAgent}/`) && !url.pathname.includes(id),
             );
+            await page.waitForFunction((key) => {
+              const pane = document.querySelector(".chat-pane-cache__pane--visible");
+              return pane && Reflect.get(pane, "sessionKey") === key;
+            }, movedKey);
             await page
               .locator(".chat-pane-cache__pane--visible")
               .getByText(transcript, { exact: true })

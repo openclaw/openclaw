@@ -3,6 +3,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
 import * as runtimeConfig from "../../../config/runtime-snapshot.js";
 import * as sessions from "../../../config/sessions/session-accessor.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  setDiagnosticsEnabledForProcess,
+} from "../../../infra/diagnostic-events.js";
+import { onWorkerRequestMetrics } from "../../../infra/worker-request-diagnostics.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
   createSubagentRunRecord,
@@ -57,7 +62,21 @@ it.each([
       });
       const lastRunError = read()?.lastRunError;
       expect(lastRunError?.length).toBeLessThanOrEqual(160);
-      await persist();
+      const diagnostics = areDiagnosticsEnabledForProcess();
+      setDiagnosticsEnabledForProcess(true);
+      let repeatedWrites = 0;
+      const unsubscribe = onWorkerRequestMetrics((kind, requestClass, phase) => {
+        if (kind === "sqlite_writer" && requestClass === "sessions" && phase === "completed") {
+          repeatedWrites++;
+        }
+      });
+      try {
+        await persist();
+      } finally {
+        unsubscribe();
+        setDiagnosticsEnabledForProcess(diagnostics);
+      }
+      expect(repeatedWrites).toBe(0);
       const notices = (await sessions.loadTranscriptEvents(target)).filter(
         (event) => isRecord(event) && event.type === "custom_message",
       );

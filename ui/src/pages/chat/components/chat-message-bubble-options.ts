@@ -62,7 +62,6 @@ export type GroupedMessageOptions = MessageRenderOptions & {
   /** Search reveals matching transcript text inside disclosures. */
   searchResult?: boolean;
   transcriptVisible?: PresentationValue;
-  duplicateCount?: number;
   showReasoning: boolean;
   bubbleMode?: boolean;
   /** First visible message of the containing group/frame; null means none. */

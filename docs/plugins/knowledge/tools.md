@@ -64,6 +64,10 @@ record changes. Never replace a page from an incomplete body. Missing or
 duplicate IDs return `record: null`. The legacy `includeMetadata` selector
 cannot be combined with `metadataView`.
 
+Claim cards, related statements, and evidence excerpts preserve UTF-16 surrogate
+pairs. A preview may stop one unit before its cap; later source lines do not fill
+that gap.
+
 `knowledge_evidence_read({id, path, sha256})` reads a retained source passage as
 UTF-8 text, with optional `startLine`/`endLine`. It returns a verified source
 hash and range plus `nextCursor`; continue with the same id, path, and hash until

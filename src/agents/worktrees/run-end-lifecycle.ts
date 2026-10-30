@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isNativeError } from "node:util/types";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
   SqliteWorkerError,
@@ -9,6 +10,7 @@ import { GatewayRetainedWorkScope, trackAsyncWork } from "../../shared/async-wor
 import { registerOpenClawStatePathAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
+import { createPreparedWorktreePathIndex } from "./gc-dependencies.js";
 
 type RunEndOperation = {
   context: OpenClawStateWorkerContext;
@@ -72,6 +74,7 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
     return [...selected];
   };
   const owner = {
+    prepareSourcePaths: createPreparedWorktreePathIndex(),
     assertRegistryAdmission(settlement = false) {
       const operation = current.getStore();
       if (
@@ -198,6 +201,14 @@ export function captureWorktreeRegistryAuthority(
   return lifetime(context).captureRegistry(changes);
 }
 
+export function prepareWorktreeSourcePaths(
+  context: OpenClawStateWorkerContext,
+  records: Parameters<ReturnType<typeof createPreparedWorktreePathIndex>>[0],
+) {
+  context.admission.assertCurrent();
+  return lifetime(context).prepareSourcePaths(records);
+}
+
 export function captureWorktreeRegistryMutation(
   context: OpenClawStateWorkerContext,
   changes: readonly WorktreeRegistryChange[],
@@ -282,6 +293,7 @@ export function withWorktreeRunEnd<T>(
 export function retainWorktreeRunEndFailure(error: unknown): void {
   const operation = current.getStore();
   if (operation && hasSqliteWorkerOutcomeUnknown(error) && isNativeError(error)) {
+    materializeErrorStack(error);
     operation.uncertain ??= error;
   }
 }

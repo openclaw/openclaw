@@ -1134,8 +1134,18 @@ Explicit repair verifies an installed candidate under current executor ownership
 even when the old lease store disappeared or was replaced. It does not execute
 the old helper, so a changed or missing helper and changed retained directories
 are preserved as evidence rather than required as proof of the live package.
-An unfinished rollback cannot be settled merely because its lease or installation
-was replaced.
+An unfinished rollback still requires recovery while its package or published
+launchers remain installed.
+
+If an external install replaced both recorded package generations and every
+published launcher, the next update retires the stale publication journal with
+a warning. It preserves the journal, helper, and retained package trees for
+diagnostics, including when the control directory or journal was copied. It does
+not restore or delete the current installation. Recorded generation inodes are
+excluded even across device-number changes, so a remount alone cannot qualify.
+The updater performing admission must contain this fix; an already-blocked older
+updater needs a manual package install first. Recovery runtime compatibility is
+checked before creating a publication journal.
 
 `openclaw update` uses the same settlement before admission
 when the recorded lease database is missing or its identity has changed and the
@@ -1154,7 +1164,7 @@ archived, a later update retains it and uses the ordinary package-swap path with
 standalone publication recovery. Its warning names that limitation.
 
 These rules do not mark an unverified publication as a successful update. Missing,
-legacy, corrupt, or identity-mismatched **unfinished** recovery artifacts still
+legacy, corrupt, or still-applicable identity-mismatched **unfinished** recovery artifacts still
 require their recovery owner. Live ownership conflicts, changed selected packages
 or launchers, and pending restoration remain refusals. Preserve those artifacts;
 do not recreate the journal or remove them to bypass recovery.

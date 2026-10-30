@@ -118,6 +118,7 @@ it.skipIf(process.platform === "win32").each([
          } else if (${JSON.stringify(kind)} === 'fallback') {
            registerSignalExitBarrier(async () => {
              await Promise.resolve();
+             process.stderr.write('fallback cleanup');
              process.stdout.write('fallback drained');
            });
          } else {
@@ -137,12 +138,18 @@ it.skipIf(process.platform === "win32").each([
   expect(result.error, result.stderr).toBeUndefined();
   if (kind === "execa") {
     expect(result.signal, result.stderr).toBe("SIGTERM");
+    expect(result.stderr).toBe("");
   } else if (kind === "fallback") {
     expect(result, result.stderr).toMatchObject({
       status: signal === "SIGINT" ? 130 : 143,
       stdout: "fallback drained|natural",
+      stderr: `Command interrupted by ${signal}. Waiting for cleanup before exiting.\nfallback cleanup`,
     });
   } else {
-    expect(result, result.stderr).toMatchObject({ status: 23, stdout: "owner drained" });
+    expect(result, result.stderr).toMatchObject({
+      status: 23,
+      stdout: "owner drained",
+      stderr: "",
+    });
   }
 });

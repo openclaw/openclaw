@@ -71,6 +71,10 @@ While automatic reconnection is running, the indicator shows **Reconnecting…**
 with the sidebar's standard spinner and without a Retry button. **Retry** remains available when automatic recovery stops.
 A required page refresh keeps its separate refresh action.
 
+A saved chat can restore its archived or read-only composer and parent breadcrumb
+while reconnecting. These saved display facts never authorize actions; live session
+state replaces them when the connection returns.
+
 If a chat side panel fails to load, its Close control remains available independently of the failed panel. Closing it keeps the conversation and its draft in place without reloading the page. Retry still respects unsaved work that blocks document reloads.
 
 Gateway actions, including saving edits and approving requests, require a live

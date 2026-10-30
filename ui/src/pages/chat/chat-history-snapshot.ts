@@ -16,6 +16,7 @@ import {
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
+import { projectChatSessionStateSnapshot } from "./chat-session-state-snapshot.ts";
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
 import { reduceChatSessionProjection } from "./history-merge.ts";
@@ -245,6 +246,9 @@ export function commitCurrentChatHistorySnapshot(
       transcriptMetadata: sessionInfo
         ? projectChatTranscriptMetadata(sessionInfo)
         : retained?.transcriptMetadata,
+      sessionState: sessionInfo
+        ? projectChatSessionStateSnapshot(state, sessionInfo, retained?.sessionState)
+        : retained?.sessionState,
       progressCard: retained?.progressCard,
       historyState:
         historyState === undefined ? retained?.historyState : (historyState ?? undefined),

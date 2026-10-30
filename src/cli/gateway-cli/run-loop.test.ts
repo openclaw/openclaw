@@ -1027,6 +1027,50 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it.each(["SIGTERM", "SIGINT"] as const)(
+    "exits instead of restarting when %s arrives while an in-place restart drains",
+    async (stopSignal) => {
+      const closing = createDeferred();
+      const close = vi.fn<GatewayCloseFn>(() => closing.promise);
+
+      await testLoop.withIsolatedSignals(async ({ captureSignal }) => {
+        const completeBoot = vi.fn();
+        const { start, runtime, exited } = await mocks.createSignaledLoopHarness(undefined, false, {
+          close,
+          completeBoot,
+        });
+        try {
+          captureSignal("SIGUSR2")();
+          await waitForCalls(close, 1);
+          captureSignal(stopSignal)();
+          // A repeated stop stays a no-op for the shutdown that is already exiting.
+          captureSignal(stopSignal)();
+          closing.resolve();
+          await testLoop.waitForLoopCondition(
+            () => runtime.exit.mock.calls.length > 0 || start.mock.calls.length > 1,
+            "restart drain did not settle",
+          );
+          expect(start).toHaveBeenCalledOnce();
+          await expect(exited).resolves.toBe(0);
+          expect(close).toHaveBeenCalledOnce();
+          expect(mocks.gatewayLog.info).toHaveBeenCalledWith(
+            `received ${stopSignal} during shutdown; finishing shutdown without restart`,
+          );
+          expect(completeBoot).toHaveBeenLastCalledWith({
+            outcome: "clean_stop",
+            reason: `stop (${stopSignal})`,
+          });
+        } finally {
+          closing.resolve();
+          if (start.mock.calls.length > 1) {
+            captureSignal("SIGINT")();
+            await exited;
+          }
+        }
+      });
+    },
+  );
+
   it.each(["close", "lock release"] as const)(
     "upgrades an accepted restart when an update arrives during %s",
     async (phase) => {

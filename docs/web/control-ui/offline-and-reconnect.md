@@ -14,6 +14,19 @@ stale connection. These signals do not retry a connection that requires a page
 reload, corrected credentials, or a new pairing request. Follow the displayed
 recovery instructions; automatic document refresh remains available after an update.
 
+While a visible tab is connecting or reconnecting, it checks same-origin Gateway
+reachability at randomized intervals. A fresh response can resume a retry sooner
+or replace an opening attempt stuck for at least eight seconds, even when airplane
+Wi-Fi never reports an offline/online change. Young opening attempts and opened
+sockets keep their normal handshake. Announced startup, restart, suspension, and
+busy-Gateway waits keep their existing retry pacing; hidden tabs do not poll.
+Expected reachability failures do not trigger sign-in recovery notifications.
+
+An unanswered send starts a liveness check after about five seconds. Any inbound
+frame proves the connection is alive; otherwise, ten more seconds without a
+response moves the UI into reconnecting so queued input can recover. Idle
+connections keep their longer heartbeat window.
+
 If an update or rollback leaves a tab using an incompatible connection protocol,
 the Control UI stops reconnecting and reloads the document served by the same
 Gateway. The tab records the attempt in session storage: it reloads once for a

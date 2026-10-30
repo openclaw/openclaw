@@ -5,6 +5,7 @@ import {
   serializeConfigResolutionFacts,
 } from "../config/resolution-facts.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
 import type { Model } from "../llm/types.js";
@@ -354,6 +355,7 @@ export function createPreparedModelCatalogWorker(
   };
   let receiveResult = validate;
   const stop = async (error: Error) => {
+    materializeErrorStack(error);
     stoppedError ??= error;
     params.retirementSignal.removeEventListener("abort", retire);
     for (const controller of captures.keys()) {

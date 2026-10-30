@@ -683,6 +683,7 @@ export function createSessionCapability(
     ...operations,
     patch: mutations.patch,
     patchMany: mutations.patchMany,
+    acknowledgeHiddenRuns: mutations.acknowledgeHiddenRuns,
     archiveVisibility: mutations.archiveVisibility,
     beginArchive: mutations.beginArchive,
     assignOwner: mutations.assignOwner,

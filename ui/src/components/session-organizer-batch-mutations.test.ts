@@ -173,13 +173,11 @@ describe("patchSessionRows", () => {
         { targets: [sessionTarget(parent)], patch: { unread: false } },
         { targets: [sessionTarget(parent)], patch: { unread: true } },
       ]);
-      expect(h.patch.mock.calls).toEqual([
-        [
-          run.key,
-          { unread: false },
-          { agentId: "main", expectedMarkedUnreadAt: null, expectedSessionId: run.sessionId },
-        ],
-      ]);
+      expect(h.acknowledgeHiddenRuns).toHaveBeenCalledExactlyOnceWith([run], {
+        agentId: "main",
+        publishErrors: true,
+      });
+      expect(h.patch).not.toHaveBeenCalled();
     },
   );
 
@@ -205,6 +203,10 @@ describe("patchSessionRows", () => {
     const h = createHarness({ scopes: ["operator.sessions.write"] });
     await h.action({ kind: "toggle-unread" }, [parent], true);
     expect(h.request).toHaveBeenCalledOnce();
+    expect(h.acknowledgeHiddenRuns).toHaveBeenCalledWith([run], {
+      agentId: "main",
+      publishErrors: true,
+    });
     expectNoCalls(h.patch, h.publishSessionMutationError);
   });
 

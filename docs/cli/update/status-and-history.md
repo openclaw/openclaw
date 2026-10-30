@@ -17,6 +17,15 @@ While an update is active, the table shows its phase instead of advertising anot
 update, and the final line points to `openclaw update status`. JSON still includes
 registry/Git `availability` separately from `activeRun`.
 
+A failed or interrupted attempt becomes history only when its saved observation
+of a running Gateway differs in version or build ID from the live serving
+Gateway. Text status then shows a past-failure note without recovery advice.
+`openclaw status` and the Control UI use the same comparison; a manual tag
+checkout, build, and restart can leave the old failure behind. The installed
+package's starting identity alone is insufficient. Missing observations, unknown
+identities, and observations that still match the live Gateway keep the failure
+actionable. The saved record and JSON history retain the original outcome.
+
 Status inspection has a 30-second overall limit, extended when `--timeout <seconds>`
 requests a longer check. Shorter check timeouts do not shorten local history inspection.
 If an inspection stalls or fails, status returns the facts already available

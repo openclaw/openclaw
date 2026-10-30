@@ -488,7 +488,11 @@ describe("ordinary steering into automatic model fallback", () => {
       await incoming;
       expect(resultState.admission).toEqual(
         crossProfile && run.run.config.messages?.queue?.allowCollaborativeSteering !== true
-          ? { status: "skipped", reason: "collaborative-steering-disabled" }
+          ? {
+              status: "accepted",
+              mode: "followup",
+              reason: "collaborative-steering-disabled",
+            }
           : {
               status: "accepted",
               mode: shouldSteer ? "steer" : "followup",
@@ -499,7 +503,7 @@ describe("ordinary steering into automatic model fallback", () => {
       );
       expect(delivered).toEqual(shouldSteer ? [run.prompt] : []);
       if (crossProfile && run.run.config.messages?.queue?.allowCollaborativeSteering !== true) {
-        expect(getFollowupQueueDepth(key)).toBe(0);
+        expect(getFollowupQueueDepth(key)).toBe(1);
       }
       expect(operation.requesterPrincipalKey).toBe(requesterPrincipalKey);
       expect(operation.toolAuthorityFingerprint).toBe(toolAuthorityFingerprint);

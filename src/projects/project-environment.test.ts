@@ -106,6 +106,11 @@ vi.mock("./project-checkout.js", () => ({
   resolveProjectCheckout: mocks.resolveCheckout,
   resolveProjectDirectory: async (directory: string) => directory,
 }));
+// mock-isolation: registration reads only the synthetic checkout's origin.
+vi.mock("../agents/worktrees/git.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/worktrees/git.js")>()),
+  runGit: async () => ({ code: 0, stdout: "https://github.com/example/project.git" }),
+}));
 // mock-isolation: environment routing must not spawn Git against synthetic checkout paths.
 vi.mock("./project-clone-runtime.js", () => ({
   ProjectCloneError: class extends Error {},
@@ -200,18 +205,12 @@ it.each(["remove", "register", "materialize", "refresh", "selector", "migration"
       const entered = createDeferredCore();
       const resume = createDeferredCore();
       const source = operation === "selector" || operation === "migration";
-      let paused = false;
-      const pauseOnce = async () => {
-        if (!paused) {
-          paused = true;
-          entered.resolve();
-          await resume.promise;
-        }
-      };
+      const pauseOnce = vi.fn().mockImplementationOnce(async () => {
+        entered.resolve();
+        await resume.promise;
+      });
       const lease: OpenClawStateLeaseContext = {
-        signal: new AbortController().signal,
-        assertCurrent() {},
-        assertOwned() {},
+        ...mocks.checkoutLease,
         assertOwnedInTransaction: mocks.forbiddenSqlite,
       };
       mocks.checkout.mockImplementation(async (_root, _options, run) => {

@@ -195,6 +195,7 @@ it.each(["ios", "android"])("routes %s daily and qualified weekly/manual release
     );
   const upload = findStep(`Prepare and upload ${ios ? "iOS" : "Android"} release`);
   if (!ios) {
+    expect(upload.env?.ANDROID_SCREENSHOT_DIAGNOSTICS).toBe("1");
     expect(workflow.on.workflow_dispatch.inputs.operation).toMatchObject({
       default: "release",
       options: ["release", "internal"],

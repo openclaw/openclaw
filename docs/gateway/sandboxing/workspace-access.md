@@ -190,6 +190,9 @@ hold that preparation lease for their entire lifetime. Concurrent Files requests
 and command checkpoints share equivalent captures while waiting for workspace
 custody. Requests arriving after capture starts trigger a fresh checkpoint so
 later guest writes remain visible. Each caller retains its own authority checks.
+Files requests skip checkpoint custody when a live read confirms that the managed
+worktree has no sandbox projection. A later request observes a newly created
+projection and checkpoints it normally; lifecycle custody still owns absent rows.
 Captured workspace authority is checked again after
 filesystem and engine preparation, immediately before filesystem commands,
 container creation/start/setup, and late browser restarts. Closing the owner

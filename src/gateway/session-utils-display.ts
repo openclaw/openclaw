@@ -9,6 +9,7 @@ import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
   isSubagentRunLive,
+  isSubagentRunPausedForContinuation,
   isSubagentRunQueued,
   resolveSubagentSessionStatus,
 } from "../agents/subagents/registry/subagent-registry-read.js";
@@ -202,13 +203,17 @@ export function projectGatewaySessionRunState(params: {
   if (subagentRun) {
     const endedAt = subagentRun.execution.endedAt;
     const subagentStatus = resolveSubagentSessionStatus(subagentRun);
+    // A kill claim keeps the pause marker until its reconciliation commits, so a
+    // killed paused child can read "paused" briefly before it reads "killed".
     fields.subagentRunState = liveSubagentRunActive
       ? "active"
-      : typeof endedAt === "number" ||
-          isTerminalSessionStatus(fields.status) ||
-          typeof fields.endedAt === "number"
-        ? "historical"
-        : "interrupted";
+      : isSubagentRunPausedForContinuation(subagentRun)
+        ? "paused"
+        : typeof endedAt === "number" ||
+            isTerminalSessionStatus(fields.status) ||
+            typeof fields.endedAt === "number"
+          ? "historical"
+          : "interrupted";
     fields.status = liveSubagentRunActive
       ? subagentStatus
       : (fields.status ?? (typeof endedAt === "number" ? subagentStatus : undefined));

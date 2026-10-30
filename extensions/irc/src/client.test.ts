@@ -139,7 +139,7 @@ describe("irc client nickserv", () => {
     const result = await connectAndCollectRegistration({
       nickserv: {
         service: "NickServ\n",
-        password: String.raw`pa\tss\new\x41` + "\r\nJOIN #bad",
+        password: String.raw`pa\tss\new\x41` + "\u0002\u007f\r\nJOIN #bad",
       },
     });
 

@@ -1,5 +1,6 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
+import * as pinPolicy from "../config/sessions/session-pin-policy.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { createSessionIdentityProjection } from "./session-identity-projection.js";
 import type { SessionListFilteredEntries } from "./session-list-filters.js";
@@ -174,6 +175,57 @@ it("retains filtered partitions while publishing current usage and bookkeeping m
   state.put(key, { ...entry, updatedAt: now + 1 });
   expect(revisions().every((revision) => before.has(revision))).toBe(false);
   expect(state.select(state.selection, opts, retained)).toEqual(state.select(state.fresh(), opts));
+});
+
+it("reads only the requested page from retained ordered partitions", () => {
+  const state = fixture();
+  const count = 10_800;
+  for (let index = 0; index < count; index++) {
+    state.put(`agent:main:page-${index}`, {
+      sessionId: String(index),
+      updatedAt: now + index,
+      pinnedAt: now + index,
+      createdActor: { type: "human", source: "profile", id: index % 2 ? "bob" : "ada" },
+    });
+  }
+  for (const opts of [
+    { limit: 200, offset: 7 },
+    { limit: 200, ownerFirst: true },
+  ]) {
+    const retained = new WeakMap<object, SessionListFilteredEntries>();
+    state.select(state.selection, opts, retained);
+    const reads = { entries: 0, ownerEntries: 0 };
+    for (const partition of state.selection.read().partitions!) {
+      const part = retained.get(partition.revision)!;
+      for (const field of ["entries", "ownerEntries"] as const) {
+        part[field] = new Proxy(part[field], {
+          get(target, key, receiver) {
+            if (typeof key === "string" && /^\d+$/.test(key)) {
+              reads[field]++;
+            }
+            return Reflect.get(target, key, receiver);
+          },
+        });
+      }
+    }
+    using pins = vi.spyOn(pinPolicy, "isPinnableSessionEntry");
+    const result = state.select(state.selection, opts, retained);
+    const shared = Array.from({ length: opts.limit }, (_, i) => count - 1 - (opts.offset ?? 0) - i);
+    const owned = opts.ownerFirst ? Array.from({ length: 60 }, (_, i) => count - 2 - i * 2) : [];
+    expect(result.entries.map(([, entry]) => entry.sessionId)).toEqual(
+      [...owned, ...shared.filter((index) => !owned.includes(index))].map(String),
+    );
+    expect(result).toMatchObject({
+      totalCount: count,
+      ownerCount: owned.length,
+      hasMore: true,
+      nextOffset: (opts.offset ?? 0) + opts.limit,
+    });
+    expect(result.ownerFacet.map((owner) => owner.id)).toEqual(["ada", "bob"]);
+    expect(reads.entries).toBeLessThanOrEqual((opts.offset ?? 0) + opts.limit + 64);
+    expect(reads.ownerEntries).toBeLessThanOrEqual(owned.length + 64);
+    expect(pins).toHaveBeenCalledTimes(reads.entries + reads.ownerEntries);
+  }
 });
 
 it.for([0x12e7, 0x4b91])("matches fresh selection after seeded write sequences (%i)", (seed) => {

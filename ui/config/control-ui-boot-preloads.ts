@@ -5,6 +5,8 @@ import { controlUiBootEntryRoute, controlUiBootManifestKey } from "./control-ui-
 // These common interactions download beside the route, but evaluate only on use.
 // Include the nested option entries too: opening a menu must not start a second RTT.
 const sharedInteractionEntries = new Set([
+  "ui/src/pages/chat/components/chat-composer-mention-menu-engine.ts",
+  "ui/src/pages/chat/components/chat-composer-emoji-engine.ts",
   "ui/src/pages/chat/components/chat-composer-slash-menu.tsx",
   "ui/src/pages/chat/components/chat-composer-slash-menu-options.tsx",
   "ui/src/pages/chat/components/chat-composer-skill-menu.tsx",
@@ -16,6 +18,7 @@ const sharedInteractionEntries = new Set([
   "ui/src/components/app-sidebar-online.tsx",
 ]);
 const chatInteractionEntries = new Set([
+  "ui/src/pages/chat/chat-composer-capability-host.tsx",
   "ui/src/pages/chat/components/chat-context-breakdown.tsx",
   "ui/src/components/markdown-live.ts",
   // Cached environment facts reveal without another network round trip.
@@ -204,11 +207,10 @@ export function controlUiBootPreloadsPlugin(): Plugin {
                     href: `./${file}`,
                   }
                 : {
-                    rel: "modulepreload",
+                    ...(assets.interactionOnly[route].has(file)
+                      ? { rel: "preload", as: "script", fetchpriority: "low" }
+                      : { rel: "modulepreload" }),
                     crossorigin: "",
-                    // Every route dependency can gate its first frame. Only
-                    // interaction-only hints yield to post-connect requests.
-                    ...(assets.interactionOnly[route].has(file) ? { fetchpriority: "low" } : {}),
                     href: `./${file}`,
                   },
             }));
