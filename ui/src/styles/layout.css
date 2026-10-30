@@ -3987,3 +3987,216 @@ html.openclaw-native-web-chrome
     opacity: 1;
   }
 }
+
+/* Sidebar top bar and session catalogs: one quiet weight for toolbar controls;
+   catalog host, project and sessions sit on the session list grid. */
+/* ── barra do topo: tudo no mesmo peso visual baixo; só o nome do filtro em texto forte ── */
+.sidebar-session-owner-filter .picker-select__label {
+  font-size: 13px;
+  font-weight: 550;
+  letter-spacing: -0.005em;
+  color: var(--text-strong);
+}
+/* Seletor: chevrons-up-down 12px muted (era chevron-down 16 com traço 2, na cor do texto). */
+.sidebar-session-owner-filter .picker-select__chevron {
+  margin-left: 2px;
+  color: var(--muted);
+}
+.sidebar-session-owner-filter .picker-select__chevron svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 1.75;
+}
+.sidebar-session-owner-filter .picker-select__leading .viewer-avatar {
+  width: 18px;
+  height: 18px;
+}
+/* Ordenar e recolher: 15px, traço 1.6, muted; o texto "Active" no mesmo tom. */
+.sidebar-session-toolbar__button {
+  color: color-mix(in srgb, var(--muted) 85%, var(--sidebar-bg, var(--bg)));
+}
+.sidebar-session-toolbar__button:hover {
+  color: var(--text);
+}
+.sidebar-session-toolbar__button svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.6;
+}
+.sidebar-session-sort {
+  gap: 4px;
+}
+.sidebar-session-sort__status {
+  font-size: 12.5px;
+  font-weight: 450;
+}
+.sidebar-session-owner-filter {
+  width: auto;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.sidebar-session-owner-filter .picker-select__trigger {
+  width: auto;
+  justify-content: flex-start;
+  gap: 5px;
+}
+.sidebar-session-owner-filter .picker-select__copy {
+  flex: 0 1 auto;
+}
+.sidebar-session-owner-filter,
+.sidebar-session-owner-filter > div,
+.sidebar-session-owner-filter .picker-select__trigger,
+.sidebar-session-owner-filter .picker-select__copy {
+  flex: none;
+}
+.sidebar-session-owner-filter .picker-select__chevron {
+  margin-left: -2px;
+}
+
+/* ── vazio de seção: dica logo abaixo do título, na coluna do texto; sem folga extra embaixo ── */
+.sidebar-recent-sessions__group > .sidebar-session-empty-hint {
+  margin: 0;
+  padding: 2px 10px 14px 0;
+  padding-left: calc(var(--sidebar-text-offset) + 2px);
+  font-size: 12.5px;
+  line-height: 18px;
+}
+/* Seção sem cabeçalho começa sempre na mesma distância da barra do topo (inclusive dono único). */
+.sidebar-recent-sessions__group--inline-owner {
+  margin-top: 0;
+}
+
+/* ── catálogo (Claude Code, Codex): máquina › projeto › sessões, na grade da lista ──
+   Cabeçalho do catálogo = cabeçalho de seção. Máquina = subtítulo discreto.
+   Projeto = linha de 28 com chevron na guia; as sessões dele recuam como subsessões. */
+.sidebar-recent-sessions__group[data-session-section^="catalog:"] > .sidebar-recent-sessions__list {
+  gap: 0;
+}
+[data-session-section^="catalog:"] > .sidebar-recent-sessions__head {
+  position: relative;
+}
+/* Rodando: no fim, na coluna dos contadores; some no hover (as ações ocupam o lugar). */
+[data-session-section^="catalog:"] > .sidebar-recent-sessions__head .session-run-spinner {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  width: 14px;
+  height: 14px;
+  margin-top: -7px;
+}
+[data-session-section^="catalog:"] > .sidebar-recent-sessions__head:hover .session-run-spinner {
+  opacity: 0;
+}
+[data-session-section^="catalog:"] .sidebar-session-catalog-provider-icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* Máquina */
+.sidebar-session-catalog-host + .sidebar-session-catalog-host {
+  margin-top: 8px;
+}
+.sidebar-session-catalog-host__head {
+  gap: var(--sidebar-row-gap);
+  min-height: 26px;
+  padding: 0 13px 0 calc(var(--sidebar-session-row-inset) + var(--sidebar-inset));
+  color: var(--muted);
+}
+.sidebar-session-catalog-host__head .sidebar-session-group-toggle__lead {
+  width: var(--sidebar-lead);
+  justify-content: center;
+}
+.sidebar-session-catalog-host__head svg {
+  width: 13px;
+  height: 13px;
+  stroke-width: 1.75;
+}
+.sidebar-session-catalog-host__label {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* Contadores do catálogo: 11px tabular, terminam na coluna x=235 */
+:is(.sidebar-session-catalog-host__count, .sidebar-session-catalog-project__count) {
+  width: auto;
+  flex: none;
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 1;
+}
+
+/* Projeto */
+.sidebar-session-catalog-project + .sidebar-session-catalog-project {
+  margin-top: 2px;
+}
+.sidebar-session-catalog-project__head {
+  gap: var(--sidebar-row-gap);
+  min-height: 28px;
+  padding: 0 13px 0 calc(var(--sidebar-session-row-inset) + var(--sidebar-inset));
+  border-radius: 10px;
+  corner-shape: superellipse(1.5);
+  color: var(--text);
+}
+.sidebar-session-catalog-project__icon {
+  opacity: 1;
+  color: var(--muted);
+}
+.sidebar-session-catalog-project__icon svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 1.75px;
+}
+.sidebar-session-catalog-project__label {
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+/* Sessões do projeto recuam como subsessões (título em x=73) */
+.sidebar-session-catalog-project__sessions {
+  margin-left: calc(var(--sidebar-lead) + 5px);
+}
+
+/* Contagem de seção fechada termina em x=235 como o resto */
+.sidebar-recent-sessions__head .sidebar-session-group-status {
+  margin-right: 0;
+  padding-right: 0;
+}
+
+.sidebar-recent-sessions__head .sidebar-session-group-status {
+  justify-content: flex-end;
+  min-width: 0;
+  width: auto;
+  margin-right: 4px;
+}
+
+.sidebar-session-catalog-host__head {
+  margin-bottom: 2px;
+}
+
+/* ── catálogo: contador e "rodando" só quando o grupo está fechado (mesma regra das seções).
+   Aberto, as próprias linhas mostram quantas são e quem roda; repetir é ruído. ── */
+.sidebar-session-catalog-host__count,
+.sidebar-session-catalog-project__head[aria-expanded="true"] .sidebar-session-catalog-project__count {
+  display: none;
+}
+[data-session-section^="catalog:"]:not(.sidebar-recent-sessions__group--collapsed) > .sidebar-recent-sessions__head .session-run-spinner {
+  display: none;
+}
+/* Fechado com contador e rodando: rodando vem antes do número. */
+[data-session-section^="catalog:"].sidebar-recent-sessions__group--collapsed > .sidebar-recent-sessions__head .session-run-spinner {
+  right: 34px;
+}
+
+/* ── tons do catálogo ──
+   Cor só no que é marca ou vida: ícone do provedor (marca), spinner e ponto (accent).
+   Texto: rótulo da seção e máquina = muted (estrutura); projeto = texto, peso 600 (lugar navegável);
+   sessão = texto 500 (conteúdo). Contadores = muted. Seção fechada: rótulo continua muted. */
+.sidebar-session-catalog-project__head {
+  color: color-mix(in srgb, var(--text) 82%, var(--muted));
+}
+.sidebar-session-catalog-project__head:hover {
+  color: var(--text);
+}
+
