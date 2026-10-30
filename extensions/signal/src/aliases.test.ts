@@ -81,4 +81,12 @@ describe("listSignalAliasDirectoryEntries", () => {
     );
     expect(resolveSignalDeliveredConversationKey({ cfg, to: "signal:ops" })).toBe("ops");
   });
+
+  it("matches canonically equivalent alias spellings", () => {
+    const cfg = signalConfig({ "cafe\u0301": "+15551234567" });
+
+    expect(listSignalAliasDirectoryEntries({ cfg, kind: "user", query: "caf\u00e9" })).toEqual([
+      { kind: "user", id: "+15551234567", name: "cafe\u0301" },
+    ]);
+  });
 });
