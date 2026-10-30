@@ -590,7 +590,11 @@ export function dispatchGatewayCronFinishedNotifications(params: {
     void runWithGatewayIndependentRootWorkContinuation(async () => {
       const { agentId, cfg } = resolveCronAgent(job.owner?.agentId ?? job.agentId);
       const sessionKey = job.owner?.sessionKey ?? resolveCronDeliverySessionKey(job);
-      if (!sessionKey || params.evt.runAtMs === undefined) {
+      if (
+        !sessionKey ||
+        params.evt.runAtMs === undefined ||
+        (params.evt.status === "skipped" && params.evt.triggerFired === false)
+      ) {
         return;
       }
       const { entry } = await loadGatewaySessionEntryReadOnlyInWorker({

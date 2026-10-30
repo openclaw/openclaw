@@ -13,7 +13,7 @@
     "discord-api-types": "0.38.57",
     "libopus-wasm": "0.4.1",
     "mdast-util-from-markdown": "2.1.0",
-    "typebox": "1.4.2",
+    "typebox": "1.4.3",
     "undici": "8.12.3",
     "ws": "8.22.0",
     "zod": "4.6.7"

@@ -39,6 +39,7 @@ export type BridgeCommand =
       storeId: string;
       lock: boolean;
       reconnectIfIdle?: boolean;
+      validateIfIdle?: boolean;
     }
   | {
       operation: "query";
@@ -46,6 +47,7 @@ export type BridgeCommand =
       sql: string;
       parameters: readonly SQLInputValue[];
       reconnectIfIdle?: boolean;
+      validateIfIdle?: boolean;
     };
 export type BridgeRequest = BridgeCommand & { id: number };
 export type BridgeReply = { id: number } & (
