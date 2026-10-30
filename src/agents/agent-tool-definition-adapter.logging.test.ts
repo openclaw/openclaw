@@ -6,7 +6,10 @@ import { REQUIRED_PARAM_GROUPS, wrapToolParamValidation } from "./agent-tools.pa
 import { withToolOperatorHint } from "./tool-operator-hint.js";
 
 const mocks = vi.hoisted(() => ({ logDebug: vi.fn(), logError: vi.fn() }));
-vi.mock("../logger.js", () => mocks);
+vi.mock("../logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logger.js")>()),
+  ...mocks,
+}));
 
 type Execute = AgentTool["execute"];
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
