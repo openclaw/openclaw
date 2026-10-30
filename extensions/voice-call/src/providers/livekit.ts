@@ -643,13 +643,7 @@ export class LiveKitProvider implements VoiceCallProvider {
             if (!ended.success) {
               // Carrier cleanup is independent of manager finalization: drain it,
               // retry terminal persistence once, then surface the original failure.
-              const disposal = await this.dispose(call).then(
-                () => undefined,
-                (error: unknown) => error,
-              );
-              if (disposal) {
-                throw disposal;
-              }
+              await this.dispose(call);
               const original = ended.error;
               ended = await this.manager!.endCall(record.callId, { reason: "completed" });
               if (!ended.success) {

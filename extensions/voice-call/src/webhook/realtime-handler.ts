@@ -1329,7 +1329,11 @@ export class RealtimeCallHandler {
     });
 
     session.connect().catch(async (error: unknown) => {
-      console.error("[voice-call] Failed to connect realtime bridge:", error);
+      // Providers redact connect errors; hostClosed separates a carrier-side abort from a model failure.
+      console.error(
+        `[voice-call] Failed to connect realtime bridge (hostClosed=${sessionClosed}):`,
+        error,
+      );
       try {
         await telephonyBinding.close("error");
       } catch {
@@ -1473,7 +1477,8 @@ export class RealtimeCallHandler {
         payload: { name: REALTIME_VOICE_END_CALL_TOOL_NAME, result: { success: true } },
         final: true,
       });
-      binding.endCall();
+      // Binding completion tracking reports close failures.
+      void binding.endCall().catch(() => {});
       return undefined;
     }
     const handler = this.toolHandlers.get(name);

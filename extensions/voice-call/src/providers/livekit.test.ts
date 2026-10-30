@@ -275,6 +275,39 @@ describe("LiveKit telephony lifecycle", () => {
     expect(h.bridgeClose).toHaveBeenCalled();
   });
 
+  it.each([
+    ["RTC close", true],
+    ["model failure", false],
+  ])("labels a redacted realtime connect failure after %s", async (_label, closeFirst) => {
+    const h = await harness();
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    let failConnect = (_error: Error) => {};
+    const pending = new Promise<void>((_resolve, reject) => {
+      failConnect = reject;
+    });
+    const failure = new Error("OpenAI GPT-Live gateway relay failed");
+    h.createModelBridge.mockImplementationOnce(() =>
+      createBridge(async () => failConnect(failure), { connect: () => pending }),
+    );
+    const started = await h.manager.initiateCall(to, undefined, { mode: "conversation" });
+    const call = h.manager.getCall(started.callId)!;
+    const binding = await h.handler.attachRoomTransport({
+      callId: call.callId,
+      providerCallId: call.providerCallId!,
+      streamId: "rtc-connect-failure",
+      transport: { readyState: 1, bufferedAmount: 0, send: vi.fn(), close: vi.fn() },
+    });
+    await (closeFirst ? binding!.endCall() : failConnect(failure));
+    await vi.waitFor(() =>
+      expect(errors).toHaveBeenCalledWith(
+        `[voice-call] Failed to connect realtime bridge (hostClosed=${closeFirst}):`,
+        failure,
+      ),
+    );
+    await h.handler.close();
+    await h.provider.stop();
+  });
+
   it("preserves the default prompt and built-in function tools over RTC", async () => {
     const h = await harness("open", livekit, false);
     const started = await h.manager.initiateCall(to, undefined, { mode: "conversation" });
