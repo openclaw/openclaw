@@ -511,18 +511,20 @@ function validateArtifact(descriptor, metadata, run, jobs) {
       Date.parse(metadata.expires_at) > Date.now(),
     "Qualification admission expired; recover retained original evidence or obtain a new admission, never substitute another run",
   );
+  const job = jobs.jobs.find((item) => item.name === QUALIFICATION_ADMISSION_JOB);
+  const steps = Array.isArray(job?.steps) ? job.steps : [];
+  const upload = steps.find((item) => item.name === QUALIFICATION_ADMISSION_UPLOAD);
+  const successfulJobWithoutSteps = job?.conclusion === "success" && steps.length === 0;
   validateActionsArtifactProducerJob({
     expected: {
       ...descriptor,
       runStatePolicy: "same-run-producer-success",
       consumerRunAttempt: descriptor.runAttempt,
       producerJobName: QUALIFICATION_ADMISSION_JOB,
-      producerStepName: QUALIFICATION_ADMISSION_UPLOAD,
+      ...(successfulJobWithoutSteps ? {} : { producerStepName: QUALIFICATION_ADMISSION_UPLOAD }),
     },
     workflowJobs: jobs,
   });
-  const job = jobs.jobs.find((item) => item.name === QUALIFICATION_ADMISSION_JOB);
-  const upload = job.steps.find((item) => item.name === QUALIFICATION_ADMISSION_UPLOAD);
   const created = Date.parse(metadata.created_at);
   const createdByProducer = [upload, job].some(
     (interval) =>
