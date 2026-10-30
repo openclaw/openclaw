@@ -11,6 +11,7 @@ import {
   resolveAdmittedRunActiveAssertion,
   type AdmittedRunContext,
 } from "./admitted-run-context.js";
+import type { WebchatMcpRequester } from "./agent-bundle-mcp-webchat-requester.types.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 /** Host run facts, never model-supplied profile labels or shared-session attribution. */
@@ -32,15 +33,6 @@ export type WebchatMcpRequesterContext = {
   scheduledToolPolicy?: unknown;
   abortSignal?: AbortSignal;
 };
-
-/** This assertion belongs to one run's view, never the cached session MCP runtime. */
-export type WebchatMcpRequester = Readonly<{
-  sessionId: string;
-  sessionKey: string;
-  runId: string;
-  requesterSenderId: string;
-  assertCurrent: () => void;
-}>;
 
 /** Harnesses consume the host-owned capture without receiving private admission state. */
 export function readWebchatMcpRequester(run: {

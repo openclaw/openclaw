@@ -37,7 +37,7 @@ import {
   type AdmittedRunContext,
   type OperationalRunInstanceRef,
 } from "../admitted-run-context.js";
-import type { WebchatMcpRequester } from "../agent-bundle-mcp-webchat-requester.js";
+import type { WebchatMcpRequester } from "../agent-bundle-mcp-webchat-requester.types.js";
 import { wrapAgentToolExecutionContext } from "../agent-tool-metadata.js";
 import {
   captureActiveEmbeddedRunPersonalToolParticipants,
