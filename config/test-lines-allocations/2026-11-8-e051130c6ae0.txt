@@ -1,0 +1,5 @@
+38
+# LOCAL 2026.11.8 row 122; source e051130c6ae044289990bb1045773c89f0014a87.
+# Follows only subagent ancestry so ordinary conversation owns its resume marker; no shutdown ordering change claimed. Scope limits: Ancestry only; shutdown marker ordering/persistence/logging companions excluded. No restart proof.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
