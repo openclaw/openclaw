@@ -13,6 +13,7 @@ import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { buildCatalogSessionKey, type CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import {
+  catalogProjectSectionAliases,
   groupCatalogSessionsByPerson,
   groupCatalogSessionsByProject,
 } from "../lib/sessions/catalog-project-grouping.ts";
@@ -400,20 +401,19 @@ function renderCatalogHostGroup(
                 () =>
                   `catalog-${group().kind}:${identity().catalogId}:${identity().hostId}:${group().key}`,
               );
-              const legacySectionId = createMemo(() =>
-                group().legacySectionKey
-                  ? `catalog-project:${readCatalog().id}:${readHost().hostId}:${group().legacySectionKey}`
-                  : null,
+              const sectionAliases = createMemo(() =>
+                catalogProjectSectionAliases(
+                  group(),
+                  identity().catalogId,
+                  identity().hostId,
+                  params.host.collapsedSessionSections,
+                ),
               );
-              const collapsedSectionId = createMemo(() => {
-                const legacyId = legacySectionId();
-                return params.host.collapsedSessionSections.has(sectionId())
-                  ? sectionId()
-                  : legacyId && params.host.collapsedSessionSections.has(legacyId)
-                    ? legacyId
-                    : null;
-              });
-              const collapsed = createMemo(() => collapsedSectionId() !== null);
+              const collapsed = createMemo(() =>
+                [sectionId(), ...sectionAliases()].some((id) =>
+                  params.host.collapsedSessionSections.has(id),
+                ),
+              );
               return (
                 <div class="sidebar-session-catalog-project" role="listitem">
                   <button
@@ -422,7 +422,7 @@ function renderCatalogHostGroup(
                     data-session-catalog-project={group().key}
                     aria-expanded={collapsed() ? "false" : "true"}
                     title={group().title}
-                    onClick={() => params.host.toggleSection(collapsedSectionId() ?? sectionId())}
+                    onClick={() => params.host.toggleSection(sectionId(), sectionAliases())}
                   >
                     <span class="sidebar-session-catalog-project__icon" aria-hidden="true">
                       {collapsed() ? <Icon name="chevronRight" /> : <Icon name="chevronDown" />}

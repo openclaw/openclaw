@@ -33,8 +33,23 @@ export function foldWorktreeCheckoutPath(path: string): string | null {
   if (!trimmed) {
     return null;
   }
-  const match = trimmed.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/);
-  return match ? match[1] || null : trimmed;
+  const pattern = /^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/;
+  const match = trimmed.match(isWindowsProjectPath(path) ? new RegExp(pattern, "i") : pattern);
+  const folded = match ? match[1] || null : trimmed;
+  return folded && /^[a-z]:$/i.test(folded) && /^[a-z]:[\\/]/i.test(path)
+    ? `${folded}${path[2]}`
+    : folded;
+}
+
+function isWindowsProjectPath(path: string): boolean {
+  return /^[a-z]:[\\/]/i.test(path) || path.startsWith("\\");
+}
+
+function projectPathKey(path: string): string {
+  if (/^[a-z]:$/i.test(path)) {
+    return `drive-relative:${path.toLowerCase()}`;
+  }
+  return isWindowsProjectPath(path) ? path.replaceAll("\\", "/").toLowerCase() : path;
 }
 
 type CatalogProjectGroup = {
@@ -47,6 +62,38 @@ type CatalogProjectGroup = {
   title: string;
   sessions: SessionCatalogSession[];
 };
+
+export function catalogProjectSectionAliases(
+  group: CatalogProjectGroup,
+  catalogId: string,
+  hostId: string,
+  collapsed: ReadonlySet<string>,
+): string[] {
+  const prefix = `catalog-project:${catalogId}:${hostId}:`;
+  const aliases = group.legacySectionKey ? [`${prefix}${group.legacySectionKey}`] : [];
+  if (group.kind !== "project") {
+    return aliases;
+  }
+  // Old drive-root ids lost their separator. Keep actual drive-relative roots
+  // in their own namespace instead of inheriting that ambiguous preference.
+  if (/^[a-z]:$/i.test(group.title)) {
+    return [];
+  }
+  if (!isWindowsProjectPath(group.title)) {
+    return aliases;
+  }
+  for (const id of collapsed) {
+    if (!id.startsWith(prefix)) {
+      continue;
+    }
+    const suffix = id.slice(prefix.length).replace(/^project:/, "");
+    const path = /^[a-z]:$/i.test(suffix) ? `${suffix}/` : foldWorktreeCheckoutPath(suffix);
+    if (path && `project:${projectPathKey(path)}` === group.key) {
+      aliases.push(id);
+    }
+  }
+  return aliases;
+}
 
 function collectCatalogGroups(
   sessions: readonly SessionCatalogSession[],
@@ -92,9 +139,9 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
       const trimmedPath = session.cwd?.trim();
       const projectPath = trimmedPath ? foldWorktreeCheckoutPath(trimmedPath) : null;
       return projectPath
-        ? (groups.get(`project:${projectPath}`) ?? {
+        ? (groups.get(`project:${projectPathKey(projectPath)}`) ?? {
             kind: "project",
-            key: `project:${projectPath}`,
+            key: `project:${projectPathKey(projectPath)}`,
             legacySectionKey: projectPath,
             label: pathDisplayName(projectPath),
             title: projectPath,

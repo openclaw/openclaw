@@ -41,11 +41,36 @@ it.each([
       ]),
     ).toEqual([
       ["custom:Release", "custom:Release", "Release", ["grouped"]],
-      [`project:${cwd}`, cwd, "openclaw", ["project", "worktree"]],
+      [
+        cwd.startsWith("C:") ? "project:c:/users/dev/openclaw" : `project:${cwd}`,
+        cwd,
+        "openclaw",
+        ["project", "worktree"],
+      ],
     ]);
     expect(result.ungrouped.map((item) => item.threadId)).toEqual(["missing", "blank"]);
   },
 );
+
+it("groups Windows aliases without changing display spelling or POSIX identity", () => {
+  const result = groupCatalogSessionsByProject([
+    session("drive", "C:\\Work\\Notes"),
+    session("slash", "c:/work/notes/"),
+    session("worktree", "C:/WORK/Notes/.CLAUDE/WORKTREES/fix/src"),
+    session("posix-upper", "//mnt/Repo"),
+    session("posix-lower", "//mnt/repo"),
+    session("absolute", "C:\\"),
+    session("relative", "C:"),
+  ]);
+  expect(result.groups.map((group) => group.sessions.map((item) => item.threadId))).toEqual([
+    ["drive", "slash", "worktree"],
+    ["posix-upper"],
+    ["posix-lower"],
+    ["absolute"],
+    ["relative"],
+  ]);
+  expect(result.groups[0]).toMatchObject({ label: "Notes", title: "C:\\Work\\Notes" });
+});
 
 it("keeps creator namespaces separate, combines profile aliases, and leaves native rows ungrouped", () => {
   expect(normalizeCatalogProjectGrouping("person")).toBe("person");

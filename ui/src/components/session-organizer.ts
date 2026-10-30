@@ -373,9 +373,13 @@ export class SessionOrganizer {
     storeCollapsedSessionSections(sections);
   }
 
-  toggleSection(sectionId: string) {
+  toggleSection(sectionId: string, aliases: readonly string[] = []) {
     const collapsed = new Set(this.collapsedSessionSections);
-    if (!collapsed.delete(sectionId)) {
+    let wasCollapsed = collapsed.delete(sectionId);
+    for (const alias of aliases) {
+      wasCollapsed = collapsed.delete(alias) || wasCollapsed;
+    }
+    if (!wasCollapsed) {
       collapsed.add(sectionId);
     }
     this.saveCollapsedSessionSections(collapsed);

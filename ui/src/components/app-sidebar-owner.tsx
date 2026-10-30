@@ -329,11 +329,11 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     this.sidebarMenus.openSessionMenu(session, rect.right, rect.bottom + 4, trigger);
   }
 
-  toggleSection(sectionId: string): void {
-    if (!this.collapsedSessionSections.has(sectionId)) {
+  toggleSection(sectionId: string, aliases: readonly string[] = []): void {
+    if (![sectionId, ...aliases].some((id) => this.collapsedSessionSections.has(id))) {
       this.sessionProjection.resetMembership(sectionId);
     }
-    this.sessionOrganizer.toggleSection(sectionId);
+    this.sessionOrganizer.toggleSection(sectionId, aliases);
   }
 
   setVisibleSessionLimit(sectionId: string, limit: number): void {
