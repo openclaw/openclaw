@@ -55,6 +55,7 @@ const MEMORY_CORE_BRIDGES = [
   ..."agent auth config io kysely memory network paths session sqlite workspace"
     .split(" ")
     .map((name) => `openclaw-runtime-${name}`),
+  "search-deadline-control",
   // Standalone transcript readers use narrow core read owners.
   "session-entry-render",
   "session-memory-authority",
