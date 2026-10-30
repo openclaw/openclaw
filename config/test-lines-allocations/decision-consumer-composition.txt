@@ -1,2 +1,2 @@
-# Real registered native HTTP and plugin consumer retirement with trusted usage completion.
-188
+# Real native HTTP and consumer retirement: 188 new lines, offset by six lines removed in earlier stack slices.
+182
