@@ -14,6 +14,8 @@ export class DecisionContractError extends Error {
   }
 }
 
+export const MAX_DECISION_V1_QUESTIONS = 256;
+
 /** Returns false only for locally unsupported resource size, never silently truncates. */
 export function validateDecisionBatch(batch: unknown): batch is DecisionBatch {
   const shape = finiteJson(batch);
@@ -34,7 +36,7 @@ export function validateDecisionBatch(batch: unknown): batch is DecisionBatch {
   if (!questions.length) {
     throw new DecisionContractError();
   }
-  if (questions.length > 256) {
+  if (questions.length > MAX_DECISION_V1_QUESTIONS) {
     return false;
   }
   for (const [id, q] of questions) {
