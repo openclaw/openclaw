@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => {
     getMediaUnderstandingProvider: vi.fn(),
     describeImageWithModel: vi.fn(async () => ({ text: "generic image ok", model: "vision" })),
     convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
+    convertImageToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
     optimizeImageDescriptionInput: vi.fn(
       async (params: { buffer: Buffer; fileName?: string; mime?: string }) => ({
         buffer: Buffer.concat([Buffer.from("optimized:"), params.buffer]),
@@ -65,8 +66,10 @@ vi.mock("./image-runtime.js", () => ({
   describeImageWithModel: mocks.describeImageWithModel,
 }));
 
+// mock-isolation: Keep real media services (host codec/exec discovery) out of this runtime matrix.
 vi.mock("../media/media-services.js", () => ({
   convertHeicToJpeg: mocks.convertHeicToJpeg,
+  convertImageToJpeg: mocks.convertImageToJpeg,
 }));
 
 vi.mock("./image-input-normalize.js", async () => {
@@ -110,6 +113,8 @@ describe("media-understanding runtime", () => {
     mocks.describeImageWithModel.mockResolvedValue({ text: "generic image ok", model: "vision" });
     mocks.convertHeicToJpeg.mockReset();
     mocks.convertHeicToJpeg.mockResolvedValue(Buffer.from("jpeg-normalized"));
+    mocks.convertImageToJpeg.mockReset();
+    mocks.convertImageToJpeg.mockResolvedValue(Buffer.from("jpeg-normalized"));
     mocks.optimizeImageDescriptionInput.mockClear();
     mocks.optimizeImageDescriptionInput.mockImplementation(
       async (params: { buffer: Buffer; fileName?: string; mime?: string }) => ({
@@ -310,6 +315,13 @@ describe("media-understanding runtime", () => {
       name: "HEIF sequence",
       mime: "image/heif-sequence",
       bytes: Buffer.from("00000018667479706d736631000000000000000000000000", "hex"),
+      convertedBy: "heic" as const,
+    },
+    {
+      name: "AVIF photo",
+      mime: "image/avif",
+      bytes: Buffer.from("0000000c667479706176696600000000", "hex"),
+      convertedBy: "image" as const,
     },
   ])(
     "normalizes local $name explicit image descriptions before provider execution",
@@ -330,7 +342,9 @@ describe("media-understanding runtime", () => {
         agentDir: undefined,
       });
 
-      expect(mocks.convertHeicToJpeg).toHaveBeenCalledWith(testCase.bytes);
+      expect(
+        mocks[testCase.convertedBy === "image" ? "convertImageToJpeg" : "convertHeicToJpeg"],
+      ).toHaveBeenCalledWith(testCase.bytes);
       expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
         expect.objectContaining({
           buffer: Buffer.from("optimized:jpeg-normalized"),
