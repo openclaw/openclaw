@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getRuntimeConfig } from "../../config/config.js";
+import { bindGatewayDeviceRevocation } from "../../gateway/device-revocation.js";
 import type { PreparedSessionMutationFacts } from "../../gateway/session-sharing-policy.js";
 import {
   prepareSessionMutationFacts,
@@ -32,6 +33,7 @@ import {
 type RequesterCronAuthority = {
   managementEntitlement?: NonNullable<CronCreatorAuthorityCapability["managementEntitlement"]>;
   requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"];
+  sourceAuthority?: { isCurrent: () => boolean; release: () => void };
   requesterSessionKey: string;
   requesterSessionId: string;
   requesterAgentId: string;
@@ -73,6 +75,7 @@ const state = resolveGlobalSingleton<RequesterCronAuthorityState>(
     for (const entries of value.bySession.values()) {
       for (const entry of entries) {
         entry.active = false;
+        entry.sourceAuthority?.release();
         if (entry.kind === "followup") {
           entry.releaseFollowup();
         } else {
@@ -87,6 +90,7 @@ const state = resolveGlobalSingleton<RequesterCronAuthorityState>(
 
 function discard(authority: RequesterCronAuthority): void {
   authority.active = false;
+  authority.sourceAuthority?.release();
   if (authority.kind === "yield") {
     authority.sessionFacts.release();
   }
@@ -114,6 +118,7 @@ function discard(authority: RequesterCronAuthority): void {
 function isCurrent(authority: RequesterCronAuthority): boolean {
   if (
     !authority.active ||
+    authority.sourceAuthority?.isCurrent() === false ||
     (authority.managementEntitlement?.source === "channel-owner" &&
       !authority.managementEntitlement.isCurrent()) ||
     authority.lifecycleGeneration !== getAgentRunLifecycleGeneration() ||
@@ -204,6 +209,7 @@ export function prepareRequesterCronAuthority(params: {
   if (!capture) {
     return undefined;
   }
+  const sourceAuthority = capture.retainSource?.();
   const preparedFacts = prepareSessionMutationFacts({
     cfg: getRuntimeConfig(),
     sessionKey: params.requesterSessionKey,
@@ -243,6 +249,7 @@ export function prepareRequesterCronAuthority(params: {
   const releaseFacts = (sessionFacts?: SessionFactsRead<PreparedSessionMutationFacts>) => {
     if (!boundAuthority) {
       sessionFacts?.release();
+      sourceAuthority?.release();
     }
   };
   return {
@@ -273,6 +280,7 @@ export function prepareRequesterCronAuthority(params: {
         requesterSessionId: capture.sessionId,
         managementEntitlement: capture.managementEntitlement,
         requesterOwner: capture.requesterOwner,
+        sourceAuthority,
         lifecycleGeneration: capture.lifecycleGeneration,
         sessionLifecycleRevision: session.entry.lifecycleRevision,
         sessionFacts,
@@ -655,7 +663,10 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
     callerOrigin: { kind: "unknown" },
     managementEntitlement: dispatch.authority.managementEntitlement,
     requesterOwner: dispatch.authority.requesterOwner,
-    isCurrent: dispatch.isCurrent,
+    isCurrent: bindGatewayDeviceRevocation(
+      dispatch.isCurrent,
+      dispatch.authority.sourceAuthority?.isCurrent,
+    ),
     ...(dispatch.pause
       ? {
           release: () => {

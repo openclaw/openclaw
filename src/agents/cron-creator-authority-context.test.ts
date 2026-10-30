@@ -26,6 +26,7 @@ import {
   runWithCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapabilityResolver,
 } from "./cron-creator-authority-context.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import {
   getGatewayToolCallerIdentity,
@@ -37,7 +38,7 @@ import * as gatewayModule from "./tools/gateway.js";
 function admittedFixture(
   runId: string,
   kind: "local" | "unknown" = "unknown",
-  source: "control-ui-admin" | "channel-owner" = "control-ui-admin",
+  source: "control-ui-admin" | "android-app-admin" | "channel-owner" = "control-ui-admin",
   callerScopedCreation?: true,
 ) {
   const caller = admittedCaller(runId);
@@ -176,6 +177,8 @@ it.each([
   ["unknown", "control-ui-admin", undefined],
   ["unknown", "channel-owner", undefined],
   ["unknown", "control-ui-admin", true],
+  ["unknown", "android-app-admin", undefined],
+  ["unknown", "android-app-admin", true],
 ] as const)(
   "separates management, creation, and runtime authority for %s/%s (fresh=%s)",
   async (kind, source, callerScopedCreation) => {
@@ -184,6 +187,13 @@ it.each([
     await run(async () => {
       expect(
         withoutGatewayToolCallerIdentity(() => bindCronManagementGrant(runId)),
+      ).toBeUndefined();
+      expect(
+        bindCronManagementGrant(runId, {
+          tools: {
+            gatewayPolicy: { allow: [AUTOMATIONS_TOOL_NAME], automations: { scope: "caller" } },
+          },
+        }),
       ).toBeUndefined();
       const management = bindCronManagementGrant(runId)!;
       expect(management.managementOnly).toBe(kind === "unknown" && !callerScopedCreation);
@@ -245,7 +255,7 @@ it("does not transfer an admin tool's authority to a replacement with the same r
     await withGatewayToolCallerIdentity({ ...caller, ...replacement }, async () => {
       expect(getGatewayToolCallerIdentity()?.approvalAuthority).toBe(replacement.approvalAuthority);
       expect(() => mint!("cron.get")).toThrow(
-        "Retry from a fresh authenticated configured channel owner or Control UI administrator turn",
+        "Retry from a fresh authenticated configured channel owner, Control UI administrator, or Android app administrator turn",
       );
     });
   });

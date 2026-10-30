@@ -38,6 +38,10 @@ import {
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import {
+  captureGatewayDeviceRevocation,
+  invalidateGatewayDeviceRevocation,
+} from "../device-revocation.js";
 import { revokeMcpLoopbackClientGrant } from "../mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../mcp-http.js";
 import { dispatchGatewayRequestInProcess } from "../server-in-process-dispatch.js";
@@ -70,7 +74,12 @@ vi.mock("../../agents/node-exec-availability.js", () => ({
 
 installRequesterCronAuthorityTestHooks();
 
-async function withSuccessor<T>(admin: boolean | "channel-owner", run: RequesterRun<T>) {
+async function withSuccessor<T>(
+  admin: boolean | "channel-owner" | "android-admin" | "android-write",
+  run: RequesterRun<T>,
+  caller?: ReturnType<typeof captureGatewayDeviceRevocation>,
+) {
+  const hasManagement = Boolean(admin) && admin !== "android-write";
   const originalRunId = "original-requester";
   const requesterTurn = {
     requesterSessionKey: SESSION,
@@ -87,11 +96,16 @@ async function withSuccessor<T>(admin: boolean | "channel-owner", run: Requester
   const runs = subagentRuns;
   const transfer = createRequesterInitialTransferFixture(runs);
   const requester = createSyntheticPluginRuntimeClient({
-    scopes: admin ? ["operator.admin"] : ["operator.write"],
+    scopes: hasManagement ? ["operator.admin"] : ["operator.write"],
   });
   // The authenticated connection boundary supplies these facts; no model or
   // child result may promote the ordinary continuation below.
-  requester.internal = admin === true ? { controlUiAdmin: true } : {};
+  requester.internal =
+    admin === true
+      ? { controlUiAdmin: true }
+      : admin === "android-admin"
+        ? { androidAppAdmin: true }
+        : {};
   const admitted =
     admin === "channel-owner"
       ? {
@@ -106,13 +120,15 @@ async function withSuccessor<T>(admin: boolean | "channel-owner", run: Requester
               }),
           },
         }
-      : admission(originalRunId, requester);
+      : admission(originalRunId, requester, undefined, caller?.isCurrent);
   if (admin === "channel-owner") {
     setRuntimeConfigSnapshot({ ...cfg, commands: { ownerAllowFrom: ["discord:owner-1"] } });
   }
   await inRun(originalRunId, admitted, () =>
     markRequesterTurnYieldedWithAuthority({ ...requesterTurn, runs, transfer }),
   );
+  // Only the continuation's retained source may keep device authority alive.
+  caller?.release();
   await settleRequesterTurnAfterSessionSpawns({
     ...requesterTurn,
     requesterYielded: true,
@@ -144,7 +160,7 @@ async function withSuccessor<T>(admin: boolean | "channel-owner", run: Requester
         // Explicitly remove the old cohort to exercise bound-scope independence.
         // This lifetime regression does not model queue ACK retiring a product outbox.
         expect(creator?.callerScopedCreation).toBeUndefined();
-        if (admin) {
+        if (hasManagement) {
           const management = bindCronManagementGrant(runId);
           expect(management?.managementOnly).toBe(true);
           expect(() => management?.mint("cron.add")).toThrow("management-only");
@@ -277,115 +293,164 @@ async function createStoredJob(
 }
 
 describe("requester continuation persisted automation management", () => {
-  it("keeps scheduler notice reads scoped and withholds a record when authority closes during its read", async ({
-    signal,
-  }) => {
-    const config: OpenClawConfig = { ...cfg, tools: { allow: [AUTOMATIONS_TOOL_NAME] } };
-    setRuntimeConfigSnapshot(config);
-    const fixture = createCronFixture(undefined, config);
-    const addOwnedJob = (sessionKey: string, name: string) =>
-      cron.add(
-        {
-          name,
-          enabled: false,
-          schedule: { kind: "every", everyMs: 60_000 },
-          sessionTarget: "current",
-          sessionKey,
-          agentId: "main",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "agentTurn", message: name, toolsAllow: [] },
-          delivery: { mode: "none" },
-          owner: { agentId: "main", sessionKey, accountId: "default" },
-        },
-        {
-          scheduledToolPolicy: {
-            version: 1,
-            mode: "account",
-            ownerSessionKey: sessionKey,
-            ownerAccountId: "default",
+  it.for(["scheduler notice", "Android requester"] as const)(
+    "keeps %s reads scoped and withholds a record when authority closes during its read",
+    async (source, { signal }) => {
+      const config: OpenClawConfig = { ...cfg, tools: { allow: [AUTOMATIONS_TOOL_NAME] } };
+      setRuntimeConfigSnapshot(config);
+      const fixture = createCronFixture(undefined, config);
+      const addOwnedJob = (sessionKey: string, name: string) =>
+        cron.add(
+          {
+            name,
+            enabled: false,
+            schedule: { kind: "every", everyMs: 60_000 },
+            sessionTarget: "current",
+            sessionKey,
+            agentId: "main",
+            wakeMode: "next-heartbeat",
+            payload: { kind: "agentTurn", message: name, toolsAllow: [] },
+            delivery: { mode: "none" },
+            owner: { agentId: "main", sessionKey, accountId: "default" },
           },
-        },
-      );
-    const own = await addOwnedJob(SESSION, "Owned automation record");
-    const foreign = await addOwnedJob("agent:main:another-conversation", "Private foreign record");
-    const responses = vi.fn<RespondFn>();
-    const get = expectDefined(coreGatewayHandlers["cron.get"], "cron.get handler");
-    fixture.context.getGatewayMethodRegistry = () =>
-      createRequestGatewayMethodRegistry({
-        "cron.get": (options) =>
-          get({
-            ...options,
-            respond: (...args) => {
-              responses(...args);
-              options.respond(...args);
+          {
+            scheduledToolPolicy: {
+              version: 1,
+              mode: "account",
+              ownerSessionKey: sessionKey,
+              ownerAccountId: "default",
             },
-          }),
-      });
+          },
+        );
+      const own = await addOwnedJob(SESSION, "Owned automation record");
+      const foreign = await addOwnedJob(
+        "agent:main:another-conversation",
+        "Private foreign record",
+      );
+      const responses = vi.fn<RespondFn>();
+      const get = expectDefined(coreGatewayHandlers["cron.get"], "cron.get handler");
+      fixture.context.getGatewayMethodRegistry = () =>
+        createRequestGatewayMethodRegistry({
+          "cron.get": (options) =>
+            get({
+              ...options,
+              respond: (...args) => {
+                responses(...args);
+                options.respond(...args);
+              },
+            }),
+        });
 
-    await inRun("automation-inspection", undefined, async (_identity, admitted) => {
-      bindGatewayContextResolver(admitted, () => fixture.context);
-      const entered = createDeferred();
-      const release = createDeferred();
-      const readJob = cron.readJob.bind(cron);
-      let holdRead = false;
-      const readSpy = vi.spyOn(cron, "readJob").mockImplementation(async (id) => {
-        const recorded = await readJob(id);
-        if (holdRead) {
-          expect(recorded?.id).toBe(own.id);
-          entered.resolve();
-          await withinTest(release.promise, signal);
+      const caller = captureGatewayDeviceRevocation(
+        fixture.context,
+        { deviceId: "android-requester-device", role: "operator" },
+        () => true,
+      );
+      const exercise: RequesterRun<void> = async (_identity, admitted, creator) => {
+        bindGatewayContextResolver(admitted, () => fixture.context);
+        const entered = createDeferred();
+        const release = createDeferred();
+        const readJob = cron.readJob.bind(cron);
+        let holdRead = false;
+        const readSpy = vi.spyOn(cron, "readJob").mockImplementation(async (id) => {
+          const recorded = await readJob(id);
+          if (holdRead) {
+            expect(recorded?.id).toBe(source === "scheduler notice" ? own.id : foreign.id);
+            entered.resolve();
+            await withinTest(release.promise, signal);
+          }
+          return recorded;
+        });
+        let pending: Promise<unknown> | undefined;
+        try {
+          const tools = await createCreatorTransportTools({
+            transport: "embedded",
+            config,
+            admitted,
+            creator,
+            senderIsOwner: source !== "scheduler notice",
+            ...(source === "scheduler notice"
+              ? {
+                  trigger: "event",
+                  inputProvenance: { kind: "internal_system", sourceTool: "cron" } as const,
+                }
+              : {}),
+          });
+          const inspect = (jobId: string) =>
+            tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "get", jobId });
+          await expect(inspect(own.id)).resolves.toMatchObject({
+            details: { id: own.id, name: own.name, enabled: false },
+          });
+          expect(responses).toHaveBeenLastCalledWith(
+            true,
+            expect.objectContaining({ id: own.id, name: own.name }),
+            undefined,
+          );
+          if (source === "scheduler notice") {
+            await expect(inspect(foreign.id)).rejects.toThrow("cron job not found");
+            expect(responses).toHaveBeenLastCalledWith(false, undefined, expect.anything());
+          } else {
+            await expect(inspect(foreign.id)).resolves.toMatchObject({
+              details: { id: foreign.id, name: foreign.name },
+            });
+          }
+          responses.mockClear();
+
+          holdRead = true;
+          pending = inspect(source === "scheduler notice" ? own.id : foreign.id);
+          await withinTest(
+            awaitGateBeforeSettlement(
+              entered.promise,
+              pending,
+              "Read settled before its owner gate",
+            ),
+            signal,
+          );
+          if (source === "scheduler notice") {
+            expect(closeAdmittedRunDelegatedAuthority(admitted)).toBe(true);
+          } else {
+            invalidateGatewayDeviceRevocation(
+              fixture.context,
+              "android-requester-device",
+              "operator",
+            );
+          }
+          release.resolve();
+          const rejection =
+            source === "scheduler notice"
+              ? /authority|admitted run/i
+              : /Automation caller authority is no longer active/;
+          await expect(pending).rejects.toThrow(rejection);
+          expect(responses).toHaveBeenCalledExactlyOnceWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              code: "INVALID_REQUEST",
+              message: expect.stringMatching(
+                source === "scheduler notice"
+                  ? rejection
+                  : /invalid cron.get params: Automation admin grant is missing, expired, or already used/,
+              ),
+            }),
+          );
+        } finally {
+          release.resolve();
+          await pending?.catch(() => undefined);
+          readSpy.mockRestore();
+          clearGatewayContextResolver(admitted);
         }
-        return recorded;
-      });
-      let pending: Promise<unknown> | undefined;
+      };
       try {
-        const tools = await createCreatorTransportTools({
-          transport: "embedded",
-          config,
-          admitted,
-          senderIsOwner: false,
-          trigger: "event",
-          inputProvenance: { kind: "internal_system", sourceTool: "cron" },
-        });
-        const inspect = (jobId: string) =>
-          tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "get", jobId });
-        await expect(inspect(own.id)).resolves.toMatchObject({
-          details: { id: own.id, name: own.name, enabled: false },
-        });
-        expect(responses).toHaveBeenLastCalledWith(
-          true,
-          expect.objectContaining({ id: own.id, name: own.name }),
-          undefined,
-        );
-        await expect(inspect(foreign.id)).rejects.toThrow("cron job not found");
-        expect(responses).toHaveBeenLastCalledWith(false, undefined, expect.anything());
-        responses.mockClear();
-
-        holdRead = true;
-        pending = inspect(own.id);
-        await withinTest(
-          awaitGateBeforeSettlement(entered.promise, pending, "Read settled before its owner gate"),
-          signal,
-        );
-        expect(closeAdmittedRunDelegatedAuthority(admitted)).toBe(true);
-        release.resolve();
-        await expect(pending).rejects.toThrow(/authority|admitted run/i);
-        expect(responses).toHaveBeenCalledExactlyOnceWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            code: "INVALID_REQUEST",
-            message: expect.stringMatching(/authority|admitted run/i),
-          }),
-        );
+        if (source === "scheduler notice") {
+          await inRun("automation-inspection", undefined, exercise);
+        } else {
+          await withSuccessor("android-admin", exercise, caller);
+        }
       } finally {
-        release.resolve();
-        await pending?.catch(() => undefined);
-        readSpy.mockRestore();
-        clearGatewayContextResolver(admitted);
+        caller.release();
       }
-    });
-  });
+    },
+  );
 
   it("rejects a socket stream request without its own exec policy", async () => {
     const fixture = createCronFixture();
@@ -485,14 +550,23 @@ describe("requester continuation persisted automation management", () => {
   it.each([
     [true, "cron.update"],
     [false, "cron.update"],
+    ["android-admin", "cron.update"],
+    ["android-write", "cron.update"],
     ["channel-owner", "cron.update"],
     ["channel-owner", "cron.remove"],
   ] as const)("requires admitted manager %s and matching grant %s", async (admin, grantMethod) => {
     const fixture = await createStoredJob();
-    const [ok, result, error] = await withSuccessor(admin, (identity) =>
-      fixture.updateWithGrantFor(grantMethod, identity),
+    const caller = captureGatewayDeviceRevocation(
+      fixture.context,
+      { deviceId: "android-requester-device", role: "operator" },
+      () => true,
     );
-    const permitted = Boolean(admin) && grantMethod === "cron.update";
+    const [ok, result, error] = await withSuccessor(
+      admin,
+      (identity) => fixture.updateWithGrantFor(grantMethod, identity),
+      caller,
+    ).finally(caller.release);
+    const permitted = Boolean(admin) && admin !== "android-write" && grantMethod === "cron.update";
     expect(ok).toBe(permitted);
     if (permitted) {
       expect(result).toMatchObject({ name: "Reviewed maintenance", enabled: true });
@@ -514,59 +588,74 @@ describe("requester continuation persisted automation management", () => {
     }
   });
 
-  it.each(["fresh user turn", "session reset", "global owner removal"])(
-    "rejects %s during update validation",
-    async (reason) => {
-      const entered = createDeferred();
-      const release = createDeferred();
-      let hold = false;
-      const fixture = await createStoredJob(async () => {
-        if (hold) {
-          entered.resolve();
-          await release.promise;
-        }
-        return [];
-      });
-      hold = true;
-      const update = withSuccessor(
-        reason === "global owner removal" ? "channel-owner" : true,
-        fixture.update,
-      );
-      try {
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          update,
-          "Update returned before service validation",
-        );
-        expect(await fixture.read()).toEqual(fixture.before);
-        if (reason === "global owner removal") {
-          setRuntimeConfigSnapshot(cfg);
-        } else if (reason === "fresh user turn") {
-          const requester = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
-          requester.internal = {};
-          admission("new-user-turn", requester);
-        } else {
-          replaceSessionEntrySync(
-            { sessionKey: SESSION },
-            { sessionId: SESSION_ID, updatedAt: 2, lifecycleRevision: "reset" },
-          );
-        }
-      } finally {
-        release.resolve();
-        // Join the real mutation before teardown, without replacing an assertion failure.
-        await update.catch(() => undefined);
+  it.each([
+    "fresh user turn",
+    "session reset",
+    "global owner removal",
+    "Android device revocation",
+  ])("rejects %s during update validation", async (reason) => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    let hold = false;
+    const fixture = await createStoredJob(async () => {
+      if (hold) {
+        entered.resolve();
+        await release.promise;
       }
-      const [ok, , error] = await update;
-      expect({ ok, error }).toMatchObject({
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: expect.stringContaining("Automation admin grant"),
-        },
-      });
+      return [];
+    });
+    const caller = captureGatewayDeviceRevocation(
+      fixture.context,
+      { deviceId: "android-requester-device", role: "operator" },
+      () => true,
+    );
+    hold = true;
+    const update = withSuccessor(
+      reason === "global owner removal"
+        ? "channel-owner"
+        : reason === "Android device revocation"
+          ? "android-admin"
+          : true,
+      fixture.update,
+      caller,
+    );
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        update,
+        "Update returned before service validation",
+      );
       expect(await fixture.read()).toEqual(fixture.before);
-    },
-  );
+      if (reason === "global owner removal") {
+        setRuntimeConfigSnapshot(cfg);
+      } else if (reason === "Android device revocation") {
+        invalidateGatewayDeviceRevocation(fixture.context, "android-requester-device", "operator");
+      } else if (reason === "fresh user turn") {
+        const requester = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
+        requester.internal = {};
+        admission("new-user-turn", requester);
+      } else {
+        replaceSessionEntrySync(
+          { sessionKey: SESSION },
+          { sessionId: SESSION_ID, updatedAt: 2, lifecycleRevision: "reset" },
+        );
+      }
+    } finally {
+      release.resolve();
+      // Join the real mutation before teardown, without replacing an assertion failure.
+      await update.catch(() => undefined);
+      caller.release();
+    }
+    const [ok, , error] = await update;
+    expect({ ok, error }).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("Automation admin grant"),
+      },
+    });
+    expect(await fixture.read()).toEqual(fixture.before);
+  });
 });
 
 describe("automation stream exec policy at persistence", () => {

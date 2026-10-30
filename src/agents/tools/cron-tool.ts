@@ -384,7 +384,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                       ...(!managementAuthority
                         ? {
                             scopeHint:
-                              "Restricted automation inventory. For Gateway-wide management, use a fresh authenticated configured channel owner or Control UI administrator turn or the Automations page.",
+                              "Restricted automation inventory. For Gateway-wide management, use a fresh authenticated configured channel owner, Control UI administrator, or Android app administrator turn or the Automations page.",
                           }
                         : {}),
                     }

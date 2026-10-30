@@ -44,7 +44,7 @@ export function createCronToolGatewayCaller({
         : undefined;
     if ((grant || requesterGrant) && !identity) {
       throw new Error(
-        "Automation management requires the active configured channel owner or Control UI administrator turn.",
+        "Automation management requires the active configured channel owner, Control UI administrator, or Android app administrator turn.",
       );
     }
     const streamExecPolicy = readStreamExecPolicy();

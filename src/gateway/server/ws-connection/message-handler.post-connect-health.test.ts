@@ -1822,7 +1822,10 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   );
 
   it.each([
-    ["openclaw-control-ui", "operator.admin", true],
+    ["openclaw-control-ui", "operator.admin", "control-ui-admin"],
+    ["openclaw-android", "operator.admin", "android-app-admin"],
+    ["openclaw-android", "operator.read", false],
+    ["openclaw-android", "operator.write", false],
     ["openclaw-control-ui", "operator.read", false],
     ["openclaw-tui", "operator.admin", false],
   ] as const)(
@@ -1849,7 +1852,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
                 runId: "control-ui-admin-run",
                 callerOrigin: { kind: "unknown" },
                 callerScopedCreation: true,
-                managementEntitlement: { source: "control-ui-admin" },
+                managementEntitlement: { source: allowed },
               }
             : undefined;
           expect(admission).toEqual(expected);

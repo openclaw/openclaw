@@ -198,6 +198,7 @@ it.each([
   ["embedded", "local", "device"],
   ["embedded", "remote", "device"],
   ["embedded", "remote-chat", "device"],
+  ["embedded", "android-chat", "device"],
   ["embedded", "local", "skill selection"],
 ] as const)(
   "fences a real %s %s creator mutation on %s change while its run remains admitted",
@@ -210,10 +211,15 @@ it.each([
       () => true,
     );
     const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.admin"] });
-    client.internal = origin === "local" ? { isLocalClient: true } : { controlUiAdmin: true };
+    client.internal =
+      origin === "local"
+        ? { isLocalClient: true }
+        : origin === "android-chat"
+          ? { androidAppAdmin: true }
+          : { controlUiAdmin: true };
     const runId = `original-${transport}-creator`;
     const creatorAdmission = expectDefined(
-      origin === "remote-chat"
+      origin === "remote-chat" || origin === "android-chat"
         ? resolveGatewayChatCronCreatorAuthorityAdmission({
             runId,
             resolvedSessionKey: SESSION,
