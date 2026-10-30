@@ -333,4 +333,17 @@ describe("Buzz directory state", () => {
       { id: MEMBER_PUBLIC_KEY, name: "bbbbbbbb...bbbbbb" },
     ]);
   });
+
+  it("matches directory queries across Unicode normalization forms", () => {
+    const state = profileState();
+    state.applyProfileEvent(profile({ display_name: "Café" }));
+    state.applyRoomEvent(room("Café Lounge".normalize("NFD")));
+
+    expect(state.listPeers({ query: "café".normalize("NFD") }).map((entry) => entry.name)).toEqual([
+      "Café",
+    ]);
+    expect(state.listGroups({ query: "café" }).map((entry) => entry.name)).toEqual([
+      "Café Lounge".normalize("NFD"),
+    ]);
+  });
 });
