@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { HelloOk } from "../../packages/gateway-protocol/src/schema/frames.js";
+import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeConfigFile } from "../config/config.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
@@ -64,6 +65,7 @@ test.each([false, true])(
       vi.stubEnv("OPENCLAW_TEST_MINIMAL_GATEWAY", "0");
     }
     await withGatewayServer(async ({ port }) => {
+      await waitForGatewayStartup(port);
       const ws = await openWs(port, {
         origin,
         "x-forwarded-user": email,
@@ -232,6 +234,7 @@ test("required placement survives disconnect but stops setup when committed call
   });
 
   await withGatewayServer(async ({ port }) => {
+    await waitForGatewayStartup(port);
     const connect = async (email: string, scopes: string[]) => {
       const ws = await openWs(port, {
         origin,
