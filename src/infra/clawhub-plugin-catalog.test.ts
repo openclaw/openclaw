@@ -113,6 +113,11 @@ it.each([false, true])(
 it.each([
   ["overview", fetchClawHubPluginOverview],
   ["categories", fetchClawHubPluginCategories],
+  [
+    "curated category",
+    (options: Parameters<typeof fetchClawHubPluginOverview>[0]) =>
+      fetchClawHubPluginCatalog({ ...options, category: "channels" }),
+  ],
 ])("public %s omits ambient auth unless requested", async (_name, read) => {
   await withEnvAsync(
     {
