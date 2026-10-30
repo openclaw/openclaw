@@ -146,12 +146,21 @@ export async function listCandidateAuthProfileStores(params: {
   );
 }
 
+function assertCandidateDatabaseIdentity(candidate: CandidateAuthProfileStore): void {
+  if (candidate.databaseIdentity.key.startsWith("path:")) {
+    // Discovery captured no file; startup or another operation may create it before first use.
+    candidate.databaseIdentity = readDatabasePathIdentitySync(candidate.databasePath);
+  } else {
+    assertDatabasePathIdentity(candidate.databasePath, candidate.databaseIdentity);
+  }
+}
+
 /** Read an already-discovered candidate without creating a missing database. */
 export function loadCandidateAuthProfileStore(
   candidate: CandidateAuthProfileStore,
 ): AuthProfileStore | null {
   try {
-    assertDatabasePathIdentity(candidate.databasePath, candidate.databaseIdentity);
+    assertCandidateDatabaseIdentity(candidate);
     return loadPersistedAuthProfileStoreAtDatabasePath(candidate.databasePath, "agent");
   } finally {
     if (!candidate.configured) {
@@ -164,12 +173,12 @@ export function loadCandidateAuthProfileStore(
 export async function loadCandidateAuthProfileStoreAsync(
   candidate: CandidateAuthProfileStore,
 ): Promise<AuthProfileStore | null> {
-  assertDatabasePathIdentity(candidate.databasePath, candidate.databaseIdentity);
+  assertCandidateDatabaseIdentity(candidate);
   const reader = prepareAgentAuthProfileRowsRead(candidate);
   try {
     const rows = await reader.read();
     reader.assertCurrent();
-    assertDatabasePathIdentity(candidate.databasePath, candidate.databaseIdentity);
+    assertCandidateDatabaseIdentity(candidate);
     return loadPersistedAuthProfileStoreFromRows(rows, candidate.databasePath);
   } finally {
     await reader.dispose();
@@ -223,7 +232,7 @@ async function runCandidateAuthProfileUpdate(
   if (workerWrites) {
     const assertCurrent = () => {
       workerWrites.assertOwner(candidate.env);
-      assertDatabasePathIdentity(candidate.databasePath, candidate.databaseIdentity);
+      assertCandidateDatabaseIdentity(candidate);
     };
     return runAuthProfileUsage(() =>
       workerWrites.run(() => {
@@ -301,8 +310,7 @@ async function runCandidateAuthProfileUpdate(
     envOnly: false,
     peerGeneration,
     options: { env: candidate.env },
-    assertCurrent: () =>
-      assertDatabasePathIdentity(candidate.databasePath, candidate.databaseIdentity),
+    assertCurrent: () => assertCandidateDatabaseIdentity(candidate),
     update(prepared) {
       const store = prepared.store;
       const changed = params.updater(store);
