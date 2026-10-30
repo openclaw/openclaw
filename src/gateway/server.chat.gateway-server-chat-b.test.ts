@@ -191,6 +191,8 @@ type HistoryPage = {
   nextOffset?: number;
   offset?: number;
   hasMore?: boolean;
+  olderCursor?: string;
+  newerCursor?: string;
   totalMessages?: number;
 };
 
@@ -2867,7 +2869,7 @@ describe("gateway server chat", () => {
         JSON.stringify({ type: "model_change", provider: "mock", modelId: "mock" }),
         JSON.stringify({ type: "thinking_level_change", thinkingLevel: "off" }),
       ]);
-      const storePath = expectDefined(testState.sessionStorePath);
+      const storePath = expectDefined(testState.sessionStorePath, "session store path");
       for (let index = 0; index < 7; index += 1) {
         await appendTranscriptMessage(makeMainSessionScope(storePath), {
           eventId: `message-${index + 1}`,
@@ -2878,10 +2880,8 @@ describe("gateway server chat", () => {
           },
         });
       }
-      await waitForSessionTranscriptIndexReconcile({
-        agentId: "main",
-        path: path.join(sessionDir, "openclaw-agent.sqlite"),
-      });
+      const databasePath = path.join(sessionDir, "openclaw-agent.sqlite");
+      await waitForSessionTranscriptIndexReconcile({ agentId: "main", path: databasePath });
 
       const history = await historyPage(ws, {
         limit: 3,
