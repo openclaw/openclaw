@@ -36,7 +36,13 @@ export PATH="$npm_config_prefix/bin:$PATH"
 export CI=true OPENCLAW_NO_ONBOARD=1 OPENCLAW_NO_PROMPT=1 OPENCLAW_DISABLE_BONJOUR=1
 export GATEWAY_AUTH_TOKEN_REF=installed-recovery-fixture-token
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing test-state function}"
-openclaw_test_state_create installed-recovery empty
+state_home=installed-recovery
+if [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = older-runtime ]; then
+  # This disposable container installs a native service; its state must belong to
+  # the OS account home so the real service-ownership guard remains in force.
+  state_home="$(node --input-type=module -e 'import os from "node:os"; process.stdout.write(os.userInfo().homedir);')"
+fi
+openclaw_test_state_create "$state_home" empty
 phase=installed-recovery-install
 openclaw_e2e_install_package "$run_artifacts/install.log" "current recovery writer" "$npm_config_prefix"
 if [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = older-runtime ]; then
