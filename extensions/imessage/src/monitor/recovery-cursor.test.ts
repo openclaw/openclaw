@@ -5,7 +5,11 @@ import {
   createIMessagePluginStateSyncStoreForTest,
   installIMessageStateRuntimeForTest,
 } from "../test-support/runtime.js";
-import { advanceIMessageRecoveryCursor, loadIMessageRecoveryCursor } from "./recovery-cursor.js";
+import {
+  advanceIMessageRecoveryCursor,
+  loadIMessageRecoveryCursor,
+  resolveIMessageRecoveryCursorDbIdentity,
+} from "./recovery-cursor.js";
 
 const accountId = "default";
 const dbIdentity = "remote:synthetic:chat.db";
@@ -45,6 +49,18 @@ describe("iMessage recovery cursor persistence", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("persists literal and trimmed database paths as separate cursors", async () => {
+    const literal = resolveIMessageRecoveryCursorDbIdentity({ dbPath: "/x/chat.db " });
+    const trimmed = resolveIMessageRecoveryCursorDbIdentity({ dbPath: "/x/chat.db" });
+
+    await advanceIMessageRecoveryCursor(accountId, literal, 888);
+    await advanceIMessageRecoveryCursor(accountId, trimmed, 777);
+
+    // plugin-state trims entry keys, so the literal row must survive on its own.
+    await expect(loadIMessageRecoveryCursor(accountId, literal)).resolves.toBe(888);
+    await expect(loadIMessageRecoveryCursor(accountId, trimmed)).resolves.toBe(777);
   });
 
   it("keeps the greatest row across concurrent completions", async () => {

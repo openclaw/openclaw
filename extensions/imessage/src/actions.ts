@@ -16,7 +16,10 @@ import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { normalizePollInput } from "openclaw/plugin-sdk/poll-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalLowercaseString,
+  readNonBlankString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { hasExclusiveIMessageLocalDatabase, resolveIMessageAccount } from "./accounts.js";
 import { IMESSAGE_ACTION_NAMES, IMESSAGE_ACTIONS } from "./actions-contract.js";
@@ -298,7 +301,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       accountId: accountId ?? undefined,
     });
     assertActionEnabled(action, account.config.actions);
-    const cliPathForProbe = account.config.cliPath?.trim() || "imsg";
+    const cliPathForProbe = readNonBlankString(account.config.cliPath) ?? "imsg";
     const remoteHost = await resolveIMessageRemoteHost({
       cliPath: cliPathForProbe,
       remoteHost: account.config.remoteHost,
@@ -331,7 +334,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     };
     const opts = {
       cliPath: cliPathForProbe,
-      dbPath: account.config.dbPath?.trim() || undefined,
+      dbPath: readNonBlankString(account.config.dbPath),
       remoteHost,
       timeoutMs: account.config.probeTimeoutMs,
     };

@@ -9,11 +9,11 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
+  readNonBlankString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { recoverIMessageBridge } from "./bridge-recovery.js";
-import { expandIMessageUserPath } from "./cli-path.js";
+import { expandIMessageUserPath, resolveIMessageLiteralPath } from "./cli-path.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import { invalidateCachedIMessagePrivateApiStatus } from "./private-api-status.js";
 import { normalizeIMessageFullDiskAccessError } from "./process-diagnostics.js";
@@ -168,12 +168,17 @@ export class IMessageRpcClient {
   private publicProcessError: string | null = null;
 
   constructor(opts: IMessageRpcClientOptions = {}) {
-    this.configuredCliPath = opts.cliPath?.trim() || "imsg";
+    this.configuredCliPath = readNonBlankString(opts.cliPath) ?? "imsg";
     this.cliPath = expandIMessageUserPath(this.configuredCliPath);
-    const dbPath = opts.dbPath?.trim();
+    const dbPath = readNonBlankString(opts.dbPath);
     // An explicitly remote database belongs to the Messages Mac. Only local
-    // database paths are relative to the Gateway user's home directory.
-    this.dbPath = dbPath ? (opts.remoteHost?.trim() ? dbPath : resolveUserPath(dbPath)) : undefined;
+    // database paths are resolved against the Gateway user's effective home,
+    // preserving the literal bytes so a trailing space cannot select another file.
+    this.dbPath = dbPath
+      ? opts.remoteHost?.trim()
+        ? dbPath
+        : resolveIMessageLiteralPath(dbPath)
+      : undefined;
     this.runtime = opts.runtime;
     this.onNotification = opts.onNotification;
     this.terminal = new Promise((resolve) => {

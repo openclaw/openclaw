@@ -16,6 +16,7 @@ import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveIMessageAccount } from "./accounts.js";
 import { getIMessageApprovalApprovers } from "./approval-auth.js";
 import {
@@ -303,7 +304,7 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
           ) {
             return false;
           }
-          const cliPath = account.config.cliPath?.trim() || "imsg";
+          const cliPath = readNonBlankString(account.config.cliPath) ?? "imsg";
           const status = getCachedIMessagePrivateApiStatus(cliPath);
           return (
             status?.available === true &&
@@ -369,8 +370,8 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
                   accountId: preparedTarget.accountId,
                 });
                 const cliOptions = {
-                  cliPath: account.config.cliPath?.trim() || "imsg",
-                  dbPath: account.config.dbPath?.trim() || undefined,
+                  cliPath: readNonBlankString(account.config.cliPath) ?? "imsg",
+                  dbPath: readNonBlankString(account.config.dbPath),
                   timeoutMs: account.config.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
                 };
                 const target = parseIMessageTarget(preparedTarget.to);

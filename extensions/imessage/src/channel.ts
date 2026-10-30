@@ -21,7 +21,10 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import { imessageMessageActions } from "./actions.js";
 import {
@@ -205,7 +208,7 @@ async function resolveIMessageConversationTarget(params: {
     ).resolveIMessageChat({
       target: parsed,
       options: {
-        cliPath: account.config.cliPath?.trim() || "imsg",
+        cliPath: readNonBlankString(account.config.cliPath) ?? "imsg",
         dbPath: account.config.dbPath,
         remoteHost: account.config.remoteHost,
       },

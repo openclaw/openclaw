@@ -30,7 +30,7 @@ describe("runIMessageCliJsonCommand", () => {
     ).resolves.toMatchObject({ success: true, messageId: "ok" });
 
     expect(runCommandMock).toHaveBeenCalledWith(
-      ["/usr/local/bin/imsg", "send", "--text", "hello", "--db", "/tmp/chat.db", "--json"],
+      ["/usr/local/bin/imsg", "send", "--text", "hello", "--db", " /tmp/chat.db ", "--json"],
       expect.objectContaining({
         maxOutputBytes: { stdout: 8 * 1024 * 1024, stderr: 64 * 1024 },
         outputCapture: { stdout: "head", stderr: "tail" },

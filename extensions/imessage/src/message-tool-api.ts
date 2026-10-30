@@ -3,6 +3,7 @@ import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import { resolveIMessageAccount } from "./accounts.js";
 import { IMESSAGE_ACTION_NAMES, IMESSAGE_ACTIONS } from "./actions-contract.js";
@@ -36,7 +37,7 @@ export function describeIMessageMessageTool({
   if (!account.enabled || !account.configured) {
     return null;
   }
-  const cliPath = account.config.cliPath?.trim() || "imsg";
+  const cliPath = readNonBlankString(account.config.cliPath) ?? "imsg";
   const privateApiStatus = getCachedIMessagePrivateApiStatus(cliPath);
   const remote = Boolean(
     getCachedIMessageRemoteHost({

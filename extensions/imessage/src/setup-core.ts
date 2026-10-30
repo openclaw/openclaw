@@ -19,7 +19,10 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  readNonBlankString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultIMessageAccountId, resolveIMessageAccount } from "./accounts.js";
 import { IMESSAGE_CHAT_TARGET_PREFIX_RE } from "./normalize.js";
 import { normalizeIMessageHandle } from "./targets.js";
@@ -39,7 +42,7 @@ const HOMEBREW_IMSG_PATHS = new Set([
 ]);
 
 export function normalizeIMessageCliPathForSetup(cliPath: string | undefined): string {
-  return cliPath?.trim() || "imsg";
+  return readNonBlankString(cliPath) ?? "imsg";
 }
 
 export function isAutoManagedIMessageCliPath(

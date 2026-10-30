@@ -488,6 +488,50 @@ describe("IMessageRpcClient child stream error handling", () => {
       { stdio: ["pipe", "pipe", "pipe"] },
     );
   });
+
+  it("resolves a configured local dbPath against the effective home", async () => {
+    vi.stubEnv("HOME", "/Users/gateway");
+    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+    await startClient({
+      cliPath: "~/.openclaw/imsg-local",
+      dbPath: "~/Library/Messages/chat.db",
+    });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      "/Users/gateway/.openclaw/imsg-local",
+      ["rpc", "--json", "--db", "/srv/openclaw-home/Library/Messages/chat.db"],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+  });
+
+  it("keeps the working-directory fallback when no home is configured", async () => {
+    vi.stubEnv("HOME", "");
+    vi.stubEnv("OPENCLAW_HOME", undefined);
+    vi.stubEnv("USERPROFILE", undefined);
+    vi.spyOn(os, "homedir").mockReturnValue("");
+    vi.spyOn(process, "cwd").mockReturnValue("/srv/gateway");
+    await startClient({ cliPath: "imsg", dbPath: "~/Library/Messages/chat.db" });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      "imsg",
+      ["rpc", "--json", "--db", "/srv/gateway/Library/Messages/chat.db"],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+  });
+
+  it("preserves trailing-space cliPath and dbPath literally for spawn", async () => {
+    vi.stubEnv("HOME", "/Users/gateway");
+    await startClient({
+      cliPath: "/opt/homebrew/bin/imsg ",
+      dbPath: "/Users/gateway/Library/Messages/chat.db ",
+    });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      "/opt/homebrew/bin/imsg ",
+      ["rpc", "--json", "--db", "/Users/gateway/Library/Messages/chat.db "],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+  });
 });
 
 describe("IMessageRpcClient bridge-stall cache invalidation", () => {

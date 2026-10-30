@@ -22,7 +22,10 @@ import {
 } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { sleep as delay } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString as stringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString as stringValue,
+  readNonBlankString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import {
   convertMarkdownTables,
@@ -153,7 +156,7 @@ function normalizeResolvedMessageGuid(value: unknown): string | null {
 }
 
 function canResolveLatestSentMessageGuidFromChatDb(dbPath?: string): boolean {
-  const normalizedDbPath = dbPath?.trim();
+  const normalizedDbPath = readNonBlankString(dbPath);
   if (!normalizedDbPath) {
     return false;
   }
@@ -171,7 +174,7 @@ async function resolveFallbackSentMessageGuid(params: {
   text: string;
   sentAfterMs?: number;
 }): Promise<string | null> {
-  const dbPath = params.dbPath?.trim();
+  const dbPath = readNonBlankString(params.dbPath);
   if (!dbPath || !canResolveLatestSentMessageGuidFromChatDb(dbPath)) {
     return null;
   }
@@ -263,8 +266,9 @@ export async function sendMessageIMessage(
       cfg,
       accountId: opts.accountId,
     });
-  const cliPath = opts.cliPath?.trim() || account.config.cliPath?.trim() || "imsg";
-  const dbPath = opts.dbPath?.trim() || account.config.dbPath?.trim();
+  const cliPath =
+    readNonBlankString(opts.cliPath) ?? readNonBlankString(account.config.cliPath) ?? "imsg";
+  const dbPath = readNonBlankString(opts.dbPath) ?? readNonBlankString(account.config.dbPath);
   const remoteHost = await resolveIMessageRemoteHost({
     cliPath,
     remoteHost: account.config.remoteHost,
@@ -413,7 +417,7 @@ export async function sendMessageIMessage(
     if (!guid) {
       const rowId = resolvedId?.trim();
       if (rowId && isNumericMessageRowId(rowId)) {
-        const lookupPath = chatDbLookupPath?.trim();
+        const lookupPath = readNonBlankString(chatDbLookupPath);
         if (lookupPath) {
           guid = normalizeResolvedMessageGuid(
             await withIMessageReceiptGuidReader(lookupPath, (read) =>

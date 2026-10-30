@@ -10,7 +10,9 @@ import { resolveIMessageChatDbLookupPath } from "../cli-path.js";
 import { getCachedIMessageRemoteHost, resolveIMessageRemoteHost } from "../remote-host.js";
 
 const execFileAsync = promisify(execFile);
-const cliPathModuleUrl = new URL("../cli-path.ts", import.meta.url).href;
+// The child probe imports the SDK-free home helper: a bare `node` process
+// cannot resolve the plugin-SDK subpaths that the rest of cli-path.ts imports.
+const cliPathModuleUrl = new URL("../user-path.ts", import.meta.url).href;
 const remoteHost = (cliPath: string) => resolveIMessageRemoteHost({ cliPath });
 const sshWrapper = (host: string) => `#!/bin/sh\nexec ssh ${host} imsg "$@"\n`;
 async function runUserPathProbe(cliPath: string, cwd: string) {
@@ -52,6 +54,17 @@ describe("detectRemoteHostFromCliPath", () => {
     vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: home });
     await wrapper(sshWrapper("user@example.test"), path.join(home, ".openclaw"));
     await expect(remoteHost("~/.openclaw/imsg-remote")).resolves.toBe("user@example.test");
+  });
+
+  it("discovers the host from the literal wrapper, not its trimmed spelling", async () => {
+    // Staging and execution must agree on one host: a trailing-space wrapper is a
+    // different file that may target a different Messages Mac.
+    const dir = tempDir();
+    const literal = await wrapper(sshWrapper("bot@mac-b"), dir, "imsg-remote ");
+    const trimmed = await wrapper(sshWrapper("bot@mac-a"), dir, "imsg-remote");
+
+    await expect(remoteHost(literal)).resolves.toBe("bot@mac-b");
+    await expect(remoteHost(trimmed)).resolves.toBe("bot@mac-a");
   });
 
   it("never selects a working-directory tilde shadow when HOME is blank", async () => {

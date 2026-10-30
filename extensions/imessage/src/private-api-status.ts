@@ -1,3 +1,5 @@
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 export type IMessagePrivateApiStatus = {
   available: boolean;
   v2Ready: boolean;
@@ -37,7 +39,7 @@ const FOUNDATIONAL_RPC_METHODS = new Set<string>([
 const bridgeStatusCache = new Map<string, PrivateApiCacheEntry>();
 
 function normalizeCliPath(cliPath?: string | null): string {
-  return cliPath?.trim() || "imsg";
+  return readNonBlankString(cliPath) ?? "imsg";
 }
 
 export function imessageRpcSupportsMethod(
