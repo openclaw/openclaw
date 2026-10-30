@@ -290,6 +290,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/agent-command.cancellation.test.ts",
   "src/agents/agent-command.compaction-rotation.test.ts",
   "src/agents/agent-command.compaction-custody.test.ts",
+  "src/agents/agent-command.private-completion-obligation.test.ts",
   "src/agents/agent-command.ingress-diagnostics.test.ts",
   "src/agents/agent-command.live-model-switch.test.ts",
   "src/agents/agent-command.embedded-maintenance.test.ts",
