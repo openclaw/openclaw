@@ -173,6 +173,11 @@ function hasAmbiguousRequestTier(usage: NormalizedUsage, cost: ModelCostConfig):
   return promptTokens > context.promptTokens && promptTokens >= secondTier.range[0];
 }
 
+/** Whether the catalog price can change this entry's estimate; read before applying it. */
+export function usageCostEstimateUsesPricing(entry: UsageCostEstimateEntry): boolean {
+  return entry.costTotal === undefined || computeUsageTokenTotals(entry.usage).totalTokens > 0;
+}
+
 export function applyUsageCostEstimate(
   entry: UsageCostEstimateEntry,
   resolveCost: UsageCostResolver,
