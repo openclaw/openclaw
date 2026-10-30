@@ -482,3 +482,24 @@ describe("completed-turn rollup", () => {
     ).toEqual(groups);
   });
 });
+
+it.each(["error", "aborted"])(
+  "keeps a terminal %s after the answer outside completed work",
+  (stopReason) => {
+    expectHistory(
+      [
+        message("user", "Check the files", 1),
+        tool("read-first", 2),
+        message("assistant", "The first file is correct.", 3),
+        message(
+          "assistant",
+          [{ type: "toolCall", id: "read-last", name: "read", arguments: {} }],
+          4,
+          { stopReason },
+        ),
+      ],
+      [0, 2, 3],
+      [1],
+    );
+  },
+);

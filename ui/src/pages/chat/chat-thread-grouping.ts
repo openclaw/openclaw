@@ -15,7 +15,11 @@ import {
   type SenderIdentity,
 } from "../../lib/chat/sender-label.ts";
 import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
-import { assistantMessageIsInterrupted, assistantMessageKind } from "./chat-assistant-reply.ts";
+import {
+  assistantMessageCanOwnTurnActions,
+  assistantMessageIsInterrupted,
+  assistantMessageKind,
+} from "./chat-assistant-reply.ts";
 import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
@@ -327,10 +331,10 @@ function groupChatItemSegment(
       Boolean(extractThinkingCached(item.message));
     const hasAssistantText =
       record?.role === "assistant" &&
-      record.stopReason === "toolUse" &&
+      (record.stopReason === "toolUse" || assistantMessageCanOwnTurnActions(item.message)) &&
       Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim());
     // Saved reasoning stays visible until its live owner retires the receipts.
-    // Legacy mixed rows retain their tool grouping and file-link attribution.
+    // An answer retains assistant ownership even when its envelope also contains tools.
     // Classify after content projection; prepared outcomes may outlive their blocks.
     const visibleContent = resolveMessageVisibleContent(item.message, normalized);
     const normalizedRole = normalizeRoleForGrouping(normalized.role);
