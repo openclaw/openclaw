@@ -1,3 +1,4 @@
+import { encodeSystemOneQuestions } from "openclaw/plugin-sdk/decisions";
 import type { DecisionProviderV2, DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
@@ -5,11 +6,7 @@ import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-hea
 import { resolveSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 import { hasCredentials, providerBaseUrl, type RuntimeConfig } from "./config.js";
-import {
-  decodeTypeSafeDecisionResult,
-  encodeTypeSafeDecisionQuestions,
-  translateTypeSafeDecisionBatch,
-} from "./decision-codec.js";
+import { decodeTypeSafeDecisionResult, translateTypeSafeDecisionBatch } from "./decision-codec.js";
 import { decisionFailure } from "./errors.js";
 import type { Evaluation } from "./schema.js";
 
@@ -180,7 +177,7 @@ export function createPreparedDecisionProvider(getConfig: () => RuntimeConfig): 
       if (!request || (context.reasoning !== undefined && context.reasoning !== "auto")) {
         return { status: "unavailable", reason: "unsupported-input" };
       }
-      const v1 = request.batch;
+      const nativeBatch = request.batch;
       if (
         request.assets &&
         !models.some(
@@ -234,11 +231,16 @@ export function createPreparedDecisionProvider(getConfig: () => RuntimeConfig): 
       if (remaining <= 0) {
         return { status: "unavailable", reason: "transport" };
       }
-      const questions = encodeTypeSafeDecisionQuestions(v1);
+      const questions = encodeSystemOneQuestions(nativeBatch);
       let evaluation: Evaluation;
       try {
         const response = await evaluateTypeSafe(
-          { state: v1.state, questions, model },
+          {
+            state:
+              nativeBatch.state.type === "text" ? nativeBatch.state.text : nativeBatch.state.value,
+            questions,
+            model,
+          },
           { ...config, timeoutMs: Math.min(config.timeoutMs, remaining) },
           signal,
           deadlineMonotonicMs,
@@ -263,7 +265,7 @@ export function createPreparedDecisionProvider(getConfig: () => RuntimeConfig): 
         signal.throwIfAborted();
         return decisionFailure(error);
       }
-      const result = decodeTypeSafeDecisionResult(v1, evaluation);
+      const result = decodeTypeSafeDecisionResult(nativeBatch, evaluation);
       return result
         ? { status: "ok", result }
         : { status: "unavailable", reason: "invalid-response" };

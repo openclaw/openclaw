@@ -1,37 +1,32 @@
 import { randomUUID } from "node:crypto";
 import {
-  decisionBatchV1ToV2,
-  decisionBatchV2ToV1,
   decodeSystemOneResponse,
+  isDecisionBatchV1Representable,
   validateDecisionResultV2,
   validateDecisionBatchV2,
-  type DecisionBatch,
   type DecisionBatchResultV2,
+  type DecisionEntry,
+  type DecisionQuestionV2,
   type DecisionBatchV2,
 } from "openclaw/plugin-sdk/decisions";
 import type { Evaluation, EvaluationInput } from "./schema-definition.js";
 import type { ImageAssets } from "./schema.js";
 
-export function encodeTypeSafeDecisionQuestions(batch: DecisionBatch) {
-  return Object.fromEntries(
-    Object.entries(batch.questions).map(([id, q]) => [
-      id,
-      q.type === "boolean" ? { ...q, type: "noul" } : q,
-    ]),
-  );
-}
+type TypeSafeDecisionBatch = DecisionBatchV2 & {
+  readonly state:
+    | { readonly type: "text"; readonly text: string }
+    | { readonly type: "json"; readonly value: Exclude<DecisionEntry, string> };
+  readonly questions: Readonly<
+    Record<string, Extract<DecisionQuestionV2, { type: "boolean" | "choice" | "score" }>>
+  >;
+};
 
 export function decodeTypeSafeDecisionResult(
-  batch: DecisionBatch,
+  batch: TypeSafeDecisionBatch,
   evaluation: Evaluation,
 ): DecisionBatchResultV2 | undefined {
-  // Validate the bounded text/UUID batch, not separately admitted image bytes.
-  const offered = decisionBatchV1ToV2(batch);
-  if (!offered) {
-    return undefined;
-  }
   // Native metadata is not part of the decision accounting contract.
-  const result = decodeSystemOneResponse(offered, {
+  const result = decodeSystemOneResponse(batch, {
     model: evaluation.model,
     answers: evaluation.answers,
     usage: {
@@ -39,20 +34,19 @@ export function decodeTypeSafeDecisionResult(
       output_tokens: evaluation.usage.output_tokens,
     },
   });
-  return validateDecisionResultV2(offered, result) ? result : undefined;
+  return validateDecisionResultV2(batch, result) ? result : undefined;
 }
 
-/** Preserve the existing question/result translation; only tagged image state adds assets. */
+/** Preserve the admitted native subset; tagged image state adds referenced assets. */
 export function translateTypeSafeDecisionBatch(
   batch: DecisionBatchV2,
-): { batch: DecisionBatch; assets?: ImageAssets } | undefined {
-  // Admit the full envelope before removing image bytes for the existing text translation.
+): { batch: TypeSafeDecisionBatch; assets?: ImageAssets } | undefined {
+  // Admit the full envelope before replacing image bytes with references.
   if (!validateDecisionBatchV2(batch)) {
     return undefined;
   }
   if (batch.state.type !== "image") {
-    const text = decisionBatchV2ToV1(batch);
-    return text ? { batch: text } : undefined;
+    return isDecisionBatchV1Representable(batch) ? { batch } : undefined;
   }
   const match = /^data:image\/(png|jpeg);base64,/.exec(batch.state.dataUri);
   if (
@@ -70,14 +64,14 @@ export function translateTypeSafeDecisionBatch(
   while (callerText.includes(ref)) {
     ref = randomUUID();
   }
-  const translated = decisionBatchV2ToV1({
+  const translated: DecisionBatchV2 = {
     state:
       batch.state.text === undefined
         ? { type: "text", text: ref }
         : { type: "json", value: [batch.state.text, ref] },
     questions: batch.questions,
-  });
-  if (!translated) {
+  };
+  if (!isDecisionBatchV1Representable(translated)) {
     return undefined;
   }
   return {
