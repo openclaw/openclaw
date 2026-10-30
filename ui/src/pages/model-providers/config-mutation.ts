@@ -4,6 +4,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { reviewAutomationModelChange } from "../../lib/cron/model-impact.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
@@ -13,7 +14,12 @@ import {
   modelSettingPatch,
   withModelSettingPrimary,
 } from "../../lib/model-setting.ts";
-import type { DefaultModelSelection, DefaultsDraft, ModelBehaviorConfig } from "./data.ts";
+import {
+  readModelProviderConfig,
+  type DefaultModelSelection,
+  type DefaultsDraft,
+  type ModelBehaviorConfig,
+} from "./data.ts";
 
 export type ModelDefaultsSaveField = "thinking" | "fastMode" | "defaults";
 
@@ -145,6 +151,7 @@ type ModelProviderConfigMutation = {
   raw: Record<string, unknown>;
   note: string;
   replacePaths?: string[];
+  beforePatch?: () => Promise<boolean>;
 };
 
 type ModelProviderConfigMutationOwner = {
@@ -153,6 +160,7 @@ type ModelProviderConfigMutationOwner = {
   isCurrentAgent: () => boolean;
   setBusy: (busy: boolean) => void;
   setMessage: (message: ModelProviderRowMessage | null) => void;
+  onDispatch?: () => void;
 };
 
 export function runModelProviderDefaultsMutation(
@@ -160,6 +168,8 @@ export function runModelProviderDefaultsMutation(
   gateway: Pick<GatewayPageBinding, "capture" | "isCurrent">,
   owner: Omit<ModelProviderConfigMutationOwner, "runtimeConfig" | "isCurrentClient"> & {
     defaults: DefaultsDraft;
+    retired?: Promise<void>;
+    onModelChangeCanceled?: (current: DefaultModelSelection) => void;
     busy: boolean;
   },
 ): Promise<boolean | null> {
@@ -174,13 +184,20 @@ export function runModelProviderDefaultsMutation(
     return Promise.resolve(null);
   }
   const params = owner.defaults;
+  const runtimeConfig = context.runtimeConfig;
+  const isCurrent = () =>
+    gateway.isCurrent(scope) &&
+    owner.isCurrentAgent() &&
+    context.runtimeConfig === runtimeConfig &&
+    !modelProviderConfigMutationBlockedReason(context);
   return runModelProviderConfigMutation(
     {
-      runtimeConfig: context.runtimeConfig,
-      isCurrentClient: () => gateway.isCurrent(scope),
+      runtimeConfig,
+      isCurrentClient: isCurrent,
       isCurrentAgent: owner.isCurrentAgent,
       setBusy: owner.setBusy,
       setMessage: owner.setMessage,
+      onDispatch: owner.onDispatch,
     },
     {
       raw: {
@@ -202,6 +219,25 @@ export function runModelProviderDefaultsMutation(
               params.fastModeOverridden && params.fastMode !== undefined ? params.fastMode : null,
           },
         },
+      },
+      beforePatch: async () => {
+        const current = readModelProviderConfig(currentConfigObject(runtimeConfig.state)).defaults;
+        if (!params.primary || params.primary === current.primary) {
+          return true;
+        }
+        const accepted = await reviewAutomationModelChange(
+          scope.client,
+          { model: params.primary },
+          {
+            isCurrent,
+            retired: owner.retired,
+            onNotice: (text) => owner.setMessage({ kind: "warning", text }),
+          },
+        );
+        if (!accepted && isCurrent()) {
+          owner.onModelChangeCanceled?.(current);
+        }
+        return accepted;
       },
       note: t("modelProviders.notes.defaultModel"),
       replacePaths: DEFAULT_MODELS_REPLACE_PATHS,
@@ -270,6 +306,13 @@ export async function runModelProviderConfigMutation(
     if (!owner.isCurrentClient()) {
       return null;
     }
+    if (params.beforePatch && !(await params.beforePatch())) {
+      return null;
+    }
+    if (!owner.isCurrentClient()) {
+      return null;
+    }
+    owner.onDispatch?.();
     const patched = await runtimeConfig.patch({
       raw: params.raw,
       note: params.note,

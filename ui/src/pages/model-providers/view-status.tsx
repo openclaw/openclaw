@@ -137,7 +137,11 @@ export function renderMutationMessage(message: ModelProviderRowMessage | undefin
   }
   return (
     <>
-      <div class={["callout", message.kind]} role={message.kind === "error" ? "alert" : "status"}>
+      <div
+        class={["callout", message.kind]}
+        role={message.kind === "error" ? "alert" : "status"}
+        style={{ "white-space": "pre-line" }}
+      >
         {message.text}
       </div>
       {message.warning ? (

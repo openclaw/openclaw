@@ -1,0 +1,2 @@
+1306
+# Exact net regression coverage for model selection/account compatibility, private-session visibility, CLI/tool transport, and UI cancel/config-only acceptance.

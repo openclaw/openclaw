@@ -66,6 +66,8 @@ To pause a saved watcher without deleting its record, update job:{enabled:false}
 
 SCOPE: ${scopeDescription}: an empty list or failed list/get/update/remove (including not-found) does not establish global absence, even for IDs from your history. Never recreate or replace a known automation for update/remove/reconciliation based on these results; report the visibility limit and ${adminRecovery}. New requested automations may still be created.
 
+MODEL CHANGE: Before changing an agent/global default, use model_impact with model (null clears primary) and optional agentId (omit for global). Read-only: shows effective model sources, blockers and recovery for visible jobs, not execution proof. It never edits jobs/accounts/policy or replays expired work. Preserve intentional pins and require separate authorization for repairs.
+
 ADD: job requires name+schedule+payload.
 ${watcherSetup}
 

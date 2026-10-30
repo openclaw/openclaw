@@ -460,6 +460,7 @@ describe("models.authLogin ownership", () => {
     let saved = modelConfig;
     hooks.writeConfig.mockImplementationOnce(async (mutator, _refs, beforeCommit, options) => {
       const next = await mutator(structuredClone(modelConfig), {
+        configPath: "/synthetic/openclaw.json",
         runtimeConfig: modelConfig,
         restoreSourceEntry: (_from, _to, entry) => entry,
       });

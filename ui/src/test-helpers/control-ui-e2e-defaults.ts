@@ -29,6 +29,7 @@ export const defaultControlUiFeatureMethods = [
   "config.patch",
   "config.schema",
   "config.set",
+  "cron.modelImpact",
   "device.scopes.requestUpgrade",
   "device.scopes.waitUpgrade",
   "session.members.add",
@@ -108,6 +109,7 @@ export function createControlUiDefaultResponses(scenario: {
   const now = new Date();
   const date = now.toISOString().slice(0, 10);
   return {
+    "cron.modelImpact": { model: null, jobs: [], issues: [] },
     "approval.history": { items: [] } satisfies ApprovalHistoryResult,
     "exec.approval.grants.list": { grants: [] } satisfies ExecApprovalGrantsListResult,
     "openclaw.chat.history": { turns: [] } satisfies SystemAgentChatHistoryResult,

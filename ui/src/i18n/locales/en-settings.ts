@@ -1031,6 +1031,34 @@ const enSettings = {
     },
   },
   modelProviders: {
+    automationModelImpact: {
+      title: "Review automation impact",
+      proposed: "Proposed model: {model}",
+      checking: "Checking automation impact…",
+      canceled: "Model change canceled. Nothing was saved; your existing drafts are kept.",
+      status: {
+        blocked: "Compatibility blocker",
+        unknown: "Compatibility unknown",
+        "no-known-blocker": "No known blocker (not a live test)",
+        "not-applicable": "Not model-driven",
+      },
+      inherited: "the inherited model",
+      warning:
+        "Some enabled automations have compatibility blockers or unverified selections. Review their details before changing the model.",
+      enabled: "Enabled automations assessed: {count}",
+      changed: "Effective model changes: {count}",
+      unchanged: "Selection unchanged",
+      disabled:
+        "Disabled automations excluded from this warning: {count}. Disabled or expired work is not replayed.",
+      transition: "{before} → {after}",
+      unresolved: "unresolved model",
+      recovery:
+        "Explicit model overrides stay unchanged. No accounts, permissions, schedules, or past runs are changed. Ask the automation owner to review a blocker, or keep the current model. This preview does not verify credentials or a live run.",
+      confirm: "Change model anyway",
+      cancel: "Keep current model",
+      failed:
+        "The model was not changed because automation impact could not be checked: {error}. Try selecting the model again when connected.",
+    },
     title: "Configured providers",
     configureModels: "Model setup",
     actionNamed: "{action}: {name}",

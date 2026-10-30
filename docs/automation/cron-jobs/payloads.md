@@ -227,6 +227,32 @@ disabling or narrowing the job itself stops later requests and retries in the
 current invocation. A confirmed write still returns its result if authority ends
 while the response is pending.
 
+### Before changing a default model
+
+1. Preview the proposed primary with `openclaw automations model-impact --model <provider/model>`
+   (add `--agent <id>` for an agent-specific primary), or ask the agent to use
+   `automations` with `action: "model_impact"`, `model`, and optional `agentId`.
+2. Check which jobs inherit the change and which keep a job, session, subagent,
+   or agent-specific selection. Existing intentional selections are not rewritten.
+3. Resolve reported policy and inference-account/runtime blockers through their
+   existing authorized operations. Per-agent model policy overrides global policy;
+   adding a model globally does not widen an agent's explicit allow-list.
+4. Treat missing observations as unknown. Preview does not contact the model,
+   refresh credentials, or verify tools and delivery. If appropriate, separately
+   authorize a representative run after changing the model; do not replay expired
+   work merely to test compatibility.
+
+The Web UI uses the same preview before changing primary models in Models and
+Agents settings. It shows the impact and asks for confirmation when enabled
+automations have blockers or unknown compatibility. The confirmation changes
+only the model selection, not automation accounts, permissions, or overrides.
+
+The preview is read-only and does not repair the reported problems. Keep
+default inheritance after account adoption rather than permanently pinning every
+job to the new model. See [inference account continuity](#inference-account-continuity)
+and [automation troubleshooting](/automation/cron-jobs/troubleshooting) for recovery
+limitations.
+
 ### Inference account continuity
 
 New isolated agent-turn jobs privately retain their selected stored inference account

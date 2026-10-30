@@ -317,6 +317,15 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
         };
         return await withGatewayToolCallerIdentity(callerIdentity, async () => {
           switch (action) {
+            case "model_impact":
+              return jsonResult(
+                await callGateway("cron.modelImpact", gatewayOpts, {
+                  model:
+                    readToolStringParam(params, "model", { required: params.model !== null }) ??
+                    null,
+                  agentId: readToolStringParam(params, "agentId"),
+                }),
+              );
             case "status": {
               const result = await callGateway("cron.status", gatewayOpts, {});
               return jsonResult(

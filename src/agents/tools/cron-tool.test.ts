@@ -27,6 +27,35 @@ import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 type Options = Parameters<typeof createCronTool>[0];
 const ok = { ok: true };
+
+it("previews a proposed default model without editing or running automations", async () => {
+  const preview = { model: "fixture/next", agentId: "main", jobs: [], issues: [] };
+  callGatewayMock.mockResolvedValueOnce(preview);
+  const result = await executeCron({
+    action: "model_impact",
+    model: "fixture/next",
+    agentId: "main",
+  });
+  expect(result.details).toEqual(preview);
+  expect(readGatewayCall(0)).toEqual({
+    method: "cron.modelImpact",
+    params: { model: "fixture/next", agentId: "main" },
+  });
+  expect(callGatewayMock).toHaveBeenCalledTimes(1);
+  await executeCron({ action: "model_impact", model: null, agentId: "main" });
+  expect(readGatewayCall(1)).toEqual({
+    method: "cron.modelImpact",
+    params: { model: null, agentId: "main" },
+  });
+  callGatewayMock.mockClear();
+  await expect(
+    executeCron(
+      { action: "model_impact", model: "fixture/next" },
+      { selfRemoveOnlyJobId: "current" },
+    ),
+  ).rejects.toThrow("restricted to the current automation");
+  expect(callGatewayMock).not.toHaveBeenCalled();
+});
 const mainCaller = { agentSessionKey: "agent:main:main" };
 const scopedCaller = { agentSessionKey: "main", selfRemoveOnlyJobId: "job-current" };
 const channelCaller = { agentSessionKey: "agent:agent-123:telegram:direct:channing" };

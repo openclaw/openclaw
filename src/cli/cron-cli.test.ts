@@ -87,6 +87,24 @@ async function runCronCommand(args: string[]): Promise<void> {
 
 const parse = (args: string[]) => buildProgram().parseAsync(args, { from: "user" });
 
+it("previews global or agent model changes through the shared read-only RPC", async () => {
+  await runCronCommand([
+    "automations",
+    "model-impact",
+    "--model",
+    "fixture/next",
+    "--agent",
+    "main",
+    "--json",
+  ]);
+  expect(rpcParams("cron.modelImpact")).toEqual({ model: "fixture/next", agentId: "main" });
+  expect(callGatewayFromCli.mock.calls.map(([method]) => method)).toEqual(["cron.modelImpact"]);
+  await runCronCommand(["automations", "model-impact", "--clear-model", "--agent", "main"]);
+  expect(rpcParams("cron.modelImpact")).toEqual({ model: null, agentId: "main" });
+  await runCronCommand(["automations", "model-impact", "--model", "fixture/next"]);
+  expect(rpcParams("cron.modelImpact")).toEqual({ model: "fixture/next" });
+});
+
 const CREATE = ["cron", "add", "--name", "job"];
 const ADD = [...CREATE, "--cron", "* * * * *"];
 const EDIT = ["cron", "edit", "job-1"];

@@ -77,6 +77,7 @@ export {
   isWizardStatusParams,
   isTtsSpeakParams,
   isHooksStatusParams,
+  isCronModelImpactParams,
   isCronListParams,
   isCronStatusParams,
   isCronGetParams,

@@ -70,6 +70,7 @@ import {
   scopedCronJobHandler,
 } from "./cron-job-access.js";
 import { cronListHandler } from "./cron-list.js";
+import { cronModelImpactHandler } from "./cron-model-impact.js";
 import { respondCronJobConfigRevisionConflict } from "./cron-revision-error.js";
 import { cronRunsHandler } from "./cron-runs.js";
 import { cronScratchHandlers } from "./cron-scratch.js";
@@ -82,6 +83,7 @@ import { assertValidParams } from "./validation.js";
 export const cronHandlers: GatewayRequestHandlers = {
   wake: cronWakeHandler,
   "cron.list": cronListHandler,
+  "cron.modelImpact": cronModelImpactHandler,
   "cron.status": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateCronStatusParams, "cron.status", respond)) {
       return;
@@ -637,6 +639,7 @@ for (const [method, handler] of Object.entries(cronHandlers)) {
           // acknowledgement must not turn a committed effect into a retryable denial.
           if (
             method === "cron.list" ||
+            method === "cron.modelImpact" ||
             method === "cron.get" ||
             method === "cron.runs" ||
             method === "cron.history"

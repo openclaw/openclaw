@@ -1,5 +1,6 @@
 import { Type, type TProperties } from "typebox";
 import { AutomationResultSchema } from "../../../packages/gateway-protocol/src/schema/cron-automation-result.js";
+import { CronModelImpactResultSchema } from "../../../packages/gateway-protocol/src/schema/cron-model-impact.js";
 import {
   CronAddJobResultSchema,
   CronAddResultSchema,
@@ -192,6 +193,7 @@ export const CronToolOutputSchema = defineToolOutputSchema({
   inputProperty: "action",
   variants: {
     status: CronStatusOutputSchema,
+    model_impact: CronModelImpactResultSchema,
     list: CronListOutputSchema,
     get: CronJobSchema,
     // Add can return a direct job or the declarative convergence envelope.

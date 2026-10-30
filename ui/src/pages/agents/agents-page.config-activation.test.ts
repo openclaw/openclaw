@@ -23,6 +23,9 @@ it("activates editing from a display-only snapshot before Agents skill and model
     if (method === "config.get" || method === "config.set") {
       return config;
     }
+    if (method === "cron.modelImpact") {
+      return { model: "fixture/selected", jobs: [], issues: [] };
+    }
     if (method === "skills.status") {
       return {
         workspaceDir: "/synthetic/workspace",
@@ -56,7 +59,7 @@ it("activates editing from a display-only snapshot before Agents skill and model
     await waitForFast(() => expect(runtimeConfig.state.configLoading).toBe(false));
 
     page.read().agentSkills.onToggle("main", "weather", false);
-    page.read().overview.onModelChange("main", "fixture/selected");
+    await page.read().overview.onModelChange("main", "fixture/selected");
 
     expect(runtimeConfig.state.configForm).toEqual({
       agents: { entries: { main: { model: "fixture/selected", skills: [] } } },

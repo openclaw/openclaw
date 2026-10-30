@@ -20,6 +20,7 @@ const independentReads = [
   "sessions.list",
   "sessions.catalog.list",
   "cron.list",
+  "cron.modelImpact",
   "push.web.vapidPublicKey",
   "sessions.github.options",
   "workboard.cards.list",

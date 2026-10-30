@@ -603,7 +603,7 @@ describe("ModelProvidersPage agent scope", () => {
     });
   });
 
-  it("keeps a newer global-model draft after an agent switch and earlier save", async () => {
+  it("keeps the newer draft and retires an unassessed model change after an agent switch", async () => {
     const { settingsAgentSelection, context, notifySelection, runtimeConfig } =
       createHarness("main");
     const gate = deferred();
@@ -621,7 +621,8 @@ describe("ModelProvidersPage agent scope", () => {
     runtimeConfig.ensureLoaded.mockImplementationOnce(() => replacementGate.promise);
     page.view.props.onUtilityChange("openai/gpt-4.1-mini");
     gate.resolve();
-    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    await drainPageUpdates(page);
+    expect(runtimeConfig.patch).not.toHaveBeenCalled();
     await drainPageUpdates(page);
 
     expect(page.view.props.defaultModels).toMatchObject({
@@ -630,7 +631,7 @@ describe("ModelProvidersPage agent scope", () => {
     });
     expect(page.view.props.messages.defaults).toBeUndefined();
     replacementGate.resolve();
-    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledTimes(2));
+    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
   });
 
   it("cancels a queued key save when the selected agent changes", async () => {

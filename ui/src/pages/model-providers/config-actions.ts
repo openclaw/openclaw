@@ -141,11 +141,23 @@ export function createModelProviderConfigActions(deps: {
     const capturedAgentEpoch = getAgentEpoch();
     const settled = await mutations.run(
       field,
-      (onAdmitted) =>
+      (onAdmitted, onDispatch) =>
         runModelProviderDefaultsMutation(context, gateway, {
           defaults,
+          retired: mutations.retired(),
+          onModelChangeCanceled: (current) => {
+            if (state.defaultsDraft === defaults) {
+              // Keep other draft fields, but never replay a canceled model with a later save.
+              state.defaultsDraft = {
+                ...defaults,
+                primary: current.primary,
+                fallbacks: current.fallbacks,
+              };
+            }
+          },
           busy: Boolean(state.busy.defaults),
           isCurrentAgent: () => getAgentEpoch() === capturedAgentEpoch,
+          onDispatch,
           setBusy: (busy) => {
             if (busy) {
               onAdmitted();

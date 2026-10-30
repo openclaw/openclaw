@@ -28,6 +28,7 @@ export const CRON_TOOL_LIST_MAX_LIMIT = 200;
 
 const CRON_ACTIONS = [
   "status",
+  "model_impact",
   "list",
   "get",
   "add",
@@ -487,6 +488,13 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
           : actions,
       ),
       ...gatewayCallOptionSchemaProperties(),
+      ...(!managementOnly
+        ? {
+            model: nullableStringSchema(
+              "model_impact: proposed default model; null clears the primary without changing fallbacks",
+            ),
+          }
+        : {}),
       includeDisabled: Type.Optional(
         Type.Boolean({ description: "List: false by default; true includes disabled saved jobs." }),
       ),
@@ -533,7 +541,7 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
         Type.String({
           description: managementOnly
             ? 'Agent filter for action="list".'
-            : 'List filter for `action: "list"`; wake target override for `action: "wake"` (defaults to the calling agent when omitted on wake)',
+            : 'model_impact: target agent (omit for global default); list filter for `action: "list"`; wake target override for `action: "wake"` (defaults to the calling agent when omitted on wake)',
         }),
       ),
       sessionKey: Type.Optional(

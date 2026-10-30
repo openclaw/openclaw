@@ -338,7 +338,7 @@ export function registerModelsCli(program: Command) {
     });
 
   for (const [name, description, field] of [
-    ["set", "Set the default model", "model"],
+    ["set", "Set the default model with an advisory automation impact preview", "model"],
     ["set-image", "Set the image model", "imageModel"],
   ] as const) {
     models

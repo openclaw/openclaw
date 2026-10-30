@@ -23,6 +23,7 @@ const CRON_SCRATCH_JSON_OPTION_DESCRIPTION =
 
 const CRON_OUTPUT_COMMANDS = {
   status: [],
+  "model-impact": [],
   add: ["create"],
   rm: ["remove", "delete"],
   enable: [],

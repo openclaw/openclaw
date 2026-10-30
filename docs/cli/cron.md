@@ -33,6 +33,32 @@ result or failure document. The CLI exits with status 130 or 143, respectively.
 An `add` or `edit` mutation already sent to the Gateway still waits for its
 receipt during cleanup and reports any failure; interrupting does not undo it.
 
+## Preview a default-model change
+
+Inspect automation compatibility without changing config or running jobs:
+
+```bash
+openclaw automations model-impact --model anthropic/claude-sonnet-4-6
+openclaw automations model-impact --model anthropic/claude-sonnet-4-6 --agent ops
+openclaw automations model-impact --clear-model --agent ops
+```
+
+Omit `--agent` to preview the global primary; supply it to preview that agent's
+primary. `--clear-model` previews removing the primary while preserving its
+configured fallbacks. It cannot be combined with `--model`. Output is JSON
+(`--json` is also accepted) and contains only jobs visible to the caller.
+
+Each job reports its before/after effective model and selection source, whether
+the model would change, and compatibility findings with recovery guidance.
+`no-known-blocker` is a metadata assessment, not a successful inference test.
+`unknown` means required facts or an execution path could not be assessed;
+inspect its reason rather than assuming the job will run.
+
+This is a preview of the primary-model change only. It never edits automation
+overrides, adopts accounts, changes model policy or runtime settings, enables
+jobs, or replays expired one-shots. A successful interactive chat does not prove
+automation compatibility. See the [model-change checklist](/automation/cron-jobs/payloads#before-changing-a-default-model).
+
 ## Create jobs quickly
 
 `openclaw automations create` is an alias for `openclaw automations add`. For new jobs, put the schedule first and the prompt second:

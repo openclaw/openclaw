@@ -310,6 +310,10 @@ export const validateHooksStatusParams = createProtocolValidator(
   S.HooksStatusParamsSchema,
   Checks.isHooksStatusParams,
 );
+export const validateCronModelImpactParams = createProtocolValidator(
+  S.CronModelImpactParamsSchema,
+  Checks.isCronModelImpactParams,
+);
 export const validateCronListParams = createProtocolValidator(
   S.CronListParamsSchema,
   Checks.isCronListParams,

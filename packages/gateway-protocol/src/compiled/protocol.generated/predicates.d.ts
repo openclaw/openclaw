@@ -1487,6 +1487,11 @@ export function isHooksStatusParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").HooksStatusParamsSchema
 >;
+export function isCronModelImpactParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").CronModelImpactParamsSchema
+>;
 export function isCronListParams(
   value: unknown,
 ): value is import("typebox").Static<typeof import("../../schema-modules.js").CronListParamsSchema>;
