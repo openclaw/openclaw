@@ -1,13 +1,5 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
-import {
-  decodeSystemOneResponse,
-  encodeSystemOneQuestions,
-  validateDecisionBatchV2,
-  validateDecisionResultV2,
-  type DecisionBatchV2,
-  type DecisionProviderV2,
-  type DecisionProviderContextV2,
-} from "openclaw/plugin-sdk/decisions";
+import type { DecisionProviderV2, DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
 import {
   fetchWithProviderHttpGuard,
   readProviderJsonResponse,
@@ -15,10 +7,14 @@ import {
   resolveProviderTransportSsrFPolicy,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
+import {
+  decodeLiquidDecisionResult,
+  encodeLiquidDecisionRequest,
+  supportsLiquidDecisionBatch,
+  supportsLiquidImageDimensions,
+} from "./decision-codec.js";
 
 const BASE_URL = "https://api.liquid.ai/decisions/v1";
-// Liquid's documented complete JSON-body limit includes base64, state and questions.
-const MAX_REQUEST_BYTES = 4_500_000;
 
 function hasUnsupportedParams(context: DecisionProviderContextV2): boolean {
   const { config, agentId, model } = context;
@@ -36,28 +32,6 @@ function hasUnsupportedParams(context: DecisionProviderContextV2): boolean {
   ].some((params) => Object.values(params ?? {}).some((value) => value !== undefined));
 }
 
-function supportsBatch(batch: DecisionBatchV2): boolean {
-  if (!validateDecisionBatchV2(batch) || batch.state.type === "list") {
-    return false;
-  }
-  if (
-    batch.state.type === "json" &&
-    (batch.state.value === null ||
-      (typeof batch.state.value !== "string" && typeof batch.state.value !== "object"))
-  ) {
-    return false;
-  }
-  return Object.values(batch.questions).every((question) => {
-    if (question.type === "boolean") {
-      return (
-        question.instructions != null ||
-        Object.values(question.criteria ?? {}).some((value) => value != null)
-      );
-    }
-    return question.type === "choice" || question.type === "score";
-  });
-}
-
 export function buildLiquidDecisionProvider(deps: {
   getImageMetadata: (buffer: Buffer) => Promise<{ width: number; height: number } | null>;
 }): DecisionProviderV2 {
@@ -70,27 +44,15 @@ export function buildLiquidDecisionProvider(deps: {
         !["d1", "d1-ultra"].includes(context.model.id) ||
         (context.reasoning !== undefined && context.reasoning !== "auto") ||
         hasUnsupportedParams(context) ||
-        !supportsBatch(batch)
+        !supportsLiquidDecisionBatch(batch)
       ) {
         return { status: "unavailable", reason: "unsupported-input" };
       }
       if (!context.auth.apiKey && !context.model.headers) {
         return { status: "unavailable", reason: "credentials-unavailable" };
       }
-      const body = JSON.stringify({
-        model: context.model.id,
-        state:
-          batch.state.type === "text"
-            ? batch.state.text
-            : batch.state.type === "json"
-              ? batch.state.value
-              : batch.state.type === "image"
-                ? (batch.state.text ?? "")
-                : undefined,
-        ...(batch.state.type === "image" ? { images: [batch.state.dataUri] } : {}),
-        questions: encodeSystemOneQuestions(batch),
-      });
-      if (Buffer.byteLength(body) >= MAX_REQUEST_BYTES) {
+      const body = encodeLiquidDecisionRequest(batch, context.model.id);
+      if (body === undefined) {
         return { status: "unavailable", reason: "unsupported-input" };
       }
       let release: (() => Promise<void>) | undefined;
@@ -115,14 +77,7 @@ export function buildLiquidDecisionProvider(deps: {
             Buffer.from(batch.state.dataUri.split(",", 2)[1]!, "base64"),
           );
           assertActive();
-          if (
-            !metadata ||
-            metadata.width <= 0 ||
-            metadata.height <= 0 ||
-            Math.max(metadata.width, metadata.height) >
-              100 * Math.min(metadata.width, metadata.height) ||
-            Math.ceil(metadata.width / 32) * Math.ceil(metadata.height / 32) > 10_000
-          ) {
+          if (!supportsLiquidImageDimensions(metadata)) {
             return { status: "unavailable", reason: "unsupported-input" };
           }
         }
@@ -197,11 +152,7 @@ export function buildLiquidDecisionProvider(deps: {
           return { status: "unavailable", reason: "invalid-response" };
         }
         assertActive();
-        const result = decodeSystemOneResponse(batch, value);
-        return validateDecisionResultV2(batch, result, context.model.inference?.decision) &&
-          result.usage?.outputTokens === 0
-          ? { status: "ok", result }
-          : { status: "unavailable", reason: "invalid-response" };
+        return decodeLiquidDecisionResult(batch, value, context.model.inference?.decision);
       } catch {
         context.signal.throwIfAborted();
         if (admissionError) {
