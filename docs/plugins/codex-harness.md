@@ -476,8 +476,8 @@ when no native Codex binary is available. This includes platforms without a
 published binary, such as Linux RISC-V64. An explicitly selected or pinned Codex
 runtime reports an error instead. Install a native Codex build and set
 `plugins.entries.codex.config.appServer.command` or `OPENCLAW_CODEX_APP_SERVER_BIN`
-to use it. Configured commands, WebSocket connections, and Unix sockets retain
-their own startup validation.
+to use it. Configured commands, WebSocket connections, Unix sockets, and
+worker-hosted app-servers retain their own startup validation.
 
 When no OpenClaw sandbox is active, OpenClaw starts Codex app-server threads
 with Codex native code mode enabled (code-mode-only stays off by default), so

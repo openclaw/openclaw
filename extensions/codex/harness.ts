@@ -401,6 +401,8 @@ export function createCodexAppServerAgentHarness(
       ).appServer;
       if (
         (appServer?.transport ?? "stdio") === "stdio" &&
+        // Worker placement owns its binary; selection has no admitted placement yet.
+        appServer?.workerHostedCloud !== true &&
         resolveCodexAppServerCommand(appServer?.command).commandSource === "managed" &&
         !hasManagedCodexAppServerBinary()
       ) {

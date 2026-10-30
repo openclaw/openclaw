@@ -128,9 +128,10 @@ describe("Codex agent harness supports()", () => {
         { command: "/custom/codex" },
         { transport: "websocket", url: "ws://127.0.0.1:4501" },
         { transport: "unix", homeScope: "user" },
+        { workerHostedCloud: true },
       ]) {
         expect(
-          makeHarness({ pluginConfig: { appServer } }).supports({
+          makeHarness({ resolvePluginConfig: () => ({ appServer }) }).supports({
             provider: "openai",
             requestedRuntime: "codex",
           }),
