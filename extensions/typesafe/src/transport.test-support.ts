@@ -98,7 +98,7 @@ export const mixedFixture = {
   },
 };
 export function registeredPreparedDecisionProvider(
-  current: () => ReturnType<OpenClawPluginApi["runtime"]["config"]["current"]>,
+  current: OpenClawPluginApi["runtime"]["config"]["current"],
 ) {
   const registerDecisionProvider = vi.fn<OpenClawPluginApi["registerDecisionProvider"]>();
   const api = createTestPluginApi({
