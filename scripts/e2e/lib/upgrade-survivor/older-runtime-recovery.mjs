@@ -93,6 +93,7 @@ async function main() {
   );
   const kv = store.createPluginStateSyncKeyedStore("older-runtime-survivor", {
     namespace: "preferences",
+    maxEntries: 1,
     env: process.env,
   });
   const userData = { cursor: 137, label: "archive — 東京", enabled: false };
