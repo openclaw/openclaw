@@ -57,7 +57,9 @@ if (import.meta.main) {
   const result = await waitForIOSSimulatorHeadroom(new AbortController().signal);
   console.log(JSON.stringify(result));
   if (result.status !== "ready") {
-    console.error("Host CPU headroom unavailable; screenshot simulator boot was not started.");
+    console.error(
+      "Host CPU headroom unavailable; screenshot simulator boot was not started. Let competing host work finish or stop it, then rerun the screenshot lane.",
+    );
     process.exitCode = 1;
   }
 }
