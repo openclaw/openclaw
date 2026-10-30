@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { collectRollupContexts, type RollupCheck } from "../../scripts/lib/watch-pr-ci-rollup.mts";
 import {
   classifyRollup,
@@ -12,7 +12,12 @@ import {
 } from "../../scripts/watch-pr-ci.mts";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
 import placeholderFixture from "../fixtures/watch-pr-ci-queued-placeholder.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { runWatcher, sha } from "./watch-pr-ci.test-support.js";
+
+// Native Node replays share compiled code, never module state or Bun's cache-disable policy.
+// Remove the file-local cache only after all replay children exit.
+const nodeCompileCache = useAutoCleanupTempDirTracker(afterAll).make("openclaw-watch-node-cache-");
 
 function expectRun(
   result: Awaited<ReturnType<typeof runWatcher>>,
@@ -67,6 +72,7 @@ async function replayGh(
       options.head ?? sha,
       options.args ?? [],
       options.clock,
+      { NODE_COMPILE_CACHE: nodeCompileCache, NODE_DISABLE_COMPILE_CACHE: undefined },
     );
     const callText = readFileSync(callsPath, "utf8");
     return { ...result, callText, calls: parseCalls(callText) };
