@@ -61,6 +61,7 @@ import {
   createCodexNodeExecServerCommand,
   createCodexNodeExecServerInvokePolicy,
 } from "./src/node-exec-server.js";
+import { registerOwnerDmRecovery } from "./src/owner-dm-recovery.js";
 import {
   CODEX_CATALOG_STATE_NAMESPACE,
   type StoredCodexCatalogEntry,
@@ -196,6 +197,7 @@ export default definePluginEntry({
       lazyBindingStateStore,
       lazyManagedThreadStateStore,
     );
+    registerOwnerDmRecovery(api, lazyBindingStateStore, bindingStore);
     registerCodexCliMetadata(api);
     const { resolveCodexSupervisionAppServerRuntimeOptions } = createCodexAppServerConfig(
       api.runtime.modelAuth,

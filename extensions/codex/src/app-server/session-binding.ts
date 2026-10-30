@@ -1,5 +1,6 @@
 /** SQLite-backed Codex app-server thread bindings. */
 
+import { isDeepStrictEqual } from "node:util";
 import {
   embeddedAgentLog,
   type AgentHarnessSessionDeletionMutation,
@@ -124,6 +125,7 @@ type CodexAppServerBindingMutation =
     }
   | {
       kind: "clear";
+      expectedBinding?: CodexAppServerThreadBinding;
       threadId?: string;
       clientId?: string;
     };
@@ -434,10 +436,6 @@ export function createCodexAppServerBindingStore(
     async mutate(identity, mutation, assertCurrent, authority) {
       return await lifecycle.withMutation(async () => {
         const key = bindingStoreKey(identity);
-        // A retained legacy sidecar may be revisited by doctor after runtime
-        // clear. Keep provenance so migration cannot resurrect its stale thread.
-        const retainLegacyClear =
-          mutation.kind === "clear" && key.startsWith("conversation:legacy-");
         return await lifecycle.transact(
           key,
           (current, leaseToken) => {
@@ -536,6 +534,8 @@ export function createCodexAppServerBindingStore(
                 !matchesPendingSupervisionBranch(active?.binding, mutation.expected)) ||
               (mutation.kind === "clear" &&
                 (!ownsGeneration ||
+                  (mutation.expectedBinding !== undefined &&
+                    !isDeepStrictEqual(active?.binding, mutation.expectedBinding)) ||
                   (mutation.threadId !== undefined &&
                     active?.binding.threadId !== mutation.threadId) ||
                   active?.binding.connectionScope === "supervision"))
@@ -611,7 +611,8 @@ export function createCodexAppServerBindingStore(
           (next) =>
             mutation.kind === "clear" &&
             next.nativeSubagentTaskImport === undefined &&
-            !retainLegacyClear &&
+            // Keep a legacy sidecar tombstone so Doctor cannot resurrect its stale thread.
+            !key.startsWith("conversation:legacy-") &&
             !lifecycle.hasLease(key)
               ? 1
               : undefined,

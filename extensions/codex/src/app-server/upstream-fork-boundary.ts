@@ -172,18 +172,17 @@ function resolveCodexUpstreamForkBoundaryFromTurns(params: {
 export async function listCodexUpstreamTurns(
   control: Pick<CodexSessionCatalogControl, "listTurnPage">,
   threadId: string,
+  itemsView: "full" | "notLoaded" = "full",
 ): Promise<CodexTurn[]> {
   const turns: CodexTurn[] = [];
   const seenCursors = new Set<string>();
   let cursor: string | undefined;
   for (;;) {
-    // Codex hydrates full turn items for both history modes; boundary validation
-    // needs their recorded message identities, not the native storage layout.
     const page = await control.listTurnPage({
       threadId,
       limit: TURN_PAGE_LIMIT,
       sortDirection: "asc",
-      itemsView: "full",
+      itemsView,
       ...(cursor ? { cursor } : {}),
     });
     turns.push(...page.data);
