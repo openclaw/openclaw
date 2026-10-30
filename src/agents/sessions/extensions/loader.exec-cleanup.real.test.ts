@@ -67,7 +67,7 @@ process.on("SIGTERM", () => process.exit(0));`;
     try {
       startup = await withinTest(launched.promise, signal);
       await withinTest(startup.ready, signal);
-      const [rootPid, childPid]: number[] = await vi.waitFor(
+      const [rootPid, childPid]: [number, number] = await vi.waitFor(
         () => JSON.parse(readFileSync(readyPath, "utf8")),
         { timeout: 3_000, interval: 25 },
       );
