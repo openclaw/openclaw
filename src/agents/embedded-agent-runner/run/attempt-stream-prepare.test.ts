@@ -372,16 +372,22 @@ describe("prepareEmbeddedAttemptStream", () => {
     }
   });
 
-  it("preserves transcript routing and run-local media trust at the subscription", () => {
+  it("preserves transcript routing, media trust, and standalone thread admission", () => {
+    const sameChannelThreadRequired = false;
     const trustedLocalMediaToolNames = new Set(["plugin_media"]);
     const sessionKey = "agent:main:internal-session-effects:companion-run";
     prepareCatalogExecutor({
       trustedLocalMediaToolNames,
+      sameChannelThreadRequired,
       sessionKey,
       attempt: { sandboxSessionKey: "agent:main:main" },
     });
     expect(mocks.subscribe).toHaveBeenCalledWith(
-      expect.objectContaining({ trustedLocalMediaToolNames, sessionKey }),
+      expect.objectContaining({
+        trustedLocalMediaToolNames,
+        sameChannelThreadRequired,
+        sessionKey,
+      }),
     );
   });
 

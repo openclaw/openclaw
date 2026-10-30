@@ -4,6 +4,14 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import {
+  setChannelSourceTurnId,
+  setChannelSourceTurnSameThreadRequired,
+} from "../../../auto-reply/reply/source-turn-id.js";
+import {
+  mintMessageActionTurnCapability,
+  revokeMessageActionTurnCapability,
+} from "../../../gateway/message-action-turn-capability.js";
 import { isEmbeddedMode, setEmbeddedMode } from "../../../infra/embedded-mode.js";
 import {
   EmbeddedPluginApprovalBroker,
@@ -291,6 +299,69 @@ afterEach(() => {
 });
 
 describe("prepareEmbeddedAttemptAgentSession", () => {
+  it.each([
+    { label: "bound-thread admission", admitted: true, recovery: false, hasSourceTurn: true },
+    { label: "standalone admission", admitted: false, recovery: true, hasSourceTurn: true },
+    {
+      label: "recovery without a capability",
+      admitted: undefined,
+      recovery: true,
+      hasSourceTurn: true,
+    },
+    { label: "unattested scope marker", admitted: undefined, recovery: true, hasSourceTurn: false },
+  ])(
+    "shares the same-thread fact from $label with terminal and stream consumers",
+    async ({ admitted, recovery, hasSourceTurn }) => {
+      const fixture = createInput();
+      const sessionKey = "agent:agent-1:slack:channel:c1";
+      const policySessionKey = "agent:agent-1:main";
+      const token =
+        admitted === undefined
+          ? undefined
+          : mintMessageActionTurnCapability({
+              agentId: fixture.input.sessionAgentId,
+              runId: attempt.runId,
+              sessionId: attempt.sessionId,
+              sessionKey: policySessionKey,
+              toolContext: {
+                currentChannelProvider: "slack",
+                currentChannelId: "c1",
+                currentThreadTs: "171.222",
+                sameChannelThreadRequired: admitted,
+              },
+            });
+      fixture.input.attempt = {
+        ...attempt,
+        sessionKey,
+        messageActionTurnCapability: token,
+      };
+      if (hasSourceTurn) {
+        setChannelSourceTurnId(fixture.input.attempt, "source-turn-1");
+      }
+      setChannelSourceTurnSameThreadRequired(fixture.input.attempt, recovery);
+      fixture.input.clientToolPreparation = {
+        codeModeControlsEnabledForRun: true,
+        deferredDirectoryToolsCallable: false,
+        sandboxSessionKey: policySessionKey,
+      } as never;
+      try {
+        const prepared = await prepareEmbeddedAttemptAgentSession(fixture.input);
+        expect(prepared.sameChannelThreadRequired).toBe(
+          admitted ?? (hasSourceTurn ? recovery : undefined),
+        );
+        expect(hoisted.installMessageToolTerminalHook).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sameChannelThreadRequired: prepared.sameChannelThreadRequired,
+          }),
+        );
+      } finally {
+        if (token) {
+          revokeMessageActionTurnCapability(token);
+        }
+      }
+    },
+  );
+
   it("keeps effective workspace rules in automatic compaction when the process and sandbox cwd differ", async () => {
     const fixture = createInput();
     const workspaceDir = tempDirs.make("openclaw-attempt-compaction-workspace-");

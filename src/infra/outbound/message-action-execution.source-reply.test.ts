@@ -41,7 +41,7 @@ function registerTextPlugin(
 }
 
 function registerSlackTextPlugin(accountIds = ["default"]) {
-  registerSlackFixture(accountIds, undefined, "direct", {
+  return registerSlackFixture(accountIds, undefined, "direct", {
     normalizeTarget: (target) => target.replace(/^channel:/, ""),
   });
 }
@@ -213,6 +213,32 @@ describe("runMessageAction core send routing", () => {
 
     expect(result.kind).toBe("send");
     expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
+  });
+
+  it.each([
+    { scope: "standalone channel", sameChannelThreadRequired: false, expected: "current-source" },
+    { scope: "bound thread", sameChannelThreadRequired: true, expected: undefined },
+    { scope: "unknown thread scope", sameChannelThreadRequired: undefined, expected: undefined },
+  ])("classifies delivered top-level Slack sends from $scope", async (testCase) => {
+    const sendText = registerSlackTextPlugin();
+    const toolContext = {
+      ...slackSourceContext,
+      currentThreadTs: "1710000000.2222",
+      currentSourceTurnId: "source-turn-1",
+      sameChannelThreadRequired: testCase.sameChannelThreadRequired,
+    };
+    const result = await runSlackSourceReply({
+      params: { topLevel: true },
+      toolContext,
+      messageActionAuthorization: { requesterAccountId: "default", toolContext },
+      sourceReplyDeliveryMode: "automatic",
+    });
+
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(result.kind).toBe("send");
+    expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBe(
+      testCase.expected,
+    );
   });
 
   it.each([

@@ -635,6 +635,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     await runEmbeddedAttemptExecutionPhase(fixture.input);
 
     const streamInput = mocks.prepareStream.mock.calls[0]?.[0];
+    expect(streamInput.agentSession.sameChannelThreadRequired).toBe(true);
     expect(streamInput.recoverStalledModelCall()).toBe(true);
     expect(fixture.input.runAbortController.signal.aborted).toBe(true);
     expect(fixture.input.runAbortController.signal.reason).toMatchObject({

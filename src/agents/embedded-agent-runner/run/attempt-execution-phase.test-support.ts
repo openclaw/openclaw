@@ -115,6 +115,7 @@ export async function createFixture(
       hasDeliveredSourceReply: vi.fn(() => false),
       hookRunner: {},
       markSourceReplyDelivered: vi.fn(),
+      sameChannelThreadRequired: true,
       replaySafeToolNames: new Set(["read"]),
       replaySafeTools: new Set([replaySafeTool]),
       trustedLocalMediaToolNames: new Set(["read"]),
