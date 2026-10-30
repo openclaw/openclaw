@@ -1886,7 +1886,7 @@ ensure
 end
 
 def capture_release_ios_screenshots!(
-  xctestrun_path:,
+  project:,
   device:,
   output_directory:,
   result_bundle_path:,
@@ -1894,6 +1894,7 @@ def capture_release_ios_screenshots!(
   log_directory:,
   capture_attempts:,
   capture_attempts_path:,
+  derived_data_path:,
   device_udid:,
   snapshot_cache_directory:,
   diagnostics: nil
@@ -1916,12 +1917,13 @@ def capture_release_ios_screenshots!(
     screenshot_phase(diagnostics, "capture", device: device, udid: device_udid, log_path: log_path) do
       run_screenshot_xcodebuild!(
         [
-          "-xctestrun", xctestrun_path,
+          "-project", project, "-scheme", "OpenClawUITests", "-configuration", "Debug",
+          "-derivedDataPath", derived_data_path,
           "-destination", "platform=iOS Simulator,id=#{device_udid}",
           "-resultBundlePath", result_bundle_path,
           *RELEASE_IOS_SCREENSHOT_TESTS.map { |screenshot| "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/#{screenshot.fetch(:test)}" },
           *Shellwords.split(IOS_SCREENSHOT_XCARGS),
-          "test-without-building"
+          "FASTLANE_SNAPSHOT=YES", "FASTLANE_LANGUAGE=en-US", "test-without-building"
         ],
         log_path: log_path
       )
@@ -2469,11 +2471,6 @@ platform :ios do
         log_path: File.join(log_directory, "build.log")
       )
     end
-    # The fresh build owns the test configuration and product paths. Reuse its
-    # manifest instead of resolving the project and scheme again for each device.
-    test_runs = Dir[File.join(derived_data_path, "Build", "Products", "*.xctestrun")]
-    UI.user_error!("Screenshot build must produce exactly one .xctestrun manifest; found #{test_runs.length}.") unless test_runs.length == 1
-    xctestrun_path = test_runs.first
     if ENV["OPENCLAW_SNAPSHOT_STARTUP_PROBE"] == "1"
       screenshot_phase(diagnostics, "host-idle") { sleep(60) }
     end
@@ -2493,7 +2490,7 @@ platform :ios do
           sh("xcrun", "simctl", "status_bar", device_udid, "override", *Shellwords.split(SNAPSHOT_STATUS_BAR_ARGUMENTS))
         end
         capture_release_ios_screenshots!(
-          xctestrun_path: xctestrun_path,
+          project: project,
           device: device.fetch("name"),
           output_directory: output_directory,
           result_bundle_path: result_bundle_path,
@@ -2501,6 +2498,7 @@ platform :ios do
           log_directory: log_directory,
           capture_attempts: capture_attempts,
           capture_attempts_path: capture_attempts_path,
+          derived_data_path: derived_data_path,
           device_udid: device_udid,
           snapshot_cache_directory: snapshot_cache_directory,
           diagnostics: diagnostics

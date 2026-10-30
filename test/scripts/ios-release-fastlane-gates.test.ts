@@ -734,8 +734,6 @@ def sh(*arguments, **options)
   raise "not using built products" unless command.include?("test-without-building")
   parts = Shellwords.split(command)
   @xcode_arguments = parts.drop(parts.index("xcodebuild") + 1)
-  manifest = @xcode_arguments.fetch(@xcode_arguments.index("-xctestrun") + 1)
-  raise "capture did not use the build manifest" unless File.read(manifest) == "fresh test configuration"
   log_path = parts.fetch(parts.index("run_apple_command_logged") + 1)
   FileUtils.mkdir_p(File.dirname(log_path))
   File.write(log_path, "native capture log")
@@ -765,16 +763,14 @@ rows = %w[capture result missing success].map do |scenario|
       path
     end
     ledger = File.join(archive, "capture-attempts.json")
-    manifest = File.join(root, "OpenClawUITests.xctestrun")
-    File.write(manifest, "fresh test configuration")
     error = nil
     begin
       capture_release_ios_screenshots!(
-        xctestrun_path: manifest, device: "fixture-device",
+        project: "fixture", device: "fixture-device",
         output_directory: root, result_bundle_path: @result_path,
         result_bundle_archive_directory: archive, capture_attempts: [],
         log_directory: logs,
-        capture_attempts_path: ledger,
+        capture_attempts_path: ledger, derived_data_path: root,
         device_udid: "fixture-udid", snapshot_cache_directory: root
       )
     rescue => failure
@@ -1015,14 +1011,9 @@ def run_screenshot_xcodebuild!(arguments, log_path:)
   @builds << "snapshot"
   raise "snapshot build failed" if @scenario == "build-failure"
   make_product(derived_data_path)
-  products = File.join(derived_data_path, "Build", "Products")
-  FileUtils.mkdir_p(products)
-  count = @scenario == "missing-manifest" ? 0 : @scenario == "ambiguous-manifest" ? 2 : 1
-  count.times { |index| File.write(File.join(products, "OpenClawUITests-#{index}.xctestrun"), "fresh test configuration") }
 end
 def capture_release_ios_screenshots!(**options)
   raise "capture before successful build" unless @builds == ["snapshot"]
-  raise "capture did not use the build manifest" unless File.read(options.fetch(:xctestrun_path)) == "fresh test configuration"
   active = @owned.fetch(options.fetch(:device_udid))
   raise "selected older runtime" unless active.fetch("runtime").end_with?("27-0")
   raise "capture failed" if @scenario == "capture-failure" || @scenario == "capture-cleanup-failure"
@@ -1114,7 +1105,7 @@ def sh(command, *arguments, **options)
   end
 end
 
-results = %w[combined diagnostics startup-probe startup-probe-ended iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure missing-manifest ambiguous-manifest busy boot-failure boot-ended watch-headroom-timeout capture-failure capture-cleanup-failure cleanup-failure runtime-recovered runtime-delete-recovered runtime-delete-repeated runtime-delete-unrelated runtime-scan-failure runtime-download-failure runtime-path-missing runtime-retry-failure runtime-unrelated runtime-local unavailable-recovered unavailable-empty unavailable-download-failure unavailable-still-missing unavailable-create-failure unavailable-local inventory-failure inventory-invalid watch-boot-failure watch-cleanup-failure].map do |scenario|
+results = %w[combined diagnostics startup-probe startup-probe-ended iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended watch-headroom-timeout capture-failure capture-cleanup-failure cleanup-failure runtime-recovered runtime-delete-recovered runtime-delete-repeated runtime-delete-unrelated runtime-scan-failure runtime-download-failure runtime-path-missing runtime-retry-failure runtime-unrelated runtime-local unavailable-recovered unavailable-empty unavailable-download-failure unavailable-still-missing unavailable-create-failure unavailable-local inventory-failure inventory-invalid watch-boot-failure watch-cleanup-failure].map do |scenario|
   Dir.mktmpdir("openclaw-watch-build-") do |root|
     @root, @scenario, @builds, @commands, @installed = root, scenario, [], [], nil
     @owned, @created = {}, 0
@@ -1354,17 +1345,6 @@ puts JSON.generate(results)
       pngs: 0,
       xcresults: 0,
     });
-    for (const [scenario, count] of [
-      ["missing-manifest", 0],
-      ["ambiguous-manifest", 2],
-    ] as const) {
-      expect(row(scenario)).toMatchObject({
-        error: `Screenshot build must produce exactly one .xctestrun manifest; found ${count}.`,
-        pngs: 0,
-        xcresults: 0,
-        lifecycle: [],
-      });
-    }
     expect(row("combined").lifecycle.map(([operation]) => operation)).toEqual([
       "create",
       "bootstatus",
