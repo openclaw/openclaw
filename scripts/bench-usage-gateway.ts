@@ -505,7 +505,6 @@ async function prepareFixture(
             isDone: () => child.exitCode !== null || child.signalCode !== null,
           });
           const readyAtMs = performance.now();
-          assert.equal(readiness.status, 200, `${role} built Gateway readiness`);
           await writeFile(
             path.join(directory, "startup.json"),
             JSON.stringify(
@@ -521,6 +520,7 @@ async function prepareFixture(
               2,
             ),
           );
+          assert.equal(readiness.status, 200, `${role} built Gateway readiness`);
           const snapshot = () =>
             new Promise<Dispatch[]>((resolve, reject) => {
               const timer = setTimeout(() => {
