@@ -68,9 +68,10 @@ cross-conversation transcript recall:
 
 The value follows normal `memory.search` inheritance with a
 per-agent override. When unset, it defaults on only if global
-`session.dmScope` is unset or `"main"` and no binding has a `session.dmScope`
-override. Any configured DM isolation defaults it off. An explicit `true` or
-`false` always wins. Enabling it implies session transcript indexing and adds
+`session.dmScope` is unset or `"main"` and no binding for this agent sets a
+`session.dmScope` other than `"main"`. Global DM isolation defaults it off for
+every agent; a binding's DM isolation defaults it off only for the agent that
+binding routes to. An explicit `true` or `false` always wins. Enabling it implies session transcript indexing and adds
 `sessions` to the agent's resolved memory sources.
 
 OpenClaw's built-in memory provider supports this protected path. Alternate memory providers can keep using their own

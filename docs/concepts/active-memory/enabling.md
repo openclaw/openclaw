@@ -28,8 +28,10 @@ private conversations with one per-agent setting:
 ```
 
 The setting defaults on for personal installs: global `session.dmScope` must be
-unset or `"main"`, and no binding may override `session.dmScope`. Any configured
-DM isolation defaults it off. An explicit `true` or `false` always wins. When
+unset or `"main"`, and no binding for this agent may set a `session.dmScope`
+other than `"main"`. Global DM isolation defaults it off for every agent; a
+binding's DM isolation defaults it off only for that binding's agent. An
+explicit `true` or `false` always wins. When
 enabled, OpenClaw indexes that agent's session transcripts and runs an Active
 Memory retrieval pass before eligible private replies. The pass can read
 relevant transcript excerpts from the same agent's other private conversations.

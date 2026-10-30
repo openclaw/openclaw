@@ -84,7 +84,7 @@ export type OpenClawConfig = {
   session?: {
     dmScope?: DmScope;
   };
-  bindings?: unknown[];
+  bindings?: Array<{ agentId: string; session?: { dmScope?: DmScope } }>;
   memory?: MemoryConfig;
   models?: {
     providers?: Record<
@@ -105,21 +105,16 @@ export function resolveRememberAcrossConversations(cfg: OpenClawConfig, agentId:
   if (explicit !== undefined) {
     return explicit;
   }
-  // Recall is per-agent/private-shaped, not per-sender. Any DM isolation signals a
-  // multi-user install, where silently recalling across senders would leak context.
+  // Recall is per-agent/private-shaped, not per-sender. DM isolation signals several
+  // people messaging the agent, where silently recalling across senders would leak
+  // context. A binding override isolates only its own agent's DMs, and "main" isolates none.
+  const id = normalizeAgentId(agentId);
   return (
-    (cfg.session?.dmScope === undefined || cfg.session.dmScope === "main") &&
-    !cfg.bindings?.some((binding) => {
-      if (!binding || typeof binding !== "object") {
-        return false;
-      }
-      const session = (binding as { session?: unknown }).session;
-      return (
-        Boolean(session) &&
-        typeof session === "object" &&
-        (session as { dmScope?: unknown }).dmScope !== undefined
-      );
-    })
+    (cfg.session?.dmScope ?? "main") === "main" &&
+    !cfg.bindings?.some(
+      (binding) =>
+        (binding.session?.dmScope ?? "main") !== "main" && normalizeAgentId(binding.agentId) === id,
+    )
   );
 }
 

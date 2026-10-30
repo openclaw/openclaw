@@ -1,0 +1,392 @@
+title: Remember across conversations with another agent's isolating binding
+
+scenario:
+  id: remember-across-binding-scope
+  surface: session-memory
+  risk: high
+  coverage:
+    primary:
+      - session-memory.active-memory-recall
+    secondary:
+      - session-memory.active-memory-active-recall
+      - session-memory.active-memory-qa-channel
+  objective: Verify the implicit recall default follows each agent's own route bindings, so another agent's isolating DM binding neither pauses this agent's private recall nor admits shared or peer-agent transcripts.
+  plugins:
+    - active-memory
+  gatewayConfigPatch:
+    # No session.dmScope and no memory.search.rememberAcrossConversations: the
+    # implicit default decides recall eligibility per agent.
+    agents:
+      ownership: explicit
+      entries:
+        peer:
+          identity:
+            name: QA Peer
+    bindings:
+      - agentId: peer
+        match:
+          channel: qa-channel
+          accountId: default
+          peer:
+            kind: direct
+            id: dm:remember-scope-peer
+        session:
+          dmScope: per-channel-peer
+      - agentId: qa
+        match:
+          channel: qa-channel
+          accountId: default
+        session:
+          dmScope: main
+    plugins:
+      entries:
+        active-memory:
+          enabled: true
+          config:
+            enabled: true
+            mode: always
+            agents: []
+            toolsAllow:
+              - memory_search
+            logging: true
+            persistTranscripts: true
+            transcriptDir: qa-remember-across-binding-scope
+            queryMode: message
+            maxSummaryChars: 220
+  successCriteria:
+    - A peer agent's per-channel-peer binding isolates the peer's DMs but leaves the qa agent's implicit recall default and session source on.
+    - A qa binding with dmScope main does not count as DM isolation.
+    - Active Memory recalls the qa agent's own pre-reset private fact in the same direct conversation.
+    - The group marker (indexed for qa) and the peer-agent marker are absent from accepted recall evidence and from every model request in the recall turn.
+    - After the qa binding switches to per-channel-peer, the qa agent's direct turn starts no recall and receives no recall context.
+  docsRefs:
+    - docs/concepts/active-memory/enabling.md
+    - docs/reference/memory-config.md
+    - docs/concepts/main-session.md
+  codeRefs:
+    - packages/memory-host-sdk/src/host/config-utils.ts
+    - extensions/active-memory/index.ts
+    - extensions/memory-core/src/session-search-visibility.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+  execution:
+    kind: flow
+    channel: qa-channel
+    providerMode: mock-openai
+    retryCount: 0
+    suiteIsolation: isolated
+    isolationReason: Indexes qa transcripts offline, resets a private session, and rewrites route bindings on an ephemeral Gateway child.
+    summary: Seed qa private, group, and peer-agent facts, reset the qa direct session, prove same-agent private recall under the implicit default, then make the qa binding isolating and prove recall stops.
+    config:
+      requiredProviderMode: mock-openai
+      conversationId: remember-scope-private
+      groupConversationId: remember-scope-group
+      peerConversationId: remember-scope-peer
+      privateFact: lemon pepper wings with blue cheese
+      groupFact: GROUP-SCOPE-ONLY loaded nachos with black olives
+      peerFact: PEER-SCOPE-ONLY smoked tofu skewers
+      seedMarker: QA-REMEMBER-SCOPE-SOURCE-SEEDED
+      recallPrompt: "Remember across conversations QA check: what snack do I usually want for QA movie night? Reply in one short sentence."
+      transcriptDir: qa-remember-across-binding-scope
+
+flow:
+  steps:
+    - name: keeps another agent's isolating binding out of this agent's recall default
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: this deterministic recall proof requires mock-openai
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - resetTransport: true
+        - call: fs.rm
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, 'MEMORY.md')"
+            - force: true
+        - call: fs.rm
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, 'memory', `${formatMemoryDreamingDay(Date.now())}.md`)"
+            - force: true
+        - call: readConfigSnapshot
+          saveAs: original
+          args:
+            - ref: env
+        - assert:
+            expr: "original.config.session?.dmScope === undefined && original.config.memory?.search?.rememberAcrossConversations === undefined"
+            message: this proof needs the implicit recall default (no global dmScope, no explicit rememberAcrossConversations)
+        - set: originalBindings
+          value:
+            expr: "structuredClone(original.config.bindings)"
+        - set: sourceDelivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: `dm:${config.conversationId}` })"
+        - set: groupDelivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: `channel:${config.groupConversationId}` })"
+        - set: peerDelivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: `dm:${config.peerConversationId}` })"
+        - set: sourceSessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: sourceDelivery.channel, accountId: transport.accountId, peer: { kind: 'direct', id: sourceDelivery.replyTo }, dmScope: 'main' })"
+        - set: groupSessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: groupDelivery.channel, accountId: transport.accountId, peer: { kind: 'channel', id: groupDelivery.replyTo } })"
+        - set: peerSessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'peer', channel: peerDelivery.channel, accountId: transport.accountId, peer: { kind: 'direct', id: peerDelivery.replyTo }, dmScope: 'per-channel-peer' })"
+        - set: isolatedSourceSessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: sourceDelivery.channel, accountId: transport.accountId, peer: { kind: 'direct', id: sourceDelivery.replyTo }, dmScope: 'per-channel-peer' })"
+        - set: transcriptRoot
+          value:
+            expr: "path.join(env.gateway.tempRoot, 'state', 'plugins', 'active-memory', 'transcripts', 'agents', 'qa', config.transcriptDir)"
+        - call: fs.rm
+          args:
+            - ref: transcriptRoot
+            - recursive: true
+              force: true
+        - sendInbound:
+            conversation: { id: { ref: config.conversationId }, kind: direct }
+            senderId: { ref: config.conversationId }
+            senderName: Remember Scope Source
+            text:
+              expr: "`Stable QA movie night usual favorite snack preference: ${config.privateFact}. Reply exactly: ${config.seedMarker}.`"
+        - waitForOutbound:
+            conversation: { id: { ref: config.conversationId }, kind: direct }
+            textIncludes: { ref: config.seedMarker }
+            timeoutMs: { expr: "liveTurnTimeoutMs(env, 60000)" }
+        - sendInbound:
+            conversation: { id: { ref: config.conversationId }, kind: direct }
+            senderId: { ref: config.conversationId }
+            senderName: Remember Scope Source
+            text: "Filler turn one after the saved fact. Reply briefly."
+        - waitForOutbound:
+            conversation: { id: { ref: config.conversationId }, kind: direct }
+            timeoutMs: { expr: "liveTurnTimeoutMs(env, 60000)" }
+        - sendInbound:
+            conversation: { id: { ref: config.conversationId }, kind: direct }
+            senderId: { ref: config.conversationId }
+            senderName: Remember Scope Source
+            text: "Filler turn two after the saved fact. Reply briefly."
+        - waitForOutbound:
+            conversation: { id: { ref: config.conversationId }, kind: direct }
+            timeoutMs: { expr: "liveTurnTimeoutMs(env, 60000)" }
+        - sendInbound:
+            conversation: { id: { ref: config.conversationId }, kind: direct }
+            senderId: { ref: config.conversationId }
+            senderName: Remember Scope Source
+            text: "Filler turn three after the saved fact. Reply briefly."
+        - waitForOutbound:
+            conversation: { id: { ref: config.conversationId }, kind: direct }
+            timeoutMs: { expr: "liveTurnTimeoutMs(env, 60000)" }
+        - sendInbound:
+            conversation:
+              id: { ref: config.groupConversationId }
+              kind: channel
+              title: Remember Scope Group
+            senderId: remember-scope-group-member
+            senderName: Remember Scope Group Member
+            text:
+              expr: "`@openclaw Stable QA movie night usual favorite snack preference: ${config.groupFact}. This applies only inside this group. Acknowledge briefly.`"
+        - waitForOutbound:
+            conversation: { id: { ref: config.groupConversationId }, kind: channel }
+            timeoutMs: { expr: "liveTurnTimeoutMs(env, 60000)" }
+        - sendInbound:
+            conversation: { id: { ref: config.peerConversationId }, kind: direct }
+            senderId: { ref: config.peerConversationId }
+            senderName: Remember Scope Peer
+            text:
+              expr: "`Stable QA movie night usual favorite snack preference: ${config.peerFact}. This belongs only to the peer agent. Acknowledge briefly.`"
+        - waitForOutbound:
+            conversation: { id: { ref: config.peerConversationId }, kind: direct }
+            timeoutMs: { expr: "liveTurnTimeoutMs(env, 60000)" }
+        - call: readRawQaSessionStore
+          saveAs: seededStore
+          args:
+            - ref: env
+        - call: readRawQaSessionStore
+          saveAs: peerStore
+          args:
+            - ref: env
+            - agentId: peer
+        - set: seedSession
+          value:
+            expr: seededStore[sourceSessionKey]
+        - set: groupSession
+          value:
+            expr: seededStore[groupSessionKey]
+        - set: peerSession
+          value:
+            expr: peerStore[peerSessionKey]
+        - assert:
+            expr: "Boolean(seedSession?.sessionId) && Boolean(groupSession?.sessionId) && Boolean(peerSession?.sessionId)"
+            message:
+              expr: "`seeded sessions missing: qa=${Object.keys(seededStore).join(',')} peer=${Object.keys(peerStore).join(',')}`"
+        - assert:
+            expr: "Object.keys(seededStore).every((key) => !key.includes(config.peerConversationId))"
+            message: the peer binding did not route its direct conversation away from the qa agent
+        - call: env.gateway.call
+          saveAs: resetResult
+          args:
+            - sessions.reset
+            - key: { ref: sourceSessionKey }
+              reason: reset
+            - timeoutMs: { expr: "liveTurnTimeoutMs(env, 60000)" }
+        - assert:
+            expr: "resetResult?.ok === true && resetResult.entry?.sessionId === seedSession.sessionId && resetResult.entry?.lifecycleRevision !== seedSession.lifecycleRevision"
+            message:
+              expr: "`gateway session reset did not start a new generation: ${JSON.stringify(resetResult)}`"
+        # Index the qa agent's transcripts (its direct and group sessions) so the
+        # group exclusion below is the visibility filter's work, not a missing row.
+        # The memory CLI needs offline state ownership, so it runs with the Gateway stopped.
+        - set: indexEvidence
+          value:
+            expr: "({})"
+        - call: env.gateway.restartAfterStateMutation
+          args:
+            - lambda:
+                async: true
+                expr: "await (async () => { indexEvidence.qa = await runQaCli(env, ['memory', 'index', '--agent', 'qa', '--force', '--verbose'], { timeoutMs: liveTurnTimeoutMs(env, 60000) }); })()"
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - assert:
+            expr: "/sessions/i.test(indexEvidence.qa) && indexEvidence.qa.includes('Memory index updated (qa)')"
+            message:
+              expr: "`qa index did not include its session transcripts: ${indexEvidence.qa}`"
+        - call: fs.rm
+          args:
+            - ref: transcriptRoot
+            - recursive: true
+              force: true
+        - set: recallCursor
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: recallOutboundIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation: { id: { ref: config.conversationId }, kind: direct }
+            senderId: { ref: config.conversationId }
+            senderName: Remember Scope Source
+            text: { ref: config.recallPrompt }
+        - call: waitForOutboundMessage
+          saveAs: recallOutbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - sinceIndex: { ref: recallOutboundIndex }
+        - call: waitForCondition
+          saveAs: helperTranscriptPath
+          args:
+            - lambda:
+                async: true
+                expr: "await (async () => { const entries = (await fs.readdir(transcriptRoot).catch(() => [])).filter((entry) => entry.endsWith('.jsonl')).toSorted(); return entries.length > 0 ? path.join(transcriptRoot, entries.at(-1)) : undefined; })()"
+            - expr: liveTurnTimeoutMs(env, 30000)
+            - 250
+        - call: fs.readFile
+          saveAs: helperTranscriptText
+          args:
+            - ref: helperTranscriptPath
+            - utf8
+        - set: recallRequests
+          value:
+            expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${recallCursor}`)"
+        - assert:
+            expr: "normalizeLowercaseStringOrEmpty(recallOutbound.text).includes(normalizeLowercaseStringOrEmpty(config.privateFact))"
+            message:
+              expr: "`qa private reply missed its own pre-reset fact: ${recallOutbound.text}`"
+        - assert:
+            expr: "helperTranscriptText.includes('memory_search') && helperTranscriptText.includes(config.privateFact) && helperTranscriptText.includes(seedSession.sessionId)"
+            message:
+              expr: "`Active Memory helper did not accept the qa private fact: ${helperTranscriptText}`"
+        - assert:
+            expr: "!helperTranscriptText.includes(config.groupFact) && !helperTranscriptText.includes(groupSession.sessionId) && !helperTranscriptText.includes(config.peerFact) && !helperTranscriptText.includes(peerSession.sessionId)"
+            message:
+              expr: "`Active Memory helper crossed a shared or peer-agent boundary: ${helperTranscriptText}`"
+        - assert:
+            expr: "recallRequests.some((request) => String(request.allInputText ?? '').includes('<active_memory_plugin>') && String(request.allInputText ?? '').includes(config.privateFact)) && recallRequests.every((request) => !String(request.allInputText ?? '').includes(config.groupFact) && !String(request.allInputText ?? '').includes(config.peerFact))"
+            message:
+              expr: "`model requests during recall missed the private context or carried shared/peer markers: ${JSON.stringify(recallRequests.map((request) => String(request.allInputText ?? '').slice(-800)))}`"
+        # Give the qa agent its own isolating binding: its implicit default turns off.
+        - call: patchConfig
+          args:
+            - env: { ref: env }
+              patch:
+                bindings:
+                  expr: "originalBindings.map((binding) => binding.agentId === 'qa' ? { ...binding, session: { dmScope: 'per-channel-peer' } } : binding)"
+              replacePaths:
+                - bindings
+        # Restart so channel routing picks up the new binding scope.
+        - call: env.gateway.restartAfterStateMutation
+          args:
+            - lambda:
+                async: true
+                expr: await Promise.resolve()
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - set: helperCountBeforeIsolated
+          value:
+            expr: "(await fs.readdir(transcriptRoot).catch(() => [])).filter((entry) => entry.endsWith('.jsonl')).length"
+        - set: isolatedCursor
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: isolatedOutboundIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation: { id: { ref: config.conversationId }, kind: direct }
+            senderId: { ref: config.conversationId }
+            senderName: Remember Scope Source
+            text: { ref: config.recallPrompt }
+        - call: waitForOutboundMessage
+          saveAs: isolatedOutbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - sinceIndex: { ref: isolatedOutboundIndex }
+        - call: readRawQaSessionStore
+          saveAs: isolatedStore
+          args:
+            - ref: env
+        - set: isolatedRequests
+          value:
+            expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${isolatedCursor}`)"
+        - set: helperCountAfterIsolated
+          value:
+            expr: "(await fs.readdir(transcriptRoot).catch(() => [])).filter((entry) => entry.endsWith('.jsonl')).length"
+        - assert:
+            expr: "Boolean(isolatedStore[isolatedSourceSessionKey]?.sessionId)"
+            message:
+              expr: "`isolating qa binding did not route the direct turn to its per-peer session: ${Object.keys(isolatedStore).join(',')}`"
+        - assert:
+            expr: helperCountAfterIsolated === helperCountBeforeIsolated
+            message: qa's own isolating binding did not stop Remember across conversations recall
+        - assert:
+            expr: "isolatedRequests.length > 0 && isolatedRequests.every((request) => !String(request.allInputText ?? '').includes(config.privateFact) && !String(request.allInputText ?? '').includes('<active_memory_plugin>'))"
+            message:
+              expr: "`isolated qa turn received recall context: ${JSON.stringify(isolatedRequests.map((request) => String(request.allInputText ?? '').slice(-800)))}`"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', scenario: 'remember-across-binding-scope', channel: 'qa-channel', provider: env.providerMode, gateway: 'ephemeral-child', peerRoutedToOwnSession: peerSessionKey, qaIndex: indexEvidence.qa.trim().slice(-400), privateRecallAccepted: helperTranscriptText.includes(seedSession.sessionId), groupExcluded: !helperTranscriptText.includes(groupSession.sessionId), peerAgentExcluded: !helperTranscriptText.includes(peerSession.sessionId), recallReply: recallOutbound.text, isolatedSession: isolatedSourceSessionKey, isolatedRecallStarted: helperCountAfterIsolated !== helperCountBeforeIsolated, isolatedReply: isolatedOutbound.text })"

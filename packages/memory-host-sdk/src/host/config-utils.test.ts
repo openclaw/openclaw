@@ -291,6 +291,21 @@ describe("resolveRememberAcrossConversations", () => {
 
     expect(resolveRememberAcrossConversations(config, "support")).toBe(false);
   });
+
+  it.each([
+    { dmScope: "per-channel-peer" as const, expected: { main: true, support: false } },
+    { dmScope: "main" as const, expected: { main: true, support: true } },
+  ])("limits a binding with dmScope $dmScope to its own agent", ({ dmScope, expected }) => {
+    const config: OpenClawConfig = {
+      agents: { entries: { main: {}, support: {} } },
+      bindings: [{ agentId: "Support", session: { dmScope } }],
+    };
+
+    expect({
+      main: resolveRememberAcrossConversations(config, "main"),
+      support: resolveRememberAcrossConversations(config, "support"),
+    }).toEqual(expected);
+  });
 });
 
 describe("normalizeConfiguredMemoryExtraPaths", () => {

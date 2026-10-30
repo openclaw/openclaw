@@ -90,9 +90,10 @@ continuity comes from layers around it:
   do not silently lose them.
 - **Memory recall across conversations** lets the agent recall content from
   its other private sessions. On personal setups — global
-  `session.dmScope` resolving to `main` with no per-binding DM overrides — it
-  is enabled by default; any configured DM isolation turns it off unless you
-  opt in explicitly. See [Memory configuration](/reference/memory-config).
+  `session.dmScope` resolving to `main` with no binding isolating this agent's
+  DMs — it is enabled by default; DM isolation turns it off for the agents it
+  applies to unless you opt in explicitly. See
+  [Memory configuration](/reference/memory-config).
 
 ## A rolling session with durable history
 
