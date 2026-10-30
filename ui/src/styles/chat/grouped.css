@@ -1301,6 +1301,12 @@ button.chat-reply-attribution__target:disabled {
   cursor: var(--cursor-default);
 }
 
+.chat-reply-attribution__excerpt {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .chat-reply-attribution__unavailable {
   min-width: 0;
   overflow: hidden;

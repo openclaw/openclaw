@@ -511,7 +511,7 @@ Select an MCP server's row to expand its tools inline; its switch enables or dis
 
 If a server's tools are already expanded, the list refreshes when the current session's run finishes; you do not need to collapse and expand it to see newly discovered tools.
 
-Capability toggles stay disabled until the Gateway, session, and runtime config are loaded, and read-only operators cannot change them. Adding a server requires administrator access. See [Connect MCP servers](/tools/mcp) for the Settings, CLI, and config paths.
+Capability toggles stay disabled until the Gateway, session, and runtime config are loaded, and read-only operators cannot change them. If your account cannot read plugin configuration, **Plugins** explains that its settings are unavailable instead of showing an empty server list. Adding a server requires administrator access. See [Connect MCP servers](/tools/mcp) for the Settings, CLI, and config paths.
 
 Switching capability views focuses the first menu item after the new view renders, while preserving any newer focus choice you make.
 

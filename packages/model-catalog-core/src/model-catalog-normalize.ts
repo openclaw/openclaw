@@ -298,6 +298,8 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "supportsLongCacheRetention",
     "supportsResponsesContinuation",
     "requiresOpenAiAnthropicToolPayload",
+    "adaptiveThinking",
+    "thinkingRequired",
   ] as const;
   for (const field of booleanFields) {
     if (typeof value[field] === "boolean") {
@@ -306,7 +308,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
   }
 
   normalizeCatalogFields(
-    ["toolSchemaProfile", "toolCallArgumentsEncoding"],
+    ["toolSchemaProfile", "toolCallArgumentsEncoding", "defaultThinkingLevel"],
     (field) => normalizeOptionalString(value[field]),
     compat,
   );
@@ -336,6 +338,17 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     );
     if (Object.keys(reasoningEffortMap).length > 0) {
       compat.reasoningEffortMap = reasoningEffortMap;
+    }
+  }
+
+  if (isRecord(value.thinkingLevelLabels)) {
+    const labels = Object.fromEntries(
+      Object.entries(value.thinkingLevelLabels).flatMap(([level, label]) =>
+        typeof label === "string" && label.trim() ? [[level.trim(), label.trim()]] : [],
+      ),
+    );
+    if (Object.keys(labels).length > 0) {
+      compat.thinkingLevelLabels = labels;
     }
   }
 

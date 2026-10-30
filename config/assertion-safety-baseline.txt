@@ -342,7 +342,6 @@ extensions/irc/src/send.ts	1
 extensions/irc/src/setup-core.ts	4
 extensions/irc/src/setup-surface.ts	24
 extensions/kilocode/provider-models.ts	3
-extensions/kimi-coding/provider-policy-api.ts	2
 extensions/line/src/accounts.ts	3
 extensions/line/src/actions.ts	3
 extensions/line/src/auto-reply-delivery.ts	1

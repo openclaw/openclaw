@@ -37,6 +37,15 @@ function setup() {
   return { callGateway, tool, execute };
 }
 
+it("does not execute inventory previews even with a current Gateway caller", async () => {
+  const { callGateway } = setup();
+  const tool = createGitHubPublishTool({ preview: true });
+  await expect(
+    withGatewayToolCallerIdentity(caller, () => tool.execute("preview", { action: "readiness" })),
+  ).rejects.toThrow("GitHub tool previews cannot execute actions");
+  expect(callGateway).not.toHaveBeenCalled();
+});
+
 it("applies deployment action limits when publication and operator actions are available", () => {
   const [tool] = applyGatewayToolPolicy([createGitHubPublishTool()], {
     tools: {

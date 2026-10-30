@@ -998,11 +998,19 @@ module Open3
 end
 def run_screenshot_xcodebuild!(arguments, log_path:)
   raise "not building test products" unless arguments.last == "build-for-testing"
+  derived_data_path = arguments.fetch(arguments.index("-derivedDataPath") + 1)
+  package_source = File.join(derived_data_path, "SourcePackages", "checkouts", "fixture", "Package.swift")
+  if @scenario == "iphone"
+    raise "unexpected cached Swift package source on cold build" if File.exist?(package_source)
+  else
+    raise "cached Swift package source was removed" unless File.exist?(package_source) && File.read(package_source) == "downloaded package source"
+  end
+  raise "stale non-package state survived clean build" if File.exist?(File.join(derived_data_path, ".previous-state"))
   FileUtils.mkdir_p(File.dirname(log_path))
   File.write(log_path, "native build log")
   @builds << "snapshot"
   raise "snapshot build failed" if @scenario == "build-failure"
-  make_product(arguments.fetch(arguments.index("-derivedDataPath") + 1))
+  make_product(derived_data_path)
 end
 def capture_release_ios_screenshots!(**options)
   raise "capture before successful build" unless @builds == ["snapshot"]
@@ -1118,9 +1126,17 @@ results = %w[combined diagnostics startup-probe startup-probe-ended iphone stand
       File.write(File.join(ios_root, "build", "screenshot-diagnostics.json"), JSON.generate({ stale: true }))
     end
     %w[SnapshotDerivedData WatchScreenshotDerivedData].each do |directory|
+      next if scenario == "iphone" && directory == "SnapshotDerivedData"
       app = File.join(ios_root, "build", directory, "Build", "Products", "Debug-watchsimulator", "OpenClawWatchApp.app")
       FileUtils.mkdir_p(app)
       File.write(File.join(app, "stale"), "previous invocation")
+    end
+    unless scenario == "iphone"
+      snapshot_data = File.join(ios_root, "build", "SnapshotDerivedData")
+      package_checkout = File.join(snapshot_data, "SourcePackages", "checkouts", "fixture")
+      FileUtils.mkdir_p(package_checkout)
+      File.write(File.join(package_checkout, "Package.swift"), "downloaded package source")
+      File.write(File.join(snapshot_data, ".previous-state"), "previous invocation")
     end
     if scenario.start_with?("standalone")
       output = File.join(ios_root, "fastlane", "screenshots", "en-US")
@@ -1587,7 +1603,7 @@ end
       'test "$fastlane_version" = "$IOS_SCREENSHOT_FASTLANE_VERSION"',
     );
     expect(captureJob).toContain("node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}");
-    expect(captureJob).not.toContain("SnapshotDerivedData");
+    expect(captureJob).not.toMatch(/SnapshotDerivedData\/(?!SourcePackages)/);
     expect(captureJob.match(/contents: read/g)).toHaveLength(1);
     expect(reducerJob).toContain("needs: [preflight, ios-screenshot-capture]");
     expect(reducerJob).not.toContain("merge-multiple:");

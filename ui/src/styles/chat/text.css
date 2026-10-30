@@ -279,6 +279,8 @@
 .markdown-table-dialog__close {
   color: var(--text);
   position: fixed;
+  /* Keep the whole control above the expanded table's sticky header. */
+  z-index: 2;
   top: 8px;
   right: 8px;
 }

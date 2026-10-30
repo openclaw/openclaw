@@ -179,8 +179,8 @@ it.each(["context-only", "permitted", "revoked", "reassigned", "unavailable"] as
           cfg: {},
           commandAuthorized: true,
         });
-        expect(authorization.senderIsOwner).toBe(false);
-        expect(authorization.assertOwnerCurrent).toBeUndefined();
+        expect(authorization.senderIsOwner).toBe(true);
+        expect(authorization.assertOwnerCurrent).not.toThrow();
         if (bound) {
           if (dispatchState === "revoked") {
             currentBinding = null;

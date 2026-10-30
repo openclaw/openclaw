@@ -17,7 +17,7 @@ import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-stat
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as repositoryWorkspaces from "../../state/session-repository-workspaces.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
-import { linkEmail } from "../../state/user-profile-writes.worker.js";
+import { linkEmail, mergeProfiles } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -247,6 +247,57 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     projection?.dispose();
     releaseCatalog?.();
     memorySessionActorOwners.closeDatabase(memoryLocation);
+    await state.cleanup();
+  }
+});
+
+test("projects.list retries recents when the caller's profile is merged mid-read", async () => {
+  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
+  let projection: SessionRowProjection | undefined;
+  try {
+    const caller = ensureProfileForEmail("caller@example.test");
+    const repository = await repositoryWorkspaces.getSessionRepositoryWorkspaceStore().create({
+      agentId: "main",
+      sessionKey: "global",
+      url: "https://github.com/octocat/hello-world.git",
+      assertCurrent: () => {},
+    });
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: "global" },
+      {
+        sessionId: "merge-race",
+        updatedAt: 1,
+        repositoryWorkspaceId: repository.workspaceId,
+        createdActor: { type: "human", source: "profile", id: caller.id },
+      },
+    );
+    const cfg = { agents: { entries: { main: { workspace: "/workspace" } } } };
+    projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const canonical = ensureProfileForEmail("canonical@example.test");
+    const findRepositories = repositoryWorkspaces.findSessionRepositoryWorkspaces;
+    using merging = vi
+      .spyOn(repositoryWorkspaces, "findSessionRepositoryWorkspaces")
+      .mockImplementationOnce(async (...args) => {
+        const result = await findRepositories(...args);
+        mergeProfiles(caller.id, canonical.id);
+        return result;
+      });
+    // The merge retires the prepared alias cohort; the retry reads the canonical one.
+    expectRecents(
+      await invokeProjectMethod(
+        "projects.list",
+        {},
+        cfg,
+        ["operator.write"],
+        caller.id,
+        registeredProjectsHandlers,
+        projection,
+      ),
+      [{ kind: "repository", url: repository.url, displayName: "hello-world" }],
+    );
+    expect(merging).toHaveBeenCalledTimes(2);
+  } finally {
+    projection?.dispose();
     await state.cleanup();
   }
 });
