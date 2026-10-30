@@ -221,7 +221,6 @@ const enSessionOrganization = {
     approvalsNeedApproval: en.sessionsView.approvalsNeedApproval,
     attentionMore: en.sessionsView.attentionMore,
     runFailedReason: en.sessionsView.runFailedReason,
-    childRunFailedReason: en.sessionsView.childRunFailedReason,
     runErrorTimedOut: en.sessionsView.runErrorTimedOut,
     runErrorUnknown: en.sessionsView.runErrorUnknown,
     attentionRequired: en.sessionsView.attentionRequired,

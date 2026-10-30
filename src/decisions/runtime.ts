@@ -24,8 +24,9 @@ import { finalizePluginModelUsage } from "../plugins/runtime/runtime-model-usage
 import { modelKey } from "../shared/model-key.js";
 import { logDecisionEvaluation } from "./diagnostics.js";
 import type { DecisionProviderHost, PreparedDecisionBilling } from "./provider-host.js";
-import type { DecisionBatchV2, DecisionEvaluateOptionsV2, DecisionOutcomeV2 } from "./types-v2.js";
-import type { DecisionBatch, DecisionOutcome, DecisionRuntimeV1 } from "./types.js";
+import type { DecisionEvaluateOptionsV2, DecisionRuntimeV1 } from "./runtime-types.js";
+import type { DecisionBatchV2, DecisionOutcomeV2 } from "./types-v2.js";
+import type { DecisionBatch, DecisionOutcome } from "./types.js";
 import { validateDecisionBatchV2 } from "./validation-v2.js";
 import { DecisionContractError, validateDecisionBatch } from "./validation.js";
 
@@ -281,28 +282,17 @@ async function evaluateVersion(
     const onPreparedBilling = (facts: PreparedDecisionBilling) => {
       preparedBilling = facts;
     };
-    const result =
-      version === 1
-        ? await entry.host.evaluate(
-            submitted as DecisionBatch, // SAFETY: V1 validation and structuredClone preserve the admitted V1 shape.
-            { ...options, timeoutMs, signal },
-            selected.model,
-            config,
-            registry,
-            consumerId,
-            isAdmissible,
-            onPreparedBilling,
-          )
-        : await entry.host.evaluateV2(
-            submitted as DecisionBatchV2, // SAFETY: V2 validation and structuredClone preserve the admitted V2 shape.
-            { ...options, timeoutMs, signal },
-            selected.model,
-            config,
-            registry,
-            consumerId,
-            isAdmissible,
-            onPreparedBilling,
-          );
+    const result = await entry.host.evaluate(
+      submitted,
+      { ...options, timeoutMs, signal },
+      selected.model,
+      config,
+      registry,
+      version,
+      consumerId,
+      isAdmissible,
+      onPreparedBilling,
+    );
     if (!rootCaller) {
       signal.throwIfAborted();
     }

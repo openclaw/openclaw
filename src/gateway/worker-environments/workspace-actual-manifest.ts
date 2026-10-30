@@ -195,6 +195,8 @@ type ActualWorkspaceNode = WorkerWorkspaceManifestEntry | { path: string; type: 
 export async function scanActualWorkspaceManifest(
   params: ActualWorkspaceManifestOptions & {
     onEntry: (entry: ActualWorkspaceNode, identity?: string) => void;
+    // Only repair candidates authenticated against a saved root may retain this former input.
+    includeLegacyPnpmStore?: boolean;
     reuseFile?: (
       entryPath: string,
       identity: string,
@@ -367,6 +369,7 @@ export async function scanActualWorkspaceManifest(
         relative,
         retained.has(relative) || (await isStagedInput(relative)),
         params.buildCacheInputs !== undefined,
+        params.includeLegacyPnpmStore,
       )
     ) {
       return "derived-only";
@@ -395,6 +398,7 @@ export async function scanActualWorkspaceManifest(
             child,
             retained.has(child) || (await isStagedInput(child)),
             params.buildCacheInputs !== undefined,
+            params.includeLegacyPnpmStore,
           ) ||
           derivedOnlyDirectories.has(child)
         ) {
@@ -422,6 +426,7 @@ export async function scanActualWorkspaceManifest(
             relative,
             retained.has(relative) || (await isStagedInput(relative)),
             params.buildCacheInputs !== undefined,
+            params.includeLegacyPnpmStore,
           )
         ) {
           hasDerivedEntry = true;

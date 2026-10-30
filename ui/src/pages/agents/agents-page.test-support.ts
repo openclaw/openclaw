@@ -22,6 +22,8 @@ const AGENTS_PAGE_GATEWAY_HELLO = gatewayHelloForMethods([
   "agents.update",
   "cron.list",
   "cron.status",
+  "tools.effective",
+  "tools.catalog",
 ]);
 
 const pages = new Set<() => void>();

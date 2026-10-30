@@ -550,8 +550,8 @@ retain whole-installation behavior for homogeneous eligible families; mixed
 selections require `--family`.
 
 Mixed installations support matched backup/restore and compatible updates.
-Whole-installation backups containing any PostgreSQL store require offline
-custody. [Archive restore](#restore-all-postgresql-stores) imports captured
+Whole-installation archives containing PostgreSQL stores can be created while the
+Gateway runs; restore requires offline custody. [Archive restore](#restore-all-postgresql-stores) imports captured
 PostgreSQL stores into fresh namespaces and publishes matching local anchors.
 Updates require candidate proof of family-override support as well as support
 for each selected or retained PostgreSQL family.
@@ -660,11 +660,16 @@ the original data; never edit metadata or discard an anchor to force admission.
 
 ### Capture both server data and local state
 
-Stop the Gateway and embedded writers before capturing PostgreSQL. Then run:
+Run this while the Gateway is up or stopped:
 
 ```bash
 openclaw backup create --output ~/Backups/openclaw --verify
 ```
+
+With the Gateway running, each PostgreSQL store is exported from its own
+`REPEATABLE READ READ ONLY` snapshot while the Gateway keeps serving; stores are
+not captured at one shared instant. Sequence allocation facts are read inside
+that snapshot, so a restored store never reissues a captured row ID.
 
 The archive combines local files and SQLite images with each actual PostgreSQL
 store's matched **format-2 envelope**: original anchor, portable SQLite export image, and manifest

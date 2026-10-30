@@ -183,7 +183,6 @@ export type SidebarRecentSession = Readonly<{
     | "unreadHiddenRuns"
     | "queuedChildCount"
     | "runningChildCount"
-    | "failedChildCount"
     | "workspaceConflictCount"
   >;
   agentStatusNote?: string;
@@ -209,7 +208,6 @@ export type SidebarRecentSession = Readonly<{
   loadingChildren: boolean;
   containsActiveDescendant: boolean;
   runningChildCount: number;
-  failedChildCount: number;
 }>;
 
 export type SidebarSessionHovercardRow = Pick<
@@ -259,7 +257,6 @@ export function rowDemandsVisibility(
         row.containsActiveDescendant ||
         row.hasActiveRun ||
         row.runningChildCount > 0 ||
-        row.failedChildCount > 0 ||
         (row.workspaceConflictCount ?? 0) > 0 ||
         row.unread ||
         (row.unreadChildCount ?? 0) > 0 ||

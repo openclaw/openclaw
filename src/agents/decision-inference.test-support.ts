@@ -4,7 +4,7 @@ import path from "node:path";
 import { expect, onTestFinished, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { DecisionEvaluateOptionsV2, DecisionRuntimeV2 } from "../decisions/types-v2.js";
+import type { DecisionEvaluateOptionsV2, DecisionRuntimeV2 } from "../decisions/runtime-types.js";
 import {
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,

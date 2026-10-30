@@ -126,6 +126,10 @@ Unrelated caller-supplied system instructions retain their existing placement.
 
 ## Keep replayed tool results stable
 
+Image attachments use the same agent image sanitization on initial submission and
+history replay. Replay loads the original attachment bytes without a separate
+delivery resize, so an aborted turn or session reopen preserves the image prefix.
+
 OpenClaw applies the same tool-result text cap before the first model request
 and when persisting the result. Subsequent turns therefore replay the same
 bounded text instead of introducing a different truncation notice. Tool text

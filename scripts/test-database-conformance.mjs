@@ -78,6 +78,7 @@ let targets = explicitTargets
       "src/infra/exec-approvals-native.test.ts",
       "src/infra/client-credential-update.test.ts",
       "src/infra/update-candidate-state.postgres.test.ts",
+      "src/snapshot/postgres-generation.postgres.test.ts",
       "src/state/openclaw-state-db.postgres.test.ts",
       "src/state/openclaw-agent-db.postgres.test.ts",
       "src/state/openclaw-agent-doctor-media.postgres.test.ts",

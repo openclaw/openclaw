@@ -6,14 +6,11 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { DecisionProviderV2 } from "../decisions/provider-types.js";
+import type { DecisionEvaluateOptionsV2 } from "../decisions/runtime-types.js";
 import * as decisionRuntime from "../decisions/runtime.js";
 import { prepareDecisionProviderReload } from "../decisions/runtime.js";
-import type {
-  DecisionBatchV2,
-  DecisionEvaluateOptionsV2,
-  DecisionProviderV2,
-  ProviderDecisionOutcomeV2,
-} from "../decisions/types-v2.js";
+import type { DecisionBatchV2, ProviderDecisionOutcomeV2 } from "../decisions/types-v2.js";
 import type { DecisionBatch } from "../decisions/types.js";
 import {
   onTrustedInternalDiagnosticEvent,
