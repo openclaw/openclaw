@@ -85,6 +85,7 @@
     "!dist/**/*.app",
     "!dist/control-ui.build-*",
     "!dist/**/*.map",
+    "!dist/**/*.br",
     "!dist/plugin-sdk/.tsbuildinfo",
     "!dist/plugin-sdk/access-groups.d.ts",
     "!dist/plugin-sdk/account-resolution-runtime.d.ts",
