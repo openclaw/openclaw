@@ -1,2 +1,2 @@
-# Managed versus unowned index refresh and existing index-lock coverage.
-14
+# Real revision ownership, managed handler stat refresh, and existing index-lock coverage.
+26
