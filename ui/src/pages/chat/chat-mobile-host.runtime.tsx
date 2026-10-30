@@ -2,15 +2,26 @@ import { dynamic } from "@solidjs/web";
 import { Show, createSignal, onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { createTextOverflow } from "../../components/solid/text-overflow.ts";
+import { createVelocityTracker, rubberBand } from "../../lib/motion/gesture.ts";
+import { SHEET_SPRING, springEasing } from "../../lib/motion/spring.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createScrollPosition } from "../../lib/reactive/scroll-state.ts";
 import { ContentPresentation } from "../../lib/solid/presentation.ts";
+import { resolveMobileSheetRelease } from "./chat-mobile-host-release.ts";
 import { createMobileSheetScrollFadeConnection } from "./chat-mobile-scroll-fades.runtime.ts";
 import type { SidebarRegionViewProps } from "./components/chat-sidebar-region-types.ts";
 
 type MobileHostViewProps = { view: SidebarRegionViewProps };
+
+/** The expand control's height: min(85%, 100% − max(24px, safe top)) in mobile-host.css. */
+function expandedDetent(bounds: number, safeTop: number, maximum: number): number {
+  return Math.min(maximum, bounds * 0.85, bounds - Math.max(24, safeTop));
+}
+
+const MOBILE_HEADER_CONTROLS =
+  "button, a, input, select, textarea, [role='button'], [contenteditable]";
 
 export function MobileHostBackdrop(props: MobileHostViewProps) {
   let backdropPointer: number | undefined;
@@ -18,17 +29,16 @@ export function MobileHostBackdrop(props: MobileHostViewProps) {
   const mobileVisible = () =>
     Boolean(props.view.mobileHost?.open && !props.view.mobileHost.suspended);
   return (
-    <Show
-      when={
-        props.view.mobileHost &&
-        mobileVisible() &&
-        (props.view.mobileHost.mode === "expanded" ||
-          props.view.mobileHost.destination.page?.presentation === "sheet")
-      }
-    >
+    <Show when={props.view.mobileHost}>
+      {/* Stays mounted while hidden so dimming fades out with the sheet. */}
       <div
         class="chat-mobile-host__backdrop"
         aria-hidden="true"
+        hidden={
+          !mobileVisible() ||
+          (props.view.mobileHost?.mode !== "expanded" &&
+            props.view.mobileHost?.destination.page?.presentation !== "sheet")
+        }
         onPointerDown={(event) => {
           backdropPointer = event.pointerId;
           backdropClicked = false;
@@ -76,41 +86,92 @@ export function MobileHostChrome(
         pointer: number;
         y: number;
         height: number;
+        /** Finger-following height before clamping; below minimum the sheet slides down. */
         current: number;
         minimum: number;
         maximum: number;
         safeTop: number;
         dock: number;
+        expanded: number;
+        bounds: number;
         independent: boolean;
         moved: boolean;
+        velocity: ReturnType<typeof createVelocityTracker>;
       }
     | undefined;
   let dragFrame = 0;
+  let releaseTimer = 0;
   let suppressGrabberClick = false;
+  // Layout height never drops below the minimum: the sheet translates instead, so its
+  // content does not reflow. Past the maximum the drag rubber-bands like a scroll view.
+  const dragGeometry = (state: NonNullable<typeof drag>) => {
+    const height =
+      state.current > state.maximum
+        ? Math.min(
+            state.bounds,
+            state.maximum + rubberBand(state.current - state.maximum, state.bounds),
+          )
+        : Math.max(state.minimum, state.current);
+    const offset = Math.max(0, state.minimum - state.current);
+    return { height, offset, visible: Math.max(0, height - offset) };
+  };
   const paintResize = () => {
     dragFrame = 0;
     if (!drag) {
       return;
     }
-    props.readRegion().style.setProperty("--mobile-live-height", `${drag.current}px`);
+    const { height, offset } = dragGeometry(drag);
+    // Sheet geometry stays on the sheet so the conversation does not restyle per frame.
+    props.readShell().style.setProperty("--mobile-live-height", `${height}px`);
+    props
+      .readShell()
+      .style.setProperty("--mobile-live-translate", offset > 0 ? `0 ${offset}px` : "none");
     props
       .readRegion()
       .style.setProperty(
         "--mobile-live-reserved",
-        `${drag.independent ? 0 : Math.min(drag.current, drag.dock)}px`,
+        `${drag.independent ? 0 : Math.max(0, Math.min(height, drag.dock) - offset)}px`,
       );
   };
-  const clearResize = () => {
+  const clearResize = (keepHeight = false) => {
     cancelAnimationFrame(dragFrame);
     dragFrame = 0;
     delete props.readRegion().dataset.mobileDragging;
-    props.readRegion().style.removeProperty("--mobile-live-height");
     props.readRegion().style.removeProperty("--mobile-live-reserved");
+    props.readShell().style.removeProperty("--mobile-live-translate");
+    if (!keepHeight) {
+      props.readShell().style.removeProperty("--mobile-live-height");
+    }
+  };
+  const settleRelease = () => {
+    clearTimeout(releaseTimer);
+    releaseTimer = 0;
+    props.readRegion().style.removeProperty("--motion-sheet");
+    props.readRegion().style.removeProperty("--motion-sheet-duration");
+  };
+  /** Plays the next geometry change as a spring that starts at the finger's speed. */
+  const playRelease = (velocity: number) => {
+    settleRelease();
+    const { easing, durationMs } = springEasing(
+      SHEET_SPRING,
+      Math.max(-20, Math.min(20, velocity)),
+    );
+    // Every sheet transition in the region reads these tokens, so one override retimes them.
+    props.readRegion().style.setProperty("--motion-sheet", `${durationMs}ms ${easing}`);
+    props.readRegion().style.setProperty("--motion-sheet-duration", `${durationMs}ms`);
+    releaseTimer = window.setTimeout(() => {
+      settleRelease();
+      // A dismissed sheet keeps its released height until it has left the screen.
+      if (!drag) {
+        props.readShell().style.removeProperty("--mobile-live-height");
+      }
+    }, durationMs + 50);
   };
   const startResize = (event: PointerEvent) => {
     if (event.button !== 0 || !resizable()) {
       return;
     }
+    settleRelease();
     suppressGrabberClick = false;
     const bounds = props.readRegion().getBoundingClientRect();
     const viewport = window.visualViewport;
@@ -127,6 +188,8 @@ export function MobileHostChrome(
       ) - safeTop,
     );
     const height = props.readShell().getBoundingClientRect().height;
+    const velocity = createVelocityTracker();
+    velocity.add(event.timeStamp, -event.clientY);
     drag = {
       pointer: event.pointerId,
       y: event.clientY,
@@ -135,9 +198,12 @@ export function MobileHostChrome(
       minimum,
       maximum,
       safeTop,
+      bounds: bounds.height,
       independent: props.view.mobileHost?.destination.page?.presentation === "sheet",
       dock: Math.max(minimum, Math.min(bounds.height * 0.52, bounds.height - 200)),
+      expanded: expandedDetent(bounds.height, safeTop, maximum),
       moved: false,
+      velocity,
     };
     if (event.currentTarget instanceof HTMLElement) {
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -147,6 +213,7 @@ export function MobileHostChrome(
     if (!drag || drag.pointer !== event.pointerId || !resizable()) {
       return;
     }
+    drag.velocity.add(event.timeStamp, -event.clientY);
     const delta = drag.y - event.clientY;
     if (!drag.moved && Math.abs(delta) < 4) {
       return;
@@ -154,12 +221,12 @@ export function MobileHostChrome(
     drag.moved = true;
     suppressGrabberClick = true;
     props.readRegion().dataset.mobileDragging = "true";
-    drag.current = Math.max(drag.minimum, Math.min(drag.maximum, drag.height + delta));
+    drag.current = Math.max(0, drag.height + delta);
     if (!dragFrame) {
       dragFrame = requestAnimationFrame(paintResize);
     }
   };
-  const endResize = () => {
+  const endResize = (event: PointerEvent) => {
     const completed = drag;
     drag = undefined;
     if (!completed?.moved || !props.readRegion().hasAttribute("data-mobile-dragging")) {
@@ -167,14 +234,42 @@ export function MobileHostChrome(
     }
     cancelAnimationFrame(dragFrame);
     dragFrame = 0;
-    const height =
-      !completed.independent && Math.abs(completed.current - completed.dock) <= 24
-        ? completed.dock
-        : completed.current;
-    const mode = height > completed.dock ? "expanded" : "dock";
-    props.view.mobileHost?.resize(height, mode, mode === "expanded" ? completed.dock : 0);
+    // Re-enable transitions now; the live geometry still pins the sheet in place, so the
+    // owner's commit below is the change that animates.
+    delete props.readRegion().dataset.mobileDragging;
+    const velocity = completed.velocity.velocity(event.timeStamp);
+    const release = resolveMobileSheetRelease(
+      {
+        height: completed.current,
+        start: completed.height,
+        minimum: completed.minimum,
+        maximum: completed.maximum,
+        dock: completed.dock,
+        expanded: completed.expanded,
+        independent: completed.independent,
+      },
+      velocity,
+    );
+    const visible = dragGeometry(completed).visible;
+    if (release.kind === "close") {
+      playRelease(visible > 0 ? -velocity / visible : 0);
+      props.view.mobileHost?.close();
+      onSettled(() => clearResize(true));
+      return;
+    }
+    const distance = release.height - visible;
+    playRelease(Math.abs(distance) > 1 ? velocity / distance : 0);
+    props.view.mobileHost?.resize(
+      release.height,
+      release.mode,
+      release.mode === "expanded" ? completed.dock : 0,
+    );
     // Keep the live geometry through the owner's commit; then only the final snap animates.
-    onSettled(clearResize);
+    onSettled(() => clearResize());
+  };
+  const cancelResize = () => {
+    clearResize();
+    drag = undefined;
   };
   onSettled(() => {
     const viewportChanged = () => {
@@ -190,8 +285,9 @@ export function MobileHostChrome(
           viewport ? viewport.height + viewport.offsetTop - bounds.top : bounds.height,
         ) - drag.safeTop,
       );
+      drag.bounds = bounds.height;
       drag.dock = Math.max(drag.minimum, Math.min(bounds.height * 0.52, bounds.height - 200));
-      drag.current = Math.min(drag.current, drag.maximum);
+      drag.expanded = expandedDetent(bounds.height, drag.safeTop, drag.maximum);
       if (!dragFrame) {
         dragFrame = requestAnimationFrame(paintResize);
       }
@@ -202,6 +298,7 @@ export function MobileHostChrome(
     return () => {
       stopViewport?.();
       drag = undefined;
+      settleRelease();
       clearResize();
     };
   });
@@ -266,10 +363,7 @@ export function MobileHostChrome(
           onPointerMove={resize}
           onPointerUp={endResize}
           onLostPointerCapture={endResize}
-          onPointerCancel={() => {
-            clearResize();
-            drag = undefined;
-          }}
+          onPointerCancel={cancelResize}
           onClick={(event) => {
             if (expandable() && (event.detail === 0 || !suppressGrabberClick)) {
               toggleExpanded();
@@ -281,7 +375,19 @@ export function MobileHostChrome(
           <span />
         </button>
       </Show>
-      <header class="chat-mobile-host__header">
+      <header
+        class="chat-mobile-host__header"
+        onPointerDown={(event) => {
+          // Like a sheet's navigation bar, empty header space drags; controls keep their taps.
+          if (event.target instanceof Element && !event.target.closest(MOBILE_HEADER_CONTROLS)) {
+            startResize(event);
+          }
+        }}
+        onPointerMove={resize}
+        onPointerUp={endResize}
+        onLostPointerCapture={endResize}
+        onPointerCancel={cancelResize}
+      >
         <button
           type="button"
           class="chat-mobile-host__circle"

@@ -202,6 +202,7 @@ function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey
         visuallyPresented={presented()}
         active={active()}
         draft={draft()}
+        ownsRouteComposer={active() && routeData() !== undefined}
         focusComposer={props.options.draftFocus.shouldFocusPane(
           active(),
           draft(),
