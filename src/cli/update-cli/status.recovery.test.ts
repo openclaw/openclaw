@@ -297,7 +297,7 @@ it.each([
     await terminal(c, "committed");
     const row = await run(c);
     row.origin.updateRecoveryCapture!.manifestSha256 = "b".repeat(64);
-    mocks.readRun.mockResolvedValue(row);
+    mocks.readRun.mockImplementation(async (id) => (id === c.manifest.runId ? row : undefined));
   }
   if (fault === "foreign-state") {
     await writeJson(c.manifestPath, { ...c.manifest, stateDir: path.join(root, "foreign") });
@@ -317,20 +317,59 @@ it.each([
       await fs.link(target, c.manifestPath);
     }
   }
+  const healthy = await capture(secondId);
+  await terminal(healthy, "committed");
+  const directory = fault === "wrong-run-directory" ? `${c.directory}-wrong` : c.directory;
+  const manifestPath = path.join(directory, "manifest.json");
+  const retained = await text(manifestPath);
   await expect(updateStatus({ json: fault !== "malformed-text" })).resolves.toBeUndefined();
   if (fault === "malformed-text") {
-    expect(printed()).toContain("Update recovery sets unavailable:");
+    expect(printed()).toContain("Update capture: unreadable");
+    expect(printed()).toContain(healthy.manifestPath);
+    expect(printed()).toContain("Preserve this capture and current state");
+    expect(printed()).not.toContain("Update recovery sets unavailable:");
   } else {
     expect(result()).toHaveProperty("availability");
-    expect(result()).not.toHaveProperty("recoverySets");
-    expect(result()).toMatchObject({ recoverySetsError: expect.stringMatching(/[\s\S]/) });
+    expect(result()).not.toHaveProperty("recoverySetsError");
+    expect(result().recoverySets).toContainEqual(
+      expect.objectContaining({ manifestPath: healthy.manifestPath, status: "stale" }),
+    );
+    const unreadable = result().recoverySets.find(
+      (set: { status: string }) => set.status === "unreadable",
+    );
+    expect(unreadable).toMatchObject({ directory, message: expect.stringMatching(/[\s\S]/) });
+    for (const field of ["ref", "manifestPath", "manifestSha256", "runId"]) {
+      expect(unreadable).not.toHaveProperty(field);
+    }
     if (fault === "durable-binding") {
-      expect(result().recoverySetsError).toContain("identity changed");
+      expect(unreadable.message).toContain("identity changed");
     }
   }
+  expect(await text(manifestPath)).toBe(retained);
+  expect(await text(healthy.manifestPath)).toBe(healthy.raw);
   if (malformed) {
     expect(await text(c.manifestPath)).toBe("{");
   }
+});
+it("keeps failed recovery ambiguous beside an unreadable marked capture", async () => {
+  const c = await capture();
+  const damaged = await capture(secondId);
+  await fs.writeFile(damaged.manifestPath, "{");
+  const row = await run(c);
+  mocks.readRun.mockImplementation(async (id) => (id === firstId ? row : undefined));
+  expect((await inspect()).recoverySets).toMatchObject([
+    { runId: firstId, status: "ambiguous" },
+    { directory: damaged.directory, status: "unreadable" },
+  ]);
+  expect(await text(damaged.manifestPath)).toBe("{");
+});
+it("reports a capture-root enumeration failure globally", async () => {
+  const store = `${stateDir}.update-captures`;
+  await fs.writeFile(store, "not a directory");
+  const status = await inspect();
+  expect(status.recoverySetsError).toMatch(/ENOTDIR|not a directory/i);
+  expect(status).not.toHaveProperty("recoverySets");
+  expect(await text(store)).toBe("not a directory");
 });
 it("reports one failed set as unresolved and multiple failed sets as ambiguous", async () => {
   const c = await capture();
@@ -449,17 +488,26 @@ it("validates forward resolution against retained generations without writing", 
   await fs.mkdir(path.join(c.directory, "candidate"));
   const raw = JSON.stringify(candidate);
   await fs.writeFile(path.join(c.directory, "candidate", "manifest.json"), raw);
-  expect((await inspect()).recoverySetsError).toContain("stale");
+  expect((await inspect()).recoverySets[0]).toMatchObject({
+    status: "unreadable",
+    message: expect.stringContaining("stale"),
+  });
   row.origin.updateRecoveryCapture!.forwardResolution.binding.candidateSha256 = digest(raw);
   expect((await inspect()).recoverySets[0].status).toBe("forward-resolved");
   const partial = path.join(c.directory, "candidate", "manifest.json.partial");
   await fs.copyFile(path.join(c.directory, "candidate", "manifest.json"), partial);
-  expect((await inspect()).recoverySetsError).toContain("incomplete publication");
+  expect((await inspect()).recoverySets[0]).toMatchObject({
+    status: "unreadable",
+    message: expect.stringContaining("incomplete publication"),
+  });
   expect(await text(partial)).toBe(raw);
   await fs.unlink(partial);
   await writeJson(path.join(c.directory, "candidate", "manifest.json"), {
     ...candidate,
     generation: { kind: "candidate", baselineSha256: "b".repeat(64) },
   });
-  expect((await inspect()).recoverySetsError).toContain("generation identity changed");
+  expect((await inspect()).recoverySets[0]).toMatchObject({
+    status: "unreadable",
+    message: expect.stringContaining("generation identity changed"),
+  });
 });
