@@ -47,6 +47,7 @@ import { loadChatLiveTools } from "./chat-live-tools.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { isChatRunRecoveryStatus, reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
+import { retireSupersededLiveProjections } from "./history-merge-retirement.ts";
 import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
@@ -67,7 +68,11 @@ import {
   prunePersistedAssistantStreamSegments,
   prunePersistedToolStreamMessages,
 } from "./stream-segment-pruning.ts";
-import { reconcileAuthoritativeTerminalHistory } from "./terminal-message-identity.ts";
+import {
+  applyAuthoritativeTerminalsForHistory,
+  armPendingAuthoritativeTerminalForHistory,
+  reconcileAuthoritativeTerminalHistory,
+} from "./terminal-message-identity.ts";
 import { persistedCurrentToolStreamIds } from "./tool-stream-identity.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
 
@@ -232,6 +237,20 @@ export async function hydrateChatHistory(
       for (const payload of response.messages) {
         applySessionMessagePayload(state, payload, runActive, { kind: "history-delta" });
       }
+      // A delta can carry the row that arms a deferred terminal (#149153).
+      armPendingAuthoritativeTerminalForHistory({
+        host: state,
+        sessionKey,
+        visibleMessages: state.chatMessages,
+      });
+      // The history filter and the pane cleanup below share one effective
+      // applied set from the same read (#149153).
+      const cursorAppliedRunIds = applyAuthoritativeTerminalsForHistory({
+        host: state,
+        sessionKey,
+        visibleMessages: state.chatMessages,
+      });
+      retireSupersededLiveProjections(state, cursorAppliedRunIds);
       const historyProjection = getChatSessionProjection(state);
       if (Object.hasOwn(response.sessionInfo, "activeLeafEntryId")) {
         state.chatDisplayedLeafEntryId = response.sessionInfo.activeLeafEntryId?.trim() || null;
@@ -291,12 +310,24 @@ export async function hydrateChatHistory(
     const nextPagination = resolveChatHistoryPagination(res);
     const nextSessionId = historySessionId(res);
     const visibleMessages = visibleChatHistoryMessages(messages);
+    armPendingAuthoritativeTerminalForHistory({ host: state, sessionKey, visibleMessages });
+    // One effective applied set feeds the history filter and the pane cleanup,
+    // so a fenced run's newer reply survives both (#149153).
+    const appliedRunIds = applyAuthoritativeTerminalsForHistory({
+      host: state,
+      sessionKey,
+      visibleMessages,
+    });
     const previousTerminalMessages = reconcileAuthoritativeTerminalHistory({
+      appliedRunIds,
       host: state,
       previousMessages,
       sessionKey,
       visibleMessages,
     });
+    // The pane projection still holds the retired live rows; clear them before
+    // the snapshot reduction retains them as live entries (#149153).
+    retireSupersededLiveProjections(state, appliedRunIds);
     const hasActiveLeafEntryId = Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId");
     const nextDisplayedLeafEntryId = hasActiveLeafEntryId
       ? res.sessionInfo?.activeLeafEntryId?.trim() || null
