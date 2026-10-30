@@ -46,6 +46,22 @@ Symptom-first checks for a Telegram bot that is not behaving.
 
   </Accordion>
 
+  <Accordion title="Messages fail with runtime owner was not published">
+
+    OpenClaw tries to rebuild an agent's failed model runtime when the next
+    message arrives. After a failed recovery, the inbound message waits until
+    the runtime is eligible to retry. Waiting does not consume a recovery
+    attempt or keep typing active. If two actual recovery attempts fail in the same process, the
+    message remains in the failed ingress queue with the reason
+    `runtime-recovery-failed`. Ordinary network failures keep their normal
+    retry policy.
+
+    Check `openclaw logs --follow` for the underlying publication error, correct
+    the reported model or plugin problem, and resend the message. The failed
+    queue entry retains the original input for operator inspection.
+
+  </Accordion>
+
   <Accordion title="A final reply fails during a network interruption">
 
     OpenClaw retries an ordinary text or rich-text final reply once after an
@@ -76,6 +92,7 @@ Symptom-first checks for a Telegram bot that is not behaving.
     - During polling startup, OpenClaw reuses the successful startup `getMe` check for grammY so the runner does not need a second `getMe` before the first `getUpdates`.
     - If `deleteWebhook` fails with a transient network error during polling startup, OpenClaw continues into long polling instead of making another pre-poll control-plane call. A still-active webhook then surfaces as a `getUpdates` conflict; OpenClaw rebuilds the transport and retries webhook cleanup.
     - `Polling stall detected` in logs means OpenClaw restarts polling and rebuilds the transport after 120 seconds without completed long-poll liveness by default.
+    - If Bun logs `failed to persist update offset ... Telegram runtime not initialized`, update OpenClaw. Clearing the checkpoint can replay updates that were already received.
     - `openclaw channels status --probe` and `openclaw doctor` warn when a running polling account has not completed `getUpdates` after startup grace, a running webhook account has not completed `setWebhook` after startup grace, or the last successful polling transport activity is stale.
     - Telegram honors process proxy env for Bot API transport: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and lowercase variants. `NO_PROXY` / `no_proxy` can still bypass `api.telegram.org`.
     - If `OPENCLAW_PROXY_URL` is set for a service environment and no standard proxy env is present, Telegram uses that URL for Bot API transport too.

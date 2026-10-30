@@ -49,6 +49,5 @@ if (isMainThread) {
     void probeMain(role);
   });
 } else {
-  // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node MessagePort has no targetOrigin.
-  parentPort?.postMessage(probe(workerData?.role));
+  parentPort?.postMessage(probe(workerData?.role), []);
 }

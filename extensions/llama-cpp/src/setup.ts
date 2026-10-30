@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { safeStat } from "openclaw/plugin-sdk/path-existence-runtime";
 import { mergeDeep } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type {
   ProviderAppGuidedSetupContext,
@@ -26,7 +26,7 @@ import {
   resolveLlamaCppModelCacheDir,
   resolveLlamaCppModelSource,
 } from "./defaults.js";
-import { detectLlamaCppHardware, formatLlamaCppMemory, type LlamaCppHardware } from "./hardware.js";
+import { detectLlamaCppHardware, formatLlamaCppMemory } from "./hardware.js";
 import {
   resolveManagedLlamaServerPaths,
   selectLlamaServerAsset,
@@ -108,13 +108,6 @@ async function configuredCandidates(
   );
 }
 
-async function isFile(filePath: string): Promise<boolean> {
-  return await fs
-    .stat(filePath)
-    .then((stat) => stat.isFile())
-    .catch(() => false);
-}
-
 async function resolveCachedArtifact(source: string, cacheDir: string, signal?: AbortSignal) {
   return await ensureLlamaCppModel({ source, cacheDir, download: false, signal }).catch(() => {
     signal?.throwIfAborted();
@@ -128,7 +121,7 @@ async function resolveCachedCandidate(
 ): Promise<string | undefined> {
   const source = resolveLlamaCppModelSource(candidate.model);
   const resolved = resolveCachedLlamaCppModelPath(candidate);
-  if (resolved && (await isFile(resolved))) {
+  if (resolved && (await safeStat(resolved))?.isFile()) {
     return resolved;
   }
   if (candidate.model.id === DEFAULT_LLAMA_CPP_MODEL_ID) {
@@ -136,7 +129,7 @@ async function resolveCachedCandidate(
       resolveLegacyLlamaCppModelCacheDir(),
       DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
     );
-    if (await isFile(legacy)) {
+    if ((await safeStat(legacy))?.isFile()) {
       return legacy;
     }
   }
@@ -197,9 +190,9 @@ export async function detectLlamaCppSetup(ctx: ProviderAppGuidedSetupContext) {
   if (
     !command ||
     !path.isAbsolute(command) ||
-    !(await isFile(command)) ||
+    !(await safeStat(command))?.isFile() ||
     !presetPath ||
-    !(await isFile(presetPath))
+    !(await safeStat(presetPath))?.isFile()
   ) {
     return null;
   }
@@ -237,166 +230,6 @@ export async function prepareLlamaCppSetup(
   });
 }
 
-function resolveEmbeddingSetup(config: ProviderAuthContext["config"], cacheDir: string) {
-  const defaults = config.memory?.search;
-  const models = listAgentIds(config).flatMap((agentId) => {
-    const override = resolveAgentConfig(config, agentId)?.memory?.search;
-    // Match core memory config: each agent field overrides the top-level default.
-    if (
-      !(override?.enabled ?? defaults?.enabled ?? true) ||
-      (override?.provider ?? defaults?.provider) !== "local"
-    ) {
-      return [];
-    }
-    return [
-      resolveLlamaCppEmbeddingModel({
-        modelPath: override?.local?.modelPath ?? defaults?.local?.modelPath,
-        modelCacheDir: cacheDir,
-      }),
-    ];
-  });
-  const model = models[0] ?? resolveLlamaCppEmbeddingModel({ modelCacheDir: cacheDir });
-  return {
-    model,
-    localMemoryIntent: models.length > 0,
-    conflict: models.some((candidate) => candidate.source !== model.source),
-  };
-}
-
-async function resolveSetupPlan(
-  ctx: LlamaCppSetupContext,
-  candidates: LlamaCppChatCandidate[],
-  embeddingModelIsDefault: boolean,
-  localMemoryIntent: boolean,
-  hardware: LlamaCppHardware,
-  asset: LlamaServerAsset,
-  runtimeNote?: string,
-): Promise<LlamaCppSetupPlan | undefined> {
-  if (ctx.embeddingOnly) {
-    return await resolveEmbeddingOnlyPlan(ctx, candidates, localMemoryIntent);
-  }
-  let candidate = candidates[0];
-  const configuredPath = candidate
-    ? await resolveCachedCandidate(candidate, ctx.signal)
-    : undefined;
-  if (candidate && configuredPath) {
-    if (
-      runtimeNote &&
-      !(await ctx.prompter.confirm({
-        message: `${runtimeNote} Use cached ${candidate.model.name} on Gateway host ${os.hostname()} with the verified CPU runtime?`,
-        initialValue: false,
-      }))
-    ) {
-      return undefined;
-    }
-    return { kind: "chat", candidate, cachedPath: configuredPath };
-  }
-
-  const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-  const provider = existing?.localService ? existing : buildLlamaCppProviderConfig();
-  const cacheDir = resolveLlamaCppModelCacheDir(provider);
-  if (candidate) {
-    const source = resolveLlamaCppModelSource(candidate.model);
-    let size: number | undefined;
-    try {
-      if (path.isAbsolute(source) || !/^[a-z][a-z\d+.-]*:/iu.test(source)) {
-        const cachedPath = await ensureLlamaCppModel({
-          source,
-          cacheDir,
-          download: false,
-          signal: ctx.signal,
-        });
-        return { kind: "chat", candidate, cachedPath };
-      }
-      size = await resolveLlamaCppModelDownloadSize(source, cacheDir, ctx.signal);
-    } catch (error) {
-      ctx.signal?.throwIfAborted();
-      await ctx.prompter.note(
-        `Cannot use configured model ${candidate.model.name}: ${error instanceof Error ? error.message : String(error)} Check params.modelPath and retry llama.cpp setup.`,
-        "Setup skipped",
-      );
-      return undefined;
-    }
-    const consent = await ctx.prompter.confirm({
-      message: `${runtimeNote ? `${runtimeNote}\n` : ""}Download ${candidate.model.name} (${size ? `${(size / BYTES_PER_GB).toFixed(1)} GB` : "size unknown"}), ${describeEmbeddingDownload(embeddingModelIsDefault)}, and the verified ${asset.backend.toUpperCase()} runtime on Gateway host ${os.hostname()}, then use this model?`,
-      initialValue: false,
-    });
-    return consent ? { kind: "chat", candidate } : undefined;
-  }
-  const cachedModels = new Map<string, string>();
-  // A cancelled activation may leave a complete download without configured inventory.
-  // Credit only verified artifacts, before charging disk space for a retry.
-  for (const recipe of resolveLlamaCppModelCandidates(hardware, asset.backend).recipes) {
-    const cached = await resolveCachedArtifact(
-      resolveLlamaCppModelSource(recipe.model),
-      cacheDir,
-      ctx.signal,
-    );
-    if (cached) {
-      cachedModels.set(recipe.model.id, cached);
-      // Lower cached tiers cannot save more download space than this one.
-      break;
-    }
-  }
-  const cachedEmbedding =
-    embeddingModelIsDefault &&
-    Boolean(await resolveCachedArtifact(DEFAULT_LLAMA_CPP_EMBEDDING_MODEL, cacheDir, ctx.signal));
-  const recommendation = recommendLlamaCppModel(hardware, asset.backend, {
-    modelIds: new Set(cachedModels.keys()),
-    embedding: cachedEmbedding,
-    // An existing pinned command is validated by the installer; it will not be downloaded again.
-    runtime: await isFile(resolveManagedLlamaServerPaths(asset).command),
-  });
-  if (recommendation.kind === "recommended") {
-    const { recipe } = recommendation;
-    const cachedPath = cachedModels.get(recipe.model.id);
-    candidate = { model: recipe.model, provider };
-    const recommendationSummary = [
-      `Runs on Gateway host ${os.hostname()} (${hardware.platform}/${hardware.arch}), using ${asset.backend === "metal" ? "Apple Metal" : asset.backend === "cuda" ? "NVIDIA CUDA" : "the CPU"}.`,
-      `${formatLlamaCppMemory(hardware.totalMemoryBytes)} RAM; ${formatLlamaCppMemory(hardware.availableDiskBytes ?? 0)} free disk.`,
-      !hardware.sharedDisk
-        ? `${formatLlamaCppMemory(hardware.availableRuntimeDiskBytes ?? 0)} free on the runtime volume.`
-        : undefined,
-      runtimeNote,
-      recommendation.reason,
-      !embeddingModelIsDefault
-        ? "This estimate includes the default embedding model; your configured embedding model may need more memory and disk space."
-        : undefined,
-      "OpenClaw will check a real tool call before making this your default model.",
-    ]
-      .filter(Boolean)
-      .join("\n");
-    const consent = await ctx.prompter.confirm({
-      message: `${recommendationSummary}\n\n${
-        cachedPath
-          ? `Use cached ${recipe.model.name}, download any missing embedding and ${asset.backend.toUpperCase()} runtime files, then use this model?`
-          : `Download ${recipe.model.name} (${(recipe.sizeBytes / BYTES_PER_GB).toFixed(1)} GB), ${describeEmbeddingDownload(embeddingModelIsDefault)}, and the verified ${asset.backend.toUpperCase()} runtime, then use this model?`
-      }`,
-      initialValue: false,
-    });
-    if (consent) {
-      return { kind: "chat", candidate, cachedPath };
-    }
-  } else if (!localMemoryIntent) {
-    await ctx.prompter.note(recommendation.reason, "Setup skipped");
-    return undefined;
-  }
-
-  const embeddingPlan = await resolveEmbeddingOnlyPlan(ctx, candidates, localMemoryIntent);
-  if (embeddingPlan) {
-    const consent = await ctx.prompter.confirm({
-      message: `${runtimeNote ? `${runtimeNote} ` : ""}Install a verified ${asset.backend.toUpperCase()} llama.cpp server on Gateway host ${os.hostname()} and download only ${describeEmbeddingDownload(embeddingModelIsDefault)}? Your chat model will stay unchanged.`,
-      initialValue: false,
-    });
-    if (consent) {
-      return embeddingPlan;
-    }
-  }
-
-  await ctx.prompter.note("Local model setup skipped.", "Setup skipped");
-  return undefined;
-}
-
 async function resolveEmbeddingOnlyPlan(
   ctx: LlamaCppSetupContext,
   candidates: LlamaCppChatCandidate[],
@@ -419,15 +252,32 @@ export async function runLlamaCppSetup(ctx: LlamaCppSetupContext): Promise<Provi
   const managedExisting = existing?.localService ? existing : undefined;
   const mediaModels = resolveLlamaCppMediaModels(managedExisting);
   const cacheDir = resolveLlamaCppModelCacheDir(managedExisting);
-  const embeddingSetup = resolveEmbeddingSetup(ctx.config, cacheDir);
-  if (embeddingSetup.conflict) {
+  const defaults = ctx.config.memory?.search;
+  const models = listAgentIds(ctx.config).flatMap((agentId) => {
+    const override = resolveAgentConfig(ctx.config, agentId)?.memory?.search;
+    // Match core memory config: each agent field overrides the top-level default.
+    if (
+      !(override?.enabled ?? defaults?.enabled ?? true) ||
+      (override?.provider ?? defaults?.provider) !== "local"
+    ) {
+      return [];
+    }
+    return [
+      resolveLlamaCppEmbeddingModel({
+        modelPath: override?.local?.modelPath ?? defaults?.local?.modelPath,
+        modelCacheDir: cacheDir,
+      }),
+    ];
+  });
+  const embeddingModel = models[0] ?? resolveLlamaCppEmbeddingModel({ modelCacheDir: cacheDir });
+  const localMemoryIntent = models.length > 0;
+  if (models.some((candidate) => candidate.source !== embeddingModel.source)) {
     await ctx.prompter.note(
       "Configured agents resolve to different local embedding models. Set memory.search.local.modelPath and any per-agent overrides to the same value, then retry llama.cpp setup.",
       "Setup skipped",
     );
     return { profiles: [] };
   }
-  const embeddingModel = embeddingSetup.model;
   const hardware = await detectLlamaCppHardware({ cacheDir, signal: ctx.signal });
   let asset: LlamaServerAsset;
   let runtimeNote: string | undefined;
@@ -442,15 +292,135 @@ export async function runLlamaCppSetup(ctx: LlamaCppSetupContext): Promise<Provi
     runtimeNote = `${error instanceof Error ? error.message : String(error)} This recommendation uses CPU execution.`;
   }
   const candidates = await configuredCandidates(ctx.config);
-  const plan = await resolveSetupPlan(
-    ctx,
-    candidates,
-    embeddingModel.isDefault,
-    embeddingSetup.localMemoryIntent,
-    hardware,
-    asset,
-    runtimeNote,
-  );
+  async function resolveSetupPlan(): Promise<LlamaCppSetupPlan | undefined> {
+    const embeddingModelIsDefault = embeddingModel.isDefault;
+    if (ctx.embeddingOnly) {
+      return await resolveEmbeddingOnlyPlan(ctx, candidates, localMemoryIntent);
+    }
+    let candidate = candidates[0];
+    const configuredPath = candidate
+      ? await resolveCachedCandidate(candidate, ctx.signal)
+      : undefined;
+    if (candidate && configuredPath) {
+      if (
+        runtimeNote &&
+        !(await ctx.prompter.confirm({
+          message: `${runtimeNote} Use cached ${candidate.model.name} on Gateway host ${os.hostname()} with the verified CPU runtime?`,
+          initialValue: false,
+        }))
+      ) {
+        return undefined;
+      }
+      return { kind: "chat", candidate, cachedPath: configuredPath };
+    }
+
+    const planExisting = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+    const provider = planExisting?.localService ? planExisting : buildLlamaCppProviderConfig();
+    const planCacheDir = resolveLlamaCppModelCacheDir(provider);
+    if (candidate) {
+      const source = resolveLlamaCppModelSource(candidate.model);
+      let size: number | undefined;
+      try {
+        if (path.isAbsolute(source) || !/^[a-z][a-z\d+.-]*:/iu.test(source)) {
+          const cachedPath = await ensureLlamaCppModel({
+            source,
+            cacheDir: planCacheDir,
+            download: false,
+            signal: ctx.signal,
+          });
+          return { kind: "chat", candidate, cachedPath };
+        }
+        size = await resolveLlamaCppModelDownloadSize(source, planCacheDir, ctx.signal);
+      } catch (error) {
+        ctx.signal?.throwIfAborted();
+        await ctx.prompter.note(
+          `Cannot use configured model ${candidate.model.name}: ${error instanceof Error ? error.message : String(error)} Check params.modelPath and retry llama.cpp setup.`,
+          "Setup skipped",
+        );
+        return undefined;
+      }
+      const consent = await ctx.prompter.confirm({
+        message: `${runtimeNote ? `${runtimeNote}\n` : ""}Download ${candidate.model.name} (${size ? `${(size / BYTES_PER_GB).toFixed(1)} GB` : "size unknown"}), ${describeEmbeddingDownload(embeddingModelIsDefault)}, and the verified ${asset.backend.toUpperCase()} runtime on Gateway host ${os.hostname()}, then use this model?`,
+        initialValue: false,
+      });
+      return consent ? { kind: "chat", candidate } : undefined;
+    }
+    const cachedModels = new Map<string, string>();
+    // A cancelled activation may leave a complete download without configured inventory.
+    // Credit only verified artifacts, before charging disk space for a retry.
+    for (const recipe of resolveLlamaCppModelCandidates(hardware, asset.backend).recipes) {
+      const cached = await resolveCachedArtifact(
+        resolveLlamaCppModelSource(recipe.model),
+        planCacheDir,
+        ctx.signal,
+      );
+      if (cached) {
+        cachedModels.set(recipe.model.id, cached);
+        // Lower cached tiers cannot save more download space than this one.
+        break;
+      }
+    }
+    const cachedEmbedding =
+      embeddingModelIsDefault &&
+      Boolean(
+        await resolveCachedArtifact(DEFAULT_LLAMA_CPP_EMBEDDING_MODEL, planCacheDir, ctx.signal),
+      );
+    const recommendation = recommendLlamaCppModel(hardware, asset.backend, {
+      modelIds: new Set(cachedModels.keys()),
+      embedding: cachedEmbedding,
+      // An existing pinned command is validated by the installer; it will not be downloaded again.
+      runtime: (await safeStat(resolveManagedLlamaServerPaths(asset).command))?.isFile() === true,
+    });
+    if (recommendation.kind === "recommended") {
+      const { recipe } = recommendation;
+      const cachedPath = cachedModels.get(recipe.model.id);
+      candidate = { model: recipe.model, provider };
+      const recommendationSummary = [
+        `Runs on Gateway host ${os.hostname()} (${hardware.platform}/${hardware.arch}), using ${asset.backend === "metal" ? "Apple Metal" : asset.backend === "cuda" ? "NVIDIA CUDA" : "the CPU"}.`,
+        `${formatLlamaCppMemory(hardware.totalMemoryBytes)} RAM; ${formatLlamaCppMemory(hardware.availableDiskBytes ?? 0)} free disk.`,
+        !hardware.sharedDisk
+          ? `${formatLlamaCppMemory(hardware.availableRuntimeDiskBytes ?? 0)} free on the runtime volume.`
+          : undefined,
+        runtimeNote,
+        recommendation.reason,
+        !embeddingModelIsDefault
+          ? "This estimate includes the default embedding model; your configured embedding model may need more memory and disk space."
+          : undefined,
+        "OpenClaw will check a real tool call before making this your default model.",
+      ]
+        .filter(Boolean)
+        .join("\n");
+      const consent = await ctx.prompter.confirm({
+        message: `${recommendationSummary}\n\n${
+          cachedPath
+            ? `Use cached ${recipe.model.name}, download any missing embedding and ${asset.backend.toUpperCase()} runtime files, then use this model?`
+            : `Download ${recipe.model.name} (${(recipe.sizeBytes / BYTES_PER_GB).toFixed(1)} GB), ${describeEmbeddingDownload(embeddingModelIsDefault)}, and the verified ${asset.backend.toUpperCase()} runtime, then use this model?`
+        }`,
+        initialValue: false,
+      });
+      if (consent) {
+        return { kind: "chat", candidate, cachedPath };
+      }
+    } else if (!localMemoryIntent) {
+      await ctx.prompter.note(recommendation.reason, "Setup skipped");
+      return undefined;
+    }
+
+    const embeddingPlan = await resolveEmbeddingOnlyPlan(ctx, candidates, localMemoryIntent);
+    if (embeddingPlan) {
+      const consent = await ctx.prompter.confirm({
+        message: `${runtimeNote ? `${runtimeNote} ` : ""}Install a verified ${asset.backend.toUpperCase()} llama.cpp server on Gateway host ${os.hostname()} and download only ${describeEmbeddingDownload(embeddingModelIsDefault)}? Your chat model will stay unchanged.`,
+        initialValue: false,
+      });
+      if (consent) {
+        return embeddingPlan;
+      }
+    }
+
+    await ctx.prompter.note("Local model setup skipped.", "Setup skipped");
+    return undefined;
+  }
+  const plan = await resolveSetupPlan();
   if (!plan) {
     return { profiles: [] };
   }

@@ -1,9 +1,6 @@
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { assertContextEngineHostSupport } from "../../context-engine/host-compat.js";
-import {
-  joinDiagnosticContent,
-  truncateDiagnosticContent,
-} from "../../infra/diagnostic-content.js";
+import { truncateDiagnosticContent } from "../../infra/diagnostic-content.js";
 import {
   diagnosticErrorCategory,
   diagnosticErrorMessage,
@@ -31,7 +28,6 @@ import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/type
 import { copyCoreTtsAttemptResultProvenance } from "../tools/tts-tool-result-provenance.js";
 import { subscribeAgentCommentaryDiagnostics } from "./commentary-diagnostics.js";
 import { recordAgentHarnessPreflightOwner } from "./errors.js";
-import { applyAgentHarnessResultClassification } from "./result-classification.js";
 import {
   EmptySettledTurnFinalizationError,
   type PreparedSettledTurnFinalizationResult,
@@ -67,7 +63,7 @@ function agentRunMessageContent(
 ): AgentRunMessageContent | undefined {
   const policy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfigSnapshot());
   const finalText = policy.outputMessages ? resolveFinalMessageRawText(assistant) : undefined;
-  const finalResponse = finalText ? joinDiagnosticContent([finalText]) : undefined;
+  const finalResponse = finalText ? truncateDiagnosticContent(finalText) : undefined;
   const userPrompt = policy.inputMessages && prompt ? truncateDiagnosticContent(prompt) : undefined;
   return userPrompt || finalResponse
     ? { ...(userPrompt ? { userPrompt } : {}), ...(finalResponse ? { finalResponse } : {}) }
@@ -376,11 +372,28 @@ export async function runAgentHarnessLifecycleAttempt(
       diagnostics.setPhase("resolve");
       // Classification happens inside the diagnostic phase so failures identify
       // whether they came from send or result resolution.
+      let classifiedResult: AgentHarnessAttemptResult;
+      if (!harness.classify) {
+        classifiedResult = { ...rawResult, agentHarnessId: harness.id };
+      } else {
+        // Reclassify from the raw result so retries or wrappers cannot preserve an
+        // obsolete classification from an earlier harness.
+        const {
+          agentHarnessResultClassification: _previousClassification,
+          ...resultWithoutPrevious
+        } = rawResult;
+        const classification = harness.classify(resultWithoutPrevious, params);
+        classifiedResult = {
+          ...resultWithoutPrevious,
+          agentHarnessId: harness.id,
+          ...(classification && classification !== "ok"
+            ? { agentHarnessResultClassification: classification }
+            : {}),
+        };
+      }
       return copyCoreTtsAttemptResultProvenance(
         rawResult,
-        normalizeAgentHarnessAttemptResult(
-          applyAgentHarnessResultClassification(harness, rawResult, params),
-        ),
+        normalizeAgentHarnessAttemptResult(classifiedResult),
       );
     };
     result = await diagnostics.run(runAndClassify);

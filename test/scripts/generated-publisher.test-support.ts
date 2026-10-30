@@ -5,19 +5,16 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll } from "vitest";
 import { parse } from "yaml";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const PUBLISH_GENERATED_PR_ACTION = ".github/actions/publish-generated-pr/action.yml";
 const publisherTemplateDirs = useAutoCleanupTempDirTracker(afterAll);
-let generatedPublisherTemplate: string | undefined;
+let generatedPublisherTemplate: { root: string; initialMain: string } | undefined;
 function runGit(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
@@ -48,19 +45,22 @@ function copyGeneratedPublisherFixture(root: string, workspaceName: string) {
     runGit(worktree, ["remote", "add", "origin", "../origin.git"]);
     runGit(worktree, ["push", "-u", "origin", "main"]);
     runGit(templateRoot, ["--git-dir", origin, "symbolic-ref", "HEAD", "refs/heads/main"]);
-    generatedPublisherTemplate = templateRoot;
+    const initialMain = runGit(worktree, ["rev-parse", "HEAD"]);
+    generatedPublisherTemplate = { root: templateRoot, initialMain };
   }
-  // Relative origin follows each copied repository pair, isolating refs, hooks and config.
+  // Immutable seed and relative origin isolate each copy's initial commit, refs, hooks and config.
   for (const name of ["origin.git", "worktree"]) {
     cpSync(
-      path.join(generatedPublisherTemplate, name),
+      path.join(generatedPublisherTemplate.root, name),
       path.join(root, name === "worktree" ? workspaceName : name),
       { recursive: true, mode: fsConstants.COPYFILE_FICLONE },
     );
   }
+  return generatedPublisherTemplate.initialMain;
 }
 
 export type GeneratedPublisherOptions = {
+  headBranch?: string;
   disarmRace?: boolean;
   updateSourceBeforeAutoMerge?: boolean;
   race?: "delete" | "advance" | "recreate";
@@ -70,6 +70,7 @@ export type GeneratedPublisherOptions = {
   existingPr?: boolean;
   expectFailure?: boolean;
   failGeneratedPush?: boolean;
+  generatedFiles?: Record<string, string>;
   invalidationPaths?: string;
   malformedAutoMergeRecord?: boolean;
   mergeGeneratedPush?: boolean;
@@ -85,6 +86,7 @@ export function prepareGeneratedPublisherFixture(
   options: GeneratedPublisherOptions = {},
   workspaceName = "worktree",
 ) {
+  const headBranch = options.headBranch ?? "automation/locale";
   const origin = path.join(root, "origin.git");
   const updater = path.join(root, "updater");
   const worktree = path.join(root, workspaceName);
@@ -96,8 +98,7 @@ export function prepareGeneratedPublisherFixture(
   const stalePrViewHeadOnce = path.join(root, "stale-pr-view-head-once");
   const summary = path.join(root, "summary.md");
 
-  copyGeneratedPublisherFixture(root, workspaceName);
-  const initialMain = runGit(worktree, ["rev-parse", "HEAD"]);
+  const initialMain = copyGeneratedPublisherFixture(root, workspaceName);
   let initialBranch = "";
   mkdirSync(fakeBin);
   mkdirSync(runnerTemp, { recursive: true });
@@ -109,11 +110,11 @@ export function prepareGeneratedPublisherFixture(
     writeFileSync(stalePrViewHeadOnce, "", "utf8");
   }
   if (options.existingPr) {
-    runGit(worktree, ["switch", "-c", "automation/locale"]);
+    runGit(worktree, ["switch", "-c", headBranch]);
     writeFixture(worktree, "generated/a.txt", "stale-pr-a\n");
     runGit(worktree, ["add", "generated"]);
     runGit(worktree, ["commit", "-m", "stale generated pull request"]);
-    runGit(worktree, ["push", "-u", "origin", "automation/locale"]);
+    runGit(worktree, ["push", "-u", "origin", headBranch]);
     initialBranch = runGit(worktree, ["rev-parse", "HEAD"]);
     writeFileSync(prState, "", "utf8");
     runGit(worktree, ["switch", "main"]);
@@ -139,6 +140,9 @@ export function prepareGeneratedPublisherFixture(
   if (!options.noGeneratedChange) {
     writeFixture(worktree, "generated/a.txt", "desired-a\n");
   }
+  for (const [name, contents] of Object.entries(options.generatedFiles ?? {})) {
+    writeFixture(worktree, name, contents);
+  }
   if (options.failGeneratedPush) {
     writeExecutable(path.join(origin, "hooks", "pre-receive"), [
       "#!/bin/sh",
@@ -150,9 +154,9 @@ export function prepareGeneratedPublisherFixture(
     writeExecutable(path.join(origin, "hooks", "post-receive"), [
       "#!/bin/sh",
       "while read -r old_head new_head ref; do",
-      '  if [ "$ref" = "refs/heads/automation/locale" ]; then',
+      '  if [ "$ref" = "refs/heads/${FAKE_HEAD_BRANCH}" ]; then',
       '    git update-ref refs/heads/main "$new_head"',
-      '    git update-ref -d refs/heads/automation/locale "$new_head"',
+      '    git update-ref -d refs/heads/${FAKE_HEAD_BRANCH} "$new_head"',
       "  fi",
       "done",
     ]);
@@ -162,12 +166,13 @@ export function prepareGeneratedPublisherFixture(
   writeExecutable(path.join(fakeBin, "gh"), [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
+    'printf "%s\\n" "$*" >> "$FAKE_GH_CALLS"',
     "read_head() {",
     '  if [[ -f "$1" ]]; then',
     '    head="0000000000000000000000000000000000000000"',
     '    rm -f "$1"',
     "  else",
-    '    head="$("${FAKE_REAL_GIT:-git}" --git-dir="$FAKE_ORIGIN" rev-parse refs/heads/automation/locale)"',
+    '    head="$("${FAKE_REAL_GIT:-git}" --git-dir="$FAKE_ORIGIN" rev-parse refs/heads/${FAKE_HEAD_BRANCH})"',
     "  fi",
     "}",
     'if [[ "$FAKE_UPDATE_BEFORE_AUTO_MERGE" == "true" && ( "${1-}:${2-}" == "pr:create" || "${1-}:${2-}" == "pr:edit" ) ]]; then',
@@ -186,7 +191,7 @@ export function prepareGeneratedPublisherFixture(
     "    ;;",
     "  pr:create)",
     '    if [[ "$FAKE_RECONCILIATION" == "" ]]; then : > "$FAKE_PR_STATE"; fi',
-    '    if [[ "$FAKE_RECONCILIATION" == "merged" ]]; then "$FAKE_REAL_GIT" --git-dir="$FAKE_ORIGIN" update-ref refs/heads/main "$("$FAKE_REAL_GIT" --git-dir="$FAKE_ORIGIN" rev-parse refs/heads/automation/locale)"; fi',
+    '    if [[ "$FAKE_RECONCILIATION" == "merged" ]]; then "$FAKE_REAL_GIT" --git-dir="$FAKE_ORIGIN" update-ref refs/heads/main "$("$FAKE_REAL_GIT" --git-dir="$FAKE_ORIGIN" rev-parse refs/heads/${FAKE_HEAD_BRANCH})"; fi',
     '    printf "%s\\n" "https://github.com/openclaw/openclaw/pull/1"',
     "    ;;",
     "  pr:edit) exit 0 ;;",
@@ -199,9 +204,9 @@ export function prepareGeneratedPublisherFixture(
     '    if [[ -n "$FAKE_RACE" && ! -f "$FAKE_PR_STATE.raced" ]]; then',
     '      : > "$FAKE_PR_STATE.raced"',
     '      if [[ "$FAKE_RACE" == "advance" ]]; then',
-    '        "$FAKE_REAL_GIT" --git-dir="$FAKE_ORIGIN" update-ref refs/heads/automation/locale "$FAKE_INITIAL_MAIN"',
+    '        "$FAKE_REAL_GIT" --git-dir="$FAKE_ORIGIN" update-ref refs/heads/${FAKE_HEAD_BRANCH} "$FAKE_INITIAL_MAIN"',
     "      else",
-    '        "$FAKE_REAL_GIT" --git-dir="$FAKE_ORIGIN" update-ref -d refs/heads/automation/locale "$head"',
+    '        "$FAKE_REAL_GIT" --git-dir="$FAKE_ORIGIN" update-ref -d refs/heads/${FAKE_HEAD_BRANCH} "$head"',
     "      fi",
     "    fi",
     "    ;;",
@@ -210,7 +215,7 @@ export function prepareGeneratedPublisherFixture(
     '    printf "%s\\n" "$*" >> "$FAKE_MERGE_CALLS"',
     '    if [[ " $* " == *" --disable-auto "* ]]; then',
     '      : > "$FAKE_MERGE_CALLS.disabled"',
-    '      if [[ "$FAKE_DISARM_RACE" == "true" ]]; then "${FAKE_REAL_GIT:-git}" --git-dir="$FAKE_ORIGIN" update-ref refs/heads/automation/locale "$FAKE_INITIAL_MAIN"; fi',
+    '      if [[ "$FAKE_DISARM_RACE" == "true" ]]; then "${FAKE_REAL_GIT:-git}" --git-dir="$FAKE_ORIGIN" update-ref refs/heads/${FAKE_HEAD_BRANCH} "$FAKE_INITIAL_MAIN"; fi',
     "    fi",
     "    ;;",
     '  *) printf "unexpected gh call: %s\\n" "$*" >&2; exit 2 ;;',
@@ -234,6 +239,8 @@ export function prepareGeneratedPublisherFixture(
       FAKE_AUTO_MERGE_METHOD: options.existingAutoMergeMethod ?? "",
       FAKE_MALFORMED_AUTO_MERGE_RECORD: String(options.malformedAutoMergeRecord ?? false),
       FAKE_ORIGIN: origin,
+      FAKE_HEAD_BRANCH: headBranch,
+      FAKE_GH_CALLS: path.join(root, "gh-calls"),
       FAKE_MERGE_CALLS: mergeCalls,
       FAKE_PR_STATE: prState,
       FAKE_STALE_HEAD_ONCE: stalePrHeadOnce,
@@ -246,32 +253,49 @@ export function prepareGeneratedPublisherFixture(
       GITHUB_REPOSITORY: "openclaw/openclaw",
       GITHUB_REPOSITORY_OWNER: "openclaw",
       GITHUB_STEP_SUMMARY: summary,
-      HEAD_BRANCH: "automation/locale",
+      HEAD_BRANCH: headBranch,
       PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
       PR_BODY: "Generated test body",
       PR_TITLE: "chore(test): refresh generated output",
       RUNNER_TEMP: runnerTemp,
     },
     inspect(publishOutput: string, checkAuth = true) {
-      const authHeader = spawnSync(
-        "git",
-        ["config", "--local", "--get-all", "http.https://github.com/.extraheader"],
-        { cwd: worktree, encoding: "utf8" },
-      );
-      if (checkAuth && (authHeader.status !== 1 || authHeader.stdout.trim() !== "")) {
-        throw new Error("generated publisher left its Git authorization header configured");
+      if (checkAuth) {
+        const authHeader = spawnSync(
+          "git",
+          ["config", "--local", "--get-all", "http.https://github.com/.extraheader"],
+          { cwd: worktree, encoding: "utf8" },
+        );
+        if (authHeader.status !== 1 || authHeader.stdout.trim() !== "") {
+          throw new Error("generated publisher left its Git authorization header configured");
+        }
       }
 
-      const branchRef = "refs/heads/automation/locale";
+      const branchRef = "refs/heads/" + headBranch;
       const originGit = (...args: string[]) => runGit(root, ["--git-dir", origin, ...args]);
-      const branchExists =
-        spawnSync("git", ["--git-dir", origin, "show-ref", "--verify", branchRef]).status === 0;
-      const branchHead = branchExists ? originGit("rev-parse", branchRef) : "";
+      const branch = spawnSync(
+        "git",
+        ["--git-dir", origin, "show-ref", "--verify", "--hash", branchRef],
+        { encoding: "utf8" },
+      );
+      const branchExists = branch.status === 0;
+      const branchHead = branchExists ? branch.stdout.trim() : "";
       const generated = (file: string) =>
         branchExists ? originGit("show", `${branchRef}:generated/${file}.txt`) : "";
       return {
         branchExists,
         branchHead,
+        localHead: runGit(worktree, ["rev-parse", "HEAD"]),
+        generatedFiles: Object.fromEntries(
+          Object.keys(options.generatedFiles ?? {}).map((name) => [
+            name,
+            branchExists
+              ? execFileSync("git", ["--git-dir", origin, "show", `${branchRef}:${name}`], {
+                  encoding: "utf8",
+                })
+              : "",
+          ]),
+        ),
         initialBranch,
         generatedA: generated("a"),
         generatedB: generated("b"),
@@ -288,7 +312,8 @@ export function runGeneratedPublisherScenario(
   baseChangePath: "a" | "b" | null,
   options: GeneratedPublisherOptions = {},
 ) {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-generated-pr-"));
+  const tempDirs = createTempDirTracker();
+  const root = tempDirs.make("openclaw-generated-pr-");
   try {
     const fixture = prepareGeneratedPublisherFixture(root, baseChangePath, options);
     const action = parse(readFileSync(PUBLISH_GENERATED_PR_ACTION, "utf8"));
@@ -318,6 +343,6 @@ export function runGeneratedPublisherScenario(
     }
     return fixture.inspect(publishOutput);
   } finally {
-    rmSync(root, { force: true, recursive: true });
+    tempDirs.cleanup();
   }
 }

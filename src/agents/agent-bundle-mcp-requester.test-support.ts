@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import http from "node:http";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
+import { McpServer } from "@modelcontextprotocol/server";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 
 export async function startRequesterScopedMcpProofServer(): Promise<{
   url: string;
@@ -10,7 +14,7 @@ export async function startRequesterScopedMcpProofServer(): Promise<{
 }> {
   const server = new McpServer({ name: "openclaw-requester-proof", version: "1.0.0" });
   const session: { current?: string; closed?: string; calls: number } = { calls: 0 };
-  const transport = new StreamableHTTPServerTransport({
+  const transport = new NodeStreamableHTTPServerTransport({
     sessionIdGenerator: randomUUID,
     onsessioninitialized(nextSessionId) {
       session.current = nextSessionId;
@@ -39,23 +43,13 @@ export async function startRequesterScopedMcpProofServer(): Promise<{
       }
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    httpServer.once("error", reject);
-    httpServer.listen(0, "127.0.0.1", resolve);
-  });
-  const address = httpServer.address();
-  if (!address || typeof address === "string") {
-    throw new Error("requester-scoped MCP proof server did not bind a loopback port");
-  }
+  const origin = await listenLoopback(httpServer);
   return {
-    url: `http://127.0.0.1:${address.port}/mcp`,
+    url: `${origin}/mcp`,
     session,
     close: async () => {
       await server.close();
-      httpServer.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        httpServer.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeHttpServer(httpServer);
     },
   };
 }

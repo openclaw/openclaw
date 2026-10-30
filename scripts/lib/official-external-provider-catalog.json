@@ -1,6 +1,50 @@
 {
   "entries": [
     {
+      "name": "@openclaw/abliteration-provider",
+      "description": "OpenClaw Abliteration provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "abliteration",
+          "label": "Abliteration"
+        },
+        "providers": [
+          {
+            "id": "abliteration",
+            "name": "Abliteration",
+            "docs": "/providers/abliteration",
+            "categories": ["cloud", "llm"],
+            "envVars": ["ABLITERATION_API_KEY", "ABLIT_KEY"],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "abliteration-api-key",
+                "appGuidedSecret": true,
+                "choiceLabel": "Abliteration API key",
+                "choiceHint": "OpenAI-compatible abliterated open-weight models",
+                "groupId": "abliteration",
+                "groupLabel": "Abliteration",
+                "groupHint": "OpenAI-compatible abliterated open-weight models",
+                "optionKey": "abliterationApiKey",
+                "cliFlag": "--abliteration-api-key",
+                "cliOption": "--abliteration-api-key <key>",
+                "cliDescription": "Abliteration API key",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/abliteration-provider",
+          "npmSpec": "@openclaw/abliteration-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.10.6"
+        }
+      }
+    },
+    {
       "name": "@openclaw/amazon-bedrock-provider",
       "description": "OpenClaw Amazon Bedrock provider plugin",
       "source": "official",
@@ -658,6 +702,30 @@
             ]
           }
         ],
+        "contracts": {
+          "webSearchProviders": [
+            "deepseek"
+          ]
+        },
+        "webSearchProviders": [
+          {
+            "id": "deepseek",
+            "label": "DeepSeek",
+            "hint": "Structured search results from DeepSeek's search engine",
+            "onboardingScopes": [
+              "text-inference"
+            ],
+            "credentialLabel": "DeepSeek API key",
+            "envVars": [
+              "DEEPSEEK_API_KEY"
+            ],
+            "placeholder": "sk-...",
+            "signupUrl": "https://platform.deepseek.com/api_keys",
+            "docsUrl": "https://docs.openclaw.ai/providers/deepseek#web-search",
+            "credentialPath": "plugins.entries.deepseek.config.webSearch.apiKey",
+            "autoDetectOrder": 80
+          }
+        ],
         "install": {
           "clawhubSpec": "clawhub:@openclaw/deepseek-provider",
           "npmSpec": "@openclaw/deepseek-provider",
@@ -764,6 +832,65 @@
           "npmSpec": "@openclaw/gmi-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/liquid-ai-provider",
+      "description": "OpenClaw Liquid AI provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "liquid-ai",
+          "label": "Liquid AI"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "liquid-ai-native",
+            "hosts": [
+              "api.liquid.ai"
+            ]
+          }
+        ],
+        "providers": [
+          {
+            "id": "liquid-ai",
+            "name": "Liquid AI",
+            "docs": "/providers/liquid-ai",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "LIQUIDAI_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "liquid-ai-api-key",
+                "choiceLabel": "Liquid AI API key",
+                "groupId": "liquid-ai",
+                "groupLabel": "Liquid AI",
+                "groupHint": "Native Decision models",
+                "optionKey": "liquidAiApiKey",
+                "cliFlag": "--liquid-ai-api-key",
+                "cliOption": "--liquid-ai-api-key <key>",
+                "cliDescription": "Liquid AI API key"
+              }
+            ]
+          }
+        ],
+        "contracts": {
+          "decisionProviders": [
+            "liquid-ai"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/liquid-ai-provider",
+          "npmSpec": "@openclaw/liquid-ai-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.10.6"
         }
       }
     },
@@ -977,7 +1104,10 @@
             "endpointClass": "opencode-native",
             "baseUrls": [
               "https://opencode.ai/zen",
-              "https://opencode.ai/zen/v1"
+              "https://opencode.ai/zen/v1",
+              "https://opencode.ai/inference/openai/v1",
+              "https://opencode.ai/inference/anthropic/v1",
+              "https://opencode.ai/inference/google/v1beta"
             ]
           }
         ],
@@ -1206,7 +1336,11 @@
             "endpointClass": "opencode-go-native",
             "baseUrls": [
               "https://opencode.ai/zen/go",
-              "https://opencode.ai/zen/go/v1"
+              "https://opencode.ai/zen/go/v1",
+              "https://opencode.ai/inference/go/openai/v1",
+              "https://opencode.ai/inference/go/anthropic",
+              "https://opencode.ai/inference/go/anthropic/v1",
+              "https://opencode.ai/inference/go/google/v1beta"
             ]
           }
         ],
@@ -1294,6 +1428,64 @@
           "npmSpec": "@openclaw/pixverse-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.26"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/particle-provider",
+      "description": "OpenClaw Particle provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "particle",
+          "label": "Particle"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "particle-native",
+            "hosts": [
+              "api.particle.ai"
+            ]
+          }
+        ],
+        "providers": [
+          {
+            "id": "particle",
+            "name": "Particle",
+            "docs": "/providers/particle",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "PARTICLE_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "particle-api-key",
+                "appGuidedSecret": true,
+                "choiceLabel": "Particle API key",
+                "groupId": "particle",
+                "groupLabel": "Particle",
+                "groupHint": "API key",
+                "optionKey": "particleApiKey",
+                "cliFlag": "--particle-api-key",
+                "cliOption": "--particle-api-key <key>",
+                "cliDescription": "Particle API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/particle-provider",
+          "npmSpec": "@openclaw/particle-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.10.8"
         }
       }
     },

@@ -1,16 +1,34 @@
 import { flush } from "solid-js";
-import { afterEach, describe, expect, it, onTestFinished } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { GatewayAgentRow } from "../api/types.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import "../test-helpers/load-styles.ts";
+import "../styles/sidebar-menus.css";
 
 afterEach(() => document.body.replaceChildren());
+
+const query = (root: ParentNode, selector: string) => root.querySelector<HTMLElement>(selector)!;
+const menuPart = (root: ParentNode, part: string) => query(root, `.sidebar-agent-menu__${part}`);
+const center = (box: DOMRect, axis: "x" | "y") =>
+  box[axis] + (axis === "x" ? box.width : box.height) / 2;
+
+async function mountAgents(client: GatewayBrowserClient, agents: GatewayAgentRow[]) {
+  await import("./app-sidebar.tsx");
+  const { createGatewayHarness, createSessions, mountSidebar } =
+    await import("../test-helpers/app-sidebar.ts");
+  return mountSidebar(
+    createGatewayHarness(client).gateway,
+    createSessions("main", ["agent:main:main"]),
+    "panel",
+    { defaultId: "main", mainKey: "main", scope: "per-sender", agents },
+  );
+}
 
 describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", () => {
   it("shows the same mixed avatars in count-aware groups without a backing circle", async () => {
     await import("./app-sidebar.tsx");
-    const { renderSidebarAgentMenuSwitcher } = await import("./sidebar-agent-menu-switcher.tsx");
-    const { Menu } = await import("./solid/menu.tsx");
+    const { renderSidebarAgentMenu } = await import("./app-sidebar-agent-menu.tsx");
     const image =
       "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR7sAAAAASUVORK5CYII=";
     const agents = Array.from({ length: 8 }, (_, index) => ({
@@ -26,34 +44,30 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
     root.style.width = "320px";
     document.body.append(root);
     let unmount: (() => void) | undefined;
-    for (const [count, pinCount] of [
-      [0, 0],
-      [1, 0],
-      [2, 0],
-      [3, 0],
-      [4, 4],
-      [5, 5],
-      [8, 8],
-    ] as const) {
+    for (const count of [0, 1, 2, 3, 4, 5, 8]) {
       unmount?.();
       unmount = mountSolid(
         () =>
-          Menu({
-            id: `agent-menu-${count}`,
-            label: "Agents",
-            open: true,
-            items: renderSidebarAgentMenuSwitcher({
-              activeId: agents[0]!.id,
-              allAgentsScope: true,
-              openMode: "hover",
-              agents: agents.slice(0, count),
-              identities: new Map(),
-              pinnedAgentIds: ["agent-0"],
-              onTogglePinnedAgent: async () => {},
-              resolveAvatarUrl: (url) => url,
-              avatarErrorHandler: () => () => {},
-              agentUnreadCount: () => 0,
-            }),
+          renderSidebarAgentMenu({
+            activeId: agents[0]!.id,
+            openMode: "hover",
+            agents: agents.slice(0, count),
+            identities: new Map(),
+            resolveAvatarUrl: (url) => url,
+            avatarErrorHandler: () => () => {},
+            agentUnreadCount: () => 0,
+            position: { x: 0, top: 0 },
+            basePath: "",
+            rosterMode: true,
+            creationDisabledReason: null,
+            onShowAllAgents: () => {},
+            onCreateAgent: () => {},
+            onPointerEnter: () => {},
+            onPointerLeave: () => {},
+            onAfterShow: () => {},
+            onSwitchAgent: () => {},
+            onClose: () => {},
+            onNavigate: () => {},
           }),
         { container: root },
       ).unmount;
@@ -61,23 +75,21 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
       await new Promise<void>((resolve) => {
         requestAnimationFrame(() => resolve());
       });
-      expect(root.querySelectorAll(".sidebar-agent-menu__pin")).toHaveLength(pinCount);
+      expect(root.querySelectorAll(".sidebar-agent-menu__pin")).toHaveLength(0);
       const all = root.querySelector('[data-value="scope:all"]');
       if (count < 2) {
         expect(all).toBeNull();
         continue;
       }
       expect(all?.getAttribute("aria-current")).toBe("true");
-      expect(all?.querySelector(".agent-select__option-label")?.textContent?.trim()).toBe(
-        "Show all",
-      );
-      const group = all!.querySelector<HTMLElement>(".sidebar-agent-menu__avatar-group")!;
+      expect(query(all!, ".agent-select__option-label")?.textContent?.trim()).toBe("Show all");
+      const group = menuPart(all!, "avatar-group");
       const items = [...group.querySelectorAll<HTMLElement>(".sidebar-agent-menu__group-item")];
       expect(items).toHaveLength(Math.min(count, 4));
       expect(getComputedStyle(group).backgroundColor).toBe("rgba(0, 0, 0, 0)");
       expect(group.querySelector("img")?.getAttribute("src")).toBe(image);
       expect(group.querySelector('[data-avatar="🧭"]')).not.toBeNull();
-      expect(group.querySelector(".sidebar-agent-menu__group-count")?.textContent?.trim()).toBe(
+      expect(menuPart(group, "group-count")?.textContent?.trim()).toBe(
         count > 4 ? String(count - 3) + "+" : undefined,
       );
       const boxes = items.map((item) => item.getBoundingClientRect());
@@ -97,8 +109,8 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
         for (const [index, box] of boxes.entries()) {
           expect(getComputedStyle(items[index]!).borderTopWidth).toBe("2px");
           const distance = Math.hypot(
-            box.x + box.width / 2 - (frame.x + frame.width / 2),
-            box.y + box.height / 2 - (frame.y + frame.height / 2),
+            center(box, "x") - center(frame, "x"),
+            center(box, "y") - center(frame, "y"),
           );
           expect(distance + box.width / 2).toBeLessThan(frame.width / 2 + 2);
         }
@@ -115,30 +127,17 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
   });
 
   it("aligns short and wrapped names beside active and inactive avatars", async () => {
-    await import("./app-sidebar.tsx");
-    const { createGatewayHarness, createSessions, mountSidebar } =
-      await import("../test-helpers/app-sidebar.ts");
-    const { sidebar, context } = await mountSidebar(
-      createGatewayHarness({ instanceId: "self-instance" } as GatewayBrowserClient).gateway,
-      createSessions("main", ["agent:main:main"]),
-      "panel",
-      {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [
-          { id: "main", name: "Molty" },
-          { id: "release", name: "Release reviewer" },
-          { id: "research", name: "Research planning and documentation assistant" },
-          { id: "scout", name: "Scout" },
-        ],
-      },
+    const { sidebar, context } = await mountAgents(
+      { instanceId: "self-instance" } as GatewayBrowserClient,
+      [
+        { id: "main", name: "Molty" },
+        { id: "release", name: "Release reviewer" },
+        { id: "research", name: "Research planning and documentation assistant" },
+        { id: "scout", name: "Scout" },
+      ],
     );
-    onTestFinished(
-      context.navigation.subscribe((snapshot) => {
-        sidebar.pinnedAgentIds = snapshot.pinnedAgentIds;
-      }),
-    );
+    const onNavigate = vi.fn();
+    sidebar.onNavigate = onNavigate;
     sidebar.connected = true;
     await sidebar.updateComplete;
     // Focus is ready before the dropdown's opening animation finishes.
@@ -153,32 +152,42 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
       sidebar.addEventListener("overlay-after-show", onShown, true);
       onTestFinished(() => sidebar.removeEventListener("overlay-after-show", onShown, true));
     });
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
+    query(sidebar, ".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     await menuShown;
+
+    expect(
+      sidebar.querySelector(".sidebar-agent-card__main")?.closest("openclaw-tooltip"),
+    ).toBeNull();
 
     const tiles = Array.from(
       sidebar.querySelectorAll<HTMLElement>(".sidebar-agent-menu__agent-switch"),
     );
-    expect(tiles).toHaveLength(5);
     await expect.poll(() => document.activeElement).toBe(tiles[1]);
-    const { userEvent } = await import("vitest/browser");
+    const { page, userEvent } = await import("vitest/browser");
+    const activeSettings = menuPart(tiles[1]!, "settings");
+    await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
+    expect(getComputedStyle(activeSettings).opacity).toBe("0");
+    await userEvent.hover(tiles[1]!);
+    expect(getComputedStyle(activeSettings).opacity).toBe("1");
+    await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
+    expect(getComputedStyle(activeSettings).opacity).toBe("0");
     await userEvent.keyboard("{ArrowDown}");
     expect(document.activeElement).toBe(tiles[2]);
     await userEvent.tab();
-    const pin = tiles[2]!.querySelector<HTMLButtonElement>(".sidebar-agent-menu__pin")!;
-    const currentPin = () =>
-      sidebar.querySelector<HTMLButtonElement>(
-        '[data-value="agent:release"] .sidebar-agent-menu__pin',
-      )!;
-    expect(document.activeElement).toBe(pin);
-    await userEvent.keyboard(" ");
-    await expect.poll(() => currentPin().getAttribute("aria-pressed")).toBe("true");
-    expect(document.activeElement).toBe(currentPin());
+    const settings = menuPart(tiles[2]!, "settings");
+    expect(document.activeElement).toBe(settings);
+    expect(settings.hasAttribute("title")).toBe(false);
+    expect(getComputedStyle(settings).opacity).toBe("1");
+    const { registerEnglishCatalog } = await import("../lib/reactive/i18n.ts");
+    // A newly opened lazy view can install its catalog while this menu is focused.
+    registerEnglishCatalog(() => {});
+    await sidebar.updateComplete;
+    expect(menuPart(tiles[2]!, "settings")).toBe(settings);
+    expect(document.activeElement).toBe(settings);
     await userEvent.keyboard("{ArrowDown}");
-    expect(document.activeElement).toBe(sidebar.querySelector('[data-value="agent:main"]'));
-    currentPin().click();
-    await expect.poll(() => currentPin().getAttribute("aria-pressed")).toBe("false");
+    expect(document.activeElement).toBe(tiles[3]);
+    expect(getComputedStyle(settings).opacity).toBe("0");
     await expect
       .poll(() =>
         tiles.map((tile) => tile.classList.contains("sidebar-agent-menu__agent-switch--active")),
@@ -186,31 +195,42 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
       .toEqual([false, true, false, false, false]);
     await document.fonts.ready;
     for (const tile of tiles) {
-      const avatar = tile.querySelector<HTMLElement>(".sidebar-agent-menu__agent-avatar")!;
-      const label = tile.querySelector<HTMLElement>(".agent-select__option-label")!;
+      const avatar = menuPart(tile, "agent-avatar");
+      const label = query(tile, ".agent-select__option-label");
       await expect.poll(() => avatar.getBoundingClientRect().width).toBeGreaterThan(0);
       const avatarBox = avatar.getBoundingClientRect();
       const labelBox = label.getBoundingClientRect();
       const rowBox = tile.getBoundingClientRect();
-      expect(rowBox.height).toBe(56);
-      expect(avatarBox.width).toBe(40);
-      expect(labelBox.left - avatarBox.right).toBe(12);
-      expect(
-        Math.abs(avatarBox.y + avatarBox.height / 2 - (rowBox.y + rowBox.height / 2)),
-      ).toBeLessThanOrEqual(1);
+      expect(rowBox.height).toBeGreaterThanOrEqual(44);
+      expect(avatarBox.width).toBe(28);
+      expect(labelBox.left - avatarBox.right).toBe(10);
+      expect(Math.abs(center(avatarBox, "y") - center(rowBox, "y"))).toBeLessThanOrEqual(1);
     }
 
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
     sidebar.sidebarAgentsMode = "roster";
     await sidebar.updateComplete;
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-workspace-header__main")?.click();
+    query(sidebar, ".sidebar-workspace-header__main")?.click();
     await sidebar.updateComplete;
     const all = sidebar.querySelector<HTMLElement>('[data-value="scope:all"]');
     await expect.poll(() => document.activeElement).toBe(all);
     expect(all?.getAttribute("aria-current")).toBe("true");
     await userEvent.keyboard("{ArrowDown}");
-    expect(document.activeElement).toBe(sidebar.querySelector('[data-value="agent:main"]'));
+    await expect
+      .poll(() => document.activeElement)
+      .toBe(query(sidebar, '[data-value="agent:main"]'));
+    await userEvent.keyboard("{ArrowDown}");
+    const release = query(sidebar, '[data-value="agent:release"]');
+    await expect.poll(() => document.activeElement).toBe(release);
+    await userEvent.tab();
+    const releaseSettings = menuPart(release, "settings");
+    expect(document.activeElement).toBe(releaseSettings);
+    await userEvent.keyboard("{Enter}");
+    expect(onNavigate).toHaveBeenCalledExactlyOnceWith("agents", {
+      pathname: "/settings/agents/release",
+    });
+    expect(context.agentSelection.state.selectedId).toBe("main");
   });
 
   it.each([
@@ -236,49 +256,31 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
       await page.viewport(width, 900);
       await import("./app-sidebar.tsx");
       await import("./sidebar-agent-roster.tsx");
-      const { createGatewayHarness, createSessions, mountSidebar } =
-        await import("../test-helpers/app-sidebar.ts");
-      const { sidebar } = await mountSidebar(
-        createGatewayHarness({} as GatewayBrowserClient).gateway,
-        createSessions("main", ["agent:main:main"]),
-        "panel",
-        {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [
-            { id: "main", name: "OpenClaw" },
-            { id: "research", name: "Research" },
-          ],
-        },
-      );
+      const { sidebar } = await mountAgents({} as GatewayBrowserClient, [
+        { id: "main", name: "OpenClaw" },
+        { id: "research", name: "Research" },
+      ]);
       await document.fonts.ready;
       const measure = (header: HTMLElement, avatarSelector: string) => {
-        const avatar = header.querySelector<HTMLElement>(avatarSelector)!.getBoundingClientRect();
-        const name = header
-          .querySelector<HTMLElement>(".sidebar-agent-card__name-text")!
-          .getBoundingClientRect();
-        const chevron = header
-          .querySelector<HTMLElement>(".sidebar-agent-card__chevron")!
-          .getBoundingClientRect();
+        const avatar = query(header, avatarSelector).getBoundingClientRect();
+        const name = query(header, ".sidebar-agent-card__name-text").getBoundingClientRect();
+        const chevron = query(header, ".sidebar-agent-card__chevron").getBoundingClientRect();
         return [
           avatar.width,
           avatar.height,
           name.x - avatar.right,
           chevron.x - name.right,
-          name.y + name.height / 2 - (avatar.y + avatar.height / 2),
-          chevron.y + chevron.height / 2 - (avatar.y + avatar.height / 2),
+          center(name, "y") - center(avatar, "y"),
+          center(chevron, "y") - center(avatar, "y"),
         ];
       };
       const agent = measure(
-        sidebar.querySelector<HTMLElement>(".sidebar-agent-card__main")!,
+        query(sidebar, ".sidebar-agent-card__main"),
         ".sidebar-agent-card__avatar",
       );
       sidebar.sidebarAgentsMode = "roster";
       await sidebar.updateComplete;
-      const workspaceHeader = sidebar.querySelector<HTMLElement>(
-        ".sidebar-workspace-header__main",
-      )!;
+      const workspaceHeader = query(sidebar, ".sidebar-workspace-header__main");
       const workspace = measure(workspaceHeader, ".sidebar-workspace-header__mark");
       for (const [index, dimension] of agent.entries()) {
         expect(Math.abs(workspace[index]! - dimension)).toBeLessThanOrEqual(1);
@@ -290,12 +292,8 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
       expect(glyphBox.width).toBeLessThan(markBox.width);
       expect(glyphBox.height).toBeLessThan(markBox.height);
       expect(glyphBox.width).toBe(glyphBox.height);
-      expect(
-        Math.abs(glyphBox.x + glyphBox.width / 2 - (markBox.x + markBox.width / 2)),
-      ).toBeLessThanOrEqual(1);
-      expect(
-        Math.abs(glyphBox.y + glyphBox.height / 2 - (markBox.y + markBox.height / 2)),
-      ).toBeLessThanOrEqual(1);
+      expect(Math.abs(center(glyphBox, "x") - center(markBox, "x"))).toBeLessThanOrEqual(1);
+      expect(Math.abs(center(glyphBox, "y") - center(markBox, "y"))).toBeLessThanOrEqual(1);
       expect(mark.querySelector("animate, animateTransform")).toBeNull();
       expect(mark.getAnimations({ subtree: true })).toHaveLength(0);
     },

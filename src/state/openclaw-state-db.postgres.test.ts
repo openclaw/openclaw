@@ -1,11 +1,13 @@
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
-import { getEnvironmentData, setEnvironmentData, Worker } from "node:worker_threads";
+import { getEnvironmentData, setEnvironmentData, type Worker } from "node:worker_threads";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import pg from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { quarantineAgentDeletionJournal } from "../commands/doctor-agent-deletion-journal-quarantine.js";
+import { prepareDoctorDatabaseMigrations } from "../commands/doctor-schema-migrations.js";
 import {
   commitDaemonRuntimePin,
   readDaemonRuntimePin,
@@ -14,26 +16,32 @@ import {
   withDaemonRuntimePinMigration,
 } from "../daemon/runtime-pin-state.js";
 import { withDaemonRuntimePinStore } from "../daemon/runtime-pin-store.js";
+import { createWorkerEnvironmentStore } from "../gateway/worker-environments/store.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
-import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { createConformanceWorker } from "../infra/database-engine/conformance.test-support.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
-import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
-  resolveRuntimeWorkerThreadExecArgv,
-  resolveRuntimeWorkerUrl,
-} from "../infra/runtime-worker-url.js";
+  postgresIndexOrderingMigration,
+  withLegacyPostgresIndexOrdering,
+} from "../infra/database-engine/postgres-index-ordering.js";
+import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   captureSqliteDatabaseAdmissions,
   retireSqliteDatabaseAdmissionForPath,
 } from "../infra/sqlite-database-admission.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import { migrateDaemonRuntimePins } from "../infra/state-migrations.daemon-runtime-pins.js";
+import { readMeetingTranscriptMigrationDetectionState } from "../infra/state-migrations.meeting-transcripts-detection.js";
+import { createUpdateRunAsync, recordUpdateRunStepAsync } from "../infra/update-run-write.async.js";
 import { readActiveOpenClawAgentDatabaseLeasesReadOnly } from "./openclaw-agent-db-lease.js";
 import { repairOpenClawAgentDatabasePaths } from "./openclaw-agent-db-path-repair.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
+import { stateEngineSchema } from "./openclaw-state-db-engine.js";
 import {
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
@@ -42,8 +50,13 @@ import {
 } from "./openclaw-state-db-readonly.js";
 import {
   ensureAgentDatabaseLeaseSchema,
+  ensureGitHubPublicationSchema,
+  ensurePersonalGitHubPublicationSchema,
+  ensureRepositoryGitHubPublicationSchema,
   ensureAgentDeletionJournalPhaseSchema,
 } from "./openclaw-state-db-schema-additive.js";
+import { withLegacyPublicationDraft } from "./openclaw-state-db-schema-v28-publication.js";
+import { TEMPLATE_STATE_TABLE_RENAMES } from "./openclaw-state-db-schema-v36-template-names.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -56,6 +69,12 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import {
+  cleanupPostgresStateFixture,
+  installPostgresStateFixture,
+} from "./openclaw-state-db.postgres-fixture.test-support.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import { executeOpenClawStateWorker } from "./openclaw-state-worker-store.js";
 import { statePostgresRuntime } from "./postgres-schema.generated/runtime.js";
 import { ensureUserBackgroundSchema } from "./user-background.store.js";
 
@@ -63,6 +82,23 @@ const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.
 const connection = typeof configured === "string" ? configured : undefined;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type Result = { namespace: string; admissionId: string; catalogReads: number; threadId: number };
+function readStateArtifacts(directory: string, pathname: string) {
+  const credentialPath = path.join(directory, "client", "credentials.sqlite");
+  expect([
+    fs.readdirSync(directory).toSorted(),
+    fs.readdirSync(path.dirname(pathname)).toSorted(),
+    fs.readdirSync(path.dirname(credentialPath)).toSorted(),
+  ]).toEqual([["client", "state"], ["openclaw.sqlite"], ["credentials.sqlite"]]);
+  return [fs.readFileSync(pathname), fs.readFileSync(credentialPath)];
+}
+
+const legacyIndexOrderingSql = withLegacyPostgresIndexOrdering(
+  postgresIndexOrderingMigration(
+    [statePostgresRuntime.eagerSql, ...statePostgresRuntime.fragments.map(({ sql }) => sql)].join(
+      "\n",
+    ),
+  ),
+);
 const legacyWriteIndexesSql = `
   DROP INDEX idx_state_leases_owner;
   ${statePostgresRuntime.preWriteIndexesV27Sql.state_leases}
@@ -70,15 +106,229 @@ const legacyWriteIndexesSql = `
   ${statePostgresRuntime.preWriteIndexesV27Sql.acp_replay_events}
 `;
 
+// Dropping a column leaves an attnum hole; rebuild only these empty fixture tables
+// so the predecessor and migrated catalogs retain their real column positions.
+async function restorePublicationSchemaV27(client: pg.Client) {
+  for (const table of [
+    "github_publication_requests",
+    "github_personal_publication_requests",
+    "github_repository_publication_requests",
+  ]) {
+    const result = await client.query("SELECT to_regclass($1) IS NOT NULL AS present", [table]);
+    if (!result.rows[0].present) {
+      continue;
+    }
+    const fragment = statePostgresRuntime.fragments.find((entry) => entry.tables.includes(table));
+    if (!fragment) {
+      throw new Error("Missing publication fixture schema");
+    }
+    await client.query(`DROP TABLE ${table}; ${withLegacyPublicationDraft(fragment.sql)}`);
+  }
+}
+// These fixtures start at the successor; restore only empty feature tables from
+// the registered predecessor, including CHECK/PK declarations, before old seals.
+async function restoreTemplatePredecessor(client: pg.Client, previousVersion: number) {
+  const source = expectDefined(
+    stateEngineSchema.postgresMigrations?.find((step) => step.version === previousVersion + 1)
+      ?.fromSchema,
+    "Registered historical shared-state schema",
+  );
+  const eager = expectDefined(source.postgres, "Historical PostgreSQL DDL");
+  for (const [previous, current] of TEMPLATE_STATE_TABLE_RENAMES) {
+    const declaration = expectDefined(
+      eager.match(new RegExp(`CREATE TABLE "${previous}" \\([\\s\\S]*?\\n\\);`))?.[0],
+      `Historical declaration for ${previous}`,
+    );
+    expect((await client.query(`SELECT count(*)::int AS n FROM "${current}"`)).rows).toEqual([
+      { n: 0 },
+    ]);
+    await client.query(`DROP TABLE "${current}"; ${declaration}`);
+  }
+  const present = await client.query(
+    "SELECT to_regclass('agent_provenance') IS NOT NULL AS present",
+  );
+  if (present.rows[0].present) {
+    const fragment = expectDefined(
+      source.postgresFragments?.find((item) => item.tables.includes("agent_provenance")),
+      "Historical optional provenance DDL",
+    );
+    expect((await client.query("SELECT count(*)::int AS n FROM agent_provenance")).rows).toEqual([
+      { n: 0 },
+    ]);
+    await client.query(`DROP TABLE agent_provenance; ${fragment.sql}`);
+  }
+}
+const legacyPublicationInsert = `INSERT INTO github_publication_requests
+  (request_id, idempotency_key, request_digest, session_id, session_key, agent_id,
+    worktree_id, repository_fingerprint, identity_source, identity_account_id,
+    identity_login, status, branch, created_at_ms, updated_at_ms)
+  VALUES ('retained-publication', 'accepted',
+    'beda069ac7c4479d5f27d419da7a1c81073d1494f373ab8059f0558ca9ca415c',
+    'publication-migration', 'agent:main:publication', 'main', 'worktree', 'repository',
+    'system-detected', 42, 'publisher', 'requested', 'topic', 1, 1)`;
+
 describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
-  it("retains one discovery generation across awaited, nested and native reads", async () => {
-    const directory = tempDirs.make("state-composite-snapshot-postgres-");
+  it.each(["shared-state", "update-bookkeeping"] as const)(
+    "reopens its worker after backend loss without replaying the failed write (%s)",
+    async (writer) => {
+      const directory = tempDirs.make("state-worker-reconnect-postgres-");
+      const pathname = path.join(directory, "state.sqlite");
+      const options = { path: pathname, env: { ...process.env, OPENCLAW_STATE_DIR: directory } };
+      const applicationName = path.basename(directory);
+      const workerConnection = new URL(connection!);
+      workerConnection.searchParams.set("application_name", applicationName);
+      installPostgresStateFixture(workerConnection.href, "state_worker_reconnect");
+      const client = new pg.Client({ connectionString: connection });
+      await client.connect();
+      let namespace: string | undefined;
+      const runId = "00000000-0000-4000-8000-000000000001";
+      const write = (value: string) =>
+        writer === "shared-state"
+          ? executeOpenClawStateWorker(captureOpenClawStateWorkerContext(options), {
+              type: "machineState.write",
+              input: { key: "reconnect.fixture", value },
+            })
+          : recordUpdateRunStepAsync(
+              runId,
+              { step: "reconnect.fixture", status: "in_progress", detail: value },
+              options,
+            );
+      const backends = async () =>
+        (
+          await client.query<{ pid: number; query: string; query_start: Date; state: string }>(
+            "SELECT pid, query, query_start, state FROM pg_stat_activity WHERE application_name = $1 ORDER BY pid",
+            [applicationName],
+          )
+        ).rows;
+      try {
+        namespace = withEngineStoreAdmission(
+          () => getPostgresPhysicalFacts(openOpenClawStateDatabase(options).db)?.namespace,
+        );
+        expect(namespace).toBeDefined();
+        await closeOpenClawStateDatabaseAsync();
+        let prior: Awaited<ReturnType<typeof backends>> = [];
+        if (writer === "update-bookkeeping") {
+          const created = await createUpdateRunAsync({ runId, trigger: "cli" }, options);
+          expect(created.runId).toBe(runId);
+          prior = await backends();
+        }
+        await write("before");
+        const active = await backends();
+        // The updater can reuse an idle backend left by run creation.
+        const victims = active.filter(
+          (row) =>
+            !prior.some(
+              (kept) =>
+                kept.pid === row.pid &&
+                kept.query === row.query &&
+                kept.query_start.getTime() === row.query_start.getTime(),
+            ),
+        );
+        expect(victims).toHaveLength(1);
+        const primary = active.filter((row) => row.pid !== victims[0]!.pid);
+        // The updater uses a separate retained writer; leave the primary healthy and unqueried.
+        if (writer === "update-bookkeeping") {
+          expect(primary.length).toBeGreaterThan(0);
+          expect(primary.every((row) => row.state === "idle")).toBe(true);
+        }
+        const killed = await client.query(
+          "SELECT pg_terminate_backend(pid) AS terminated FROM pg_stat_activity WHERE application_name = $1 AND pid = $2",
+          [applicationName, victims[0]!.pid],
+        );
+        expect(killed.rows).toEqual([{ terminated: true }]);
+        expect(
+          (await backends()).filter((row) => primary.some((kept) => kept.pid === row.pid)),
+        ).toEqual(primary);
+        await expect(write("interrupted")).rejects.toSatisfy(hasSqliteWorkerOutcomeUnknown);
+        const read = async () => {
+          if (writer === "shared-state") {
+            const result = await client.query(
+              `SELECT value_json FROM "${namespace}".config_machine_state WHERE state_key = $1`,
+              ["reconnect.fixture"],
+            );
+            return JSON.parse(result.rows[0].value_json);
+          }
+          const result = await client.query(
+            `SELECT steps_json FROM "${namespace}".update_runs WHERE run_id = $1`,
+            [runId],
+          );
+          const steps: Array<{ step: string; detail?: string }> = JSON.parse(
+            result.rows[0].steps_json,
+          );
+          return steps.find((step) => step.step === "reconnect.fixture")?.detail;
+        };
+        expect(await read()).toBe("before");
+        await write("recovered");
+        expect(await read()).toBe("recovered");
+      } finally {
+        await closeOpenClawStateDatabaseAsync();
+        await cleanupPostgresStateFixture(client, pathname, namespace);
+      }
+    },
+  );
+
+  it("prunes worker history with bounded UTF-8 ordering and placement protection", async () => {
+    const directory = tempDirs.make("state-worker-retention-postgres-");
     const pathname = path.join(directory, "state.sqlite");
     const options = { path: pathname, env: { ...process.env, OPENCLAW_STATE_DIR: directory } };
-    installDatabaseEngineSelection({
-      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
-      postgres: { connection: connection!, schemaPrefix: "state_composite_snapshot" },
-    });
+    const client = new pg.Client({ connectionString: connection });
+    await client.connect();
+    installPostgresStateFixture(connection!, "state_worker_retention");
+    let namespace: string | undefined;
+    const referencedId = "worker-000-reference";
+    const laterId = "worker-\u{10000}";
+    const firstId = "worker-\ue000";
+    try {
+      const database = withEngineStoreAdmission(() => openOpenClawStateDatabase(options));
+      namespace = getPostgresPhysicalFacts(database.db)?.namespace;
+      expect(namespace).toBeDefined();
+      let store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
+      for (const environmentId of [referencedId, laterId, firstId]) {
+        await store.createIntent({
+          environmentId,
+          providerId: "fixture",
+          profileId: "development",
+          profileSnapshot: { settings: {} },
+          provisionOperationId: `provision:${environmentId}`,
+        });
+        await store.transition({ environmentId, from: "requested", to: "failed" });
+      }
+      await store.close();
+      withEngineStoreAdmission(() =>
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            db.prepare(`INSERT INTO worker_session_placements (
+              session_id, agent_id, session_key, state, environment_id, recovery_error,
+              created_at_ms, updated_at_ms, state_changed_at_ms
+            ) VALUES ('retained-session', 'main', 'retained-key', 'failed', ?,
+              'worker unavailable', 1, 1, 1)`).run(referencedId);
+          },
+          { database },
+        ),
+      );
+      store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
+      const nowMs = 10 * 24 * 60 * 60 * 1_000;
+      expect(await store.pruneTerminalEnvironments({ nowMs, limit: 1 })).toBe(1);
+      expect(store.get(firstId)).toBeUndefined();
+      expect(store.get(laterId)?.state).toBe("failed");
+      expect(store.get(referencedId)?.state).toBe("failed");
+      expect(await store.pruneTerminalEnvironments({ nowMs })).toBe(1);
+      expect(store.list().map((record) => record.environmentId)).toEqual([referencedId]);
+      expect(
+        (await client.query(`SELECT environment_id FROM "${namespace}".worker_environments`)).rows,
+      ).toEqual([{ environment_id: referencedId }]);
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      await cleanupPostgresStateFixture(client, pathname, namespace);
+    }
+  });
+
+  it("retains one discovery generation across awaited, nested and native reads", async () => {
+    const directory = tempDirs.make("state-composite-snapshot-postgres-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: directory };
+    const pathname = resolveOpenClawStateSqlitePath(env);
+    const options = { path: pathname, env };
+    installPostgresStateFixture(connection!, "state_composite_snapshot");
     const writer = new pg.Client({ connectionString: connection });
     await writer.connect();
     let namespace: string | undefined;
@@ -99,11 +349,10 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
             "before",
             1,
           );
-          return getPostgresPhysicalFacts(db)?.namespace;
+          return expectDefined(getPostgresPhysicalFacts(db), "PostgreSQL fixture").namespace;
         }, options),
       );
-      expect(namespace).toBeDefined();
-      const anchor = fs.readFileSync(pathname);
+      const artifacts = readStateArtifacts(directory, pathname);
       await withOpenClawStateDatabaseReadSnapshot(async () => {
         expect(await read()).toBe("before");
         await writer.query(
@@ -128,19 +377,10 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         expect(await read(true)).toBe("after");
       }, options);
       expect(await read()).toBe("after");
-      expect(fs.readFileSync(pathname)).toEqual(anchor);
-      expect(fs.readdirSync(directory)).toEqual(["state.sqlite"]);
+      expect(readStateArtifacts(directory, pathname)).toEqual(artifacts);
     } finally {
       await closeOpenClawStateDatabaseAsync();
-      retireSqliteDatabaseAdmissionForPath(pathname);
-      resetDatabaseEngineSelectionForTest();
-      try {
-        if (namespace) {
-          await writer.query(`DROP SCHEMA "${namespace}" CASCADE`);
-        }
-      } finally {
-        await writer.end();
-      }
+      await cleanupPostgresStateFixture(writer, pathname, namespace);
     }
   });
 
@@ -148,10 +388,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
     const directory = tempDirs.make("state-anchor-reader-postgres-");
     const pathname = path.join(directory, "state.sqlite");
     const options = { path: pathname, env: { ...process.env, OPENCLAW_STATE_DIR: directory } };
-    installDatabaseEngineSelection({
-      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
-      postgres: { connection: connection!, schemaPrefix: "state_anchor_reader" },
-    });
+    installPostgresStateFixture(connection!, "state_anchor_reader");
     const client = new pg.Client({ connectionString: connection });
     await client.connect();
     let namespace: string | undefined;
@@ -176,15 +413,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       }
     } finally {
       await closeOpenClawStateDatabaseByPathAsync(pathname);
-      retireSqliteDatabaseAdmissionForPath(pathname);
-      resetDatabaseEngineSelectionForTest();
-      try {
-        if (namespace) {
-          await client.query(`DROP SCHEMA "${namespace}" CASCADE`);
-        }
-      } finally {
-        await client.end();
-      }
+      await cleanupPostgresStateFixture(client, pathname, namespace);
     }
   });
 
@@ -197,10 +426,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
     const sentinel = path.join(directory, "(multiple).sqlite");
     const client = new pg.Client({ connectionString: connection });
     await client.connect();
-    installDatabaseEngineSelection({
-      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
-      postgres: { connection: connection!, schemaPrefix: "state_doctor_conformance" },
-    });
+    installPostgresStateFixture(connection!, "state_doctor_conformance");
     let namespace: string | undefined;
     const inspectJournal = () => {
       let inspection: ReturnType<typeof quarantineAgentDeletionJournal> | undefined;
@@ -261,28 +487,18 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       expect(fs.existsSync(path.join(directory, "agents"))).toBe(false);
     } finally {
       await closeOpenClawStateDatabaseAsync();
-      retireSqliteDatabaseAdmissionForPath(pathname);
-      resetDatabaseEngineSelectionForTest();
-      try {
-        if (namespace) {
-          await client.query(`DROP SCHEMA "${namespace}" CASCADE`);
-        }
-      } finally {
-        await client.end();
-      }
+      await cleanupPostgresStateFixture(client, pathname, namespace);
     }
   });
 
   it("reads warm and cold discovery state without copying or changing the PostgreSQL anchor", async () => {
     const directory = tempDirs.make("state-discovery-postgres-");
-    const pathname = path.join(directory, "state.sqlite");
-    const options = { path: pathname, env: { ...process.env, OPENCLAW_STATE_DIR: directory } };
+    const env = { ...process.env, OPENCLAW_STATE_DIR: directory };
+    const pathname = resolveOpenClawStateSqlitePath(env);
+    const options = { path: pathname, env };
     const client = new pg.Client({ connectionString: connection });
     await client.connect();
-    installDatabaseEngineSelection({
-      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
-      postgres: { connection: connection!, schemaPrefix: "state_discovery_conformance" },
-    });
+    installPostgresStateFixture(connection!, "state_discovery_conformance");
     let namespace: string | undefined;
     const stateKey = "discovery.fixture";
     const valueJson = JSON.stringify({ source: "PostgreSQL" });
@@ -290,28 +506,30 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       namespace = withEngineStoreAdmission(() =>
         runOpenClawStateWriteTransaction(({ db }) => {
           ensureAgentDatabaseLeaseSchema(db);
+          db.exec(`INSERT INTO migration_runs (id, started_at, status, report_json)
+            VALUES ('meeting-import', 1, 'imported', '{}');
+            INSERT INTO migration_sources
+            (source_key, migration_kind, source_path, target_table, last_run_id, status, imported_at, report_json)
+            VALUES ('meeting-import', 'meeting-transcripts-files-v1', 'synthetic', 'meeting_transcript_sessions', 'meeting-import', 'imported', 1, '{}');`);
           db.prepare(
             "INSERT INTO agent_database_leases (lease_id, agent_id, path, owner_pid, owner_start_time, opened_at) VALUES (?, ?, ?, ?, NULL, ?)",
           ).run("diagnostic-lease", "main", path.join(directory, "agent.sqlite"), process.pid, 1);
           db.prepare(
             "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
           ).run(stateKey, valueJson, 1);
-          return getPostgresPhysicalFacts(db)?.namespace;
+          return expectDefined(getPostgresPhysicalFacts(db), "PostgreSQL fixture").namespace;
         }, options),
       );
-      expect(namespace).toBeDefined();
-      const anchorBytes = fs.readFileSync(pathname);
+      const artifacts = readStateArtifacts(directory, pathname);
       let prepared: Promise<{ changes: string[]; warnings: string[] }> | undefined;
       withEngineStoreAdmission(() => {
         prepared = prepareOpenClawStateDatabaseSchema(options, "doctor-preparation");
-        expect(repairOpenClawStateDatabaseIndexesForDoctor(options)).toEqual({
-          changes: [],
-          warnings: [],
-        });
-        expect(repairOpenClawStateDatabaseReadabilityForDoctor(options)).toEqual({
-          changes: [],
-          warnings: [],
-        });
+        for (const repair of [
+          repairOpenClawStateDatabaseIndexesForDoctor,
+          repairOpenClawStateDatabaseReadabilityForDoctor,
+        ]) {
+          expect(repair(options)).toEqual({ changes: [], warnings: [] });
+        }
       });
       expect(await prepared).toEqual({ changes: [], warnings: [] });
       for (const source of ["warm", "cold"]) {
@@ -320,6 +538,12 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         }
         withEngineStoreAdmission(() => {
           expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
+          for (const artifactPreservingReadOnly of [false, true]) {
+            expect(
+              readMeetingTranscriptMigrationDetectionState({ env, artifactPreservingReadOnly })
+                .pendingImportCount,
+            ).toBe(1);
+          }
           expect(
             readActiveOpenClawAgentDatabaseLeasesReadOnly(
               options,
@@ -335,8 +559,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
           ),
         );
         expect(reply?.row).toEqual({ value_json: valueJson, updated_at_ms: 1 });
-        expect(fs.readFileSync(pathname)).toEqual(anchorBytes);
-        expect(fs.readdirSync(directory)).toEqual(["state.sqlite"]);
+        expect(readStateArtifacts(directory, pathname)).toEqual(artifacts);
       }
       using anchor = openNodeSqliteDatabase(pathname, { readOnly: true });
       expect(
@@ -344,35 +567,36 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       ).toEqual([{ name: "openclaw_engine_anchor" }]);
     } finally {
       await closeOpenClawStateDatabaseAsync();
-      retireSqliteDatabaseAdmissionForPath(pathname);
-      resetDatabaseEngineSelectionForTest();
-      try {
-        if (namespace) {
-          await client.query(`DROP SCHEMA "${namespace}" CASCADE`);
-        }
-      } finally {
-        await client.end();
-      }
+      await cleanupPostgresStateFixture(client, pathname, namespace);
     }
   });
 
-  it.each([25, 26])(
-    "migrates version %i indexes while preserving heads, leases, lazy fragments and schema admission",
+  it.each([25, 26, 27, 28])(
+    "migrates version %i while preserving heads, leases, lazy fragments and publication intent",
     async (previousVersion) => {
       const directory = tempDirs.make("state-layout-postgres-");
-      const pathname = path.join(directory, "state.sqlite");
-      const options = { path: pathname, env: { ...process.env, OPENCLAW_STATE_DIR: directory } };
+      const pathname = path.join(directory, "state", "openclaw.sqlite");
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: directory,
+        OPENCLAW_CONFIG_PATH: path.join(directory, "openclaw.json"),
+      };
+      fs.writeFileSync(
+        env.OPENCLAW_CONFIG_PATH,
+        JSON.stringify({ database: { engine: "postgres", postgres: { connection } } }),
+      );
+      const options = { path: pathname, env };
       const client = new pg.Client({ connectionString: connection });
       await client.connect();
-      installDatabaseEngineSelection({
-        effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
-        postgres: { connection: connection!, schemaPrefix: "state_layout_conformance" },
-      });
+      installPostgresStateFixture(connection!, "state_layout_conformance");
       let namespace: string | undefined;
       try {
         const facts = withEngineStoreAdmission(() =>
           runOpenClawStateWriteTransaction(({ db }) => {
             ensureUserBackgroundSchema(options);
+            ensureGitHubPublicationSchema(db);
+            ensurePersonalGitHubPublicationSchema(db);
+            ensureRepositoryGitHubPublicationSchema(db);
             db.prepare(`INSERT INTO session_state_heads
             (session_key, agent_id, last_sequence, pruned_max_sequence, updated_at)
             VALUES (?, ?, ?, ?, ?)`).run("shared-key", "main", 7, 3, 11);
@@ -395,6 +619,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         const retainedLease = await client.query(
           `SELECT * FROM "${namespace}".state_leases WHERE scope = 'synthetic'`,
         );
+
         const currentIndexes = await client.query(
           `SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = $1
           AND tablename IN ('acp_replay_events', 'skill_usage', 'state_leases') ORDER BY indexname`,
@@ -402,18 +627,62 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         );
         closeOpenClawStateDatabaseForTest();
         retireSqliteDatabaseAdmissionForPath(pathname);
-        // Restore the actual pre-v27 catalog before relabeling metadata.
-        await client.query(`BEGIN;
-        SET LOCAL search_path TO "${namespace}";
-        ${legacyWriteIndexesSql}
+        // Restore the actual historical catalog before relabeling metadata.
+        await client.query(`BEGIN; SET LOCAL search_path TO "${namespace}";`);
+        await restoreTemplatePredecessor(client, previousVersion);
+        if (previousVersion < 28) {
+          await restorePublicationSchemaV27(client);
+        }
+        await client.query(legacyPublicationInsert);
+        await client.query(`
+        ${statePostgresRuntime.clientCredentialSource.sql}
+        ${legacyIndexOrderingSql}
+        ${previousVersion < 27 ? legacyWriteIndexesSql : ""}
         UPDATE schema_meta SET schema_version = ${previousVersion};
         UPDATE config_machine_state SET value_json = '${previousVersion}'
           WHERE state_key = 'state.schema.contentVersion';
         UPDATE openclaw_schema_meta
           SET version = ${previousVersion}, fingerprint = NULL, ddl_hash = NULL, server_major = NULL;
         COMMIT;`);
+        const retainedPublication = await client.query(
+          `SELECT * FROM "${namespace}".github_publication_requests WHERE request_id = 'retained-publication'`,
+        );
+        const lock = await acquireGatewayLock({
+          env,
+          allowInTests: true,
+          role: "sqlite-maintenance",
+          timeoutMs: 0,
+        });
+        expect(lock).not.toBeNull();
+        try {
+          const migration = await lock!.run(() =>
+            prepareDoctorDatabaseMigrations({
+              env,
+              databasePaths: [pathname],
+              pendingDatabasePaths: [pathname],
+              pendingMigrations: [
+                {
+                  kind: "state",
+                  path: pathname,
+                  foundVersion: previousVersion,
+                  supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+                },
+              ],
+            }),
+          );
+          expect(migration.warnings).toEqual([]);
+        } finally {
+          await lock!.release();
+        }
         withEngineStoreAdmission(() => {
           const upgraded = openOpenClawStateDatabase(options);
+          for (const table of [
+            "github_publication_requests",
+            "github_personal_publication_requests",
+            "github_repository_publication_requests",
+          ]) {
+            expect(() => upgraded.db.prepare(`SELECT draft FROM ${table}`).all()).not.toThrow();
+          }
           expect(getPostgresPhysicalFacts(upgraded.db)?.version).toBe(
             OPENCLAW_STATE_SCHEMA_VERSION,
           );
@@ -463,6 +732,13 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
           ).rows,
         ).toEqual(currentIndexes.rows);
         expect(
+          (
+            await client.query(
+              `SELECT * FROM "${namespace}".github_publication_requests WHERE request_id = 'retained-publication'`,
+            )
+          ).rows,
+        ).toEqual([{ ...retainedPublication.rows[0], draft: null }]);
+        expect(
           (await client.query(`SELECT * FROM "${namespace}".user_background_images`)).rows,
         ).toEqual([]);
         closeOpenClawStateDatabaseForTest();
@@ -475,21 +751,24 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         });
       } finally {
         closeOpenClawStateDatabaseForTest();
-        retireSqliteDatabaseAdmissionForPath(pathname);
-        resetDatabaseEngineSelectionForTest();
-        try {
-          if (namespace) {
-            await client.query(`DROP SCHEMA "${namespace}" CASCADE`);
-          }
-        } finally {
-          await client.end();
-        }
+        await cleanupPostgresStateFixture(client, pathname, namespace);
       }
     },
   );
 
   it("bootstraps, migrates authority metadata, retains lazy fragments, reuses admission and closes paired handles", async () => {
-    const pathname = path.join(tempDirs.make("state-postgres-"), "state.sqlite");
+    const directory = tempDirs.make("state-postgres-");
+    const pathname = path.join(directory, "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(pathname), { recursive: true });
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: directory,
+      OPENCLAW_CONFIG_PATH: path.join(directory, "openclaw.json"),
+    };
+    fs.writeFileSync(
+      env.OPENCLAW_CONFIG_PATH,
+      JSON.stringify({ database: { engine: "postgres", postgres: { connection } } }),
+    );
     const run = async (mode: "bootstrap" | "restart" | "migrate") => {
       const anchor = openNodeSqliteDatabase(pathname);
       admitSqliteSchema(anchor);
@@ -502,14 +781,16 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       let worker: Worker;
       try {
         setEnvironmentData("openclaw.test.state.connection", connection);
-        worker = new Worker(url, {
-          execArgv: resolveRuntimeWorkerThreadExecArgv(url),
-          workerData: {
+        worker = createConformanceWorker(
+          url,
+          {
             path: pathname,
+            env,
             mode,
             admissions: captureSqliteDatabaseAdmissions(undefined, { location: pathname }),
           },
-        });
+          { connection: connection! },
+        );
       } finally {
         setEnvironmentData("openclaw.test.state.connection", previous);
       }
@@ -544,7 +825,12 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       namespace = cold.namespace;
       expect(cold.threadId).not.toBe(0);
       await client.query(`SET search_path = "${namespace}"`);
-      await client.query(`BEGIN;
+      await client.query("BEGIN");
+      await restoreTemplatePredecessor(client, 24);
+      await restorePublicationSchemaV27(client);
+      await client.query(`
+        ${statePostgresRuntime.clientCredentialSource.sql}
+        ${legacyIndexOrderingSql}
         ${legacyWriteIndexesSql}
         UPDATE openclaw_schema_meta
           SET version = 24, fingerprint = NULL, ddl_hash = NULL, server_major = NULL
@@ -610,10 +896,7 @@ describe.skipIf(!connection)("PostgreSQL local runtime pins", () => {
   beforeAll(async () => {
     await client.connect();
     env = { ...process.env, OPENCLAW_STATE_DIR: directories.make("pin-postgres-") };
-    installDatabaseEngineSelection({
-      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
-      postgres: { connection: connection!, schemaPrefix: "pin_conformance" },
-    });
+    installPostgresStateFixture(connection!, "pin_conformance");
     namespace = withEngineStoreAdmission(() =>
       runOpenClawStateWriteTransaction(
         ({ db }) => {

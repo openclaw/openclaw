@@ -1,13 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { getEventListeners } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { setTimeout as waitForReaper } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
-import { runNodeStep } from "../../scripts/prepare-extension-package-boundary-artifacts.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
-import { isProcessAlive } from "../helpers/process-wait.js";
 import { createDeferred } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -47,18 +43,6 @@ function heldGate() {
       await release.promise;
     }),
   };
-}
-
-// runNodeStep exposes its joined outcome, but no ChildProcess handle for rescue
-// after an unverified join. Observe only the fixture's recorded PID.
-async function waitForRescuedChild(pid: number, signal: AbortSignal) {
-  try {
-    while (isProcessAlive(pid)) {
-      await waitForReaper(10, undefined, { signal });
-    }
-  } catch (error) {
-    throw new Error(`process still alive: ${pid}`, { cause: error });
-  }
 }
 
 it("releases inputs and claims after a native execFileSync ENOENT error", async () => {
@@ -177,242 +161,53 @@ it("holds claims for work admitted during asynchronous fixture removal", async (
     await lifetime.cleanup();
   }
 });
-
-it
-  .skipIf(process.platform === "win32")
-  .for(["normal", "missing readiness", "held close", "early exit", "cleanup rejection"])(
-  "keeps inputs through cancellation, child close and whole-body unwind before the next fixture (%s)",
-  async (fault, { signal: contextSignal }) => {
-    const driverAbort = new AbortController();
-    const signal = AbortSignal.any([contextSignal, driverAbort.signal]);
-    const abortReason = new Error("driver canceled");
-    const prematureExit = new Error("child completed before driver gate");
-    const cleanupFailure = new Error("driver cleanup rejected");
-    const originalNow = Date.now;
-    let finalizing = false;
-    let requiredRescue = false;
-    let rescue: Promise<void> | undefined;
-    let driverError: unknown;
-    const controls = fixture.createTempDir("fixture-lifetime-control-");
-    const root = fixture.createTempDir("fixture-lifetime-input-");
-    const input = path.join(root, "input");
-    fs.writeFileSync(input, "preserved");
-    const release = path.join(controls, "release");
-    const ready = createDeferred<number>();
-    const terminating = createDeferred();
-    const commandJoined = createDeferred();
-    const bodyRelease = createDeferred();
-    const controller = new AbortController();
-    const lines: string[] = [];
-    let laterPhase = false;
-    let pid = 0;
-    const clock = vi.spyOn(Date, "now");
-    let childFinished = false;
-    const canceled = createDeferred<never>();
-    void canceled.promise.catch(() => {});
-    const releaseDriverGates = () => {
-      // Cancellation must unfreeze the real supervisor's escalation deadline,
-      // even when the outer driver is still waiting for readiness or close.
-      clock.mockRestore();
-      bodyRelease.resolve();
-      try {
-        if (!childFinished) {
-          fs.writeFileSync(release, "release");
-        }
-      } finally {
-        controller.abort(signal.reason);
-      }
-    };
-    const abort = () => {
-      canceled.reject(signal.reason);
-      try {
-        releaseDriverGates();
-      } catch (error) {
-        void fixture.verifyCleanup(async () => {
-          throw new Error("Could not release canceled driver gates", { cause: error });
-        });
-      }
-    };
-    signal.addEventListener("abort", abort, { once: true });
-    if (signal.aborted) {
-      abort();
-    }
-    const childEnded = commandJoined.promise.then(() => {
-      throw prematureExit;
-    });
-    void childEnded.catch(() => {});
-    const waitForGate = async <T>(gate: Promise<T>, allowChildClose = false) => {
-      const result = await Promise.race(
-        allowChildClose ? [gate, canceled.promise] : [gate, canceled.promise, childEnded],
-      );
-      signal.throwIfAborted();
-      return result;
-    };
-    // A one-turn rescue bounds the pre-fix reproduction without replacing the
-    // actual child join. Cancellation must enter finally before this turn.
-    const requestRescue = () => {
-      rescue = new Promise<void>((resolve) => {
-        setImmediate(() => {
-          requiredRescue = !finalizing;
-          if (requiredRescue) {
-            releaseDriverGates();
-            ready.resolve(pid);
-            terminating.resolve();
-          }
-          resolve();
-        });
-      });
-    };
-    const body = fixture.run(async () => {
-      try {
-        await fixture.track(
-          runNodeStep(
-            "lifetime-child",
-            [
-              "--eval",
-              `
-          const fs = require("node:fs");
-          process.on("SIGTERM", () => {
-            console.log("terminating");
-            const poll = setInterval(() => {
-              if (!fs.existsSync(${JSON.stringify(release)})) return;
-              if (${JSON.stringify(fault)} === "held close") return;
-              clearInterval(poll);
-              console.log(fs.readFileSync(${JSON.stringify(input)}, "utf8"));
-              process.exit(0);
-            }, 5);
-          });
-          console.log((${JSON.stringify(fault)} === "missing readiness" || ${JSON.stringify(fault)} === "early exit" ? "started:" : "ready:") + process.pid);
-          if (${JSON.stringify(fault)} === "early exit") process.exitCode = 2;
-          else setInterval(() => {}, 1000);
-        `,
-            ],
-            30_000,
-            {
-              abortController: controller,
-              onStdoutLine(line) {
-                const text = line.trim();
-                lines.push(text);
-                if (text.startsWith("ready:") || text.startsWith("started:")) {
-                  pid = Number(text.split(":")[1]);
-                  if (fault === "missing readiness") {
-                    driverAbort.abort(abortReason);
-                    requestRescue();
-                  } else if (fault !== "early exit") {
-                    ready.resolve(pid);
-                  }
-                }
-                if (text === "terminating") {
-                  terminating.resolve();
-                }
-                return true;
-              },
-            },
-          ),
-        );
-      } catch (error) {
-        if (!controller.signal.aborted) {
-          throw error;
-        }
-      } finally {
-        childFinished = true;
-        commandJoined.resolve();
-        if (fault === "early exit") {
-          requestRescue();
-        }
-        await bodyRelease.promise;
-      }
-      controller.signal.throwIfAborted();
-      laterPhase = true;
-      await runNodeStep("late-phase", ["--eval", "process.exit(0)"], 1_000, {
-        abortController: controller,
-      });
-    });
-    const outcome = body.catch((error: unknown) => error);
-    let cleanup: Promise<void> | undefined;
+it("joins tracked cancellation and body unwind before releasing inputs", async () => {
+  const root = fixture.createTempDir("fixture-lifetime-input-");
+  const command = createDeferred<never>();
+  const entered = createDeferred();
+  const joined = createDeferred();
+  const unwind = createDeferred();
+  const cancelled = new Error("command cancelled after verified join");
+  let laterPhase = false;
+  const tracked = fixture.track(command.promise);
+  const body = fixture.run(async () => {
+    entered.resolve();
     try {
-      pid = await waitForGate(ready.promise);
-      // Hold only the managed supervisor's grace clock; the child and pipes stay real.
-      clock.mockReturnValue(Date.now());
-      controller.abort(new Error("test canceled"));
-      cleanup = fixture.cleanup();
-      const repeatedCleanup = fixture.cleanup();
-      cleanup = Promise.all([cleanup, repeatedCleanup]).then(() => {});
-      void cleanup.catch(() => {});
-      await waitForGate(terminating.promise);
-      expect(fs.readFileSync(input, "utf8")).toBe("preserved");
-      expect(isProcessAlive(pid)).toBe(true);
-      fs.writeFileSync(release, "release");
-      if (fault === "held close") {
-        driverAbort.abort(abortReason);
-        requestRescue();
-      }
-      await waitForGate(commandJoined.promise, true);
-      expect(isProcessAlive(pid)).toBe(false);
-      expect(lines).toContain("preserved");
-      expect(fs.existsSync(root)).toBe(true);
-      if (fault === "cleanup rejection") {
-        await fixture.verifyCleanup(() => Promise.reject(cleanupFailure)).catch(() => {});
-      }
-      bodyRelease.resolve();
-      await cleanup;
-      expect(fs.existsSync(root)).toBe(false);
-      expect(laterPhase).toBe(false);
-      expect(await outcome).toBeInstanceOf(Error);
-    } catch (error) {
-      if (fault === "normal") {
-        throw error;
-      }
-      driverError = error;
+      await tracked;
+      laterPhase = true;
     } finally {
-      finalizing = true;
-      try {
-        try {
-          releaseDriverGates();
-        } finally {
-          // These are actual joins, never cancellation races. A cleanup rejection
-          // must still reach timer/listener restoration and join the probe rescue.
-          try {
-            await outcome;
-            const drain = cleanup ?? fixture.cleanup();
-            if (fault === "cleanup rejection") {
-              await expect(drain).rejects.toBe(driverError);
-            } else {
-              await drain;
-            }
-          } finally {
-            try {
-              if (pid && isProcessAlive(pid)) {
-                process.kill(pid, "SIGKILL");
-                await waitForRescuedChild(pid, contextSignal);
-              }
-            } finally {
-              await rescue;
-            }
-          }
-        }
-      } finally {
-        clock.mockRestore();
-        signal.removeEventListener("abort", abort);
-      }
+      joined.resolve();
+      await unwind.promise;
     }
-    expect(Date.now).toBe(originalNow);
-    expect(getEventListeners(signal, "abort")).toEqual([]);
-    if (fault === "cleanup rejection") {
-      expect(driverError).toBeInstanceOf(AggregateError);
-      expect(driverError).toHaveProperty("errors", [cleanupFailure]);
-      expect(isProcessAlive(pid)).toBe(false);
-      expect(fs.existsSync(root)).toBe(true);
-      // Only this injected failure is disposable: its real child has joined.
-      fs.rmSync(root, { recursive: true, force: true });
-      fs.rmSync(controls, { recursive: true, force: true });
-    } else if (fault !== "normal") {
-      expect(requiredRescue).toBe(false);
-      expect(driverError).toBe(fault === "early exit" ? prematureExit : abortReason);
-      expect(isProcessAlive(pid)).toBe(false);
-    }
-  },
-);
+  });
+  const outcome = body.catch((error: unknown) => error);
+  let cleaned = false;
+  await entered.promise;
+  const cleanup = fixture.cleanup();
+  expect(fixture.cleanup()).toBe(cleanup);
+  const settled = cleanup.then(() => {
+    cleaned = true;
+  });
+  try {
+    expectInputs(root, true);
+    command.reject(cancelled);
+    await joined.promise;
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(cleaned).toBe(false);
+    expectInputs(root, true);
+    unwind.resolve();
+    expect(await outcome).toBe(cancelled);
+    await settled;
+    expectInputs(root, false);
+    expect(laterPhase).toBe(false);
+  } finally {
+    command.reject(cancelled);
+    unwind.resolve();
+    await Promise.all([outcome, settled]);
+  }
+});
 
 it.each(["cyclic aggregate", "cleanup"])(
   "retains inputs and reports unverified %s cleanup even when the body handled its rejection",

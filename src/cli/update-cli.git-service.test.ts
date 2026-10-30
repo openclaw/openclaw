@@ -167,7 +167,7 @@ it.each(["owned", "unresolved"] as const)(
     }
 
     if (ownership === "unresolved") {
-      expect(checks.getLogOutput()).toContain("Restart the Gateway you launched manually");
+      expect(checks.getLogOutput()).toContain("Stop the Gateway through its owner");
       expect(cli.updateGitCheckout).toHaveBeenCalledOnce();
       checks.expectNoSideEffects(
         mocks.serviceStop,
@@ -246,7 +246,7 @@ it.each(["stopped", "throws", "refused"] as const)(
     } else {
       f.expectFailedManagedGitRestart(
         failure === "stopped"
-          ? "Gateway responded, but the managed service did not report running after restart."
+          ? "Managed Gateway service status: stopped."
           : "Gateway: restart failed: Error: restart unavailable",
       );
     }

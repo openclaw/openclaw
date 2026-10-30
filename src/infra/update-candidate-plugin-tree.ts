@@ -3,12 +3,12 @@ import path from "node:path";
 import { assertDirectoryIdentitySync, readDirectoryIdentity } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { root as openRoot } from "./fs-safe.js";
 import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { isPackageUpdateRecoveryArtifactName } from "./package-update-backup-paths.js";
 import { hasNodeErrorCode, isPathInside, isPathStrictlyInside } from "./path-guards.js";
-import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import { copyUpdateCandidatePluginFiles } from "./update-candidate-plugin-file.js";
 import {
@@ -17,7 +17,6 @@ import {
 } from "./update-candidate-plugin-hash.js";
 import { runUpdateCandidatePluginTasks } from "./update-candidate-plugin-tasks.js";
 import {
-  assertUpdateCandidatePluginEntryStat,
   ignoreUnresolvedPluginLink,
   isUpdateCandidateHostLauncher,
   publishUpdateCandidatePluginTreeLinks,
@@ -84,7 +83,7 @@ async function dependencyOwner(
   }
 }
 
-export function assertUpdateCandidatePluginCopySource(source: string, privateRoot: string): void {
+function assertUpdateCandidatePluginCopySource(source: string, privateRoot: string): void {
   if (isPathInside(source, privateRoot) || isPathInside(privateRoot, source)) {
     throw new Error("Plugin copy source overlaps update state");
   }
@@ -628,17 +627,7 @@ export async function copyUpdateCandidatePluginTrees(
 ): Promise<void> {
   const targets = resolveUpdateCandidatePluginTreeTargets(plan, params);
   const { privateRoot, candidateRoot, copies, hostLinks, relocations, destinationFor } = targets;
-  const assertEntry = async (entry: UpdateCandidatePluginEntry) => {
-    assertUpdateCandidatePluginEntryStat(entry, await fs.lstat(entry.path, { bigint: true }));
-    if (entry.kind === "symlink" && (await fs.readlink(entry.path)) !== entry.link) {
-      throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
-    }
-  };
-  const assertEntries = async () => {
-    await runUpdateCandidatePluginTasks(plan.entries.map((entry) => () => assertEntry(entry)));
-  };
   await targets.assertBindings();
-  await assertEntries();
   await fs.mkdir(privateRoot, { recursive: true, mode: 0o700 });
   const rootIdentity = await readDirectoryIdentity(privateRoot);
   const destinationRoot = await openRoot(privateRoot);
@@ -671,13 +660,10 @@ export async function copyUpdateCandidatePluginTrees(
   });
   for (const entry of plan.entries) {
     if (entry.kind === "symlink") {
-      await assertEntry(entry);
       const destination = destinationFor(entry.path);
       await fs.symlink(entry.link, destination, entry.linkType);
     }
   }
-  await targets.assertBindings();
-  await assertEntries();
   for (const entry of plan.entries) {
     if (entry.kind !== "directory") {
       const target = destinationFor(entry.path);

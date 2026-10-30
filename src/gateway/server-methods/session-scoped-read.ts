@@ -1,11 +1,14 @@
+import type { SessionEntryReadScope } from "../../config/sessions/session-accessor.types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
-import { resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
+import { operatorSessionCap, resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import {
   hasSessionReadAccessChanged,
   hiddenSessionNotFound,
   sharingIdentity,
 } from "../session-sharing-policy.js";
 import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
+import { prepareSessionSharingRead } from "../session-sharing-target-read.js";
 import {
   createSessionListEntryFilter,
   SessionMutationAuthorizationChangedError,
@@ -23,7 +26,12 @@ export async function retainSessionScopedRead(
     requireMaterialized?: boolean;
     allowMetadataChanges?: boolean;
     retain?: boolean;
+    projection?: SessionEntryReadScope["projection"];
     entryMatches?: NonNullable<Parameters<typeof retainGatewaySessionEntryReadOnly>[2]>;
+    prepared?: {
+      cfg: OpenClawConfig;
+      pending: ReturnType<typeof retainGatewaySessionEntryReadOnly>;
+    };
   } = {},
 ) {
   const authority = readGatewayRequestMutationAuthority(options);
@@ -44,15 +52,25 @@ export async function retainSessionScopedRead(
   const assertRoutingCurrent = captureSessionMutationRouting(cfg, undefined, [
     { sessionKey, agentId },
   ]);
-  const read = await retainGatewaySessionEntryReadOnly(
-    sessionKey,
-    agentId,
-    readOptions.entryMatches ??
-      (readOptions.allowMetadataChanges
-        ? (previous, current) => !hasSessionReadAccessChanged(previous, current)
-        : undefined),
-    cfg,
-  );
+  const borrowed = readOptions.prepared?.cfg === cfg ? readOptions.prepared.pending : undefined;
+  const read = await (borrowed ??
+    retainGatewaySessionEntryReadOnly(
+      sessionKey,
+      agentId,
+      readOptions.entryMatches ??
+        (readOptions.allowMetadataChanges
+          ? (previous, current) => !hasSessionReadAccessChanged(previous, current)
+          : undefined),
+      cfg,
+      { projection: readOptions.projection },
+    ));
+  let sharing: Awaited<ReturnType<typeof prepareSessionSharingRead>> | undefined;
+  const release = () => {
+    sharing?.release();
+    if (!borrowed) {
+      read.release();
+    }
+  };
   const assertCurrent = () => {
     authority.assertCurrent();
     const currentCfg = getConfig();
@@ -61,6 +79,7 @@ export async function retainSessionScopedRead(
     const visible = createSessionListEntryFilter({
       client: options.client,
       cfg: currentCfg,
+      membership: sharing?.readCurrent(currentCfg).membership,
     });
     if (
       (narrow &&
@@ -78,10 +97,13 @@ export async function retainSessionScopedRead(
     }
   };
   try {
+    if (operatorSessionCap(options.client, cfg) === "invited") {
+      sharing = await prepareSessionSharingRead({ cfg, sessionKey, agentId });
+    }
     assertCurrent();
-    return { assertCurrent, release: read.release, prepared: read };
+    return { assertCurrent, release, prepared: read };
   } catch (error) {
-    read.release();
+    release();
     throw error;
   }
 }

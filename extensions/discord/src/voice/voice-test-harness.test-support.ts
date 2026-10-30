@@ -31,6 +31,7 @@ import { voiceTestMocks as mocks } from "./voice-test-mocks.test-support.js";
 const { getDiscordAudioTestWorker } = await import("./audio-worker.test-support.js");
 // Parallel entry points can race Vitest's async audio mock and capture different exports.
 const managerModule = await import("./voice-runtime.js");
+const listenersModule = await import("./listeners.js");
 const realtimeModule = await import("./realtime-session.runtime.js");
 type Manager = InstanceType<typeof managerModule.DiscordVoiceManager>;
 type ManagerParams = ConstructorParameters<typeof managerModule.DiscordVoiceManager>[0];
@@ -186,9 +187,8 @@ function buildVoiceTestHarness() {
     voice: { enabled: true, mode: "stt-tts", ...voice },
   });
 
-  const makeAgentProxyConfig = (overrides: AgentProxyConfigOverrides = {}): DiscordConfig => {
-    const { voice, ...discord } = overrides;
-    return makeVoiceConfig(
+  const makeAgentProxyConfig = ({ voice, ...discord }: AgentProxyConfigOverrides = {}) =>
+    makeVoiceConfig(
       {
         mode: "agent-proxy",
         ...voice,
@@ -196,10 +196,6 @@ function buildVoiceTestHarness() {
       },
       { groupPolicy: "open", ...discord },
     );
-  };
-
-  const makeBidiConfig = ({ voice, ...discord }: AgentProxyConfigOverrides = {}) =>
-    makeAgentProxyConfig({ ...discord, voice: { mode: "bidi", ...voice } });
 
   const createAgentProxyManager = (
     client?: ReturnType<typeof createClient>,
@@ -415,6 +411,7 @@ function buildVoiceTestHarness() {
     createDefaultVoiceStates,
     ...mocks,
     managerModule,
+    listenersModule,
     realtimeModule,
     configureVoiceStateGateway,
     createClient,
@@ -477,8 +474,10 @@ function buildVoiceTestHarness() {
       joinManagerFixture(
         createAgentProxyManager(overrides.client, overrides.config, overrides.cfg),
       ),
-    createJoinedBidiFixture: async (config: AgentProxyConfigOverrides = {}) =>
-      joinManagerFixture(createManager(makeBidiConfig(config))),
+    createJoinedBidiFixture: async ({ voice, ...config }: AgentProxyConfigOverrides = {}) =>
+      joinManagerFixture(
+        createAgentProxyManager(undefined, { ...config, voice: { mode: "bidi", ...voice } }),
+      ),
     lastAudioResourceInput: () => lastMockCall(mocks.createAudioResourceMock, "audio resource")[0],
     lastTtsArgs: () => callArgs(mocks.textToSpeechMock, "tts"),
     lastTtsStreamArgs: () => callArgs(mocks.textToSpeechStreamMock, "tts stream"),

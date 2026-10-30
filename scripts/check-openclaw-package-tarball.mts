@@ -639,10 +639,10 @@ if (entrySet.has(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)) {
               path: entry,
               sha256: createHash("sha256").update(bytes).digest("hex"),
               size: bytes.length,
-              mode: fs.statSync(file).mode & 0o777,
+              mode: fs.statSync(file).mode & 0o7777,
             };
           });
-        errors.push(...comparePackageDistContentInventory(expected, actual));
+        errors.push(...comparePackageDistContentInventory(expected, actual, warnings));
       }
 
       const parity = comparePackageDistInventory({

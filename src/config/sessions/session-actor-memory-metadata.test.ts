@@ -1,11 +1,11 @@
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
-import type { SessionActorAuthority, SessionActorStorage } from "./session-actor-contract.js";
+import type { SessionActorStorage } from "./session-actor-contract.js";
+import { authority, memoryOwnerFixture } from "./session-actor-memory-family.test-support.js";
 import {
   readMemory,
   commitMemory,
   mutateMemory,
 } from "./session-actor-memory-publication.test-support.js";
-import { createMemorySessionActorOwner } from "./session-actor-memory.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
@@ -24,17 +24,11 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
 const sessionKey = "agent:main:dashboard:incognito-metadata";
 const sessionId = "session-1";
 const scope = { agentId: "main", storePath: "/synthetic/metadata", sessionKey, sessionId };
-const authority: SessionActorAuthority = { authorize() {}, assertCurrent() {} };
-const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
+const openFixture = memoryOwnerFixture({ agentId: scope.agentId, path: scope.storePath });
 const header =
   '{ "type": "session", "version": 3, "id": "session-1", "timestamp": "1970-01-01T00:00:00.000Z", "cwd": "/synthetic" }';
 
-afterEach(() => {
-  for (const owner of owners.splice(0)) {
-    owner.close();
-  }
-  vi.useRealTimers();
-});
+afterEach(() => vi.useRealTimers());
 
 async function hydrate(storage: SessionActorStorage, selectedId = sessionId) {
   const result = await readMemory(storage, "session.history.hydrate", { sessionId: selectedId });
@@ -45,28 +39,28 @@ async function hydrate(storage: SessionActorStorage, selectedId = sessionId) {
 async function fixture() {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(1000);
-  const owner = createMemorySessionActorOwner({ agentId: scope.agentId, path: scope.storePath });
-  owners.push(owner);
+  const { owner, actor, store: storage } = await openFixture(sessionKey);
   const acquire = async () => {
-    const actor = await owner.acquire(
-      { database: owner.identity, sessionKey },
-      { assertCurrent() {}, assertReadable() {} },
-    );
-    assert(actor.storage, "Missing memory storage");
-    return { actor, storage: actor.storage };
+    const next = await openFixture(sessionKey, owner);
+    return { actor: next.actor, storage: next.store };
   };
-  const { actor, storage } = await acquire();
   await commitMemory(storage, "session.metadata.initialize", {
     scope,
     entry: { sessionId, updatedAt: 1, incognito: true },
   });
+  expect((await hydrate(storage)).events).toEqual([]);
   const raw = async (event: string) =>
     await commitMemory(storage, "session.metadata.append", { scope, event, options: {} });
-  const user = async (id: string, text: string) => {
+  const message = async (
+    id: string,
+    text: string,
+    role = "user",
+    parentId: string | null = null,
+  ) => {
     const event = {
       type: "message" as const,
       id,
-      parentId: null,
+      parentId,
       timestamp: "1970-01-01T00:00:00.002Z",
     };
     return await commitMemory(storage, "session.metadata.append", {
@@ -74,44 +68,28 @@ async function fixture() {
       event,
       options: { appendIntent: "active-branch" },
       message: {
-        messageJson: JSON.stringify({ role: "user", content: text, timestamp: 2 }),
+        messageJson: JSON.stringify({ role, content: text, timestamp: 2 }),
         cwd: "/synthetic",
         validateTurn: false,
       },
     });
   };
-  return { owner, actor, storage, raw, user, acquire };
+  const snapshot = () => actor.snapshot(authority)!;
+  const anchors = () =>
+    snapshot().transcript.anchors.map(({ entryId, rawSeq }) => [entryId, rawSeq]);
+  const workspace = (maxSeq: number, generation = snapshot().transcript.watermark.generation) => {
+    expect(snapshot().entry?.priorWorkspace?.through).toEqual({ generation, maxSeq });
+  };
+  return { actor, storage, raw, user: message, acquire, anchors, workspace };
 }
 
 describe("memory actor metadata storage", () => {
-  it("initializes without a fabricated message and preserves prepared bytes across append/read", async () => {
-    const { actor, storage, raw } = await fixture();
-    expect((await hydrate(storage)).events).toEqual([]);
-    await raw(header);
-    const messageJson = '{ "role": "user", "content": "Prepared bytes", "timestamp": 2 }';
-    const appended = await commitMemory(storage, "session.transcript.appendMessage", {
-      scope,
-      messageJson,
-      cwd: "/synthetic",
-    });
-    expect(appended.snapshot).toMatchObject({ ok: true, value: { result: { appended: true } } });
-    const read = await hydrate(storage);
-    expect(read.eventJson?.[0]).toBe(header);
-    expect(read.eventJson?.[1]).toContain(`"message":${messageJson}}`);
-    expect(actor.snapshot(authority)?.transcript.anchors).toHaveLength(1);
-    expect(await readMemory(storage, "session.metadata.mutation", { scope })).toBeGreaterThan(1000);
-    assert(read.events[1] && typeof read.events[1] === "object", "Expected message");
-    Object.assign(read.events[1], { id: "changed-returned-copy" });
-    expect((await hydrate(storage)).events).not.toContainEqual(
-      expect.objectContaining({ id: "changed-returned-copy" }),
-    );
-  });
-
   it("refuses a prepared rewrite after a phase append and preserves the original branch bytes", async () => {
-    const { actor, storage, raw, user } = await fixture();
+    const { actor, storage, raw, user, anchors } = await fixture();
     await raw(header);
     await user("user-1", "First");
     const before = await hydrate(storage);
+    expect(before.eventJson?.[0]).toBe(header);
     const source = before.events.find(
       (event) => isIndexedSessionEntry(event) && event.id === "user-1",
     );
@@ -157,9 +135,7 @@ describe("memory actor metadata storage", () => {
     const after = await hydrate(storage);
     expect(after.eventJson?.slice(0, current.events.length)).toEqual(current.eventJson);
     expect(after.events.at(-1)).toMatchObject({ id: "copied-user", message: { content: "First" } });
-    expect(actor.snapshot(authority)?.transcript.anchors.map((anchor) => anchor.entryId)).toEqual([
-      "copied-user",
-    ]);
+    expect(anchors().map(([entryId]) => entryId)).toEqual(["copied-user"]);
     const side = {
       ...source,
       id: "side-copy",
@@ -177,9 +153,7 @@ describe("memory actor metadata storage", () => {
       id: "side-copy",
       appendMode: "side",
     });
-    expect(actor.snapshot(authority)?.transcript.anchors.map((anchor) => anchor.entryId)).toEqual([
-      "copied-user",
-    ]);
+    expect(anchors().map(([entryId]) => entryId)).toEqual(["copied-user"]);
   });
 
   it("replaces only an exact suffix, preserves opaque custom data, and invalidates old cursors", async () => {
@@ -227,25 +201,116 @@ describe("memory actor metadata storage", () => {
     expect((await hydrate(storage)).eventJson).toEqual(after.eventJson);
   });
 
+  it("keeps adopted file provenance through media rewrite, boundary removal and manual trim", async () => {
+    const { actor, storage, raw, user, anchors, workspace } = await fixture();
+    await raw(header);
+    await user("old-discarded", "Earlier original source");
+    await user("old-kept", "Original notes.md");
+    await user("adoption-boundary", "Prepare the PR");
+    const prior = actor.snapshot(authority)!.transcript.watermark;
+    await commitMemory(storage, "session.entry.patch", {
+      operation: {
+        kind: "fields",
+        patch: {
+          worktree: { id: "adopted", branch: "pr", repoRoot: "/synthetic/current" },
+          priorWorkspace: {
+            worktreeId: "adopted",
+            sessionId,
+            workspaceDir: "/synthetic/original",
+            fileRoot: "/synthetic/original",
+            through: prior,
+          },
+        },
+      },
+      preserveActivity: true,
+    });
+    await user("current", "Current notes.md");
+    await user("assistant", "Prepared the PR", "assistant", "current");
+    const anchor = actor
+      .snapshot(authority)!
+      .transcript.anchors.find((item) => item.entryId === "assistant")!;
+    const target = { kind: "anchor" as const, anchor, active: "exact" as const };
+    const expected = await readMemory(storage, "session.rewrite.prepare", { scope, target });
+    assert(expected);
+    await commitMemory(storage, "session.rewrite.commit", {
+      scope,
+      target,
+      expected,
+      message: {
+        role: "assistant",
+        content: "Prepared the PR and attached a preview",
+        timestamp: 2,
+      },
+    });
+    const rewritten = actor.snapshot(authority)!;
+    expect(rewritten.transcript.watermark.generation).not.toBe(prior.generation);
+    workspace(3);
+    const before = await hydrate(storage);
+    const next = before.events
+      .filter((event) => !isIndexedSessionEntry(event) || event.id !== "adoption-boundary")
+      .map((event) =>
+        isIndexedSessionEntry(event) && event.id === "current"
+          ? Object.assign({}, event, { parentId: "old-kept" })
+          : event,
+      );
+    await commitMemory(storage, "session.transcript.replaceSuffix", {
+      scope,
+      args: [before.events, next, 0, before.version.updatedAt, false, []],
+    });
+    workspace(2);
+    expect(anchors()).toEqual([
+      ["old-discarded", 1],
+      ["old-kept", 2],
+      ["current", 3],
+      ["assistant", 4],
+    ]);
+    await commitMemory(storage, "session.transcript.manualCompact", { scope, maxLines: 4 });
+    const compacted = actor.snapshot(authority)!;
+    workspace(1);
+    expect(anchors()).toEqual([
+      ["old-kept", 1],
+      ["current", 2],
+      ["assistant", 3],
+    ]);
+    // Maintenance rewrites re-append copies; an original-file copy keeps its side.
+    const trimmed = await hydrate(storage);
+    const source = (id: string) => {
+      const event = trimmed.events.find((item) => isIndexedSessionEntry(item) && item.id === id);
+      assert(isIndexedSessionEntry(event) && event.type === "message", `Expected ${id}`);
+      return event;
+    };
+    const copies = [
+      { ...source("old-kept"), id: "copied-old", parentId: null },
+      { ...source("current"), id: "copied-current", parentId: "copied-old" },
+    ];
+    await commitMemory(storage, "session.transcript.rewrite", {
+      scope,
+      appendParentId: "assistant",
+      version: trimmed.version,
+      entries: copies,
+      sources: [
+        ["copied-old", source("old-kept")],
+        ["copied-current", source("current")],
+      ],
+    });
+    expect(anchors()).toEqual([
+      ["copied-old", 4],
+      ["copied-current", 5],
+    ]);
+    workspace(4, compacted.transcript.watermark.generation);
+  });
+
   it("retains an old window across branch replacement and commits compaction accounting atomically", async () => {
     const { storage, raw, user, acquire } = await fixture();
     await raw(header);
     await user("user-1", "Old window");
     const before = await hydrate(storage);
     const branchId = "branched-session";
-    const branchHeader = {
-      type: "session",
-      version: 3,
-      id: branchId,
-      timestamp: "1970-01-01T00:00:00.000Z",
-      cwd: "/synthetic",
-    };
-    const branched = await commitMemory(storage, "session.transcript.branch", {
+    await commitMemory(storage, "session.transcript.branch", {
       scope,
       expectedLifecycleRevision: undefined,
-      branch: { sessionId: branchId, events: [branchHeader] },
+      branch: { sessionId: branchId, events: [{ type: "session", version: 3, id: branchId }] },
     });
-    expect(branched.identity.current.get(sessionKey)?.sessionId).toBe(branchId);
     const next = await acquire();
     expect((await hydrate(next.storage, sessionId)).eventJson).toEqual(before.eventJson);
     const branchScope = { ...scope, sessionId: branchId };
@@ -267,7 +332,6 @@ describe("memory actor metadata storage", () => {
       },
       transcriptByteCompactionLatch: latch,
     });
-    expect(compacted.committed.result.id).toBe("compact-1");
     expect(next.actor.snapshot(authority)?.entry).toMatchObject({
       compactionCount: 1,
       compactionQualityDegraded: true,

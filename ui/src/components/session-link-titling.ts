@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionsResolveParams,
@@ -11,6 +10,7 @@ import { pathForSession } from "../app-session-path-builder.ts";
 import type { SessionPathTarget } from "../app-session-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
@@ -18,11 +18,11 @@ import {
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
 import { findLocalSessionReference } from "../pages/chat/route-loader-short-cache.ts";
+import { stampSessionTitleLabel, type SessionTitleDisplay } from "./markdown-link-display.ts";
 import {
   markdownSessionPublicOrigin,
   parseLocalMarkdownSessionUrl,
 } from "./markdown-session-links.ts";
-import { SESSION_TITLE_TARGET_SELECTOR } from "./session-progress-hovercard-target.ts";
 
 const SUCCESS_CACHE_MS = 5 * 60_000;
 const FAILURE_CACHE_MS = 30_000;
@@ -36,6 +36,12 @@ type SessionTitleTarget = {
 
 type SessionTitle = SessionTitleTarget & { title?: string };
 
+type RegisteredTitle = {
+  element: HTMLElement;
+  label: HTMLElement;
+  display?: SessionTitleDisplay;
+};
+
 /** A session URL the loaded roster cannot identify; the Gateway resolves it on demand. */
 type SessionReference = {
   agentId: string;
@@ -44,55 +50,25 @@ type SessionReference = {
   params: SessionsResolveParams;
 };
 
-type CacheEntry = {
+type CacheEntry<T = SessionTitle> = {
   expiresAt: number;
-  promise: Promise<SessionTitle>;
-  value?: SessionTitle;
+  promise: Promise<T>;
+  value?: T;
 };
-
-type ReferenceEntry = {
-  expiresAt: number;
-  promise: Promise<SessionTitleTarget | null>;
-  value?: SessionTitleTarget | null;
-};
-
-function titleFromPreview(value: unknown): SessionTitle {
-  if (!isRecord(value) || value.status !== "ok") {
-    throw new Error("Session title unavailable");
-  }
-  const sessionKey = readNonBlankString(value.sessionKey);
-  const agentId = readNonBlankString(value.agentId);
-  if (!sessionKey || !agentId) {
-    throw new Error("Session title response was incomplete");
-  }
-  return {
-    sessionKey,
-    agentId,
-    namespace: "chat",
-    title: readNonBlankString(value.title) ?? readNonBlankString(value.derivedTitle),
-  };
-}
 
 export class SessionLinkTitler {
   private currentClient: GatewayBrowserClient | null = null;
   private currentContext: ApplicationContext | null = null;
   private readonly cache = new Map<string, CacheEntry>();
-  private readonly references = new Map<string, ReferenceEntry>();
+  private readonly references = new Map<string, CacheEntry<SessionTitleTarget | null>>();
   private scope = {};
   private presentationScope: number | undefined;
+  private readonly registered = new Map<HTMLElement, RegisteredTitle>();
+  private refreshQueued = false;
   private readonly titledAnchors = new WeakMap<
     HTMLElement,
     { scope: object; key: string; title: string }
   >();
-  private readonly observer = new MutationObserver((records) => {
-    for (const node of records.flatMap((record) => [...record.addedNodes])) {
-      if (node instanceof HTMLElement) {
-        this.refresh(node);
-      }
-    }
-  });
-
-  constructor(private readonly host: HTMLElement) {}
 
   get client() {
     return this.currentClient;
@@ -131,58 +107,86 @@ export class SessionLinkTitler {
     return this.scope;
   }
 
-  connect(): void {
-    this.observer.observe(this.host, { childList: true, subtree: true });
-    this.refresh();
+  private canRead(method: string, client = this.client, scope?: object): boolean {
+    return (
+      client === this.client &&
+      (scope === undefined || this.currentScope() === scope) &&
+      canCallGatewayMethod(
+        this.context && { ...this.context.gateway.snapshot, client },
+        method,
+        "operator.read",
+        // Route resolution is an internal, deliberately unadvertised method.
+        { requireAdvertisement: method !== "sessions.resolve" },
+      )
+    );
   }
 
-  refresh(root = this.host): void {
+  register(element: HTMLElement, label: HTMLElement, display?: SessionTitleDisplay): () => void {
+    const entry = { element, label, display };
+    this.registered.set(element, entry);
+    if (!this.refreshQueued) {
+      this.refreshQueued = true;
+      queueMicrotask(() => {
+        this.refreshQueued = false;
+        this.refresh();
+      });
+    }
+    return () => {
+      if (this.registered.get(entry.element) === entry) {
+        this.registered.delete(entry.element);
+      }
+    };
+  }
+
+  refresh(): void {
     // Share repeated references only within this synchronous roster projection.
     const targets = new Map<string, SessionTitleTarget | SessionReference | null>();
-    if (root.matches(SESSION_TITLE_TARGET_SELECTOR)) {
-      void this.decorate(root, true, targets);
-    }
-    for (const anchor of root.querySelectorAll<HTMLElement>(SESSION_TITLE_TARGET_SELECTOR)) {
-      void this.decorate(anchor, true, targets);
+    // A code link can acquire an anchor, changing its registration key below.
+    const registrations = [...this.registered.values()];
+    for (const entry of registrations) {
+      void this.decorate(entry.element, targets);
     }
   }
 
   disconnect(): void {
-    this.observer.disconnect();
+    // Native bridge remounts retain producer-owned DOM and registrations.
+    this.client = null;
+    this.context = null;
   }
 
   async decorate(
     element: HTMLElement,
-    load = false,
     targets?: Map<string, SessionTitleTarget | SessionReference | null>,
   ): Promise<void> {
+    const entry = this.registered.get(element);
+    if (!entry) {
+      return;
+    }
+    if (
+      entry.display?.title &&
+      (this.context?.gateway.snapshot.phase !== "connected" ||
+        this.context.sessions.state.resultCached)
+    ) {
+      return;
+    }
     const scope = this.currentScope();
     let target = this.targetForAnchor(element, targets);
-    const anchor =
-      element instanceof HTMLAnchorElement || element.hasAttribute("data-session-title-only")
-        ? element
-        : document.createElement("a");
-    if (element !== anchor && element.classList.contains("markdown-session-link")) {
-      anchor.dataset.sessionHref = element.dataset.sessionHref;
-      anchor.setAttribute("href", element.getAttribute("href") ?? "");
-      anchor.className = "markdown-session-link";
-      element.classList.remove("markdown-session-link");
-      element.removeAttribute("href");
-      element.removeAttribute("data-session-href");
-      element.replaceWith(anchor);
-      anchor.append(element);
+    const anchor = stampSessionTitleLabel(element, entry.label);
+    if (element !== anchor) {
+      this.registered.delete(element);
+      entry.element = anchor;
+      this.registered.set(anchor, entry);
     }
     const previous = this.titledAnchors.get(anchor);
     if (previous && previous.scope !== scope) {
-      const label = anchor.querySelector<HTMLSpanElement>(":scope > .session-label");
-      if (label?.textContent === previous.title) {
+      if (entry.label.textContent === previous.title) {
         anchor.classList.remove("markdown-session-link--titled");
-        label.textContent = previous.key;
+        entry.label.textContent = previous.key;
       }
       this.titledAnchors.delete(anchor);
     }
     if (target && !("sessionKey" in target)) {
-      if (!load) {
+      if (!this.canRead("sessions.resolve")) {
         return;
       }
       try {
@@ -191,7 +195,7 @@ export class SessionLinkTitler {
         // Resolution is decoration; the URL remains navigable.
         return;
       }
-      if (this.currentScope() !== scope) {
+      if (this.currentScope() !== scope || this.registered.get(anchor) !== entry) {
         return;
       }
     }
@@ -199,14 +203,14 @@ export class SessionLinkTitler {
       return;
     }
     const cached = this.cachedOrSeededEntry(target);
-    this.stampAnchor(anchor, target, cached?.value);
-    if (!load || cached?.value) {
+    this.stampAnchor(entry, target, cached?.value);
+    if (cached?.value) {
       return;
     }
     try {
-      const title = await this.loadTitle(target);
-      if (this.currentScope() === scope) {
-        this.stampAnchor(anchor, target, title);
+      const title = await (cached?.promise ?? this.loadTitle(target));
+      if (this.currentScope() === scope && this.registered.get(anchor) === entry) {
+        this.stampAnchor(entry, target, title);
       }
     } catch {
       // A title is decoration; the session link remains usable with its raw key.
@@ -320,41 +324,55 @@ export class SessionLinkTitler {
       return cached.promise;
     }
     const client = this.client;
-    const entry: ReferenceEntry = {
-      expiresAt: now + SUCCESS_CACHE_MS,
-      promise: Promise.resolve().then(async () => {
-        if (!client) {
-          throw new Error("Session link resolution requires a connected Gateway");
-        }
-        const result = await client.request<SessionsResolveResult>(
-          "sessions.resolve",
-          reference.params,
-        );
-        if (!result.ok) {
-          // Missing and ambiguous references stay plain links.
-          return null;
-        }
-        const target = {
-          sessionKey: result.key,
-          agentId: result.agentId,
-          namespace: reference.namespace,
-        };
-        const title = readNonBlankString(result.displayName);
-        if (title && this.scope === scope && !this.cache.has(target.sessionKey)) {
-          const value = { ...target, title };
-          this.setCacheEntry(target.sessionKey, {
-            expiresAt: Date.now() + SUCCESS_CACHE_MS,
-            promise: Promise.resolve(value),
-            value,
-          });
-        }
-        return target;
-      }),
+    return this.load(this.references, reference.cacheKey, async () => {
+      if (!client || !this.canRead("sessions.resolve", client, scope)) {
+        throw new Error("Session link resolution requires a connected Gateway");
+      }
+      const result = await client.request<SessionsResolveResult>(
+        "sessions.resolve",
+        reference.params,
+      );
+      if (!result.ok) {
+        // Missing and ambiguous references stay plain links.
+        return null;
+      }
+      const target = {
+        sessionKey: result.key,
+        agentId: result.agentId,
+        namespace: reference.namespace,
+      };
+      const title = readNonBlankString(result.displayName);
+      if (title && this.scope === scope && !this.cache.has(target.sessionKey)) {
+        const value = { ...target, title };
+        this.remember(this.cache, target.sessionKey, {
+          expiresAt: Date.now() + SUCCESS_CACHE_MS,
+          promise: Promise.resolve(value),
+          value,
+        });
+      }
+      return target;
+    });
+  }
+
+  private remember<T>(cache: Map<string, CacheEntry<T>>, key: string, entry: CacheEntry<T>): void {
+    cache.delete(key);
+    cache.set(key, entry);
+    pruneMapToMaxSize(cache, CACHE_LIMIT);
+  }
+
+  private load<T>(
+    cache: Map<string, CacheEntry<T>>,
+    key: string,
+    request: () => Promise<T>,
+  ): Promise<T> {
+    const entry: CacheEntry<T> = {
+      expiresAt: Date.now() + SUCCESS_CACHE_MS,
+      promise: Promise.resolve().then(request),
     };
     entry.promise = entry.promise.then(
       (value) => {
         entry.value = value;
-        if (!value) {
+        if (value === null) {
           entry.expiresAt = Date.now() + FAILURE_CACHE_MS;
         }
         return value;
@@ -364,30 +382,22 @@ export class SessionLinkTitler {
         throw error;
       },
     );
-    this.references.delete(reference.cacheKey);
-    this.references.set(reference.cacheKey, entry);
-    pruneMapToMaxSize(this.references, CACHE_LIMIT);
+    this.remember(cache, key, entry);
     return entry.promise;
-  }
-
-  private setCacheEntry(key: string, entry: CacheEntry): void {
-    this.cache.delete(key);
-    this.cache.set(key, entry);
-    pruneMapToMaxSize(this.cache, CACHE_LIMIT);
   }
 
   private cachedOrSeededEntry(target: SessionTitleTarget): CacheEntry | undefined {
     const now = Date.now();
     const cached = this.cache.get(target.sessionKey);
-    if (cached && cached.expiresAt > now) {
-      this.setCacheEntry(target.sessionKey, cached);
-      return cached;
-    }
-    this.cache.delete(target.sessionKey);
     const row = this.context?.sessions.state.result?.sessions.find((candidate) =>
       areUiSessionKeysEquivalent(candidate.key, target.sessionKey),
     );
     if (!row) {
+      if (cached && cached.expiresAt > now) {
+        this.remember(this.cache, target.sessionKey, cached);
+        return cached;
+      }
+      this.cache.delete(target.sessionKey);
       return undefined;
     }
     const value: SessionTitle = {
@@ -396,51 +406,52 @@ export class SessionLinkTitler {
       agentId: row.agentId ?? parseAgentSessionKey(row.key)?.agentId ?? target.agentId,
       title: row.displayName ?? row.derivedTitle,
     };
+    if (
+      cached?.value &&
+      cached.expiresAt > now &&
+      cached.value.sessionKey === value.sessionKey &&
+      cached.value.agentId === value.agentId &&
+      cached.value.title === value.title
+    ) {
+      this.remember(this.cache, target.sessionKey, cached);
+      return cached;
+    }
     const entry = { expiresAt: now + SUCCESS_CACHE_MS, promise: Promise.resolve(value), value };
-    this.setCacheEntry(target.sessionKey, entry);
+    this.remember(this.cache, target.sessionKey, entry);
     return entry;
   }
 
-  private loadTitle(target: SessionTitleTarget): Promise<SessionTitle> {
-    const cached = this.cachedOrSeededEntry(target);
-    if (cached) {
-      return cached.promise;
-    }
+  private loadTitle(target: SessionTitleTarget): Promise<SessionTitle | undefined> {
     const client = this.client;
-    const load = async () => {
-      if (!client) {
+    if (!client || !this.canRead("controlUi.sessionPreview", client)) {
+      return Promise.resolve(undefined);
+    }
+    const scope = this.currentScope();
+    return this.load(this.cache, target.sessionKey, async () => {
+      if (!this.canRead("controlUi.sessionPreview", client, scope)) {
         throw new Error("Session title requires a connected Gateway");
       }
-      const title = titleFromPreview(
-        await client.request<ControlUiSessionPreview>("controlUi.sessionPreview", {
-          sessionKey: target.sessionKey,
-        }),
-      );
-      return { ...title, namespace: target.namespace };
-    };
-    const entry: CacheEntry = {
-      expiresAt: Date.now() + SUCCESS_CACHE_MS,
-      promise: Promise.resolve().then(load),
-    };
-    entry.promise = entry.promise.then(
-      (value) => {
-        entry.value = value;
-        return value;
-      },
-      (error: unknown) => {
-        entry.expiresAt = Date.now() + FAILURE_CACHE_MS;
-        throw error;
-      },
-    );
-    this.setCacheEntry(target.sessionKey, entry);
-    return entry.promise;
+      const value = await client.request<ControlUiSessionPreview>("controlUi.sessionPreview", {
+        sessionKey: target.sessionKey,
+      });
+      if (value.status !== "ok") {
+        throw new Error("Session title unavailable");
+      }
+      return {
+        sessionKey: value.sessionKey,
+        agentId: value.agentId,
+        namespace: target.namespace,
+        title: readNonBlankString(value.title) ?? readNonBlankString(value.derivedTitle),
+      };
+    });
   }
 
   private stampAnchor(
-    anchor: HTMLElement,
+    entry: RegisteredTitle,
     target: SessionTitleTarget,
     titleRecord?: SessionTitle,
   ): void {
+    const { element: anchor, label } = entry;
     const title = titleRecord?.title;
     const href = pathForSession(
       target.namespace,
@@ -460,17 +471,30 @@ export class SessionLinkTitler {
         anchor.setAttribute("href", href);
       }
     }
-    if (!title || anchor.classList.contains("markdown-session-link--titled")) {
+    const previous = this.titledAnchors.get(anchor);
+    const ownedTitle = previous?.title ?? entry.display?.title;
+    if (
+      anchor.classList.contains("markdown-session-link--titled") &&
+      (ownedTitle === undefined || label.textContent !== ownedTitle)
+    ) {
       return;
     }
-    anchor.classList.add("markdown-session-link--titled");
+    if (!title) {
+      if (
+        titleRecord &&
+        ownedTitle !== undefined &&
+        anchor.classList.contains("markdown-session-link--titled")
+      ) {
+        anchor.classList.remove("markdown-session-link--titled");
+        label.textContent = target.sessionKey;
+        this.titledAnchors.delete(anchor);
+        entry.display?.onTitle(undefined);
+      }
+      return;
+    }
     this.titledAnchors.set(anchor, { scope: this.scope, key: target.sessionKey, title });
-    // Keep a producer's label node so Lit can still update its text binding.
-    const label =
-      anchor.querySelector<HTMLSpanElement>(":scope > .session-label") ??
-      document.createElement("span");
-    label.className = "session-label";
-    label.textContent = title;
-    anchor.replaceChildren(label);
+    // The producer retains this label across later rendering updates.
+    stampSessionTitleLabel(anchor, label, title);
+    entry.display?.onTitle(title);
   }
 }

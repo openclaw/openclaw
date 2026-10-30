@@ -26,6 +26,7 @@ import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-supp
 import { withEnvAsync } from "../test-utils/env.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withArtifactPreservingStateReads } from "./artifact-preserving-state-reads.js";
+import { createDanglingSkillWorkshopReviewIndex } from "./openclaw-state-db-corruption.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -552,7 +553,7 @@ describe("external shared-state ownership", () => {
       throw new Error("ownership fixture state directory is unavailable");
     }
     fs.rmSync(path.join(stateDir, "tmp"), { force: true, recursive: true });
-    expect(fs.readdirSync(stateDir)).toEqual(["state"]);
+    expect(fs.readdirSync(stateDir).toSorted()).toEqual(["client", "state"]);
     const before = snapshotSqliteFamily(fixture.databasePath);
 
     if (process.platform !== "win32") {
@@ -567,7 +568,7 @@ describe("external shared-state ownership", () => {
     }
 
     assert.deepStrictEqual(snapshotSqliteFamily(fixture.databasePath), before);
-    expect(fs.readdirSync(stateDir)).toEqual(["state"]);
+    expect(fs.readdirSync(stateDir).toSorted()).toEqual(["client", "state"]);
   });
 
   it("requires the external marker and makes claims idempotent only for one manager", () => {
@@ -627,28 +628,7 @@ describe("external shared-state ownership", () => {
     const databasePath = openOpenClawStateDatabase({ env }).path;
     closeOpenClawStateDatabaseForTest();
     const { DatabaseSync } = requireNodeSqlite();
-    const damaged = new DatabaseSync(databasePath);
-    damaged.exec(
-      "CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (review_id TEXT NOT NULL PRIMARY KEY, owner_agent_id TEXT NOT NULL, backup_id TEXT NOT NULL, create_time INTEGER NOT NULL, kept_names_json TEXT NOT NULL, written_names_json TEXT NOT NULL, dropped_json TEXT NOT NULL) STRICT; CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
-    );
-    damaged.enableDefensive?.(false);
-    damaged.exec("PRAGMA writable_schema = ON;");
-    damaged
-      .prepare(
-        `UPDATE sqlite_schema
-            SET sql = 'CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time
-                         ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC)'
-          WHERE type = 'index'
-            AND name = 'idx_skill_workshop_collection_reviews_workspace_time'`,
-      )
-      .run();
-    const schemaVersion = damaged.prepare("PRAGMA schema_version").get() as {
-      schema_version: number;
-    };
-    damaged.exec(
-      `PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion.schema_version + 1};`,
-    );
-    damaged.close();
+    createDanglingSkillWorkshopReviewIndex(databasePath);
 
     const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")?.value as
       | ((this: import("node:sqlite").DatabaseSync, sql: string) => void)

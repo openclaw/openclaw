@@ -75,6 +75,7 @@ export const BoardWidgetSchema = closedObject({
   contentOwner: Type.Optional(
     Type.Enum(["html", "mcp-app", "plugin", "registered"] as const, { type: "string" }),
   ),
+  // Read-only v4 metadata from older Gateways; new stores never emit registered content.
   registeredContentKind: Type.Optional(Type.String({ pattern: "^[a-z][a-z0-9-]{0,31}$" })),
   pluginKind: Type.Optional(BoardWidgetPluginKindSchema),
   props: Type.Optional(BoardWidgetPluginPropsSchema),
@@ -201,6 +202,8 @@ export const BoardWidgetPluginContentSchema = closedObject({
   pluginKind: BoardWidgetPluginKindSchema,
   props: Type.Optional(BoardWidgetPluginPropsSchema),
 });
+// Keep retired v4 content wire-valid for older clients and Gateways. The put
+// handler reports its removal; this is never materialized or rendered.
 export const BoardWidgetRegisteredContentSchema = closedObject({
   kind: Type.Literal("registered"),
   contentKind: Type.String({ pattern: "^[a-z][a-z0-9-]{0,31}$" }),
@@ -217,10 +220,6 @@ export type BoardWidgetMaterializedContent =
   | Static<typeof BoardWidgetHtmlContentSchema>
   | (Static<typeof BoardWidgetMcpAppContentSchema> & { interactive: boolean })
   | Static<typeof BoardWidgetPluginContentSchema>;
-export type BoardWidgetRegisteredMaterializedContent = Static<
-  typeof BoardWidgetRegisteredContentSchema
-> & { pluginKind: string };
-
 export const BoardCanvasDocumentSourceSchema = closedObject({
   kind: Type.Literal("canvas-doc"),
   docId: NonEmptyString,
@@ -257,7 +256,7 @@ export const BoardWidgetPutParamsSchema = closedObject({
 export type BoardWidgetPutParams = Static<typeof BoardWidgetPutParamsSchema>;
 /** Materialized input accepted by the board store after gateway source resolution. */
 export type BoardWidgetMaterializedPutParams = Omit<BoardWidgetPutParams, "content"> & {
-  content: BoardWidgetMaterializedContent | BoardWidgetRegisteredMaterializedContent;
+  content: BoardWidgetMaterializedContent;
 };
 export const BoardWidgetPutResultSchema = closedObject({
   ...BoardSnapshotFields,

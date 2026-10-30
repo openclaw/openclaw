@@ -10,6 +10,8 @@ import {
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { admitChatSend } from "./server-methods/chat-send-admission.js";
 import { handleChatSendSetupError } from "./server-methods/chat-send-dispatch-errors.js";
@@ -26,8 +28,79 @@ import * as lifecycleState from "./session-lifecycle-state.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
 import { closeSessionSqliteDatabasesForTest } from "./session-utils.test-support.js";
+import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
-it.each(["success", "failed-write", "setup-failed-write"] as const)(
+it("preserves admitted work when cancellation authority is revoked before the effect", async () => {
+  const state = await createOpenClawTestState({ scenario: "minimal" });
+  const cfg = {};
+  setRuntimeConfigSnapshot(cfg);
+  const sessionKey = "agent:main:revoked-worker-stop";
+  const { storePath } = await resolveGatewaySessionStoreTargetInWorker({ cfg, key: sessionKey });
+  const target = { storePath, sessionKey };
+  const sessionId = "revoked-worker-stop-session";
+  const runId = "revoked-worker-stop-run";
+  const entry = { sessionId, updatedAt: Date.now() };
+  const context = Object.assign(createWorkerStopChatContext(), { getRuntimeConfig: () => cfg });
+  let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
+  let releaseClaim: (() => void) | undefined;
+  try {
+    await replaceSessionEntry(target, entry);
+    admitted = await (
+      await admitWorkerStopChat({
+        context,
+        storePath,
+        sessionKey,
+        sessionId,
+        agentId: "main",
+        entry,
+        runId,
+      })
+    ).promise;
+    expect(admitted.ok).toBe(true);
+    if (!admitted.ok) {
+      throw new Error("worker Stop admission missing");
+    }
+    const owned = admitted.value;
+    if (!owned.activeRunAbort.entry) {
+      throw new Error("worker Stop source missing");
+    }
+    releaseClaim = await claimRpcSourceForTest(owned.activeRunAbort.entry);
+    expect(owned.activeRunAbort.markExecutionStarted()).toBe(true);
+    owned.activeRunAbort.controller.signal.addEventListener(
+      "abort",
+      () => {
+        releaseClaim?.();
+        owned.cleanupAdmittedRun();
+      },
+      { once: true },
+    );
+    const revoked = new Error("worker Stop authority revoked");
+    let current = true;
+    const failure = await cancelGatewayWorkerSessionWork(context, {
+      sessionId,
+      sessionKeys: [sessionKey],
+      agentId: "main",
+      assertCurrent: () => {
+        if (!current) {
+          throw revoked;
+        }
+        queueMicrotask(() => {
+          current = false;
+        });
+      },
+    }).catch((error: unknown) => error);
+    expect(owned.activeRunAbort.controller.signal.aborted).toBe(false);
+    expect(failure).toBe(revoked);
+  } finally {
+    releaseClaim?.();
+    cleanupAdmission(runId, admitted);
+    await closeSessionSqliteDatabasesForTest();
+    clearRuntimeConfigSnapshot();
+    await state.cleanup();
+  }
+});
+
+it.each(["success", "setup-failed-write"] as const)(
   "Stop preserves canonical terminal ownership through %s",
   async (outcome) => {
     const terminalWrite = createDeferred();
@@ -99,7 +172,6 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         nodeSendToSession: context.nodeSendToSession,
         agentRunSeq: context.agentRunSeq,
         chatRunState,
-        chatAbortControllers: context.chatAbortControllers,
         log,
         toolEventRecipients: chatRunState.toolEventRecipients,
       });
@@ -109,7 +181,12 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         throw new Error("active admission missing");
       }
       const owned = active.value;
+      let releaseClaim: (() => void) | undefined;
       if (outcome !== "setup-failed-write") {
+        if (!owned.activeRunAbort.entry) {
+          throw new Error("Missing worker source");
+        }
+        releaseClaim = await claimRpcSourceForTest(owned.activeRunAbort.entry);
         expect(owned.activeRunAbort.markExecutionStarted()).toBe(true);
       }
       await replaceSessionEntry(target, {
@@ -121,6 +198,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         "abort",
         () => {
           if (outcome !== "setup-failed-write") {
+            releaseClaim?.();
             owned.cleanupAdmittedRun();
           }
           abortObserved.resolve();
@@ -166,30 +244,31 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         },
       });
       await abortObserved.promise;
-      expect(context.chatAbortControllers.has(runId)).toBe(true);
-      expect(owned.activeRunAbort.entry?.projectSessionTerminalPersistence).toBeInstanceOf(Promise);
+      expect(rpcSourceTesting.has(runId)).toBe(true);
+      expect(owned.activeRunAbort.entry?.adapter.projectSessionTerminalPersistence).toBeInstanceOf(
+        Promise,
+      );
       expect(reclaimEffectStarted).toBe(false);
       expect(loadSessionEntry(target)?.status).toBeUndefined();
       const late = await admit("during-terminal-write");
       expect(late.ok).toBe(false);
       expect(context.dedupe.get("chat:during-terminal-write")).toMatchObject({
-        payload: { summary: "aborted" },
+        ok: true,
+        payload: { runId: "during-terminal-write", status: "timeout", summary: "aborted" },
       });
       if (outcome === "setup-failed-write") {
-        expect(owned.restartSafeAdmission).toBeUndefined();
         await handleChatSendSetupError({
           admission: owned,
           context,
           error: new Error("pre-ACK reply context failed"),
           respond: vi.fn(),
           session: { agentId: "main", clientRunId: runId, sessionKey: target.sessionKey },
-          terminalizeRestartSafeAdmission: vi.fn(async () => false),
         });
-        expect(context.chatAbortControllers.get(runId)).toBe(owned.activeRunAbort.entry);
+        expect(rpcSourceTesting.has(runId)).toBe(false);
         expect(reclaimEffectStarted).toBe(false);
       }
       if (outcome !== "success") {
-        const rejected = expect(reclaim).rejects.toThrow("Session cancellation did not persist");
+        const rejected = expect(reclaim).rejects.toThrow("terminal store unavailable");
         terminalWrite.reject(new Error("terminal store unavailable"));
         releaseWriter.resolve();
         await heldWriter;
@@ -204,7 +283,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       expect(events.filter((event) => event.phase === "end")).toEqual([
         { phase: "end", status: "cancelled", aborted: true, stopReason: "rpc" },
       ]);
-      expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(rpcSourceTesting.has(runId)).toBe(false);
       await closeSessionSqliteDatabasesForTest();
       const persisted = loadSessionEntry({ ...target, readConsistency: "latest" });
       expect(persisted).toMatchObject(terminal);
@@ -220,7 +299,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       cleanupAdmission(runId, active);
       unsubscribe();
       await subscriptions?.agentUnsub();
-      subscriptions?.heartbeatUnsub();
+      heartbeatNotifications.onEvent = () => {};
       subscriptions?.transcriptUnsub();
       subscriptions?.lifecycleUnsub();
       await closeSessionSqliteDatabasesForTest();

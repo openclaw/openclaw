@@ -40,10 +40,9 @@ export async function assertExpectedLeafActiveAsync(
   agentId: string,
   expectedLeafEntryId: string | null,
   requestedSessionId: string | undefined,
-  options?: { allowEmptyAncestor?: boolean },
 ): Promise<void> {
   if (isIncognitoSessionKey(session.canonicalKey)) {
-    assertExpectedLeafActive(session, expectedLeafEntryId, requestedSessionId, options);
+    assertExpectedLeafActive(session, expectedLeafEntryId, requestedSessionId);
     return;
   }
   await withSessionEntriesFromStoresInWorker(
@@ -71,7 +70,6 @@ export async function assertExpectedLeafActiveAsync(
         },
         expectedLeafEntryId,
         requestedSessionId,
-        options,
       );
     },
     { ordered: true },

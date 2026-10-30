@@ -4,9 +4,9 @@ import { expect } from "vitest";
 import { writeToolCall } from "../../../src/gateway/gateway-provider-fixture.test-support.ts";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
 import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.ts";
-import { createOpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { createChatGatewayInstance } from "./chat-real-gateway.test-support.ts";
 
 export const waitClockFixture = {
   key: "agent:main:dashboard:wait-clock-proof",
@@ -22,37 +22,22 @@ export const waitClockFixture = {
 };
 
 export async function createWaitClockInstance(port: number, controlUiRoot: string) {
-  const instance = await createOpenClawTestInstance({
+  const instance = await createChatGatewayInstance({
     name: "wait-clock",
+    provider: "wait-fixture",
+    identity: "Review assistant",
+    model: "parent",
+    agents: { ownership: "explicit" },
+    defaults: { workspace: "${OPENCLAW_WORKSPACE_DIR}" },
+    apiKey: "synthetic-wait-fixture-key",
+    baseUrl: "http://127.0.0.1:" + port + "/v1",
+    models: ["parent", "child"].map((id) => ({ id, name: id })),
     // Admission below requires built artifacts; never let the helper rebuild during proof.
     entrypoint: ["dist/index.js"],
-    env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
     config: {
       update: { checkOnStart: false },
       gateway: { controlUi: { enabled: true, root: controlUiRoot } },
-      cron: { enabled: false },
       tools: { profile: "full", codeMode: false, toolSearch: false },
-      agents: {
-        ownership: "explicit",
-        defaults: {
-          workspace: "${OPENCLAW_WORKSPACE_DIR}",
-          model: "wait-fixture/parent",
-          modelPolicy: { allow: ["wait-fixture/*"] },
-        },
-        entries: { main: { identity: { name: "Review assistant" } } },
-      },
-      models: {
-        catalogRefresh: { enabled: false },
-        providers: {
-          "wait-fixture": {
-            api: "openai-responses",
-            apiKey: "synthetic-wait-fixture-key",
-            baseUrl: "http://127.0.0.1:" + port + "/v1",
-            models: ["parent", "child"].map((id) => ({ id, name: id })),
-          },
-        },
-      },
-      plugins: { allow: [] },
     },
   });
   instance.env.OPENCLAW_WORKSPACE_DIR = instance.state.path("public-workspace");

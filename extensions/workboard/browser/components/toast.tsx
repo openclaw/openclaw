@@ -1,14 +1,15 @@
 /** @jsxImportSource @solidjs/web */
-import { createEffect, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createEffect, createSignal, onSettled, Show } from "solid-js";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.tsx";
-import "./toast.css";
+
+type ToastTone = "info" | "error";
 
 type WorkboardToastProps = {
   message: string;
   hidden?: boolean;
   key?: unknown;
-  tone?: "info" | "error";
+  tone?: ToastTone;
   owner?: object;
   outcomeSource?: boolean;
 };
@@ -16,13 +17,12 @@ type WorkboardToastProps = {
 type ToastOutcome = {
   message: string;
   key: unknown;
-  tone: "info" | "error";
   dismissed: boolean;
 };
 
-const outcomes = new WeakMap<object, Partial<Record<ToastOutcome["tone"], ToastOutcome>>>();
+const outcomes = new WeakMap<object, Partial<Record<ToastTone, ToastOutcome>>>();
 
-export function updateWorkboardToastOutcome(owner: object, props: WorkboardToastProps) {
+function updateWorkboardToastOutcome(owner: object, props: WorkboardToastProps) {
   const { message, key, tone = "info" } = props;
   const ownerOutcomes = outcomes.get(owner) ?? {};
   // Recovery starts a new error lifetime without resurrecting an older result.
@@ -31,7 +31,7 @@ export function updateWorkboardToastOutcome(owner: object, props: WorkboardToast
   }
   const previous = ownerOutcomes[tone];
   if (!previous || previous.message !== message || !Object.is(previous.key, key)) {
-    ownerOutcomes[tone] = { message, key, tone, dismissed: false };
+    ownerOutcomes[tone] = { message, key, dismissed: false };
   }
   outcomes.set(owner, ownerOutcomes);
 }
@@ -42,7 +42,7 @@ export function WorkboardToast(props: WorkboardToastProps) {
   let host: HTMLElement | undefined;
   let lastMessage = "";
   let lastKey: unknown;
-  let lastTone: ToastOutcome["tone"] = "info";
+  let lastTone: ToastTone = "info";
   let lastOwner = localOwner;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let remaining = 0;
@@ -72,11 +72,7 @@ export function WorkboardToast(props: WorkboardToastProps) {
   function dismiss() {
     pause();
     const outcome = outcomes.get(lastOwner)?.[lastTone];
-    if (
-      outcome?.message === lastMessage &&
-      Object.is(outcome.key, lastKey) &&
-      outcome.tone === lastTone
-    ) {
+    if (outcome?.message === lastMessage && Object.is(outcome.key, lastKey)) {
       outcome.dismissed = true;
     }
     shown = false;
@@ -131,8 +127,10 @@ export function WorkboardToast(props: WorkboardToastProps) {
       }
     },
   );
-  onSettled(resume);
-  onCleanup(pause);
+  onSettled(() => {
+    resume();
+    return pause;
+  });
 
   return (
     <openclaw-workboard-toast

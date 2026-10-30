@@ -71,14 +71,18 @@ function withExternalResources(run: Parameters<typeof withResources>[0]) {
   return withResources(run, "external-service");
 }
 
+async function expectSession(store: CaptureStore, id: string, expected: object) {
+  expect((await store.listSessions()).find((session) => session.id === id)).toMatchObject(expected);
+}
+
 // Plugin state keeps cause text out of its public message; the maintenance refusal is the cause.
-async function expectOfflineMaintenance(operation: Promise<unknown>) {
+async function expectMissingMaintenanceScope(operation: Promise<unknown>) {
   const error = await operation.then(() => undefined).catch((caught: unknown) => caught);
   const messages: string[] = [];
   for (let current: unknown = error; current instanceof Error; current = current.cause) {
     messages.push(current.message);
   }
-  expect(messages.join("\n")).toContain("offline maintenance");
+  expect(messages.join("\n")).toContain("without an active schema lease or maintenance scope");
 }
 
 function createSharedWorkerClient(env: NodeJS.ProcessEnv) {
@@ -121,6 +125,7 @@ it.each(["siblings", "nested"] as const)(
 
 it("settles its agent resource before closing the associated native handle", () =>
   withResources(async ({ agent, begin }) => {
+    const earlier = agent("earlier");
     const lock = await begin("Gateway lock");
     const observed: boolean[] = [];
     const owned = lock.run(() => {
@@ -139,14 +144,6 @@ it("settles its agent resource before closing the associated native handle", () 
     });
     await lock.release();
     expect({ observed, isOpen: owned.db.isOpen }).toEqual({ observed: [true], isOpen: false });
-  }));
-
-it("closes its created agent handle while preserving earlier and later runtime handles", () =>
-  withResources(async ({ agent, begin }) => {
-    const earlier = agent("earlier");
-    const lock = await begin("Gateway lock");
-    const owned = lock.run(() => agent("owned"));
-    await lock.release();
     const later = agent("later");
     expect([owned, earlier, later].map(({ db }) => db.isOpen)).toEqual([false, true, true]);
   }));
@@ -168,7 +165,7 @@ it.each(["new", "existing", "borrowed"] as const)(
         await store.register("owned", { value: "owned" });
         return database && reference ? { database, reference } : undefined;
       });
-      await expectOfflineMaintenance(store.register("later", { value: "later" }));
+      await expectMissingMaintenanceScope(store.register("later", { value: "later" }));
       if (borrowed) {
         borrowed.reference.release();
         expect(borrowed.database.db.isOpen).toBe(false);
@@ -203,22 +200,16 @@ it.each(["Doctor", "Gateway lock"] as const)(
 
       await captureWsEventAsync(maintenanceCaptureFrame("outside-after"), outside);
       await read(async (store) => {
-        const sessions = await store.listSessions();
-        expect(sessions.find((session) => session.id === owned.sessionId)).toMatchObject({
+        await expectSession(store, owned.sessionId, {
           endedAt: expect.any(Number),
           eventCount: 1,
         });
-        expect(sessions.find((session) => session.id === outside.sessionId)).toMatchObject({
+        await expectSession(store, outside.sessionId, {
           endedAt: null,
           eventCount: 2,
         });
         await expectCapturedPayload(store, owned.sessionId, "owned");
-        expect(
-          (await store.getSessionEvents(outside.sessionId)).map(({ flowId, dataText }) => ({
-            flowId,
-            dataText,
-          })),
-        ).toEqual([
+        expect(await store.getSessionEvents(outside.sessionId)).toMatchObject([
           { flowId: "outside-after", dataText: "bytes for outside-after" },
           { flowId: "outside-before", dataText: "bytes for outside-before" },
         ]);
@@ -320,9 +311,7 @@ it.each(["Doctor", "Gateway lock"] as const)(
       await fetchBody("outside-second");
 
       await read(async (store) => {
-        expect(
-          (await store.listSessions()).find((session) => session.id === settings.sessionId),
-        ).toMatchObject({ endedAt: null });
+        await expectSession(store, settings.sessionId, { endedAt: null });
         await fetchBody("outside-after-release");
         await finalizeDebugProxyCaptureAsync(settings, deps);
         expect(target.fetch).not.toBe(patchedFetch);
@@ -349,9 +338,10 @@ it.each(["Doctor", "Gateway lock"] as const)(
         }
         expect(requestIds[0]).toBeLessThan(requestIds[1]!);
         expect(requestIds[1]).toBeLessThan(requestIds[2]!);
-        expect(
-          (await store.listSessions()).find((session) => session.id === settings.sessionId),
-        ).toMatchObject({ endedAt: expect.any(Number), eventCount: 6 });
+        await expectSession(store, settings.sessionId, {
+          endedAt: expect.any(Number),
+          eventCount: 6,
+        });
       });
     }),
 );
@@ -379,9 +369,10 @@ it.each(["Doctor", "Gateway lock"] as const)(
       await Promise.all([accepted, closing]);
 
       await read(async (store) => {
-        expect(
-          (await store.listSessions()).find((session) => session.id === settings.sessionId),
-        ).toMatchObject({ endedAt: expect.any(Number), eventCount: 1 });
+        await expectSession(store, settings.sessionId, {
+          endedAt: expect.any(Number),
+          eventCount: 1,
+        });
         await expectCapturedPayload(store, settings.sessionId, "accepted-late-capture");
       });
     }),

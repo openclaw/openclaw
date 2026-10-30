@@ -1,15 +1,14 @@
 import { calculateUsageCost, type ModelCostConfig } from "@openclaw/llm-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { hasRecordedUsageCost, normalizeUsage } from "../agents/usage.js";
-import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
+import { isToolCallContentType } from "../chat/tool-content.js";
 import type { CostBreakdown, ParsedTranscriptEntry } from "./session-cost-usage.types.js";
 
-const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
-  if (!usageRaw || usageRaw.usageReport?.state === "unavailable") {
-    return undefined;
-  }
-  const cost = usageRaw.cost;
+const extractCostBreakdown = (usageRaw?: UsageLike): CostBreakdown | undefined => {
+  const cost = usageRaw?.cost;
   if (!cost) {
     return undefined;
   }
@@ -65,7 +64,10 @@ export const parseUsageCostTranscriptRecord = (
 
   const usageRaw =
     (message.usage as UsageLike | undefined) ?? (entry.usage as UsageLike | undefined);
-  const usage = usageRaw ? (normalizeUsage(usageRaw) ?? undefined) : undefined;
+  // Usage reports count only measured turns. A turn whose provider usage is unknown (a failed or
+  // interrupted request) adds no tokens or cost; it still counts as a message.
+  const reported = usageRaw?.usageReport?.state === "unavailable" ? undefined : usageRaw;
+  const usage = reported ? (normalizeUsage(reported) ?? undefined) : undefined;
 
   const provider =
     (typeof message.provider === "string" ? message.provider : undefined) ??
@@ -74,9 +76,41 @@ export const parseUsageCostTranscriptRecord = (
     (typeof message.model === "string" ? message.model : undefined) ??
     (typeof entry.model === "string" ? entry.model : undefined);
 
-  const costBreakdown = extractCostBreakdown(usageRaw);
+  const costBreakdown = extractCostBreakdown(reported);
   const stopReason = typeof message.stopReason === "string" ? message.stopReason : undefined;
   const durationMs = asFiniteNumber(message.durationMs ?? entry.durationMs);
+  const toolNames: string[] = [];
+  const toolResultCounts = { total: 0, errors: 0 };
+  if (isStandaloneToolResult) {
+    toolResultCounts.total = 1;
+    toolResultCounts.errors = message.isError === true || message.is_error === true ? 1 : 0;
+  } else {
+    let unmatchedTopLevelName = normalizeOptionalString(message.toolName ?? message.tool_name);
+    if (unmatchedTopLevelName) {
+      toolNames.push(unmatchedTopLevelName);
+    }
+    for (const contentEntry of Array.isArray(message.content) ? message.content : []) {
+      const block = asOptionalObjectRecord(contentEntry);
+      if (!block) {
+        continue;
+      }
+      const type = normalizeOptionalString(block.type)?.toLowerCase();
+      if (isToolCallContentType(type)) {
+        const name = normalizeOptionalString(block.name);
+        // Suppress only the first legacy mirror; repeated calls still count.
+        if (name && name === unmatchedTopLevelName) {
+          unmatchedTopLevelName = undefined;
+        } else if (name) {
+          toolNames.push(name);
+        }
+      } else if (type === "tool_result" || type === "tool_result_error") {
+        toolResultCounts.total += 1;
+        if (block.is_error === true) {
+          toolResultCounts.errors += 1;
+        }
+      }
+    }
+  }
 
   return {
     role,
@@ -88,13 +122,8 @@ export const parseUsageCostTranscriptRecord = (
     provider,
     model,
     stopReason,
-    toolNames: isStandaloneToolResult ? [] : extractToolCallNames(message),
-    toolResultCounts: isStandaloneToolResult
-      ? {
-          total: 1,
-          errors: message.isError === true || message.is_error === true ? 1 : 0,
-        }
-      : countToolResults(message),
+    toolNames,
+    toolResultCounts,
   };
 };
 
@@ -126,7 +155,6 @@ export function needsUsageCostEstimate(
   // Recorded estimates include request-time service tiers the current catalog cannot recover.
   return (
     Boolean(entry?.usage) &&
-    entry?.usage?.usageReport?.state !== "unavailable" &&
     !((entry?.costTotal ?? 0) > 0 || hasRecordedUsageCost(entry?.costBreakdown))
   );
 }
@@ -143,6 +171,11 @@ function hasAmbiguousRequestTier(usage: NormalizedUsage, cost: ModelCostConfig):
   }
   const promptTokens = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
   return promptTokens > context.promptTokens && promptTokens >= secondTier.range[0];
+}
+
+/** Whether the catalog price can change this entry's estimate; read before applying it. */
+export function usageCostEstimateUsesPricing(entry: UsageCostEstimateEntry): boolean {
+  return entry.costTotal === undefined || computeUsageTokenTotals(entry.usage).totalTokens > 0;
 }
 
 export function applyUsageCostEstimate(

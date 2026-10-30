@@ -2,9 +2,9 @@
 import "openclaw/plugin-sdk/image-generation";
 import "openclaw/plugin-sdk/media-generation-runtime";
 import "openclaw/plugin-sdk/provider-http";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
+import { openAIImageConfig } from "./image-generation-provider.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
@@ -23,13 +23,16 @@ const provider = buildOpenAIImageGenerationProvider({
   listProfilesForProvider: () => [],
   isProviderApiKeyConfiguredAsync: async () => true,
 });
-const config: OpenClawConfig = {
-  models: {
-    providers: {
-      openai: { baseUrl: `${origin}/v1`, apiKey: "endpoint-key", models: [] },
-    },
-  },
+const config = {
+  ...openAIImageConfig({ baseUrl: `${origin}/v1`, apiKey: "endpoint-key" }),
+  agents: { defaults: { mediaMaxMb: 1 / (1024 * 1024) } },
 };
+const image = (
+  buffer = png,
+  mimeType = "image/png",
+  fileName = "image-1.png",
+  revisedPrompt = "Revised fixture",
+) => ({ buffer, mimeType, fileName, revisedPrompt });
 type OpenAIImageRequest = Parameters<typeof provider.generateImage>[0];
 let payload: unknown;
 let contentType: string | undefined;
@@ -73,28 +76,23 @@ afterEach(() => {
 });
 
 describe("OpenAI-compatible image URL responses", () => {
-  it.each(["generations", "edits"])("downloads URL results from %s", async (action) => {
-    const result = await generate({
-      inputImages: action === "edits" ? [{ buffer: png, mimeType: "image/png" }] : undefined,
-    });
-    expect(result.images).toEqual([
-      {
-        buffer: png,
-        mimeType: "image/png",
-        fileName: "image-1.png",
-        revisedPrompt: "Revised fixture",
-      },
-    ]);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(`${origin}/v1/images/${action}`);
-    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
-      "Bearer endpoint-key",
-    );
-    expect(fetchMock.mock.calls[1]?.[0]).toBe(imageUrl);
-    const headers = new Headers(fetchMock.mock.calls[1]?.[1]?.headers);
-    expect(headers.has("Authorization")).toBe(false);
-    expect(headers.has("Cookie")).toBe(false);
-  });
+  it.each(["generations", "edits"])(
+    "downloads URL results above the media cap from %s",
+    async (action) => {
+      const result = await generate({
+        inputImages: action === "edits" ? [{ buffer: png, mimeType: "image/png" }] : undefined,
+      });
+      expect(result.images).toEqual([image()]);
+      expect(fetchMock.mock.calls[0]?.[0]).toBe(`${origin}/v1/images/${action}`);
+      expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
+        "Bearer endpoint-key",
+      );
+      expect(fetchMock.mock.calls[1]?.[0]).toBe(imageUrl);
+      const headers = new Headers(fetchMock.mock.calls[1]?.[1]?.headers);
+      expect(headers.has("Authorization")).toBe(false);
+      expect(headers.has("Cookie")).toBe(false);
+    },
+  );
 
   it("prefers inline bytes when both response forms are present", async () => {
     payload = { data: [{ b64_json: png.toString("base64"), url: privateUrl }] };
@@ -113,28 +111,27 @@ describe("OpenAI-compatible image URL responses", () => {
     };
     const result = await generate({ count: 2 });
     expect(result.images).toEqual([
-      { buffer: png, mimeType: "image/png", fileName: "image-1.png", revisedPrompt: "Inline" },
-      {
-        buffer: Buffer.from(imageBytes),
-        mimeType: "image/jpeg",
-        fileName: "image-2.jpg",
-        revisedPrompt: "Remote",
-      },
+      image(png, "image/png", "image-1.png", "Inline"),
+      image(Buffer.from(imageBytes), "image/jpeg", "image-2.jpg", "Remote"),
     ]);
   });
 
-  it("blocks a private image URL outside the provider's allowed origin", async () => {
-    payload = { data: [{ url: privateUrl }] };
-    await expect(generate()).rejects.toThrow(/private|blocked|internal/i);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not extend the local API test allowance to other private image origins", async () => {
-    vi.stubEnv("OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER", "1");
-    payload = { data: [{ url: privateUrl }] };
-    await expect(generate()).rejects.toThrow(/private|blocked|internal/i);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
+  it.each(["direct", "local API allowance", "redirect"])(
+    "blocks private image origins: %s",
+    async (route) => {
+      if (route === "redirect") {
+        redirect = privateUrl;
+      } else {
+        vi.stubEnv(
+          "OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER",
+          route === "local API allowance" ? "1" : "",
+        );
+        payload = { data: [{ url: privateUrl }] };
+      }
+      await expect(generate()).rejects.toThrow(/private|blocked|internal/i);
+      expect(fetchMock).toHaveBeenCalledTimes(route === "redirect" ? 2 : 1);
+    },
+  );
 
   it("applies the provider's explicit private-network opt-in to image downloads", async () => {
     payload = { data: [{ url: privateUrl }] };
@@ -145,22 +142,9 @@ describe("OpenAI-compatible image URL responses", () => {
     expect(fetchMock.mock.calls[1]?.[0]).toBe(privateUrl);
   });
 
-  it("rechecks the same policy on image redirects", async () => {
-    redirect = privateUrl;
-    await expect(generate()).rejects.toThrow(/private|blocked|internal/i);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
   it.each([undefined, "text/html"])("rejects non-image Content-Type %s", async (mimeType) => {
     contentType = mimeType;
     await expect(generate()).rejects.toThrow(/image.*content.type/i);
-  });
-
-  it("keeps streamed downloads above the configured media cap", async () => {
-    const result = await generate({
-      cfg: { ...config, agents: { defaults: { mediaMaxMb: 1 / (1024 * 1024) } } },
-    });
-    expect(result.images[0]?.buffer).toEqual(png);
   });
 
   it("rejects streamed downloads above the generated image download ceiling", async () => {

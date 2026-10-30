@@ -203,7 +203,7 @@ export function createSqliteReadOnlyNativeResourceClient(port: MessagePort) {
       pathname: string,
       options: {
         mode: "sync" | "async";
-        stagingRoot?: string;
+        stagingRoot: string;
         signal?: AbortSignal;
         expectedSourceIdentity?: DatabaseFileIdentity;
       },
@@ -247,16 +247,15 @@ export function createSqliteReadOnlyNativeResourceClient(port: MessagePort) {
 
 /** Host-port framing; the staging owner alone admits readers and retires directories. */
 export function createSqliteReadOnlyNativeResourceConnection(callbacks: {
-  receive(request: SqliteNativeOwnerRequest, owner: { disposed: boolean }): void;
+  receive(request: SqliteNativeOwnerRequest): void;
   onFailure(error: unknown): void;
-  onDispose(owner: { disposed: boolean }): void;
 }): NativeWorkerResourceConnection {
   const { port1, port2 } = new MessageChannel();
-  const owner = { disposed: false };
+  let disposed = false;
   const receive = (request: SqliteNativeOwnerRequest) => {
     let reply: SqliteNativeOwnerReply;
     try {
-      callbacks.receive(request, owner);
+      callbacks.receive(request);
       reply = { id: request.id, ok: true };
     } catch (error) {
       const encoded = encodeOpenClawStateWorkerError(error, { includeOrdinary: true });
@@ -283,7 +282,7 @@ export function createSqliteReadOnlyNativeResourceConnection(callbacks: {
   return {
     port: port2,
     service() {
-      if (owner.disposed) {
+      if (disposed) {
         return;
       }
       for (;;) {
@@ -309,8 +308,7 @@ export function createSqliteReadOnlyNativeResourceConnection(callbacks: {
         : new SqliteSnapshotCleanupError(error.message, { cause: error });
     },
     dispose() {
-      owner.disposed = true;
-      callbacks.onDispose(owner);
+      disposed = true;
       port1.removeAllListeners();
       port1.close();
       port2.close();

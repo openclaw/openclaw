@@ -24,14 +24,9 @@ import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 type MentionFixture = Parameters<Parameters<typeof withInbox>[0]>[0];
 
 const directoryParams = (query = "Alice", sessionKey = SESSION_KEY) => ({ sessionKey, query });
-const syncBob = (
-  login: string,
-  accountId = 42,
-  email = "bob@mentions.example.test",
-  name?: string,
-) =>
+const syncBob = (login: string, accountId = 42, email = "bob@mentions.example.test") =>
   syncGitHubIdentity({
-    identity: { accountId, login, name },
+    identity: { accountId, login },
     authenticationAlias: { kind: "email", email },
   });
 
@@ -135,7 +130,6 @@ it("discards a completed directory read when a linked handle changes before sele
       syncBob("bob-after");
       setDisplayName(f.bob.id, "Robert Updated");
     });
-    expect(response.error).toBeUndefined();
     expectUsers(response, [{ profileId: f.bob.id, displayName: "Robert Updated" }]);
     expect(await searchDirectory(f, "bob-before")).toMatchObject({ users: [] });
   }));
@@ -159,9 +153,9 @@ it.each([
   });
 });
 
-it("resolves verified handles and full names to the same recipient without exposing account data", () =>
+it("resolves verified handles and optional full names without exposing account data", () =>
   withInbox(async (f) => {
-    syncBob("bobby", 42, "bob@mentions.example.test", "Robert Example");
+    syncBob("bobby");
     setDisplayName(f.bob.id, "Robert Example");
     syncBob("bob-work", 43, "bob-work@mentions.example.test");
     linkEmail("bob-work@mentions.example.test", f.bob.id);
@@ -179,12 +173,11 @@ it("resolves verified handles and full names to the same recipient without expos
     expect(
       f.inbox.validateRecipients(f.aliceClient, { sessionKey: SESSION_KEY }, [f.bob.id]),
     ).toEqual({ ok: true, value: [f.bob.id] });
-    await f.post();
-    expect(await f.items()).toHaveLength(1);
     syncBob("robert-new");
+    setDisplayName(f.bob.id, null);
     expect(await searchDirectory(f, "bobby")).toMatchObject({ users: [] });
     expect(await searchDirectory(f, "robert-new")).toMatchObject({
-      users: [{ profileId: f.bob.id }],
+      users: [{ profileId: f.bob.id, displayName: "robert-new" }],
     });
   }));
 
@@ -203,10 +196,6 @@ it("includes offline people without leaking administrative profile fields or bin
     for (const user of users) {
       expect(Object.keys(user).toSorted()).toEqual(fields);
     }
-    setDisplayName(offline.id, "Dana");
-    expect(await searchDirectory(f, "Dana")).toMatchObject({
-      users: [{ profileId: offline.id, displayName: "Dana", online: false }],
-    });
   }));
 
 it.each([

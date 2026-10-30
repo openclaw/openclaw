@@ -3,7 +3,6 @@ import { performance } from "node:perf_hooks";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { serializeNativeErrorResponse } from "./native-error-response.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { readSqliteIntegrityFileIdentity } from "./sqlite-file-generation.js";
 import type {
   SqliteIntegrityWorkerInput,
@@ -11,7 +10,7 @@ import type {
   SqliteIntegrityWorkerPhase,
   SqliteIntegrityWorkerResult,
 } from "./sqlite-integrity-worker.js";
-import { assertSqliteIntegrity } from "./sqlite-integrity.js";
+import { assertSqliteIntegrity, SqliteIntegrityError } from "./sqlite-integrity.js";
 import { configureSqliteMaintenanceCache } from "./sqlite-maintenance-cache.js";
 
 if (!process.send || !process.disconnect) {
@@ -44,8 +43,10 @@ async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrity
   try {
     await sendPhase("opening");
     readSqliteIntegrityFileIdentity(input.pathname, input.identity);
-    database = openNodeSqliteDatabase(input.pathname, { readOnly: true });
-    setSqliteBusyTimeout(database, input.busyTimeoutMs);
+    database = openNodeSqliteDatabase(input.pathname, {
+      readOnly: true,
+      timeout: input.busyTimeoutMs,
+    });
     configureSqliteMaintenanceCache(database);
     readSqliteIntegrityFileIdentity(input.pathname, input.identity);
     await sendPhase("checking");
@@ -76,7 +77,10 @@ async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrity
   if (failure) {
     result = {
       ok: false,
-      error: serializeNativeErrorResponse(failure),
+      error: {
+        ...serializeNativeErrorResponse(failure),
+        ...(failure instanceof SqliteIntegrityError ? { findings: failure.findings } : {}),
+      },
     };
   }
   if (checkElapsedMs !== undefined) {

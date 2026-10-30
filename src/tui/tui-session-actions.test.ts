@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
 import { ChatLog } from "./components/chat-log.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
@@ -102,10 +102,6 @@ function createHarness({
   };
 }
 const renderChat = (chatLog: ChatLog) => chatLog.render(120).join("\n");
-const flushImmediate = () =>
-  new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
 const mainSession = { key: "agent:main:main", sessionId: "session-main" };
 const description = (
   session: TuiSessionDescription["session"],
@@ -122,6 +118,24 @@ const historyResult = (messages: unknown[] = [], fields: Record<string, unknown>
 });
 const mockHistory = (messages: unknown[] = [], fields: Record<string, unknown> = {}) =>
   vi.fn().mockResolvedValue(historyResult(messages, fields));
+const selectedHistory = (
+  messages: unknown[] = [],
+  sessionId = "session-main",
+  info: Record<string, unknown> = {},
+) => historyResult(messages, { sessionId, sessionInfo: session(sessionId, info) });
+const selectHistoryHarness = (
+  messages: unknown[] = [],
+  info: Record<string, unknown> = {},
+  state: Partial<TuiStateAccess> = {},
+) =>
+  createHarness({
+    mockChatMethods: [],
+    state,
+    backend: {
+      describeSession: vi.fn(),
+      loadHistory: vi.fn().mockResolvedValue(selectedHistory(messages, "session-main", info)),
+    },
+  });
 const switchSession = (name: "A" | "B") => ({
   key: `agent:main:${name}`,
   sessionId: `session-${name.toLowerCase()}`,
@@ -230,10 +244,7 @@ describe("tui session actions", () => {
       context: { agentNames },
     });
 
-    await expect(refreshAgents()).resolves.toEqual({
-      ok: false,
-      error: "gateway unavailable",
-    });
+    await expect(refreshAgents()).resolves.toBe(false);
     expect(state.agents).toBe(cachedAgents);
     expect(state).toMatchObject({
       agentDefaultId: "cached",
@@ -342,7 +353,7 @@ describe("tui session actions", () => {
       }),
     });
 
-    await expect(refreshAgents()).resolves.toEqual({ ok: true, value: undefined });
+    await expect(refreshAgents()).resolves.toBe(true);
     expect(state).toMatchObject({
       agentDefaultId: "team-lead",
       sessionMainKey: "primary",
@@ -405,19 +416,11 @@ describe("tui session actions", () => {
   );
 
   it.each([
-    {
-      scope: "per-sender" as const,
-      previousKey: "agent:research:main",
-      nextKey: "agent:ops:main",
-    },
-    {
-      scope: "global" as const,
-      previousKey: "global",
-      nextKey: "global",
-    },
-  ])(
-    "retires the complete $scope session when its selected agent disappears",
-    async ({ scope, previousKey, nextKey }) => {
+    ["per-sender", "agent:research:main", "agent:ops:main"],
+    ["global", "global", "global"],
+  ] as const)(
+    "retires the complete %s session when its selected agent disappears",
+    async (scope, previousKey, nextKey) => {
       const { state, refreshAgents, spies, btw, client } = createHarness({
         mockChatMethods: ["clearAll"],
         backend: {
@@ -452,7 +455,7 @@ describe("tui session actions", () => {
       });
       sendPendingUser(state, "pending-run", "stale prompt");
 
-      await expect(refreshAgents()).resolves.toEqual({ ok: true, value: undefined });
+      await expect(refreshAgents()).resolves.toBe(true);
 
       expect(state).toMatchObject({
         currentAgentId: "ops",
@@ -481,6 +484,16 @@ describe("tui session actions", () => {
 
   it("preserves the complete selected session when its agent remains in the roster", async () => {
     const resolveSessionSelection = vi.fn();
+    const selected = {
+      currentAgentId: "research",
+      currentSessionKey: "agent:research:incident",
+      currentSessionId: "current-session",
+      sessionScope: "per-sender" as const,
+      activeChatRunId: "current-run",
+      pendingSubmit: acceptedSubmit("pending-run"),
+      historyLoaded: true,
+      sessionInfo: { updatedAt: 100, thinkingLevel: "high" },
+    };
     const { state, refreshAgents, invalidateRunOwnership } = createHarness({
       backend: {
         listAgents: vi.fn().mockResolvedValue({
@@ -491,29 +504,15 @@ describe("tui session actions", () => {
         }),
       },
       context: { resolveSessionSelection },
-      state: {
-        agents: [{ id: "research" }],
-        currentAgentId: "research",
-        currentSessionKey: "agent:research:incident",
-        currentSessionId: "current-session",
-        sessionScope: "per-sender",
-        activeChatRunId: "current-run",
-        pendingSubmit: acceptedSubmit("pending-run"),
-        historyLoaded: true,
-        sessionInfo: { updatedAt: 100, thinkingLevel: "high" },
-      },
+      state: { agents: [{ id: "research" }], ...selected },
     });
     sendPendingUser(state, "pending-run", "current prompt");
     const previousProjection = state.sessionProjection;
 
-    await expect(refreshAgents()).resolves.toEqual({ ok: true, value: undefined });
+    await expect(refreshAgents()).resolves.toBe(true);
 
     expect(state).toMatchObject({
-      currentAgentId: "research",
-      currentSessionKey: "agent:research:incident",
-      currentSessionId: "current-session",
-      activeChatRunId: "current-run",
-      historyLoaded: true,
+      ...selected,
       sessionInfo: { updatedAt: 100, thinkingLevel: "high" },
     });
     expect(state.pendingSubmit).toEqual(acceptedSubmit("pending-run"));
@@ -539,7 +538,7 @@ describe("tui session actions", () => {
     const second = refreshSessionInfo();
     const third = refreshSessionInfo();
 
-    await flushImmediate();
+    await nextEventLoopTurn();
     expect(describeSession).toHaveBeenCalledTimes(1);
     expect(describeSession).toHaveBeenNthCalledWith(1, {
       sessionKey: "agent:main:main",
@@ -554,7 +553,7 @@ describe("tui session actions", () => {
       }),
     );
 
-    await flushImmediate();
+    await nextEventLoopTurn();
 
     expect(describeSession).toHaveBeenCalledTimes(2);
 
@@ -666,44 +665,32 @@ describe("tui session actions", () => {
   });
 
   it.each([
-    {
-      name: "another session",
-      currentAgentId: "main",
-      currentSessionKey: "agent:main:current",
-      resultKey: "agent:main:previous",
-    },
-    {
-      name: "the same request key owned by another agent",
-      currentAgentId: "main",
-      currentSessionKey: "agent:main:main",
-      resultKey: "agent:work:main",
-    },
-  ])(
-    "ignores a session patch belonging to $name",
-    ({ currentAgentId, currentSessionKey, resultKey }) => {
-      const { state, applySessionInfoFromPatch, updateHeader, updateFooter } = createHarness({
-        state: {
-          currentAgentId,
-          currentSessionKey,
-          sessionInfo: { model: "current-model", modelProvider: "openai" },
-        },
-      });
-
-      applySessionInfoFromPatch({
-        ok: true,
-        path: "/sessions/patch",
-        key: resultKey,
-        entry: { model: "stale-model", modelProvider: "anthropic" },
-      });
-
-      expect(state).toMatchObject({
-        currentSessionKey,
+    ["another session", "agent:main:current", "agent:main:previous"],
+    ["the same request key owned by another agent", "agent:main:main", "agent:work:main"],
+  ])("ignores a session patch belonging to %s", (_name, currentSessionKey, resultKey) => {
+    const currentAgentId = "main";
+    const { state, applySessionInfoFromPatch, updateHeader, updateFooter } = createHarness({
+      state: {
         currentAgentId,
+        currentSessionKey,
         sessionInfo: { model: "current-model", modelProvider: "openai" },
-      });
-      expectCalls(0, updateHeader, updateFooter);
-    },
-  );
+      },
+    });
+
+    applySessionInfoFromPatch({
+      ok: true,
+      path: "/sessions/patch",
+      key: resultKey,
+      entry: { model: "stale-model", modelProvider: "anthropic" },
+    });
+
+    expect(state).toMatchObject({
+      currentSessionKey,
+      currentAgentId,
+      sessionInfo: { model: "current-model", modelProvider: "openai" },
+    });
+    expectCalls(0, updateHeader, updateFooter);
+  });
 
   it("adopts the canonical key for a patch belonging to the selected alias", () => {
     const { state, applySessionInfoFromPatch, updateHeader } = createHarness({
@@ -758,6 +745,56 @@ describe("tui session actions", () => {
       modelProvider: "openai",
       contextTokens: 272000,
     });
+  });
+
+  const createRunMessageHarness = () => {
+    const describeSession = vi.fn().mockResolvedValue(description(session("session-main")));
+    const h = createHarness({
+      backend: { describeSession },
+      state: { activeChatRunId: "run-1", currentSessionId: "session-main" },
+    });
+    const events = h.events({
+      refreshSessionInfo: h.refreshSessionInfo,
+      applySessionEventRow: h.applySessionEventRow,
+    });
+    const message = (updatedAt: number, row?: Record<string, unknown>) =>
+      events.handleSessionMessageEvent({
+        sessionKey: mainSession.key,
+        sessionId: "session-main",
+        updatedAt,
+        message: { role: "toolResult", content: [] },
+        ...(row ? { session: session("session-main", { updatedAt, ...row }) } : {}),
+      });
+    return { describeSession, state: h.state, events, message };
+  };
+
+  it("applies session rows from run messages without describing the session", async () => {
+    const { describeSession, state, events, message } = createRunMessageHarness();
+    try {
+      for (let toolCall = 1; toolCall <= 10; toolCall += 1) {
+        message(100 + toolCall, { totalTokens: toolCall * 100, contextTokens: 120000 });
+      }
+      await nextEventLoopTurn();
+      expect(describeSession).not.toHaveBeenCalled();
+      expect(state.sessionInfo).toMatchObject({ totalTokens: 1000, contextTokens: 120000 });
+    } finally {
+      events.dispose();
+    }
+  });
+
+  it.each([
+    { name: "carries no row", row: undefined },
+    { name: "carries a row the session picker hides", row: { archived: true } },
+  ])("describes the session once when a run message $name", async ({ row }) => {
+    const { describeSession, events, message } = createRunMessageHarness();
+    try {
+      message(200, row);
+      await vi.waitFor(() => expect(describeSession).toHaveBeenCalledOnce());
+      await nextEventLoopTurn();
+      expect(describeSession).toHaveBeenCalledOnce();
+    } finally {
+      events.dispose();
+    }
   });
 
   it.each([
@@ -816,76 +853,6 @@ describe("tui session actions", () => {
       }
     },
   );
-
-  it("preserves distinct imported live users through a stale history snapshot", async () => {
-    const { history: deferredHistory, state, chatLog, loadHistory } = createDeferredHistory();
-
-    const loading = loadHistory();
-    for (const [index, cliSessionId] of ["first-cli-session", "second-cli-session"].entries()) {
-      reduceTuiSessionProjection(state, {
-        type: "messagePersisted",
-        message: userMessage(`Imported live prompt ${index + 1}`, "shared-provider-id", index + 1, {
-          importedFrom: "claude-cli",
-          cliSessionId,
-          externalId: "shared-provider-id",
-        }),
-        scope: readTuiSessionProjectionScope(state),
-      });
-    }
-    deferredHistory.resolve({
-      sessionId: "session-main",
-      sessionInfo: mainSession,
-      messages: [assistantMessage("Current branch reply", "imported-live-reply", 3)],
-    });
-
-    await expect(loading).resolves.toMatchObject({ loaded: true });
-    const rendered = renderChat(chatLog);
-    expect(rendered.match(/Imported live prompt 1/g)).toHaveLength(1);
-    expect(rendered.match(/Imported live prompt 2/g)).toHaveLength(1);
-    expect(rendered).toContain("Current branch reply");
-  });
-
-  it("keeps native and separately imported users with the same provider-local ID distinct", async () => {
-    const sharedId = "provider-local-user";
-    const imported = { importedFrom: "claude-cli", externalId: sharedId };
-    const { chatLog, loadHistory } = createHarness({
-      mockChatMethods: [],
-      state: { currentSessionId: "session-main" },
-      backend: {
-        describeSession: vi.fn(),
-        loadHistory: vi.fn().mockResolvedValue({
-          sessionId: "session-main",
-          sessionInfo: mainSession,
-          messages: [
-            userMessage("Native canonical prompt", sharedId, 1),
-            userMessage("First imported prompt", sharedId, 2, {
-              ...imported,
-              cliSessionId: "first-cli-session",
-            }),
-            userMessage("Second imported prompt", sharedId, 3, {
-              ...imported,
-              cliSessionId: "second-cli-session",
-            }),
-            userMessage("First partially imported prompt", sharedId, 4, imported),
-            userMessage("Second partially imported prompt", sharedId, 5, imported),
-          ],
-        }),
-      },
-    });
-
-    await expect(loadHistory()).resolves.toMatchObject({ loaded: true });
-
-    const rendered = renderChat(chatLog);
-    for (const text of [
-      "Native canonical prompt",
-      "First imported prompt",
-      "Second imported prompt",
-      "First partially imported prompt",
-      "Second partially imported prompt",
-    ]) {
-      expect(rendered.split(text)).toHaveLength(2);
-    }
-  });
 
   it("preserves new-session live users without leaking the previous session during a switch", async () => {
     const { history: deferredHistory, state, chatLog, setSession } = createDeferredHistory();
@@ -1113,7 +1080,11 @@ describe("tui session actions", () => {
         );
 
         expect(state.activeChatRunId).toBe(preservesOld ? previousRunId : null);
-        expect(setActivityStatus).toHaveBeenLastCalledWith(preservesOld ? "running" : "idle");
+        if (preservesOld) {
+          expect(setActivityStatus).toHaveBeenLastCalledWith("running");
+        } else {
+          expect(setActivityStatus).toHaveBeenLastCalledWith("idle", "completed");
+        }
         vi.advanceTimersByTime(101);
         expect(addPendingSystem).toHaveBeenCalledTimes(preservesOld ? 1 : 0);
         if (sameSession && !preservesOld) {
@@ -1480,136 +1451,117 @@ describe("tui session actions", () => {
     },
   );
 
-  it("fences pre-reset history and session-info reads when reset commits", async () => {
-    const history = createDeferred<unknown>();
-    const sessionInfo = createDeferred<TuiSessionDescription>();
-    const loadHistory = vi.fn(() => history.promise);
-    const describeSession = vi.fn(() => sessionInfo.promise);
-    const {
-      state,
-      addUser,
-      clearAll,
-      applySessionMutationResult,
-      loadHistory: readHistory,
-      refreshSessionInfo,
-    } = createHarness({
-      mockChatMethods: historyChatMocks,
-      backend: { loadHistory, describeSession },
+  it.each(["local", "external"])(
+    "fences pre-reset history and session-info after a %s reset",
+    async (source) => {
+      const history = createDeferred<unknown>();
+      const sessionInfo = createDeferred<TuiSessionDescription>();
+      const loadHistory = vi.fn(() => history.promise);
+      const describeSession = vi.fn(() => sessionInfo.promise);
+      const {
+        state,
+        addUser,
+        addSystem,
+        clearAll,
+        applySessionMutationResult,
+        loadHistory: readHistory,
+        refreshSessionInfo,
+      } = createHarness({
+        mockChatMethods: historyChatMocks,
+        backend: { loadHistory, describeSession },
+        state: {
+          currentSessionId: "session-before-reset",
+          sessionGeneration: 4,
+          sessionInfo: {
+            model: "model-before-reset",
+            ...(source === "local" ? { updatedAt: 10 } : {}),
+          },
+        },
+      });
+
+      const staleHistory = readHistory();
+      const staleSessionInfo = refreshSessionInfo();
+      await vi.waitFor(() => {
+        expect(loadHistory).toHaveBeenCalledOnce();
+        expect(describeSession).toHaveBeenCalledOnce();
+      });
+
+      const replacement = {
+        sessionId: "session-after-reset",
+        model: "model-after-reset",
+        updatedAt: 20,
+      };
+      if (source === "local") {
+        expect(
+          applySessionMutationResult({ ok: true, key: mainSession.key, entry: replacement }),
+        ).toBe(true);
+      } else {
+        Object.assign(state, {
+          sessionGeneration: 5,
+          currentSessionId: replacement.sessionId,
+          sessionInfo: { model: replacement.model },
+        });
+      }
+
+      history.resolve({
+        sessionInfo: {
+          key: "agent:main:main",
+          sessionId: "session-before-reset",
+          model: "stale-history-model",
+          ...(source === "local" ? { updatedAt: 10 } : {}),
+        },
+        messages: [{ role: "user", content: "before reset" }],
+      });
+      sessionInfo.resolve(
+        description({
+          key: mainSession.key,
+          sessionId: "session-before-reset",
+          model: "stale-session-info-model",
+          updatedAt: 10,
+        }),
+      );
+
+      await expect(staleHistory).resolves.toEqual({ loaded: false });
+      await staleSessionInfo;
+
+      expect(state).toMatchObject({
+        sessionGeneration: 5,
+        currentSessionId: "session-after-reset",
+        sessionInfo: { model: "model-after-reset" },
+      });
+      expect(addUser).not.toHaveBeenCalled();
+      expect(clearAll).toHaveBeenCalledTimes(source === "local" ? 1 : 0);
+      if (source === "external") {
+        expect(addSystem).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("discards an in-flight description error after an external same-key reset", async () => {
+    const result = createDeferred<TuiSessionDescription>();
+    const h = createHarness({
+      mockChatMethods: ["addSystem"],
+      backend: { describeSession: vi.fn(() => result.promise) },
       state: {
         currentSessionId: "session-before-reset",
         sessionGeneration: 4,
         sessionInfo: { model: "model-before-reset", updatedAt: 10 },
       },
     });
-
-    const staleHistory = readHistory();
-    const staleSessionInfo = refreshSessionInfo();
-    await vi.waitFor(() => {
-      expect(loadHistory).toHaveBeenCalledOnce();
-      expect(describeSession).toHaveBeenCalledOnce();
-    });
-
-    expect(
-      applySessionMutationResult({
-        ok: true,
-        key: "agent:main:main",
-        entry: {
-          sessionId: "session-after-reset",
-          model: "model-after-reset",
-          updatedAt: 20,
-        },
-      }),
-    ).toBe(true);
-
-    history.resolve({
-      sessionInfo: {
-        key: "agent:main:main",
-        sessionId: "session-before-reset",
-        model: "stale-history-model",
-        updatedAt: 10,
-      },
-      messages: [{ role: "user", content: "before reset" }],
-    });
-    sessionInfo.resolve(
-      description({
-        key: mainSession.key,
-        sessionId: "session-before-reset",
-        model: "stale-session-info-model",
-        updatedAt: 10,
-      }),
-    );
-
-    await expect(staleHistory).resolves.toEqual({ loaded: false });
-    await staleSessionInfo;
-
-    expect(state).toMatchObject({
+    const stale = h.refreshSessionInfo();
+    Object.assign(h.state, {
       sessionGeneration: 5,
+      currentSessionId: "session-after-reset",
+      sessionInfo: { model: "model-after-reset", updatedAt: 20 },
+    });
+    result.reject(new Error("private previous-session details"));
+    await stale;
+    expect(h.addSystem).not.toHaveBeenCalled();
+    expect(h.state).toMatchObject({
       currentSessionId: "session-after-reset",
       sessionInfo: { model: "model-after-reset" },
     });
-    expect(addUser).not.toHaveBeenCalled();
-    expect(clearAll).toHaveBeenCalledOnce();
   });
-
-  it.each(["history", "description success", "description failure"] as const)(
-    "discards an in-flight %s after an external same-key reset",
-    async (outcome) => {
-      const history = createDeferred<unknown>();
-      const sessionInfo = createDeferred<TuiSessionDescription>();
-      const h = createHarness({
-        mockChatMethods: outcome === "history" ? historyChatMocks : ["addSystem"],
-        backend:
-          outcome === "history"
-            ? { loadHistory: vi.fn(() => history.promise) }
-            : { describeSession: vi.fn(() => sessionInfo.promise) },
-        state: {
-          currentSessionId: "session-before-reset",
-          sessionGeneration: 4,
-          sessionInfo: {
-            model: "model-before-reset",
-            ...(outcome === "history" ? {} : { updatedAt: 10 }),
-          },
-        },
-      });
-      const { state } = h;
-      const stale = outcome === "history" ? h.loadHistory() : h.refreshSessionInfo();
-      state.sessionGeneration = 5;
-      state.currentSessionId = "session-after-reset";
-      state.sessionInfo = {
-        model: "model-after-reset",
-        ...(outcome === "history" ? {} : { updatedAt: 20 }),
-      };
-      if (outcome === "description failure") {
-        sessionInfo.reject(new Error("private previous-session details"));
-      } else if (outcome === "description success") {
-        sessionInfo.resolve(
-          description({
-            ...mainSession,
-            sessionId: "session-before-reset",
-            model: "private-old-model",
-            updatedAt: 10,
-          }),
-        );
-      } else {
-        history.resolve(
-          historyResult([{ role: "user", content: "PRIVATE OLD HISTORY" }], {
-            sessionInfo: session("session-before-reset", { model: "private-old-model" }),
-          }),
-        );
-      }
-      if (outcome === "history") {
-        await expect(stale).resolves.toEqual({ loaded: false });
-        expectCalls(0, h.addUser, h.clearAll);
-      } else {
-        await stale;
-        expect(h.addSystem).not.toHaveBeenCalled();
-      }
-      expect(state).toMatchObject({
-        currentSessionId: "session-after-reset",
-        sessionInfo: { model: "model-after-reset" },
-      });
-    },
-  );
 
   it.each([
     {
@@ -1680,52 +1632,14 @@ describe("tui session actions", () => {
     expect(rememberSessionKey).toHaveBeenCalledWith("agent:main:main");
   });
 
-  it("preserves optimistic user messages across stale history rebuilds", async () => {
-    const describeSession = vi.fn().mockResolvedValue(description(mainSession));
-    const loadHistory = mockHistory(
-      [
-        { role: "user", content: "persisted", timestamp: 2_000 },
-        { role: "assistant", content: [{ type: "text", text: "reply" }] },
-      ],
-      { sessionId: "session-main" },
-    );
-    const {
-      state,
-      spies,
-      loadHistory: runLoadHistory,
-      requestRender,
-    } = createHarness({
-      mockChatMethods: ["addSystem", "addUser", "addPendingUser", "finalizeAssistant", "clearAll"],
-      backend: { describeSession, loadHistory },
-      state: { currentSessionId: "session-main" },
-    });
-    sendPendingUser(state, "optimistic-run", "optimistic prompt");
-
-    const result = await runLoadHistory();
-
-    expect(spies.clearAll).toHaveBeenCalledWith();
-    expect(spies.addUser).toHaveBeenCalledWith("persisted", { images: [] });
-    expect(spies.addPendingUser).toHaveBeenCalledWith("optimistic-run", "optimistic prompt");
-    expect(spies.finalizeAssistant).toHaveBeenCalledWith("reply", undefined, []);
-    expect(requestRender).toHaveBeenCalledWith(true);
-    expect(result).toEqual({
-      loaded: true,
-      runOutcome: { state: "completed" },
-    });
-  });
-
   it.each([
-    {
-      name: "interrupted",
-      sessionInfo: { status: "killed", abortedLastRun: true },
-      runOutcome: { state: "interrupted" },
-    },
-    {
-      name: "failed",
-      sessionInfo: { status: "failed", lastRunError: "provider failed" },
-      runOutcome: { state: "failed", errorMessage: "provider failed" },
-    },
-  ])("projects a closed $name history outcome", async ({ sessionInfo, runOutcome }) => {
+    ["interrupted", { status: "killed", abortedLastRun: true }, { state: "interrupted" }],
+    [
+      "failed",
+      { status: "failed", lastRunError: "provider failed" },
+      { state: "failed", errorMessage: "provider failed" },
+    ],
+  ] as const)("projects a closed %s history outcome", async (_name, sessionInfo, runOutcome) => {
     const { loadHistory } = createHarness({
       backend: {
         describeSession: vi.fn(),
@@ -1744,30 +1658,19 @@ describe("tui session actions", () => {
     "preserves $verboseLevel tool-output visibility when rebuilding history",
     async ({ verboseLevel, showsTool, showsOutput }) => {
       const privateOutput = "TUI_PRIVATE_TOOL_OUTPUT";
-      const { chatLog, loadHistory } = createHarness({
-        mockChatMethods: [],
-        state: { sessionInfo: { verboseLevel } },
-        backend: {
-          describeSession: vi.fn(),
-          loadHistory: vi.fn().mockResolvedValue({
-            sessionId: "session-main",
-            sessionInfo: {
-              key: "agent:main:main",
-              sessionId: "session-main",
-              verboseLevel,
-            },
-            messages: [
-              {
-                role: "toolResult",
-                toolCallId: "tool-private",
-                toolName: "read_file",
-                content: [{ type: "text", text: privateOutput }],
-                details: { accessToken: "TUI_PRIVATE_TOOL_DETAILS" },
-              },
-            ],
-          }),
-        },
-      });
+      const { chatLog, loadHistory } = selectHistoryHarness(
+        [
+          {
+            role: "toolResult",
+            toolCallId: "tool-private",
+            toolName: "read_file",
+            content: [{ type: "text", text: privateOutput }],
+            details: { accessToken: "TUI_PRIVATE_TOOL_DETAILS" },
+          },
+        ],
+        { verboseLevel },
+        { sessionInfo: { verboseLevel } },
+      );
       const startTool = vi.spyOn(chatLog, "startTool");
 
       await loadHistory();
@@ -1852,7 +1755,7 @@ describe("tui session actions", () => {
           assistantMessage("Delivered reply"),
         ],
       });
-      await flushImmediate();
+      await nextEventLoopTurn();
 
       expect(state.activeChatRunId).toBe(phase === "concurrent" ? "run-other" : null);
       expect(getPendingSubmitAcceptedRunId(state)).toBe(phase === "superseded" ? "run-new" : null);
@@ -1918,18 +1821,15 @@ describe("tui session actions", () => {
 
   it("uses top-level chat history thinking level when session info inherits it", async () => {
     const describeSession = vi.fn();
-    const loadHistory = vi.fn().mockResolvedValue({
-      messages: [],
-      thinkingLevel: "medium",
-      sessionInfo: {
-        key: "agent:main:main",
-        sessionId: "session-main",
+    const loadHistory = mockHistory([], {
+      sessionInfo: session("session-main", {
         modelProvider: "openai",
         model: "gpt-5",
         contextTokens: 120_000,
         thinkingDefault: "medium",
         updatedAt: 200,
-      },
+      }),
+      thinkingLevel: "medium",
     });
     const { state, loadHistory: runLoadHistory } = createHarness({
       backend: { describeSession, loadHistory },

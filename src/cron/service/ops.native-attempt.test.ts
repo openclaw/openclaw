@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDueIsolatedJob } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { wrapToolWithAbortSignal } from "../../agents/agent-tools.abort.js";
 import type { OpenClawCodingToolsOptions } from "../../agents/agent-tools.options.js";
@@ -15,14 +15,25 @@ import {
 } from "../../agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.js";
 import { createCronTool } from "../../agents/tools/cron-tool.js";
 import { wrapToolWithGatewayCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import * as gatewayModule from "../../agents/tools/gateway.js";
 import { callAgentToolGatewayRequest } from "../../agents/tools/in-process-gateway.js";
 import { getTotalQueueSize } from "../../process/command-queue.js";
+import {
+  getSessionControllerEntryForOperation,
+  getSessionControllerOperation,
+} from "../../sessions/session-controller.state.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { occupyWorkers, readJob, withCronGatewayState } from "./ops.gateway.test-support.js";
 
 const hoisted = getHoisted();
 const tempPaths: string[] = [];
+const sessionKey = "agent:main:native-cron-admission";
+
+function toolGeneration(signal?: AbortSignal) {
+  const released = createDeferredCore();
+  return { signal, released, cleanup: vi.fn(async () => released.resolve()) };
+}
 
 describe("native attempt queued automation admission", () => {
   beforeAll(preloadRunEmbeddedAttemptForTests);
@@ -45,54 +56,37 @@ describe("native attempt queued automation admission", () => {
     async (outcome) => {
       await withCronGatewayState(async (fixture) => {
         const { cfg, context, cron, finished } = fixture;
+        const gatewaySpy = vi
+          .spyOn(gatewayModule, "callGatewayTool")
+          .mockImplementation((method, _options, params) =>
+            callAgentToolGatewayRequest({ method, params }),
+          );
+        onTestFinished(() => gatewaySpy.mockRestore());
         const now = Date.now();
         const job = createDueIsolatedJob({ id: "native-queued-run", nowMs: now, nextRunAtMs: now });
         const payloadStarted = createDeferredCore();
         const releasePayload = createDeferredCore();
-        const generationReleased = createDeferredCore();
-        const cleanup = vi.fn(async () => {
-          generationReleased.resolve();
-        });
         const requesterWork = new AsyncWorkScope();
         const controller = new AbortController();
         let current = true;
         let tool: AnyAgentTool;
         let toolSignal: AbortSignal | undefined;
-        const generations: Array<{
-          signal: AbortSignal | undefined;
-          cleanup: typeof cleanup;
-          released: typeof generationReleased;
-        }> = [];
+        const generations: ReturnType<typeof toolGeneration>[] = [];
         hoisted.createOpenClawCodingToolsMock.mockImplementation((input) => {
           const options = input as OpenClawCodingToolsOptions;
-          const released = generations.length === 0 ? generationReleased : createDeferredCore();
-          const generationCleanup =
-            generations.length === 0
-              ? cleanup
-              : vi.fn(async () => {
-                  released.resolve();
-                });
-          generations.push({ signal: options.abortSignal, cleanup: generationCleanup, released });
-          options.registerRunCleanup?.(generationCleanup);
+          const generation = toolGeneration(options.abortSignal);
+          generations.push(generation);
+          options.registerRunCleanup?.(generation.cleanup);
           toolSignal ??= options.abortSignal;
           tool = wrapToolWithAbortSignal(
-            wrapToolWithGatewayCallerIdentity(
-              createCronTool(
-                { config: cfg },
-                {
-                  callGatewayTool: (method, _options, params) =>
-                    callAgentToolGatewayRequest({ method, params }),
-                },
-              ),
-              {
-                agentId: "main",
-                sessionKey: "agent:main:native-cron-admission",
-                operationalRunInstance: options.operationalRunInstance,
-                receiptAuthority: () => current,
-                approvalSignals: options.abortSignal ? [options.abortSignal] : [],
-                gatewayContextResolver: () => context,
-              },
-            ),
+            wrapToolWithGatewayCallerIdentity(createCronTool({ config: cfg }), {
+              agentId: "main",
+              sessionKey,
+              operationalRunInstance: options.operationalRunInstance,
+              receiptAuthority: () => current,
+              approvalSignals: options.abortSignal ? [options.abortSignal] : [],
+              gatewayContextResolver: () => context,
+            }),
             options.abortSignal,
           );
           return [tool];
@@ -110,7 +104,7 @@ describe("native attempt queued automation admission", () => {
           const result = await requesterWork.run(() =>
             createContextEngineAttemptRunner({
               contextEngine: createContextEngineBootstrapAndAssemble(),
-              sessionKey: "agent:main:native-cron-admission",
+              sessionKey,
               tempPaths,
               attemptOverrides: {
                 config: cfg,
@@ -129,7 +123,13 @@ describe("native attempt queued automation admission", () => {
                       });
                       expect(ack.details).toMatchObject({ ok: true, enqueued: true });
                       if (outcome === "permission change") {
-                        const change = prepareEmbeddedRunPermissionChange("embedded-session");
+                        const operation = getSessionControllerOperation(sessionKey);
+                        const target =
+                          operation && getSessionControllerEntryForOperation(operation).target;
+                        if (!target) {
+                          throw new Error("Native permission target missing");
+                        }
+                        const change = prepareEmbeddedRunPermissionChange(target);
                         expect(change.kind).toBe("active");
                         if (change.kind !== "active") {
                           throw new Error("Native permission owner missing");
@@ -156,6 +156,11 @@ describe("native attempt queued automation admission", () => {
           expect(result.terminal.kind).toBe(
             outcome === "abort before completion" ? "aborted" : "ok",
           );
+          const firstGeneration = generations[0];
+          if (!firstGeneration) {
+            throw new Error("Native attempt did not construct a tool generation");
+          }
+          const { cleanup, released: generationReleased } = firstGeneration;
           const abortedAtCompletion = toolSignal?.aborted;
           const cleanupCallsAtCompletion = cleanup.mock.calls.length;
           const replacement = outcome === "permission change" ? generations[1] : undefined;

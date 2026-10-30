@@ -5,7 +5,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vite
 import * as configRuntime from "../config/config.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createRequestGatewayMethodRegistry } from "../gateway/server-methods.js";
 import { flushPendingSessionsChangedEvents } from "../gateway/server-methods/session-change-event.js";
@@ -35,6 +34,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { registerAgentHarness } from "./harness/registry.js";
 import type { AgentHarness } from "./harness/types.js";
+import { configFor, modelDefinition } from "./model-auth.fixtures.test-support.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import * as preparedCatalog from "./prepared-model-catalog.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -97,23 +97,11 @@ function modelConfig(policy = false): OpenClawConfig {
         sandbox: { mode: "off", sessionToolsVisibility: "all" },
       },
     },
-    models: {
-      providers: {
-        fixture: {
-          api: "openai-completions",
-          baseUrl: "https://fixture.invalid/v1",
-          agentRuntime: { id: "openclaw" },
-          models: entries.map<ModelDefinitionConfig>((entry) => ({
-            id: entry.id,
-            name: entry.name,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            maxTokens: 1024,
-          })),
-        },
-      },
-    },
+    ...configFor("fixture", "https://fixture.invalid/v1", {
+      api: "openai-completions",
+      agentRuntime: { id: "openclaw" },
+      models: entries.map(({ id }) => modelDefinition(id, { reasoning: false, maxTokens: 1024 })),
+    }),
   };
 }
 

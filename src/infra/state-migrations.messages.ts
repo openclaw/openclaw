@@ -2,7 +2,10 @@ import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
+import {
+  listAgentDatabaseAdmissionRefusals,
+  listAgentDatabaseStartupFtsRepairs,
+} from "../state/agent-database-admission.js";
 import type {
   LegacyStateMigrationStepPlan,
   LegacyStateMigrationStepReceipt,
@@ -65,7 +68,12 @@ export function readStartupMigrationWarning(includeSensitive = true): string | u
   const admissionWarnings = listAgentDatabaseAdmissionRefusals()
     .filter((refusal) => refusal.code !== "agent-database-inspection-pending")
     .map((refusal) => `${refusal.reason}\n${refusal.repairHint}`);
-  const details = [startupMigrationDetails, formatStartupMigrationDetails(admissionWarnings)]
+  const repairs = listAgentDatabaseStartupFtsRepairs();
+  const needsAttention = Boolean(startupMigrationDetails || admissionWarnings.length);
+  const details = [
+    startupMigrationDetails,
+    formatStartupMigrationDetails([...admissionWarnings, ...repairs]),
+  ]
     .filter(Boolean)
     .join("\n");
   if (!details) {
@@ -73,8 +81,10 @@ export function readStartupMigrationWarning(includeSensitive = true): string | u
   }
   // Migration errors can contain host paths; read-only status keeps only the repair hint.
   return includeSensitive
-    ? `${boundStartupMigrationDetails(details)}\n${STARTUP_MIGRATION_FOLLOW_UP}`
-    : `Startup migrations need attention. ${STARTUP_MIGRATION_FOLLOW_UP}`;
+    ? `${boundStartupMigrationDetails(details)}${needsAttention ? `\n${STARTUP_MIGRATION_FOLLOW_UP}` : ""}`
+    : needsAttention
+      ? `Startup migrations need attention. ${STARTUP_MIGRATION_FOLLOW_UP}`
+      : "Startup rebuilt stale search indexes; see startup log.";
 }
 
 export function mergeNotices(sources: NoticeSource[]): string[] {
@@ -99,6 +109,7 @@ export function createLegacyStateMigrationStepReceipt(
             : "skipped",
     changes: result.changes,
     warnings: result.warnings,
+    ...(result.leaseLoss ? { leaseLoss: result.leaseLoss } : {}),
     ...(result.deferred?.length ? { deferred: result.deferred } : {}),
     ...(result.sqliteFamilies?.length ? { sqliteFamilies: result.sqliteFamilies } : {}),
     ...(result.refusedAgentDatabasePaths?.length
@@ -136,7 +147,14 @@ export class DoctorStateMigrationRefusalError extends Error {
         .toSorted((left, right) => Number(isBlocked(left)) - Number(isBlocked(right)))
         .flatMap((receipt) =>
           receipt.refusal
-            ? [{ check: receipt.id, code: receipt.refusal.code, message: receipt.refusal.message }]
+            ? [
+                {
+                  check: receipt.id,
+                  code: receipt.refusal.code,
+                  message: receipt.refusal.message,
+                  leaseLoss: receipt.leaseLoss,
+                },
+              ]
             : [],
         ),
     );

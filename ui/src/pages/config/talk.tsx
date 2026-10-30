@@ -5,14 +5,12 @@ import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 // same config draft, so both stay in sync without narrowing the schema.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { JSX } from "@solidjs/web";
-import { createMemo, Show } from "solid-js";
+import { createMemo, Errored, Loading, Show } from "solid-js";
 import type {
   NativeDeviceSettingsSnapshot,
   NativeDeviceSettingsCapability,
 } from "../../app/native-device-settings.ts";
-import type { PickerParams, PickerOption } from "../../components/select-picker.ts";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
-import "../../components/select-picker.ts";
+import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import {
   SettingsPage,
   SettingsRow,
@@ -46,11 +44,20 @@ export type TalkCatalogState =
     };
 
 type TalkViewProps = {
+  presentationRetired: () => Promise<void>;
   nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
   nativeDeviceSnapshot?: NativeDeviceSettingsSnapshot | null;
-  voiceWake?: { state: VoiceWakeEditorState; onInput: (text: string) => void; onRetry: () => void };
+  voiceWake?: {
+    readState: () => VoiceWakeEditorState;
+    scope?: object | null;
+    saving: boolean;
+    readWriteResult: () => void;
+    onInput: (text: string) => void;
+    onRetry: () => void;
+  };
   selection: TalkRealtimeSelection;
   catalog: TalkCatalogState;
+  catalogScope?: object | null;
   modelDefaultPending?: boolean;
   configBusy: boolean;
   onProviderChange: (providerId: string | null) => void;
@@ -124,7 +131,7 @@ export function effectiveTalkValues(
 }
 
 function StatusRow(props: TalkViewProps) {
-  const status = createMemo(() => {
+  const status = () => {
     const catalog = props.catalog;
     if (catalog.kind !== "ready") {
       return {
@@ -141,7 +148,7 @@ function StatusRow(props: TalkViewProps) {
       kind: catalog.ready ? ("ok" as const) : ("warn" as const),
       label: t(catalog.ready ? "talkPage.status.ready" : "talkPage.status.notReady"),
     };
-  });
+  };
   return (
     <SettingsRow
       title={t("talkPage.status.title")}
@@ -199,8 +206,6 @@ function ProviderRow(props: TalkViewProps) {
   );
 }
 
-type TalkModelOption = PickerOption & { provider: string };
-
 function ModelRow(props: TalkViewProps) {
   const provider = () => selectedTalkProviderOption(props.catalog, props.selection);
   const model = () => effectiveTalkValues(props.selection, provider()).model;
@@ -224,10 +229,6 @@ function ModelRow(props: TalkViewProps) {
       ...known.map((value) => ({ value, label: value })),
       ...(model() && !known.includes(model()!) ? [{ value: model()!, label: model()! }] : []),
     ].map((option) => Object.assign({}, option, { provider: selected.id }));
-    const index = values.findIndex((option) => option.value === model());
-    if (index > 0) {
-      values.unshift(...values.splice(index, 1));
-    }
     return values;
   });
   return (
@@ -237,29 +238,13 @@ function ModelRow(props: TalkViewProps) {
           title={t("talkPage.model.title")}
           description={t("talkPage.model.description")}
           control={
-            <div class="model-picker">
-              <openclaw-select-picker
-                class="settings-select picker-select model-picker__select"
-                style={{ width: "100%", "min-width": "min(138px,100%)" }}
-                prop:params={
-                  {
-                    label: t("talkPage.model.title"),
-                    value: model() ?? TALK_PICKER_UNSET,
-                    options: options(),
-                    disabled: props.configBusy,
-                    searchable: true,
-                    showOptionTooltips: false,
-                    renderLeading: (option) => (
-                      <ProviderBrandIcon
-                        provider={option.provider}
-                        class="model-picker__provider-icon"
-                      />
-                    ),
-                    onChange: (value) => props.onModelChange(value || null),
-                  } satisfies PickerParams<TalkModelOption>
-                }
-              />
-            </div>
+            <ModelPicker
+              label={t("talkPage.model.title")}
+              value={model() ?? TALK_PICKER_UNSET}
+              options={options()}
+              disabled={props.configBusy}
+              onChange={(value) => props.onModelChange(value || null)}
+            />
           }
         />
       ) : (
@@ -355,14 +340,33 @@ function ModelFamilyRow(props: TalkViewProps) {
   );
 }
 
+function TalkCatalogRows(props: TalkViewProps) {
+  return (
+    <>
+      <StatusRow {...props} />
+      <ProviderRow {...props} />
+      <ModelRow {...props} />
+      <VoiceRow {...props} />
+      <ModelFamilyRow {...props} />
+    </>
+  );
+}
+
 export function Talk(props: TalkViewProps) {
   return (
     <section class="talk-page">
       <SettingsPage>
-        <DeviceTalk capability={props.nativeDeviceSettings} snapshot={props.nativeDeviceSnapshot} />
+        <DeviceTalk
+          capability={props.nativeDeviceSettings}
+          snapshot={props.nativeDeviceSnapshot}
+          presentationRetired={props.presentationRetired}
+        />
         {props.voiceWake && (
           <VoiceWakeEditor
-            state={props.voiceWake.state}
+            readState={props.voiceWake.readState}
+            scope={props.voiceWake.scope}
+            saving={props.voiceWake.saving}
+            readWriteResult={props.voiceWake.readWriteResult}
             onInput={props.voiceWake.onInput}
             onRetry={props.voiceWake.onRetry}
           />
@@ -371,11 +375,16 @@ export function Talk(props: TalkViewProps) {
           title={t("talkPage.voiceSection.title")}
           description={t("talkPage.voiceSection.description")}
         >
-          <StatusRow {...props} />
-          <ProviderRow {...props} />
-          <ModelRow {...props} />
-          <VoiceRow {...props} />
-          <ModelFamilyRow {...props} />
+          <Errored
+            fallback={(_error) => <TalkCatalogRows {...props} catalog={{ kind: "unavailable" }} />}
+          >
+            <Loading
+              on={props.catalogScope}
+              fallback={<TalkCatalogRows {...props} catalog={{ kind: "loading" }} />}
+            >
+              <TalkCatalogRows {...props} />
+            </Loading>
+          </Errored>
         </SettingsSection>
       </SettingsPage>
       {props.editor}

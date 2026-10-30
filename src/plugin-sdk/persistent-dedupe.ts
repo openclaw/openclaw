@@ -295,11 +295,10 @@ export function createClaimableDedupe(
     if (!trimmed) {
       return false;
     }
-    const namespace = resolveNamespace(dedupeOptions?.namespace);
-    const scopedKey = resolveScopedKey(namespace, trimmed);
     if (persistent) {
       return persistent.hasRecent(trimmed, dedupeOptions);
     }
+    const scopedKey = resolveScopedKey(resolveNamespace(dedupeOptions?.namespace), trimmed);
     return memory.peek(scopedKey, dedupeOptions?.now);
   }
 
@@ -311,8 +310,7 @@ export function createClaimableDedupe(
     if (!trimmed) {
       return false;
     }
-    const namespace = resolveNamespace(dedupeOptions?.namespace);
-    const scopedKey = resolveScopedKey(namespace, trimmed);
+    const scopedKey = resolveScopedKey(resolveNamespace(dedupeOptions?.namespace), trimmed);
     const claimValue = inflight.get(scopedKey);
     claimValue?.reject(createReleasedClaimError(scopedKey));
     inflight.delete(scopedKey);
@@ -331,8 +329,7 @@ export function createClaimableDedupe(
     if (!trimmed) {
       return { kind: "claimed" };
     }
-    const namespace = resolveNamespace(dedupeOptions?.namespace);
-    const scopedKey = resolveScopedKey(namespace, trimmed);
+    const scopedKey = resolveScopedKey(resolveNamespace(dedupeOptions?.namespace), trimmed);
     const existing = inflight.get(scopedKey);
     if (existing) {
       return { kind: "inflight", pending: existing.promise };
@@ -374,8 +371,7 @@ export function createClaimableDedupe(
     if (!trimmed) {
       return true;
     }
-    const namespace = resolveNamespace(dedupeOptions?.namespace);
-    const scopedKey = resolveScopedKey(namespace, trimmed);
+    const scopedKey = resolveScopedKey(resolveNamespace(dedupeOptions?.namespace), trimmed);
     const claimValue = inflight.get(scopedKey);
     try {
       const recorded = persistent
@@ -404,8 +400,7 @@ export function createClaimableDedupe(
     if (!trimmed) {
       return;
     }
-    const namespace = resolveNamespace(dedupeOptions?.namespace);
-    const scopedKey = resolveScopedKey(namespace, trimmed);
+    const scopedKey = resolveScopedKey(resolveNamespace(dedupeOptions?.namespace), trimmed);
     const claimLocal = inflight.get(scopedKey);
     if (!claimLocal) {
       return;

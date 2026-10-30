@@ -28,7 +28,7 @@ const Agent = z
     provenance: z
       .object({
         agentId: AgentId,
-        createdVia: z.enum(["operator", "agent", "claw"]),
+        createdVia: z.enum(["operator", "agent", "template"]),
         creatorAgentId: AgentId.nullable(),
         createdAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
       })

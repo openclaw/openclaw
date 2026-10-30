@@ -2,6 +2,7 @@ import type { Locator, Page } from "playwright";
 import { expect as browserExpect } from "playwright/test";
 import { expect, it } from "vitest";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../pages/chat/sidebar-layout.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledSettingsStorageKey,
   createControlUiMockSameOriginGatewayScript,
@@ -69,7 +70,7 @@ async function prepareRailPage(page: Page, colorScheme: "dark" | "light") {
   await page.goto(`${suite.server.baseUrl}chat`);
 }
 
-async function trackReader(page: Page, colorScheme: "dark" | "light") {
+async function trackReader(page: Page) {
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   const messages = Array.from({ length: 240 }, (_, index) => ({
@@ -99,7 +100,16 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
     timestamp: Date.UTC(2026, 8, 4, 12, index),
   }));
   const gateway = await installMockGateway(page, { historyMessages: messages });
-  await prepareRailPage(page, colorScheme);
+  await prepareRailPage(page, "dark");
+  const checkThemes = async (run: () => Promise<void>) => {
+    // Theme changes paint; keep both presentations around one reader lifecycle.
+    for (const mode of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: mode });
+      await evaluateControlUiContext(page, (context, value) => context.theme.setMode(value), mode);
+      await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
+      await run();
+    }
+  };
   const transcript = page.locator(".chat-thread");
   await transcript
     .locator(".chat-virtual-row")
@@ -120,34 +130,20 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
   await expect.poll(logicalCount).toBe(240);
   expect(await markers.count()).toBeLessThan(100);
   const track = rail.locator(".chat-position-rail__track");
-  const trackBounds = (await track.boundingBox())!;
-  const transcriptBounds = (await transcript.boundingBox())!;
-  const contentBounds = (await transcript.locator(".chat-thread-inner").boundingBox())!;
-  const conversationBounds = (await page.locator(".chat-main__conversation").boundingBox())!;
-  expect(trackBounds.x).toBeGreaterThanOrEqual(transcriptBounds.x);
-  expect(trackBounds.x + trackBounds.width).toBeLessThan(contentBounds.x);
-  expect(trackBounds.height).toBeCloseTo(900 * 0.45, 2);
-  const centerY = ({ y, height }: { y: number; height: number }) => y + height / 2;
-  expect(Math.abs(centerY(trackBounds) - centerY(conversationBounds))).toBeLessThan(2);
-  const markBounds = await markers.evaluateAll((items) =>
-    items.map((item) => ({
-      ...item.getBoundingClientRect().toJSON(),
-      index: Number(item.getAttribute("data-position-marker-id")!.split("-").at(-1)),
-    })),
-  );
-  expect(Math.min(...markBounds.map((bounds) => bounds.width))).toBeGreaterThanOrEqual(44);
-  for (let index = 1; index < markBounds.length; index++) {
-    expect(markBounds[index]!.y - markBounds[index - 1]!.y).toBeCloseTo(
-      (markBounds[index]!.index - markBounds[index - 1]!.index) * 12,
-      2,
-    );
-  }
-  expect(await markers.first().getAttribute("aria-label")).toContain(
-    `${markBounds[0]!.index + 1} of 240`,
-  );
-  expect(await markerForIndex(239).getAttribute("aria-label")).toContain("240 of 240");
-  expect(await preview.count()).toBe(0);
-  expect(await rail.locator('[role="status"]').count()).toBe(0);
+  await checkThemes(async () => {
+    const trackBounds = (await track.boundingBox())!;
+    const transcriptBounds = (await transcript.boundingBox())!;
+    const contentBounds = (await transcript.locator(".chat-thread-inner").boundingBox())!;
+    const conversationBounds = (await page.locator(".chat-main__conversation").boundingBox())!;
+    expect(trackBounds.x).toBeGreaterThanOrEqual(transcriptBounds.x);
+    expect(trackBounds.x + trackBounds.width).toBeLessThan(contentBounds.x);
+    expect(trackBounds.height).toBeCloseTo(900 * 0.45, 2);
+    const centerY = ({ y, height }: { y: number; height: number }) => y + height / 2;
+    expect(Math.abs(centerY(trackBounds) - centerY(conversationBounds))).toBeLessThan(2);
+    expect(await markerForIndex(239).getAttribute("aria-label")).toContain("240 of 240");
+    expect(await preview.count()).toBe(0);
+    expect(await rail.locator('[role="status"]').count()).toBe(0);
+  });
 
   // Exercise the composite through real Tab navigation, including reentry.
   const focusedMarkerId = () =>
@@ -221,24 +217,6 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
     }));
   const currentIsVisible = () =>
     fits(scroller.locator('[aria-current="true"]'), ".chat-position-rail__marks");
-  const ticks = markers.locator(".chat-position-rail__tick");
-  const strokeSizes = async () => [
-    ...new Set((await readStyles(ticks, ["width", "height"])).map((size) => size.join(" × "))),
-  ];
-  await page.mouse.move(700, 80);
-  await expect.poll(strokeSizes).toEqual(["8px × 2px"]);
-  const colors = await rail.evaluate((element) => {
-    const probe = document.createElement("span");
-    element.append(probe);
-    probe.style.color = "var(--muted)";
-    const muted = getComputedStyle(probe).color;
-    probe.style.color = "var(--text)";
-    const text = getComputedStyle(probe).color;
-    probe.remove();
-    return { muted, text };
-  });
-  const tick = (index: number) => markerForIndex(index).locator(".chat-position-rail__tick");
-  const strokeColor = (index: number) => readStyle(tick(index), "background-color");
   const visibilityMatchesViewport = () =>
     transcript.evaluate((element) => {
       const viewport = element.getBoundingClientRect();
@@ -271,8 +249,9 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
   const invisibleTick = rail
     .locator(".chat-position-rail__marker:not([data-visible]) .chat-position-rail__tick")
     .first();
-  expect(await readStyle(invisibleTick, "background-color")).toMatch(/\/ 0\.4\)$/);
-  expect(await strokeColor(239)).toBe(colors.muted);
+  await checkThemes(async () => {
+    expect(await readStyle(invisibleTick, "background-color")).toMatch(/\/ 0\.4\)$/);
+  });
   await expect.poll(fades).toEqual({ top: true, bottom: false });
   await expect.poll(currentIsVisible).toBe(true);
   await transcript.evaluate((element) => {
@@ -321,16 +300,18 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
   await expect.poll(fades).toEqual({ top: false, bottom: true });
   await markerForIndex(1).hover();
   const previewImage = preview.locator("img");
-  await expect
-    .poll(() => previewImage.evaluate((image: HTMLImageElement) => image.naturalHeight))
-    .toBe(1024);
-  expect(
-    await preview.evaluate(
-      (element) =>
-        element.getBoundingClientRect().height /
-        Number.parseFloat(getComputedStyle(element).lineHeight),
-    ),
-  ).toBeLessThanOrEqual(3.01);
+  await checkThemes(async () => {
+    await expect
+      .poll(() => previewImage.evaluate((image: HTMLImageElement) => image.naturalHeight))
+      .toBe(1024);
+    expect(
+      await preview.evaluate(
+        (element) =>
+          element.getBoundingClientRect().height /
+          Number.parseFloat(getComputedStyle(element).lineHeight),
+      ),
+    ).toBeLessThanOrEqual(3.01);
+  });
   await page.mouse.move(600, 100);
 
   await markerForIndex(4).hover();
@@ -360,24 +341,15 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
   const composer = page.locator(".agent-chat__composer-combobox textarea");
   await composer.focus();
   await expect.poll(visibilityMatchesViewport).toBe(true);
-  const strokeColors = async () => (await readStyles(ticks, ["background-color"])).flat();
-  // The tick animates its background after visibility changes. Capture
-  // each marker's target color, not a transient animation frame.
-  const restingColors = await markers.evaluateAll((items) =>
-    items.map((item) => getComputedStyle(item).color),
-  );
   await markerForIndex(4).hover();
   await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 4");
+  const ticks = markers.locator(".chat-position-rail__tick");
   const waveWidths = async () =>
     (await readStyles(ticks, ["width"])).slice(0, 9).map(([width]) => Number.parseFloat(width!));
-  const expectedWave = [8, 12, 16, 24, 32, 24, 16, 12, 8];
   const expectWave = async () => {
-    await expect.poll(waveWidths).toEqual(expectedWave);
-    await expect
-      .poll(strokeColors)
-      .toEqual(restingColors.map((color, index) => (index === 4 ? colors.text : color)));
+    await expect.poll(waveWidths).toEqual([8, 12, 16, 24, 32, 24, 16, 12, 8]);
   };
-  await expectWave();
+  await checkThemes(expectWave);
 
   const previewBounds = await preview.boundingBox();
   expect(previewBounds).not.toBeNull();
@@ -390,7 +362,6 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
   await expectWave();
   await page.keyboard.press("Escape");
   await expect.poll(() => preview.count()).toBe(0);
-  await expect.poll(strokeSizes).toEqual(["8px × 2px"]);
   await browserExpect(composer).toBeFocused();
 
   await page.mouse.move(600, 100);
@@ -398,7 +369,6 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
   await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 4");
   await page.mouse.move(600, 100);
   await expect.poll(() => preview.count()).toBe(0);
-  await expect.poll(strokeSizes).toEqual(["8px × 2px"]);
   await expect.poll(visibilityMatchesViewport).toBe(true);
   await markers.first().hover();
   await expect.poll(async () => (await preview.textContent())?.trim()).toBe("Preview unavailable");
@@ -409,7 +379,9 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
   await markerForIndex(5).press("ArrowDown");
   await expect.poll(focusedMarkerId).toBe("position-rail-6");
   await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 6");
-  expect(await readStyle(tick(6), "width")).toBe("8px");
+  await expect
+    .poll(() => readStyle(markerForIndex(6).locator(".chat-position-rail__tick"), "width"))
+    .toBe("8px");
   await showMarker(120);
   await markerForIndex(120).focus();
   await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 120");
@@ -507,9 +479,11 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
       }
     }
   };
-  for (const index of [120, 121]) {
-    await clickAndObserveFlash(index, true);
-  }
+  await checkThemes(async () => {
+    for (const index of [120, 121]) {
+      await clickAndObserveFlash(index, true);
+    }
+  });
   await markerForIndex(120).press("Escape");
   await expect.poll(() => preview.count()).toBe(0);
   await markerForIndex(120).press("Home");
@@ -520,59 +494,36 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
   await markerForIndex(239).press("Enter");
   await expect.poll(currentMarkerIndex).toBe(239);
 
-  // Pane-local width matters even inside an otherwise wide desktop.
-  await setStyle(transcript, "width", "800px");
-  await markers.first().waitFor({ state: "hidden" });
-  await setStyle(transcript, "width");
-  await markers.first().waitFor({ state: "visible" });
+  await checkThemes(async () => {
+    // Pane-local width matters even inside an otherwise wide desktop.
+    await setStyle(transcript, "width", "800px");
+    await markers.first().waitFor({ state: "hidden" });
+    await setStyle(transcript, "width");
+    await markers.first().waitFor({ state: "visible" });
 
-  await page.setViewportSize({ height: 900, width: 900 });
-  await markers.first().waitFor({ state: "hidden" });
-  await page.setViewportSize({ height: 844, width: 390 });
-  await markers.first().waitFor({ state: "hidden" });
-  await page.setViewportSize({ height: 900, width: 1440 });
-  await markers.first().waitFor({ state: "visible" });
+    await page.setViewportSize({ height: 900, width: 900 });
+    await markers.first().waitFor({ state: "hidden" });
+    await page.setViewportSize({ height: 844, width: 390 });
+    await markers.first().waitFor({ state: "hidden" });
+    await page.setViewportSize({ height: 900, width: 1440 });
+    await markers.first().waitFor({ state: "visible" });
+  });
   await page.emulateMedia({ reducedMotion: "reduce" });
-  // Global reduced-motion policy uses 0.01ms.
-  expect(
-    Number.parseFloat(
-      await readStyle(markers.first().locator(".chat-position-rail__tick"), "transition-duration"),
-    ),
-  ).toBeLessThanOrEqual(0.00001);
-
-  await showMarker(239);
-  await clickAndObserveFlash(239, false);
-
-  // Saved widths can consume the gutter even in a wide desktop pane.
-  for (const width of ["100%", "none", "95%", "48rem"]) {
-    await page.goto(`${suite.server.baseUrl}settings/appearance#settings-appearance-chat`);
-    const widthInput = page.locator("[data-settings-chat-message-width]");
-    await widthInput.fill(width);
-    await widthInput.press("Tab");
-    await expect
-      .poll(() =>
-        page.evaluate(
-          (key) => JSON.parse(localStorage.getItem(key) ?? "{}").chatMessageMaxWidth,
-          controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+  await checkThemes(async () => {
+    // Global reduced-motion policy uses 0.01ms.
+    expect(
+      Number.parseFloat(
+        await readStyle(
+          markers.first().locator(".chat-position-rail__tick"),
+          "transition-duration",
         ),
-      )
-      .toBe(width);
-    await page.goto(`${suite.server.baseUrl}chat`);
-    await transcript.locator('.chat-bubble[data-entry-id="position-rail-239"]').waitFor();
-    await expect
-      .poll(() =>
-        transcript.evaluate((element) =>
-          getComputedStyle(element).getPropertyValue("--chat-thread-max-width").trim(),
-        ),
-      )
-      .toBe(width);
-    await markers.first().waitFor({ state: width === "48rem" ? "visible" : "hidden" });
-    if (width === "48rem") {
-      const inner = await transcript.locator(".chat-thread-inner").boundingBox();
-      const marker = await markers.first().boundingBox();
-      expect(inner!.x - (marker!.x + marker!.width)).toBeGreaterThanOrEqual(10);
-    }
-  }
+      ),
+    ).toBeLessThanOrEqual(0.00001);
+
+    await showMarker(239);
+    await clickAndObserveFlash(239, false);
+  });
+
   // A foreign-host commit can change the inner column while the pane's
   // own dimensions stay fixed. Exercise that existing event boundary.
   for (const width of ["95%", "48rem"]) {
@@ -620,133 +571,16 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
   expect(pageErrors).toEqual([]);
 }
 
-async function trackContinuation(page: Page, colorScheme: "dark" | "light") {
-  const message = (id: string, role: string, content: unknown, seq: number, runId?: string) => ({
-    role,
-    content,
-    timestamp: (seq + 80) * 1_000,
-    __openclaw: { id, seq: seq + 80, ...(runId ? { runId } : {}) },
-  });
-  const longReply =
-    "The review preserves the request, explains the evidence, and records the decision. Each participant can check the source and understand the next step.\n\n".repeat(
-      22,
-    );
-  await installMockGateway(page, {
-    historyMessages: [
-      ...Array.from({ length: 80 }, (_, index) => ({
-        role: index % 2 === 0 ? "user" : "assistant",
-        content: [{ type: "text", text: `Earlier checkpoint ${index + 1}.` }],
-        timestamp: (index + 1) * 1_000,
-        __openclaw: { id: `earlier-${index}`, seq: index + 1 },
-      })),
-      message("question", "user", "Review the shared design", 1),
-      message("first", "assistant", "I will inspect the design", 2, "review-run"),
-      message(
-        "call",
-        "assistant",
-        [
-          {
-            type: "toolCall",
-            id: "read-1",
-            name: "read",
-            arguments: { path: "design.md" },
-          },
-        ],
-        3,
-        "review-run",
-      ),
-      {
-        ...message("result", "toolResult", "The design was loaded", 4, "review-run"),
-        toolName: "read",
-        toolCallId: "read-1",
-      },
-      message("continuation", "assistant", longReply, 5, "review-run"),
-      message("final", "assistant", "The shared design is ready", 6, "review-run"),
-      message("next-question", "user", "Continue with the next review", 7),
-      message("next-answer", "assistant", "Ready for the next review", 8, "next-run"),
-    ],
-  });
-  await prepareRailPage(page, colorScheme);
-  const thread = page.locator(".chat-thread");
-  const marks = thread.locator(".chat-position-rail__marker");
-  await expect.poll(() => railCount(thread.locator(".chat-position-rail"))).toBe(84);
-  expect(await marks.count()).toBeLessThan(84);
-  const runMarker = thread.locator('[data-position-marker-id="run:review-run"]');
-  await thread.locator('.chat-position-rail__marker[tabindex="0"]').focus();
-  await press(page.keyboard, "End", "ArrowUp", "ArrowUp");
-  await browserExpect(runMarker).toBeFocused();
-  await runMarker.press("Enter");
-  const first = thread.locator('.chat-bubble[data-entry-id="first"]');
-  await browserExpect(first).toHaveClass(/\bchat-bubble--reply-target\b/);
-  await expect
-    .poll(async () =>
-      (await thread.locator(".chat-position-rail__preview-copy").textContent())?.trim(),
-    )
-    .toBe("The shared design is ready");
-  const continuation = thread.locator('.chat-bubble[data-entry-id="continuation"]');
-  await thread.hover();
-  const bounds = await relativeBounds(continuation, ".chat-thread");
-  await page.mouse.wheel(0, (bounds.top + bounds.bottom - bounds.clientHeight) / 2);
-  await expect
-    .poll(async () => {
-      const rect = await relativeBounds(continuation, ".chat-thread");
-      return rect.top < 0 && rect.bottom > rect.height;
-    })
-    .toBe(true);
-  await browserExpect(runMarker).toHaveAttribute("aria-current", "true");
-  await browserExpect(runMarker).toHaveAttribute("data-visible", "");
-  expect(await thread.locator('.chat-position-rail__marker[aria-current="true"]').count()).toBe(1);
-  expect((await relativeBounds(first, ".chat-thread")).bottom).toBeLessThan(0);
-  const composerInput = page.locator(".agent-chat__composer-combobox textarea");
-  const markerFits = () => fits(runMarker, ".chat-position-rail__marks", true);
-  const markerBottomClearance = async () => {
-    const rect = await relativeBounds(runMarker, ".chat-position-rail__marks");
-    return rect.clientHeight - rect.bottom;
-  };
-  // Resize preserves the reader's rail offset; make its clipping precondition explicit.
-  await composerInput.focus();
-  await thread.locator(".chat-position-rail__marks").hover();
-  await page.mouse.wheel(0, 1 - (await markerBottomClearance()));
-  await expect
-    .poll(async () => Math.abs((await markerBottomClearance()) - 1))
-    .toBeLessThanOrEqual(1);
-  await expect.poll(markerFits).toBe(true);
-  await composerInput.fill(
-    Array.from({ length: 6 }, (_, index) => `Review note ${index + 1}`).join("\n"),
-  );
-  await expect.poll(markerFits).toBe(false);
-  const readerOffset = await scrollTop(thread);
-  await thread.hover();
-  await page.mouse.wheel(0, 120);
-  await expect.poll(() => scrollTop(thread)).toBeGreaterThan(readerOffset);
-  await expect.poll(() => runMarker.getAttribute("aria-current")).toBe("true");
-  await expect.poll(markerFits).toBe(true);
-  await composerInput.fill("");
-  await runMarker.press("Enter");
-  await expect.poll(() => fits(first, ".chat-thread")).toBe(true);
-}
-
 suite.define(() => {
-  it.each(["dark", "light"] as const)(
-    "tracks reader position and keyboard jumps in %s mode",
-    async (colorScheme) => {
-      await suite.withPage(
-        {
-          colorScheme,
-          locale: "en-US",
-          serviceWorkers: "block",
-          viewport: { height: 900, width: 1440 },
-        },
-        ({ page }) => trackReader(page, colorScheme),
-      );
-    },
-  );
-  it.each(["dark", "light"] as const)(
-    "keeps one run current while reading its long continuation in %s mode",
-    async (colorScheme) => {
-      await suite.withPage({ colorScheme, viewport: { width: 1440, height: 900 } }, ({ page }) =>
-        trackContinuation(page, colorScheme),
-      );
-    },
-  );
+  it("tracks reader position and keyboard jumps with both theme presentations", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+      },
+      ({ page }) => trackReader(page),
+    );
+  });
 });

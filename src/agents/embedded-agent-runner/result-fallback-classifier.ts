@@ -42,6 +42,7 @@ export function mergeEmbeddedAgentRunResultForModelFallbackExhaustion(params: {
     meta: {
       ...params.latestResult.meta,
       error: params.preferredResult.meta.error,
+      suppressErrorNotice: params.preferredResult.meta.suppressErrorNotice,
       terminalReply: params.preferredResult.meta.terminalReply,
       finalAssistantRawText: params.preferredResult.meta.finalAssistantRawText,
       finalAssistantVisibleText: params.preferredResult.meta.finalAssistantVisibleText,
@@ -133,6 +134,8 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     return null;
   }
   if (
+    // A deliberate handoff continues this turn; an empty final is not a failed model.
+    params.result.meta.yielded === true ||
     params.result.meta.intentionalTerminalCompletion === "tool-batch" ||
     params.result.meta.aborted ||
     params.hasDirectlySentBlockReply === true ||

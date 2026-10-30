@@ -1,14 +1,25 @@
-import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
+import {
+  getSqliteDatabaseAdmissionIdentityForPath,
+  readSqliteDatabaseWriteTokenForPath,
+} from "../../infra/sqlite-database-admission.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
+import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
 import {
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
   readOpenClawAgentDatabaseRegistryToken,
 } from "../../state/openclaw-agent-db-registry-listing.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent-owner.js";
+import type { SessionStoreWorkerReadScope } from "./session-entry-read-runtime.types.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import type { SessionStoreRegistryRead } from "./session-sqlite-target.js";
 import { isPerAgentSessionStoreConfig } from "./session-store-config.js";
-import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import {
+  assertSessionStoreReadCandidate,
+  captureSessionStoreReadCandidate,
+} from "./session-store-read-candidates.js";
+import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import type {
   SessionStoreTargetInventoryRequest,
   SessionStoreTargetInventoryResult,
@@ -17,11 +28,15 @@ import type {
 } from "./session-store-target-inventory.js";
 import {
   targetDiscoveryLane,
+  prepareSessionStoreCandidatesInWorker,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
 import { listConfiguredSessionStoreAgentIds } from "./targets-configured-agents.js";
 
-type PreparedStoreTarget = Extract<SessionStoreTargetReadResult, { kind: "session-store-target" }>;
+type DeepReadonly<T> = { readonly [K in keyof T]: DeepReadonly<T[K]> };
+type PreparedStoreTarget = DeepReadonly<
+  Extract<SessionStoreTargetReadResult, { kind: "session-store-target" }>
+>;
 type StoreTargetReadOwner = {
   assertCurrent: () => void;
   onRegistryChange: (change: AgentDatabaseRegistryChange) => void;
@@ -29,65 +44,62 @@ type StoreTargetReadOwner = {
   revalidateTarget: () => Promise<void>;
 };
 
-type PreparedInventory = Extract<
-  SessionStoreTargetInventoryResult,
-  { kind: "session-target-inventory" }
+type PreparedInventory = DeepReadonly<
+  Extract<SessionStoreTargetInventoryResult, { kind: "session-target-inventory" }>
 >;
-type PreparedSelection = PreparedStoreTarget | PreparedInventory;
 type SelectionMemo<Value> = Map<string, { registry: symbol; value: Value }>;
 const targetSelections: SelectionMemo<PreparedStoreTarget> = new Map();
 const targetInventories: SelectionMemo<PreparedInventory> = new Map();
 const MAX_SELECTIONS = 128;
 
-/** Registry receipts and physical replacement invalidate locator facts, never caller authority. */
-function captureSelectionMemo<Value extends PreparedSelection>(
+/** Memo keys track supplied physical identities; in-process registry publications retire entries.
+ * Family markers alone do not witness external changes. Neither memo grants caller authority. */
+function captureSelectionMemo<Value>(
   selections: SelectionMemo<Value>,
   request: Pick<SessionStoreTargetReadRequest, "env" | "candidates">,
   selection: unknown,
   includeRows = false,
 ) {
   const registry = readOpenClawAgentDatabaseRegistryToken({ env: request.env });
-  const key = () => {
-    try {
-      return JSON.stringify([
+  let captured: string | undefined;
+  try {
+    // Family custody does not enumerate every row source an inventory can discover.
+    if (!includeRows || !request.candidates.some((candidate) => candidate.scope)) {
+      captured = JSON.stringify([
         selection,
         request.candidates.map((candidate) => {
-          const identity = readDatabasePathIdentitySync(candidate.path);
+          if (candidate.scope && isArtifactPreservingStateRead("agent")) {
+            return [candidate];
+          }
+          const identity = candidate.identity ?? readDatabasePathIdentitySync(candidate.path);
           return [
             candidate,
             identity.key,
             identity.birthtime,
-            includeRows ? readSqliteDatabaseWriteTokenForPath(candidate.path) : undefined,
+            includeRows &&
+            (!candidate.identity || getSqliteDatabaseAdmissionIdentityForPath(candidate.path))
+              ? readSqliteDatabaseWriteTokenForPath(candidate.path)
+              : undefined,
           ];
         }),
       ]);
-    } catch {
-      // Unreadable candidates retain the discovery owner's normal error path.
-      return undefined;
     }
-  };
-  // Family custody does not enumerate every row source an inventory can discover.
-  const captured =
-    includeRows && request.candidates.some((candidate) => candidate.scope) ? undefined : key();
+  } catch {
+    // Unreadable candidates retain the discovery owner's normal error path.
+  }
+  const cached = captured ? selections.get(captured) : undefined;
+  if (captured && cached?.registry === registry) {
+    selections.delete(captured);
+    selections.set(captured, cached);
+  }
   return {
-    read(): Value | undefined {
-      if (!captured) {
-        return undefined;
-      }
-      const cached = selections.get(captured);
-      if (!cached || cached.registry !== registry) {
-        return undefined;
-      }
-      selections.delete(captured);
-      selections.set(captured, cached);
-      return structuredClone(cached.value);
-    },
+    value: cached?.registry === registry ? cached.value : undefined,
     install(value: Value): void {
       if (!captured) {
         return;
       }
       selections.delete(captured);
-      selections.set(captured, { registry, value: structuredClone(value) });
+      selections.set(captured, { registry, value: freezeTrustedJsonSnapshot(value) });
       while (selections.size > MAX_SELECTIONS) {
         selections.delete(selections.keys().next().value!);
       }
@@ -101,6 +113,18 @@ export function prepareSessionStoreTargetInventoryRead(
   registeredDatabases?: SessionStoreRegistryRead,
 ) {
   const { candidates, ...prepared } = request;
+  const selection = [
+    request.preserveSourceArtifacts,
+    request.selection,
+    request.recoveryExclusions,
+    request.agentIds,
+    request.config.session?.store,
+    request.config.agents?.defaults?.sessionStore?.agentId,
+    resolveSessionStoreCompatibilityAgentId(request.config),
+    listConfiguredSessionStoreAgentIds(request.config),
+    [...request.paths],
+    request.registryDiscovery,
+  ];
   // Security-scoped inventories can supply a stricter witness. Ordinary discovery
   // keeps its selected registry snapshot; later registrations affect the next read.
   const registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead(
@@ -114,10 +138,7 @@ export function prepareSessionStoreTargetInventoryRead(
     assertRegistryCurrent,
     followRegistration: registry.followRegistration,
     withRead<T>(
-      operation: (
-        inventory: Extract<SessionStoreTargetInventoryResult, { kind: "session-target-inventory" }>,
-        assertCurrent: () => void,
-      ) => Promise<T>,
+      operation: (inventory: PreparedInventory, assertCurrent: () => void) => Promise<T>,
       assertCallerCurrent?: () => void,
       signal?: AbortSignal,
     ) {
@@ -133,26 +154,19 @@ export function prepareSessionStoreTargetInventoryRead(
           const memo = captureSelectionMemo(
             targetInventories,
             request,
-            [
-              request.selection,
-              request.agentIds,
-              request.config.session?.store,
-              request.config.agents?.defaults?.sessionStore?.agentId,
-              resolveSessionStoreCompatibilityAgentId(request.config),
-              listConfiguredSessionStoreAgentIds(request.config),
-              [...request.paths],
-              request.registryDiscovery,
-            ],
+            selection,
             // Only fixed-store visibility depends on the session rows. Per-agent
             // topology changes with physical files or registry ownership, not activity.
             !isPerAgentSessionStoreConfig(request.config.session?.store),
           );
-          let inventory =
-            memo.read() ??
-            (await discovery.readTargetInventory({
-              ...prepared,
-              registeredDatabases: registeredDatabases ?? { status: "deferred" },
-            }));
+          if (memo.value) {
+            assertCurrent();
+            return operation(memo.value, assertCurrent);
+          }
+          let inventory = await discovery.readTargetInventory({
+            ...prepared,
+            registeredDatabases: registeredDatabases ?? { status: "deferred" },
+          });
           if (inventory.kind === "session-target-registry-required") {
             const { result } = await registry.read(signal);
             inventory = await discovery.readTargetInventory({
@@ -184,7 +198,10 @@ export async function withSessionStoreTarget<T>(
   onReadError?: (error: unknown, assertCurrent: () => void) => Promise<T>,
 ): Promise<T> {
   assertCallerCurrent?.();
-  const { candidates, ...targetRequest } = request;
+  const { candidates, ...targetRequest } = {
+    ...request,
+    ...(isArtifactPreservingStateRead("agent") ? { preserveSourceArtifacts: true as const } : {}),
+  };
   const registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env: request.env });
   return withSessionHistoryWorkerReadCandidates(
     candidates,
@@ -195,11 +212,12 @@ export async function withSessionStoreTarget<T>(
         discovery.assertCurrent();
       };
       const memo = captureSelectionMemo(targetSelections, request, [
+        targetRequest.preserveSourceArtifacts,
         request.agentId,
         request.defaultAgentId,
         request.storePath,
       ]);
-      const cached = memo.read();
+      const cached = memo.value;
       let read = cached
         ? { ok: true as const, value: cached }
         : await discovery.readStoreTargetResult({
@@ -224,7 +242,9 @@ export async function withSessionStoreTarget<T>(
       if (read.value.kind === "session-target-registry-required") {
         throw new Error("Session store target requested registry rows twice");
       }
-      memo.install(read.value);
+      if (!cached) {
+        memo.install(read.value);
+      }
       const target = read.value;
       const assertTargetCurrent = () => {
         assertCurrent();
@@ -244,4 +264,46 @@ export async function withSessionStoreTarget<T>(
     },
     targetDiscoveryLane,
   );
+}
+
+/** A live prepared source already owns physical qualification; cold locators use discovery. */
+export async function prepareSessionStoreReaderCandidates(
+  storePath: string,
+  options: {
+    inspection: boolean;
+    allowDirect: boolean;
+    preparedSource?: SessionStoreWorkerReadScope["preparedSource"];
+  },
+) {
+  const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
+  const source = options.preparedSource;
+  if (options.inspection && source) {
+    source.assertCurrent();
+    return {
+      target,
+      direct: undefined,
+      candidates: [
+        {
+          path: source.path,
+          physicalPath: source.path,
+          identity: {
+            key: "file:" + source.databaseIdentity,
+            canonicalPath: source.path,
+            birthtime: source.databaseBirthtime,
+          },
+        },
+      ],
+    };
+  }
+  const captured =
+    !options.inspection && options.allowDirect && target.agentId
+      ? captureSessionStoreReadCandidate(target.path)
+      : undefined;
+  const direct = captured && captured.path === captured.physicalPath ? captured : undefined;
+  const candidates = options.inspection
+    ? (await prepareSessionStoreCandidatesInWorker({ storePath })).candidates
+    : direct
+      ? [direct]
+      : captureSessionStoreReadCandidates(storePath);
+  return { target, direct, candidates };
 }

@@ -3,6 +3,47 @@ import { en } from "./en.ts";
 
 const enCron = {
   cron: {
+    adminRequired: "Browsing only. Automation changes require operator.admin access.",
+    runNotStarted: {
+      notDue: "This automation is not due yet.",
+      alreadyRunning: "This automation is already running.",
+      recoveryPending: "Scheduler recovery is still in progress.",
+      invalidSpec: "This automation has an invalid schedule or payload.",
+      stopped: "The scheduler is stopped.",
+      unknown: "This automation could not be started.",
+    },
+    errors: {
+      nameRequired: "Name is required.",
+      activeHoursTime: "Enter HH:MM (24:00 is allowed only for the end).",
+      activeHoursTimezone: "Enter a valid IANA timezone, local, or user.",
+      scheduleAtInvalid: "Enter a valid date/time.",
+      everyAmountInvalid: "Interval must be greater than 0.",
+      triggerIntervalTooShort:
+        "Condition-triggered automations must run at least every 30 seconds.",
+      cronExprRequired: "Cron expression is required.",
+      cronExprInvalid: "Enter 5 fields like 0 9 * * * or 6 fields like 0 0 9 * * *.",
+      cronTzInvalid: "Enter a valid IANA timezone, such as America/New_York.",
+      staggerAmountInvalid: "Stagger must be greater than 0.",
+      triggerScriptRequired: "Trigger script is required when the condition trigger is enabled.",
+      triggerScriptPayloadUnsupported:
+        "Script payloads cannot use condition triggers because both own the same saved state.",
+      triggerScheduleUnsupported:
+        "Condition triggers require an interval, cron, or stream schedule.",
+      systemTextRequired: "System text is required.",
+      agentMessageRequired: "Agent message is required.",
+      timeoutInvalid: "If set, timeout must be 0 or greater (0 disables this timeout).",
+      deliveryModeRequired:
+        "Choose a delivery mode explicitly, or run openclaw doctor --fix to repair legacy settings.",
+      webhookUrlRequired: "Webhook URL is required.",
+      webhookUrlInvalid: "Webhook URL must be a valid http(s):// URL without embedded credentials.",
+      invalidRunTime: "Invalid run time.",
+      invalidIntervalAmount: "Invalid interval amount.",
+      cronExprRequiredShort: "Cron expression required.",
+      invalidStaggerAmount: "Invalid stagger amount.",
+      systemEventTextRequired: "System event text required.",
+      agentMessageRequiredShort: "Agent message required.",
+      nameRequiredShort: "Name required.",
+    },
     tabs: {
       filterLabel: "Automation status",
       all: "All",
@@ -145,6 +186,25 @@ const enCron = {
       now: "Now",
       nextHeartbeat: "Next heartbeat",
       wakeModeHelp: "Now triggers immediately. Next heartbeat waits for the next cycle.",
+      activeHours: "Active hours",
+      activeHoursHelp:
+        "Only run within this window, including manual runs. Overnight windows are supported; the end is exclusive.",
+      activeHoursStart: "Window start",
+      activeHoursEnd: "Window end",
+      idleOnly: "Wait until idle",
+      idleOnlyHelp: "Yield to active work before starting this automation.",
+      skipIfScratchEmpty: "Skip empty scratch",
+      skipIfScratchEmptyHelp:
+        "Skip when saved scratch has no tasks. Missing scratch does not suppress runs.",
+      deliveryTarget: "Destination",
+      channelTarget: "Channel destination",
+      ownerTarget: "Owner direct message",
+      ownerTargetHelp:
+        "Owner delivery resolves a concrete owner DM each run, never the last group conversation. Channel and account optionally scope owner lookup.",
+      directPolicy: "Direct messages",
+      defaultPolicy: "Default policy",
+      allowDirect: "Allow",
+      blockDirect: "Block",
       action: "Action",
       command: "Command",
       script: "Script",
@@ -206,6 +266,8 @@ const enCron = {
       accountIdHelp: "Optional channel account ID for multi-account setups.",
       lightContext: "Light context",
       lightContextHelp: "Use lightweight bootstrap context for this agent job.",
+      includeReasoning: "Include reasoning",
+      includeReasoningHelp: "Include available model reasoning in this automation's delivery.",
       model: "Model",
       customModel: "Custom model…",
       modelPlaceholder: "openai/gpt-5.2",
@@ -301,6 +363,25 @@ const enCron = {
       label: "Showing the linked run.",
       showAll: "Show all runs",
     },
+    scratch: {
+      title: "Job scratch",
+      help: "Private working notes for this automation. Loaded only when requested; never included in the task list or run history. Do not store credentials here.",
+      content: "Scratch content",
+      load: "Load scratch",
+      reload: "Reload scratch",
+      save: "Save scratch",
+      clear: "Remove scratch",
+      empty:
+        "No scratch saved. Saving an empty editor creates explicit empty scratch; removing it restores missing scratch.",
+      limit: "{bytes} / {max} bytes",
+      conflict:
+        "Scratch changed during editing. Your draft is preserved. Reload the latest version before saving again.",
+      redacted:
+        "Sensitive content was redacted. Saving is disabled to protect the original. You can remove this scratch without revealing it.",
+      saved: "Scratch saved.",
+      removed: "Scratch removed.",
+      tooLarge: "Scratch exceeds the byte limit.",
+    },
     suggestions: {
       title: "Starter automations",
       schedules: {
@@ -375,8 +456,10 @@ const enCron = {
 
 export const registerCronEnglish = Object.assign(
   () => {
-    // SAFETY: The canonical English catalog owns cron as an object; extend its lazy page copy.
-    Object.assign(en.cron as TranslationMap, enCron.cron);
+    const { runNotStarted, errors, ...cron } = enCron.cron;
+    Object.assign(en.cron, cron);
+    Object.assign(en.cron.runNotStarted, runNotStarted);
+    Object.assign(en.cron.errors, errors);
   },
   { catalog: enCron },
 );

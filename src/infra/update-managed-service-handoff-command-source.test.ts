@@ -4,12 +4,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MANAGED_HANDOFF_COMMAND_SOURCE } from "./update-managed-service-handoff-command-source.js";
 
 type CommandResult = { code: number; stdout: string; stderr: string };
+const output = (code = 1, stderr = ""): CommandResult => ({ code, stdout: "", stderr });
 type RunServiceCommand = (
-  command: string,
-  args: string[],
-  onSpawn?: () => void,
-  deadline?: number,
-  timeoutCap?: number,
+  ...args: [string, string[], (() => void)?, number?, number?]
 ) => Promise<CommandResult>;
 
 beforeEach(() => {
@@ -42,65 +39,70 @@ function createHelper(closeCode: number | null = null) {
 }
 
 it.each([
-  { operation: "/End", deadline: 2_400_000, cap: 2_400_000, elapsed: 15_000 },
-  { operation: "/Run", deadline: undefined, cap: undefined, elapsed: 15_000 },
-  { operation: "/End", deadline: 7_500, cap: undefined, elapsed: 7_500 },
-  { operation: "/Run", deadline: undefined, cap: 5_000, elapsed: 5_000 },
-  { operation: "/Run", deadline: undefined, cap: undefined, elapsed: 15_000, closeCode: 0 },
-])(
-  "bounds stalled schtasks $operation to $elapsed ms and names the operation",
-  async (scenario) => {
-    const helper = createHelper(scenario.closeCode);
-    let result: CommandResult | undefined;
-    const completed = helper
-      .run(
-        "schtasks.exe",
-        [scenario.operation, "/TN", "Synthetic Gateway"],
-        undefined,
-        scenario.deadline,
-        scenario.cap,
-      )
-      .then((value) => {
-        result = value;
-      });
-    helper.child.stderr.emit("data", "native diagnostic");
-
-    await vi.advanceTimersByTimeAsync(scenario.elapsed);
-
-    const detail = `schtasks ${scenario.operation} timed out after ${scenario.elapsed}ms`;
-    expect(result).toEqual({ code: 124, stdout: "", stderr: `${detail}\nnative diagnostic` });
-    expect(helper.appendLog).toHaveBeenCalledWith(detail);
+  ["/End", 2_400_000, 2_400_000, 15_000],
+  ["/Run", undefined, undefined, 15_000],
+  ["/End", 7_500, undefined, 7_500],
+  ["/Run", undefined, 5_000, 5_000],
+  ["/Run", undefined, undefined, 15_000, 0],
+  ["systemctl", 120_000, 120_000, 120_000],
+  ["launchctl", 120_000, 120_000, 120_000],
+] as const)(
+  "bounds %s command duration",
+  async (operation, deadline, cap, elapsed, closeCode?: number) => {
+    const helper = createHelper(closeCode);
+    const scheduled = operation.startsWith("/");
+    const settled = vi.fn<(result: CommandResult) => void>();
+    const command = scheduled ? "schtasks.exe" : operation;
+    const args = scheduled ? [operation] : ["stop"];
+    const completed = helper.run(command, args, undefined, deadline, cap).then(settled);
+    if (scheduled) {
+      helper.child.stderr.emit("data", "native diagnostic");
+    } else {
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(settled).not.toHaveBeenCalled();
+    }
+    await vi.advanceTimersByTimeAsync(elapsed - (scheduled ? 0 : 15_000));
+    const detail = `schtasks ${operation} timed out after ${elapsed}ms`;
+    expect(settled).toHaveBeenCalledExactlyOnceWith(
+      output(scheduled ? 124 : 1, scheduled ? `${detail}\nnative diagnostic` : ""),
+    );
+    expect(helper.appendLog.mock.calls).toEqual(scheduled ? [[detail]] : []);
     await completed;
   },
 );
-
-it.each(["systemctl", "launchctl"])("preserves the %s supervisor drain budget", async (command) => {
-  const helper = createHelper();
-  let result: CommandResult | undefined;
-  const completed = helper
-    .run(command, ["stop", "synthetic"], undefined, 120_000, 120_000)
-    .then((value) => {
-      result = value;
-    });
-
-  await vi.advanceTimersByTimeAsync(15_000);
-  expect(result).toBeUndefined();
-  await vi.advanceTimersByTimeAsync(105_000);
-  expect(result).toEqual({ code: 1, stdout: "", stderr: "" });
-  expect(helper.appendLog).not.toHaveBeenCalled();
-  await completed;
-});
 
 it("does not dispatch a Scheduled Task command after its lease is lost", async () => {
   const helper = createHelper();
   helper.hasManagedUpdateLease.mockReturnValue(false);
 
-  await expect(helper.run("schtasks.exe", ["/Run"])).resolves.toEqual({
-    code: 1,
-    stdout: "",
-    stderr: "",
-  });
+  await expect(helper.run("schtasks.exe", ["/Run"])).resolves.toEqual(output());
 
-  expect(helper.spawn).not.toHaveBeenCalled();
-  expect(helper.appendLog).not.toHaveBeenCalled();
+  expect([helper.spawn.mock.calls, helper.appendLog.mock.calls]).toEqual([[], []]);
 });
+
+it.each([9_000, 1024 * 1024 + 1])(
+  "preserves complete launchd inspections or refuses overflow (%i characters)",
+  async (size) => {
+    const helper = createHelper(0);
+    const completed = helper.run("launchctl", ["print", "gui/501/ai.openclaw.gateway"]);
+    const header = "gui/501/ai.openclaw.gateway = {\n";
+    const body = "x".repeat(size);
+    helper.child.stdout.emit("data", header);
+    helper.child.stdout.emit("data", body);
+    helper.child.stdout.emit("data", "\n\tpid = 4242\n}\n");
+    helper.child.stderr.emit("data", "native diagnostic");
+    helper.child.emit("close", 0);
+    const result = await completed;
+    if (size > 1024 * 1024) {
+      expect(result).toEqual(
+        output(1, "launchctl print exceeded the inspection output limit\nnative diagnostic"),
+      );
+    } else {
+      expect(result).toEqual({
+        code: 0,
+        stdout: header + body + "\n\tpid = 4242\n}\n",
+        stderr: "native diagnostic",
+      });
+    }
+  },
+);

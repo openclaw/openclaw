@@ -1,7 +1,5 @@
-// Gateway multi E2E tests validate multi-gateway runtime behavior.
 import { spawnSync } from "node:child_process";
-import { watch } from "node:fs";
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -9,7 +7,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, describe, expect, it } from "vitest";
 import { GatewayClient } from "../src/gateway/client.js";
 import { requireGatewayRecord } from "../src/gateway/test-helpers.assertions.js";
-import { connectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
@@ -22,7 +19,9 @@ import {
   stopGatewayInstance,
   waitForNodeStatus,
 } from "./helpers/gateway-e2e-harness.js";
+import { connectProofClient } from "./helpers/gateway-integration-fixtures.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
+import { waitForFile } from "./helpers/process-wait.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
 const E2E_TIMEOUT_MS = 120_000;
@@ -43,7 +42,6 @@ const timer = setInterval(() => {
   if (shiftReadyPath) {
     writeFileSync(shiftReadyPath, "ready\\n");
   }
-  process.stdout.write("[clock-shift] offsetMs=" + offsetMs + String.fromCharCode(10));
 }, 10);
 timer.unref();
 `;
@@ -60,8 +58,7 @@ async function settleGatewayCleanups(cleanups: Array<() => unknown>) {
 }
 
 async function cleanupGateways(instances: GatewayInstance[], clients: GatewayClient[]) {
-  // A failed client join must not strand Gateway processes or release files
-  // their owners may still use. Keep terminal cleanup with the instance owner.
+  // Failed client cleanup must not release files their Gateway may still use.
   let clientsJoined = false;
   await runQaGatewayFixture(
     async () => {
@@ -84,8 +81,7 @@ describe("gateway multi-instance e2e", () => {
   const acquisitions: Promise<unknown>[] = [];
 
   afterAll(async () => {
-    // Promise.all can reject while its siblings still acquire owners. Join the
-    // original acquisitions before reading either retained cleanup collection.
+    // Join failed acquisitions' siblings before reading their retained owners.
     await Promise.allSettled(acquisitions);
     await cleanupGateways(instances, nodeClients);
   });
@@ -101,47 +97,34 @@ describe("gateway multi-instance e2e", () => {
       };
       const gatewayAcquisitions = [spawnOwnedGateway("a"), spawnOwnedGateway("b")] as const;
       acquisitions.push(...gatewayAcquisitions);
-      const [gwA, gwB] = await Promise.all(gatewayAcquisitions);
-
-      const [hookResA, hookResB] = await Promise.all([
-        postJson(
-          `http://127.0.0.1:${gwA.port}/hooks/wake`,
-          {
-            text: "wake a",
-            mode: "now",
-          },
-          { "x-openclaw-token": gwA.hookToken },
+      const gateways = await Promise.all(gatewayAcquisitions);
+      const hookResults = await Promise.all(
+        gateways.map((gateway, index) =>
+          postJson(
+            `http://127.0.0.1:${gateway.port}/hooks/wake`,
+            { text: `wake ${index === 0 ? "a" : "b"}`, mode: "now" },
+            { "x-openclaw-token": gateway.hookToken },
+          ),
         ),
-        postJson(
-          `http://127.0.0.1:${gwB.port}/hooks/wake`,
-          {
-            text: "wake b",
-            mode: "now",
-          },
-          { "x-openclaw-token": gwB.hookToken },
-        ),
+      );
+      expect(hookResults).toMatchObject([
+        { status: 200, json: { ok: true } },
+        { status: 200, json: { ok: true } },
       ]);
-      expect(hookResA.status).toBe(200);
-      expect((hookResA.json as { ok?: boolean } | undefined)?.ok).toBe(true);
-      expect(hookResB.status).toBe(200);
-      expect((hookResB.json as { ok?: boolean } | undefined)?.ok).toBe(true);
 
       const connectOwnedNode = async (inst: GatewayInstance, label: string) => {
         const node = await connectNode(inst, label);
         nodeClients.push(node.client);
         return node;
       };
-      const nodeAcquisitions = [
-        connectOwnedNode(gwA, "node-a"),
-        connectOwnedNode(gwB, "node-b"),
-      ] as const;
+      const nodeAcquisitions = gateways.map((gateway, index) =>
+        connectOwnedNode(gateway, index === 0 ? "node-a" : "node-b"),
+      );
       acquisitions.push(...nodeAcquisitions);
-      const [nodeA, nodeB] = await Promise.all(nodeAcquisitions);
-
-      await Promise.all([
-        waitForNodeStatus(gwA, nodeA.nodeId),
-        waitForNodeStatus(gwB, nodeB.nodeId),
-      ]);
+      const nodes = await Promise.all(nodeAcquisitions);
+      await Promise.all(
+        gateways.map((gateway, index) => waitForNodeStatus(gateway, nodes[index]!.nodeId)),
+      );
     },
   );
 
@@ -150,6 +133,7 @@ describe("gateway multi-instance e2e", () => {
     { timeout: E2E_TIMEOUT_MS },
     async () => {
       const model = buildMockOpenAiResponsesProvider("http://127.0.0.1:9/v1", "scheduler-canary");
+      const profileId = `${model.providerId}:cron-passive-manager`;
       const manager = await createOpenClawTestInstance({
         name: "cron-passive-manager",
         config: {
@@ -177,9 +161,9 @@ describe("gateway multi-instance e2e", () => {
           await manager.state.writeAuthProfiles({
             version: 1,
             profiles: {
-              "openai:cron-passive-manager": {
+              [profileId]: {
                 type: "api_key",
-                provider: "openai",
+                provider: model.providerId,
                 key: "synthetic-cron-scheduler-key",
               },
             },
@@ -194,7 +178,7 @@ describe("gateway multi-instance e2e", () => {
             wakeMode: "now",
             payload: {
               kind: "agentTurn",
-              model: "openai/gpt-4.1@openai:cron-passive-manager",
+              model: `${model.modelRef}@${profileId}`,
               message: "run canary",
               toolsAllow: [],
             },
@@ -211,9 +195,7 @@ describe("gateway multi-instance e2e", () => {
 
           await managerClient.request("cron.list", { includeDisabled: true });
 
-          // Cron custody is exclusive even when scheduling is disabled. Hand the
-          // database to the offline scheduler only after the Gateway has stopped;
-          // stale in-memory service snapshots are covered by shared-store-runtime.test.ts.
+          // Exclusive cron custody requires stopping the Gateway before the offline scheduler.
           await managerClient.stopAndWait();
           managerClient = undefined;
           await manager.stopGateway();
@@ -260,8 +242,7 @@ try {
           const before = JSON.parse(scheduler.stdout) as {
             state: { lastRunAtMs?: number; lastStatus?: string };
           };
-          expect(before.state.lastRunAtMs).toEqual(expect.any(Number));
-          expect(before.state.lastStatus).toBe("ok");
+          expect(before.state).toMatchObject({ lastRunAtMs: expect.any(Number), lastStatus: "ok" });
 
           await manager.startGateway();
           managerClient = await connectGatewayStatusClient(manager);
@@ -304,11 +285,16 @@ try {
           });
           await instance.startGateway();
           const nodeIdentity = loadOrCreateDeviceIdentity({
-            path: path.join(instance.homeDir, "proof-node-device.sqlite"),
+            path: path.join(
+              instance.homeDir,
+              "proof-clients",
+              "node",
+              "client",
+              "credentials.sqlite",
+            ),
           });
-          node = await connectGatewayClient({
-            url: instance.url,
-            token: instance.gatewayToken,
+          const nodeId = nodeIdentity.deviceId;
+          node = await connectProofClient(instance, {
             clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
             clientDisplayName: "real-node-proof",
             clientVersion: "1.0.0",
@@ -324,11 +310,10 @@ try {
                 return;
               }
               const payload = requireGatewayRecord(event.payload, "node invoke request");
-              expect(payload.id).toEqual(expect.any(String));
-              expect(payload.nodeId).toBe(nodeIdentity.deviceId);
+              expect(payload).toMatchObject({ id: expect.any(String), nodeId });
               responseWork = responseWork.then(async () => {
                 await writeFile(shiftPath, "shift\n");
-                await waitForFile(shiftReadyPath);
+                await waitForFile(shiftReadyPath, AbortSignal.timeout(5_000));
                 await new Promise<void>((resolve) => {
                   setTimeout(resolve, 50);
                 });
@@ -342,33 +327,35 @@ try {
               void responseWork.catch(() => {});
             },
           });
-          operator = await connectGatewayClient({
-            url: instance.url,
-            token: instance.gatewayToken,
+          operator = await connectProofClient(instance, {
             clientName: GATEWAY_CLIENT_NAMES.CLI,
             mode: GATEWAY_CLIENT_MODES.CLI,
             role: "operator",
             scopes: ["operator.admin", "operator.read", "operator.write", "operator.pairing"],
             deviceIdentity: loadOrCreateDeviceIdentity({
-              path: path.join(instance.homeDir, "proof-operator-device.sqlite"),
+              path: path.join(
+                instance.homeDir,
+                "proof-clients",
+                "operator",
+                "client",
+                "credentials.sqlite",
+              ),
             }),
           });
           const pairing = await operator.request<{
             pending: Array<{ nodeId: string }>;
             paired: Array<{ nodeId: string; commands?: string[] }>;
           }>("node.pair.list", {});
-          expect(
-            pairing.pending.find((entry) => entry.nodeId === nodeIdentity.deviceId),
-          ).toBeUndefined();
-          expect(
-            pairing.paired.find((entry) => entry.nodeId === nodeIdentity.deviceId)?.commands,
-          ).toEqual(["system.notify"]);
-          await waitForNodeStatus(instance, nodeIdentity.deviceId);
+          expect(pairing.pending.find((entry) => entry.nodeId === nodeId)).toBeUndefined();
+          expect(pairing.paired.find((entry) => entry.nodeId === nodeId)?.commands).toEqual([
+            "system.notify",
+          ]);
+          await waitForNodeStatus(instance, nodeId);
           const startedAt = performance.now();
-          const result = await operator.request<{ payload?: { captured?: boolean } }>(
+          const result = await operator.request(
             "node.invoke",
             {
-              nodeId: nodeIdentity.deviceId,
+              nodeId,
               command: "system.notify",
               params: { quality: "low" },
               timeoutMs: 500,
@@ -377,52 +364,20 @@ try {
             { timeoutMs: 5_000 },
           );
           const elapsedMs = Math.round(performance.now() - startedAt);
-          expect(result.payload?.captured).toBe(true);
+          expect(result).toMatchObject({ payload: { captured: true } });
           expect(elapsedMs).toBeGreaterThanOrEqual(50);
           expect(elapsedMs).toBeLessThan(500);
           await responseWork;
-          expect(instance.logs()).toContain("[clock-shift] offsetMs=1000");
-          console.log(
-            `[real-gateway-node-proof] gatewayProcess=true nodeWebSocket=true wallClockOffsetMs=1000 result=SUCCESS elapsedMs=${elapsedMs}`,
-          );
         },
+        () => responseWork,
         async () => {
-          await runQaGatewayFixture(
-            async () => await responseWork,
-            async () => {
-              await cleanupGateways(
-                instance ? [instance] : [],
-                [operator, node].filter((client): client is GatewayClient => client !== undefined),
-              );
-              await rm(proofRoot, { recursive: true, force: true });
-            },
+          await cleanupGateways(
+            instance ? [instance] : [],
+            [operator, node].filter((client): client is GatewayClient => client !== undefined),
           );
+          await rm(proofRoot, { recursive: true, force: true });
         },
       );
     },
   );
 });
-
-async function waitForFile(filePath: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const watcher = watch(path.dirname(filePath), (_event, name) => {
-      if (String(name) === path.basename(filePath)) {
-        clearTimeout(timer);
-        watcher.close();
-        resolve();
-      }
-    });
-    const timer = setTimeout(() => {
-      watcher.close();
-      reject(new Error(`Timed out waiting for ${filePath}`));
-    }, 5_000);
-    void access(filePath).then(
-      () => {
-        clearTimeout(timer);
-        watcher.close();
-        resolve();
-      },
-      () => {},
-    );
-  });
-}

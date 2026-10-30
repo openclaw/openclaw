@@ -13,6 +13,7 @@ import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-pr
 import type { GatewayAuthPolicy } from "../../auth-policy.types.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
+import type { GitHubIdentityPreparationTiming } from "../../github-user-identity.types.js";
 import type { GatewayAttributedIngress } from "../../ingress-attribution.js";
 import type { GatewayMethodRegistry } from "../../methods/registry.js";
 import type { NodePairingAutoApproveClientIpSource } from "../../node-pairing-auto-approve.types.js";
@@ -73,6 +74,8 @@ export type GatewayWsMessageHandlerParams = {
   /** Browser-origin fallback limiter (loopback is never exempt). */
   browserRateLimiter?: AuthRateLimiter;
   nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
+  isConnectPending?: () => boolean;
+  startupMethodsReady?: Promise<void>;
   isStartupPending?: () => boolean;
   isPendingWorkerNodeSetup?: (setupId: string, deviceId: string) => boolean;
   admitsNodeSetupCompletion?: (setup: CloudWorkerSetupMutationAdmission) => boolean;
@@ -100,6 +103,7 @@ export type GatewayWsMessageHandlerParams = {
 };
 
 export type GatewayConnectAttachTiming =
+  | GitHubIdentityPreparationTiming
   | "deviceAuthorizationMs"
   | "deviceLookupMs"
   | "deviceTokensMs"
@@ -107,9 +111,12 @@ export type GatewayConnectAttachTiming =
   | "identityMs"
   | "profileEnsureMs"
   | "profileAuthorityMs"
+  | "profileProjectionMs"
   | "scopeGrantMs"
   | "operatorDeviceMs"
-  | "sessionRegistrationMs";
+  | "sessionRegistrationMs"
+  | "snapshotMs"
+  | "helloDescriptorsMs";
 
 export type GatewayConnectPhaseContext = {
   handler: GatewayWsMessageHandlerParams;

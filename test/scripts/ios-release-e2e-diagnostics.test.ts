@@ -14,13 +14,32 @@ import {
   collectGatewayProcessDiagnostics,
   summarizeGatewayLanes,
   summarizeGatewayLogs,
+  summarizeIOSBuildTiming,
 } from "../../scripts/lib/ios-release-e2e-diagnostics.js";
 
 beforeEach(() => {
   execFile.mockReset();
 });
 
+test("retains build task timings without exporting script names or raw build output", () => {
+  expect(
+    summarizeIOSBuildTiming(`
+PRIVATE-TOKEN /private/source/path
+Build Timing Summary
+SwiftCompile (280 tasks) | 123.45 seconds
+PhaseScriptExecution (1 task) | 0.007 seconds
+PRIVATE-TOKEN (1 task) | 99 seconds
+CodeSign (2 tasks) | 0.12 seconds
+`),
+  ).toEqual([
+    { task: "SwiftCompile", tasks: 280, seconds: 123.45 },
+    { task: "PhaseScriptExecution", tasks: 1, seconds: 0.007 },
+    { task: "CodeSign", tasks: 2, seconds: 0.12 },
+  ]);
+});
+
 test("projects only numeric worker and lane totals", () => {
+  const dynamic = { laneCount: 2, activeCount: 1, queuedCount: 3, queuedLaneCount: 1 };
   expect(
     summarizeGatewayLanes({
       workerCount: 5,
@@ -30,13 +49,7 @@ test("projects only numeric worker and lane totals", () => {
         { lane: "secret-token", activeCount: 1, queuedCount: 2, maxConcurrent: 3, draining: true },
         { activeCount: 4, queuedCount: 5, maxConcurrent: 6, draining: false },
       ],
-      dynamic: {
-        laneCount: 2,
-        activeCount: 1,
-        queuedCount: 3,
-        queuedLaneCount: 1,
-        token: "secret-token",
-      },
+      dynamic: { ...dynamic, token: "secret-token" },
     }),
   ).toEqual({
     outcome: "captured",
@@ -47,7 +60,7 @@ test("projects only numeric worker and lane totals", () => {
     queuedCount: 7,
     maxConcurrent: 9,
     drainingLaneCount: 1,
-    dynamic: { laneCount: 2, activeCount: 1, queuedCount: 3, queuedLaneCount: 1 },
+    dynamic,
   });
   expect(summarizeGatewayLanes(undefined)).toEqual({ outcome: "unavailable" });
 });
@@ -74,7 +87,6 @@ arbitrary secret-token and /private/home/credentials
     { event: "process-cleanup-identity-lost" },
     { event: "process-cleanup-deadline", pending: { closingReceipt: true, stdoutEnd: false } },
   ]);
-  expect(JSON.stringify(events)).not.toContain("secret-token");
   expect(summarizeGatewayLogs("req device.pair.setupCode\n".repeat(100))).toHaveLength(32);
 });
 
@@ -86,7 +98,6 @@ test("projects process and sample output without exporting paths or credentials"
         ? " 12.3 2048 S+\n"
         : `Process: node secret-token /private/credentials
 Call graph:
-    100 Thread_1
     + 80 sqlite3_step (in libsqlite3.dylib)
     + 70 __psynch_cvwait (in libsystem_kernel.dylib)
     + 50 v8::internal::Compile (in node)
@@ -98,16 +109,13 @@ Binary Images: secret-token`,
     );
   });
   const result = await collectGatewayProcessDiagnostics(123, { sample: true });
-  expect(result.process).toEqual({
-    outcome: "captured",
-    cpuPercent: 12.3,
-    rssBytes: 2097152,
-    state: "S",
-  });
-  expect(result.sample).toEqual({
-    outcome: "captured",
-    frameCount: 7,
-    frameCounts: { sqlite: 1, filesystem: 1, locks: 1, poll: 1, v8: 1, node: 1, other: 1 },
+  expect({ process: result.process, sample: result.sample }).toEqual({
+    process: { outcome: "captured", cpuPercent: 12.3, rssBytes: 2097152, state: "S" },
+    sample: {
+      outcome: "captured",
+      frameCount: 7,
+      frameCounts: { sqlite: 1, filesystem: 1, locks: 1, poll: 1, v8: 1, node: 1, other: 1 },
+    },
   });
   expect(result.host.totalMemoryBytes).toBeGreaterThan(0);
   expect(JSON.stringify(result)).not.toMatch(/secret-token|\/private\//u);

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   ErrorCodes,
   errorShape,
@@ -9,16 +9,25 @@ import {
   validateArtifactsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
+import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-accessor.sqlite-active-events.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
+import type { TranscriptReadWindow } from "../../sessions/transcript-read-window.js";
 import { resolveChatAttachmentFrameBudgetBytes } from "../../shared/chat-attachment-frame-budget.js";
 import { normalizeChatImageRenditionWidth } from "../../shared/chat-image-renditions.js";
+import { getOrCreateWeakOwnerMap } from "../../shared/weak-owner-map.js";
 import {
   canCreateArtifactDownload,
   createArtifactDownload,
   createManagedArtifactDownload,
 } from "../artifact-download-grants.js";
 import type { PreparedArtifactDownload } from "../artifact-download-projection.js";
+import {
+  type ArtifactLookup,
+  type ArtifactRecord,
+  toArtifactSummary,
+} from "../artifacts-content.js";
 import {
   parseManagedOutgoingArtifactId,
   resolveManagedOutgoingMediaArtifactDownload,
@@ -33,12 +42,6 @@ import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-a
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { readSessionArtifacts } from "../session-transcript-readers.js";
 import { parseTranscriptImageArtifactId } from "../transcript-image-artifacts.js";
-import {
-  type ArtifactLookup,
-  type ArtifactRecord,
-  toArtifactSummary,
-} from "./artifacts-content.js";
-import { readArtifactImagePage } from "./artifacts-image-page.js";
 import { prepareArtifactSessionRead } from "./artifacts-session-read.js";
 import {
   ArtifactSessionResolutionError,
@@ -48,6 +51,7 @@ import {
   createArtifactSessionAccess,
 } from "./artifacts-session-resolution.js";
 import { findTranscriptImageArtifact } from "./artifacts-transcript-images.js";
+import { sessionFilesError } from "./session-files-errors.js";
 import {
   readGatewayRequestMutationAuthority,
   retainGatewayRequestMutationAuthority,
@@ -62,6 +66,27 @@ type ArtifactCollectionOptions = {
 
 type ArtifactDownloadLookup = ArtifactLookup &
   ({ download: PreparedArtifactDownload; release: () => void } | { download?: undefined });
+
+const CURSOR_TTL_MS = 15 * 60_000;
+type ImageCursor = {
+  binding: string;
+  beforeSeq: number;
+  imageOffset: number;
+  readWindow: TranscriptReadWindow;
+  expiresAt: number;
+};
+
+// Connection-owned continuation facts are bounded, ephemeral, and never confer access.
+const cursors = new WeakMap<object, Map<string, ImageCursor>>();
+const internalCaller = {};
+
+function invalidImageCursor(message: string) {
+  return new ArtifactSessionResolutionError(
+    errorShape(ErrorCodes.INVALID_REQUEST, message, {
+      details: { type: "artifact_cursor_invalid" },
+    }),
+  );
+}
 
 const queuedArtifactDownloads = new Map<
   string,
@@ -106,15 +131,6 @@ function createArtifactRequestAccess(
   });
 }
 
-function artifactError(type: string, message: string, details?: Record<string, unknown>) {
-  return errorShape(ErrorCodes.INVALID_REQUEST, message, {
-    details: {
-      type,
-      ...details,
-    },
-  });
-}
-
 async function loadArtifacts(
   query: ArtifactsListParams,
   access: ArtifactSessionAccess,
@@ -133,23 +149,59 @@ async function loadArtifacts(
   const { sessionKey, scope, assertCurrent } = selected;
   const { storePath, sessionId, sessionEntry: entry } = scope;
   if (query.type === "image") {
-    const page = await readArtifactImagePage({
-      scope,
-      binding: JSON.stringify([
-        sessionKey,
-        scope.agentId,
-        sessionId,
-        query.runId,
-        query.messageRole,
-      ]),
-      client: access.client,
-      cursor: query.cursor,
-      limit: query.limit ?? 4,
+    const binding = JSON.stringify([
       sessionKey,
-      filters: { runId: query.runId, messageRole: query.messageRole },
+      scope.agentId,
+      sessionId,
+      query.runId,
+      query.messageRole,
+    ]);
+    const state = getOrCreateWeakOwnerMap(cursors, access.client ?? internalCaller);
+    const now = Date.now();
+    for (const [key, value] of state) {
+      if (value.expiresAt <= now) {
+        state.delete(key);
+      }
+    }
+    const cursor = query.cursor ? state.get(query.cursor) : undefined;
+    if (query.cursor && (!cursor || cursor.binding !== binding)) {
+      throw invalidImageCursor(
+        "Image cursor expired or belongs to another session; restart artifacts.list",
+      );
+    }
+    const page = await readSessionArtifacts(scope, {
+      kind: "image-page",
+      sessionKey,
+      runId: query.runId,
+      messageRole: query.messageRole,
+      limit: query.limit ?? 4,
+      beforeSeq: cursor?.beforeSeq,
+      imageOffset: cursor?.imageOffset,
+      readWindow: cursor?.readWindow,
+    }).catch((error: unknown) => {
+      if (cursor && isSessionTranscriptProjectionUnavailableError(error)) {
+        throw invalidImageCursor("Transcript changed; restart artifacts.list");
+      }
+      throw error;
     });
+    let nextCursor: string | undefined;
+    if (page.next) {
+      nextCursor = randomUUID();
+      state.set(nextCursor, {
+        ...page.next,
+        binding,
+        expiresAt: now + CURSOR_TTL_MS,
+      });
+      pruneMapToMaxSize(state, 128);
+    }
     assertCurrent();
-    return { ...page, sessionKey, assertCurrent };
+    return {
+      artifacts: page.artifacts,
+      ...(nextCursor ? { nextCursor } : {}),
+      ...(page.omittedOversized ? { omittedOversized: true } : {}),
+      sessionKey,
+      assertCurrent,
+    };
   }
   const downloadIds = opts.downloadArtifactId ? new Set([opts.downloadArtifactId]) : undefined;
   const queuedKey =
@@ -205,7 +257,7 @@ function requireQueryable(params: ArtifactQuery, respond: RespondFn): boolean {
   respond(
     false,
     undefined,
-    artifactError("artifact_query_unsupported", "artifacts require sessionKey or runId"),
+    sessionFilesError("artifact_query_unsupported", "artifacts require sessionKey or runId"),
   );
   return false;
 }
@@ -214,7 +266,7 @@ function respondArtifactNotFound(respond: RespondFn, requestedArtifactId: string
   respond(
     false,
     undefined,
-    artifactError("artifact_not_found", "artifact not found", {
+    sessionFilesError("artifact_not_found", "artifact not found", {
       artifactId: requestedArtifactId,
     }),
   );
@@ -352,7 +404,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        artifactError("artifact_query_unsupported", "limit and cursor require type image"),
+        sessionFilesError("artifact_query_unsupported", "limit and cursor require type image"),
       );
       return;
     }
@@ -368,13 +420,13 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        artifactError("artifact_scope_not_found", "no session found for artifact query"),
+        sessionFilesError("artifact_scope_not_found", "no session found for artifact query"),
       );
       return;
     }
     if (artifactResponseIsCurrent(loaded.value, respond)) {
       respond(true, {
-        artifacts: artifacts.map(toArtifactSummary),
+        artifacts,
         ...(nextCursor ? { nextCursor } : {}),
         ...(omittedOversized ? { omittedOversized: true } : {}),
       });
@@ -458,7 +510,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        artifactError("artifact_download_unsupported", "artifact download is unsupported", {
+        sessionFilesError("artifact_download_unsupported", "artifact download is unsupported", {
           artifactId: artifact.id,
         }),
       );
@@ -560,9 +612,11 @@ export const artifactsHandlers: GatewayRequestHandlers = {
         respond(
           false,
           undefined,
-          artifactError("artifact_preview_unavailable", "artifact image preview is unavailable", {
-            artifactId: artifact.id,
-          }),
+          sessionFilesError(
+            "artifact_preview_unavailable",
+            "artifact image preview is unavailable",
+            { artifactId: artifact.id },
+          ),
         );
         return;
       }
@@ -606,7 +660,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
         respond(
           false,
           undefined,
-          artifactError(
+          sessionFilesError(
             "artifact_download_unsupported",
             'artifact is too large for inline transfer; request transport: "http"',
             { artifactId: artifact.id },

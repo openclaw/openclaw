@@ -8,8 +8,11 @@ import {
   initializeCodexClientForkSettings,
   forgetCodexClientForkSettings,
 } from "./client-fork-settings.js";
+import * as threadClosure from "./client-thread-closure.js";
 import {
   createThreadOwnerToken,
+  isThreadBackgroundOnly,
+  waitForThreadBackgroundCleanup,
   releaseThreadProtection,
   forgetThreadOwnership,
   hasSiblingThreadWork,
@@ -143,6 +146,7 @@ export function ensureCodexAppServerClientRuntime(
     workspaceReferences: new Map(),
   };
   configuredClients.set(client, runtime);
+  threadClosure.ensureCodexAppServerThreadClosureTracking(client);
   initializeCodexClientForkSettings(client);
   client.addCloseHandler(() => {
     // Pending releases may settle after close; their continuations must never
@@ -161,6 +165,7 @@ export function ensureCodexAppServerClientRuntime(
     runtime.sessionMetadata.clear();
     runtime.workspaceReferences.clear();
     forgetCodexClientForkSettings(client);
+    updateThreadOwnership(client, runtime);
   });
   client.addRequestHandler(async (request) => {
     if (request.method !== "account/chatgptAuthTokens/refresh") {
@@ -248,6 +253,9 @@ export function ensureCodexAppServerClientRuntime(
 function updateThreadOwnership(client: CodexAppServerClient, runtime: ClientRuntime): void {
   clearTimeout(runtime.evictionTimer);
   runtime.evictionTimer = undefined;
+  for (const listener of runtime.threadOwnershipListeners ?? []) {
+    listener();
+  }
   if (runtime.closed) {
     return;
   }
@@ -393,6 +401,7 @@ export async function retainCodexAppServerLiveThread(
     return false;
   }
   const previousOwner = runtime.retainedThreads.get(threadId)?.ownerToken;
+  threadClosure.clearCodexAppServerThreadClosed(client, threadId);
   runtime.retainedThreads.delete(threadId);
   const retained: RetainedLiveThread = {
     ownerToken,
@@ -509,6 +518,7 @@ function claimCodexAppServerThreadOwnership(
   const previousClaim = runtime.claimedThreads.get(threadId);
   runtime.retainedThreads.delete(threadId);
   const claimed = createThreadOwnerToken(threadId, onInvalidated);
+  claimed.configFingerprint = retained.configFingerprint;
   runtime.claimedThreads.set(threadId, claimed);
   previousClaim?.invalidate();
   retained.ownerToken?.invalidate();
@@ -608,26 +618,13 @@ export function revertCodexAppServerLiveThreadInstructions(
   client: CodexAppServerClient,
   threadId: string,
 ): void {
-  const runtime = configuredClients.get(client);
-  if (runtime && !runtime.closed) {
-    revertRetainedThreadInstructions(runtime, threadId);
-  }
+  revertRetainedThreadInstructions(configuredClients.get(client), threadId);
 }
 
-/** Native subscriptions, including ephemeral history and releases, pin their physical client. */
 export function hasCodexAppServerThreadOwnership(client: CodexAppServerClient): boolean {
-  const runtime = configuredClients.get(client);
-  return Boolean(
-    runtime &&
-    !runtime.closed &&
-    (runtime.retainedThreads.size > 0 ||
-      runtime.claimedThreads.size > 0 ||
-      runtime.releasingThreads.size > 0 ||
-      runtime.protectedThreads.size > 0),
-  );
+  return hasThreadOwnership(configuredClients.get(client));
 }
 
-/** Distinguish active claimed ownership from an already-evicted idle subscription. */
 export function hasCodexAppServerLiveThread(
   client: CodexAppServerClient,
   threadId: string,
@@ -641,6 +638,15 @@ export function isCodexAppServerLiveThreadClaimed(
 ): boolean {
   const runtime = configuredClients.get(client);
   return runtime !== undefined && !runtime.closed && runtime.claimedThreads.has(threadId);
+}
+
+/** Completed foreground work may leave cleanup custody with native background work. */
+export function isCodexAppServerLiveThreadBackgroundOnly(
+  client: CodexAppServerClient,
+  threadId: string,
+  configFingerprint?: string,
+): boolean {
+  return isThreadBackgroundOnly(configuredClients.get(client), threadId, configFingerprint);
 }
 
 /** Native commands and children can still need an otherwise-idle subscription. */
@@ -724,6 +730,14 @@ export async function unsubscribeCodexAppServerLiveThread(
       updateThreadOwnership(client, runtime);
     }
   }
+}
+
+export function waitForCodexAppServerThreadBackgroundCleanup(
+  client: CodexAppServerClient,
+  threadId: string,
+  signal: AbortSignal,
+): Promise<void> {
+  return waitForThreadBackgroundCleanup(configuredClients.get(client), threadId, signal);
 }
 
 /** Reset/end owns the exact thread; failed generation retirement must never release its successor. */

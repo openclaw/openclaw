@@ -4,13 +4,13 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
-import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
 import { readSubagentRunAnnounceResult } from "../../agents/subagents/announce/subagent-announce-output.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
@@ -22,8 +22,10 @@ import {
   appendTranscriptMessage,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
-import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { requestRpcSourceCancellation } from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
@@ -38,6 +40,10 @@ import {
   registerPluginSubagentRequesterLineageCase,
 } from "./agent.plugin-subagent-registration.test-utils.js";
 import {
+  dailySessionResetConfig,
+  mockClonedSessionStoreUpdate,
+} from "./agent.session-store-fixtures.test-support.js";
+import {
   registerCompactionSessionSettlementCase,
   registerSuccessfulAgentSettlementCase,
   registerYieldedRequesterSettlementCase,
@@ -48,10 +54,13 @@ import {
   mockGlobalSessionAgentRoster,
   mockSpawnedChildSessionEntry,
   nativeSubagentClient,
+  registerPluginSubagentAdmissionTests,
   seedPersistedSubagentRunForAgentTest,
   withPluginSubagentTestState,
 } from "./agent.spawned-child.test-support.js";
 import {
+  createElevatedExecApprovalFixture,
+  mockTelegramSessionEntry,
   getAgentTestMocks,
   operatorWriteCliClient,
   makeContext,
@@ -73,99 +82,38 @@ import {
   describe0AfterEach0,
 } from "./agent.test-harness.js";
 import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
+import { createActiveRpcSourceForTest } from "./rpc-source-fixtures.test-support.js";
 
 const mocks = getAgentTestMocks();
+
+function mockGlobalSessionEntry(
+  sessionId: string,
+  cfg: typeof mocks.loadConfigReturn = { session: { scope: "global" } },
+) {
+  mocks.loadSessionEntry.mockReturnValue({
+    cfg,
+    storePath: getAgentTestStorePath(),
+    entry: { sessionId, updatedAt: Date.now() },
+    canonicalKey: "global",
+  });
+  mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+    const store: Record<string, unknown> = {
+      global: { sessionId, updatedAt: Date.now() },
+    };
+    return await updater(store);
+  });
+}
 
 describe("gateway agent handler", () => {
   afterEach(describe0AfterEach0);
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-gateway-agent-sessions-");
 
-  it("rejects ordinary work on a restart-recovery tombstone", async () => {
-    const entry = {
-      sessionId: "tombstoned-session",
-      updatedAt: Date.now(),
-      status: "failed",
-      abortedLastRun: false,
-      mainRestartRecovery: {
-        cycleId: "cycle-exhausted",
-        revision: 4,
-        chargedAttempts: 3,
-        tombstone: { reason: "automatic recovery exhausted" },
-      },
-    };
-    mockMainSessionEntry(entry);
-    mocks.updateSessionStore.mockImplementation(
-      async (_path, updater) => await updater({ "agent:main:main": structuredClone(entry) }),
-    );
-    const commandCallCount = mocks.agentCommand.mock.calls.length;
-    const respond = vi.fn();
-
-    await invokeAgent(
-      {
-        message: "continue old work",
-        sessionKey: "agent:main:main",
-        idempotencyKey: "tombstone-reuse",
-      },
-      { reqId: "tombstone-reuse", respond },
-    );
-
-    expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
-    const error = expectRespondError(respond, { code: ErrorCodes.INVALID_REQUEST });
-    expectStringFieldContains(error, "message", "ended during restart recovery");
-  });
-
-  it("rejects ordinary work while restart recovery exhaustion is being tombstoned", async () => {
-    const entry = {
-      sessionId: "exhausted-session",
-      updatedAt: Date.now(),
-      status: "interrupted",
-      abortedLastRun: true,
-      mainRestartRecovery: {
-        cycleId: "cycle-exhausted",
-        revision: 4,
-        chargedAttempts: 3,
-      },
-    };
-    mockMainSessionEntry(entry);
-    mocks.updateSessionStore.mockImplementation(
-      async (_path, updater) => await updater({ "agent:main:main": structuredClone(entry) }),
-    );
-    const commandCallCount = mocks.agentCommand.mock.calls.length;
-    const respond = vi.fn();
-
-    await invokeAgent(
-      {
-        message: "continue old work",
-        sessionKey: "agent:main:main",
-        idempotencyKey: "exhausted-reuse",
-      },
-      { reqId: "exhausted-reuse", respond },
-    );
-
-    expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
-    const error = expectRespondError(respond, { code: ErrorCodes.UNAVAILABLE });
-    expectStringFieldContains(error, "message", "quarantined after restart recovery exhaustion");
-  });
-
   it("does not restore elevated defaults from idempotency key suffixes", async () => {
-    const bashElevated = {
-      enabled: true,
-      allowed: true,
-      defaultLevel: "on" as const,
-    };
-    const registration = registerExecApprovalFollowupRuntimeHandoff({
-      approvalId: "req-elevated-75832",
-      sessionKey: "agent:main:telegram:direct:123",
-      bashElevated,
-    });
+    const { registration } = createElevatedExecApprovalFixture("req-elevated-75832");
     if (!registration) {
       throw new Error("expected runtime handoff id");
     }
-    mockMainSessionEntry({
-      sessionId: "existing-session-id",
-      lastChannel: "telegram",
-      lastTo: "123",
-    });
+    mockTelegramSessionEntry();
     mockSuccessfulAgentCommand();
 
     await invokeAgent(
@@ -185,139 +133,7 @@ describe("gateway agent handler", () => {
 
   registerSuccessfulAgentSettlementCase();
 
-  it.each([
-    { identity: "ASCII", runId: "plugin-subagent-task-run" },
-    { identity: "astral prefix", runId: "abc😀" + "x".repeat(10) },
-    { identity: "astral suffix", runId: "x".repeat(10) + "😀abc" },
-    { identity: "astral prefix and suffix", runId: "abc😀" + "x".repeat(10) + "😀xyz" },
-  ])("tracks plugin subagent $identity runs through the registry", async ({ runId }) => {
-    await withTestDir({ prefix: "openclaw-gateway-plugin-subagent-task-" }, async (root) => {
-      useTestStateDir(root);
-      await resetSubagentRegistryForTests({ persist: false });
-      const childSessionKey = "agent:work:subagent:plugin-helper";
-      await using fixture = createPluginSubagentTestLifetime({ root, runId, childSessionKey });
-      const cfg = {
-        session: { mainKey: "main", scope: "per-sender" },
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-sonnet-4-6" },
-            models: {
-              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
-            },
-          },
-          entries: { main: {}, work: {} },
-        },
-      } satisfies typeof mocks.loadConfigReturn;
-      mocks.listAgentIds.mockReturnValue(["main", "work"]);
-      mocks.loadConfigReturn = cfg;
-      mocks.userTurnStorePath = path.join(root, "agents", "work", "sessions", "sessions.json");
-      mocks.loadSessionEntry.mockReturnValue({
-        cfg,
-        storePath: mocks.userTurnStorePath,
-        entry: {
-          sessionId: "plugin-subagent-session",
-          updatedAt: Date.now(),
-        },
-        canonicalKey: childSessionKey,
-      });
-      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-        const store: Record<string, unknown> = {
-          [childSessionKey]: {
-            sessionId: "plugin-subagent-session",
-            updatedAt: Date.now(),
-          },
-        };
-        return await updater(store);
-      });
-      mockSuccessfulAgentCommand();
-      const context = makeContext();
-      context.trackExecution = (run) => fixture.work.track(run);
-      const baseClient = requireValue(backendGatewayClient(), "expected backend client");
-      const pluginClient: AgentHandlerArgs["client"] = {
-        connect: baseClient.connect,
-        internal: {
-          ...baseClient.internal,
-          agentRunTracking: "plugin_subagent",
-          pluginRuntimeOwnerId: "memory-core",
-        },
-      };
-      const initialCommandCallCount = mocks.agentCommand.mock.calls.length;
-
-      const respond = await fixture.work.track(() =>
-        invokeAgent(
-          {
-            message: "background plugin subagent task",
-            sessionKey: childSessionKey,
-            idempotencyKey: runId,
-          },
-          {
-            context,
-            reqId: runId,
-            client: pluginClient,
-          },
-        ),
-      );
-      await waitForAgentCommandCallAfter(initialCommandCallCount);
-
-      const acceptedPayload = respond.mock.calls.find(
-        ([ok, payload]) =>
-          ok === true &&
-          typeof payload === "object" &&
-          payload !== null &&
-          "status" in payload &&
-          payload.status === "accepted",
-      )?.[1];
-      expect(acceptedPayload).toMatchObject({
-        runtime: {
-          harness: "claude-cli",
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-        },
-      });
-
-      await fixture.cleanupCompleted;
-
-      const run = requireValue(
-        await getSubagentRunByChildSessionKey(childSessionKey),
-        "expected subagent registry run",
-      );
-      expectRecordFields(run, {
-        cleanupCompletedAt: expect.any(Number),
-        runId,
-        childSessionKey,
-        controllerSessionKey: "agent:work:main",
-        requesterSessionKey: "agent:work:main",
-        requesterDisplayKey: "main",
-        cleanup: "keep",
-        spawnMode: "run",
-        label: "plugin:memory-core",
-      });
-      expectRecordFields(run.completion, { required: false });
-      expectRecordFields(run.delivery, { status: "not_required" });
-
-      const commandCallCount = mocks.agentCommand.mock.calls.length;
-      const createdAt = run.createdAt;
-      await fixture.work.track(() =>
-        invokeAgent(
-          {
-            message: "background plugin subagent task",
-            sessionKey: childSessionKey,
-            idempotencyKey: runId,
-          },
-          {
-            context,
-            reqId: `${runId}-retry`,
-            client: pluginClient,
-          },
-        ),
-      );
-
-      await fixture.work.runWhenIdle(async () => {
-        expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
-        expect((await getSubagentRunByChildSessionKey(childSessionKey))?.createdAt).toBe(createdAt);
-      });
-    });
-  });
+  registerPluginSubagentAdmissionTests();
 
   registerPluginSubagentRequesterLineageCase();
 
@@ -407,7 +223,7 @@ describe("gateway agent handler", () => {
             }),
           );
           expect(mocks.agentCommand).not.toHaveBeenCalled();
-          expect(context.chatAbortControllers.has(runId)).toBe(false);
+          expect(rpcSourceTesting.has(runId)).toBe(false);
           expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
             runId: previousRunId,
             pauseReason: "sessions_yield",
@@ -425,7 +241,9 @@ describe("gateway agent handler", () => {
     );
   });
 
-  it("registers normally when a follow-up to a paused session names its own requester", async () => {
+  it("registers normally when a follow-up to a paused session names its own requester", async ({
+    signal,
+  }) => {
     await withPluginSubagentTestState(
       "openclaw-gateway-plugin-subagent-own-requester-",
       async ({ stateDir: root }) => {
@@ -439,13 +257,26 @@ describe("gateway agent handler", () => {
           sessionKey: "agent:main:telegram:direct:555",
           origin: { channel: "telegram", to: "telegram:555", accountId: "work" },
         } as const;
+        await replaceSessionEntry(
+          {
+            agentId: "main",
+            sessionKey: followUpRequester.sessionKey,
+            storePath: path.join(root, "agents", "main", "sessions", "sessions.json"),
+          },
+          { sessionId: "followup-requester", updatedAt: Date.now() },
+        );
         const cfg = {
           session: { mainKey: "main", scope: "per-sender" },
           agents: { entries: { main: {}, work: {} } },
         } satisfies typeof mocks.loadConfigReturn;
         mocks.listAgentIds.mockReturnValue(["main", "work"]);
         mocks.loadConfigReturn = cfg;
-        mocks.userTurnStorePath = path.join(root, "agents", "work", "sessions", "sessions.json");
+        mocks.userTurnStorePath = await writeSubagentSessionEntry({
+          stateDir: root,
+          agentId: "work",
+          sessionKey: childSessionKey,
+          defaultSessionId: "spawned-child-session",
+        });
         mocks.loadSessionEntry.mockReturnValue({
           cfg,
           storePath: mocks.userTurnStorePath,
@@ -527,7 +358,7 @@ describe("gateway agent handler", () => {
           ),
         );
         expect(response.mock.calls[0]?.[0], JSON.stringify(response.mock.calls[0])).toBe(true);
-        await fixture.cleanupCompleted;
+        await racePromiseWithAbortSignal(fixture.cleanupCompleted, signal);
         expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, { status: "ok" });
         expect(announce).toHaveBeenCalledTimes(1);
 
@@ -979,7 +810,10 @@ describe("gateway agent handler", () => {
     const context = makeContext();
     const runId = "gateway-agent-run-abort-error";
     mocks.agentCommand.mockImplementationOnce(() => {
-      context.chatAbortControllers.get(runId)?.controller.abort();
+      const source = rpcSourceTesting.get(runId);
+      if (source) {
+        requestRpcSourceCancellation(source);
+      }
       return Promise.reject(abortError);
     });
 
@@ -1046,7 +880,10 @@ describe("gateway agent handler", () => {
     const context = makeContext();
     const runId = "gateway-agent-run-restart-abort";
     mocks.agentCommand.mockImplementationOnce(() => {
-      context.chatAbortControllers.get(runId)?.controller.abort(abortError);
+      const source = rpcSourceTesting.get(runId);
+      if (source) {
+        requestRpcSourceCancellation(source, abortError);
+      }
       return Promise.reject(wrappedError);
     });
 
@@ -1079,7 +916,10 @@ describe("gateway agent handler", () => {
     const context = makeContext();
     const runId = "gateway-agent-run-timeout-error";
     mocks.agentCommand.mockImplementationOnce(() => {
-      context.chatAbortControllers.get(runId)?.controller.abort(timeoutError);
+      const source = rpcSourceTesting.get(runId);
+      if (source) {
+        requestRpcSourceCancellation(source, timeoutError);
+      }
       return Promise.reject(timeoutError);
     });
 
@@ -1116,7 +956,10 @@ describe("gateway agent handler", () => {
     const context = makeContext();
     const runId = "gateway-agent-run-wrapped-timeout-error";
     mocks.agentCommand.mockImplementationOnce(() => {
-      context.chatAbortControllers.get(runId)?.controller.abort(timeoutReason);
+      const source = rpcSourceTesting.get(runId);
+      if (source) {
+        requestRpcSourceCancellation(source, timeoutReason);
+      }
       return Promise.reject(wrappedError);
     });
 
@@ -1444,7 +1287,7 @@ describe("gateway agent handler", () => {
     expect(call.to).toBeUndefined();
   });
 
-  it("rolls stale gateway agent sessions even when updatedAt was recently touched", async () => {
+  it("resets stale gateway agent sessions without rotating a recently touched transcript", async () => {
     const now = Date.parse("2026-04-25T12:00:00.000Z");
     vi.useFakeTimers();
     vi.setSystemTime(now);
@@ -1457,25 +1300,9 @@ describe("gateway agent handler", () => {
           sessionStartedAt: now - 25 * 60 * 60_000,
           lastInteractionAt: now - 25 * 60 * 60_000,
         },
-        {
-          session: {
-            reset: {
-              mode: "daily",
-              atHour: 4,
-            },
-          },
-        },
+        dailySessionResetConfig(),
       );
-      const loaded = mocks.loadSessionEntry();
-      let capturedEntry: Record<string, unknown> | undefined;
-      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-        const store: Record<string, unknown> = {
-          [loaded.canonicalKey]: structuredClone(loaded.entry),
-        };
-        const result = await updater(store);
-        capturedEntry = result as Record<string, unknown>;
-        return result;
-      });
+      const getCapturedEntry = mockClonedSessionStoreUpdate();
       mockSuccessfulAgentCommand();
 
       const broadcastToConnIds = vi.fn();
@@ -1501,9 +1328,9 @@ describe("gateway agent handler", () => {
         sessionKey?: string;
       }>();
       expect(call.sessionKey).toBe("agent:main:main");
-      expect(call.sessionId).not.toBe("stale-session-id");
-      expect(capturedEntry?.sessionStartedAt).toBe(now);
-      expect(capturedEntry?.lastInteractionAt).toBe(now);
+      expect(call.sessionId).toBe("stale-session-id");
+      expect(getCapturedEntry()?.sessionStartedAt).toBe(now);
+      expect(getCapturedEntry()?.lastInteractionAt).toBe(now);
       expect(mocks.emitGatewaySessionEndPluginHook).toHaveBeenCalledTimes(1);
       expectRecordFields(
         mockCallArg(mocks.emitGatewaySessionEndPluginHook) as Record<string, unknown>,
@@ -1550,16 +1377,7 @@ describe("gateway agent handler", () => {
         modelProvider: "claude-cli",
         cliSessionBindings: { "claude-cli": { sessionId: "claude-cli-conversation-123" } },
       });
-      const loaded = mocks.loadSessionEntry();
-      let capturedEntry: Record<string, unknown> | undefined;
-      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-        const store: Record<string, unknown> = {
-          [loaded.canonicalKey]: structuredClone(loaded.entry),
-        };
-        const result = await updater(store);
-        capturedEntry = result as Record<string, unknown>;
-        return result;
-      });
+      const getCapturedEntry = mockClonedSessionStoreUpdate();
       mockSuccessfulAgentCommand();
 
       await invokeAgent(
@@ -1575,8 +1393,8 @@ describe("gateway agent handler", () => {
       const call = await waitForAgentCommandCall();
       expect(call.sessionKey).toBe("agent:main:main");
       expect(call.sessionId).toBe("provider-owned-session-id");
-      expect(capturedEntry?.sessionStartedAt).toBe(now - 25 * 60 * 60_000);
-      expect(capturedEntry?.cliSessionBindings).toMatchObject({
+      expect(getCapturedEntry()?.sessionStartedAt).toBe(now - 25 * 60 * 60_000);
+      expect(getCapturedEntry()?.cliSessionBindings).toMatchObject({
         "claude-cli": { sessionId: "claude-cli-conversation-123" },
       });
       expect(mocks.emitGatewaySessionEndPluginHook).not.toHaveBeenCalled();
@@ -1600,25 +1418,9 @@ describe("gateway agent handler", () => {
           agentHarnessId: "codex",
           modelSelectionLocked: true,
         },
-        {
-          session: {
-            reset: {
-              mode: "daily",
-              atHour: 4,
-            },
-          },
-        },
+        dailySessionResetConfig(),
       );
-      const loaded = mocks.loadSessionEntry();
-      let capturedEntry: Record<string, unknown> | undefined;
-      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-        const store: Record<string, unknown> = {
-          [loaded.canonicalKey]: structuredClone(loaded.entry),
-        };
-        const result = await updater(store);
-        capturedEntry = result as Record<string, unknown>;
-        return result;
-      });
+      const getCapturedEntry = mockClonedSessionStoreUpdate();
       mockSuccessfulAgentCommand();
 
       await invokeAgent(
@@ -1637,8 +1439,8 @@ describe("gateway agent handler", () => {
       }>();
       expect(call.sessionKey).toBe("agent:main:main");
       expect(call.sessionId).toBe("model-locked-session-id");
-      expect(capturedEntry?.sessionStartedAt).toBe(now - 25 * 60 * 60_000);
-      expect(capturedEntry?.modelSelectionLocked).toBe(true);
+      expect(getCapturedEntry()?.sessionStartedAt).toBe(now - 25 * 60 * 60_000);
+      expect(getCapturedEntry()?.modelSelectionLocked).toBe(true);
       expect(mocks.emitGatewaySessionEndPluginHook).not.toHaveBeenCalled();
       expect(mocks.emitGatewaySessionStartPluginHook).not.toHaveBeenCalled();
     } finally {
@@ -1646,7 +1448,7 @@ describe("gateway agent handler", () => {
     }
   });
 
-  it("emits idle lifecycle reason when inactivity rotates a gateway agent session", async () => {
+  it("emits idle lifecycle reason when inactivity resets a gateway agent session", async () => {
     const now = Date.parse("2026-04-25T12:00:00.000Z");
     vi.useFakeTimers();
     vi.setSystemTime(now);
@@ -1668,13 +1470,7 @@ describe("gateway agent handler", () => {
           },
         },
       );
-      const loaded = mocks.loadSessionEntry();
-      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-        const store: Record<string, unknown> = {
-          [loaded.canonicalKey]: structuredClone(loaded.entry),
-        };
-        return updater(store);
-      });
+      mockClonedSessionStoreUpdate();
       mockSuccessfulAgentCommand();
 
       await invokeAgent(
@@ -1692,7 +1488,7 @@ describe("gateway agent handler", () => {
         sessionKey?: string;
       }>();
       expect(call.sessionKey).toBe("agent:main:main");
-      expect(call.sessionId).not.toBe("idle-session-id");
+      expect(call.sessionId).toBe("idle-session-id");
       expectRecordFields(
         mockCallArg(mocks.emitGatewaySessionEndPluginHook) as Record<string, unknown>,
         {
@@ -1716,7 +1512,7 @@ describe("gateway agent handler", () => {
     }
   });
 
-  it("emits lifecycle hooks when a committed rotation later fails delivery validation", async () => {
+  it("emits lifecycle hooks when a committed reset later fails delivery validation", async () => {
     const now = Date.parse("2026-04-25T12:00:00.000Z");
     vi.useFakeTimers();
     vi.setSystemTime(now);
@@ -1729,22 +1525,9 @@ describe("gateway agent handler", () => {
           sessionStartedAt: now - 25 * 60 * 60_000,
           lastInteractionAt: now - 25 * 60 * 60_000,
         },
-        {
-          session: {
-            reset: {
-              mode: "daily",
-              atHour: 4,
-            },
-          },
-        },
+        dailySessionResetConfig(),
       );
-      const loaded = mocks.loadSessionEntry();
-      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-        const store: Record<string, unknown> = {
-          [loaded.canonicalKey]: structuredClone(loaded.entry),
-        };
-        return updater(store);
-      });
+      mockClonedSessionStoreUpdate();
       mocks.agentCommand.mockClear();
       const respond = vi.fn();
 
@@ -1801,16 +1584,7 @@ describe("gateway agent handler", () => {
         sessionStartedAt: now,
         lastInteractionAt: now,
       });
-      const loaded = mocks.loadSessionEntry();
-      let capturedEntry: Record<string, unknown> | undefined;
-      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-        const store: Record<string, unknown> = {
-          [loaded.canonicalKey]: structuredClone(loaded.entry),
-        };
-        const result = await updater(store);
-        capturedEntry = result as Record<string, unknown>;
-        return result;
-      });
+      const getCapturedEntry = mockClonedSessionStoreUpdate();
       mockSuccessfulAgentCommand();
 
       const broadcastToConnIds = vi.fn();
@@ -1838,8 +1612,8 @@ describe("gateway agent handler", () => {
       }>();
       expect(call.sessionKey).toBe("agent:main:main");
       expect(call.sessionId).toBe("caller-selected-session-id");
-      expect(capturedEntry?.sessionId).toBe("caller-selected-session-id");
-      expect(capturedEntry?.sessionStartedAt).toBe(now);
+      expect(getCapturedEntry()?.sessionId).toBe("caller-selected-session-id");
+      expect(getCapturedEntry()?.sessionStartedAt).toBe(now);
       expect(mocks.emitGatewaySessionEndPluginHook).toHaveBeenCalledTimes(1);
       expectRecordFields(
         mockCallArg(mocks.emitGatewaySessionEndPluginHook) as Record<string, unknown>,
@@ -1886,25 +1660,9 @@ describe("gateway agent handler", () => {
           sessionStartedAt: now - 25 * 60 * 60_000,
           lastInteractionAt: now - 25 * 60 * 60_000,
         },
-        {
-          session: {
-            reset: {
-              mode: "daily",
-              atHour: 4,
-            },
-          },
-        },
+        dailySessionResetConfig(),
       );
-      const loaded = mocks.loadSessionEntry();
-      let capturedEntry: Record<string, unknown> | undefined;
-      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-        const store: Record<string, unknown> = {
-          [loaded.canonicalKey]: structuredClone(loaded.entry),
-        };
-        const result = await updater(store);
-        capturedEntry = result as Record<string, unknown>;
-        return result;
-      });
+      const getCapturedEntry = mockClonedSessionStoreUpdate();
       mockSuccessfulAgentCommand();
 
       await invokeAgent(
@@ -1923,9 +1681,9 @@ describe("gateway agent handler", () => {
         sessionKey?: string;
       }>();
       expect(call.sessionKey).toBe("agent:main:main");
-      expect(call.sessionId).not.toBe("stale-session-id");
-      expect(capturedEntry?.sessionStartedAt).toBe(now);
-      expect(capturedEntry?.lastInteractionAt).toBe(now);
+      expect(call.sessionId).toBe("stale-session-id");
+      expect(getCapturedEntry()?.sessionStartedAt).toBe(now);
+      expect(getCapturedEntry()?.lastInteractionAt).toBe(now);
     } finally {
       vi.useRealTimers();
     }
@@ -1934,21 +1692,7 @@ describe("gateway agent handler", () => {
   it("forwards the selected agent id with canonical global session keys", async () => {
     mocks.listAgentIds.mockReturnValue(["main", "ops"]);
     mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:ops:main");
-    mocks.loadSessionEntry.mockReturnValue({
-      cfg: { session: { scope: "global" } },
-      storePath: getAgentTestStorePath(),
-      entry: {
-        sessionId: "global-session-id",
-        updatedAt: Date.now(),
-      },
-      canonicalKey: "global",
-    });
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      const store: Record<string, unknown> = {
-        global: { sessionId: "global-session-id", updatedAt: Date.now() },
-      };
-      return await updater(store);
-    });
+    mockGlobalSessionEntry("global-session-id");
     mockSuccessfulAgentCommand();
 
     await invokeAgent(
@@ -1974,21 +1718,7 @@ describe("gateway agent handler", () => {
 
   it("accepts an explicit global session key with a selected agent id", async () => {
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
-    mocks.loadSessionEntry.mockReturnValue({
-      cfg: { session: { scope: "global" } },
-      storePath: getAgentTestStorePath(),
-      entry: {
-        sessionId: "global-work-session-id",
-        updatedAt: Date.now(),
-      },
-      canonicalKey: "global",
-    });
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      const store: Record<string, unknown> = {
-        global: { sessionId: "global-work-session-id", updatedAt: Date.now() },
-      };
-      return await updater(store);
-    });
+    mockGlobalSessionEntry("global-work-session-id");
     mockSuccessfulAgentCommand();
     const respond = vi.fn();
     mocks.loadSessionEntry.mockClear();
@@ -2029,21 +1759,7 @@ describe("gateway agent handler", () => {
       agents: { list: [{ id: "main" }, { id: "ops", default: true }] },
       session: { scope: "global" },
     }).config;
-    mocks.loadSessionEntry.mockReturnValue({
-      cfg: mocks.loadConfigReturn,
-      storePath: getAgentTestStorePath(),
-      entry: {
-        sessionId: "global-ops-session-id",
-        updatedAt: Date.now(),
-      },
-      canonicalKey: "global",
-    });
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      const store: Record<string, unknown> = {
-        global: { sessionId: "global-ops-session-id", updatedAt: Date.now() },
-      };
-      return await updater(store);
-    });
+    mockGlobalSessionEntry("global-ops-session-id", mocks.loadConfigReturn);
     mockSuccessfulAgentCommand();
     mocks.loadSessionEntry.mockClear();
 
@@ -2073,21 +1789,7 @@ describe("gateway agent handler", () => {
 
   it("infers selected-global agent id from agent-prefixed session aliases", async () => {
     mockGlobalSessionAgentRoster();
-    mocks.loadSessionEntry.mockReturnValue({
-      cfg: mocks.loadConfigReturn,
-      storePath: getAgentTestStorePath(),
-      entry: {
-        sessionId: "global-work-session-id",
-        updatedAt: Date.now(),
-      },
-      canonicalKey: "global",
-    });
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      const store: Record<string, unknown> = {
-        global: { sessionId: "global-work-session-id", updatedAt: Date.now() },
-      };
-      return await updater(store);
-    });
+    mockGlobalSessionEntry("global-work-session-id", mocks.loadConfigReturn);
     mockSuccessfulAgentCommand();
 
     await invokeAgent(
@@ -2113,71 +1815,54 @@ describe("gateway agent handler", () => {
 
   it("registers tool event recipients for active selected-global alias runs", async () => {
     mockGlobalSessionAgentRoster();
-    mocks.loadSessionEntry.mockReturnValue({
-      cfg: mocks.loadConfigReturn,
-      storePath: getAgentTestStorePath(),
-      entry: {
-        sessionId: "global-work-session-id",
-        updatedAt: Date.now(),
-      },
-      canonicalKey: "global",
-    });
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      const store: Record<string, unknown> = {
-        global: { sessionId: "global-work-session-id", updatedAt: Date.now() },
-      };
-      return await updater(store);
-    });
+    mockGlobalSessionEntry("global-work-session-id", mocks.loadConfigReturn);
     mockSuccessfulAgentCommand();
     const context = makeContext();
     const registerToolEventRecipient = vi.fn();
     context.registerToolEventRecipient = registerToolEventRecipient;
-    context.chatAbortControllers.set("run-existing", {
-      controller: new AbortController(),
-      sessionKey: "global",
-      agentId: "work",
-      clientRunId: "run-existing",
-    } as never);
-
-    await invokeAgent(
+    const existing = await createActiveRpcSourceForTest(
+      {},
       {
-        message: "global alias session",
-        sessionKey: "agent:work:main",
-        idempotencyKey: "alias-global-tool-events",
-      },
-      {
-        reqId: "alias-global-tool-events",
-        context,
-        client: {
-          connId: "conn-1",
-          connect: { ...operatorWriteCliClient().connect, caps: ["tool-events"] },
-        } as never,
+        sessionKey: "global",
+        sessionId: "global-work-session-id",
+        agentId: "work",
+        storeScope: getAgentTestStorePath(),
       },
     );
+    rpcSourceTesting.set("run-existing", existing);
 
-    expect(registerToolEventRecipient).toHaveBeenCalledWith("alias-global-tool-events", "conn-1");
-    expect(registerToolEventRecipient).toHaveBeenCalledWith("run-existing", "conn-1");
+    try {
+      await invokeAgent(
+        {
+          message: "global alias session",
+          sessionKey: "agent:work:main",
+          idempotencyKey: "alias-global-tool-events",
+        },
+        {
+          reqId: "alias-global-tool-events",
+          context,
+          flushDispatch: false,
+          client: {
+            connId: "conn-1",
+            connect: { ...operatorWriteCliClient().connect, caps: ["tool-events"] },
+          } as never,
+        },
+      );
+
+      expect(registerToolEventRecipient).toHaveBeenCalledWith("alias-global-tool-events", "conn-1");
+      expect(registerToolEventRecipient).toHaveBeenCalledWith("run-existing", "conn-1");
+    } finally {
+      existing.release();
+      await existing.input.settlement.promise;
+    }
+    await waitForAgentCommandCall();
   });
 
   registerCompactionSessionSettlementCase();
 
   it("honors selected-global agent id when the request uses the main alias", async () => {
     mockGlobalSessionAgentRoster();
-    mocks.loadSessionEntry.mockReturnValue({
-      cfg: mocks.loadConfigReturn,
-      storePath: getAgentTestStorePath(),
-      entry: {
-        sessionId: "global-work-session-id",
-        updatedAt: Date.now(),
-      },
-      canonicalKey: "global",
-    });
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      const store: Record<string, unknown> = {
-        global: { sessionId: "global-work-session-id", updatedAt: Date.now() },
-      };
-      return await updater(store);
-    });
+    mockGlobalSessionEntry("global-work-session-id", mocks.loadConfigReturn);
     mockSuccessfulAgentCommand();
 
     await invokeAgent(
@@ -2255,6 +1940,12 @@ describe("gateway agent handler", () => {
         const childSessionKey = "agent:main:acp:plugin-child";
         const runId = "acp-plugin-subagent-run";
         await using fixture = createPluginSubagentTestLifetime({ root, runId, childSessionKey });
+        await writeSubagentSessionEntry({
+          stateDir: root,
+          agentId: "main",
+          sessionKey: childSessionKey,
+          defaultSessionId: "spawned-child-session",
+        });
         mockSpawnedChildSessionEntry(childSessionKey, root);
         mocks.readAcpSessionMetaAsync.mockResolvedValue(confirmedAcpMeta);
 

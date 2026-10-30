@@ -1,6 +1,4 @@
 /**
- * Application keybinding definitions and user-config loading.
- *
  * Wraps pi-tui keybindings with OpenClaw-specific actions and per-agent overrides.
  */
 import { readFileSync } from "node:fs";
@@ -23,7 +21,6 @@ declare module "@earendil-works/pi-tui" {
   interface Keybindings extends AppKeybindings {}
 }
 
-/** Application actions with their default keys and display descriptions. */
 const APP_KEYBINDINGS = {
   "app.interrupt": ["escape", "Cancel or abort"],
   "app.clear": ["ctrl+c", "Clear editor"],
@@ -71,7 +68,6 @@ const APP_KEYBINDINGS = {
   "app.tree.filter.cycleBackward": ["shift+ctrl+o", "Tree filter: cycle backward"],
 } as const satisfies Record<string, [KeyId | KeyId[], string]>;
 
-/** Complete keybinding definition map consumed by the TUI keybinding manager. */
 const KEYBINDINGS = {
   ...TUI_KEYBINDINGS,
   ...Object.fromEntries(

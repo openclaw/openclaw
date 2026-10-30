@@ -96,6 +96,32 @@ export function hasConfigDocInput(changedPaths: string[]): boolean {
   );
 }
 
+/** Line-cap ratchet inputs: counted sources plus the Oxlint cap configuration. */
+export function hasLineCapRatchetInput(changedPaths: string[]): boolean {
+  return changedPaths.some(
+    (file) => /\.(?:ts|tsx|mts|mjs)$/u.test(file) || file === ".oxlintrc.json",
+  );
+}
+
+/** Markdown that CI's check-docs lints; config/markdownlint-cli2.jsonc still applies its ignores. */
+export function isDocsMarkdownLintPath(file: string): boolean {
+  return /^(?:docs\/.+\.mdx?|README\.md)$/u.test(file);
+}
+
+/** Native app sources and generators that feed apps/.i18n/native-source.json. */
+export function hasNativeI18nInput(changedPaths: string[]): boolean {
+  return changedPaths.some((file) =>
+    /^(?:apps\/|scripts\/(?:native-app-i18n|native-i18n-(?:inventory|locales)|android-app-i18n|apple-app-i18n)\.ts$)/u.test(
+      file,
+    ),
+  );
+}
+
+/** Agent instruction files bounded by the workspace bootstrap cap. */
+export function hasAgentsInstructionInput(changedPaths: string[]): boolean {
+  return changedPaths.some((file) => /(?:^|\/)AGENTS\.md$/u.test(file));
+}
+
 /**
  * Files whose changes are treated as release metadata only.
  * @internal Shared repository-script contract.
@@ -442,8 +468,8 @@ export function listChangedPathsFromGit(params: {
     return rangePaths;
   }
   const worktreePaths = [
-    ...runGitNameOnlyDiff(["--cached", "--diff-filter=ACMRD"], cwd),
-    ...runGitNameOnlyDiff(["--diff-filter=ACMRD"], cwd),
+    ...runGitNameOnlyDiff(["--cached"], cwd),
+    ...runGitNameOnlyDiff([], cwd),
     ...runGitLsFiles(["--others", "--exclude-standard"], cwd),
   ];
   // Raw Crabbox syncs can have unrelated synthetic refs; prefer the synced
@@ -463,6 +489,7 @@ export function listChangedPathsFromGit(params: {
 
 function runGitNameOnlyDiff(extraArgs: string[], cwd = process.cwd()): string[] {
   // Keep rename sources so checks still cover the removed path's consumers.
+  // Keep every status too: file/symlink type changes still need their owner's checks.
   const output = execFileSync("git", ["diff", "--no-renames", "--name-only", "-z", ...extraArgs], {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
@@ -503,7 +530,7 @@ function runGitLsFiles(extraArgs: string[], cwd = process.cwd()): string[] {
  * Lists staged changed paths for pre-commit checks.
  */
 export function listStagedChangedPaths(cwd = process.cwd(), base?: string) {
-  return runGitNameOnlyDiff(["--cached", "--diff-filter=ACMRD", ...(base ? [base] : [])], cwd);
+  return runGitNameOnlyDiff(["--cached", ...(base ? [base] : [])], cwd);
 }
 
 /**

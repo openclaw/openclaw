@@ -10,7 +10,6 @@ import type {
 import type { MatrixClient } from "../sdk.js";
 import type { MatrixResolvedAllowlistEntry } from "./config.js";
 import type { createDirectRoomTracker } from "./direct.js";
-import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
 
 export type MatrixMonitorHandlerParams = {
   client: MatrixClient;
@@ -42,13 +41,10 @@ export type MatrixMonitorHandlerParams = {
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
   mediaMaxBytes: number;
   historyLimit: number;
-  startupMs: number;
-  dropPreStartupMessages: boolean;
-  inboundDeduper?: Pick<MatrixInboundEventDeduper, "claim">;
   directTracker: Pick<ReturnType<typeof createDirectRoomTracker>, "isDirectMessage">;
   getRoomInfo: (
     roomId: string,
-    opts?: { includeAliases?: boolean },
+    opts?: { includeAliases?: boolean; currentName?: boolean },
   ) => Promise<{ name?: string; canonicalAlias?: string; altAliases: string[] }>;
   getMemberDisplayName: (roomId: string, userId: string) => Promise<string>;
   needsRoomAliasesForConfig: boolean;

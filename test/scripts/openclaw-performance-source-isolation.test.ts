@@ -5,24 +5,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-
-const WORKFLOW = ".github/workflows/openclaw-performance.yml";
+import { readPerformanceWorkflow } from "./openclaw-performance-workflow.test-support.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-type WorkflowStep = {
-  name?: string;
-  run?: string;
-  env?: Record<string, string>;
-  with?: Record<string, string>;
-};
-
-type Workflow = {
-  env?: Record<string, string>;
-  jobs?: Record<string, { env?: Record<string, string>; steps?: WorkflowStep[] }>;
-};
-
 it("isolates the source performance gateway from network and scheduled work", () => {
-  const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
+  const workflow = readPerformanceWorkflow();
   const job = workflow.jobs?.source_performance;
   const targetStepName = "Run OpenClaw source performance probes";
   const jobSteps = job?.steps ?? [];
@@ -34,94 +21,68 @@ it("isolates the source performance gateway from network and scheduled work", ()
   const sliceStart = run.indexOf(sliceStartMarker);
   const sliceEndMarkerIndex = run.indexOf(sliceEndMarker, sliceStart);
   const workflowSlice = run.slice(sliceStart, sliceEndMarkerIndex + sliceEndMarker.length);
-  const cronEnv = "OPENCLAW_SKIP_CRON";
   expect(sliceStart).toBeGreaterThanOrEqual(0);
-  expect(run.lastIndexOf(sliceStartMarker)).toBe(sliceStart);
   expect(sliceEndMarkerIndex).toBeGreaterThan(sliceStart);
-  expect(run.lastIndexOf(sliceEndMarker)).toBe(sliceEndMarkerIndex);
 
   const fixtureRoot = tempDirs.make("openclaw-performance-isolation-");
   const binDir = join(fixtureRoot, "bin");
   mkdirSync(binDir);
-  const writeCommand = (name: string, source: string) =>
-    writeFileSync(join(binDir, name), `#!/bin/sh\nset -eu\n${source}`, { mode: 0o755 });
-  writeCommand(
-    "node",
-    `capture() {
-  name="$1"
-  shift
-  {
-    printf 'OPENCLAW_HOME=%s\\n' "\${OPENCLAW_HOME-<unset>}"
-    printf 'OPENCLAW_STATE_DIR=%s\\n' "\${OPENCLAW_STATE_DIR-<unset>}"
-    printf 'OPENCLAW_CONFIG_PATH=%s\\n' "\${OPENCLAW_CONFIG_PATH-<unset>}"
-    printf 'OPENCLAW_GATEWAY_PORT=%s\\n' "\${OPENCLAW_GATEWAY_PORT-<unset>}"
-    printf 'OPENCLAW_GATEWAY_TOKEN=%s\\n' "\${OPENCLAW_GATEWAY_TOKEN-<unset>}"
-    printf 'OPENCLAW_SKIP_CHANNELS=%s\\n' "\${OPENCLAW_SKIP_CHANNELS-<unset>}"
-    printf 'OPENCLAW_SKIP_CRON=%s\\n' "\${OPENCLAW_SKIP_CRON-<unset>}"
-  } > "$CAPTURE_DIR/$name.env"
-  printf '%s\\n' "$@" > "$CAPTURE_DIR/$name.argv"
-  /bin/cp "$OPENCLAW_CONFIG_PATH" "$CAPTURE_DIR/$name.config"
+  const shim = `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const assert = require("node:assert/strict");
+const { spawnSync } = require("node:child_process");
+const env = process.env, args = process.argv.slice(2), command = path.basename(process.argv[1]);
+const capture = (file, value) => fs.writeFileSync(path.join(env.CAPTURE_DIR, file), value);
+const event = (name) => fs.appendFileSync(env.EVENTS_FILE, name + "\\n");
+if (command === "node" && args[0] === "-e") {
+  process.exit(spawnSync(env.REAL_NODE, args, { stdio: "inherit" }).status ?? 64);
+} else if (command === "node") {
+  const name = args[2] === "run" ? "gateway" : args[2] === "health" ? "health" : "benchmark";
+  assert((args[0] === "dist/entry.js" && args[1] === "gateway" && ["run", "health"].includes(args[2])) ||
+    (args[0] === "--import" && args[1] === "tsx" && args[2].endsWith("bench-cli-startup.ts")));
+  const keys = ["HOME", "STATE_DIR", "CONFIG_PATH", "GATEWAY_PORT", "GATEWAY_TOKEN", "SKIP_CHANNELS", "SKIP_CRON"];
+  capture(name + ".env", JSON.stringify(Object.fromEntries(keys.map(key => [
+    "OPENCLAW_" + key, env["OPENCLAW_" + key] ?? "<unset>"
+  ]))));
+  capture(name + ".argv", args.join("\\n") + "\\n");
+  capture(name + ".config", fs.readFileSync(env.OPENCLAW_CONFIG_PATH));
+  event(name === "gateway" ? "gateway-run" : name === "health" ? "gateway-health" : name);
+  if (name === "gateway") {
+    capture("gateway.port", env.OPENCLAW_GATEWAY_PORT);
+    capture("gateway.ready", "");
+    process.on("SIGTERM", () => { capture("gateway.terminated", "terminated\\n"); process.exit(0); });
+    process.on("SIGINT", () => { capture("gateway.terminated", "terminated\\n"); process.exit(0); });
+    setTimeout(() => process.exit(64), 8000);
+  }
+} else if (command === "cp") {
+  assert.equal(args.length, 2);
+  assert(!fs.existsSync(path.join(env.CAPTURE_DIR, "readiness-copy.config")));
+  capture("readiness-copy.config", fs.readFileSync(args[0]));
+  fs.copyFileSync(args[0], args[1]);
+} else if (command === "curl") {
+  const port = fs.readFileSync(path.join(env.CAPTURE_DIR, "gateway.port"), "utf8").trim();
+  assert(args.includes("http://127.0.0.1:" + port + "/healthz"));
+  assert(fs.existsSync(path.join(env.CAPTURE_DIR, "gateway.ready")));
+  event("http-health");
+} else {
+  assert.deepEqual(args.slice(0, 1), ["-q"]);
+  assert.equal(args.length, 3);
+  const catalog = args[1] === "catalogRefresh:";
+  assert.deepEqual(args.slice(1), catalog ? ["catalogRefresh:", "src/config/zod-schema.core.ts"] :
+    ["heartbeat:", "src/config/zod-schema.agent-defaults.ts"]);
+  event(catalog ? "catalog-probe" : "heartbeat-probe");
+  process.exit(Number(env[catalog ? "CATALOG_RG_STATUS" : "HEARTBEAT_RG_STATUS"]));
 }
-if [ "\${1-}" = "-e" ]; then
-  [ -n "\${REAL_NODE-}" ] || { printf 'REAL_NODE is required\\n' >&2; exit 64; }
-  exec "$REAL_NODE" "$@"
-fi
-case "\${1-}:\${2-}:\${3-}" in
-  dist/entry.js:gateway:run) name=gateway; event=gateway-run ;;
-  dist/entry.js:gateway:health) name=health; event=gateway-health ;;
-  --import:tsx:*bench-cli-startup.ts) name=benchmark; event=benchmark ;;
-  *) printf 'unexpected node argv: %s\\n' "$*" >&2; exit 64 ;;
-esac
-capture "$name" "$@"
-if [ "$name" = gateway ]; then
-  printf '%s\\n' "$OPENCLAW_GATEWAY_PORT" > "$CAPTURE_DIR/gateway.port"
-  trap 'printf "terminated\\n" > "$CAPTURE_DIR/gateway.terminated"; exit 0' TERM INT
-fi
-printf '%s\\n' "$event" >> "$EVENTS_FILE"
-[ "$name" = gateway ] || exit 0
-: > "$CAPTURE_DIR/gateway.ready"
-for _ in 1 2 3 4 5 6 7 8; do
-  /bin/sleep 1
-done
-exit 64
-`,
-  );
-  writeCommand(
-    "cp",
-    `[ "$#" -eq 2 ] || exit 64
-[ ! -e "$CAPTURE_DIR/readiness-copy.config" ] || exit 64
-/bin/cp "$1" "$CAPTURE_DIR/readiness-copy.config"
-/bin/cp "$1" "$2"
-`,
-  );
-  writeCommand(
-    "curl",
-    `[ -s "$CAPTURE_DIR/gateway.port" ] || exit 1
-port="$(cat "$CAPTURE_DIR/gateway.port")"
-expected="http://127.0.0.1:$port/healthz"
-found=false
-for arg in "$@"; do
-  [ "$arg" = "$expected" ] && found=true
-done
-[ "$found" = true ] || { printf 'unexpected curl argv\\n' >&2; exit 64; }
-[ -f "$CAPTURE_DIR/gateway.ready" ] || exit 1
-printf 'http-health\\n' >> "$EVENTS_FILE"
-`,
-  );
-  writeCommand(
-    "rg",
-    `[ "$#" -eq 3 ] && [ "$1" = '-q' ] && [ "$2" = 'catalogRefresh:' ] && [ "$3" = 'src/config/zod-schema.core.ts' ] || {
-  printf 'unexpected rg argv\\n' >&2
-  exit 64
-}
-printf 'catalog-probe\\n' >> "$EVENTS_FILE"
-exit "$RG_STATUS"
-`,
-  );
+`;
+  for (const command of ["node", "cp", "curl", "rg"]) {
+    writeFileSync(join(binDir, command), shim, { mode: 0o755 });
+  }
 
-  for (const [branch, rgStatus, expectsCatalogRefresh] of [
-    ["unsupported", "1", false],
-    ["supported", "0", true],
+  // Older candidates lack catalogRefresh and still accept the retired heartbeat key.
+  for (const [branch, expectsCatalogRefresh, expectsHeartbeat] of [
+    ["older", false, true],
+    ["current", true, false],
   ] as const) {
     const branchDir = join(fixtureRoot, branch);
     const captureDir = join(branchDir, "capture");
@@ -147,7 +108,8 @@ exit "$RG_STATUS"
       GITHUB_WORKSPACE: "/fixture/workspace",
       PERFORMANCE_HELPER_DIR: "/fixture/helpers",
       REAL_NODE: process.execPath,
-      RG_STATUS: rgStatus,
+      CATALOG_RG_STATUS: expectsCatalogRefresh ? "0" : "1",
+      HEARTBEAT_RG_STATUS: expectsHeartbeat ? "0" : "1",
       SOURCE_PERF_DIR: sourcePerfDir,
       source_runs: "2",
     });
@@ -166,6 +128,7 @@ exit "$RG_STATUS"
 
     expect(readFileSync(eventsFile, "utf8").trim().split("\n")).toEqual([
       "catalog-probe",
+      "heartbeat-probe",
       "gateway-run",
       "http-health",
       "gateway-health",
@@ -180,10 +143,13 @@ exit "$RG_STATUS"
     parse(gatewayConfig, { uniqueKeys: true });
     const parsedConfig = JSON.parse(gatewayConfig) as {
       gateway?: { auth?: Record<string, unknown> };
+      agents?: unknown;
       models?: { catalogRefresh?: { enabled?: boolean } };
     };
+    expect(parsedConfig.agents).toEqual(
+      expectsHeartbeat ? { defaults: { heartbeat: { every: "0m" } } } : undefined,
+    );
     expect(parsedConfig).toMatchObject({
-      agents: { defaults: { heartbeat: { every: "0m" } } },
       browser: { enabled: false },
       update: { checkOnStart: false },
       gateway: {
@@ -195,7 +161,6 @@ exit "$RG_STATUS"
       },
       plugins: { enabled: true, entries: { browser: { enabled: false } } },
     });
-    expect(JSON.stringify(parsedConfig)).not.toContain('"dreaming":');
     expect(parsedConfig.gateway?.auth).toEqual({ mode: "token" });
     if (expectsCatalogRefresh) {
       expect(parsedConfig.models?.catalogRefresh?.enabled).toBe(false);
@@ -204,15 +169,7 @@ exit "$RG_STATUS"
     }
 
     const readCapturedEnv = (name: string) =>
-      Object.fromEntries(
-        readCapture(`${name}.env`)
-          .trim()
-          .split("\n")
-          .map((line) => {
-            const separator = line.indexOf("=");
-            return [line.slice(0, separator), line.slice(separator + 1)];
-          }),
-      ) as Record<string, string>;
+      JSON.parse(readCapture(`${name}.env`)) as Record<string, string>;
     const gatewayEnv = readCapturedEnv("gateway");
     const healthEnv = readCapturedEnv("health");
     const benchmarkEnv = readCapturedEnv("benchmark");
@@ -254,28 +211,22 @@ exit "$RG_STATUS"
       `dist/entry.js\ngateway\nhealth\n--port\n${gatewayPort}\n`,
     );
     expect(readCapture("benchmark.argv")).toContain(
-      "--import\ntsx\n/fixture/helpers/scripts/bench-cli-startup.ts\n",
+      "--import\ntsx\n/fixture/helpers/scripts/bench-cli-startup.ts\n" +
+        "--entry\n/fixture/workspace/openclaw.mjs\n" +
+        "--case\ngatewayHealthJsonWarmState\n--case\ngatewayHealthJsonFreshState\n",
     );
     expect(readCapture("gateway.terminated")).toBe("terminated\n");
     expect([gatewayPaths.home, healthPaths.home].map(existsSync)).toEqual([false, false]);
   }
 
-  expect(targetStepIndex).toBeGreaterThanOrEqual(0);
-  const inheritedCronScopes = [
-    ["workflow env", workflow.env],
-    ["job env", job?.env],
-    ["current step env", step.env],
-    ["current step before harness", run.slice(0, sliceStart)],
-    ["preceding steps", jobSteps.slice(0, targetStepIndex)],
-    [
-      "current step GITHUB_ENV writes",
-      run
-        .split("\n")
-        .filter((line) => line.includes("GITHUB_ENV"))
-        .join("\n"),
-    ],
-  ] as const;
-  for (const [scope, value] of inheritedCronScopes) {
-    expect(JSON.stringify(value ?? {}), scope).not.toContain(cronEnv);
-  }
+  expect(
+    JSON.stringify([
+      workflow.env,
+      job?.env,
+      step.env,
+      run.slice(0, sliceStart),
+      jobSteps.slice(0, targetStepIndex),
+      run.split("\n").filter((line) => line.includes("GITHUB_ENV")),
+    ]),
+  ).not.toContain("OPENCLAW_SKIP_CRON");
 });

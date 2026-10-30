@@ -21,7 +21,6 @@ const mock = vi.hoisted(() => ({
   close: vi.fn<() => void>(),
   query: vi.fn<() => []>(),
   claimAgentLease: vi.fn(() => "quarantine-test-lease"),
-  databases: [] as FakeDatabase[],
 }));
 vi.mock("../infra/worker-task-server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/worker-task-server.js")>()),
@@ -57,7 +56,6 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 beforeEach(() => {
-  mock.databases.length = 0;
   mock.read.mockReset().mockReturnValue({ user_version: 0 });
   mock.close.mockReset();
   mock.query.mockReset().mockReturnValue([]);
@@ -75,7 +73,6 @@ beforeEach(() => {
         database.isOpen = false;
       },
     };
-    mock.databases.push(database);
     return database;
   });
 });
@@ -139,6 +136,7 @@ it.each([
     const reason = known ? knownQuarantine(kind) : undefined;
     const readFailure = new Error("quarantine metadata read failed");
     const closeFailure = new Error("quarantine native reader close failed");
+    const failures = [...(readFails ? [readFailure] : []), closeFailure];
     const configure = kind === "state" ? "mockImplementationOnce" : "mockImplementation";
     if (readFails) {
       mock.read[configure](fail(readFailure));
@@ -158,17 +156,15 @@ it.each([
       }
       if (closeFails) {
         expect(reply.nativeCleanupFailure?.error?.nodes).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ message: closeFailure.message }),
-            ...(readFails ? [expect.objectContaining({ message: readFailure.message })] : []),
-          ]),
+          expect.arrayContaining(
+            failures.map(({ message }) => expect.objectContaining({ message })),
+          ),
         );
       } else {
         expect(reply.nativeCleanupFailure).toBeUndefined();
       }
       expect(mock.query).toHaveBeenCalledTimes(known ? 0 : 1);
       expect(mock.close).toHaveBeenCalledOnce();
-      expect(mock.databases[0]?.isOpen).toBe(closeFails);
       return;
     }
     const agentPath = path.join(path.dirname(input.databasePath), "openclaw-agent.sqlite");
@@ -194,7 +190,7 @@ it.each([
         expect(failure).toBeInstanceOf(AggregateError);
         expect(failure).toMatchObject({
           name: "OpenClawQuarantineReadCleanupError",
-          errors: [...(readFails ? [readFailure] : []), closeFailure],
+          errors: failures,
         });
         expect(failure.cause).toBe(readFails ? readFailure : closeFailure);
       }

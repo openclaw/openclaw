@@ -76,83 +76,69 @@ const identity: SystemdServiceIdentity = {
   serviceUser: "",
 };
 
-async function activate(admission: () => void, current: () => void = () => {}) {
+function activate(admission: () => void, current: () => void = () => {}) {
   return withGatewayServiceUpdateAuthority(
     admission,
-    async (assertCurrent) => {
-      await activateSystemdServiceIdentity({
+    (assertCurrent) =>
+      activateSystemdServiceIdentity({
         identity,
         action: "restart",
         assertCurrent,
         warn: () => {},
-      });
-    },
+      }),
     { updateOwned: false, assertRecoveryCurrent: current },
   );
 }
 
 it("restores within the native deadline when cold source observations cost two seconds", async () => {
-  const { admission, family, assertIsolation } = fixture();
+  using context = fixture();
+  const { admission, family } = context;
   const before = family();
   let elapsed = 0;
   vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+  const slow =
+    <T>(read: (pathname: string) => T) =>
+    (pathname: string) => {
+      const result = read(pathname);
+      elapsed += 2_000;
+      return result;
+    };
   const observe = snapshots.readSqliteSourceContentVersionSync;
-  vi.spyOn(snapshots, "readSqliteSourceContentVersionSync").mockImplementation((pathname) => {
-    const version = observe(pathname);
-    elapsed += 2_000;
-    return version;
-  });
   const prepare = snapshots.prepareSqliteReadOnlyLocationSync;
-  vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync").mockImplementation((pathname) => {
-    const prepared = prepare(pathname);
-    // Deterministic slow-storage cost; the actual database read is not replaced.
-    elapsed += 2_000;
-    return prepared;
-  });
-  try {
-    await activate(admission);
-  } finally {
-    expect(family()).toEqual(before);
-    assertIsolation();
-  }
-  expect(native.effects).toEqual(["ResetFailedUnit", "RestartUnit"]);
-  expect(native.closes).toBe(1);
+  vi.spyOn(snapshots, "readSqliteSourceContentVersionSync").mockImplementation(slow(observe));
+  vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync").mockImplementation(slow(prepare));
+  await activate(admission);
+  expect(family()).toEqual(before);
+  expect([native.effects, native.closes]).toEqual([["ResetFailedUnit", "RestartUnit"], 1]);
 });
 
-it("refuses an update committed after the final restart ownership reply", async () => {
-  const { env, admission, family, assertIsolation } = fixture();
-  let committedFamily: unknown;
-  native.preparingRestart = () => {
-    createUpdateRun({ trigger: "cli", runId: "2c45c690-8265-498b-8504-d608ee2cda01" }, { env });
-    committedFamily = family();
-  };
-  try {
-    await expect(activate(admission)).rejects.toThrow("2c45c690-8265-498b-8504-d608ee2cda01");
-    expect(family()).toEqual(committedFamily);
-  } finally {
-    assertIsolation();
-  }
-  expect(native.effects).toEqual(["ResetFailedUnit"]);
-  expect(native.closes).toBe(1);
-});
-
-it("retains final native custody revocation after the final restart ownership reply", async () => {
-  const { admission, assertIsolation } = fixture();
-  let current = true;
-  native.preparingRestart = () => {
-    current = false;
-  };
-  try {
+it.each(["new update", "revoked custody"] as const)(
+  "refuses %s after the final restart ownership reply",
+  async (reason) => {
+    using context = fixture();
+    const { env, admission, family } = context;
+    const runId = "2c45c690-8265-498b-8504-d608ee2cda01";
+    const message = reason === "new update" ? runId : "original native custody revoked";
+    let current = true;
+    let committedFamily: unknown;
+    native.preparingRestart = () => {
+      if (reason === "new update") {
+        createUpdateRun({ trigger: "cli", runId }, { env });
+        committedFamily = family();
+      } else {
+        current = false;
+      }
+    };
     await expect(
       activate(admission, () => {
         if (!current) {
-          throw new Error("original native custody revoked");
+          throw new Error(message);
         }
       }),
-    ).rejects.toThrow("original native custody revoked");
-  } finally {
-    assertIsolation();
-  }
-  expect(native.effects).toEqual(["ResetFailedUnit"]);
-  expect(native.closes).toBe(1);
-});
+    ).rejects.toThrow(message);
+    if (reason === "new update") {
+      expect(family()).toEqual(committedFamily);
+    }
+    expect([native.effects, native.closes]).toEqual([["ResetFailedUnit"], 1]);
+  },
+);

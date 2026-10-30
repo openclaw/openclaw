@@ -25,7 +25,7 @@ before changing property transport, content custody, connection, or context.
 ## Bindings and types
 
 - Never destructure props: read `props.foo` where reactivity is needed. Use `merge` for defaults (`undefined` overrides) and `omit` for a remainder.
-- `prop:` is the only surviving JSX namespace. Use `prop:value={value}` for explicit native or custom-element property assignment. `on:x`, `attr:x`, `bool:x`, `classList`, and `use:` compile to literal attributes or no-ops; lint rejects them.
+- Use `prop:value={value}` for explicit native or custom-element property assignment; a bare `prop:active` means `true`. Removed `on:x`, `oncapture:`, `attr:x`, `bool:x`, `classList`, and `use:` forms are compile errors on native elements in rc.18. Spreads still need the lint guard. XML namespaces remain supported.
 - Native events use camelCase (`onClick`); dashed custom events keep their dash (`onSession-change`). Use a ref factory when native listener options are needed.
 - Custom tags with properties need typings: augment `@solidjs/web`'s `JSX.IntrinsicElements` in a `.d.ts` (see `ui/src/types/solid-elements.d.ts`). Keep that file a module with a side-effect `import "@solidjs/web";`. Lint forbids `export {}`, and without a module marker `declare module` silently becomes an ambient declaration instead of an augmentation. Inside the augmented `namespace JSX`, refer to `HTMLAttributes` unqualified.
 - Native ARIA attributes are typed enumerations: `aria-pressed={on() ? "true" : "false"}`.
@@ -35,10 +35,15 @@ before changing property transport, content custody, connection, or context.
 
 ## Lifecycle and DOM ownership
 
-Keep synchronous subscriptions in the component or factory body when descendants
-can publish during setup, and pair teardown with `onCleanup`. Use `onSettled`
-when setup needs committed DOM, and return its cleanup. Ref callbacks are unowned;
-they capture nodes but cannot register cleanup.
+Default to `onSettled` for component setup and return its cleanup. Reactive primitives
+are the preferred home for synchronous subscriptions, as in `projectSource` in
+`lib/reactive/projection.ts`. Ref, registry, and admitted-resource lifetimes may
+need `onCleanup` registered synchronously because descendants or the current
+owner can retire before settlement. For example, `createMenuControls().ref()`
+in `components/solid/menu.tsx` registers cleanup in the owned factory so embedded
+controls leave the registry when their owner retires. Preserve that ordering;
+do not defer it merely to remove `onCleanup`. Ref callbacks themselves are
+unowned: capture nodes there, and register cleanup in the owned setup phase.
 
 Keep xterm, noVNC, markdown reconcilers, and canvas DOM islands as ref-owned native
 nodes: Solid owns the host and cleanup, while the island owns its descendants.

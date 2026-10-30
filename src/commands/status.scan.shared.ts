@@ -1,4 +1,3 @@
-// Shared status scan helpers for gateway probing, Tailscale URL formatting, and memory status.
 // This file owns the cross-command contracts reused by normal, JSON, and status-all scans.
 
 import { existsSync } from "node:fs";
@@ -15,10 +14,7 @@ import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
 import type { GatewayProbeAuth, GatewayProbeResult } from "../gateway/probe.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
-import {
-  readMemorySearchManagerStatus,
-  type MemorySearchManager,
-} from "../memory-host-sdk/host/types.js";
+import { readMemorySearchManagerStatus } from "../memory-host-sdk/host/types.js";
 import type { ActiveMemoryProviderResult, MemoryHealth } from "../plugins/memory-provider-types.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -66,87 +62,6 @@ export type GatewayProbeSnapshot = {
   gatewaySelf: ReturnType<typeof pickGatewaySelfPresence>;
   gatewayCallOverrides?: GatewayProbeAuth & { url: string };
 };
-
-type StatusMemorySearchManager = Pick<
-  MemorySearchManager,
-  "probeVectorStoreAvailability" | "probeVectorAvailability" | "status" | "statusAsync" | "close"
->;
-
-type StatusMemorySearchManagerResolver = (params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  purpose: "status";
-  inspectSources: true;
-}) => Promise<{
-  manager: StatusMemorySearchManager | null;
-}>;
-
-async function applyLocalStatusRpcFallback(params: {
-  cfg: OpenClawConfig;
-  configPath: string;
-  gatewayMode: "local" | "remote";
-  gatewayUrl: string;
-  gatewayProbe: GatewayProbeResult | null;
-  gatewayProbeAuth: GatewayProbeAuth;
-  timeoutMs: number;
-  gatewayProbeDeadlineMs: number;
-  enabled?: boolean;
-}): Promise<GatewayProbeResult | null> {
-  // Only retry ambiguous local loopback probes, never remote or origin-scoped endpoints.
-  if (
-    params.enabled === false ||
-    params.gatewayMode !== "local" ||
-    !params.gatewayProbe ||
-    params.gatewayProbe.ok ||
-    !isLoopbackGatewayUrl(params.gatewayUrl)
-  ) {
-    return params.gatewayProbe;
-  }
-  const error = params.gatewayProbe.error?.toLowerCase() ?? "";
-  if (!error.includes("timeout") && params.gatewayProbe.auth?.capability !== "unknown") {
-    return params.gatewayProbe;
-  }
-  // The fallback uses the gateway status RPC because it can succeed after probe handshake ambiguity.
-  const status = await import("../gateway/call.js")
-    .then(({ callGateway }) => {
-      const timeoutMs = Math.min(2000, resolveStatusGatewayProbeTimeoutMs(params));
-      if (timeoutMs === 0) {
-        return null;
-      }
-      return callGateway<Partial<StatusSummary>>({
-        config: params.cfg,
-        configPath: params.configPath,
-        method: "status",
-        params: { includeChannelSummary: false, includeCliProjection: true },
-        token: params.gatewayProbeAuth.token,
-        password: params.gatewayProbeAuth.password,
-        timeoutMs,
-        mode: GATEWAY_CLIENT_MODES.BACKEND,
-        clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      });
-    })
-    .catch(() => null);
-  if (!status) {
-    return params.gatewayProbe;
-  }
-  const auth = params.gatewayProbe.auth;
-  return {
-    ...params.gatewayProbe,
-    ok: true,
-    status,
-    ...(auth
-      ? {
-          auth:
-            auth.capability === "unknown"
-              ? {
-                  ...auth,
-                  capability: "read_only",
-                }
-              : auth,
-        }
-      : {}),
-  };
-}
 
 function hasExplicitMemorySearchConfig(cfg: OpenClawConfig, agentId: string): boolean {
   if (cfg.memory && Object.hasOwn(cfg.memory, "search")) {
@@ -248,21 +163,59 @@ export async function resolveGatewayProbeSnapshot(params: {
             })
             .catch(() => null)
         : null;
-  const gatewayProbe = await applyLocalStatusRpcFallback({
-    cfg: params.cfg,
-    configPath: params.configPath,
-    gatewayMode,
-    gatewayUrl: gatewayConnection.url,
-    gatewayProbe: initialGatewayProbe,
-    gatewayProbeAuth: gatewayProbeAuthResolution.auth,
+  const fallbackBudget = {
     timeoutMs: remainingTimeoutMs(),
     gatewayProbeDeadlineMs: params.opts.gatewayProbeDeadlineMs,
-    enabled:
-      !originScopedDeviceAuth &&
-      params.opts.localStatusRpcFallback !== false &&
-      remainingTimeoutMs() > 0 &&
-      (!readiness || canDiagnose),
-  });
+  };
+  let gatewayProbe = initialGatewayProbe;
+  // Only retry ambiguous local loopback probes, never remote or origin-scoped endpoints.
+  if (
+    !originScopedDeviceAuth &&
+    params.opts.localStatusRpcFallback !== false &&
+    remainingTimeoutMs() > 0 &&
+    (!readiness || canDiagnose) &&
+    gatewayMode === "local" &&
+    gatewayProbe &&
+    !gatewayProbe.ok &&
+    isLoopbackGatewayUrl(gatewayConnection.url)
+  ) {
+    const error = gatewayProbe.error?.toLowerCase() ?? "";
+    if (error.includes("timeout") || gatewayProbe.auth?.capability === "unknown") {
+      // Status can succeed after an ambiguous detail-probe handshake, within the same budget.
+      const status = await import("../gateway/call.js")
+        .then(({ callGateway }) => {
+          const timeoutMs = Math.min(2000, resolveStatusGatewayProbeTimeoutMs(fallbackBudget));
+          if (timeoutMs === 0) {
+            return null;
+          }
+          return callGateway<Partial<StatusSummary>>({
+            config: params.cfg,
+            configPath: params.configPath,
+            method: "status",
+            params: { includeChannelSummary: false, includeCliProjection: true },
+            token: gatewayProbeAuthResolution.auth.token,
+            password: gatewayProbeAuthResolution.auth.password,
+            timeoutMs,
+            mode: GATEWAY_CLIENT_MODES.BACKEND,
+            clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          });
+        })
+        .catch(() => null);
+      if (status) {
+        const auth = gatewayProbe.auth;
+        gatewayProbe = {
+          ...gatewayProbe,
+          ok: true,
+          status,
+          ...(auth
+            ? {
+                auth: auth.capability === "unknown" ? { ...auth, capability: "read_only" } : auth,
+              }
+            : {}),
+        };
+      }
+    }
+  }
   if (gatewayProbeAuthWarning && gatewayProbe?.ok === false && !gatewayProbe.startupPhase) {
     gatewayProbe.error = gatewayProbe.error
       ? `${gatewayProbe.error}; ${gatewayProbeAuthWarning}`
@@ -324,7 +277,6 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
     cfg: OpenClawConfig,
     agentId: string,
   ) => { store: { databasePath: string } } | null;
-  getMemorySearchManager: StatusMemorySearchManagerResolver;
   /** Whether the selected slot owner registers the provider-neutral runtime. */
   isMemoryProviderNative?: (params: { cfg: OpenClawConfig; agentId: string }) => boolean;
   getMemoryProvider?: (params: {
@@ -355,7 +307,7 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
     if (params.isMemoryProviderNative?.({ cfg, agentId })) {
       return await resolveProviderStatusSnapshot(params, agentId, memoryPlugin.slot);
     }
-    return await resolveMemoryManagerStatusSnapshot(params, agentId);
+    return await resolveMemoryManagerStatusSnapshot(cfg, agentId);
   }
 
   const hasExplicitConfig = hasExplicitMemorySearchConfig(cfg, agentId);
@@ -377,7 +329,7 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   if (!shouldInspectStore) {
     return null;
   }
-  return await resolveMemoryManagerStatusSnapshot(params, agentId);
+  return await resolveMemoryManagerStatusSnapshot(cfg, agentId);
 }
 
 async function resolveProviderStatusSnapshot(
@@ -419,14 +371,12 @@ async function resolveProviderStatusSnapshot(
 }
 
 async function resolveMemoryManagerStatusSnapshot(
-  params: {
-    cfg: OpenClawConfig;
-    getMemorySearchManager: StatusMemorySearchManagerResolver;
-  },
+  cfg: OpenClawConfig,
   agentId: string,
 ): Promise<MemoryStatusSnapshot | null> {
-  const { manager } = await params.getMemorySearchManager({
-    cfg: params.cfg,
+  const { getMemorySearchManager } = await import("./status.scan.deps.runtime.js");
+  const { manager } = await getMemorySearchManager({
+    cfg,
     agentId,
     purpose: "status",
     inspectSources: true,

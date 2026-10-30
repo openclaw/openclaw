@@ -20,6 +20,7 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { getMemoryEmbeddingCommandSecretTargetIds } from "../cli/command-secret-targets.js";
+import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import type { HealthCheckContext, HealthFinding } from "../flows/health-checks.js";
@@ -28,6 +29,10 @@ import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/conf
 import { hasConfiguredMemorySecretInput } from "../memory-host-sdk/secret.js";
 import { getMissingLocalMemoryEmbeddingProviderMessage } from "../plugin-sdk/memory-core-bundled-runtime.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
+import {
+  OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
+  OPENAI_COMPATIBLE_MODEL_APIS,
+} from "../plugins/embedding-provider-config.js";
 import { resolveManifestOwnerBasePolicyBlock } from "../plugins/manifest-owner-policy.js";
 import {
   getActiveMemoryProviderCore,
@@ -62,8 +67,6 @@ const MEMORY_EMBEDDING_PROVIDER_AUTH_IDS = new Map([
   ["mistral", "mistral"],
   ["bedrock", "amazon-bedrock"],
 ]);
-const OPENAI_COMPATIBLE_MEMORY_EMBEDDING_PROVIDER = "openai-compatible";
-const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-responses"]);
 
 function hasConfiguredAwsSdkAuthForProvider(provider: string, cfg: OpenClawConfig): boolean {
   const providerConfig = findNormalizedProviderValue(cfg.models?.providers, provider);
@@ -80,7 +83,7 @@ function hasConfiguredAwsSdkAuthForProvider(provider: string, cfg: OpenClawConfi
 
 function isOpenAICompatibleMemoryProvider(providerId: string, cfg: OpenClawConfig): boolean {
   const normalizedProviderId = normalizeProviderId(providerId);
-  if (normalizedProviderId === OPENAI_COMPATIBLE_MEMORY_EMBEDDING_PROVIDER) {
+  if (normalizedProviderId === OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID) {
     return true;
   }
   if (MEMORY_EMBEDDING_PROVIDER_AUTH_IDS.has(normalizedProviderId)) {
@@ -91,10 +94,7 @@ function isOpenAICompatibleMemoryProvider(providerId: string, cfg: OpenClawConfi
     return false;
   }
   const api = normalizeProviderId(providerConfig.api ?? "");
-  if (
-    api === OPENAI_COMPATIBLE_MEMORY_EMBEDDING_PROVIDER ||
-    OPENAI_COMPATIBLE_MODEL_APIS.has(api)
-  ) {
+  if (api === OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID || OPENAI_COMPATIBLE_MODEL_APIS.has(api)) {
     return true;
   }
   return !api && Boolean(normalizeOptionalString(providerConfig.baseUrl));
@@ -221,10 +221,11 @@ export async function collectMemorySearchHealthFindings(
 }
 
 async function inspectMemorySearchHealth(
-  cfg: OpenClawConfig,
+  sourceConfig: OpenClawConfig,
   opts: MemorySearchHealthOptions,
   emit: (diagnostic: { text: string; finding: HealthFinding | null }) => void,
 ): Promise<void> {
+  const cfg = captureRuntimeConfig(sourceConfig);
   const scopes = resolveMemoryDoctorAgentScopes(cfg);
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const labelAgents = scopes.length > 1;

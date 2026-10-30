@@ -10,11 +10,8 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { chatInputOwnerForContext, type ChatInputRegion } from "../../app/chat-input-owner.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  createQuestionPromptState,
-  listQuestionPrompts,
-  type QuestionPrompt,
-} from "../../app/question-prompt.ts";
+import { createQuestionPromptState } from "../../app/question-prompt.ts";
+import type { GatewayStatusProps } from "../../components/gateway-status.ts";
 import type { SessionPanelToggleSlot } from "../../components/session-panel-toggle-buffer.ts";
 import type {
   BoardCommandEvent,
@@ -23,6 +20,7 @@ import type {
 } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import {
   readSessionProgressCard,
   sessionProgressCardsForGateway,
@@ -36,36 +34,38 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
-import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.tsx";
+import type { ChatComposerCapabilityHost } from "./chat-composer-capability-host.tsx";
 import { projectChatFields } from "./chat-field-projection.ts";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
   CHAT_RUN_ACTIVITY_CHANGED_EVENT,
-  CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
 } from "./chat-history-events.ts";
 import {
   getAcceptedChatHistorySession,
   getChatHistoryLoadState,
+  isChatHistoryLoading,
   isChatHistoryRetrying,
 } from "./chat-history-state.ts";
+import { createMobileSheetScrollFades } from "./chat-mobile-scroll-fades.ts";
 import { createChatPaneDiscussionState } from "./chat-pane-discussion-state.ts";
 import { createChatPanePresence } from "./chat-pane-presence.ts";
 import type { PendingSessionPanelToggle } from "./chat-pane-session-panel-toggle.ts";
 import type { ChatPaneConnectionScope, PaneSessionChangeOptions } from "./chat-pane-shared.ts";
 import { SessionParticipationTracker } from "./chat-pane-state.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { requestChatPageUpdate } from "./chat-state-render.ts";
 import type {
   ChatTypingActorState,
   ChatTypingActorView,
   ChatTypingOverflow,
 } from "./chat-typing-presence.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
-import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
+import type { ChatPaneHeaderAction } from "./components/chat-pane-header.types.ts";
+import type { ChatSessionSharingState } from "./components/chat-session-sharing-shared.tsx";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { createChatTranscript } from "./components/chat-transcript-controller.ts";
+import type { ComposerActivityLayout } from "./components/chat-transcript-layout-owner.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import { canAutoFollowChat, handleChatScrollTakeover } from "./scroll.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
@@ -78,26 +78,81 @@ export type ChatPaneInputChanges = {
   inputRegion?: boolean;
   draft?: boolean;
   focusComposer?: boolean;
+  routeResolutionPending?: boolean;
 };
 
 /** Synchronous pane facts and domain resources; Solid owns publication and commits. */
 export abstract class ChatPaneStateOwner {
-  invalidate: () => void = () => {};
+  protected readonly mobileScrollFades = createMobileSheetScrollFades();
+  readonly presentation = {
+    active: false,
+    presented: true,
+    visuallyPresented: true,
+    documentVisible: document.visibilityState !== "hidden",
+  };
   updateComplete: Promise<boolean> = Promise.resolve(true);
+  awaitDomCommit = (): Promise<boolean> => this.updateComplete;
   isConnected = false;
+  headerElement: HTMLElement | null = null;
+  historySentinel: HTMLElement | null = null;
+  transcriptAnnouncement: HTMLElement | null = null;
+  composerShell: HTMLElement | null = null;
+  composerFloat: HTMLElement | null = null;
+  private composerActivityLayout: ComposerActivityLayout | null = null;
+  protected readonly onActivityPillsLayout = (layout: ComposerActivityLayout, detached = false) => {
+    if (detached && this.composerActivityLayout?.strip !== layout.strip) {
+      return;
+    }
+    this.composerActivityLayout = detached ? null : layout;
+    this.transcript.syncViewportGeometry();
+  };
+  private registerPaneElement(
+    key:
+      | "headerElement"
+      | "historySentinel"
+      | "transcriptAnnouncement"
+      | "composerShell"
+      | "composerFloat",
+  ) {
+    return (element: HTMLElement) => {
+      this[key] = element;
+      if (key === "composerFloat") {
+        this.transcript.syncViewportGeometry();
+      }
+      return () => {
+        if (this[key] === element) {
+          this[key] = null;
+          if (key === "composerFloat") {
+            this.transcript.syncViewportGeometry();
+          }
+        }
+      };
+    };
+  }
+  protected readonly registerHeaderElement = this.registerPaneElement("headerElement");
+  protected readonly registerHistorySentinel = this.registerPaneElement("historySentinel");
+  protected readonly registerTranscriptAnnouncement =
+    this.registerPaneElement("transcriptAnnouncement");
+  protected readonly registerComposerShell = this.registerPaneElement("composerShell");
+  protected readonly registerComposerFloat = this.registerPaneElement("composerFloat");
 
+  protected abstract get usesMobileHost(): boolean;
   abstract synchronizeInputs(changes: ChatPaneInputChanges): void;
   abstract afterRender(focusComposerChanged: boolean): void;
   private paneLifecycleRoot: Element | null = null;
   // The first Solid render initializes hidden panes; later hidden work parks.
   private readonly handleVisibilityChange = () => {
-    this.invalidate();
+    this.presentation.documentVisible = document.visibilityState !== "hidden";
     if (document.visibilityState !== "hidden") {
       return;
     }
     const state = this.state;
     if (!state) {
       return;
+    }
+    if (state.chatStreamRenderFrame != null) {
+      // Publish before the browser suspends animation frames; the hidden view stays parked.
+      chatRunPresentation(state).publish();
     }
     const liveDraft = getChatComposerState(this.presentationId).composerTextarea?.value;
     const draftChanged = liveDraft !== undefined && liveDraft !== state.chatMessage;
@@ -106,7 +161,7 @@ export abstract class ChatPaneStateOwner {
       // live textarea while visibility change can still reach browser storage.
       state.handleChatDraftChange(liveDraft);
     }
-    requestChatPageUpdate(state);
+    state.composerDraftChanged?.();
   };
   start() {
     if (this.chatState.disposed) {
@@ -114,7 +169,7 @@ export abstract class ChatPaneStateOwner {
     }
     this.paneLifecycleRoot =
       this.element.closest("openclaw-app-shell") ?? this.element.parentElement;
-    document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    this.chatState.addCleanup(listen(document, "visibilitychange", this.handleVisibilityChange));
     this.isConnected = true;
     this.transcript.start();
     this.refreshBoardSubscriptions();
@@ -129,36 +184,26 @@ export abstract class ChatPaneStateOwner {
         if (this.state) {
           this.reconcileWaitingApprovalSnapshot(snapshot.approvalQueue);
         }
-        this.invalidate();
       }) ?? (() => {}),
     );
     // Configuration publications reconcile the scoped swarm hydrator outside rendering.
     this.chatState.addCleanup(
       this.context.runtimeConfig?.subscribe(() => {
         this.refreshSwarmRoster();
-        this.invalidate();
       }) ?? (() => {}),
-    );
-    this.element.addEventListener(
-      CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
-      this.synchronizeForegroundTranscript,
     );
     this.paneLifecycleRoot?.dispatchEvent(new Event(CHAT_PANE_LIFECYCLE_CHANGED_EVENT));
   }
 
   dispose() {
-    this.element.removeEventListener(
-      CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
-      this.synchronizeForegroundTranscript,
-    );
+    this.context?.connectionBootstrap.cancelQueued(this);
     this.context?.connectionBootstrap.setForegroundPane(this, null);
-    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.chatState.dispose();
     this.isConnected = false;
     this.transcript.dispose();
     this.stopBoardSubscriptions?.();
     this.stopBoardSubscriptions = undefined;
-    this.subscribedBoardProvider = undefined;
+    this.boardPresentation.provider = undefined;
     // A removed Home pane cannot bubble its final loading edge. Notify its
     // former shell so background history does not stay blocked on that pane.
     const paneRoot = this.paneLifecycleRoot;
@@ -167,38 +212,38 @@ export abstract class ChatPaneStateOwner {
     paneRoot?.dispatchEvent(new Event(CHAT_PANE_LIFECYCLE_CHANGED_EVENT));
   }
 
-  mcpAppLaunch?: import("../../components/mcp-app-launch.ts").McpAppOpenDetail;
+  // Optional inputs need own fields after TypeScript erasure so their first value publishes.
+  mcpAppLaunch?: import("../../components/mcp-app-launch.ts").McpAppOpenDetail = undefined;
   paneId = "single";
-  paneLabel?: string;
+  paneLabel?: string = undefined;
   presentationId = "single";
-  chatMessagesBySession?: ChatMessageCache;
-  sessionSnapshotStore?: SessionSnapshotStore;
+  chatMessagesBySession?: ChatMessageCache = undefined;
+  sessionSnapshotStore?: SessionSnapshotStore = undefined;
   // Empty means unresolved route data: boot on the page state's default session
   // without canonicalizing until the container supplies a real key.
   sessionKey = "";
   // This session-keyed pane retains its initial skeleton through URL canonicalization.
   routeLoadingSkeleton = false;
-  agentId?: string;
+  routeResolutionPending = false;
+  agentId?: string = undefined;
   inputRegion: ChatInputRegion = "page";
   compact = false;
-  onBackToSubagents?: () => void;
-  workContext?: ChatWorkContext;
+  onBackToSubagents?: () => void = undefined;
+  workContext?: ChatWorkContext = undefined;
   // Route ownership settles after retained-pane preview; dashboard activity follows
   // the pane the user can already see so its warmed runtime paints immediately.
-  private visuallyPresentedValue = true;
   private conversationVisible = false;
   get visuallyPresented(): boolean {
-    return this.visuallyPresentedValue;
+    return this.presentation.visuallyPresented;
   }
   set visuallyPresented(value: boolean) {
-    const previous = this.visuallyPresentedValue;
+    const previous = this.presentation.visuallyPresented;
     if (value === previous) {
       return;
     }
     const wasConversationPresented = this.conversationPresented;
-    this.visuallyPresentedValue = value;
+    this.presentation.visuallyPresented = value;
     this.element.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-    this.invalidate();
     this.notifyConversationPresentation(wasConversationPresented);
   }
   /** The pane's committed layout and both visual and route ownership permit idle warming. */
@@ -217,22 +262,19 @@ export abstract class ChatPaneStateOwner {
       );
     }
   }
-  private activeValue = false;
   private headerPresentationGeneration = 0;
-  private presentedValue = true;
   get presented(): boolean {
-    return this.presentedValue;
+    return this.presentation.presented;
   }
   set presented(value: boolean) {
-    const previous = this.presentedValue;
+    const previous = this.presentation.presented;
     if (value === previous) {
       return;
     }
     const wasConversationPresented = this.conversationPresented;
     this.headerPresentationGeneration += 1;
-    this.presentedValue = value;
+    this.presentation.presented = value;
     this.element.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-    this.invalidate();
     this.presentedChanged(value);
     this.notifyConversationPresentation(wasConversationPresented);
     this.synchronizeForegroundTranscript();
@@ -240,8 +282,7 @@ export abstract class ChatPaneStateOwner {
   protected presentedChanged(_presented: boolean): void {}
   /** True while the authoritative transcript for this pane is still being fetched. */
   get transcriptLoading(): boolean {
-    const phase = this.state ? getChatHistoryLoadState(this.state).phase : "idle";
-    return phase === "pending-connection" || phase === "in-flight";
+    return Boolean(this.state && isChatHistoryLoading(getChatHistoryLoadState(this.state)));
   }
   /** Scoped transient recovery is presented once in the shell connection indicator. */
   get historyRecovering(): boolean {
@@ -276,29 +317,28 @@ export abstract class ChatPaneStateOwner {
         : null,
     );
   };
-  protected get headerOutcomeOwner(): string {
+  get headerOutcomeOwner(): string {
     return `${this.connectionGeneration}:${this.headerPresentationGeneration}`;
   }
-  protected ownsHeaderOutcome(owner: string): boolean {
+  ownsHeaderOutcome(owner: string): boolean {
     return this.presented && owner === this.headerOutcomeOwner;
   }
   protected get selected(): boolean {
-    return this.activeValue;
+    return this.presentation.active;
   }
   get active(): boolean {
     // The selected split pane stays selected while another region owns input.
     return (
-      this.activeValue &&
+      this.presentation.active &&
       (!this.context || chatInputOwnerForContext(this.context).current === this.inputRegion)
     );
   }
   set active(value: boolean) {
-    const previous = this.activeValue;
+    const previous = this.presentation.active;
     if (value === previous) {
       return;
     }
-    this.activeValue = value;
-    this.invalidate();
+    this.presentation.active = value;
     this.activeChanged(this.active);
     this.synchronizeForegroundTranscript();
   }
@@ -310,32 +350,39 @@ export abstract class ChatPaneStateOwner {
     this.headerSessionMutationAbortController.abort();
     this.headerSessionMutationAbortController = new AbortController();
   }
-  draft?: string;
+  protected retireHeaderSessionDrafts(): void {
+    this.headerSessionDraftAbortController.abort();
+    this.headerSessionDraftAbortController = new AbortController();
+  }
+  draft?: string = undefined;
   focusComposer = false;
+  /** The active pane for the route's session adopts the document's boot composer. */
+  ownsRouteComposer = false;
   dashboardExpanded = false;
-  routeFace?: BoardFace;
-  onFaceChange?: (paneId: string, sessionKey: string, face: BoardFace) => void;
-  onFocusPane?: (paneId: string, intent?: "review-edit") => void;
+  routeFace?: BoardFace = undefined;
+  onFaceChange?: (paneId: string, sessionKey: string, face: BoardFace) => void = undefined;
+  onFocusPane?: (paneId: string, intent?: "review-edit") => void = undefined;
   onPaneSessionChange?: (
     paneId: string,
     nextSessionKey: string,
     options?: PaneSessionChangeOptions,
-  ) => boolean | void;
+  ) => boolean | void = undefined;
   onSessionDeleted?: (
     paneId: string,
     sessionKey: string,
     replacementSessionKey: string,
     preserveDraft?: boolean,
-  ) => void;
+  ) => void = undefined;
   narrow = false;
   mergedChrome = false;
   navDrawerOpen = false;
+  gatewayStatus: GatewayStatusProps | null = null;
   onboarding = false;
-  onOpenSplitView?: () => void;
-  onSplitDown?: (paneId: string) => void;
-  onSplitRight?: (paneId: string) => void;
-  onClosePane?: (paneId: string) => void;
-  boardProvider?: BoardProvider;
+  onOpenSplitView?: () => void = undefined;
+  onSplitDown?: (paneId: string) => void = undefined;
+  onSplitRight?: (paneId: string) => void = undefined;
+  onClosePane?: (paneId: string) => void = undefined;
+  boardProvider?: BoardProvider = undefined;
 
   private publishedRunActivity: ChatPaneStateOwner["runActivity"] = null;
   chatState: ReturnType<typeof createChatState<ChatPageHost>> = this.mountChatState();
@@ -367,9 +414,28 @@ export abstract class ChatPaneStateOwner {
   get runActivity() {
     return this.chatState.projectRunActivity(this.state);
   }
-  readonly composerCapabilities = new ChatComposerCapabilityHost();
+  composerCapabilities: ChatComposerCapabilityHost | undefined = undefined;
+
+  ensureComposerCapabilities(create: () => ChatComposerCapabilityHost) {
+    return (this.composerCapabilities ??= create());
+  }
+
+  protected composerCapabilityMenu(
+    state: ChatPageHost,
+    selectedSession: GatewaySessionRow | undefined,
+    currentAgentId: string,
+  ) {
+    return {
+      initialize: (create: () => ChatComposerCapabilityHost) =>
+        this.ensureComposerCapabilities(create),
+      read: () =>
+        this.composerCapabilities?.props(this.context, state, selectedSession, currentAgentId),
+    };
+  }
   readonly transcript = createChatTranscript(() => this.paneId, {
     geometryEventTarget: this.element,
+    getComposerFloat: () => (this.usesMobileHost ? this.composerFloat : null),
+    getComposerActivityLayout: () => (this.usesMobileHost ? this.composerActivityLayout : null),
     onViewportResize: () => this.chatState.handleTranscriptResize(),
     canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),
     onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
@@ -382,12 +448,8 @@ export abstract class ChatPaneStateOwner {
     return readSessionProgressCard(this.progressCards, this.initialProgressCardTarget());
   }
 
-  protected readonly questionPromptState = createQuestionPromptState(() => {
-    this.questionPrompts = listQuestionPrompts(this.questionPromptState);
-    this.invalidate();
-  });
-  protected questionPrompts: QuestionPrompt[] = [];
-  protected state: ChatPageHost | undefined;
+  readonly questionPromptState = createQuestionPromptState();
+  state: ChatPageHost | undefined;
 
   protected ownsChatSnapshot(target: Parameters<typeof resolveChatSnapshotKey>[1]): boolean {
     const state = this.state;
@@ -432,11 +494,9 @@ export abstract class ChatPaneStateOwner {
   ) {
     const sessions = target ? this.swarm.hydrator?.rows : undefined;
     return {
-      swarm: target && this.swarm.enabled ? { ...target, sessions: sessions ?? [] } : undefined,
       subagentSessions: sessions,
       subagentSessionsHydrated: Boolean(target && this.swarm.hydrator?.hydrated),
       subagentSessionsPending: Boolean(target && this.swarm.hydrator?.pendingChildRead),
-      subagentSessionsRead: Boolean(target && this.swarm.hydrator?.childrenRead),
       // Carry the admitted owner forward; route aliases do not identify child ancestry.
       subagentParentKey: target
         ? scopedSessionArtifactKey(target.sessionKey, target.agentId)
@@ -454,17 +514,18 @@ export abstract class ChatPaneStateOwner {
   }
   /* Infinity until the first ResizeObserver tick so an unmeasured pane keeps
    * the wide side-by-side layout instead of flashing the stacked one. */
-  protected paneWidth = Number.POSITIVE_INFINITY;
+  paneWidth = Number.POSITIVE_INFINITY;
   protected paneResizeObserver: ResizeObserver | null = null;
   protected connectedClient: GatewayBrowserClient | null = null;
   protected boardProviderLease: (BoardProviderLease & { cacheKey: string }) | undefined;
   protected boardProviderLifecycleConnected = false;
-  protected connectionGeneration = 0;
+  connectionGeneration = 0;
   // Owns the abort signal handed to header-scoped destructive confirm dialogs.
   // Retiring it alongside every connectionGeneration bump lets a dialog open
   // across a reconnect or pane teardown dismiss itself, matching
   // SessionDataController's own epoch-scoped controller for the sidebar.
   protected headerSessionMutationAbortController = new AbortController();
+  headerSessionDraftAbortController = new AbortController();
 
   readonly headerPresentation: {
     renameValue: string;
@@ -527,13 +588,15 @@ export abstract class ChatPaneStateOwner {
   };
   protected readonly sessionSharingHydrationTargets = new Map<string, string>();
   protected readonly sessionParticipationTracker = new SessionParticipationTracker();
-  protected resetConfirmation:
-    | {
-        scopeKey: string;
-        promise: Promise<boolean>;
-        resolve: (confirmed: boolean) => void;
-      }
-    | undefined;
+  readonly resetConfirmation: {
+    pending:
+      | {
+          scopeKey: string;
+          promise: Promise<boolean>;
+          resolve: (confirmed: boolean) => void;
+        }
+      | undefined;
+  } = { pending: undefined };
   protected readonly observedBoardPresence = new Map<string, boolean>();
   protected dashboardPresentationActivation?: {
     client: ChatPageHost["client"];
@@ -546,12 +609,11 @@ export abstract class ChatPaneStateOwner {
     enabled: true,
   };
   readonly sessionDiscussion = createChatPaneDiscussionState();
-  protected readonly pendingPanelToggleRequests = new Map<
-    SessionPanelToggleSlot,
-    PendingSessionPanelToggle
-  >();
+  readonly pendingPanelToggles = {
+    requests: new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>(),
+  };
   protected readonly sessionDiscussionProbes = new Set<string>();
-  protected readonly sessionDiscussionPanels = new Map<
+  readonly sessionDiscussionPanels = new Map<
     string,
     {
       generation: number;
@@ -564,6 +626,12 @@ export abstract class ChatPaneStateOwner {
     const sessionKey = this.state?.sessionKey;
     if (sessionKey) {
       this.context.placementStartup.retry(sessionKey);
+    }
+  };
+  protected readonly discardSessionPlacementStartup = () => {
+    const sessionKey = this.state?.sessionKey;
+    if (sessionKey) {
+      this.context.placementStartup.discard(sessionKey);
     }
   };
   protected headerRenameInitialValue = "";
@@ -581,11 +649,12 @@ export abstract class ChatPaneStateOwner {
   protected readonly typingActors = new Map<string, ChatTypingActorState>();
   protected readonly typingTimers = new Map<string, number>();
   readonly publication: { binding: GitHubPublicationBinding | null } = { binding: null };
-  protected readonly dismissedWorkspaceConflictRefs = new Map<string, string>();
+  readonly workspaceConflicts = { dismissedRefs: new Map<string, string>() };
   readonly history = projectChatFields<{
     catalogMessages: unknown[];
     catalogLoading: boolean;
     loadingOlder: boolean;
+    olderError: string | null;
     catalogCursor: string | undefined;
     catalogSession: SessionCatalogSession | null;
     catalogHost: SessionCatalogHost | null;
@@ -593,6 +662,7 @@ export abstract class ChatPaneStateOwner {
     catalogMessages: [],
     catalogLoading: false,
     loadingOlder: false,
+    olderError: null,
     catalogCursor: undefined,
     catalogSession: null,
     catalogHost: null,
@@ -616,7 +686,9 @@ export abstract class ChatPaneStateOwner {
     public context: ApplicationContext,
   ) {}
 
-  subscribedBoardProvider: BoardProvider | undefined;
+  readonly boardPresentation: { provider: BoardProvider | undefined } = {
+    provider: undefined,
+  };
   private stopBoardSubscriptions: (() => void) | undefined;
 
   refreshBoardSubscriptions(): void {
@@ -624,11 +696,11 @@ export abstract class ChatPaneStateOwner {
       return;
     }
     const provider = this.resolveBoardProvider();
-    if (provider === this.subscribedBoardProvider) {
+    if (provider === this.boardPresentation.provider) {
       return;
     }
     this.stopBoardSubscriptions?.();
-    this.subscribedBoardProvider = provider;
+    this.boardPresentation.provider = provider;
     // Commands must reach the synchronous pane owner in order, including while parked.
     this.stopBoardSubscriptions = provider.events.subscribe((event) =>
       this.handleBoardCommand(event),
@@ -663,7 +735,6 @@ export abstract class ChatPaneStateOwner {
     snapshot: ApplicationContext["gateway"]["snapshot"],
   ): void;
   protected abstract applyApplicationConfig(config: ApplicationContext["config"]["current"]): void;
-  protected abstract applySessionsState(state: ApplicationContext["sessions"]["state"]): void;
   protected abstract cancelHeaderRename(): void;
   protected abstract handleArchiveSessionShortcut(event: KeyboardEvent): boolean;
   protected abstract resetOlderMessagesViewport(): void;

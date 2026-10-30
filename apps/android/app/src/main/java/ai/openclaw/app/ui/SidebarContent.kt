@@ -9,7 +9,10 @@ import ai.openclaw.app.SessionCatalogEntry
 import ai.openclaw.app.SessionCatalogState
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSessionPatch
+import ai.openclaw.app.chat.SIDEBAR_SESSION_PAGE_SIZE
+import ai.openclaw.app.chat.SIDEBAR_SESSION_SEE_LESS_THRESHOLD
 import ai.openclaw.app.chat.SessionSnooze
+import ai.openclaw.app.chat.normalizeSidebarSectionOrder
 import ai.openclaw.app.defaultSidebarPageOrder
 import ai.openclaw.app.defaultSidebarVisiblePages
 import ai.openclaw.app.i18n.nativeString
@@ -61,6 +64,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -179,12 +183,17 @@ internal fun updateSidebarDestinationVisibility(
   return SidebarDestination.entries.map(SidebarDestination::stableId).filter(updated::contains)
 }
 
-private const val SIDEBAR_SESSION_LIMIT = 8
+internal data class SidebarSessionGroupSection(
+  val name: String,
+  val entries: List<ChatSessionEntry>,
+)
 
 internal data class SidebarSessionPresentation(
   val pinned: List<ChatSessionEntry>,
-  val recentSections: List<SessionSection>,
-  val canExpandRecent: Boolean,
+  val groups: List<SidebarSessionGroupSection>,
+  /** Uncategorized channel group chats (gateway kind "group"), not catalog folders. */
+  val chatGroups: List<ChatSessionEntry>,
+  val recent: List<ChatSessionEntry>,
 )
 
 internal fun sidebarRecentSessions(
@@ -201,21 +210,59 @@ internal fun sidebarRecentSessions(
         .thenBy { it.key },
     ).toList()
 
+/**
+ * Category folders follow the gateway catalog order, then unknown categories.
+ * Empty catalog folders stay. Pinned rows stay in Pinned. kind=="group" rows
+ * without a category form the Groups zone. Recent is everything else, so the
+ * Recent cap does not hide folder members or channel groups.
+ */
+internal fun sidebarSessionGroupSections(
+  sessions: List<ChatSessionEntry>,
+  knownGroups: List<String>,
+): List<SidebarSessionGroupSection> {
+  val byCategory = linkedMapOf<String, MutableList<ChatSessionEntry>>()
+  val known =
+    knownGroups.mapNotNull { name ->
+      val trimmed = name.trim()
+      if (trimmed.isEmpty() || byCategory.containsKey(trimmed)) {
+        null
+      } else {
+        byCategory[trimmed] = mutableListOf()
+        trimmed
+      }
+    }
+  for (session in sessions) {
+    val category = session.category?.trim()?.takeIf { it.isNotEmpty() } ?: continue
+    byCategory.getOrPut(category) { mutableListOf() }.add(session)
+  }
+  val extras = byCategory.keys.filter { it !in known }.sortedWith(String.CASE_INSENSITIVE_ORDER)
+  return (known + extras).map { name -> SidebarSessionGroupSection(name, byCategory[name].orEmpty()) }
+}
+
 internal fun sidebarSessionPresentation(
   sessions: List<ChatSessionEntry>,
   knownGroups: List<String>,
-  expanded: Boolean,
   excludedSessionKeys: Set<String> = emptySet(),
   currentSessionKey: String = "",
   nowMs: Long = System.currentTimeMillis(),
 ): SidebarSessionPresentation {
-  val (pinned, unpinned) = sidebarRecentSessions(sessions, currentSessionKey, nowMs).partition { it.pinned == true }
-  val recent = unpinned.filter { it.key !in excludedSessionKeys }
-  val visibleRecent = if (expanded) recent else recent.take(SIDEBAR_SESSION_LIMIT)
+  val activeSessions = sidebarRecentSessions(sessions, currentSessionKey, nowMs)
+  val pinned = activeSessions.filter { it.pinned == true }
+  val navigable =
+    activeSessions.filter { session ->
+      session.pinned != true && session.key !in excludedSessionKeys
+    }
+  val grouped = navigable.filter { !it.category.isNullOrBlank() }
+  val ungrouped = navigable.filter { it.category.isNullOrBlank() }
+  // An explicit category wins, matching web/Mac. Groups is only kind=="group".
+  val chatGroups = ungrouped.filter { it.kind == "group" }
+  val recent = ungrouped.filter { it.kind != "group" }
+
   return SidebarSessionPresentation(
     pinned = pinned,
-    recentSections = groupSessionEntries(visibleRecent, knownGroups).filter { it.entries.isNotEmpty() },
-    canExpandRecent = recent.size > SIDEBAR_SESSION_LIMIT,
+    groups = sidebarSessionGroupSections(grouped, knownGroups),
+    chatGroups = chatGroups,
+    recent = recent,
   )
 }
 
@@ -373,6 +420,39 @@ internal fun sidebarPalette(colors: ClawColors): SidebarPalette =
     hairline = colors.border,
   )
 
+internal data class SidebarSectionWindow(
+  val rows: List<ChatSessionEntry>,
+  val canShowMore: Boolean,
+  val canShowLess: Boolean,
+)
+
+/** The active session stays visible even outside the locally revealed page. */
+internal fun sidebarSectionWindow(
+  entries: List<ChatSessionEntry>,
+  visibleLimit: Int,
+  activeSessionKey: String,
+): SidebarSectionWindow {
+  val limit = visibleLimit.coerceAtLeast(0)
+  val total = entries.size
+  val canShowLess = limit > SIDEBAR_SESSION_PAGE_SIZE && total > SIDEBAR_SESSION_SEE_LESS_THRESHOLD
+  if (limit >= total) {
+    return SidebarSectionWindow(
+      rows = entries,
+      canShowMore = false,
+      canShowLess = canShowLess,
+    )
+  }
+  val page = entries.take(limit).toMutableList()
+  val shown = page.mapTo(HashSet()) { it.key }
+  val active = entries.firstOrNull { it.key == activeSessionKey && it.key !in shown }
+  if (active != null) page.add(active)
+  return SidebarSectionWindow(
+    rows = page,
+    canShowMore = true,
+    canShowLess = canShowLess && page.size > SIDEBAR_SESSION_SEE_LESS_THRESHOLD,
+  )
+}
+
 @Composable
 internal fun OpenClawSidebar(
   viewModel: MainViewModel,
@@ -399,7 +479,12 @@ internal fun OpenClawSidebar(
   val lifecycle = LocalLifecycleOwner.current.lifecycle
   val scrollState = rememberScrollState()
   val agentPicker = agentPickerState(agents, selectedAgentId)
-  val storedGroups by viewModel.sessionCustomGroups.collectAsState()
+  val localGroups by viewModel.sessionCustomGroups.collectAsState()
+  val groupCatalog by viewModel.sessionGroupCatalog.collectAsState()
+  val rosterHasMore by viewModel.sessionRosterHasMore.collectAsState()
+  val rosterLoadingMore by viewModel.sessionRosterLoadingMore.collectAsState()
+  val rosterLoadFailed by viewModel.sessionRosterLoadFailed.collectAsState()
+  val storedGroups = (groupCatalog.names + localGroups).distinct()
   val questions by viewModel.chatQuestions.collectAsState()
   val approvalInbox by viewModel.execApprovalInbox.collectAsState()
   val defaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
@@ -429,7 +514,9 @@ internal fun OpenClawSidebar(
   }
   var pagesExpanded by rememberSaveable { mutableStateOf(true) }
   var pagesMenuMode by rememberSaveable { mutableStateOf(SidebarPagesMenuMode.Closed) }
-  var sessionsExpanded by rememberSaveable { mutableStateOf(false) }
+  val visibleLimits = remember(gatewayStableId, selectedAgentId) { mutableStateMapOf<String, Int>() }
+  var collapsedGroups by rememberSaveable(gatewayStableId, selectedAgentId) { mutableStateOf(emptyList<String>()) }
+  var chatGroupsExpanded by rememberSaveable(gatewayStableId, selectedAgentId) { mutableStateOf(true) }
   var expandedCatalogIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
   var pinnedExpanded by rememberSaveable { mutableStateOf(false) }
   var recentExpanded by rememberSaveable { mutableStateOf(false) }
@@ -451,13 +538,19 @@ internal fun OpenClawSidebar(
     sidebarSessionPresentation(
       sessions = sessions,
       knownGroups = storedGroups,
-      expanded = sessionsExpanded,
       excludedSessionKeys = catalogSessionKeys,
       currentSessionKey = activeSessionKey,
       nowMs = sessionNowMs,
     )
   val pinnedSessions = recentPresentation.pinned
-  val recentSections = recentPresentation.recentSections
+  val recentRows = recentPresentation.recent
+  val groupsByName = recentPresentation.groups.associateBy { it.name }
+  val sectionOrder =
+    normalizeSidebarSectionOrder(
+      groupCatalog.sectionOrder,
+      recentPresentation.groups.map { it.name },
+      if (catalogAvailable) catalogSections.map { it.catalog.id } else emptyList(),
+    )
   val desktopObserveAvailable by viewModel.desktopObserveAvailable.collectAsState()
   val orderedPages = orderedSidebarDestinations(pageOrder).filter { it.settingsRoute?.isAvailable(desktopObserveAvailable) != false }
   val visiblePageIdSet = visiblePageIds.toSet()
@@ -511,6 +604,26 @@ internal fun OpenClawSidebar(
           onDragActiveChange = if (dragSource == null) ({}) else onDragActiveChange,
         )
       }
+    }
+  }
+  LaunchedEffect(connection.isConnected, gatewayStableId, selectedAgentId, visible) {
+    if (connection.isConnected && visible) {
+      viewModel.refreshSessionGroups()
+      viewModel.refreshChatSessions()
+    }
+  }
+  val sectionRows: @Composable (String, List<ChatSessionEntry>) -> Unit = { token, entries ->
+    val window = sidebarSectionWindow(entries, visibleLimits[token] ?: SIDEBAR_SESSION_PAGE_SIZE, activeSessionKey)
+    sessionRows(window.rows, SidebarSessionDragSource.Recent)
+    if (window.canShowMore) {
+      SidebarActionRow(nativeString("Show more"), Icons.Default.KeyboardArrowDown, palette, onClick = {
+        visibleLimits[token] = (visibleLimits[token] ?: SIDEBAR_SESSION_PAGE_SIZE) + SIDEBAR_SESSION_PAGE_SIZE
+      })
+    }
+    if (window.canShowLess) {
+      SidebarActionRow(nativeString("Show less"), Icons.Default.KeyboardArrowUp, palette, onClick = {
+        visibleLimits[token] = SIDEBAR_SESSION_PAGE_SIZE
+      })
     }
   }
   LaunchedEffect(
@@ -747,25 +860,11 @@ internal fun OpenClawSidebar(
             }
           }
 
-          if (catalogAvailable) {
+          for (token in sectionOrder) {
             when {
-              catalogState.loading && catalogSections.isEmpty() -> {
-                SidebarCatalogStatus(nativeString("Loading"), palette, progress = true)
-              }
-
-              catalogErrorText != null && catalogSections.isEmpty() -> {
-                SidebarCatalogStatus(catalogErrorText, palette)
-              }
-
-              catalogSections.isEmpty() -> {
-                SidebarCatalogStatus(nativeString("No sessions"), palette)
-              }
-
-              else -> {
-                if (catalogState.loading) {
-                  SidebarCatalogStatus(nativeString("Loading"), palette, progress = true)
-                }
-                catalogSections.forEach { section ->
+              token.startsWith("catalog:") -> {
+                val section = catalogSections.firstOrNull { it.catalog.id == token.removePrefix("catalog:") }
+                if (section != null) {
                   val catalog = section.catalog
                   key("catalog:${catalog.id}") {
                     SidebarCollapsibleHeader(
@@ -827,45 +926,73 @@ internal fun OpenClawSidebar(
                     }
                   }
                 }
-                catalogErrorText?.let { SidebarCatalogStatus(it, palette) }
+              }
+
+              token.startsWith("category:") -> {
+                val group = groupsByName[token.removePrefix("category:")] ?: continue
+                val expanded = group.name !in collapsedGroups
+                SidebarCollapsibleHeader(
+                  label = group.name,
+                  attention = if (expanded) null else attentionFor(group.entries.map { it.key }),
+                  expanded = expanded,
+                  palette = palette,
+                  iconContent = { Icon(Icons.Outlined.Folder, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                  onClick = { collapsedGroups = toggleSidebarExpansion(collapsedGroups, group.name) },
+                )
+                if (expanded) sectionRows(token, group.entries)
+              }
+
+              token == "groups" && recentPresentation.chatGroups.isNotEmpty() -> {
+                SidebarCollapsibleHeader(
+                  label = nativeString("Groups"),
+                  attention = if (chatGroupsExpanded) null else attentionFor(recentPresentation.chatGroups.map { it.key }),
+                  expanded = chatGroupsExpanded,
+                  palette = palette,
+                  onClick = { chatGroupsExpanded = !chatGroupsExpanded },
+                )
+                if (chatGroupsExpanded) sectionRows(token, recentPresentation.chatGroups)
+              }
+
+              token == "ungrouped" -> {
+                SidebarCollapsibleHeader(
+                  label = nativeString("Recent"),
+                  attention = if (recentExpanded) null else attentionFor(recentRows.map { it.key }),
+                  expanded = recentExpanded,
+                  palette = palette,
+                  onClick = { recentExpanded = !recentExpanded },
+                )
+                if (recentExpanded) {
+                  if (recentRows.isEmpty()) {
+                    Text(
+                      nativeString("No recent sessions"),
+                      style = ClawTheme.type.caption,
+                      color = palette.muted,
+                      modifier = Modifier.padding(horizontal = 40.dp, vertical = 10.dp),
+                    )
+                  } else {
+                    sectionRows(token, recentRows)
+                  }
+                }
               }
             }
           }
-
-          SidebarCollapsibleHeader(
-            label = nativeString("Recent"),
-            attention = if (recentExpanded) null else attentionFor(sidebarRecentSessions(sessions, activeSessionKey, sessionNowMs).filter { it.pinned != true && it.key !in catalogSessionKeys }.map { it.key }),
-            expanded = recentExpanded,
-            palette = palette,
-            onClick = { recentExpanded = !recentExpanded },
-          )
-          if (recentExpanded) {
-            if (recentSections.isEmpty()) {
-              Text(
-                text = nativeString("No recent sessions"),
-                style = ClawTheme.type.caption,
-                color = palette.muted,
-                modifier = Modifier.padding(horizontal = 40.dp, vertical = 10.dp),
-              )
-            } else {
-              recentSections.forEach { section ->
-                section.title?.let { title -> SidebarSectionTitle(title, palette, Modifier.padding(start = 24.dp)) }
-                sessionRows(section.entries, SidebarSessionDragSource.Recent)
-              }
+          if (catalogAvailable) {
+            if (catalogState.loading) SidebarCatalogStatus(nativeString("Loading"), palette, progress = true)
+            catalogErrorText?.let { SidebarCatalogStatus(it, palette) }
+            if (catalogSections.isEmpty() && !catalogState.loading && catalogErrorText == null) {
+              SidebarCatalogStatus(nativeString("No sessions"), palette)
             }
-            if (recentPresentation.canExpandRecent) {
-              SidebarActionRow(
-                label = nativeString(if (sessionsExpanded) "Show less" else "Show more"),
-                icon =
-                  if (sessionsExpanded) {
-                    Icons.Default.KeyboardArrowUp
-                  } else {
-                    Icons.Default.KeyboardArrowDown
-                  },
-                palette = palette,
-                onClick = { sessionsExpanded = !sessionsExpanded },
-              )
+          }
+          if (rosterHasMore) {
+            if (rosterLoadFailed) {
+              SidebarCatalogStatus(nativeString("Could not load more sessions. Try again."), palette)
             }
+            SidebarActionRow(
+              label = nativeString(if (rosterLoadingMore) "Loading" else "Load more sessions"),
+              icon = Icons.Default.KeyboardArrowDown,
+              palette = palette,
+              onClick = { if (!rosterLoadingMore) scope.launch { viewModel.loadMoreChatSessions() } },
+            )
           }
         }
       }

@@ -34,9 +34,15 @@ it("keeps current menu input reads bounded after visibility and direction change
     );
   });
   flush();
+  expect(binding.runtime()).toBeUndefined();
+  expect(overlay.request(true)).toBe(true);
+  await expect.poll(() => binding.runtime()).toBeDefined();
+  expect(overlay.request(false)).toBe(true);
+  await Promise.resolve();
+  flush();
   const readCost = () => {
     contentReads = 0;
-    const api = binding.read();
+    const api = binding.runtime()!.read();
     expect(api.getContentProps().id).toBe("current-menu-inputs:content");
     return contentReads;
   };
@@ -48,12 +54,12 @@ it("keeps current menu input reads bounded after visibility and direction change
     expect(overlay.request(true)).toBe(true);
     await Promise.resolve();
     flush();
-    expect(binding.read().open).toBe(true);
-    expect(binding.service.prop("dir")).toBe(index % 2 === 0 ? "rtl" : "ltr");
+    expect(binding.runtime()!.read().open).toBe(true);
+    expect(binding.runtime()!.service.prop("dir")).toBe(index % 2 === 0 ? "rtl" : "ltr");
     expect(overlay.request(false)).toBe(true);
     await Promise.resolve();
     flush();
-    expect(binding.read().open).toBe(false);
+    expect(binding.runtime()!.read().open).toBe(false);
   }
   expect(readCost()).toBe(initialCost);
 });

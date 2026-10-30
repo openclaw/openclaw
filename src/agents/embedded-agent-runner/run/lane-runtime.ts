@@ -4,7 +4,6 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import type { CommandLaneSnapshot } from "../../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../../process/command-queue.types.js";
-import { isMainSessionRestartRecoveryInputProvenance } from "../../../sessions/input-provenance.js";
 import { DEFAULT_AGENT_TIMEOUT_MS } from "../../timeout.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
@@ -41,17 +40,13 @@ export function resolveEmbeddedRunSessionLanePolicy(
   const triggerPriority =
     trigger === "user" || trigger === "manual"
       ? "foreground"
-      : ["cron", "heartbeat", "memory", "overflow"].includes(trigger ?? "")
+      : ["cron", "memory", "overflow"].includes(trigger ?? "")
         ? "background"
         : "normal";
-  const isRestartRecovery = isMainSessionRestartRecoveryInputProvenance(inputProvenance);
   // Inter-session work must yield to humans without losing already-admitted
   // user work when the Gateway lifecycle rotates while it waits.
   return {
-    priority:
-      isRestartRecovery || inputProvenance?.kind === "inter_session"
-        ? "background"
-        : triggerPriority,
-    canResumeAcrossRotation: !isRestartRecovery && triggerPriority === "foreground",
+    priority: inputProvenance?.kind === "inter_session" ? "background" : triggerPriority,
+    canResumeAcrossRotation: triggerPriority === "foreground",
   };
 }

@@ -1,23 +1,13 @@
 // Skill contract tests cover full and compact catalog serialization.
 import { formatSkillsForPrompt as upstreamFormatSkillsForPrompt } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it } from "vitest";
-import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
+import { makeSkill } from "../test-support/test-helpers.js";
 import {
   compactSkillsPromptForContext,
   formatSkillsForPromptCore,
   type Skill,
   formatSkillsCompactForPrompt as formatSkillsCompact,
 } from "./skill-contract.js";
-
-function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/SKILL.md`): Skill {
-  return createCanonicalFixtureSkill({
-    name,
-    description: desc,
-    filePath,
-    baseDir: `/skills/${name}`,
-    source: "workspace",
-  });
-}
 
 describe("compactSkillsPromptForContext", () => {
   it("preserves nested entities and whole surrogate pairs while normalizing whitespace", () => {

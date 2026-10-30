@@ -212,6 +212,8 @@ export const zh_TW = {
       returningToSelection: "返回選擇。",
       arrayPromptSuffix: "（逗號分隔，留空則清除）",
       arrayPlaceholder: "value1, value2",
+      invalidInteger: "請輸入 JSON 整數。",
+      invalidNumber: "請輸入有效的 JSON 數字。",
       sensitiveField:
         '"{label}" 是敏感欄位。請透過以下方式設定：\n  openclaw config set plugins.entries.{plugin}.config.{field} <value>\n或使用 Web UI 設定頁。',
       sensitiveTitle: "敏感欄位",
@@ -1154,9 +1156,9 @@ export const zh_TW = {
       daemonRuntime: "Gateway 服務執行環境",
       daemonRuntimeNode: "Node（建議）",
       daemonRuntimeNodeHint: "託管服務的主要與建議執行環境。",
-      daemonRuntimeBun: "Bun 1.4.3+",
+      daemonRuntimeBun: "Bun 1.4.4+",
       daemonRuntimeBunHint:
-        "需要 Bun 1.4.3 或更新版本，並使用符合 WAL 重設安全要求的 node:sqlite。",
+        "需要 Bun 1.4.4 或更新版本，並使用符合 WAL 重設安全要求的 node:sqlite。",
       editBootstrap: "之後可編輯 BOOTSTRAP.md 來修改 agent 的自我介紹方式。",
       bootstrapHatchMessage: "醒醒，我的朋友！",
       firstTerminalChat: '第一次終端機聊天會傳送："醒醒，我的朋友！"',

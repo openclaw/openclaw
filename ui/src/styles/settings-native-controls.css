@@ -33,9 +33,9 @@
   width: calc(var(--settings-toggle-height) + 2 * var(--settings-toggle-travel));
   height: var(--settings-toggle-height);
   box-sizing: border-box;
-  border: 1px solid var(--muted);
+  border: 1px solid transparent;
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--border-strong) 60%, transparent);
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
   pointer-events: none;
   transition: background var(--duration-fast) var(--ease-out);
 }
@@ -74,35 +74,13 @@
   outline-offset: 1px;
 }
 
-.settings-toggle:has(input:disabled) {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.settings-row--toggle:has(.settings-toggle__input:disabled) {
+.settings-row--toggle:has(.settings-toggle__input:is(:disabled, [aria-disabled="true"])) {
   cursor: not-allowed;
 }
 
 .settings-segmented__btn:has(> .settings-segmented__input) {
   position: relative;
   min-height: calc(var(--settings-control-height) - 6px);
-}
-
-.settings-segmented > .settings-segmented__btn:has(> input:checked) {
-  background: var(--bg-elevated);
-  color: var(--text-strong);
-  box-shadow: var(--shadow-sm);
-}
-
-.settings-segmented > .settings-segmented__btn:has(> input:focus-visible) {
-  outline: none;
-  color: var(--text);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
-}
-
-.settings-segmented > .settings-segmented__btn:has(> input:disabled) {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 @media (forced-colors: active) {
@@ -118,14 +96,5 @@
   }
   .settings-toggle__input:checked + .settings-toggle__control::before {
     background: HighlightText;
-  }
-  .settings-segmented > .settings-segmented__btn:has(> input:checked) {
-    text-decoration: underline 2px;
-    text-underline-offset: 3px;
-  }
-
-  .settings-segmented > .settings-segmented__btn:has(> input:focus-visible) {
-    outline: 2px solid Highlight;
-    outline-offset: 2px;
   }
 }

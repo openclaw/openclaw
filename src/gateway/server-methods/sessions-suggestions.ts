@@ -18,27 +18,45 @@ import {
   finalizeSessionSuggestionClaimInWorker,
   releaseSessionSuggestionDispatchInWorker,
 } from "../../config/sessions/session-metadata-write.async.js";
+import { isSessionWorkStartInvalidatedError } from "../../config/sessions/work-start-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   getSessionRowProjection,
   requireSessionRowProjection,
 } from "../session-row-projection-access.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { captureSessionSharingMemoryFacts } from "../session-sharing-incognito.js";
 import type { SessionSharingTarget } from "../session-sharing-policy.js";
 import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
-import { prepareProjectedSessionSharing } from "../session-sharing.js";
+import {
+  prepareProjectedSessionSharing,
+  SessionMutationAuthorizationChangedError,
+} from "../session-sharing.js";
+import { handleChatSend } from "./chat-send-handler.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
+import { respondError } from "./response.js";
+import {
+  retainForwardedSessionMutationAuthorization,
+  withSessionMutationCommitGuard,
+} from "./session-mutation-guards.js";
 import { sharingExpectedEntry } from "./sessions-sharing-authority.js";
 import {
+  authorizeSessionSuggestionMutation,
   createSessionSuggestionMutation,
+  sessionSuggestionSessionChangedError,
   suggestionScope,
   requireSuggestionTarget,
   readCollaborationTarget,
   requireVisibleSuggestionRole,
 } from "./sessions-suggestions-access.js";
-import { dispatchSuggestion } from "./sessions-suggestions-dispatch.js";
 import { sessionTypingHandler } from "./sessions-typing.js";
-import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandlers,
+  RespondFn,
+  SessionMutationAuthorization,
+} from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 function protocolSuggestion(
@@ -82,17 +100,14 @@ function publishSuggestion(
 }
 
 function respondSuggestionDispatchError(respond: RespondFn, error: unknown): void {
-  respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.UNAVAILABLE,
-      error instanceof Error ? error.message : "suggestion dispatch outcome is unknown",
-      {
-        retryable: true,
-        retryAfterMs: SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
-      },
-    ),
+  respondError(
+    respond,
+    ErrorCodes.UNAVAILABLE,
+    error instanceof Error ? error.message : "suggestion dispatch outcome is unknown",
+    {
+      retryable: true,
+      retryAfterMs: SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
+    },
   );
 }
 
@@ -107,20 +122,12 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
         return;
       }
       if (!author) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "identified suggestion author required"),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "identified suggestion author required");
         return;
       }
       const text = params.text;
       if (!text.trim()) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "suggestion text is required"),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "suggestion text is required");
         return;
       }
       const expectedSessionId = target.entry.sessionId;
@@ -163,13 +170,10 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           respond(false, undefined, added.error);
         }
       } catch (error) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            error instanceof Error ? error.message : "suggestion could not be stored",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          error instanceof Error ? error.message : "suggestion could not be stored",
         );
       } finally {
         mutation.release();
@@ -221,11 +225,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           hasCurrentClientAuthority?.() === false ||
           gatewayClientSessionCreator(client)?.id !== identity?.id
         ) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.FORBIDDEN, "suggestion reader authority changed"),
-          );
+          respondError(respond, ErrorCodes.FORBIDDEN, "suggestion reader authority changed");
           return null;
         }
         const target = readCollaborationTarget(projection, query, actorFacts);
@@ -304,13 +304,10 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       const resolution = params.resolution;
       const dispatching = resolution === "send" || resolution === "queue";
       if (dispatching && !client) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "connected client required for suggestion dispatch",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "connected client required for suggestion dispatch",
         );
         return;
       }
@@ -350,32 +347,26 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
         }
         const claim = claimResult.value;
         if (!claim) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "pending suggestion not found"),
-          );
+          respondError(respond, ErrorCodes.INVALID_REQUEST, "pending suggestion not found");
           return;
         }
         if (claim.kind === "busy") {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, "suggestion resolution is already in progress", {
+          respondError(
+            respond,
+            ErrorCodes.UNAVAILABLE,
+            "suggestion resolution is already in progress",
+            {
               retryable: true,
               retryAfterMs: SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
-            }),
+            },
           );
           return;
         }
         if (claim.kind === "mismatch") {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `suggestion dispatch recovery must retry the original ${claim.resolution} action`,
-            ),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            `suggestion dispatch recovery must retry the original ${claim.resolution} action`,
           );
           return;
         }
@@ -400,21 +391,134 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           }
         };
         if (dispatching && client) {
+          const dispatchSuggestion = async (): Promise<
+            { ok: true } | { ok: false; error: Parameters<RespondFn>[2] }
+          > => {
+            let response: Parameters<RespondFn> | undefined;
+            const suggestion = claim.suggestion;
+            const chatParams = {
+              sessionKey: target.canonicalKey,
+              agentId: target.agentId,
+              sessionId: expectedSessionId,
+              message: suggestion.text,
+              queueMode: resolution === "queue" ? ("followup" as const) : ("steer" as const),
+              idempotencyKey: `session-suggestion:${suggestion.id}`,
+            };
+            const captureResponse: RespondFn = (...args) => {
+              response = args;
+            };
+            const label = suggestion.authorLabel ?? suggestion.authorId;
+            const chatClient: GatewayClient = {
+              ...client,
+              internal: {
+                ...client.internal,
+                syntheticClient: true,
+                senderAttribution: {
+                  id: suggestion.authorId,
+                  identity: { type: "profile", id: suggestion.authorId },
+                  name: `Suggested by ${label}`,
+                },
+              },
+            };
+            const assertRequestCurrent = () => {
+              signal?.throwIfAborted();
+              sessionMutationAuthorization?.assertCurrent();
+            };
+            const assertAdmittedCurrent =
+              sessionMutationAuthorization?.assertAdmittedSourceCurrent ??
+              sessionMutationAuthorization?.assertAdmittedInputCurrent ??
+              sessionMutationAuthorization?.assertCurrent;
+            let chatAuthorization: SessionMutationAuthorization | undefined;
+            let releaseChatAuthorization: (() => void) | undefined;
+            try {
+              assertRequestCurrent();
+              const current = mutation.readCurrent();
+              if (
+                !authorizeSessionSuggestionMutation(
+                  {
+                    client,
+                    ...current,
+                    sessionKey: target.canonicalKey,
+                    respond: captureResponse,
+                  },
+                  resolution,
+                )
+              ) {
+                return { ok: false, error: response?.[2] };
+              }
+              const expectedTarget = {
+                agentId: current.target.agentId,
+                sessionKey: current.target.canonicalKey,
+                storePath: current.target.storePath,
+                sessionId: expectedSessionId,
+              };
+              const authorization = await resolveSessionMutationAuthorizationAsync({
+                client: chatClient,
+                method: "chat.send",
+                requestParams: chatParams,
+                context,
+                expectedTarget,
+                assertInvocationCurrent: assertRequestCurrent,
+              });
+              releaseChatAuthorization = authorization.authorization?.release;
+              assertRequestCurrent();
+              if (authorization.error) {
+                return { ok: false, error: authorization.error };
+              }
+              chatAuthorization = withSessionMutationCommitGuard(
+                authorization.authorization,
+                assertAdmittedCurrent,
+                assertRequestCurrent,
+              );
+              if (chatAuthorization) {
+                chatAuthorization = retainForwardedSessionMutationAuthorization(
+                  chatAuthorization,
+                  sessionMutationAuthorization,
+                );
+                releaseChatAuthorization = chatAuthorization.release;
+              }
+              chatAuthorization?.assertCurrent();
+            } catch (error) {
+              releaseChatAuthorization?.();
+              // No chat invocation occurred, so the caller can release its exact claim.
+              if (error instanceof SessionMutationAuthorizationChangedError) {
+                return { ok: false, error: error.error };
+              }
+              if (isSessionWorkStartInvalidatedError(error)) {
+                return {
+                  ok: false,
+                  error: sessionSuggestionSessionChangedError(target.canonicalKey),
+                };
+              }
+              return {
+                ok: false,
+                error: errorShape(
+                  ErrorCodes.UNAVAILABLE,
+                  error instanceof Error
+                    ? error.message
+                    : "suggestion dispatch authorization failed",
+                ),
+              };
+            }
+            try {
+              await handleChatSend({
+                req: { ...req, method: "chat.send", params: chatParams },
+                params: chatParams,
+                client: chatClient,
+                isWebchatConnect,
+                respond: captureResponse,
+                sessionMutationAuthorization: chatAuthorization,
+                sessionMutationCommitGuard: assertRequestCurrent,
+                context,
+              });
+            } finally {
+              releaseChatAuthorization?.();
+            }
+            return response?.[0] === true ? { ok: true } : { ok: false, error: response?.[2] };
+          };
           let dispatched: Awaited<ReturnType<typeof dispatchSuggestion>>;
           try {
-            dispatched = await dispatchSuggestion({
-              context,
-              client,
-              req,
-              isWebchatConnect,
-              target,
-              suggestion: claim.suggestion,
-              resolution,
-              expectedSessionId,
-              readCurrent: mutation.readCurrent,
-              signal,
-              sessionMutationAuthorization,
-            });
+            dispatched = await dispatchSuggestion();
           } catch (error) {
             respondSuggestionDispatchError(respond, error);
             return;
@@ -466,12 +570,13 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
         }
         const suggestion = finalizeResult.value;
         if (!suggestion) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, "suggestion resolution could not be finalized", {
+          respondError(
+            respond,
+            ErrorCodes.UNAVAILABLE,
+            "suggestion resolution could not be finalized",
+            {
               retryable: true,
-            }),
+            },
           );
           return;
         }

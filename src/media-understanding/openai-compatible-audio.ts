@@ -13,15 +13,13 @@ import {
 } from "./shared.js";
 import type { AudioTranscriptionRequest, AudioTranscriptionResult } from "./types.js";
 
-type OpenAiCompatibleAudioParams = AudioTranscriptionRequest & {
-  defaultBaseUrl: string;
-  defaultModel: string;
-  provider?: string;
-};
-
 /** Sends an OpenAI-compatible audio transcription request and returns validated text output. */
 export async function transcribeOpenAiCompatibleAudio(
-  params: OpenAiCompatibleAudioParams,
+  params: AudioTranscriptionRequest & {
+    defaultBaseUrl: string;
+    defaultModel: string;
+    provider?: string;
+  },
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =

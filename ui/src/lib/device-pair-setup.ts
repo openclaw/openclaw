@@ -315,6 +315,7 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
   const requestToken = {};
   devicePairSetupRequests.set(state, requestToken);
   if (lifecycle.phase === "error" && lifecycle.source === "status") {
+    state.devicePairSetupLifecycle = { phase: "reconciling", access, setupId: lifecycle.setupId };
     const lookup = await readGatewaySetupCompletion(state, lifecycle.setupId);
     if (devicePairSetupRequests.get(state) === requestToken) {
       applyDevicePairSetupCompletionLookup(state, lifecycle.setupId, access, lookup);

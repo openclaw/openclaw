@@ -36,7 +36,6 @@ export type SessionTranscriptProjectionFacts = {
 };
 
 export type SessionTranscriptProjectionReceipt = {
-  path: string;
   sessionId: string;
   /** The actor snapshot validated this entry independently of transcript-window completeness. */
   entrySessionKey?: string;

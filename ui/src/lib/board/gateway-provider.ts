@@ -5,19 +5,20 @@ import type {
   BoardGetParams,
   BoardOp,
   BoardSnapshot,
-  BoardWidget,
   BoardWidgetAppViewResult,
 } from "@openclaw/gateway-protocol";
+import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import { sleepWithAbort } from "@openclaw/retry";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../format-error.ts";
+import { isBoardSnapshot } from "../protocol-validators.generated/board.js";
 import {
   normalizeSessionKeyForUiComparison,
   parseAgentSessionKey,
   resolveUiConversationIdentity,
 } from "../sessions/session-key.ts";
 import { BoardMcpAppViewCache } from "./mcp-app-view-cache.ts";
-import { emptyBoardSnapshot, normalizeBoardWidgetTitle } from "./provider-helpers.ts";
+import { emptyBoardSnapshot } from "./provider-helpers.ts";
 import {
   EventStream,
   ValueSignal,
@@ -30,9 +31,11 @@ import { canvasWidgetNameForDocument, mcpAppWidgetNameForViewId } from "./widget
 import {
   copyBoardWidgetTicketReceipt,
   recordBoardWidgetTicketReceipt,
+  remainingBoardWidgetTicketTtlMs,
 } from "./widget-ticket-lifetime.ts";
 
 type BoardGatewayClient = Pick<GatewayBrowserClient, "request" | "addEventListener">;
+type CacheSnapshot = (snapshot: BoardSnapshot | null, receivedAtMs: number) => void;
 
 export class GatewayBoardProvider implements BoardProvider {
   readonly canPinWidgets = true;
@@ -57,6 +60,9 @@ export class GatewayBoardProvider implements BoardProvider {
   private readonly appViews = new BoardMcpAppViewCache();
   private disposed = false;
   private snapshotLoaded = false;
+  private snapshotRevalidated = false;
+  private cacheReceipt: { snapshot: BoardSnapshot | null; receivedAtMs: number } | undefined;
+  private readonly cacheListeners = new Set<CacheSnapshot>();
 
   constructor(
     private readonly session: BoardGetParams,
@@ -67,7 +73,7 @@ export class GatewayBoardProvider implements BoardProvider {
     this.snapshot$ = this.snapshotSignal;
     this.loadError$ = this.loadErrorSignal;
     this.events = this.eventStream;
-    this.subscribe(client);
+    this.attachGatewayEvents(client);
     if (connected) {
       void this.activate();
     }
@@ -108,9 +114,11 @@ export class GatewayBoardProvider implements BoardProvider {
     this.changedWidgets.clear();
     this.appViews.clear();
     this.snapshotLoaded = false;
+    this.snapshotRevalidated = false;
+    this.cacheReceipt = undefined;
     this.setLoadError(null);
     this.snapshotSignal.set(emptyBoardSnapshot(this.sessionKey));
-    this.subscribe(client);
+    this.attachGatewayEvents(client);
     if (connected) {
       void this.activate();
     }
@@ -122,6 +130,50 @@ export class GatewayBoardProvider implements BoardProvider {
 
   get hasLoadedSnapshot(): boolean {
     return this.snapshotLoaded;
+  }
+
+  subscribeCacheSnapshot(listener: CacheSnapshot): () => void {
+    if (this.disposed) {
+      return () => {};
+    }
+    const notify: CacheSnapshot = (snapshot, receivedAtMs) => listener(snapshot, receivedAtMs);
+    this.cacheListeners.add(notify);
+    if (this.cacheReceipt) {
+      listener(this.cacheReceipt.snapshot, this.cacheReceipt.receivedAtMs);
+    }
+    return () => this.cacheListeners.delete(notify);
+  }
+
+  restoreSnapshot(snapshot: unknown, receivedAtMs: number): void {
+    if (
+      this.disposed ||
+      this.snapshotLoaded ||
+      this.snapshotRevalidated ||
+      !isBoardSnapshot(snapshot) ||
+      !this.matchesSession(snapshot.sessionKey)
+    ) {
+      return;
+    }
+    const now = Date.now();
+    const widgets = snapshot.widgets
+      .filter(
+        (widget) =>
+          widget.contentKind !== "mcp-app" ||
+          (widget.grantState !== "pending" && widget.grantState !== "rejected"),
+      )
+      .map((widget) => {
+        const restored = Object.assign(
+          {},
+          widget,
+          widget.viewTicketTtlMs !== undefined
+            ? { viewTicketTtlMs: Math.max(0, widget.viewTicketTtlMs - (now - receivedAtMs)) }
+            : {},
+        );
+        recordBoardWidgetTicketReceipt(restored, now);
+        return restored;
+      });
+    this.snapshotLoaded = true;
+    this.snapshotSignal.set({ ...snapshot, widgets });
   }
 
   get appViewGeneration(): number {
@@ -142,6 +194,8 @@ export class GatewayBoardProvider implements BoardProvider {
     this.userRefreshRequested = false;
     this.changedWidgets.clear();
     this.appViews.clear();
+    this.cacheListeners.clear();
+    this.cacheReceipt = undefined;
     this.wakeRetryDelay?.();
   }
 
@@ -186,7 +240,8 @@ export class GatewayBoardProvider implements BoardProvider {
     name: string,
     content: { kind: "canvas-doc"; docId: string } | { kind: "mcp-app"; viewId: string },
   ): Promise<void> {
-    const title = normalizeBoardWidgetTitle(input.title);
+    const normalizedTitle = input.title?.trim() ?? "";
+    const title = normalizedTitle ? truncateCodePoints(normalizedTitle, 80) : undefined;
     await this.mutate(
       "board.widget.put",
       {
@@ -234,7 +289,7 @@ export class GatewayBoardProvider implements BoardProvider {
     force: boolean,
   ): Promise<BoardWidgetAppViewState> {
     if (this.disposed || !this.connected) {
-      return { status: "stale", error: "Dashboard MCP App view unavailable" };
+      return { status: "stale" };
     }
     const widget = this.snapshotSignal.value.widgets.find(
       (candidate) =>
@@ -243,7 +298,7 @@ export class GatewayBoardProvider implements BoardProvider {
         candidate.contentKind === "mcp-app",
     );
     if (!widget) {
-      return { status: "stale", error: "Dashboard MCP App widget unavailable" };
+      return { status: "stale" };
     }
     const client = this.client;
     const clientGeneration = this.clientGeneration;
@@ -264,12 +319,12 @@ export class GatewayBoardProvider implements BoardProvider {
       client !== this.client ||
       clientGeneration !== this.clientGeneration
     ) {
-      return { status: "stale", error: "Dashboard MCP App view unavailable" };
+      return { status: "stale" };
     }
     return result;
   }
 
-  private subscribe(client: BoardGatewayClient): void {
+  private attachGatewayEvents(client: BoardGatewayClient): void {
     // Gateway event subscriptions return teardown; this is not a native DOM listener.
     this.unsubscribe = client.addEventListener((event) => {
       if (this.disposed || client !== this.client) {
@@ -408,6 +463,12 @@ export class GatewayBoardProvider implements BoardProvider {
           (error.gatewayCode === "FORBIDDEN" ||
             (error.gatewayCode === "UNAVAILABLE" && !error.retryable))
         ) {
+          if (!this.snapshotRevalidated || error.gatewayCode === "FORBIDDEN") {
+            this.snapshotLoaded = false;
+            this.snapshotSignal.set(emptyBoardSnapshot(this.sessionKey));
+          }
+          this.snapshotRevalidated = true;
+          this.cacheSnapshot(null, Date.now());
           // A definitive rejection consumes this refresh. Only a newer event,
           // connection generation, or explicit refresh can request another one.
           this.refreshRequested =
@@ -486,9 +547,49 @@ export class GatewayBoardProvider implements BoardProvider {
         previous.revision === widget.revision &&
         previous.instanceId === widget.instanceId
       ) {
+        if (
+          widget.contentKind === "plugin" &&
+          widget.pluginKind === "session:report" &&
+          widget.instanceId !== undefined &&
+          previous.contentKind === "plugin" &&
+          previous.pluginKind === widget.pluginKind &&
+          !widget.frameUrl &&
+          !widget.viewTicket &&
+          !previous.frameUrl &&
+          !previous.viewTicket
+        ) {
+          // Report puts advance revision; layout operations do not. Retain the
+          // saved data while applying every change to the surrounding envelope.
+          const fields = Object.keys(widget);
+          if (
+            fields.length === Object.keys(previous).length &&
+            fields.every(
+              (key) =>
+                key === "props" || Object.is(Reflect.get(widget, key), Reflect.get(previous, key)),
+            )
+          ) {
+            return previous;
+          }
+          return { ...widget, props: previous.props };
+        }
         if (preserveMissingViewContracts && widget.viewGeneration === undefined) {
           // Mutation snapshots omit the view contract minted by board.get.
-          const preserved = preserveBoardWidgetViewContract(widget, previous);
+          const preserved = {
+            ...widget,
+            ...(previous.frameUrl !== undefined ? { frameUrl: previous.frameUrl } : {}),
+            ...(previous.viewTicket !== undefined ? { viewTicket: previous.viewTicket } : {}),
+            ...(previous.viewTicketTtlMs !== undefined
+              ? { viewTicketTtlMs: previous.viewTicketTtlMs }
+              : {}),
+            ...(previous.viewGeneration !== undefined
+              ? { viewGeneration: previous.viewGeneration }
+              : {}),
+            ...(previous.sandboxUrl !== undefined ? { sandboxUrl: previous.sandboxUrl } : {}),
+            ...(previous.sandboxPort !== undefined ? { sandboxPort: previous.sandboxPort } : {}),
+            ...(previous.sandboxOrigin !== undefined
+              ? { sandboxOrigin: previous.sandboxOrigin }
+              : {}),
+          };
           copyBoardWidgetTicketReceipt(preserved, previous, receivedAtMs);
           return preserved;
         }
@@ -507,8 +608,29 @@ export class GatewayBoardProvider implements BoardProvider {
     });
     this.appViews.prune(widgets);
     this.snapshotLoaded = true;
-    this.snapshotSignal.set({ ...snapshot, widgets });
+    this.snapshotRevalidated = true;
+    const next = { ...snapshot, widgets };
+    this.snapshotSignal.set(next);
+    this.cacheSnapshot(next, receivedAtMs);
     this.setLoadError(null);
+  }
+
+  private cacheSnapshot(snapshot: BoardSnapshot | null, receivedAtMs: number): void {
+    let expired = false;
+    // Mutation snapshots retain older ticket receipts; cache TTLs start at this publication.
+    const cached = snapshot && {
+      ...snapshot,
+      widgets: snapshot.widgets.map((widget) => {
+        const ttl = remainingBoardWidgetTicketTtlMs(widget);
+        expired ||= ttl === 0;
+        return ttl === undefined || ttl === 0 ? widget : { ...widget, viewTicketTtlMs: ttl };
+      }),
+    };
+    const persisted = expired ? null : cached;
+    this.cacheReceipt = { snapshot: persisted, receivedAtMs };
+    for (const listener of this.cacheListeners) {
+      listener(persisted, receivedAtMs);
+    }
   }
 
   private setLoadError(error: string | null): void {
@@ -530,19 +652,4 @@ export class GatewayBoardProvider implements BoardProvider {
       });
     }
   }
-}
-
-function preserveBoardWidgetViewContract(widget: BoardWidget, previous: BoardWidget): BoardWidget {
-  return {
-    ...widget,
-    ...(previous.frameUrl !== undefined ? { frameUrl: previous.frameUrl } : {}),
-    ...(previous.viewTicket !== undefined ? { viewTicket: previous.viewTicket } : {}),
-    ...(previous.viewTicketTtlMs !== undefined
-      ? { viewTicketTtlMs: previous.viewTicketTtlMs }
-      : {}),
-    ...(previous.viewGeneration !== undefined ? { viewGeneration: previous.viewGeneration } : {}),
-    ...(previous.sandboxUrl !== undefined ? { sandboxUrl: previous.sandboxUrl } : {}),
-    ...(previous.sandboxPort !== undefined ? { sandboxPort: previous.sandboxPort } : {}),
-    ...(previous.sandboxOrigin !== undefined ? { sandboxOrigin: previous.sandboxOrigin } : {}),
-  };
 }

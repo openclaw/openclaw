@@ -22,21 +22,18 @@ import {
   type UpdateFailureReportReceipt,
 } from "./restart-sentinel.js";
 import {
-  cleanRetiredUpdateFailureReportArtifacts,
-  type UpdateFailureReportSweepReceipt,
-} from "./update-failure-report-artifact-sweep.js";
-import {
   bindSavedReportArtifact,
   discardSavedUpdateFailureReport,
   discardSavedUpdateFailureReportBestEffort,
+  listRetiredUpdateFailureReportArtifacts,
   publishPreparedUpdateFailureReport,
+  removeRetiredUpdateFailureReportArtifacts,
   savePreparedUpdateFailureReport,
 } from "./update-failure-report-artifact.js";
 import {
   assertUpdateReportPreCreateState,
   assertUpdateReportSubmissionAuthority,
-  retryUpdateReportStateWrite,
-  retryUpdateReportStateWriteAfterNoStart,
+  tryUpdateReportStateWrite,
   UpdateReportPreCreateGuardError,
 } from "./update-failure-report-precreate.js";
 import type { PreparedUpdateFailureReport } from "./update-failure-report-prepare.js";
@@ -47,6 +44,11 @@ export type {
   PreparedUpdateFailureReport,
   UpdateFailureReportInput,
 } from "./update-failure-report-prepare.js";
+
+type UpdateFailureReportSweepReceipt = Pick<
+  UpdateFailureReportReceipt,
+  "artifactSweep" | "previewDigest" | "replacementReady" | "reservationId"
+>;
 
 export type UpdateFailureReportSubmitResult =
   | { message?: string; savedReportPath: string; status: "created"; url: string }
@@ -141,8 +143,37 @@ export async function submitUpdateFailureReport(
   };
   ensureAuthority("submission");
   const ensureReconciliationAuthority = () => ensureAuthority("reconciliation");
-  const cleanRetiredArtifacts = (receipt: UpdateFailureReportSweepReceipt, keepCurrent: boolean) =>
-    cleanRetiredUpdateFailureReportArtifacts(prepared, receipt, stateEnv, keepCurrent, context);
+  const cleanRetiredArtifacts = async (
+    receipt: UpdateFailureReportSweepReceipt,
+    keepCurrent: boolean,
+  ): Promise<void> => {
+    const candidates = await listRetiredUpdateFailureReportArtifacts(prepared);
+    const current = await readUpdateFailureReportReceipt(prepared.attemptId, stateEnv, context);
+    const keep = [
+      ...(keepCurrent && !receipt.replacementReady ? [receipt] : []),
+      ...(current &&
+      current.status !== "created" &&
+      current.cleanup !== "pending" &&
+      !current.replacementReady
+        ? [current]
+        : []),
+    ];
+    const keepPaths = new Set(
+      keep.flatMap((owner) => {
+        const { savedReportPath } = bindSavedReportArtifact(
+          prepared,
+          owner.reservationId,
+          owner.previewDigest,
+        );
+        return [savedReportPath, `${savedReportPath}.pending`];
+      }),
+    );
+    // Protect a successor already listed; later reservations use names outside this captured set.
+    context.admission.assertCurrent();
+    await removeRetiredUpdateFailureReportArtifacts(
+      candidates.filter((candidate) => !keepPaths.has(candidate)),
+    );
+  };
   const cleanOwnedArtifact = async (receipt: UpdateFailureReportSweepReceipt): Promise<boolean> => {
     if (receipt.artifactSweep) {
       await cleanRetiredArtifacts(receipt, false);
@@ -158,7 +189,7 @@ export async function submitUpdateFailureReport(
     } catch {
       return false;
     }
-    return retryUpdateReportStateWrite(() =>
+    return tryUpdateReportStateWrite(() =>
       completeUpdateFailureReportReceiptCleanup(
         prepared.attemptId,
         receipt.reservationId,
@@ -171,7 +202,7 @@ export async function submitUpdateFailureReport(
     receipt: UpdateFailureReportSweepReceipt,
     beginCleanup = beginUpdateFailureReportReceiptCleanup,
   ): Promise<boolean> => {
-    const cleanupRecorded = await retryUpdateReportStateWrite(() =>
+    const cleanupRecorded = await tryUpdateReportStateWrite(() =>
       beginCleanup(prepared.attemptId, receipt.reservationId, stateEnv, context),
     );
     return cleanupRecorded ? cleanOwnedArtifact(receipt) : false;
@@ -184,7 +215,7 @@ export async function submitUpdateFailureReport(
       status: "created",
       url,
     };
-    const finalized = await retryUpdateReportStateWrite(() =>
+    const finalized = await tryUpdateReportStateWrite(() =>
       finalizeUpdateFailureReportReceipt(prepared.attemptId, receipt, stateEnv, context),
     );
     if (
@@ -202,7 +233,7 @@ export async function submitUpdateFailureReport(
   const persistKnownNoStartReceipt = async (
     receipt: UpdateFailureReportReceipt,
   ): Promise<boolean> =>
-    await retryUpdateReportStateWriteAfterNoStart(async () => {
+    await tryUpdateReportStateWrite(async () => {
       if (
         await finalizeUpdateFailureReportReceipt(prepared.attemptId, receipt, stateEnv, context)
       ) {
@@ -325,7 +356,7 @@ export async function submitUpdateFailureReport(
       return ownedResult("stale", "This failed update attempt is stale or unavailable.");
     }
     ensureAuthority("submission");
-    const publicationReserved = await retryUpdateReportStateWrite(() =>
+    const publicationReserved = await tryUpdateReportStateWrite(() =>
       markUpdateFailureReportReceiptPrepared(
         prepared.attemptId,
         reservationId,
@@ -477,7 +508,7 @@ export async function submitUpdateFailureReport(
       : created.reason === "authentication-unavailable"
         ? "GitHub authentication is unavailable. Review and submit the prefilled issue in your browser."
         : "GitHub submission is unavailable. Review and submit the prefilled issue in your browser.";
-  const preparationRefreshed = await retryUpdateReportStateWrite(() =>
+  const preparationRefreshed = await tryUpdateReportStateWrite(() =>
     refreshUpdateFailureReportReceiptPreparation(
       prepared.attemptId,
       reservationId,

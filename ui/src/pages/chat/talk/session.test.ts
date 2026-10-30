@@ -4,7 +4,7 @@ import { createDeferred } from "../../../../../test/helpers/promise.js";
 import * as gatewayRelayTransport from "./gateway-relay.ts";
 import * as googleLiveTransport from "./google-live.ts";
 import { useRealtimeTalkMicrophoneFixture } from "./input.test-support.ts";
-import { createRealtimeTalkEventEmitter } from "./shared.ts";
+import { createGatewayRelaySession } from "./session.test-support.ts";
 import type { RealtimeTalkTransport, RealtimeTalkTransportContext } from "./shared.ts";
 import * as webRtcTransport from "./webrtc.ts";
 
@@ -30,20 +30,6 @@ const requestTimeoutOptions = { timeoutMs: 30_000 };
 
 function createWebRtcSession(voiceSessionId = "voice-1") {
   return { provider: "openai", transport: "webrtc", voiceSessionId, clientSecret: "secret" };
-}
-
-function createRelaySession(provider = "example", relaySessionId = "relay-1") {
-  return {
-    provider,
-    transport: "gateway-relay",
-    relaySessionId,
-    audio: {
-      inputEncoding: "pcm16",
-      inputSampleRateHz: 24000,
-      outputEncoding: "pcm16",
-      outputSampleRateHz: 24000,
-    },
-  };
 }
 
 function videoCatalog(supportsVideoFrames = true) {
@@ -187,14 +173,9 @@ describe("RealtimeTalkSession", () => {
     const session = sessionFor(request, { onStatus });
     await session.start();
     const ctx = transportContext(googleInstances[0]);
-    const emit = createRealtimeTalkEventEmitter(ctx, {
-      provider: "test",
-      transport: "webrtc",
-      clientSecret: "test-session",
-    });
     ctx.callbacks.onTranscript?.({ role: "user", text: "Keep this utterance", final: true });
     ctx.callbacks.onStatus?.("error", "Microphone disconnected");
-    emit({ type: "session.closed", final: true });
+    ctx.callbacks.onTalkEvent?.({ type: "session.closed" });
     expect(googleStop).toHaveBeenCalledOnce();
     expect(onStatus).toHaveBeenLastCalledWith("error", "Microphone disconnected");
     expect(request.mock.calls.filter(([method]) => method === "talk.client.close")).toEqual([]);
@@ -207,14 +188,14 @@ describe("RealtimeTalkSession", () => {
       ),
     );
     await session.start();
-    emit({ type: "session.closed", final: true });
+    ctx.callbacks.onTalkEvent?.({ type: "session.closed" });
     expect(googleStop).toHaveBeenCalledOnce();
     expect(request.mock.calls.filter(([method]) => method === "talk.client.close")).toHaveLength(1);
     void session.stop();
   });
 
   it("closes a Gateway relay allocated after the session stops", async () => {
-    const create = createDeferred<ReturnType<typeof createRelaySession>>();
+    const create = createDeferred<ReturnType<typeof createGatewayRelaySession>>();
     const request = vi.fn((method: string) => {
       if (method === "talk.client.create") {
         return create.promise;
@@ -235,7 +216,7 @@ describe("RealtimeTalkSession", () => {
       ),
     );
     void session.stop();
-    create.resolve(createRelaySession("openai", "relay-stale"));
+    create.resolve(createGatewayRelaySession("openai", "relay-stale"));
     await starting;
 
     expect(request).toHaveBeenCalledWith(
@@ -303,18 +284,16 @@ describe("RealtimeTalkSession", () => {
       if (method === "talk.client.create") {
         throw new Error("browser session unavailable");
       }
+      if (method === "talk.config") {
+        return { config: { talk: { realtime: { transport: "gateway-relay" } } } };
+      }
       if (method === "talk.session.create") {
-        return createRelaySession("openai");
+        return createGatewayRelaySession("openai");
       }
       throw new Error(`Unexpected request: ${method}`);
     });
     const onVideoCapability = vi.fn();
-    const session = new RealtimeTalkSession(
-      { request } as never,
-      "main",
-      { onVideoCapability },
-      { provider: "openai", transport: "gateway-relay" },
-    );
+    const session = new RealtimeTalkSession({ request } as never, "main", { onVideoCapability });
 
     await session.start();
 
@@ -323,18 +302,15 @@ describe("RealtimeTalkSession", () => {
       "talk.client.create",
       {
         sessionKey: "main",
-        provider: "openai",
-        transport: "gateway-relay",
         capabilities: ["voice-transcript", "voice-selection", "camera-frame"],
       },
       requestTimeoutOptions,
     );
     expect(request).toHaveBeenNthCalledWith(
-      3,
+      4,
       "talk.session.create",
       {
         sessionKey: "main",
-        provider: "openai",
         transport: "gateway-relay",
         mode: "realtime",
         brain: "agent-consult",
@@ -347,21 +323,16 @@ describe("RealtimeTalkSession", () => {
     expect(relayInstances).toHaveLength(1);
   });
 
-  it("passes launch options to client-owned realtime session creation", async () => {
+  it("passes voice-change options and camera choice to client-owned realtime session creation", async () => {
     const request = vi.fn(async () => createWebRtcSession());
     const session = new RealtimeTalkSession(
       { request } as never,
       "main",
       {},
       {
-        provider: "openai",
-        model: "gpt-realtime-2",
         voice: "marin",
+        voiceChangeId: "voice-change-1",
         transport: "webrtc",
-        vadThreshold: 0.45,
-        silenceDurationMs: 650,
-        prefixPaddingMs: 250,
-        reasoningEffort: "low",
       },
       { inputDeviceId: "usb-mic", videoDeviceId: "desk-camera" },
     );
@@ -372,14 +343,9 @@ describe("RealtimeTalkSession", () => {
       "talk.client.create",
       {
         sessionKey: "main",
-        provider: "openai",
-        model: "gpt-realtime-2",
         voice: "marin",
+        voiceChangeId: "voice-change-1",
         transport: "webrtc",
-        vadThreshold: 0.45,
-        silenceDurationMs: 650,
-        prefixPaddingMs: 250,
-        reasoningEffort: "low",
         capabilities: ["voice-transcript", "voice-selection"],
       },
       requestTimeoutOptions,
@@ -532,7 +498,7 @@ describe("RealtimeTalkSession", () => {
         return { config };
       }
       if (method === "talk.session.create") {
-        return createRelaySession();
+        return createGatewayRelaySession("example");
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -590,12 +556,7 @@ describe("RealtimeTalkSession", () => {
         }
         return { ok: true };
       });
-      const session = new RealtimeTalkSession(
-        { request } as never,
-        "main",
-        {},
-        pendingMethod === "talk.client.create" ? { transport: "gateway-relay" } : {},
-      );
+      const session = new RealtimeTalkSession({ request } as never, "main");
       const starting = session.start().then(
         () => undefined,
         (error: unknown) => error,

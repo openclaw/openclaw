@@ -6,6 +6,7 @@ import {
   SettingsSegmented,
 } from "../../components/solid/settings-ui.tsx";
 import { parseCronDurationMs } from "../../lib/cron/decimal.ts";
+import { parseCronScheduleAt } from "../../lib/cron/form-schedule.ts";
 import type { CronFormState } from "../../lib/cron/types.ts";
 import { formatMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -35,8 +36,8 @@ function describeFormSchedule(form: CronFormState): string | null {
     return Number(amount) === 1 ? t(singular) : t(plural, { amount });
   }
   if (form.scheduleKind === "at") {
-    const ms = Date.parse(form.scheduleAt);
-    return Number.isFinite(ms) ? t("cron.form.summaryOnce", { at: formatMs(ms) }) : null;
+    const at = parseCronScheduleAt(form.scheduleAt);
+    return at ? t("cron.form.summaryOnce", { at: formatMs(Date.parse(at)) }) : null;
   }
   if (form.scheduleKind === "cron") {
     const expr = form.cronExpr.trim();
@@ -110,20 +111,17 @@ export function ScheduleSection(props: CronProps) {
   const isStream = () => form().scheduleKind === "stream";
   // Process-backed schedules stay selectable only while current: jobs can
   // convert to an editable schedule, but never synthesize a command in the UI.
-  const processSchedule = createMemo(() =>
+  const processSchedule = () =>
     isOnExit()
       ? { value: "on-exit" as const, label: t("cron.form.repeatOnExit") }
       : isStream()
         ? { value: "stream" as const, label: t("cron.form.repeatStream") }
-        : null,
-  );
-  const kinds = createMemo<
-    Array<{
-      value: CronFormState["scheduleKind"];
-      label: string;
-      testId: string;
-    }>
-  >(() => {
+        : null;
+  const kinds = (): Array<{
+    value: CronFormState["scheduleKind"];
+    label: string;
+    testId: string;
+  }> => {
     const process = processSchedule();
     return [
       ...(process ? [{ ...process, testId: `cron-schedule-kind-${process.value}` }] : []),
@@ -141,7 +139,7 @@ export function ScheduleSection(props: CronProps) {
           ]
         : []),
     ];
-  });
+  };
   const summary = createMemo(() => describeFormSchedule(form()));
   return (
     <SettingsSection title={t("cron.detail.scheduleSection")}>
@@ -194,6 +192,7 @@ export function ScheduleSection(props: CronProps) {
           <CronInput
             {...props}
             field="cronTz"
+            errorKey="cronTz"
             label={t("cron.form.timezoneOptional")}
             help={t("cron.form.timezoneHelp")}
             list="cron-tz-suggestions"

@@ -2,7 +2,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type { AgentsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
-import type { WorkboardCard, WorkboardUiState } from "../../lib/workboard/index.ts";
+import type { WorkboardCard, WorkboardUiState } from "../../lib/workboard/types.ts";
 
 export type WorkboardAgentsList = Pick<AgentsListResult, "defaultId" | "agents">;
 type WorkboardAgentRow = AgentsListResult["agents"][number];

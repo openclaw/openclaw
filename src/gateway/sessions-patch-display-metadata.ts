@@ -9,6 +9,28 @@ import {
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { parseSessionLabel, SESSION_LABEL_MAX_LENGTH } from "../sessions/session-label.js";
 
+const ICON_COLOR_ONLY_ALLOWED_KEYS = new Set([
+  "agentId",
+  "color",
+  "expectedLifecycleRevision",
+  "expectedSessionId",
+  "icon",
+  "key",
+]);
+
+/**
+ * A patch that only restyles the row ("Icon & color") plus its target identity.
+ * Shared with the patch projection owner, which must not age the session row for it.
+ */
+export function isSessionIconColorOnlyPatch(patch: SessionsPatchParams): boolean {
+  return (
+    (patch.icon !== undefined || patch.color !== undefined) &&
+    Object.entries(patch).every(
+      ([key, value]) => value === undefined || ICON_COLOR_ONLY_ALLOWED_KEYS.has(key),
+    )
+  );
+}
+
 /** Applies display-metadata patch fields onto the next entry; returns an error message on invalid input. */
 export function applySessionsPatchDisplayMetadata(params: {
   patch: SessionsPatchParams;

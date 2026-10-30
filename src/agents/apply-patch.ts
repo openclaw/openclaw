@@ -1,5 +1,4 @@
 /**
- * Runtime apply_patch tool and parser.
  * Parses OpenAI-style patch envelopes and applies add/update/delete/move hunks
  * through guarded host or sandbox filesystem operations.
  */
@@ -47,7 +46,6 @@ export type ApplyPatchSummary = {
 type ApplyPatchResult = {
   summary: ApplyPatchSummary;
   text: string;
-  noOp?: boolean;
 };
 
 type ApplyPatchToolDetails = {
@@ -86,7 +84,6 @@ const ApplyPatchToolOutputSchema = Type.Object(
   { additionalProperties: false },
 );
 
-/** Create the agent tool wrapper for applying patch-envelope input. */
 export function createApplyPatchTool(
   options: {
     cwd?: string;
@@ -101,7 +98,7 @@ export function createApplyPatchTool(
   const cwd = options.cwd ?? process.cwd();
   const root = options.root ?? cwd;
   const sandbox = options.sandbox;
-  const workspaceOnly = options.workspaceOnly !== false;
+  const workspaceOnly = options.workspaceOnly ?? Boolean(sandbox);
 
   return {
     name: "apply_patch",
@@ -136,6 +133,7 @@ export function createApplyPatchTool(
         throw withApplyPatchContainmentHint(
           error,
           workspaceOnly ? options.containmentSource : undefined,
+          !sandbox,
         );
       }
 
@@ -149,7 +147,6 @@ export function createApplyPatchTool(
   };
 }
 
-/** Parse and apply a patch envelope to the configured filesystem target. */
 async function applyPatch(input: string, options: ApplyPatchOptions): Promise<ApplyPatchResult> {
   const parsedHunks = parsePatchText(input);
   if (parsedHunks.length === 0) {
@@ -667,7 +664,6 @@ async function commitPatchHunks(
   return {
     summary,
     text: noOp ? `No changes made to ${Array.from(noOpPaths).join(", ")}.` : formatSummary(summary),
-    ...(noOp ? { noOp: true } : {}),
   };
 }
 
@@ -788,6 +784,7 @@ async function resolvePatchPath(
           filePath,
           cwd: options.cwd,
           root: options.root ?? options.cwd,
+          allowLinkedWorktrees: true,
           allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
           allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
         })
@@ -797,11 +794,5 @@ async function resolvePatchPath(
     resolved,
     queueKey: await resolveFileMutationQueueKey(resolved),
     display: toDisplayPath(resolved, options.cwd),
-  };
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.applyPatchTestApi")] = {
-    applyPatch,
   };
 }

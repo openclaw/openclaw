@@ -1,3 +1,4 @@
+import { mapErrorCauseChain } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -5,7 +6,6 @@ import chalk from "chalk";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { SESSION_LIST_SOURCES } from "../../packages/gateway-protocol/src/schema/sessions-list.js";
 import { isVerbose } from "../globals.js";
-import { stringifyNonErrorCause } from "../infra/errors.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -118,7 +118,9 @@ function shortId(value: string): string {
 export function formatForLog(value: unknown): string {
   try {
     if (value instanceof Error) {
-      const combined = renderErrorChainForLog(value);
+      const combined = mapErrorCauseChain(value, renderSingleErrorForLog)
+        .filter(Boolean)
+        .join(" <- ");
       if (combined) {
         return redactLogText(combined);
       }
@@ -168,23 +170,6 @@ function renderSingleErrorForLog(error: Error): string {
     parts.push(`code=${code}`);
   }
   return parts.filter(Boolean).join(": ").trim();
-}
-
-function renderErrorChainForLog(error: Error): string {
-  const segments: string[] = [renderSingleErrorForLog(error)];
-  let current: unknown = error.cause;
-  let depth = 0;
-  while (current !== undefined && current !== null && depth < 8) {
-    if (current instanceof Error) {
-      segments.push(renderSingleErrorForLog(current));
-      current = current.cause;
-    } else {
-      segments.push(stringifyNonErrorCause(current));
-      current = undefined;
-    }
-    depth += 1;
-  }
-  return segments.filter(Boolean).join(" <- ");
 }
 
 /** Extracts small, non-sensitive fields from agent event payloads for WS logs. */

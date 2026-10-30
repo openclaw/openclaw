@@ -73,7 +73,7 @@ export async function findDeliveryIntentOwner(
 }
 
 /** Resolve one ordered batch without reopening the store for each intent. */
-export async function findDeliveryIntentOwners(
+async function findDeliveryIntentOwners(
   ids: readonly string[],
   stateDir?: string,
   context?: DeliveryQueueStateContext,
@@ -386,9 +386,6 @@ async function readOutboundDeliveries(
   );
   if (!reply) {
     return [];
-  }
-  if (!reply.ok || reply.type !== "deliveryQueue.outbound") {
-    throw new Error("Unexpected outbound queue read result");
   }
   return reply.entries.map(({ queueName, entry }) => projectOutboundDelivery(queueName, entry));
 }

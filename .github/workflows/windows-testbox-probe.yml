@@ -70,7 +70,7 @@ on:
       startup_node_version:
         description: "Exact Node version for installed package probes"
         required: false
-        default: "26.9.0"
+        default: "26.12.1"
         type: string
       installed_startup_cpu_diagnostic:
         description: "Capture one established CPU profile after a fresh prime instead of a timing cohort"
@@ -535,7 +535,7 @@ jobs:
         shell: bash
         env:
           NODE_OPTIONS: ${{ inputs.windows_ci_replay != '' && '--max-old-space-size=8192' || env.NODE_OPTIONS }}
-          REQUESTED_NODE_VERSION: ${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}
+          REQUESTED_NODE_VERSION: ${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.22.1' }}
         run: |
           set -euo pipefail
           source .github/actions/setup-pnpm-store-cache/ensure-node.sh
@@ -550,7 +550,7 @@ jobs:
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
           cache-mode: restore
-          node-version: ${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}
+          node-version: ${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.22.1' }}
 
       - &windows_versions
         name: Runtime versions
@@ -1053,12 +1053,30 @@ jobs:
           }
           $inputRecord | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath .artifacts/windows-schtasks/installed-input.json
 
-      - name: Run native Scheduled Task lifecycle proof
-        id: native_schtasks
+      - name: Prepare source Scheduled Task workers
+        id: native_prepare_source
         if: ${{ inputs.run_windows_ci && inputs.installed_startup_package == '' }}
         timeout-minutes: 5
         shell: bash
         env:
+          OPENCLAW_VITEST_WORKER_CACHE: "1"
+          CI_WINDOWS_SCHTASKS_INTEGRATION: "1"
+          EXPECTED_HEAD: ${{ inputs.target_ref }}
+        run: |
+          set -euo pipefail
+          export PATH="$NODE_BIN:$PATH"
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          # Compile and validate workers before the lifecycle deadline starts.
+          node scripts/prepare-vitest-worker-cache.mts
+
+      - name: Run native Scheduled Task lifecycle proof
+        id: native_schtasks
+        if: ${{ inputs.run_windows_ci && inputs.installed_startup_package == '' && steps.native_prepare_source.outcome == 'success' }}
+        timeout-minutes: 5
+        shell: bash
+        env:
+          OPENCLAW_VITEST_WORKER_CACHE: "1"
           CI_WINDOWS_SCHTASKS_PROOF_PATH: ${{ github.workspace }}\.artifacts\windows-schtasks\proof.json
           CI_WINDOWS_SCHTASKS_INSTALLED_INPUT: ${{ inputs.installed_startup_package != '' && format('{0}/.artifacts/windows-schtasks/installed-input.json', github.workspace) || '' }}
           CI_WINDOWS_SCHTASKS_ROOT: ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}

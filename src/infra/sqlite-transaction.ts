@@ -228,50 +228,6 @@ function transactionDiagnosticLabels(
   };
 }
 
-function logSlowTransactionHold(params: {
-  db: DatabaseSync;
-  elapsedMs: number;
-  mode: SqliteTransactionMode;
-  options?: SqliteTransactionOptions;
-  prepareMs?: number;
-  beginMs: number;
-  hostAdmissionWaitMs: number;
-  databaseAdmissionWaitMs: number;
-  commitMs: number;
-}): void {
-  if (
-    params.elapsedMs < (params.options?.slowTransactionHoldMs ?? DEFAULT_SLOW_TRANSACTION_HOLD_MS)
-  ) {
-    return;
-  }
-  (params.options?.logger ?? transactionLog).warn("slow SQLite transaction hold", {
-    async: false,
-    callbackKind: "application-transaction",
-    ...transactionDiagnosticLabels(params.db, params.options),
-    elapsedMs: params.elapsedMs,
-    phases: {
-      prepareMs: params.prepareMs,
-      beginMs: params.beginMs,
-      // This legacy field includes application work between native statements.
-      sqlMs: Math.max(
-        0,
-        params.elapsedMs -
-          params.hostAdmissionWaitMs -
-          params.databaseAdmissionWaitMs -
-          params.commitMs,
-      ),
-      hostAdmissionWaitMs: params.hostAdmissionWaitMs,
-      databaseAdmissionWaitMs: params.databaseAdmissionWaitMs,
-      commitMs: params.commitMs,
-    },
-    isMainThread,
-    mode: params.mode,
-    pid: process.pid,
-    threadId,
-    thresholdMs: params.options?.slowTransactionHoldMs ?? DEFAULT_SLOW_TRANSACTION_HOLD_MS,
-  });
-}
-
 function logTransactionStep(
   params: {
     beginAdmission?: SqliteBeginAdmissionDiagnostics;
@@ -515,17 +471,31 @@ function settleSqliteTransactionSync<T>(
       const hostAdmissionWaitMs = (timing?.hostAdmissionWaitMs ?? 0) - admissionWaitBefore;
       const databaseAdmissionWaitMs =
         (timing?.databaseAdmissionWaitMs ?? 0) - databaseAdmissionWaitBefore;
-      logSlowTransactionHold({
-        db,
-        elapsedMs,
-        mode,
-        options,
-        prepareMs,
-        beginMs,
-        hostAdmissionWaitMs,
-        databaseAdmissionWaitMs,
-        commitMs,
-      });
+      if (!(elapsedMs < (options?.slowTransactionHoldMs ?? DEFAULT_SLOW_TRANSACTION_HOLD_MS))) {
+        (options?.logger ?? transactionLog).warn("slow SQLite transaction hold", {
+          async: false,
+          callbackKind: "application-transaction",
+          ...transactionDiagnosticLabels(db, options),
+          elapsedMs,
+          phases: {
+            prepareMs,
+            beginMs,
+            // This legacy field includes application work between native statements.
+            sqlMs: Math.max(
+              0,
+              elapsedMs - hostAdmissionWaitMs - databaseAdmissionWaitMs - commitMs,
+            ),
+            hostAdmissionWaitMs,
+            databaseAdmissionWaitMs,
+            commitMs,
+          },
+          isMainThread,
+          mode,
+          pid: process.pid,
+          threadId,
+          thresholdMs: options?.slowTransactionHoldMs ?? DEFAULT_SLOW_TRANSACTION_HOLD_MS,
+        });
+      }
     } catch {
       // Diagnostics cannot change an already-settled transaction's outcome.
     } finally {
@@ -620,7 +590,10 @@ export function runSqliteSingleStatementSync<T>(
   }
   assertTransactionUsable(db);
   return withSqlitePostCommitPublications(db, () => {
-    if (db.isTransaction) {
+    const location = writeAdmissionServices.size > 0 ? writeAdmissionLocation(db) : null;
+    // A worker can hold the writer lock while awaiting this host's commit grant.
+    // Reserve through the serviceable BEGIN owner before entering the callback.
+    if (db.isTransaction || (location !== null && writeAdmissionServices.has(location))) {
       return runSqliteTransactionSync(db, statement, "immediate");
     }
     const result = runSqliteReadOperationSync(db, statement);

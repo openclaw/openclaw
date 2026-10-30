@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CodexAppInventoryCache } from "./app-inventory-cache.js";
-import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
+import { appMetadata, codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
@@ -11,6 +11,8 @@ import {
   appInfo,
   appSummary,
   asPluginInstalled,
+  codexPluginConfig,
+  curatedPlugin,
   pluginDetail,
   pluginInstalled,
   pluginList,
@@ -390,11 +392,7 @@ type ConfiguredPlugin = {
 };
 
 function pluginPolicy(plugins: Record<string, ConfiguredPlugin>) {
-  return resolveCodexPluginsPolicy({ codexPlugins: { enabled: true, plugins } });
-}
-
-function curatedPlugin(pluginName: string, options: { enabled?: boolean } = {}): ConfiguredPlugin {
-  return { marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME, pluginName, ...options };
+  return resolveCodexPluginsPolicy(codexPluginConfig({ plugins }));
 }
 
 function workspacePlugin(pluginName: string): ConfiguredPlugin {
@@ -420,12 +418,7 @@ function configuredPlugin(
   pluginName: string,
   configKey = `${pluginName}@${marketplaceName}`,
 ) {
-  return {
-    codexPlugins: {
-      enabled: true,
-      plugins: { [configKey]: { marketplaceName, pluginName } },
-    },
-  };
+  return codexPluginConfig({ plugins: { [configKey]: { marketplaceName, pluginName } } });
 }
 
 describe("Codex marketplace-qualified plugin inventory", () => {
@@ -490,9 +483,8 @@ describe("Codex marketplace-qualified plugin inventory", () => {
     const metadataCache = new CodexPluginMetadataCache();
     let catalogCalls = 0;
     const inventory = await readCodexPluginInventory({
-      policy: resolveCodexPluginsPolicy({
-        codexPlugins: {
-          enabled: true,
+      policy: resolveCodexPluginsPolicy(
+        codexPluginConfig({
           plugins: {
             "a-security": {
               marketplaceName: "company-tools",
@@ -503,8 +495,8 @@ describe("Codex marketplace-qualified plugin inventory", () => {
               pluginName: "calendar",
             },
           },
-        },
-      }),
+        }),
+      ),
       appCacheKey: "runtime",
       configCwd: "/repo/company",
       metadataCache,
@@ -580,17 +572,7 @@ describe("Codex marketplace-qualified plugin inventory", () => {
   });
 });
 
-const approvalAppMetadata = {
-  id: "linear",
-  name: "linear",
-  description: null,
-  iconUrl: null,
-  iconUrlDark: null,
-  distributionChannel: null,
-  installUrl: null,
-  pluginDisplayNames: [],
-  toolSummaries: null,
-};
+const approvalAppMetadata = appMetadata("linear");
 
 describe("Codex owned app approval metadata", () => {
   it("keeps approval checks conservative when tool metadata is absent", () => {

@@ -9,6 +9,7 @@ struct SlashFilterCache {
 }
 
 private let chatSendingLogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
+private let localSessionCommands: Set<String> = ["/new", "/reset", "/clear", "/compact"]
 
 extension OpenClawChatViewModel {
     public var canSend: Bool {
@@ -16,9 +17,30 @@ extension OpenClawChatViewModel {
             !isSubmittingDraft &&
             !isSending &&
             self.attachmentStagingCount == 0 &&
-            !self.hasBlockingRunActivity &&
+            !self.isSwitchingSessionBranch &&
+            (!self.hasBlockingRunActivity || self.canSendDuringRun) &&
             self.composerModelAvailabilityMessage == nil &&
             self.hasDraftToSend
+    }
+
+    private var canSendDuringRun: Bool {
+        let command = Self.slashCommandName(from: self.input).map { "/\($0)" } ?? ""
+        return self.outbox != nil && self.attachments.isEmpty && !localSessionCommands.contains(command)
+    }
+
+    var canChooseSendMode: Bool {
+        self.hasBlockingRunActivity && self.canSend &&
+            !Self.isSlashCommandDraft(self.input.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    var sendModeChoices: [OpenClawChatQueueMode] {
+        guard self.canChooseSendMode else { return [] }
+        switch self.currentSessionEntry()?.effectiveQueueMode {
+        case "steer": return [.followup]
+        case "followup": return [.steer]
+        // Other Gateway modes and older Gateways do not have a single opposite.
+        default: return [.steer, .followup]
+        }
     }
 
     public var hasDraftToSend: Bool {
@@ -41,11 +63,11 @@ extension OpenClawChatViewModel {
     }
 
     @discardableResult
-    public func send() -> Task<Void, Never>? {
+    public func send(queueMode: OpenClawChatQueueMode? = nil) -> Task<Void, Never>? {
         guard !self.usesWebConversation else { return nil }
         // Reserve the accepted draft before scheduling work so initial route
         // hydration cannot retire its owner before asynchronous validation starts.
-        guard let draft = captureSendDraft() else { return nil }
+        guard let draft = captureSendDraft(queueMode: queueMode) else { return nil }
         isSubmittingDraft = true
         return Task { await self.performSend(draft) }
     }
@@ -252,6 +274,7 @@ extension OpenClawChatViewModel {
         let trimmed: String
         let session: SessionSnapshot
         let replyTarget: OpenClawChatReplyTarget?
+        let queueMode: OpenClawChatQueueMode?
         let composerSessionKey: String
         let composerRevision: UInt64
 
@@ -306,7 +329,7 @@ extension OpenClawChatViewModel {
         await self.deliverLiveSend(attempt)
     }
 
-    private func captureSendDraft() -> SendDraft? {
+    private func captureSendDraft(queueMode: OpenClawChatQueueMode?) -> SendDraft? {
         guard !isSubmittingDraft, !isSending else {
             return nil
         }
@@ -315,7 +338,9 @@ extension OpenClawChatViewModel {
             // attachment. Do not let a programmatic send overtake that owner.
             return nil
         }
-        guard !self.hasBlockingRunActivity else {
+        guard !self.isSwitchingSessionBranch,
+              !self.hasBlockingRunActivity || self.canSendDuringRun
+        else {
             return nil
         }
         let input = self.input
@@ -324,19 +349,25 @@ extension OpenClawChatViewModel {
         guard !trimmed.isEmpty || !attachments.isEmpty else {
             return nil
         }
+        // A menu choice belongs to this message. Slash commands own their
+        // intent, and a transport without an outbox cannot preserve the choice.
+        if queueMode != nil {
+            guard self.canSendDuringRun, !Self.isSlashCommandDraft(trimmed) else { return nil }
+        }
         return SendDraft(
             input: input,
             attachments: attachments,
             trimmed: trimmed,
             session: currentSessionSnapshot(),
             replyTarget: Self.isSlashCommandDraft(trimmed) ? nil : replyTarget,
+            queueMode: queueMode,
             composerSessionKey: self.composerSessionKey(for: sessionKey),
             composerRevision: composerRevision(for: sessionKey))
     }
 
     private func validateSendDraft(_ draft: SendDraft) async -> Bool {
         let command = draft.trimmed.lowercased()
-        if ["/new", "/reset", "/clear", "/compact"].contains(command) {
+        if localSessionCommands.contains(command) {
             // Preserved presentations can retain healthy state after a silent disconnect.
             await pollHealthIfNeeded(force: true, sessionSnapshot: draft.session)
             guard isCurrentSession(draft.session) else { return false }
@@ -399,8 +430,12 @@ extension OpenClawChatViewModel {
         // session-scoped: other sessions are separate conversations with no
         // ordering contract.
         if outbox != nil,
+           draft.queueMode != nil || self.hasBlockingRunActivity ||
            shouldPersistAttachmentDraft || mustPreserveOutboxOrder
         {
+            // Busy sends reuse durable delivery without replacing the active
+            // run's stream or tools. A menu choice also takes this path if the
+            // original run completed while the menu was open.
             await self.enqueueOutboxDraft(draft)
             return false
         }
@@ -413,6 +448,7 @@ extension OpenClawChatViewModel {
             draftInput: draft.input,
             draftRevision: draft.composerRevision,
             draftAttachments: draft.attachments,
+            queueMode: draft.queueMode,
             session: draft.session)
         if accepted {
             self.finishAcceptedComposerSend(draft)
@@ -527,7 +563,7 @@ extension OpenClawChatViewModel {
 
     private func deliverLiveSend(_ attempt: LiveSendAttempt) async {
         let sessionKey = attempt.draft.session.key
-        var durableSessionSettingsExpectation: OpenClawChatSessionSettingsExpectation?
+        var preparedDelivery: (settings: OpenClawChatSessionSettingsExpectation, thinking: String)?
         do {
             if let settingsError = await waitForCapabilitySettingsBarrier(in: sessionKey) {
                 await self.handleLiveSendFailure(
@@ -540,8 +576,8 @@ extension OpenClawChatViewModel {
             }
             guard isCurrentSession(attempt.draft.session) else { return }
             let sendSessionSettingsExpectation = self.composerSessionSettingsExpectation()
-            durableSessionSettingsExpectation = self.durableSessionSettingsExpectation()
             let thinkingLevel = effectiveThinkingLevelForSend(attempt.storedThinkingLevel)
+            preparedDelivery = (self.durableSessionSettingsExpectation(), thinkingLevel)
             let response = try await transport.sendMessage(
                 sessionKey: sessionKey,
                 target: OpenClawChatSendTarget(
@@ -563,7 +599,7 @@ extension OpenClawChatViewModel {
             await self.handleLiveSendFailure(
                 error,
                 attempt: attempt,
-                durableSessionSettingsExpectation: durableSessionSettingsExpectation)
+                preparedDelivery: preparedDelivery)
         }
     }
 
@@ -632,31 +668,33 @@ extension OpenClawChatViewModel {
     private func handleLiveSendFailure(
         _ error: Error,
         attempt: LiveSendAttempt,
-        durableSessionSettingsExpectation: OpenClawChatSessionSettingsExpectation? = nil) async
+        preparedDelivery: (settings: OpenClawChatSessionSettingsExpectation, thinking: String)? = nil) async
     {
-        guard isCurrentSession(attempt.draft.session) else { return }
-        let restartRejected = Self.isRestartRejectedSend(error)
-        if let durableSessionSettingsExpectation,
+        let admissionRejected = Self.isRetryableAdmissionRejection(error)
+        // Known-unsent work still belongs to its captured session after navigation.
+        guard isCurrentSession(attempt.draft.session) || admissionRejected else { return }
+        if let preparedDelivery,
            attempt.encodedAttachments.isEmpty,
-           !(error is GatewayResponseError) || restartRejected,
+           !(error is GatewayResponseError) || admissionRejected,
            !(error is OpenClawChatSendOwnershipError)
         {
             runMessageScopesByRunID.removeValue(forKey: attempt.runId)
             clearPendingRun(attempt.runId)
-            let deliveryIsAmbiguous = !(error is OpenClawChatTransportSendError) && !restartRejected
-            if restartRejected {
+            let deliveryIsAmbiguous = !(error is OpenClawChatTransportSendError) && !admissionRejected
+            if admissionRejected {
                 applyTransportHealth(false)
             }
             let preserved = await preserveFailedLiveSend(
                 runId: attempt.runId,
                 text: attempt.draft.outgoingMessageText,
-                thinking: effectiveThinkingLevelForSend(attempt.storedThinkingLevel),
+                thinking: preparedDelivery.thinking,
                 messageID: attempt.userMessageID,
                 session: attempt.draft.session,
-                expectedSessionSettings: durableSessionSettingsExpectation,
+                expectedSessionSettings: preparedDelivery.settings,
                 deliveryIsAmbiguous: deliveryIsAmbiguous)
             if preserved {
                 self.finishAcceptedComposerSend(attempt.draft)
+                guard isCurrentSession(attempt.draft.session) else { return }
                 applyTransportHealth(false)
                 let outcome = deliveryIsAmbiguous ? "delivery unconfirmed" : "queued after route change"
                 logDiagnostic(

@@ -13,22 +13,23 @@ import {
 } from "../commands/backup-resource-inventory.js";
 import {
   buildBackupArchiveBasename,
-  buildBackupArchivePath,
   buildBackupArchiveRoot,
   canonicalizePathForContainment,
   type BackupAsset,
   resolveBackupPlanFromDisk,
+  resolveBackupArchivePath,
 } from "../commands/backup-shared.js";
 import { encodeBackupManifest, type BackupManifest } from "../commands/backup-verify-manifest.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { runOfflineDatabaseBackup } from "../snapshot/database-backup.js";
-import { resolveHomeDir, resolveUserPath } from "../utils.js";
+import { resolveHomeDir } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import {
   recordArchiveSymbolicLink,
   type BackupSymbolicLink,
+  buildBackupArchivePath,
 } from "./backup-archive-path-policy.js";
 import {
   cleanupBackupArchivePublication,
@@ -58,6 +59,7 @@ import {
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { walkBackupTar } from "./backup-tar-walk.js";
 import { isErrno } from "./errors.js";
+import { safeStat } from "./path-existence.js";
 import {
   createLegacyAuditBackupCapture,
   legacyAuditBackupCapturesMatch,
@@ -125,8 +127,8 @@ async function resolveOutputPath(params: {
   stateDir: string;
 }): Promise<string> {
   const basename = buildBackupArchiveBasename(params.nowMs);
-  const rawOutput = params.output?.trim();
-  if (!rawOutput) {
+  const rawOutput = params.output;
+  if (!rawOutput?.trim()) {
     const cwd = path.resolve(process.cwd());
     const canonicalCwd = await fs.realpath(cwd).catch(() => cwd);
     const cwdInsideSource = params.includedAssets.some((asset) =>
@@ -136,17 +138,13 @@ async function resolveOutputPath(params: {
     return path.resolve(defaultDir, basename);
   }
 
-  const resolved = resolveUserPath(rawOutput);
+  const resolved = resolveBackupArchivePath(rawOutput, "--output");
   if (rawOutput.endsWith("/") || rawOutput.endsWith("\\")) {
     return path.join(resolved, basename);
   }
 
-  try {
-    if ((await fs.stat(resolved)).isDirectory()) {
-      return path.join(resolved, basename);
-    }
-  } catch {
-    // Treat as a file path when the target does not exist yet.
+  if ((await safeStat(resolved))?.isDirectory()) {
+    return path.join(resolved, basename);
   }
 
   return resolved;
@@ -401,6 +399,7 @@ async function createBackupArchiveInScope(
       plan.stateDir,
       () => createBackupArchiveInScope({ ...opts, nowMs }, plan),
       { config: plan.databaseConfig, selection },
+      { online: true },
     );
   }
   const outputPath = await resolveOutputPath({
@@ -667,6 +666,12 @@ async function createBackupArchiveInScope(
                 ];
                 // Per-entry reports must not overflow the bounded restore manifest.
                 const manifest = buildManifest({ ...result, skipped: plan.skipped }, plan);
+                if (stateSqliteBackup.sharedDatabaseSourcePath !== undefined) {
+                  manifest.paths = {
+                    ...manifest.paths,
+                    sharedDatabaseSourcePath: stateSqliteBackup.sharedDatabaseSourcePath,
+                  };
+                }
                 manifest.externalSymbolicLinks = externalSymbolicLinks;
                 manifest.sqliteSnapshots = snapshotFacts.map((snapshot) =>
                   snapshot.role === "agent"

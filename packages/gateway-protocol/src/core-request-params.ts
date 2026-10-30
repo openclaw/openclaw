@@ -20,6 +20,7 @@ import type * as PortalSchema from "./schema/portals.js";
 import type { PresenceActivityParams, PresenceQueryParams } from "./schema/presence.js";
 import type * as GitHubSchema from "./schema/session-github-publication.js";
 import type { StorageLocationsListParams, StorageLocationsProbeParams } from "./schema/storage.js";
+import type * as TemplateDraftSchema from "./schema/template-drafts.js";
 import type {
   ThemesListParams,
   ThemesGetParams,
@@ -33,6 +34,11 @@ import type * as UsersSchema from "./schema/users.js";
 /** Schema-derived payload ownership for statically validated core Gateway methods. */
 export type GatewayCoreRequestParams = {
   "agents.avatar.generate": AgentsAvatarGenerateParams;
+  "templates.drafts.create": TemplateDraftSchema.TemplatesDraftsCreateParams;
+  "templates.drafts.read": TemplateDraftSchema.TemplatesDraftsReadParams;
+  "templates.drafts.save": TemplateDraftSchema.TemplatesDraftsSaveParams;
+  "templates.drafts.review": TemplateDraftSchema.TemplatesDraftsReviewParams;
+  "templates.drafts.publish": TemplateDraftSchema.TemplatesDraftsPublishParams;
   "catalog.browse": CatalogBrowseParams;
   "catalog.searchKeywords": CatalogSearchKeywordsParams;
   "backup.status": BackupStatusParams;
@@ -76,6 +82,7 @@ export type GatewayCoreRequestParams = {
   "portal.session.open": Static<typeof PortalSchema.SessionPortalOpenParamsSchema>;
   "sessions.github.publish": GitHubSchema.SessionGitHubPublishParams;
   "sessions.github.action": GitHubSchema.SessionGitHubActionParams;
+  "sessions.github.readiness": Static<typeof GitHubSchema.SessionGitHubReadinessParamsSchema>;
   "sessions.github.options": Static<typeof GitHubSchema.SessionGitHubOptionsParamsSchema>;
   "sessions.github.status": Static<typeof GitHubSchema.SessionGitHubStatusParamsSchema>;
   "sessions.github.confirm": GitHubSchema.SessionGitHubConfirmParams;

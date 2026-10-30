@@ -5,6 +5,10 @@ import { getMockCallOutput } from "./test-runtime-capture.js";
 export function createUpdateConfigMock() {
   const readConfigFileSnapshot = vi.fn();
   return {
+    // Source-only recovery cleanup may import the runtime loader, but must not use it.
+    loadConfig: vi.fn((): OpenClawConfig => {
+      throw new Error("Unexpected runtime config load in update fixture");
+    }),
     createConfigIO: (
       options: {
         pluginValidation?: string;

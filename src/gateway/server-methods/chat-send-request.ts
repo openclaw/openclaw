@@ -23,7 +23,6 @@ import {
   type AttachedChatWorkContext,
 } from "../../chat/work-context.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
-import type { SessionRestartResume } from "../../config/sessions/restart-resume.js";
 import { loadChatRequestIdentityKeyAsync } from "../../infra/device-identity-async.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
@@ -42,6 +41,7 @@ import {
 import type { ChatAttachment } from "../chat-attachments.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
+import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { normalizeChatHumanMentions } from "./chat-human-mentions.js";
 import {
@@ -63,7 +63,6 @@ type ChatSendRequestParams = Omit<
 };
 
 export type NormalizedChatSendRequest = {
-  restartResume?: SessionRestartResume;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   goalOperation?: SessionGoalOperation & { action: "start" | "resume" };
   chatSendReceivedAtMs: number;
@@ -97,12 +96,15 @@ export function normalizeChatSendRequest(params: {
   client: GatewayRequestHandlerOptions["client"];
   trustedSystemInput?: boolean;
   goalResume?: SessionGoalOperation & { action: "resume" };
-  restartResume?: SessionRestartResume;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
 }): NormalizeChatSendRequestResult | Promise<NormalizeChatSendRequestResult> {
   const chatSendReceivedAtMs = performance.now();
   const reject = (error: string) => ({ ok: false as const, error });
   const client = params.client;
+  const recoveredInput =
+    typeof params.params.idempotencyKey === "string"
+      ? readQueuedChatInputAdmission(params.params.idempotencyKey)
+      : undefined;
   const clientInfo = client?.connect?.client;
   const supportsTaskSuggestions =
     isOperatorUiClient(clientInfo) &&
@@ -302,7 +304,6 @@ export function normalizeChatSendRequest(params: {
       ? { providerReviewAcknowledgment: params.providerReviewAcknowledgment }
       : {}),
     ...(params.goalResume ? { goalOperation: params.goalResume } : {}),
-    ...(params.restartResume ? { restartResume: params.restartResume } : {}),
     explicitOrigin: explicitOriginResult.value,
     inboundMessage: modelMessage,
     ...(workContext ? { workContext } : {}),
@@ -319,6 +320,14 @@ export function normalizeChatSendRequest(params: {
   };
   if (stopCommand) {
     return { ok: true, value };
+  }
+  if (recoveredInput) {
+    // Approved text may differ from the submitted bytes; retries keep their original identity.
+    const requestIdentity = recoveredInput.target.message["__openclaw"]?.chatRequestIdentity;
+    return {
+      ok: true,
+      value: { ...value, ...(typeof requestIdentity === "string" ? { requestIdentity } : {}) },
+    };
   }
   return loadChatRequestIdentityKeyAsync().then((key) => {
     // A keyed verifier survives redaction without storing an offline prompt digest.

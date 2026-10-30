@@ -6,13 +6,6 @@ import { normalizeChatFollowUpModeOverride, type ChatFollowUpMode } from "../../
 
 export type ControlUiFollowUpMode = ChatFollowUpMode | Exclude<QueueMode, "steer">;
 
-type ServerQueueModeSources = {
-  configNeedsApply?: boolean;
-  effectiveMode?: unknown;
-  sessionMetadataLoaded?: boolean;
-  sessionMode?: unknown;
-};
-
 function normalizedQueueMode(value: unknown): QueueMode | undefined {
   return typeof value === "string" ? normalizeQueueMode(value) : undefined;
 }
@@ -20,7 +13,12 @@ function normalizedQueueMode(value: unknown): QueueMode | undefined {
 /** Matches resolveQueueSettings precedence for the current Control UI session. */
 export function resolveControlUiServerQueueMode(
   runtimeConfig: unknown,
-  sources: ServerQueueModeSources = {},
+  sources: {
+    configNeedsApply?: boolean;
+    effectiveMode?: unknown;
+    sessionMetadataLoaded?: boolean;
+    sessionMode?: unknown;
+  } = {},
 ): QueueMode | undefined {
   const config = record(runtimeConfig);
   const messages = record(config?.messages);

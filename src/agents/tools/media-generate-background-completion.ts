@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { sessionMatchesExpectedTranscriptTurn } from "../../config/sessions/session-transcript-turn-state.js";
 import {
@@ -7,23 +6,20 @@ import {
   type SessionTranscriptTargetBinding,
 } from "../../config/sessions/transcript-target-binding.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import type { SessionDeliveryRequesterBinding } from "../../infra/session-delivery-queue.records.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { RequiredCompletionTerminalResult } from "../completion-result.js";
 import {
-  formatGeneratedAttachmentLines,
   mediaUrlsFromGeneratedAttachments,
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../internal-events.js";
-import { isMediaGenerationOperationCurrent } from "../media-generation-activity.js";
+import { findMediaGenerationOperation } from "../media-generation-activity.js";
 import { deliverSubagentAnnouncement } from "../subagents/announce/subagent-announce-delivery.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-completion");
-// Only blocked results missed the requester; retain references instead of resending.
-// Bound the process-local failure summary independently of durable transcript retention.
-const MEDIA_GENERATION_RETAINED_RESULT_MAX_CHARS = 4_000;
 
 export type MediaGenerationTaskHandle = {
   taskId: string;
@@ -33,14 +29,17 @@ export type MediaGenerationTaskHandle = {
   requesterOrigin?: DeliveryContext;
   detach: boolean;
   requesterTranscript?: SessionTranscriptTargetBinding & { lifecycleRevision: string | null };
+  resolveGatewayContext?: GatewayContextResolver;
   taskLabel: string;
 };
 
 function isMediaGenerationSourceCurrent(handle: MediaGenerationTaskHandle): boolean {
   const target = handle.requesterTranscript;
+  const operation = findMediaGenerationOperation(handle.runId);
   return Boolean(
     target &&
-    isMediaGenerationOperationCurrent(handle.runId) &&
+    operation &&
+    operation.endedAt === undefined &&
     sameSessionTranscriptStorageEnvironment(
       target.env,
       captureSessionTranscriptStorageEnvironment(process.env),
@@ -120,30 +119,6 @@ export type MediaGenerationCompletionWakeOutcome =
   | { status: "queued" }
   | { status: "pending" }
   | { status: "permanent_failure" };
-
-export function retainBlockedMediaReferences(
-  terminalResult: RequiredCompletionTerminalResult | undefined,
-  attachments: AgentGeneratedAttachment[] | undefined,
-): RequiredCompletionTerminalResult | undefined {
-  if (terminalResult?.terminalOutcome !== "blocked") {
-    return terminalResult;
-  }
-  const referenceLines = formatGeneratedAttachmentLines(attachments);
-  if (referenceLines.length === 0) {
-    return terminalResult;
-  }
-  const terminalSummary = [
-    terminalResult.terminalSummary,
-    "Retained generated media:",
-    ...referenceLines,
-  ]
-    .filter((line): line is string => Boolean(line))
-    .join("\n");
-  return {
-    ...terminalResult,
-    terminalSummary: truncateUtf16Safe(terminalSummary, MEDIA_GENERATION_RETAINED_RESULT_MAX_CHARS),
-  };
-}
 
 export async function wakeMediaGenerationTaskCompletion(params: {
   handle: MediaGenerationTaskHandle | null;
@@ -227,6 +202,9 @@ export async function wakeMediaGenerationTaskCompletion(params: {
     requesterAgentId: handle.requesterAgentId,
     targetRequesterSessionKey: target.sessionKey,
     preparedRequester: { binding: requesterBinding, entry: requesterEntry },
+    resolveGatewayContext: handle.resolveGatewayContext,
+    completionRequesterSessionId: target.sessionId,
+    completionRequesterLifecycleRevision: target.lifecycleRevision ?? undefined,
     triggerMessage,
     internalEvents,
     requesterSessionOrigin: handle.requesterOrigin,

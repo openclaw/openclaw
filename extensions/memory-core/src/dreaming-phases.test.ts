@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as sessionCorpus from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   listMemoryArtifactProvenance,
   resolveMemoryDreamingPluginConfig,
@@ -352,11 +353,6 @@ describe("memory-core dreaming phases", () => {
         valid: { ...entry, key: "valid", lastRecalledAt: "2026-04-14T12:00:00.000Z" },
       },
     });
-    expect(
-      Object.keys(
-        (await shortTermTesting.readRecallStore(workspaceDir, now.toISOString())).entries,
-      ),
-    ).toEqual(["invalid", "valid"]);
     const { sweep, logger } = createHarness(
       inlineConfig({ light: { enabled: true, limit: 1, lookbackDays: 3, dedupeSimilarity: 0.9 } }),
     );
@@ -413,7 +409,7 @@ describe("memory-core dreaming phases", () => {
     });
   });
 
-  it.each(["## Ops"])("does not ingest nested REM output before boundary %s", async (boundary) => {
+  it("does not ingest nested REM output before the next section", async () => {
     await withClock(async () => {
       await writeDailyNote([
         `# ${DAY}`,
@@ -427,7 +423,7 @@ describe("memory-core dreaming phases", () => {
         "- Old generated dream text must not become a daily memory.",
         "### Possible Lasting Truths",
         "- Old generated lasting truth must not become a daily memory.",
-        boundary,
+        "## Ops",
         "### User follow-up",
         "- Rotate access keys.",
       ]);
@@ -629,7 +625,6 @@ describe("memory-core dreaming phases", () => {
   it("checkpoints session transcript ingestion and skips unchanged transcripts", async () => {
     setStateDir(path.join(workspaceDir, ".state"));
     const { sweep } = createDailyHarness({ includeMainAgent: true, memorySearchEnabled: false });
-
     const transcriptName = `dreaming-${"x".repeat(48)}`;
     const snippetTranscriptName = "snippet-boundary";
     const renderedSource = `[main/sessions/main/${transcriptName}#L4] `;
@@ -661,13 +656,13 @@ describe("memory-core dreaming phases", () => {
       ],
     });
 
-    let firstSessionIngestion;
-    await withClock(async () => {
-      await sweepLight(sweep, 5);
-      firstSessionIngestion = await dreamingTestState.readSessionIngestionState(workspaceDir);
-      await sweepLight(sweep, 6);
-    });
-
+    const inventory = vi.spyOn(sessionCorpus, "listSessionTranscriptCorpusEntriesForAgent");
+    await runLight(sweep);
+    const discovered = await inventory.mock.results[0]?.value;
+    inventory.mockRestore();
+    expect(JSON.stringify(discovered)).not.toContain('"contentRevision"');
+    const firstSessionIngestion = await dreamingTestState.readSessionIngestionState(workspaceDir);
+    await runLight(sweep, 6);
     const sessionIngestion = await dreamingTestState.readSessionIngestionState(workspaceDir);
     expect(firstSessionIngestion).toStrictEqual(sessionIngestion);
     expect(Object.keys(sessionIngestion.files)).toContain(`main:sessions/main/${transcriptName}`);

@@ -12,7 +12,6 @@ export type {
   RuntimeToolInputSchemaProjection,
 } from "@openclaw/ai/internal/tool-schema";
 
-/** Diagnostic for one incompatible runtime tool schema. */
 export type RuntimeToolSchemaDiagnostic = {
   readonly toolName: string;
   readonly toolIndex: number;
@@ -27,14 +26,16 @@ type RuntimeToolSchemaInspection<TTool extends Pick<AnyAgentTool, "name" | "para
 
 type ToolSchemaInspectionMode = "runtime" | "provider-normalizable";
 
+const unreadableField = Symbol("unreadable tool field");
+
 function readToolProjectionField(
   tool: Pick<AnyAgentTool, "name" | "parameters">,
   field: "name" | "parameters",
-): { readable: true; value: unknown } | { readable: false } {
+): unknown {
   try {
-    return { readable: true, value: tool[field] };
+    return tool[field];
   } catch {
-    return { readable: false };
+    return unreadableField;
   }
 }
 
@@ -44,38 +45,35 @@ function inspectToolSchema(
   mode: ToolSchemaInspectionMode,
 ): RuntimeToolSchemaDiagnostic | undefined {
   const nameRead = readToolProjectionField(tool, "name");
-  const toolName =
-    nameRead.readable && typeof nameRead.value === "string" && nameRead.value
-      ? nameRead.value
-      : `tool[${toolIndex}]`;
-  const descriptorViolations = nameRead.readable ? [] : [`${toolName}.name is unreadable`];
+  const toolName = typeof nameRead === "string" && nameRead ? nameRead : `tool[${toolIndex}]`;
+  const descriptorViolations =
+    nameRead === unreadableField ? [`${toolName}.name is unreadable`] : undefined;
   const parametersRead = readToolProjectionField(tool, "parameters");
-  if (!parametersRead.readable) {
+  if (parametersRead === unreadableField) {
     return {
       toolName,
       toolIndex,
-      violations: [...descriptorViolations, `${toolName}.parameters is unreadable`],
+      violations: [...(descriptorViolations ?? []), `${toolName}.parameters is unreadable`],
     };
   }
-  if (mode === "provider-normalizable" && parametersRead.value === undefined) {
-    return descriptorViolations.length > 0
+  if (mode === "provider-normalizable" && parametersRead === undefined) {
+    return descriptorViolations
       ? { toolName, toolIndex, violations: descriptorViolations }
       : undefined;
   }
 
   const schemaPath = `${toolName}.parameters`;
-  const projection = projectRuntimeToolInputSchema(parametersRead.value, schemaPath, toolName);
+  const projection = projectRuntimeToolInputSchema(parametersRead, schemaPath, toolName);
   const projectionViolations =
-    mode === "runtime"
+    mode === "runtime" || projection.violations.length === 0
       ? projection.violations
       : projection.violations.filter(
           (violation) =>
-            violation !== `${schemaPath}.$dynamicRef` &&
-            violation !== `${schemaPath}.$dynamicAnchor` &&
-            !violation.endsWith(".$dynamicRef") &&
-            !violation.endsWith(".$dynamicAnchor"),
+            !violation.endsWith(".$dynamicRef") && !violation.endsWith(".$dynamicAnchor"),
         );
-  const violations = [...descriptorViolations, ...projectionViolations];
+  const violations = descriptorViolations
+    ? [...descriptorViolations, ...projectionViolations]
+    : projectionViolations;
   return violations.length > 0 ? { toolName, toolIndex, violations } : undefined;
 }
 

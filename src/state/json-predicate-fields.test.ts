@@ -6,6 +6,27 @@ describe("JSON predicate field scanning", () => {
     const fields = scanJsonObjectFields('{"type\\u0000suffix":"message","type":"reset"}', ["type"]);
     expect(readJsonPredicateScalar(fields.first.get("type"))).toBe("message");
     expect(readJsonPredicateScalar(fields.last.get("type"))).toBe("reset");
+    expect(fields.duplicateKeys).toEqual(new Set());
+  });
+
+  it("reports exact selected duplicate keys without counting nested or unrelated keys", () => {
+    const fields = scanJsonObjectFields(
+      '{"kind":"first","body":{"kind":1,"kind":2},"other":1,"other":2,"kind":"last"}',
+      ["kind"],
+    );
+    expect(fields.duplicateKeys).toEqual(new Set(["kind"]));
+    expect(readJsonPredicateScalar(fields.first.get("kind"))).toBe("first");
+    expect(readJsonPredicateScalar(fields.last.get("kind"))).toBe("last");
+  });
+
+  it("preserves lone surrogate tokens without decoding opaque values", () => {
+    const fields = scanJsonObjectFields('{"revision":"active-\\ud800","body":"\\udfff"}', [
+      "revision",
+    ]);
+    expect(fields.valid).toBe(true);
+    expect(fields.first.get("revision")).toEqual({ kind: "string", text: '"active-\\ud800"' });
+    expect(readJsonPredicateScalar(fields.first.get("revision"))).toBe("active-\ud800");
+    expect(fields.duplicateKeys).toEqual(new Set());
   });
 
   it("preserves first and last members while skipping opaque containers and strings", () => {
@@ -38,6 +59,7 @@ describe("JSON predicate field scanning", () => {
     const fields = scanJsonObjectFields(json, ["kind"]);
     expect(fields.valid).toBe(false);
     expect(fields.first.size).toBe(0);
+    expect(fields.duplicateKeys).toEqual(new Set());
   });
 
   it("records SQLite's container-depth boundary for empty and scalar leaves", () => {

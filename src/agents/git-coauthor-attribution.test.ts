@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/index.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -26,354 +26,243 @@ afterAll(async () => {
   await sharedState.cleanup();
 });
 
-async function withOpenClawTestState<T>(
-  _options: { scenario: "minimal" },
-  fn: (state: OpenClawTestState) => Promise<T>,
+function sessionScope(sessionKey: string) {
+  return { agentId: "main", env: sharedState.env, sessionKey };
+}
+async function withSession<T>(
+  sessionId: string,
+  fn: (scope: ReturnType<typeof sessionScope>, state: OpenClawTestState) => Promise<T>,
 ): Promise<T> {
   const work = new AsyncWorkScope();
   try {
-    return await work.track(() => fn(sharedState));
+    const scope = sessionScope(`agent:main:${sessionId}`);
+    return await work.track(() => fn(scope, sharedState));
   } finally {
     await work.drain();
   }
 }
 
-describe("Git co-author attribution", () => {
-  it("resolves credit from the configured templated session store", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const sessionKey = "agent:main:custom-store-credit";
-      const scope = { agentId: "main", env: state.env, sessionKey };
-      const storePath = state.statePath("custom-store", "main", "sessions.json");
-      const config = {
-        session: { store: state.statePath("custom-store", "{agentId}", "sessions.json") },
-      };
-      const entry = { sessionId: "custom-store-credit", updatedAt: 1 };
-      await upsertSessionEntryCore(scope, entry);
-      await upsertSessionEntryCore({ ...scope, storePath }, entry);
-      const profile = ensureProfileForEmail("ada@example.test", { env: state.env });
-      syncGitHubIdentity(
-        {
-          identity: { accountId: 20, login: "ada" },
-          authenticationAlias: { kind: "email", email: "ada@example.test" },
-        },
-        { env: state.env },
-      );
-      recordSessionParticipant(
-        { ...scope, storePath },
-        { identity: { type: "profile", id: profile.id }, promptedAt: 1, sessionAgentId: "main" },
-      );
+const stateOptions = () => ({ env: sharedState.env });
+function readCredit(
+  scope: ReturnType<typeof sessionScope>,
+  overrides: Partial<Parameters<typeof resolveGitCoauthorAttribution>[0]> = {},
+) {
+  return resolveGitCoauthorAttribution({ ...scope, config: {}, ...overrides });
+}
+function setCredit(profileId: string, value: unknown) {
+  return setUserPreferences(profileId, { [GIT_COAUTHOR_PREFERENCE_KEY]: value }, stateOptions());
+}
 
-      expect(
-        await resolveGitCoauthorAttribution({
-          ...scope,
-          config,
-          storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
-        }),
-      ).toBeUndefined();
-      expect(await resolveGitCoauthorAttribution({ ...scope, config })).toEqual({
-        logins: ["ada"],
-        trailers: ["Co-authored-by: ada <20+ada@users.noreply.github.com>"],
-      });
-    });
+function linkedProfile(login: string, accountId: number) {
+  const email = `${login}@example.test`;
+  const options = stateOptions();
+  const profile = ensureProfileForEmail(email, options);
+  syncGitHubIdentity(
+    { identity: { accountId, login }, authenticationAlias: { kind: "email", email } },
+    options,
+  );
+  return profile;
+}
+
+function participant(
+  scope: Parameters<typeof recordSessionParticipant>[0],
+  profile: { id: string },
+  promptedAt: number,
+) {
+  recordSessionParticipant(scope, {
+    identity: { type: "profile", id: profile.id },
+    promptedAt,
+    sessionAgentId: "main",
   });
+}
 
-  it("returns undefined when the only participant has opted out", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        env: state.env,
-        sessionKey: "agent:main:no-coauthors-opted-out",
-      };
-      await upsertSessionEntryCore(scope, { sessionId: "no-coauthors-opted-out", updatedAt: 1 });
-      const email = "solo-opted-out@example.test";
-      const profile = ensureProfileForEmail(email, { env: state.env });
-      syncGitHubIdentity(
-        {
-          identity: { accountId: 201, login: "solo-opted-out" },
-          authenticationAlias: { kind: "email", email },
-        },
-        { env: state.env },
-      );
-      setUserPreferences(profile.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: false }, { env: state.env });
-      recordSessionParticipant(scope, {
-        identity: { type: "profile", id: profile.id },
-        promptedAt: 1,
-        sessionAgentId: "main",
-      });
+function expectedCredit(...accounts: [number, string][]) {
+  return {
+    logins: accounts.map(([, login]) => login),
+    trailers: accounts.map(
+      ([id, login]) => `Co-authored-by: ${login} <${id}+${login}@users.noreply.github.com>`,
+    ),
+  };
+}
 
-      expect(await resolveGitCoauthorAttribution({ ...scope, config: {} })).toBeUndefined();
+it("does not export unrelated shared-main participants into a Discord task's commit", async () => {
+  await withSession("main", async (scope) => {
+    await upsertSessionEntryCore(scope, { sessionId: "shared-discord-credit", updatedAt: 1 });
+    const profiles = [
+      [9101, "task-requester"],
+      [9102, "unrelated-a"],
+      [9103, "unrelated-b"],
+    ] as const;
+    const linked = profiles.map(([id, login]) => linkedProfile(login, id));
+    for (const profile of linked.slice(1)) {
+      participant(scope, profile, 1);
+    }
+    const attribution = await readCredit(scope, {
+      config: { session: { groupScope: "main" } },
+      requesterProfileId: linked[0]!.id,
     });
+    expect(attribution).toMatchObject(expectedCredit([9101, "task-requester"]));
+    expect(await readCredit(scope)).toBeUndefined();
   });
+});
+it("resolves credit from the configured templated session store", async () => {
+  await withSession("custom-store-credit", async (scope, state) => {
+    const storePath = state.statePath("custom-store", "main", "sessions.json");
+    const config = {
+      session: { store: state.statePath("custom-store", "{agentId}", "sessions.json") },
+    };
+    const entry = { sessionId: "custom-store-credit", updatedAt: 1 };
+    await upsertSessionEntryCore(scope, entry);
+    await upsertSessionEntryCore({ ...scope, storePath }, entry);
+    const profile = linkedProfile("ada", 20);
+    participant({ ...scope, storePath }, profile, 1);
 
-  it("derives exact bounded trailers only from canonical profile-backed humans", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const sessionKey = "agent:main:coauthors";
-      // "default" writes no preference row: credit is on unless the person opts out.
-      const profile = (
-        email: string,
-        accountId?: number,
-        login?: string,
-        credit: "on" | "off" | "default" | "malformed" = "on",
-      ) => {
-        const value = ensureProfileForEmail(email, { env: state.env });
-        if (accountId && login) {
-          syncGitHubIdentity(
-            {
-              identity: { accountId, login },
-              authenticationAlias: { kind: "email", email },
-            },
-            { env: state.env },
-          );
-          if (credit !== "default") {
-            expect(
-              setUserPreferences(
-                value.id,
-                // The preference API persists arbitrary JSON, so a non-boolean row is a
-                // reachable state that must not read as consent to publish a trailer.
-                { [GIT_COAUTHOR_PREFERENCE_KEY]: credit === "malformed" ? "yes" : credit === "on" },
-                { env: state.env },
-              ),
-            ).toMatchObject({ ok: true });
-          }
-        }
-        return value;
-      };
-      const ada = profile("ada@example.test", 20, "ada");
-      const grace = profile("grace@example.test", 10, "grace");
-      const sameTime = profile("same-time@example.test", 5, "same-time");
-      const later = profile("later@example.test", 1, "later");
-      const primary = profile("primary@example.test", 30, "primary");
-      const current = profile("current@example.test", 15, "current");
-      const optedOut = profile("opted-out@example.test", 25, "opted-out", "off");
-      const defaulted = profile("defaulted@example.test", 35, "defaulted", "default");
-      const malformed = profile("malformed@example.test", 45, "malformed", "malformed");
-      const unlinked = profile("unlinked@example.test");
-      const legacy = ensureProfileForEmail("legacy@example.test", { env: state.env });
-      openOpenClawStateDatabase({ env: state.env })
-        .db.prepare(
-          "INSERT INTO user_profile_identities (provider, subject, profile_id, canonical_login, created_at) VALUES (?, ?, ?, ?, ?)",
-        )
-        .run("github-attribution", "40", legacy.id, "legacy", Date.now());
-      const scope = { agentId: "main", env: state.env, sessionKey };
-      await upsertSessionEntryCore(scope, { sessionId: "coauthors", updatedAt: 1 });
-      for (const [index, participant] of [
-        ada,
-        grace,
-        sameTime,
-        later,
-        primary,
-        optedOut,
-        defaulted,
-        malformed,
-        unlinked,
-        legacy,
-      ].entries()) {
-        recordSessionParticipant(scope, {
-          identity: { type: "profile", id: participant.id },
-          promptedAt: participant === grace || participant === sameTime ? 100 : 200 + index,
-          sessionAgentId: "main",
-        });
-      }
-      for (const participant of [ada, ada, grace, sameTime, later]) {
-        recordSessionParticipant(scope, {
-          identity: { type: "profile", id: participant.id },
-          promptedAt: 400,
-          sessionAgentId: "main",
-        });
-      }
-      recordSessionParticipant(scope, {
-        identity: {
-          type: "observation",
-          pluginId: "discord",
-          accountId: null,
-          senderKind: "unknown",
-          id: current.id,
-        },
-        promptedAt: 1,
-        sessionAgentId: "main",
-      });
-      recordSessionParticipant(scope, {
-        identity: { type: "agent", id: "helper" },
-        sessionAgentId: "main",
-      });
+    expect(
+      await readCredit(scope, {
+        config,
+        storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
+      }),
+    ).toBeUndefined();
+    expect(await readCredit(scope, { config })).toEqual(expectedCredit([20, "ada"]));
+  });
+});
 
-      const attribution = await resolveGitCoauthorAttribution({
-        agentId: "main",
+it("derives exact bounded trailers only from canonical profile-backed humans", async () => {
+  await withSession("coauthors", async (scope, state) => {
+    await upsertSessionEntryCore(scope, { sessionId: "coauthors", updatedAt: 1 });
+    // Undefined leaves consent at its default; malformed persisted consent must not publish credit.
+    for (const [login, accountId, credit, firstPrompt, repeats] of [
+      ["ada", 20, true, 200, 2],
+      ["grace", 10, true, 100, 1],
+      ["same-time", 5, true, 100, 1],
+      ["later", 1, true, 203, 1],
+      ["primary", 30, true, 204, 0],
+      ["opted-out", 25, false, 205, 0],
+      ["defaulted", 35, undefined, 206, 0],
+      ["malformed", 45, "yes", 207, 0],
+    ] as const) {
+      const profile = linkedProfile(login, accountId);
+      if (credit !== undefined) {
+        expect(setCredit(profile.id, credit)).toMatchObject({ ok: true });
+      }
+      participant(scope, profile, firstPrompt);
+      for (let index = 0; index < repeats; index++) {
+        participant(scope, profile, 400);
+      }
+    }
+    const current = linkedProfile("current", 15);
+    expect(setCredit(current.id, true)).toMatchObject({ ok: true });
+    participant(scope, ensureProfileForEmail("unlinked@example.test", stateOptions()), 208);
+    const legacy = ensureProfileForEmail("legacy@example.test", stateOptions());
+    openOpenClawStateDatabase({ env: state.env })
+      .db.prepare(
+        "INSERT INTO user_profile_identities (provider, subject, profile_id, canonical_login, created_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run("github-attribution", "40", legacy.id, "legacy", Date.now());
+    participant(scope, legacy, 209);
+    recordSessionParticipant(scope, {
+      identity: {
+        type: "observation",
+        pluginId: "discord",
+        accountId: null,
+        senderKind: "unknown",
+        id: current.id,
+      },
+      promptedAt: 1,
+      sessionAgentId: "main",
+    });
+    recordSessionParticipant(scope, {
+      identity: { type: "agent", id: "helper" },
+      sessionAgentId: "main",
+    });
+
+    const read = (email: string, excludeAccountId?: number) =>
+      readCredit(scope, {
         config: {
           tools: {
             github: {
               profileId: "ghp_11111111111111111111111111111111",
-              gitAuthor: {
-                email: "30+primary@users.noreply.github.com",
-              },
+              gitAuthor: { email },
             },
           },
         },
-        env: state.env,
-        sessionKey,
+        excludeAccountId,
         storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
       });
-      const structured = await resolveGitCoauthorAttribution({
-        agentId: "main",
-        config: {
-          tools: {
-            github: {
-              profileId: "ghp_11111111111111111111111111111111",
-              gitAuthor: { email: "custom-author@example.test" },
-            },
-          },
-        },
-        excludeAccountId: 30,
-        env: state.env,
-        sessionKey,
-        storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
-      });
+    const attribution = await read("30+primary@users.noreply.github.com");
+    const structured = await read("custom-author@example.test", 30);
+    const personalPublisher = await read("30+primary@users.noreply.github.com", 20);
+    expect(personalPublisher?.trailers).toContain(
+      "Co-authored-by: primary <30+primary@users.noreply.github.com>",
+    );
+    expect(personalPublisher?.trailers).not.toContain(
+      "Co-authored-by: ada <20+ada@users.noreply.github.com>",
+    );
 
-      const personalPublisher = await resolveGitCoauthorAttribution({
-        agentId: "main",
-        config: {
-          tools: {
-            github: {
-              profileId: "ghp_11111111111111111111111111111111",
-              gitAuthor: { email: "30+primary@users.noreply.github.com" },
-            },
-          },
-        },
-        excludeAccountId: 20,
-        env: state.env,
-        sessionKey,
-        storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
-      });
-      expect(personalPublisher?.trailers).toContain(
-        "Co-authored-by: primary <30+primary@users.noreply.github.com>",
-      );
-      expect(personalPublisher?.trailers).not.toContain(
-        "Co-authored-by: ada <20+ada@users.noreply.github.com>",
-      );
-
-      expect(attribution).toEqual(structured);
-      expect(structured).toMatchObject({
-        logins: ["ada", "same-time", "grace", "later", "defaulted"],
-        trailers: [
-          "Co-authored-by: ada <20+ada@users.noreply.github.com>",
-          "Co-authored-by: same-time <5+same-time@users.noreply.github.com>",
-          "Co-authored-by: grace <10+grace@users.noreply.github.com>",
-          "Co-authored-by: later <1+later@users.noreply.github.com>",
-          "Co-authored-by: defaulted <35+defaulted@users.noreply.github.com>",
-        ],
-      });
-    });
+    expect(attribution).toEqual(structured);
+    expect(structured).toMatchObject(
+      expectedCredit([20, "ada"], [5, "same-time"], [10, "grace"], [1, "later"], [35, "defaulted"]),
+    );
   });
+});
 
-  it("combines historical profile contributions under one verified GitHub account", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const sessionKey = "agent:main:merged-coauthors";
-      const scope = { agentId: "main", env: state.env, sessionKey };
-      await upsertSessionEntryCore(scope, { sessionId: "merged-coauthors", updatedAt: 1 });
-      const oldProfile = ensureProfileForEmail("old@example.test", { env: state.env });
-      const mergedProfile = ensureProfileForEmail("merged@example.test", { env: state.env });
-      const otherProfile = ensureProfileForEmail("other@example.test", { env: state.env });
-
-      for (const [profile, accountId, login, email] of [
-        [mergedProfile, 20, "merged", "merged@example.test"],
-        [otherProfile, 10, "other", "other@example.test"],
-      ] as const) {
-        syncGitHubIdentity(
-          { identity: { accountId, login }, authenticationAlias: { kind: "email", email } },
-          { env: state.env },
-        );
-        setUserPreferences(profile.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: true }, { env: state.env });
-      }
-      for (const [profile, promptedAt] of [
-        [oldProfile, 10],
-        [oldProfile, 20],
-        [mergedProfile, 30],
-        [mergedProfile, 40],
-        [otherProfile, 50],
-        [otherProfile, 60],
-        [otherProfile, 70],
-      ] as const) {
-        recordSessionParticipant(scope, {
-          identity: { type: "profile", id: profile.id },
-          promptedAt,
-          sessionAgentId: "main",
-        });
-      }
-      recordSessionParticipant(scope, {
-        identity: { type: "profile", id: otherProfile.id },
-        promptedAt: 80,
-      });
-      // A contaminated historical time stays unknown even after profile aliases merge.
-      openOpenClawAgentDatabase({ agentId: "main", env: state.env })
-        .db.prepare(
-          "UPDATE session_participants SET first_prompted_at = NULL, last_prompted_at = NULL WHERE actor_id = ?",
-        )
-        .run(oldProfile.id);
-      linkEmail("old@example.test", mergedProfile.id, { env: state.env });
-
-      expect(
-        await resolveGitCoauthorAttribution({
-          agentId: "main",
-          config: {},
-          env: state.env,
-          sessionKey,
-        }),
-      ).toMatchObject({
-        logins: ["other", "merged"],
-        trailers: [
-          "Co-authored-by: other <10+other@users.noreply.github.com>",
-          "Co-authored-by: merged <20+merged@users.noreply.github.com>",
-        ],
-      });
+it("combines historical profile contributions under one verified GitHub account", async () => {
+  await withSession("merged-coauthors", async (scope, state) => {
+    await upsertSessionEntryCore(scope, { sessionId: "merged-coauthors", updatedAt: 1 });
+    const oldProfile = ensureProfileForEmail("old@example.test", { env: state.env });
+    const mergedProfile = linkedProfile("merged", 20);
+    const otherProfile = linkedProfile("other", 10);
+    setCredit(mergedProfile.id, true);
+    setCredit(otherProfile.id, true);
+    for (const [profile, promptedAt] of [
+      [oldProfile, 10],
+      [oldProfile, 20],
+      [mergedProfile, 30],
+      [mergedProfile, 40],
+      [otherProfile, 50],
+      [otherProfile, 60],
+      [otherProfile, 70],
+    ] as const) {
+      participant(scope, profile, promptedAt);
+    }
+    recordSessionParticipant(scope, {
+      identity: { type: "profile", id: otherProfile.id },
+      promptedAt: 80,
     });
+    // A contaminated historical time stays unknown even after profile aliases merge.
+    openOpenClawAgentDatabase({ agentId: "main", env: state.env })
+      .db.prepare(
+        "UPDATE session_participants SET first_prompted_at = NULL, last_prompted_at = NULL WHERE actor_id = ?",
+      )
+      .run(oldProfile.id);
+    linkEmail("old@example.test", mergedProfile.id, { env: state.env });
+
+    expect(await readCredit(scope)).toMatchObject(expectedCredit([10, "other"], [20, "merged"]));
   });
+});
 
-  it("uses current identity and consent for inherited credit without counting it twice", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const sessionKey = "agent:main:delegated-credit";
-      const scope = { agentId: "main", env: state.env, sessionKey };
-      const original = ensureProfileForEmail("delegation-original@example.test", {
-        env: state.env,
-      });
-      const current = ensureProfileForEmail("delegation-current@example.test", { env: state.env });
-      const later = ensureProfileForEmail("delegation-later@example.test", { env: state.env });
-      await upsertSessionEntryCore(scope, {
-        sessionId: "delegated-credit",
-        updatedAt: 1,
-        createdVia: "spawn",
-        inheritedGitContributorProfileIds: [original.id, later.id],
-      });
-      recordSessionParticipant(scope, {
-        identity: { type: "profile", id: current.id },
-        promptedAt: 1,
-        sessionAgentId: "main",
-      });
-      for (const [email, accountId, login] of [
-        ["delegation-current@example.test", 901, "current-contributor"],
-        ["delegation-later@example.test", 902, "later-contributor"],
-      ] as const) {
-        syncGitHubIdentity(
-          { identity: { accountId, login }, authenticationAlias: { kind: "email", email } },
-          { env: state.env },
-        );
-      }
-      linkEmail("delegation-original@example.test", current.id, { env: state.env });
-      const read = () => resolveGitCoauthorAttribution({ ...scope, config: {} });
-
-      expect(await read()).toEqual({
-        logins: ["current-contributor", "later-contributor"],
-        trailers: [
-          "Co-authored-by: current-contributor <901+current-contributor@users.noreply.github.com>",
-          "Co-authored-by: later-contributor <902+later-contributor@users.noreply.github.com>",
-        ],
-      });
-      setUserPreferences(later.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: false }, { env: state.env });
-      expect((await read())?.logins).toEqual(["current-contributor"]);
-      setUserPreferences(later.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: true }, { env: state.env });
-      expect((await read())?.logins).toEqual(["current-contributor", "later-contributor"]);
-      expect(
-        await resolveGitCoauthorAttribution({ ...scope, config: {}, sessionId: "replaced-child" }),
-      ).toBeUndefined();
+it("uses current identity and consent for inherited credit without counting it twice", async () => {
+  await withSession("delegated-credit", async (scope, state) => {
+    const original = ensureProfileForEmail("delegation-original@example.test", stateOptions());
+    const current = linkedProfile("current-contributor", 901);
+    const later = linkedProfile("later-contributor", 902);
+    await upsertSessionEntryCore(scope, {
+      sessionId: "delegated-credit",
+      updatedAt: 1,
+      createdVia: "spawn",
+      inheritedGitContributorProfileIds: [original.id, later.id],
     });
+    participant(scope, current, 1);
+    linkEmail("delegation-original@example.test", current.id, { env: state.env });
+    const read = () => readCredit(scope);
+
+    expect(await read()).toEqual(
+      expectedCredit([901, "current-contributor"], [902, "later-contributor"]),
+    );
+    setCredit(later.id, false);
+    expect((await read())?.logins).toEqual(["current-contributor"]);
+    setCredit(later.id, true);
+    expect((await read())?.logins).toEqual(["current-contributor", "later-contributor"]);
+    expect(await readCredit(scope, { sessionId: "replaced-child" })).toBeUndefined();
   });
 });

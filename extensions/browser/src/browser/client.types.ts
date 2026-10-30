@@ -23,26 +23,13 @@ export type ProfileStatus = {
 
 export type BrowserGraphicsAcceleration = "hardware" | "software" | "unknown";
 
-export type BrowserGraphicsDevice = {
+type BrowserGraphicsDevice = {
   vendorId: number;
   deviceId: number;
   vendor: string;
   device: string;
   driverVendor: string;
   driverVersion: string;
-};
-
-type BrowserVideoDecodeCapability = {
-  profile: string;
-  minResolution: { width: number; height: number };
-  maxResolution: { width: number; height: number };
-};
-
-type BrowserVideoEncodeCapability = {
-  profile: string;
-  maxResolution: { width: number; height: number };
-  maxFramerateNumerator: number;
-  maxFramerateDenominator: number;
 };
 
 export type BrowserGraphicsDiagnostics =
@@ -58,8 +45,17 @@ export type BrowserGraphicsDiagnostics =
       featureStatus: Record<string, string>;
       disabledFeatures: Array<{ feature: string; status: string }>;
       driverBugWorkarounds: string[];
-      videoDecoding: BrowserVideoDecodeCapability[];
-      videoEncoding: BrowserVideoEncodeCapability[];
+      videoDecoding: {
+        profile: string;
+        minResolution: { width: number; height: number };
+        maxResolution: { width: number; height: number };
+      }[];
+      videoEncoding: {
+        profile: string;
+        maxResolution: { width: number; height: number };
+        maxFramerateNumerator: number;
+        maxFramerateDenominator: number;
+      }[];
     }
   | {
       status: "unavailable";

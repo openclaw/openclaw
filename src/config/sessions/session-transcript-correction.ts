@@ -15,10 +15,10 @@ import {
   rewriteTranscriptEventRowsExact,
   withTranscriptWriteSequence,
 } from "./session-accessor.sqlite-transcript-write.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import {
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
-  withSessionActorStorage,
 } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
@@ -225,7 +225,6 @@ async function runPreparedTranscriptCorrection<T>(
             await restoreSessionColdTranscript(source.scope, assertCurrent);
           },
           beforeWrite: assertCurrent,
-          async release() {},
         }),
         async run(worker, commit) {
           const hydration = await source.owner.readTranscript({

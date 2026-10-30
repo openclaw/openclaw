@@ -8,7 +8,7 @@ import {
   type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import {
@@ -25,6 +25,13 @@ import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { materializeProjectClone, refreshProjectClone } from "../../projects/project-clone.js";
 import { parseConfiguredProjectGitUrl } from "../../projects/project-git-url.runtime.js";
 import { resolveProjectDirectory } from "../../projects/project-registry.js";
+import {
+  getRpcSourceIdentity,
+  getRpcSourceLifecycleGeneration,
+  getRpcSourceProjectSessionActive,
+  isRpcSourceRegistered,
+  requestRpcSourceCancellation,
+} from "../../sessions/session-controller.rpc-sources.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -255,22 +262,21 @@ export function prepareSessionWorkspace(params: {
   if (!entry) {
     throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
   }
-  const { controller } = admission.activeRunAbort;
-  const signal = controller.signal;
+  const signal = admission.activeRunAbort.entry.input.abortSignal;
   const assertRunOwnership = () => {
     signal.throwIfAborted();
-    const activeRun = context.chatAbortControllers.get(clientRunId);
+    const activeRun = admission.activeRunAbort.entry;
+    const activeRunIdentity = getRpcSourceIdentity(activeRun);
     if (
-      !activeRun ||
-      activeRun !== admission.activeRunAbort.entry ||
-      activeRun.controller !== controller ||
-      activeRun.sessionKey !== sessionKey ||
-      activeRun.sessionId !== entry.sessionId ||
+      !isRpcSourceRegistered(activeRun) ||
+      activeRun.input.abortSignal !== signal ||
+      activeRunIdentity.sessionKey !== sessionKey ||
+      activeRunIdentity.sessionId !== entry.sessionId ||
       entry.sessionId !== admission.admittedSessionId ||
-      activeRun.lifecycleGeneration !== admission.lifecycleGeneration ||
-      activeRun.projectSessionActive === false ||
-      activeRun.projectSessionTerminalPending === true ||
-      activeRun.projectSessionTerminalPersisted === true ||
+      getRpcSourceLifecycleGeneration(activeRun) !== admission.lifecycleGeneration ||
+      getRpcSourceProjectSessionActive(activeRun) === false ||
+      activeRun.adapter.projectSessionTerminalPending === true ||
+      activeRun.adapter.projectSessionTerminalPersisted === true ||
       !hasActiveAgentRuntimeAuthority(client, context)
     ) {
       throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
@@ -319,7 +325,7 @@ export function prepareSessionWorkspace(params: {
           error,
           "Workspace preparation failed; check the repository and retry.",
         );
-        controller.abort(preparationFailure);
+        requestRpcSourceCancellation(admission.activeRunAbort.entry, preparationFailure);
       }
       const failure = preparationFailure ?? error;
       promptReady.reject(failure);
@@ -537,7 +543,14 @@ export async function prepareSessionWorkspaceForRun(params: {
           runSetupScript: !cfg.cloudWorkers?.requiredProfile && params.runSetupScript,
           signal,
           commitGuard: assertProjectCurrent,
-          onProgress: (stage) => status(stage === "setup" ? "running_setup" : "creating_worktree"),
+          onProgress: (stage) =>
+            status(
+              stage === "base"
+                ? "preparing_worktree_base"
+                : stage === "setup"
+                  ? "running_setup"
+                  : "creating_worktree",
+            ),
           acceptedSource: pending.source,
           onPromptReady: params.onPromptReady
             ? async (promptWorkspace) => {

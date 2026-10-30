@@ -1,5 +1,4 @@
 /* @vitest-environment jsdom */
-
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
@@ -7,97 +6,54 @@ import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { PanelTabStrip, type SolidPanelTabStripTab } from "./panel-tab-strip-solid.tsx";
 
-const first: SolidPanelTabStripTab = {
-  id: "first",
-  domId: "tab-first",
-  label: "First",
-  closeLabel: "Close first",
-};
-const second: SolidPanelTabStripTab = {
-  id: "second",
-  domId: "tab-second",
-  label: "Second",
-  closeLabel: "Close second",
-};
-
+const first = { id: "a", domId: "a", label: "A", closeLabel: "Close A" };
+const second = { id: "b", domId: "b", label: "B", closeLabel: "Close B" };
 function mountStrip(
-  initial = [first, second],
-  callbacks: {
-    onSelect?: (id: string) => void;
-    onClose?: (id: string) => void | Promise<void>;
-    onNew?: () => void;
-    onReorder?: (source: string, target: string, placement: "before" | "after") => void;
-  } = {},
+  initial: SolidPanelTabStripTab[] = [first, second],
+  onReorder?: Parameters<typeof PanelTabStrip>[0]["onReorder"],
 ) {
-  const [tabs, setTabs] = createSignal(initial);
-  const [activeId, setActiveId] = createSignal<string | null>(initial[0]?.id ?? null);
-  const view = mountSolid(() => (
-    <PanelTabStrip
-      tabs={tabs()}
-      activeId={activeId()}
-      ariaControls="panel"
-      onSelect={callbacks.onSelect ?? vi.fn()}
-      onClose={callbacks.onClose ?? vi.fn()}
-      onReorder={callbacks.onReorder}
-      onNew={callbacks.onNew ?? vi.fn()}
-      newLabel="New tab"
-    />
-  ));
-  const group = () => view.container.querySelector<HTMLElement>(".tabstrip");
-  return { ...view, group, setTabs, setActiveId };
+  const callbacks = { onSelect: vi.fn(), onClose: vi.fn(), onNew: vi.fn() };
+  const [props, setProps] = createSignal({
+    tabs: initial,
+    activeId: initial[0]?.id ?? null,
+    ariaControls: "panel",
+    ...callbacks,
+    onReorder,
+    newLabel: "New tab",
+  });
+  const view = mountSolid(() => <PanelTabStrip {...props()} />);
+  const query = (selector: string) => view.container.querySelector<HTMLElement>(selector);
+  const button = (id: string) => view.container.querySelector<HTMLButtonElement>(`#${id}`)!;
+  const update = (next: SolidPanelTabStripTab[], active = props().activeId) => {
+    setProps((current) => ({ ...current, tabs: next, activeId: active }));
+    flush();
+  };
+  return { ...view, ...callbacks, button, query, update };
 }
-
 afterEach(() => {
   document.documentElement.removeAttribute("dir");
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
-it("keeps keyed tab nodes while publishing controlled selection and new labels", async () => {
-  const onSelect = vi.fn();
-  const view = mountStrip(undefined, { onSelect });
-  const firstNode = view.container.querySelector("#tab-first");
-  const secondNode = view.container.querySelector("#tab-second");
-  view.container.querySelector<HTMLButtonElement>("#tab-first")!.click();
-  expect(onSelect).not.toHaveBeenCalled();
-  view.container.querySelector<HTMLButtonElement>("#tab-second")!.click();
-  expect(onSelect).toHaveBeenCalledExactlyOnceWith("second");
-
-  view.setTabs([{ ...second, label: "Renamed second" }, first]);
-  view.setActiveId("second");
-  flush();
-  expect([...view.container.querySelectorAll('[role="tab"]')]).toEqual([secondNode, firstNode]);
-  expect(secondNode?.textContent).toContain("Renamed second");
-  expect(secondNode?.getAttribute("aria-selected")).toBe("true");
-  expect(view.container.querySelector<HTMLButtonElement>("#tab-second-close")?.tabIndex).toBe(0);
-  expect(view.container.querySelector<HTMLButtonElement>("#tab-first-close")?.tabIndex).toBe(-1);
-  view.container.querySelector<HTMLButtonElement>("#tab-second")!.click();
-  expect(onSelect).toHaveBeenCalledOnce();
-});
-
-it("tracks empty and populated tab lists without creating an empty group", () => {
-  const onNew = vi.fn();
-  const view = mountStrip([], { onNew });
-  expect(view.group()).toBeNull();
-  expect(view.container.querySelector(".tabstrip-new")?.hasAttribute("slot")).toBe(false);
-  view.container.querySelector<HTMLButtonElement>(".tabstrip-new")!.click();
+it("creates the group only for populated lists and slots the new-tab action", () => {
+  const { query, update, onNew } = mountStrip([]);
+  expect(query(".tabstrip")).toBeNull();
+  expect(query(".tabstrip-new")?.hasAttribute("slot")).toBe(false);
+  query(".tabstrip-new")!.click();
   expect(onNew).toHaveBeenCalledOnce();
-  view.setTabs([first]);
-  view.setActiveId(first.id);
-  flush();
-  expect(view.group()).not.toBeNull();
-  expect(view.container.querySelector(".tabstrip-new")?.getAttribute("slot")).toBe("nav");
-  view.setTabs([]);
-  flush();
-  expect(view.group()).toBeNull();
+  update([first], first.id);
+  expect(query(".tabstrip")).not.toBeNull();
+  expect(query(".tabstrip-new")?.getAttribute("slot")).toBe("nav");
+  update([]);
+  expect(query(".tabstrip")).toBeNull();
 });
 
-it("keeps activation, keyboard repeat, and middle-click close separate", () => {
+it("separates activation, keyboard repeat, and middle-click close", () => {
   const onActivate = vi.fn();
-  const onSelect = vi.fn();
-  const onClose = vi.fn();
-  const view = mountStrip([first, { ...second, onActivate }], { onClose, onSelect });
-  const tab = view.container.querySelector<HTMLElement>("#tab-second")!;
+  const { button, onClose, onSelect } = mountStrip([first, { ...second, onActivate }]);
+  const tab = button("b");
   tab.click();
   for (const key of ["Enter", " "]) {
     const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
@@ -112,57 +68,84 @@ it("keeps activation, keyboard repeat, and middle-click close separate", () => {
   expect(onSelect).not.toHaveBeenCalled();
 });
 
+it("disables both close gestures without disabling selection", () => {
+  const tabs = [first, { ...second, closeDisabled: true }];
+  const { button, update, onClose, onSelect } = mountStrip(tabs);
+  const [tab, close] = [button("b"), button("b-close")] as const;
+  expect(close.disabled).toBe(true);
+  close.click();
+  tab.dispatchEvent(new MouseEvent("auxclick", { button: 1 }));
+  tab.click();
+  expect(onClose).not.toHaveBeenCalled();
+  expect(onSelect).toHaveBeenCalledExactlyOnceWith(second.id);
+  update([first, { ...second, label: "Renamed second" }], "b");
+  expect(button("b")).toBe(tab);
+  expect(tab).toMatchObject({ textContent: expect.stringContaining("Renamed second") });
+  expect(tab.getAttribute("aria-selected")).toBe("true");
+  expect([close.tabIndex, button("a-close").tabIndex]).toEqual([0, -1]);
+  tab.click();
+  expect(onSelect).toHaveBeenCalledOnce();
+  expect(close.disabled).toBe(false);
+  close.click();
+  expect(onClose).toHaveBeenCalledExactlyOnceWith(second.id);
+});
+
 it.each(["ltr", "rtl"])("uses the same %s edge for drag preview and reorder", (direction) => {
   document.documentElement.dir = direction;
   const onReorder = vi.fn();
-  const view = mountStrip(undefined, { onReorder });
-  const tabs = [...view.container.querySelectorAll<HTMLElement>('[role="tab"]')];
-  const source = tabs[0]!;
-  const target = tabs[1]!;
-  vi.spyOn(target, "getBoundingClientRect").mockReturnValue({ left: 100, width: 80 } as DOMRect);
+  const { button, query } = mountStrip(undefined, onReorder);
+  const [source, target] = [button("a"), button("b")] as const;
+  vi.spyOn(target, "getBoundingClientRect").mockReturnValue(new DOMRect(100, 0, 80, 0));
   // jsdom does not resolve inherited direction through custom elements.
   target.style.direction = direction;
   const dataTransfer = createDataTransferStub();
-  for (const [element, type] of [
-    [source, "dragstart"],
-    [target, "dragover"],
-  ] as const) {
+  const drag = (element: HTMLElement, type: string) => {
     const event = new MouseEvent(type, { clientX: 110, bubbles: true, cancelable: true });
     Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
     element.dispatchEvent(event);
-  }
+  };
+  drag(source, "dragstart");
+  drag(target, "dragover");
   flush();
   const placement = direction === "rtl" ? "after" : "before";
   expect(target.classList.contains(`is-drop-${placement}`)).toBe(true);
-  const drop = new MouseEvent("drop", { clientX: 110, bubbles: true, cancelable: true });
-  Object.defineProperty(drop, "dataTransfer", { value: dataTransfer });
-  target.dispatchEvent(drop);
-  expect(onReorder).toHaveBeenCalledExactlyOnceWith("first", "second", placement);
-  expect(view.group()?.hasAttribute("data-dragged-panel-tab")).toBe(false);
+  drag(target, "drop");
+  expect(onReorder).toHaveBeenCalledExactlyOnceWith("a", "b", placement);
+  expect(query(".tabstrip")?.hasAttribute("data-dragged-panel-tab")).toBe(false);
   flush();
   expect(target.classList.contains(`is-drop-${placement}`)).toBe(false);
 });
 
 it("releases measurement observers on disposal", () => {
-  const observer = vi.fn();
-  const disconnected = vi.fn();
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      constructor() {
-        observer();
-      }
-      observe() {}
-      unobserve() {}
-      disconnect() {
-        disconnected();
-      }
-    },
-  );
+  vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+  const observed = new Set<Element>();
+  const disconnected = vi.fn(() => observed.clear());
+  vi.stubGlobal("ResizeObserver", function () {
+    return {
+      observe: (target: Element) => observed.add(target),
+      unobserve: (target: Element) => observed.delete(target),
+      disconnect: disconnected,
+    };
+  });
   const view = mountStrip();
-  const initialObservers = observer.mock.calls.length;
-  expect(initialObservers).toBeGreaterThan(0);
+  flush();
+  vi.advanceTimersToNextFrame();
+  expect(observed.size).toBeGreaterThan(0);
+  const firstTargets = new Set(observed);
+  const other = mountStrip();
+  flush();
+  vi.advanceTimersToNextFrame();
+  const otherTargets = new Set([...observed].filter((target) => !firstTargets.has(target)));
+  expect(otherTargets.size).toBeGreaterThan(0);
   view.unmount();
-  expect(observer).toHaveBeenCalledTimes(initialObservers);
-  expect(disconnected).toHaveBeenCalledTimes(initialObservers);
+  expect(observed).toEqual(otherTargets);
+  expect(disconnected).not.toHaveBeenCalled();
+  other.query(".tabstrip")!.dispatchEvent(new Event("scroll"));
+  expect(vi.getTimerCount()).toBeGreaterThan(0);
+  other.unmount();
+  expect(vi.getTimerCount()).toBe(0);
+  expect(observed.size).toBe(0);
+  expect(disconnected).toHaveBeenCalled();
+  vi.advanceTimersToNextFrame();
+  expect(observed.size).toBe(0);
 });

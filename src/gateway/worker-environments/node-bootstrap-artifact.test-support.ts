@@ -1,9 +1,15 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach } from "vitest";
+import * as tar from "tar";
+import { afterEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createNodeBootstrapArtifactProvider } from "./node-bootstrap-artifact.js";
+
+// mock-isolation: archive fixtures have synthetic registry dependencies; install-lock tests own npm I/O.
+vi.mock("./node-bootstrap-install-lock.js", () => ({
+  prepareNodeBootstrapInstallLock: async () => undefined,
+}));
 
 export const buildId = "fixture-source-build";
 export const version = "2026.8.1";
@@ -14,6 +20,37 @@ export async function write(root: string, relative: string, contents: string | o
   const target = path.join(root, relative);
   await fs.mkdir(path.dirname(target), { recursive: true });
   await fs.writeFile(target, typeof contents === "string" ? contents : JSON.stringify(contents));
+}
+
+export async function writeFiles(root: string, files: Record<string, string | object>) {
+  for (const [relative, contents] of Object.entries(files)) {
+    await write(root, relative, contents);
+  }
+}
+
+export const readText = (root: string, relative: string) =>
+  fs.readFile(path.join(root, relative), "utf8");
+
+export async function expectFiles(root: string, files: Record<string, string>) {
+  for (const [relative, text] of Object.entries(files)) {
+    expect(await readText(root, relative), relative).toBe(text);
+  }
+}
+
+export async function expectMissing(root: string, files: string[]) {
+  for (const relative of files) {
+    await expect(fs.access(path.join(root, relative)), relative).rejects.toHaveProperty(
+      "code",
+      "ENOENT",
+    );
+  }
+}
+
+export async function extract(root: string, artifact: { tarballPath: string }) {
+  const installed = path.join(root, "node");
+  await fs.mkdir(installed);
+  await tar.extract({ file: artifact.tarballPath, cwd: installed });
+  return path.join(installed, "package");
 }
 
 export type OwnedRuntimeChunk = { source: string; extensions: readonly string[] };
@@ -53,20 +90,15 @@ export async function writeBundledBrowser(packageRoot: string) {
     bin: { browser: "./build/src/bin/browser.js" },
     files: ["build/src", "LICENSE", "skills", "!*.js.map"],
   });
-  await write(
-    browserRoot,
-    "build/src/index.js",
-    'import { readFileSync } from "node:fs"; export const notice = readFileSync(new URL("./third_party/THIRD_PARTY_NOTICES", import.meta.url), "utf8");',
-  );
-  await write(
-    browserRoot,
-    "build/src/bin/browser.js",
-    'import { notice } from "../index.js"; console.log(notice);',
-  );
-  await write(browserRoot, "build/src/third_party/THIRD_PARTY_NOTICES", "bundled-notice");
-  await write(browserRoot, "build/src/OPENCLAW_PATCH_NOTICE.md", "patched-runtime");
-  await write(browserRoot, "skills/browser/SKILL.md", "browser-skill");
-  await write(browserRoot, "LICENSE", "fixture-license");
+  await writeFiles(browserRoot, {
+    "build/src/index.js":
+      'import { readFileSync } from "node:fs"; export const notice = readFileSync(new URL("./third_party/THIRD_PARTY_NOTICES", import.meta.url), "utf8");',
+    "build/src/bin/browser.js": 'import { notice } from "../index.js"; console.log(notice);',
+    "build/src/third_party/THIRD_PARTY_NOTICES": "bundled-notice",
+    "build/src/OPENCLAW_PATCH_NOTICE.md": "patched-runtime",
+    "skills/browser/SKILL.md": "browser-skill",
+    LICENSE: "fixture-license",
+  });
   return browserRoot;
 }
 
@@ -100,13 +132,26 @@ export function useNodeBootstrapArtifactFixtures() {
       version,
       type: "module",
       files: [
+        "openclaw.mjs",
+        "node-version.mjs",
+        "node-sqlite.mjs",
+        "node-runtime-update.mjs",
+        "node-runtime-recovery.mjs",
+        "cli-parent-lifetime.mjs",
+        "node-runtime-env.mjs",
+        "cli-invocation.mjs",
+        "cli-root-options.mjs",
+        "gateway-run-argv.mjs",
+        "gateway-shutdown-budget.mjs",
+        "node-host-launcher.mjs",
+        "node-compile-cache.mjs",
         "dist/",
         "!dist/extensions/remote-runtime/**",
         "scripts/preinstall.mjs",
         "scripts/postinstall.mjs",
       ],
       dependencies: { "@fixture/ai": mode === "source" ? "workspace:*" : version },
-      ...(mode !== "source" ? { bundleDependencies: ["@fixture/ai"] } : {}),
+      bundleDependencies: mode === "source" ? false : ["@fixture/ai"],
       devDependencies: { "typescript-only": "workspace:*" },
       scripts: {
         prepare: "exit 91",
@@ -125,71 +170,55 @@ export function useNodeBootstrapArtifactFixtures() {
       "cli-invocation.mjs",
       "cli-parent-lifetime.mjs",
       "gateway-shutdown-budget.mjs",
+      "node-runtime-env.mjs",
     ]) {
       await fs.copyFile(filename, path.join(packageRoot, filename));
     }
-    await write(packageRoot, "node-version.mjs", "export const supported = true;");
-    await write(packageRoot, "node-sqlite.mjs", "export const probe = true;");
-    await write(packageRoot, "node-runtime-update.mjs", "export const update = true;");
-    await write(packageRoot, "node-runtime-recovery.mjs", "export const recovery = true;");
-    await write(packageRoot, "node-runtime-env.mjs", "export {};");
-    await write(packageRoot, "cli-root-options.mjs", "export {};");
-    await write(packageRoot, "gateway-run-argv.mjs", "export {};");
-    await write(packageRoot, "node-host-launcher.mjs", "export const launcher = true;");
-    await write(packageRoot, "node-compile-cache.mjs", "export {};");
-    await write(packageRoot, "scripts/preinstall.mjs", "export {};\n");
-    await write(
-      packageRoot,
-      "scripts/postinstall.mjs",
-      'import { rmSync } from "node:fs"; rmSync(new URL("../.openclaw-lifecycle-pending", import.meta.url));',
-    );
-    await write(
-      packageRoot,
-      "dist/entry.js",
-      'import { answer } from "./extensions/remote-runtime/index.js"; import { name } from "../node_modules/@fixture/ai/dist/index.js"; console.log(`${name}:${answer}`);',
-    );
-    await write(packageRoot, "dist/control-ui/index.html", "<title>Gateway dashboard</title>");
-    await write(packageRoot, "dist/control-ui/assets/app.js", 'console.log("gateway-ui");');
-    await write(packageRoot, "dist/shared.js", 'export const answer = "cloud-ready";');
-    await write(packageRoot, "dist/empty.js", "");
-    await write(packageRoot, longEntryPath, { payload: longEntryPayload });
-    await write(packageRoot, "dist/worker/worker.mjs", 'console.log("separate-worker-bundle");');
-    await write(packageRoot, "dist/worker/workspace-rsync-receiver.mjs", "export {};");
-    await write(packageRoot, "dist/worker/github-exec-launcher.mjs", "export {};");
-    await write(packageRoot, "dist/worker-artifacts/fixture.tgz", "separate-worker-archive");
-    await write(packageRoot, "dist/build-info.json", { version, buildId });
-    await write(packageRoot, "dist/extensions/remote-runtime/package.json", pluginPackage);
-    await write(packageRoot, "dist/extensions/remote-runtime/openclaw.plugin.json", {
-      id: "remote-runtime",
+    await writeFiles(packageRoot, {
+      "node-version.mjs": "export const supported = true;",
+      "node-sqlite.mjs": "export const probe = true;",
+      "node-runtime-update.mjs": "export const update = true;",
+      "node-runtime-recovery.mjs": "export const recovery = true;",
+      "cli-root-options.mjs": "export {};",
+      "gateway-run-argv.mjs": "export {};",
+      "node-host-launcher.mjs": "export const launcher = true;",
+      "node-compile-cache.mjs": "export {};",
+      "scripts/preinstall.mjs": "export {};\n",
+      "scripts/postinstall.mjs":
+        'import { rmSync } from "node:fs"; rmSync(new URL("../.openclaw-lifecycle-pending", import.meta.url));',
+      "dist/entry.js":
+        'import { answer } from "./extensions/remote-runtime/index.js"; import { name } from "../node_modules/@fixture/ai/dist/index.js"; console.log(`${name}:${answer}`);',
+      "dist/control-ui/index.html": "<title>Gateway dashboard</title>",
+      "dist/control-ui/assets/app.js": 'console.log("gateway-ui");',
+      "dist/shared.js": 'export const answer = "cloud-ready";',
+      "dist/empty.js": "",
+      [longEntryPath]: { payload: longEntryPayload },
+      "dist/worker/worker.mjs": 'console.log("separate-worker-bundle");',
+      "dist/worker/workspace-rsync-receiver.mjs": "export {};",
+      "dist/worker/github-exec-launcher.mjs": "export {};",
+      "dist/worker-artifacts/fixture.tgz": "separate-worker-archive",
+      "dist/build-info.json": { version, buildId },
+      "dist/extensions/remote-runtime/package.json": pluginPackage,
+      "dist/extensions/remote-runtime/openclaw.plugin.json": { id: "remote-runtime" },
+      "dist/extensions/remote-runtime/index.js": 'export { answer } from "../../shared.js";',
+      "dist/extensions/remote-runtime/node_modules/native-runtime/vendor/host-native":
+        "do-not-transfer-native",
+      "dist/.buildstamp": "local-build-only",
+      "dist/debug.js.map": "source-map-only",
+      ".env": "FAKE_PRIVATE_VALUE=do-not-transfer",
+      "src/private.ts": "source-only",
+      "extensions/remote-runtime/package.json": pluginPackage,
     });
-    await write(
-      packageRoot,
-      "dist/extensions/remote-runtime/index.js",
-      'export { answer } from "../../shared.js";',
-    );
-    await write(
-      packageRoot,
-      "dist/extensions/remote-runtime/node_modules/native-runtime/vendor/host-native",
-      "do-not-transfer-native",
-    );
-    await write(packageRoot, "dist/.buildstamp", "local-build-only");
-    await write(packageRoot, "dist/debug.js.map", "source-map-only");
-    await write(packageRoot, ".env", "FAKE_PRIVATE_VALUE=do-not-transfer");
-    await write(packageRoot, "src/private.ts", "source-only");
-    await write(packageRoot, "extensions/remote-runtime/package.json", pluginPackage);
     const aiRoot =
       mode === "source"
         ? path.join(root, "ai-source")
         : mode === "linked-package"
           ? path.join(root, "node_modules/linked-project/ai-source")
           : path.join(packageRoot, "node_modules/@fixture/ai");
-    await write(aiRoot, "package.json", {
-      name: "@fixture/ai",
-      version,
-      type: "module",
-      exports: "./dist/index.js",
+    await writeFiles(aiRoot, {
+      "package.json": { name: "@fixture/ai", version, type: "module", exports: "./dist/index.js" },
+      "dist/index.js": 'export const name = "local-ai";',
     });
-    await write(aiRoot, "dist/index.js", 'export const name = "local-ai";');
     if (mode === "source" || mode === "linked-package") {
       await write(aiRoot, ".env", "FAKE_PRIVATE_VALUE=do-not-transfer");
       await write(aiRoot, "src/private.ts", "source-only");
@@ -203,18 +232,16 @@ export function useNodeBootstrapArtifactFixtures() {
     );
     if (mode === "external-plugin") {
       pluginRoot = path.join(root, "installed-plugin");
-      await write(pluginRoot, "package.json", {
-        ...pluginPackage,
-        openclaw: { extensions: ["./index.ts"], runtimeExtensions: ["./dist/index.js"] },
+      await writeFiles(pluginRoot, {
+        "package.json": {
+          ...pluginPackage,
+          openclaw: { extensions: ["./index.ts"], runtimeExtensions: ["./dist/index.js"] },
+        },
+        "openclaw.plugin.json": { id: "remote-runtime" },
+        "dist/index.js": 'export const answer = "cloud-ready";',
+        ".env": "FAKE_PRIVATE_VALUE=do-not-transfer",
+        "node_modules/native-runtime/vendor/host-native": "do-not-transfer-native",
       });
-      await write(pluginRoot, "openclaw.plugin.json", { id: "remote-runtime" });
-      await write(pluginRoot, "dist/index.js", 'export const answer = "cloud-ready";');
-      await write(pluginRoot, ".env", "FAKE_PRIVATE_VALUE=do-not-transfer");
-      await write(
-        pluginRoot,
-        "node_modules/native-runtime/vendor/host-native",
-        "do-not-transfer-native",
-      );
       await write(
         packageRoot,
         "dist/entry.js",

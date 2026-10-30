@@ -1,4 +1,5 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginConfigUiHint } from "../plugins/types.js";
@@ -164,8 +165,8 @@ async function promptPluginFields(params: {
       continue;
     }
 
-    const label = hint.label ?? key;
-    const helpSuffix = hint.help ? ` — ${hint.help}` : "";
+    const label = terminalText`${hint.label ?? key}`;
+    const helpSuffix = hint.help ? terminalText` — ${hint.help}` : "";
 
     // Plugin secrets stay with config set and the Web UI's secret-storage flow.
     if (hint.sensitive) {
@@ -184,12 +185,14 @@ async function promptPluginFields(params: {
     if (schemaProp?.enum && Array.isArray(schemaProp.enum)) {
       const options = schemaProp.enum.map((configValue, index) => ({
         value: String(index),
-        label: JSON.stringify(configValue) ?? String(configValue),
+        label: terminalText`${JSON.stringify(configValue) ?? String(configValue)}`,
       }));
       if (hasValue) {
         options.unshift({
           value: "__keep__",
-          label: t("wizard.plugins.currentValue", { value: formatCurrentValue(currentValue) }),
+          label: t("wizard.plugins.currentValue", {
+            value: terminalText`${formatCurrentValue(currentValue)}`,
+          }),
         });
       }
       const selected = await prompter.select({
@@ -211,6 +214,10 @@ async function promptPluginFields(params: {
       }
     } else {
       const isArray = schemaProp?.type === "array";
+      const numberType =
+        schemaProp?.type === "number" || schemaProp?.type === "integer"
+          ? schemaProp.type
+          : undefined;
       const currentStr = isArray
         ? Array.isArray(currentValue)
           ? currentValue.join(", ")
@@ -219,8 +226,27 @@ async function promptPluginFields(params: {
       const input = await prompter.text({
         message: `${label}${isArray ? t("wizard.plugins.arrayPromptSuffix") : ""}${helpSuffix}`,
         initialValue: currentStr,
-        placeholder:
-          hint.placeholder ?? (isArray ? t("wizard.plugins.arrayPlaceholder") : undefined),
+        placeholder: hint.placeholder
+          ? terminalText`${hint.placeholder}`
+          : isArray
+            ? t("wizard.plugins.arrayPlaceholder")
+            : undefined,
+        validate: numberType
+          ? (value) => {
+              const trimmed = value.trim();
+              if (!trimmed) {
+                return undefined;
+              }
+              const parsed = parseJsonNumberInput(trimmed);
+              return parsed !== undefined && (numberType === "number" || Number.isInteger(parsed))
+                ? undefined
+                : t(
+                    numberType === "integer"
+                      ? "wizard.plugins.invalidInteger"
+                      : "wizard.plugins.invalidNumber",
+                  );
+            }
+          : undefined,
       });
       const trimmed = input.trim();
       if (trimmed === currentStr) {
@@ -231,12 +257,8 @@ async function promptPluginFields(params: {
           ? normalizeStringEntries(trimmed.split(","))
           : trimmed
         : undefined;
-      if (trimmed && (schemaProp?.type === "number" || schemaProp?.type === "integer")) {
-        const parsed = parseJsonNumberInput(trimmed);
-        if (parsed === undefined || (schemaProp.type === "integer" && !Number.isInteger(parsed))) {
-          continue;
-        }
-        nextValue = parsed;
+      if (trimmed && numberType) {
+        nextValue = JSON.parse(trimmed);
       }
     }
     setPathCreateStrict(updatedConfig, pathSegments, nextValue);
@@ -292,7 +314,7 @@ export async function setupPluginConfig(params: {
       },
       ...unconfigured.map((p) => ({
         value: p.id,
-        label: p.name,
+        label: terminalText`${p.name}`,
         hint: t("wizard.plugins.fieldsCount", {
           count: Object.keys(p.uiHints).length,
           plural: Object.keys(p.uiHints).length === 1 ? "" : "s",
@@ -308,7 +330,7 @@ export async function setupPluginConfig(params: {
       continue;
     }
     await params.prompter.note(
-      t("wizard.plugins.configurePlugin", { plugin: plugin.name }),
+      t("wizard.plugins.configurePlugin", { plugin: terminalText`${plugin.name}` }),
       t("wizard.plugins.configureFieldsTitle"),
     );
     config = await promptPluginFields({
@@ -351,7 +373,7 @@ export async function configurePluginConfig(params: {
         const totalCount = Object.keys(p.uiHints).length;
         return {
           value: p.id,
-          label: p.name,
+          label: terminalText`${p.name}`,
           hint: t("wizard.plugins.configuredCount", {
             configured: configuredCount,
             total: totalCount,

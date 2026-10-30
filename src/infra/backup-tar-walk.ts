@@ -3,7 +3,7 @@ import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import type { HeaderData } from "tar";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 
 /** Open sources before emitting headers so a vanished name cannot leave a partial entry. */
 export async function* walkBackupTar(params: {
@@ -17,6 +17,7 @@ export async function* walkBackupTar(params: {
   onProgress: (sourcePath: string, bytes?: number) => void;
 }): AsyncGenerator<Buffer> {
   const noFollow = process.platform === "win32" ? 0 : constants.O_NOFOLLOW;
+  const nonBlocking = process.platform === "win32" ? 0 : constants.O_NONBLOCK;
   type Directory = { sourcePath: string; identity: BigIntStats };
   const assertDirectory = async ({ sourcePath, identity }: Directory) => {
     const current = await fs.lstat(sourcePath, { bigint: true });
@@ -55,7 +56,9 @@ export async function* walkBackupTar(params: {
             linkpath = linkpath.replaceAll("\\", "/");
           }
         } else if (stat.isFile()) {
-          handle = await fs.open(sourcePath, constants.O_RDONLY | noFollow);
+          // A regular source can become a FIFO after lstat. Open without waiting
+          // for a writer so the descriptor check below can reject that change.
+          handle = await fs.open(sourcePath, constants.O_RDONLY | noFollow | nonBlocking);
           const openedIdentity = await handle.stat({ bigint: true });
           const opened = await handle.stat();
           if (!opened.isFile()) {
@@ -64,12 +67,7 @@ export async function* walkBackupTar(params: {
           // The kernel binds a no-follow open; later renames cannot invalidate its bytes.
           // Without that support, bind the descriptor to a regular-file observation.
           if (!noFollow) {
-            const current = await fs.lstat(sourcePath, { bigint: true }).catch((error: unknown) => {
-              if (hasErrnoCode(error, "ENOENT")) {
-                return undefined;
-              }
-              throw error;
-            });
+            const current = await fs.lstat(sourcePath, { bigint: true }).catch(ignoreMissingPath);
             if (current?.isSymbolicLink()) {
               throw new Error(`Backup source became a symbolic link while opening: ${sourcePath}`);
             }
@@ -89,9 +87,7 @@ export async function* walkBackupTar(params: {
           await assertDirectory(parent);
         }
       } catch (error) {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
+        ignoreMissingPath(error);
         params.onVanished(sourcePath);
         return;
       }

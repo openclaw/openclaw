@@ -1,191 +1,100 @@
-// Gateway Protocol tests cover agent behavior.
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import {
-  AgentParamsSchema,
-  ConversationListParamsSchema,
-  ConversationListResultSchema,
-  ConversationSendParamsSchema,
-  ConversationSendResultSchema,
-  ConversationTurnCancelParamsSchema,
-  ConversationTurnCancelResultSchema,
-  ConversationTurnParamsSchema,
-  ConversationTurnResultSchema,
-  MessageActionParamsSchema,
-} from "./agent.js";
+import * as S from "./agent.js";
+import { schemaValidation, withOverrides } from "./protocol-validation.test-support.js";
+import { accepts, rejects } from "./schema.test-support.js";
 
 describe("AgentParamsSchema", () => {
+  const request = { message: "resume", idempotencyKey: "creation" };
   it.each([undefined, false, true, "true"])(
     "accepts only boolean session creation intent (%s)",
     (createSessionIfMissing) => {
-      expect(
-        Value.Check(AgentParamsSchema, {
-          message: "resume",
-          sessionId: "named-session",
-          createSessionIfMissing,
-          idempotencyKey: "creation",
-        }),
-      ).toBe(createSessionIfMissing !== "true");
+      const value = { ...request, sessionId: "named-session", createSessionIfMissing };
+      expect(Value.Check(S.AgentParamsSchema, value)).toBe(createSessionIfMissing !== "true");
     },
   );
 
-  it.each([undefined])(
-    "accepts the backend expected-session binding with revision %s",
-    (revision) => {
-      expect(
-        Value.Check(AgentParamsSchema, {
-          message: "resume",
-          sessionKey: "agent:main:main",
-          expectedExistingSessionId: "session-1",
-          expectedExistingSessionLifecycleRevision: revision,
-          idempotencyKey: "recovery-1",
-        }),
-      ).toBe(true);
-    },
-  );
+  it("accepts the backend expected-session binding without a revision", () => {
+    accepts(S.AgentParamsSchema, {
+      ...request,
+      sessionKey: "agent:main:main",
+      expectedExistingSessionId: "session-1",
+      expectedExistingSessionLifecycleRevision: undefined,
+      idempotencyKey: "recovery-1",
+    });
+  });
 });
 
 describe("MessageActionParamsSchema", () => {
-  const baseParams = {
-    channel: "matrix",
-    action: "read",
-    params: {},
-    idempotencyKey: "idem-1",
-  };
+  const baseParams = { channel: "matrix", action: "read", params: {}, idempotencyKey: "idem-1" };
 
   it("accepts only the operation-local direct-operator marker", () => {
-    expect(
-      Value.Check(MessageActionParamsSchema, {
-        ...baseParams,
-        conversationReadOrigin: "direct-operator",
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(MessageActionParamsSchema, {
-        ...baseParams,
-        conversationReadOrigin: "delegated",
-      }),
-    ).toBe(false);
+    accepts(S.MessageActionParamsSchema, {
+      ...baseParams,
+      conversationReadOrigin: "direct-operator",
+    });
+    rejects(S.MessageActionParamsSchema, { ...baseParams, conversationReadOrigin: "delegated" });
   });
 
   it("rejects caller-supplied current chat classification", () => {
-    expect(
-      Value.Check(MessageActionParamsSchema, {
-        ...baseParams,
-        toolContext: {
-          currentChannelId: "!room:example.org",
-          currentChatType: "direct",
-        },
-      }),
-    ).toBe(false);
+    rejects(S.MessageActionParamsSchema, {
+      ...baseParams,
+      toolContext: { currentChannelId: "!room:example.org", currentChatType: "direct" },
+    });
   });
 
   it("validates closed reply routing facts", () => {
-    for (const reply of [
-      { replyToId: "message-1", source: "explicit" },
-      { replyToId: "message-1", source: "implicit", mode: "first" },
-      { replyToId: "message-1", source: "implicit", mode: "all" },
-    ]) {
-      expect(Value.Check(MessageActionParamsSchema, { ...baseParams, reply })).toBe(true);
-    }
-    for (const reply of [
-      { replyToId: "message-1", source: "explicit", mode: "off" },
-      { replyToId: "message-1", source: "implicit" },
-      { replyToId: "message-1", source: "implicit", mode: "batched" },
-    ]) {
-      expect(Value.Check(MessageActionParamsSchema, { ...baseParams, reply })).toBe(false);
-    }
+    const reply = withOverrides({ replyToId: "message-1", source: "implicit" });
+    const action = schemaValidation(S.MessageActionParamsSchema);
+    const request = (facts: object) => ({ ...baseParams, reply: facts });
+    action.accepts(
+      ...[reply({ source: "explicit" }), reply({ mode: "first" }), reply({ mode: "all" })].map(
+        request,
+      ),
+    );
+    action.rejects(
+      ...[reply({ source: "explicit", mode: "off" }), reply({}), reply({ mode: "batched" })].map(
+        request,
+      ),
+    );
   });
 });
 
 describe("Conversation schemas", () => {
+  const conversationRef = "conv_0123456789abcdef0123456789abcdef";
+  const request = {
+    agentId: "main",
+    sourceSessionKey: "agent:main:telegram:direct:operator",
+    conversationRef,
+    message: "hello",
+  };
   it("accepts Gateway-owned address discovery without session internals", () => {
-    expect(
-      Value.Check(ConversationListParamsSchema, {
-        agentId: "main",
-        channel: "reef",
-        query: "@molty",
-        limit: 50,
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(ConversationListResultSchema, {
-        conversations: [
-          {
-            conversationRef: "conv_0123456789abcdef0123456789abcdef",
-            channel: "reef",
-            accountId: "default",
-            kind: "direct",
-            target: "reef:molty",
-            label: "@molty's agent",
-            firstSeenAt: 100,
-            lastSeenAt: 100,
-          },
-        ],
-      }),
-    ).toBe(true);
+    accepts(S.ConversationListParamsSchema, {
+      agentId: "main",
+      channel: "reef",
+      query: "@molty",
+      limit: 50,
+    });
   });
 
-  it("accepts a Gateway-owned durable send and result", () => {
-    expect(
-      Value.Check(ConversationSendParamsSchema, {
-        agentId: "main",
-        sourceSessionKey: "agent:main:telegram:direct:operator",
-        operationId: "conversation-send-1",
-        conversationRef: "conv_0123456789abcdef0123456789abcdef",
-        message: "hello",
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(ConversationSendResultSchema, {
-        status: "sent",
-        conversationRef: "conv_0123456789abcdef0123456789abcdef",
-        channel: "reef",
-        messageId: "01JZ0000000000000000000200",
-        queueId: "conversation-send-1",
-      }),
-    ).toBe(true);
+  it("accepts a Gateway-owned durable send", () => {
+    accepts(S.ConversationSendParamsSchema, { ...request, operationId: "conversation-send-1" });
   });
 
-  it("accepts a Gateway-owned correlated turn and its inline reply", () => {
-    expect(
-      Value.Check(ConversationTurnParamsSchema, {
-        agentId: "main",
-        sourceSessionKey: "agent:main:telegram:direct:operator",
-        turnId: "conversation-turn-1",
-        conversationRef: "conv_0123456789abcdef0123456789abcdef",
-        message: "hello",
-        timeoutMs: 30_000,
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(ConversationTurnResultSchema, {
-        status: "replied",
-        conversationRef: "conv_0123456789abcdef0123456789abcdef",
-        channel: "reef",
-        messageId: "01JZ0000000000000000000200",
-        correlationPersisted: true,
-        reply: {
-          conversationRef: "conv_0123456789abcdef0123456789abcdef",
-          messageId: "01JZ0000000000000000000201",
-          replyToId: "01JZ0000000000000000000200",
-          text: "hello back",
-          timestamp: 123,
-        },
-      }),
-    ).toBe(true);
+  it("accepts a Gateway-owned correlated turn", () => {
+    accepts(S.ConversationTurnParamsSchema, {
+      ...request,
+      turnId: "conversation-turn-1",
+      timeoutMs: 30_000,
+    });
   });
 
   it("accepts explicit cancellation for an abandoned Gateway-owned turn", () => {
-    expect(
-      Value.Check(ConversationTurnCancelParamsSchema, {
-        agentId: "main",
-        turnId: "conversation-turn-1",
-      }),
-    ).toBe(true);
-    expect(Value.Check(ConversationTurnCancelParamsSchema, { turnId: "conversation-turn-1" })).toBe(
-      false,
-    );
-    expect(Value.Check(ConversationTurnCancelResultSchema, { cancelled: true })).toBe(true);
+    accepts(S.ConversationTurnCancelParamsSchema, {
+      agentId: "main",
+      turnId: "conversation-turn-1",
+    });
+    rejects(S.ConversationTurnCancelParamsSchema, { turnId: "conversation-turn-1" });
+    accepts(S.ConversationTurnCancelResultSchema, { cancelled: true });
   });
 });

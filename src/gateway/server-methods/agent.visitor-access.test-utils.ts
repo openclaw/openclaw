@@ -18,6 +18,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasAgentRunContextExecutionOwner } from "../../infra/agent-run-registry.js";
 import * as mutationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { getUserProfileListItem } from "../../state/user-profile-list-item.test-support.js";
 import { captureResidentUserProfileAccess } from "../../state/user-profile-list.js";
@@ -304,7 +305,7 @@ describe("visitor access admitted caller", () => {
           try {
             await expectDefined(proof, "admitted visitor proof missing");
           } finally {
-            await waitForAssertion(() => expect(context.chatAbortControllers.size).toBe(0));
+            await waitForAssertion(() => expect(rpcSourceTesting.size).toBe(0));
           }
           expect(mocks.agentCommand).toHaveBeenCalledOnce();
           const saved = await grants.lookup(EMAIL);

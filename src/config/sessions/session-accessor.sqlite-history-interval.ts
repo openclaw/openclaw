@@ -9,6 +9,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
+  boundHistoryAnchorPageRange,
   resolveHistoryAnchorPageRange,
   type TranscriptAnchorPageOptions,
 } from "../../sessions/transcript-anchor-page.js";
@@ -21,6 +22,7 @@ import { positionTranscriptDisplayEvents } from "./session-accessor.sqlite-displ
 import { findUnindexedActiveTranscriptEntry } from "./session-accessor.sqlite-history-navigation.js";
 import {
   getActiveTranscriptKysely,
+  selectActiveTranscriptIdentityRows,
   type SessionTranscriptMessageAnchorPage,
   type CurrentTranscriptProjection,
   type SessionTranscriptMessageEvent,
@@ -126,14 +128,7 @@ function selectDisplayableActiveEventById(
   projection: CurrentTranscriptProjection,
   eventId: string,
 ) {
-  const db = getActiveTranscriptKysely(projection.database);
-  return db
-    .selectFrom("transcript_event_identities as identity")
-    .innerJoin("session_transcript_active_events as active", (join) =>
-      join
-        .onRef("active.session_id", "=", "identity.session_id")
-        .onRef("active.event_seq", "=", "identity.seq"),
-    )
+  return selectActiveTranscriptIdentityRows(projection.database)
     .innerJoin("transcript_events as event", (join) =>
       join
         .onRef("event.session_id", "=", "active.session_id")
@@ -265,6 +260,7 @@ function readHistoricalDisplayEventRange(
   count: number,
   anchor: { activePosition: number; displayPosition: number },
   maxBytes?: number,
+  anchorOptions?: TranscriptAnchorPageOptions,
 ): SessionTranscriptMessageEvent[] {
   if (count <= 0) {
     return [];
@@ -274,7 +270,7 @@ function readHistoricalDisplayEventRange(
     historyNavigationValidSql(projection.database.db).as("navigation_valid"),
     eb(transcriptEventReadBytesSql("event"), "+", 1).as("serialized_bytes"),
   ]);
-  const olderCount = anchor.displayPosition - start;
+  const olderCount = Math.max(0, anchor.displayPosition - start);
   // The anchor already identifies the physical position; visit only its selected neighbors.
   const older =
     olderCount === 0
@@ -289,7 +285,11 @@ function readHistoricalDisplayEventRange(
   const newer = executeSqliteQuerySync(
     projection.database.db,
     query
-      .where("active.active_position", ">=", anchor.activePosition)
+      .where(
+        "active.active_position",
+        start > anchor.displayPosition ? ">" : ">=",
+        anchor.activePosition,
+      )
       .orderBy("active.active_position", "asc")
       .limit(count - olderCount),
   ).rows;
@@ -297,29 +297,19 @@ function readHistoricalDisplayEventRange(
     assertTranscriptNavigationValid(row.navigation_valid);
     return Object.assign(row, { displaySeq: start + index + 1 });
   });
-  let selected = ranged;
-  if (
-    maxBytes === undefined &&
-    ranged.reduce((bytes, row) => bytes + row.serialized_bytes, 2) > SOURCE_PAGE_MAX_BYTES
-  ) {
-    throw new Error(
-      `Transcript history page exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte limit; request a smaller limit`,
-    );
-  }
-  if (maxBytes !== undefined) {
-    const limit = Math.min(SOURCE_PAGE_MAX_BYTES, Math.max(1_024, Math.floor(maxBytes)));
-    let bytes = 2;
-    let selectedStart = ranged.length;
-    while (selectedStart > 0) {
-      const nextBytes = ranged[selectedStart - 1]!.serialized_bytes;
-      if (bytes + nextBytes > limit) {
-        break;
-      }
-      bytes += nextBytes;
-      selectedStart--;
-    }
-    selected = ranged.slice(selectedStart);
-  }
+  // Size the contiguous anchor window before loading event bodies.
+  const limit = Math.min(
+    SOURCE_PAGE_MAX_BYTES,
+    Math.max(1_024, Math.floor(maxBytes ?? SOURCE_PAGE_MAX_BYTES)),
+  );
+  const selectedRange = boundHistoryAnchorPageRange(
+    { readStart: 0, endExclusive: ranged.length, hasOverreadContext: false, offset: 0 },
+    anchorOptions ? anchor.displayPosition - start : ranged.length - 1,
+    limit,
+    (position) => ranged[position]!.serialized_bytes,
+    anchorOptions !== undefined && maxBytes === undefined,
+  );
+  const selected = ranged.slice(selectedRange.start, selectedRange.endExclusive);
   if (selected.length === 0) {
     return [];
   }
@@ -426,19 +416,22 @@ export function readHistoricalHistoryAnchorPage(
     excludeClosingReset ? total - 1 : anchorPosition,
     options,
   );
+  const requested = range.endExclusive - range.readStart;
+  const events = readHistoricalDisplayEventRange(
+    projection,
+    displaySource,
+    interval,
+    range.readStart,
+    requested,
+    { activePosition: row.active_position, displayPosition: anchorPosition },
+    options.maxBytes,
+    options,
+  );
   return {
-    events: readHistoricalDisplayEventRange(
-      projection,
-      displaySource,
-      interval,
-      range.readStart,
-      range.endExclusive - range.readStart,
-      { activePosition: row.active_position, displayPosition: anchorPosition },
-      options.maxBytes,
-    ),
+    events,
     found: true,
-    hasOverreadContext: range.hasOverreadContext,
-    offset: range.offset,
+    hasOverreadContext: range.hasOverreadContext && events[0]?.seq === range.readStart + 1,
+    offset: total - (events.at(-1)?.seq ?? range.endExclusive),
     displaySource,
     totalMessages: total,
   };

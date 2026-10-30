@@ -2,9 +2,13 @@ import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
-import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
+import {
+  asPositiveSafeInteger,
+  floorPositiveFiniteNumber as readPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { omitNullRequestHeaders } from "../../packages/llm-core/src/utils/request-headers.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { parseConfiguredModelVisibilityEntries } from "../agents/model-selection-shared.js";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
@@ -29,6 +33,7 @@ import {
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { readParsedField } from "../utils/string-readers.js";
 import { recordLiveServingContextLimit } from "./provider-catalog-expiry.js";
 import type { ProviderCatalogContext } from "./types.js";
 
@@ -61,13 +66,6 @@ type DiscoveryResponse =
   | { kind: "unreachable"; error: unknown }
   | { kind: "invalid-response"; error: unknown };
 
-function readPositiveInteger(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return Math.trunc(value);
-}
-
 const OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS = [
   "context_length",
   "context_window",
@@ -75,16 +73,8 @@ const OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS = [
   "max_model_len",
 ] as const;
 
-function readOpenAICompatibleContextWindow(
-  model: Record<string, unknown> | undefined,
-): number | undefined {
-  for (const field of OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS) {
-    const contextWindow = readPositiveInteger(model?.[field]);
-    if (contextWindow !== undefined) {
-      return contextWindow;
-    }
-  }
-  return undefined;
+function readOpenAICompatibleContextWindow(model: Record<string, unknown>): number | undefined {
+  return readParsedField(model, OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS, readPositiveInteger);
 }
 
 function buildSelfHostedDiscoveryHeaders(params: {
@@ -120,9 +110,11 @@ async function fetchSelfHostedDiscoveryJson(params: {
     const request = {
       url: params.url,
       init: {
-        headers: params.acceptJson
-          ? { Accept: "application/json", ...params.requestPolicy.headers }
-          : params.requestPolicy.headers,
+        headers: omitNullRequestHeaders(
+          params.acceptJson
+            ? { Accept: "application/json", ...params.requestPolicy.headers }
+            : params.requestPolicy.headers,
+        ),
       },
       policy: resolveProviderTransportSsrFPolicy({ ...params.requestPolicy, url: params.url }),
       dispatcherPolicy,
@@ -181,9 +173,8 @@ function shouldProbeRuntimeProps(model: Record<string, unknown>): boolean {
 
 function resolveRuntimePropsUrl(params: { serverBaseUrl: string; modelId?: string }): string {
   const url = new URL(`${params.serverBaseUrl.replace(/\/+$/, "")}/props`);
-  const modelId = normalizeOptionalString(params.modelId);
-  if (modelId) {
-    url.searchParams.set("model", modelId);
+  if (params.modelId) {
+    url.searchParams.set("model", params.modelId);
     url.searchParams.set("autoload", "false");
   }
   return url.toString();

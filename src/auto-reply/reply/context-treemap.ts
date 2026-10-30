@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { estimateTokensFromChars } from "@openclaw/normalization-core/cjk-chars";
+import { formatInjectedWorkspaceFileLabel } from "../../config/sessions/session-system-prompt-report.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { encodePngRgba } from "../../media/png-encode.js";
@@ -118,7 +119,6 @@ function totalValue(items: Array<{ value: number }>): number {
 function sanitizeLabel(value: string): string {
   return value
     .replace(/[^a-zA-Z0-9/_.:-]+/g, " ")
-    .replace(/\s+/g, " ")
     .trim()
     .toUpperCase();
 }
@@ -273,6 +273,9 @@ function buildGroups(
   const tools = report.tools.entries
     .map((tool) => ({ name: tool.name, value: tool.schemaChars ?? 0 }))
     .filter((tool) => tool.value > 0);
+  const files = report.injectedWorkspaceFiles.filter(
+    (file) => file.injectionStatus !== "native_unverified",
+  );
   const groups = [
     {
       name: "Conversation",
@@ -283,12 +286,10 @@ function buildGroups(
       name: "Workspace files",
       color: rgb(58, 145, 91),
       leaves: [
-        ...report.injectedWorkspaceFiles
-          .filter((file) => file.injectionStatus !== "native_unverified")
-          .map((file) => ({
-            name: file.name,
-            value: file.injectedChars,
-          })),
+        ...files.map((file) => ({
+          name: formatInjectedWorkspaceFileLabel(file, files, { compact: true }),
+          value: file.injectedChars,
+        })),
         { name: "Project context frame", value: projectFrameChars },
       ],
     },
@@ -329,15 +330,12 @@ function drawTreemap(canvas: PngCanvas, groups: TreemapGroup[], rect: Rect): voi
       rgb(248, 250, 252),
       groupRect.width > 260 && groupRect.height > 120 ? 2 : 1,
     );
-    const childRect = inset(
-      {
-        x: groupRect.x + TREEMAP_GAP,
-        y: groupRect.y + (groupRect.height > 92 ? 44 : TREEMAP_GAP),
-        width: groupRect.width - TREEMAP_GAP * 2,
-        height: groupRect.height - (groupRect.height > 92 ? 48 : TREEMAP_GAP * 2),
-      },
-      0,
-    );
+    const childRect = {
+      x: groupRect.x + TREEMAP_GAP,
+      y: groupRect.y + (groupRect.height > 92 ? 44 : TREEMAP_GAP),
+      width: groupRect.width - TREEMAP_GAP * 2,
+      height: groupRect.height - (groupRect.height > 92 ? 48 : TREEMAP_GAP * 2),
+    };
     const leafRects = layoutBinary(group.leaves, childRect);
     leafRects.forEach(({ item: leaf, rect: leafRect }, leafIndex) => {
       const shade = (leafIndex % 7) / 10 + (groupIndex % 2) * 0.08;

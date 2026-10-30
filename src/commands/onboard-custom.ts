@@ -169,42 +169,6 @@ async function promptBaseUrlAndKey(params: {
   }
 }
 
-async function promptCustomApiModelId(params: {
-  prompter: WizardPrompter;
-  baseUrl: string;
-  apiKey: string;
-  compatibility: CustomApiCompatibilityChoice;
-}): Promise<string> {
-  const { prompter } = params;
-  if (params.compatibility !== "anthropic") {
-    const modelIds = await discoverCustomApiModelIds(params);
-    if (modelIds.length > 0) {
-      const selected = await prompter.select({
-        message: t("wizard.customProvider.modelId"),
-        options: [
-          ...modelIds.map((id) => ({ value: id, label: id })),
-          { value: "", label: t("wizard.customProvider.modelIdManual") },
-        ],
-      });
-      if (selected) {
-        return selected;
-      }
-    } else {
-      await prompter.note(
-        t("wizard.customProvider.modelDiscoveryUnavailable"),
-        t("wizard.customProvider.modelId"),
-      );
-    }
-  }
-  return (
-    await prompter.text({
-      message: t("wizard.customProvider.modelId"),
-      placeholder: t("wizard.customProvider.modelIdPlaceholder"),
-      validate: (val) => (val.trim() ? undefined : t("wizard.customProvider.modelIdRequired")),
-    })
-  ).trim();
-}
-
 /** Prompts for a custom API provider and prepares its endpoint config without writing it. */
 export async function promptCustomApiConfig(params: {
   prompter: WizardPrompter;
@@ -240,13 +204,35 @@ export async function promptCustomApiConfig(params: {
     })),
   });
 
-  const selectModel = () =>
-    promptCustomApiModelId({
-      prompter,
-      baseUrl,
-      apiKey: resolvedApiKey,
-      compatibility: compatibilityChoice,
-    });
+  const selectModel = async (): Promise<string> => {
+    if (compatibilityChoice !== "anthropic") {
+      const modelIds = await discoverCustomApiModelIds({ baseUrl, apiKey: resolvedApiKey });
+      if (modelIds.length > 0) {
+        const selected = await prompter.select({
+          message: t("wizard.customProvider.modelId"),
+          options: [
+            ...modelIds.map((id) => ({ value: id, label: id })),
+            { value: "", label: t("wizard.customProvider.modelIdManual") },
+          ],
+        });
+        if (selected) {
+          return selected;
+        }
+      } else {
+        await prompter.note(
+          t("wizard.customProvider.modelDiscoveryUnavailable"),
+          t("wizard.customProvider.modelId"),
+        );
+      }
+    }
+    return (
+      await prompter.text({
+        message: t("wizard.customProvider.modelId"),
+        placeholder: t("wizard.customProvider.modelIdPlaceholder"),
+        validate: (val) => (val.trim() ? undefined : t("wizard.customProvider.modelIdRequired")),
+      })
+    ).trim();
+  };
   let modelId = await selectModel();
 
   let compatibility: CustomApiCompatibility | null =

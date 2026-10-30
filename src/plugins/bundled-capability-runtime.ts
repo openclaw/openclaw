@@ -1,5 +1,4 @@
 /** Loads capability providers through the canonical scoped plugin loader. */
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
@@ -9,9 +8,8 @@ import {
 } from "./loader-runtime-load.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
+import { pluginRuntimeLoaderLogger } from "./runtime/load-context.js";
 import type { PluginRuntime } from "./runtime/types.js";
-
-const log = createSubsystemLogger("plugins");
 
 function createCapabilityRegistrationRuntime(
   config: NonNullable<PluginLoadOptions["config"]>,
@@ -111,12 +109,7 @@ function prepareBundledCapabilityRuntime(params: BundledCapabilityRuntimeParams)
       // Channel setup entries cannot register providers; keep their runtime entry in discovery mode.
       channelPluginLoadIntent: "full",
       manifestRegistry: scopedManifestRegistry,
-      logger: {
-        info: (message) => log.info(message),
-        warn: (message) => log.warn(message),
-        error: (message) => log.error(message),
-        debug: (message) => log.debug(message),
-      },
+      logger: pluginRuntimeLoaderLogger,
     },
     overrides: {
       // Discovery needs the current config, but not the full host runtime graph. The registry

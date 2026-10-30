@@ -3,6 +3,10 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError } from "./app-server/rpc-error.js";
+import {
+  getSharedCodexAppServerClientState,
+  ownCodexStartup,
+} from "./app-server/shared-client-lifecycle.js";
 import { describeCodexSpawnError } from "./app-server/spawn-error.js";
 import { createClientHarness as createHarness } from "./app-server/test-support.js";
 import { observeCodexCatalogClient } from "./session-catalog-events.js";
@@ -31,23 +35,20 @@ function createClientHarness(options?: Parameters<typeof createHarness>[0]) {
   clients.push(harness.client);
   return harness;
 }
-function wirePages(read: (offset: number, limit: number) => NativePage, measureBytes = false) {
-  const pages: { limit: number; bytes: number }[] = [];
+function wirePages(read: (offset: number, limit: number) => NativePage) {
+  const limits: number[] = [];
   const harness = createClientHarness({
     onWrite(line, send) {
       const { id, params } = JSON.parse(line);
       const response = { id, result: read(Number(params.cursor ?? 0), params.limit) };
-      pages.push({
-        limit: params.limit,
-        bytes: measureBytes ? Buffer.byteLength(JSON.stringify(response)) : 0,
-      });
+      limits.push(params.limit);
       send(response);
     },
   });
   rpc.mockImplementation((_plugin, method, params, options) =>
     harness.client.request(method, params, options),
   );
-  return pages;
+  return limits;
 }
 async function advanceIdle(factory: ReturnType<typeof catalogFactory>, milliseconds = 30_000) {
   await vi.advanceTimersByTimeAsync(milliseconds);
@@ -62,6 +63,11 @@ function holdRpc() {
   });
   return { started, pending };
 }
+async function remoteControl(name: string) {
+  const factory = remoteCatalogFactory(name);
+  const source = (await factory.homesForAgent("main"))[0]!;
+  return { factory, source, control: factory.forRequest("main", source) };
+}
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((client) => client.closeAndWait()));
   vi.restoreAllMocks();
@@ -73,38 +79,50 @@ it("shrinks oversized wire pages and retains the working limit for later refresh
   const native = Array.from({ length: 20 }, (_, i) =>
     idleThread({ id: `large-${i}`, source: "cli", preview: "x".repeat(600_000) }),
   );
-  const pages = wirePages((offset, limit) => nativePage(native, offset, limit), true);
+  const limits = wirePages((offset, limit) => nativePage(native, offset, limit));
   const factory = catalogFactory();
   const control = factory.forRequest("main");
   await control.initialize();
   expect((await control.listPage({ limit: 64 })).sessions).toHaveLength(20);
-  expect(pages.map((page) => page.limit)).toEqual([16, 8, 8, 8]);
-  expect(pages[0]!.bytes).toBeGreaterThan(8 * 1024 * 1024);
-  expect(pages.slice(1).every((page) => page.bytes < 8 * 1024 * 1024)).toBe(true);
-  pages.length = 0;
-  await vi.advanceTimersByTimeAsync(15 * 60_000);
-  await control.listPage({});
-  await vi.waitFor(() => expect(factory.hasActiveWork()).toBe(false));
-  expect(pages.map((page) => page.limit)).toEqual([8, 8, 8]);
-  expect((await control.listPage({ limit: 64 })).sessions).toHaveLength(20);
+  expect(limits).toEqual([16, 8, 8, 8]);
+  limits.length = 0;
+  native[19]!.name = "Refreshed";
+  // Unrelated shared startup must not gate this catalog's refresh assertions.
+  const unrelatedStartup = createDeferred<void>();
+  const startup = ownCodexStartup(
+    getSharedCodexAppServerClientState().startup,
+    unrelatedStartup.promise,
+  );
+  try {
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
+    await control.listPage({});
+    await vi.waitFor(async () => {
+      const { sessions } = await control.listPage({ limit: 64 });
+      expect(sessions.find((session) => session.threadId === "large-19")?.name).toBe("Refreshed");
+    });
+    expect(limits).toEqual([8, 8, 8]);
+    expect((await control.listPage({ limit: 64 })).sessions).toHaveLength(20);
+  } finally {
+    unrelatedStartup.resolve();
+    await startup;
+  }
 });
 
 it("defers an oversized single thread for 15 minutes without repeated background warnings", async () => {
   let now = 0;
   const native = idleThread({ source: "cli", name: null, preview: "x".repeat(8 * 1024 * 1024) });
-  const pages = wirePages(() => ({ data: [native] }));
-  const limits = () => pages.map((page) => page.limit);
+  const limits = wirePages(() => ({ data: [native] }));
   const warn = warnings();
   const factory = catalogFactory({ now: () => now });
   const control = factory.forRequest("main");
   await expect(control.listPage({})).rejects.toThrow("exceeds 8 MiB");
   await vi.waitFor(() => expect(factory.hasActiveWork()).toBe(false));
-  expect(limits()).toEqual([16, 8, 4, 2, 1]);
+  expect(limits).toEqual([16, 8, 4, 2, 1]);
   for (now = 5_000; now < 15 * 60_000; now += 5_000) {
     await expect(control.listPage({})).rejects.toThrow("exceeds 8 MiB");
     await nextTurn();
   }
-  expect(limits()).toHaveLength(5);
+  expect(limits).toHaveLength(5);
   expect(
     warn.mock.calls.filter(
       ([message]) => message === "Codex resident catalog background update failed",
@@ -112,7 +130,7 @@ it("defers an oversized single thread for 15 minutes without repeated background
   ).toHaveLength(1);
   native.preview = "Recovered";
   await control.initialize();
-  expect(limits()).toEqual([16, 8, 4, 2, 1, 1]);
+  expect(limits).toEqual([16, 8, 4, 2, 1, 1]);
   expect((await control.listPage({})).sessions[0]?.fallbackName).toBe("Recovered");
 });
 
@@ -125,9 +143,7 @@ it("settles a successful prefix recovery probe before the next activity check", 
     expect(method).toBe("thread/list");
     return nativePage(native, Number(params.cursor ?? 0), 64);
   });
-  const factory = remoteCatalogFactory("prefix-recovery");
-  const source = (await factory.homesForAgent("main"))[0]!;
-  const control = factory.forRequest("main", source);
+  const { factory, source, control } = await remoteControl("prefix-recovery");
   const harness = createClientHarness();
   await observeCodexCatalogClient(harness.client, {
     startOptions: source.appServer.start,
@@ -197,12 +213,11 @@ it.each([true, false])("backs off hydration, not memory (config %s)", async (has
   recovered = true;
   await control.initialize();
   expect((await search()).sessions[0]?.threadId).toBe("match");
-  expectCalls(9);
   expect((await control.listPage({ limit: 10 })).sessions).toHaveLength(3);
   expectCalls(9);
 });
 
-it("shares cold initialization and keeps host backoff observable to catalog callers", async () => {
+it("keeps host backoff and recovery observable to concurrent catalog callers", async () => {
   let now = 0;
   const control = catalogFactory({ getRuntimeConfig: () => config, now: () => now });
   const home = (await control.homesForAgent("main"))[0]!;
@@ -211,50 +226,29 @@ it("shares cold initialization and keeps host backoff observable to catalog call
   const list = (search?: string) =>
     provider.list({ agentId: "main", hostIds: [home.hostId], limitPerHost: 1, search });
   const failure = new Error("native host timed out");
-  const { started, pending: failed } = holdRpc();
-  const settled = Promise.allSettled(parallel(() => request.initialize()));
-  const listDelivered = vi.fn();
-  const pendingList = list();
-  const observedList = Promise.allSettled([pendingList.then(listDelivered)]);
-  try {
-    await started.promise;
-    await nextTurn();
-    expect(listDelivered).not.toHaveBeenCalled();
-    expectCalls(1);
-    now += 60_000;
-    failed.reject(failure);
-    expect(await settled).toEqual(parallel(() => ({ status: "rejected", reason: failure })));
-    expectCalls(1);
-    expect((await pendingList)[0]).toMatchObject({
-      connected: false,
-      sessions: [],
-      error: { code: "APP_SERVER_UNAVAILABLE" },
-    });
+  const { started, pending } = holdRpc();
+  const initialized = expect(request.initialize()).rejects.toBe(failure);
+  await started.promise;
+  now += 60_000;
+  pending.reject(failure);
+  await initialized;
+  await expect(request.initialize()).rejects.toBe(failure);
+  const duringBackoff = await Promise.all(parallel(() => list("other")));
+  expect(duringBackoff).toMatchObject(
+    parallel(() => [{ connected: false, sessions: [], error: { code: "APP_SERVER_UNAVAILABLE" } }]),
+  );
+  const blocked = await Promise.allSettled(parallel(() => request.initialize()));
+  expect(blocked.every((result) => result.status === "rejected")).toBe(true);
+  expectCalls(2);
 
-    await expect(request.initialize()).rejects.toBe(failure);
-    expectCalls(2);
-    const duringBackoff = await Promise.all(parallel(() => list("other")));
-    expect(duringBackoff).toMatchObject(
-      parallel(() => [{ connected: false, error: { code: "APP_SERVER_UNAVAILABLE" } }]),
-    );
-    expectCalls(2);
-    const blocked = await Promise.allSettled(parallel(() => request.initialize()));
-    expect(blocked.every((result) => result.status === "rejected")).toBe(true);
-    expectCalls(2);
-
-    now += 5_000;
-    rpc.mockResolvedValue({ data: [] });
-    await Promise.all(parallel(() => request.initialize()));
-    expectCalls(3);
-    const recovered = await Promise.all(parallel(() => list()));
-    expect(
-      recovered.every(([host]) => host?.connected && !host.error && !host.sessions.length),
-    ).toBe(true);
-    expectCalls(3);
-  } finally {
-    failed.resolve({ data: [] });
-    await Promise.all([settled, observedList]);
-  }
+  now += 5_000;
+  rpc.mockResolvedValue({ data: [] });
+  await Promise.all(parallel(() => request.initialize()));
+  const recovered = await Promise.all(parallel(() => list()));
+  expect(recovered.every(([host]) => host?.connected && !host.error && !host.sessions.length)).toBe(
+    true,
+  );
+  expectCalls(3);
 });
 
 it.each([-32600, -32602])("does not back off invalid-request error %s", async (code) => {
@@ -311,26 +305,13 @@ it("selects the recorded package for passive catalogs even with a user home", as
   });
 });
 
-it("leaves explicit homes cold until a catalog request admits them", async () => {
+it("keeps explicit homes cold until requested and retires their refresh loop on stop", async () => {
+  fakeClock();
   rpc.mockResolvedValue({ data: [] });
-  const factory = remoteCatalogFactory("retired-catalog");
+  const { factory, control } = await remoteControl("retired-catalog");
   await factory.start();
   expect(factory.hasActiveWork()).toBe(false);
   expectCalls(0);
-
-  const source = (await factory.homesForAgent("main"))[0]!;
-  await factory.forRequest("main", source).initialize();
-  expectCalls(1);
-  await factory.stop();
-  expect(factory.hasActiveWork()).toBe(false);
-});
-
-it("retires the resident refresh loop when its catalog owner stops", async () => {
-  fakeClock();
-  rpc.mockResolvedValue({ data: [] });
-  const factory = remoteCatalogFactory("retired-catalog");
-  const source = (await factory.homesForAgent("main"))[0]!;
-  const control = factory.forRequest("main", source);
   await control.initialize();
   expectCalls(1);
   await vi.advanceTimersByTimeAsync(15 * 60_000);

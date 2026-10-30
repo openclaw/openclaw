@@ -1,77 +1,65 @@
 import type { JSX } from "@solidjs/web";
-import type { ToolsEffectiveResult } from "../../../api/types.ts";
-import type { ApplicationNavigationOptions } from "../../../app/context.ts";
 import type { IconName } from "../../../components/solid/icon.tsx";
-import type { McpServerSummary } from "../../../lib/config/mcp-servers.ts";
+import type {
+  MenuControls,
+  MenuEntry,
+  MenuHandle,
+  MenuItem,
+} from "../../../components/solid/menu.tsx";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
-import type { ComposerLibraryProps } from "../composer-library-session.ts";
+import type { ChatComposerCapabilityHost } from "../chat-composer-capability-host.tsx";
+import type {
+  ChatComposerCapabilityMenuProps,
+  ChatComposerPlusMenuView,
+} from "../composer-capability-types.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
-
-export type ChatComposerPlusMenuView =
-  | "root"
-  | "skills"
-  | "connectors"
-  | `tools:${string}`
-  | `library:${string}`;
-
-export type ChatComposerMenuSkill = {
-  key: string;
-  name: string;
-  enabled: boolean;
-  baseEnabled: boolean;
-  missingDeps?: boolean;
-  blocked?: boolean;
-};
-
-type ChatComposerRootToggle = {
-  value: string;
-  label: string;
-  icon?: IconName;
-  checked: boolean;
-  disabled: boolean;
-  title?: string;
-  onChange: (checked: boolean) => void;
-};
+import type { ChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 
 export type ChatComposerPlusMenuProps = {
   attachments: ChatAttachmentControlsProps;
-  capabilityMenu?: ChatComposerCapabilityMenuProps;
+  inputHandle: ChatAttachmentInputHandle;
+  capabilityMenu?: ChatComposerCapabilityMenuSource;
   disabled: boolean;
   open: boolean;
   view: ChatComposerPlusMenuView;
   toolOverrides: SessionToolOverrides | null | undefined;
-  rootToggles?: readonly ChatComposerRootToggle[];
+  rootToggles?: readonly {
+    value: string;
+    label: string;
+    icon?: IconName;
+    checked: boolean;
+    disabled: boolean;
+    title?: string;
+    onChange: (checked: boolean) => void;
+  }[];
   onOpenChange: (open: boolean) => void;
   onViewChange: (view: ChatComposerPlusMenuView) => void;
 };
 
-export type ChatComposerCapabilityMenuProps = {
-  basePath: string;
-  skills: readonly ChatComposerMenuSkill[] | null;
-  skillsLoading: boolean;
-  skillsError: boolean;
-  library?: ComposerLibraryProps;
-  libraryDialog?: JSX.Element;
-  mcpServers: readonly McpServerSummary[];
-  toolsEffectiveResult: ToolsEffectiveResult | null;
-  toolsEffectiveLoading: boolean;
-  toolsEffectiveError: boolean;
-  toolAccessMutationBlockedReason: string | null;
-  webSearchBaseEnabled: boolean;
-  mutationBlockedReason: string | null;
-  canAdmin: boolean;
-  adminBlockedReason: string | null;
-  addServerDialog?: JSX.Element;
-  onLoadSkills: () => void;
-  onLoadView?: (view: ChatComposerPlusMenuView) => void;
-  onPatchToolOverrides: (next: SessionToolOverrides | null) => void;
-  onNavigate: (
-    routeId: "mcp" | "plugins" | "skills",
-    options?: ApplicationNavigationOptions,
-  ) => void;
-  onAddServer?: () => void;
-  onOpenToolAccess?: (serverName: string) => void;
+export type ChatComposerCapabilityMenuSource = {
+  initialize?: (create: () => ChatComposerCapabilityHost) => void;
+  read: () => ChatComposerCapabilityMenuProps | undefined;
 };
 
 export type ChatComposerPlusMenuContentProps = ChatComposerPlusMenuProps &
   ChatComposerCapabilityMenuProps & { showCapabilities: boolean };
+
+export type ChatComposerPlusMenuHandlers = {
+  items(): readonly MenuEntry[];
+  select(item: MenuItem, event: CustomEvent<MenuItem>): void;
+  navigate(value: string): void;
+};
+
+export type ChatComposerPlusMenuBodyProps = {
+  menu: ChatComposerPlusMenuProps;
+  view: ChatComposerPlusMenuView;
+  readMenu: () => MenuHandle;
+  onReady: (handlers: ChatComposerPlusMenuHandlers | undefined) => void;
+  controls: MenuControls;
+  renderItems: (items: () => readonly MenuEntry[]) => JSX.Element;
+};
+
+export type ChatComposerPlusMenuResolvedProps = Omit<ChatComposerPlusMenuBodyProps, "menu"> & {
+  menu: ChatComposerPlusMenuContentProps;
+  open: boolean;
+};

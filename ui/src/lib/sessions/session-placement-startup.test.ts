@@ -1,7 +1,14 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayPendingRequests } from "../../../../packages/gateway-client/src/pending-request.js";
+import type { GatewayProtocolRequestOptions } from "../../../../packages/gateway-client/src/protocol-client.js";
+import type { RequestFrame } from "../../../../packages/gateway-protocol/src/schema/frames.js";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { useFakeClock as fakeTimers } from "../../test-helpers/fake-clock.ts";
+import { sessionRequest as gatewayRequest } from "./hydration-family.test-support.ts";
 import {
   deleteSessionPlacementDraft,
   startSessionPlacementInitialTurn,
@@ -10,6 +17,7 @@ import {
 const targetKey = { key: "agent:cloud:test", agentId: "cloud" };
 const params = {
   ...targetKey,
+  sessionId: "physical-startup-session",
   target: { kind: "profile", profileId: "aws" } as const,
   message: "run remotely",
   mode: "dispatch" as const,
@@ -59,22 +67,145 @@ function placement(state: string, environmentId = "environment-1") {
   return { placement: { state, environmentId } };
 }
 
-function fakeTimers() {
-  vi.useFakeTimers();
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
-}
-
 function expectReclaim(request: ReturnType<typeof vi.fn>, call: number) {
   expect(request).toHaveBeenNthCalledWith(call, "sessions.reclaim", targetKey);
 }
 
 function expectNotSent(request: ReturnType<typeof vi.fn>) {
-  expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
+  expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+}
+
+function pendingSend(
+  onSend: (frame: RequestFrame) => void,
+  pendingOptions: Omit<ConstructorParameters<typeof GatewayPendingRequests>[0], "nowMs"> = {
+    createRequestId: () => "placement-initial-turn",
+    requestTimeoutMs: 30_000,
+  },
+) {
+  fakeTimers();
+  const frames: string[] = [];
+  const pending = new GatewayPendingRequests({
+    ...pendingOptions,
+    nowMs: Date.now,
+  });
+  onTestFinished(() => pending.flush(new Error("test disposed")));
+  const request = vi.fn(
+    (method: string, input?: unknown, options?: GatewayProtocolRequestOptions) => {
+      if (method !== "chat.send") {
+        return Promise.resolve(method === "sessions.dispatch" ? placement("active") : {});
+      }
+      return pending.request(
+        {
+          send(raw) {
+            const frame = JSON.parse(raw) as RequestFrame;
+            frames.push(raw);
+            onSend(frame);
+          },
+        },
+        method,
+        input,
+        options,
+      );
+    },
+  );
+  return { frames, pending, request };
 }
 
 describe("session placement startup", () => {
+  it.each([
+    { waitMs: 45_000, cancel: false },
+    { waitMs: 240_000, cancel: false },
+    { waitMs: 45_000, cancel: true },
+    { waitMs: 240_000, cancel: true },
+  ])(
+    "retains a cancellable initial send through startup ($waitMs ms, cancel=$cancel)",
+    async ({ waitMs, cancel }) => {
+      const abort = new AbortController();
+      let ready = false;
+      let writes = 0;
+      const { frames, pending, request } = pendingSend((frame) => {
+        if (ready) {
+          writes += 1;
+          pending.handleResponse({
+            type: "res",
+            id: frame.id,
+            ok: true,
+            payload: { runId: "initial-turn", status: "started" },
+          });
+        } else {
+          pending.handleResponse({
+            type: "res",
+            id: frame.id,
+            ok: false,
+            error: {
+              code: "UNAVAILABLE",
+              message: "Agent is preparing",
+              retryable: true,
+              retryAfterMs: 500,
+              details: { reason: "startup-sidecars", method: "chat.send" },
+            },
+          });
+        }
+      });
+      const outcome = start(request, { signal: abort.signal }, () => !abort.signal.aborted);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(pending.hasPending).toBe(true);
+      expect(writes).toBe(0);
+      if (cancel) {
+        abort.abort();
+        expect(pending.hasPending).toBe(false);
+      }
+      await vi.advanceTimersByTimeAsync(waitMs - 30_000);
+      ready = true;
+      await vi.advanceTimersByTimeAsync(500);
+      expect(await outcome).toMatchObject({ status: cancel ? "cancelled" : "started" });
+      expect(writes).toBe(cancel ? 0 : 1);
+      expect(new Set(frames).size).toBe(1);
+      expect(pending.hasPending).toBe(false);
+    },
+  );
+
+  it.each([false, true])(
+    "settles a dispatched send before cancellation cleanup (cleanup=%s)",
+    async (cleanup) => {
+      const abort = new AbortController();
+      const dispatched = Promise.withResolvers<RequestFrame>();
+      const { frames, pending, request } = pendingSend((frame) => dispatched.resolve(frame), {
+        createRequestId: () => "placement-late-ack",
+      });
+      const outcome = start(
+        request,
+        {
+          messageId: "retained-message",
+          signal: abort.signal,
+          cleanupOnCancellation: () => cleanup,
+        },
+        () => !abort.signal.aborted,
+      );
+      let settled = false;
+      void outcome.then(() => (settled = true));
+      const frame = await dispatched.promise;
+      abort.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      expect(request).not.toHaveBeenCalledWith("sessions.reclaim", expect.anything());
+
+      pending.handleResponse({
+        type: "res",
+        id: frame.id,
+        ok: true,
+        payload: { status: "started", runId: "accepted-after-cancellation" },
+      });
+      await expect(outcome).resolves.toEqual({ status: cleanup ? "cancelled" : "interrupted" });
+      expect(request.mock.calls.filter(([method]) => method === "sessions.reclaim")).toHaveLength(
+        cleanup ? 1 : 0,
+      );
+      await vi.advanceTimersByTimeAsync(GATEWAY_STARTUP_ADMISSION_WAIT_MS);
+      expect(frames).toHaveLength(1);
+      expect(pending.hasPending).toBe(false);
+    },
+  );
+
   it.each([
     [
       { kind: "profile", profileId: "aws", os: "windows/wsl2", machineClass: "fast" },
@@ -155,8 +286,9 @@ describe("session placement startup", () => {
     expect(request).not.toHaveBeenCalledWith("environments.destroy", expect.anything());
     expect(request).toHaveBeenNthCalledWith(
       4,
-      "sessions.send",
+      "chat.send",
       expect.objectContaining({ message: params.message, attachments }),
+      expect.objectContaining({ timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS }),
     );
   });
 
@@ -184,7 +316,7 @@ describe("session placement startup", () => {
     await vi.runAllTimersAsync();
     await expect(outcome).resolves.toMatchObject({ status: "started" });
     expect(request).not.toHaveBeenCalledWith("sessions.reclaim", expect.anything());
-    expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
   });
 
   it.each([
@@ -307,24 +439,35 @@ describe("session placement startup", () => {
     });
   });
 
-  it("reclaims the worker after a definitive first-turn rejection", async () => {
-    const request = replies(
-      placement("active"),
-      new GatewayRequestError({
-        code: "INVALID_REQUEST",
-        message: "message rejected",
-        retryable: false,
-      }),
-      { ok: true },
-    );
+  it.each([false, true])(
+    "reclaims only the same worker after a first-turn rejection (replaced=%s)",
+    async (replaced) => {
+      const request = replies(
+        placement("active"),
+        new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "message rejected",
+          retryable: false,
+          ...(replaced ? { details: { reason: "active-leaf-changed" } } : {}),
+        }),
+        { ok: true },
+      );
 
-    await expect(start(request)).resolves.toEqual({
-      status: "send-definitive-rejected",
-      error: "message rejected",
-      messageId: expect.any(String),
-    });
-    expectReclaim(request, 3);
-  });
+      await expect(start(request)).resolves.toEqual({
+        status: "send-definitive-rejected",
+        error: "message rejected",
+        messageId: expect.any(String),
+      });
+      if (replaced) {
+        expect(request.mock.calls.map(([method]) => method)).toEqual([
+          "sessions.dispatch",
+          "chat.send",
+        ]);
+      } else {
+        expectReclaim(request, 3);
+      }
+    },
+  );
 
   it("reclaims the worker without sending when recovery cannot enter the sending phase", async () => {
     const request = replies(placement("active"), { ok: true });
@@ -341,17 +484,14 @@ describe("session placement startup", () => {
   });
 
   it("preserves send-not-started classification when cleanup fails", async () => {
-    const request = vi.fn((method: string) => {
-      if (method === "sessions.dispatch") {
-        return Promise.resolve({ placement: { state: "active" } });
-      }
-      if (method === "sessions.send") {
-        return Promise.reject(new Error("gateway not connected"));
-      }
-      if (method === "sessions.reclaim") {
-        return Promise.reject(new Error("cleanup unavailable"));
-      }
-      throw new Error(`unexpected method ${method}`);
+    const request = gatewayRequest({
+      "sessions.dispatch": () => placement("active"),
+      "chat.send": () => {
+        throw new Error("gateway not connected");
+      },
+      "sessions.reclaim": () => {
+        throw new Error("cleanup unavailable");
+      },
     });
     await expect(start(request, { messageId: "retained" })).resolves.toEqual({
       status: "send-not-started",
@@ -360,7 +500,7 @@ describe("session placement startup", () => {
     });
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "sessions.dispatch",
-      "sessions.send",
+      "chat.send",
       "sessions.reclaim",
     ]);
   });
@@ -442,12 +582,13 @@ describe("session placement startup", () => {
     expect(outcome).toMatchObject({ status: "send-rejected", error: "transport closed" });
     expect(request).toHaveBeenNthCalledWith(
       2,
-      "sessions.send",
+      "chat.send",
       expect.objectContaining({
-        key: params.key,
+        sessionKey: params.key,
         message: params.message,
         idempotencyKey: (outcome as { messageId: string }).messageId,
       }),
+      expect.objectContaining({ timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS }),
     );
   });
 });

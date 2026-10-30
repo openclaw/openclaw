@@ -6,7 +6,6 @@ const programOwners = [
   "src/media/staged-inputs.ts",
   "src/gateway/worker-environments/workspace-path-exclusions.ts",
   "src/gateway/worker-environments/workspace-hash-memo.ts",
-  "src/gateway/worker-environments/workspace-manifest-script.runtime.ts",
   "src/worker/workspace-seed-retention.ts",
 ];
 const receiverOwner = "src/worker/workspace-rsync-receiver.ts";
@@ -394,11 +393,15 @@ fs.writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify([...records.value
   if (programs.length !== expectedPrograms) {
     throw new Error(`Expected ${expectedPrograms} static programs, captured ${programs.length}`);
   }
-  return { programs, ...createStandaloneCodegenTransform({ programs, parse, aot }) };
+  const programModule = path.join(captureRoot, "fixed-programs.mjs");
+  const transform = createStandaloneCodegenTransform({ programs, parse, aot, programModule });
+  fs.writeFileSync(programModule, transform.moduleSource);
+  fs.writeFileSync(programModule.replace(/\.mjs$/, ".d.mts"), transform.declarationSource);
+  return { programs, ...transform };
 }
 
 /** Emit captured fixed functions; only the experimental AOT runtime needs intrinsic guards. */
-export function createStandaloneCodegenTransform({ programs, parse, aot = false }) {
+export function createStandaloneCodegenTransform({ programs, parse, aot = false, programModule }) {
   const functions = new Map(
     programs.map(({ signature, code, params }) => {
       const expression = `(function(${params.join(", ")}) {\n${code}\n})`;
@@ -407,6 +410,7 @@ export function createStandaloneCodegenTransform({ programs, parse, aot = false 
       return [signature, expression];
     }),
   );
+  const bindings = new Map(programs.map(({ signature }, index) => [signature, `program${index}`]));
   const contracts = new Map();
   for (const { signature, params } of programs) {
     const separator = signature.indexOf("\nreturn ");
@@ -417,12 +421,26 @@ export function createStandaloneCodegenTransform({ programs, parse, aot = false 
     if (contracts.has(contract)) {
       throw new Error("Ambiguous static program return contract");
     }
-    contracts.set(contract, functions.get(signature));
+    contracts.set(contract, signature);
   }
   const residuals = [];
   return {
     residuals,
-    transform({ contents: originalContents, filename }) {
+    // Captured bodies are JavaScript programs, not unannotated TypeScript.
+    // Factories retain compileFunction's fresh-function identity on every call.
+    moduleSource: [...functions]
+      .map(
+        ([signature, expression]) =>
+          `export function ${bindings.get(signature)}() { return ${expression}; }\n`,
+      )
+      .join(""),
+    declarationSource: [...bindings.values()]
+      .map(
+        (name) =>
+          `export function ${name}(): ReturnType<typeof import("node:vm").compileFunction>;\n`,
+      )
+      .join(""),
+    transform({ contents: originalContents, filename, preserveTypes = false }) {
       let contents = originalContents;
       let typeboxAccelerationDisabled = false;
       const normalized = filename.replaceAll("\\", "/");
@@ -452,19 +470,45 @@ export function createStandaloneCodegenTransform({ programs, parse, aot = false 
       const guarded = aot ? protectBuiltinWrites(contents, parse) : { contents, count: 0 };
       contents = guarded.contents;
       const calls = staticProgramCalls(contents, parse);
+      const imports = new Map();
+      const fixedFunction = (signature) => {
+        if (!functions.has(signature)) {
+          return undefined;
+        }
+        if (!preserveTypes) {
+          return functions.get(signature);
+        }
+        if (!programModule) {
+          throw new Error("Typed static programs require their JavaScript module");
+        }
+        const exported = bindings.get(signature);
+        if (!imports.has(exported)) {
+          let local = `__openclawStandaloneFixed_${exported}`;
+          while (originalContents.includes(local)) {
+            local += "_";
+          }
+          imports.set(exported, local);
+        }
+        return `${imports.get(exported)}()`;
+      };
       let count = 0;
       for (const { node, signature, selection, contract } of calls.toSorted(
         (left, right) => right.node.start - left.node.start,
       )) {
         const expression = selection
-          ? `(${contents.slice(selection.test.start, selection.test.end)} ? ${functions.get(selection.consequent.name)} : ${functions.get(selection.alternate.name)})`
-          : (functions.get(signature) ?? contracts.get(contract));
+          ? `(${contents.slice(selection.test.start, selection.test.end)} ? ${fixedFunction(selection.consequent.name)} : ${fixedFunction(selection.alternate.name)})`
+          : fixedFunction(functions.has(signature) ? signature : contracts.get(contract));
         if (!expression) {
           residuals.push({ filename, expression: contents.slice(node.start, node.end) });
           continue;
         }
         contents = contents.slice(0, node.start) + expression + contents.slice(node.end);
         count += 1;
+      }
+      if (imports.size) {
+        const statement = `import { ${[...imports].map(([exported, local]) => `${exported} as ${local}`).join(", ")} } from ${JSON.stringify(programModule)};\n`;
+        const start = contents.startsWith("#!") ? contents.indexOf("\n") + 1 : 0;
+        contents = contents.slice(0, start) + statement + contents.slice(start);
       }
       return {
         contents,

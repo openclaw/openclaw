@@ -1,7 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
+import { getMockCallOutput } from "../cli/test-runtime-capture.js";
 import { createNonExitingRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
+import { sessionsCompactCommand } from "./sessions-compact.js";
 import { sessionsLifecycleCommand } from "./sessions-lifecycle.js";
 
 const mocks = vi.hoisted(() => ({
@@ -15,14 +17,12 @@ vi.mock("../cli/gateway-rpc.js", () => ({
 }));
 
 // mock-isolation: Session lifecycle fixtures supply config without reading operator state.
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: mocks.getRuntimeConfig,
-  loadConfig: mocks.getRuntimeConfig,
-  captureRuntimeConfigAsyncReader:
-    (...args: Parameters<typeof mocks.getRuntimeConfig>) =>
-    async () =>
-      mocks.getRuntimeConfig(...args),
-}));
+vi.mock("../config/config.js", async () => {
+  const { createTestConfigReadMocks } = await import("./test-runtime-config-helpers.js");
+  return {
+    ...createTestConfigReadMocks(mocks, "getRuntimeConfig"),
+  };
+});
 
 vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: () => ({ confirm: mocks.confirm }),
@@ -53,6 +53,20 @@ function failedDelete(results: unknown[]) {
   };
 }
 
+function result(key: string, status: string, extra = {}) {
+  return { key, ok: true, status, ...extra };
+}
+
+function respond(...values: unknown[]) {
+  for (const value of values) {
+    mocks.callGateway.mockResolvedValueOnce(value);
+  }
+}
+
+function prepareDelete(key: string, extra = {}, session = {}) {
+  respond(described(key, "session-1", session), deleted(key, extra));
+}
+
 describe("sessions lifecycle commands", () => {
   let runtime: ReturnType<typeof createNonExitingRuntimeEnv>;
   const run = (
@@ -61,11 +75,23 @@ describe("sessions lifecycle commands", () => {
   ) => sessionsLifecycleCommand(operation, options, runtime);
   const expectJson = (payload: unknown) =>
     expect(runtime.writeJson).toHaveBeenCalledWith(payload, 2);
+  const expectSuccess = (operation: string, results: unknown[], dryRun = false) =>
+    expectJson({ ok: true, operation, dryRun, results });
+  const expectMutation = (index: number, method: string, params: unknown) =>
+    expect(mocks.callGateway).toHaveBeenNthCalledWith(index, method, expect.any(Object), params, {
+      defaultTimeoutMs: 10 * 60_000,
+    });
+  const expectMessage = (text: string, channel: "log" | "error" = "log") =>
+    expect(runtime[channel]).toHaveBeenCalledWith(expect.stringContaining(text));
+  const expectNoMessage = (text: string) =>
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(text));
+  const joinedArgs = (channel: "log" | "error") => getMockCallOutput(vi.mocked(runtime[channel]));
 
   afterEach(() => vi.unstubAllEnvs());
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.callGateway.mockReset();
     runtime = createNonExitingRuntimeEnv();
     mocks.confirm.mockResolvedValue(true);
     mocks.getRuntimeConfig.mockReturnValue({
@@ -88,16 +114,11 @@ describe("sessions lifecycle commands", () => {
   });
 
   it("archives through sessions.patch and emits the stable JSON envelope", async () => {
-    mocks.callGateway
-      .mockResolvedValueOnce(described("agent:work:scratch-1", "session-1"))
-      .mockResolvedValueOnce({
-        ok: true,
-        key: "agent:work:scratch-1",
-        entry: { archivedAt: 123 },
-      });
+    const key = "agent:work:scratch-1";
+    respond(described(key, "session-1"), { ok: true, key, entry: { archivedAt: 123 } });
 
     await run("archive", {
-      keys: ["agent:work:scratch-1"],
+      keys: [key],
       agent: "work",
       url: "ws://gateway.test",
       token: "test-token",
@@ -106,50 +127,14 @@ describe("sessions lifecycle commands", () => {
       json: true,
     });
 
-    expect(mocks.callGateway).toHaveBeenNthCalledWith(
-      2,
-      "sessions.patch",
-      expect.any(Object),
-      {
-        key: "agent:work:scratch-1",
-        agentId: "work",
-        expectedSessionId: "session-1",
-        archived: true,
-      },
-      { defaultTimeoutMs: 10 * 60_000 },
-    );
-    expectJson({
-      ok: true,
-      operation: "archive",
-      dryRun: false,
-      results: [{ key: "agent:work:scratch-1", ok: true, status: "archived" }],
+    expectMutation(2, "sessions.patch", {
+      key,
+      agentId: "work",
+      expectedSessionId: "session-1",
+      archived: true,
     });
+    expectSuccess("archive", [result(key, "archived")]);
     expect(runtime.exit).not.toHaveBeenCalled();
-  });
-
-  it("uses archived state for a mutation-free archive dry run", async () => {
-    mocks.callGateway
-      .mockResolvedValueOnce(described("agent:main:active", "active-session"))
-      .mockResolvedValueOnce(
-        described("agent:main:archived", "archived-session", { archived: true }),
-      );
-
-    await run("archive", {
-      keys: ["agent:main:active", "agent:main:archived"],
-      dryRun: true,
-      json: true,
-    });
-
-    expect(mocks.callGateway).toHaveBeenCalledTimes(2);
-    expectJson({
-      ok: true,
-      operation: "archive",
-      dryRun: true,
-      results: [
-        { key: "agent:main:active", ok: true, status: "would_archive" },
-        { key: "agent:main:archived", ok: true, status: "already_archived" },
-      ],
-    });
   });
 
   it.each([
@@ -162,22 +147,22 @@ describe("sessions lifecycle commands", () => {
         agents: { entries: { work: {} } },
         session: { mainKey: "main", scope: "global" },
       });
-      mocks.callGateway
-        .mockResolvedValueOnce(
-          described("agent:work:gateway-main", "main-session", { isMain: true }),
-        )
-        .mockResolvedValueOnce(described("agent:work:main", "ordinary-session", { isMain: false }))
-        .mockResolvedValueOnce(described("global", "global-session", { isMain: true }));
+      respond(
+        described("agent:work:gateway-main", "main-session", { isMain: true }),
+        described("agent:work:main", "ordinary-session", { isMain: false }),
+        described("global", "global-session", { isMain: true }),
+        described("archived", "archived-session", { archived: true }),
+      );
 
       await run(operation, {
-        keys: ["agent:work:gateway-main", "agent:work:main", "global"],
+        keys: ["agent:work:gateway-main", "agent:work:main", "global", "archived"],
         agent: "work",
         url: "ws://gateway.test",
         dryRun: true,
         json: true,
       });
 
-      expect(mocks.callGateway).toHaveBeenCalledTimes(3);
+      expect(mocks.callGateway).toHaveBeenCalledTimes(4);
       expect(mocks.confirm).not.toHaveBeenCalled();
       expectJson(
         expect.objectContaining({
@@ -185,9 +170,10 @@ describe("sessions lifecycle commands", () => {
           operation,
           dryRun: true,
           results: [
-            { key: "agent:work:gateway-main", ok: false, status: "failed", error },
-            { key: "agent:work:main", ok: true, status: `would_${operation}` },
-            { key: "global", ok: true, status: `would_${operation}` },
+            failure("agent:work:gateway-main", error),
+            result("agent:work:main", `would_${operation}`),
+            result("global", `would_${operation}`),
+            result("archived", operation === "archive" ? "already_archived" : "would_delete"),
           ],
         }),
       );
@@ -195,107 +181,48 @@ describe("sessions lifecycle commands", () => {
     },
   );
 
-  it("rejects a key-only listed session before delete mutation", async () => {
-    mocks.callGateway.mockResolvedValueOnce({ session: { key: "agent:main:key-only" } });
-
-    await run("delete", { keys: ["agent:main:key-only"], yes: true, json: true });
-
-    expect(mocks.callGateway).toHaveBeenCalledTimes(1);
-    expectJson(
-      failedDelete([
-        failure(
-          "agent:main:key-only",
-          "Session has no durable identity; lifecycle mutation was not attempted.",
-        ),
-      ]),
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-  });
-
   it("deletes archived sessions once with the Control UI gates", async () => {
-    const keys = ["agent:main:archived", " agent:main:archived "];
+    const key = "agent:main:archived";
     const worktreePreserved = {
       id: "wt-1",
       branch: "scratch",
       path: "/worktree",
       reason: "owner-mismatch",
     };
-    onTestFinished(() => {
-      mocks.callGateway.mockReset();
-    });
-    mocks.callGateway
-      .mockResolvedValueOnce(
-        described("agent:main:archived", "session-1", { agentId: "main", archived: true }),
-      )
-      .mockResolvedValueOnce({
-        ok: true,
-        key: "agent:main:archived",
-        deleted: true,
-        archived: ["/state/session-1.jsonl.deleted.123"],
-        worktreePreserved,
-      })
-      .mockResolvedValueOnce({ ok: true, key: "agent:main:archived", deleted: false });
+    const extra = { archived: ["/state/session-1.jsonl.deleted.123"], worktreePreserved };
+    respond(described(key, "session-1", { agentId: "main", archived: true }), deleted(key, extra));
 
-    await run("delete", { keys, yes: true, json: true });
+    await run("delete", { keys: [key, ` ${key} `], yes: true, json: true });
 
     expect(mocks.callGateway).toHaveBeenCalledTimes(2);
-    expect(mocks.callGateway).toHaveBeenNthCalledWith(
-      2,
-      "sessions.delete",
-      expect.any(Object),
-      {
-        key: "agent:main:archived",
-        expectedSessionId: "session-1",
-        deleteTranscript: true,
-        archivedOnly: true,
-      },
-      { defaultTimeoutMs: 10 * 60_000 },
-    );
-    expectJson({
-      ok: true,
-      operation: "delete",
-      dryRun: false,
-      results: [
-        {
-          key: "agent:main:archived",
-          ok: true,
-          status: "deleted",
-          archived: ["/state/session-1.jsonl.deleted.123"],
-          worktreePreserved,
-        },
-      ],
+    expectMutation(2, "sessions.delete", {
+      key,
+      expectedSessionId: "session-1",
+      deleteTranscript: true,
+      archivedOnly: true,
     });
+    expectSuccess("delete", [result(key, "deleted", extra)]);
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("keeps requested owners when described sessions share a canonical key", async () => {
-    mocks.callGateway
-      .mockResolvedValueOnce(described("global", "work-session", { agentId: "work" }))
-      .mockResolvedValueOnce(described("global", "peer-session", { agentId: "peer" }))
-      .mockResolvedValueOnce(deleted("global", { archived: ["/work/archive"] }))
-      .mockResolvedValueOnce(deleted("global", { archived: ["/peer/archive"] }));
+    respond(
+      described("global", "work-session", { agentId: "work" }),
+      described("global", "peer-session", { agentId: "peer" }),
+      deleted("global", { archived: ["/work/archive"] }),
+      deleted("global", { archived: ["/peer/archive"] }),
+    );
 
     await run("delete", { keys: ["agent:work:main", "agent:peer:main"], yes: true });
 
     for (const [index, agentId] of ["work", "peer"].entries()) {
-      expect(mocks.callGateway).toHaveBeenNthCalledWith(
-        index + 3,
-        "sessions.delete",
-        expect.any(Object),
-        {
-          key: `agent:${agentId}:main`,
-          expectedSessionId: `${agentId}-session`,
-          deleteTranscript: true,
-        },
-        { defaultTimeoutMs: 10 * 60_000 },
-      );
+      expectMutation(index + 3, "sessions.delete", {
+        key: `agent:${agentId}:main`,
+        expectedSessionId: `${agentId}-session`,
+        deleteTranscript: true,
+      });
+      expectMessage(`openclaw memory forget --agent ${agentId} --session global`);
     }
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("openclaw memory forget --agent work --session global"),
-    );
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("openclaw memory forget --agent peer --session global"),
-    );
   });
 
   it("keeps client target hints out of Gateway-host cleanup", async () => {
@@ -307,62 +234,70 @@ describe("sessions lifecycle commands", () => {
       agents: { entries: { main: {}, work: {} } },
       gateway: { mode: "remote", remote: { url: "ws://configured-gateway.test" } },
     });
-    mocks.callGateway
-      .mockResolvedValueOnce(described(key, "session-1", { agentId: "work" }))
-      .mockResolvedValueOnce(deleted(key, { archived: ["/gateway/archive"] }));
+    prepareDelete(key, { archived: ["/gateway/archive"] }, { agentId: "work" });
 
     await run("delete", { keys: [key], yes: true, url });
 
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "openclaw memory forget --agent work --session 'agent:work:notes;echo unsafe' on the Gateway host or container using its state and configuration",
-      ),
+    expectMessage(
+      "openclaw memory forget --agent work --session 'agent:work:notes;echo unsafe' on the Gateway host or container using its state and configuration",
     );
-    expect(runtime.log).not.toHaveBeenCalledWith(
-      expect.stringContaining("--profile client-profile"),
-    );
-    expect(runtime.log).not.toHaveBeenCalledWith(
-      expect.stringContaining("--container client-container"),
-    );
+    expectNoMessage("--profile client-profile");
+    expectNoMessage("--container client-container");
   });
 
+  it.each([false, true])(
+    "escapes lifecycle display values without changing JSON (%s)",
+    async (json) => {
+      const key = "agent:work:notes\u001b[2J\nnext";
+      const archived = "/gateway/notes\u001b]2;changed\u0007\rnext";
+      prepareDelete(key, { archived: [archived] }, { agentId: "work" });
+
+      await run("delete", { keys: [key], yes: true, json });
+
+      expect(mocks.callGateway).toHaveBeenLastCalledWith(
+        "sessions.delete",
+        expect.any(Object),
+        { key, expectedSessionId: "session-1", deleteTranscript: true },
+        expect.any(Object),
+      );
+      if (json) {
+        expectSuccess("delete", [result(key, "deleted", { archived: [archived] })]);
+        return;
+      }
+      const output = vi.mocked(runtime.log).mock.calls.flat().join("\n");
+      expect(output).toContain("Deleted session agent:work:notes\\nnext.");
+      expect(output).toContain("Archived transcript: /gateway/notes\\rnext");
+      for (const control of ["\u0007", "\u001b", "\r"]) {
+        expect(output).not.toContain(control);
+      }
+      expect(output).not.toContain("\nnext");
+    },
+  );
+
   it("does not guess an owner when the Gateway omits its optional agent field", async () => {
-    mocks.callGateway
-      .mockResolvedValueOnce(described("unknown", "session-1"))
-      .mockResolvedValueOnce(deleted("unknown", { archived: ["/archive"] }));
+    prepareDelete("unknown", { archived: ["/archive"] });
 
     await run("delete", { keys: ["unknown"], yes: true });
 
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "select the owning agent with --agent and this session with --session",
-      ),
-    );
-    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("--agent main"));
+    expectMessage("select the owning agent with --agent and this session with --session");
+    expectNoMessage("--agent main");
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("prints the preserved worktree cleanup reason without claiming source changes", async () => {
-    mocks.callGateway
-      .mockResolvedValueOnce(described("agent:main:active", "session-1"))
-      .mockResolvedValueOnce({
-        ok: true,
-        key: "agent:main:active",
-        deleted: true,
-        archived: [],
-        worktreePreserved: {
-          id: "wt-1",
-          branch: "openclaw/active",
-          path: "/worktree",
-          reason: "cleanup-failed",
-        },
-      });
+    prepareDelete("agent:main:active", {
+      archived: [],
+      worktreePreserved: {
+        id: "wt-1",
+        branch: "openclaw/active",
+        path: "/worktree",
+        reason: "cleanup-failed",
+      },
+    });
 
     await run("delete", { keys: ["agent:main:active"], yes: true });
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("cleanup did not finish normally"),
-    );
+    expectMessage("cleanup did not finish normally", "error");
     expect(runtime.error).not.toHaveBeenCalledWith(expect.stringMatching(/uncommitted|unpushed/i));
   });
 
@@ -381,18 +316,14 @@ describe("sessions lifecycle commands", () => {
 
     expect(mocks.callGateway).toHaveBeenCalledTimes(1);
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Pass --yes to delete non-interactively"),
-    );
+    expectMessage("Pass --yes to delete non-interactively", "error");
     expect(runtime.writeJson).not.toHaveBeenCalled();
   });
 
-  it("delete continues past rejected lookups and reports mixed results in order", async () => {
-    onTestFinished(() => {
-      mocks.callGateway.mockReset();
-    });
+  it("preserves batch order across missing identities, lookup failures and delete races", async () => {
     mocks.callGateway
       .mockResolvedValueOnce(described("agent:main:first", "session-1"))
+      .mockResolvedValueOnce({ session: { key: "agent:main:key-only" } })
       .mockRejectedValueOnce(
         new GatewayClientRequestError({
           code: "INVALID_REQUEST",
@@ -401,25 +332,33 @@ describe("sessions lifecycle commands", () => {
       )
       .mockResolvedValueOnce({ session: null })
       .mockResolvedValueOnce(described("agent:main:last", "session-2"))
+      .mockResolvedValueOnce(described("agent:main:vanished", "session-3"))
       .mockResolvedValueOnce(
         deleted("agent:main:first", { archived: ["/state/session-1.jsonl.deleted.123"] }),
       )
-      .mockRejectedValueOnce(new Error("session is still active"));
+      .mockRejectedValueOnce(new Error("session is still active"))
+      .mockResolvedValueOnce({ ok: true, key: "agent:main:vanished", deleted: false });
 
     await run("delete", {
-      keys: ["agent:main:first", "agent:", "agent:main:missing", "agent:main:last"],
+      keys: [
+        "agent:main:first",
+        "agent:main:key-only",
+        "agent:",
+        "agent:main:missing",
+        "agent:main:last",
+        "agent:main:vanished",
+      ],
       yes: true,
       json: true,
     });
 
     expectJson(
       failedDelete([
-        {
-          key: "agent:main:first",
-          ok: true,
-          status: "deleted",
-          archived: ["/state/session-1.jsonl.deleted.123"],
-        },
+        result("agent:main:first", "deleted", { archived: ["/state/session-1.jsonl.deleted.123"] }),
+        failure(
+          "agent:main:key-only",
+          "Session has no durable identity; lifecycle mutation was not attempted.",
+        ),
         failure("agent:", 'malformed session key "agent:"'),
         failure(
           "agent:main:missing",
@@ -427,9 +366,15 @@ describe("sessions lifecycle commands", () => {
           "not_found",
         ),
         failure("agent:main:last", "session is still active"),
+        failure("agent:main:vanished", expect.stringContaining("choose a valid key"), "not_found"),
       ]),
     );
-    expect(mocks.callGateway).toHaveBeenCalledTimes(6);
+    expect(mocks.callGateway).toHaveBeenCalledTimes(9);
+    expect(
+      mocks.callGateway.mock.calls
+        .filter(([method]) => method === "sessions.delete")
+        .map((call) => call[2].key),
+    ).toEqual(["agent:main:first", "agent:main:last", "agent:main:vanished"]);
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
@@ -451,18 +396,117 @@ describe("sessions lifecycle commands", () => {
     expect(runtime.writeJson).not.toHaveBeenCalled();
   });
 
-  it("treats a delete race that reports deleted:false as not found", async () => {
-    mocks.callGateway
-      .mockResolvedValueOnce(described("agent:main:vanished", "session-1"))
-      .mockResolvedValueOnce({ ok: true, key: "agent:main:vanished", deleted: false });
+  describe("sessionsCompactCommand", () => {
+    const compact = (
+      opts: Parameters<typeof sessionsCompactCommand>[0] = { key: "agent:main:main" },
+    ) => sessionsCompactCommand(opts, runtime);
 
-    await run("delete", { keys: ["agent:main:vanished"], yes: true, json: true });
-
-    expectJson(
-      failedDelete([
-        failure("agent:main:vanished", expect.stringContaining("choose a valid key"), "not_found"),
-      ]),
+    it.each(["compacted", "degraded", "pending", "noop", "failed", "throw"])(
+      "escapes terminal controls in %s output without changing RPC input",
+      async (outcome) => {
+        const key = "agent:main:notes\u001b[2J\nnext";
+        const reason = "detail\u001b]2;changed\u0007\rnext";
+        if (outcome === "throw") {
+          mocks.callGateway.mockRejectedValueOnce(new Error(reason));
+        } else {
+          respond({
+            ok: outcome !== "failed",
+            key,
+            compacted: outcome === "compacted" || outcome === "degraded",
+            reason,
+            result: {
+              tokensBefore: 243868,
+              tokensAfter: 34941,
+              details: { pending: outcome === "pending", qualityDegraded: outcome === "degraded" },
+            },
+          });
+        }
+        await compact({ key });
+        expect(mocks.callGateway.mock.calls[0]?.[2]).toEqual({ key });
+        expect(mocks.callGateway.mock.calls[0]?.[1]).toMatchObject({ timeout: null });
+        const output = `${joinedArgs("log")}${joinedArgs("error")}`;
+        for (const control of ["\u0007", "\u001b", "\r"]) {
+          expect(output).not.toContain(control);
+        }
+        expect(output).not.toContain("\nnext");
+        if (outcome !== "degraded") {
+          expect(output).not.toContain("\n");
+        }
+        if (outcome === "compacted" || outcome === "degraded") {
+          expect(runtime.exit).not.toHaveBeenCalled();
+          expect(output).toContain("243868");
+          expect(output).toContain("34941");
+          expect(output.includes("degraded summary")).toBe(outcome === "degraded");
+        }
+        if (outcome !== "throw") {
+          expect(output).toContain("agent:main:notes\\nnext");
+        }
+        if (["noop", "failed", "throw"].includes(outcome)) {
+          expect(output).toContain("detail\\rnext");
+        }
+        if (["failed", "throw"].includes(outcome)) {
+          expect(runtime.exit).toHaveBeenCalledWith(1);
+          expect(joinedArgs("error")).toContain("Compaction failed");
+        }
+        if (outcome === "pending") {
+          expect(runtime.exit).not.toHaveBeenCalled();
+          expect(output).toContain("pending");
+          expect(output).not.toContain("No compaction needed");
+        }
+      },
     );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
+
+    it("emits the shared JSON failure envelope for a rejected RPC", async () => {
+      const key = "agent:main:missing";
+      mocks.callGateway.mockRejectedValueOnce(
+        new GatewayClientRequestError({ code: "INVALID_REQUEST", message: "Session not found." }),
+      );
+
+      await compact({ key, json: true });
+
+      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+        { ok: false, key, error: { type: "cli_error", message: "Session not found." } },
+        2,
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.error).not.toHaveBeenCalled();
+    });
+
+    it("preserves raw result values in JSON output", async () => {
+      const payload = {
+        ok: false,
+        key: "agent:main:notes\u001b[2J\nnext",
+        reason: "detail\u001b]2;changed\u0007\rnext",
+      };
+      respond(payload);
+      await compact({ key: payload.key, json: true });
+      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(payload, 2);
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    });
+
+    it("rejects a blank agent before calling the Gateway", async () => {
+      await expect(compact({ key: "agent:main:main", agent: "" })).rejects.toThrow(
+        "--agent must not be blank",
+      );
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+    });
+
+    it("exits non-zero when the gateway response omits explicit success", async () => {
+      respond({ key: "agent:main:main", compacted: false });
+      await compact();
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(joinedArgs("error")).toContain("Compaction failed");
+    });
+
+    it("forwards agentId and maxLines to the RPC params", async () => {
+      respond({ ok: true, key: "agent:work:main", compacted: true, kept: 200 });
+      await compact({ key: "agent:work:main", agent: "work", maxLines: 200 });
+      expect(mocks.callGateway).toHaveBeenCalledExactlyOnceWith(
+        "sessions.compact",
+        expect.anything(),
+        { key: "agent:work:main", agentId: "work", maxLines: 200 },
+        expect.anything(),
+      );
+    });
   });
 });

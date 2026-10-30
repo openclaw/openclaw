@@ -65,13 +65,14 @@ Use the phase-specific hooks for new plugins:
   a tool-backed capability and the same turn must be allowed to call that
   tool. See [Authorized prompt
   enrichment](/plugins/hooks/prompt-and-session#authorized-prompt-enrichment).
-- `heartbeat_prompt_contribution`: runs only for heartbeat turns and returns
-  `prependContext` or `appendContext`. Intended for background monitors that
-  need to summarize current state without changing user-initiated turns.
+- `heartbeat_prompt_contribution`: retains its public name for receipt-owned
+  proactive automation jobs and returns `prependContext` or `appendContext`.
+  It adds monitoring context without changing user-initiated turns. It does not
+  run as a generic prompt-preparation hook or create a separate heartbeat turn.
 
 On embedded, CLI, and harness runtime prompt-preparation paths (including
 ACPX, Agents API, Codex, and Copilot), ordering is: drain queued injections →
-`agent_turn_prepare` → heartbeat contribution (if applicable) → ordinary
+`agent_turn_prepare` → ordinary
 `before_prompt_build` → finalized tool policy → authorized prompt enrichment.
 
 For multiple registrations, the first defined provider/model/fallback override and
@@ -79,7 +80,32 @@ For multiple registrations, the first defined provider/model/fallback override a
 restrictions intersect. Recursive `before_prompt_build` contributions on the
 same runner are unsupported; handlers must avoid dispatching themselves.
 
-Message-consuming prompt hooks receive a detached model-context snapshot. Mutating nested messages does not change the caller's history, including when a handler retains its input after returning. Registrations within one dispatch share that snapshot in priority order; prepare, ordinary prompt-build, authorized enrichment, and subsequent prompt rebuilds receive separate snapshots. Storage-only native prompt text and tool-result details are excluded from these snapshots.
+Each plugin hook's `prependSystemContext` and `appendSystemContext` is separately
+limited to 25% of the resolved model context window, using the shared character
+token estimate (including CJK weighting). When a runtime has no resolved window,
+the default context window is used. Oversized blocks retain their prefix and end
+with `[Plugin system context truncated to fit the model budget.]`; smaller blocks
+are unchanged. The host warns once per plugin and session in its bounded
+process-local warning cache, naming the plugin and original/kept character counts.
+This is a per-contribution limit, not a total prompt budget: multiple plugins,
+workspace instructions, and tool definitions still share the model's window.
+Keep system context small and stable; put turn-specific material in `prependContext`
+or `appendContext` instead.
+
+`before_prompt_build` and `agent_turn_prepare` receive a model-context view with
+fresh message arrays and envelopes per dispatch. Owned transcript payload leaves
+(such as content blocks and tool arguments) are shared and deeply frozen. Treat
+nested history as read-only: writing a frozen leaf throws a `TypeError` in strict
+mode. Return the hook's result fields to contribute context or change the prompt;
+in-place history edits do not update core history or become hook results.
+
+Registrations within one dispatch share its array and envelopes in priority order.
+Replacing an envelope field or editing the array remains local to that dispatch.
+Prepare, ordinary prompt-build, authorized enrichment, and later prompt rebuilds
+receive separate arrays and envelopes. Non-owned values are deep-cloned and retain
+the shared-memory isolation checks. Storage-only native prompt text and tool-result
+details are excluded. See the [migration note](/plugins/sdk-migration#prompt-hook-history-is-read-only)
+if your plugin previously mutated nested content.
 
 ### Restrict a run to local models
 

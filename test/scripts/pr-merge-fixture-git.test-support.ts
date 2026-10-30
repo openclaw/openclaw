@@ -80,6 +80,11 @@ export function createMergeGitFixtureFactory(directory: string, gitEnv: NodeJS.P
   seed.git(["config", "user.name", "Merge Fixture"]);
   seed.git(["config", "user.email", "fixture@example.invalid"]);
   seed.git(["init", "-q", "--bare", remote]);
+  // Copied fixture trees must stay quiescent after each joined Git command.
+  for (const repository of [repo, remote]) {
+    seed.git(["config", "maintenance.auto", "false"], undefined, repository);
+    seed.git(["config", "gc.auto", "0"], undefined, repository);
+  }
   // Preserve the real protected publisher inputs in synthetic history so the
   // exact-main owner check remains part of each admission fixture.
   const workflowPath = ".github/workflows/security-review.yml";
@@ -90,6 +95,7 @@ export function createMergeGitFixtureFactory(directory: string, gitEnv: NodeJS.P
   );
   const sources: string[] = [
     workflowPath,
+    ".github/workflows/ci-build-artifacts-testbox.yml",
     ...checkout.with["sparse-checkout"]
       .trim()
       .split(/\r?\n/u)
@@ -147,6 +153,8 @@ export function createMergeGitFixtureFactory(directory: string, gitEnv: NodeJS.P
       git(
         [
           "clone",
+          "--config=maintenance.auto=false",
+          "--config=gc.auto=0",
           "--no-checkout",
           "--filter=blob:none",
           "--branch=topic",

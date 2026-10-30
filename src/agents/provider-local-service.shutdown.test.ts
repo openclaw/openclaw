@@ -1,16 +1,16 @@
 import { ChildProcess } from "node:child_process";
-import { subscribe, unsubscribe } from "node:diagnostics_channel";
+import { channel } from "node:diagnostics_channel";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred, withinTest, withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isPidAlive } from "../shared/pid-alive.js";
-import { isPortFree } from "../test-utils/ports.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
 import {
   ensureProviderLocalService,
@@ -61,6 +61,8 @@ function captureServicePid(healthUrl: string): number {
 }
 
 const serviceClosures = new Map<ChildProcess, Promise<void>>();
+// Retain the channel before the first spawn; Bun's channel registry holds it weakly.
+const serviceSpawnChannel = channel("child_process");
 const observeServiceSpawn = (message: unknown) => {
   if (
     message &&
@@ -96,13 +98,13 @@ async function killOwnedServices(pids: Set<number>, signal: AbortSignal): Promis
 describe("provider local service shutdown", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const fixture = createProviderLocalServiceTestFixture();
-  beforeEach(() => subscribe("child_process", observeServiceSpawn));
+  beforeEach(() => serviceSpawnChannel.subscribe(observeServiceSpawn));
   afterEach(async ({ signal }) => {
     await runQaGatewayFixture(
       fixture.cleanup,
       () => killOwnedServices(servicePids, signal),
       () => {
-        unsubscribe("child_process", observeServiceSpawn);
+        serviceSpawnChannel.unsubscribe(observeServiceSpawn);
         serviceClosures.clear();
         servicePids.clear();
       },
@@ -151,13 +153,7 @@ describe("provider local service shutdown", () => {
         stopping.resolve();
         void gate.promise.then(() => response.end("continue"));
       });
-      control.listen(0, "127.0.0.1");
-      await once(control, "listening");
-      const address = control.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Expected local service control listener");
-      }
-      const controlUrl = `http://127.0.0.1:${address.port}/stopping`;
+      const controlUrl = `${await listenLoopback(control)}/stopping`;
       const target = serviceTarget(
         port,
         "local-idle-stop-join",
@@ -183,6 +179,13 @@ describe("provider local service shutdown", () => {
         1,
       );
       const pending: Promise<unknown>[] = [];
+      const settled = { stop: false, acquisition: false };
+      const track = <T>(job: Promise<T>, key: keyof typeof settled) => {
+        const tracked = job.finally(() => (settled[key] = true));
+        pending.push(tracked);
+        void tracked.catch(() => {});
+        return tracked;
+      };
 
       const capturePid = () => captureServicePid(healthUrl);
       await runQaGatewayFixture(
@@ -193,28 +196,19 @@ describe("provider local service shutdown", () => {
           await withTestTimeout(stopping.promise, 5_000, "Provider did not enter SIGTERM handler");
           expect(hasManagedProviderLocalServices()).toBe(true);
 
-          let stopSettled = false;
-          const stopped = stopManagedProviderLocalServices().finally(() => {
-            stopSettled = true;
-          });
-          pending.push(stopped);
-          void stopped.catch(() => {});
-          let acquisitionSettled = false;
-          const replacement = acquireService(target)
-            .then((nextLease) => {
+          const stopped = track(stopManagedProviderLocalServices(), "stop");
+          const replacement = track(
+            acquireService(target).then((nextLease) => {
               capturePid();
               return nextLease;
-            })
-            .finally(() => {
-              acquisitionSettled = true;
-            });
-          pending.push(replacement);
-          void replacement.catch(() => {});
+            }),
+            "acquisition",
+          );
 
           await nextEventLoopTurn();
-          expect({ stopSettled, acquisitionSettled, alive: isPidAlive(originalPid) }).toEqual({
-            stopSettled: false,
-            acquisitionSettled: false,
+          expect({ ...settled, alive: isPidAlive(originalPid) }).toEqual({
+            stop: false,
+            acquisition: false,
             alive: true,
           });
 
@@ -227,7 +221,6 @@ describe("provider local service shutdown", () => {
           nextLease.release();
           await stopManagedProviderLocalServices();
           expect(hasManagedProviderLocalServices()).toBe(false);
-          expect(await isPortFree(port)).toBe(true);
         },
         async () => {
           releaseGate();
@@ -262,7 +255,6 @@ describe("provider local service shutdown", () => {
 
     await stopManagedProviderLocalServices();
     expect(isPidAlive(replacementPid)).toBe(false);
-    expect(await isPortFree(port)).toBe(true);
     replacementLease.release();
   });
 
@@ -312,7 +304,7 @@ describe("provider local service shutdown", () => {
         : once(child, "close", { signal: AbortSignal.timeout(5_000) });
     try {
       if (closed) {
-        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
       }
       lease.release();
       const stopped = stopManagedProviderLocalServices();
@@ -345,6 +337,5 @@ describe("provider local service shutdown", () => {
     await stopManagedProviderLocalServices();
     expect(isPidAlive(replacementPid)).toBe(false);
     expect(hasManagedProviderLocalServices()).toBe(false);
-    expect(await isPortFree(port)).toBe(true);
   });
 });

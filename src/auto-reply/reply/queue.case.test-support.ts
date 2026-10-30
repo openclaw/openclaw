@@ -34,6 +34,16 @@ export function createQueueCase(overrides: Partial<QueueSettings> = {}, expected
         enqueue(run);
       }
     },
+    slackAnchor: (prompt: string, replyToId: string, mode: "off" | "all") =>
+      enqueue({
+        prompt,
+        messageId: replyToId,
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+        originatingReplyToId: replyToId,
+        originatingReplyToMode: mode,
+        originatingChatType: "channel",
+      }),
     slack: (
       prompt: string,
       runOverrides: Partial<FollowupRun["run"]>,

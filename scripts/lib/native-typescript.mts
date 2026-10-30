@@ -1,24 +1,78 @@
 import { createRequire } from "node:module";
 import path from "node:path";
-import type { SourceFile } from "typescript/unstable/ast";
-import { createFileSystem, createFileSystemLayer, type FileSystem } from "typescript/unstable/fs";
+import type { SourceFile } from "typescript/ast";
+import { createFileSystem, createFileSystemLayer, type FileSystemCallbacks } from "typescript/fs";
 import {
   API,
   type CreateSnapshotParams,
   type Diagnostic,
   type Project,
   type Snapshot,
-} from "typescript/unstable/sync";
+} from "typescript/sync";
 
 export type NativeTypeScriptSource = { fileName: string; text: string };
 export type NativeTypeScriptParser = ReturnType<typeof createNativeTypeScriptParser>;
 export type NativeTypeScriptProject = ReturnType<typeof createNativeTypeScriptProject>;
+export type NativeTypeScriptObserver = (
+  phase: string,
+  facts?: Readonly<Record<string, string | number>>,
+) => void;
+
+/** Diagnostics must never replace an analysis or disposal outcome. */
+export function reportNativeTypeScriptPhase(
+  observer: NativeTypeScriptObserver | undefined,
+  phase: string,
+  facts?: Readonly<Record<string, string | number>>,
+) {
+  try {
+    observer?.(phase, facts);
+  } catch {
+    // The analysis remains authoritative when its diagnostic sink fails.
+  }
+}
+
+function nativePhaseReporter(getApi: () => API | undefined, observer: NativeTypeScriptObserver) {
+  let totals: Readonly<Record<string, number>> | undefined;
+  return (phase: string, sample = true) => {
+    const api = getApi();
+    if (!api) {
+      return;
+    }
+    let fresh = false;
+    if (sample) {
+      try {
+        const timing = api.getTimingInfo().totals;
+        totals = Object.fromEntries(
+          (
+            [
+              "requestCount",
+              "roundTripMs",
+              "serverTimeMs",
+              "bytesSent",
+              "bytesReceived",
+              "sourceFilesFetched",
+              "nodesFetched",
+              "nodesMaterialized",
+            ] as const
+          ).map((metric) => [metric, timing[metric]]),
+        );
+        fresh = true;
+      } catch {
+        // Timing is an extra RPC; retain the last successful snapshot if it fails.
+      }
+    }
+    reportNativeTypeScriptPhase(observer, phase, {
+      ...totals,
+      timingSample: fresh ? "current" : totals ? "last-successful" : "unavailable",
+    });
+  };
+}
 
 type ProjectOptions = {
   cwd: string;
   configFileName: string;
   files?: Readonly<Record<string, string>>;
-  fs?: FileSystem;
+  fs?: FileSystemCallbacks;
 };
 
 /** Select the same installed compiler as the native API, including in relocated tooling. */
@@ -36,13 +90,17 @@ function compilerFileName(cwd: string, file: string) {
 }
 
 /** Own one native compiler process and its immutable semantic snapshot. */
-export function createNativeTypeScriptProject(options: ProjectOptions) {
+export function createNativeTypeScriptProject(
+  options: ProjectOptions & { observer?: NativeTypeScriptObserver },
+) {
   const cwd = path.resolve(options.cwd);
   const configFileName = compilerFileName(cwd, options.configFileName);
   const api = new API({
     cwd,
     fs: options.fs,
+    collectTiming: options.observer ? true : undefined,
   });
+  const checkpoint = options.observer && nativePhaseReporter(() => api, options.observer);
   let snapshot: Snapshot;
   let project: Project;
   try {
@@ -63,8 +121,10 @@ export function createNativeTypeScriptProject(options: ProjectOptions) {
       throw new Error(`Native TypeScript did not open ${configFileName}`);
     }
     project = opened;
+    checkpoint?.("project");
   } catch (error) {
     api.close();
+    checkpoint?.("close", false);
     throw error;
   }
   let closed = false;
@@ -74,13 +134,15 @@ export function createNativeTypeScriptProject(options: ProjectOptions) {
     }
     closed = true;
     api.close();
+    // Error unwinding must not issue another RPC to a possibly failed compiler.
+    checkpoint?.("close", false);
   };
-  return { api, snapshot, project, close, [Symbol.dispose]: close };
+  return { api, snapshot, project, checkpoint, close, [Symbol.dispose]: close };
 }
 
 /** The async transport keeps its child referenced while close ends the server's input. */
 export async function createNativeTypeScriptProjectAsync(options: ProjectOptions) {
-  const { API: AsyncAPI } = await import("typescript/unstable/async");
+  const { API: AsyncAPI } = await import("typescript/async");
   const cwd = path.resolve(options.cwd);
   const configFileName = compilerFileName(cwd, options.configFileName);
   const api = new AsyncAPI({
@@ -117,10 +179,12 @@ export async function createNativeTypeScriptProjectAsync(options: ProjectOptions
 export function createNativeTypeScriptParser({
   cwd = process.cwd(),
   tsserverPath,
-}: { cwd?: string; tsserverPath?: string } = {}) {
+  observer,
+}: { cwd?: string; tsserverPath?: string; observer?: NativeTypeScriptObserver } = {}) {
   const root = path.resolve(cwd);
   const configFileName = compilerFileName(root, ".openclaw-native-parser.tsconfig.json");
   let api: API | undefined;
+  const checkpoint = observer && nativePhaseReporter(() => api, observer);
   let snapshot: Snapshot | undefined;
   let project: Project | undefined;
   let sourceNames: string[] = [];
@@ -164,6 +228,7 @@ export function createNativeTypeScriptParser({
     api ??= new API({
       cwd: root,
       tsserverPath,
+      collectTiming: observer ? true : undefined,
     });
     const previousNames = new Set(sourceNames);
     const currentNames = new Set(names);
@@ -186,13 +251,16 @@ export function createNativeTypeScriptParser({
       throw new Error("Native TypeScript did not open the syntax scan project");
     }
     const program = project.program;
-    return names.map((fileName) => {
+    checkpoint?.("project");
+    const parsed = names.map((fileName) => {
       const sourceFile = program.getSourceFile(fileName);
       if (!sourceFile) {
         throw new Error(`Native TypeScript did not parse ${fileName}`);
       }
       return sourceFile;
     });
+    checkpoint?.("sources");
+    return parsed;
   };
   const close = () => {
     if (closed) {
@@ -200,12 +268,14 @@ export function createNativeTypeScriptParser({
     }
     closed = true;
     api?.close();
+    checkpoint?.("close", false);
     api = undefined;
     project = undefined;
     snapshot = undefined;
     sourceNames = [];
   };
   return {
+    checkpoint,
     parseSourceFiles,
     parseSourceFile(fileName: string, text: string): SourceFile {
       const sourceFile = parseSourceFiles([{ fileName, text }])[0];

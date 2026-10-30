@@ -1,3 +1,7 @@
+import {
+  registerSessionBindingAdapterV2 as registerSdkSessionBindingAdapter,
+  type SessionBindingAdapterV2,
+} from "openclaw/plugin-sdk/thread-bindings-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -5,13 +9,15 @@ import { createAccountScopedBindingAdapterV2 } from "./session-binding-adapter.j
 import { readSessionBindingInspectionConversation } from "./session-binding-normalization.js";
 import {
   getSessionBindingService,
-  readSessionBindingSelectionCurrent,
-  registerSessionBindingAdapter,
-  registerSessionBindingAdapterV2,
+  readSessionBindingSelectionCurrent as readSelection,
+  registerSessionBindingAdapter as registerAdapter,
+  registerSessionBindingAdapterV2 as registerV2,
   testing,
   unregisterSessionBindingAdapter,
   type SessionBindingAdapter,
   type SessionBindingRecord,
+  type ConversationRef,
+  type SessionBindingBindInput,
 } from "./session-binding-service.js";
 
 afterEach(() => testing.resetSessionBindingAdaptersForTests());
@@ -34,7 +40,7 @@ function register(overrides: Partial<SessionBindingAdapter>) {
     resolveByConversation: () => null,
     ...overrides,
   };
-  registerSessionBindingAdapter(owner);
+  registerAdapter(owner);
   return owner;
 }
 function createV2(
@@ -42,33 +48,111 @@ function createV2(
   assertSourceCurrent = () => {},
   legacyRead = () => record,
 ) {
-  return {
-    ...createAccountScopedBindingAdapterV2({
-      channel: "external",
-      accountId: "default",
-      capabilities: {},
-      assertCurrent,
-      bind: async () => record,
-      project: (entry: SessionBindingRecord) => entry,
-      listBySessionKey: () => [legacyRead()],
-      getByConversation: legacyRead,
-      touchConversation: () => {},
-      unbindConversation: () => null,
-      unbindBySessionKey: () => [],
-      listBySessionKeyAsync: async () => [record],
-      getByConversationAsync: async () => record,
-      inspectByConversationAsync: async () => record,
-      inspectByConversations: (refs) => ({
-        records: refs.map(() => record),
-        assertCurrent: assertSourceCurrent,
-      }),
-      touchConversationAsync: async () => {},
+  return createAccountScopedBindingAdapterV2({
+    channel: "external",
+    accountId: "default",
+    capabilities: {},
+    assertCurrent,
+    bind: async () => record,
+    project: (entry: SessionBindingRecord) => entry,
+    listBySessionKey: () => [legacyRead()],
+    getByConversation: legacyRead,
+    touchConversation: () => {},
+    unbindConversation: () => null,
+    unbindBySessionKey: () => [],
+    listBySessionKeyAsync: async () => [record],
+    getByConversationAsync: async () => record,
+    inspectByConversationAsync: async () => record,
+    inspectByConversations: (refs) => ({
+      records: refs.map(() => record),
+      assertCurrent: assertSourceCurrent,
     }),
-    inspectByConversation: legacyRead,
-  };
+    touchConversationAsync: async () => {},
+  });
 }
 
 describe("awaited binding read ownership", () => {
+  it("retains class adapter methods and their receiver through SDK registration", async () => {
+    class Adapter implements SessionBindingAdapterV2 {
+      readonly version = 2;
+      readonly channel = " External ";
+      readonly accountId = " DEFAULT ";
+      #binding: SessionBindingRecord | null = record;
+
+      assertCurrent() {
+        if (!this.#binding) {
+          throw new Error("adapter closed");
+        }
+      }
+      listBySession(key: string) {
+        return this.#binding?.targetSessionKey === key ? [this.#binding] : [];
+      }
+      resolveByConversation(conversation: ConversationRef) {
+        return this.#binding?.conversation.conversationId === conversation.conversationId
+          ? this.#binding
+          : null;
+      }
+      async listBySessionAsync(key: string) {
+        return this.listBySession(key);
+      }
+      async resolveByConversationAsync(conversation: ConversationRef) {
+        return this.resolveByConversation(conversation);
+      }
+      async inspectByConversationAsync(conversation: ConversationRef) {
+        return this.resolveByConversation(conversation);
+      }
+      async inspectByConversationsAsync(refs: readonly ConversationRef[]) {
+        return {
+          bindings: refs.map((conversation) => this.resolveByConversation(conversation)),
+          assertCurrent: () => this.assertCurrent(),
+        };
+      }
+      async bind(input: SessionBindingBindInput) {
+        input.assertCurrent?.();
+        this.#binding = {
+          ...record,
+          targetSessionKey: input.targetSessionKey,
+          conversation: input.conversation,
+        };
+        return this.#binding;
+      }
+      async touchAsync(_id: string, at = 1) {
+        this.#binding = this.#binding ? { ...this.#binding, boundAt: at } : null;
+      }
+      async unbind() {
+        const removed = this.#binding ? [this.#binding] : [];
+        this.#binding = null;
+        return removed;
+      }
+    }
+
+    const adapter = new Adapter();
+    registerSdkSessionBindingAdapter(adapter);
+    const scope = { channel: "external", accountId: "default" };
+    expect(service.getCapabilities(scope)).toMatchObject({
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+    });
+    expect(await service.resolveByConversationAsync(record.conversation)).toBe(record);
+    const bound = await service.bind({
+      targetSessionKey: "agent:owner:other",
+      targetKind: "session",
+      conversation: { ...record.conversation, channel: " External ", accountId: " DEFAULT " },
+    });
+    expect(bound.conversation).toEqual(record.conversation);
+    await service.touchAsync(bound.bindingId, 42, scope);
+    expect(await service.resolveByConversationAsync(record.conversation)).toMatchObject({
+      targetSessionKey: "agent:owner:other",
+      boundAt: 42,
+    });
+    expect(await service.unbind({ scope, reason: "test" })).toHaveLength(1);
+    expect(adapter.channel).toBe(" External ");
+    expect(adapter.accountId).toBe(" DEFAULT ");
+    unregisterSessionBindingAdapter({ ...scope, adapter });
+    expect(testing.getRegisteredAdapterKeys()).toEqual([]);
+  });
+
   it.each([false, true])(
     "inspects admission without resolver mutations (async=%s)",
     async (asyncInspector) => {
@@ -79,7 +163,7 @@ describe("awaited binding read ownership", () => {
         resolveByConversation: resolve,
         resolveByConversationAsync: async () => resolve(),
       });
-      expect(await readSessionBindingSelectionCurrent([ref])).toEqual([record]);
+      expect(await readSelection([ref])).toEqual([record]);
       expect(resolve).not.toHaveBeenCalled();
     },
   );
@@ -118,7 +202,7 @@ describe("awaited binding read ownership", () => {
     if (change === "remove") {
       unregisterSessionBindingAdapter({ ...owner, adapter: owner });
     } else if (change === "replace") {
-      registerSessionBindingAdapter({ ...owner, resolveByConversation: () => null });
+      registerAdapter({ ...owner, resolveByConversation: () => null });
     }
     gate.resolve(record);
     if (rejection) {
@@ -138,33 +222,19 @@ describe("awaited binding read ownership", () => {
   });
 
   it("never calls a V2 adapter's synchronous compatibility readers", async () => {
-    const legacy = () => {
-      throw new Error("legacy reader must not run");
+    const fail = (message: string) => {
+      throw new Error(message);
     };
-    let active = true;
-    let sourceCurrent = true;
-    registerSessionBindingAdapterV2(
-      createV2(
-        () => {
-          if (!active) {
-            throw new Error("closed adapter");
-          }
-        },
-        () => {
-          if (!sourceCurrent) {
-            throw new Error("binding source changed");
-          }
-        },
-        legacy,
-      ),
+    const assertCurrent = vi.fn();
+    const assertSourceCurrent = vi.fn();
+    registerV2(
+      createV2(assertCurrent, assertSourceCurrent, () => fail("legacy reader must not run")),
     );
     expect(await service.resolveByConversationAsync(ref)).toEqual(record);
-    expect(await readSessionBindingSelectionCurrent([ref])).toEqual([record]);
-    sourceCurrent = false;
-    await expect(readSessionBindingSelectionCurrent([ref])).rejects.toThrow(
-      "binding source changed",
-    );
-    active = false;
+    expect(await readSelection([ref])).toEqual([record]);
+    assertSourceCurrent.mockImplementation(() => fail("binding source changed"));
+    await expect(readSelection([ref])).rejects.toThrow("binding source changed");
+    assertCurrent.mockImplementation(() => fail("closed adapter"));
     await expect(service.resolveByConversationAsync(ref)).rejects.toThrow("closed adapter");
   });
 
@@ -174,39 +244,20 @@ describe("awaited binding read ownership", () => {
       withPluginRuntimePluginScope({ pluginId: "binding-sdk-compat-fixture" }, body);
     try {
       await run(async () => {
-        registerSessionBindingAdapterV2(createV2());
+        registerV2(createV2());
         expect(await service.resolveByConversationAsync(ref)).toEqual(record);
         expect(warning).not.toHaveBeenCalled();
         expect(service.resolveByConversation(ref)).toEqual(record);
         service.touch("", undefined, ref);
       });
       run(() => service.resolveByConversation(ref));
-      expect(warning.mock.calls).toEqual([
+      expect(warning.mock.calls.map(([message]) => message)).toEqual(
         [
-          expect.stringContaining(
-            "SessionBindingService.resolveByConversation is deprecated; use SessionBindingService.resolveByConversationAsync",
-          ),
-          { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
-        ],
-        [
-          expect.stringContaining(
-            "SessionBindingAdapter.resolveByConversation is deprecated; use SessionBindingAdapterV2.resolveByConversationAsync",
-          ),
-          { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
-        ],
-        [
-          expect.stringContaining(
-            "SessionBindingService.touch is deprecated; use SessionBindingService.touchAsync",
-          ),
-          { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
-        ],
-      ]);
-      const message = warning.mock.calls[0]?.[0];
-      expect(message).toContain(
-        "Plugin binding-sdk-compat-fixture: SessionBindingService.resolveByConversation",
+          "SessionBindingService.resolveByConversation",
+          "SessionBindingAdapter.resolveByConversation",
+          "SessionBindingService.touch",
+        ].map((method) => expect.stringContaining(`${method} is deprecated;`)),
       );
-      expect(message).toContain("SessionBindingService.resolveByConversationAsync");
-      expect(message).toContain("Final compatibility day: 2026-12-31");
     } finally {
       warning.mockRestore();
     }

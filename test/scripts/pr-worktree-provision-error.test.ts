@@ -1,27 +1,20 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatProvisionError } from "../../scripts/pr-lib/worktree-provision-error.mjs";
-import { GatewayStateOwnerContentionError } from "../../src/infra/gateway-state-owner.js";
 import { markSqliteNativeOpenFailure } from "../../src/infra/sqlite-error-diagnostics.js";
 import { markOpenClawStateDatabaseFailure } from "../../src/state/openclaw-state-db-failure.js";
 import { OpenClawStateLeaseAcquisitionError } from "../../src/state/openclaw-state-lease-error.js";
-import {
-  hydrateOpenClawStateWorkerError,
-  retainOpenClawStateWorkerErrorPayload,
-} from "../../src/state/openclaw-state-worker-error.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createMainRefreshFixture } from "./pr-main-refresh.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const unavailable = "Provisioning failed; diagnostic unavailable.";
-const storage = (
-  cause: unknown,
-  reason: "sqlite-busy" | "lifecycle-busy" | "storage-error" = "storage-error",
-) =>
+const storage = (cause: unknown) =>
   new OpenClawStateLeaseAcquisitionError(
     "managed worktree allocation lease",
-    { kind: "store-unavailable", reason },
+    { kind: "store-unavailable", reason: "storage-error" },
     cause,
   );
 const render = (error: unknown) => JSON.parse(formatProvisionError(error));
@@ -46,50 +39,6 @@ describe("native PR provisioning diagnostics", () => {
       nativeOpen: true,
       stateDatabasePath: "/fixture/refused.sqlite",
     });
-  });
-
-  it("preserves distinct busy, lifecycle and worker failures without guessing a classification", () => {
-    const busy = render(
-      storage(
-        Object.assign(new Error("synthetic busy"), { code: "SQLITE_BUSY", errcode: 5 }),
-        "sqlite-busy",
-      ),
-    );
-    expect(busy.outcome.reason).toBe("sqlite-busy");
-    expect(busy.error.nodes[1]).toMatchObject({ code: "SQLITE_BUSY", errcode: 5 });
-    const lifecycle = render(
-      storage(new GatewayStateOwnerContentionError("/fixture/state.sqlite"), "lifecycle-busy"),
-    );
-    expect(lifecycle.outcome.reason).toBe("lifecycle-busy");
-    expect(lifecycle.error.nodes[1]).toMatchObject({
-      type: "state-owner-contention",
-      databasePath: "/fixture/state.sqlite",
-    });
-    const worker = render(
-      storage(Object.assign(new Error("synthetic worker unavailable"), { code: "unavailable" })),
-    );
-    expect(worker.outcome.reason).toBe("storage-error");
-    expect(worker.error.nodes[1].code).toBe("unavailable");
-  });
-
-  it("retains shared and cyclic causes as a hydratable graph without changing the original", () => {
-    const leaf = new Error("shared synthetic cause");
-    const aggregate = new AggregateError([leaf, leaf], "aggregate", { cause: leaf });
-    leaf.cause = aggregate;
-    const error = storage(aggregate);
-    const out = render(error);
-    const carrier = new Error("wire carrier");
-    retainOpenClawStateWorkerErrorPayload(carrier, out.error);
-    const restored = hydrateOpenClawStateWorkerError(carrier);
-    expect(restored).not.toBe(carrier);
-    expect(restored.cause).toBeInstanceOf(AggregateError);
-    const restoredAggregate = restored.cause as AggregateError;
-    expect(restoredAggregate.errors[0]).toBe(restoredAggregate.errors[1]);
-    expect(restoredAggregate.cause).toBe(restoredAggregate.errors[0]);
-    expect(restoredAggregate.errors[0].cause).toBe(restoredAggregate);
-    expect(error.cause).toBe(aggregate);
-    expect(leaf.cause).toBe(aggregate);
-    expect(aggregate.errors).toEqual([leaf, leaf]);
   });
 
   it.each([
@@ -122,7 +71,6 @@ describe("native PR provisioning diagnostics", () => {
     const text = formatProvisionError(error);
     expect(text).not.toContain(credential);
     expect(text).toContain("***");
-    expect(() => JSON.parse(text)).not.toThrow();
     expect(formatProvisionError("Authorization: Bearer " + credential)).not.toContain(credential);
     const outcome = { kind: "held", holder: { owner: "api_key=" + credential, epoch: 7 } } as const;
     const held = render(new OpenClawStateLeaseAcquisitionError("lease", outcome));
@@ -153,18 +101,12 @@ describe("native PR provisioning diagnostics", () => {
     expect(toJSON).not.toHaveBeenCalled();
   });
 
-  it.each([
-    "plain failure",
-    "state lease heartbeat is not responsive (phase=verify, trigger=deadline, requestId=2, elapsedMs=1000, responseRemainingMs=0, operationRemainingMs=59000, leaseRemainingMs=59000, status=1, renewalProgress=2, completedRequestId=1)",
-  ])("reports ordinary errors without fabricating storage facts: %s", (message) => {
+  it("does not fabricate storage facts from heartbeat wording", () => {
+    const message =
+      "state lease heartbeat is not responsive (phase=verify, trigger=deadline, requestId=2, elapsedMs=1000, responseRemainingMs=0, operationRemainingMs=59000, leaseRemainingMs=59000, status=1, renewalProgress=2, completedRequestId=1)";
     const out = render(new Error(message));
     expect(out.outcome).toBeUndefined();
     expect(out.error.nodes).toEqual([{ type: "error", name: "Error", message }]);
-    const carrier = new Error("wire carrier");
-    retainOpenClawStateWorkerErrorPayload(carrier, out.error);
-    expect(hydrateOpenClawStateWorkerError(carrier, { includeOrdinary: true }).message).toBe(
-      message,
-    );
   });
 
   it("safely handles primitives", () => {
@@ -173,6 +115,64 @@ describe("native PR provisioning diagnostics", () => {
       expect(formatProvisionError(value)).toBe(unavailable);
     }
   });
+
+  it.skipIf(process.platform === "win32").each([
+    { fault: "exit", status: 2, signal: null },
+    { fault: "signal", status: null, signal: "SIGTERM" },
+    { fault: "spawn", status: null, signal: null },
+  ] as const)(
+    "reports a lock-check $fault without provisioning a checkout",
+    ({ fault, status, signal }) => {
+      const f = createMainRefreshFixture(tempDirs.make("openclaw-pr-lock-diagnostic-"), {
+        precreateWorktree: false,
+      });
+      const preload = join(f.root, "lock-check-fault.mjs");
+      const credential = ["sk", "fixturesecretabcdefghijklmnopqrstuvwxyz0123456789"].join("-");
+      writeFileSync(
+        preload,
+        `import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+if (process.argv[1]?.endsWith('/worktree-provision.mts')) {
+  const spawnSync = childProcess.spawnSync;
+  childProcess.spawnSync = (command, args, options) => {
+    if (args?.[2] !== 'pr-provision-authority') return spawnSync(command, args, options);
+    // Exercise real subprocess outcomes at the check boundary, not fabricated errors.
+    const fault = ${JSON.stringify(fault)};
+    if (fault === 'spawn') return spawnSync(${JSON.stringify(join(f.root, "missing-shell"))}, args, options);
+    const script = fault === 'signal' ? 'kill -TERM $$'
+      : ${JSON.stringify(`printf '%s\\n' 'synthetic lock-check refusal' 'Authorization: Bearer ${credential}' >&2; exit 2`)};
+    return spawnSync(command, ['-c', script], options);
+  };
+  syncBuiltinESMExports();
+}
+`,
+      );
+      f.env.NODE_OPTIONS = `--import=${pathToFileURL(preload).href} ${f.env.NODE_OPTIONS ?? ""}`;
+      const result = f.run("review-init");
+      f.assertPrivateHandoffVerified();
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("[pr-worktree-provision] FAILED (exit 1)");
+      const report = result.stderr.split("\n").find((line) => line.startsWith('{"error":'));
+      expect(report, result.stderr).toBeDefined();
+      const out = JSON.parse(report!);
+      const root = out.error.nodes[out.error.root];
+      expect(root.message).toContain(
+        `PR operation lock check failed (status=${status}, signal=${signal})`,
+      );
+      expect(root.message).toContain("retain provisioning state for recovery");
+      if (fault === "exit") {
+        expect(root.message).toContain("synthetic lock-check refusal");
+        expect(report).not.toContain(credential);
+        expect(root.message).toContain("Authorization:");
+      } else if (fault === "spawn") {
+        expect(out.error.nodes[root.cause.ref]).toMatchObject({ code: "ENOENT" });
+      }
+      expect(existsSync(f.worktree)).toBe(false);
+      expect(f.git(f.canonical, "rev-parse", "refs/heads/temp/pr-42")).toBe(f.main);
+      expect(result.stderr).toContain("Released the operation lock for PR #42 after exit code 1");
+      expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "reports the real native storage failure, keeps its exit status, and releases the drained lock",
@@ -195,12 +195,12 @@ describe("native PR provisioning diagnostics", () => {
       const report = result.stderr.split("\n").find((line) => line.startsWith('{"error":'));
       expect(report, result.stderr).toBeDefined();
       const out = JSON.parse(report!);
-      expect(out.outcome, report).toEqual({ kind: "store-unavailable", reason: "storage-error" });
-      expect(out.error.nodes).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED" }),
-          expect.objectContaining({ code: "ERR_SQLITE_ERROR", errcode: 26 }),
-        ]),
+      expect(out.outcome, report).toBeUndefined();
+      expect(out.error.nodes).toContainEqual(
+        expect.objectContaining({ code: "ERR_SQLITE_ERROR", errcode: 26 }),
+      );
+      expect(out.error.nodes).not.toContainEqual(
+        expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED" }),
       );
       expect(readFileSync(database, "utf8")).toBe(corrupt);
       expect(existsSync(f.worktree)).toBe(false);

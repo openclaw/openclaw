@@ -19,6 +19,7 @@ import {
   sessionChangeAffectsStoredRow,
 } from "../sessions/session-row-facts.js";
 import { GatewaySessionFactsChangedDuringReadError } from "./session-utils-store-errors.js";
+import { createGatewaySessionStore } from "./session-utils-store-read.js";
 import type { GatewaySessionStoreTargetWithStore } from "./session-utils-store.types.js";
 
 export type GatewaySessionStoreSelection = {
@@ -181,9 +182,7 @@ export async function withQualifiedGatewaySessionStoreTarget<T>(params: {
             canonicalKey: params.target.canonicalKey,
             storePath: params.logicalStorePath,
             storeKeys: [...params.target.storeKeys],
-            store: Object.fromEntries(
-              selected.result.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-            ),
+            store: createGatewaySessionStore(selected.result.entries),
             readSource: selected.database,
             lifecycleTimestamps: selected.result.lifecycleTimestamps,
             ...(selected.result.transcript ? { transcript: selected.result.transcript } : {}),
@@ -259,7 +258,9 @@ export function withIncognitoGatewaySessionStoreTarget<T>(params: {
         canonicalKey: sessionKey,
         storePath: captured.path,
         storeKeys: [sessionKey],
-        store: snapshot?.entry ? { [sessionKey]: snapshot.entry } : {},
+        store: createGatewaySessionStore(
+          snapshot?.entry ? [{ sessionKey, entry: snapshot.entry }] : [],
+        ),
         readSource: { agentId, path: captured.path },
         ...(capturedReadSource ? { capturedReadSource } : {}),
         capturedReadSources: capturedReadSource ? [capturedReadSource] : [],

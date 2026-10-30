@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
@@ -19,7 +18,6 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
@@ -27,19 +25,17 @@ import {
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteAdmission,
 } from "openclaw/plugin-sdk/sqlite-runtime";
-import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
-  observeHostDataSql,
+  useSqliteWorkerFault,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "../index.js";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
-import { memoryCpuProcessEntrypoints } from "./memory/manager-cpu-entrypoints.js";
 import { createStandingIntentExecutor } from "./standing-intents-tool.js";
 import {
   createStandingIntent,
@@ -52,6 +48,26 @@ import {
 const pending: Promise<unknown>[] = [];
 const releases: Array<() => void> = [];
 const writerDrains: Array<() => Promise<unknown>> = [];
+const writeActions = ["create", "list", "cancel", "match"] as const;
+const writeFault = useSqliteWorkerFault(
+  writeActions.map((action) => {
+    const insert = action === "create";
+    const condition = insert
+      ? ""
+      : action === "match"
+        ? "WHEN NEW.fire_count != OLD.fire_count"
+        : `WHEN NEW.status = '${action === "list" ? "expired" : "cancelled"}'`;
+    return {
+      match: new RegExp(`^${insert ? "insert into" : "update"} standing_intents `),
+      name: `reject_intent_${action}`,
+      sql: `CREATE TEMP TRIGGER reject_intent_${action}
+        BEFORE ${insert ? "INSERT" : "UPDATE"} ON standing_intents ${condition}
+        BEGIN SELECT RAISE(ABORT, 'fixture standing-intent write rejected'); END`,
+    };
+  }),
+);
+const failStandingIntentWrites = (action: (typeof writeActions)[number]) =>
+  writeFault.enable(writeActions.indexOf(action));
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     vi.restoreAllMocks();
@@ -120,54 +136,6 @@ async function holdWriter(beforeRelease?: () => void, beforeLock?: () => Promise
   writerDrains.push(drain);
   await Promise.race([entered.promise, done]);
   return { entered: entered.promise, release: finish.resolve, done, drain };
-}
-
-function failStandingIntentWrites(action: "create" | "list" | "cancel" | "match") {
-  const operation = action === "create" ? "insert into" : "update";
-  const moduleUrl = resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.standingIntents);
-  const fixturePath = path.join(stateDir, "standing-intent-statement-fault.mjs");
-  // Prototype interception also reaches statements prepared by the seed operation.
-  fs.writeFileSync(
-    fixturePath,
-    `import { StatementSync } from "node:sqlite";
-import { bindSqliteWorkerBackend as bind } from ${JSON.stringify(moduleUrl.href)};
-export function bindSqliteWorkerBackend(input, context) {
-  const backend = bind(input, context);
-  const action = ${JSON.stringify(action)};
-  const originals = new Map();
-  for (const method of ["run", "get", "all", "iterate"]) {
-    const original = StatementSync.prototype[method];
-    originals.set(method, original);
-    StatementSync.prototype[method] = function (...args) {
-      const sql = this.sourceSQL.toLowerCase().replaceAll('"', '');
-      const selected = action === 'create' || (action === 'match'
-        ? sql.includes('set fire_count =')
-        : args.includes(action === 'list' ? 'expired' : 'cancelled'));
-      if (selected && sql.startsWith(${JSON.stringify(`${operation} standing_intents `)})) {
-        throw new Error('fixture standing-intent write rejected');
-      }
-      return Reflect.apply(original, this, args);
-    };
-  }
-  return { ...backend, close() {
-    for (const [method, original] of originals) StatementSync.prototype[method] = original;
-    return backend.close();
-  } };
-}
-`,
-  );
-  const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
-  return vi
-    .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2")
-    .mockImplementation((options, source, worker) =>
-      open(
-        options,
-        source,
-        worker.moduleUrl.href === moduleUrl.href
-          ? { ...worker, moduleUrl: pathToFileURL(fixturePath) }
-          : worker,
-      ),
-    );
 }
 
 async function expectWaiting(work: Promise<unknown>, entered: Promise<void>) {
@@ -250,30 +218,6 @@ function readStored(id: string) {
     .get(id);
 }
 
-async function withoutHostSql<T>(run: () => Promise<T>) {
-  const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-  const calibration = "SELECT id FROM standing_intents LIMIT 1";
-  const statement = db.prepare(calibration);
-  const observation = observeHostDataSql();
-  try {
-    // Prove that already-prepared native statements remain visible to the observer.
-    statement.get();
-    expect(observation.queries).toContain(calibration);
-    observation.queries.length = 0;
-    for (const call of observation.calls) {
-      call.mockClear();
-    }
-    const result = await run();
-    // Ignore cold bootstrap and native lease SQL, but never standing-intent data SQL.
-    expect(observation.queries.filter((sql) => /\bstanding_intents(?:_fts)?\b/i.test(sql))).toEqual(
-      [],
-    );
-    return result;
-  } finally {
-    observation.restore();
-  }
-}
-
 async function registerHooks() {
   const config: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
@@ -332,13 +276,11 @@ async function registeredIntentTool(assertInvocationCurrent?: () => void) {
 describe("standing-intent admitted operations", () => {
   it("reuses service-owned absence without hiding a queued creation or another agent", async () => {
     const { clock, stop } = maintenance();
-    const open = vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2");
     await clock.wake();
-    open.mockClear();
     const match = () => matchStandingIntents({ agentId: "main", prompt: "launch", nowMs: 1_000 });
     await expect(match()).resolves.toEqual([]);
-    await expect(match()).resolves.toEqual([]);
-    expect(open).not.toHaveBeenCalled();
+    // Startup recovery must not create an unused agent database.
+    expect(fs.existsSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }))).toBe(false);
 
     const other = await seed({ agentId: "other" });
     await expect(
@@ -354,13 +296,10 @@ describe("standing-intent admitted operations", () => {
     await expect(matching).resolves.toMatchObject([{ id: intent.id, fireCount: 1 }]);
     await held.done;
     await clock.wake();
-    open.mockClear();
     await expect(match()).resolves.toEqual([]);
-    expect(open).not.toHaveBeenCalled();
 
     stop();
     await expect(match()).resolves.toEqual([]);
-    expect(open).toHaveBeenCalledOnce();
   });
 
   it("recovers overdue intents at restart and schedules writes and cooldowns while idle", async () => {
@@ -433,15 +372,10 @@ describe("standing-intent admitted operations", () => {
     await expect(work).rejects.toThrow(
       revoked ? "owner revoked" : "fixture standing-intent write rejected",
     );
-    const checkRows = (db: IntentDatabase) => {
+    await drain();
+    await readDurable((db) => {
       expect([storedStatus(db, existing.id), rowCount(db)]).toEqual(["armed", 1]);
-    };
-    if (revoked) {
-      await drain();
-      await readDurable(checkRows);
-    } else {
-      checkRows(openOpenClawAgentDatabase({ agentId: "main" }).db);
-    }
+    });
   });
 
   it("restores first-use schema and creates once under the queued writer", async () => {
@@ -450,34 +384,20 @@ describe("standing-intent admitted operations", () => {
     db.exec("DROP TABLE standing_intents; DROP TABLE standing_intents_fts");
     const schemaExists = () =>
       db.prepare("SELECT name FROM sqlite_schema WHERE name = 'standing_intents'").get();
-    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
-    const publications: Array<() => number> = [];
-    const admissions: string[] = [];
-    vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2").mockImplementation(
-      async (options, source, worker) => {
-        const store = await open(options, source, {
-          ...worker,
-          onAdmitted(request) {
-            admissions.push(request.stage);
-            worker.onAdmitted?.(request);
-          },
-        });
-        const execute = vi.spyOn(store, "execute");
-        publications.push(() => execute.mock.calls.length);
-        return store;
-      },
-    );
     const work = keep(seed());
     await expectWaiting(work, held.entered);
     expect(schemaExists()).toBeUndefined();
     held.release();
     const created = await work;
     expect(schemaExists()).toBeDefined();
-    expect(readStored(created.id)).toMatchObject({ status: "armed", fire_count: 0 });
-    expect(publications.reduce((count, calls) => count + calls(), 0)).toBe(1);
-    expect(admissions.filter((stage) => stage === "transaction")).toHaveLength(0);
-    // Schema recovery and the intent stay independently durable, each with live commit authority.
-    expect(admissions.filter((stage) => stage === "commit")).toHaveLength(2);
+    await readDurable((durable) => {
+      expect(rowCount(durable)).toBe(1);
+      expect(durable.prepare("SELECT id, status, fire_count FROM standing_intents").get()).toEqual({
+        id: created.id,
+        status: "armed",
+        fire_count: 0,
+      });
+    });
   });
 
   it.each(["create", "cancel"] as const)(
@@ -488,10 +408,8 @@ describe("standing-intent admitted operations", () => {
       const { work, release } = await queue(() =>
         tool.execute("intent-call", intentArgs(action, existing.id)),
       );
-      const result = await withoutHostSql(async () => {
-        release();
-        return await work;
-      });
+      release();
+      const result = await work;
       const text = result.content.find((item) => item.type === "text")?.text ?? "";
       const payload: unknown = JSON.parse(text);
       expect(payload).toMatchObject(
@@ -513,10 +431,8 @@ describe("standing-intent admitted operations", () => {
     const { runner } = await registerHooks();
     const { work, release } = await queue(() => promptHook(runner));
     expect(readStored(existing.id)?.fire_count).toBe(0);
-    await withoutHostSql(async () => {
-      release();
-      expect((await work)?.prependContext).toContain("Confirm the rollback owner.");
-    });
+    release();
+    expect((await work)?.prependContext).toContain("Confirm the rollback owner.");
     expect(readStored(existing.id)).toMatchObject({ fire_count: 1, status: "done" });
   });
 

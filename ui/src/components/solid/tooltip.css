@@ -8,6 +8,9 @@ openclaw-tooltip-provider {
 }
 
 .tooltip-surface {
+  --chat-bubble-background: initial;
+  --chat-text-link: var(--link);
+  --chat-text-link-hover: var(--link-hover);
   position: fixed;
   inset: auto;
   --oc-overlay-distance: 8px;
@@ -73,26 +76,6 @@ openclaw-tooltip-provider {
   display: block;
   pointer-events: inherit;
   text-align: left;
-}
-
-.shortcut-kbd:where(:not([hidden])) {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  vertical-align: middle;
-}
-
-.shortcut-kbd > span + span {
-  margin-inline-start: 0.15em;
-}
-
-.kbd__text {
-  text-box: trim-both cap alphabetic;
-}
-
-.shortcut-kbd::before {
-  content: "";
-  height: 1lh;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -3,12 +3,14 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { Value } from "typebox/value";
 import { readMissingScopeErrorDetails } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import type { SessionsDispatchResult } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
+import type { CyberAccessProgram } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { readChildSessionPublication } from "../../channels/message-access/child-session-publication.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { attributeDelegatedSessionCreator } from "../../config/sessions/session-entry-provenance.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { buildDashboardSessionTitleSource } from "../../gateway/dashboard-session-title.js";
 import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
@@ -17,10 +19,7 @@ import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-
 import { resolveWorkerPlacementDestination } from "../../gateway/worker-environments/placement-destination.js";
 import { readExecRequestOwners, withExecRequestOwners } from "../../infra/exec-request-context.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import {
-  getCanonicalGatewayContextResolver,
-  getPluginRuntimeGatewayRequestScope,
-} from "../../plugins/runtime/gateway-request-scope.js";
+import { getCanonicalGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { resolveUserPath } from "../../utils.js";
@@ -29,12 +28,14 @@ import { listAgentIds, resolveSessionAgentId } from "../agent-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { prepareNativeDelegatedToolPolicy } from "../delegated-tool-policy.js";
+import { resolveRunEntryCliRuntime } from "../embedded-agent-runner/run-entry-runtime.js";
 import { resolveAgentIdentity } from "../identity.js";
 import {
   resolveSandboxRuntimeStatus,
   resolveSandboxRuntimeStatusAsync,
 } from "../sandbox/runtime-status.js";
 import { resolveSpawnAdmission } from "../spawn-plan.js";
+import { resolveRequesterDeliveryThreadId } from "../spawn-requester-origin.js";
 import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
 import { prepareSubagentSessionListReadCache } from "../subagents/registry/subagent-registry-state.js";
 import { registerSubagentRun } from "../subagents/registry/subagent-registry.js";
@@ -42,6 +43,7 @@ import { getSubagentDepthFromSessionStoreInWorker } from "../subagents/spawn/sub
 import { terminateAcceptedCollectorRun } from "../subagents/spawn/subagent-spawn-cleanup.js";
 import {
   callNativeSubagentGateway,
+  captureSubagentSpawnGatewayContext,
   resolveSubagentAgentGatewayTimeoutMs,
 } from "../subagents/spawn/subagent-spawn-gateway.js";
 import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn-ownership.js";
@@ -49,9 +51,13 @@ import {
   resolveConfiguredSubagentRunTimeoutSeconds,
   resolveSubagentModelAndThinkingPlan,
 } from "../subagents/spawn/subagent-spawn-plan.js";
-import { resolveRequesterPreferences } from "../subagents/spawn/subagent-spawn-requester-prefs.js";
+import {
+  resolveRequesterPreferences,
+  resolveSubagentCyberAccessProgram,
+} from "../subagents/spawn/subagent-spawn-requester-prefs.js";
 import { buildSubagentTaskMessage } from "../subagents/spawn/subagent-system-prompt.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
+import { validateName } from "../worktrees/name.js";
 import { normalizeToolModelOverride, readToolStringParam, ToolInputError } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
@@ -70,6 +76,7 @@ import { resolveVisibleSessionOwner } from "./sessions-spawn-visible-owner.js";
 import {
   correctedVisibleSpawnCall,
   SessionsSpawnPlacementSchema,
+  validateVisibleSpawnOptions,
 } from "./sessions-spawn-visible.schema.js";
 
 type VisibleSessionsSpawnOptions = SessionsSpawnToolOptions & {
@@ -87,6 +94,7 @@ export async function maybeSpawnVisibleSession(params: {
   runTimeoutSeconds?: number;
   sandbox: "inherit" | "require";
   expectsCompletionMessage: boolean;
+  cyberAccessProgram?: CyberAccessProgram;
   options?: VisibleSessionsSpawnOptions;
 }): Promise<Record<string, unknown> | undefined> {
   const promptedAt = Date.now();
@@ -107,10 +115,23 @@ export async function maybeSpawnVisibleSession(params: {
       `Cloud placement requires visible=true and worktree=true. Corrected call: ${correctedVisibleSpawnCall(params.raw)}`,
     );
   }
-  const worktreeName = readToolStringParam(params.raw, "worktreeName");
-  const worktreeBaseRef = readToolStringParam(params.raw, "worktreeBaseRef");
+  // Hidden native checkout selectors only apply when worktree is explicitly enabled.
+  const checkoutParams =
+    worktree || params.raw.visible === true || params.runtime === "acp" ? params.raw : {};
+  const worktreeName = readToolStringParam(checkoutParams, "worktreeName", {
+    trim: false,
+    allowEmpty: true,
+  });
+  if (worktreeName !== undefined) {
+    try {
+      validateName(worktreeName);
+    } catch (error) {
+      throw new ToolInputError(error instanceof Error ? error.message : String(error));
+    }
+  }
+  const worktreeBaseRef = readToolStringParam(checkoutParams, "worktreeBaseRef");
   const group = readToolStringParam(params.raw, "group");
-  const projectId = readToolStringParam(params.raw, "projectId");
+  const projectId = readToolStringParam(checkoutParams, "projectId");
   const projectGitUrl = readToolStringParam(params.raw, "projectGitUrl");
   if (params.raw.visible !== true) {
     const visibleOnlyParams = [
@@ -131,67 +152,18 @@ export async function maybeSpawnVisibleSession(params: {
         'Managed worktree parameters are unavailable with runtime="acp". Use runtime="subagent" with worktree=true, or omit projectId, worktree, worktreeName, and worktreeBaseRef for ACP.',
       );
     }
-    if (!worktree && (projectId || worktreeName || worktreeBaseRef)) {
-      throw new ToolInputError(
-        "Hidden native subagents require worktree=true with projectId, worktreeName, or worktreeBaseRef.",
-      );
-    }
     return undefined;
   }
   const modelOverride = normalizeToolModelOverride(readToolStringParam(params.raw, "model"));
   const requestedCwd = readToolStringParam(params.raw, "cwd");
   const spawnedCwd = requestedCwd ? resolveUserPath(requestedCwd) : undefined;
-  // A visible session starts one run; empty attachment fields request no staging.
-  const requestedMode = params.raw.mode === "run" ? undefined : params.raw.mode;
-  const unsupported = [
-    [
-      "runtime",
-      params.runtime === "subagent" ? undefined : params.runtime,
-      'supports runtime="subagent" only',
-    ],
-    [
-      "thinking",
-      readToolStringParam(params.raw, "thinking"),
-      "thinking overrides are not wired to the sessions.create path",
-    ],
-    [
-      "thread",
-      params.raw.thread === true ? true : undefined,
-      "visible sessions route to the dashboard, not a channel thread",
-    ],
-    ["mode", requestedMode, "visible sessions are persistent dashboard sessions"],
-    [
-      "lightContext",
-      params.raw.lightContext === true ? true : undefined,
-      "bootstrap staging is not wired to the sessions.create path",
-    ],
-    [
-      "attachments",
-      Array.isArray(params.raw.attachments) && params.raw.attachments.length > 0
-        ? params.raw.attachments
-        : undefined,
-      "attachment staging is not wired to the sessions.create path",
-    ],
-    [
-      "attachAs",
-      isRecord(params.raw.attachAs)
-        ? readToolStringParam(params.raw.attachAs, "mountPath")
-        : params.raw.attachAs,
-      "attachment staging is not wired to the sessions.create path",
-    ],
-  ] as const;
-  const unsupportedEntries = unsupported.filter(([, value]) => value !== undefined);
-  if (unsupportedEntries.length > 0) {
-    throw new ToolInputError(
-      `Parameters unavailable with visible=true: ${unsupportedEntries
-        .map(([name, , reason]) => `${name}: ${reason}`)
-        .join("; ")}`,
-    );
-  }
+  validateVisibleSpawnOptions(params.raw, params.runtime);
 
-  const resolveGatewayContext =
-    getGatewayToolCallerIdentity()?.gatewayContextResolver ??
-    getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+  const {
+    gatewayContextResolver: resolveGatewayContext,
+    requester,
+    creatorProfileId,
+  } = captureSubagentSpawnGatewayContext();
   const cloudGateway = placement ? resolveGatewayContext?.() : undefined;
   if (placement && (!cloudGateway || cloudGateway.localEmbedded === true)) {
     return {
@@ -364,7 +336,37 @@ export async function maybeSpawnVisibleSession(params: {
     return { status: "error", error: modelPlan.error };
   }
   const { resolvedModel, inheritedModel, initialSessionPatch } = modelPlan;
+  const cyberAccessProgram = resolveSubagentCyberAccessProgram({
+    cfg,
+    requesterAgentId,
+    requesterEntry,
+    targetAgentId,
+    requested: params.cyberAccessProgram,
+    requesterModel: params.options?.requesterModel,
+    childModel: resolvedModel,
+  });
   const { authProfileOverride } = initialSessionPatch;
+  // A sandbox-classified visible child must not dispatch to a host-executed CLI
+  // backend: the CLI runs as the Gateway OS user outside the configured sandbox
+  // while the child session would still be reported sandboxed. The admission
+  // above only sees the config-derived classification; re-check once the child
+  // model is resolved, mirroring the cron seam guard. The run seam enforces the
+  // same invariant for fallback candidates and post-spawn runtime overrides.
+  if (childRuntimeSandboxed) {
+    const { useCliExecution, cliExecutionProvider } = resolveRunEntryCliRuntime({
+      config: cfg,
+      provider: modelPlan.modelRef.provider,
+      model: modelPlan.modelRef.model,
+      agentId: targetAgentId,
+      authProfileId: authProfileOverride,
+    });
+    if (useCliExecution) {
+      return {
+        status: "forbidden",
+        error: `This spawn targets a sandboxed child, but model "${resolvedModel}" runs on host-executed CLI backend "${cliExecutionProvider}" and cannot honor the sandbox. Choose a sandbox-compatible (embedded/API) model for the child, or change the agent's sandbox policy explicitly.`,
+      };
+    }
+  }
   const resolvedModelRef = authProfileOverride
     ? `${resolvedModel}@${authProfileOverride}`
     : resolvedModel;
@@ -406,10 +408,14 @@ export async function maybeSpawnVisibleSession(params: {
           requestParams,
           {
             via: "spawn",
-            actor: { type: "agent", id: requesterAgentId },
+            actor: attributeDelegatedSessionCreator(
+              { type: "agent", id: requesterAgentId },
+              creatorProfileId,
+            ),
             requesterSessionKey: requesterKey,
             ...(childSessionPublication ? { childSessionPublication } : {}),
             requesterSenderIsOwner: params.options?.senderIsOwner === true,
+            gitContributorProfileId: params.options?.gitContributorProfileId,
             completionOwnerSessionKey: ownership.completionRequesterSessionKey,
             ...(params.options?.sessionPermissionPolicy
               ? { inheritedPermissionMode: params.options.sessionPermissionPolicy.mode }
@@ -450,6 +456,7 @@ export async function maybeSpawnVisibleSession(params: {
         // sessions.create persists the group under the legacy wire field `category`.
         ...(group ? { category: group } : {}),
         model: resolvedModelRef,
+        ...(cyberAccessProgram !== undefined ? { cyberAccessProgram } : {}),
         ...(placement ? { titleSource } : { task: taskMessage }),
         timeoutMs:
           runTimeoutSeconds === 0
@@ -551,8 +558,7 @@ export async function maybeSpawnVisibleSession(params: {
                     assertDispatchCurrent,
                     timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
                   },
-                  undefined,
-                  resolveGatewayContext,
+                  { gatewayContextResolver: resolveGatewayContext, requester },
                 ),
               )
             ).response;
@@ -630,7 +636,7 @@ export async function maybeSpawnVisibleSession(params: {
               params.options?.currentMessagingTarget ??
               params.options?.currentChannelId ??
               params.options?.agentTo,
-            threadId: params.options?.currentThreadTs ?? params.options?.agentThreadId,
+            threadId: params.options ? resolveRequesterDeliveryThreadId(params.options) : undefined,
           }),
           requesterDisplayKey: ownership.completionRequesterDisplayKey,
           task: params.task,
@@ -687,6 +693,7 @@ export async function maybeSpawnVisibleSession(params: {
       ...(response.placement ? { placement: response.placement } : {}),
       ...(sessionUrl ? { sessionUrl } : {}),
       publicRead: response.publicRead === true,
+      ...(cyberAccessProgram !== undefined ? { cyberAccessProgram } : {}),
       ...(params.label ? { label: params.label } : {}),
       owner: resolveVisibleSessionOwner(response.entry, requesterAgentId, ownerLabel, cfg),
     };

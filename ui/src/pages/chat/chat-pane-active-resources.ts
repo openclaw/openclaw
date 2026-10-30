@@ -1,27 +1,23 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
-import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "../../app/panel-availability.ts";
-import {
-  bindBrowserRequestClient,
-  listBrowserTabs,
-} from "../../components/browser/browser-client.ts";
-import type { BrowserTabSelection } from "../../components/browser/browser-target.ts";
+import { isNativeMobileHost } from "../../app/native-web-chrome.ts";
+import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import {
   desktopSourceForEnvironment,
   loadDesktopEnvironments,
+  resolveChatPaneDesktopTarget,
 } from "../../components/desktop/desktop-source.ts";
-import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import type {
   SessionCapability,
   SessionRowObservation,
 } from "../../lib/sessions/session-capability.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
+  isSidebarNewTabActive,
   openSlot,
   sidebarActivePanel,
   sidebarMainPanel,
@@ -29,7 +25,11 @@ import {
   type SidebarLayout,
 } from "./sidebar-layout.ts";
 
-type ResourceSlot = "desktop" | "browser";
+type ResourceSlot = "desktop";
+type ResourceLayoutChange = Pick<
+  NonNullable<Parameters<ChatPageHost["updateSidebarLayout"]>[1]>,
+  "automaticResource" | "retireAutomaticResource"
+>;
 export type ActiveResourceOwner = {
   client: GatewayBrowserClient;
   sessions: Pick<SessionCapability, "describe">;
@@ -38,14 +38,12 @@ export type ActiveResourceOwner = {
   agentId?: string;
   connectionEpoch: number;
   desktopAvailable: boolean;
-  browserAvailable: boolean;
   placement: GatewaySessionRow["placement"];
   sessionId?: GatewaySessionRow["sessionId"];
   execNode?: GatewaySessionRow["execNode"];
   archived?: boolean;
-  browserTab?: BrowserTabSelection;
   layout: () => SidebarLayout;
-  commit: (layout: SidebarLayout, resource: ResourceSlot) => void;
+  commit: (layout: SidebarLayout, options: ResourceLayoutChange) => void;
   isCurrent: () => boolean;
 };
 
@@ -85,7 +83,7 @@ function hasResourceSlot(layout: SidebarLayout, slot: ResourceSlot): boolean {
 
 /** Read-only discovery belongs to the visible session, not to a global tool dock. */
 export class ChatPaneActiveResources {
-  private readonly listeners = new Set<() => void>();
+  private render?: () => void;
   private owner: ActiveResourceOwner | null = null;
   private descriptorRead:
     | {
@@ -114,7 +112,7 @@ export class ChatPaneActiveResources {
     gateway: ApplicationGatewaySnapshot;
     isConnected: () => boolean;
     isPresented: () => boolean;
-    commit: (layout: SidebarLayout, resource: ResourceSlot) => void;
+    commit: (layout: SidebarLayout, options: ResourceLayoutChange) => void;
   }): void {
     const state = view.state();
     const client = state?.client;
@@ -142,18 +140,14 @@ export class ChatPaneActiveResources {
             agentId,
             connectionEpoch: state.connectionEpoch,
             desktopAvailable: isDesktopPanelAvailable(view.gateway),
-            browserAvailable: isBrowserPanelAvailable(view.gateway),
             placement: session?.placement,
             sessionId: session?.sessionId,
             execNode: session?.execNode,
             archived: session?.archived,
-            browserTab: [
-              ...latestBrowserTabCards(state.chatMessages, state.chatToolMessages).values(),
-            ].at(-1),
             layout: () => state.sidebarLayout,
             // Discovery is not a saved layout preference. Reload must validate again
             // before mounting a resource; explicit UI actions still persist normally.
-            commit: (layout, resource) => view.commit(layout, resource),
+            commit: view.commit,
             isCurrent: () =>
               view.isConnected() &&
               view.state() === state &&
@@ -177,8 +171,10 @@ export class ChatPaneActiveResources {
   }
 
   subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    this.render = listener;
+    return () => {
+      this.render = undefined;
+    };
   }
 
   reconcileObservation(): void {
@@ -189,9 +185,7 @@ export class ChatPaneActiveResources {
     const layout = owner.layout();
     const desktopDiscovery =
       owner.desktopAvailable && (this.desktop !== undefined || !hasResourceSlot(layout, "desktop"));
-    const browserDiscovery =
-      !this.dismissed(layout) && owner.browserAvailable && owner.browserTab !== undefined;
-    if (!desktopDiscovery && !browserDiscovery) {
+    if (!desktopDiscovery) {
       return;
     }
     // Do not expose a resource while its assignment is being revalidated.
@@ -260,7 +254,8 @@ export class ChatPaneActiveResources {
   sync(owner: ActiveResourceOwner | null): void {
     const previousOwner = this.owner;
     this.owner = owner;
-    if (!owner) {
+    if (!owner || isNativeMobileHost()) {
+      this.owner = null;
       this.invalidate();
       // The Desktop panel owns its hidden-view retention timer. Its observed
       // session and connection still fence this source while the pane is hidden.
@@ -273,8 +268,6 @@ export class ChatPaneActiveResources {
       owner.connectionEpoch,
       identity,
       owner.desktopAvailable,
-      owner.browserAvailable,
-      owner.browserTab,
       owner.layout().resourceAutoOpenDismissed,
     ]);
     if (
@@ -309,18 +302,15 @@ export class ChatPaneActiveResources {
       return;
     }
     const current = () =>
+      !isNativeMobileHost() &&
       this.signature === signature &&
       this.descriptorRead === undefined &&
       owner.isCurrent() &&
       (!this.dismissed(owner.layout()) ||
         (this.desktop !== undefined && hasResourceSlot(owner.layout(), "desktop")));
-    // Independent probes: a broken browser route must not hide an available desktop.
     // Existing manual panels own their reads, including dormant retained tabs.
     if (owner.desktopAvailable && (this.desktop || !desktopAlreadyPresent)) {
       void this.discoverDesktop(owner, current);
-    }
-    if (!this.dismissed(owner.layout()) && owner.browserAvailable && owner.browserTab) {
-      void this.discoverBrowser(owner, owner.browserTab, current);
     }
   }
 
@@ -355,11 +345,11 @@ export class ChatPaneActiveResources {
     };
     if (source !== null) {
       this.reveal(owner, "desktop");
+    } else if (existing) {
+      owner.commit(owner.layout(), { retireAutomaticResource: "desktop" });
     }
     if (changed) {
-      for (const listener of this.listeners) {
-        listener();
-      }
+      this.render?.();
     }
   }
 
@@ -374,7 +364,7 @@ export class ChatPaneActiveResources {
     }
     const next = openSlot(layout, slot);
     // Add to the same dock without stealing an already-visible selection or expanding chat.
-    if (layout.open && sidebarActivePanel(layout)) {
+    if (layout.open && (sidebarActivePanel(layout) || isSidebarNewTabActive(layout))) {
       next.columns[0]!.activePanelId = layout.columns[0]!.activePanelId;
     }
     if (
@@ -385,7 +375,7 @@ export class ChatPaneActiveResources {
     }
     next.expanded = layout.expanded;
     next.expandedSide = layout.expandedSide;
-    owner.commit(next, slot);
+    owner.commit(next, { automaticResource: slot });
   }
 
   private async discoverDesktop(owner: ActiveResourceOwner, current: () => boolean): Promise<void> {
@@ -444,40 +434,6 @@ export class ChatPaneActiveResources {
         this.publishDesktop(owner, null);
       }
       // Unavailable inventory is not evidence of a live resource. Manual opening remains available.
-    }
-  }
-
-  private async discoverBrowser(
-    owner: ActiveResourceOwner,
-    selection: BrowserTabSelection,
-    current: () => boolean,
-  ): Promise<void> {
-    try {
-      const session = await this.readSession(owner);
-      if (
-        !session ||
-        session.archived ||
-        !current() ||
-        resourceIdentityForSession(session) !== resourceIdentityForSession(owner)
-      ) {
-        return;
-      }
-      const snapshot = await listBrowserTabs(
-        bindBrowserRequestClient(owner.client, selection.tab, current),
-      );
-      if (
-        !current() ||
-        !snapshot?.running ||
-        !snapshot.tabs.some(
-          (tab) => tab.targetId === selection.tab.targetId && !tab.urlUnavailableReason,
-        )
-      ) {
-        return;
-      }
-      // No /start, /tabs/open, focus, or unscoped default-browser probe.
-      this.reveal(owner, "browser");
-    } catch {
-      // Historical result cards alone cannot prove the tab still exists.
     }
   }
 }

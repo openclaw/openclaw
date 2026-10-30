@@ -6,40 +6,24 @@ import {
 } from "./context-visibility.js";
 
 describe("evaluateSupplementalContextVisibility", () => {
-  it("reports why all mode keeps context", () => {
-    expect(
-      evaluateSupplementalContextVisibility({
-        mode: "all",
-        kind: "history",
-        senderAllowed: false,
-      }),
-    ).toEqual({
-      include: true,
-      reason: "mode_all",
-    });
-  });
-
-  it("reports quote override decisions", () => {
-    expect(
-      evaluateSupplementalContextVisibility({
-        mode: "allowlist_quote",
-        kind: "quote",
-        senderAllowed: false,
-      }),
-    ).toEqual({
-      include: true,
-      reason: "quote_override",
-    });
-  });
-
-  it("still drops non-quote context in allowlist_quote mode", () => {
-    expect(
-      evaluateSupplementalContextVisibility({
-        mode: "allowlist_quote",
-        kind: "history",
-        senderAllowed: false,
-      }),
-    ).toEqual({ include: false, reason: "blocked" });
+  it.each([
+    [
+      "reports why all mode keeps context",
+      { mode: "all", kind: "history", senderAllowed: false },
+      { include: true, reason: "mode_all" },
+    ],
+    [
+      "reports quote override decisions",
+      { mode: "allowlist_quote", kind: "quote", senderAllowed: false },
+      { include: true, reason: "quote_override" },
+    ],
+    [
+      "still drops non-quote context in allowlist_quote mode",
+      { mode: "allowlist_quote", kind: "history", senderAllowed: false },
+      { include: false, reason: "blocked" },
+    ],
+  ] as const)("%s", (_name, params, expected) => {
+    expect(evaluateSupplementalContextVisibility(params)).toEqual(expected);
   });
 });
 

@@ -98,8 +98,9 @@ export async function captureUpdateDatabases(params: {
         // Database recovery outlives runtime retirement and stays outside the Git source fence.
         const artifactRoot = path.join(execution.root, ".artifacts");
         await fs.mkdir(artifactRoot, { recursive: true });
+        const physicalArtifactRoot = await fs.realpath(artifactRoot);
         params.assertCurrent();
-        backupRoot = path.join(artifactRoot, path.basename(backupRoot));
+        backupRoot = path.join(physicalArtifactRoot, path.basename(backupRoot));
       }
       const captured = await createUpdateDatabaseBackup({
         backupRoot,
@@ -110,6 +111,13 @@ export async function captureUpdateDatabases(params: {
         // source open would rebuild an exited writer's WAL index, changing the
         // recorded generation and disabling automatic restoration.
         preserveSourceArtifacts: maintenance !== null && unavailable === undefined,
+        // Confirmed custody can authorize automatic rollback, which keeps FULL validation.
+        integrityCheck:
+          maintenance !== null && unavailable === undefined
+            ? undefined
+            : execution.opts.fullIntegrityCheck
+              ? "full"
+              : "quick",
         timeoutMs: execution.updateStepTimeoutMs,
         nodeRunner: execution.packageUpdateNodeRunner,
         postgresOffline: maintenance !== null && unavailable === undefined,
@@ -159,7 +167,7 @@ export async function captureUpdateDatabases(params: {
     durationMs: Date.now() - startedAt,
     exitCode: 0,
     diagnostics: [
-      `Databases snapshotted at ${backup.directory}. ${restorable ? "Verified successful activation removes these snapshots; otherwise retain them with the update's recovery artifacts." : "These snapshots require manual recovery and remain available after successful activation."}`,
+      `Databases snapshotted at ${backup.directory}. ${restorable ? "Verified successful activation removes these snapshots only if automatic restoration remains available; otherwise retain them with the update's recovery artifacts." : "These snapshots require manual recovery and remain available after successful activation."}`,
       ...backup.databases.map(
         (entry) =>
           `${entry.path} -> ${entry.snapshotPath}; schema ${entry.userVersion}; ${entry.sizeBytes} bytes; SHA-256 ${entry.sha256}`,

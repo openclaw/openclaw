@@ -2,14 +2,9 @@ import {
   BUILTIN_THEMES,
   resolveThemeBranding,
 } from "../../../packages/gateway-protocol/src/theme.ts";
-import { registerListener } from "../../../src/shared/listeners.js";
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { listen } from "../lib/reactive/listener.ts";
-import type {
-  ApplicationGateway,
-  ApplicationTheme,
-  ApplicationThemePalette,
-  ApplicationThemeServerSelection,
-} from "./context.ts";
+import type { ApplicationGateway, ApplicationTheme, ApplicationThemePalette } from "./context.ts";
 import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { backgroundPreferenceStorageKey } from "./settings-background.ts";
@@ -100,10 +95,9 @@ export function createApplicationTheme(
 ): ApplicationTheme & { dispose: () => void } {
   const { token: _token, ...initialPreferences } = initialSettings;
   let settings: UiPreferences = initialPreferences;
-  let serverSelection: ApplicationThemeServerSelection | null = null;
   let appliedPalette: ApplicationThemePalette | null = null;
   let systemThemeCleanup: (() => void) | undefined;
-  const listeners = new Set<() => void>();
+  const listeners = createChangeListeners();
 
   let presentationGeneration = 0;
   let catalog: ReturnType<typeof createThemeCatalog> | undefined;
@@ -132,9 +126,7 @@ export function createApplicationTheme(
       // Computed-style consumers need the applied palette, not just the new
       // preference. Synchronous application shares the publication below.
       if (preferencesPublished) {
-        for (const listener of listeners) {
-          listener();
-        }
+        listeners.publish();
       }
       if (
         typeof document !== "undefined" &&
@@ -155,9 +147,7 @@ export function createApplicationTheme(
     // Live preferences cannot wait for a palette download. Presentation keeps
     // its own generation fence; subscribers consume the new snapshot now.
     preferencesPublished = true;
-    for (const listener of listeners) {
-      listener();
-    }
+    listeners.publish();
   };
 
   const loadCatalog = async () => {
@@ -174,7 +164,7 @@ export function createApplicationTheme(
     try {
       const { createThemeCatalog } = await import("./theme-catalog.ts");
       if (!disposed) {
-        catalog = createThemeCatalog(gateway, publish);
+        catalog = createThemeCatalog(gateway, publish, listeners.publish);
         catalogLoadError = undefined;
       }
     } catch (error) {
@@ -244,6 +234,7 @@ export function createApplicationTheme(
     typeof globalThis.addEventListener === "function"
       ? listen(globalThis, "storage", onStorage)
       : undefined;
+  // Connection changes refresh scoped preferences and the document's theme owner.
   const stopGateway = gateway.subscribe(() => {
     void loadCatalog();
     if (settings.gatewayUrl !== gateway.connection.gatewayUrl) {
@@ -275,16 +266,10 @@ export function createApplicationTheme(
       const mode = catalog?.theme(settings.theme)?.mode ?? settings.themeMode;
       return resolveTheme(settings.theme, mode).endsWith("light") ? "light" : "dark";
     },
-    get serverSelection() {
-      return serverSelection;
-    },
     get appliedPalette() {
       return appliedPalette;
     },
-    recordServerSelection(theme, scope) {
-      serverSelection = { revision: (serverSelection?.revision ?? 0) + 1, scope, theme };
-      publish();
-    },
+    recordServerSelection: publish,
     setMode(mode: ThemeMode) {
       patchSettings({ themeMode: mode });
     },
@@ -292,7 +277,7 @@ export function createApplicationTheme(
     retryCatalog() {
       void (catalog?.refresh() ?? loadCatalog());
     },
-    subscribe: (listener) => registerListener(listeners, listener),
+    subscribe: listeners.subscribe,
     dispose() {
       disposed = true;
       catalog?.dispose();

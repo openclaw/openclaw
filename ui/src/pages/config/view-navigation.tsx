@@ -74,12 +74,10 @@ export type SectionCategory = {
   sections: Array<{ key: string; label: string }>;
 };
 
-type SectionCategoryDefinition = {
+export const SECTION_CATEGORIES: {
   id: string;
   sections: string[];
-};
-
-export const SECTION_CATEGORIES: SectionCategoryDefinition[] = [
+}[] = [
   {
     id: "core",
     sections: [

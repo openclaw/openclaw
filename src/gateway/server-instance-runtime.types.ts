@@ -1,19 +1,32 @@
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
+import type { ReplyExpectation } from "../agents/reply-completion.js";
 import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagents/announce/subagent-announce-handoff.js";
+import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
+import type { SessionControllerInput } from "../sessions/session-controller.contracts.js";
 import type {
   AgentTurnStartOwner,
   InternalAgentTurnFacadeFactory,
 } from "./agent-turn/internal-facade.types.js";
 import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
+import type { GatewayClient } from "./server-methods/client-types.js";
 
 export type GatewayInstanceAgentDispatchOptions = {
-  /** Exact source custody to re-admit; the instance reads its private durable record itself. */
-  restartRecoveryOperatorTarget?: import("./operator-run-recovery.js").OperatorRecoveryTarget;
+  /** Host-issued source authority for independently accepted native work. */
+  operatorRunAuthority?: AdmittedRunOperatorAuthority;
+  agentToolCaller?: NonNullable<GatewayClient["internal"]>["agentToolCaller"];
+  /** Exact process-local source reserved by a durable lifecycle owner. */
+  controllerInput?: SessionControllerInput;
+  /** Host-owned input semantics, never supplied by wire request parameters. */
+  replyExpectation?: ReplyExpectation;
+
   assertAdmissionCurrent?: () => void;
+  /** Live source permission retained by accepted execution, independently of its admission claim. */
+  executionSource?: SessionSourceAssertion;
   /** Refresh source facts immediately before dispatch; the accepted turn owns execution. */
   prepareDispatchCurrent?: () => Promise<void>;
   allowModelOverride?: boolean;
@@ -46,9 +59,9 @@ type GatewayApprovalEventPublisherV2 = GatewayApprovalEventPublisher & {
   publishRequestedAsync: (kind: ChannelApprovalKind, request: unknown) => Promise<number>;
 };
 
-export type GatewayRecoverySessionMethod = "chat.history" | "chat.abort" | "sessions.delete";
+export type GatewayLifecycleSessionMethod = "chat.history" | "chat.abort" | "sessions.delete";
 
-export type GatewayRecoveryTypingParams = {
+export type GatewayLifecycleTypingParams = {
   agentId?: string;
   runId: string;
   channel: string;
@@ -58,15 +71,13 @@ export type GatewayRecoveryTypingParams = {
   isCurrent: (cfg: OpenClawConfig) => boolean;
 };
 
-export type GatewayRecoveryRuntime = {
-  /** Healthy boots are ready synchronously; safe mode returns its owner's pause deadline. */
-  prepareRestartRecovery: (signal?: AbortSignal) => Promise<number | undefined> | undefined;
+export type GatewayLifecycleRuntime = {
   dispatchSessionMethod: <T = unknown>(
-    method: GatewayRecoverySessionMethod,
+    method: GatewayLifecycleSessionMethod,
     params: unknown,
     options?: { timeoutMs?: number; signal?: AbortSignal; assertCurrent?: () => void },
   ) => Promise<T>;
-  startRecoveryTyping?: (params: GatewayRecoveryTypingParams) => () => void;
+  startTyping?: (params: GatewayLifecycleTypingParams) => () => void;
   dispatchAgent: <T = unknown>(
     params: AgentRunRequest,
     timeoutMs?: number,
@@ -77,27 +88,15 @@ export type GatewayRecoveryRuntime = {
     timeoutMs?: number,
     signal?: AbortSignal,
   ) => Promise<T>;
-  sendRecoveryNotice: (
-    params: {
-      channel: string;
-      to: string;
-      accountId?: string;
-      threadId?: string | number;
-      text: string;
-      idempotencyKey: string;
-    } & (
-      | {
-          /** Main-session announcements cannot outlive their process-local owner. */
-          liveOnly: true;
-          isCurrent: (cfg: OpenClawConfig) => boolean;
-        }
-      | {
-          /** Existing callers retain durable retry and deduplication by default. */
-          liveOnly?: false;
-          isCurrent?: (cfg: OpenClawConfig) => boolean;
-        }
-    ),
-  ) => Promise<{
+  sendNotice: (params: {
+    channel: string;
+    to: string;
+    accountId?: string;
+    threadId?: string | number;
+    text: string;
+    idempotencyKey: string;
+    isCurrent?: (cfg: OpenClawConfig) => boolean;
+  }) => Promise<{
     /** True when delivery produced zero platform results (policy/channel suppression). */
     suppressed: boolean;
   }>;
@@ -107,7 +106,7 @@ export type GatewayInstanceRuntime = {
   createAgentTurnFacade: InternalAgentTurnFacadeFactory;
   approvalEvents: GatewayApprovalEventPublisherV2;
   nativeApprovals: GatewayNativeApprovalRuntime;
-  recovery: GatewayRecoveryRuntime;
+  lifecycle: GatewayLifecycleRuntime;
   isAvailable: () => boolean;
   close: () => void;
 };

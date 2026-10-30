@@ -3,58 +3,60 @@ import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
 import { build } from "vite";
 
-const MERMAID_CORE_SUFFIX = "/mermaid/dist/mermaid.core.mjs";
-const MERMAID_LAYOUT_CHUNK = /\/mermaid\/dist\/chunks\/mermaid\.core\/chunk-[^/]+\.mjs$/u;
-const MERMAID_SCRIPT_URL_SUFFIX = "/mermaid-renderer/src/mermaid-script-url.ts";
-const DEV_MERMAID_SCRIPT_PATH = "/@openclaw/mermaid.min.js";
+const PELE_SCRIPT_URL_SUFFIX = "/mermaid-renderer/src/pele-script-url.ts";
+const DEV_PELE_SCRIPT_PATH = "/@openclaw/pele.min.js";
 
-function resolveMermaidScriptEntry(): string {
-  return fileURLToPath(new URL("./src/mermaid.min.ts", import.meta.url));
+function resolvePeleScriptEntry(): string {
+  return fileURLToPath(new URL("./src/pele.min.ts", import.meta.url));
 }
 
-async function buildDevMermaidScript(): Promise<string> {
+async function buildDevPeleScript(): Promise<string> {
   const result = await build({
     configFile: false,
     logLevel: "error",
-    plugins: [mermaidClassicBundlePlugin()],
+    plugins: [peleClassicBundlePlugin()],
     build: {
       write: false,
       minify: true,
       lib: {
-        entry: resolveMermaidScriptEntry(),
-        name: "OpenClawMermaid",
+        entry: resolvePeleScriptEntry(),
+        name: "OpenClawPele",
         formats: ["iife"],
       },
     },
   });
   const builds = Array.isArray(result) ? result : "output" in result ? [result] : [];
   if (builds.length === 0) {
-    throw new Error("Vite started a watcher instead of building the Mermaid classic script.");
+    throw new Error("Vite started a watcher instead of building the Pele classic script.");
   }
   const outputs = builds.flatMap((entry) => entry.output);
   const script = outputs.find((entry) => entry.type === "chunk" && entry.isEntry);
   if (!script || script.type !== "chunk") {
-    throw new Error("Vite did not emit the Mermaid classic script.");
+    throw new Error("Vite did not emit the Pele classic script.");
   }
   return script.code;
 }
 
-export function mermaidClassicBundlePlugin(): Plugin {
+export function peleClassicBundlePlugin(): Plugin {
   let command: "build" | "serve";
   let devScript: Promise<string> | undefined;
+  let emitBrowserNotices = false;
   return {
-    name: "openclaw-mermaid-classic-bundle",
+    name: "openclaw-pele-classic-bundle",
     enforce: "pre",
     configResolved(config) {
       command = config.command;
+      // Native builds copy this same canonical notice into their offline document.
+      // Worker/lib builds emit only the classic script, not another notice copy.
+      emitBrowserNotices = command === "build" && !config.isWorker && !config.build.lib;
     },
     configureServer(server) {
       server.middlewares.use((request, response, next) => {
-        if (request.url?.split("?", 1)[0] !== DEV_MERMAID_SCRIPT_PATH) {
+        if (request.url?.split("?", 1)[0] !== DEV_PELE_SCRIPT_PATH) {
           next();
           return;
         }
-        devScript ??= buildDevMermaidScript();
+        devScript ??= buildDevPeleScript();
         void devScript
           .then((script) => {
             response.statusCode = 200;
@@ -65,52 +67,25 @@ export function mermaidClassicBundlePlugin(): Plugin {
           .catch(next);
       });
     },
-    async load(id) {
+    async generateBundle() {
+      if (emitBrowserNotices) {
+        this.emitFile({
+          type: "asset",
+          fileName: "diagram-NOTICE.txt",
+          source: await readFile(new URL("./native/NOTICE.txt", import.meta.url), "utf8"),
+        });
+      }
+    },
+    load(id) {
       const normalizedId = id.replaceAll("\\", "/");
-      if (normalizedId.endsWith(MERMAID_SCRIPT_URL_SUFFIX)) {
+      if (normalizedId.endsWith(PELE_SCRIPT_URL_SUFFIX)) {
         if (command === "serve") {
-          return `export default ${JSON.stringify(DEV_MERMAID_SCRIPT_PATH)};`;
+          return `export default ${JSON.stringify(DEV_PELE_SCRIPT_PATH)};`;
         }
-        const scriptEntry = resolveMermaidScriptEntry();
+        const scriptEntry = resolvePeleScriptEntry();
         return `import url from ${JSON.stringify(`${scriptEntry}?worker&url`)}; export default url;`;
       }
-      if (!normalizedId.endsWith(MERMAID_CORE_SUFFIX) && !MERMAID_LAYOUT_CHUNK.test(normalizedId)) {
-        return null;
-      }
-      const source = await readFile(id.replace(/\?.*$/u, ""), "utf8");
-      if (normalizedId.endsWith(MERMAID_CORE_SUFFIX)) {
-        const withoutNewDiagrams = source
-          .replace(
-            "  registerLazyLoadedDiagrams(\n    afDetector_default,\n",
-            "  registerLazyLoadedDiagrams(\n",
-          )
-          .replace(",\n    usecase\n  );", "\n  );");
-        if (
-          withoutNewDiagrams === source ||
-          withoutNewDiagrams.includes("registerLazyLoadedDiagrams(\n    afDetector_default,") ||
-          withoutNewDiagrams.includes(",\n    usecase\n  );")
-        ) {
-          throw new Error("Mermaid 12 legacy diagram registry contract changed.");
-        }
-        return withoutNewDiagrams;
-      }
-      if (!source.includes("elkLayoutLoaders")) {
-        return null;
-      }
-      const withoutElk = source
-        .replace(
-          /import\("\.\/elk-[^"]+\.mjs"\)/u,
-          'Promise.reject(new Error("ELK layout is unavailable."))',
-        )
-        .replace(/,\s*\.\.\.elkLayoutLoaders\(\)/u, "");
-      if (
-        withoutElk === source ||
-        withoutElk.includes('import("./elk-') ||
-        withoutElk.includes("...elkLayoutLoaders()")
-      ) {
-        throw new Error("Mermaid 12 ELK loader contract changed.");
-      }
-      return withoutElk;
+      return null;
     },
   };
 }

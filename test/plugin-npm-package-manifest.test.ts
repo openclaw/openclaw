@@ -26,6 +26,11 @@ import {
 import { resolveNpmRunner } from "../scripts/npm-runner.mts";
 import { hasChannelPackageState } from "../src/channels/plugins/package-state-probes.js";
 import type { PluginManifest } from "../src/plugins/manifest-types.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+  respondJson,
+} from "./helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { writeJsonFile } from "./helpers/temp-repo.js";
 
@@ -469,35 +474,33 @@ function writePatchedRuntimeFixture(bundling = "default") {
   };
 }
 
-function createRegistryServer(
+async function withRegistry<T>(
+  repoDir: string,
   artifacts: ReturnType<typeof writePatchedRuntimeFixture>["artifacts"],
+  run: (env: NodeJS.ProcessEnv) => Promise<T>,
 ) {
   const server = createServer((request, response) => {
-    const endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
     const versions = artifacts.filter(({ manifest }) => request.url === `/${manifest.name}`);
     const tarball = artifacts.find(
       ({ manifest }) => request.url === `/${manifest.name}-${manifest.version}.tgz`,
     );
     if (versions.length > 0) {
-      response.setHeader("content-type", "application/json");
-      response.end(
-        JSON.stringify({
-          name: versions[0]?.manifest.name,
-          "dist-tags": { latest: versions.at(-1)?.manifest.version },
-          versions: Object.fromEntries(
-            versions.map(({ manifest, integrity }) => [
-              manifest.version,
-              {
-                ...manifest,
-                dist: {
-                  tarball: `${endpoint}/${manifest.name}-${manifest.version}.tgz`,
-                  integrity,
-                },
+      respondJson(response, {
+        name: versions[0]?.manifest.name,
+        "dist-tags": { latest: versions.at(-1)?.manifest.version },
+        versions: Object.fromEntries(
+          versions.map(({ manifest, integrity }) => [
+            manifest.version,
+            {
+              ...manifest,
+              dist: {
+                tarball: `${endpoint}/${manifest.name}-${manifest.version}.tgz`,
+                integrity,
               },
-            ]),
-          ),
-        }),
-      );
+            },
+          ]),
+        ),
+      });
     } else if (tarball) {
       response.end(tarball.tarball);
     } else {
@@ -505,28 +508,15 @@ function createRegistryServer(
       response.end();
     }
   });
-  return server;
-}
-
-async function withRegistry<T>(
-  repoDir: string,
-  versions: ReturnType<typeof writePatchedRuntimeFixture>["artifacts"],
-  run: (env: NodeJS.ProcessEnv) => Promise<T>,
-) {
-  const server = createRegistryServer(versions);
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const endpoint = await listenLoopback(server);
   try {
     return await run({
       ...process.env,
-      npm_config_registry: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+      npm_config_registry: endpoint,
       npm_config_cache: join(repoDir, "npm-cache"),
     });
   } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await closeHttpServer(server);
   }
 }
 
@@ -652,6 +642,11 @@ it.each(["providerCatalogEntry", "capabilityCatalogEntry"] as const)(
       id: "twitch",
       [catalogField]: "./catalog.ts",
       channels: ["twitch"],
+      controlUi: {
+        entry: "dist/control-ui/fixture/index.js",
+        activation: "settings-only",
+        settingsViews: [{ section: "channels", panel: "detail", channelId: "twitch" }],
+      },
       configSchema: { type: "object", additionalProperties: false, properties: {} },
     };
     writeJsonFile(join(packageDir, "openclaw.plugin.json"), sourceManifest);

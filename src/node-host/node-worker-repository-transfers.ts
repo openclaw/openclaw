@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
-import { REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS } from "../gateway/github-repository-publication-snapshot.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceReconciliationJournal,
 } from "../gateway/worker-environments/workspace-manifest.js";
 import { applyStagedWorkerWorkspace } from "../gateway/worker-environments/workspace-reconcile.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import {
   NODE_WORKSPACE_EMPTY_MANIFEST,
   NODE_WORKSPACE_EMPTY_MANIFEST_REF,
@@ -94,9 +95,10 @@ export async function withNodeRepositoryPublication<T>(
         workspaceDir: params.workspaceDir,
         homeDir: params.manifestHome,
         argv: [
-          "node",
-          "-e",
-          REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS,
+          process.execPath,
+          ...resolveRuntimeWorkerArgv(
+            resolveRuntimeProcessEntrypointUrl("nodeWorkspacePublicationSnapshot"),
+          ),
           params.workspaceDir,
           params.baseCommit,
           publication.dir,

@@ -77,23 +77,6 @@ it("bounds image frames when the transport declares a limit", async () => {
   await expect(next).resolves.toEqual({ models: [] });
 });
 
-it("replays configuration warnings emitted before their notification observer exists", () => {
-  const harness = createHarness();
-  const notification = {
-    method: "configWarning",
-    params: {
-      summary: "Error parsing rules; custom rules not applied.",
-      details: "rules.toml: unexpected token",
-    },
-  };
-
-  harness.send(notification);
-  const receiveNotification = vi.fn();
-  harness.client.addNotificationHandler(receiveNotification);
-
-  expect(receiveNotification).toHaveBeenCalledExactlyOnceWith(notification);
-});
-
 it("keeps frames alive without replay when diagnostic logging fails before observers", async () => {
   const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementationOnce(() => {
     throw new Error("diagnostic sink failed");
@@ -140,15 +123,7 @@ it("isolates synchronous notification handler failures", async () => {
   });
   harness.client.addNotificationHandler(receiveNotification);
 
-  const notification = {
-    method: "item/agentMessage/delta",
-    params: {
-      threadId: "thread-1",
-      turnId: "turn-1",
-      itemId: "message-1",
-      delta: "hello",
-    },
-  };
+  const notification = { method: "item/agentMessage/delta", params: { delta: "hello" } };
 
   expect(() => harness.send(notification)).not.toThrow();
   expect(receiveNotification).toHaveBeenCalledWith(notification);
@@ -348,7 +323,7 @@ const cat = Buffer.from("猫", "utf8");
 it.each([
   {
     name: "redacted credentials",
-    chunks: ['fatal token="secret-value" while booting\n'],
+    chunks: [`fatal token="${"synthetic-secret-".repeat(50)}" while booting\n`],
     tail: 'fatal token="<redacted>" while booting',
   },
   {
@@ -359,7 +334,11 @@ it.each([
     ],
     tail: "fatal 猫 boot",
   },
-  { name: "bounded UTF-16", chunks: [`🎉${"x".repeat(1_999)}`], tail: `${"x".repeat(500)}...` },
+  {
+    name: "terminal cause after warnings with bounded UTF-16",
+    chunks: [`${"warning: ".repeat(300)}🎉${"x".repeat(467)}fatal: startup owner unavailable`],
+    tail: `...${"x".repeat(467)}fatal: startup owner unavailable`,
+  },
 ])("preserves $name in stderr exit errors", async ({ chunks, tail }) => {
   const harness = createHarness();
   const pending = harness.client.request("test/method");
@@ -370,6 +349,7 @@ it.each([
   await expect(pending).rejects.toThrow(
     `codex app-server exited: code=1 signal=null stderr=${JSON.stringify(tail)}`,
   );
+  expect(harness.client.getStderrDiagnostic()).toBe(tail);
   await expect(harness.client.request("another/method")).rejects.toThrow(
     "codex app-server exited: code=1 signal=null",
   );
@@ -383,14 +363,10 @@ it("does not write to stdin after the child process exits", () => {
   expect(harness.writes).toHaveLength(0);
 });
 
-it("interleaves a bounded remote file command with a pending dynamic tool request", async () => {
+it("allows a server tool handler to await a nested client request", async () => {
   const harness = createHarness();
-  const remotePath = "/remote/codex-workspace/reports/slack-upload.txt";
   const content = "authoritative remote attachment";
-  const params = {
-    command: ["node", "-e", "fixed-reader", "--", remotePath, "64", "0", "524288"],
-    env: { NODE_OPTIONS: null, NODE_PATH: null },
-  };
+  const params = { command: ["read-file"] };
   harness.client.addRequestHandler(async (request, signal) => {
     if (request.method !== "item/tool/call") {
       return undefined;

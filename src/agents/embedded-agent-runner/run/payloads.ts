@@ -1,9 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { REPEATED_TOOL_ERROR_CODE } from "../../../../packages/agent-core/src/errors.js";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
-import {
-  createHeartbeatToolResponsePayload,
-  type HeartbeatToolResponse,
-} from "../../../auto-reply/heartbeat-tool-response.js";
 import { buildProviderLoginRecovery } from "../../../auto-reply/provider-login-recovery.js";
 import {
   addReplyPayloadMediaFailures,
@@ -16,9 +13,10 @@ import {
 } from "../../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
-import { HEARTBEAT_TOKEN } from "../../../auto-reply/tokens.js";
 import { applyAssistantDeliveryDirectives } from "../../../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { readAgentAssistantSource } from "../../../infra/agent-events.js";
+import { hasMeaningfulAutomationResult } from "../../../infra/agent-run-registry.automation.js";
 import { hasReplyPayloadContent } from "../../../interactive/payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
@@ -31,13 +29,13 @@ import {
   type PreparedAgentRunTerminalReply,
 } from "../../agent-run-terminal-reply.js";
 import { classifyOAuthRefreshFailure } from "../../auth-profiles/oauth-refresh-failure.js";
+import { classifyAssistantFailoverReason } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import {
-  classifyAssistantFailoverReason,
   formatAssistantErrorText,
   formatUserFacingAssistantErrorText,
-  normalizeTextForComparison,
-} from "../../embedded-agent-helpers.js";
-import { SYNTHESIZED_TIMEOUT_ERROR_TEXT } from "../../embedded-agent-helpers/error-text.js";
+  SYNTHESIZED_TIMEOUT_ERROR_TEXT,
+} from "../../embedded-agent-helpers/error-text.js";
+import { normalizeTextForComparison } from "../../embedded-agent-helpers/messaging-dedupe.js";
 import { sanitizeUserFacingText } from "../../embedded-agent-helpers/sanitize-user-facing-text.js";
 import type {
   MessagingToolSend,
@@ -126,7 +124,6 @@ export function buildEmbeddedRunPayloads(params: {
   config?: OpenClawConfig;
   sandboxRuntime?: EmbeddedRunAttemptResult["sandboxRuntime"];
   isCronTrigger?: boolean;
-  isHeartbeatTrigger?: boolean;
   sessionKey: string;
   provider?: string;
   providerOwner?: PreparedProviderFailoverOwner;
@@ -150,20 +147,8 @@ export function buildEmbeddedRunPayloads(params: {
   deferAssistantTimeoutError?: boolean;
   rateLimitRetriesExhausted?: number;
   didSendDeterministicApprovalPrompt?: boolean;
-  heartbeatToolResponse?: HeartbeatToolResponse;
 }): ReplyPayload[] {
   const sourceReplyPending = params.sourceReplyDeliveryState === "pending";
-  const heartbeatToolResponse = sourceReplyPending ? undefined : params.heartbeatToolResponse;
-  const heartbeatTerminalToolFailure =
-    !sourceReplyPending &&
-    params.isHeartbeatTrigger === true &&
-    params.lastToolError &&
-    params.lastToolError.mutatingAction === true
-      ? { toolName: params.lastToolError.toolName }
-      : undefined;
-  if (heartbeatToolResponse && !heartbeatTerminalToolFailure) {
-    return [createHeartbeatToolResponsePayload(heartbeatToolResponse)];
-  }
   // Internal source replies always need transcript/UI mirrors. A committed
   // tool-authored batch replaces the model answer in either delivery mode.
   const sourceReplyStateFor = (payloads: MessagingToolSourceReplyPayload[]) =>
@@ -178,13 +163,6 @@ export function buildEmbeddedRunPayloads(params: {
   );
   const replyItems = ordinarySourceReplies.replyItems;
   const pendingAuthoredReplies = new Set(sourceReplies.filter((payload) => payload.toolAuthored));
-  if (heartbeatToolResponse) {
-    const heartbeatPayload = createHeartbeatToolResponsePayload(heartbeatToolResponse);
-    replyItems.push({
-      text: heartbeatPayload.text ?? "",
-      ...(heartbeatPayload.channelData ? { channelData: heartbeatPayload.channelData } : {}),
-    });
-  }
   const useMarkdown = params.toolResultFormat === "markdown";
   let suppressFailureArtifacts = false;
   let hasUserFacingReply = false;
@@ -217,7 +195,6 @@ export function buildEmbeddedRunPayloads(params: {
         ? completedSourceReplyViaMessageTool
         : ordinarySourceReplies.deliveredSourceReplyViaMessageTool;
     const suppressAssistantArtifacts =
-      heartbeatToolResponse !== undefined ||
       params.didSendDeterministicApprovalPrompt === true ||
       (params.sourceReplyDeliveryMode === "message_tool_only" &&
         ordinarySourceReplies.hasSourceReplyPayload) ||
@@ -229,8 +206,7 @@ export function buildEmbeddedRunPayloads(params: {
     // Silence belongs to this input's answer. An earlier steered input must not
     // hide a later input that actually failed without producing an answer.
     hasIntentionalSilentFinal = false;
-    hasUserFacingReply =
-      completedSourceReplyViaMessageTool || heartbeatToolResponse?.notify === true;
+    hasUserFacingReply = completedSourceReplyViaMessageTool;
     const authoredReplies = [...pendingAuthoredReplies].filter((payload) =>
       isToolAuthoredSourceReplyForAssistant(payload, currentAssistant ?? lastAssistant),
     );
@@ -272,9 +248,9 @@ export function buildEmbeddedRunPayloads(params: {
     const rawErrorMessage = lastAssistantNeedsErrorSurface
       ? normalizeOptionalString(assistantForPayload?.errorMessage)
       : undefined;
-    const oauthRefreshFailure = rawErrorMessage
-      ? classifyOAuthRefreshFailure(rawErrorMessage)
-      : null;
+    const repeatedToolError = assistantForPayload?.errorCode === REPEATED_TOOL_ERROR_CODE;
+    const oauthRefreshFailure =
+      rawErrorMessage && !repeatedToolError ? classifyOAuthRefreshFailure(rawErrorMessage) : null;
     const providerLoginRecovery = buildProviderLoginRecovery({
       provider: oauthRefreshFailure?.provider ?? params.provider,
       oauthReason: oauthRefreshFailure?.reason,
@@ -294,9 +270,11 @@ export function buildEmbeddedRunPayloads(params: {
         ? suppressFailureArtifacts
           ? undefined
           : lastAssistantErrored || rawErrorMessage
-            ? (providerLoginRecovery?.hint ??
-              renderRateLimitRetryExhaustion(rateLimitRetriesExhausted) ??
-              formatUserFacingAssistantErrorText(assistantForPayload, errorContext))
+            ? repeatedToolError
+              ? formatUserFacingAssistantErrorText(assistantForPayload, errorContext)
+              : (providerLoginRecovery?.hint ??
+                renderRateLimitRetryExhaustion(rateLimitRetriesExhausted) ??
+                formatUserFacingAssistantErrorText(assistantForPayload, errorContext))
             : formatAssistantErrorText(assistantForPayload, errorContext)
         : undefined;
     const deferAssistantTimeoutError =
@@ -455,9 +433,14 @@ export function buildEmbeddedRunPayloads(params: {
             : {}),
         };
         addReplyPayloadMediaFailures(replyPayload, mediaFailures);
-        if (assistantMessageIndex !== undefined) {
-          setReplyPayloadMetadata(replyPayload, { assistantMessageIndex });
-        }
+        const assistantTranscriptSource =
+          mediaUrls?.length || mediaFailures?.length
+            ? readAgentAssistantSource(assistantForPayload)
+            : undefined;
+        setReplyPayloadMetadata(replyPayload, {
+          ...(assistantMessageIndex !== undefined ? { assistantMessageIndex } : {}),
+          ...(assistantTranscriptSource ? { assistantTranscriptSource } : {}),
+        });
         replyItems.push(
           ttsFacts ? setReplyPayloadMetadata(replyPayload, { tts: ttsFacts }) : replyPayload,
         );
@@ -495,7 +478,6 @@ export function buildEmbeddedRunPayloads(params: {
     (!params.isCronTrigger ||
       (hasVisibleCommittedMessagingToolDeliveryEvidence(params) &&
         hasCompletedMessagingToolDeliveryEvidence(params))) &&
-    !params.isHeartbeatTrigger &&
     !params.runAborted;
   if (params.lastToolError && !respectIntentionalSilence && !sourceReplyPending) {
     // A restart intentionally aborts the active tool while the Gateway takes over.
@@ -505,7 +487,8 @@ export function buildEmbeddedRunPayloads(params: {
       ? "Gateway restarting…"
       : buildFailureWarning({
           lastToolError: params.lastToolError,
-          hasUserFacingReply,
+          // A recorded progress/done/blocked summary already reports the scheduled run.
+          hasUserFacingReply: hasUserFacingReply || hasMeaningfulAutomationResult(params.runId),
           verboseLevel: params.verboseLevel,
           useMarkdown,
         });
@@ -531,9 +514,6 @@ export function buildEmbeddedRunPayloads(params: {
       }
     }
   }
-  if (heartbeatTerminalToolFailure && !replyItems.some((item) => item.isReasoning !== true)) {
-    replyItems.push({ text: HEARTBEAT_TOKEN });
-  }
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
   return replyItems
     .map((item) => {
@@ -549,11 +529,6 @@ export function buildEmbeddedRunPayloads(params: {
         !suppressFailureArtifacts
       ) {
         markReplyPayloadForSourceSuppressionDelivery(payload);
-      }
-      if (heartbeatTerminalToolFailure) {
-        setReplyPayloadMetadata(payload, {
-          heartbeatTerminalToolFailure,
-        });
       }
       if (
         !item.isError &&

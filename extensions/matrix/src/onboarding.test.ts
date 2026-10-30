@@ -1,17 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixOnboardingAdapter } from "./onboarding.js";
 import {
-  createConfiguredMatrixDefaultAccountConfig,
   createConfiguredMatrixTopLevelConfig,
-  createMatrixEnvShortcutAddAccountPrompter,
-  createMatrixNamedAccountsConfig,
-  createLegacyMatrixTopLevelConfig,
+  matrixConfig,
   installMatrixScopedEnvShortcut,
-  createMatrixTokenAddAccountPrompter,
   createMatrixUpdateKeepCredentialsPrompter,
   installMatrixOnboardingEnvRestoreHooks,
   createMatrixWizardPrompter,
-  runMatrixAddAccountAllowlistConfigure,
   runMatrixInteractiveConfigure as configureMatrix,
 } from "./onboarding.test-harness.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
@@ -76,6 +71,10 @@ function authPrompter(
   });
 }
 
+function textPrompt(prompter: ReturnType<typeof createMatrixWizardPrompter>, message: string) {
+  return vi.mocked(prompter.text).mock.calls.find(([options]) => options.message === message)?.[0];
+}
+
 describe("matrix onboarding", () => {
   installMatrixOnboardingEnvRestoreHooks();
   beforeEach(() => installMatrixTestRuntime());
@@ -84,13 +83,16 @@ describe("matrix onboarding", () => {
     installMatrixScopedEnvShortcut();
 
     const notes: string[] = [];
-    const prompter = createMatrixEnvShortcutAddAccountPrompter({
+    const prompter = createMatrixWizardPrompter({
       notes,
       select: {
+        "Matrix already configured. What do you want to do?": "add-account",
+        "Matrix auth method": "token",
         "Matrix rooms access": "allowlist",
         "Matrix invite auto-join": "allowlist",
       },
       text: {
+        "Matrix account name": "ops",
         "Matrix rooms allowlist (comma-separated)": "!ops-room:example.org",
         "Matrix invite auto-join allowlist (comma-separated)": "#ops-invites:example.org",
       },
@@ -102,7 +104,14 @@ describe("matrix onboarding", () => {
     });
 
     const result = await configure({
-      cfg: createConfiguredMatrixDefaultAccountConfig(),
+      cfg: matrixConfig({
+        accounts: {
+          default: {
+            homeserver: "https://matrix.main.example.org",
+            accessToken: "main-token",
+          },
+        },
+      }),
       prompter,
       shouldPromptAccountIds: true,
     });
@@ -119,48 +128,9 @@ describe("matrix onboarding", () => {
     expect(opsAccount?.homeserver).toBeUndefined();
     expect(opsAccount?.accessToken).toBeUndefined();
     expect(notes.join("\n")).toContain("WARNING: Matrix invite auto-join defaults to off.");
-  });
-
-  it("reuses an existing raw default-like key during onboarding promotion when defaultAccount is unset", async () => {
-    const prompter = createMatrixTokenAddAccountPrompter();
-
-    const result = await configure({
-      cfg: {
-        ...createLegacyMatrixTopLevelConfig(),
-        channels: {
-          matrix: {
-            ...createLegacyMatrixTopLevelConfig().channels?.matrix,
-            accounts: {
-              Default: {
-                enabled: true,
-                deviceName: "Legacy raw key",
-              },
-              support: {
-                homeserver: "https://matrix.support.example.org",
-                accessToken: "support-token",
-              },
-            },
-          },
-        },
-      } as CoreConfig,
-      prompter,
-      shouldPromptAccountIds: true,
-    });
-
-    const defaultAccount = result.cfg.channels?.matrix?.accounts?.Default;
-    expect(defaultAccount).toMatchObject({
-      enabled: true,
-      deviceName: "Legacy raw key",
-      homeserver: "https://matrix.main.example.org",
-      userId: "@main:example.org",
-      accessToken: "main-token",
-      avatarUrl: "mxc://matrix.main.example.org/main-avatar",
-    });
-    expect(result.cfg.channels?.matrix?.accounts?.default).toBeUndefined();
-    expect(result.cfg.channels?.matrix?.accounts).toMatchObject({
-      support: { homeserver: "https://matrix.support.example.org", accessToken: "support-token" },
-      ops: { name: "ops", homeserver: "https://matrix.ops.example.org", accessToken: "ops-token" },
-    });
+    expect(textPrompt(prompter, "Matrix rooms allowlist (comma-separated)")?.placeholder).toBe(
+      "!roomId:server, !roomId, #alias:server, Project Room",
+    );
   });
 
   it("prompts for private-network access when onboarding an internal http homeserver", async () => {
@@ -192,55 +162,79 @@ describe("matrix onboarding", () => {
     });
 
     await configure({ cfg: {}, configured: false, prompter });
-    const secretCall = vi
-      .mocked(prompter.text)
-      .mock.calls.find(([options]) => options.message === secretPrompt);
-    expect(secretCall?.[0]).toMatchObject({ message: secretPrompt, sensitive: true });
-    expect(secretCall?.[0]).not.toHaveProperty("initialValue");
+    const prompt = textPrompt(prompter, secretPrompt);
+    expect(prompt).toMatchObject({ message: secretPrompt, sensitive: true });
+    expect(prompt).not.toHaveProperty("initialValue");
   });
 
   it("preserves SecretRef access tokens when keeping existing credentials", async () => {
     process.env.MATRIX_ACCESS_TOKEN = "env-token";
 
-    const prompter = createMatrixUpdateKeepCredentialsPrompter();
-
+    const accessToken = { source: "env", provider: "default", id: "MATRIX_ACCESS_TOKEN" } as const;
     const result = await configure({
       cfg: {
-        ...createConfiguredMatrixTopLevelConfig({
-          accessToken: { source: "env", provider: "default", id: "MATRIX_ACCESS_TOKEN" },
-        }),
-        secrets: {
-          defaults: {
-            env: "default",
-          },
-        },
+        ...createConfiguredMatrixTopLevelConfig({ accessToken }),
+        secrets: { defaults: { env: "default" } },
       } as CoreConfig,
-      prompter,
+      prompter: createMatrixUpdateKeepCredentialsPrompter(),
     });
-
-    expect(result.cfg.channels?.matrix?.accessToken).toEqual({
-      source: "env",
-      provider: "default",
-      id: "MATRIX_ACCESS_TOKEN",
-    });
+    expect(result.cfg.channels?.matrix?.accessToken).toEqual(accessToken);
   });
 
-  it("writes allowlists and room access to the selected Matrix account", async () => {
-    const notes: string[] = [];
-
-    const result = await runMatrixAddAccountAllowlistConfigure({
-      cfg: createConfiguredMatrixDefaultAccountConfig(),
-      allowFromInput: "@alice:example.org",
-      roomsAllowlistInput: "!ops-room:example.org",
-      autoJoinAllowlistInput: "#ops-invites:example.org",
-      deviceName: "Ops Gateway",
-      notes,
+  it("promotes the raw default key and writes allowlists to the selected Matrix account", async () => {
+    const legacy = {
+      homeserver: "https://matrix.main.example.org",
+      userId: "@main:example.org",
+      accessToken: "main-token",
+      avatarUrl: "mxc://matrix.main.example.org/main-avatar",
+    };
+    const support = {
+      homeserver: "https://matrix.support.example.org",
+      accessToken: "support-token",
+    };
+    const result = await configure({
+      cfg: matrixConfig({
+        ...legacy,
+        accounts: { Default: { enabled: true, deviceName: "Legacy raw key" }, support },
+      }),
+      prompter: createMatrixWizardPrompter({
+        select: {
+          "Matrix already configured. What do you want to do?": "add-account",
+          "Matrix auth method": "token",
+          "Matrix rooms access": "allowlist",
+          "Matrix invite auto-join": "allowlist",
+        },
+        text: {
+          "Matrix account name": "ops",
+          "Matrix homeserver URL": "https://matrix.ops.example.org",
+          "Matrix access token": "ops-token",
+          "Matrix device name (optional)": "Ops Gateway",
+          "Matrix allowFrom (full @user:server; display name only if unique)": "@alice:example.org",
+          "Matrix rooms allowlist (comma-separated)": "!ops-room:example.org",
+          "Matrix invite auto-join allowlist (comma-separated)": "#ops-invites:example.org",
+        },
+        confirm: {
+          "Enable end-to-end encryption (E2EE)?": false,
+          "Configure Matrix rooms access?": true,
+          "Configure Matrix invite auto-join?": true,
+        },
+        onConfirm: async () => false,
+      }),
+      shouldPromptAccountIds: true,
+      forceAllowFrom: true,
     });
 
-    assertConfigured(result);
-
     expect(result.accountId).toBe("ops");
+    const matrix = result.cfg.channels?.matrix;
+    expect(matrix?.accounts?.Default).toMatchObject({
+      ...legacy,
+      enabled: true,
+      deviceName: "Legacy raw key",
+    });
+    expect(matrix?.accounts?.default).toBeUndefined();
+    expect(matrix?.accounts?.support).toMatchObject(support);
     expect(result.cfg.channels?.matrix?.accounts?.ops).toMatchObject({
+      name: "ops",
       homeserver: "https://matrix.ops.example.org",
       accessToken: "ops-token",
       deviceName: "Ops Gateway",
@@ -252,23 +246,17 @@ describe("matrix onboarding", () => {
     });
     expect(result.cfg.channels?.["matrix"]?.dm).toBeUndefined();
     expect(result.cfg.channels?.["matrix"]?.groups).toBeUndefined();
-    expect(notes.join("\n")).toContain("WARNING: Matrix invite auto-join defaults to off.");
   });
 
   it("clears Matrix invite auto-join allowlists when switching auto-join off", async () => {
     const notes: string[] = [];
-
-    const prompter = createMatrixUpdateKeepCredentialsPrompter({
-      notes,
-      inviteAutoJoin: "off",
-    });
 
     const result = await configure({
       cfg: createConfiguredMatrixTopLevelConfig({
         autoJoin: "allowlist",
         autoJoinAllowlist: ["#ops:example.org"],
       }),
-      prompter,
+      prompter: createMatrixUpdateKeepCredentialsPrompter({ notes, inviteAutoJoin: "off" }),
     });
 
     expect(result.cfg.channels?.matrix?.autoJoin).toBe("off");
@@ -302,24 +290,6 @@ describe("matrix onboarding", () => {
     ]);
   });
 
-  it("advertises the suffixless Room v12 form in the group room setup placeholder", async () => {
-    const prompter = createMatrixUpdateKeepCredentialsPrompter({
-      configureRoomsAccess: true,
-      roomsAllowlist: "!ops-room:example.org",
-    });
-
-    await configure({ prompter });
-
-    const roomsPromptCall = vi
-      .mocked(prompter.text)
-      .mock.calls.find(
-        ([options]) => options.message === "Matrix rooms allowlist (comma-separated)",
-      );
-    expect(roomsPromptCall?.[0].placeholder).toBe(
-      "!roomId:server, !roomId, #alias:server, Project Room",
-    );
-  });
-
   it("reports account-scoped DM config keys for named accounts", () => {
     const resolveConfigKeys = matrixOnboardingAdapter.dmPolicy?.resolveConfigKeys;
     if (resolveConfigKeys === undefined) {
@@ -328,14 +298,10 @@ describe("matrix onboarding", () => {
 
     expect(
       resolveConfigKeys(
-        createMatrixNamedAccountsConfig({
+        matrixConfig({
           accounts: {
-            default: {
-              homeserver: "https://matrix.main.example.org",
-            },
-            ops: {
-              homeserver: "https://matrix.ops.example.org",
-            },
+            default: { homeserver: "https://matrix.main.example.org" },
+            ops: { homeserver: "https://matrix.ops.example.org" },
           },
         }),
         "ops",
@@ -355,7 +321,7 @@ describe("matrix onboarding", () => {
     async (selected) => {
       expect(
         await matrixOnboardingAdapter.getStatus({
-          cfg: createMatrixNamedAccountsConfig({
+          cfg: matrixConfig({
             defaultAccount: selected ? "ops" : undefined,
             accounts: {
               ...(!selected ? { assistant: namedAccount("assistant") } : {}),

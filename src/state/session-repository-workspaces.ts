@@ -13,7 +13,10 @@ import {
   type SqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
-import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  withArtifactPreservingStateReads,
+} from "./openclaw-state-db-readonly.js";
 import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import {
@@ -81,13 +84,11 @@ export async function findSessionRepositoryWorkspaces(
 export function createSessionRepositoryWorkspaceStore(
   options: {
     path?: string;
-    now?: () => number;
     env?: NodeJS.ProcessEnv;
   } = {},
 ) {
   const env = options.env && cloneEnvWithPlatformSemantics(options.env);
   const databasePath = resolveDatabasePath({ path: options.path, env });
-  const now = options.now;
   const context = () => captureOpenClawStateWorkerContext({ path: databasePath, env });
   async function mutate(
     command: Mutation,
@@ -257,13 +258,25 @@ export function createSessionRepositoryWorkspaceStore(
         input: { agentId: owner.agentId, sessionKey: owner.sessionKey },
       });
     },
-    prepare(workspaceId: string) {
+    prepare(
+      workspaceId: string,
+      read?: { mode: "existing-only"; owner: RepositoryWorkspaceOwner },
+    ) {
       const captured = context();
       return prepareRepositoryWorkspaceRead(captured.admission, workspaceId, () =>
-        executeOpenClawStateWorker(captured, {
-          type: "repositoryWorkspaces.get",
-          input: { workspaceId },
-        }),
+        read
+          ? withArtifactPreservingStateReads(async () => {
+              const reply = await executeExistingOpenClawStateRead(
+                { path: databasePath, env },
+                { type: "sessionRepositoryWorkspaces.find", owners: [read.owner] },
+                { current: true, context: captured, preferIndependentWarmRead: true },
+              );
+              return reply?.workspaces.find((workspace) => workspace.workspaceId === workspaceId);
+            })
+          : executeOpenClawStateWorker(captured, {
+              type: "repositoryWorkspaces.get",
+              input: { workspaceId },
+            }),
       );
     },
     async create(input: Guarded<RepositoryWorkspaceCreate>) {
@@ -278,7 +291,6 @@ export function createSessionRepositoryWorkspaceStore(
               requestedRef: input.requestedRef,
               runSetupScript: input.runSetupScript,
               branch: input.branch,
-              nowMs: now?.(),
             },
           },
           input.assertCurrent,
@@ -295,7 +307,6 @@ export function createSessionRepositoryWorkspaceStore(
               expectedRevision: input.expectedRevision,
               baseCommit: input.baseCommit,
               baseManifestHash: input.baseManifestHash,
-              nowMs: now?.(),
             },
           },
           input.assertCurrent,
@@ -312,7 +323,6 @@ export function createSessionRepositoryWorkspaceStore(
               expectedRevision: input.expectedRevision,
               checkpointRef: input.checkpointRef,
               manifestHash: input.manifestHash,
-              nowMs: now?.(),
             },
           },
           input.assertCurrent,

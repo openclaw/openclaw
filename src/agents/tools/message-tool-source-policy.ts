@@ -3,18 +3,15 @@ import {
   normalizeOptionalStringifiedId,
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
-import { Type, type TObject } from "typebox";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
-import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
-import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import type { AgentRuntimeMessageActionContext } from "../../gateway/message-action-turn-capability.js";
 import { MessageActionDeniedError } from "../../infra/outbound/message-action-denial.js";
 import { sourceDeliveryTargetsMatch } from "../../infra/outbound/source-delivery-plan.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
+import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
-import { channelTargetSchema, stringEnum } from "../schema/typebox.js";
 import { readToolStringParam } from "./common.js";
 import { normalizeEscapedLineBreaksForVisibleText } from "./message-tool-visible-content.js";
 
@@ -35,47 +32,41 @@ function sourceReplyPolicyError(message: string): MessageActionDeniedError {
     "message-source-reply:current-conversation",
   );
 }
-export const SOURCE_REPLY_ONLY_MESSAGE_SCHEMA = Type.Object({
-  action: stringEnum(["send"], {
-    description: "Send a text reply to the current source conversation.",
-  }),
-  channel: Type.Optional(Type.String()),
-  target: Type.Optional(channelTargetSchema()),
-  accountId: Type.Optional(Type.String()),
-  message: Type.Optional(
-    Type.String({ description: "Text to send to the current source conversation." }),
-  ),
-  replyTo: Type.Optional(Type.String()),
-  threadId: Type.Optional(Type.String()),
-});
-const SOURCE_REPLY_ONLY_RUNTIME_ARG_NAMES = new Set(["to", "channelId", "final"]);
-const SOURCE_REPLY_FINAL_PROPERTY = Type.Optional(
-  Type.Boolean({
-    description:
-      "For source replies, set false for progress; set true, or omit, for a completed send. For react, set true when adding a reaction to the current source message is your complete response; omit or set false when more work follows. A confirmed final source reply ends the turn.",
-  }),
-);
-
-export function addSourceReplyFinalControl(schema: TObject): TObject {
-  return Type.Object({ ...schema.properties, final: SOURCE_REPLY_FINAL_PROPERTY });
-}
+// Content uses normal outbound validation; routing stays bound to the source.
+const SOURCE_REPLY_ONLY_ARG_NAMES = new Set([
+  "action",
+  "channel",
+  "target",
+  "accountId",
+  "message",
+  "caption",
+  "media",
+  "attachments",
+  "filename",
+  "contentType",
+  "mimeType",
+  "replyTo",
+  "threadId",
+  "to",
+  "channelId",
+  "final",
+]);
 
 export function enforceSourceReplyOnlyTextDirectives(args: Record<string, unknown>): void {
-  if (typeof args.message !== "string" || !args.message.trim()) {
-    throw sourceReplyPolicyError("Completion source replies require non-empty visible text.");
-  }
-  // Use the outbound owner's parser: sanitization can assemble directives that
-  // change routes, attach local files, or deliver audio.
-  const message = normalizeEscapedLineBreaksForVisibleText(args.message);
+  // Preserve Markdown indentation when checking sanitizer-assembled reply/audio directives.
+  const text = readToolStringParam(args, "message", { trim: false });
+  const caption = readToolStringParam(args, "caption", { trim: false }) ?? "";
+  const message = normalizeEscapedLineBreaksForVisibleText(text?.trim() ? text : caption);
   const withoutCitationMarkers = stripUnsupportedCitationControlMarkers(message);
   for (const normalized of new Set([
     message,
     withoutCitationMarkers,
     stripPlainTextToolCallBlocks(withoutCitationMarkers),
   ])) {
-    const directives = parseReplyDirectives(normalized, { extractMarkdownImages: true });
-    if (directives.replyToTag || directives.audioAsVoice || directives.mediaUrls?.length) {
-      throw sourceReplyPolicyError("Completion source replies cannot contain non-text directives.");
+    // Match outbound preparation before media extraction can hide reply/audio tags in URLs.
+    const directives = parseInlineDirectives(normalized);
+    if (directives.hasReplyTag || directives.audioAsVoice) {
+      throw sourceReplyPolicyError("Completion source replies cannot use reply/audio directives.");
     }
   }
 }
@@ -116,7 +107,7 @@ export function enforceTrustedTurnExplicitAccount(params: {
 }
 
 export function enforceSourceReplyOnlyMessageAction(params: {
-  action: ChannelMessageActionName;
+  action: string;
   args: Record<string, unknown>;
   currentChannelProvider?: string;
   currentChannelId?: string;
@@ -132,10 +123,7 @@ export function enforceSourceReplyOnlyMessageAction(params: {
     );
   }
   for (const name of Object.keys(params.args)) {
-    if (
-      !Object.hasOwn(SOURCE_REPLY_ONLY_MESSAGE_SCHEMA.properties, name) &&
-      !SOURCE_REPLY_ONLY_RUNTIME_ARG_NAMES.has(name)
-    ) {
+    if (!SOURCE_REPLY_ONLY_ARG_NAMES.has(name)) {
       throw sourceReplyPolicyError(`Completion source replies cannot use the "${name}" argument.`);
     }
   }

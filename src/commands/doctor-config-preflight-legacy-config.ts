@@ -2,71 +2,74 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { preserveDeferredPluginMigrationConfig } from "../config/deferred-plugin-migration-config.js";
 import { resolveFutureConfigActionBlock } from "../config/future-version-guard.js";
+import {
+  createConfigIoContext,
+  type ConfigRecoveryCandidateTransform,
+} from "../config/io.context.js";
+import { createInvalidConfigError } from "../config/io.invalid-config.js";
 import {
   createConfigIO,
   parseConfigJson5,
   recoverConfigFromJsonRootSuffix,
   type ConfigSnapshotReadMeasure,
 } from "../config/io.js";
+import { recoverConfigFromLastKnownGoodCore } from "../config/io.observe-recovery.js";
+import { prepareConfigRecoveryFromContext } from "../config/io.snapshot.js";
 import { resolveCanonicalConfigPath, resolveIsConfigReadOnly } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store/paths.js";
 import { listRetiredCronStateFiles } from "../infra/state-migrations.retired-cron-files.js";
 import { assertNoRetiredStateFiles } from "../infra/state-migrations.retired-files.js";
-import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { ConfigPreflightSnapshotRead } from "./config-preflight-snapshot.js";
-import { shouldSkipPluginValidationForDoctorConfigPreflight } from "./doctor-config-preflight-plugin-index.js";
-import {
-  canPlanAutomaticConfigRepair,
-  planAutomaticConfigRepair,
-} from "./doctor/shared/automatic-config-repair.js";
-import type { DoctorConfigPreflightOptions } from "./doctor/shared/config-migration-result.js";
-import {
-  prepareDoctorConfigRecoverySnapshot,
-  recoverDoctorConfigFromLastKnownGood,
-} from "./doctor/shared/config-recovery.js";
+import type { planAutomaticConfigRepair } from "./doctor/shared/automatic-config-repair.js";
+import { classifyOtelGrpcMigrationOwnership } from "./doctor/shared/include-migration-ownership.js";
+import { applyLegacyDoctorMigrations } from "./doctor/shared/legacy-config-compat.js";
 import { findRetiredConfigUpgradeRequirement } from "./doctor/shared/retired-config-formats.js";
 
-export function createDoctorConfigRepairPlanner(params: {
-  options: DoctorConfigPreflightOptions;
-  stateMigrationsRequested: boolean;
-  skipLegacyParentConfigWrite: boolean;
-  runWithPluginMetadataSnapshot: PluginMetadataSnapshotScopeRunner;
-}) {
-  const planScopedConfigRepair = (snapshot: ConfigFileSnapshot) =>
-    params.runWithPluginMetadataSnapshot(
-      { config: snapshot.sourceConfig ?? snapshot.config ?? {} },
-      () => planAutomaticConfigRepair(snapshot),
+const transformDoctorRecoveryCandidate: ConfigRecoveryCandidateTransform = (params) => {
+  const ownership = classifyOtelGrpcMigrationOwnership({
+    snapshot: { path: params.configPath, includeProvenance: params.includeProvenance },
+    authoredConfig: params.candidate.parsed,
+    resolvedConfig: params.resolvedConfig,
+  });
+  if (ownership && ownership.kind !== "direct") {
+    throw createInvalidConfigError(
+      params.configPath,
+      ownership.kind === "resolved-only"
+        ? "candidate migration cannot persist an env-resolved diagnostics.otel.protocol repair"
+        : "candidate migration requires an include-owned diagnostics.otel.protocol repair",
     );
-  const planAdmittedConfigRepair = (
-    snapshot: ConfigFileSnapshot,
-    prepared: Awaited<ReturnType<typeof planAutomaticConfigRepair>> = null,
-  ) =>
-    (params.options.repairPrefixedConfig === true ||
-      (params.stateMigrationsRequested && params.options.migrateLegacyConfig !== false)) &&
-    canPlanAutomaticConfigRepair(snapshot) &&
-    !params.skipLegacyParentConfigWrite &&
-    (params.options.repairPrefixedConfig === true ||
-      !shouldSkipPluginValidationForDoctorConfigPreflight()) &&
-    !resolveIsConfigReadOnly(process.env) &&
-    !resolveFutureConfigActionBlock({ action: "normalize legacy config", snapshot })
-      ? (prepared ?? planScopedConfigRepair(snapshot))
-      : null;
-  return { planScopedConfigRepair, planAdmittedConfigRepair };
-}
+  }
+  const migration = applyLegacyDoctorMigrations(params.candidate.parsed, {
+    sourceConfigBeforeMigrations: params.resolvedConfig,
+    context: {
+      authoredRaw: params.candidate.parsed,
+      resolvedRaw: params.resolvedConfig,
+    },
+  });
+  return migration.next
+    ? preserveDeferredPluginMigrationConfig({
+        sourceConfig: params.candidate.parsed,
+        nextConfig: migration.next,
+        pending: params.deferredPluginMigrations,
+      })
+    : params.candidate.parsed;
+};
 
 export async function migrateLegacyDoctorConfig(params: {
   enabled: boolean;
   measure: ConfigSnapshotReadMeasure;
-}): Promise<void> {
+}): Promise<boolean> {
   if (!params.enabled || resolveIsConfigReadOnly(process.env)) {
-    return;
+    return false;
   }
   const changes = await params.measure("legacy-config-migration", maybeMigrateLegacyConfig);
   if (changes.length > 0) {
     note(changes.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
   }
+  return changes.length > 0;
 }
 
 /** Repair active legacy bytes before considering an older backup. */
@@ -105,8 +108,8 @@ export async function prepareDoctorConfigRecovery(params: {
   const recoveryEnabled =
     params.enabled && !resolveFutureConfigActionBlock({ action: "recover config", snapshot });
   if (recoveryEnabled && snapshot.valid && params.databaseAccess !== "none") {
-    const recovery = await prepareDoctorConfigRecoverySnapshot(
-      { configPath: snapshot.path },
+    const recovery = await prepareConfigRecoveryFromContext(
+      createConfigIoContext({ configPath: snapshot.path }, transformDoctorRecoveryCandidate),
       snapshot,
     );
     if (recovery) {
@@ -136,14 +139,26 @@ export async function prepareDoctorConfigRecovery(params: {
     } else if (
       !activeConfigRepair &&
       // Last-known-good recovery must verify its promotion in the selected database.
-      params.databaseAccess !== "none" &&
-      (await recoverDoctorConfigFromLastKnownGood({ snapshot, reason: "doctor-invalid-config" }))
+      params.databaseAccess !== "none"
     ) {
-      note(
-        "Restored openclaw.json from last-known-good; original saved as .clobbered.*.",
-        "Config",
+      const context = createConfigIoContext(
+        { configPath: snapshot.path },
+        transformDoctorRecoveryCandidate,
       );
-      configRepaired = true;
+      if (
+        await recoverConfigFromLastKnownGoodCore({
+          snapshot,
+          reason: "doctor-invalid-config",
+          deps: context.deps,
+          prepareCandidate: context.prepareRecoveryBackupCandidate,
+        })
+      ) {
+        note(
+          "Restored openclaw.json from last-known-good; original saved as .clobbered.*.",
+          "Config",
+        );
+        configRepaired = true;
+      }
     }
     if (configRepaired) {
       snapshotRead = await params.readSnapshot();

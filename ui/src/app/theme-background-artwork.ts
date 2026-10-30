@@ -65,6 +65,11 @@ export function syncThemeBackgroundArtwork(
     });
 }
 
+/**
+ * At or below default visibility: the same strength as a custom upload at default
+ * visibility (session-background owns that formula). Above it, a linear lift from
+ * that palette-safe strength to the shared cap, reached at full visibility.
+ */
 function paint(
   root: HTMLElement,
   source: string,
@@ -72,24 +77,6 @@ function paint(
   mode: ThemeColorMode,
   visibility: number,
 ): void {
-  root.style.setProperty(
-    BACKGROUND_PROPERTY,
-    dimmedBackgroundImage(source, opacityLimit, mode, visibility),
-  );
-  root.dataset.themeBackground = "plugin";
-}
-
-/**
- * At or below default visibility: the same strength as a custom upload at default
- * visibility (session-background owns that formula). Above it, a linear lift from
- * that palette-safe strength to the shared cap, reached at full visibility.
- */
-function dimmedBackgroundImage(
-  source: string,
-  opacityLimit: number,
-  mode: ThemeColorMode,
-  visibility: number,
-): string {
   const safe = opacityLimit * DEFAULT_BACKGROUND_PREFERENCE.visibility;
   const lift = Math.min(
     1,
@@ -99,5 +86,9 @@ function dimmedBackgroundImage(
   const strength = safe + Math.max(0, BACKGROUND_IMAGE_OPACITY_CAP - safe) * lift;
   const opacity = strength * (mode === "light" ? 0.65 : 1);
   const scrim = `color-mix(in srgb, var(--bg-content, var(--bg)) ${Math.round((1 - opacity) * 1000) / 10}%, transparent)`;
-  return `linear-gradient(${scrim}, ${scrim}), url("${source}")`;
+  root.style.setProperty(
+    BACKGROUND_PROPERTY,
+    `linear-gradient(${scrim}, ${scrim}), url("${source}")`,
+  );
+  root.dataset.themeBackground = "plugin";
 }
