@@ -117,7 +117,7 @@ export class ReadOnlySqliteTranscriptReader {
         candidates.push(row.session_id);
       }
     }
-    return candidates.sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
+    return candidates.toSorted((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
   }
 
   labelRepairSnapshot(
