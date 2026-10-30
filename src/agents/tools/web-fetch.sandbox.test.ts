@@ -85,41 +85,8 @@ async function readSpill(read: ReturnType<typeof createSandboxedReadTool>, fileP
   return JSON.stringify(await read.execute("read", { path: filePath, offset: 1_000, limit: 30 }));
 }
 
-beforeEach(() => {
-  fetchMock.mockImplementation(async () => mockResponse());
-});
+beforeEach(() => fetchMock.mockImplementation(async () => mockResponse()));
 afterEach(() => fetchMock.mockReset());
-
-it("removes the owned sandbox output directory when release rejects publication", async () => {
-  const root = tempDirs.make("web-fetch-unpublished-sandbox-");
-  const sandbox = context(root, "unpublished");
-  const reason = new Error("guard release failed");
-  let created: string | undefined;
-  fetchMock.mockImplementationOnce(async () => ({
-    ...mockResponse(),
-    release: async () => {
-      const inbound = path.join(root, "media/inbound");
-      const entries = await fs.readdir(inbound);
-      expect(entries).toHaveLength(1);
-      assert(entries[0]);
-      created = path.join(inbound, entries[0]);
-      const files = await fs.readdir(created);
-      expect(files).toContain("openclaw-web-fetch.log");
-      expect(await fs.readFile(path.join(created, "openclaw-web-fetch.log"), "utf8")).toContain(
-        marker,
-      );
-      throw reason;
-    },
-  }));
-  await expect(fetch(sandbox.fetch, "unpublished")).rejects.toBe(reason);
-  expect(created).toBeDefined();
-  await expect(fs.stat(created!)).rejects.toMatchObject({ code: "ENOENT" });
-  // A rejected invocation must not publish a cache entry for the deleted output.
-  const accepted = await fetch(sandbox.fetch, "unpublished");
-  expect(accepted.cached).toBeUndefined();
-  expect(accepted.spill).toBeDefined();
-  expect(fetchMock).toHaveBeenCalledTimes(2);
-});
 
 it("recovers omitted content through bounded read and keeps cached files with their requester", async () => {
   const root = tempDirs.make("web-fetch-sandbox-");
@@ -158,8 +125,7 @@ it("recovers omitted content through bounded read and keeps cached files with th
   await expect(first.read.execute("host", { path: outside })).rejects.toThrow();
 });
 
-// This local backend executes the bridge's GNU stat/readlink scripts on the host.
-it.runIf(process.platform === "linux")("stages read-only output", async () => {
+it.runIf(process.platform !== "win32")("stages read-only output", async () => {
   const root = tempDirs.make("web-fetch-native-read-only-");
   const sandbox = sandboxContext(root, "ro");
   const backend = { runShellCommand: createLocalRemoteShellScriptRunner() };

@@ -14,8 +14,6 @@ export type PrivateTempFileOptions = {
   sandbox?: { root?: string; bridge?: SandboxFsBridge };
   assertCurrent?: () => void;
   signal?: AbortSignal;
-  /** Transfer cleanup custody before a later authority check or wrapper can fail. */
-  onCreated?: (cleanup: () => Promise<void>) => void;
 };
 
 export async function writePrivateTempFile(
@@ -33,28 +31,15 @@ export async function writePrivateTempFile(
     if (!stageInput) {
       throw new Error("Sandbox does not support private output staging");
     }
-    let cleanup: (() => Promise<void>) | undefined;
-    try {
-      return await stageInput({
-        prefix,
-        content,
-        signal: options.signal,
-        assertCurrent: () => options.assertCurrent?.(),
-        onCreated: (remove) => {
-          cleanup = remove;
-          options.onCreated?.(remove);
-        },
-      });
-    } catch (error) {
-      // A staging wrapper may reject after its delegate created the output.
-      await cleanup?.().catch(() => undefined);
-      throw error;
-    }
+    return stageInput({
+      prefix,
+      content,
+      signal: options.signal,
+      assertCurrent: () => options.assertCurrent?.(),
+    });
   }
   const { capturePathRemovalGuard, removePathWithinRoot } =
     await import("../../../infra/fs-safe-remove.js");
-  options?.signal?.throwIfAborted();
-  options?.assertCurrent?.();
   const filePath = createPrivateTempFilePath(prefix);
   const assertRoot = capturePathRemovalGuard(tmpdir());
   if (!assertRoot) {
@@ -81,20 +66,16 @@ export async function writePrivateTempFile(
     if (!assertFile) {
       throw new Error("Private output disappeared during creation");
     }
-    options?.onCreated?.(cleanup);
-    options?.signal?.throwIfAborted();
-    options?.assertCurrent?.();
     await file.writeFile(content);
     await file.close();
-    options?.signal?.throwIfAborted();
-    options?.assertCurrent?.();
-    return filePath;
   } catch (error) {
     // Preserve the operation's error even if best-effort removal also fails.
     await file.close().catch(() => undefined);
     await cleanup().catch(() => undefined);
     throw error;
   }
+  options?.assertCurrent?.();
+  return filePath;
 }
 
 function createPrivateTempFilePath(prefix: string): string {

@@ -7,7 +7,6 @@ export type SandboxInputStager = (params: {
   content: string;
   signal?: AbortSignal;
   assertCurrent: () => void;
-  onCreated?: (cleanup: () => Promise<void>) => void;
 }) => Promise<string>;
 
 const INPUT_STAGER = Symbol.for("openclaw.sandboxInputStager");
@@ -36,14 +35,9 @@ export function createSandboxInputStager(owner: {
       input.assertCurrent();
     };
     assertCurrent();
-    const [
-      { root: fsRoot },
-      { stagedInputDirectory, STAGED_INPUT_GITIGNORE },
-      { capturePathRemovalGuard, removePathWithinRoot },
-    ] = await Promise.all([
+    const [{ root: fsRoot }, { stagedInputDirectory, STAGED_INPUT_GITIGNORE }] = await Promise.all([
       import("../../infra/fs-safe.js"),
       import("../../media/staged-inputs.js"),
-      import("../../infra/fs-safe-remove.js"),
     ]);
     const directory = stagedInputDirectory(randomUUID());
     const filePath = `${directory}/${input.prefix}.log`;
@@ -54,46 +48,14 @@ export function createSandboxInputStager(owner: {
       throw new Error("Sandbox input staging is shadowed by another mount");
     }
     const root = await fsRoot(owner.root);
-    const assertRoot = capturePathRemovalGuard(owner.root);
-    if (!assertRoot) {
-      throw new Error("Sandbox input staging root is unavailable");
-    }
-    let assertDirectory: (() => void) | undefined;
-    const cleanup = async () => {
-      if (!assertDirectory) {
-        return;
-      }
-      // Only this newly created input retains cleanup custody after cancellation.
-      await removePathWithinRoot({
-        rootDir: owner.root,
-        relativePath: directory,
-        recursive: true,
-        assertBeforeMutation: () => {
-          assertRoot();
-          assertDirectory?.();
-        },
-      });
-    };
-    try {
-      for (const [file, data] of [
-        [`${directory}/.gitignore`, STAGED_INPUT_GITIGNORE],
-        [filePath, input.content],
-      ] as const) {
-        assertCurrent();
-        await root.create(file, data, { mode: 0o600, assertBeforeMutation: assertCurrent });
-        if (!assertDirectory) {
-          assertDirectory = capturePathRemovalGuard(path.join(owner.root, directory));
-          if (!assertDirectory) {
-            throw new Error("Sandbox input staging disappeared during creation");
-          }
-          input.onCreated?.(cleanup);
-        }
-      }
+    for (const [file, data] of [
+      [`${directory}/.gitignore`, STAGED_INPUT_GITIGNORE],
+      [filePath, input.content],
+    ] as const) {
       assertCurrent();
-      return target.containerPath;
-    } catch (error) {
-      await cleanup().catch(() => undefined);
-      throw error;
+      await root.create(file, data, { mode: 0o600, assertBeforeMutation: assertCurrent });
     }
+    assertCurrent();
+    return target.containerPath;
   };
 }

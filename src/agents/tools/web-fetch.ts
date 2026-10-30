@@ -611,14 +611,12 @@ export function createWebFetchTool(options?: {
           ? { ...executionFetch?.ssrfPolicy, hostnameAllowlist }
           : executionFetch?.ssrfPolicy;
         const lookupFn = options?.lookupFn;
-        const unpublishedSpills = new Set<() => Promise<void>>();
         const fetchOutput = {
           ...(options?.sandboxed
             ? { sandbox: { root: options.sandboxRoot, bridge: options.sandboxFsBridge } }
             : {}),
           assertCurrent,
           signal,
-          onCreated: (cleanup: () => Promise<void>) => unpublishedSpills.add(cleanup),
         };
         const fetchWebPayload = async (): Promise<Record<string, unknown>> => {
           const start = Date.now();
@@ -880,27 +878,16 @@ export function createWebFetchTool(options?: {
 
           // Preserve the direct fetch's rejection; replacing it with signal.reason would
           // discard the transport's own error detail.
-          try {
-            const payload = await fetchWebPayload();
-            // Publish only after guard release: cancellation or cleanup failure must not
-            // leave a successful cache entry for a call that never returned its content.
-            throwIfFetchAborted(signal);
-            fetchOutput.assertCurrent?.();
-            // Retry a failed sandbox save on the next call; never cache an unavailable spill.
-            if (!fetchOutput.sandbox || !payload.truncated || payload.spill) {
-              writeCache(FETCH_CACHE, cacheKey, payload, cacheTtlMs);
-            }
-            return payload;
-          } catch (error) {
-            for (const cleanup of unpublishedSpills) {
-              try {
-                await cleanup();
-              } catch (cleanupError) {
-                logWarn(`[web-fetch] failed to remove unpublished spill: ${String(cleanupError)}`);
-              }
-            }
-            throw error;
+          const payload = await fetchWebPayload();
+          // Publish only after guard release: cancellation or cleanup failure must not
+          // leave a successful cache entry for a call that never returned its content.
+          throwIfFetchAborted(signal);
+          fetchOutput.assertCurrent?.();
+          // Retry a failed sandbox save on the next call; never cache an unavailable spill.
+          if (!fetchOutput.sandbox || !payload.truncated || payload.spill) {
+            writeCache(FETCH_CACHE, cacheKey, payload, cacheTtlMs);
           }
+          return payload;
         };
         const result = await runWebFetch();
         return jsonResult(result);
