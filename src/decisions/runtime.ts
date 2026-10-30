@@ -281,28 +281,17 @@ async function evaluateVersion(
     const onPreparedBilling = (facts: PreparedDecisionBilling) => {
       preparedBilling = facts;
     };
-    const result =
-      version === 1
-        ? await entry.host.evaluate(
-            submitted as DecisionBatch, // SAFETY: V1 validation and structuredClone preserve the admitted V1 shape.
-            { ...options, timeoutMs, signal },
-            selected.model,
-            config,
-            registry,
-            consumerId,
-            isAdmissible,
-            onPreparedBilling,
-          )
-        : await entry.host.evaluateV2(
-            submitted as DecisionBatchV2, // SAFETY: V2 validation and structuredClone preserve the admitted V2 shape.
-            { ...options, timeoutMs, signal },
-            selected.model,
-            config,
-            registry,
-            consumerId,
-            isAdmissible,
-            onPreparedBilling,
-          );
+    const result = await entry.host.evaluate(
+      submitted,
+      { ...options, timeoutMs, signal },
+      selected.model,
+      config,
+      registry,
+      version,
+      consumerId,
+      isAdmissible,
+      onPreparedBilling,
+    );
     if (!rootCaller) {
       signal.throwIfAborted();
     }
