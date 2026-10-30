@@ -1,8 +1,10 @@
 import { statSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type { LegacyMainSessionMigrationResult } from "../config/sessions/legacy-main-session-migration.contract.js";
 import { FsSafeError, type ReadResult } from "../infra/fs-safe.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 
 const identityStat = statSync(new URL(import.meta.url));
 
@@ -18,6 +20,9 @@ function identityReadResult(content: string): ReadResult {
 
 const mocks = vi.hoisted(() => ({
   config: {} as Record<string, unknown>,
+  postgresAgent: false,
+  configuredTargets: vi.fn(),
+  inspectRetainedStore: vi.fn(),
   persisted: {} as Record<string, unknown>,
   transformConfigFileWithRetry: vi.fn(),
   withConfigMutationExclusive: vi.fn(),
@@ -80,6 +85,22 @@ vi.mock("../state/openclaw-agent-execution.js", () => ({
   prepareOpenClawAgentDatabaseExecution: async () => {},
 }));
 
+vi.mock("../infra/database-engine/context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/database-engine/context.js")>()),
+  getDatabaseEngineInput: () => (mocks.postgresAgent ? { schemaPrefix: "fixture" } : undefined),
+}));
+vi.mock("../config/sessions/targets.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/targets.js")>()),
+  resolveConfiguredAgentDatabaseTargets: mocks.configuredTargets,
+}));
+// mock-isolation: Store facts are external I/O; this suite proves creation's effect boundary.
+vi.mock("../state/openclaw-agent-schema-inspection-worker.js", () => ({
+  createAgentSchemaInspectionWorker: () => ({
+    inspect: mocks.inspectRetainedStore,
+    [Symbol.asyncDispose]: async () => {},
+  }),
+}));
+
 vi.mock("../config/sessions/legacy-main-session-migration.js", () => ({
   migrateLegacyMainSessionKeys: mocks.migrateLegacyMainSessionKeys,
 }));
@@ -103,7 +124,7 @@ vi.mock("../infra/fs-safe.js", async (importOriginal) => ({
   root: vi.fn(async () => ({ read: mocks.rootRead, write: mocks.rootWrite })),
 }));
 
-import { createAgent } from "./agent-create.js";
+import { checkAgentCreationGate, createAgent } from "./agent-create.js";
 
 function migration(overrides: Partial<LegacyMainSessionMigrationResult> = {}) {
   return {
@@ -160,6 +181,9 @@ describe("createAgent", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.config = roster();
+    mocks.postgresAgent = false;
+    mocks.configuredTargets.mockReturnValue([]);
+    mocks.inspectRetainedStore.mockResolvedValue(null);
     mocks.persisted = {};
     mocks.readAgentDeletionJournal.mockReturnValue(undefined);
     mocks.claimCompletedAgentDeletion.mockReturnValue(true);
@@ -186,6 +210,58 @@ describe("createAgent", () => {
         return { path: "/tmp/created-config.json", ...transformed };
       },
     );
+  });
+
+  it.each(["missing", "empty", "mismatched"])(
+    "refuses a %s retained PostgreSQL store before creation effects",
+    async (kind) => {
+      mocks.postgresAgent = true;
+      const anchor = fileURLToPath(import.meta.url);
+      mocks.configuredTargets.mockReturnValue([{ agentId: "researcher", path: anchor }]);
+      if (kind === "missing") {
+        mocks.inspectRetainedStore.mockRejectedValue(new Error("namespace missing"));
+      } else {
+        mocks.inspectRetainedStore.mockResolvedValue({
+          version: OPENCLAW_AGENT_SCHEMA_VERSION,
+          agentSchemaMeta:
+            kind === "empty"
+              ? null
+              : {
+                  agentId: "another-agent",
+                  role: "agent",
+                  schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+                },
+        });
+      }
+      const result = await createAgent({ name: "researcher" });
+      expect(result).toMatchObject({ status: "error", reason: "already-exists" });
+      expect("message" in result && result.message).toEqual(expect.stringContaining(anchor));
+      expect("message" in result && result.message).toEqual(
+        expect.stringContaining("openclaw backup restore"),
+      );
+      expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+      expect(mocks.mkdir).not.toHaveBeenCalled();
+      expect(mocks.persisted).toEqual({});
+      expect(await checkAgentCreationGate("researcher")).toMatchObject({ status: "error" });
+    },
+  );
+
+  it.each(["unanchored", "retained"])("creates with a %s PostgreSQL store", async (kind) => {
+    mocks.postgresAgent = true;
+    mocks.configuredTargets.mockReturnValue([
+      { agentId: "researcher", path: fileURLToPath(import.meta.url) },
+    ]);
+    if (kind === "retained") {
+      mocks.inspectRetainedStore.mockResolvedValue({
+        version: OPENCLAW_AGENT_SCHEMA_VERSION,
+        agentSchemaMeta: {
+          agentId: "researcher",
+          role: "agent",
+          schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+        },
+      });
+    }
+    await expectCreation({ name: "researcher" }, { status: "created", agentId: "researcher" });
   });
 
   it("returns validation errors before mutation", async () => {
