@@ -377,6 +377,15 @@ export function startManagedGatewayConfigReloader(
     readSnapshot: params.readSnapshot,
     promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
     subscribeToWrites: params.subscribeToWrites,
+    canRetireDeferredRestart: () => {
+      const plan = acceptedRestart?.plan;
+      // Writer intent, hot-reload recovery and a pending shared-auth generation
+      // outlive a config revert, so the revert keeps the normal restart path.
+      return (
+        params.sharedGatewaySessionGenerationState.required === null &&
+        (plan?.restartReasons.every((reason) => plan.changedPaths.includes(reason)) ?? true)
+      );
+    },
     onConfigCandidateObserved: () => {
       configCandidatePending = true;
       // Every writer must expose persisted revisions before runtime acceptance.
@@ -388,6 +397,9 @@ export function startManagedGatewayConfigReloader(
       params.prepareTerminalConfig(plan, applyRuntimeConfigOverrides(nextConfig));
     },
     onConfigAccepted: async (nextConfig, transactionOwnership, sourceConfig, acceptance) => {
+      if (acceptance.revertsDeferredRestart) {
+        acceptedRestart = undefined;
+      }
       const sameRestart =
         acceptedRestart && isDeepStrictEqual(acceptedRestart.sourceConfig, sourceConfig);
       const restart =
