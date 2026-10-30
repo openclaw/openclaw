@@ -176,7 +176,8 @@ extension OpenClawChatViewModel {
 
     func observeOutboxTranscriptTip(_ message: OpenClawChatMessage, session: SessionSnapshot) {
         guard let outbox, let scope = self.outboxBranchScope(for: session),
-              let tip = message.transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines), !tip.isEmpty
+              let tip = message.canonicalTranscriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !tip.isEmpty
         else { return }
         let state = Task { await outbox.branchState(for: scope) }
         let previous = self.pendingCacheWriteTask
@@ -206,7 +207,7 @@ extension OpenClawChatViewModel {
             return isVisible ? session : nil
         }
         let activeTranscriptEntryIDs = visibleSession() != nil
-            ? Set(self.messages.compactMap(\.transcriptMessageID))
+            ? Set(self.messages.compactMap(\.canonicalTranscriptMessageID))
             : []
         guard let commands = await outbox.reconcileBranchScope(
             scope,

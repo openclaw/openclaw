@@ -8,13 +8,12 @@ extension OpenClawChatViewModel {
     {
         let byID = Dictionary((activity ?? []).map { ($0.messageId, $0.items) }, uniquingKeysWith: { _, next in next })
         let decoded = raw.compactMap { item in
-            (try? GatewayPayloadDecoding.decode(item, as: OpenClawChatMessage.self))
-                .map { Self.stripInboundMetadata(from: $0) }
+            try? GatewayPayloadDecoding.decode(item, as: OpenClawChatMessage.self)
         }
-        return Self.dedupeMessages(decoded.map { message in
+        return Self.dedupeMessages(decoded.flatMap { message in
             var message = message
             if let id = message.transcriptMessageID { message.activity = byID[id] }
-            return message
+            return message.ingestedMessages.map { Self.stripInboundMetadata(from: $0) }
         })
     }
 
@@ -394,7 +393,10 @@ extension OpenClawChatViewModel {
         }
     }
 
-    func adoptCorrelatedUserMessage(incoming: OpenClawChatMessage) -> Bool {
+    func adoptCorrelatedUserMessage(
+        incoming: OpenClawChatMessage,
+        precedingMessages: [OpenClawChatMessage] = []) -> Bool
+    {
         guard incoming.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user" else {
             return false
         }
@@ -416,6 +418,7 @@ extension OpenClawChatViewModel {
         }
         var updated = self.messages
         updated[matchIndex] = Self.adoptingCanonicalMessage(incoming, over: existing)
+        updated.insert(contentsOf: precedingMessages, at: matchIndex)
         self.replaceMessages(Self.dedupeMessages(updated))
         self.prunePendingLocalUserEchoMessageIDs()
         return true
@@ -678,6 +681,10 @@ extension OpenClawChatViewModel {
 
     static func dedupeKey(for message: OpenClawChatMessage) -> String? {
         if let key = correlatedMessageIdentityKey(for: message, role: message.role) { return key }
+        if message.isToolResult, ChatPayloadDecoding.trimmedNonEmptyString(message.toolCallId) != nil {
+            // Parallel calls can return identical output at the carrier's timestamp.
+            return Self.messageIdentityKey(for: message).map { "\($0)|\(message.workRunID ?? "")" }
+        }
         guard let timestamp = message.timestamp else { return nil }
         let text = message.content.compactMap(\.text).joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
