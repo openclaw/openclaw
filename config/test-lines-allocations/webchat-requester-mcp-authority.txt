@@ -1,3 +1,3 @@
-396
+397
 # Personal MCP OAuth for accepted visible Webchat turns, separate users,
 # live revocation across awaits, released views and Codex host authority.

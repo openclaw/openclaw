@@ -21,7 +21,8 @@ import { admitted, attempt } from "./harness/tool-authority.runtime.test-support
 import { prepareOperatorModelPolicy } from "./operator-model-policy.js";
 
 const oauth = vi.hoisted(() => ({ status: vi.fn(), start: vi.fn() }));
-vi.mock("./mcp-oauth.js", () => ({
+vi.mock("./mcp-oauth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./mcp-oauth.js")>()),
   readMcpOAuthCredentialsStatuses: oauth.status,
   startMcpOAuthAuthorization: oauth.start,
 }));
