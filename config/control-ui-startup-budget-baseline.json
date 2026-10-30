@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 88740,
-  "reason": "Matched Board containment build measures 88,740 B gzip, within 2 B of its main baseline, with three startup JavaScript requests and one CSS request.",
+  "startupJsGzipBytes": 88728,
+  "reason": "Board containment keeps startup within build variance of the matched main build; ratchet to the measured final head with three JavaScript requests and one CSS request.",
   "updatedAt": "2026-10-30"
 }
