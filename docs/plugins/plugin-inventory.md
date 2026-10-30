@@ -206,7 +206,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-101 plugins
+102 plugins
 
 - **[abliteration](/plugins/reference/abliteration)** (`@openclaw/abliteration-provider`) - npm or ClawHub: `@openclaw/abliteration-provider`. OpenClaw Abliteration provider plugin.
 
@@ -337,6 +337,8 @@ Each entry lists the package, distribution route, and description.
 - **[openshell](/plugins/reference/openshell)** (`@openclaw/openshell-sandbox`) - npm or ClawHub: `@openclaw/openshell-sandbox`. OpenClaw sandbox backend for the NVIDIA OpenShell CLI with mirrored local workspaces and SSH command execution.
 
 - **[parallel](/tools/parallel-search)** (`@openclaw/parallel-plugin`) - npm or ClawHub: `@openclaw/parallel-plugin`. Adds web search provider support.
+
+- **[particle](/plugins/reference/particle)** (`@openclaw/particle-provider`) - npm or ClawHub: `@openclaw/particle-provider`. Adds Particle model provider support to OpenClaw.
 
 - **[perplexity](/plugins/reference/perplexity)** (`@openclaw/perplexity-plugin`) - npm or ClawHub: `@openclaw/perplexity-plugin`. Adds web search provider support.
 
