@@ -168,6 +168,7 @@ export type PreparedModelRuntimeInput = {
 export type PreparedModelRuntimeLease = Readonly<{
   snapshot: PreparedModelRuntimeSnapshot;
   pluginGeneration: PreparedModelRuntimePluginGeneration;
+  run<T>(run: () => T): T;
   [Symbol.asyncDispose](): Promise<void>;
 }>;
 

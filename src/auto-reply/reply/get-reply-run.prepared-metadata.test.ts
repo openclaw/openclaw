@@ -55,6 +55,7 @@ it("keeps the admitted Gateway generation active through a different reply works
       pluginRegistry: selectedGeneration.pluginRegistry,
       workspaceDir,
     },
+    run: <T>(run: () => T): T => run(),
     [Symbol.asyncDispose]: release,
     pluginGeneration: selectedGeneration,
   }));
