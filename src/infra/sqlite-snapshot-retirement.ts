@@ -51,6 +51,9 @@ export function beginSqliteSnapshotRetirement(
     options.token?.();
     return { bytes: 0, payload, release, retire: () => {} };
   }
+  // Name the rejected entry relative to the staging root so an operator can inspect it.
+  const describeArtifact = (location: string) =>
+    path.relative(directory, location).split(path.sep).join("/");
   function inspect(
     current: string,
     inheritedCutoff: number,
@@ -110,7 +113,7 @@ export function beginSqliteSnapshotRetirement(
             !["openclaw", "openclaw-state", "openclaw-state/state"].includes(childLayout)) ||
             (nested && layout !== "" && layout !== "openclaw"))
         ) {
-          throw new Error("Unrecognized snapshot directory");
+          throw new Error(`Unrecognized snapshot directory: ${describeArtifact(location)}`);
         }
         const child = inspect(location, cutoff, childLayout, lock);
         bytes += child.bytes;
@@ -131,7 +134,7 @@ export function beginSqliteSnapshotRetirement(
           payload.push(location);
         }
       } else {
-        throw new Error("Unrecognized snapshot artifact");
+        throw new Error(`Unrecognized snapshot artifact: ${describeArtifact(location)}`);
       }
     }
     if (newest >= cutoff) {

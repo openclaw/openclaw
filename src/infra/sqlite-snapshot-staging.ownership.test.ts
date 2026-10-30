@@ -336,6 +336,8 @@ it.each([
       expect(fs.statSync(young.root).mtimeMs).toBe(mtime);
     }
     expect(log).toContain("Skipped SQLite snapshot reclamation");
+    const rejected = path.relative(unknown.root, unknownFile).split(path.sep).join("/");
+    expect(log).toContain(`Unrecognized snapshot artifact: ${rejected}`);
     expect(fs.readFileSync(young.location).equals(bytes)).toBe(true);
     expect(fs.readFileSync(unknown.location).equals(bytes)).toBe(true);
     expect(fs.readFileSync(unknownFile, "utf8")).toBe("preserve");
