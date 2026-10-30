@@ -6,6 +6,7 @@ import { createControlUiE2eSuite } from "../e2e/control-ui-e2e-suite.test-suppor
 import { openChatPanels } from "./chat-layout-menu.ts";
 import { waitForConfirmModal, waitForControlUiGatewayReady } from "./control-ui-e2e-readiness.ts";
 import {
+  controlUiE2eWaitTimeoutMs as timeout,
   defaultControlUiFeatureMethods,
   installMockGateway,
   navigateToControlUiSession,
@@ -228,23 +229,17 @@ suite.define(() => {
         if (!offline) {
           await navigateToControlUiSession(page, key);
         }
-        // Keep the generation that passed the wait; another owner update can invalidate it.
-        const snapshotHandle = await page.waitForFunction(() => {
-          const snapshot = window.openclawControlUi?.snapshot();
-          return snapshot?.ready ? snapshot : null;
-        });
-        const snapshot = await snapshotHandle.jsonValue();
-        await snapshotHandle.dispose();
-        expect(snapshot).toMatchObject({
-          booted: true,
-          gatewayPhase: offline ? "reconnecting" : "connected",
-          sessionKey: key,
-          terminalActivationReady: true,
-          route: { matches: [{ routeId: "chat" }] },
-        });
-        if (!offline) {
-          expect(snapshot).toMatchObject({ routeReady: true, rosterReady: true });
-        }
+        await expect
+          .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot()), { timeout })
+          .toMatchObject({
+            ready: true,
+            booted: true,
+            gatewayPhase: offline ? "reconnecting" : "connected",
+            sessionKey: key,
+            terminalActivationReady: true,
+            route: { matches: [{ routeId: "chat" }] },
+            ...(offline ? {} : { routeReady: true, rosterReady: true }),
+          });
         expect(requests).toHaveLength(1);
       });
     },
