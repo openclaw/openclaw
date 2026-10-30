@@ -1438,7 +1438,7 @@ describe("ci workflow guards", () => {
         contracts: false,
         channelContracts: false,
         performance: false,
-        coreStripes: [1, 4],
+        coreStripes: [1],
         lintCoreStripes: [1, 2],
         lintExtensionStripes: [],
         lintCentralScripts: true,
@@ -1478,7 +1478,7 @@ describe("ci workflow guards", () => {
         contracts: false,
         channelContracts: false,
         performance: true,
-        coreStripes: [1, 4],
+        coreStripes: [1],
         lintCoreStripes: [1],
         lintExtensionStripes: [],
         lintCentralScripts: false,
@@ -1507,7 +1507,7 @@ describe("ci workflow guards", () => {
         contracts: false,
         channelContracts: false,
         performance: false,
-        coreStripes: [1, 4],
+        coreStripes: [1],
         lintCoreStripes: [1, 2],
         lintExtensionStripes: [],
         lintCentralScripts: true,
@@ -2164,12 +2164,7 @@ describe("ci workflow guards", () => {
         const hostedJob = workflow.jobs["check-test-types-hosted-core-shard"];
         expect(evaluateWorkflowExpression(hostedJob.if, context)).toBe(hosted);
         expect(evaluateWorkflowExpression(hostedJob.strategy.matrix, context).include).toEqual(
-          hosted
-            ? [
-                { stripe: 1, type_graph_names_json: JSON.stringify([coreNames[0]]) },
-                { stripe: 4, type_graph_names_json: JSON.stringify([coreNames[1]]) },
-              ]
-            : [],
+          hosted ? [{ stripe: 1, type_graph_names_json: JSON.stringify(coreNames) }] : [],
         );
         const prodRun = runCheckShardFixture({
           frozenTarget: false,
@@ -2205,19 +2200,11 @@ describe("ci workflow guards", () => {
         });
         expect(result.status, result.output).toBe(0);
         expect(result.typeCalls.filter(({ row }) => row !== "boundary")).toEqual([
-          ...(hosted
-            ? coreNames.map((name, index) => ({
-                row: `core-${index === 0 ? 1 : 4}`,
-                localCheck: null,
-                command: `node --ci-graphs-json ${JSON.stringify([name])} --concurrency 2`,
-              }))
-            : [
-                {
-                  row: "central",
-                  localCheck: centralCorePaths ? null : "0",
-                  command: `node --ci-graphs-json ${JSON.stringify(coreNames)} --concurrency ${centralCorePaths ? 2 : 1}`,
-                },
-              ]),
+          {
+            row: hosted ? "core-1" : "central",
+            localCheck: hosted || centralCorePaths ? null : "0",
+            command: `node --ci-graphs-json ${JSON.stringify(coreNames)} --concurrency ${hosted || centralCorePaths ? 2 : 1}`,
+          },
           {
             row: "central",
             localCheck: "0",
