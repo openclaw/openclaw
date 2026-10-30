@@ -1,6 +1,7 @@
 import { getAiTransportHost } from "@openclaw/ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-manager-api.js";
 import { bindSessionMcpRuntimeTestScheduler } from "../agents/agent-bundle-mcp-manager.test-support.js";
 import { providerResponse } from "../agents/embedded-agent-runner.wire.test-support.js";
@@ -8,11 +9,15 @@ import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { refreshSessionPatchQueuedSelection } from "../gateway/server-methods/sessions-patch-model-selection.js";
 import "../llm/ai-transport-host.js";
+import { refreshSessionPatchQueuedSelection } from "../gateway/server-methods/sessions-patch-model-selection.js";
+import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
+import { ensureGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { closeSessionControllerAdmission } from "../sessions/session-controller.lifecycle.js";
 import { resetSessionControllerStateForTest } from "../sessions/session-lifecycle-admission.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
@@ -21,6 +26,8 @@ import { runCronSessionTurn } from "./session-run.js";
 import type { CronStoredJob } from "./types.js";
 
 const admission = vi.hoisted(() => ({
+  beforeOperation: undefined as (() => () => void) | undefined,
+  beforeTargetPreparation: undefined as (() => void) | undefined,
   onEnqueued: undefined as ((sessionKey: string) => void) | undefined,
   whileQueuedAdmissionWaits: undefined as ((sessionKey: string) => Promise<void>) | undefined,
 }));
@@ -58,6 +65,44 @@ vi.mock("../auto-reply/reply/reply-turn-admission.js", async (importOriginal) =>
     },
   };
 });
+
+// Retain a real lifecycle closure through the operation owner's synchronous guard.
+vi.mock("../sessions/session-controller.js", async (original) => {
+  const actual = await original<typeof import("../sessions/session-controller.js")>();
+  return {
+    ...actual,
+    createReplyOperation: (...args: Parameters<typeof actual.createReplyOperation>) => {
+      const block = admission.beforeOperation;
+      admission.beforeOperation = undefined;
+      const release = block?.();
+      try {
+        return actual.createReplyOperation(...args);
+      } finally {
+        release?.();
+      }
+    },
+  };
+});
+
+// Publish during real native target preparation, after scheduled start admission.
+vi.mock(
+  "../agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.js",
+  async (original) => {
+    const actual =
+      await original<
+        typeof import("../agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.js")
+      >();
+    return {
+      ...actual,
+      prepareEmbeddedAttemptTranscriptLifecycle: (
+        ...args: Parameters<typeof actual.prepareEmbeddedAttemptTranscriptLifecycle>
+      ) => {
+        admission.beforeTargetPreparation?.();
+        return actual.prepareEmbeddedAttemptTranscriptLifecycle(...args);
+      },
+    };
+  },
+);
 
 // Match Gateway startup: scheduled session turns settle through the real reply runtime.
 await Promise.all([
@@ -100,6 +145,8 @@ function stubProvider(baseUrl: string, model: string) {
 beforeEach(bindSessionMcpRuntimeTestScheduler);
 
 afterEach(async () => {
+  admission.beforeOperation = undefined;
+  admission.beforeTargetPreparation = undefined;
   admission.onEnqueued = undefined;
   admission.whileQueuedAdmissionWaits = undefined;
   await disposeAllSessionMcpRuntimes();
@@ -113,11 +160,26 @@ describe("stored session model selections in scheduled session turns", () => {
   const userSelection = { modelOverrideSource: "user" } as const;
   const pinned = { provider: "pinned", model: "model-x" };
   const primary = { provider: "primary", model: "model-a" };
+  const policyCases = [
+    ["unrelated", "ok", 1, 1, 0],
+    ["policy", "ok", 1, 2, 0],
+    ["in-place-policy", "ok", 1, 2, 0],
+    ["other-agent", "ok", 1, 1, 0],
+    ["agent-policy", "ok", 1, 2, 0],
+    ["channel-defaults", "ok", 1, 2, 0],
+    ["bootstrap-effect", "error", 0, 1, 1],
+    ["hook-effect", "error", 0, 1, 1],
+    ["revoked", "error", 0, 1, 0],
+    ["cancelled", "error", 0, 1, 0],
+    ["unknown-effect", "error", 1, 1, 0],
+    ["text-only", "error", 0, 1, 0],
+  ] as const;
   function expectPinnedFailure(result: Awaited<ReturnType<typeof runCronSessionTurn>> | undefined) {
     expect(result?.status).toBe("error");
     expect(result?.error).toContain("Couldn't sign in to the AI service");
   }
   async function runWithFailingPinnedModel(params: {
+    reload?: (typeof policyCases)[number][0];
     storedSelection?: Pick<SessionEntry, "modelOverrideSource">;
     target?: "main" | "session";
     payload?: { model?: string; fallbacks?: string[] };
@@ -126,11 +188,48 @@ describe("stored session model selections in scheduled session turns", () => {
     defaultPrimary?: string;
     modelAllow?: string[];
     // Commit a sessions.patch model change while a queued turn waits in admission.
-    retargetWhileAdmitting?: { pin: { provider: string; model: string } | null };
+    retargetWhileAdmitting?: { pin: { provider: string; model: string } | null; blocked?: boolean };
   }) {
     return await withOpenClawTestState({ label: "cron-session-turn-model" }, async (state) => {
       installPrivateUpdateHandoffStore(state.root);
       const requests: string[] = [];
+      const controller = new AbortController();
+      let revoked = false;
+      let preparations = 0;
+      const effect = vi.fn(async () => undefined);
+      using _ = {
+        [Symbol.dispose]: () => unregisterInternalHook("agent:bootstrap", effect),
+      };
+      if (params.reload === "hook-effect") {
+        const hooks = ensureGlobalHookRunner();
+        const hasHooks = hooks.hasHooks.bind(hooks);
+        vi.spyOn(hooks, "hasHooks").mockImplementation(
+          (name, ctx) => name === "before_agent_reply" || hasHooks(name, ctx),
+        );
+        vi.spyOn(hooks, "runBeforeAgentReply").mockImplementation(effect);
+      }
+      if (params.reload === "bootstrap-effect") {
+        registerInternalHook("agent:bootstrap", effect);
+      }
+      admission.beforeTargetPreparation = () => {
+        preparations++;
+        if (preparations !== 1 || !params.reload || params.reload === "unknown-effect") {
+          return;
+        }
+        if (params.reload === "text-only") {
+          throw new Error("Session event configuration changed; retry under the current policy");
+        }
+        if (params.reload === "in-place-policy") {
+          cfg.tools = next.tools;
+          setRuntimeConfigSnapshot(cfg);
+        } else {
+          setRuntimeConfigSnapshot(next);
+        }
+        revoked = params.reload === "revoked";
+        if (params.reload === "cancelled") {
+          controller.abort();
+        }
+      };
       const activeTurn = params.retargetWhileAdmitting && {
         pin: params.retargetWhileAdmitting.pin,
         started: Promise.withResolvers<void>(),
@@ -146,6 +245,9 @@ describe("stored session model selections in scheduled session turns", () => {
           request.url.startsWith(url),
         )?.[0];
         requests.push(`${route ?? "unknown"}/${body.model}`);
+        if (params.reload === "unknown-effect") {
+          setRuntimeConfigSnapshot(next);
+        }
         if (activeTurn && requests.length === 1) {
           // The first request belongs to the active turn; hold the session until the next one queues.
           activeTurn.started.resolve();
@@ -177,12 +279,11 @@ describe("stored session model selections in scheduled session turns", () => {
               fallbacks: ["fallback/model-b"],
             },
             ...(params.modelAllow ? { modelPolicy: { allow: params.modelAllow } } : {}),
-            models: {
-              "pinned/model-x": routeParams,
-              "primary/model-a": routeParams,
-              "fallback/model-b": routeParams,
-              "jobfallback/model-c": routeParams,
-            },
+            models: Object.fromEntries(
+              ["pinned/model-x", "primary/model-a", "fallback/model-b", "jobfallback/model-c"].map(
+                (ref) => [ref, routeParams],
+              ),
+            ),
           },
         },
         models: {
@@ -198,7 +299,32 @@ describe("stored session model selections in scheduled session turns", () => {
         plugins: { allow: ["openai"], slots: { memory: "none" } },
         skills: { load: { watch: false } },
         tools: { deny: ["*"] },
+        channels: { discord: { enabled: true, guilds: {} }, slack: { enabled: true } },
       };
+      const next: OpenClawConfig = { ...cfg };
+      if (params.reload === "unrelated") {
+        next.channels = {
+          discord: {
+            enabled: true,
+            guilds: { synthetic: { channels: { other: { users: ["synthetic"] } } } },
+          },
+          slack: { enabled: true },
+        };
+      } else if (params.reload === "other-agent") {
+        next.agents = {
+          ...cfg.agents,
+          entries: { ...cfg.agents?.entries, other: { tools: { deny: ["write"] } } },
+        };
+      } else if (params.reload === "agent-policy") {
+        next.agents = {
+          ...cfg.agents,
+          entries: { main: { ...cfg.agents?.entries?.main, cwd: state.workspaceDir } },
+        };
+      } else if (params.reload === "channel-defaults") {
+        next.channels = { ...cfg.channels, defaults: { groupPolicy: "disabled" } };
+      } else {
+        next.tools = { deny: ["write"] };
+      }
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
       // `main` resolves to the agent's main conversation, as the Gateway target resolver does.
@@ -225,16 +351,19 @@ describe("stored session model selections in scheduled session turns", () => {
         updatedAt: Date.now(),
         sessionStartedAt: Date.now(),
       };
+      const entryFor = (
+        pin: { provider: string; model: string } | null,
+        selection: Pick<SessionEntry, "modelOverrideSource"> = userSelection,
+      ): SessionEntry => ({
+        ...conversation,
+        ...(pin ? { providerOverride: pin.provider, modelOverride: pin.model, ...selection } : {}),
+      });
       await replaceSessionEntry(
         { agentId: "main", sessionKey },
-        params.storedPin === null
-          ? conversation
-          : {
-              ...conversation,
-              providerOverride: params.storedPin?.provider ?? "pinned",
-              modelOverride: params.storedPin?.model ?? "model-x",
-              ...(params.storedSelection ?? userSelection),
-            },
+        entryFor(
+          params.storedPin === undefined ? pinned : params.storedPin,
+          params.storedSelection,
+        ),
       );
       const activeJob: CronStoredJob = { ...stored, id: "active-turn", name: "Active turn" };
       const runTurn = (scheduled: CronStoredJob) =>
@@ -247,24 +376,26 @@ describe("stored session model selections in scheduled session turns", () => {
           text: "Reply.",
           admissionSource: "operator-schedule",
           deliveryAttemptFence: null,
-          assertCurrent() {},
+          abortSignal: controller.signal,
+          assertCurrent() {
+            if (revoked) {
+              throw new Error("Scheduled source revoked");
+            }
+          },
         });
       if (!activeTurn) {
-        return { result: await runTurn(stored), requests };
+        return {
+          result: await runTurn(stored),
+          requests,
+          preparations,
+          externalEffects: effect.mock.calls.length,
+        };
       }
-      let retargeted = false;
       admission.whileQueuedAdmissionWaits = async (admittedSessionKey) => {
         expect(admittedSessionKey).toBe(sessionKey);
         // Commit, then refresh waiting work, as sessions.patch does for a model change.
         const { pin } = activeTurn;
-        const entry: SessionEntry = pin
-          ? {
-              ...conversation,
-              providerOverride: pin.provider,
-              modelOverride: pin.model,
-              modelOverrideSource: "user",
-            }
-          : conversation;
+        const entry = entryFor(pin);
         await replaceSessionEntry({ agentId: "main", sessionKey }, entry);
         refreshSessionPatchQueuedSelection({
           cfg,
@@ -273,7 +404,15 @@ describe("stored session model selections in scheduled session turns", () => {
           sessionKey,
           agentId: "main",
         });
-        retargeted = true;
+        if (params.retargetWhileAdmitting?.blocked) {
+          admission.beforeOperation = () =>
+            closeSessionControllerAdmission({
+              agentId: "main",
+              scope: resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }),
+              identities: [sessionKey, conversation.sessionId],
+              reason: new Error("Lifecycle publication before operation acquisition"),
+            });
+        }
       };
       const queued = Promise.withResolvers<void>();
       admission.onEnqueued = (queuedSessionKey) => {
@@ -281,16 +420,12 @@ describe("stored session model selections in scheduled session turns", () => {
           queued.resolve();
         }
       };
-      // A turn settling before its signal reports its own outcome instead of hanging the wait.
-      const settledEarly = (turn: string) => (outcome: unknown) => {
-        throw new Error(`${turn} turn settled early: ${JSON.stringify(outcome)}`);
-      };
       const activeResult = runTurn(activeJob);
       let pending: ReturnType<typeof runTurn> | undefined;
       try {
-        await Promise.race([activeTurn.started.promise, activeResult.then(settledEarly("active"))]);
+        await awaitGateBeforeSettlement(activeTurn.started.promise, activeResult, "active turn");
         pending = runTurn(stored);
-        await Promise.race([queued.promise, pending.then(settledEarly("scheduled"))]);
+        await awaitGateBeforeSettlement(queued.promise, pending, "scheduled turn");
       } finally {
         activeTurn.release.resolve();
         // Join both turns before the state root is torn down, on failure paths too.
@@ -298,7 +433,6 @@ describe("stored session model selections in scheduled session turns", () => {
       }
       expect((await activeResult).status).toBe("ok");
       const result = await pending;
-      expect(retargeted).toBe(true);
       return { result, requests };
     });
   }
@@ -324,38 +458,53 @@ describe("stored session model selections in scheduled session turns", () => {
   );
 
   it.each([
-    {
-      name: "an automatic session selection",
-      storedSelection: { modelOverrideSource: "auto" as const },
+    ["automatic selection", { storedSelection: { modelOverrideSource: "auto" } }],
+    [
+      "unpinned main system-event",
+      {
+        storedPin: null,
+        defaultPrimary: "pinned/model-x",
+        target: "main",
+        payloadKind: "systemEvent",
+      },
+    ],
+    ["explicit job fallbacks", { payload: { fallbacks: ["jobfallback/model-c"] } }],
+    ["explicit job model", { payload: { model: "pinned/model-x" } }],
+    [
+      "disallowed user selection",
+      {
+        storedPin: primary,
+        defaultPrimary: "pinned/model-x",
+        modelAllow: ["pinned/*", "fallback/*"],
+      },
+    ],
+  ] satisfies Array<[string, Parameters<typeof runWithFailingPinnedModel>[0]]>)(
+    "keeps falling back for %s",
+    async (_name, selection) => {
+      const { result, requests } = await runWithFailingPinnedModel(selection);
+      const fallback =
+        "payload" in selection && "fallbacks" in selection.payload
+          ? "jobfallback/model-c"
+          : "fallback/model-b";
+      expect(requests).toEqual(["pinned/model-x", fallback]);
+      expect(result.status, result.error).toBe("ok");
     },
-    {
-      name: "an unpinned session in a main system-event turn",
-      storedPin: null,
-      defaultPrimary: "pinned/model-x",
-      target: "main" as const,
-      payloadKind: "systemEvent" as const,
-    },
-    {
-      name: "a user selection with explicit job fallbacks",
-      payload: { fallbacks: ["jobfallback/model-c"] },
-      expectedFallback: "jobfallback/model-c",
-    },
-    {
-      name: "a user selection when the job sets its own model",
-      payload: { model: "pinned/model-x" },
-    },
-    {
-      name: "a disallowed user selection that falls through to the default",
-      storedPin: primary,
-      defaultPrimary: "pinned/model-x",
-      modelAllow: ["pinned/*", "fallback/*"],
-    },
-  ])("keeps falling back for $name", async ({ expectedFallback, ...selection }) => {
-    const { result, requests } = await runWithFailingPinnedModel(selection);
+  );
 
-    expect(requests).toEqual(["pinned/model-x", expectedFallback ?? "fallback/model-b"]);
-    expect(result.status, result.error).toBe("ok");
-  });
+  it.each(policyCases)(
+    "settles a scheduled occurrence across %s target preparation once",
+    async (reload, status, calls, attempts, effects) => {
+      const { result, requests, preparations, externalEffects } = await runWithFailingPinnedModel({
+        storedPin: null,
+        payload: { fallbacks: [] },
+        reload,
+      });
+      expect(result?.status, result?.error).toBe(status);
+      expect(requests).toEqual(calls ? ["primary/model-a"] : []);
+      expect(preparations).toBe(attempts);
+      expect(externalEffects).toBe(effects);
+    },
+  );
 
   describe("when the session model changes while a queued turn waits for admission", () => {
     it("falls back once the user pin is cleared", async () => {
@@ -365,24 +514,23 @@ describe("stored session model selections in scheduled session turns", () => {
         defaultPrimary: "pinned/model-x",
         retargetWhileAdmitting: { pin: null },
       });
-
-      // The active turn answers from the old pin; the queued turn runs the new selection.
       expect(requests).toEqual(["primary/model-a", "pinned/model-x", "fallback/model-b"]);
       expect(result.status, result.error).toBe("ok");
     });
 
     it.each([
-      { target: "session", payloadKind: undefined },
-      { target: "main", payloadKind: "systemEvent" },
+      { target: "session", payloadKind: undefined, blocked: false },
+      { target: "session", payloadKind: undefined, blocked: true },
+      { target: "main", payloadKind: "systemEvent", blocked: false },
     ] as const)(
-      "keeps a queued $target/$payloadKind turn strict after pinning",
-      async ({ target, payloadKind }) => {
+      "keeps a queued $target/$payloadKind turn strict after pinning (admission blocked: $blocked)",
+      async ({ target, payloadKind, blocked }) => {
         const { result, requests } = await runWithFailingPinnedModel({
           storedSelection: {},
           storedPin: null,
           target,
           payloadKind,
-          retargetWhileAdmitting: { pin: pinned },
+          retargetWhileAdmitting: { pin: pinned, blocked },
         });
         expect(requests).toEqual(["primary/model-a", "pinned/model-x"]);
         expectPinnedFailure(result);
