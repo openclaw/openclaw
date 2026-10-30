@@ -290,7 +290,7 @@ describe("persistInboundImagesForTranscript", () => {
       const recovered = readPersistedMediaFacts(message)?.[0];
       expect(recovered).toMatchObject({ kind: "image", fileName, contentType: mimeType });
       expect([recovered?.width, recovered?.height]).toEqual([width, height]);
-      expect(saveMediaBufferMock.mock.calls[0]?.[0]).toEqual(bytes);
+      expect(saveMediaBufferMock.mock.calls[0]?.[0]?.equals(bytes), "saved image bytes").toBe(true);
     },
   );
 
