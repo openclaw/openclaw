@@ -374,7 +374,7 @@ describe("renderChatComposer context usage", () => {
     expect(part(container, "stats")?.textContent).toContain("$0.00");
   });
 
-  it("offers Compact beside View context with state-matched emphasis", () => {
+  it("offers a secondary Compact beside View context in every popover state", () => {
     const onCompact = vi.fn();
     const render = (overrides: ComposerOverrides & { session?: Partial<GatewaySessionRow> }) =>
       compactButton(
@@ -383,34 +383,35 @@ describe("renderChatComposer context usage", () => {
     const state = (button: HTMLButtonElement | null) =>
       button && {
         label: button.textContent,
-        high: button.classList.contains("chat-context__compact--high"),
+        filled: button.classList.contains("chat-context__compact--high"),
         disabled: button.disabled,
         busy: button.getAttribute("aria-busy"),
         title: button.title,
       };
-    const ready = "Replaces older context with a summary.";
-
-    expect(compactButton(renderComposer({ session: { totalTokens: 190_000 } }))).toBeNull();
-    expect(state(render({ session: { totalTokens: 40_000 } }))).toEqual({
+    const ready = {
       label: "Compact",
-      high: false,
+      filled: false,
       disabled: false,
       busy: null,
-      title: ready,
-    });
-    expect(state(render({ session: { totalTokens: 190_000 } }))).toMatchObject({
-      high: true,
-      disabled: false,
-    });
-    // Stale totals may predate a compaction, so they never ask for another one.
-    expect(
-      state(render({ session: { totalTokens: 190_000, totalTokensFresh: false } })),
-    ).toMatchObject({ high: false, disabled: false });
-    expect(state(render({ session: { totalTokens: 190_000 }, runActive: true }))).toMatchObject({
+      title: "Replaces older context with a summary.",
+    };
+
+    expect(compactButton(renderComposer({ session: { totalTokens: 190_000 } }))).toBeNull();
+    // Near the limit the ring carries the warning; the action stays secondary.
+    for (const session of [
+      { totalTokens: 40_000 },
+      { totalTokens: 190_000 },
+      { totalTokens: 190_000, totalTokensFresh: false },
+    ]) {
+      expect(state(render({ session }))).toEqual(ready);
+    }
+    expect(state(render({ session: { totalTokens: 190_000 }, runActive: true }))).toEqual({
+      ...ready,
       disabled: true,
       title: "Available when the current run finishes.",
     });
-    expect(state(render({ session: { totalTokens: 190_000 }, connected: false }))).toMatchObject({
+    expect(state(render({ session: { totalTokens: 190_000 }, connected: false }))).toEqual({
+      ...ready,
       disabled: true,
     });
     // A compaction the pane already tracks (runtime or another surface) reads as busy.
@@ -422,7 +423,7 @@ describe("renderChatComposer context usage", () => {
           compactionStatus: { phase: "active", runId: "run-1", startedAt: 1, completedAt: null },
         }),
       ),
-    ).toEqual({ label: "Compacting", high: true, disabled: true, busy: "true", title: ready });
+    ).toEqual({ ...ready, label: "Compacting", disabled: true, busy: "true" });
     expect(onCompact).not.toHaveBeenCalled();
   });
 

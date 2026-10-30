@@ -301,13 +301,13 @@ export function ChatComposerContextPanel(
                 {t("chat.sessionDetails.contextOpen")}
                 <Icon name="chevronRight" />
               </button>
-              {/* Compacting keeps the popover open so the budget above shows the result. */}
+              {/* A secondary action beside View context: the ring already carries the warning.
+                  Compacting keeps the popover open so the budget above shows the result. */}
               <ContextCompactButton
                 onCompact={props.onCompact}
                 compactionStatus={props.compactionStatus}
                 runActive={props.runActive}
                 connected={props.connected !== false}
-                warning={context().warning}
               />
             </div>
             <div class="context-usage__separator" />

@@ -1056,6 +1056,12 @@ openclaw-pending-session-create {
   gap: 8px;
   min-height: 26px;
 }
+/* The label's caps sit 1px above its content-box center. Lift only the outline so it
+   centers on the line it shares with View context; both labels keep one baseline. */
+.context-usage__actions .chat-context__compact {
+  margin-top: -2px;
+  padding-top: 2px;
+}
 /* Shared Compact control: the composer popover and the context panel size it. */
 .chat-context__compact {
   display: inline-flex;
@@ -1079,11 +1085,6 @@ openclaw-pending-session-create {
     box-shadow 150ms var(--ease-out),
     color 150ms var(--ease-out);
 }
-.chat-context__compact--high {
-  background: var(--primary);
-  box-shadow: none;
-  color: var(--primary-foreground);
-}
 .chat-context__compact:disabled {
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--border);
@@ -1096,9 +1097,6 @@ openclaw-pending-session-create {
 @media (hover: hover) {
   .chat-context__compact:not(:disabled):not(.chat-context__compact--high):hover {
     background: var(--bg-hover);
-  }
-  .chat-context__compact--high:not(:disabled):hover {
-    background: color-mix(in srgb, var(--primary) 88%, var(--text-strong));
   }
 }
 .context-usage__separator {

@@ -132,6 +132,12 @@ openclaw-chat-context-panel {
     padding: 0;
     font-size: 12px;
   }
+  /* Only the panel promotes Compact near the limit; the composer popover keeps it secondary. */
+  .chat-context__compact--high {
+    background: var(--primary);
+    color: var(--primary-foreground);
+    box-shadow: none;
+  }
   .chat-context__compact .btn__spinner {
     width: 13px;
     height: 13px;

@@ -100,7 +100,9 @@ suite.define(() => {
       const summary = page.locator(".context-usage__popover").filter({ visible: true });
       const compactButton = summary.locator(".context-usage__actions .chat-context__compact");
       await summary.getByRole("button", { name: "Compact", exact: true }).waitFor();
-      expect(await compactButton.getAttribute("class")).toContain("chat-context__compact--high");
+      expect(await compactButton.getAttribute("class")).not.toContain(
+        "chat-context__compact--high",
+      );
 
       const beforeCompact = await gateway.deferNext("sessions.compact", { key: sessionKey });
       await compactButton.click();
@@ -131,9 +133,6 @@ suite.define(() => {
         .poll(() => summary.locator(".context-usage__context-value").textContent())
         .toContain("21%");
       await summary.getByRole("button", { name: "Compact", exact: true }).waitFor();
-      expect(await compactButton.getAttribute("class")).not.toContain(
-        "chat-context__compact--high",
-      );
       expect(await summary.isVisible()).toBe(true);
       expect(await draft.inputValue()).toBe("Keep this unsent draft");
     });

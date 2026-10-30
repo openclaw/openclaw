@@ -71,6 +71,16 @@ function isPainted(element: HTMLElement) {
   );
 }
 
+function labelBox(element: HTMLElement) {
+  const range = document.createRange();
+  range.selectNodeContents(
+    [...element.childNodes].find((node) => node.nodeType === Node.TEXT_NODE && node.textContent)!,
+  );
+  return range.getBoundingClientRect();
+}
+
+const center = (box: DOMRect) => box.top + box.height / 2;
+
 async function expectBounds(element: HTMLElement, matches: (box: DOMRect) => boolean) {
   await expect.poll(() => matches(element.getBoundingClientRect())).toBe(true);
 }
@@ -150,7 +160,7 @@ it.each([
 );
 
 it.each([1280, 320] as const)(
-  "keeps Compact on the View context row at %spx and stays open while it runs",
+  "centers a secondary Compact on the View context row at %spx and stays open while it runs",
   async (width) => {
     await page.viewport(width, 720);
     container.style.cssText = "position:fixed;bottom:16px;left:16px;right:16px";
@@ -177,10 +187,16 @@ it.each([1280, 320] as const)(
     await expect.poll(() => isPainted(open) && isPainted(compact)).toBe(true);
     const link = open.getBoundingClientRect();
     const action = compact.getBoundingClientRect();
-    expect(Math.abs(link.top + link.height / 2 - (action.top + action.height / 2))).toBeLessThan(1);
+    const linkText = labelBox(open);
+    const actionText = labelBox(compact);
+    // One baseline for both labels, and the outline centered on that shared line.
+    expect(Math.abs(linkText.bottom - actionText.bottom)).toBeLessThan(0.5);
+    expect(Math.abs(center(action) - center(actionText))).toBeLessThan(0.5);
+    expect(open.parentElement!.getBoundingClientRect().height).toBe(26);
     expect(link.right).toBeLessThan(action.left);
     expect(action.right).toBeLessThanOrEqual(popover.getBoundingClientRect().right);
-    expect(getComputedStyle(compact).backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+    // 95% fresh usage still renders the outlined secondary treatment.
+    expect(getComputedStyle(compact).backgroundColor).toBe("rgba(0, 0, 0, 0)");
 
     await page.elementLocator(compact).click();
     await expect.poll(() => compact.textContent).toBe("Compacting");
