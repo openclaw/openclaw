@@ -47,6 +47,10 @@ assistant message, Chat keeps its commentary and tool activity visible and marks
 the run **Interrupted**. This presentation does not resume the run or recover an
 answer that was never saved.
 
+Archived sessions keep earlier messages and recorded failures readable in the
+transcript. Past run failures do not show a recovery banner above the archived
+composer; unarchive the session to continue the conversation.
+
 Tool activity shows a tool-specific icon beside its purpose or details instead of
 repeating the tool name. When no distinct purpose or detail is available, the row
 shows the tool label instead of leaving the text blank. Activity summaries stay

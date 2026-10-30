@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, assert, describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import type { SessionActorAuthority } from "./session-actor-contract.js";
 import type {
   SessionActorMemoryHistoryQuery,
@@ -214,7 +214,7 @@ describe("memory actor history", () => {
 
   it("sizes pages before copying and makes progress past oversized history", async () => {
     const large = message("large", "small", "assistant", "x".repeat(20000));
-    const { read } = await fixture([message("small", null, "user", "Small"), large]);
+    const { read, storage } = await fixture([message("small", null, "user", "Small"), large]);
     expect(
       await read("by-id", { messageId: "missing", options: { currentOnly: true, maxBytes: 1024 } }),
     ).toEqual({ found: false, oversized: false });
@@ -240,6 +240,28 @@ describe("memory actor history", () => {
       options: { offset: page.olderOffset!, maxMessages: 2, maxBytes: 1024 },
     });
     expect(messageIds(older.messages)).toEqual(["small"]);
+    {
+      using stringify = vi.spyOn(JSON, "stringify");
+      const anchorPage = storage.readCurrent(
+        {
+          type: "session.history.around-id",
+          input: {
+            options: { messageId: "small", maxMessages: 2, maxBytes: 1024, direction: "newer" },
+          },
+        },
+        authority,
+      );
+      expect(messageIds(anchorPage.messages)).toEqual(["small"]);
+      expect(
+        stringify.mock.calls.some(
+          ([value]) =>
+            isRecord(value) &&
+            isRecord(value.event) &&
+            isRecord(value.event.message) &&
+            value.event.message.content === large.message.content,
+        ),
+      ).toBe(false);
+    }
     const raw = await read("raw-delta", { limits: { maxEvents: 2 } });
     assert(raw.kind === "page", "Expected raw page");
     expect(
@@ -293,37 +315,42 @@ describe("memory actor history", () => {
     expect(messageIds(media.messages)).toEqual(["large"]);
   });
 
-  it("bounds recent and anchor history and refuses unbounded offset pages over the cap", async () => {
-    const content = "x".repeat(3 * 1024 * 1024);
-    const { storage, read } = await fixture([
-      message("first", null, "user", content),
-      message("second", "first", "assistant", content),
-      message("third", "second", "user", content),
-    ]);
-    const recent = await read("recent", {
-      options: { maxMessages: 3, maxBytes: 16 * 1024 * 1024 },
-    });
-    expect(messageIds(recent.messages)).toEqual(["second", "third"]);
-    const offsetPage: SessionActorMemoryHistoryQuery = {
-      type: "session.history.page",
-      input: { options: { offset: 0, maxMessages: 3 } },
-    };
-    expect(() => storage.readCurrent(offsetPage, authority)).toThrow(
-      "Transcript history page exceeds the 8388608-byte limit; request a smaller limit",
-    );
-    // Earlier-history paging anchors on older windows; an oversized window must still page.
-    const older = await read("around-id", {
-      options: { messageId: "third", maxMessages: 3, direction: "older" },
-    });
-    expect(older.found && messageIds(older.messages)).toEqual(["second", "third"]);
-    const around: SessionActorMemoryHistoryQuery = {
-      type: "session.history.around-id",
-      input: { options: { messageId: "second", maxMessages: 3 } },
-    };
-    expect(() => storage.readCurrent(around, authority)).toThrow(
-      "Transcript history page exceeds the 8388608-byte limit; request a smaller limit",
-    );
-  });
+  it.each([3, 5])(
+    "bounds %i MiB anchor history while preserving directional progress",
+    async (size) => {
+      const content = "x".repeat(size * 1024 * 1024);
+      const { storage, read } = await fixture([
+        message("first", null, "user", content),
+        message("second", "first", "assistant", content),
+        message("third", "second", "user", content),
+      ]);
+      const recent = await read("recent", {
+        options: { maxMessages: 3, maxBytes: 16 * 1024 * 1024 },
+      });
+      expect(messageIds(recent.messages)).toEqual(size === 3 ? ["second", "third"] : ["third"]);
+      const offsetPage: SessionActorMemoryHistoryQuery = {
+        type: "session.history.page",
+        input: { options: { offset: 0, maxMessages: 3 } },
+      };
+      expect(() => storage.readCurrent(offsetPage, authority)).toThrow(
+        "Transcript history page exceeds the 8388608-byte limit; request a smaller limit",
+      );
+      for (const [direction, messageId, excludeAnchor, expected, offset] of [
+        ["older", "third", false, size === 3 ? ["second", "third"] : ["third"], 0],
+        ["newer", "first", false, size === 3 ? ["first", "second"] : ["first"], size === 3 ? 1 : 2],
+        [undefined, "second", false, size === 3 ? ["first", "second"] : ["second"], 1],
+        ["older", "third", true, size === 3 ? ["first", "second"] : ["second"], 1],
+        ["newer", "first", true, size === 3 ? ["second", "third"] : ["second"], size === 3 ? 0 : 1],
+      ] as const) {
+        const page = await read("around-id", {
+          options: { messageId, maxMessages: 3, direction, excludeAnchor },
+        });
+        expect(page).toMatchObject({ found: true, hasOverreadContext: false, offset });
+        expect(messageIds(page.messages)).toEqual(expected);
+        expect(Buffer.byteLength(JSON.stringify(page.messages))).toBeLessThan(8 * 1024 * 1024);
+      }
+    },
+  );
 
   it("keeps full hydration exact while model context excludes obsolete payloads and private fields", async () => {
     const events = [

@@ -3,6 +3,7 @@ import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:https";
 import type { LookupFunction, Server } from "node:net";
 import type { DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import {
   redactProviderResponseErrorText,
   resolveProviderHttpRequestConfigWithOriginTrust,
@@ -16,7 +17,6 @@ import {
 } from "openclaw/plugin-sdk/test-env";
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import type { RuntimeConfig } from "./config.js";
 import {
   collectRequest,
   registeredPreparedDecisionProvider,
@@ -74,7 +74,7 @@ async function listen<T extends Server>(listener: T) {
   };
 }
 
-type ModelProviderConfig = NonNullable<RuntimeConfig["providerConfig"]>;
+type ModelProviderConfig = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string];
 
 const batch = {
   state: { type: "json" as const, value: { evidence: "Synthetic outage" } },

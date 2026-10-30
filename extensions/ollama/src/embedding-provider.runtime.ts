@@ -122,7 +122,6 @@ function resolveConfiguredProvider(options: OllamaEmbeddingOptions) {
   return config ? { providerId, config } : undefined;
 }
 
-type OllamaEmbeddingBaseUrlOrigin = "remote-config" | "provider-config" | "default";
 type OllamaEmbeddingSourceResolution = "unset" | "opt-out" | { apiKey: string };
 
 function resolveSourcedOllamaEmbeddingKey(params: {
@@ -197,21 +196,6 @@ async function resolveOllamaEmbeddingResolvedKeys(
   return { remote, provider, env };
 }
 
-function resolveOllamaEmbeddingBaseUrl(params: {
-  remoteBaseUrl?: string;
-  providerConfig: ReturnType<typeof resolveConfiguredProvider>;
-}): { baseUrl: string; origin: OllamaEmbeddingBaseUrlOrigin } {
-  const remoteBaseUrl = params.remoteBaseUrl?.trim();
-  if (remoteBaseUrl) {
-    return { baseUrl: resolveOllamaApiBase(remoteBaseUrl), origin: "remote-config" };
-  }
-  const providerBaseUrl = readProviderBaseUrl(params.providerConfig?.config);
-  if (providerBaseUrl) {
-    return { baseUrl: resolveOllamaApiBase(providerBaseUrl), origin: "provider-config" };
-  }
-  return { baseUrl: resolveOllamaApiBase(undefined), origin: "default" };
-}
-
 function normalizeOllamaHostKey(baseUrl: string): string | undefined {
   const parsed = URL.parse(baseUrl);
   if (!parsed) {
@@ -236,16 +220,15 @@ async function resolveOllamaEmbeddingClient(
   options: OllamaEmbeddingOptions,
 ): Promise<OllamaEmbeddingClientConfig> {
   const providerConfig = resolveConfiguredProvider(options);
-  const { baseUrl, origin: baseUrlOrigin } = resolveOllamaEmbeddingBaseUrl({
-    remoteBaseUrl: options.remote?.baseUrl,
-    providerConfig,
-  });
+  const remoteBaseUrl = options.remote?.baseUrl?.trim();
+  const baseUrl = resolveOllamaApiBase(
+    remoteBaseUrl || readProviderBaseUrl(providerConfig?.config),
+  );
   const model = normalizeEmbeddingModel(options.model, options.provider);
   const providerOwnedHost = resolveOllamaApiBase(readProviderBaseUrl(providerConfig?.config));
   // Provider keys and headers belong to this origin only; a remote override
   // must neither resolve nor inherit another host's configured credentials.
-  const providerOwnsHost =
-    baseUrlOrigin !== "remote-config" || areOllamaHostsEquivalent(baseUrl, providerOwnedHost);
+  const providerOwnsHost = !remoteBaseUrl || areOllamaHostsEquivalent(baseUrl, providerOwnedHost);
   const remoteHeaderNames = new Set(
     Object.keys(options.remote?.headers ?? {}).map((headerName) => headerName.toLowerCase()),
   );
@@ -301,7 +284,7 @@ async function resolveOllamaEmbeddingClient(
     allowPodmanHostGatewayLinkLocal: providerOwnsHost,
     model,
     outputDimensionality: options.dimensions,
-    ...(localService && baseUrlOrigin !== "remote-config"
+    ...(localService && !remoteBaseUrl
       ? {
           localServiceTarget: {
             providerId: providerConfig.providerId,

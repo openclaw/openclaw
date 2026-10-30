@@ -2,7 +2,10 @@
 // Native control polling: main-thread-stall-measure.mjs worker-service 21 1000000
 // Compare five counterbalanced base/candidate pairs. Allocation is sampled separately
 // from untraced wall/CPU time; this measures the monitored decode probe, not a Gateway.
+// Leaf-attribution proof: main-thread-stall-measure.mjs flight (Node 26 native profiler).
+import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { pbkdf2Sync, scryptSync } from "node:crypto";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { performance } from "node:perf_hooks";
@@ -12,8 +15,41 @@ import {
   getMainThreadTaskName,
   runWithMainThreadTask,
 } from "../../src/infra/main-thread-stall.ts";
+import { createStallFlightRecorder } from "../../src/logging/diagnostic-stall-flight-recorder.ts";
 
 const [mode = "phase", countText = "21", iterationsText = "200000"] = process.argv.slice(2);
+if (mode === "flight") {
+  const warnings = [];
+  const recorder = createStallFlightRecorder((message) => warnings.push(message));
+  try {
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    const startedAt = performance.now();
+    runWithMainThreadTask("benchmark:synthetic-stall", () => {
+      while (performance.now() - startedAt < 1_200) {
+        pbkdf2Sync("synthetic", "synthetic", 10_000, 32, "sha256");
+      }
+    });
+    const endedAt = performance.now();
+    while (performance.now() - endedAt < 600) {
+      scryptSync("synthetic", "synthetic", 32);
+    }
+    const report = recorder.sample({ startedAt, endedAt });
+    assert.equal(warnings.length, 0);
+    assert.ok(report?.includes("self="));
+    assert.ok(report.includes("pbkdf2Sync@node:internal/crypto/pbkdf2"));
+    assert.ok(report.includes("openclaw:src/infra/main-thread-stall.ts"));
+    assert.ok(!report.includes("scryptSync"));
+    assert.ok(Buffer.byteLength(report) <= 2_048);
+    console.log(
+      JSON.stringify({ node: process.version, bytes: Buffer.byteLength(report), report }),
+    );
+  } finally {
+    recorder.stop();
+  }
+  process.exit(0);
+}
 const count = Number(countText);
 const iterations = Number(iterationsText);
 if (

@@ -1,9 +1,6 @@
 import { sql, type Expression, type RawBuilder, type SqlBool } from "kysely";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../../agents/internal-runtime-context.js";
-import {
-  assertUnboundedAnchorPageUsable,
-  SOURCE_PAGE_MAX_BYTES,
-} from "../../gateway/session-transcript-source-pages.js";
+import { SOURCE_PAGE_MAX_BYTES } from "../../gateway/session-transcript-source-pages.js";
 import { engineIndexHint } from "../../infra/database-engine/index-hint.js";
 import { jsonArrayElements } from "../../infra/database-engine/json-values.js";
 import {
@@ -12,6 +9,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
+  boundHistoryAnchorPageRange,
   resolveHistoryAnchorPageRange,
   type TranscriptAnchorPageOptions,
 } from "../../sessions/transcript-anchor-page.js";
@@ -262,6 +260,7 @@ function readHistoricalDisplayEventRange(
   count: number,
   anchor: { activePosition: number; displayPosition: number },
   maxBytes?: number,
+  anchorOptions?: TranscriptAnchorPageOptions,
 ): SessionTranscriptMessageEvent[] {
   if (count <= 0) {
     return [];
@@ -271,7 +270,7 @@ function readHistoricalDisplayEventRange(
     historyNavigationValidSql(projection.database.db).as("navigation_valid"),
     eb(transcriptEventReadBytesSql("event"), "+", 1).as("serialized_bytes"),
   ]);
-  const olderCount = anchor.displayPosition - start;
+  const olderCount = Math.max(0, anchor.displayPosition - start);
   // The anchor already identifies the physical position; visit only its selected neighbors.
   const older =
     olderCount === 0
@@ -286,7 +285,11 @@ function readHistoricalDisplayEventRange(
   const newer = executeSqliteQuerySync(
     projection.database.db,
     query
-      .where("active.active_position", ">=", anchor.activePosition)
+      .where(
+        "active.active_position",
+        start > anchor.displayPosition ? ">" : ">=",
+        anchor.activePosition,
+      )
       .orderBy("active.active_position", "asc")
       .limit(count - olderCount),
   ).rows;
@@ -294,22 +297,19 @@ function readHistoricalDisplayEventRange(
     assertTranscriptNavigationValid(row.navigation_valid);
     return Object.assign(row, { displaySeq: start + index + 1 });
   });
-  // Oversized ranges return their newest byte-bounded slice; callers page from the oldest returned event.
+  // Size the contiguous anchor window before loading event bodies.
   const limit = Math.min(
     SOURCE_PAGE_MAX_BYTES,
     Math.max(1_024, Math.floor(maxBytes ?? SOURCE_PAGE_MAX_BYTES)),
   );
-  let bytes = 2;
-  let selectedStart = ranged.length;
-  while (selectedStart > 0) {
-    const nextBytes = ranged[selectedStart - 1]!.serialized_bytes;
-    if (bytes + nextBytes > limit) {
-      break;
-    }
-    bytes += nextBytes;
-    selectedStart--;
-  }
-  const selected = ranged.slice(selectedStart);
+  const selectedRange = boundHistoryAnchorPageRange(
+    { readStart: 0, endExclusive: ranged.length, hasOverreadContext: false, offset: 0 },
+    anchorOptions ? anchor.displayPosition - start : ranged.length - 1,
+    limit,
+    (position) => ranged[position]!.serialized_bytes,
+    anchorOptions !== undefined && maxBytes === undefined,
+  );
+  const selected = ranged.slice(selectedRange.start, selectedRange.endExclusive);
   if (selected.length === 0) {
     return [];
   }
@@ -425,19 +425,13 @@ export function readHistoricalHistoryAnchorPage(
     requested,
     { activePosition: row.active_position, displayPosition: anchorPosition },
     options.maxBytes,
+    options,
   );
-  // Trimming keeps the newest events, so the returned page starts at endExclusive - events.length.
-  assertUnboundedAnchorPageUsable(options, {
-    start: range.endExclusive - events.length,
-    readStart: range.readStart,
-    endExclusive: range.endExclusive,
-  });
   return {
     events,
     found: true,
-    // Byte trimming drops the oldest events first, so a short page no longer carries the overread context.
-    hasOverreadContext: range.hasOverreadContext && events.length === requested,
-    offset: range.offset,
+    hasOverreadContext: range.hasOverreadContext && events[0]?.seq === range.readStart + 1,
+    offset: total - (events.at(-1)?.seq ?? range.endExclusive),
     displaySource,
     totalMessages: total,
   };
