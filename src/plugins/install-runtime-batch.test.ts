@@ -24,7 +24,9 @@ import {
 import { hashStableJson } from "./installed-plugin-index-hash.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import { createFixture } from "./plugin-generation-artifact.admission.test-support.js";
 import { inspectPluginGenerationSources } from "./plugin-generation-source-inspection.js";
+import * as generationWorker from "./plugin-generation-worker.js";
 import {
   hasPluginLifecycleLease,
   runOutsidePluginLifecycleLease,
@@ -364,6 +366,36 @@ it("holds the original batch lease until preparation settles before calling the 
   });
   await expect(operation).resolves.toBe("installed");
   expect(reload).toHaveBeenCalledOnce();
+});
+
+it("refuses batch publication when source inspection returns after authority is revoked", async () => {
+  const { env, reload, batch } = await preparationFixture();
+  const fixture = createFixture(path.join(env.OPENCLAW_STATE_DIR, "plugin"), false);
+  const index = { ...fixture.index, installRecords: recordsAt(fixture.root) };
+  writeConfigMachineState("plugins.installedIndex", { revision: 2, index }, { env });
+  batch.retain("fixture");
+  const controller = new AbortController();
+  const refusal = new Error("source inspection authority revoked");
+  const inspect = generationWorker.inspectPluginGenerationSourcesAsync;
+  vi.spyOn(generationWorker, "inspectPluginGenerationSourcesAsync").mockImplementation(
+    async (...args) => {
+      const result = await inspect(...args);
+      controller.abort(refusal);
+      return result;
+    },
+  );
+  let preparation: PromiseSettledResult<void> | undefined;
+  await Promise.allSettled([
+    withPluginLifecycleLease(
+      { env, assertCurrent: () => controller.signal.throwIfAborted() },
+      async (lease) => {
+        [preparation] = await Promise.allSettled([batch.prepare(lease)]);
+      },
+    ),
+  ]);
+  expect(preparation).toMatchObject({ status: "rejected", reason: refusal });
+  expect(reload).not.toHaveBeenCalled();
+  batch.close();
 });
 
 it.each(["index", "deferred obligation"] as const)(

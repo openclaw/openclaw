@@ -6,7 +6,7 @@
   "dependencies": {
     "@openclaw/fs-safe": "0.26.14",
     "minimatch": "10.2.6",
-    "typebox": "1.4.2"
+    "typebox": "1.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

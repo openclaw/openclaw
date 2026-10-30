@@ -12,7 +12,7 @@
     "@slack/types": "3.2.0",
     "@slack/web-api": "8.2.0",
     "get-east-asian-width": "1.7.0",
-    "typebox": "1.4.2",
+    "typebox": "1.4.3",
     "undici": "8.12.3",
     "zod": "4.6.7"
   },
