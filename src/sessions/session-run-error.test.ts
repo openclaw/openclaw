@@ -32,6 +32,11 @@ it.each([
     return [error, expect.any(String), content] as const;
   }),
   [
+    "The provider stopped this request as a safety precaution (misalignment).",
+    "The provider stopped this request as a safety precaution (misalignment).",
+    "Your request couldn't be completed: The provider stopped this request as a safety precaution (misalignment).",
+  ],
+  [
     Object.assign(new Error("EACCES: permission denied, scandir '/synthetic/workspace-main'"), {
       code: "EACCES",
     }),
