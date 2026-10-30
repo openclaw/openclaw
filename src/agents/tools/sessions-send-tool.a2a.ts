@@ -79,6 +79,15 @@ export async function runSessionsSendA2AFlow(params: {
         untilTerminal: true,
       }));
     if (wait.status !== "ok") {
+      if (wait.observationDenied === true) {
+        // The accepted run's outcome is unobserved, not failed. Reporting a delivery
+        // failure here would tell the requester to repeat already-completed work.
+        log.warn("sessions_send reply observation denied", {
+          runId: params.runId,
+          error: wait.error?.trim() || undefined,
+        });
+        return;
+      }
       if (
         params.notifyRequesterOnWaitFailure === true &&
         params.requesterSessionKey &&

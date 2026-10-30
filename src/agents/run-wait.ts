@@ -65,8 +65,19 @@ const RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS: readonly RegExp[] = [
   /socket hang up/i,
 ];
 
+// A scope rejection means the observer could not read the run, not that the run failed.
+const OBSERVATION_DENIED_PATTERN = /\bmissing scope:/i;
+
 function normalizeAgentWaitError(cause: unknown): AgentWaitResult {
   const error = formatErrorMessage(cause);
+  const observationDenied =
+    (cause instanceof GatewayProtocolRequestError && cause.gatewayCode === "FORBIDDEN") ||
+    OBSERVATION_DENIED_PATTERN.test(error);
+  if (observationDenied) {
+    // Never let an authority gap become evidence about delivery; retry guidance would
+    // ask the requester to repeat work the accepted run already completed.
+    return { status: "error", error, observationDenied: true };
+  }
   // A rejected observation during drain carries no terminal fact about the run.
   const unavailable =
     isGatewayRestartDraining() ||
@@ -206,6 +217,10 @@ export async function waitForAgentRun(params: {
       terminalReply: normalizeAgentRunTerminalReplySnapshot(wait?.terminalReply),
       sourceReplyDelivered:
         receipt?.runId === runId && receipt.sourceReplyDelivered === true ? true : undefined,
+      // A returned authority rejection is the same fact as a thrown one.
+      ...(OBSERVATION_DENIED_PATTERN.test(normalized.error ?? "")
+        ? { observationDenied: true as const }
+        : {}),
     };
   } catch (err) {
     return normalizeAgentWaitError(err);

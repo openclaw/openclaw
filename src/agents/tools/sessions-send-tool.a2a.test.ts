@@ -400,6 +400,15 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
     expectNoSend();
   });
 
+  it("does not report delivery failure when completion observation is denied", async () => {
+    // The Gateway rejects the wait; it does not return a terminal fact about the run.
+    agentWaitMock.mockRejectedValueOnce(new Error("missing scope: operator.write"));
+
+    await runNotification("run-observation-denied");
+
+    expectNoDelivery();
+  });
+
   it("reports timeout after confirmed source delivery without recommending a resend", async () => {
     const wait = { status: "timeout", error: "backend stalled after sending", endedAt: 1 };
     agentWaitMock.mockResolvedValueOnce({

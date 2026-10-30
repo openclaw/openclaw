@@ -383,6 +383,21 @@ describe("waitForAgentRun", () => {
     }
   });
 
+  it("keeps a scope rejection from becoming retry evidence", async () => {
+    callGatewayMock.mockRejectedValueOnce(
+      new GatewayProtocolRequestError({
+        code: "FORBIDDEN",
+        message: "missing scope: operator.write",
+      }),
+    );
+
+    const result = await waitForAgentRun({ runId: "run-scope-denied", timeoutMs: 500 });
+
+    expect(result.status).toBe("error");
+    expect(result.observationDenied).toBe(true);
+    expect(result.retryableTransportError).toBeUndefined();
+  });
+
   it("normalizes blocked ok waits to errors", async () => {
     callGatewayMock.mockResolvedValue({
       status: "ok",

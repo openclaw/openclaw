@@ -7,6 +7,8 @@ export type AgentWaitResult = {
   error?: string;
   /** Set locally when the wait RPC fails; terminal run text is never retry evidence. */
   retryableTransportError?: true;
+  /** The wait was rejected for authority, so it says nothing about the accepted run. */
+  observationDenied?: true;
   startedAt?: number;
   endedAt?: number;
   stopReason?: string;
