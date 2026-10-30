@@ -10,6 +10,7 @@ import {
   type createPreparedPoolPresence,
   isSupersededPresenceReserve,
   matchingPreparedPoolPresenceDemand,
+  preparedDemandSourceKey,
   type PreparedPoolPresenceOptions,
 } from "./prepared-pool-presence.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
@@ -32,6 +33,14 @@ export type Generation = {
   slots?: number;
 };
 export const DEFAULT_MAX_TOTAL = 4;
+/** Explicit repository builds have no service-owned user credential after their RPC closes. */
+export function isRequestScopedRepositoryBuild(record: Environment): boolean {
+  if (record.preparation?.purpose !== "build") {
+    return false;
+  }
+  const project = readWorkerProjectSnapshot(record.profileSnapshot.project);
+  return Boolean(project && "source" in project);
+}
 export type PoolOptions = Omit<PreparedPoolPresenceOptions, "schedule" | "prepareIntent"> & {
   resolveProvider: (providerId: string) => WorkerProvider | undefined;
   prepareIntent: (
@@ -132,7 +141,7 @@ export function admitSources(ctx: PassContext): Generations {
       demand &&
       (demand.retireAtMs ?? Infinity) > now() &&
       demand.profileId === record.profileId &&
-      demand.project.key === readWorkerProjectSnapshot(record.profileSnapshot.project)?.key &&
+      preparedDemandSourceKey(demand) === workerPreparationSourceKey(record.profileSnapshot) &&
       demand.preparationKey !== record.preparation?.key
     ) {
       continue;
@@ -212,7 +221,9 @@ export function admitSources(ctx: PassContext): Generations {
             activationExpiresAtMs ?? 0,
           ),
           presenceOwned: Boolean(presenceOwned),
-          deferred: Boolean(presenceOwned && deferred && !activationEligible),
+          deferred:
+            isRequestScopedRepositoryBuild(record) ||
+            Boolean(presenceOwned && deferred && !activationEligible),
           activationEligible,
         });
       } else {
@@ -244,8 +255,8 @@ export function assertGenerationCurrent(ctx: PassContext, generation: Generation
   const { options, presence, isAdmitted } = ctx;
   options.signal.throwIfAborted();
   if (generation.presenceOwned && !generation.activationEligible) {
-    if (!isAdmitted() || !presence.isPresent()) {
-      throw new Error("Authenticated human presence is unavailable for preparation");
+    if (!isAdmitted() || !presence.isDemandActive()) {
+      throw new Error("Prepared capacity demand is unavailable for preparation");
     }
   }
   if (!generation.retention?.isCurrent()) {
