@@ -178,6 +178,8 @@ export async function requireGitHubPublicationCommit(
         "--no-tags",
         "--no-write-fetch-head",
         "--recurse-submodules=no",
+        // Preserve ancestry for integration; hydrate only the requested tree below.
+        ...(!missing && options.contents ? ["--filter=blob:none"] : []),
         ...(missing ? ["--refetch", "--stdin"] : []),
         "--",
         githubRepositoryUrl(repository, host),

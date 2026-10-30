@@ -316,6 +316,39 @@ describe("existing PR preparation through the registered agent action", () => {
     },
   );
 
+  it("prepares cold PR history and current files without unrelated historical blobs", async () => {
+    const f = await fixture({ empty: true, fork: true });
+    const upstream = (...args: string[]) => f.local!.git("-C", f.upstream, ...args);
+    await upstream("config", "uploadpack.allowFilter", "true");
+    await f.advanceHead({ "pr.txt": "obsolete PR contents\n" });
+    const historicalBlob = await upstream("rev-parse", "HEAD:pr.txt");
+    const head = await f.advanceHead({ "pr.txt": "current PR contents\n" });
+    vi.stubEnv("GIT_NO_LAZY_FETCH", "1");
+    await expect(f.git("cat-file", "-e", head)).rejects.toThrow();
+
+    expect(await f.invoke()).toMatchObject({
+      status: "prepared",
+      headCommit: head,
+      review: { mode: "local", base: f.commonAncestor },
+    });
+    expect(await f.git("rev-parse", "--is-shallow-repository")).toBe("false");
+    expect(await f.git("rev-list", "--count", head)).toBe("4");
+    expect(await f.git("write-tree")).toBe(await upstream("rev-parse", `${head}^{tree}`));
+    expect(
+      await f.git("rev-list", "--objects", "--missing=print", "--max-count=1", head),
+    ).not.toContain("?");
+    await expect(f.git("cat-file", "-e", historicalBlob)).rejects.toThrow();
+    expect(await fs.readFile(path.join(f.projection, "pr.txt"), "utf8")).toBe(
+      "current PR contents\n",
+    );
+
+    const fetches = () => mocks.runCommand.mock.calls.filter(([argv]) => argv.includes("fetch"));
+    const beforeRepeat = fetches().length;
+    expect(await f.invoke()).toMatchObject({ status: "prepared", headCommit: head });
+    expect(fetches()).toHaveLength(beforeRepeat);
+    expect(f.writes).toEqual([]);
+  });
+
   it.each([false, true])(
     "uses the actual empty source only when no earlier work needs preserving (earlier notes=%s)",
     async (earlierNotes) => {
