@@ -11,6 +11,7 @@ import {
   resolveWorkerCellExport,
 } from "./worker-cell-package.mjs";
 
+let phase = "resolve-installed-root";
 async function main() {
   const [artifacts, candidateRoot, rootArgument, tarball] = process.argv.slice(2);
   const root = fs.realpathSync(rootArgument);
@@ -47,27 +48,33 @@ async function main() {
     assert.equal(typeof functions[0], "function");
     return { call: functions[0], owners };
   }
+  phase = "read-package-identities";
   const baseline = readWorkerCellPackageIdentity(root);
   const candidate = readWorkerCellPackageIdentity(candidateRoot);
   assert.equal(baseline.version, "2026.10.9");
   assert.notEqual(baseline.buildInfo.buildId, candidate.buildInfo.buildId);
+  phase = "load-published-runtime";
   const oldDaemon = await import(pathToFileURL(path.join(root, "dist/cli/daemon-cli.js")).href);
   assert.equal(
     oldDaemon.runManagedHandoffSentinelChild,
     undefined,
     "published runtime must lack the new operation export",
   );
+  phase = "load-published-ledger-owner";
   const ledger = await binding(root, "update-run-ledger", "createUpdateRun");
+  phase = "load-candidate-handoff-owner";
   const start = await binding(
     candidateRoot,
     "update-managed-service-handoff",
     "startManagedServiceUpdateHandoff",
   );
+  phase = "load-candidate-transfer-owner";
   const transfer = await binding(
     candidateRoot,
     "update-managed-service-handoff",
     "transferManagedServiceUpdateHandoff",
   );
+  phase = "seed-operator-state";
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   const settings = () => {
     const config = read(configPath);
@@ -91,6 +98,7 @@ async function main() {
   const userData = { cursor: 137, label: "archive — 東京", enabled: false };
   kv.register("authored", userData);
   const runtimeFile = `${process.env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG}.runtime.json`;
+  phase = "read-serving-gateway";
   const parentPid = read(runtimeFile).pid;
   assert(Number.isSafeInteger(parentPid) && parentPid > 1);
   const run = ledger.call({
@@ -135,6 +143,7 @@ async function main() {
     OPENCLAW_SURVIVOR_PACKAGE_FAULT: faultPath,
     NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${observer} --import=${fault}`.trim(),
   };
+  phase = "start-candidate-handoff";
   const result = await start.call({
     root,
     runId: run.runId,
@@ -149,6 +158,7 @@ async function main() {
     restartDrainTimeoutMs: 300_000,
     meta: { note: "Packaged rollback recovery probe" },
   });
+  phase = "inspect-captured-helper";
   assert.equal(result.status, "started");
   const directory = path.dirname(result.logPath);
   const params = read(path.join(directory, "handoff.json"));
@@ -165,7 +175,9 @@ async function main() {
       name: path.relative(directory, file),
       sha256: hash(file),
     }));
+  phase = "transfer-captured-helper";
   assert(await transfer.call({ kind: "managed-update-handoff", handoffId, installRoot: root }));
+  phase = "wait-rollback-settlement";
   await wait(
     () => fs.readFileSync(result.logPath, "utf8").includes("managed update helper completed code="),
     "managed rollback settlement",
@@ -185,6 +197,7 @@ async function main() {
       throw error;
     }
   }, "helper process exit");
+  phase = "verify-rollback-outcome";
   assert.match(log, /managed update helper completed code=1/u);
   assert.match(log, /Update notice changed or belongs to another handoff; it was not replaced\./u);
   assert.doesNotMatch(
@@ -211,10 +224,12 @@ async function main() {
     "canonical handoff must preserve the unrelated notice before Gateway recovery",
   );
   assert.deepEqual(JSON.parse(concurrent.row.payload_json), notice);
+  phase = "verify-operator-state";
   assertWorkerCellPackageIdentity(readWorkerCellPackageIdentity(root), baseline);
   assert.deepEqual(settings(), beforeSettings);
   assert.equal(hash(dataFile), dataDigest);
   assert.deepEqual(kv.lookup("authored"), userData);
+  phase = "verify-terminal-ledger";
   const settled = oldDaemon.getUpdateRun(run.runId);
   assert.equal(settled.status, "rolled-back");
   assert(
@@ -222,6 +237,7 @@ async function main() {
       (step) => step.step === "previous generation restoration" && step.status === "completed",
     ),
   );
+  phase = "verify-helper-cleanup";
   assert.equal(
     readDatabase(
       params.updateLeaseDatabasePath,
@@ -235,6 +251,7 @@ async function main() {
   for (const file of params.sensitivePaths) {
     assert(!fs.existsSync(file), `Sensitive helper file remains: ${path.basename(file)}`);
   }
+  phase = "verify-restored-gateway";
   const replacement = read(runtimeFile);
   assert.notEqual(replacement.pid, parentPid);
   process.kill(replacement.pid, 0);
@@ -278,6 +295,18 @@ await main().catch(
         mode: 0o600,
       },
     );
+    // Assertion values stay private; publish only our static step and numeric source location.
+    const frame =
+      error instanceof Error
+        ? error.stack?.split("\n").find((line) => line.includes(import.meta.url))
+        : undefined;
+    const site =
+      frame
+        ?.slice(frame.indexOf(import.meta.url) + import.meta.url.length)
+        .match(/^:(\d+):(\d+)/u)
+        ?.slice(1)
+        .join(":") ?? "unknown";
+    console.error(`[older-runtime-recovery] phase=${phase} site=${site}`);
     console.error("[older-runtime-recovery] inspect driver.err in the private run evidence");
     console.error("[older-runtime-recovery] FAILED (exit 1)");
     process.exitCode = 1;
