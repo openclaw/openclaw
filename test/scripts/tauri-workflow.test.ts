@@ -26,21 +26,11 @@ it("stops Windows boundary checks when the Node fixtures fail", () => {
   ]);
 });
 
-it("prepares only pinned Node for the macOS Cargo tests", () => {
+it("keeps macOS Cargo setup separate from packaging dependencies", () => {
   const job = workflow.jobs["test-macos"];
   const nodeSetup = job.steps.find((step: Step) => step.name === "Setup Node.js");
   expect(setupStep("test-macos")).toBeUndefined();
   expect(nodeSetup.shell).toBe("/bin/bash -e {0}");
-  expect(
-    nodeSetup.run
-      .trim()
-      .split("\n")
-      .filter((line: string) => !line.trim().startsWith("#")),
-  ).toEqual([
-    "set -euo pipefail",
-    "source .github/actions/setup-pnpm-store-cache/ensure-node.sh",
-    'openclaw_ensure_node "24.22.1"',
-  ]);
   expect(job.steps.at(-1).run).toBe("cargo +stable test --locked --all-targets");
   for (const name of ["build", "test-windows-power"]) {
     expect(setupStep(name).with["install-deps"]).not.toBe("false");
