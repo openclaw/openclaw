@@ -23,6 +23,8 @@
   --text-tertiary: var(--muted);
   --icon-interactive: var(--muted);
   --rail-header-action-color: var(--muted);
+  --chat-composer-control-text: var(--muted);
+  --chat-composer-control-icon: var(--muted);
   --navigation-selected-border: var(--border-strong);
 
   /* Atkinson Hyperlegible Next everywhere, prose included: the face is part of
