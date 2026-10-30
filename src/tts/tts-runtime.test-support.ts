@@ -115,7 +115,6 @@ export const {
   getTtsProviderAsync,
   isTtsProviderConfiguredAsync,
   listSpeechVoices,
-  prepareTtsRequest,
   resolveTtsConfig,
   setTtsMachinePrefsPathResolver,
   setSummarizationEnabled,
@@ -124,6 +123,7 @@ export const {
   textToSpeechStream,
   textToSpeechTelephony,
 } = await import("./runtime-api.js");
+export const { prepareTtsRequest } = await import("./tts-request.js");
 export const { maybeApplyTtsToPayloadCore } = await import("./tts-payload.js");
 export const { textToSpeechCore } = await import("./tts-synthesis.js");
 
