@@ -570,6 +570,43 @@ const unrelatedArgs = [
     expect(withoutControlMember).toContain("runtimeProcessDeployManifest");
   });
 
+  it("models TTS method selectors only through their supplying lazy runtime binder", () => {
+    const consumerPath = path.resolve("src/plugins/runtime/index.ts");
+    const source = fs.readFileSync(consumerPath, "utf8");
+    const compile = createDynamicConsumerCompiler();
+    const project = (consumer = source) =>
+      compile(new Map([[consumerPath, consumer]]))
+        .split("\n")
+        .filter((line) => line.endsWith('from "../src/tts/tts.js";'))
+        .join("\n");
+    const members = [
+      "buildTtsSystemPromptHintAsync",
+      "textToSpeechStream",
+      "textToSpeechTelephony",
+    ];
+    const compiled = project();
+    for (const member of members) {
+      expect(compiled).toContain(`${member} as`);
+      const selector = `bindTtsRuntime((runtime) => runtime.${member})`;
+      const renamed = selector.replaceAll("runtime", "speech");
+      expect(project(replaceFixture(source, selector, renamed))).toContain(`${member} as`);
+      expect(project(replaceFixture(source, selector, "otherMethod"))).not.toContain(
+        `${member} as`,
+      );
+    }
+    for (const [from, to] of [
+      ['import("../../tts/tts.js")', 'import("./other.js")'],
+      [
+        "createLazyRuntimeMethodBinder(loadTtsRuntime)",
+        "createLazyRuntimeMethodBinder(loadTtsRequestRuntime)",
+      ],
+      ["const bindTtsRuntime =", "// const bindTtsRuntime ="],
+    ] as const) {
+      expect(project(replaceFixture(source, from, to))).toBe("");
+    }
+    expect(compiled).not.toContain("prepareTtsRequest as");
+  });
+
   it("models a computed checkout module member only while its binding and call exist", () => {
     const consumerPath = path.resolve(
       ".agents/skills/telegram-e2e-userbot/scripts/published-upgrade-scenario.mjs",
