@@ -60,10 +60,6 @@ import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-
 import { sidebarPresentationProbe } from "../ui/src/test-helpers/control-ui-sidebar-presentation-probe.test-support.ts";
 import { installTeamScaleSidebarPresentation } from "../ui/src/test-helpers/control-ui-sidebar-presentation.test-support.ts";
 import { revealSidebarTarget } from "../ui/src/test-helpers/control-ui-sidebar-window.ts";
-import {
-  createControlUiStreamingReply,
-  createStreamingReplyProbeInitScript,
-} from "../ui/src/test-helpers/control-ui-streaming-reply.ts";
 import { createControlUiTeamScaleFixture } from "../ui/src/test-helpers/control-ui-team-scale-fixture.ts";
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
 import { resolveColdLoadLatency } from "./lib/control-ui-bench-latency.ts";
@@ -110,6 +106,8 @@ import {
 } from "./lib/control-ui-interaction-trace.ts";
 import { probeColdLoadOverlays } from "./lib/control-ui-overlay-probe.ts";
 import { installPaneChromeProbe } from "./lib/control-ui-pane-chrome-probe.ts";
+import { createControlUiStreamingReply } from "./lib/control-ui-streaming-fixture.ts";
+import { createStreamingReplyProbeInitScript } from "./lib/control-ui-streaming-reply.ts";
 import { warmReloadProbe } from "./lib/control-ui-warm-reload-probe.ts";
 import {
   GATEWAY_HEAP_SAMPLE_INTERVAL,

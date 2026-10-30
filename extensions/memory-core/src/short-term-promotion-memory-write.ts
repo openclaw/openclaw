@@ -10,6 +10,7 @@ import type { MemoryWorkspaceFiles } from "openclaw/plugin-sdk/memory-core-host-
 import { sha256Hex as hashMemoryContent } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { getMemoryWorkspaceMaintenance, readWorkspaceFile } from "./memory-workspace-files.js";
+import { resolveWorkspaceCreationMode } from "./workspace-file-mode.js";
 
 type MemoryFileCommit = Parameters<
   NonNullable<MemoryWorkspaceFiles["maintenance"]>["commitContent"]
@@ -178,6 +179,7 @@ export async function commitMemoryContent(
     await fs.unlink(params.filePath);
     return;
   }
+  const mode = resolveWorkspaceCreationMode(params.workspaceFileMode);
   const memoryDirMode = (await fs.stat(path.dirname(params.filePath))).mode & 0o7777;
   const expectedHash = params.expectedHash;
   const replacementContent = params.content;
@@ -189,7 +191,7 @@ export async function commitMemoryContent(
       filePath: params.filePath,
       content: params.content,
       dirMode: memoryDirMode,
-      mode: 0o600,
+      mode,
       preserveExistingMode: true,
       tempPrefix: params.tempPrefix,
       syncTempFile: true,

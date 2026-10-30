@@ -71,6 +71,7 @@ it("isolates renamed hardlinks to database files", async () => {
 });
 
 it("reuses the broker for isolated reads, preserving bytes, failures, and cancellation", async () => {
+  vi.mocked(command.runCommandBuffered).mockRestore();
   const broker = createSpawnBrokerHost();
   onTestFinished(() => broker.close());
   const filePath = file("state/notes.txt");
@@ -79,6 +80,7 @@ it("reuses the broker for isolated reads, preserving bytes, failures, and cancel
   const bytes = Buffer.alloc(1024 * 1024 + 13, 0xa7);
   fs.writeFileSync(filePath, bytes);
   write("state/empty.txt", "");
+  await expect(read("missing.txt")).rejects.toMatchObject({ code: "ENOENT" });
   await broker.ready();
   await runWithSpawnBroker(broker, async () => {
     const reads = await Promise.all([read(), read("empty.txt"), read()]);
