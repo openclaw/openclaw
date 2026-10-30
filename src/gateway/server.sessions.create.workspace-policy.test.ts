@@ -20,7 +20,6 @@ import type { SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { isSessionMutationActive } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { sessionLog } from "./server-methods/sessions-shared.js";
@@ -90,8 +89,8 @@ async function openWorkspaceClient(root: string, scope = "operator.admin", name 
 }
 
 async function setupResetWorktree(prefix: string, model?: { primary: string }) {
-  const state = await createOpenClawTestState({ layout: "state-only", prefix });
-  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, state.root);
+  // Keep the live suite Gateway and direct handlers on the same state root.
+  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, tempDirs.make(prefix));
   testState.agentConfig = { workspace, ...(model ? { model } : {}) };
   testState.sessionConfig = { dmScope: "main" };
   const { storePath } = await createSessionStoreDir();
@@ -123,7 +122,6 @@ async function setupResetWorktree(prefix: string, model?: { primary: string }) {
       await disposeSessionReadContexts();
       testState.agentConfig = undefined;
       testState.sessionConfig = undefined;
-      await state.cleanup();
     },
   };
 }

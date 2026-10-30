@@ -204,6 +204,7 @@ type ResolveSandboxContextParams = {
   execOverrides?: ExecPolicyOverrides;
   requireCurrentConfig?: boolean;
   assertCurrent?: () => void;
+  abortSignal?: AbortSignal;
   admittedRunContext?: AdmittedRunContext;
   sessionKey?: string;
   skillsSnapshot?: SkillSnapshot;
@@ -248,7 +249,10 @@ async function prepareSandboxWorkspaceSelection(
         sessionKey: rawSessionKey,
         workspaceDir: params.workspaceDir,
         sandbox: resolved.cfg,
-        signal: operatorAuthority?.signal,
+        signal:
+          params.abortSignal && operatorAuthority?.signal
+            ? AbortSignal.any([params.abortSignal, operatorAuthority.signal])
+            : (params.abortSignal ?? operatorAuthority?.signal),
         // Cleanup retains the workspace owner after execution authorization closes.
         assertCurrent: persistentExecution ? undefined : params.assertCurrent,
         assertHost: () => {
@@ -634,6 +638,7 @@ export async function prepareSandboxWorkspaceForSession(
     agentId?: string;
     sessionKey?: string;
     workspaceDir?: string;
+    abortSignal?: AbortSignal;
   },
   readSource?: CapturedSessionEntryReadSource,
 ): Promise<{
@@ -642,7 +647,10 @@ export async function prepareSandboxWorkspaceForSession(
   [Symbol.dispose]: () => void;
 } | null> {
   const readAuthority = captureChannelReadAuthority();
-  const assertCurrent = () => readAuthority?.();
+  const assertCurrent = () => {
+    params.abortSignal?.throwIfAborted();
+    readAuthority?.();
+  };
   const ownedParams = { ...params, assertCurrent };
   using resources = new DisposableStack();
   let assertWorkspaceCurrent = assertCurrent;
