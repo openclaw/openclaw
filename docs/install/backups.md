@@ -91,6 +91,12 @@ workspaces remain ordinary workspace files. [Backup CLI](/cli/backup)
 documents every flag, owner-declared regenerable resources, volatile files,
 and verification details.
 
+Archive verification normally decompresses the archive once and keeps database
+artifacts in private temporary storage while checking them. Allow space for the
+uncompressed database snapshots as well as the archive. Under temporary-storage
+pressure, verification may reread the archive for required artifacts; integrity
+checks still run in full.
+
 If the configuration is malformed, state archive creation fails because agent
 and plugin ownership cannot be resolved. `--no-include-workspace` only excludes
 workspace files; it does not bypass ownership discovery. Before repairing the

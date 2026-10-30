@@ -116,6 +116,13 @@ restore and update-recovery behavior.
 - `openclaw backup create --only-config` backs up just the active JSON config file, **not** its `$include` dependencies. It is a root-file export, not a complete modular-config recovery point.
 - Config files are pinned before database capture. SQLite snapshots retain their existing per-database consistency and sanitization; the archive is not one atomic snapshot across config and all databases. Later writes remain live and may not appear in the archive.
 
+Verification normally reads and decompresses the archive once, retaining database
+candidates in private temporary storage for the same integrity and ownership
+checks. A trailing manifest or a database discovered through the archived agent
+registry does not require another pass. If temporary storage cannot retain a
+candidate, verification can reread the archive to extract only the required
+artifacts. The archive format and compression settings are unchanged.
+
 Archive members live beneath a timestamped root and `payload/`, with source paths
 encoded below it. Counting entries beginning `.openclaw/agents/` therefore returns
 zero even when the agent databases are present. Inspect the root `manifest.json`
