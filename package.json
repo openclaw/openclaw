@@ -674,6 +674,10 @@
     "./plugin-sdk/cron-store-runtime": {
       "default": "./dist/plugin-sdk/cron-store-runtime.js"
     },
+    "./plugin-sdk/cron-tool-defaults": {
+      "types": "./dist/plugin-sdk/cron-tool-defaults.d.ts",
+      "default": "./dist/plugin-sdk/cron-tool-defaults.js"
+    },
     "./plugin-sdk/json-schema-runtime": {
       "default": "./dist/plugin-sdk/json-schema-runtime.js"
     },

@@ -1310,6 +1310,7 @@ src/infra/temp-artifact-cleanup.ts
 src/infra/test-runtime-env.ts
 src/infra/tls-certificate-errors.ts
 src/infra/tmp-openclaw-dir.ts
+src/infra/update-capture-space.ts
 src/infra/update-channels.ts
 src/infra/update-database-generations.ts
 src/infra/update-doctor-config-schema.ts
@@ -1888,6 +1889,7 @@ src/state/agent-creation-claim.ts
 src/state/agent-database-admission-error.ts
 src/state/agent-database-admission.ts
 src/state/agent-database-preparation-context.ts
+src/state/agent-database-startup-observation.ts
 src/state/agent-database-startup.ts
 src/state/agent-deletion-cleanup-admission.ts
 src/state/agent-deletion-cleanup.ts

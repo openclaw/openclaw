@@ -8,6 +8,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { monotonicNow, remainingMonotonicMs as left } from "../../shared/monotonic-time.js";
 import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
+import { releaseProcessStdin } from "../release-stdin.js";
 import { serializeBrokerError } from "../spawn-broker/protocol.js";
 import type { SpawnStdioEntry } from "../spawn-secret-input.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
@@ -108,7 +109,7 @@ export function runServiceChildGroupAnchor(): void {
 
   const finish = (code: number) => {
     process.exitCode = code;
-    process.stdin.destroy();
+    releaseProcessStdin();
     const disconnect = () => {
       // end() flushes the receipt; destroy() also releases the readable socket.
       control?.off("close", disconnect);
@@ -679,7 +680,7 @@ export function runServiceChildGroupAnchor(): void {
       const stopInput = () => {
         input.unpipe(destination);
         input.off("end", endInput);
-        input.destroy();
+        releaseProcessStdin();
         if (!inputClosed) {
           inputClosed = true;
           void send({ type: "stdin-closed" });

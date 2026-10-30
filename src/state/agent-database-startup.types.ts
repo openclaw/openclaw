@@ -19,7 +19,7 @@ export type AgentDatabaseStartupActivation = {
   openAgent: (input: AgentDatabaseStartupPreparationInput) => Promise<AsyncDisposable | void>;
   migrateAgent: (
     input: AgentDatabaseStartupPreparationInput,
-  ) => Promise<void | { maintain: () => Promise<void> }>;
+  ) => Promise<void | { maintain?: () => Promise<void>; recoverInputs?: () => Promise<void> }>;
   publishAgent: (input: AgentDatabaseStartupPreparationInput) => Promise<void>;
   captureReadAdmission?: (input: AgentDatabaseStartupPreparationInput) => () => void;
 };
@@ -34,11 +34,13 @@ export type AgentDatabaseStartupPreparationPhase =
   | "publication-wait"
   | "secrets"
   | "models"
-  | "publication";
+  | "publication"
+  | "input-recovery";
 export type PendingAgentDatabaseRecovery = {
   refusal: AgentDatabaseAdmissionRefusal;
   completion: Promise<void>;
   readReady?: Promise<void>;
+  inputReady?: Promise<void>;
   startedAt: number;
   phase: AgentDatabaseStartupPreparationPhase;
   phaseStartedAt: number;

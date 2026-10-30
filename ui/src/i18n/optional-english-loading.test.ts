@@ -1,8 +1,141 @@
 /* @vitest-environment jsdom */
-import { expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
 
 const loadI18n = useLazyEnglishTest();
+let restoreElementRegistration: (() => void) | undefined;
+beforeEach(() => {
+  // Cold imports rerun module registrars; jsdom keeps its element registry.
+  // These catalog tests import consumers without mounting their elements.
+  const define = customElements.define.bind(customElements);
+  const registration = vi
+    .spyOn(customElements, "define")
+    .mockImplementation((name, constructor, options) => {
+      if (!customElements.get(name)) {
+        define(name, constructor, options);
+      }
+    });
+  restoreElementRegistration = () => registration.mockRestore();
+});
+afterEach(() => restoreElementRegistration?.());
+
+it.each([
+  [
+    "chat.sessionSharing.copyPublicLink",
+    "Copy public link",
+    () => import("../pages/chat/components/chat-session-sharing-content.tsx"),
+  ],
+  [
+    "chat.sessionSharing.publishDraft",
+    "Publish draft",
+    () => import("../pages/chat/components/chat-session-sharing-menu.tsx"),
+  ],
+  [
+    "chat.sessionSharing.noPeople",
+    "No paired people found.",
+    () => import("../pages/chat/components/chat-session-sharing-mobile.tsx"),
+  ],
+  [
+    "chat.sessionSharing.publicConfirmEnable",
+    "Make public",
+    () => import("../pages/chat/chat-pane-sharing-operations.ts"),
+  ],
+  [
+    "chat.subagentsPanel.empty",
+    "No subagents in this conversation.",
+    () => import("../pages/chat/components/chat-subagents-panel.tsx"),
+  ],
+  [
+    "chat.subagentsPanel.desktopFor",
+    "for",
+    () => import("../pages/chat/components/chat-subagents-panel-desktop.tsx"),
+  ],
+  [
+    "chat.subagentsPanel.nativeTitle",
+    "Live native agents",
+    () => import("../pages/chat/components/chat-subagents-native.tsx"),
+  ],
+  [
+    "chat.subagentsPanel.workingFor",
+    "Working for",
+    () => import("../pages/chat/components/chat-subagents-mobile.tsx"),
+  ],
+  [
+    "chat.sessionHeader.continueInTerminal.title",
+    "Continue in terminal",
+    () => import("../pages/chat/components/continue-in-terminal-dialog.tsx"),
+  ],
+] as const)("loads cold owner copy only with its consumer: %s", async (key, copy, load) => {
+  const { en, manager } = await loadI18n({ common: { health: "Gesundheit" } });
+  const { registerEnglishCatalog } = await import("../lib/reactive/i18n.ts");
+  const { registerChatSessionEnglish } = await import("./locales/en-chat-session.ts");
+  registerEnglishCatalog(registerChatSessionEnglish);
+  const sharing = en.chat.sessionSharing;
+  const subagents = en.chat.subagentsPanel;
+  const terminal = en.chat.sessionHeader.continueInTerminal;
+  await manager.setLocale("de");
+  expect(manager.t(key)).toBe(key);
+
+  await load();
+
+  expect(manager.t(key)).toBe(copy);
+  expect(manager.t("chat.sessionSharing.publicIndicator")).toBe("Public");
+  expect(manager.t("chat.subagentsPanel.stop", { name: "Build" })).toBe("Stop Build");
+  expect(manager.t("chat.sessionHeader.continueInTerminal.action")).toBe("Continue in terminal…");
+  expect(manager.t("common.health")).toBe("Gesundheit");
+  expect(manager.getLocale()).toBe("de");
+  expect(en.chat.sessionSharing).toBe(sharing);
+  expect(en.chat.subagentsPanel).toBe(subagents);
+  expect(en.chat.sessionHeader.continueInTerminal).toBe(terminal);
+});
+
+it.each([false, true])(
+  "preserves sharing, subagent, and terminal catalogs in either registration order (optional first=%s)",
+  async (optionalFirst) => {
+    const { en, manager } = await loadI18n({
+      chat: {
+        sessionSharing: { visibility: "Sichtbarkeit" },
+        subagentsPanel: { empty: "Keine Subagents.", nativeStatus: { running: "Läuft" } },
+        sessionHeader: { continueInTerminal: { authNote: "Ohne Zugangsdaten." } },
+      },
+    });
+    const { registerEnglishCatalog } = await import("../lib/reactive/i18n.ts");
+    const { registerChatSessionEnglish } = await import("./locales/en-chat-session.ts");
+    const { registerChatSessionOptionalEnglish } =
+      await import("./locales/en-chat-session-optional.ts");
+    await manager.setLocale("de");
+    const registrars = [registerChatSessionEnglish, registerChatSessionOptionalEnglish];
+    const ordered = optionalFirst ? registrars.toReversed() : registrars;
+    registerEnglishCatalog(ordered[0]!);
+    const sharing = en.chat.sessionSharing;
+    const panel = en.chat.subagentsPanel;
+    const header = en.chat.sessionHeader;
+    const terminal = header.continueInTerminal;
+    registerEnglishCatalog(ordered[1]!);
+    registerChatSessionEnglish();
+
+    expect(manager.t("chat.sessionSharing.copyPublicLink")).toBe("Copy public link");
+    expect(manager.t("chat.sessionSharing.publicIndicator")).toBe("Public");
+    expect(manager.t("chat.sessionSharing.visibility")).toBe("Sichtbarkeit");
+    expect(manager.t("chat.sessionHeader.continueInTerminal.title")).toBe("Continue in terminal");
+    expect(manager.t("chat.sessionHeader.continueInTerminal.action")).toBe("Continue in terminal…");
+    expect(manager.t("chat.sessionHeader.continueInTerminal.authNote")).toBe("Ohne Zugangsdaten.");
+    expect(manager.t("chat.subagentsPanel.nativeTitle")).toBe("Live native agents");
+    expect(manager.t("chat.subagentsPanel.empty")).toBe("Keine Subagents.");
+    expect(manager.t("chat.subagentsPanel.nativeStatus.running")).toBe("Läuft");
+    expect(manager.t("chat.subagentsPanel.stop", { name: "Build" })).toBe("Stop Build");
+    expect(manager.getLocale()).toBe("de");
+    expect(en.chat.subagentsPanel).toBe(panel);
+    expect(en.chat.sessionSharing).toBe(sharing);
+    expect(en.chat.sessionHeader).toBe(header);
+    expect(en.chat.sessionHeader.continueInTerminal).toBe(terminal);
+    const status = panel.nativeStatus;
+    const filters = panel.desktopFilter;
+    registerChatSessionOptionalEnglish();
+    expect(en.chat.subagentsPanel.nativeStatus).toBe(status);
+    expect(en.chat.subagentsPanel.desktopFilter).toBe(filters);
+  },
+);
 
 it.each([false, true])(
   "merges conflict notice copy without replacing transcript copy (optional first=%s)",

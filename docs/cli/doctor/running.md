@@ -39,7 +39,16 @@ maintenance custody.
 
 SIGINT and SIGTERM cancel Doctor's preparation before it stops a Gateway or
 starts repairs. If repair already owns state, Doctor settles its admitted work
-and restores any service it stopped before exiting.
+and restores any service it stopped before exiting. Startup cancellation also
+aborts package-file reads and stops and joins prerequisite subprocesses. Doctor
+closes its owned resources, records the signal exit status, and lets Node exit
+naturally so V8 can finish worker cleanup safely.
+
+Before maintenance begins, package-root discovery, source-config loading, and
+Tailscale prerequisite inspection each have a 60-second asynchronous wait limit.
+A timeout names the phase and recommends `OPENCLAW_DEBUG=1 openclaw doctor --lint`
+and a Node diagnostic report. These limits cannot interrupt synchronous native I/O;
+capture a report on the affected host when the event loop itself is blocked.
 
 If a native SQLite snapshot request fails, Doctor exits with an error even when
 an optional check defers its work. Resolve the reported snapshot or filesystem
