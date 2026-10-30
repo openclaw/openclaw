@@ -1,6 +1,7 @@
 // Voice Call tests cover how a running Telnyx runtime answers inbound realtime calls.
 import crypto from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -69,12 +70,8 @@ async function deliverInboundCall(runtime: VoiceCallRuntime): Promise<string> {
   return callControlId;
 }
 
-/** Wait for `count` Telnyx commands for the call; return each action with its parsed body. */
-async function waitForCommands(callControlId: string, count: number) {
-  const timeout = 3_000;
-  await vi.waitFor(() => expect(apiMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(count), {
-    timeout,
-  });
+/** Every Telnyx command sent for the call, as its action and parsed body. */
+function readCommands(callControlId: string) {
   const prefix = `https://api.telnyx.com/v2/calls/${callControlId}/actions/`;
   return apiMocks.fetchWithSsrFGuard.mock.calls.map(([{ url, init }]) => {
     expect(url.startsWith(prefix)).toBe(true);
@@ -126,17 +123,26 @@ describe("voice-call runtime answering inbound Telnyx realtime calls", () => {
     },
   ] as const)("$name", async ({ noiseSuppression, reject, actions, suppressionBody, warning }) => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    apiMocks.fetchWithSsrFGuard.mockImplementation(async ({ url }) => ({
-      response:
-        reject && url.endsWith(`/${reject}`)
-          ? new Response(JSON.stringify({ errors: [{ code: "90045" }] }), { status: 422 })
-          : new Response(JSON.stringify({ data: {} }), { status: 200 }),
-      finalUrl: url,
-      release: vi.fn(async () => {}),
-    }));
+    // The answer path is done once its last command goes out.
+    const lastCommandSent = createDeferred<void>();
+    apiMocks.fetchWithSsrFGuard.mockImplementation(async ({ url }) => {
+      if (url.endsWith(`/${actions.at(-1)}`)) {
+        lastCommandSent.resolve();
+      }
+      return {
+        response:
+          reject && url.endsWith(`/${reject}`)
+            ? new Response(JSON.stringify({ errors: [{ code: "90045" }] }), { status: 422 })
+            : new Response(JSON.stringify({ data: {} }), { status: 200 }),
+        finalUrl: url,
+        release: vi.fn(async () => {}),
+      };
+    });
     const runtime = await startRuntime(noiseSuppression);
     try {
-      const commands = await waitForCommands(await deliverInboundCall(runtime), actions.length);
+      const callControlId = await deliverInboundCall(runtime);
+      await lastCommandSent.promise;
+      const commands = readCommands(callControlId);
 
       expect(commands.map((command) => command.action)).toEqual(actions);
       // The stream fields ride on the only answer when unset, otherwise on streaming_start.
