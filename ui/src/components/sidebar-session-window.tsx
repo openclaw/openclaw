@@ -36,7 +36,7 @@ export function createSidebarSessionWindow(
     const preview =
       host().sessionsShowPreview &&
       Boolean(row.snapshotSubtitle?.subtitle || row.lastMessagePreview || row.channelPresentation);
-    const ownHeight = Math.max(preview ? 50 : 32, rowFloor());
+    const ownHeight = Math.max(preview ? 44 : 32, rowFloor());
     if (!host().isSessionChildrenExpanded(row)) {
       return { height: ownHeight, signature: [preview] };
     }
