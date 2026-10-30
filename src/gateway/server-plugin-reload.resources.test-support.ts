@@ -9,6 +9,7 @@ import { retainRuntimePluginWork } from "../agents/runtime-plugin-work.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { PluginInstanceConsumer } from "../plugins/plugin-instance.types.js";
+import { waitForPluginRegistryRetirement } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   reloadFailure,
@@ -39,6 +40,83 @@ function expectServing(fixture: RecoveryFixture, instance = fixture.instance()) 
 
 function resourceConfig(mode: string): OpenClawConfig {
   return { plugins: { allow: ["first", "sibling"], entries: { first: { config: { mode } } } } };
+}
+
+export async function verifyOverlapPublishesDuringAdmittedCall(
+  createRecoveryFixture: RecoveryFixtureFactory,
+  signal: AbortSignal,
+) {
+  const call = heldWork();
+  const drain = heldWork();
+  let registrations = 0;
+  const options: NonNullable<Parameters<RecoveryFixtureFactory>[0]> & {
+    generationOverlap: true;
+  } = {
+    generationOverlap: true,
+    abortOnCandidateStart: false,
+    registerFirst(api, record) {
+      // Keep the same declaration when this regression is replayed with main's fixture.
+      Object.assign(record, { generationOverlap: true });
+      const generation = ++registrations;
+      let serviceRunning = false;
+      api.registerService({
+        id: "admitted-call-service",
+        start() {
+          serviceRunning = true;
+        },
+        stop() {
+          serviceRunning = false;
+        },
+      });
+      api.registerGatewayMethod("first.admitted", async ({ respond }) => {
+        if (generation === 1) {
+          await call.run();
+        }
+        respond(true, { generation, serviceRunning });
+      });
+    },
+  };
+  const fixture = await createRecoveryFixture(options);
+  const reportStatus = fixture.owner.setReloadStatus.bind(fixture.owner);
+  const observation = vi.spyOn(fixture.owner, "setReloadStatus").mockImplementation((status) => {
+    reportStatus(status);
+    if (status?.phase === "reloading" && status.deadlineAtMs !== undefined) {
+      drain.enter();
+    }
+  });
+  const admitted = invokeReloadMethod(fixture.previousRegistry, "first.admitted");
+  let reloading: ReturnType<typeof fixture.reload> | undefined;
+  try {
+    await withinTest(call.entered, signal);
+    reloading = fixture.reload();
+    expect(
+      await withinTest(
+        Promise.race([reloading.then(() => "published"), drain.entered.then(() => "draining")]),
+        signal,
+      ),
+    ).toBe("published");
+    expect(fixture.firstStop).not.toHaveBeenCalled();
+    const current = await invokeReloadMethod(fixture.registryOwner.registry, "first.admitted");
+    expect(current).toHaveBeenCalledWith(
+      true,
+      { generation: 2, serviceRunning: true },
+      undefined,
+      undefined,
+    );
+    call.release();
+    expect(await withinTest(admitted, signal)).toHaveBeenCalledWith(
+      true,
+      { generation: 1, serviceRunning: true },
+      undefined,
+      undefined,
+    );
+    await withinTest(waitForPluginRegistryRetirement(fixture.previousRegistry), signal);
+    expect(fixture.firstStop).toHaveBeenCalledOnce();
+  } finally {
+    call.release();
+    observation.mockRestore();
+    await Promise.allSettled([admitted, reloading]);
+  }
 }
 
 export async function verifySerializedSuccessorJoinsOverlappingPredecessor(

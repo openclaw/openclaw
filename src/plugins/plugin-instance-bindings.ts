@@ -1,10 +1,10 @@
 // Registered executable surfaces retain receiver binding and instance lifetime.
 import { types } from "node:util";
+import { retainPluginOwnerWork } from "./plugin-instance-invocation.js";
 import {
   createPluginIteratorBindings,
   type PluginIteratorBindingOwner,
 } from "./plugin-instance-iterator.js";
-import { retainPluginOwnerWork } from "./plugin-instance-invocation.js";
 import { PluginFactoryBinding } from "./plugin-instance-owned-values.js";
 import {
   getPluginOriginalValue,
@@ -122,7 +122,7 @@ function bindNativeReceiver<T, R>(invoke: (receiver: T, args: unknown[]) => R) {
   };
 }
 
-type PluginInstanceBindingOwner = PluginIteratorBindingOwner & {
+type PluginInstanceBindingOwner = Omit<PluginIteratorBindingOwner, "lease"> & {
   invoke: <T>(run: () => T, lease?: PluginInstanceCallLease) => T;
   lease: (options?: { joinDisposal?: boolean; ownerLifetime?: true }) => PluginInstanceCallLease;
 };

@@ -219,6 +219,9 @@ The anchors from the single-page version still resolve here.
 admitted turns finish on its old generation. Omitted or `false` preserves serialized
 replacement. Other value types are rejected. Both the predecessor and successor
 must opt in; the Gateway also checks their registered resource surfaces.
+If both `generationOverlap` and `reload.turnHandover` are declared, overlap takes
+precedence: admitted turns keep their old generation, and any serialized
+replacement waits for them to finish.
 
 Declare this only when registration, service startup, runtime state, and cleanup
 are independent for each generation. A successor must not overwrite a shared

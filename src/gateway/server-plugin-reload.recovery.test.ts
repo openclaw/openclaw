@@ -79,6 +79,7 @@ import {
 } from "./server-plugin-reload.recovery.test-support.js";
 import {
   verifyCandidateResourceCleanup,
+  verifyOverlapPublishesDuringAdmittedCall,
   registerPluginRetainedWorkReloadTests,
   verifySharedResourceReplacement,
   verifySerializedSuccessorJoinsOverlappingPredecessor,
@@ -376,6 +377,9 @@ it.for([undefined, false] as const)(
 it("serializes mixed plugins without draining an opted predecessor's idle background authority", ({
   signal,
 }) => verifySerializedCandidateStartup(createRecoveryFixture, "mixed", signal));
+
+it("publishes an opted-in successor before stopping an admitted call's service", ({ signal }) =>
+  verifyOverlapPublishesDuringAdmittedCall(createRecoveryFixture, signal));
 
 it("keeps the admitted predecessor serving when an overlapping successor fails preparation", ({
   signal,

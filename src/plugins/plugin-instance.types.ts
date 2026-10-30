@@ -1,7 +1,6 @@
 import type { Static } from "typebox";
 import type { PluginRuntimeRetentionSchema } from "../../packages/gateway-protocol/src/schema/plugin-retention.js";
 
-
 export type PluginInstanceDisposalCleanup = {
   failures: unknown[];
   hostFailure?: { error: unknown };
