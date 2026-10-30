@@ -44,12 +44,14 @@ const repositoryScriptEntries = [
   "scripts/perf/code-mode-result-load-measure.ts!",
   "scripts/perf/completion-payload-bytes-measure.ts!",
   "scripts/perf/connect-profile-binding-measure.ts!",
+  "scripts/perf/control-ui-forbidden-catalog-measure.ts!",
   "scripts/perf/cron-reader-reuse-measure.ts!",
   "scripts/perf/cron-registry-read-measure.ts!",
   "scripts/perf/doctor-retirement-measure.mts!",
   "scripts/perf/doctor-session-manifests.ts!",
   "scripts/perf/doctor-sqlite-inspection.mjs!",
   "scripts/perf/github-readiness-state-bench.ts!",
+  "scripts/perf/github-publication-read-measure.ts!",
   "scripts/perf/history-model-projection-measure.ts!",
   "scripts/perf/inspection-read-admission.ts!",
   "scripts/perf/local-workspace-refresh-measure.ts!",
@@ -72,6 +74,7 @@ const repositoryScriptEntries = [
   "scripts/perf/trajectory-record-event-measure.ts!",
   "scripts/perf/transcript-json-array-measure.mjs!",
   "scripts/perf/transcript-pool-idle-measure.ts!",
+  "scripts/perf/transcript-turn-gateway.mts!",
   "scripts/perf/update-state-io-measure.ts!",
   "scripts/perf/worktree-creation-measure.ts!",
   // The source header documents this matched Code Mode engine probe by path.
@@ -177,6 +180,8 @@ const repositoryScriptEntries = [
   "scripts/control-ui-retention/retention-suite.ts!",
   // #179175 invokes this development-loop benchmark CLI by path.
   "scripts/bench-control-ui-dev-loop.mts!",
+  // The Control UI development guide invokes this watcher/dispatch diagnostic.
+  "scripts/bench-control-ui-hmr.mts!",
   // #179449 documents this document-handler benchmark CLI by path.
   "scripts/bench-control-ui-document.ts!",
   // The channel-turn benchmark guide invokes this opt-in CLI by path.
@@ -1147,6 +1152,8 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/review-artifacts.mjs!",
   // worktree.sh invokes this journal-state validator by path before native replay.
   "scripts/pr-lib/review-transition-state.mjs!",
+  // worktree.sh invokes explicit, supervised checkout-file salvage by path.
+  "scripts/pr-lib/review-transition-recovery.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
   // worktree.sh launches the locked cold-worktree adapter by path.
   "scripts/pr-lib/worktree-provision.mts!",

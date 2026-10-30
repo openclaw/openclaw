@@ -64,6 +64,7 @@ async function readOwnGatewayServiceCommand(
     ]);
     // Cgroup membership alone is not authority: child CLIs can inherit it.
     // Both readers require native loaded facts for this explicit manager target.
+    // DelegateSubgroup=gateway leaves the manager's ControlGroup at the unit root.
     return location.kind === "command" &&
       location.command.programArguments.length > 0 &&
       runtime.status === "running" &&
@@ -73,7 +74,7 @@ async function readOwnGatewayServiceCommand(
       runtime.pid === process.pid &&
       runtime.systemd?.scope === scope &&
       runtime.systemd.unit === unit &&
-      runtime.systemd.controlGroup === servicePath
+      runtime.systemd.controlGroup === servicePath.replace(/\/gateway$/u, "")
       ? location.command
       : undefined;
   } catch {

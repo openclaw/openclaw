@@ -25,6 +25,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
+import { isHostGeneratedInputProvenance } from "../../sessions/input-provenance.js";
 import type {
   ReplyToolAuthorityOverlay,
   ReplyToolAuthorityRequester,
@@ -75,6 +76,15 @@ export function captureReplyToolAuthorityContinuation({
       ? caller
       : undefined;
   const incomingProfile = continuation && readTransferredRequesterProfile(continuation.caller);
+  // Owner guidance joins background work without borrowing its principal or
+  // replacing the scheduled/delegated execution's permissions.
+  const backgroundOwner =
+    continuation &&
+    readReplyInputChannel(continuation.caller) &&
+    isHostGeneratedInputProvenance(snapshot.run.inputProvenance) &&
+    continuation.caller.operatorAuthority?.scopes.includes("operator.admin")
+      ? continuation.caller.operatorAuthority
+      : undefined;
   // A profile link records attribution; only host-attested human ingress can
   // use it to continue another transport's execution.
   const matchingProfile =
@@ -129,18 +139,21 @@ export function captureReplyToolAuthorityContinuation({
         }
       };
     })();
-  const continuationKind = matchingProfile
-    ? "verified-profile"
-    : sharedOwner
-      ? "shared-owner"
-      : undefined;
+  const continuationKind = backgroundOwner
+    ? "owner-guidance"
+    : matchingProfile
+      ? "verified-profile"
+      : sharedOwner
+        ? "shared-owner"
+        : undefined;
   // Continuation permits guidance across scopes, not automatic question
   // answers or image cancellation under the incumbent's question authority.
   const allowPendingUserInputAnswer: false | undefined =
     continuationKind &&
     caller &&
     "kind" in caller &&
-    (sharedOwner ||
+    (backgroundOwner ||
+      sharedOwner ||
       !isSameReplyToolAuthorityConversation(snapshot, caller.caller) ||
       requesterPrincipalKey !==
         resolveRequesterPrincipalKey({
@@ -153,6 +166,10 @@ export function captureReplyToolAuthorityContinuation({
     continuationKind,
     allowPendingUserInputAnswer,
     assertCurrent: () => {
+      if (backgroundOwner) {
+        assertAdmittedRunOperatorAuthority(backgroundOwner);
+        backgroundOwner.assertCurrent();
+      }
       if (matchingProfile && !matchingProfile.isCurrent()) {
         throw new MessageInjectionAuthorityError({
           cause: new Error("Requester profile binding is no longer current"),

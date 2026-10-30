@@ -190,7 +190,7 @@ suite.define(() => {
           await page.addInitScript(() => {
             const frames: Array<{
               title: string;
-              welcome: boolean;
+              empty: boolean;
               board: boolean;
               boardRegion: string | null;
               transcript: boolean;
@@ -206,7 +206,7 @@ suite.define(() => {
                 const transcript = pane?.querySelector(".chat-thread");
                 frames.push({
                   title: heading.textContent?.trim() ?? "",
-                  welcome: Boolean(pane?.querySelector(".agent-chat__welcome")),
+                  empty: Boolean(pane?.querySelector(".agent-chat__empty")),
                   board: Boolean(bounds && bounds.width > 0 && bounds.height > 0),
                   boardRegion:
                     boardSkeleton?.closest("[data-region]")?.getAttribute("data-region") ?? null,
@@ -252,7 +252,7 @@ suite.define(() => {
               const { transcript, ...layout } = frame;
               expect(layout).toEqual({
                 title,
-                welcome: false,
+                empty: false,
                 board: true,
                 boardRegion: "main",
                 transcriptRegion: "side",

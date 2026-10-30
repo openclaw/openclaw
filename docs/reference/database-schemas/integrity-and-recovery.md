@@ -45,8 +45,23 @@ holds the same agent database, reuses the Gateway's completed admission. The pee
 must hold a lease on the exact path, have finished admission, still match its
 recorded PID and start time, and carry the same lease provenance (boot, PID
 namespace, build, and file inode), so a file replaced at that path is checked again.
-Aliases, unfinished admissions, stale leases, and platforms without lease
-provenance still run the full check. The borrowing process never checked the file
+Aliases, live unfinished admissions, and platforms without lease provenance still
+run the full check. A dead owner with matching provenance, including an interrupted
+admission without a known FULL requirement, takes a quick check plus foreign-key
+and canonical schema/index checks.
+SQLite WAL recovery preserves committed writes without a full index scan on the
+admission path. Previously revoked validation, mismatched provenance or a replaced
+file, a dirty receipt without a matching dead-owner lease, and recorded corruption
+retain full verification or refusal. A failed crash-recovery quick check also runs
+the full check before admission. Crash-recovery quick admission records a distinct
+quick receipt. After successful checkpoint and final native close, the existing
+owner can seal that receipt so the next ordinary restart also skips the full scan.
+It never supplies a full-integrity receipt; Doctor and explicit verification retain
+their policy. Ordinary maintenance QUICK checks do not mint this recovery receipt.
+Known validation, file, or seal refusals and explicit FULL policy are recorded in
+the existing lease admission status before verification, so another process death
+cannot downgrade that requirement. Successful admission replaces the pending status.
+The borrowing process never checked the file
 itself, so if it closes last it leaves the next opener to verify instead of writing
 a seal.
 

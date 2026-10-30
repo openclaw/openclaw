@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
+import { readBackgroundResultPlacement } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import {
   jsonObjectFieldsForScan,
   jsonScannedValue,
@@ -235,6 +236,14 @@ export function resolveTranscriptEventAppendParent(
     appendIntent: "active-branch",
     parentId,
   });
+  const placement = readBackgroundResultPlacement(event);
+  if (placement) {
+    return {
+      ...event,
+      parentId: effectiveParentId,
+      data: { ...placement, afterEntryId: effectiveParentId },
+    };
+  }
   return effectiveParentId === parentId ? event : { ...event, parentId: effectiveParentId };
 }
 

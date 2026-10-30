@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { createComponent, createSignal } from "solid-js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelAuthStatusProvider } from "../../api/types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { renderComposerFixture, resetComposerFixture } from "./chat-composer.test-support.ts";
 import { ContextNotice } from "./components/chat-composer-context.tsx";
 
@@ -29,6 +30,8 @@ function renderComposer({
 
 const part = (root: ParentNode, name: string) => root.querySelector(`.context-usage__${name}`);
 const contextRingFor = (root: ParentNode) => root.querySelector(".context-ring");
+const compactButton = (root: ParentNode) =>
+  root.querySelector<HTMLButtonElement>(".context-usage__actions .chat-context__compact");
 const statsTitle = (root: ParentNode) => part(root, "stats [title]")?.getAttribute("title");
 const defaultSessions = () => ({ sessions: [], defaults: { contextTokens: 200_000 } });
 const textContents = (root: ParentNode, selector: string) =>
@@ -369,6 +372,86 @@ describe("renderChatComposer context usage", () => {
 
     expect(part(container, "stats [title]")).toBeNull();
     expect(part(container, "stats")?.textContent).toContain("$0.00");
+  });
+
+  it("offers a secondary Compact beside View context in every popover state", () => {
+    const onCompact = vi.fn();
+    const render = (overrides: ComposerOverrides & { session?: Partial<GatewaySessionRow> }) =>
+      compactButton(
+        renderComposer({ sessions: defaultSessions() as never, onCompact, ...overrides }),
+      );
+    const state = (button: HTMLButtonElement | null) =>
+      button && {
+        label: button.textContent,
+        filled: button.classList.contains("chat-context__compact--high"),
+        disabled: button.disabled,
+        busy: button.getAttribute("aria-busy"),
+        title: button.title,
+      };
+    const ready = {
+      label: "Compact",
+      filled: false,
+      disabled: false,
+      busy: null,
+      title: "Replaces older context with a summary.",
+    };
+
+    expect(compactButton(renderComposer({ session: { totalTokens: 190_000 } }))).toBeNull();
+    // Near the limit the ring carries the warning; the action stays secondary.
+    for (const session of [
+      { totalTokens: 40_000 },
+      { totalTokens: 190_000 },
+      { totalTokens: 190_000, totalTokensFresh: false },
+    ]) {
+      expect(state(render({ session }))).toEqual(ready);
+    }
+    expect(state(render({ session: { totalTokens: 190_000 }, runActive: true }))).toEqual({
+      ...ready,
+      disabled: true,
+      title: "Available when the current run finishes.",
+    });
+    expect(state(render({ session: { totalTokens: 190_000 }, connected: false }))).toEqual({
+      ...ready,
+      disabled: true,
+    });
+    // A compaction the pane already tracks (runtime or another surface) reads as busy.
+    expect(
+      state(
+        render({
+          session: { totalTokens: 190_000 },
+          runActive: true,
+          compactionStatus: { phase: "active", runId: "run-1", startedAt: 1, completedAt: null },
+        }),
+      ),
+    ).toEqual({ ...ready, label: "Compacting", disabled: true, busy: "true" });
+    expect(onCompact).not.toHaveBeenCalled();
+  });
+
+  it("keeps the popover open and busy until the compaction request settles", async () => {
+    const pending = createDeferred();
+    const onCompact = vi.fn(() => pending.promise);
+    const container = renderComposer({
+      session: { totalTokens: 190_000 },
+      sessions: defaultSessions() as never,
+      onCompact,
+    });
+    const details = container.querySelector<HTMLDetailsElement>(".context-usage details")!;
+    const button = compactButton(container)!;
+    try {
+      button.click();
+      await waitForSolid(() => {
+        expect(button.disabled).toBe(true);
+        expect(button.textContent).toBe("Compacting");
+      });
+      button.click();
+      expect(onCompact).toHaveBeenCalledOnce();
+      expect(details.open).toBe(true);
+    } finally {
+      pending.resolve();
+    }
+    await waitForSolid(() => expect(button.textContent).toBe("Compact"));
+    expect(button.disabled).toBe(false);
+    expect(details.open).toBe(true);
   });
 
   it("warns on fresh high usage but keeps stale usage approximate", () => {

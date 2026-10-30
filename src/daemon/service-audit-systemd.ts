@@ -41,6 +41,7 @@ export const SYSTEMD_SERVICE_AUDIT_CODES = {
   systemdUnitBackupUnsafe: "systemd-unit-backup-unsafe",
   systemdStopTimeout: "systemd-stop-timeout",
   systemdUserManagerStopTimeout: "systemd-user-manager-stop-timeout",
+  systemdExecDelegation: "systemd-exec-delegation",
 } as const;
 
 const SYSTEMD_AUDIT_TIMEOUT_MS = 10_000;
@@ -71,6 +72,8 @@ function parseSystemdUnit(directives: UnitDirective[]) {
   const wants = new Set<string>();
   let restartSec: string | undefined;
   let killMode: string | undefined;
+  let delegate: string | undefined;
+  let delegateSubgroup: string | undefined;
   let stopTimeoutMs = SYSTEMD_DEFAULT_STOP_TIMEOUT_MS;
   // Parse only unit keys relevant to service resilience; this is not a full
   // systemd parser. Stop timeout directives belong only to [Service].
@@ -82,6 +85,11 @@ function parseSystemdUnit(directives: UnitDirective[]) {
       } else if (parsed !== undefined) {
         stopTimeoutMs = parsed === 0 ? Infinity : parsed;
       }
+    }
+    if (section === "[Service]" && key === "Delegate") {
+      delegate = value;
+    } else if (section === "[Service]" && key === "DelegateSubgroup") {
+      delegateSubgroup = value;
     }
     if (!value) {
       continue;
@@ -100,7 +108,7 @@ function parseSystemdUnit(directives: UnitDirective[]) {
     }
   }
 
-  return { after, wants, restartSec, killMode, stopTimeoutMs };
+  return { after, wants, restartSec, killMode, stopTimeoutMs, delegate, delegateSubgroup };
 }
 
 export async function auditSystemdUnit(
@@ -131,6 +139,9 @@ export async function auditSystemdUnit(
     );
   }
   const directives = readUnitDirectives(content);
+  const nodeService =
+    (resolveManagedGatewayServiceCommand(command ?? null)?.environment ?? env)
+      .OPENCLAW_SERVICE_KIND === "node";
   if (definitionDrift && !definitionDriftError) {
     try {
       const definitions = new Map([[unitPath, directives]]);
@@ -175,6 +186,9 @@ export async function auditSystemdUnit(
             ? new Set([...Object.keys(SYSTEMD_FIXED_POLICY), ...values.keys()])
             : values.keys();
         for (const key of keys) {
+          if (nodeService && key.startsWith("Service.Delegate")) {
+            continue;
+          }
           const expected = SYSTEMD_FIXED_POLICY[key];
           const current = values.get(key);
           if (
@@ -263,7 +277,7 @@ export async function auditSystemdUnit(
         `${resolveSystemdServiceName(env)}.service`,
         "--no-page",
         "--property",
-        "After,Wants,RestartUSec,KillMode,LoadState,TimeoutStopUSec,ControlGroup",
+        "After,Wants,RestartUSec,KillMode,LoadState,TimeoutStopUSec,ControlGroup,Delegate,DelegateSubgroup",
       ],
       timeoutMs && timeoutMs > 0 ? timeoutMs : SYSTEMD_AUDIT_TIMEOUT_MS,
     ),
@@ -279,6 +293,8 @@ export async function auditSystemdUnit(
         wants: new Set(entries.wants?.split(/\s+/).filter(Boolean)),
         restartSec: entries.restartusec,
         killMode: entries.killmode,
+        delegate: entries.delegate,
+        delegateSubgroup: entries.delegatesubgroup,
         stopTimeoutMs:
           parseSystemdTimeSpanMs(entries.timeoutstopusec ?? "") ?? SYSTEMD_DEFAULT_STOP_TIMEOUT_MS,
       }
@@ -286,6 +302,23 @@ export async function auditSystemdUnit(
   const report = (code: string, message: string, detail = unitPath) => {
     issues.push({ code, message, detail, level: "recommended" });
   };
+  const delegated = parsed.delegate?.trim().toLowerCase();
+  const hasDelegation = Boolean(delegated && !["no", "false", "off", "0"].includes(delegated));
+  if (!nodeService && (!hasDelegation || parsed.delegateSubgroup !== "gateway")) {
+    const hostUpgrade =
+      entries &&
+      parsed.delegateSubgroup === undefined &&
+      parseSystemdUnit(directives).delegateSubgroup === "gateway";
+    issues.push({
+      code: SYSTEMD_SERVICE_AUDIT_CODES.systemdExecDelegation,
+      message: hostUpgrade
+        ? "Agent exec resource isolation needs systemd 254+ with DelegateSubgroup=gateway. Upgrade systemd to enable it; the Gateway continues without cgroup isolation."
+        : "Agent exec resource isolation needs Delegate=yes and DelegateSubgroup=gateway (systemd 254+). Run openclaw doctor --fix for a managed unit, or inspect custom unit and drop-in policy; the Gateway continues without cgroup isolation.",
+      detail: unitPath,
+      level: "recommended",
+      ...(hostUpgrade ? { repair: "host" as const } : {}),
+    });
+  }
   if (parsed.stopTimeoutMs > 0 && parsed.stopTimeoutMs < GATEWAY_SERVICE_STOP_TIMEOUT_MS) {
     report(
       SYSTEMD_SERVICE_AUDIT_CODES.systemdStopTimeout,

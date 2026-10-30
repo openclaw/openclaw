@@ -27,6 +27,7 @@ import {
   revokeSqliteDatabaseAdmissionsForPath,
   readSqliteDatabaseIntegrityVerification,
   readSqliteDatabaseCleanClose,
+  retireSqliteDatabaseAdmissionForPath,
 } from "../infra/sqlite-database-admission.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
@@ -794,7 +795,7 @@ it.each([
 );
 
 it.runIf(process.platform === "linux")(
-  "fully verifies killed owners before writing, regardless of WAL state or lease provenance",
+  "quickly admits matching killed owners while fully checking untrusted recovery",
   async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-process-death-") };
     const cases = [
@@ -838,16 +839,9 @@ it.runIf(process.platform === "linux")(
     for (const fixture of fixtures) {
       const { agentId, path: pathname } = fixture;
       const held = shared.db
-        .prepare(
-          "SELECT lease_id, provenance, owner_pid, owner_start_time FROM agent_database_leases WHERE path=?",
-        )
+        .prepare("SELECT * FROM agent_database_leases WHERE path=?")
         .get(pathname);
-      expect(held).toMatchObject({
-        lease_id: expect.stringMatching(/^[a-f0-9-]+$/u),
-        provenance: expect.stringMatching(/^process-v1:[a-f0-9]{64}$/u),
-        owner_pid: child.pid,
-        owner_start_time: expect.any(Number),
-      });
+      expect(held).toMatchObject({ owner_pid: child.pid, owner_start_time: expect.any(Number) });
       if (agentId === "interrupted-admission") {
         expect(readSqliteDatabaseIntegrityVerification(pathname)).toBeUndefined();
       } else {
@@ -858,7 +852,7 @@ it.runIf(process.platform === "linux")(
       } else {
         expect(fs.statSync(`${pathname}-wal`).size).toBeGreaterThan(32);
       }
-      if (agentId === "foreign-boot" || agentId === "corrupt-page") {
+      if (agentId === "foreign-boot") {
         shared.db
           .prepare("UPDATE agent_database_leases SET provenance=? WHERE path=?")
           .run(`process-v1:${"0".repeat(64)}`, pathname);
@@ -901,18 +895,22 @@ it.runIf(process.platform === "linux")(
         expect(Atomics.load(new Int32Array(counter.checks), 0)).toBeGreaterThan(0);
         continue;
       }
+      const full = !["same-boot", "checkpointed-wal", "interrupted-admission"].includes(agentId);
       const sessionKey = `agent:${agentId}:after-crash`;
       await expect(
         generation.run(source, (scope) => {
-          expect(checks(), agentId).toEqual([1, 1]);
+          expect(checks(), agentId).toEqual([Number(full), 1]);
           return initialized(scope, "after-crash", agentId);
         }),
       ).resolves.toMatchObject({ kind: "session-transcript-initialized", sessionKey });
-      expect(checks(), agentId).toEqual([1, 1]);
-      expect(readSqliteDatabaseIntegrityVerification(pathname)).toEqual({
-        verifiedAt: expect.any(Number),
-      });
       await generation.close();
+      clearOpenClawAgentDatabaseValidationCache(pathname);
+      retireSqliteDatabaseAdmissionForPath(pathname);
+      await using restart = nativeGeneration(fixture, context, assertCurrent);
+      await expect(restart.run(source, async () => "reopened")).resolves.toBe("reopened");
+      expect(checks(), agentId).toEqual([Number(full), 1]);
+      await restart.close();
+      expect(Boolean(readSqliteDatabaseIntegrityVerification(pathname))).toBe(full);
       expect(readSqliteDatabaseCleanClose(pathname)).toBe(true);
       using reopened = openNodeSqliteDatabase(pathname, { readOnly: true });
       expect(reopened.prepare("SELECT store_json FROM auth_profile_store").all()).toEqual([

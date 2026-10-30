@@ -18,6 +18,7 @@ function present(row: GatewaySessionRow, isChild = false): SidebarRecentSession 
     label: row.label ?? row.key,
     isChild,
     hasActiveRun: row.hasActiveRun === true,
+    backgroundProcessCount: row.backgroundProcessCount,
     active: row.key === conversationKey,
     unread: row.unread === true,
     status: row.status,
@@ -106,6 +107,53 @@ it("reattaches a persistent session through hidden runs and reveals its visible 
   run.spawnedBy = workerKey;
   expect(project([run, child]).map((row) => row.key)).toEqual([conversationKey]);
 });
+
+it("counts background work once per descendant without marking its parent active", () => {
+  const rows = [
+    makeRow(homeKey),
+    makeRow(workerKey, { spawnedBy: homeKey, backgroundProcessCount: 2 }),
+    makeRow(conversationKey, {
+      spawnedBy: workerKey,
+      hasActiveRun: true,
+      backgroundProcessCount: 1,
+    }),
+  ];
+  expect(project(rows)[0]).toMatchObject({
+    hasActiveRun: false,
+    runningChildCount: 2,
+    subagentSummary: { runningChildCount: 1 },
+  });
+});
+
+it.each([false, true])(
+  "folds hidden grandchild work through a persistent child (loaded: %s)",
+  (loaded) => {
+    const parent = makeRow(homeKey, {
+      hasActiveRun: true,
+      status: "queued",
+      childSessions: [conversationKey],
+    });
+    const child = makeRow(conversationKey, {
+      spawnedBy: homeKey,
+      backgroundProcessCount: 2,
+      hasActiveSubagentRun: true,
+      childSessions: [workerKey],
+    });
+    const worker = makeRow(workerKey, { spawnedBy: conversationKey, hasActiveRun: true });
+    const [tree] = project([parent], [parent, child, ...(loaded ? [worker] : [])]);
+    expect(tree).toMatchObject({
+      hasActiveRun: true,
+      runningChildCount: 2,
+      subagentSummary: { runningChildCount: 1 },
+      children: [{ subagentSummary: { runningChildCount: 1 } }],
+    });
+    expect(project([parent], [parent, { ...child, hasActiveSubagentRun: false }])[0]).toMatchObject(
+      {
+        subagentSummary: { runningChildCount: 0 },
+      },
+    );
+  },
+);
 
 it("keeps independent conversations outside Home while a worker runs", () => {
   const home = makeRow(homeKey, { childSessions: [conversationKey, workerKey] });

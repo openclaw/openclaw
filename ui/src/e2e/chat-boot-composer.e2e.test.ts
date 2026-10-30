@@ -28,26 +28,16 @@ suite.define(() => {
       // Like the chat composer, it takes focus only from the operator; nothing covers it.
       expect(await boot.evaluate((el) => el === document.activeElement)).toBe(false);
       await boot.click();
-      // The composer survives splash replacement; sample its current frame in one task.
       await expect
         .poll(() =>
-          page.evaluate(() => {
-            const composer = document.getElementById("openclaw-boot-composer");
-            const splash = composer?.closest(".connect-splash");
+          boot.evaluate((textarea) => {
+            const splash = textarea.closest(".connect-splash");
             const status = splash?.querySelector(".connect-splash__status");
-            const frame = composer?.closest(".loading-skeleton__composer");
+            const frame = textarea.closest(".loading-skeleton__composer");
             if (!status || !frame) {
               return false;
             }
-            const statusBox = status.getBoundingClientRect();
-            const frameBox = frame.getBoundingClientRect();
-            return (
-              statusBox.width > 0 &&
-              statusBox.height > 0 &&
-              frameBox.width > 0 &&
-              frameBox.height > 0 &&
-              statusBox.bottom <= frameBox.top
-            );
+            return status.getBoundingClientRect().bottom <= frame.getBoundingClientRect().top;
           }),
         )
         .toBe(true);

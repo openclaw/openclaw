@@ -1,5 +1,6 @@
 /** Type contracts for plugin-contributed embedding providers. */
 import type { MemorySearchDeadlineControlOptions } from "../../packages/memory-host-sdk/src/host/search-deadline-control.js";
+import type { AcquireConfiguredProviderLocalService } from "../agents/provider-local-service-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import type { EmbeddingProviderBatchRuntime } from "./embedding-provider-runtime-types.js";
@@ -75,6 +76,8 @@ export type EmbeddingProvider = {
 export type EmbeddingProviderCreateOptions = {
   config: OpenClawConfig;
   agentDir?: string;
+  /** Host-injected acquisition of the configured provider's local service. */
+  acquireLocalService?: AcquireConfiguredProviderLocalService;
   provider?: string;
   remote?: {
     baseUrl?: string;

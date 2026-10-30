@@ -67,6 +67,9 @@ The host resolves the secret and passes the connection to
 database workers; workers do not resolve SecretRefs. Treat the DSN as a credential
 and do not put it in logs or diagnostic captures.
 
+Connect directly or use a pooler in session mode. Transaction-mode poolers are
+not supported; see [connection poolers](/gateway/postgresql#connection-poolers).
+
 The following connection surfaces are qualified on PostgreSQL 17. See the
 [connection qualification and setup](/gateway/postgresql#tls-and-exec-connection-qualification)
 for the server and provider configuration.
@@ -339,6 +342,20 @@ Local agents may avoid their own PostgreSQL round trips, but still depend on
 shared-state registration, leases, and commit participants. Lower latency is a
 hypothesis to measure for your workload, not a promise of a network-free agent
 critical path.
+
+## Workflow support and qualification
+
+These PostgreSQL workflows have focused regression coverage. The broader
+[support matrix](/gateway/postgresql#support-matrix) retains the platform-specific
+qualification limits, including signed macOS app and native Windows flows.
+
+| Workflow                          | Supported behavior                                                                                                                                                                                  | Evidence                                                    |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Retained `agent exec --state-dir` | Uses the effective configured engines; temporary and `--isolated` runs use SQLite. See [agent exec](/cli/agent#agent-exec).                                                                         | [#188420](https://github.com/openclaw/openclaw/pull/188420) |
+| iMessage with PostgreSQL state    | Recovery cursors use the selected shared-state engine without NUL-containing keys.                                                                                                                  | [#184919](https://github.com/openclaw/openclaw/pull/184919) |
+| Store-backed Gateway credentials  | Local CLI RPC commands resolve `gateway.auth.*` refs from the configured state engine. See the [store provider](/gateway/secrets/secretref-contract#store-provider).                                | [#185238](https://github.com/openclaw/openclaw/pull/185238) |
+| Archive backup creation           | `backup create` works while the Gateway runs; generic PostgreSQL snapshots, Git backups, and restore still require offline custody.                                                                 | [#185236](https://github.com/openclaw/openclaw/pull/185236) |
+| Retained agent creation           | Missing, uninitialized, or mismatched namespaces refuse reuse; new anchors publish after initialization commits. See [retained-store recovery](/gateway/postgresql#recover-a-retained-agent-store). | [#188350](https://github.com/openclaw/openclaw/pull/188350) |
 
 ## Search on PostgreSQL
 
@@ -666,6 +683,11 @@ waits allow 60 seconds and the synchronous bridge has a 120-second deadline.
 Port and restore materialization allow a one-hour statement timeout. See the
 [operator timeout guidance](/gateway/postgresql#updates-and-schema-migrations).
 
+The bridge reuses named prepared statements for parameterized SQL on each
+connection, retaining up to 256 SQL texts in least-recently-used order.
+Parameterless SQL uses the simple query protocol. Session state and statement
+names must remain bound to that connection, which requires session-mode poolers.
+
 PostgreSQL model-context navigation reads parse each selected transcript row once
 and keep intermediate projections as JSONB until the navigation and byte counts
 cross the database boundary. The read remains bounded by the context page, and
@@ -686,6 +708,10 @@ PostgreSQL schema metadata must match the anchor's store UUID and expected schem
 version. Admission checks run once per physical store per process load, and
 workers and handles reuse the admitted facts. Confirmed commits and uncertain
 commit outcomes invalidate cached store facts through the anchor's write token.
+
+New agent anchors publish only after the server schema and agent identity commit.
+Reusing a retained anchor requires its initialized namespace to match; see
+[retained agent recovery](/gateway/postgresql#recover-a-retained-agent-store).
 
 When an agent worker is refused before opening its native writer, the host releases
 its prepared lease after native exit. The original refusal reaches its caller,
@@ -726,8 +752,11 @@ Updater admission and recovery commands retain their context, receipt, or explic
 path selection. QA fixtures, database tooling, and agent execution likewise keep
 their existing target owners.
 
-Gateway RPC commands defer local engine selection until paired-device authentication
-needs state. Loopback calls with shared credentials do not require database credentials.
+Gateway RPC commands defer local engine selection until authentication needs state.
+Loopback calls with inline or env/file/exec credentials do not require local state
+access. Store-backed `gateway.auth.*` refs use the configured state engine, so
+PostgreSQL state requires its connection SecretRef even for loopback calls.
+See the [store provider](/gateway/secrets/secretref-contract#store-provider).
 Runtime-intent service status and Gateway discovery also run without a database.
 Config validation reports source parse and include errors before selecting storage;
 valid config validation and config mutation previews still select the engine before

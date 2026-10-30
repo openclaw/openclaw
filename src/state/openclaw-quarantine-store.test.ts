@@ -4,7 +4,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
-import { retainSqliteDatabaseAdmissionLocation } from "../infra/sqlite-database-admission.js";
+import {
+  getSqliteDatabaseAdmissionIdentityForPath,
+  retainSqliteDatabaseAdmissionLocation,
+} from "../infra/sqlite-database-admission.js";
 import {
   currentSqliteOperationTiming,
   withSqliteReaderOwner,
@@ -17,6 +20,10 @@ import {
   readPersistedQuarantineRow,
   seedOpenClawDatabaseQuarantine,
 } from "./openclaw-quarantine-store.test-support.js";
+import {
+  closeRetainedOpenClawStateReadConnections,
+  withOpenClawStateReadOnlyLocation,
+} from "./openclaw-state-db-read-connection.js";
 import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -144,6 +151,71 @@ it("keeps quarantine decisions scoped to their recorded pathname", () => {
   expect(fixture.read()).toEqual(failure);
   expect(clearOpenClawDatabaseQuarantine(alias, { env: fixture.env })).toBe(true);
   expect(fixture.read()).toEqual(failure);
+});
+
+it("retains quarantine admission with its reader while observing changes and final closure", () => {
+  const fixture = createFixture();
+  const { env, pathname, storePath } = fixture;
+  const seed = nodeSqlite.openNodeSqliteDatabase(pathname);
+  seed.exec("CREATE TABLE sample (value INTEGER); INSERT INTO sample VALUES (1)");
+  seed.close();
+  const read = () =>
+    withOpenClawStateReadOnlyLocation(
+      ({ db }) => ({ db, value: db.prepare("SELECT value FROM sample").get()?.value }),
+      pathname,
+      pathname,
+      undefined,
+      undefined,
+      undefined,
+      true,
+      undefined,
+      storePath,
+    );
+  const identity = () => getSqliteDatabaseAdmissionIdentityForPath(storePath);
+  const decision = () =>
+    readOpenClawDatabaseQuarantineFailure("state", pathname, { env, refreshIdentity: true });
+  try {
+    read();
+    const original = identity();
+    expect(original).toEqual(expect.objectContaining({ key: expect.stringMatching(/^file:/u) }));
+    for (let index = 0; index < 3; index++) {
+      expect(decision()).toBeUndefined();
+      expect(read().value).toBe(1);
+      expect(identity()).toBe(original);
+    }
+    {
+      using unavailable = vi.spyOn(fs, "statSync").mockImplementationOnce(() => {
+        throw Object.assign(new Error("index unavailable"), { code: "EACCES" });
+      });
+      expect(decision()).toBeUndefined();
+      expect(unavailable).toHaveBeenCalledOnce();
+    }
+    fixture.seed("changed");
+    expect(decision()?.message).toContain("changed");
+    fixture.clear();
+    expect(decision()).toBeUndefined();
+    fs.renameSync(storePath, `${storePath}.previous`);
+    expect(decision()).toBeUndefined();
+    expect(identity()).toBeUndefined();
+    read();
+    fixture.seed("replacement");
+    expect(decision()?.message).toContain("replacement");
+    const { db: database } = read();
+    expect(identity()?.key).not.toBe(original?.key);
+    expect(decision()?.message).toContain("replacement");
+    {
+      using close = vi.spyOn(database, "close").mockImplementationOnce(() => {
+        throw new Error("native close failed");
+      });
+      expect(() => closeRetainedOpenClawStateReadConnections()).toThrow("native close failed");
+      expect(close).toHaveBeenCalledOnce();
+      expect(identity()).toBeDefined();
+    }
+    closeRetainedOpenClawStateReadConnections();
+    expect(identity()).toBeUndefined();
+  } finally {
+    closeRetainedOpenClawStateReadConnections();
+  }
 });
 
 it("validates a replaced quarantine store once while an admitted sibling remains open", () => {

@@ -26,7 +26,7 @@ suite.define(() => {
   it("keeps help available on empty chat home while messages require a model", async () => {
     await withSetupPage(async (page, gateway) => {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page.getByRole("heading", { name: "No AI provider configured" }).waitFor();
+      await page.locator(".agent-chat__empty").waitFor();
 
       await expect.poll(() => page.locator(".agent-chat__composer-shell").count()).toBe(1);
       const textarea = page.locator(".agent-chat__composer-combobox textarea");

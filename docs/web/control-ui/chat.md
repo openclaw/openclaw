@@ -12,6 +12,11 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: session controls, the composer, and how the transcript renders.
 
+An existing session with an empty transcript shows **No messages yet** and keeps
+the composer available. The agent welcome and recent chats appear only on the
+**New session** page. If no model is configured, the existing session's composer
+banner still offers **Connect an AI provider**.
+
 Click a session-menu submenu, such as **Assign to…**, to open it immediately.
 Hovering still uses a short delay so moving across the menu does not open every submenu.
 
@@ -41,6 +46,10 @@ If an inactive run's saved history ends during tool use and has no terminal
 assistant message, Chat keeps its commentary and tool activity visible and marks
 the run **Interrupted**. This presentation does not resume the run or recover an
 answer that was never saved.
+
+Archived sessions keep earlier messages and recorded failures readable in the
+transcript. Past run failures do not show a recovery banner above the archived
+composer; unarchive the session to continue the conversation.
 
 Tool activity shows a tool-specific icon beside its purpose or details instead of
 repeating the tool name. When no distinct purpose or detail is available, the row

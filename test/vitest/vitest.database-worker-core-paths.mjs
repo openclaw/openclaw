@@ -947,6 +947,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-canonical-validation-schema.test.ts",
   "src/state/openclaw-agent-json-predicate-schema.test.ts",
   "src/state/openclaw-agent-db-maintenance.test.ts",
+  "src/state/openclaw-agent-db-maintenance.schema-renewal.test.ts",
   "src/state/openclaw-agent-db-leasehold.test.ts",
   "src/state/openclaw-agent-db-retired-lease-repair.test.ts",
   "src/state/openclaw-agent-db.storage-migration.test.ts",

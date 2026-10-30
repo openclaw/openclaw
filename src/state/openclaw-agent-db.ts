@@ -267,8 +267,16 @@ function* openOpenClawAgentDatabaseSteps(
   let reuseIntegrity = false;
   let liveOwnerProvenance: string | undefined;
   let integrityRevoked = false;
+  let processDeath = false;
   const diagnostics: SqliteIntegrityDiagnostics = {};
   const validation = pending?.validation ?? preparedLease?.validation;
+  const previouslyRevoked =
+    preparedLease?.integrityRevoked === true ||
+    pending?.integrityRevoked === true ||
+    hasRevokedOpenClawAgentDatabaseValidation(pathname, validation);
+  const claimProvenance = preparedLease
+    ? preparedLease.provenance
+    : readAgentDatabaseLeaseProvenance(pathname);
   const captureVerification: OpenClawAgentIntegrityVerificationReceiver = (
     runtimeIntegrityAllowed,
     invalidated,
@@ -277,6 +285,8 @@ function* openOpenClawAgentDatabaseSteps(
   ) => {
     reuseIntegrity = runtimeIntegrityAllowed;
     liveOwnerProvenance = admittedFileProvenance;
+    processDeath =
+      invalidated && runtimeIntegrityAllowed && !previouslyRevoked && because === undefined;
     // A host refusal may have no positive validation receipt to transfer.
     integrityRevoked =
       invalidated || preparedLease?.integrityRevoked === true || pending?.integrityRevoked === true;
@@ -416,18 +426,24 @@ function* openOpenClawAgentDatabaseSteps(
         }
         // The host grant can revoke transferred proof; decide reuse after it returns.
         diagnostics.integrityGateReason = integrityRevoked
-          ? "stale-lease-full"
+          ? processDeath &&
+            claimProvenance !== null &&
+            readAgentDatabaseLeaseProvenance(pathname) === claimProvenance
+            ? "process-death"
+            : "stale-lease-full"
           : hasRevokedOpenClawAgentDatabaseValidation(pathname, validation)
             ? "revoked"
             : reuseIntegrity
               ? (readSqliteDatabaseCleanCloseRefusal(db) ?? "no-proof")
               : "lease-class";
-        diagnostics.because ??= integrityRevoked
-          ? agentDatabaseAdmissionProvenanceRefusal(preparedLease?.provenance, pathname)
-          : undefined;
+        diagnostics.because ??=
+          diagnostics.integrityGateReason === "stale-lease-full"
+            ? agentDatabaseAdmissionProvenanceRefusal(preparedLease?.provenance, pathname)
+            : undefined;
         let verification: { verifiedAt: number } | undefined;
         if (
           diagnostics.integrityGateReason === "revoked" ||
+          diagnostics.integrityGateReason === "process-death" ||
           diagnostics.integrityGateReason === "stale-lease-full"
         ) {
           isValidatedReopen = false;
@@ -435,6 +451,18 @@ function* openOpenClawAgentDatabaseSteps(
         } else if (reuseIntegrity) {
           // Path admission can precede replacement detection; borrow only this native file's proof.
           verification = readSqliteDatabaseIntegrityVerification(db);
+        }
+        if (
+          integrityCheck !== "quick" &&
+          (integrityCheck === "full" ||
+            !["process-death", "lease-class", "no-proof"].includes(diagnostics.integrityGateReason))
+        ) {
+          // A missing seal alone is not corruption evidence; known refusals must survive death.
+          recordOpenClawAgentDatabaseAdmission(
+            leaseId,
+            { agentId, path: pathname, env: leaseEnvironment },
+            "full-required",
+          );
         }
         const requiresCurrentVersionConvergence = yield* agentDatabaseIntegrityBeforeMutationSteps(
           db,

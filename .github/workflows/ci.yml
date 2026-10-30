@@ -2647,6 +2647,7 @@ jobs:
           const webkitSuites = new Set([
             resolve("ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts"),
             resolve("ui/src/e2e/tooltip-first-activation.e2e.test.ts"),
+            resolve("ui/src/e2e/logs-scroll.e2e.test.ts"),
           ].filter(existsSync));
           const runtimeSuite = resolve("ui/src/e2e/stale-build-recovery.production.e2e.test.ts");
           let requiresWebkit = false;
@@ -4978,6 +4979,9 @@ jobs:
           }
           const result = spawnSync(process.execPath, [
             "--import", "./scripts/tsx.mjs", "scripts/test-projects.mts", ...targets, "--fileParallelism",
+            "--reporter=verbose",
+            "--reporter=github-actions",
+            "--reporter=./scripts/lib/vitest-resource-reporter.mts",
           ], { stdio: "inherit" });
           if (result.error) throw result.error;
           process.exit(result.status ?? 1);

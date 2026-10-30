@@ -195,9 +195,9 @@ describe("managed Crabbox", () => {
   });
 
   it("upgrades an old candidate, preserves its distribution, and reuses it offline", async () => {
-    const test = await fixture("0.79.1");
+    const test = await fixture("0.79.2");
     await expect(test.ensure()).resolves.toEqual(test.installed);
-    expect(await fs.readFile(test.candidate, "utf8")).toBe("0.79.1");
+    expect(await fs.readFile(test.candidate, "utf8")).toBe("0.79.2");
     await test.expectFiles({
       "companion-helper": "keep me",
       "crabbox-runtime/manifest.json": '{"runtime":"fixture"}',
@@ -208,11 +208,11 @@ describe("managed Crabbox", () => {
         expect((await fs.stat(path.join(test.directory, name))).mode & 0o111).toBe(0o111);
       }
     }
-    await fs.writeFile(test.binary, "0.79.3");
+    await fs.writeFile(test.binary, "0.80.1");
     test.fetch.mockRejectedValue(new Error("offline"));
     await expect(test.ensure()).resolves.toEqual({
       ...test.installed,
-      version: "0.79.3",
+      version: "0.80.1",
     });
     expect(await test.entries()).toEqual([path.basename(test.directory)]);
   });
@@ -583,11 +583,11 @@ describe("Crabbox version admission", () => {
 
   it.each([
     ["0.72.0", "outdated"],
-    ["0.79.1", "outdated"],
-    ["0.79.2", "supported"],
-    ["0.79.2-rc.1", "outdated"],
-    ["0.79.2+build.1", "supported"],
-    ["0.79.3", "supported"],
+    ["0.79.2", "outdated"],
+    ["0.80.0", "supported"],
+    ["0.80.0-rc.1", "outdated"],
+    ["0.80.0+build.1", "supported"],
+    ["0.80.1", "supported"],
     ["unparseable", "indeterminate"],
     ["0.9007199254740993.0", "indeterminate"],
   ])("classifies %s as %s", async (version, status) => {

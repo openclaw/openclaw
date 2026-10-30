@@ -26,13 +26,11 @@ it("stops Windows boundary checks when the Node fixtures fail", () => {
   ]);
 });
 
-it("keeps Node without workspace dependencies for the macOS Cargo tests", () => {
+it("keeps macOS Cargo setup separate from packaging dependencies", () => {
   const job = workflow.jobs["test-macos"];
-  expect(setupStep("test-macos").with).toMatchObject({
-    "cache-mode": "off",
-    "install-bun": "false",
-    "install-deps": "false",
-  });
+  const nodeSetup = job.steps.find((step: Step) => step.name === "Setup Node.js");
+  expect(setupStep("test-macos")).toBeUndefined();
+  expect(nodeSetup.shell).toBe("/bin/bash -e {0}");
   expect(job.steps.at(-1).run).toBe("cargo +stable test --locked --all-targets");
   for (const name of ["build", "test-windows-power"]) {
     expect(setupStep(name).with["install-deps"]).not.toBe("false");
