@@ -5,6 +5,7 @@ import { expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
+  nextEventLoopTurn,
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -42,6 +43,81 @@ function createTranscriptTarget(sessionId: string, storePath: string) {
     storePath,
   };
 }
+
+it("does not reserve the writer while prepared model context waits", async () => {
+  await withOpenClawTestState({ label: "model-context-writer-progress" }, async (state) => {
+    const target = createTranscriptTarget("context-progress", state.statePath("transcript.sqlite"));
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const manager = await SessionManager.openAsync(target);
+    await manager.appendMessageAsync({ role: "user", content: "committed", timestamp: 1 });
+    const { databaseClaim } = await loadSessionEntryForAdmission(target);
+    if (!("kind" in databaseClaim) || databaseClaim.kind !== "worker" || !databaseClaim.reader) {
+      throw new Error("Expected admitted durable session reader");
+    }
+    const entered = createDeferred();
+    const release = createDeferred();
+    const read = contextWorker.readSessionTranscriptModelContextInWorker;
+    const delayed = vi
+      .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+      .mockImplementation(async (...args) => {
+        const value = await read(...args);
+        entered.resolve();
+        await release.promise;
+        return value;
+      });
+    let reading: Promise<unknown> | undefined;
+    let writer: Promise<void> | undefined;
+    try {
+      await withOwnedSessionTranscriptWrites(
+        {
+          sessionTarget: target,
+          sessionReader: databaseClaim.reader,
+          withTranscriptWrite: async (write) => write(),
+        },
+        async () => {
+          const consume = vi.fn((context) => context.events);
+          reading = readSessionTranscriptModelContextAsync(
+            target,
+            consume,
+            undefined,
+            undefined,
+            undefined,
+            { maxBytes: 4096, maxEvents: 10 },
+            true,
+          );
+          await awaitGateBeforeSettlement(
+            entered.promise,
+            reading,
+            "Model context bypassed worker",
+          );
+          writer = runOpenClawAgentWriteAdmission(
+            { agentId: target.agentId, path: target.storePath },
+            () => {},
+          );
+          expect(
+            await Promise.race([writer.then(() => true), nextEventLoopTurn().then(() => false)]),
+          ).toBe(true);
+          expect(consume).not.toHaveBeenCalled();
+          release.resolve();
+          await expect(reading).resolves.toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                type: "message",
+                message: expect.objectContaining({ content: "committed" }),
+              }),
+            ]),
+          );
+          expect(consume).toHaveBeenCalledTimes(1);
+        },
+      );
+    } finally {
+      release.resolve();
+      await Promise.allSettled([reading, writer]);
+      delayed.mockRestore();
+      await databaseClaim.release();
+    }
+  });
+});
 
 it("captures a caller's transcript anchor before asynchronous reading", async () => {
   await withOpenClawTestState({ label: "context-anchor-snapshot" }, async (state) => {

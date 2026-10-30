@@ -4,7 +4,6 @@ import {
   revalidateAgentDatabaseTerminalOpenAsync,
 } from "../../state/openclaw-agent-db-terminal.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import {
   prepareSqliteTranscriptReadScope,
   toDatabaseOptions,
@@ -27,6 +26,7 @@ import { readRestoredSessionTranscriptInWorker } from "./session-cold-storage-re
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import type { SessionTranscriptContextSelection } from "./session-history-read.types.js";
 import type { SessionTranscriptMaintenanceRead } from "./session-transcript-hydration.types.js";
+import { readSessionTranscriptCohort } from "./session-transcript-read-cohort.js";
 import {
   resolveSessionTranscriptReadFence,
   resolveSqliteSessionTranscriptReadFence,
@@ -317,8 +317,6 @@ export function prepareSessionTranscriptHydration(
         return withSessionTranscriptReadSource(
           target,
           async ({ scope, resolved, owner, expectedIdentity, assertCurrent: assertSource }) => {
-            const { captureSessionEntryNativeMutationWitness } =
-              await import("./session-entry-read-ordered.js");
             assertSource();
             const database = {
               agentId: resolved.databaseAgentId ?? resolved.agentId,
@@ -329,29 +327,23 @@ export function prepareSessionTranscriptHydration(
             await readRestoredSessionTranscriptInWorker(
               { scope, resolved, owner, assertCurrent: assertSource },
               () =>
-                runOpenClawAgentWriteAdmission(
+                readSessionTranscriptCohort(
                   database,
-                  async (_identity, assertOwner) => {
-                    assertSource();
-                    const assertNative = captureSessionEntryNativeMutationWitness([database]);
-                    const prepared =
-                      retainedRead(selection, resolved) ??
-                      (await owner.readTranscript(
-                        {
-                          target: scope,
-                          resolvedScope: resolved,
-                          expectedIdentity,
-                          limits: contextLimits,
-                          admission,
-                          transcript: selection,
-                          preparedEntry: readOwnedSessionTranscriptEntry(target),
-                        },
-                        signal,
-                      ));
-                    signal?.throwIfAborted();
-                    assertOwner();
-                    assertSource();
-                    assertNative();
+                  async () =>
+                    retainedRead(selection, resolved) ??
+                    (await owner.readTranscript(
+                      {
+                        target: scope,
+                        resolvedScope: resolved,
+                        expectedIdentity,
+                        limits: contextLimits,
+                        admission,
+                        transcript: selection,
+                        preparedEntry: readOwnedSessionTranscriptEntry(target),
+                      },
+                      signal,
+                    )),
+                  (prepared) => {
                     retainRead(prepared);
                     const consumed = consume(prepared);
                     if (isPromiseLike(consumed)) {
@@ -359,15 +351,14 @@ export function prepareSessionTranscriptHydration(
                       throw new Error("Transcript cohort consumers must remain synchronous");
                     }
                   },
-                  true,
-                  undefined,
+                  assertSource,
                   signal,
                   "history.hydration",
                 ),
             );
           },
           signal,
-          // Cohort consumption holds the writer through read failure and reader cleanup.
+          // Keep discovery separate from the bounded history worker.
           targetDiscoveryLane,
         );
       }
