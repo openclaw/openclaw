@@ -61,8 +61,9 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   transform: translateX(-100%);
   opacity: 0;
   pointer-events: none;
+  /* The drawer slides on the sheet spring; opacity only softens its leading edge. */
   transition:
-    transform 160ms cubic-bezier(0.32, 0.72, 0, 1),
+    transform var(--motion-sheet),
     opacity 100ms ease-out;
 }
 
@@ -85,9 +86,10 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   border-radius: 0;
   background: rgb(0 0 0 / 44%);
   opacity: 0;
+  /* visibility interpolates as visible until the fade ends, in both directions. */
   transition:
-    opacity 160ms cubic-bezier(0.32, 0.72, 0, 1),
-    visibility 0s linear 160ms;
+    opacity var(--motion-sheet),
+    visibility var(--motion-sheet);
   touch-action: none;
 }
 
@@ -95,9 +97,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   pointer-events: auto;
   visibility: visible;
   opacity: 1;
-  transition:
-    opacity 200ms cubic-bezier(0.32, 0.72, 0, 1),
-    visibility 0s;
 }
 
 .shell--mobile-nav.shell--nav-drawer-open .shell-nav,
@@ -105,7 +104,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   transform: translateX(0);
   opacity: 1;
   pointer-events: auto;
-  transition-duration: 200ms, 140ms;
+  transition-duration: var(--motion-sheet-duration), 140ms;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -117,7 +116,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 
   .shell--mobile-nav .shell-nav-backdrop,
   .shell--mobile-nav.shell--nav-drawer-open .shell-nav-backdrop {
-    transition-duration: 100ms, 0s;
+    transition-duration: 100ms;
   }
 }
 

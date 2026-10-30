@@ -1819,37 +1819,32 @@ describe("updateNpmInstalledPlugins", () => {
       }
       expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
       expect(result.changed).toBe(false);
+      const expectedOutcome = {
+        pluginId,
+        status: "error",
+        code: "npm_metadata_failure",
+        message:
+          scenario === "beta"
+            ? expect.stringContaining("registry timeout")
+            : "Failed to check lossless-claw: npm view failed: registry timeout",
+      };
+      expect(result.outcomes).toEqual([
+        scenario === "beta" ? expect.objectContaining(expectedOutcome) : expectedOutcome,
+      ]);
       if (scenario === "beta") {
         expect(result.config).toBe(config);
-        expect(result.outcomes).toEqual([
-          expect.objectContaining({
-            pluginId,
-            status: "error",
-            code: "npm_metadata_failure",
-            message: expect.stringContaining("registry timeout"),
-          }),
-        ]);
-      } else {
-        expect(result.outcomes).toEqual([
-          {
-            pluginId,
-            status: "error",
-            message: "Failed to check lossless-claw: npm view failed: registry timeout",
-          },
-        ]);
-        if (scenario === "healthy") {
-          expect(result.config.plugins?.entries?.[pluginId]).toEqual({
-            enabled: true,
-            config: { preserved: true },
-          });
-          expect(result.config.plugins?.allow).toEqual([pluginId, "keep"]);
-          expect(result.config.plugins?.deny).toEqual([pluginId, "blocked"]);
-          expect(result.config.plugins?.slots).toEqual({
-            memory: pluginId,
-            contextEngine: pluginId,
-          });
-          expect(validatePackageExtensionEntriesForInstallMock).toHaveBeenCalledTimes(1);
-        }
+      } else if (scenario === "healthy") {
+        expect(result.config.plugins?.entries?.[pluginId]).toEqual({
+          enabled: true,
+          config: { preserved: true },
+        });
+        expect(result.config.plugins?.allow).toEqual([pluginId, "keep"]);
+        expect(result.config.plugins?.deny).toEqual([pluginId, "blocked"]);
+        expect(result.config.plugins?.slots).toEqual({
+          memory: pluginId,
+          contextEngine: pluginId,
+        });
+        expect(validatePackageExtensionEntriesForInstallMock).toHaveBeenCalledTimes(1);
       }
     },
   );
@@ -2292,6 +2287,7 @@ describe("updateNpmInstalledPlugins", () => {
         expectOutcome(result, {
           pluginId,
           status: "error",
+          code: "artifact_unavailable",
           message:
             "Failed to update discord: artifact unavailable (ClawHub clawhub:@openclaw/discord@beta).",
         });

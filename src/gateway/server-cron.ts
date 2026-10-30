@@ -120,7 +120,7 @@ export function buildGatewayCronService(params: {
   const webhookSsrfPolicy = mergeSsrFPolicies(params.cfg.cron?.webhookSsrfPolicy);
 
   const { resolveCronAgent, resolveCronTarget, deferSessionEvent, enqueueSessionEvent } =
-    createGatewayCronTargetResolver(env, cronLogger);
+    createGatewayCronTargetResolver(env, cronLogger, scheduledGatewayContextResolver);
 
   const defaultAgentId = tryResolveAmbientOwnerAgentId(params.cfg);
   const resolveSessionStorePath = (agentId?: string) =>

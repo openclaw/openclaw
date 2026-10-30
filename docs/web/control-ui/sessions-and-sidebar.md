@@ -410,7 +410,7 @@ keep their live messages. The active agent's session list retains critical obser
 headlines even when ambient message previews are off.
 
 On phone-width layouts the panel opens as a bottom sheet, like the issues sheet:
-tap the backdrop or press Escape to close it. The sheet has no hover or flyouts:
+swipe its grabber down, tap the backdrop, or press Escape to close it. The sheet has no hover or flyouts:
 tapping **Group by**, **Sort by**, or **Hide empty groups** opens its
 choices as a page inside the sheet, with **Back** and the current choice checked.
 Choosing applies it and returns to the main page. The title chip opens a separate

@@ -368,6 +368,26 @@
   --duration-fast: 100ms;
   --duration-normal: 180ms;
   --duration-slow: 300ms;
+  /* Sheet spring from ui/src/lib/motion/spring.ts (SwiftUI duration/bounce model:
+     0.3 s, no bounce, fitted to the iOS sheet curve). spring.test.ts keeps it in sync. */
+  --motion-sheet-duration: 441ms;
+  --motion-sheet: 441ms
+    linear(
+      0,
+      0.013 1.8%,
+      0.05 3.9%,
+      0.131 6.8%,
+      0.452 16.6%,
+      0.58 21.1%,
+      0.684 25.6%,
+      0.77 30.4%,
+      0.84 35.6%,
+      0.897 41.7%,
+      0.941 49.2%,
+      0.973 59.4%,
+      0.993 75.5%,
+      1
+    );
   --cursor-action: default;
   --safe-area-top: env(safe-area-inset-top, 0px);
   --safe-area-right: env(safe-area-inset-right, 0px);
