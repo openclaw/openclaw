@@ -386,7 +386,7 @@ describeUnix("inspectPortUsage", () => {
     ["foreign", commandOutput("1 node\n"), "u", { ppid: 1, commandLine: "node", user: "u" }, 222],
   ] as const)(
     "preserves socket evidence with %s metadata",
-    async (_name, output, user, metadata, knownRuntimePid = undefined) => {
+    async (_name, output, user, metadata, knownRuntimePid) => {
       mockUnixCommands({
         lsof: commandOutput("p111\ncnode\nnTCP *:18789 (LISTEN)\n"),
         processInfo: output,

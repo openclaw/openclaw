@@ -662,7 +662,7 @@ export async function runServiceRestart(params: {
       const { collectDurableServiceEnvVars } = await import("../../config/state-dir-dotenv.js");
       const { collectEnvSecretRefIds } = await import("../../config/resolution-facts.js");
       const issue = checkManagedServiceEnvDrift({
-        command,
+        command: command ?? null,
         durableEnvironment: collectDurableServiceEnvVars({ env: driftEnv, config: cfg }),
         secretRefKeys: collectEnvSecretRefIds(cfg),
       });

@@ -350,7 +350,7 @@ describe("runDaemonRestart health checks", () => {
 
   it("refreshes distinct caller and service config after restart repair", async () => {
     loadConfig.mockReturnValue({ gateway: { auth: { token: "caller-before" } } });
-    createConfigIO.mockImplementation(({ env } = {}) => ({
+    createConfigIO.mockImplementation(({ env }: { env?: NodeJS.ProcessEnv } = {}) => ({
       readBestEffortConfig: async () => ({ gateway: { auth: { token: env?.OPENCLAW_STATE_DIR } } }),
     }));
     process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-caller-state";

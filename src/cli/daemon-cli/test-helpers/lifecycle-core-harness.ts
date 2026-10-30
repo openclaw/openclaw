@@ -30,6 +30,7 @@ export function createGatewayServiceRunArgs(
     serviceNoun: "Gateway",
     service,
     renderStartHints: () => [],
+    renderFailureHints: () => [],
     opts: { json: true as const },
     readDriftContext,
   };
