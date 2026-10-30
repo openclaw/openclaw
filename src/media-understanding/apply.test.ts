@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { ProviderHttpError } from "../agents/provider-http-errors.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type {
   MediaUnderstandingCapabilityConfig,
@@ -12,6 +13,7 @@ import type {
 } from "../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { formatDecisionSummary } from "./runner.entries.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
@@ -377,6 +379,38 @@ describe("applyMediaUnderstanding", () => {
       Body: "[Audio attachment could not be analyzed]",
       BodyForAgent: ctx.Body,
     });
+  });
+
+  it.each([
+    [
+      401,
+      "invalid_authentication",
+      "provider rejected the credential (401 invalid_authentication)",
+    ],
+    [429, "insufficient_quota", "provider account is out of quota (429 insufficient_quota)"],
+    [429, undefined, "provider rate limited the request (429)"],
+    [400, "Bearer sk-reflected secret", "provider rejected the request (400)"],
+  ])("names the classified provider cause for HTTP %i %s", async (status, code, cause) => {
+    const ctx = await createAudioCtx();
+    const failure = new ProviderHttpError(`Audio transcription failed (HTTP ${status})`, {
+      status,
+      code,
+      body: "provider prose that must not reach the agent",
+    });
+    await applyAudio(ctx, vi.fn<TranscribeAudio>().mockRejectedValue(failure), {
+      cfg: createGroqAudioConfig(),
+    });
+    expect(ctx.Body).toBe(`[Audio attachment could not be analyzed: ${cause}]`);
+    const decision = ctx.MediaUnderstandingDecisions?.find((entry) => entry.capability === "audio");
+    expect(decision && formatDecisionSummary(decision)).toMatch(`reason=${cause}`);
+  });
+
+  it("keeps the generic marker for an unclassified failure", async () => {
+    const ctx = await createAudioCtx();
+    await applyAudio(ctx, vi.fn<TranscribeAudio>().mockRejectedValue(new Error("boom")), {
+      cfg: createGroqAudioConfig(),
+    });
+    expect(ctx.Body).toBe("[Audio attachment could not be analyzed]");
   });
 
   it("falls back to a CLI transcript after provider failure", async () => {

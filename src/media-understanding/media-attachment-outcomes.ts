@@ -25,7 +25,9 @@ export function renderMediaAttachmentDisposition(
     case "scope-denied":
       return `[${label} attachment not analyzed in this chat]`;
     case "failed":
-      return `[${label} attachment could not be analyzed]`;
+      return disposition.cause
+        ? `[${label} attachment could not be analyzed: ${disposition.cause}]`
+        : `[${label} attachment could not be analyzed]`;
     default:
       return disposition satisfies never;
   }
