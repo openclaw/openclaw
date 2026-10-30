@@ -1,9 +1,9 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildChatItems } from "../chat-thread-build.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import {
@@ -16,6 +16,7 @@ const sessionKey = "agent:main:dashboard:activity-preview";
 const sourceKey = "agent:main:dashboard:icon-work";
 const options = { sessionKey, runWorking: false, searchActive: false };
 const container = document.createElement("div");
+const view = createMessageGroupHarness(container);
 
 function update(id: string, source = sourceKey) {
   return {
@@ -43,7 +44,7 @@ function chain(messages: unknown[], searchActive = false) {
   );
 }
 afterEach(() => {
-  render(null, container);
+  view.unmount();
   resetChatThreadState();
 });
 
@@ -71,24 +72,24 @@ describe("session activity", () => {
     }
     const expanded = new Map<string, boolean>();
     const draw = () =>
-      render(
-        renderMessageGroup(group, {
-          showReasoning: false,
-          showToolCalls: false,
-          agentId: "main",
-          isToolMessageExpanded: (id) => expanded.get(id),
-          onToggleToolMessageExpanded: (id, previous) => {
-            expanded.set(id, !previous);
-            draw();
-          },
-        }),
-        container,
-      );
+      view.render(group, {
+        showReasoning: false,
+        showToolCalls: false,
+        agentId: "main",
+        isToolMessageExpanded: (id) => expanded.get(id),
+        onToggleToolMessageExpanded: (id, previous) => {
+          expanded.set(id, !previous);
+          draw();
+        },
+      });
     draw();
     const disclosure = container.querySelector<HTMLDetailsElement>(".chat-session-activity");
     expect(disclosure).not.toBeNull();
     expect(disclosure?.open).toBe(false);
     expect(disclosure?.querySelector("summary")?.textContent).toContain("Daily report");
+    expect(disclosure?.querySelector("summary a[data-cron-run-link]")?.getAttribute("href")).toBe(
+      "/automations?job=daily&run=execution",
+    );
     expect(container.textContent).not.toContain("Original receipt");
     expect(
       container.querySelector(".chat-avatar, .chat-group--forwarded, .chat-bubble"),
@@ -156,7 +157,7 @@ describe("session activity", () => {
     if (group?.kind !== "group") {
       throw new Error("expected input group");
     }
-    render(renderMessageGroup(group, { showReasoning: false }), container);
+    view.render(group, { showReasoning: false });
     expect(container.querySelector(".chat-session-activity")).toBeNull();
   });
 
@@ -214,41 +215,41 @@ describe("session activity", () => {
     }
     const expanded = new Map<string, boolean>();
     const draw = () =>
-      render(
-        renderMessageGroup(group, {
-          showReasoning: false,
-          showToolCalls: false,
-          assistantName: "OpenClaw",
-          agentId: "main",
-          isToolMessageExpanded: (id) => expanded.get(id),
-          onToggleToolMessageExpanded: (id, previous) => {
-            expanded.set(id, !previous);
-            draw();
-          },
-        }),
-        container,
-      );
+      view.render(group, {
+        showReasoning: false,
+        showToolCalls: false,
+        assistantName: "OpenClaw",
+        agentId: "main",
+        isToolMessageExpanded: (id) => expanded.get(id),
+        onToggleToolMessageExpanded: (id, previous) => {
+          expanded.set(id, !previous);
+          draw();
+        },
+      });
     draw();
     const disclosure = container.querySelector<HTMLDetailsElement>(".chat-session-activity");
-    expect(disclosure?.open).toBe(false);
-    expect(disclosure?.querySelector("summary")?.textContent).toContain("2 updates from");
-    expect(disclosure?.querySelector("summary")?.textContent).toContain("Visualize tool icons");
+    const summary = disclosure?.querySelector("summary");
+    if (!disclosure || !summary) {
+      throw new Error("expected disclosure");
+    }
+    // Lit part markers are bookkeeping; the rendered summary must not change on toggle.
+    const summaryMarkup = () => summary.innerHTML.replace(/<!--[^]*?-->/gu, "");
+    const collapsedMarkup = summaryMarkup();
+    expect(disclosure.open).toBe(false);
+    expect(summary.textContent?.replace(/\s+/gu, " ").trim()).toBe(
+      "2 updates from Visualize tool icons",
+    );
     expect(container.textContent).not.toContain("Original receipt");
     expect(
       container.querySelector(".chat-avatar, .chat-avatar-slot, .chat-group--forwarded"),
     ).toBeNull();
-    expect(disclosure?.querySelector("summary a")).toBeNull();
-    if (!disclosure) {
-      throw new Error("expected disclosure");
-    }
+    expect(summary.querySelector("a[data-session-key]")?.getAttribute("data-session-key")).toBe(
+      sourceKey,
+    );
     disclosure.open = true;
     disclosure.dispatchEvent(new Event("toggle"));
     expect(disclosure.querySelectorAll(".chat-reply-attribution")).toHaveLength(1);
-    expect(disclosure.querySelector("summary")?.textContent).not.toContain("2 updates from");
-    expect(disclosure.querySelector("summary")?.textContent).toContain("From");
-    expect(
-      disclosure.querySelector("summary a[data-session-key]")?.getAttribute("data-session-key"),
-    ).toBe(sourceKey);
+    expect(summaryMarkup()).toBe(collapsedMarkup);
     expect(
       disclosure.querySelector(".chat-session-activity__body .chat-reply-attribution"),
     ).toBeNull();
@@ -261,6 +262,41 @@ describe("session activity", () => {
     disclosure.open = false;
     disclosure.dispatchEvent(new Event("toggle"));
     expect(container.textContent).not.toContain("Original receipt");
+  });
+
+  it("retains a focused action while a same-key forwarded message refreshes", () => {
+    const message = update("retained");
+    const onReply = vi.fn();
+    const draw = (content: string) => {
+      const group = chain([{ ...message, content }]).transcriptItems[0];
+      if (group?.kind !== "group") {
+        throw new Error("expected activity group");
+      }
+      view.render(group, {
+        showReasoning: false,
+        isToolMessageExpanded: () => true,
+        onReply,
+      });
+    };
+    document.body.append(container);
+    try {
+      draw(message.content);
+      const action = container.querySelector<HTMLButtonElement>(
+        ".chat-group-footer-actions .chat-reply-btn",
+      );
+      expect(action).not.toBeNull();
+      action!.focus();
+      expect(document.activeElement).toBe(action);
+      draw("refreshed " + message.content);
+      expect(container.textContent).toContain("refreshed");
+      expect(container.querySelector(".chat-group-footer-actions .chat-reply-btn")).toBe(action);
+      expect(document.activeElement).toBe(action);
+      action!.click();
+      expect(onReply).toHaveBeenCalledOnce();
+      expect(onReply.mock.calls[0]?.[0].text).toContain("refreshed");
+    } finally {
+      container.remove();
+    }
   });
 
   it("keeps reply-bearing receipts separate and preserves navigation to their original", () => {
@@ -294,15 +330,12 @@ describe("session activity", () => {
       ]),
       { assistantName: "Assistant" },
     );
-    render(
-      renderMessageGroup(group, {
-        showReasoning: false,
-        isToolMessageExpanded: () => true,
-        resolveReplyPreview,
-        onOpenReply,
-      }),
-      container,
-    );
+    view.render(group, {
+      showReasoning: false,
+      isToolMessageExpanded: () => true,
+      resolveReplyPreview,
+      onOpenReply,
+    });
     const target = container.querySelector<HTMLButtonElement>(
       '.chat-reply-attribution button[aria-label="Replying to Alice"]',
     );
@@ -317,14 +350,11 @@ describe("session activity", () => {
     if (group?.kind !== "group") {
       throw new Error("expected search group");
     }
-    render(
-      renderMessageGroup(group, {
-        showReasoning: false,
-        searchResult: true,
-        isToolMessageExpanded: () => false,
-      }),
-      container,
-    );
+    view.render(group, {
+      showReasoning: false,
+      searchResult: true,
+      isToolMessageExpanded: () => false,
+    });
     expect(container.querySelector<HTMLDetailsElement>(".chat-session-activity")?.open).toBe(true);
     expect(container.textContent).toContain("END search");
     expect(container.querySelectorAll(".chat-reply-attribution")).toHaveLength(1);

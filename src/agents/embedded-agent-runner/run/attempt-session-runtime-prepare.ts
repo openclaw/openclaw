@@ -1,5 +1,10 @@
+import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
+import { buildTrajectoryRunMetadata } from "../../../trajectory/metadata.js";
+import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import { bindCodeModeSessionStore } from "../../code-mode-session-store.js";
@@ -7,11 +12,15 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { getOpenClawSystemUpdateKind } from "../../internal-runtime-context.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
+import type { AnyAgentTool } from "../../tools/common.js";
+import { declarePromptToolPin } from "../prompt-cache-observability.js";
 import { getProviderPromptState } from "../provider-prompt-state.js";
 import {
   retainEmbeddedSessionPromptState,
   beginSessionSystemPrompt,
+  buildSystemPromptRouteKey,
   prepareSessionSystemPrompt,
+  prepareSessionToolSurface,
   retireSessionSystemPrompt,
 } from "../session-prompt-state.js";
 import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
@@ -30,9 +39,10 @@ import { prepareEmbeddedAttemptTransport } from "./attempt-stream-settle.js";
 import type { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
 import type { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
-import { prepareEmbeddedAttemptTrajectory } from "./attempt-trajectory.js";
+import { resolveAttemptTrajectorySessionFile } from "./attempt-transcript-helpers.js";
 import type { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
 import { measureEmbeddedAgentPreparation } from "./preparation-timing.js";
+import { projectTrajectorySessionTarget } from "./shared-run-context.js";
 import type {
   EmbeddedAttemptExternalAbortController,
   EmbeddedRunAttemptParams,
@@ -46,6 +56,7 @@ type EmbeddedAttemptSessionRuntimeState = {
   prePromptMessageCount: number;
   promptCache: EmbeddedRunAttemptResult["promptCache"];
   systemPromptText: string;
+  systemPromptSeries?: ReturnType<typeof prepareSessionSystemPrompt>["seriesStatus"];
 };
 
 export async function prepareEmbeddedAttemptSessionRuntime(input: {
@@ -101,6 +112,11 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   const effectiveToolCount = effectiveTools.length;
   const sessionPreparation = {
     attempt,
+    assertCurrent: () => {
+      runAbortSignal.throwIfAborted();
+      sessionLock.ownedTranscriptWriteContext.assertCommitAllowed?.();
+      sessionLock.ownedTranscriptWriteContext.initialWriter?.assertActive();
+    },
     ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
     agentDir: input.agentDir,
     effectiveCwd,
@@ -112,6 +128,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     () =>
       prepareEmbeddedAttemptSessionManager({
         ...sessionPreparation,
+        sessionTarget: sessionLock.ownedTranscriptWriteContext.sessionTarget,
+        runAbortSignal,
         onSessionManagerCreated: (manager) => {
           resources.sessionManager = manager;
         },
@@ -135,15 +153,15 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   const sessionPromptState = promptStateLease.state;
   const usesSystemPromptSeries =
     !input.isRawModelRun && attempt.operation !== "settled-tool-finalization";
-  const promptRouteKey = JSON.stringify([
-    attempt.provider,
-    attempt.modelId,
-    attempt.model.api,
-    attempt.model.baseUrl,
-    transcriptPolicy.inHistorySystemUpdates === true,
-    // Personal bootstrap follows the selected human, not only the session ID.
-    attempt.bootstrapUserProfileId,
-  ]);
+  const promptRouteKey = buildSystemPromptRouteKey({
+    provider: attempt.provider,
+    model: attempt.modelId,
+    api: attempt.model.api,
+    baseUrl: attempt.model.baseUrl,
+    inHistorySystemUpdates: transcriptPolicy.inHistorySystemUpdates === true,
+    // Personal bootstrap follows the session's selected human, not only the session ID.
+    personalProfile: attempt.bootstrapUserProfileId,
+  });
   // Retire old overrides before new carriers without checkpointing unadmitted notices.
   const retireSystemPromptUpdates = () =>
     sessionLock.withOwnedTranscriptWrite(() =>
@@ -160,7 +178,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
       state: sessionPromptState,
       routeKey: promptRouteKey,
       enabled: transcriptPolicy.inHistorySystemUpdates === true,
-      entries: sessionManager.getBranch(),
+      getEntries: () => sessionManager.getBranch(),
     })
   ) {
     await retireSystemPromptUpdates();
@@ -178,7 +196,12 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
             routeKey: promptRouteKey,
             systemPrompt: freshSystemPrompt,
             entries: sessionManager.getBranch(),
+            historyBoundaryCount: sessionManager.getBoundaryCount(),
           });
+          // Keep an attempt's restart visible through subsequent continuation preparations.
+          if (prepared.restart || state.systemPromptSeries === undefined) {
+            state.systemPromptSeries = prepared.seriesStatus;
+          }
           let restartRecorded = false;
           if (prepared.restart && resources.session) {
             await retireSystemPromptUpdates();
@@ -194,6 +217,33 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   resources.getUserTranscriptContexts =
     preparedSessionManager.userMessageBoundary.getUserTranscriptContexts;
 
+  // Every turn of the session sends the pinned tool definitions, on any route. A tool
+  // policy change starts a new pin, so configured removals leave the provider request.
+  const toolPolicyDigest = sha256Hex(
+    stableStringify([
+      attempt.config?.tools,
+      attempt.config?.agents?.entries?.[sessionAgentId]?.tools,
+      attempt.config?.plugins,
+      attempt.config?.desktop,
+    ]),
+  );
+  const pinTools = usesSystemPromptSeries
+    ? (tools: AnyAgentTool[]) => {
+        const pending = sessionPromptState.pendingToolSurface;
+        const pinned = prepareSessionToolSurface({
+          state: sessionPromptState,
+          routeKey: promptRouteKey,
+          toolPolicy: toolPolicyDigest,
+          entries: sessionManager.getBranch(),
+          historyBoundaryCount: sessionManager.getBoundaryCount(),
+          tools,
+        });
+        if (sessionPromptState.pendingToolSurface !== pending) {
+          declarePromptToolPin(attempt);
+        }
+        return pinned;
+      }
+    : undefined;
   const state: EmbeddedAttemptSessionRuntimeState = {
     currentTurnImageFailureCount: 0,
     prePromptMessageCount: 0,
@@ -218,6 +268,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
               codeModeControlsEnabledForRun,
               deferredDirectoryToolsCallable,
               effectiveTools,
+              pinTools,
               replaySafetyOptions,
               sandboxSessionKey,
               sessionAgentId,
@@ -321,19 +372,117 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   };
   const cacheTrace = createCacheTrace({ cfg: attempt.config, ...traceContext });
   const anthropicPayloadLogger = createAnthropicPayloadLogger(traceContext);
-  const trajectoryRecorder = await prepareEmbeddedAttemptTrajectory({
-    ...sessionPreparation,
-    activeSession,
-    transcriptOwner: sessionLock.ownedTranscriptWriteContext,
-    clientToolCount: preparedAgentSession.clientToolDefs.length,
-    effectiveToolCount,
-    localModelLeanEnabled,
-    ...(systemPromptReport ? { systemPromptReport } : {}),
-  });
+  let trajectoryRecorder: Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>> = null;
+  {
+    const clientToolCount = preparedAgentSession.clientToolDefs.length;
+    const candidate = sessionLock.ownedTranscriptWriteContext?.sessionTarget;
+    const sessionKey = candidate?.sessionKey;
+    const assertCommitAllowed = sessionLock.ownedTranscriptWriteContext?.assertCommitAllowed;
+    const initialWriter = sessionLock.ownedTranscriptWriteContext?.initialWriter;
+    // Reuse only the lock owner's descriptive key; recorder persistence retains its own authority.
+    const retained =
+      candidate &&
+      sessionKey &&
+      assertCommitAllowed &&
+      candidate.agentId === sessionAgentId &&
+      candidate.sessionId === activeSession.sessionId &&
+      sessionKey === attempt.sessionKey &&
+      candidate.storePath &&
+      candidate.storePath === attempt.sessionTarget?.storePath
+        ? {
+            sessionKey,
+            assertCurrent() {
+              assertCommitAllowed();
+              initialWriter?.assertActive();
+            },
+          }
+        : undefined;
+    retained?.assertCurrent();
+    const trajectorySessionFile = retained
+      ? retained.sessionKey
+      : await resolveAttemptTrajectorySessionFile({
+          agentId: sessionAgentId,
+          config: attempt.config,
+          sessionFile: attempt.sessionFile,
+          sessionId: activeSession.sessionId,
+          sessionKey: attempt.sessionKey,
+          sessionTarget: attempt.sessionTarget,
+        });
+    if (!attempt.disableTrajectory && attempt.sessionPersistence !== "detached") {
+      const assertActive = resolveAdmittedRunActiveAssertion(
+        attempt.admittedRunContext,
+        attempt.abortSignal,
+      );
+      if (!assertActive) {
+        throw new Error("trajectory preparation requires an active admitted run");
+      }
+      assertActive();
+      retained?.assertCurrent();
+      const { sessionTarget } = projectTrajectorySessionTarget(attempt.sessionTarget);
+      const recorder = await createTrajectoryRuntimeRecorder({
+        cfg: attempt.config,
+        env: process.env,
+        runId: attempt.runId,
+        sessionId: activeSession.sessionId,
+        sessionKey: attempt.sessionKey,
+        sessionFile: trajectorySessionFile,
+        sessionTarget,
+        provider: attempt.provider,
+        modelId: attempt.modelId,
+        modelApi: attempt.model.api,
+        workspaceDir: attempt.workspaceDir,
+      });
+      assertActive();
+      retained?.assertCurrent();
+      recorder?.recordEvent("session.started", {
+        trigger: attempt.trigger,
+        sessionFile: attempt.sessionFile,
+        workspaceDir: effectiveWorkspace,
+        agentId: sessionAgentId,
+        messageProvider: attempt.messageProvider,
+        messageChannel: attempt.messageChannel,
+        localModelLean: localModelLeanEnabled,
+        toolCount: effectiveToolCount,
+        clientToolCount,
+      });
+      const fastMode = typeof attempt.fastMode === "boolean" ? attempt.fastMode : undefined;
+      recorder?.recordEvent(
+        "trace.metadata",
+        buildTrajectoryRunMetadata({
+          env: process.env,
+          config: attempt.config,
+          ...(attempt.preparedModelRuntime?.metadataSnapshot
+            ? { pluginMetadataSnapshot: attempt.preparedModelRuntime.metadataSnapshot }
+            : {}),
+          workspaceDir: effectiveWorkspace,
+          sessionFile: attempt.sessionFile,
+          sessionKey: attempt.sessionKey,
+          agentId: sessionAgentId,
+          trigger: attempt.trigger,
+          messageProvider: attempt.messageProvider,
+          messageChannel: attempt.messageChannel,
+          provider: attempt.provider,
+          modelId: attempt.modelId,
+          modelApi: attempt.model.api,
+          timeoutMs: attempt.timeoutMs,
+          fastMode,
+          thinkLevel: attempt.thinkLevel,
+          reasoningLevel: attempt.reasoningLevel,
+          toolResultFormat: attempt.toolResultFormat,
+          disableTools: attempt.disableTools,
+          toolsAllow: attempt.toolsAllow,
+          skillsSnapshot: attempt.skillsSnapshot,
+          systemPromptReport,
+        }),
+      );
+      trajectoryRecorder = recorder;
+    }
+  }
   resources.trajectoryRecorder = trajectoryRecorder;
 
   const transport = await prepareEmbeddedAttemptTransport({
     attempt,
+    contextEngineInfo: input.activeContextEngine?.info,
     assertCronRootCurrent: sessionLock.assertCronRootCurrent,
     session: activeSession,
     settingsManager,

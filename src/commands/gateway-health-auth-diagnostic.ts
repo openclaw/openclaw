@@ -8,23 +8,20 @@ import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
 type GatewayProbeReachabilityEvidence = NonNullable<DaemonStatus["rpc"]>;
 
 export const GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE =
-  "Gateway is reachable, but this CLI has no token/password or paired device token for read-scope health RPCs.";
+  "Gateway is reachable, but this CLI lacks credentials with read scope for health RPCs.";
 export const GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE = "Gateway credentials required";
 export const GATEWAY_HEALTH_REACHABLE_LINE = "Gateway: reachable";
 export const GATEWAY_HEALTH_RATE_LIMITED_MESSAGE =
   "Gateway authentication is temporarily rate-limited. Wait for the temporary lockout to expire, then retry.";
 export const GATEWAY_HEALTH_RATE_LIMITED_TITLE = "Gateway authentication rate-limited";
 
-function gatewayProbeFailureKind(status: GatewayProbeReachabilityEvidence) {
-  return (
-    status.connectFailure?.kind ?? classifyGatewayConnectFailure({ message: status.error }).kind
-  );
-}
-
 export function gatewayProbeResultWasRateLimited(
   status: GatewayProbeReachabilityEvidence,
 ): boolean {
-  return gatewayProbeFailureKind(status) === "rate-limited";
+  return (
+    (status.connectFailure?.kind ??
+      classifyGatewayConnectFailure({ message: status.error }).kind) === "rate-limited"
+  );
 }
 
 export function gatewayConnectErrorWasRateLimited(error: unknown): boolean {

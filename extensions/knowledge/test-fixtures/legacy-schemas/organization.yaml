@@ -1,0 +1,9 @@
+format: knowledge-schema-v1
+version: 0.1.0
+name: organization
+label: Organization
+description: Organization records. One primary home per record; references
+  connect related knowledge.
+kind: page
+directory: organizations/
+fields: []

@@ -1,4 +1,3 @@
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { projectInFlightRunSnapshot } from "../gateway/chat-inflight-snapshot.js";
@@ -6,13 +5,14 @@ import { createAgentEventTestHarness } from "../gateway/server-chat.agent-events
 import { subscribeAgentEvents } from "../gateway/server-chat.agent-events.test-helpers.js";
 import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
 import { createOpenAiResponsesTextBlock } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
-import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
+import {
+  emitProviderUpdate as update,
+  textMessage,
+  toolBlock,
+  type TestAssistant,
+} from "./embedded-agent-subscribe.provider-events.test-support.js";
 
 type Options = Omit<Parameters<typeof createSubscribedSessionHarness>[0], "runId">;
-type TestAssistant = Pick<AssistantMessage, "role" | "content"> &
-  Partial<Pick<AssistantMessage, "api" | "stopReason" | "openclawDelivery">> & {
-    phase?: "commentary" | "final_answer";
-  };
 function commentaryHarness(options: Options) {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(new Date("2026-05-09T00:00:00.000Z"));
@@ -54,32 +54,46 @@ function commentaryHarness(options: Options) {
     },
   };
 }
-function update(
-  emit: ReturnType<typeof createSubscribedSessionHarness>["emit"],
-  message: TestAssistant,
-  event: {
-    type: string;
-    contentIndex?: number;
-    delta?: string;
-    content?: string;
-    partial?: TestAssistant;
-  },
-) {
-  emit({ type: "message_update", message, assistantMessageEvent: event });
-}
-function textMessage(
-  text: string,
-  api: "anthropic-messages" | "openai-completions",
-): TestAssistant {
-  return { ...textAssistant(text), api };
-}
 function textBlock(text: string, id: string, phase: "commentary" | "final_answer") {
   return { ...createOpenAiResponsesTextBlock({ text, id, phase }), type: "text" as const };
 }
-function toolBlock(id: string, name: string) {
-  return { type: "toolCall" as const, id, name, arguments: {} };
-}
 describe("commentary preambles", () => {
+  it.each(["anthropic-messages", "openai-responses"] as const)(
+    "coalesces %s commentary and preserves its complete boundary text",
+    async (api) => {
+      const onAgentEvent = vi.fn();
+      const { emit, subscription } = commentaryHarness({ onAgentEvent });
+      const message = (text: string): TestAssistant => ({
+        role: "assistant",
+        api,
+        phase: "commentary",
+        content: [textBlock(text, "commentary-paced", "commentary")],
+      });
+      const progress = () =>
+        onAgentEvent.mock.calls
+          .map(([event]) => event)
+          .filter((event) => event.stream === "item")
+          .map((event) => event.data.progressText);
+      emit({ type: "message_start", message: message("") });
+      let text = "";
+      for (const delta of ["Checking", " the", " café 🦞."]) {
+        text += delta;
+        const partial = message(text);
+        update(emit, partial, { type: "text_delta", contentIndex: 0, delta, partial });
+      }
+      await subscription.waitForPendingEvents();
+      expect(progress()).toEqual(["Checking"]);
+      update(emit, message(text), {
+        type: "text_end",
+        contentIndex: 0,
+        content: text,
+        partial: message(text),
+      });
+      await subscription.waitForPendingEvents();
+      expect(progress().at(-1)).toBe("Checking the café 🦞.");
+    },
+  );
+
   it.each(["anthropic-messages", "openai-completions"] as const)(
     "preserves unphased %s narration inline across a tool call",
     async (api) => {

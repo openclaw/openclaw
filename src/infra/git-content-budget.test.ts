@@ -1,13 +1,23 @@
+import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { promisify } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { WorkerTaskPoolCore } from "@openclaw/worker-runtime";
 import { afterEach, expect, it, vi } from "vitest";
-import { withinTest } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createNestedGitEnv } from "../../test/helpers/temp-repo.js";
 import { withWorktreeGitConfig } from "../agents/worktrees/checkout-git-config.js";
 import type { runGitBytes } from "../agents/worktrees/git.js";
 import { removeManagedCheckout } from "../agents/worktrees/removal-git.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { withContentGitSlot } from "./git-content-budget.js";
 import { runGitWorkerOperation } from "./git-worker.js";
-import { WorkerTaskPool } from "./worker-task-pool.js";
+import { resolveWorkerPoolSize } from "./worker-pool-sizing.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
   await drainGlobalSingletonLifecycleState();
@@ -21,9 +31,109 @@ function settle<T>(operation: Promise<T>) {
   );
 }
 
-it("bounds content, snapshot, and checkout removal through cancellation while metadata stays responsive", async ({
+it("admits summary reads ahead of queued content without starving content or exceeding two slots", async ({
   signal,
 }) => {
+  const started: string[] = [];
+  const releases = Array.from({ length: 5 }, () => createDeferredCore());
+  const entered = Array.from({ length: 5 }, () => createDeferredCore());
+  let active = 0;
+  let maximum = 0;
+  const run = (index: number, interactive = false) =>
+    withContentGitSlot(
+      async () => {
+        started.push(String(index));
+        maximum = Math.max(maximum, ++active);
+        entered[index]!.resolve();
+        try {
+          await releases[index]!.promise;
+        } finally {
+          active--;
+        }
+      },
+      signal,
+      interactive,
+    );
+  const pending = [run(0), run(1), run(2), run(3, true), run(4, true)];
+  try {
+    await withinTest(Promise.all([entered[0]!.promise, entered[1]!.promise]), signal);
+    releases[0]!.resolve();
+    await pending[0];
+    expect(started).toEqual(["0", "1", "3"]);
+    releases[1]!.resolve();
+    await pending[1];
+    expect(started).toEqual(["0", "1", "3", "2"]);
+    releases[3]!.resolve();
+    await pending[3];
+    expect(started).toEqual(["0", "1", "3", "2", "4"]);
+    expect(maximum).toBe(2);
+  } finally {
+    for (const release of releases) {
+      release.resolve();
+    }
+    await Promise.all(pending);
+  }
+  expect(active).toBe(0);
+});
+
+it("serves summary polls while full diff workers await untracked-file preparation", async ({
+  signal,
+}) => {
+  const repo = tempDirs.make("openclaw-git-worker-summary-");
+  await promisify(execFile)("git", ["init", "--template=", "--initial-branch=main"], {
+    cwd: repo,
+    env: createNestedGitEnv(),
+  });
+  await fs.writeFile(path.join(repo, "new.txt"), "new content\n");
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const realMkdtemp = fs.mkdtemp;
+  const contentWorkers = resolveWorkerPoolSize("reader");
+  let held = 0;
+  vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix, options) => {
+    if (prefix.includes("openclaw-git-operation-") && held < contentWorkers) {
+      if (++held === contentWorkers) {
+        entered.resolve();
+      }
+      await release.promise;
+    }
+    return await realMkdtemp(prefix, options);
+  });
+  const pending = Array.from({ length: contentWorkers }, () =>
+    runGitWorkerOperation({ type: "checkout.diff", input: { cwd: repo } }),
+  );
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(
+        entered.promise,
+        Promise.all(pending),
+        "Full diffs finished before untracked-file preparation was held",
+      ),
+      signal,
+    );
+    const summary = runGitWorkerOperation({
+      type: "checkout.diff",
+      input: { cwd: repo, summaryOnly: true },
+    });
+    pending.push(summary);
+    const result = await withinTest(summary, signal);
+    expect(result.files).toContainEqual({
+      path: "new.txt",
+      status: "added",
+      untracked: true,
+      additions: 1,
+      deletions: 0,
+    });
+  } finally {
+    release.resolve();
+    await Promise.all(pending);
+  }
+});
+
+it("bounds content/removal through cancellation while metadata stays responsive", async ({
+  signal,
+}) => {
+  const wait = <T>(promise: Promise<T>) => withinTest(promise, signal);
   const release = createDeferredCore();
   const firstStarted = createDeferredCore();
   const started: string[] = [];
@@ -57,7 +167,7 @@ it("bounds content, snapshot, and checkout removal through cancellation while me
     }
   };
   // Exercise host batch admission without starting a worker or child process.
-  vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(async (request, options) => {
+  vi.spyOn(WorkerTaskPoolCore.prototype, "run").mockImplementation(async (request, options) => {
     const command = typeof request === "function" ? await request() : request;
     const input = asOptionalRecord(asOptionalRecord(command)?.input);
     const cwd = input?.cwd ?? input?.root ?? input?.repoRoot;
@@ -77,52 +187,45 @@ it("bounds content, snapshot, and checkout removal through cancellation while me
     return { ok: true, value: undefined };
   });
   const gitCommands = { text: run, buffered: run };
+  const operation = (
+    command: Parameters<typeof runGitWorkerOperation>[0],
+    taskSignal?: AbortSignal,
+  ) => runGitWorkerOperation(command, { git: gitCommands, signal: taskSignal });
+  const task = (...args: Parameters<typeof operation>) => settle(operation(...args));
   const abortRunning = new AbortController();
   const abortQueued = new AbortController();
   const abortRemoval = new AbortController();
-  let firstSettled = false;
-  const first = settle(
-    runGitWorkerOperation(
-      { type: "checkout.diff", input: { cwd: "diff", scope: "uncommitted" } },
-      { git: gitCommands, signal: abortRunning.signal },
-    ),
-  ).then((value) => {
-    firstSettled = true;
-    return value;
-  });
+  const firstSettled = vi.fn();
+  const first = task(
+    { type: "checkout.diff", input: { cwd: "diff", scope: "uncommitted" } },
+    abortRunning.signal,
+  ).finally(firstSettled);
   const pending: Promise<unknown>[] = [first];
   try {
-    await withinTest(firstStarted.promise, signal);
-    const second = settle(
-      runGitWorkerOperation(
-        { type: "checkout.baseline", input: { cwd: "baseline" } },
-        { git: gitCommands },
-      ),
-    );
-    const queued = settle(
-      runGitWorkerOperation(
-        {
-          type: "pull-request.branch-facts",
-          input: { root: "canceled", branch: "main", mergedHeads: [] },
+    await wait(firstStarted.promise);
+    const second = task({ type: "checkout.baseline", input: { cwd: "baseline" } });
+    const queued = task(
+      {
+        type: "pull-request.branch-facts",
+        input: {
+          root: "canceled",
+          branch: "main",
+          mergedHeads: [],
+          comparison: { statsBase: null, creatable: false, equalPushedTips: false, complete: true },
         },
-        { git: gitCommands, signal: abortQueued.signal },
-      ),
+      },
+      abortQueued.signal,
     );
-    const snapshot = settle(
-      runGitWorkerOperation(
-        {
-          type: "worktree.snapshot",
-          input: {
-            worktreeId: "snapshot",
-            repoRoot: "snapshot",
-            checkoutPath: "snapshot",
-            reason: "fixture",
-            provisionedPaths: [],
-          },
-        },
-        { git: gitCommands },
-      ),
-    );
+    const snapshot = task({
+      type: "worktree.snapshot",
+      input: {
+        worktreeId: "snapshot",
+        repoRoot: "snapshot",
+        checkoutPath: "snapshot",
+        reason: "fixture",
+        provisionedPaths: [],
+      },
+    });
     const remove = (name: string, queueSignal?: AbortSignal) =>
       withWorktreeGitConfig(name, false, {}, (git) =>
         removeManagedCheckout(
@@ -146,7 +249,8 @@ it("bounds content, snapshot, and checkout removal through cancellation while me
               stderr: "",
             }),
           },
-          false,
+          // Keep this slot/cancellation test independent of checkout filesystem setup.
+          true,
           "bounded",
           undefined,
           queueSignal,
@@ -155,25 +259,16 @@ it("bounds content, snapshot, and checkout removal through cancellation while me
     const removal = remove("removal");
     const canceledRemoval = settle(remove("canceled-removal", abortRemoval.signal));
     pending.push(second, queued, snapshot, removal, canceledRemoval);
-    await withinTest(
-      runGitWorkerOperation(
-        { type: "repository.branches", input: { repoRoot: "metadata" } },
-        { git: gitCommands },
-      ),
-      signal,
-    );
+    await wait(operation({ type: "repository.branches", input: { repoRoot: "metadata" } }));
     expect(started).toEqual(["diff", "diff"]);
     abortQueued.abort();
-    expect((await withinTest(queued, signal)).rejected).toBe(true);
+    expect((await wait(queued)).rejected).toBe(true);
     const canceled = new Error("removal cancelled while queued");
     abortRemoval.abort(canceled);
-    expect(await withinTest(canceledRemoval, signal)).toEqual({
-      rejected: true,
-      error: canceled,
-    });
+    expect(await wait(canceledRemoval)).toEqual({ rejected: true, error: canceled });
     expect(started).toEqual(["diff", "diff"]);
     abortRunning.abort();
-    expect(firstSettled).toBe(false);
+    expect(firstSettled).not.toHaveBeenCalled();
     expect(active).toBe(2);
     release.resolve();
     await Promise.all(pending);

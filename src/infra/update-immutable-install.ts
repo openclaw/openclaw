@@ -1,10 +1,12 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { UpdateImmutableInstall } from "../../packages/gateway-protocol/src/schema/config.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
+import type { InstallOwner } from "./install-owner.js";
 import {
   packageActivationRuntimeIdentity,
   resolveImmutableRecoveryCommand,
@@ -138,13 +140,29 @@ async function installationRoot(input: string): Promise<string | null> {
 /** Shape is only a hint. Unadopted releases must never fall through to mutable Git. */
 export async function inspectImmutableInstall(
   root: string,
-): Promise<UpdateImmutableInstall | null> {
+  options: { allowExternalOwner?: boolean } = {},
+): Promise<(UpdateImmutableInstall & { installOwner?: InstallOwner }) | null> {
   const installation = await installationRoot(root);
   if (!installation) {
     return null;
   }
   const record = await readImmutableInstallRecord(installation);
   if (!record) {
+    if (options.allowExternalOwner) {
+      const layout = readImmutableLayout(installation);
+      return {
+        root: installation,
+        currentSha: layout.current.sha,
+        currentPath: layout.current.path,
+        installOwner: {
+          schemaVersion: 1,
+          owner: "immutable-deployer",
+          displayName: "immutable release deployment owner",
+          updateHint:
+            "Update through the deployment owner. Native updates require explicit adoption after its previous updater has stopped.",
+        },
+      };
+    }
     throw new Error(
       "Immutable release layout is not adopted. Use openclaw update adopt-immutable after its previous updater has stopped.",
     );
@@ -195,7 +213,7 @@ export async function adoptImmutableInstall(params: {
     verifyImmutableGeneration,
     assertImmutableGenerationControlVersion,
   } = await import("./update-immutable-generation.js");
-  const { verifyImmutableService } = await import("./update-immutable-service.js");
+  const { readImmutableService } = await import("./update-immutable-service.js");
   const { ImmutableInstallDescriptorSchema } = await import("./update-immutable-install-schema.js");
   if (!params.previousUpdaterStopped) {
     throw new Error("The previous updater must be stopped before adoption.");
@@ -280,7 +298,6 @@ export async function adoptImmutableInstall(params: {
       if (existing.activation?.operation) {
         throw new Error("Immutable activation recovery is pending; run openclaw update recover.");
       }
-      const { isDeepStrictEqual } = await import("node:util");
       const {
         version: _version,
         activationEnabled: _enabled,
@@ -381,7 +398,7 @@ export async function adoptImmutableInstall(params: {
         );
       }
     }
-    await verifyImmutableService(descriptor.service, root, descriptor.current.path, runtime);
+    await readImmutableService(descriptor.service, root, descriptor.current.path, runtime);
     assertCurrent();
     await installImmutableLauncher({ root, runtimePath: runtime });
     assertCurrent();
@@ -407,6 +424,7 @@ export async function prepareImmutableUpdate(params: {
   sha?: string;
   dryRun?: boolean;
   timeoutMs?: number;
+  onWarning?: (warning: string) => void;
 }): Promise<ImmutableUpdateResult> {
   const installation = await inspectImmutableInstall(params.root);
   if (!installation) {
@@ -414,6 +432,10 @@ export async function prepareImmutableUpdate(params: {
   }
   const steps: UpdateStepResult[] = [];
   const warnings: string[] = [];
+  const warn = (warning: string) => {
+    warnings.push(warning);
+    params.onWarning?.(warning);
+  };
   let targetSha: string | undefined;
   const result = (
     status: ImmutableUpdateResult["status"],
@@ -434,6 +456,7 @@ export async function prepareImmutableUpdate(params: {
       sealImmutableGeneration,
       verifyImmutableGeneration,
       assertImmutableGenerationControlVersion,
+      recordImmutableOperatorBuild,
     } = await import("./update-immutable-generation.js");
     const runner = await buildUpdateCommandRunner();
     const defaultCommandEnv = resolveImmutableGenerationEnv({
@@ -504,10 +527,28 @@ export async function prepareImmutableUpdate(params: {
       };
     }
     requireUpdater();
-    const { verifyImmutableService } = await import("./update-immutable-service.js");
+    const { readImmutableService } = await import("./update-immutable-service.js");
     const { runImmutableBuild } = await import("./update-immutable-build.js");
-    const { readGitTargetSchemaVersions } = await import("./update-runner-git-target.js");
+    const { resolveImmutableOperatorBuildAccount } =
+      await import("./update-immutable-build-account.js");
+    const { readGitTargetSchemaVersions } = await import("./update-runner-git-schema.js");
     const selectedSha = targetSha;
+    const admitted = await readImmutableInstallRecord(installation.root);
+    if (!admitted) {
+      throw new Error("Immutable adoption record disappeared.");
+    }
+    const needsBuild =
+      selectedSha !== admitted.descriptor.current.sha &&
+      !(await inspectEntry(path.join(installation.root, "releases", selectedSha)));
+    const operator =
+      needsBuild && !admitted.descriptor.build
+        ? await resolveImmutableOperatorBuildAccount(admitted.descriptor)
+        : undefined;
+    if (operator) {
+      warn(
+        `The isolated build account is missing; building as ${operator.account} (uid ${operator.uid}, gid ${operator.gid}) (built-by: operator; isolation: none). See https://docs.openclaw.ai/cli/update#immutable-release-installations for build-account provisioning status.`,
+      );
+    }
     return await withImmutableUpdateOwner(installation.root, async (assertOwner) => {
       const record = await readImmutableInstallRecord(installation.root);
       if (!record) {
@@ -517,6 +558,11 @@ export async function prepareImmutableUpdate(params: {
         throw new Error("Immutable activation recovery is pending; run openclaw update recover.");
       }
       const descriptor = record.descriptor;
+      if (!isDeepStrictEqual(descriptor, admitted.descriptor)) {
+        throw new Error(
+          "Immutable installation changed after build account selection; retry update.",
+        );
+      }
       if ((await fs.realpath(process.execPath)) !== descriptor.runtime.path) {
         throw new Error(
           `Run preparation with the adopted Node executable: ${descriptor.runtime.path}`,
@@ -527,7 +573,7 @@ export async function prepareImmutableUpdate(params: {
         assertImmutableDescriptorCurrent(descriptor);
       };
       const verifyService = () =>
-        verifyImmutableService(
+        readImmutableService(
           descriptor.service,
           descriptor.root,
           descriptor.current.path,
@@ -578,6 +624,7 @@ export async function prepareImmutableUpdate(params: {
         await fs.mkdir(buildStage, { mode: 0o700 });
         await runImmutableBuild({
           descriptor,
+          operator,
           stage: buildStage,
           sha: selectedSha,
           timeoutMs,
@@ -592,6 +639,9 @@ export async function prepareImmutableUpdate(params: {
         const candidate = path.join(stage, "sealed");
         await copyImmutableGeneration(path.join(buildStage, "generation"), candidate);
         await verifyImmutableGeneration(candidate, selectedSha, runCommand, { sealed: false });
+        if (operator) {
+          await recordImmutableOperatorBuild(candidate, operator);
+        }
         const metadata = await readGitTargetSchemaVersions({
           runCommand,
           root: candidate,
@@ -630,10 +680,10 @@ export async function prepareImmutableUpdate(params: {
       } finally {
         assertCurrent();
         if (cleanupUncertain) {
-          warnings.push(`Preparation processes did not settle; retained ${stage} for inspection.`);
+          warn(`Preparation processes did not settle; retained ${stage} for inspection.`);
         } else {
           await fs.rm(stage, { recursive: true, force: true }).catch(() => {
-            warnings.push(`Preparation scratch retained at ${stage}; current is unchanged.`);
+            warn(`Preparation scratch retained at ${stage}; current is unchanged.`);
           });
         }
       }

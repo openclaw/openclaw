@@ -1,5 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { replaceSessionWithBranchedTranscript } from "../../config/sessions/session-accessor.js";
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { publishCommittedSessionIdentity } from "../../config/sessions/session-accessor.sqlite-identity.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
@@ -9,7 +8,6 @@ import {
   captureOwnedTranscriptWriteAssertion,
   withOwnedSessionTranscriptWriterFence,
 } from "../../config/sessions/transcript-write-context.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { parseOpaqueLeafEntry, parseParentLinkedOpaqueEntry } from "./session-manager-codec.js";
 import { createManagedSessionId, generateSessionEntryId } from "./session-manager-id.js";
@@ -26,6 +24,29 @@ import type { SessionManagerPersistenceTarget } from "./session-manager-view-typ
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 
 export class SessionManagerBranching extends SessionManagerMetadata {
+  /** A context-only view must not rewind past omitted, user-visible entries. */
+  hasLoadedTranscriptTail(entryId: string, parentId: string | null): boolean {
+    this.assertTranscriptViewAvailable();
+    if (this.appendMode === "side") {
+      return false;
+    }
+    let currentId = this.appendParentId;
+    for (let remaining = this.byId.size; currentId && remaining > 0; remaining--) {
+      const entry = this.byId.get(currentId);
+      if (!entry) {
+        return false;
+      }
+      const currentParentId = this.boundedParentIds.has(currentId)
+        ? (this.boundedParentIds.get(currentId) ?? null)
+        : entry.parentId;
+      if (currentId === entryId) {
+        return currentParentId === parentId;
+      }
+      currentId = currentParentId;
+    }
+    return false;
+  }
+
   private collectBranchedSessionPath(leafId: string): {
     entries: SessionEntry[];
     opaqueEntries: PreservedOpaqueFileEntry[];
@@ -114,6 +135,16 @@ export class SessionManagerBranching extends SessionManagerMetadata {
       this.assertTranscriptWriteActive();
       const assertNavigation = this.captureTranscriptNavigationAssertion();
       const previousSessionId = this.sessionId;
+      // The source counts its active path, and its own inherited paths stay inherited;
+      // copied entries off both still count in the branch.
+      const countedIds = new Set(
+        [
+          ...this.getBranch(),
+          ...(this.getHeader()?.inheritedThrough ?? []).flatMap((id) =>
+            this.getEntry(id) ? this.getBranch(id) : [],
+          ),
+        ].map((entry) => entry.id),
+      );
       const branchPath = this.collectBranchedSessionPath(leafId);
       if (branchPath.entries.length === 0) {
         throw new Error(`Entry ${leafId} not found`);
@@ -130,6 +161,10 @@ export class SessionManagerBranching extends SessionManagerMetadata {
         timestamp,
         cwd: this.cwd,
         parentSession: persistenceTarget ? previousSessionId : undefined,
+        inheritedThrough: branchPath.entries
+          .filter((entry) => countedIds.has(entry.id))
+          .slice(-1)
+          .map((entry) => entry.id),
       };
       const pathEntryIds = new Set(branchPath.entries.map((entry) => entry.id));
       const labelEntries: LabelEntry[] = [];
@@ -172,11 +207,7 @@ export class SessionManagerBranching extends SessionManagerMetadata {
         this.transcriptMutationAt = target ? version?.updatedAt : undefined;
         this.persistenceHeaderPending = false;
       };
-      if (
-        persistenceTarget &&
-        admission &&
-        (!isIncognitoSessionKey(persistenceTarget.sessionKey) || !("db" in admission.database))
-      ) {
+      if (persistenceTarget && admission) {
         const identity = { ...persistenceTarget };
         const version = this.transcriptVersion;
         const assertOwned = captureOwnedTranscriptWriteAssertion(identity);
@@ -198,7 +229,7 @@ export class SessionManagerBranching extends SessionManagerMetadata {
         };
         const { restoreSessionColdTranscript } =
           await import("../../config/sessions/session-cold-storage.js");
-        if ("db" in admission.database) {
+        if (!("withMetadata" in admission.database)) {
           await restoreSessionColdTranscript(persistenceTarget, assertCurrent);
         }
         const reader = prepareSessionManagerHydration(persistenceTarget, {
@@ -281,7 +312,7 @@ export class SessionManagerBranching extends SessionManagerMetadata {
           failure = { cause };
         }
         try {
-          if (!("db" in admission.database)) {
+          if ("withMetadata" in admission.database) {
             publishCommittedSessionIdentity(
               scope.agentId,
               admission.database.identity.incarnation,
@@ -317,17 +348,6 @@ export class SessionManagerBranching extends SessionManagerMetadata {
           this.invalidateTranscriptView(error);
           throw error;
         }
-      } else if (persistenceTarget) {
-        // Incognito retains its process-held owner until its worker migration activates.
-        await replaceSessionWithBranchedTranscript(
-          persistenceTarget,
-          { sessionId: newSessionId, events: branch.getPersistedFileEntries() },
-          adoptBranch,
-          () => {
-            this.assertTranscriptWriteActive();
-            assertNavigation();
-          },
-        );
       } else {
         adoptBranch();
       }

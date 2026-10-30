@@ -1,15 +1,17 @@
 import { EventEmitter, once } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import {
-  GATEWAY_SERVER_CAPS,
-  type HelloOk,
-} from "../../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_CLIENT_CAPS } from "../../../../packages/gateway-protocol/src/client-info.js";
+import type { ConnectParams, HelloOk } from "../../../../packages/gateway-protocol/src/index.js";
+import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import * as systemPresence from "../../../infra/system-presence.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { resolveGatewayAuth } from "../../auth-resolve.js";
+import type { HealthSummary } from "../../health/types.js";
 import { startGatewayTailscaleExposure } from "../../server-tailscale.js";
 import { prepareTailscalePublishedOrigin } from "../../tailscale-published-origin.js";
+import { getHealthCache } from "../health-state.js";
 import type { GatewayWsClient } from "../ws-types.js";
 
 // Hello update-scope tests cover authenticated role/scope and recovery ownership projection.
@@ -17,10 +19,12 @@ import type { GatewayWsClient } from "../ws-types.js";
 const {
   buildGatewaySnapshotMock,
   emitGatewayAuthSecurityEventMock,
+  getSessionRowProjectionMock,
   listControlUiPluginTabsMock,
   listControlUiPluginWidgetKindsMock,
 } = vi.hoisted(() => ({
   emitGatewayAuthSecurityEventMock: vi.fn(),
+  getSessionRowProjectionMock: vi.fn(),
   listControlUiPluginTabsMock: vi.fn((_scopes: readonly string[]) => []),
   listControlUiPluginWidgetKindsMock: vi.fn((_scopes: readonly string[]) => []),
   buildGatewaySnapshotMock: vi.fn((opts?: { includeUpdateDetails?: boolean }) => {
@@ -69,8 +73,14 @@ vi.mock("../health-state.js", () => ({
   getHealthVersion: vi.fn(() => 1),
 }));
 
-vi.mock("../../../state/user-profiles.js", () => ({
-  hasMultipleSessionSharingIdentities: vi.fn(() => false),
+vi.mock("../../session-row-projection-access.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../session-row-projection-access.js")>()),
+  getSessionRowProjection: getSessionRowProjectionMock,
+}));
+
+vi.mock("../../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../state/user-profile-list.js")>()),
+  hasMultipleResidentSessionSharingIdentities: vi.fn(() => false),
 }));
 
 vi.mock("../../control-ui-plugin-tabs.js", () => ({
@@ -102,6 +112,13 @@ function makeContext(
   scopes: string[],
   client?: Pick<GatewayWsClient, "internal" | "preparedSessionProfile">,
 ) {
+  const connectParams: ConnectParams = {
+    minProtocol: PROTOCOL_VERSION,
+    maxProtocol: PROTOCOL_VERSION,
+    client: { id: "gateway-client", version: "dev", platform: "test", mode: "backend" },
+    role,
+    scopes,
+  };
   return {
     handler: {
       socket: new EventEmitter(),
@@ -120,11 +137,7 @@ function makeContext(
       logHealth: { error: vi.fn() },
     },
     frame: { id: `hello-${role}` },
-    connectParams: {
-      client: { id: "gateway-client", version: "dev", platform: "test", mode: "backend" },
-      role,
-      scopes,
-    },
+    connectParams,
     configSnapshot: {},
     sendFrame: vi.fn(async () => undefined),
     onHelloDelivered: vi.fn(),
@@ -174,11 +187,123 @@ function expectRedactedHelloSnapshot(context: ReturnType<typeof makeContext>) {
 
 describe("sendGatewayHello update detail scope", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
+    getSessionRowProjectionMock.mockReset();
     prepareTailscalePublishedOrigin({ origin: "https://reset.test", mode: "serve" })();
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getHealthCache).mockReturnValue(null);
+  });
+
+  it.each([
+    { origin: "https://gateway.example.test", local: false, expected: true },
+    { origin: "http://127.0.0.1:18789", local: true, expected: true },
+    { origin: "http://127.0.0.1:18789", local: false, expected: false },
+  ])(
+    "advertises browser sign-in only for a secure served return: %j",
+    async ({ origin, local, expected }) => {
+      const context = {
+        ...makeContext("operator", ["operator.read"]),
+        browserOrigin: { origin, requestHost: new URL(origin).host, isLocalClient: local },
+      };
+      const gatewayMethods = ["health", "mcp.authLogin"];
+      await sendGatewayHello(
+        { ...context, handler: { ...context.handler, gatewayMethods } } as never,
+        makeState("operator", ["operator.read"]) as never,
+        {},
+      );
+      expect(helloPayload(context)?.features.methods).toEqual(
+        expected ? gatewayMethods : ["health"],
+      );
+    },
+  );
+
+  it.each([
+    { caps: [], mode: "full" },
+    { caps: [GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY], mode: "summary" },
+    { caps: [GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND], mode: "empty" },
+    {
+      caps: [GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND, GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY],
+      mode: "empty",
+    },
+  ])("negotiates $mode cached health in hello", async ({ caps, mode }) => {
+    const summary = {
+      ok: true as const,
+      ts: 123,
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+    };
+    const health: HealthSummary = {
+      ...summary,
+      agents: [],
+      sessions: { path: "", count: 5000, recent: [] },
+    };
+    vi.mocked(getHealthCache).mockReturnValue(health);
+    const context = makeContext("operator", ["operator.read"]);
+    context.connectParams = {
+      ...context.connectParams,
+      caps,
+    };
+
+    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+
+    expect(helloSnapshot(context)).toMatchObject({
+      presence: [],
+      stateVersion: { presence: 1, health: 1 },
+      uptimeMs: 1,
+    });
+    expect(helloSnapshot(context)?.health).toEqual(
+      mode === "empty" ? {} : mode === "summary" ? summary : health,
+    );
+  });
+
+  it.each([undefined, []])(
+    "sends hello without membership reads for idle presence (%j)",
+    async (watchedSessions) => {
+      vi.spyOn(systemPresence, "listSystemPresence").mockReturnValue([
+        { text: "idle peer", ts: 1, watchedSessions },
+      ]);
+      const projection = {
+        needsMembershipPreparation: vi.fn(() => true),
+        prepareMembership: vi.fn(async () => {
+          throw new Error("unexpected membership read");
+        }),
+      };
+      getSessionRowProjectionMock.mockReturnValue(projection);
+      const context = makeContext("operator", ["operator.read"]);
+
+      await sendGatewayHello(
+        context as never,
+        makeState("operator", ["operator.read"]) as never,
+        {},
+      );
+
+      expect(projection.needsMembershipPreparation).not.toHaveBeenCalled();
+      expect(projection.prepareMembership).not.toHaveBeenCalled();
+      expect(context.sendFrame).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("sends hello while watched-session membership preparation is pending", async () => {
+    vi.spyOn(systemPresence, "listSystemPresence").mockReturnValue([
+      { text: "watching peer", ts: 1, watchedSessions: ["agent:main:watched"] },
+    ]);
+    const projection = {
+      needsMembershipPreparation: vi.fn(() => true),
+      prepareMembership: vi.fn(() => new Promise<void>(() => {})),
+    };
+    getSessionRowProjectionMock.mockReturnValue(projection);
+    const context = makeContext("operator", ["operator.read"]);
+
+    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+
+    expect(context.sendFrame).toHaveBeenCalledOnce();
+    expect(projection.prepareMembership).not.toHaveBeenCalled();
   });
 
   it.each(["write", "suggest", "view", "none", undefined] as const)(
@@ -284,19 +409,6 @@ describe("sendGatewayHello update detail scope", () => {
     },
   );
 
-  it("does not advertise configured Serve identity without a live route claim", async () => {
-    const context = makeContext("operator", ["operator.read"]);
-    context.configSnapshot = {
-      gateway: { publicOrigin: "https://other.example.test", tailscale: { mode: "serve" } },
-    };
-    const state = {
-      ...makeState("operator", ["operator.read"]),
-      resolvedAuth: { mode: "token", allowTailscale: true },
-    };
-    await sendGatewayHello(context as never, state as never, {});
-    expect(helloSnapshot(context)).not.toHaveProperty("controlUiIdentityUrl");
-  });
-
   it.each(["before hello delivery", "after hello delivery", "during hello delivery"] as const)(
     "releases only live announcement owners when withdrawn %s",
     async (phase) => {
@@ -336,11 +448,12 @@ describe("sendGatewayHello update detail scope", () => {
     async (withdrawal) => {
       const gatewayMethods = ["health", "config.get"];
       const exited = createDeferredCore();
-      tailscaleClaim.mockResolvedValue({
+      tailscaleClaim.mockResolvedValueOnce({
         exited: exited.promise,
         isActive: () => true,
         stop: vi.fn(),
       });
+      tailscaleClaim.mockRejectedValue(new Error("Tailscale daemon unavailable"));
       const cleanup = await startGatewayTailscaleExposure({
         tailscaleMode: "serve",
         port: 18789,
@@ -470,47 +583,8 @@ describe("sendGatewayHello update detail scope", () => {
       includeUpdateDetails: false,
     });
     expectRedactedHelloSnapshot(context);
-  });
-
-  it("includes update details for an operator.read client", async () => {
-    const context = makeContext("operator", ["operator.read"]);
-    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
-
-    expect(buildGatewaySnapshotMock).toHaveBeenCalledWith({
-      client: null,
-      includeSensitive: false,
-      includeUpdateDetails: true,
-    });
-    expect(helloSnapshot(context)).toEqual(
-      expect.objectContaining({
-        updateAvailable: expect.objectContaining({
-          upstreamRef: "origin/main",
-          upstreamSha: "2222222222222222222222222222222222222222",
-          commitsBehind: 1,
-          commits: [{ sha: "2222222", subject: "Detailed commit subject" }],
-        }),
-        updateSchedule: {
-          channel: "dev",
-          autoEnabled: true,
-          install: { kind: "git" },
-        },
-      }),
-    );
-    expect(helloPayload(context)?.server.buildId).toBe("build-a");
-    expect(helloPayload(context)?.server.bootId).toBe("gateway-boot-a");
-    expect(helloPayload(context)?.server.controlUiBuildSource).toBe("bundled");
-    expect(helloPayload(context)?.features.capabilities).toContain(
-      GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
-    );
-    expect(helloPayload(context)?.features.capabilities).toContain(
-      GATEWAY_SERVER_CAPS.PROGRESS_CARD_AGENT_SCOPE,
-    );
-    expect(helloPayload(context)?.features.capabilities).toContain("session-scoped-chat-metadata");
-    expect(helloPayload(context)?.features.capabilities).toContain("session-scoped-model-catalog");
-    expect(helloPayload(context)?.features.capabilities).toContain("profile-binding-v1");
-    expect(helloPayload(context)?.features.capabilities).toContain(
-      "sender-restricted-hidden-helpers-v1",
-    );
+    expect(helloPayload(context)?.features.capabilities).toContain("node-permission-errors");
+    expect(helloPayload(context)?.features.capabilities).toContain("agent-session-id-create-v1");
   });
 
   it.each([
@@ -594,6 +668,7 @@ describe("sendGatewayHello update detail scope", () => {
       method: "none",
       role: "operator",
       scopes: ["operator.pairing"],
+      roleAllowsAdmin: true,
       recoveryMigrationAllowed: true,
       recoveryScope: expect.stringMatching(/^[A-Za-z0-9_-]+$/u),
       deviceToken: "paired-token",

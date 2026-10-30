@@ -3,6 +3,8 @@ import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
+import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 
 export type ExpectedWorkerBuild = {
   bundleHash: WorkerAdmissionHandshake["bundleHash"];
@@ -10,13 +12,15 @@ export type ExpectedWorkerBuild = {
   protocolFeatures: readonly string[];
 };
 
-/** Fence persisted builds that cannot parse the exact current launch descriptor. */
+/** Fence persisted builds missing the launch descriptor's tool and approval contracts. */
 export function supportsCurrentWorkerLaunch(
   handshake: Pick<WorkerAdmissionHandshake, "protocolFeatures"> | null | undefined,
 ): boolean {
   return (
     handshake?.protocolFeatures.includes(WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE) === true &&
-    handshake.protocolFeatures.includes(WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE)
+    handshake.protocolFeatures.includes(WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE) &&
+    handshake.protocolFeatures.includes(WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE) &&
+    handshake.protocolFeatures.includes(WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE)
   );
 }
 

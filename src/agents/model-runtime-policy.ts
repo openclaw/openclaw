@@ -23,8 +23,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
-import { resolveAgentEntry, resolveNativeModelPrimary } from "./agent-scope-config.js";
-import { resolveSessionAgentIds } from "./agent-scope.js";
+import {
+  resolveAgentEntry,
+  resolveNativeModelPrimary,
+  resolveSessionAgentIds,
+} from "./agent-scope-config.js";
 import { resolveProviderModelAuthPolicy } from "./model-auth-policy.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 
@@ -50,13 +53,11 @@ export function resolveAgentRuntimePolicyAgentId(
     : params.agentId;
 }
 
-/** Config surface that supplied a resolved model runtime policy. */
-type ModelRuntimePolicySource = "model" | "provider";
-
 /** Runtime policy plus the config surface that supplied it. */
 type ResolvedModelRuntimePolicy = {
   policy?: AgentRuntimePolicyConfig;
-  source?: ModelRuntimePolicySource;
+  /** Config surface that supplied a resolved model runtime policy. */
+  source?: "model" | "provider";
   matchedProvider?: string;
   forcedByEnvironment?: true;
 };
@@ -256,12 +257,13 @@ function resolveModelConfig(params: {
   modelId?: string;
 }): ModelDefinitionConfig | undefined {
   const modelId = normalizeModelIdForProvider(params.provider, params.modelId);
-  if (!modelId || !Array.isArray(params.providerConfig?.models)) {
+  const models = params.providerConfig?.models;
+  if (!modelId || !models) {
     return undefined;
   }
   // Catalog projection resolves every row against its provider's authored rows, so this scan
   // runs rows² times. An exact match ends with the model id; skip parsing rows that cannot match.
-  return params.providerConfig.models.find((entry) => {
+  return models.find((entry) => {
     const entryId = entry.id.trim();
     return (
       entryId === modelId ||

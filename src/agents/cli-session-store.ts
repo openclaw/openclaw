@@ -8,7 +8,8 @@ import {
 } from "../config/sessions/session-source-authority.js";
 import { formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { appendAgentRunFailure } from "./agent-run-result.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { appendAgentRunFailure, hasCommittedCliFinalReply } from "./agent-run-result.js";
 import {
   applyCliSessionBindingResult,
   assertCliSessionBindingResultCommitAllowed,
@@ -207,6 +208,12 @@ export async function settleCliSessionResult(
     await settle();
     return result;
   } catch (error) {
+    if (hasCommittedCliFinalReply(result)) {
+      createSubsystemLogger("agents/cli-runner").warn(
+        `CLI session continuity could not be saved after final reply commit: ${formatErrorMessageForDisplay(error)}`,
+      );
+      return result;
+    }
     const detail = redactSensitiveText(formatErrorMessageForDisplay(error), { mode: "tools" });
     const diagnostic = truncateUtf16Safe(
       `CLI session continuity could not be saved: ${detail}`,
@@ -221,6 +228,7 @@ export async function persistCliSessionBindingResult(
   params: CliSessionStoreTarget & {
     result: EmbeddedAgentRunResult;
     expectedSession?: InternalSessionEntry;
+    preserveBinding?: boolean;
     assertSettlementCurrent: SessionSourceAssertion;
     abortSignal?: AbortSignal;
   },
@@ -235,8 +243,26 @@ export async function persistCliSessionBindingResult(
       expectedSession,
       preserveActivity: true,
       skipMaintenance: true,
-      update: (entry) =>
-        applyCliSessionBindingResult(entry, params.provider, params.result.meta.agentMeta),
+      update: (entry) => {
+        const meta = params.result.meta.agentMeta;
+        if (!params.preserveBinding) {
+          return applyCliSessionBindingResult(entry, params.provider, meta);
+        }
+        const binding = getCliSessionBinding(entry, params.provider);
+        const resultBinding = meta?.cliSessionBinding;
+        const transcriptCursor = resultBinding?.transcriptCursor;
+        if (
+          meta?.clearCliSessionBinding === true ||
+          !binding ||
+          binding.sessionId !== resultBinding?.sessionId ||
+          !transcriptCursor
+        ) {
+          return false;
+        }
+        // Preserved completions acknowledge input only in the native session they resumed.
+        setCliSessionBinding(entry, params.provider, { ...binding, transcriptCursor });
+        return true;
+      },
       assertCommitAllowed: composeSessionSourceAssertion(
         [params.assertSettlementCurrent],
         (assertSource) =>
@@ -247,6 +273,37 @@ export async function persistCliSessionBindingResult(
           ),
       ),
     });
+  });
+}
+
+/**
+ * A directly stopped first turn has no settled result, but its flushed native session is
+ * the chat's only continuity. The turn owner still guards the write; caller abort does not,
+ * and an existing binding is never replaced.
+ */
+export async function persistStoppedFirstCliSessionInStore(
+  params: CliSessionStoreTarget & {
+    binding: CliSessionBinding;
+    expectedSession?: InternalSessionEntry;
+    assertSettlementCurrent: SessionSourceAssertion;
+  },
+): Promise<void> {
+  if (!params.expectedSession || getCliSessionBinding(params.expectedSession, params.provider)) {
+    return;
+  }
+  await patchCliSessionBindingInStore({
+    ...params,
+    expectedSession: params.expectedSession,
+    preserveActivity: true,
+    skipMaintenance: true,
+    assertCommitAllowed: params.assertSettlementCurrent,
+    update: (entry) => {
+      if (getCliSessionBinding(entry, params.provider)) {
+        return false;
+      }
+      setCliSessionBinding(entry, params.provider, params.binding);
+      return true;
+    },
   });
 }
 

@@ -1,4 +1,5 @@
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { listen } from "../../lib/reactive/listener.ts";
 
 export type SessionSnapshotInvalidationReason = "cache-eviction";
 
@@ -76,8 +77,9 @@ export function subscribeSnapshotInvalidation(listener: SnapshotInvalidationList
   return () => invalidationListeners.delete(listener);
 }
 
+// Cross-tab invalidation belongs to the module lifetime, independently of mounted pages.
 if (typeof window !== "undefined") {
-  window.addEventListener("storage", (event) => {
+  listen(window, "storage", (event) => {
     if (event.key === SNAPSHOT_INVALIDATION_STORAGE_KEY && event.newValue !== null) {
       void notifySnapshotInvalidation(parseSnapshotInvalidation(event.newValue)).catch(
         (error: unknown) => {

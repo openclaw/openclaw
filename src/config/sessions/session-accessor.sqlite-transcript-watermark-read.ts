@@ -1,12 +1,12 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   createSqliteQueryCache,
   getNodeSqliteKysely,
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { SessionTranscriptWatermark } from "./session-history-read.types.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { readTranscriptContextFacts } from "./session-transcript-context-facts.js";
 
 export type { SessionTranscriptWatermark } from "./session-history-read.types.js";
@@ -50,7 +50,7 @@ const hotWatermarkQuery = createSqliteQueryCache((database) => {
 
 /** Reads hot append and rewrite tokens together on the caller's admitted connection. */
 export function readSessionTranscriptHotWatermark(
-  database: { db: DatabaseSync },
+  database: { db: EngineConnection },
   sessionId: string,
   options: { requireHot?: boolean } = {},
 ): SessionTranscriptWatermark {

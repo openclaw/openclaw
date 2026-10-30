@@ -11,7 +11,9 @@ import { diagnosticProfileEntrypoints } from "../../logging/diagnostic-profile-r
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import type { GatewayRequestOptions } from "./types.js";
 
 const native = vi.hoisted(() => ({ write: vi.fn(), warn: vi.fn() }));
@@ -26,7 +28,11 @@ vi.mock("node:inspector/promises", () => ({
   Session: class {
     connect() {}
     disconnect() {}
-    async post() {}
+    async post(method: string) {
+      if (method === "HeapProfiler.enable") {
+        throw new Error("Inspector error -32601: HeapProfiler.enable is unavailable");
+      }
+    }
   },
 }));
 vi.mock("node:trace_events", () => ({ getEnabledCategories: () => undefined }));
@@ -51,7 +57,7 @@ let stateDir: string;
 let clock = 0;
 const memory = process.memoryUsage();
 
-function request(
+async function request(
   options: {
     role?: string;
     scopes?: string[];
@@ -61,28 +67,37 @@ function request(
 ) {
   const respond = vi.fn();
   const pending = handleGatewayRequest({
-    req: {
-      type: "req",
-      id: "heap-snapshot",
-      method: "diagnostics.heapSnapshot",
-      params: options.params,
-    },
+    req: gatewayRequest("heap-snapshot", "diagnostics.heapSnapshot", options.params),
     respond,
     client: {
       connId: "snapshot-client",
-      connect: {
-        role: options.role ?? "operator",
-        scopes: options.scopes ?? ["operator.admin"],
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: { id: "test", version: "1", platform: "test", mode: "test" },
-      },
+      connect: gatewayConnect(
+        options.scopes ?? ["operator.admin"],
+        { id: "test", version: "1", mode: "test" },
+        1,
+        options.role ?? "operator",
+      ),
     } as GatewayRequestOptions["client"],
     isWebchatConnect: () => false,
-    context: { logGateway: { warn: vi.fn() } } as unknown as GatewayRequestOptions["context"],
+    context: {
+      getRuntimeConfig: () => ({}),
+      logGateway: { warn: vi.fn() },
+    } as unknown as GatewayRequestOptions["context"],
     hasCurrentClientAuthority: options.hasAuthority,
   });
-  return { respond, pending };
+  await pending;
+  return respond;
+}
+
+function expectUnavailable(respond: Awaited<ReturnType<typeof request>>, reason: string) {
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({
+      code: "UNAVAILABLE",
+      details: { reason, cleanupFailed: false },
+    }),
+  );
 }
 
 function runSnapshotScript(source: string, ownerUrl: URL, signal: AbortSignal, executable: string) {
@@ -136,10 +151,9 @@ describe("diagnostics.heapSnapshot", () => {
     { role: "operator", scopes: ["operator.write"] },
     { role: "node", scopes: ["operator.admin"] },
   ])("rejects $role/$scopes before native work", async (options) => {
-    const call = request(options);
-    await call.pending;
+    const respond = await request(options);
     expect(native.write).not.toHaveBeenCalled();
-    expect(call.respond).toHaveBeenCalledWith(
+    expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
       expect.objectContaining({ code: options.role === "node" ? "INVALID_REQUEST" : "FORBIDDEN" }),
@@ -147,17 +161,16 @@ describe("diagnostics.heapSnapshot", () => {
   });
 
   it("rejects path-controlling params", async () => {
-    const call = request({ params: { path: "/tmp/override" } });
-    await call.pending;
+    const respond = await request({ params: { path: "/tmp/override" } });
     expect(native.write).not.toHaveBeenCalled();
-    expect(call.respond).toHaveBeenCalledWith(
+    expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
   });
 
-  it("returns only file metadata, writes privately, and refuses immediate recapture", async () => {
+  it("writes a native snapshot without enabling heap sampling, privately and with cooldown", async () => {
     const stat = fs.stat.bind(fs);
     // Model queued allocations running after native capture while metadata is awaited.
     vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
@@ -167,10 +180,9 @@ describe("diagnostics.heapSnapshot", () => {
       }
       return result;
     });
-    const call = request({ params: { reason: "retention baseline" } });
-    await call.pending;
-    const result = call.respond.mock.calls[0]?.[1];
-    expect(call.respond).toHaveBeenCalledWith(
+    const respond = await request({ params: { reason: "retention baseline" } });
+    const result = respond.mock.calls[0]?.[1];
+    expect(respond).toHaveBeenCalledWith(
       true,
       {
         path: expect.stringMatching(/heap-.*\.heapsnapshot$/),
@@ -183,16 +195,7 @@ describe("diagnostics.heapSnapshot", () => {
     );
     expect(path.dirname(result.path)).toBe(path.join(stateDir, "diagnostics"));
     expect((await fs.stat(result.path)).mode & 0o777).toBe(0o600);
-    const repeated = request();
-    await repeated.pending;
-    expect(repeated.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        details: { reason: "cooldown", cleanupFailed: false },
-      }),
-    );
+    expectUnavailable(await request(), "cooldown");
     expect(native.write).toHaveBeenCalledTimes(1);
   });
 
@@ -210,13 +213,7 @@ describe("diagnostics.heapSnapshot", () => {
       let authorized = true;
       const first = request({ hasAuthority: () => authorized });
       await entered.promise;
-      const second = request();
-      await second.pending;
-      expect(second.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ details: { reason: "busy", cleanupFailed: false } }),
-      );
+      expectUnavailable(await request(), "busy");
       const { captureDiagnosticHeapProfile } =
         await import("../../logging/diagnostic-heap-profile.js");
       expect(
@@ -232,17 +229,13 @@ describe("diagnostics.heapSnapshot", () => {
         vi.mocked(process.memoryUsage).mockReturnValue({ ...memory, heapUsed: 6 * 1024 ** 3 + 1 });
       }
       release.resolve();
-      await first.pending;
+      const respond = await first;
       expect(native.write).not.toHaveBeenCalled();
       expect(await fs.readdir(path.join(stateDir, "diagnostics"))).toEqual([]);
       if (guard === "authority") {
-        expect(first.respond).not.toHaveBeenCalled();
+        expect(respond).not.toHaveBeenCalled();
       } else {
-        expect(first.respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ details: { reason: "heap-too-large", cleanupFailed: false } }),
-        );
+        expectUnavailable(respond, "heap-too-large");
       }
     },
   );
@@ -252,95 +245,73 @@ describe("diagnostics.heapSnapshot", () => {
       writeFileSync(filename, "partial");
       throw new Error("disk full");
     });
-    const failed = request();
-    await failed.pending;
-    expect(failed.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        details: { reason: "capture-failed", cleanupFailed: false },
-      }),
-    );
+    expectUnavailable(await request(), "capture-failed");
     expect(await fs.readdir(path.join(stateDir, "diagnostics"))).toEqual([]);
     clock += 60_001;
-    const recovered = request();
-    await recovered.pending;
-    expect(recovered.respond).toHaveBeenCalledWith(
+    expect(await request()).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ sizeBytes: 16 }),
       undefined,
     );
   });
 
-  it("captures a native snapshot with the current runtime without opening a listener", async ({
-    signal,
-  }) => {
+  it.for([
+    { name: "current runtime without a listener", tracking: false },
+    { name: "Node with V8 object IDs released", tracking: true },
+  ])("captures a native snapshot: $name", { timeout: 30_000 }, async ({ tracking }, { signal }) => {
     vi.restoreAllMocks();
     const ownerUrl = resolveRuntimeWorkerUrl(diagnosticProfileEntrypoints.snapshot);
     const source = `
 import assert from 'node:assert/strict';
 import { readFile, stat } from 'node:fs/promises';
-import { url } from 'node:inspector/promises';
+import { Session, url } from 'node:inspector/promises';
 import path from 'node:path';
 import { captureDiagnosticHeapSnapshot } from ${JSON.stringify(ownerUrl.href)};
-assert.equal(process.versions.bun ?? null, ${JSON.stringify(process.versions.bun ?? null)});
+const tracking = ${JSON.stringify(tracking)};
+if (tracking) assert.equal(process.versions.bun, undefined, 'V8 tracking regression requires real Node');
+else assert.equal(process.versions.bun ?? null, ${JSON.stringify(process.versions.bun ?? null)});
 assert.equal(url(), undefined);
 globalThis.snapshotMarker = { label: 'synthetic retention marker' };
-const outcome = await captureDiagnosticHeapSnapshot({ signal: new AbortController().signal, hasAuthority: () => true });
-assert.equal(outcome.status, 'complete', JSON.stringify(outcome));
-const result = outcome.result;
-const metadata = await stat(result.path);
-assert.ok(result.sizeBytes > 0);
-assert.equal(result.sizeBytes, metadata.size);
-// Windows stat mode bits do not encode owner-only ACL permissions.
-if (process.platform !== 'win32') assert.equal(metadata.mode & 0o777, 0o600);
-assert.equal(path.dirname(result.path), path.join(process.env.OPENCLAW_STATE_DIR, 'diagnostics'));
-for (const value of [result.heapUsedBefore, result.heapUsedAfter, result.elapsedMs]) {
-  assert.ok(Number.isFinite(value) && value >= 0);
-}
-const snapshot = JSON.parse(await readFile(result.path, 'utf8'));
-assert.ok(snapshot.snapshot.node_count > 0);
-assert.ok(snapshot.strings.includes(globalThis.snapshotMarker.label));
-assert.equal(url(), undefined);
-console.log(JSON.stringify({ node: process.version, bun: process.versions.bun ?? null, sizeBytes: result.sizeBytes, listener: false }));
-`;
-    const result = await runSnapshotScript(source, ownerUrl, signal, process.execPath);
-    expect(result.error).toBeUndefined();
-    expect(result.status, [result.stderr, result.stdout].join("\n")).toBe(0);
-    console.log("HEAP_SNAPSHOT_NATIVE", result.stdout.trim());
-  }, 30_000);
-
-  it("releases V8 object IDs after writing a native snapshot under Node", async ({ signal }) => {
-    vi.restoreAllMocks();
-    const ownerUrl = resolveRuntimeWorkerUrl(diagnosticProfileEntrypoints.snapshot);
-    const source = `
-import assert from 'node:assert/strict';
-import { readFile, stat } from 'node:fs/promises';
-import { Session } from 'node:inspector/promises';
-import { captureDiagnosticHeapSnapshot } from ${JSON.stringify(ownerUrl.href)};
-assert.equal(process.versions.bun, undefined, 'V8 tracking regression requires real Node');
-globalThis.snapshotMarker = { label: 'synthetic retention marker' };
-const observer = new Session();
-observer.connect();
+const observer = tracking ? new Session() : undefined;
+observer?.connect();
 try {
-  const { result } = await observer.post('Runtime.evaluate', { expression: 'globalThis.snapshotMarker' });
+  const tracked = await observer?.post('Runtime.evaluate', { expression: 'globalThis.snapshotMarker' });
   const outcome = await captureDiagnosticHeapSnapshot({ signal: new AbortController().signal, hasAuthority: () => true });
   assert.equal(outcome.status, 'complete', JSON.stringify(outcome));
-  assert.ok(outcome.result.sizeBytes > 0);
-  assert.equal((await stat(outcome.result.path)).mode & 0o777, 0o600);
-  const snapshot = JSON.parse(await readFile(outcome.result.path, 'utf8'));
+  const result = outcome.result;
+  const metadata = await stat(result.path);
+  assert.ok(result.sizeBytes > 0);
+  assert.equal(result.sizeBytes, metadata.size);
+  // Windows stat mode bits do not encode owner-only ACL permissions.
+  if (tracking || process.platform !== 'win32') assert.equal(metadata.mode & 0o777, 0o600);
+  assert.equal(path.dirname(result.path), path.join(process.env.OPENCLAW_STATE_DIR, 'diagnostics'));
+  for (const value of [result.heapUsedBefore, result.heapUsedAfter, result.elapsedMs]) {
+    assert.ok(Number.isFinite(value) && value >= 0);
+  }
+  const snapshot = JSON.parse(await readFile(result.path, 'utf8'));
   assert.ok(snapshot.snapshot.node_count > 0);
-  assert.ok(snapshot.strings.includes('synthetic retention marker'));
-  // Keep the observer connected: disconnecting it would hide leaked V8 tracking.
-  const { heapSnapshotObjectId } = await observer.post('HeapProfiler.getHeapObjectId', { objectId: result.objectId });
-  assert.equal(heapSnapshotObjectId, '0', 'snapshot left V8 object-move tracking active');
+  assert.ok(snapshot.strings.includes(globalThis.snapshotMarker.label));
+  if (observer) {
+    // Keep the observer connected: disconnecting it would hide leaked V8 tracking.
+    const { heapSnapshotObjectId } = await observer.post('HeapProfiler.getHeapObjectId', { objectId: tracked.result.objectId });
+    assert.equal(heapSnapshotObjectId, '0', 'snapshot left V8 object-move tracking active');
+  }
+  assert.equal(url(), undefined);
+  console.log(JSON.stringify({ node: process.version, bun: process.versions.bun ?? null, sizeBytes: result.sizeBytes, listener: false }));
 } finally {
-  observer.disconnect();
+  observer?.disconnect();
 }
 `;
-    const result = await runSnapshotScript(source, ownerUrl, signal, resolveTestNodeExecPath());
+    const result = await runSnapshotScript(
+      source,
+      ownerUrl,
+      signal,
+      tracking ? resolveTestNodeExecPath() : process.execPath,
+    );
     expect(result.error).toBeUndefined();
     expect(result.status, [result.stderr, result.stdout].join("\n")).toBe(0);
-  }, 30_000);
+    if (!tracking) {
+      console.log("HEAP_SNAPSHOT_NATIVE", result.stdout.trim());
+    }
+  });
 });

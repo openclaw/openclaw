@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { shortenHomePath } from "../../utils.js";
 import {
@@ -8,6 +9,7 @@ import {
   hasUnresolvedProviderAuthEndpoint,
   resolveProviderIdForAuth,
 } from "../provider-auth-aliases.js";
+import { authProfileSourceExists } from "./file-state.js";
 import {
   coerceLegacyFlatCredential,
   parseLegacyCredentialEntry,
@@ -262,6 +264,7 @@ function recordAuthProfileMigrationRequired(
   const previous = migrationRequiredByDatabase.get(databasePath);
   // Scoped reads may discover more providers, but only lifecycle clear may release any.
   const retained = previous ? new AuthProfileMigrationRequiredError(error, previous) : error;
+  materializeErrorStack(retained);
   migrationRequiredByDatabase.set(databasePath, retained);
   if (previous?.message !== retained.message) {
     log.warn(retained.message, {
@@ -337,16 +340,13 @@ export function assertAuthProfileMigrationCandidates(params: {
     params.config,
     params.deferScopedRefusals,
   );
-  // Older shipped processes and restores can recreate these three fixed files
-  // after startup, so this credential boundary deliberately rechecks their names.
+  // External restores invalidate the owner's source facts through directory observation.
   const sources = params.candidates.filter(
-    (source) => isCredentialSource(source) && fs.existsSync(source.path),
+    (source) => isCredentialSource(source) && authProfileSourceExists(source.path),
   );
   if (sources.length === 0) {
     return;
   }
-  // The store read only happens once a retired file actually exists, so the
-  // healthy majority keeps the plain name check on this hot path.
   if (params.hasCredentials()) {
     warnLegacyAuthProfileSourcesIgnored({ databasePath: params.databasePath, sources });
     return;

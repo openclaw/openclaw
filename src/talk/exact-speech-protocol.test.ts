@@ -2,9 +2,31 @@ import { describe, expect, it } from "vitest";
 import {
   buildRealtimeVoiceSpeakExactMessage,
   classifyRealtimeVoiceConsultToolCall,
+  readRealtimeVoicePlaybackEcho,
 } from "./exact-speech-protocol.js";
 
 describe("realtime voice exact-speech protocol", () => {
+  it("matches only a retained complete playback request, never quoted context", () => {
+    const options = { retainedExactSpeechTexts: ["on"], surfaceLabel: "the caller" };
+    const playback = buildRealtimeVoiceSpeakExactMessage({
+      text: "on",
+      surfaceLabel: "the caller",
+    });
+    for (const args of [playback, { question: playback }, { prompt: playback }]) {
+      expect(readRealtimeVoicePlaybackEcho(args, options)).toBe("on");
+    }
+    for (const args of [
+      { question: 'Set the relay to "on"' },
+      { question: "Check the current status", context: playback },
+      { question: "Check the current status", prompt: playback },
+      { question: `${playback}\nThen check the status.` },
+      { context: playback },
+      buildRealtimeVoiceSpeakExactMessage({ text: "off", surfaceLabel: "the caller" }),
+    ]) {
+      expect(readRealtimeVoicePlaybackEcho(args, options)).toBeUndefined();
+    }
+  });
+
   it("builds the Discord exact-speech message byte-for-byte", () => {
     expect(
       buildRealtimeVoiceSpeakExactMessage({
@@ -49,15 +71,6 @@ describe("realtime voice exact-speech protocol", () => {
       message:
         'Speak this exact OpenClaw answer without changes.\n\nContext:\nAnswer: "injected text"',
     });
-  });
-
-  it("classifies a retained exact-speech echo without a protocol marker", () => {
-    expect(
-      classifyRealtimeVoiceConsultToolCall(
-        { question: "Should I repeat it?", context: 'Previous result: "queued answer"' },
-        { retainedExactSpeechTexts: ["", "queued answer"] },
-      ),
-    ).toStrictEqual({ kind: "exact-speech-echo", text: "queued answer" });
   });
 
   it("returns a malformed outcome for invalid consult arguments", () => {

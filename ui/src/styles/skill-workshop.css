@@ -1,19 +1,16 @@
 /* Skill Workshop: one list/detail pair. The list carries each skill's latest change; the
  * detail pane owns instructions, support files, and the change history. */
 
-.sw-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-}
-
+.sw-toolbar,
 .sw-toolbar__end {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-3);
+}
+
+.sw-toolbar {
+  justify-content: space-between;
 }
 
 .sw-learning,
@@ -46,7 +43,6 @@
 .sw-layout {
   display: grid;
   grid-template-columns: minmax(280px, 2fr) minmax(0, 3fr);
-  align-items: start;
   gap: var(--space-5);
 }
 
@@ -56,8 +52,14 @@
   overflow: hidden;
 }
 
+.sw-layout > .sw-detail {
+  display: flex;
+  flex-direction: column;
+}
+
 .sw-list__head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
@@ -246,16 +248,18 @@
 }
 
 .sw-detail__actions {
+  display: flex;
   flex: none;
+  gap: var(--space-2);
 }
 
-.sw-detail__actions .btn.danger {
+.sw-detail__actions .btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
 
-.sw-detail__actions .btn.danger svg {
+.sw-detail__actions .btn svg {
   width: 14px;
   height: 14px;
 }
@@ -304,11 +308,15 @@
 }
 
 .sw-detail__body {
+  flex: auto;
+  /* Bound intrinsic document height while flex fills the list-sized panel. */
+  height: 70vh;
+  overflow: auto;
   padding: var(--space-4) var(--space-5) var(--space-5);
 }
 
-.sw-markdown {
-  max-height: 70vh;
+.sw-markdown,
+.sw-file {
   overflow: auto;
   overflow-wrap: anywhere;
 }
@@ -370,8 +378,6 @@
 .sw-diff__lines,
 .sw-file {
   margin: 0;
-  max-height: 70vh;
-  overflow: auto;
   border-radius: var(--radius-sm);
   background: var(--bg-hover);
   font-family: var(--mono);
@@ -473,7 +479,6 @@
 .sw-file {
   padding: var(--space-3) var(--space-4);
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 
 .sw-timeline {
@@ -563,5 +568,10 @@
   .sw-layout,
   .sw-files {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sw-detail__body {
+    height: auto;
+    max-height: 70vh;
   }
 }

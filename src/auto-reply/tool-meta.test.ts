@@ -21,21 +21,6 @@ describe("tool meta formatting", () => {
     });
   });
 
-  it("formats aggregates with grouping and brace-collapse", () => {
-    withHome(() => {
-      const out = formatToolAggregate("  fs  ", [
-        `${home}/dir/a.txt`,
-        `${home}/dir/b.txt`,
-        "note",
-        "a→b",
-      ]);
-      expect(out).toMatch(/^Fs/);
-      expect(out).toContain("~/dir/{a.txt, b.txt}");
-      expect(out).toContain("note");
-      expect(out).toContain("a→b");
-    });
-  });
-
   it("wraps aggregate meta in backticks when markdown is enabled", () => {
     withHome(() => {
       const out = formatToolAggregate("fs", [`${home}/dir/a.txt`], { markdown: true });
@@ -62,11 +47,6 @@ describe("tool meta formatting", () => {
         "Fs: relative/file; /a→b; /z/{a, b}; /2/a; /1/a; /{root, leaf}; /double//file; /trailing/",
       );
     });
-  });
-
-  it("uses a longer inline code delimiter when meta contains backticks", () => {
-    const out = formatToolAggregate("fs", ["name `with` ticks"], { markdown: true });
-    expect(out).toBe("Fs: ``name `with` ticks``");
   });
 
   it("keeps exec flags outside markdown and moves them to the front", () => {

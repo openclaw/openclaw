@@ -20,10 +20,8 @@ import type {
 } from "../state/github-publication-worker.types.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { PersonalGitHubPublicationRow } from "./github-personal-publication-store.js";
-import { readPersonalGitHubPublication } from "./github-personal-publication-store.js";
 import type { GitHubPublicationEffectTransition } from "./github-publication-execution-effects.js";
 import type { GitHubPublicationSourceCapability } from "./github-publication-source.js";
-import { readRepositoryGitHubPublication } from "./github-repository-publication-store.js";
 
 /** Native callers retain live memory authority; durable execution predicates stay in the worker. */
 export type GitHubPublicationTransitionAuthority = {
@@ -47,13 +45,10 @@ async function personalMutation(
   input: PersonalPublicationMutation,
   authority: (() => void) | GitHubPublicationTransitionAuthority,
 ) {
-  const receipt = await withMutationAuthority(authority, (assertCurrent, source) =>
-    scope.mutate(
-      { type: "githubPublications.personal", input: { ...input, operationId: randomUUID() } },
-      assertCurrent,
-      publish,
-      source,
-    ),
+  const receipt = await withMutationAuthority(
+    scope,
+    { type: "githubPublications.personal", input: { ...input, operationId: randomUUID() } },
+    authority,
   );
   if (receipt.kind !== "personal") {
     throw new Error("Invalid personal publication receipt.");
@@ -66,13 +61,10 @@ async function repositoryMutation(
   input: RepositoryPublicationMutation,
   authority: (() => void) | GitHubPublicationTransitionAuthority,
 ) {
-  const receipt = await withMutationAuthority(authority, (assertCurrent, source) =>
-    scope.mutate(
-      { type: "githubPublications.repository", input: { ...input, operationId: randomUUID() } },
-      assertCurrent,
-      publish,
-      source,
-    ),
+  const receipt = await withMutationAuthority(
+    scope,
+    { type: "githubPublications.repository", input: { ...input, operationId: randomUUID() } },
+    authority,
   );
   if (receipt.kind !== "repository") {
     throw new Error("Invalid repository publication receipt.");
@@ -85,13 +77,10 @@ async function sharedMutation(
   input: SharedPublicationMutation,
   authority: (() => void) | GitHubPublicationTransitionAuthority,
 ) {
-  const receipt = await withMutationAuthority(authority, (assertCurrent, source) =>
-    scope.mutate(
-      { type: "githubPublications.shared", input: { ...input, operationId: randomUUID() } },
-      assertCurrent,
-      publish,
-      source,
-    ),
+  const receipt = await withMutationAuthority(
+    scope,
+    { type: "githubPublications.shared", input: { ...input, operationId: randomUUID() } },
+    authority,
   );
   if (receipt.kind !== "shared") {
     throw new Error("Invalid shared publication receipt.");
@@ -106,21 +95,19 @@ function requireRow<Row>(rows: Row[]): Row {
   return rows[0];
 }
 
-function withMutationAuthority<T>(
+function withMutationAuthority(
+  scope: ReturnType<typeof mutationScope>,
+  command: Parameters<ReturnType<typeof mutationScope>["mutate"]>[0],
   authority: (() => void) | GitHubPublicationTransitionAuthority,
-  operation: (
-    assertCurrent: () => void,
-    source?: () => Promise<GitHubPublicationSourceCapability>,
-  ) => Promise<T>,
-): Promise<T> {
+): Promise<PublicationMutationReceipt> {
   if (typeof authority === "function") {
-    return operation(authority);
+    return scope.mutate(command, authority, publish);
   }
   const assertCurrent = () => {
     authority.assertCustody();
     authority.assertAction();
   };
-  return operation(assertCurrent, () => authority.prepareSource());
+  return scope.mutate(command, assertCurrent, publish, () => authority.prepareSource());
 }
 
 function effects<Row>(apply: (transition: GitHubPublicationEffectTransition) => Promise<Row>) {
@@ -151,18 +138,10 @@ export async function claimPersonalGitHubPublicationAsync(
   );
   return {
     row: { ...claimed, gateway_instance_id: instanceId, execution_id: executionId },
-    // Retained final-effect guard until legacy synchronous writers are removed.
+    // The coordinator owns this claim under workspace exclusion until settlement.
     ownsExecution() {
       scope.assertCurrent();
-      const current = readPersonalGitHubPublication(row.owner_profile_id, {
-        requestId: row.request_id,
-      });
-      return (
-        current?.status === "publishing" &&
-        current.gateway_instance_id === instanceId &&
-        current.execution_id === executionId &&
-        current.request_digest === row.request_digest
-      );
+      return true;
     },
     ...effects(async (transition) => {
       return requireRow(
@@ -191,13 +170,7 @@ export async function claimRepositoryGitHubPublicationAsync(
     row: { ...claimed, gateway_instance_id: instanceId, execution_id: executionId },
     ownsExecution() {
       scope.assertCurrent();
-      const current = readRepositoryGitHubPublication(row.request_id);
-      return (
-        current?.status === "publishing" &&
-        current.gateway_instance_id === instanceId &&
-        current.execution_id === executionId &&
-        current.request_digest === row.request_digest
-      );
+      return true;
     },
     ...effects(async (transition) => {
       return requireRow(

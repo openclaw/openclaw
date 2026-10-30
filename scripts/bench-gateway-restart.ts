@@ -28,6 +28,7 @@ import {
   flushOutputLineBuffers,
   formatMb,
   formatMs,
+  gatewayBenchCpuProfileArgs,
   formatStats,
   hasHelpFlag,
   parseGatewayBenchRuntimeOptions,
@@ -154,6 +155,7 @@ type BenchmarkEvidenceFailure = {
 type CliOptions = GatewayBenchRuntimeOptions & {
   allowFailures: boolean;
   cases: GatewayBenchCase[];
+  cpuProfDir?: string;
   entry: string;
   json: boolean;
   output?: string;
@@ -173,6 +175,7 @@ const DEFAULT_ENTRY = "dist/entry.js";
 const BOOLEAN_FLAGS = new Set(["--allow-failures", "--help", "-h", "--json"]);
 const VALUE_FLAGS = new Set([
   "--case",
+  "--cpu-prof-dir",
   "--entry",
   "--gateway-runtime",
   "--gateway-cpus",
@@ -242,6 +245,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     ...parseGatewayBenchRuntimeOptions(flags),
     allowFailures: flags.has("--allow-failures"),
     cases: resolveCases(flags.get("--case") ?? []),
+    cpuProfDir: flags.get("--cpu-prof-dir")?.[0],
     entry: resolveGatewayBenchEntry(flags.get("--entry")?.[0], DEFAULT_ENTRY),
     json: flags.has("--json"),
     output: resolveOutputPath(flags.get("--output")?.[0]),
@@ -267,6 +271,7 @@ Usage:
 Options:
   --case <id>              Specific case id to run; repeatable (default: skipChannels)
   --entry <path>           Gateway CLI entry file (default: ${DEFAULT_ENTRY})
+  --cpu-prof-dir <dir>     Write V8 CPU profiles for the Gateway and its workers
   --gateway-runtime <path> Gateway executable (default: the benchmark runtime)
   --gateway-cpus <list>    Linux Gateway-only CPU affinity (comma-separated CPU numbers)
   --runs <n>               Measured process samples per case (default: ${DEFAULT_RUNS})
@@ -697,6 +702,7 @@ async function waitForIterationCondition(
 async function runGatewaySample(
   options: GatewayBenchRuntimeOptions & {
     benchCase: GatewayBenchCase;
+    cpuProfDir?: string;
     entry: string;
     restarts: number;
     postReadyDelayMs: number;
@@ -706,7 +712,7 @@ async function runGatewaySample(
   ensureSupportedRestartPlatform();
   const port = await getFreePort();
   const command = buildGatewayBenchCommand(
-    buildGatewayBenchChildArgs(options.entry, port),
+    buildGatewayBenchChildArgs(options.entry, port, gatewayBenchCpuProfileArgs(options.cpuProfDir)),
     options,
   );
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-gateway-restart-bench-"));
@@ -960,6 +966,7 @@ async function runGatewaySample(
 async function runCase(
   options: GatewayBenchRuntimeOptions & {
     benchCase: GatewayBenchCase;
+    cpuProfDir?: string;
     entry: string;
     postReadyDelayMs: number;
     restarts: number;

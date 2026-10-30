@@ -1,19 +1,21 @@
 import { formatByteSize } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { For, Show, untrack } from "solid-js";
+import { For, Show } from "solid-js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import {
   collectGatewayStatusSamples,
-  renderGatewayCpuVital,
-  renderGatewayMemoryVital,
-  renderGatewayVitals,
   type GatewayStatusSample,
   type GatewayStatusSnapshot,
 } from "../../components/gateway-vitals.ts";
+import {
+  GatewayCpuVital,
+  GatewayMemoryVital,
+  GatewayVitals,
+} from "../../components/solid/gateway-vitals.tsx";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import {
@@ -22,7 +24,6 @@ import {
 } from "../../lib/gateway-diagnostics.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { readSystemInfo } from "../../lib/system-info.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import {
   DEBUG_OVERLAY_SECTION_HEADERS,
   type DebugOverlaySectionId,
@@ -81,8 +82,8 @@ export function DebugOverlayWidget(props: {
 }) {
   return (
     <div class="debug-overlay__widget">
-      <LitContent render={() => renderGatewayCpuVital(props.status, props.history)} />
-      <LitContent render={() => renderGatewayMemoryVital(props.status, props.history)} />
+      <GatewayCpuVital status={props.status} history={props.history} />
+      <GatewayMemoryVital status={props.status} history={props.history} />
       <openclaw-sparkline
         class="gateway-vital gateway-vital--ping"
         data-degraded={props.status.pingMs > 250 ? "" : undefined}
@@ -90,7 +91,7 @@ export function DebugOverlayWidget(props: {
         prop:label={t("debug.overlay.ping")}
         prop:samples={collectGatewayStatusSamples(props.history, (sample) => sample.pingMs)}
         prop:format={(value: number) =>
-          untrack(() => t("debug.overlay.pingMs", { value: String(Math.round(value)) }))
+          t("debug.overlay.pingMs", { value: String(Math.round(value)) })
         }
         prop:floorMax={20}
       />
@@ -103,7 +104,7 @@ function Status(props: {
 }) {
   return (
     <>
-      <LitContent render={() => renderGatewayVitals(props.status, props.history)} />
+      <GatewayVitals status={props.status} history={props.history} />
       <Show when={props.status.disks?.length}>
         <div class="gateway-vitals debug-overlay__disks">
           <For each={props.status.disks ?? []} keyed={(disk) => disk.path}>
@@ -119,7 +120,7 @@ function Status(props: {
                     sample.disks?.find((entry) => entry.path === disk().path)?.availableBytes,
                 )}
                 prop:format={(value: number) =>
-                  untrack(() => t("debug.overlay.freeShort", { value: storageBytes(value) }))
+                  t("debug.overlay.freeShort", { value: storageBytes(value) })
                 }
                 autorange
               />
@@ -127,7 +128,7 @@ function Status(props: {
           </For>
         </div>
       </Show>
-      <Show when={typeof props.status.uptimeMs === "number"}>
+      <Show when={props.status.uptimeMs !== undefined}>
         <div class="debug-overlay__vitals-footer mono">
           {t("debug.overlay.uptime")} {formatDurationHuman(props.status.uptimeMs)}
         </div>

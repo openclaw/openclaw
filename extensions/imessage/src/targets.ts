@@ -110,7 +110,16 @@ export function inferIMessageTargetChatType(raw: string): "direct" | "group" | u
     if (parsed.kind === "handle") {
       return "direct";
     }
-    return "group";
+    const identifier =
+      parsed.kind === "chat_guid"
+        ? parsed.chatGuid
+        : parsed.kind === "chat_identifier"
+          ? parsed.chatIdentifier
+          : "";
+    if (/^(?:imessage|sms|any);[-+];.+$/i.test(identifier)) {
+      return identifier.includes(";+;") ? "group" : "direct";
+    }
+    return undefined;
   } catch {
     return undefined;
   }
@@ -158,4 +167,17 @@ export function formatIMessageChatTarget(chatId?: number | null): string {
     return "";
   }
   return `chat_id:${chatId}`;
+}
+
+export function iMessageTargetRpcParams(target: IMessageTarget): Record<string, unknown> {
+  if (target.kind === "chat_id") {
+    return { chat_id: target.chatId };
+  }
+  if (target.kind === "chat_guid") {
+    return { chat_guid: target.chatGuid };
+  }
+  if (target.kind === "chat_identifier") {
+    return { chat_identifier: target.chatIdentifier };
+  }
+  return { to: target.to };
 }

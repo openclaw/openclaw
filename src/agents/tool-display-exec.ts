@@ -1,7 +1,6 @@
 import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { formatInlineCodeSpan } from "../shared/markdown-code.js";
 import {
   binaryName,
@@ -526,30 +525,27 @@ function isGenericSummary(summary: string): boolean {
   return false;
 }
 
-function compactRawCommand(raw: string, maxLength = 120): string {
-  const oneLine = redactToolPayloadText(
-    raw
-      .replace(/\s*\n\s*/g, " ")
-      .replace(/\s{2,}/g, " ")
-      .trim(),
-  );
-  if (oneLine.length <= maxLength) {
+function compactRawCommand(raw: string): string {
+  const oneLine = raw
+    .replace(/\s*\n\s*/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  if (oneLine.length <= 120) {
     return oneLine;
   }
-  const half = Math.floor((maxLength - 1) / 2);
-  return `${sliceUtf16Safe(oneLine, 0, half)}…${sliceUtf16Safe(oneLine, -(maxLength - 1 - half))}`;
+  return `${sliceUtf16Safe(oneLine, 0, 59)}…${sliceUtf16Safe(oneLine, -60)}`;
 }
 
 export type ToolDetailMode = "explain" | "raw";
 
-/** Treat agent-authored titles as bounded, redacted display text, never an outcome. */
+/** Treat agent-authored titles as bounded display text, never an outcome. */
 export function resolveExecTitle(args: unknown): string | undefined {
   const title = asRecord(args)?.title;
   if (typeof title !== "string") {
     return undefined;
   }
   const text = sanitizeTerminalText(title.replace(/\s+/gu, " ")).trim();
-  return sliceUtf16Safe(redactToolPayloadText(text), 0, 120) || undefined;
+  return sliceUtf16Safe(text, 0, 120) || undefined;
 }
 
 /** Native Codex cells retain their freeform source under input. */

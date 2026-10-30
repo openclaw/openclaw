@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readMemorySearchManagerStatus } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   defaultRuntime,
   shortenHomePath,
@@ -7,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { terminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import { resolveMemoryPluginConfig, withMemoryCommand } from "./cli-runtime-common.js";
 import type { MemoryRemBackfillOptions, MemoryRemHarnessOptions } from "./cli.types.js";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-dreams-file.js";
@@ -32,7 +34,7 @@ export async function runMemorySessionBackfill(
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
-      const workspaceDir = manager.status().workspaceDir?.trim();
+      const workspaceDir = (await readMemorySearchManagerStatus(manager)).workspaceDir?.trim();
       if (!workspaceDir) {
         throw new Error("Memory session-backfill requires a resolvable workspace directory.");
       }
@@ -79,7 +81,7 @@ export function printSessionBackfillResult(
     defaultRuntime.log(
       [
         `${heading("Session Backfill")} ${muted("(rollback)")}`,
-        muted(`workspace=${shortenHomePath(result.workspaceDir)}`),
+        muted(terminalText`workspace=${shortenHomePath(result.workspaceDir)}`),
         muted(`removedDiaryEntries=${result.rollback.removedDiaryEntries}`),
         muted(`removedStagedEntries=${result.rollback.removedStagedEntries}`),
       ].join("\n"),
@@ -87,8 +89,8 @@ export function printSessionBackfillResult(
     return;
   }
   const lines = [
-    `${heading("Session Backfill")} ${muted(`(${result.agentId})`)}`,
-    muted(`workspace=${shortenHomePath(result.workspaceDir)}`),
+    `${heading("Session Backfill")} ${muted(terminalText`(${result.agentId})`)}`,
+    muted(terminalText`workspace=${shortenHomePath(result.workspaceDir)}`),
     muted(
       `batches=${result.batchCount ?? 1} days=${result.days.length} candidates=${result.candidateCount} staged=${result.stagedEntries}`,
     ),
@@ -101,8 +103,8 @@ export function printSessionBackfillResult(
     );
   }
   for (const day of result.days) {
-    lines.push("", heading(day.day), muted(`candidates=${day.candidateCount}`));
-    lines.push(...day.topCandidates.map((candidate) => `- ${candidate}`));
+    lines.push("", heading(terminalText`${day.day}`), muted(`candidates=${day.candidateCount}`));
+    lines.push(...day.topCandidates.map((candidate) => terminalText`- ${candidate}`));
   }
   if (result.days.length === 0) {
     lines.push("", "No new hash-untracked trusted session candidates.");
@@ -123,7 +125,9 @@ export async function runMemoryRemHarness(
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
-      const managerWorkspaceDir = manager.status().workspaceDir?.trim();
+      const managerWorkspaceDir = (
+        await readMemorySearchManagerStatus(manager)
+      ).workspaceDir?.trim();
       const pluginConfig = resolveMemoryPluginConfig(cfg);
       const remConfig = resolveMemoryRemDreamingConfig({ pluginConfig, cfg });
       const nowMs = Date.now();
@@ -197,18 +201,18 @@ export async function runMemoryRemHarness(
         return;
       }
       const lines = [
-        `${heading("REM Harness")} ${muted(`(${agentId})`)}`,
-        muted(`workspace=${shortenHomePath(workspaceDir)}`),
+        `${heading("REM Harness")} ${muted(terminalText`(${agentId})`)}`,
+        muted(terminalText`workspace=${shortenHomePath(workspaceDir)}`),
         ...(opts.path
           ? [
-              muted(`sourcePath=${shortenHomePath(path.resolve(opts.path))}`),
+              muted(terminalText`sourcePath=${shortenHomePath(path.resolve(opts.path))}`),
               muted(
                 `historicalFiles=${sourceFiles.length} importedFiles=${importedFileCount} importedSignals=${importedSignalCount}`,
               ),
               ...(skippedPaths.length > 0
                 ? [
                     warn(
-                      `skipped=${skippedPaths.map((entry) => shortenHomePath(entry)).join(", ")}`,
+                      terminalText`skipped=${skippedPaths.map((entry) => shortenHomePath(entry)).join(", ")}`,
                     ),
                   ]
                 : []),
@@ -217,7 +221,7 @@ export async function runMemoryRemHarness(
         ...(opts.grounded
           ? [
               muted(
-                `groundedInputs=${groundedInputPaths.length > 0 ? groundedInputPaths.map((entry) => shortenHomePath(entry)).join(", ") : "none"}`,
+                terminalText`groundedInputs=${groundedInputPaths.length > 0 ? groundedInputPaths.map((entry) => shortenHomePath(entry)).join(", ") : "none"}`,
               ),
             ]
           : []),
@@ -226,14 +230,17 @@ export async function runMemoryRemHarness(
         ),
         "",
         heading("REM Preview"),
-        ...remPreview.bodyLines,
+        ...remPreview.bodyLines.map((line) => terminalText`${line}`),
         ...(groundedPreview
           ? [
               "",
               heading("Grounded REM"),
               ...groundedPreview.files.flatMap((file) => [
-                muted(file.path),
-                file.renderedMarkdown,
+                muted(terminalText`${file.path}`),
+                file.renderedMarkdown
+                  .split("\n")
+                  .map((line) => terminalText`${line}`)
+                  .join("\n"),
                 "",
               ]),
             ]
@@ -245,7 +252,7 @@ export async function runMemoryRemHarness(
               .slice(0, 10)
               .map(
                 (candidate) =>
-                  `${candidate.score.toFixed(3)} ${candidate.snippet} [${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}]`,
+                  terminalText`${candidate.score.toFixed(3)} ${candidate.snippet} [${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}]`,
               )
           : ["- No deep candidates."]),
       ];
@@ -263,7 +270,7 @@ export async function runMemoryRemBackfill(
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
-      const status = manager.status();
+      const status = await readMemorySearchManagerStatus(manager);
       const workspaceDir = status.workspaceDir?.trim();
       const pluginConfig = resolveMemoryPluginConfig(cfg);
       const remConfig = resolveMemoryRemDreamingConfig({
@@ -303,16 +310,18 @@ export async function runMemoryRemBackfill(
         defaultRuntime.log(
           [
             `${heading("REM Backfill")} ${muted("(rollback)")}`,
-            muted(`workspace=${shortenHomePath(workspaceDir)}`),
+            muted(terminalText`workspace=${shortenHomePath(workspaceDir)}`),
             ...(diaryRollback
               ? [
-                  muted(`dreamsPath=${shortenHomePath(diaryRollback.dreamsPath)}`),
+                  muted(terminalText`dreamsPath=${shortenHomePath(diaryRollback.dreamsPath)}`),
                   muted(`removedEntries=${diaryRollback.removed}`),
                 ]
               : []),
             ...(shortTermRollback
               ? [
-                  muted(`shortTermStorePath=${shortenHomePath(shortTermRollback.storePath)}`),
+                  muted(
+                    terminalText`shortTermStorePath=${shortenHomePath(shortTermRollback.storePath)}`,
+                  ),
                   muted(`removedShortTermEntries=${shortTermRollback.removed}`),
                 ]
               : []),
@@ -415,9 +424,9 @@ export async function runMemoryRemBackfill(
       }
       defaultRuntime.log(
         [
-          `${heading("REM Backfill")} ${muted(`(${agentId})`)}`,
-          muted(`workspace=${shortenHomePath(workspaceDir)}`),
-          muted(`sourcePath=${shortenHomePath(path.resolve(opts.path))}`),
+          `${heading("REM Backfill")} ${muted(terminalText`(${agentId})`)}`,
+          muted(terminalText`workspace=${shortenHomePath(workspaceDir)}`),
+          muted(terminalText`sourcePath=${shortenHomePath(path.resolve(opts.path))}`),
           muted(
             `historicalFiles=${sourceFiles.length} writtenEntries=${written.written} replacedEntries=${written.replaced}`,
           ),
@@ -428,7 +437,7 @@ export async function runMemoryRemBackfill(
                 ),
               ]
             : []),
-          muted(`dreamsPath=${shortenHomePath(written.dreamsPath)}`),
+          muted(terminalText`dreamsPath=${shortenHomePath(written.dreamsPath)}`),
         ].join("\n"),
       );
     },
@@ -507,11 +516,7 @@ function parseGroundedRef(
   fallbackPath: string,
   ref: string,
 ): { path: string; startLine: number; endLine: number } | null {
-  const trimmed = ref.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const match = trimmed.match(/^(.*?):(\d+)(?:-(\d+))?$/);
+  const match = ref.trim().match(/^(.*?):(\d+)(?:-(\d+))?$/);
   if (!match) {
     return null;
   }

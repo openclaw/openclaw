@@ -1,0 +1,2 @@
+# Cached usage scan shape, rewrite/cold replay safety, and nonblocking overview coverage.
+72

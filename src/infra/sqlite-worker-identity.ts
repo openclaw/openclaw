@@ -11,15 +11,15 @@ export type DatabaseFileIdentity = Readonly<{
 export type DatabasePathIdentity = DatabaseFileIdentity & Readonly<{ canonicalPath: string }>;
 
 // The physical host policy stays fixed across every admission in this process.
-const useDatabaseBirthtime = process.platform !== "linux";
+const useDatabaseBirthtime = process.platform !== "linux" && process.platform !== "android";
 
 export function databaseFileIdentityKey(file: Pick<BigIntStats, "dev" | "ino">): string {
   return `${file.dev}:${file.ino}`;
 }
 
 export function readDatabaseIdentityBirthtime(file: Pick<BigIntStats, "birthtimeNs">): string {
-  // Node does not expose Linux STATX_BTIME availability and can substitute ctime.
-  // Keep the unknown creation-time value stable across ordinary database writes.
+  // Node does not expose STATX_BTIME availability on Linux or Android (Termux) and can
+  // substitute ctime. Keep the unknown creation-time value stable across ordinary database writes.
   return useDatabaseBirthtime ? file.birthtimeNs.toString() : "0";
 }
 
@@ -180,12 +180,16 @@ export async function readDatabasePathIdentity(
     }
   }
   // Resolve the existing ancestor before a first open so directory aliases share admission.
+  const canonicalPath = await resolveDatabasePathKeyAsync(databasePath);
+  return { key: `path:${canonicalPath}`, canonicalPath };
+}
+
+export async function resolveDatabasePathKeyAsync(databasePath: string): Promise<string> {
   const missing: string[] = [];
-  let ancestor = databasePath;
+  let ancestor = path.resolve(databasePath);
   while (true) {
     try {
-      const canonicalPath = normalizeDatabasePath(path.join(await realpath(ancestor), ...missing));
-      return { key: `path:${canonicalPath}`, canonicalPath };
+      return normalizeDatabasePath(path.join(await realpath(ancestor), ...missing));
     } catch (error) {
       ancestor = missingAncestorParent(ancestor, missing, error);
     }

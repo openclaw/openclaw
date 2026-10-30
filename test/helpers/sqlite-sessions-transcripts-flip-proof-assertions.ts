@@ -101,7 +101,10 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
     expect(forcedExit.signal).toBe("SIGKILL");
   }
   expect(before.selected.sessionKey).toBe(report.fullTurnSessionKey);
-  expect(before.selected.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+  expect(
+    before.selected.messages.map((message) => message.role),
+    JSON.stringify({ events: before.selected.events, history: before.selected.history.messages }),
+  ).toEqual(["user", "assistant"]);
   expect(before.selected.history.sessionId).toBe(before.selected.sessionId);
   expect(afterRestart).toEqual(before);
   expect(afterAppend.sibling).toEqual(before.sibling);
@@ -201,23 +204,22 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
     "seeded-legacy-store",
     "after-startup-refusal",
     "after-doctor-fix",
+    "after-rollback-restore",
     "after-gateway-start",
     "after-doctor-inspect",
     "after-doctor-validate",
-    "after-rollback-restore",
-    "after-gateway-restart",
     "after-chat-send",
     "after-full-agent-turn",
+    "after-sessions-reset",
     "after-abrupt-gateway-exit",
     "after-abrupt-gateway-restart",
     "after-abrupt-restart-chat-send",
     "after-doctor-import-idempotence",
     "after-downgrade-reupgrade-import",
     "after-sqlite-busy-contention",
-    "after-concurrent-multi-client",
-    "after-sessions-reset",
     "after-second-startup-after-reset",
     "after-transcript-append",
+    "after-concurrent-multi-client",
     "after-sessions-delete",
     "after-shared-first-delete",
     "after-shared-final-delete",

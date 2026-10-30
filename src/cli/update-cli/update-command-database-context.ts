@@ -20,9 +20,12 @@ import {
   captureOwnedManagedUpdatePreflightContext,
   resolveOwnedManagedUpdatePreflightEnv,
 } from "./update-command-managed-context.js";
-import { collectServiceInspectionFailureFacts } from "./update-command-result.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
-import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
+import {
+  collectServiceInspectionFailureFacts,
+  GatewayServiceUpdateOwnershipError,
+} from "./update-command-service-plan.js";
+import { assertUnavailableGatewayPackageConsumerStopped } from "./update-command-service-revalidation.js";
 import {
   maybeStopManagedServiceBeforeMutableUpdate,
   type PreManagedServiceStop,
@@ -31,6 +34,7 @@ import {
 type UpdateManagedServiceInspectionParams = {
   roots: readonly string[];
   updateInstallKind: "package" | "git";
+  packageAlreadyCurrent?: boolean;
   shouldRestart: boolean;
   jsonMode: boolean;
   timeoutMs: number;
@@ -96,6 +100,19 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
             collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict),
         },
       );
+    }
+    if (
+      params.updateInstallKind === "package" &&
+      !params.packageAlreadyCurrent &&
+      inspected.serviceUpdateVerdict?.kind === "unavailable"
+    ) {
+      await assertUnavailableGatewayPackageConsumerStopped({
+        roots: params.roots,
+        env: process.env,
+        timeoutMs: params.timeoutMs,
+        assertCurrent: params.assertCurrent ?? (() => {}),
+        verdict: inspected.serviceUpdateVerdict,
+      });
     }
     if (
       foreground &&

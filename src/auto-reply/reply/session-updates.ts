@@ -7,7 +7,6 @@ import {
 } from "../../agents/exec-defaults.js";
 import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { projectCompactionAccountingPatch } from "../../config/sessions/session-entry-projection.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
@@ -36,8 +35,8 @@ async function persistSkillSnapshot(params: {
   assertCurrent?: SessionSourceAssertion;
 }): Promise<SessionEntry | undefined> {
   params.assertCurrent?.();
+  // Refreshing cached skills is not conversation activity; admission owns recency.
   const updates = {
-    updatedAt: Date.now(),
     ...(params.isFirstTurnInSession ? { systemSent: true } : {}),
     skillsSnapshot: params.skillsSnapshot,
   };
@@ -51,16 +50,13 @@ async function persistSkillSnapshot(params: {
     publishReplySessionEntry(params, nextEntry);
     return nextEntry;
   }
-  const persistedEntry = await patchSessionEntryCore(
+  const persistedEntry = await applySessionEntryOperation(
     {
       storePath: params.storePath,
       sessionKey: params.sessionKey,
     },
-    () => {
-      params.assertCurrent?.();
-      return updates;
-    },
-    sessionEntryCommitGuardOptions(params.assertCurrent),
+    { kind: "fields", patch: updates },
+    { ...sessionEntryCommitGuardOptions(params.assertCurrent), preserveActivity: true },
   );
   params.assertCurrent?.();
   publishReplySessionEntry(params, persistedEntry ?? undefined);

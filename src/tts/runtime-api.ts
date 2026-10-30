@@ -21,6 +21,7 @@ import {
 export { setSpeechRuntimeAvailabilityGuard } from "./runtime-availability.js";
 export {
   buildTtsSystemPromptHint,
+  buildTtsSystemPromptHintAsync,
   getTtsMaxLength,
   getTtsPersona,
   isSummarizationEnabled,
@@ -49,11 +50,7 @@ export {
   isTtsProviderConfiguredAsync,
   resolveTtsProviderOrder,
 } from "./tts-provider-resolution.js";
-export {
-  prepareTtsRequest,
-  resolveExplicitTtsOverrides,
-  resolveExplicitTtsOverridesAsync,
-} from "./tts-request.js";
+export { resolveExplicitTtsOverrides, resolveExplicitTtsOverridesAsync } from "./tts-request.js";
 export { streamSpeech, textToSpeechStream } from "./tts-streaming.js";
 export { synthesizeSpeech } from "./tts-synthesis.js";
 export { textToSpeechTelephony } from "./tts-telephony.js";
@@ -65,7 +62,7 @@ export type {
   TtsTelephonyResult,
 } from "./tts-runtime-types.js";
 
-/** @deprecated Use getTtsProviderAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use getTtsProviderAsync. Final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
 export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): TtsProvider {
   warnPluginSdkDeprecation({
     family: "tts",

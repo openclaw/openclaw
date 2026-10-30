@@ -115,6 +115,13 @@ Available actions: `send`, `image`, `link`, `friends`, `groups`, `me`, `status`
 - Check status: `openclaw channels status --probe`
 - Name resolution issues (allowlist/groups): use numeric IDs or exact Zalo names
 
+## Runtime lifetime
+
+Managed registrations isolate restored API sessions, pending logins, and cached group
+information. Retirement releases that instance's in-memory state after admitted
+channel calls settle; it does not delete saved credentials. Standalone helper use
+retains process-local session reuse until explicit logout or process exit.
+
 ## Credits
 
 Built on [zca-js](https://github.com/RFS-ADRENO/zca-js).

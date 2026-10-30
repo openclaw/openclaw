@@ -7,12 +7,12 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import {
   copyProviderCatalogOutcomes,
-  copyProviderCatalogResultProjection,
+  readProviderCatalogResultEntries,
 } from "./provider-catalog-result.js";
 import type { ProviderCatalogContext, ProviderCatalogOutcome } from "./provider-catalog.types.js";
+import { PROVIDER_CATALOG_ORDERS as DISCOVERY_ORDER } from "./provider-catalog.types.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
-const DISCOVERY_ORDER: readonly ProviderCatalogOrder[] = ["simple", "profile", "paired", "late"];
 const providerRuntimeLoader = createLazyImportLoader(
   () => import("./provider-discovery.runtime.js"),
 );
@@ -28,7 +28,6 @@ export type PreparedProviderStaticCatalog = Readonly<{
   entries: readonly PreparedProviderStaticCatalogEntry[];
 }>;
 
-/** Options for resolving plugin providers that can contribute model catalog entries. */
 export type ResolveRuntimePluginDiscoveryProvidersParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -69,7 +68,7 @@ export async function resolveRuntimePluginDiscoveryProviders(
 
 /** Groups plugin providers into stable discovery phases for catalog probing. */
 export function groupPluginDiscoveryProvidersByOrder(
-  providers: ProviderPlugin[],
+  providers: readonly ProviderPlugin[],
 ): Record<ProviderCatalogOrder, ProviderPlugin[]> {
   const grouped: Record<ProviderCatalogOrder, ProviderPlugin[]> = {
     simple: [],
@@ -104,18 +103,12 @@ export function normalizePluginDiscoveryResult(params: {
     return {};
   }
 
-  const projection = copyProviderCatalogResultProjection(result);
   const normalized = Object.create(null) as Record<string, ModelProviderConfig>;
-  const entries =
-    projection.kind === "provider"
-      ? [
-          params.provider.id,
-          ...(params.provider.aliases ?? []),
-          ...(params.provider.hookAliases ?? []),
-        ].map((id) => [id, projection.provider] as const)
-      : projection.kind === "providers"
-        ? projection.providers
-        : [];
+  const entries = readProviderCatalogResultEntries({
+    providerId: params.provider.id,
+    aliases: [...(params.provider.aliases ?? []), ...(params.provider.hookAliases ?? [])],
+    result,
+  });
   for (const [key, value] of entries) {
     const normalizedKey = normalizeProviderId(key);
     if (!normalizedKey || isBlockedObjectKey(normalizedKey)) {
@@ -202,9 +195,9 @@ export async function prepareProviderStaticCatalog(params: {
   signal?: AbortSignal;
   /** Provider ids the caller will resolve from these catalogs; absent for unscoped validation. */
   providerIds?: readonly string[];
-}): Promise<PreparedProviderStaticCatalog> {
+}): Promise<Pick<PreparedProviderStaticCatalog, "entries">> {
   const entries: PreparedProviderStaticCatalogEntry[] = [];
-  const byOrder = groupPluginDiscoveryProvidersByOrder([...params.providers]);
+  const byOrder = groupPluginDiscoveryProvidersByOrder(params.providers);
   for (const order of DISCOVERY_ORDER) {
     for (const provider of byOrder[order]) {
       if (!provider.staticCatalog) {
@@ -216,18 +209,13 @@ export async function prepareProviderStaticCatalog(params: {
         providerIds: params.providerIds,
       });
       params.signal?.throwIfAborted();
-      entries.push(
-        Object.freeze({
-          provider,
-          providerConfigs: normalizePluginDiscoveryResult({ provider, result }),
-        }),
-      );
+      entries.push({
+        provider,
+        providerConfigs: normalizePluginDiscoveryResult({ provider, result }),
+      });
     }
   }
-  return Object.freeze({
-    providers: Object.freeze([...params.providers]),
-    entries: Object.freeze(entries),
-  });
+  return { entries };
 }
 
 export function resolvePreparedProviderStaticConfigs(

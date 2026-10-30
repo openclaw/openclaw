@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/primitives.js";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { getRuntimeConfigSnapshotMetadata } from "../config/runtime-snapshot.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type {
   RuntimeSessionFactsResult,
@@ -11,7 +10,6 @@ import type {
 } from "../plugins/runtime/types-session-facts.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
-import { runSynchronousWork } from "../shared/synchronous-work.js";
 import { readUserProfileVersion } from "../state/user-profile-events.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import { operatorReadShareKey } from "./methods/read-share-keys.js";
@@ -22,7 +20,6 @@ import { sessionClassificationForRow } from "./session-classification.js";
 import {
   prepareFactsRead,
   safeText,
-  sessionFactsRedactionPolicy,
   type SelectedFacts,
   type SelectedPrFacts,
 } from "./session-facts-read.js";
@@ -75,7 +72,6 @@ const readScopes = new WeakMap<
     policy: object | undefined;
     access: number;
     profiles: number;
-    redaction: ReturnType<typeof sessionFactsRedactionPolicy>;
     scopes: Map<string, ReadScope>;
   }
 >();
@@ -173,7 +169,6 @@ export async function withTrustedPluginSessionFacts<T>(
       const policy = context.getCommittedRuntimeConfig?.();
       const access = readGatewayAccessRevision();
       const profiles = readUserProfileVersion();
-      const redaction = sessionFactsRedactionPolicy();
       const assertAuthority = () => {
         assertCurrent();
         if (
@@ -183,8 +178,7 @@ export async function withTrustedPluginSessionFacts<T>(
           getRuntimeConfigSnapshotMetadata()?.revision !== configRevision ||
           context.getCommittedRuntimeConfig?.() !== policy ||
           readGatewayAccessRevision() !== access ||
-          readUserProfileVersion() !== profiles ||
-          sessionFactsRedactionPolicy() !== redaction
+          readUserProfileVersion() !== profiles
         ) {
           throw new Error("Session read authority changed; retry the request");
         }
@@ -210,8 +204,7 @@ export async function withTrustedPluginSessionFacts<T>(
           entry.configRevision !== configRevision ||
           entry.policy !== policy ||
           entry.access !== access ||
-          entry.profiles !== profiles ||
-          entry.redaction !== redaction
+          entry.profiles !== profiles
         ) {
           entry = {
             config,
@@ -219,7 +212,6 @@ export async function withTrustedPluginSessionFacts<T>(
             policy,
             access,
             profiles,
-            redaction,
             scopes: new Map(),
           };
           readScopes.set(projection, entry);
@@ -248,7 +240,7 @@ export async function withTrustedPluginSessionFacts<T>(
       const cache = authority ?? createReadScope("");
       const snapshot = await projection.withSelectionPreparation(async () => {
         do {
-          await projection.prepareSelection(true);
+          await projection.prepareSelection({ yieldForCatalog: true });
           await projection.prepareMembership();
           assertAuthority();
         } while (projection.needsSelectionPreparation());
@@ -277,9 +269,7 @@ export async function withTrustedPluginSessionFacts<T>(
             visibility: authority?.visibility,
           });
           const selected = presentation.select(opts, () =>
-            withAgentRosterFactsBatch(prepared.cfg, () =>
-              runSynchronousWork(selectSessionEntries(filters)),
-            ),
+            withAgentRosterFactsBatch(prepared.cfg, () => selectSessionEntries(filters)),
           );
           const targets = new Map<string, SelectionRow>();
           const bySessionId = new Map<string, Set<string>>();
@@ -372,9 +362,7 @@ export async function withTrustedPluginSessionFacts<T>(
           } catch (error) {
             assertAuthority();
             complete = false;
-            const unavailable = redactToolPayloadText(String(error))
-              .replace(/\s+/g, " ")
-              .slice(0, 300);
+            const unavailable = String(error).replace(/\s+/g, " ").slice(0, 300);
             for (const { key, target } of batch) {
               const { entry } = target;
               if (
@@ -435,7 +423,6 @@ export async function withTrustedPluginSessionFacts<T>(
           result = Object.freeze({
             scope: authority?.token,
             revision: randomUUID(),
-            redactionRevision: redaction.revision,
             sessions,
             ...(currentRoster.selected.people !== undefined
               ? { people: currentRoster.selected.people }

@@ -123,6 +123,13 @@ separate permission boundary; the token remains scoped to the bucket.
 
 ## Troubleshooting
 
+Downloads use sequential 64 MiB ranges and resume from the last received byte
+after a connection reset, timeout, or retryable server error, with up to eight
+retries per range. Each range must match the original object's ETag. If the object
+changes during a download, restart the command to read the new object. Failed
+downloads report the byte count and next offset; restarting a command starts a
+new download rather than reusing a previous scratch file.
+
 For a 401 or 403 error, check that the R2 token has **Object Read & Write** on the
 configured bucket and that both SecretRefs resolve in the process running the
 command. For temporary credentials, also verify that the session token is present

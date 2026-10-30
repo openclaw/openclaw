@@ -10,16 +10,18 @@ import {
   appendSessionTranscriptMessageByIdentityStrict,
   appendSessionTranscriptMessagesByIdentity,
   publishSessionTranscriptUpdateByIdentity,
-  readVisibleSessionTranscriptMessageEntries,
+  withSessionTranscriptWrite,
   type SessionTranscriptTargetParams,
   type TranscriptEntryAnchor,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { appendInMemoryMessage, findInMemoryMessage } from "./attempt-transcript-memory.js";
 import {
   isCompatibleSingletonRewrite,
   isCompleteToolGroup,
   isSameUserTurn,
   projectReplayPayload,
+  readIdempotencyKey,
   userText,
   type AttemptTranscriptMessage as TranscriptMessage,
 } from "./attempt-transcript-replay.js";
@@ -28,7 +30,7 @@ import type { AttemptParamsLike } from "./attempt-types.js";
 type TranscriptRecorder = NonNullable<AttemptParamsLike["userTurnTranscriptRecorder"]>;
 type AppendResult =
   | {
-      anchor: TranscriptEntryAnchor;
+      anchor?: TranscriptEntryAnchor;
       appended: boolean;
       message: TranscriptMessage;
       messageId: string;
@@ -94,6 +96,7 @@ export function createAttemptTranscriptJournal(params: {
   const projectDisplay = (message: AgentMessage) =>
     projectAgentHarnessTranscriptMessageForDisplay({
       hidden: hiddenTurn || (message as { display?: boolean }).display === false,
+      inputProvenance: params.attempt.inputProvenance,
       message,
     });
   const messagesSnapshot = [...params.messages];
@@ -129,7 +132,21 @@ export function createAttemptTranscriptJournal(params: {
   if (currentUser) {
     replaceTailUser(currentUser, projectDisplay(currentUser));
   }
-  const target = resolveTranscriptTarget(params.attempt);
+  const manager = params.attempt.sessionManager;
+  // Ephemeral callers own their transcript. A durable manager is not a substitute
+  // for the exact runtime target required by ordinary persistent attempts.
+  const owner =
+    manager && !manager.getSessionTarget()
+      ? { kind: "memory" as const, manager, sessionId: manager.getSessionId() }
+      : { kind: "durable" as const, target: resolveTranscriptTarget(params.attempt) };
+  const assertMemoryOwnerCurrent = () => {
+    if (
+      owner.kind === "memory" &&
+      (owner.manager.getSessionTarget() || owner.manager.getSessionId() !== owner.sessionId)
+    ) {
+      throw new Error("Copilot caller-owned transcript changed during attempt");
+    }
+  };
   const config = params.attempt.config;
   const seenEventIds = new Set<string>();
   const deferredUserWrites: PendingWrite[] = [];
@@ -189,18 +206,20 @@ export function createAttemptTranscriptJournal(params: {
     write: PendingWrite,
     options: { singleton?: boolean } = {},
   ): TranscriptMessage | undefined => {
-    const message = structuredClone(write.message) as TranscriptMessage;
+    assertMemoryOwnerCurrent();
+    const message = write.message;
     const originalReplayPayload = projectReplayPayload(message);
     const hooked = runAgentHarnessBeforeMessageWriteHook({
       message: structuredClone(message) as TranscriptMessage,
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
+      agentId: owner.kind === "durable" ? owner.target.agentId : params.attempt.agentId,
+      sessionKey: owner.kind === "durable" ? owner.target.sessionKey : params.attempt.sessionKey,
       // Tool-group narrative is replay state, not the dispatcher's terminal attachment reply.
       prepareAssistantTranscriptMessage:
         options.singleton && !hiddenTurn
           ? params.attempt.prepareAssistantTranscriptMessage
           : undefined,
     });
+    assertMemoryOwnerCurrent();
     if (!hooked) {
       return undefined;
     }
@@ -238,47 +257,71 @@ export function createAttemptTranscriptJournal(params: {
   };
 
   const append = async (write: PendingWrite): Promise<AppendResult> => {
-    const outcome = await appendSessionTranscriptMessageByIdentityStrict({
-      ...target,
-      ...(config ? { config } : {}),
-      ...(write.eventId ? { eventId: write.eventId } : {}),
-      idempotencyLookup: "scan",
-      message: write.message,
-      preparation: {
-        prepareMessage: async () => prepare(write, { singleton: true }),
-      },
-    });
-    if (outcome.kind === "suppressed") {
-      write.recorder?.markBlocked();
-      return undefined;
-    }
-    if (outcome.kind === "rejected") {
-      throw new Error("Transcript session changed before singleton append");
+    let result: NonNullable<AppendResult>;
+    if (owner.kind === "memory") {
+      assertMemoryOwnerCurrent();
+      const previous = findInMemoryMessage(owner.manager, write.message);
+      const message = previous?.message ?? prepare(write, { singleton: true });
+      if (!message) {
+        write.recorder?.markBlocked();
+        return undefined;
+      }
+      assertMemoryOwnerCurrent();
+      result = previous ?? (await appendInMemoryMessage(owner.manager, message));
+      assertMemoryOwnerCurrent();
+    } else {
+      const outcome = await appendSessionTranscriptMessageByIdentityStrict({
+        ...owner.target,
+        ...(config ? { config } : {}),
+        ...(write.eventId ? { eventId: write.eventId } : {}),
+        idempotencyLookup: "scan",
+        message: write.message,
+        preparation: {
+          prepareMessage: async () => prepare(write, { singleton: true }),
+        },
+      });
+      if (outcome.kind === "suppressed") {
+        write.recorder?.markBlocked();
+        return undefined;
+      }
+      if (outcome.kind === "rejected") {
+        throw new Error("Transcript session changed before singleton append");
+      }
+      result = outcome.result as NonNullable<AppendResult>;
     }
     if (
-      !isDeepStrictEqual(
-        projectReplayPayload(write.message),
-        projectReplayPayload(outcome.result.message as TranscriptMessage),
-      )
+      !isDeepStrictEqual(projectReplayPayload(write.message), projectReplayPayload(result.message))
     ) {
       replayInvalid = true;
     }
-    if (outcome.result.message.role === "user") {
-      write.recorder?.markRuntimePersisted(outcome.result.message, outcome.result.anchor, {
-        appended: outcome.result.appended,
+    if (result.message.role === "user") {
+      write.recorder?.markRuntimePersisted(result.message, result.anchor, {
+        appended: result.appended,
       });
     }
-    return outcome.result as AppendResult;
+    return result;
   };
 
   const appendToolGroup = async (group: ToolGroup) => {
+    assertMemoryOwnerCurrent();
     const writes = [group.assistant, ...group.order.map((id) => group.results.get(id)!)];
     const keys = writes.map((write) => readIdempotencyKey(write.message));
-    const persistedKeys = new Set(
-      (await readVisibleSessionTranscriptMessageEntries(target)).flatMap((entry) =>
-        entry.idempotencyKey ? [entry.idempotencyKey] : [],
-      ),
-    );
+    const persistedKeys =
+      owner.kind === "memory"
+        ? new Set(
+            owner.manager.getEntries().flatMap((entry) => {
+              const key = entry.type === "message" ? readIdempotencyKey(entry.message) : undefined;
+              return key ? [key] : [];
+            }),
+          )
+        : (
+            await withSessionTranscriptWrite(owner.target, (transcript) =>
+              transcript.readMessageFacts({
+                idempotencyKeys: keys.filter((key) => key !== undefined),
+                activeBranchOnly: true,
+              }),
+            )
+          ).existingIdempotencyKeys;
     const persistedCount = keys.filter((key) => key && persistedKeys.has(key)).length;
     if (persistedCount > 0 && persistedCount < writes.length) {
       // The pre-atomic journal was never shipped. Partial identity is corruption,
@@ -299,15 +342,27 @@ export function createAttemptTranscriptJournal(params: {
     ) {
       return undefined;
     }
-    const results = await appendSessionTranscriptMessagesByIdentity({
-      ...target,
-      ...(config ? { config } : {}),
-      messages: writes.map((write, index) => ({
-        eventId: write.eventId!,
-        idempotencyLookup: "scan" as const,
-        message: messages[index]!,
-      })),
-    });
+    let results: Array<NonNullable<AppendResult>>;
+    if (owner.kind === "memory") {
+      // Stage the complete group so a failed append cannot publish a partial group.
+      assertMemoryOwnerCurrent();
+      const staged = await owner.manager.prepareTranscriptRewriteAsync();
+      results = [];
+      for (const message of messages) {
+        results.push(await appendInMemoryMessage(staged.sessionManager, message!));
+      }
+      await staged.commit(new Map());
+    } else {
+      results = await appendSessionTranscriptMessagesByIdentity({
+        ...owner.target,
+        ...(config ? { config } : {}),
+        messages: writes.map((write, index) => ({
+          eventId: write.eventId!,
+          idempotencyLookup: "scan" as const,
+          message: messages[index]!,
+        })),
+      });
+    }
     if (
       !isCompleteToolGroup(
         results.map((result) => result.message),
@@ -331,10 +386,12 @@ export function createAttemptTranscriptJournal(params: {
   };
 
   const publish = async (appended: boolean) => {
-    if (appended) {
-      await publishSessionTranscriptUpdateByIdentity({ ...target }).catch((error: unknown) => {
-        console.warn("[copilot-attempt] transcript update notification failed", error);
-      });
+    if (appended && owner.kind === "durable") {
+      await publishSessionTranscriptUpdateByIdentity({ ...owner.target }).catch(
+        (error: unknown) => {
+          console.warn("[copilot-attempt] transcript update notification failed", error);
+        },
+      );
     }
   };
 
@@ -392,7 +449,7 @@ export function createAttemptTranscriptJournal(params: {
     }
     if (firstFailure) {
       const error = new Error(
-        `[copilot-attempt] canonical transcript persistence failed: ${firstFailure.message}`,
+        `[copilot-attempt] saved transcript persistence failed: ${firstFailure.message}`,
         { cause: firstFailure },
       ) as Error & { code?: string };
       error.code = "transcript_persistence_failed";
@@ -644,18 +701,13 @@ function resolveTranscriptTarget(attempt: AttemptParamsLike): SessionTranscriptT
   const storePath = normalizeOptionalString(attempt.sessionTarget?.storePath);
   if (!sessionId || !sessionKey || !storePath) {
     const error = new Error(
-      "[copilot-attempt] canonical transcript persistence requires an exact runtime session target",
+      "[copilot-attempt] saved transcript persistence requires an exact runtime session target",
     ) as Error & { code?: string };
     error.code = "transcript_persistence_failed";
     throw error;
   }
   const agentId = normalizeOptionalString(attempt.sessionTarget?.agentId ?? attempt.agentId);
   return { sessionId, sessionKey, storePath, ...(agentId ? { agentId } : {}) };
-}
-
-function readIdempotencyKey(message: AgentMessage): string | undefined {
-  const key = (message as { idempotencyKey?: unknown }).idempotencyKey;
-  return typeof key === "string" && key ? key : undefined;
 }
 
 function isCurrentJournalIdentity(

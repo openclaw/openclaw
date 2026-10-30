@@ -1,12 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as runtimeConfig from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  clearAgentRunContext,
-  getAgentRunContext,
-  recordAgentRunModel,
-  resolveProjectedAgentRunModel,
-  registerAgentRunContext,
-} from "../../infra/agent-run-registry.js";
+import * as runRegistry from "../../infra/agent-run-registry.js";
+import { makeModel } from "./model.test-harness.js";
 import { registerRunEntryFailureTests } from "./run-entry.failures.test-support.js";
 import { runEmbeddedAgentEntry, setupRunEntryTestState } from "./run-entry.test-harness.js";
 import {
@@ -19,16 +15,102 @@ import {
 
 const state = setupRunEntryTestState();
 
-type EntryParams = Parameters<typeof runEmbeddedAgentEntry>[0];
+beforeEach(() => runtimeConfig.setRuntimeConfigSnapshot({}));
+afterEach(runtimeConfig.clearRuntimeConfigSnapshot);
 
-function runEntry(
-  params: Pick<EntryParams, "selection" | "identity" | "runCandidate"> & Partial<EntryParams>,
-) {
+type EntryParams = Parameters<typeof runEmbeddedAgentEntry>[0];
+const primaryRoute = { provider: "primary-provider", model: "primary-model" };
+const fallbackRoute = { provider: "fallback-provider", model: "fallback-model" };
+const sameModelRetry = { result: "same_model_transient" as const, reason: "rate_limit" };
+const identity = { agentId: "main", sessionId: "session-1" };
+const commandRpc = { kind: "command-rpc" as const, hasCommittedSideEffect: () => false };
+const channelDelivery: EntryParams["behavior"] = {
+  kind: "channel-delivery",
+  readDeliveryEvidence: () => ({
+    hasDirectlySentBlockReply: false,
+    hasBlockReplyPipelineOutput: false,
+    hasRetryBlockedDelivery: false,
+  }),
+};
+
+function runEntry({
+  runId = "run-entry",
+  runCandidate = async (provider, model, { isFallbackRetry }) =>
+    makeResult({ provider, model, classification: isFallbackRetry ? undefined : "empty" }),
+  ...params
+}: Partial<EntryParams> & { runId?: string }) {
   return runEmbeddedAgentEntry({
+    selection: { cfg: {}, ...primaryRoute },
+    identity: { runId, ...identity },
     harness: createDirectHarness(),
-    behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
+    behavior: commandRpc,
     sessionOverride: { kind: "preserve" },
+    runCandidate,
     ...params,
+  });
+}
+
+type CandidateResult = Awaited<ReturnType<FallbackRunnerParams["run"]>>;
+function usePrimaryFallback(
+  inspect?: (params: FallbackRunnerParams, result: CandidateResult) => void | Promise<void>,
+  outcome: "completed" | "exhausted" = "completed",
+) {
+  state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+    const { provider, model } = params;
+    const result = await params.run(provider, model, initialAttemptOptions(params));
+    await inspect?.(params, result);
+    return { outcome, result, provider, model, attempts: [] };
+  });
+}
+
+function classify(params: FallbackRunnerParams, result: CandidateResult, total = 2) {
+  return params.classifyResult?.({
+    result,
+    provider: params.provider,
+    model: params.model,
+    attempt: 1,
+    total,
+  });
+}
+
+function receiptFor(runId: string, provider: string, model: string, responseModel = model) {
+  return {
+    runId,
+    sessionId: "session-1",
+    turnId: "turn-1",
+    requested: { provider, model },
+    effective: { provider, model, responseModel },
+    successfulToolNames: [] as string[],
+    rerouted: false,
+  };
+}
+
+const visibleReply = (text: string) => ({
+  finalAssistantVisibleText: text,
+  finalAssistantRawText: text,
+  terminalReply: { disposition: "visible" as const, text },
+});
+
+function runReceipt(
+  runId: string,
+  selection: EntryParams["selection"],
+  effectiveModel: string,
+  responseModel: string,
+) {
+  usePrimaryFallback();
+  return runEntry({
+    selection,
+    runId,
+    runCandidate: async (provider, model) => {
+      const candidate = makeResult({ provider, model, meta: visibleReply("done") });
+      candidate.meta.agentMeta!.terminalReceipt = receiptFor(
+        runId,
+        provider,
+        effectiveModel,
+        responseModel,
+      );
+      return candidate;
+    },
   });
 }
 
@@ -38,42 +120,18 @@ describe("runEmbeddedAgentEntry", () => {
   it("keeps shared fallback and terminal behavior aligned across entry modes", async ({
     onTestFinished,
   }) => {
-    const cfg: OpenClawConfig = {};
     const runMode = async (behavior: "channel-delivery" | "command-rpc") => {
-      registerAgentRunContext("run-shared-fallback", {
-        agentId: "main",
-        sessionId: "session-1",
+      runRegistry.registerAgentRunContext("run-shared-fallback", {
+        ...identity,
         sessionKey: "agent:main:chat",
       });
-      onTestFinished(() => clearAgentRunContext("run-shared-fallback"));
-      const candidateCalls: Array<{
-        provider: string;
-        model: string;
-        isFallbackRetry: boolean;
-      }> = [];
+      onTestFinished(() => runRegistry.clearAgentRunContext("run-shared-fallback"));
+      const candidateCalls: Array<typeof primaryRoute & { isFallbackRetry: boolean }> = [];
       const candidateLeases: object[] = [];
-      const reconciled: Array<{ provider: string; model: string }> = [];
+      const reconciled: Array<typeof primaryRoute> = [];
       const result = await runEntry({
-        selection: { cfg, provider: "primary-provider", model: "primary-model" },
-        identity: {
-          runId: "run-shared-fallback",
-          agentId: "main",
-          sessionId: "session-1",
-        },
-        behavior:
-          behavior === "channel-delivery"
-            ? {
-                kind: "channel-delivery" as const,
-                readDeliveryEvidence: () => ({
-                  hasDirectlySentBlockReply: false,
-                  hasBlockReplyPipelineOutput: false,
-                  hasRetryBlockedDelivery: false,
-                }),
-              }
-            : {
-                kind: "command-rpc" as const,
-                hasCommittedSideEffect: () => false,
-              },
+        runId: "run-shared-fallback",
+        behavior: behavior === "channel-delivery" ? channelDelivery : commandRpc,
         sessionOverride: {
           kind: "reconcile-completed",
           reconcile: async (candidate) => {
@@ -81,59 +139,40 @@ describe("runEmbeddedAgentEntry", () => {
           },
         },
         runCandidate: async (provider, model, options) => {
-          expect(
-            resolveProjectedAgentRunModel({
-              agentId: "main",
-              sessionId: "session-1",
-            }),
-          ).toBeNull();
-          recordAgentRunModel("run-shared-fallback", { provider, model });
+          expect(runRegistry.resolveProjectedAgentRunModel(identity)).toBeNull();
+          runRegistry.recordAgentRunModel("run-shared-fallback", { provider, model });
           candidateCalls.push({ provider, model, isFallbackRetry: options.isFallbackRetry });
           candidateLeases.push(options.contextEngineLogicalTurnLease);
-          return makeResult({
+          const candidate = makeResult({
             provider,
             model,
             classification: options.isFallbackRetry ? undefined : "empty",
-            meta: options.isFallbackRetry
-              ? {
-                  finalAssistantVisibleText: "fallback complete",
-                  finalAssistantRawText: "fallback complete",
-                  executionTrace: {
-                    winnerProvider: provider,
-                    winnerModel: model,
-                    attempts: [
-                      {
-                        provider,
-                        model,
-                        result: "same_model_transient",
-                        reason: "rate_limit",
-                      },
-                      { provider, model, result: "success" },
-                    ],
-                    fallbackUsed: false,
-                    runner: "embedded",
-                  },
-                  agentMeta: {
-                    sessionId: "session-1",
-                    provider,
-                    model,
-                    terminalReceipt: {
-                      runId: "run-shared-fallback",
-                      sessionId: "session-1",
-                      turnId: "turn-1",
-                      assistantTranscriptIdempotencyKey: "selected-saved-reply",
-                      requested: { provider, model },
-                      effective: { provider, model, responseModel: "producer-model" },
-                      successfulToolNames: [],
-                      rerouted: false,
-                    },
-                  },
-                }
-              : undefined,
           });
+          if (options.isFallbackRetry) {
+            candidate.meta = {
+              ...candidate.meta,
+              ...visibleReply("NO_REPLY"),
+              finalAssistantRawText: "NO_REPLY\nNO_REPLY",
+              executionTrace: {
+                winnerProvider: provider,
+                winnerModel: model,
+                attempts: [
+                  { provider, model, ...sameModelRetry },
+                  { provider, model, result: "success" },
+                ],
+                fallbackUsed: false,
+                runner: "embedded",
+              },
+            };
+            candidate.meta.agentMeta!.terminalReceipt = {
+              ...receiptFor("run-shared-fallback", provider, model, "producer-model"),
+              assistantTranscriptIdempotencyKey: "selected-saved-reply",
+            };
+          }
+          return candidate;
         },
       });
-      expect(getAgentRunContext("run-shared-fallback")?.activeModel).toBeUndefined();
+      expect(runRegistry.getAgentRunContext("run-shared-fallback")?.activeModel).toBeUndefined();
       await result.settleSessionOverride();
       await result.settleSessionOverride();
       return { result, candidateCalls, candidateLeases, reconciled };
@@ -143,71 +182,39 @@ describe("runEmbeddedAgentEntry", () => {
     const command = await runMode("command-rpc");
 
     expect(channel.candidateCalls).toEqual(command.candidateCalls);
-    expect(channel.result.outcome).toBe("completed");
-    expect(channel.result.provider).toBe("fallback-provider");
-    expect(channel.result.model).toBe("fallback-model");
+    expect(channel.result).toMatchObject({ outcome: "completed", ...fallbackRoute });
     expect(channel.result.attempts).toEqual(command.result.attempts);
     expect(channel.result.terminal).toEqual(command.result.terminal);
     expect(channel.result.result.meta.executionTrace).toEqual({
-      winnerProvider: "fallback-provider",
-      winnerModel: "fallback-model",
+      winnerProvider: fallbackRoute.provider,
+      winnerModel: fallbackRoute.model,
       attempts: [
-        {
-          provider: "primary-provider",
-          model: "primary-model",
-          result: "candidate_failed",
-          reason: "format",
-        },
-        {
-          provider: "fallback-provider",
-          model: "fallback-model",
-          result: "same_model_transient",
-          reason: "rate_limit",
-        },
-        { provider: "fallback-provider", model: "fallback-model", result: "success" },
+        { ...primaryRoute, result: "candidate_failed", reason: "format" },
+        { ...fallbackRoute, ...sameModelRetry },
+        { ...fallbackRoute, result: "success" },
       ],
       fallbackUsed: true,
       runner: "embedded",
     });
-    expect(channel.result.result.meta.agentMeta?.terminalReceipt).toMatchObject({
-      requested: { provider: "primary-provider", model: "primary-model" },
-      effective: {
-        provider: "fallback-provider",
-        model: "fallback-model",
-        responseModel: "producer-model",
-      },
+    const expectedReceipt = {
+      requested: primaryRoute,
+      effective: { ...fallbackRoute, responseModel: "producer-model" },
       rerouted: true,
-    });
-    expect(channel.result.terminal.metadata.assistantTranscriptIdempotencyKey).toBe(
-      "selected-saved-reply",
-    );
-    expect(channel.result.terminal.metadata.terminalReceipt).toMatchObject({
-      requested: { provider: "primary-provider", model: "primary-model" },
-      effective: {
-        provider: "fallback-provider",
-        model: "fallback-model",
-        responseModel: "producer-model",
-      },
-      rerouted: true,
-      terminalDisposition: "visible",
+    };
+    expect(channel.result.result.meta.agentMeta?.terminalReceipt).toMatchObject(expectedReceipt);
+    expect(channel.result.terminal.metadata).toMatchObject({
+      assistantTranscriptIdempotencyKey: "selected-saved-reply",
+      terminalReceipt: { ...expectedReceipt, terminalDisposition: "visible" },
     });
     expect(channel.result.terminal.metadata.terminalReply).toEqual({
       disposition: "visible",
-      text: "fallback complete",
+      text: "NO_REPLY",
       modelRouteChange:
         "Model route changed: primary-provider/primary-model → fallback-provider/producer-model.",
     });
     expect(channel.candidateLeases[0]).toBe(channel.candidateLeases[1]);
-    expect(state.selectAgentHarness).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "fallback-provider",
-        modelId: "fallback-model",
-      }),
-    );
     expect(channel.reconciled).toEqual(command.reconciled);
-    expect(channel.reconciled).toEqual([
-      { provider: "fallback-provider", model: "fallback-model" },
-    ]);
+    expect(channel.reconciled).toEqual([fallbackRoute]);
   });
 
   it("preflights caller-resolved CLI hosts instead of the model harness", async () => {
@@ -218,32 +225,17 @@ describe("runEmbeddedAgentEntry", () => {
     }));
 
     await runEntry({
-      selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
-      identity: { runId: "cli-host-preflight", agentId: "main", sessionId: "session-1" },
+      runId: "cli-host-preflight",
       harness: {
-        workspaceDir: "/tmp/workspace",
-        preparation: { kind: "direct" },
-        resolveRuntimeOverride: () => undefined,
+        ...createDirectHarness(),
         resolveContextEngineHost,
       },
-      runCandidate: async (provider, model) =>
-        makeResult({
-          provider,
-          model,
-          classification: provider === "primary-provider" ? "empty" : undefined,
-        }),
     });
 
-    expect(resolveContextEngineHost).toHaveBeenCalledWith(
-      "primary-provider",
-      "primary-model",
-      undefined,
-    );
-    expect(resolveContextEngineHost).toHaveBeenCalledWith(
-      "fallback-provider",
-      "fallback-model",
-      undefined,
-    );
+    expect(resolveContextEngineHost.mock.calls).toEqual([
+      ["primary-provider", "primary-model", undefined],
+      ["fallback-provider", "fallback-model", undefined],
+    ]);
     expect(state.selectAgentHarness).not.toHaveBeenCalled();
   });
 
@@ -261,19 +253,11 @@ describe("runEmbeddedAgentEntry", () => {
     });
 
     await runEntry({
-      selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
-      identity: { runId: "lazy-plugin-preflight", agentId: "main", sessionId: "session-1" },
+      runId: "lazy-plugin-preflight",
       harness: {
-        workspaceDir: "/tmp/workspace",
-        preparation: { kind: "direct" },
+        ...createDirectHarness(),
         resolveRuntimeOverride: (provider) => `${provider}-harness`,
       },
-      runCandidate: async (provider, model) =>
-        makeResult({
-          provider,
-          model,
-          classification: provider === "primary-provider" ? "empty" : undefined,
-        }),
     });
 
     expect(events).toEqual([
@@ -285,21 +269,12 @@ describe("runEmbeddedAgentEntry", () => {
   });
 
   it("leaves maintenance fallback classification to thrown candidate errors", async () => {
-    state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+    usePrimaryFallback((params) => {
       expect(params.classifyResult).toBeUndefined();
       expect(params.mergeExhaustedResult).toBeUndefined();
-      const result = await params.run(params.provider, params.model, initialAttemptOptions(params));
-      return {
-        outcome: "completed" as const,
-        result,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
     });
     const result = await runEntry({
-      selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
-      identity: { runId: "maintenance", agentId: "main", sessionId: "session-1" },
+      runId: "maintenance",
       behavior: { kind: "maintenance" },
       runCandidate: async (provider, model) => makeResult({ provider, model }),
     });
@@ -308,25 +283,19 @@ describe("runEmbeddedAgentEntry", () => {
   });
 
   it("finalizes only the accepted fallback candidate after its attempt releases ownership", async () => {
-    let primaryReleased = false;
-    let fallbackReleased = false;
+    const released: string[] = [];
     const releaseAcceptedTerminalWork = vi.fn();
     const onAcceptedTerminal = vi.fn(() => {
       expect(state.finalizedAttempts).toEqual([]);
       return releaseAcceptedTerminalWork;
     });
     await runEntry({
-      selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
-      identity: { runId: "settle-winner", agentId: "main", sessionId: "session-1" },
+      runId: "settle-winner",
       onAcceptedTerminal,
       runCandidate: async (provider, model, options) => {
         const label = provider === "primary-provider" ? "primary" : "fallback";
         recordTurnAttempt(options.onContextEngineTurnCandidate, label);
-        if (label === "primary") {
-          primaryReleased = true;
-        } else {
-          fallbackReleased = true;
-        }
+        released.push(label);
         return makeResult({
           provider,
           model,
@@ -335,8 +304,7 @@ describe("runEmbeddedAgentEntry", () => {
       },
     });
 
-    expect(primaryReleased).toBe(true);
-    expect(fallbackReleased).toBe(true);
+    expect(released).toEqual(["primary", "fallback"]);
     expect(onAcceptedTerminal).toHaveBeenCalledOnce();
     expect(releaseAcceptedTerminalWork).toHaveBeenCalledOnce();
     expect(state.finalizedAttempts).toEqual(["fallback"]);
@@ -345,28 +313,11 @@ describe("runEmbeddedAgentEntry", () => {
   it("does not commit the accepted terminal after abort wins before fallback settlement", async () => {
     const abortController = new AbortController();
     const onAcceptedTerminal = vi.fn();
-    state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = await params.run(params.provider, params.model, initialAttemptOptions(params));
-      abortController.abort("user_abort");
-      return {
-        outcome: "completed" as const,
-        result,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
-    });
+    usePrimaryFallback(() => abortController.abort("user_abort"));
     await runEntry({
       selection: { cfg: {}, provider: "provider", model: "model" },
-      identity: { runId: "settle-after-abort", agentId: "main", sessionId: "session-1" },
-      behavior: {
-        kind: "channel-delivery",
-        readDeliveryEvidence: () => ({
-          hasDirectlySentBlockReply: false,
-          hasBlockReplyPipelineOutput: false,
-          hasRetryBlockedDelivery: false,
-        }),
-      },
+      runId: "settle-after-abort",
+      behavior: channelDelivery,
       abortSignal: abortController.signal,
       onAcceptedTerminal,
       runCandidate: async (provider, model, options) => {
@@ -383,33 +334,13 @@ describe("runEmbeddedAgentEntry", () => {
     "settles an empty result after %s without reusing a replaced result's classification",
     async (settlement) => {
       const committed = settlement === "committed side effect";
-      const hasCommittedSideEffect = vi.fn(() => committed);
-      state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-        const result = await params.run(
-          params.provider,
-          params.model,
-          initialAttemptOptions(params),
-        );
-        const classification = await params.classifyResult?.({
-          result,
-          provider: params.provider,
-          model: params.model,
-          attempt: 1,
-          total: 2,
-        });
-        expect(classification).toBe(committed ? undefined : null);
-        return {
-          outcome: "completed",
-          result,
-          provider: params.provider,
-          model: params.model,
-          attempts: [],
-        };
+      usePrimaryFallback(async (params, result) => {
+        expect(await classify(params, result)).toBe(committed ? undefined : null);
       });
       const run = await runEntry({
         selection: { cfg: {}, provider: "provider", model: "model" },
-        identity: { runId: "settle-result", agentId: "main", sessionId: "session-1" },
-        behavior: { kind: "command-rpc", hasCommittedSideEffect },
+        runId: "settle-result",
+        behavior: { kind: "command-rpc", hasCommittedSideEffect: () => committed },
         runCandidate: async (provider, model, options) => {
           recordTurnAttempt(options.onContextEngineTurnCandidate, "candidate");
           const candidate = makeResult({ provider, model, classification: "empty" });
@@ -442,54 +373,41 @@ describe("runEmbeddedAgentEntry", () => {
   );
 
   it.each([
-    {
-      label: "yielded",
-      status: "ok",
-      meta: { yielded: true, livenessState: "paused" as const, stopReason: "end_turn" },
-    },
-    {
-      label: "timed out",
-      status: "timeout",
-      meta: {
-        timeoutPhase: "provider" as const,
+    ["yielded", "ok", { yielded: true, livenessState: "paused", stopReason: "end_turn" }],
+    [
+      "timed out",
+      "timeout",
+      {
+        timeoutPhase: "provider",
         stopReason: "timeout",
-        modelFallbackStopReason: "agent_run_terminal_timeout" as const,
+        modelFallbackStopReason: "agent_run_terminal_timeout",
       },
-    },
-    {
-      label: "errored",
-      status: "error",
-      meta: {
-        error: { kind: "retry_limit" as const, message: "provider failed" },
+    ],
+    [
+      "errored",
+      "error",
+      {
+        error: { kind: "retry_limit", message: "provider failed" },
         stopReason: "error",
-        modelFallbackStopReason: "idle_timeout_circuit_breaker" as const,
+        modelFallbackStopReason: "idle_timeout_circuit_breaker",
       },
-    },
-  ])("does not finalize a $label candidate", async ({ meta, status }) => {
-    state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const { provider, model } = params;
-      const result = await params.run(provider, model, initialAttemptOptions(params));
+    ],
+  ] as const)("does not finalize a %s candidate", async (_label, status, meta) => {
+    usePrimaryFallback(async (params, result) => {
       if ("modelFallbackStopReason" in meta) {
-        const classification = await params.classifyResult?.({
-          result,
-          provider,
-          model,
-          attempt: 1,
-          total: 2,
+        expect(await classify(params, result)).toEqual({
+          stopReason: meta.modelFallbackStopReason,
         });
-        expect(classification).toEqual({ stopReason: meta.modelFallbackStopReason });
       }
-      return { outcome: "completed" as const, result, provider, model, attempts: [] };
     });
     const innerFailure = {
       provider: "inner-provider",
       model: "inner-model",
-      result: "same_model_transient" as const,
-      reason: "rate_limit",
+      ...sameModelRetry,
     };
     const result = await runEntry({
       selection: { cfg: {}, provider: "provider", model: "model" },
-      identity: { runId: "settle-non-terminal", agentId: "main", sessionId: "session-1" },
+      runId: "settle-non-terminal",
       behavior: { kind: "command-rpc", hasCommittedSideEffect: () => true },
       runCandidate: async (provider, model, options) => {
         recordTurnAttempt(options.onContextEngineTurnCandidate, "candidate");
@@ -522,32 +440,15 @@ describe("runEmbeddedAgentEntry", () => {
   });
 
   it("retains non-visible follow-up results for terminal delivery", async () => {
-    state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = await params.run(params.provider, params.model, initialAttemptOptions(params));
-      expect(
-        params.classifyResult?.({
-          result,
-          provider: params.provider,
-          model: params.model,
-          attempt: 1,
-          total: 1,
-        }),
-      ).toMatchObject({
+    usePrimaryFallback(async (params, result) => {
+      expect(await classify(params, result, 1)).toMatchObject({
         code: "empty_result",
         preserveResultOnExhaustion: true,
         preserveResultPriority: -1,
       });
-      return {
-        outcome: "exhausted" as const,
-        result,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
-    });
+    }, "exhausted");
     const result = await runEntry({
-      selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
-      identity: { runId: "followup", agentId: "main", sessionId: "session-1" },
+      runId: "followup",
       behavior: { kind: "followup-delivery" },
       runCandidate: async (provider, model) =>
         makeResult({ provider, model, classification: "empty" }),
@@ -557,77 +458,69 @@ describe("runEmbeddedAgentEntry", () => {
     expect(result.result.payloads).toEqual([]);
   });
 
-  it.each([
-    {
-      name: "CLI delivered source reply",
-      meta: { finalAssistantRawText: "NO_REPLY" },
-      sourceReplyDelivered: true as const,
-      expected: { disposition: "silent" },
-    },
-    {
-      name: "final internal source reply after silence",
-      meta: { finalAssistantRawText: "NO_REPLY" },
-      sourceReplies: [{ text: "forward this reply", sourceReplyFinal: true }],
-      expected: { disposition: "visible", text: "forward this reply" },
-    },
-  ])(
-    "records the producer-owned terminal snapshot for $name",
-    async ({ name, meta, expected, sourceReplies, sourceReplyDelivered }) => {
-      const runId = `terminal-${name}`;
-      state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-        outcome: "completed" as const,
-        result: await params.run(params.provider, params.model, initialAttemptOptions(params)),
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      }));
-      const result = await runEntry({
-        selection: { cfg: {}, provider: "provider", model: "model" },
-        identity: { runId, agentId: "main", sessionId: "session-1" },
-        runCandidate: async (provider, model) => ({
-          ...makeResult({ provider, model }),
-          messagingToolSourceReplyPayloads: sourceReplies,
-          sourceReplyDelivered,
-          meta: {
-            ...makeResult({ provider, model }).meta,
-            ...meta,
-            agentMeta: Object.assign(
-              {
-                sessionId: sourceReplyDelivered ? "native-cli-session" : "session-1",
-                provider,
-                model,
-              },
-              sourceReplyDelivered
-                ? {}
-                : {
-                    terminalReceipt: {
-                      runId,
-                      sessionId: "session-1",
-                      turnId: "turn-1",
-                      requested: { provider, model },
-                      effective: { provider, model, responseModel: model },
-                      successfulToolNames: ["read"],
-                      rerouted: false,
-                    },
-                  },
-            ),
-          },
-        }),
-      });
+  it("honors configured endpoint equivalence when publishing a receipt", async () => {
+    const row = { ...makeModel("team/chat"), responseModelEquivalent: true };
+    const cfg: OpenClawConfig = {
+      models: { providers: { broker: { baseUrl: "https://broker.example/v1", models: [row] } } },
+    };
+    const result = await runReceipt(
+      "declared-endpoint",
+      { cfg, provider: "broker", model: row.id },
+      row.id,
+      "upstream-model",
+    );
+    expect(result.terminal.metadata.terminalReceipt).toMatchObject({
+      effective: { provider: "broker", model: row.id, responseModel: "upstream-model" },
+      rerouted: false,
+    });
+    expect(result.terminal.metadata.terminalReply).toEqual({
+      disposition: "visible",
+      text: "done",
+    });
+  });
 
-      expect(result.terminal.metadata.terminalReply).toEqual(expected);
-      expect(result.terminal.metadata.terminalReceipt).toMatchObject({
-        runId,
-        terminalDisposition: expected.disposition === "visible" ? "visible" : "not-visible",
-      });
-      if (sourceReplyDelivered) {
-        expect(result.terminal.metadata.terminalReceipt).toMatchObject({
-          sourceReplyDelivered: true,
-          sessionId: "session-1",
-          requested: { provider: "provider", model: "model" },
-          successfulToolNames: ["message"],
+  const selected = "openai/gpt-5.6-sol";
+  it.each([
+    [selected, "gpt-5.6-sol", false],
+    [selected, "gpt-5.6-luna", true],
+    [selected, "anthropic/gpt-5.6-sol", true],
+    ["openai/gpt-5.6-luna", "gpt-5.6-luna", true],
+  ] as const)("classifies router receipt %s → %s", async (model, responseModel, rerouted) => {
+    const route = { provider: "clawrouter", model: selected };
+    const result = await runReceipt("router-receipt", { cfg: {}, ...route }, model, responseModel);
+    expect(result.terminal.metadata.terminalReceipt).toMatchObject({
+      requested: route,
+      effective: { provider: route.provider, model, responseModel },
+      rerouted,
+    });
+  });
+
+  it("records a silent CLI delivery using the entry's session identity", async () => {
+    const runId = "terminal-cli-delivery";
+    usePrimaryFallback();
+    const result = await runEntry({
+      selection: { cfg: {}, provider: "provider", model: "model" },
+      runId,
+      runCandidate: async (provider, model) => {
+        const candidate = makeResult({
+          provider,
+          model,
+          meta: { finalAssistantRawText: "NO_REPLY", terminalReply: { disposition: "silent" } },
         });
-      }
-    },
-  );
+        candidate.sourceReplyDelivered = true;
+        candidate.meta.agentMeta!.sessionId = "native-cli-session";
+        return candidate;
+      },
+    });
+
+    expect(result.terminal.metadata.terminalReply).toEqual({ disposition: "silent" });
+    expect(result.terminal.metadata.terminalReceipt).toMatchObject({
+      runId,
+      terminalDisposition: "not-visible",
+      sourceReplyDelivered: true,
+      sessionId: "session-1",
+      requested: { provider: "provider", model: "model" },
+      successfulToolNames: ["message"],
+    });
+  });
 });

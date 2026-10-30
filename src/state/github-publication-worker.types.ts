@@ -2,12 +2,8 @@ import type { SessionGitHubPublicationResult } from "../../packages/gateway-prot
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.types.js";
 import type { GitHubPublicationChange } from "../gateway/github-publication-events.js";
 import type { GitHubPublicationEffectTransition } from "../gateway/github-publication-execution-effects.js";
-import type { RepositoryGitHubPublicationFilter } from "../gateway/github-repository-publication.kernel.js";
 import type { WorkerSessionTurnClaim } from "../gateway/worker-environments/placement-record.js";
-import type {
-  GitHubPublicationRow,
-  SharedGitHubPublicationFilter,
-} from "./github-publication-read.types.js";
+import type { GitHubPublicationRow } from "./github-publication-read.types.js";
 import type { GitHubPublicationAuthorityReceipt } from "./github-publication-receipts.js";
 import type { GitHubPublicationRequesterSnapshot } from "./github-publication-requester.js";
 import type { DB } from "./openclaw-state-db.generated.js";
@@ -19,6 +15,7 @@ export type SharedGitHubPublicationInsert = {
     idempotencyKey: string;
     title?: string;
     body?: string;
+    draft?: boolean;
   };
   requestId: string;
   requestDigest: string;
@@ -39,7 +36,13 @@ export type GitHubPublicationDeferral =
   | { kind: "claim"; claim: WorkerSessionTurnClaim }
   | { kind: "claimMissingSnapshot"; claim: WorkerSessionTurnClaim }
   | { kind: "request"; row: GitHubPublicationRow }
-  | { kind: "orphaned" };
+  | {
+      kind: "orphaned";
+      localClaims?: Pick<
+        WorkerSessionTurnClaim,
+        "sessionId" | "claimId" | "runId" | "placementGeneration"
+      >[];
+    };
 export type SharedGitHubPublicationWorkspaceSnapshot = {
   row: GitHubPublicationRow;
   sourceHeadCommit: string;
@@ -63,54 +66,9 @@ export type PersonalPublicationSelector =
   | { requestId: string }
   | { sessionId: string; idempotencyKey: string }
   | { sessionKey: string; agentId: string };
-export type PublicationReadOperations = {
-  "githubPublications.sharedRead": {
-    input: { requestId: string } | { sessionId: string; idempotencyKey: string };
-    output: { type: "githubPublications.sharedRead"; row: GitHubPublicationRow | undefined };
-  };
-  "githubPublications.sharedList": {
-    input: SharedGitHubPublicationFilter;
-    output: { type: "githubPublications.sharedList"; rows: GitHubPublicationRow[] };
-  };
-  "githubPublications.claimRequests": {
-    input: { claim: { sessionId: string; claimId: string; runId: string }; pendingOnly?: boolean };
-    output: { type: "githubPublications.claimRequests"; rows: GitHubPublicationRow[] };
-  };
-  "githubPublications.personalRead": {
-    input: { owner: string; request: PersonalPublicationSelector };
-    output: { type: "githubPublications.personalRead"; row: PersonalPublicationRow | undefined };
-  };
-  "githubPublications.unreported": {
-    input: undefined;
-    output: {
-      type: "githubPublications.unreported";
-      rows: {
-        sessionId: string;
-        sessionKey: string;
-        agentId: string;
-        result: SessionGitHubPublicationResult;
-      }[];
-    };
-  };
-  "githubPublications.repositoryList": {
-    input: RepositoryGitHubPublicationFilter;
-    output: { type: "githubPublications.repositoryList"; rows: RepositoryPublicationRow[] };
-  };
-  "githubPublications.repositoryRead": {
-    input: { requestId: string };
-    output: {
-      type: "githubPublications.repositoryRead";
-      row: RepositoryPublicationRow | undefined;
-    };
-  };
-  "githubPublications.branch": {
-    input: { workspaceId: string; branch: string; pushRepository: string };
-    output: {
-      type: "githubPublications.branch";
-      branch: { head: RepositoryPublicationRow | undefined; unsettled: boolean };
-    };
-  };
-};
+export type PublicationReadOperations = import("./worker-operation-registry.js").WorkerOperations<
+  typeof import("./github-publication.read.worker.js").publicationReadOperations
+>;
 
 type PersonalPublicationRow = DB["github_personal_publication_requests"];
 type RepositoryPublicationRow = DB["github_repository_publication_requests"];

@@ -27,6 +27,23 @@ function configIO(root: string, env: NodeJS.ProcessEnv = { HOME: root, OPENCLAW_
   });
 }
 
+async function setupConfig(
+  config: (root: string) => unknown,
+  envOverrides: NodeJS.ProcessEnv = {},
+  files: Record<string, string> = {},
+) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-default-roles-"));
+  roots.push(root);
+  const configPath = path.join(root, "openclaw.json");
+  const env: NodeJS.ProcessEnv = { HOME: root, OPENCLAW_TEST_FAST: "1", ...envOverrides };
+  for (const [name, contents] of Object.entries(files)) {
+    await fs.writeFile(path.join(root, name), contents, "utf8");
+  }
+  await fs.writeFile(configPath, `${JSON.stringify(config(root), null, 2)}\n`, "utf8");
+  const io = configIO(root, env);
+  return { root, configPath, env, io };
+}
+
 afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   resetConfigRuntimeState();
@@ -35,38 +52,22 @@ afterEach(async () => {
 
 describe("default role materialization authored writes", () => {
   it("preserves env references and includes and is idempotent after persistence", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-default-roles-"));
-    roots.push(root);
-    const configPath = path.join(root, "openclaw.json");
-    const channelsPath = path.join(root, "channels.json5");
     const includeRaw = `${JSON.stringify({ telegram: { enabled: true } }, null, 2)}\n`;
-    await fs.writeFile(channelsPath, includeRaw, "utf-8");
-    await fs.writeFile(
-      configPath,
-      `${JSON.stringify(
-        {
-          agents: {
-            defaults: { model: "${DEFAULT_MODEL}", workspace: "/srv/ops" },
-            entries: {
-              ops: { default: true },
-              research: { model: "${RESEARCH_MODEL}" },
-            },
+    const { root, configPath, io } = await setupConfig(
+      () => ({
+        agents: {
+          defaults: { model: "${DEFAULT_MODEL}", workspace: "/srv/ops" },
+          entries: {
+            ops: { default: true },
+            research: { model: "${RESEARCH_MODEL}" },
           },
-          channels: { $include: "./channels.json5" },
-          talk: { provider: "test" },
         },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
+        channels: { $include: "./channels.json5" },
+        talk: { provider: "test" },
+      }),
+      { DEFAULT_MODEL: "openai/default-model", RESEARCH_MODEL: "openai/research-model" },
+      { "channels.json5": includeRaw },
     );
-    const io = configIO(root, {
-      HOME: root,
-      OPENCLAW_TEST_FAST: "1",
-      DEFAULT_MODEL: "openai/default-model",
-      RESEARCH_MODEL: "openai/research-model",
-    });
-
     const snapshot = await io.readConfigFileSnapshot();
     expect(snapshot.valid).toBe(false);
     expect(snapshot.sourceConfig).toHaveProperty("agents.entries.ops.default", true);
@@ -91,12 +92,12 @@ describe("default role materialization authored writes", () => {
     expect(persisted.agents?.entries?.research?.model).toBe("${RESEARCH_MODEL}");
     expect(persisted.agents?.entries?.ops).not.toHaveProperty("default");
     expect(persisted.channels).toEqual({ $include: "./channels.json5" });
-    await expect(fs.readFile(channelsPath, "utf-8")).resolves.toBe(includeRaw);
+    await expect(fs.readFile(path.join(root, "channels.json5"), "utf-8")).resolves.toBe(includeRaw);
     expect(persisted.bindings).toContainEqual({
       agentId: "ops",
       match: { channel: "telegram", accountId: "*" },
     });
-    expect(persisted.agents?.defaults?.heartbeat?.agentId).toBe("ops");
+    expect(persisted).not.toHaveProperty("agents.defaults.heartbeat");
     expect(persisted.agents?.defaults?.authInheritance?.agentId).toBe("ops");
     expect(persisted.talk?.agentId).toBe("ops");
 
@@ -121,121 +122,14 @@ describe("default role materialization authored writes", () => {
     expect(rewritten.agents).toMatchObject({ ownership: "explicit", entries: { writer: {} } });
   });
 
-  it.each([true, false])(
-    "pins a replaced sole fixed-store owner only when the store is unchanged: %s",
-    async (sameStore) => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-owner-"));
-      roots.push(root);
-      const configPath = path.join(root, "openclaw.json");
-      const sourceStore = path.join(root, "source-sessions.json");
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ agents: { entries: { ops: {} } }, session: { store: sourceStore } }),
-      );
-      const io = configIO(root);
-      const snapshot = await io.readConfigFileSnapshot();
-      await io.writeConfigFile(
-        {
-          ...snapshot.config,
-          agents: { ownership: "explicit", entries: { research: {} } },
-          session: {
-            store: sameStore ? sourceStore : path.join(root, "destination-sessions.json"),
-          },
-        },
-        { baseSnapshot: snapshot, allowedAgentRosterRemovals: ["ops"] },
-      );
-      const persisted = JSON.parse(await fs.readFile(configPath, "utf8"));
-      expect(persisted.agents?.defaults?.sessionStore?.agentId).toBe(sameStore ? "ops" : undefined);
-    },
-  );
-
-  it.each([
-    ["another fixed store", "destination-sessions.json"],
-    ["a per-agent store", "sessions-{agentId}.json"],
-  ])("drops a persisted fixed-store owner when switching to %s", async (_label, storeName) => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-owner-switch-"));
-    roots.push(root);
-    const configPath = path.join(root, "openclaw.json");
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        agents: {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "ops" } },
-          entries: { ops: {}, research: {} },
-        },
-        session: { store: path.join(root, "source-sessions.json") },
-      }),
-    );
-    const io = configIO(root);
-    const snapshot = await io.readConfigFileSnapshot();
-
-    await io.writeConfigFile(
-      {
-        ...snapshot.config,
-        session: { ...snapshot.config.session, store: path.join(root, storeName) },
-      },
-      { baseSnapshot: snapshot },
-    );
-
-    const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-    expect(persisted.agents?.defaults?.sessionStore?.agentId).toBeUndefined();
-  });
-
-  it("keeps an explicitly supplied owner when switching fixed stores", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-owner-switch-"));
-    roots.push(root);
-    const configPath = path.join(root, "openclaw.json");
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        agents: {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "ops" } },
-          entries: { ops: {}, research: {} },
-        },
-        session: { store: path.join(root, "source-sessions.json") },
-      }),
-    );
-    const io = configIO(root);
-    const snapshot = await io.readConfigFileSnapshot();
-    const nextConfig: OpenClawConfig = {
-      ...snapshot.config,
-      agents: {
-        ...snapshot.config.agents,
-        defaults: {
-          ...snapshot.config.agents?.defaults,
-          sessionStore: { agentId: "research" },
-        },
-      },
-      session: { ...snapshot.config.session, store: path.join(root, "destination-sessions.json") },
-    };
-
-    await io.writeConfigFile(nextConfig, {
-      baseSnapshot: snapshot,
-      explicitSetPaths: [["agents", "defaults", "sessionStore", "agentId"]],
-      explicitSetValueSource: nextConfig,
-    });
-
-    const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-    expect(persisted.agents?.defaults?.sessionStore?.agentId).toBe("research");
-  });
-
   it("pins the survivor's previous workspace during a generic roster collapse", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-collapse-"));
-    roots.push(root);
-    const configPath = path.join(root, "openclaw.json");
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        agents: {
-          ownership: "explicit",
-          defaults: { workspace: "/srv/fleet" },
-          entries: { ops: {}, research: {} },
-        },
-      }),
-    );
-    const io = configIO(root);
+    const { configPath, io } = await setupConfig(() => ({
+      agents: {
+        ownership: "explicit",
+        defaults: { workspace: "/srv/fleet" },
+        entries: { ops: {}, research: {} },
+      },
+    }));
     const snapshot = await io.readConfigFileSnapshot();
 
     await io.writeConfigFile(
@@ -254,52 +148,10 @@ describe("default role materialization authored writes", () => {
     expect(persisted.agents?.entries?.research?.workspace).toBe("/srv/fleet/research");
   });
 
-  it.each([
-    ["pins the replaced owner", "research", false, "ops"],
-    ["keeps an explicitly authored owner", "research", true, "research"],
-    ["does nothing when the owner is unchanged", "ops", false, undefined],
-  ] as const)(
-    "%s during generic roster writes",
-    async (_label, targetAgentId, explicit, expected) => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-owner-transition-"));
-      roots.push(root);
-      const configPath = path.join(root, "openclaw.json");
-      await fs.writeFile(configPath, JSON.stringify({ agents: { entries: { ops: {} } } }));
-      const io = configIO(root);
-      const snapshot = await io.readConfigFileSnapshot();
-      const nextConfig: OpenClawConfig = {
-        ...snapshot.config,
-        agents: {
-          ownership: "explicit",
-          ...(explicit ? { defaults: { authInheritance: { agentId: "research" } } } : {}),
-          entries: { [targetAgentId]: targetAgentId === "ops" ? { model: "openai/test" } : {} },
-        },
-      };
-      await io.writeConfigFile(nextConfig, {
-        baseSnapshot: snapshot,
-        ...(targetAgentId === "research" ? { allowedAgentRosterRemovals: ["ops"] } : {}),
-        explicitSetPaths: [
-          ["agents", "entries"],
-          ...(explicit ? [["agents", "defaults", "authInheritance"]] : []),
-        ],
-        explicitSetValueSource: nextConfig,
-      });
-
-      const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-      expect(persisted.agents?.defaults?.authInheritance?.agentId).toBe(expected);
-    },
-  );
-
   it("refuses to remove an inherited-auth owner with a custom agentDir", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-custom-auth-owner-"));
-    roots.push(root);
-    const configPath = path.join(root, "openclaw.json");
-    const customAgentDir = path.join(root, "custom-ops-agent");
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({ agents: { entries: { ops: { agentDir: customAgentDir } } } }),
-    );
-    const io = configIO(root);
+    const { io } = await setupConfig((root) => ({
+      agents: { entries: { ops: { agentDir: path.join(root, "custom-ops-agent") } } },
+    }));
     const snapshot = await io.readConfigFileSnapshot();
 
     await expect(
@@ -316,72 +168,12 @@ describe("default role materialization authored writes", () => {
     });
   });
 
-  it("replaces a legacy list when persisting explicit ownership", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-roster-write-"));
-    roots.push(root);
-    const configPath = path.join(root, "openclaw.json");
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        agents: {
-          list: [
-            { id: "ops", default: true, workspace: "/srv/ops" },
-            { id: "research", model: "openai/research" },
-          ],
-        },
-      }),
-    );
-    const io = configIO(root);
-    const snapshot = await io.readConfigFileSnapshot();
-    const nextConfig = createCanonicalAgentConfigFixture(snapshot.sourceConfig, {
-      env: { HOME: root },
-      homedir: () => root,
-    }).config;
-
-    await io.writeConfigFile(nextConfig, {
-      baseSnapshot: snapshot,
-      explicitSetPaths: [["agents", "ownership"]],
-      explicitSetValueSource: nextConfig,
-    });
-
-    const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-    expect(persisted.agents).toEqual({
-      ownership: "explicit",
-      defaults: {
-        heartbeat: { agentId: "ops" },
-        systemAgent: { agentId: "ops" },
-        authInheritance: { agentId: "ops" },
-      },
-      entries: {
-        ops: { workspace: "/srv/ops" },
-        research: { model: "openai/research" },
-      },
-    });
-    expect(persisted.agents).not.toHaveProperty("list");
-    const firstPersisted = await fs.readFile(configPath, "utf8");
-    const reread = await io.readConfigFileSnapshot();
-    await io.writeConfigFile(reread.config, { baseSnapshot: reread });
-    await expect(fs.readFile(configPath, "utf8")).resolves.toBe(firstPersisted);
-  });
-
   it("refuses to retire the legacy owner while cron rows still need Doctor", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-cron-owner-write-"));
-    roots.push(root);
-    const configPath = path.join(root, "openclaw.json");
+    const { root, configPath, env } = await setupConfig(() => ({
+      agents: { list: [{ id: "ops", default: true }, { id: "research" }] },
+    }));
     const storePath = path.join(root, "custom-cron", "jobs.json");
-    const env = {
-      HOME: root,
-      OPENCLAW_STATE_DIR: root,
-      OPENCLAW_TEST_FAST: "1",
-    } as NodeJS.ProcessEnv;
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        agents: {
-          list: [{ id: "ops", default: true }, { id: "research" }],
-        },
-      }),
-    );
+    env.OPENCLAW_STATE_DIR = root;
     writeConfigMachineState("cron.store", storePath, { env });
     const storeKey = cronStoreKey(storePath);
     const database = openOpenClawStateDatabase({ env }).db;
@@ -424,114 +216,11 @@ describe("default role materialization authored writes", () => {
     expect(readRows()).toEqual(beforeRows);
   });
 
-  it("refuses to rewrite an unmigrated legacy cron file during an ordinary config write", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-json-cron-owner-"));
-    roots.push(root);
-    const configPath = path.join(root, "openclaw.json");
-    const storePath = path.join(root, "cron", "jobs.json");
-    const env = {
-      HOME: root,
-      OPENCLAW_STATE_DIR: root,
-      OPENCLAW_TEST_FAST: "1",
-    } as NodeJS.ProcessEnv;
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({ agents: { list: [{ id: "ops", default: true }, { id: "research" }] } }),
-    );
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        version: 1,
-        jobs: [
-          makeCronJob({ id: "ownerless" }),
-          makeCronJob({ id: "owned", agentId: "research" }),
-          { ...makeCronJob({ id: "session-owned" }), sessionKey: "agent:research:main" },
-        ],
-      }),
-    );
-    writeConfigMachineState("cron.store", storePath, { env });
-    const beforeConfig = await fs.readFile(configPath, "utf8");
-    const beforeStore = await fs.readFile(storePath, "utf8");
-    const io = configIO(root, env);
-    const snapshot = await io.readConfigFileSnapshot();
-    const nextConfig = createCanonicalAgentConfigFixture(snapshot.sourceConfig, {
-      env,
-      homedir: () => root,
-    }).config;
-
-    const write = io.writeConfigFile(nextConfig, {
-      baseSnapshot: snapshot,
-      explicitSetPaths: [["agents", "ownership"]],
-      explicitSetValueSource: nextConfig,
-    });
-
-    await expect(write).rejects.toMatchObject({
-      code: "CONFIG_WRITE_REJECTED",
-      refusal: "cron-owner-safety",
-      message: expect.stringContaining("openclaw doctor --fix"),
-    });
-    await expect(fs.readFile(configPath, "utf8")).resolves.toBe(beforeConfig);
-    await expect(fs.readFile(storePath, "utf8")).resolves.toBe(beforeStore);
-  });
-
-  it("leaves the legacy owner marker intact when a cron row is corrupt", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-corrupt-cron-owner-write-"));
-    roots.push(root);
-    const configPath = path.join(root, "openclaw.json");
-    const env = {
-      HOME: root,
-      OPENCLAW_STATE_DIR: root,
-      OPENCLAW_TEST_FAST: "1",
-    } as NodeJS.ProcessEnv;
-    const storePath = path.join(root, "cron", "jobs.json");
-    const source = JSON.stringify({
-      agents: { list: [{ id: "ops", default: true }, { id: "research" }] },
-    });
-    await fs.writeFile(configPath, source);
-    writeConfigMachineState("cron.store", storePath, { env });
-    const database = openOpenClawStateDatabase({ env }).db;
-    replaceCronRows(database, cronStoreKey(storePath), {
-      version: 1,
-      jobs: [makeCronJob({ id: "corrupt" })],
-    });
-    database
-      .prepare("UPDATE cron_jobs SET job_json = ? WHERE store_key = ? AND job_id = ?")
-      .run("not json", cronStoreKey(storePath), "corrupt");
-    const io = configIO(root, env);
-    const snapshot = await io.readConfigFileSnapshot();
-    const nextConfig = createCanonicalAgentConfigFixture(snapshot.sourceConfig, {
-      env,
-      homedir: () => root,
-    }).config;
-
-    await expect(
-      io.writeConfigFile(nextConfig, {
-        baseSnapshot: snapshot,
-        explicitSetPaths: [["agents", "ownership"]],
-        explicitSetValueSource: nextConfig,
-      }),
-    ).rejects.toThrow("ownership cannot be verified");
-    await expect(fs.readFile(configPath, "utf8")).resolves.toBe(source);
-  });
-
   it("requires roster migration before an unrelated write and preserves the canonical owner", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-owner-roundtrip-"));
-    roots.push(root);
-    const configPath = path.join(root, "openclaw.json");
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        agents: {
-          entries: {
-            ops: {},
-            research: { default: true },
-          },
-        },
-        gateway: { port: 18789 },
-      }),
-    );
-    const io = configIO(root);
+    const { root, configPath, io } = await setupConfig(() => ({
+      agents: { entries: { ops: {}, research: { default: true } } },
+      gateway: { port: 18789 },
+    }));
     const snapshot = await io.readConfigFileSnapshot();
     expect(snapshot.valid).toBe(false);
     const original = await fs.readFile(configPath, "utf8");

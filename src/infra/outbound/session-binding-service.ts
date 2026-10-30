@@ -21,6 +21,7 @@ import {
   unbindGenericCurrentConversationBindings,
 } from "./current-conversation-bindings.js";
 import { CURRENT_BINDINGS_ID_PREFIX } from "./current-conversation-bindings.kernel.js";
+import { prepareSessionBindingSelection } from "./prepared-session-binding.js";
 import { SessionBindingError } from "./session-binding-errors.js";
 import {
   nativeSessionBindingInspection,
@@ -37,6 +38,9 @@ import {
 import type {
   ConversationRef,
   SessionBindingBindInput,
+  SessionBindingAdapter,
+  SessionBindingAdapterV2,
+  SessionBindingSelectionSnapshot,
   SessionBindingCapabilities,
   SessionBindingInspection,
   SessionBindingPlacement,
@@ -46,6 +50,9 @@ import type {
 } from "./session-binding.types.js";
 
 export type {
+  SessionBindingAdapter,
+  SessionBindingAdapterV2,
+  SessionBindingSelectionSnapshot,
   BindingTargetKind,
   ConversationRef,
   SessionBindingBindInput,
@@ -59,11 +66,11 @@ export { isSessionBindingError } from "./session-binding-errors.js";
 export type SessionBindingService = {
   bind: (input: SessionBindingBindInput) => Promise<SessionBindingRecord>;
   getCapabilities: (params: SessionBindingScope) => SessionBindingCapabilities;
-  /** @deprecated Use listBySessionAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Use listBySessionAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   listBySession: (targetSessionKey: string) => SessionBindingRecord[];
-  /** @deprecated Use resolveByConversationAsync. The synchronous form will be removed in the next Plugin SDK major. */
+  /** @deprecated Use resolveByConversationAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   resolveByConversation: (ref: ConversationRef) => SessionBindingRecord | null;
-  /** @deprecated Use touchAsync. The synchronous form will be removed in the next Plugin SDK major. */
+  /** @deprecated Use touchAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   touch: (bindingId: string, at?: number, scope?: SessionBindingScope) => void;
   unbind: (input: SessionBindingUnbindInput) => Promise<SessionBindingRecord[]>;
 };
@@ -78,54 +85,6 @@ export type AsyncSessionBindingService = SessionBindingService & {
 
 export type SessionBindingServiceV2 = AsyncSessionBindingService & {
   listBySessionAsync: typeof listSessionBindingsBySessionAsync;
-};
-
-type SessionBindingAdapterCapabilities = {
-  placements?: SessionBindingPlacement[];
-  bindSupported?: boolean;
-  unbindSupported?: boolean;
-};
-
-/** @deprecated Implement SessionBindingAdapterV2; removed in the next Plugin SDK major. */
-export type SessionBindingAdapter = {
-  channel: string;
-  accountId: string;
-  capabilities?: SessionBindingAdapterCapabilities;
-  bind?: (input: SessionBindingBindInput) => Promise<SessionBindingRecord | null>;
-  /** @deprecated Use listBySessionAsync; removed in the next Plugin SDK major. */
-  listBySession: (targetSessionKey: string) => SessionBindingRecord[];
-  /** @deprecated Use resolveByConversationAsync. The synchronous form will be removed in the next Plugin SDK major. */
-  resolveByConversation: (ref: ConversationRef) => SessionBindingRecord | null;
-  /** @deprecated Use inspectByConversationAsync; removed in the next Plugin SDK major. */
-  inspectByConversation?: (ref: ConversationRef) => SessionBindingRecord | null;
-  /** Inspects committed ownership without creating storage or pruning rows. */
-  inspectByConversationAsync?: (ref: ConversationRef) => Promise<SessionBindingRecord | null>;
-  resolveByConversationAsync?: (ref: ConversationRef) => Promise<SessionBindingRecord | null>;
-  /** @deprecated Use touchAsync. The synchronous form will be removed in the next Plugin SDK major. */
-  touch?: (bindingId: string, at?: number) => void;
-  /** Settles accepted persistence before resolving. */
-  touchAsync?: (bindingId: string, at?: number) => Promise<void>;
-  unbind?: (input: SessionBindingUnbindInput) => Promise<SessionBindingRecord[]>;
-};
-
-/** A coherent source-owned selection; its assertion also covers absence and replacement. */
-export type SessionBindingSelectionSnapshot = {
-  bindings: readonly (SessionBindingRecord | null)[];
-  assertCurrent: () => void;
-};
-
-/** Awaited adapter contract. Synchronous members serve released SDK consumers only. */
-export type SessionBindingAdapterV2 = SessionBindingAdapter & {
-  version: 2;
-  inspectByConversationsAsync: (
-    refs: readonly ConversationRef[],
-  ) => Promise<SessionBindingSelectionSnapshot>;
-  touchAsync: (bindingId: string, at?: number) => Promise<void>;
-  /** Rechecks the original owner after awaited work and before accepting mutations. */
-  assertCurrent: () => void;
-  listBySessionAsync: (targetSessionKey: string) => Promise<SessionBindingRecord[]>;
-  inspectByConversationAsync: (ref: ConversationRef) => Promise<SessionBindingRecord | null>;
-  resolveByConversationAsync: (ref: ConversationRef) => Promise<SessionBindingRecord | null>;
 };
 
 function isAsyncAdapter(adapter: SessionBindingAdapter): adapter is SessionBindingAdapterV2 {
@@ -169,15 +128,14 @@ type NativeCapableSessionBindingAdapter = (SessionBindingAdapter | SessionBindin
   NativeSessionBindingReads;
 
 type SessionBindingAdapterRegistration = {
-  adapter: SessionBindingAdapter;
-  normalizedAdapter: NativeCapableSessionBindingAdapter;
+  adapter: NativeCapableSessionBindingAdapter;
 };
 
 const ADAPTERS_BY_CHANNEL_ACCOUNT = resolveGlobalMap<string, SessionBindingAdapterRegistration[]>(
   SESSION_BINDING_ADAPTERS_KEY,
 );
 
-/** @deprecated Use registerSessionBindingAdapterV2; removed in the next Plugin SDK major. */
+/** @deprecated Use registerSessionBindingAdapterV2; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): void {
   warnPluginSdkDeprecation({
     family: "conversation-bindings",
@@ -189,19 +147,11 @@ export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): v
 }
 
 function registerAdapter(adapter: SessionBindingAdapter | SessionBindingAdapterV2): void {
-  const normalizedAdapter: NativeCapableSessionBindingAdapter = {
-    ...adapter,
-    ...normalizeConversationRef({
-      channel: adapter.channel,
-      accountId: adapter.accountId,
-      conversationId: "unused",
-    }),
-  };
-  const key = buildChannelAccountKey(normalizedAdapter);
+  const key = buildChannelAccountKey(adapter);
   // Registrations are stacked so duplicate module graphs can temporarily
   // coexist and unregister without tearing down the active replacement.
   const registrations = ADAPTERS_BY_CHANNEL_ACCOUNT.get(key) ?? [];
-  registrations.push({ adapter, normalizedAdapter });
+  registrations.push({ adapter });
   ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, registrations);
 }
 
@@ -235,16 +185,13 @@ export function unregisterSessionBindingAdapter(params: {
 function resolveAdapterForChannelAccount(
   params: SessionBindingScope,
 ): NativeCapableSessionBindingAdapter | null {
-  return (
-    ADAPTERS_BY_CHANNEL_ACCOUNT.get(buildChannelAccountKey(params))?.at(-1)?.normalizedAdapter ??
-    null
-  );
+  return ADAPTERS_BY_CHANNEL_ACCOUNT.get(buildChannelAccountKey(params))?.at(-1)?.adapter ?? null;
 }
 
 /** Revalidates the exact registration, including its original adapter's retained callbacks. */
 export function isSessionBindingAdapterCurrent(adapter: SessionBindingAdapter): boolean {
   const registration = ADAPTERS_BY_CHANNEL_ACCOUNT.get(buildChannelAccountKey(adapter))?.at(-1);
-  return registration?.adapter === adapter || registration?.normalizedAdapter === adapter;
+  return registration?.adapter === adapter;
 }
 
 function assertAdapterSelectionCurrent(
@@ -261,7 +208,6 @@ function assertAdapterSelectionCurrent(
     throw new SessionBindingError(
       "BINDING_ADAPTER_UNAVAILABLE",
       `Session binding owner changed for ${ref.channel}:${ref.accountId}`,
-      { channel: ref.channel, accountId: ref.accountId },
     );
   }
 }
@@ -291,7 +237,7 @@ function getActiveRegisteredAdapters(
     return adapter ? [adapter] : [];
   }
   return [...ADAPTERS_BY_CHANNEL_ACCOUNT.values()].flatMap(
-    (registrations) => registrations.at(-1)?.normalizedAdapter ?? [],
+    (registrations) => registrations.at(-1)?.adapter ?? [],
   );
 }
 
@@ -368,7 +314,7 @@ export async function listSessionBindingsBySessionAsync(
   );
 }
 
-/** @deprecated Use inspectSessionBindingByConversationAsync; removed in the next Plugin SDK major. */
+/** @deprecated Use inspectSessionBindingByConversationAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function inspectSessionBindingByConversation(
   ref: ConversationRef,
 ): SessionBindingInspection {
@@ -382,7 +328,7 @@ export function inspectSessionBindingByConversation(
 }
 
 /** One synchronous owner view per phase; no selection survives a wait or a later grant. */
-export function inspectSessionBindingsByConversations(
+function inspectSessionBindingsByConversations(
   refs: readonly ConversationRef[],
 ): SessionBindingInspection[] {
   const nativeRefs: ConversationRef[] = [];
@@ -428,6 +374,16 @@ export function inspectSessionBindingsByConversations(
   });
   const records = inspectCurrentConversationBindingRecords(nativeRefs);
   return selections.map((select) => select(records));
+}
+
+/** Prepares worker-backed binding facts without transferring adapter-registry ownership. */
+export function prepareSessionBindingInspections(refs: readonly ConversationRef[]) {
+  return prepareSessionBindingSelection(refs, {
+    resolveAdapterForChannelAccount,
+    assertAdapterSelectionCurrent,
+    isAsyncAdapter,
+    availableBindingInspection,
+  });
 }
 
 function availableBindingInspection(
@@ -538,10 +494,6 @@ const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
   bind: async (input) => {
     const assertCurrent = input.assertCurrent;
     const normalizedConversation = normalizeConversationRef(input.conversation);
-    const scope = {
-      channel: normalizedConversation.channel,
-      accountId: normalizedConversation.accountId,
-    };
     const adapter = resolveAdapterForChannelAccount(normalizedConversation);
     const genericCapabilities = adapter
       ? null
@@ -550,7 +502,6 @@ const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
       throw new SessionBindingError(
         adapter ? "BINDING_CAPABILITY_UNSUPPORTED" : "BINDING_ADAPTER_UNAVAILABLE",
         `Session binding adapter ${adapter ? "does not support binding" : "unavailable"} for ${normalizedConversation.channel}:${normalizedConversation.accountId}`,
-        scope,
       );
     }
     const placement =
@@ -563,7 +514,6 @@ const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
       throw new SessionBindingError(
         "BINDING_CAPABILITY_UNSUPPORTED",
         `Session binding placement "${placement}" is not supported for ${normalizedConversation.channel}:${normalizedConversation.accountId}`,
-        { ...scope, placement },
       );
     }
     const assertBindingCurrent = () => {
@@ -584,7 +534,6 @@ const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
       throw new SessionBindingError(
         "BINDING_CREATE_FAILED",
         "Session binding adapter failed to bind target conversation",
-        { ...scope, placement },
       );
     }
     return bound;
@@ -596,6 +545,7 @@ const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
       : (getGenericCurrentConversationBindingCapabilities(params) ??
           resolveAdapterCapabilities(null));
   },
+  /** @deprecated Use listBySessionAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   listBySession: (targetSessionKey) => {
     warnPluginSdkDeprecation({
       family: "conversation-bindings",
@@ -614,6 +564,7 @@ const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
     results.push(...listGenericCurrentConversationBindingsBySession(key));
     return dedupeBindings(results).filter((record) => routableBinding(record));
   },
+  /** @deprecated Use resolveByConversationAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   resolveByConversation: (ref) => {
     warnPluginSdkDeprecation({
       family: "conversation-bindings",
@@ -649,6 +600,7 @@ const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
     assertAdapterSelectionCurrent(normalized, adapter);
     return routableBinding(binding);
   },
+  /** @deprecated Use touchAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   touch: (bindingId, at, scope) => {
     warnPluginSdkDeprecation({
       family: "conversation-bindings",

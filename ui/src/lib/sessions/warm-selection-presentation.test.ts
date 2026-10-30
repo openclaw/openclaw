@@ -23,6 +23,7 @@ afterEach(async () => {
 });
 const mainQuery = {
   agentId: "main",
+  rowMode: "sidebar" as const,
   includeDerivedTitles: true,
   includeLastMessage: true,
   force: true,
@@ -31,6 +32,7 @@ const mainQuery = {
 // Hold the returning agent's RPC so assertions cannot pass through network revalidation.
 async function createWarmSelectionHarness(holdObserver = false) {
   const pending = createDeferred<SessionsListResult>();
+  const heldMainReadStarted = createDeferred();
   const observer = createDeferred<{ subscribed: boolean }>();
   let holdMain = false;
   let selectedId = "main";
@@ -63,7 +65,11 @@ async function createWarmSelectionHarness(holdObserver = false) {
     if (typeof agentId !== "string") {
       throw new Error("Session query has no agent owner");
     }
-    return holdMain && agentId === "main" ? pending.promise : result(agentId);
+    if (holdMain && agentId === "main") {
+      heldMainReadStarted.resolve();
+      return pending.promise;
+    }
+    return result(agentId);
   });
   const client = createTestGatewayClient(request);
   const harness = createGatewayHarness(client);
@@ -90,6 +96,7 @@ async function createWarmSelectionHarness(holdObserver = false) {
     ...harness,
     sessions,
     request,
+    heldMainReadStarted: heldMainReadStarted.promise,
     refuseObserver: () => observer.resolve({ subscribed: false }),
     result,
     select(agentId: string) {
@@ -173,7 +180,8 @@ it.each([
           expectedSessionId: "main-incarnation",
         }),
       );
-      await vi.advanceTimersByTimeAsync(0);
+      // The delete promise waits on this held read; its start proves confirmation.
+      await h.heldMainReadStarted;
       expect(h.sessions.deletionState("agent:main:main", "main", "main-incarnation")).toBe(
         "confirmed",
       );

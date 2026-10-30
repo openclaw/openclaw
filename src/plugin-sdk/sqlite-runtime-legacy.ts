@@ -19,30 +19,30 @@ const legacy = {
     "Native SQL and callbacks retain their current completion and transaction ordering.",
 } as const;
 
-/** @deprecated Writable runtime handles use openOpenClawAgentSqliteWorkerStoreV2; removed in the next Plugin SDK major. Explicit readOnly inspection remains supported. */
-function openNodeSqliteDatabaseLegacy(...args: Parameters<typeof openNativeDatabase>) {
+/** @deprecated Writable runtime handles use openOpenClawAgentSqliteWorkerStoreV2; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. Explicit readOnly inspection remains supported. */
+function sdkOpenNodeSqliteDatabase(...args: Parameters<typeof openNativeDatabase>) {
   if (!args[1]?.readOnly) {
     warnPluginSdkDeprecation({ ...legacy, method: "sqlite-runtime.openNodeSqliteDatabase" });
   }
   return openNativeDatabase(...args);
 }
 
-/** @deprecated Use openOpenClawAgentSqliteWorkerStoreV2; removed in the next Plugin SDK major. */
-function openOpenClawAgentDatabaseLegacy(
+/** @deprecated Use openOpenClawAgentSqliteWorkerStoreV2; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
+function sdkOpenOpenClawAgentDatabase(
   ...args: Parameters<typeof agents.openOpenClawAgentDatabase>
 ) {
   warnPluginSdkDeprecation({ ...legacy, method: "sqlite-runtime.openOpenClawAgentDatabase" });
   return agents.openOpenClawAgentDatabase(...args);
 }
 
-/** @deprecated Use openOpenClawAgentSqliteWorkerStoreV2; removed in the next Plugin SDK major. */
-function borrowOpenClawAgentDatabaseLegacy(options: OpenClawAgentDatabaseOptions) {
+/** @deprecated Use openOpenClawAgentSqliteWorkerStoreV2; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
+function sdkBorrowOpenClawAgentDatabase(options: OpenClawAgentDatabaseOptions) {
   warnPluginSdkDeprecation({ ...legacy, method: "sqlite-runtime.borrowOpenClawAgentDatabase" });
   return agents.borrowOpenClawAgentDatabase(options);
 }
 
-/** @deprecated Use openOpenClawAgentSqliteWorkerStoreV2; callbacks stay on the host and are removed in the next Plugin SDK major. */
-function withOpenClawAgentDatabaseAsyncLegacy<T>(
+/** @deprecated Use openOpenClawAgentSqliteWorkerStoreV2; callbacks stay on the host and are removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
+function sdkWithOpenClawAgentDatabaseAsync<T>(
   options: OpenClawAgentDatabaseOptions,
   operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
   assertCurrent?: () => void,
@@ -52,22 +52,8 @@ function withOpenClawAgentDatabaseAsyncLegacy<T>(
   return agents.withOpenClawAgentDatabaseAsync(options, operation, assertCurrent, signal);
 }
 
-/** @deprecated Use openOpenClawAgentSqliteWorkerStoreV2; callbacks stay on the host and are removed in the next Plugin SDK major. */
-function withOpenClawAgentDatabaseRuntimeLegacy<T>(
-  options: OpenClawAgentDatabaseOptions,
-  operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
-  assertCurrent?: () => void,
-  signal?: AbortSignal,
-): Promise<T> {
-  warnPluginSdkDeprecation({
-    ...legacy,
-    method: "sqlite-runtime.withOpenClawAgentDatabaseRuntime",
-  });
-  return agents.withOpenClawAgentDatabaseRuntime(options, operation, assertCurrent, signal);
-}
-
-/** @deprecated Use openOpenClawAgentSqliteWorkerStoreV2; callbacks stay on the host and are removed in the next Plugin SDK major. */
-function withOpenClawAgentDatabaseWriteLegacy<T>(
+/** @deprecated Use openOpenClawAgentSqliteWorkerStoreV2; callbacks stay on the host and are removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
+function sdkWithOpenClawAgentDatabaseWrite<T>(
   options: OpenClawAgentDatabaseOptions,
   operation: (database: OpenClawAgentDatabase) => T,
   expectedDatabase?: DatabaseSync,
@@ -77,8 +63,8 @@ function withOpenClawAgentDatabaseWriteLegacy<T>(
   return withNativeWrite(options, operation, expectedDatabase, signal);
 }
 
-/** @deprecated Use openOpenClawAgentSqliteWorkerStoreV2; native admission callbacks are removed in the next Plugin SDK major. */
-function runOpenClawAgentWriteAdmissionLegacy<T>(
+/** @deprecated Use openOpenClawAgentSqliteWorkerStoreV2; native admission callbacks are removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
+function sdkRunOpenClawAgentWriteAdmission<T>(
   options: OpenClawAgentDatabaseOptions,
   run: Parameters<typeof runNativeAdmission<T>>[1],
   reentrant?: boolean,
@@ -89,14 +75,14 @@ function runOpenClawAgentWriteAdmissionLegacy<T>(
   return runNativeAdmission(options, run, reentrant, timing, signal);
 }
 
-/** @deprecated Use sqlite-worker-runtime.getNodeSqliteKysely inside a worker backend; removed in the next Plugin SDK major. */
-function getNodeSqliteKyselyLegacy<Database>(database: DatabaseSync): Kysely<Database> {
+/** @deprecated Use sqlite-worker-runtime.getNodeSqliteKysely inside a worker backend; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
+function sdkGetNodeSqliteKysely<Database>(database: DatabaseSync): Kysely<Database> {
   warnPluginSdkDeprecation({ ...legacy, method: "sqlite-runtime.getNodeSqliteKysely" });
   return queries.getNodeSqliteKysely<Database>(database);
 }
 
-/** @deprecated Use sqlite-worker-runtime.executeSqliteQuerySync inside a worker backend; removed in the next Plugin SDK major. */
-function executeSqliteQuerySyncLegacy<Row>(
+/** @deprecated Use sqlite-worker-runtime.executeSqliteQuerySync inside a worker backend; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
+function sdkExecuteSqliteQuerySync<Row>(
   database: DatabaseSync,
   query: Compilable<Row>,
 ): QueryResult<Row> {
@@ -104,8 +90,8 @@ function executeSqliteQuerySyncLegacy<Row>(
   return queries.executeSqliteQuerySync(database, query);
 }
 
-/** @deprecated Use sqlite-worker-runtime.executeSqliteQueryTakeFirstSync inside a worker backend; removed in the next Plugin SDK major. */
-function executeSqliteQueryTakeFirstSyncLegacy<Row>(
+/** @deprecated Use sqlite-worker-runtime.executeSqliteQueryTakeFirstSync inside a worker backend; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
+function sdkExecuteSqliteQueryTakeFirstSync<Row>(
   database: DatabaseSync,
   query: Compilable<Row>,
 ): Row | undefined {
@@ -113,8 +99,8 @@ function executeSqliteQueryTakeFirstSyncLegacy<Row>(
   return queries.executeSqliteQueryTakeFirstSync(database, query);
 }
 
-/** @deprecated Use sqlite-worker-runtime.iterateSqliteQuerySync inside a worker backend; removed in the next Plugin SDK major. */
-function iterateSqliteQuerySyncLegacy<Row>(
+/** @deprecated Use sqlite-worker-runtime.iterateSqliteQuerySync inside a worker backend; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
+function sdkIterateSqliteQuerySync<Row>(
   database: DatabaseSync,
   query: Compilable<Row>,
 ): IterableIterator<Row> {
@@ -122,20 +108,17 @@ function iterateSqliteQuerySyncLegacy<Row>(
   return queries.iterateSqliteQuerySync(database, query);
 }
 
-/** @deprecated Use sqlite-worker-runtime.prepareSqliteQuerySync inside a worker backend; removed in the next Plugin SDK major. */
-function prepareSqliteQuerySyncLegacy<Params, Row = unknown>(
+/** @deprecated Use sqlite-worker-runtime.prepareSqliteQuerySync inside a worker backend; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
+function sdkPrepareSqliteQuerySync<Params, Row = unknown>(
   database: DatabaseSync,
   build: Parameters<typeof queries.prepareSqliteQuerySync<Params, Row>>[1],
 ): (params: Params) => QueryResult<Row> {
-  const execute = queries.prepareSqliteQuerySync(database, build);
-  return (params) => {
-    warnPluginSdkDeprecation({ ...legacy, method: "sqlite-runtime.prepareSqliteQuerySync" });
-    return execute(params);
-  };
+  warnPluginSdkDeprecation({ ...legacy, method: "sqlite-runtime.prepareSqliteQuerySync" });
+  return queries.prepareSqliteQuerySync(database, build);
 }
 
-/** @deprecated Use sqlite-worker-runtime.runSqliteImmediateTransactionSync inside a worker backend; removed in the next Plugin SDK major. */
-function runSqliteImmediateTransactionSyncLegacy<T>(
+/** @deprecated Use sqlite-worker-runtime.runSqliteImmediateTransactionSync inside a worker backend; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
+function sdkRunSqliteImmediateTransactionSync<T>(
   database: DatabaseSync,
   operation: () => T,
   options?: transactions.SqliteTransactionOptions,
@@ -147,8 +130,8 @@ function runSqliteImmediateTransactionSyncLegacy<T>(
   return transactions.runSqliteImmediateTransactionSync(database, operation, options);
 }
 
-/** @deprecated Use openOpenClawAgentSqliteWorkerStoreV2; native transaction callbacks are removed in the next Plugin SDK major. */
-function runSqliteImmediateTransactionLegacy<T>(
+/** @deprecated Use openOpenClawAgentSqliteWorkerStoreV2; native transaction callbacks are removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
+function sdkRunSqliteImmediateTransaction<T>(
   database: DatabaseSync,
   prepare: () => Promise<(() => T) | undefined>,
   options?: transactions.SqliteTransactionOptions,
@@ -159,18 +142,17 @@ function runSqliteImmediateTransactionLegacy<T>(
 }
 
 export {
-  openNodeSqliteDatabaseLegacy as openNodeSqliteDatabase,
-  openOpenClawAgentDatabaseLegacy as openOpenClawAgentDatabase,
-  borrowOpenClawAgentDatabaseLegacy as borrowOpenClawAgentDatabase,
-  withOpenClawAgentDatabaseAsyncLegacy as withOpenClawAgentDatabaseAsync,
-  withOpenClawAgentDatabaseRuntimeLegacy as withOpenClawAgentDatabaseRuntime,
-  withOpenClawAgentDatabaseWriteLegacy as withOpenClawAgentDatabaseWrite,
-  runOpenClawAgentWriteAdmissionLegacy as runOpenClawAgentWriteAdmission,
-  getNodeSqliteKyselyLegacy as getNodeSqliteKysely,
-  executeSqliteQuerySyncLegacy as executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSyncLegacy as executeSqliteQueryTakeFirstSync,
-  iterateSqliteQuerySyncLegacy as iterateSqliteQuerySync,
-  prepareSqliteQuerySyncLegacy as prepareSqliteQuerySync,
-  runSqliteImmediateTransactionSyncLegacy as runSqliteImmediateTransactionSync,
-  runSqliteImmediateTransactionLegacy as runSqliteImmediateTransaction,
+  sdkOpenNodeSqliteDatabase as openNodeSqliteDatabase,
+  sdkOpenOpenClawAgentDatabase as openOpenClawAgentDatabase,
+  sdkBorrowOpenClawAgentDatabase as borrowOpenClawAgentDatabase,
+  sdkWithOpenClawAgentDatabaseAsync as withOpenClawAgentDatabaseAsync,
+  sdkWithOpenClawAgentDatabaseWrite as withOpenClawAgentDatabaseWrite,
+  sdkRunOpenClawAgentWriteAdmission as runOpenClawAgentWriteAdmission,
+  sdkGetNodeSqliteKysely as getNodeSqliteKysely,
+  sdkExecuteSqliteQuerySync as executeSqliteQuerySync,
+  sdkExecuteSqliteQueryTakeFirstSync as executeSqliteQueryTakeFirstSync,
+  sdkIterateSqliteQuerySync as iterateSqliteQuerySync,
+  sdkPrepareSqliteQuerySync as prepareSqliteQuerySync,
+  sdkRunSqliteImmediateTransactionSync as runSqliteImmediateTransactionSync,
+  sdkRunSqliteImmediateTransaction as runSqliteImmediateTransaction,
 };

@@ -2,38 +2,54 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { DEFAULT_LEARN_REQUEST } from "../../skills/workshop/learn-prompt.js";
 import { WorkshopReviewNotFoundError } from "../../skills/workshop/review-undo.js";
+import { SKILL_LEARNING_METHOD_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { handleLearnCommand } from "./commands-learn.js";
+import { buildSessionCommandTestParams } from "./commands-session-params.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const undoWorkshopReview = vi.hoisted(() => vi.fn());
+const listWorkshopDrafts = vi.hoisted(() => vi.fn());
+vi.mock("../../skills/workshop/drafts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../skills/workshop/drafts.js")>()),
+  listWorkshopDrafts,
+}));
 vi.mock("../../skills/workshop/review-undo.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../skills/workshop/review-undo.js")>()),
   undoWorkshopReview,
 }));
 
-const DEFAULT_TEST_MODELS: NonNullable<OpenClawConfig["models"]> = {
-  providers: {
-    openai: {
-      baseUrl: "https://api.openai.com/v1",
-      models: [
-        {
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          reasoning: true,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128_000,
-          maxTokens: 16_384,
-          compat: { supportsTools: true },
-        },
-      ],
+const getMemoryLearnContribution = vi.hoisted(() => vi.fn());
+vi.mock("../../plugins/memory-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/memory-state.js")>()),
+  getMemoryLearnContribution,
+}));
+
+function createLearnModels(supportsTools: boolean): NonNullable<OpenClawConfig["models"]> {
+  return {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        models: [
+          {
+            id: "gpt-5.5",
+            name: "GPT-5.5",
+            reasoning: true,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128_000,
+            maxTokens: 16_384,
+            compat: { supportsTools },
+          },
+        ],
+      },
     },
-  },
-};
+  };
+}
+
+const DEFAULT_TEST_MODELS = createLearnModels(true);
 
 function buildLearnParams(
   commandBodyNormalized: string,
@@ -41,6 +57,17 @@ function buildLearnParams(
 ): HandleCommandsParams {
   const loadedConfig = createCanonicalAgentConfigFixture(cfg).config;
   return {
+    ...buildSessionCommandTestParams({
+      commandBodyNormalized,
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      senderId: "tester",
+      channel: INTERNAL_MESSAGE_CHANNEL,
+      channelId: INTERNAL_MESSAGE_CHANNEL,
+      surface: INTERNAL_MESSAGE_CHANNEL,
+      ownerList: [],
+      rawBodyNormalized: commandBodyNormalized,
+    }),
     cfg: { ...loadedConfig, models: loadedConfig.models ?? DEFAULT_TEST_MODELS },
     ctx: {
       Provider: INTERNAL_MESSAGE_CHANNEL,
@@ -53,74 +80,44 @@ function buildLearnParams(
       BodyForAgent: commandBodyNormalized,
       BodyStripped: commandBodyNormalized,
     },
-    command: {
-      commandBodyNormalized,
-      isAuthorizedSender: true,
-      senderIsOwner: true,
-      senderId: "tester",
-      channel: INTERNAL_MESSAGE_CHANNEL,
-      channelId: INTERNAL_MESSAGE_CHANNEL,
-      surface: INTERNAL_MESSAGE_CHANNEL,
-      ownerList: [],
-      rawBodyNormalized: commandBodyNormalized,
-    },
     directives: {},
-    elevated: { enabled: true, allowed: true, failures: [] },
-    agentId: "main",
     sessionKey: "agent:main:webchat:test",
-    workspaceDir: "/tmp",
-    provider: "openai",
     model: "gpt-5.5",
-    contextTokens: 0,
-    defaultGroupActivation: () => "mention",
-    resolvedVerboseLevel: "off",
-    resolvedReasoningLevel: "off",
-    resolveDefaultThinkingLevel: async () => undefined,
-    isGroup: false,
   } as unknown as HandleCommandsParams;
 }
 
-afterEach(() => cliBackendsTesting.resetDepsForTest());
+afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
+  getMemoryLearnContribution.mockReset();
+});
 
 describe("learn command", () => {
-  it.each([
-    { agentId: "direct", shouldContinue: true },
-    { agentId: "isolated", shouldContinue: false },
-  ])(
-    "uses $agentId workshop availability in a global session",
-    async ({ agentId, shouldContinue }) => {
-      const params = buildLearnParams("/learn", {
-        session: { scope: "global" },
-        agents: {
-          entries: {
-            direct: { sandbox: { mode: "off" } },
-            isolated: { sandbox: { mode: "all" } },
-          },
+  it("uses isolated workshop availability in a global session", async () => {
+    const params = buildLearnParams("/learn", {
+      session: { scope: "global" },
+      agents: {
+        entries: {
+          direct: { sandbox: { mode: "off" } },
+          isolated: { sandbox: { mode: "all" } },
         },
-      });
-      params.agentId = agentId;
-      params.sessionKey = "global";
+      },
+    });
+    params.agentId = "isolated";
+    params.sessionKey = "global";
 
-      const result = await handleLearnCommand(params, true);
+    const result = await handleLearnCommand(params, true);
 
-      expect(result?.shouldContinue).toBe(shouldContinue);
-      if (shouldContinue) {
-        expect(params.ctx.BodyForAgent).toContain(DEFAULT_LEARN_REQUEST);
-        expect(params.command.commandBodyNormalized).toBe(params.ctx.BodyForAgent);
-        expect(params.ctx.BodyForCommands).toBe(params.ctx.BodyForAgent);
-      } else {
-        expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
-        expect(params.ctx.BodyForAgent).toBe("/learn");
-      }
-    },
-  );
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
+    expect(params.ctx.BodyForAgent).toBe("/learn");
+  });
 
   it.each([
-    { mode: "all", denyWorkshop: false, shouldContinue: false },
-    { mode: "off", denyWorkshop: true, shouldContinue: false },
+    { mode: "all", denyWorkshop: false },
+    { mode: "off", denyWorkshop: true },
   ] as const)(
     "preserves an independent policy owner with sandbox mode $mode and workshop denied $denyWorkshop",
-    async ({ mode, denyWorkshop, shouldContinue }) => {
+    async ({ mode, denyWorkshop }) => {
       const params = buildLearnParams("/learn", {
         agents: {
           entries: {
@@ -136,12 +133,8 @@ describe("learn command", () => {
 
       const result = await handleLearnCommand(params, true);
 
-      expect(result?.shouldContinue).toBe(shouldContinue);
-      if (shouldContinue) {
-        expect(params.ctx.BodyForAgent).toContain(DEFAULT_LEARN_REQUEST);
-      } else {
-        expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
-      }
+      expect(result?.shouldContinue).toBe(false);
+      expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
     },
   );
 
@@ -153,6 +146,54 @@ describe("learn command", () => {
     const result = await handleLearnCommand(params, true);
 
     expect(result?.shouldContinue).toBe(true);
+  });
+
+  describe("/learn drafts", () => {
+    const draft = (id: string, skillName: string) => ({ id, skillName, createdAtMs: 1, files: [] });
+
+    it("answers without a model turn when no draft matches", async () => {
+      listWorkshopDrafts.mockResolvedValue([]);
+      const params = buildLearnParams("/learn drafts");
+
+      const result = await handleLearnCommand(params, true);
+
+      expect(result?.shouldContinue).toBe(false);
+      expect(result?.reply?.text).toBe("No Skill Workshop drafts are waiting for review.");
+    });
+
+    it.each([
+      {
+        command: "/learn drafts deploy keep only the rollback step",
+        listed: [{ id: "deploy-1", skill: "deploy" }],
+        focus: "keep only the rollback step",
+      },
+      {
+        command: "/learn drafts; only the deploy one",
+        listed: [
+          { id: "deploy-1", skill: "deploy" },
+          { id: "notes-1", skill: "notes" },
+        ],
+        focus: "only the deploy one",
+      },
+    ])("selects the drafts for $command", async ({ command, listed, focus }) => {
+      listWorkshopDrafts.mockResolvedValue([
+        draft("deploy-1", "deploy"),
+        draft("notes-1", "notes"),
+      ]);
+      const params = buildLearnParams(command);
+
+      const result = await handleLearnCommand(params, true);
+
+      expect(result?.shouldContinue).toBe(true);
+      expect(params.ctx.BodyForAgent).toContain(
+        `Drafts to review (JSON): ${JSON.stringify(listed)}.`,
+      );
+      expect(params.ctx.BodyForAgent).toContain(
+        `User focus (JSON string): ${JSON.stringify(focus)}`,
+      );
+      expect(params.ctx.BodyForAgent).toContain("Do not save anything yet.");
+      expect(params.ctx.BodyForAgent).toContain(SKILL_LEARNING_METHOD_PROMPT);
+    });
   });
 
   it("keeps the wildcard sender policy for non-owner WebChat", async () => {
@@ -179,31 +220,91 @@ describe("learn command", () => {
 
   it("replies without continuing when the selected model disables tools", async () => {
     const params = buildLearnParams("/learn", {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            models: [
-              {
-                id: "gpt-5.5",
-                name: "GPT-5.5",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 128_000,
-                maxTokens: 16_384,
-                compat: { supportsTools: false },
-              },
-            ],
-          },
-        },
-      },
+      models: createLearnModels(false),
     });
 
     const result = await handleLearnCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
+  });
+
+  describe("memory provider learning", () => {
+    const memoryLearn = () => {
+      const buildGuidance = vi.fn(({ availableTools }: { availableTools: Set<string> }) =>
+        availableTools.has("memory_save") ? ["Memory: follow the provider learning skill."] : [],
+      );
+      getMemoryLearnContribution.mockReturnValue({
+        pluginId: "acme-memory",
+        toolNames: ["memory_save", "memory_search"],
+        buildGuidance,
+      });
+      return buildGuidance;
+    };
+
+    it("routes lessons between skills and memory when both are available", async () => {
+      memoryLearn();
+      const params = buildLearnParams("/learn trajectories/");
+
+      const result = await handleLearnCommand(params, true);
+
+      expect(result?.shouldContinue).toBe(true);
+      expect(params.ctx.BodyForAgent).toContain("Route each lesson to one medium.");
+      expect(params.ctx.BodyForAgent).toContain("Memory: follow the provider learning skill.");
+      expect(params.ctx.BodyForAgent).toContain("Write skills with skill_workshop");
+      expect(params.ctx.BodyForAgent).toContain(SKILL_LEARNING_METHOD_PROMPT);
+      expect(params.ctx.BodyForAgent).not.toContain("Make at most one change.");
+    });
+
+    it("learns into memory alone when policy hides skill_workshop", async () => {
+      const buildGuidance = memoryLearn();
+      const params = buildLearnParams("/learn", {
+        tools: { deny: ["skill_workshop", "memory_search"] },
+      });
+
+      const result = await handleLearnCommand(params, true);
+
+      expect(result?.shouldContinue).toBe(true);
+      expect(buildGuidance).toHaveBeenCalledWith({ availableTools: new Set(["memory_save"]) });
+      expect(params.ctx.BodyForAgent).toContain("The user asked you to learn.");
+      expect(params.ctx.BodyForAgent).toContain("Learn what is worth keeping");
+      expect(params.ctx.BodyForAgent).not.toContain("skill_workshop");
+    });
+
+    it("honors plugin-ID and group:plugins policy entries for memory learning tools", async () => {
+      const buildGuidance = memoryLearn();
+      const allowed = buildLearnParams("/learn", { tools: { allow: ["acme-memory"] } });
+
+      expect((await handleLearnCommand(allowed, true))?.shouldContinue).toBe(true);
+      expect(buildGuidance).toHaveBeenCalledWith({
+        availableTools: new Set(["memory_save", "memory_search"]),
+      });
+
+      buildGuidance.mockClear();
+      for (const deny of [["acme-memory"], ["group:plugins"]]) {
+        const denied = buildLearnParams("/learn", { tools: { deny } });
+        const result = await handleLearnCommand(denied, true);
+        expect(denied.ctx.BodyForAgent).not.toContain(
+          "Memory: follow the provider learning skill.",
+        );
+        expect(result?.shouldContinue).toBe(true);
+      }
+      expect(buildGuidance).not.toHaveBeenCalled();
+    });
+
+    it("names both media when policy hides both", async () => {
+      memoryLearn();
+      const params = buildLearnParams("/learn", {
+        tools: { deny: ["skill_workshop", "memory_save"] },
+      });
+
+      const result = await handleLearnCommand(params, true);
+
+      expect(result?.shouldContinue).toBe(false);
+      expect(result?.reply?.text).toContain(
+        "neither the skill_workshop tool nor the memory plugin's learning tools",
+      );
+    });
   });
 
   describe("undo", () => {
@@ -249,16 +350,6 @@ describe("learn command", () => {
 
       expect((await undo())?.reply?.text).toBe("That skill change was already undone.");
       expect((await undo())?.reply?.text).toBe("No skill change found for that id.");
-    });
-
-    it("keeps any other undo text a learn request", async () => {
-      const params = buildLearnParams("/learn undo the deploy notes");
-
-      const result = await handleLearnCommand(params, true);
-
-      expect(result).toEqual({ shouldContinue: true });
-      expect(params.ctx.BodyForAgent).toContain("undo the deploy notes");
-      expect(undoWorkshopReview).not.toHaveBeenCalled();
     });
 
     it("refuses senders without owner or admin authority", async () => {

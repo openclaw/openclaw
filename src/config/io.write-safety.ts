@@ -7,6 +7,7 @@ import {
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isMissingPathError } from "../infra/errors.js";
+import { readExistingStateRootMode } from "../infra/private-dir-mode.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isRecord } from "../utils.js";
 import { hashConfigIncludeRaw } from "./includes.js";
@@ -15,6 +16,7 @@ import { hashConfigRaw, parseConfigJson5 } from "./io.read-helpers.js";
 import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import type { ConfigWriteOptions } from "./io.types.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
+import { resolveStateDir } from "./paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { createConfigWriteAuthorityGuard } from "./write-authority.js";
 
@@ -140,6 +142,47 @@ export function captureConfigFileWritePathProof(
   const assertCurrent = () => assertConfigFileWritePathSnapshot(snapshot, ioFs);
   assertCurrent();
   return { path: filePath, snapshot, assertCurrent };
+}
+
+/** Resolve the operator-selected directory, retaining its logical-path identity. */
+export function captureConfigRootWriteTarget(filePath: string, ioFs: typeof fs) {
+  if (ioFs.lstatSync(filePath, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    throw new ConfigMutationConflictError(
+      `Config writes need a regular file, but ${filePath} is a symlink. Point OPENCLAW_CONFIG_PATH at the real file, or replace the symlink with that file.`,
+      { retryable: false },
+    );
+  }
+  const directory = path.dirname(filePath);
+  let realDirectory: string;
+  try {
+    realDirectory = ioFs.realpathSync(directory);
+  } catch (error) {
+    if (!isMissingPathError(error)) {
+      throw error;
+    }
+    realDirectory = resolvePathViaExistingAncestorSync(directory);
+  }
+  // Resolve the parent only; a config-file symlink must not redirect publication.
+  const targetPath = path.join(realDirectory, path.basename(filePath));
+  return {
+    path: targetPath,
+    pathProof: captureConfigFileWritePathProof(filePath, targetPath, ioFs),
+  };
+}
+
+export function resolveConfigWriteDirectory(
+  configPath: string,
+  publicationPath: string,
+  deps: Pick<NormalizedConfigIoDeps, "env" | "homedir"> & { logger: Pick<typeof console, "warn"> },
+) {
+  const stateRoot = resolveStateDir(deps.env, deps.homedir);
+  return {
+    path:
+      path.resolve(path.dirname(configPath)) === path.resolve(stateRoot)
+        ? path.dirname(publicationPath)
+        : stateRoot,
+    warn: (message: string) => deps.logger.warn(message),
+  };
 }
 
 type ConfigFileWriteIdentity = Pick<fs.BigIntStats, "dev" | "ino">;
@@ -277,7 +320,7 @@ export function createConfigFileWriteGuard(
       assertOwner();
       publication?.targetPathProof?.assertCurrent();
     };
-    assertRollbackOwner();
+    assertOwner();
     assertPublishedIdentity();
     if (publishedIdentity === undefined) {
       throw new ConfigMutationConflictError("config write has no publication to roll back", {
@@ -463,7 +506,13 @@ export async function rollbackConfigFileWriteIfUnchanged(params: {
       replaceFileAtomicSync({
         filePath: params.configPath,
         content: previousRaw,
-        dirMode: 0o700,
+        dirMode: params.stateDirectory
+          ? (readExistingStateRootMode(
+              path.dirname(params.configPath),
+              params.stateDirectory.path,
+              params.fsModule,
+            ) ?? 0o700)
+          : 0o700,
         mode: 0o600,
         copyFallbackOnPermissionError: true,
         syncTempFile: params.durable,
@@ -568,19 +617,24 @@ export function formatConfigArtifactTimestamp(ts: string): string {
 
 export function resolveConfigSizeBaselineBytes(params: {
   raw: string | null;
-  json5: { parse: (value: string) => unknown };
   lastTouchedVersionOverride?: string;
+  env?: NodeJS.ProcessEnv;
 }): number | null {
   if (params.raw === null) {
     return null;
   }
   const rawBytes = Buffer.byteLength(params.raw, "utf-8");
-  const parsed = parseConfigJson5(params.raw, params.json5);
+  const parsed = parseConfigJson5(params.raw);
   if (!parsed.ok || !isRecord(parsed.parsed)) {
     return rawBytes;
   }
   const canonical = JSON.stringify(
-    stampConfigWriteMetadata(parsed.parsed as OpenClawConfig, params.lastTouchedVersionOverride),
+    stampConfigWriteMetadata(
+      parsed.parsed as OpenClawConfig,
+      params.lastTouchedVersionOverride,
+      undefined,
+      params.env,
+    ),
     null,
     2,
   )

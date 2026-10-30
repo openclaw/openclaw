@@ -17,23 +17,70 @@ vi.mock("@openclaw/fs-safe/file-lock", async (importOriginal) => ({
 const actual = await vi.importActual<typeof import("@openclaw/fs-safe/file-lock")>(
   "@openclaw/fs-safe/file-lock",
 );
+const acquire = vi.mocked(fileLock.acquireFileLock);
+const callback = vi.fn();
+let root: string;
+let ownerPath: string;
+let controller: AbortController;
 beforeEach(() => {
-  vi.mocked(fileLock.acquireFileLock).mockReset().mockImplementation(actual.acquireFileLock);
+  acquire.mockReset().mockImplementation(actual.acquireFileLock);
+  callback.mockReset();
+  root = fs.realpathSync(fixture.createTempDir("openclaw-lock-cancel-"));
+  // Keep checkout discovery from selecting an ancestor of the temporary fixture.
+  fs.mkdirSync(path.join(root, ".git"));
+  ownerPath = path.join(resolveDistArtifactLockPath(root), "owner.json");
+  controller = new AbortController();
 });
 const fixture = createFixtureLifetime();
 afterEach(async () => {
   vi.restoreAllMocks();
   await fixture.cleanup();
 });
-const createRoot = () => {
-  const root = fs.realpathSync(fixture.createTempDir("openclaw-lock-cancel-"));
-  // Keep checkout discovery from selecting an ancestor of the temporary fixture.
-  fs.mkdirSync(path.join(root, ".git"));
-  return root;
-};
+const readOwner = () => fs.readFileSync(ownerPath, "utf8");
+
+it("waits for an empty ownership record being published before acquiring", async () => {
+  fs.mkdirSync(path.dirname(ownerPath), { recursive: true });
+  fs.writeFileSync(ownerPath, "");
+  acquire.mockImplementation(async (...args) => {
+    try {
+      return await actual.acquireFileLock(...args);
+    } catch (error) {
+      // Finish the creator's release after a real contention attempt observes
+      // the empty file exposed between exclusive creation and payload write.
+      fs.unlinkSync(ownerPath);
+      acquire.mockImplementation(actual.acquireFileLock);
+      throw error;
+    }
+  });
+  await withDistArtifactOwnership(root, callback, controller.signal);
+  expect(callback).toHaveBeenCalledOnce();
+  expect(fs.existsSync(ownerPath)).toBe(false);
+});
+
+it.for([false, true])(
+  "retains an empty abandoned ownership record (unjoined=%s)",
+  async (unjoined) => {
+    fs.mkdirSync(path.dirname(ownerPath), { recursive: true });
+    fs.writeFileSync(ownerPath, "");
+    if (unjoined) {
+      fs.writeFileSync(
+        path.join(path.dirname(ownerPath), "unjoined"),
+        "Unverified child cleanup.\n",
+      );
+    } else {
+      fs.utimesSync(ownerPath, new Date(0), new Date(0));
+    }
+    await expect(
+      withDistArtifactOwnership(root, callback, controller.signal),
+    ).rejects.toMatchObject({
+      cause: { code: "file_lock_stale" },
+    });
+    expect(callback).not.toHaveBeenCalled();
+    expect(readOwner()).toBe("");
+  },
+);
 
 it("cancels an already contended same-process waiter without disturbing the owner", async () => {
-  const root = createRoot();
   const enteredOwner = createDeferred();
   const releaseOwner = createDeferred();
   const owner = withDistArtifactOwnership(root, async () => {
@@ -41,23 +88,18 @@ it("cancels an already contended same-process waiter without disturbing the owne
     await releaseOwner.promise;
   });
   await enteredOwner.promise;
-  const ownerPath = path.join(resolveDistArtifactLockPath(root), "owner.json");
-  const originalOwner = fs.readFileSync(ownerPath, "utf8");
+  const originalOwner = readOwner();
   const attempted = createDeferred();
-  const acquire = actual.acquireFileLock;
-  vi.mocked(fileLock.acquireFileLock).mockImplementation(async (...args) => {
+  acquire.mockImplementation(async (...args) => {
     try {
-      return await acquire(...args);
+      return await actual.acquireFileLock(...args);
     } catch (error) {
       // Observe a real completed contention attempt, not merely waiter startup.
       attempted.resolve();
       throw error;
     }
   });
-  const controller = new AbortController();
-  const callback = vi.fn();
-  const waiter = withDistArtifactOwnership(root, callback, controller.signal).then(
-    () => undefined,
+  const waiter = withDistArtifactOwnership(root, callback, controller.signal).catch(
     (error: unknown) => error,
   );
   try {
@@ -65,7 +107,7 @@ it("cancels an already contended same-process waiter without disturbing the owne
     controller.abort();
     expect(await waiter).toBe(controller.signal.reason);
     expect(callback).not.toHaveBeenCalled();
-    expect(fs.readFileSync(ownerPath, "utf8")).toBe(originalOwner);
+    expect(readOwner()).toBe(originalOwner);
   } finally {
     controller.abort();
     releaseOwner.resolve();
@@ -81,14 +123,11 @@ it.for([
 ])(
   "joins acquisition-race release before rejecting (direct=$direct, release fails=$fails)",
   async ({ direct, fails }) => {
-    const root = createRoot();
     const entered = createDeferred();
     const acquired = createDeferred<fileLock.FileLockHandle>();
     const releasing = createDeferred();
     const released = createDeferred();
     const failure = new Error("release failed");
-    const controller = new AbortController();
-    const callback = vi.fn();
     const release = vi.fn(async () => {
       releasing.resolve();
       await released.promise;
@@ -96,7 +135,7 @@ it.for([
         throw failure;
       }
     });
-    vi.mocked(fileLock.acquireFileLock).mockImplementation(async () => {
+    acquire.mockImplementation(async () => {
       entered.resolve();
       return await acquired.promise;
     });
@@ -129,14 +168,11 @@ it.for([
 );
 
 it("preserves an acquisition cleanup failure racing cancellation", async () => {
-  const root = createRoot();
-  const controller = new AbortController();
   const failure = new Error("acquisition cleanup failed");
-  vi.mocked(fileLock.acquireFileLock).mockImplementation(async () => {
+  acquire.mockImplementation(async () => {
     controller.abort();
     throw failure;
   });
-  const callback = vi.fn();
   await expect(withDistArtifactOwnership(root, callback, controller.signal)).rejects.toMatchObject({
     cause: failure,
     message: expect.stringContaining("filesystem error"),
@@ -145,19 +181,15 @@ it("preserves an acquisition cleanup failure racing cancellation", async () => {
 });
 
 it("does not acquire for an already cancelled waiter", async () => {
-  const acquire = vi.mocked(fileLock.acquireFileLock);
   const signal = AbortSignal.abort();
-  await expect(withDistArtifactOwnership(createRoot(), vi.fn(), signal)).rejects.toBe(
-    signal.reason,
-  );
+  await expect(withDistArtifactOwnership(root, callback, signal)).rejects.toBe(signal.reason);
   expect(acquire).not.toHaveBeenCalled();
 });
 
 it("keeps the published two-argument wait inside one native acquisition", async () => {
-  const acquire = vi.mocked(fileLock.acquireFileLock);
   const failure = Object.assign(new Error("native timeout"), { code: "file_lock_timeout" });
   acquire.mockRejectedValue(failure);
-  await expect(withDistArtifactOwnership(createRoot(), vi.fn())).rejects.toMatchObject({
+  await expect(withDistArtifactOwnership(root, callback)).rejects.toMatchObject({
     cause: failure,
   });
   expect(acquire).toHaveBeenCalledOnce();

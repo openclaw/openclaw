@@ -1,3 +1,4 @@
+import { communicationEntryBinding } from "../../sessions/communication-admission.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { bindPreparedSessionEntryPublication } from "./session-accessor.sqlite-entry-cache-publication.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
@@ -18,6 +19,7 @@ export function publishSessionActorMemoryChanges(
         entry && after
           ? {
               kind: "replacement",
+              communicationBinding: communicationEntryBinding(entry),
               membership: [
                 sessionKey,
                 entry.category ?? null,

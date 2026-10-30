@@ -73,6 +73,7 @@ export const WizardStepSchema = closedObject({
   ]),
   title: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
+  progressMessage: Type.Optional(Type.String()),
   format: Type.Optional(Type.Union([Type.Literal("plain")])),
   options: Type.Optional(Type.Array(WizardStepOptionSchema)),
   initialValue: Type.Optional(Type.Unknown()),
@@ -108,6 +109,7 @@ const WizardResultFields = {
   modelActivation: Type.Optional(
     closedObject({
       modelRef: NonEmptyString,
+      modelName: Type.Optional(NonEmptyString),
       modelTarget: Type.Optional(Type.Literal("utility")),
       gatewayRestartRequired: Type.Optional(Type.Literal(true)),
     }),

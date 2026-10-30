@@ -34,7 +34,7 @@ export function supportsInferenceEnvironment(native: NodeJS.ProcessEnv): boolean
     return false;
   }
   // Reqwest prefers uppercase and has no HTTP_PROXY fallback for HTTPS. Only
-  // equivalent proxy selection and literal loopback bypasses are qualified here.
+  // equivalent proxy selection and loopback-only bypasses are qualified here.
   if ((https ?? all) !== (https ?? http ?? all)) {
     return false;
   }
@@ -42,7 +42,12 @@ export function supportsInferenceEnvironment(native: NodeJS.ProcessEnv): boolean
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
-  if (bypasses.some((entry) => !["127.0.0.1", "localhost", "::1", "[::1]"].includes(entry))) {
+  if (
+    bypasses.some(
+      (entry) =>
+        !["127.0.0.1", "localhost", "localhost.", "::1", "[::1]", "127.0.0.0/8"].includes(entry),
+    )
+  ) {
     return false;
   }
   if ((http || all) && !bypasses.includes("127.0.0.1")) {

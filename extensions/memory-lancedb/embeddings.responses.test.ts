@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { describe, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { createEmbeddings } from "./embeddings.js";
 
 const { post } = vi.hoisted(() => ({
@@ -31,45 +31,34 @@ async function embedResponse(value: unknown): Promise<number[]> {
   }
 }
 
-describe("memory-lancedb embedding responses", () => {
-  test("accepts float arrays and base64 float32 responses", async () => {
-    await expect(embedResponse([0.1, 0.2, 0.3])).resolves.toEqual([0.1, 0.2, 0.3]);
+test("accepts float arrays and base64 float32 responses", async () => {
+  await expect(embedResponse([0.1, 0.2, 0.3])).resolves.toEqual([0.1, 0.2, 0.3]);
 
-    const bytes = Buffer.alloc(2 * Float32Array.BYTES_PER_ELEMENT);
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    view.setFloat32(0, 1.25, true);
-    view.setFloat32(Float32Array.BYTES_PER_ELEMENT, -2.5, true);
+  const bytes = Buffer.alloc(2 * Float32Array.BYTES_PER_ELEMENT);
+  bytes.writeFloatLE(1.25, 0);
+  bytes.writeFloatLE(-2.5, Float32Array.BYTES_PER_ELEMENT);
+  await expect(embedResponse(bytes.toString("base64"))).resolves.toEqual([1.25, -2.5]);
+});
 
-    const decoded = await embedResponse(bytes.toString("base64"));
-    expect(decoded[0]).toBeCloseTo(1.25);
-    expect(decoded[1]).toBeCloseTo(-2.5);
-  });
-
-  test.each(
-    [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY].flatMap((coordinate) => [
-      { encoding: "float array", coordinate },
-      { encoding: "base64", coordinate },
-    ]),
-  )("rejects nonfinite $coordinate in $encoding embeddings", async ({ encoding, coordinate }) => {
+test.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+  "rejects nonfinite %s in float and base64 embeddings",
+  async (coordinate) => {
     const bytes = Buffer.alloc(Float32Array.BYTES_PER_ELEMENT);
     bytes.writeFloatLE(coordinate);
-    const vector = encoding === "base64" ? bytes.toString("base64") : [coordinate];
-    await expect(embedResponse(vector)).rejects.toThrow(
-      "Embedding response contains non-numeric values",
-    );
-  });
+    for (const vector of [[coordinate], bytes.toString("base64")]) {
+      await expect(embedResponse(vector)).rejects.toThrow(
+        "Embedding response contains non-numeric values",
+      );
+    }
+  },
+);
 
-  test("rejects malformed embedding payloads", async () => {
-    await expect(embedResponse("abc")).rejects.toThrow(
-      "Base64 embedding response has invalid byte length",
-    );
-    await expect(embedResponse("!!!!")).rejects.toThrow("Base64 embedding response is malformed");
-    await expect(embedResponse("ZE==")).rejects.toThrow("Base64 embedding response is malformed");
-    await expect(embedResponse("AQIDBE==")).rejects.toThrow(
-      "Base64 embedding response is malformed",
-    );
-    await expect(embedResponse(undefined)).rejects.toThrow(
-      "Embedding response is missing a vector",
-    );
-  });
+test.each([
+  ["abc", "Base64 embedding response has invalid byte length"],
+  ["!!!!", "Base64 embedding response is malformed"],
+  ["ZE==", "Base64 embedding response is malformed"],
+  ["AQIDBE==", "Base64 embedding response is malformed"],
+  [undefined, "Embedding response is missing a vector"],
+])("rejects malformed embedding payload %s", async (value, error) => {
+  await expect(embedResponse(value)).rejects.toThrow(error);
 });

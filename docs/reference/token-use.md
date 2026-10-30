@@ -167,6 +167,13 @@ reports a billed amount. This gives `/usage cost` and
 transcript-backed session status a stable source even after the live
 runtime state is gone.
 
+If a stream is interrupted before its final usage report, token and cost
+accounting are unavailable. Intermediate token snapshots do not count as complete
+usage, and `/status` clears the previous response's counters instead of showing
+them for the interrupted response. Usage cost summaries retain known amounts
+from completed responses and label the aggregate incomplete. A provider-reported
+terminal zero remains a measured zero; an initialized zero is not a measurement.
+
 OpenClaw keeps provider usage accounting separate from the current context
 snapshot. Provider `usage.total` can include cached input, output, and
 multiple tool-loop model calls, so it is useful for cost and telemetry but
@@ -264,7 +271,9 @@ tokens, while cache writes are billed at a higher multiplier. See Anthropic's
 prompt caching pricing for the latest rates and TTL multipliers:
 [https://platform.claude.com/docs/en/build-with-claude/prompt-caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
 
-### Example: keep 1h cache warm with heartbeat
+<a id="example-keep-1h-cache-warm-with-heartbeat" />
+
+### Example: reuse a one-hour cache
 
 ```yaml
 agents:
@@ -275,9 +284,13 @@ agents:
       "anthropic/claude-opus-4-6":
         params:
           cacheRetention: "long"
-    heartbeat:
-      every: "55m"
 ```
+
+For an existing automation that performs useful checks in the same persistent
+session, `openclaw automations edit <job-id> --every 55m` keeps its nominal
+cadence inside the one-hour window. An isolated job does not warm another
+conversation’s history. Quiet hours and busy deferrals can delay a check, and
+every turn costs tokens; compare total usage rather than assuming a cache hit.
 
 ### Example: mixed traffic with per-agent cache strategy
 
@@ -293,8 +306,6 @@ agents:
   list:
     - id: "research"
       default: true
-      heartbeat:
-        every: "55m" # keep long cache warm for deep sessions
     - id: "alerts"
       params:
         cacheRetention: "none" # avoid cache writes for bursty notifications

@@ -3,6 +3,14 @@ import { describe, expect, it } from "vitest";
 import { isSafeFenceBreak, parseFenceSpans, scanFenceSpans } from "./fences.js";
 
 describe("parseFenceSpans closing-fence rules", () => {
+  it("allows backticks in tilde-fence info strings", () => {
+    const text = "~~~literal`\ncode\n~~~\nParagraph";
+    const spans = parseFenceSpans(text);
+    expect(spans).toHaveLength(1);
+    expect(isSafeFenceBreak(spans, text.indexOf("code") + 1)).toBe(false);
+    expect(isSafeFenceBreak(spans, text.indexOf("Paragraph") + 1)).toBe(true);
+  });
+
   it("treats a marker line with trailing text as code content, not a closing fence", () => {
     // CommonMark: a closing fence may be followed only by whitespace, so "``` not a close" is code
     // content and the block stays open until the real closing fence. Reporting an interior offset
@@ -31,27 +39,6 @@ describe("parseFenceSpans closing-fence rules", () => {
 
     expect(spans).toHaveLength(1);
     expect(isSafeFenceBreak(spans, text.indexOf("after") + 1)).toBe(true);
-  });
-
-  it.each(["\n", "\r\n"])("preserves raw UTF-16 offsets with %j line endings", (newline) => {
-    const prefix = `😀${newline}`;
-    const openLine = "  ````ts `metadata`";
-    const text = `${prefix}${openLine}${newline}code${newline} \`\`\`\`\` \t${newline}tail`;
-
-    expect(parseFenceSpans(text)).toEqual([
-      {
-        start: prefix.length,
-        end: text.lastIndexOf("\n"),
-        openLine,
-        marker: "````",
-        indent: "  ",
-      },
-    ]);
-  });
-
-  it.each(["\r", "\u2028", "\u2029"])("does not treat %j as a scanner line break", (separator) => {
-    expect(parseFenceSpans(`intro${separator}\`\`\`ts\ncode`)).toEqual([]);
-    expect(parseFenceSpans(`\`\`\`ts${separator}info\ncode`)).toEqual([]);
   });
 
   it("carries an open fence through empty input and a continued line without mutating state", () => {

@@ -15,7 +15,6 @@ import {
   validatePreparedConfigWithPlugins,
   type ValidateConfigWithPluginsParams,
 } from "./validation-plugin-rules.js";
-import type { PreparedPluginSchemaValidations } from "./validation-prepared.js";
 import type {
   PreparedConfigValidationPluginMetadata,
   ValidateConfigWithPluginsResult,
@@ -32,6 +31,8 @@ export type ValidateConfigWithPluginsAsyncParams = Omit<
     config: OpenClawConfig,
   ) => Promise<PreparedConfigValidationPluginMetadata>;
 };
+
+class PluginMetadataRequired extends Error {}
 
 export function validateConfigObjectWithPlugins(
   raw: unknown,
@@ -74,33 +75,46 @@ async function validateConfigObjectWithPluginsAsyncInternal(
     migrated: cloneConfigWithResolutionFacts(prepared.migrated),
     parsedConfig: prepared.parsedConfig,
   };
-  const metadata = await loadPluginMetadataSnapshotAsync(pending.parsedConfig);
-  const strictConfig = prepareStrictValidation
-    ? cloneConfigWithResolutionFacts(pending.parsedConfig)
-    : undefined;
-  const schemaValidations: PreparedPluginSchemaValidations | undefined = strictConfig
-    ? new Map()
-    : undefined;
-  const preparedParams = { ...validationParams, pluginMetadataSnapshot: metadata };
-  const result = finishConfigObjectWithPlugins(
-    pending,
-    preparedParams,
-    true,
-    metadata.installedPluginRecordIds,
-    schemaValidations,
-  );
-  if (!result.ok || !strictConfig) {
-    return result;
+  const validate = (metadata?: PreparedConfigValidationPluginMetadata) => {
+    // Defaults normalize paths in place; a suspended attempt must not alter the source facts.
+    const parsedConfig = cloneConfigWithResolutionFacts(pending.parsedConfig);
+    const strictConfig = prepareStrictValidation
+      ? cloneConfigWithResolutionFacts(parsedConfig)
+      : undefined;
+    const preparedParams = {
+      ...validationParams,
+      pluginMetadataSnapshot: metadata,
+      loadPluginMetadataSnapshot: () => {
+        throw new PluginMetadataRequired();
+      },
+    };
+    const result = finishConfigObjectWithPlugins(
+      { ...pending, parsedConfig },
+      preparedParams,
+      true,
+      metadata?.installedPluginRecordIds,
+    );
+    if (!result.ok || !strictConfig) {
+      return result;
+    }
+    const strict = validatePreparedConfigWithPlugins(pending.migrated, strictConfig, {
+      ...preparedParams,
+      applyDefaults: false,
+      pluginValidation: "full",
+      semanticValidation: "strict",
+      installedPluginRecordIds: metadata?.installedPluginRecordIds,
+    });
+    return { ...result, strictIssues: strict.ok ? [] : strict.issues };
+  };
+  try {
+    // The rule owner requests metadata only at the first plugin-dependent decision.
+    return validate();
+  } catch (error) {
+    if (!(error instanceof PluginMetadataRequired)) {
+      throw error;
+    }
   }
-  const strict = validatePreparedConfigWithPlugins(pending.migrated, strictConfig, {
-    ...preparedParams,
-    applyDefaults: false,
-    pluginValidation: "full",
-    semanticValidation: "strict",
-    installedPluginRecordIds: metadata.installedPluginRecordIds,
-    schemaValidations,
-  });
-  return { ...result, strictIssues: strict.ok ? [] : strict.issues };
+  return validate(await loadPluginMetadataSnapshotAsync(pending.parsedConfig));
 }
 
 export function validateConfigObjectRawWithPlugins(
@@ -155,13 +169,11 @@ function finishConfigObjectWithPlugins(
   params: ValidateConfigWithPluginsParams | undefined,
   applyDefaults: boolean,
   installedPluginRecordIds?: ReadonlySet<string>,
-  schemaValidations?: PreparedPluginSchemaValidations,
 ): ValidateConfigWithPluginsResult {
   return validatePreparedConfigWithPlugins(migrated, parsedConfig, {
     ...params,
     applyDefaults,
     installedPluginRecordIds,
-    schemaValidations,
     pluginValidation: params?.pluginValidation ?? "full",
     semanticValidation: params?.semanticValidation ?? "runtime",
   });
@@ -184,11 +196,9 @@ export function materializeLegacyAgentOwnershipForActiveChannelsResult(
     ...(manifestRecords ? { manifestRecords } : {}),
   });
   return materializeLegacyDefaultAgentRoles(config, legacyDefaultAgentId, {
+    ...options,
     ambientChannelIds,
     env,
-    homedir: options?.homedir,
-    materializeSessionStore: options?.materializeSessionStore,
-    materializeWorkspace: options?.materializeWorkspace,
   });
 }
 
@@ -203,10 +213,8 @@ export async function materializeLegacyAgentOwnershipForActiveChannelsResultAsyn
     ...(manifestRecords ? { manifestRecords } : {}),
   });
   return materializeLegacyDefaultAgentRoles(config, legacyDefaultAgentId, {
+    ...options,
     ambientChannelIds,
     env,
-    homedir: options?.homedir,
-    materializeSessionStore: options?.materializeSessionStore,
-    materializeWorkspace: options?.materializeWorkspace,
   });
 }

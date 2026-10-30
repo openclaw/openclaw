@@ -28,7 +28,6 @@ import { createLazyPromise } from "../shared/lazy-runtime.js";
 import type { AgentRuntimeDelegatedAuthority } from "./agent-runtime-identity-token.js";
 import { resolveApprovalSessionAudienceWithFallback } from "./approval-session-audience.js";
 import { createApprovalWebPushDelivery } from "./approval-web-push.js";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import {
   createExecApprovalIosPushDelivery,
   createPluginApprovalIosPushDelivery,
@@ -38,15 +37,11 @@ import {
   type OperatorApprovalLifecycleEvent,
   type OperatorStandingGrantMintSpec,
 } from "./exec-approval-manager.js";
-import { createLazyHandler } from "./lazy-handler.js";
 import {
   createPlacementStandingGrantRuntime,
   type PlacementStandingGrantRuntime,
 } from "./operator-approval-placement-grants.js";
-import {
-  closeOrphanedOperatorApprovals,
-  pruneTerminalOperatorApprovals,
-} from "./operator-approval-store.js";
+import { recoverOperatorApprovalsOnStartup } from "./operator-approval-store.js";
 import { QuestionManager } from "./question-manager.js";
 import { publishAppliedApprovalResolution } from "./server-methods/approval-publication.js";
 import {
@@ -54,7 +49,11 @@ import {
   cancelUnboundRunApprovals,
   cancelWorkerTurnClaimBoundApprovals,
 } from "./server-methods/approval-run-cancellation.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandler,
+  GatewayRequestHandlers,
+} from "./server-methods/types.js";
 import {
   createGatewaySecretsReloader,
   type GatewaySecretsReloaderParams,
@@ -66,16 +65,14 @@ type ApprovalPayload =
   | PluginApprovalRequestPayload
   | SystemAgentApprovalRequestPayload;
 
-type GatewayAuxHandlerLogger = {
-  warn?: (message: string) => void;
-  error?: (message: string) => void;
-  debug?: (message: string) => void;
-};
-
 export function createGatewayAuxHandlers(
   params: GatewaySecretsReloaderParams & {
     scheduler: GatewayScheduler;
-    log: GatewayAuxHandlerLogger;
+    log: {
+      warn?: (message: string) => void;
+      error?: (message: string) => void;
+      debug?: (message: string) => void;
+    };
     onApprovalLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
     onAgentRunAuthorityClosed?: (
       authority: AgentRunDelegatedAuthority,
@@ -88,7 +85,6 @@ export function createGatewayAuxHandlers(
     getNativeApprovalRouteCoordinator: () => ApprovalNativeRouteCoordinator | undefined;
     /** Config-driven default expiry stamp for freshly minted standing grants. */
     resolveGrantDefaultExpiresAtMs?: (nowMs: number) => number | null;
-    chatAbortControllers?: Map<string, ChatAbortControllerEntry>;
     registerWorkerTurnClaimClosedHandler?: (
       handler: (claim: WorkerSessionTurnClaim) => void,
     ) => () => void;
@@ -101,12 +97,10 @@ export function createGatewayAuxHandlers(
   const placementStandingGrants = createPlacementStandingGrantRuntime({
     runtimeEpoch: approvalPersistence.runtimeEpoch,
   });
-  const approvalStartupNowMs = Date.now();
-  closeOrphanedOperatorApprovals({
+  const ready = recoverOperatorApprovalsOnStartup({
     runtimeEpoch: approvalPersistence.runtimeEpoch,
-    nowMs: approvalStartupNowMs,
+    nowMs: Date.now(),
   });
-  pruneTerminalOperatorApprovals({ nowMs: approvalStartupNowMs });
   const presentationWork = new AsyncWorkScope();
   const trackPresentationWork = (run: () => Promise<void>): Promise<void> =>
     presentationWork.track(() => runWithRetainedGatewayRootWork(run));
@@ -424,6 +418,8 @@ export function createGatewayAuxHandlers(
           manager.retire();
         }
         questionManager.close();
+        // A failed startup still has observers and managers to retire.
+        await Promise.allSettled([ready]);
         await questionManager.drain();
         await Promise.all(approvalManagers.map((manager) => manager.drain()));
         await presentationWork.drain();
@@ -435,16 +431,27 @@ export function createGatewayAuxHandlers(
     return stopPromise;
   };
 
-  // Startup terminalized prior-runtime approvals above; retain their browser
-  // publication until its real send/storage work finishes, including failure logging.
-  void trackPresentationWork(() =>
-    approvalWebPushDelivery.recoverTerminalDeliveries().catch((error: unknown) => {
+  // The handler startup boundary awaits durable recovery before accepting requests.
+  // Browser delivery remains background work retained through Gateway close.
+  void trackPresentationWork(async () => {
+    try {
+      await ready;
+      await approvalWebPushDelivery.recoverTerminalDeliveries();
+    } catch (error: unknown) {
       params.log.error?.(`approval Web Push restart recovery failed: ${String(error)}`);
-    }),
-  );
+    }
+  });
 
-  const bindLazyHandlers = (load: Parameters<typeof createLazyHandler>[1]) => (method: string) =>
-    createLazyHandler(method, load);
+  const bindLazyHandlers =
+    (load: () => Promise<GatewayRequestHandlers>) =>
+    (method: string): GatewayRequestHandler =>
+    async (opts) => {
+      const handler = (await load())[method];
+      if (!handler) {
+        throw new Error(`lazy gateway handler not found: ${method}`);
+      }
+      await handler(opts);
+    };
   const execApprovalHandler = bindLazyHandlers(loadExecApprovalHandlers);
   const pluginApprovalHandler = bindLazyHandlers(loadPluginApprovalHandlers);
   const approvalHandler = bindLazyHandlers(loadApprovalHandlers);
@@ -452,6 +459,7 @@ export function createGatewayAuxHandlers(
   const secretsHandler = bindLazyHandlers(loadSecretsHandlers);
 
   return {
+    ready,
     execApprovalManager,
     cancelRunBoundApprovals,
     forwardPluginApprovalRequest: execApprovalForwarder.handlePluginApprovalRequested,

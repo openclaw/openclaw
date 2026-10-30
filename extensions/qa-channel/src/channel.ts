@@ -10,6 +10,10 @@ import {
   defineChannelMessageAdapter,
   type ChannelMessageSendPayloadContext,
 } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
 import { DEFAULT_ACCOUNT_ID } from "./accounts.js";
 import {
   buildQaTarget,
@@ -26,8 +30,24 @@ import {
   sendQaChannelMediaBatch,
   sendQaChannelText,
 } from "./outbound.js";
-import { qaChannelStatus } from "./status.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
+
+const qaChannelStatus = createComputedAccountStatusAdapter<ResolvedQaChannelAccount>({
+  defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+  buildChannelSummary: ({ snapshot }) => ({
+    baseUrl: snapshot.baseUrl ?? "[missing]",
+  }),
+  resolveAccountSnapshot: ({ account }) => ({
+    accountId: account.accountId,
+    name: account.name,
+    enabled: account.enabled,
+    configured: account.configured,
+    extra: {
+      baseUrl: account.baseUrl || "[missing]",
+      botUserId: account.botUserId,
+    },
+  }),
+});
 
 type QaChannelPayloadSendContext = Pick<
   ChannelMessageSendPayloadContext,
@@ -42,6 +62,9 @@ type QaChannelPayloadSendContext = Pick<
   | "mediaAccess"
   | "mediaLocalRoots"
   | "mediaReadFile"
+  | "signal"
+  | "onPlatformSendDispatch"
+  | "assertDirectAdapterHandoff"
 >;
 
 function createQaChannelMessageReceipt(
@@ -58,13 +81,15 @@ function createQaChannelMessageReceipt(
   });
 }
 
-async function sendQaChannelMessagePayload(ctx: QaChannelPayloadSendContext) {
-  const text = ctx.payload.text ?? ctx.text;
-  const mediaUrls = collectQaMediaUrls(
+async function sendQaChannelMessagePayload(
+  ctx: QaChannelPayloadSendContext,
+  mediaUrls = collectQaMediaUrls(
     ctx.mediaUrl,
     ctx.payload.mediaUrl,
     ...(ctx.payload.mediaUrls ?? []),
-  );
+  ),
+) {
+  const text = ctx.payload.text ?? ctx.text;
   const params = {
     cfg: ctx.cfg as CoreConfig,
     accountId: ctx.accountId,
@@ -73,6 +98,9 @@ async function sendQaChannelMessagePayload(ctx: QaChannelPayloadSendContext) {
     isError: ctx.payload.isError,
     threadId: ctx.threadId,
     replyToId: ctx.replyToId,
+    signal: ctx.signal,
+    onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+    assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
   };
   const result =
     mediaUrls.length === 0
@@ -109,38 +137,8 @@ const qaChannelMessageAdapter = defineChannelMessageAdapter({
   send: {
     // Detached completions must deliver the visible caption and media atomically.
     payload: sendQaChannelMessagePayload,
-    text: async (ctx) => {
-      const result = await sendQaChannelText({
-        cfg: ctx.cfg as CoreConfig,
-        accountId: ctx.accountId,
-        to: ctx.to,
-        text: ctx.text,
-        threadId: ctx.threadId,
-        replyToId: ctx.replyToId,
-      });
-      return {
-        messageId: result.messageId,
-        receipt: createQaChannelMessageReceipt(ctx, result.messageId, "text"),
-      };
-    },
-    media: async (ctx) => {
-      const result = await sendQaChannelMedia({
-        cfg: ctx.cfg as CoreConfig,
-        accountId: ctx.accountId,
-        to: ctx.to,
-        text: ctx.text,
-        mediaUrl: ctx.mediaUrl,
-        mediaAccess: ctx.mediaAccess,
-        mediaLocalRoots: ctx.mediaLocalRoots,
-        mediaReadFile: ctx.mediaReadFile,
-        threadId: ctx.threadId,
-        replyToId: ctx.replyToId,
-      });
-      return {
-        messageId: result.messageId,
-        receipt: createQaChannelMessageReceipt(ctx, result.messageId, "media"),
-      };
-    },
+    text: (ctx) => sendQaChannelMessagePayload({ ...ctx, payload: {} }, []),
+    media: (ctx) => sendQaChannelMessagePayload({ ...ctx, payload: {} }, [ctx.mediaUrl]),
   },
 });
 
@@ -172,6 +170,7 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
   base: {
     ...qaChannelPluginBase,
     capabilities: { ...qaChannelPluginBase.capabilities, media: true },
+    agentPrompt: { questionInputMode: "buttons" },
     messaging: {
       normalizeTarget: normalizeQaTarget,
       inferTargetChatType: ({ to }) => parseQaTarget(to).chatType,

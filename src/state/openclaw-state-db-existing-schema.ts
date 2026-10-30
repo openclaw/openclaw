@@ -1,12 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
-  collectSqliteSchemaIssues,
   createSqliteTableContractReader,
   readSqliteSchemaCookie,
 } from "../infra/sqlite-schema-contract.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
+import type { SqliteSchemaErrorContext } from "../infra/sqlite-user-version.js";
 import {
   getStateRuntimeSchemaAdmission,
   getStateSchemaVersionAdmission,
@@ -28,16 +28,12 @@ import {
   readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
 import type { DB } from "./openclaw-state-db.generated.js";
-import {
-  isOpenClawStateStartupRepairableSchemaIssue,
-  STATE_RUNTIME_SCHEMA_COMPATIBILITY,
-} from "./openclaw-state-schema-compatibility.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 /** Metadata is validated with the physical database's first runtime admission. */
 function assertExistingOpenClawStateRuntimeMetadata(
   database: DatabaseSync,
   pathname: string,
+  context: SqliteSchemaErrorContext,
 ): number {
   if (getStateRuntimeSchemaAdmission(database)) {
     const version = getStateSchemaVersionAdmission(database)?.userVersion;
@@ -45,7 +41,13 @@ function assertExistingOpenClawStateRuntimeMetadata(
       return version;
     }
   }
-  const version = assertSupportedStateSchemaVersion(database, pathname);
+  const version = assertSupportedStateSchemaVersion(
+    database,
+    pathname,
+    undefined,
+    undefined,
+    context,
+  );
   if (readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
     throw new Error(
       `Existing shared-state database ${pathname} requires schema migration by its owning installation; run openclaw doctor --fix there before using it.`,
@@ -77,12 +79,13 @@ function assertExistingOpenClawStateRuntimeMetadata(
   return version;
 }
 
-/** Prove the existing runtime contract without certifying this release's repairs. */
+/** Validate an existing runtime schema without applying repairs. */
 export function assertExistingOpenClawStateRuntimeSchema(
   database: DatabaseSync,
   pathname: string,
   integrity?: OpenClawStateIntegrityAdmission,
   integrityPolicy?: OpenClawStateIntegrityPolicy,
+  context: SqliteSchemaErrorContext = "runtime",
 ): void {
   const admitted = getStateRuntimeSchemaAdmission(database)
     ? getAdmittedSqliteSchemaFacts(database)
@@ -99,10 +102,10 @@ export function assertExistingOpenClawStateRuntimeSchema(
     return;
   }
   let publishIntegrity: (() => void) | undefined;
-  const startupReady = runSqliteDeferredTransactionSync(
+  runSqliteReadSnapshotSync(
     database,
     () => {
-      const userVersion = assertExistingOpenClawStateRuntimeMetadata(database, pathname);
+      const userVersion = assertExistingOpenClawStateRuntimeMetadata(database, pathname, context);
       const currentCookie = readSqliteSchemaCookie(database);
       if (typeof currentCookie !== "number") {
         throw new Error(
@@ -119,15 +122,9 @@ export function assertExistingOpenClawStateRuntimeSchema(
       const readTable = createSqliteTableContractReader(database);
       assertCurrentStateRuntimeSchema(database, pathname, readTable);
       assertNoLegacyStateRuntimeRepair(database, pathname);
-      return !collectSqliteSchemaIssues(
-        database,
-        OPENCLAW_STATE_SCHEMA_SQL,
-        STATE_RUNTIME_SCHEMA_COMPATIBILITY,
-        readTable,
-      ).some(isOpenClawStateStartupRepairableSchemaIssue);
     },
     { operationLabel: "state.admission.existing-schema" },
   );
   publishIntegrity?.();
-  publishStateRuntimeSchemaAdmission(database, startupReady);
+  publishStateRuntimeSchemaAdmission(database, true);
 }

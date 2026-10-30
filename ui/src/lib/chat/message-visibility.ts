@@ -9,9 +9,13 @@ import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
 } from "./heartbeat-display.ts";
-import { extractText, extractTextCached, isEmptyUserTextOnlyMessage } from "./message-extract.ts";
+import {
+  extractText,
+  extractTextCached,
+  isEmptyUserTextOnlyMessage,
+  readTranscriptMediaEntries,
+} from "./message-extract.ts";
 
-const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 
@@ -21,6 +25,9 @@ export function resolveMessageVisibleContent(
   message: unknown,
   normalized: NormalizedMessage,
 ): MessageGroup["visibleContent"] {
+  if (readTranscriptMediaEntries(message).length > 0) {
+    return "non-text";
+  }
   let hasText = false;
   for (const block of normalized.content) {
     if (block.type === "text") {
@@ -36,44 +43,22 @@ export function resolveMessageVisibleContent(
   return hasText || extractTextCached(message)?.trim() ? "text" : "none";
 }
 
-export function isSilentReplyStream(text: string): boolean {
-  return SILENT_REPLY_PATTERN.test(text);
-}
-
-/** Client-side defense-in-depth: detect assistant messages whose text is purely NO_REPLY. */
-function isAssistantSilentReply(message: unknown): boolean {
-  const entry = asNullableRecord(message);
-  if (!entry || normalizeLowercaseStringOrEmpty(entry.role) !== "assistant") {
-    return false;
-  }
-  // entry.text takes precedence — matches gateway extractAssistantTextForSilentCheck
-  if (typeof entry.text === "string") {
-    return isSilentReplyStream(entry.text);
-  }
-  const text = extractText(message);
-  return typeof text === "string" && isSilentReplyStream(text);
-}
-
 function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
   const entry = asNullableRecord(message);
   if (!entry || normalizeLowercaseStringOrEmpty(entry.role) !== "toolresult") {
     return false;
   }
   const text = extractText(message);
-  return typeof text === "string" && text.trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT;
+  return text?.trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT;
 }
 
 export function isHiddenAssistantStreamText(text: string): boolean {
-  return isSilentReplyStream(text) || stripHeartbeatTokenForDisplay(text).shouldSkip;
-}
-
-export function shouldHideAssistantChatMessage(message: unknown): boolean {
-  return isAssistantSilentReply(message) || isAssistantHeartbeatAckForDisplay(message);
+  return stripHeartbeatTokenForDisplay(text).shouldSkip;
 }
 
 export function isVisibleChatHistoryMessage(message: unknown): boolean {
   return !(
-    shouldHideAssistantChatMessage(message) ||
+    isAssistantHeartbeatAckForDisplay(message) ||
     isSyntheticTranscriptRepairToolResult(message) ||
     isEmptyUserTextOnlyMessage(message)
   );

@@ -5,6 +5,7 @@ import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
 } from "openclaw/plugin-sdk/windows-spawn";
+import type { CodexPluginConfig } from "./config-contracts.js";
 import { readCodexPluginConfig } from "./config-parsing.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import { buildCodexLoginStatusArgs, isCodexAppServerProxyLaunch } from "./launch-args.js";
@@ -20,16 +21,15 @@ const OPENAI_LOGIN_MODES: Readonly<Record<string, "oauth" | "token">> = {
 /** Ask the selected native binary about its own store; retain no credential material. */
 export async function probeCodexNativeAuth(params: {
   config?: OpenClawConfig;
-  pluginConfig?: unknown;
+  pluginConfig?: CodexPluginConfig;
   pluginRoot?: string;
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
 }): ReturnType<NonNullable<ProviderPlugin["prepareSyntheticAuth"]>> {
   params.signal?.throwIfAborted();
   try {
-    const pluginConfig = readCodexPluginConfig(
-      params.pluginConfig ?? params.config?.plugins?.entries?.codex?.config,
-    );
+    const pluginConfig =
+      params.pluginConfig ?? readCodexPluginConfig(params.config?.plugins?.entries?.codex?.config);
     const options = resolveCodexAppServerRuntimeOptions({ pluginConfig, env: params.env });
     // Isolated homes and external servers cannot borrow the operator's local login.
     if (
@@ -67,10 +67,15 @@ export async function probeCodexNativeAuth(params: {
     const line = `${result.stdout}\n${result.stderr}`
       .split("\n")
       .map((value) => value.trim())
-      .find((value) => value.startsWith("Logged in using "));
+      .find(
+        (value) =>
+          value.startsWith("Logged in using ") || value.startsWith("API key configured - "),
+      );
     const mode =
       line &&
-      (line.startsWith("Logged in using an API key - ") ? "api-key" : OPENAI_LOGIN_MODES[line]);
+      (line.startsWith("Logged in using an API key - ") || line.startsWith("API key configured - ")
+        ? "api-key"
+        : OPENAI_LOGIN_MODES[line]);
     // Workload identity and Bedrock logins do not authorize an OpenAI route.
     return mode
       ? {

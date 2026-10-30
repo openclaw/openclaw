@@ -3,6 +3,11 @@ import {
   bindGitHubPublicationSource,
   type GitHubPublicationSourceCapability,
 } from "../gateway/github-publication-source.js";
+import { placementAuthorityOwnerFor } from "../gateway/worker-environments/placement-authority-owner.js";
+import {
+  isPublishedPlacementTurnClaimCurrent,
+  readPlacementReplica,
+} from "../gateway/worker-environments/placement-turn-authority.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -15,7 +20,7 @@ import type {
   PublicationReadOperations,
 } from "./github-publication-worker.types.js";
 import type { PublicationWorkerOperations } from "./github-publication.worker-contract.js";
-import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
 
@@ -33,15 +38,7 @@ type MutationCommand = SqliteWorkerCommand<
 export async function readGitHubPublicationInWorker(
   command: SqliteWorkerCommand<PublicationReadOperations>,
 ) {
-  const context = captureOpenClawStateReadWorkerContext();
-  const captured = structuredClone(command);
-  const result = await runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute(captured),
-    { existingOnly: true },
-  );
-  context.admission.assertCurrent();
-  return result;
+  return await executeExistingOpenClawStateRead({}, command, { current: true });
 }
 
 /** A publication execution retains FIFO writes through native settlement. */
@@ -103,14 +100,64 @@ export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerC
         // SAFETY: the private worker response matches its exact dispatched operation.
         return facts as PublicationMutationReceipt;
       };
-      if (source) {
-        return enqueue(async () => {
-          let retainedSource: GitHubPublicationSourceCapability | undefined;
-          try {
+      return enqueue(async () => {
+        if (
+          commandSnapshot.type === "githubPublications.shared" &&
+          commandSnapshot.input.operation === "defer" &&
+          commandSnapshot.input.selection.kind === "orphaned"
+        ) {
+          const owner = placementAuthorityOwnerFor(context.admission.identity);
+          // A release after this snapshot leaves its receipt for the next recovery pass.
+          commandSnapshot.input.selection.localClaims = [...owner.localClaimSessions].flatMap(
+            (sessionId) => {
+              const claim = owner.placements.get(sessionId)?.placement?.turnClaim;
+              return claim?.owner === "local" && claim.ownerEpoch === null
+                ? [
+                    {
+                      sessionId,
+                      claimId: claim.claimId,
+                      runId: claim.runId,
+                      placementGeneration: claim.generation,
+                    },
+                  ]
+                : [];
+            },
+          );
+        }
+        let retainedSource: GitHubPublicationSourceCapability | undefined;
+        try {
+          let binding: ReturnType<typeof bindGitHubPublicationSource> | undefined;
+          if (source) {
             assertCurrent();
             retainedSource = typeof source === "function" ? await source() : source;
             assertCurrent();
-            const binding = bindGitHubPublicationSource(retainedSource);
+            const request =
+              commandSnapshot.type === "githubPublications.insert" &&
+              commandSnapshot.input.kind === "shared"
+                ? commandSnapshot.input.input
+                : undefined;
+            const claim = request?.claim;
+            binding = bindGitHubPublicationSource(
+              retainedSource,
+              request && claim?.owner.kind === "local" && claim.owner.environmentId === undefined
+                ? () => {
+                    const placement = readPlacementReplica(
+                      context.admission.identity,
+                      claim.sessionId,
+                    )?.placement;
+                    if (
+                      placement?.state !== "local" ||
+                      placement.agentId !== request.request.agentId ||
+                      placement.sessionKey !== request.request.sessionKey ||
+                      !isPublishedPlacementTurnClaimCurrent(context.admission.identity, claim)
+                    ) {
+                      throw new Error(
+                        "GitHub publication turn authority changed before recording.",
+                      );
+                    }
+                  }
+                : undefined,
+            );
             if (
               binding.context.admission.databasePath !== context.admission.databasePath ||
               binding.context.admission.identity.key !== context.admission.identity.key ||
@@ -118,115 +165,81 @@ export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerC
             ) {
               throw new Error("GitHub publication destination changed before dispatch.");
             }
-            const captured = structuredClone({
-              ...commandSnapshot,
-              input: { ...commandSnapshot.input, source: binding.predicate },
-            });
-            let admission: SqliteWorkerOperationAdmission | undefined;
-            let receipt: PublicationMutationReceipt | undefined;
-            let settled: Promise<unknown> = Promise.resolve();
-            const accept = (facts: unknown) => {
-              receipt = readReceipt(facts);
-              try {
-                assertSource();
-              } catch {
-                return;
+          }
+          const captured = binding
+            ? {
+                ...commandSnapshot,
+                input: { ...commandSnapshot.input, source: binding.predicate },
               }
-              publish(receipt);
-            };
-            return await runOpenClawStateWorkerOperation(
-              binding.context,
-              async (scope) => {
-                const outcome = await scope.execute(captured).then(
-                  () => ({ ok: true as const }),
-                  (error: unknown) => ({ ok: false as const, error }),
-                );
-                await settled;
-                if (admission?.committed) {
+            : commandSnapshot;
+          const operationContext = binding?.context ?? context;
+          let admission: SqliteWorkerOperationAdmission | undefined;
+          let receipt: PublicationMutationReceipt | undefined;
+          let settled: Promise<unknown> = Promise.resolve();
+          const check = () => {
+            assertSource();
+            if (!binding) {
+              assertCurrent();
+            }
+          };
+          return await runOpenClawStateWorkerOperation(
+            operationContext,
+            async (scope) => {
+              const outcome = await scope.execute(captured).then(
+                () => ({ ok: true as const }),
+                (error: unknown) => ({ ok: false as const, error }),
+              );
+              await settled;
+              const committed = admission?.committed;
+              if (committed) {
+                if (binding) {
                   if (!receipt) {
                     throw new Error("GitHub publication committed facts were not installed.");
                   }
                   return receipt;
                 }
-                if (!outcome.ok) {
-                  throw outcome.error;
-                }
-                throw new Error("GitHub publication mutation has no committed receipt.");
-              },
-              {
-                assertCurrent: assertSource,
-                createAdmission(operation) {
-                  settled = operation.settled;
-                  const retained = withGitHubPublicationWorkerReceipt(
-                    binding.createAdmission,
-                    binding.context,
-                    accept,
-                  )(operation);
-                  admission = retained.admission;
-                  return retained;
-                },
-              },
-            );
-          } finally {
-            await retainedSource?.release();
-          }
-        });
-      }
-      const captured = commandSnapshot;
-      let admission: SqliteWorkerOperationAdmission | undefined;
-      let settled: Promise<unknown> = Promise.resolve();
-      const check = () => {
-        assertSource();
-        assertCurrent();
-      };
-      return enqueue(() =>
-        runOpenClawStateWorkerOperation(
-          context,
-          async (scope) => {
-            const outcome = await scope.execute(captured).then(
-              () => ({ ok: true as const }),
-              (error: unknown) => ({ ok: false as const, error }),
-            );
-            await settled;
-            const committed = admission?.committed;
-            if (committed) {
-              return readReceipt(committed.facts);
-            }
-            if (!outcome.ok) {
-              throw outcome.error;
-            }
-            throw new Error("GitHub publication mutation has no committed receipt.");
-          },
-          {
-            assertCurrent: check,
-            createAdmission: (operation) => {
-              settled = operation.settled;
-              const mutationAdmission = createSqliteWorkerOperationAdmission(() => {
-                throw new Error("GitHub publication bookkeeping requires no source admission.");
-              });
-              admission = mutationAdmission;
-              const retained = withGitHubPublicationWorkerReceipt(
-                () => ({
-                  admission: mutationAdmission,
-                  nativeLocations: [context.admission.databasePath],
-                }),
-                context,
-                (facts) => {
-                  const receipt = readReceipt(facts);
-                  // Installation precedes observers and is independent of ordinary reply delivery.
-                  try {
-                    assertSource();
-                  } catch {
-                    return;
-                  }
-                  publish(receipt);
-                },
-              )(operation);
-              return retained;
+                return readReceipt(committed.facts);
+              }
+              if (!outcome.ok) {
+                throw outcome.error;
+              }
+              throw new Error("GitHub publication mutation has no committed receipt.");
             },
-          },
-        ),
-      );
+            {
+              assertCurrent: check,
+              createAdmission: (operation) => {
+                settled = operation.settled;
+                const retained = withGitHubPublicationWorkerReceipt(
+                  binding?.createAdmission ??
+                    (() => ({
+                      admission: createSqliteWorkerOperationAdmission(() => {
+                        throw new Error(
+                          "GitHub publication bookkeeping requires no source admission.",
+                        );
+                      }),
+                      nativeLocations: [context.admission.databasePath],
+                    })),
+                  operationContext,
+                  (facts) => {
+                    receipt = readReceipt(facts);
+                    // Installation precedes observers and is independent of ordinary reply delivery.
+                    try {
+                      assertSource();
+                    } catch {
+                      return;
+                    }
+                    publish(receipt);
+                  },
+                )(operation);
+                admission = retained.admission;
+                return retained;
+              },
+            },
+          );
+        } finally {
+          await retainedSource?.release();
+        }
+      });
     },
   };
 }

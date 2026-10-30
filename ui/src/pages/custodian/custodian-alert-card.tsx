@@ -7,13 +7,16 @@ import {
 } from "../../app/update-confirmation.ts";
 import type { CustodianAlert } from "../../components/custodian-alert-contract.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { registerUpdateActionsEnglish } from "../../i18n/locales/en-update-actions.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerUpdateActionsEnglish);
 
 export function CustodianAlertCard(props: {
   alert: CustodianAlert;
-  context: ApplicationContext;
+  context: Pick<ApplicationContext, "gateway" | "overlays" | "navigate">;
   onDismiss: () => void;
 }) {
   const gateway = createMemo(() => projectGateway(props.context.gateway));
@@ -50,6 +53,9 @@ export function CustodianAlertCard(props: {
                 context.navigate(target.routeId);
               } else if (canUpdate()) {
                 void confirmAndStartUpdate({
+                  isCurrentTarget: context.overlays.captureUpdateTarget(),
+                  canStartNativeUpdate: () =>
+                    canCallGatewayMethod(context.gateway.snapshot, "update.run", "operator.admin"),
                   startGatewayUpdate: () => void context.overlays.runUpdate(),
                   watchUpdateProgress: createUpdateProgressWatcher(context),
                   onAcknowledge: () => context.overlays.acknowledgeUpdateRun(),

@@ -1,97 +1,84 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginNodeHostCommandIo } from "openclaw/plugin-sdk/node-host";
-import type {
-  OpenClawPluginApi,
-  OpenClawPluginServiceContext,
-} from "openclaw/plugin-sdk/plugin-entry";
+import type * as Plugin from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { handleFileCreate } from "./node-host/file-create.js";
-import { handleFileFetch } from "./node-host/file-fetch.js";
-import { createWorkspaceCommand } from "./node-host/workspace-memory.js";
-import { createFileTransferNodeInvokePolicy } from "./shared/node-invoke-policy.js";
+import plugin from "../index.js";
+import { duplexPeer } from "./node-host/node-host.test-support.js";
 import { createCtx } from "./shared/node-invoke-policy.test-support.js";
-import { createWorkspaceWorkerPolicy } from "./shared/workspace-memory-policy.js";
 
-/** Real policy and file handlers; only the paired connection is replaced here. */
-export function createNodeWorkspaceTestTransport(
-  api: OpenClawPluginApi,
-  remote: string,
-  afterChunk?: () => void,
-  onOutput?: (bytes: Uint8Array) => void,
-): NonNullable<OpenClawPluginServiceContext["openNodeDuplex"]> {
-  return async (request) => {
-    const controller = new AbortController();
-    const signal = request.signal
-      ? AbortSignal.any([controller.signal, request.signal])
-      : controller.signal;
-    const ready = createDeferred<void>();
-    let receive: ((message: Uint8Array) => void | Promise<void>) | undefined;
-    let acknowledge: ((message: Uint8Array) => void | Promise<void>) | undefined;
-    const io: OpenClawPluginNodeHostCommandIo = {
-      signal,
-      emitChunk: async () => {},
-      onInput: () => {},
-      frames: {
-        onMessage: (listener) => {
-          receive = listener;
-          ready.resolve();
-          return () => {
-            receive = undefined;
-          };
-        },
-        send: async (message) => {
-          onOutput?.(message);
-          await acknowledge?.(message);
-        },
+/** Use the plugin's registrations instead of maintaining a parallel command router. */
+export function createWorkspaceNodeDispatcher(remote: string) {
+  const commands = new Map(plugin.nodeHostCommands!.map((command) => [command.command, command]));
+  const policies = new Map<string, Plugin.OpenClawPluginNodeInvokePolicy>();
+  plugin.register(
+    createTestPluginApi({
+      config: { agents: { defaults: { workspace: remote } } },
+      runtime: {
+        agent: { resolveAgentWorkspaceDir: () => remote },
+      } as unknown as Plugin.OpenClawPluginApi["runtime"],
+      registerNodeHostCommand: (command) => {
+        commands.set(command.command, command);
       },
-    };
+      registerNodeInvokePolicy: (policy) => {
+        for (const command of policy.commands) {
+          policies.set(command, policy);
+        }
+      },
+    }),
+  );
+  return async (
+    request: { command: string; params?: unknown; assertCurrent?: () => void },
+    pluginConfig?: Record<string, unknown>,
+    io?: OpenClawPluginNodeHostCommandIo,
+  ) => {
     const { ctx, invokeNode } = createCtx({
       command: request.command,
       params: request.params as Record<string, unknown>,
-      pluginConfig: api.config.plugins!.entries!["file-transfer"]!.config,
+      pluginConfig,
     });
-    invokeNode.mockImplementation(async ({ params } = {}) => {
+    invokeNode.mockImplementation(async (options: Parameters<typeof invokeNode>[0] = {}) => {
+      const { params } = options;
       request.assertCurrent?.();
-      signal.throwIfAborted();
-      if (request.command === "workspace.memory" || request.command === "workspace.skills") {
-        const nodeApi = createTestPluginApi({
-          config: { agents: { defaults: { workspace: remote } } },
-          runtime: {
-            agent: { resolveAgentWorkspaceDir: () => remote },
-          } as unknown as OpenClawPluginApi["runtime"],
-        });
-        return {
-          ok: true,
-          payload: JSON.parse(
-            await createWorkspaceCommand(
-              nodeApi,
-              request.command === "workspace.memory" ? "memory" : "skills",
-            ).handle(JSON.stringify(params ?? request.params), io),
-          ),
-        };
+      io?.signal.throwIfAborted();
+      const command = commands.get(request.command);
+      if (!command) {
+        throw new Error(`Unexpected command ${request.command}`);
       }
       return {
         ok: true,
-        payload:
-          request.command === "file.fetch"
-            ? await handleFileFetch(params as Record<string, unknown>, io)
-            : await handleFileCreate(params as Record<string, unknown>, io),
+        payload: JSON.parse(await command.handle(JSON.stringify(params ?? request.params), io)),
       };
     });
-    const policy =
-      request.command === "workspace.memory"
-        ? createWorkspaceWorkerPolicy("memory")
-        : request.command === "workspace.skills"
-          ? createWorkspaceWorkerPolicy("skills")
-          : createFileTransferNodeInvokePolicy();
-    const closed = Promise.resolve(policy.handle(ctx)).then((result) => {
-      if (!result.ok) {
-        throw new Error(`${result.code}: ${result.message}`);
-      }
-      return result;
+    const result = await policies.get(request.command)!.handle(ctx);
+    if (!result.ok) {
+      throw new Error(`${result.code}: ${result.message}`);
+    }
+    return result;
+  };
+}
+
+/** Real policy and file handlers; only the paired connection is replaced here. */
+export function createNodeWorkspaceTestTransport(
+  api: Plugin.OpenClawPluginApi,
+  remote: string,
+  afterChunk?: () => void,
+  onOutput?: (bytes: Uint8Array) => void,
+): NonNullable<Plugin.OpenClawPluginServiceContext["openNodeDuplex"]> {
+  const invoke = createWorkspaceNodeDispatcher(remote);
+  return async (request) => {
+    const peer = duplexPeer();
+    const { controller } = peer;
+    const signal = request.signal
+      ? AbortSignal.any([controller.signal, request.signal])
+      : controller.signal;
+    let acknowledge: ((message: Uint8Array) => void | Promise<void>) | undefined;
+    const io: OpenClawPluginNodeHostCommandIo = { ...peer.io, signal };
+    peer.send.mockImplementation(async (message) => {
+      onOutput?.(message);
+      await acknowledge?.(message);
     });
+    const closed = invoke(request, api.config.plugins!.entries!["file-transfer"]!.config, io);
     await Promise.race([
-      ready.promise,
+      peer.ready,
       closed.then(() => {
         throw new Error("closed before upload ready");
       }),
@@ -100,10 +87,7 @@ export function createNodeWorkspaceTestTransport(
       send: async (message) => {
         request.assertCurrent?.();
         signal.throwIfAborted();
-        if (!receive) {
-          throw new Error("input receiver missing");
-        }
-        await receive(message);
+        await peer.receive(message);
         if (message.byteLength) {
           afterChunk?.();
         }

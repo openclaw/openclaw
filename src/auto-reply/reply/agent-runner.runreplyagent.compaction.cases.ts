@@ -138,7 +138,7 @@ export function registerReplyCompactionCases({
             ? { authProfileOverride: "openai:missing", authProfileOverrideSource: "user" as const }
             : {}),
         });
-        const sessionManager = SessionManager.open(
+        const sessionManager = await SessionManager.openAsync(
           { agentId: "main", sessionId: sessionEntry.sessionId, sessionKey: "main", storePath },
           tempDirs.make("openclaw-reply-compaction-"),
         );
@@ -240,7 +240,6 @@ export function registerReplyCompactionCases({
               modelPrompt: "Current request.",
               transcriptPrompt: "Current request.",
               onFinalPromptText: () => {},
-              onSteeringAcknowledged: () => {},
               persistToolResultProjections: async () => {},
               withTranscriptWrite,
               runtimeOnly: false,
@@ -274,6 +273,7 @@ export function registerReplyCompactionCases({
             authProfileIdSource: plannerFails ? "user" : undefined,
             provider,
             model: model.id,
+            thinkLevel: "off",
             config,
             thinkingCatalog: [
               configured

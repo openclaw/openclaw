@@ -1,19 +1,19 @@
 import { Buffer } from "node:buffer";
-import type { DatabaseSync } from "node:sqlite";
 import type { AliasedExpression } from "kysely";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "./kysely-sync.js";
+import { isPostgresSqlConnection, type EngineConnection } from "./sql-connection.js";
 import { SqliteJsonlReadBudgetExceededError } from "./sqlite-jsonl-budget-error.js";
 
 /** Admit a filtered JSONL source inside the caller's payload-read transaction. */
 export function assertSqliteJsonlReadBudget(
-  database: DatabaseSync,
+  database: EngineConnection,
   source: AliasedExpression<
-    { event_json: string | null; event_utf8_bytes?: number | null },
+    { event_json: string | null; event_utf8_bytes: number | null },
     "events"
   >,
   budget: number,
   label: string,
-  options: { hasExactUtf8Bytes?: boolean; separatorBytes?: number; maxRows?: number } = {},
+  options: { separatorBytes?: number; maxRows?: number } = {},
 ): void {
   const db = getNodeSqliteKysely<{ pragma_encoding: { encoding: string } }>(database);
   const rejectOverflow = (bytes: number) => {
@@ -33,8 +33,11 @@ export function assertSqliteJsonlReadBudget(
       .selectFrom(source)
       .select((eb) => [
         eb.fn<number | null>("octet_length", ["event_json"]).as("bytes"),
-        (options.hasExactUtf8Bytes ? eb.ref("event_utf8_bytes") : eb.val(null)).as("utf8_bytes"),
-        eb.selectFrom("pragma_encoding").select("encoding").as("encoding"),
+        eb.ref("event_utf8_bytes").as("utf8_bytes"),
+        (isPostgresSqlConnection(database)
+          ? eb.val("UTF-8")
+          : eb.selectFrom("pragma_encoding").select("encoding")
+        ).as("encoding"),
       ])
       .$if(options.maxRows !== undefined, (query) => query.limit(options.maxRows! + 1)),
   );
@@ -72,12 +75,7 @@ export function assertSqliteJsonlReadBudget(
   // UTF-16 storage size is not the UTF-8 export size. After metadata admission,
   // decode one bounded row at a time for exact accounting in the same snapshot.
   bytes = knownBytes + separators;
-  const unknown = db
-    .selectFrom(source)
-    .select("event_json")
-    .$if(options.hasExactUtf8Bytes === true, (query) =>
-      query.where("event_utf8_bytes", "is", null),
-    );
+  const unknown = db.selectFrom(source).select("event_json").where("event_utf8_bytes", "is", null);
   for (const row of iterateSqliteQuerySync(database, unknown)) {
     if (row.event_json === null) {
       throw new Error(`${label} has a transcript row without identity text`);

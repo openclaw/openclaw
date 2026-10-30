@@ -1,4 +1,5 @@
 // Memory Core plugin module owns manager cache and close serialization.
+import type { AcquireConfiguredProviderLocalService } from "openclaw/plugin-sdk/embedding-providers";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type {
@@ -11,10 +12,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import {
-  resolveMemoryCoreLocalServiceHostIdentity,
-  type MemoryCoreAcquireLocalService,
-} from "./embedding-local-service.js";
+import { resolveMemoryCoreLocalServiceHostIdentity } from "./embedding-local-service.js";
 import {
   MemoryManagerReloadError,
   type MemoryManagerLifecycle,
@@ -53,7 +51,7 @@ export function resolveMemoryIndexManagerCacheKey(params: {
   settings: ResolvedMemorySearchConfig;
   providerRequirement: unknown;
   purpose: MemoryIndexManagerPurpose;
-  acquireLocalService?: MemoryCoreAcquireLocalService;
+  acquireLocalService?: AcquireConfiguredProviderLocalService;
 }): string {
   return [
     params.agentId,
@@ -128,11 +126,6 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
     return await create();
   }
 
-  canPublishProbe(manager: T): boolean {
-    const owner = this.managers.get(manager);
-    return owner !== undefined && !owner.retiring;
-  }
-
   getProbeOwners(manager: T): readonly MemoryEmbeddingProviderAdapter[] {
     const owner = this.managers.get(manager);
     return owner ? [...owner.adapters] : [];
@@ -156,8 +149,8 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
       );
       for (const [manager, owner] of selected) {
         owner.retiring = true;
-        // Release reuse before cleanup can yield. Keep the retiring owner so
-        // late provider/probe work cannot publish into its replacement's cache.
+        // Release reuse before cleanup can yield. Keep the retiring owner to
+        // decline late provider creation.
         if (this.cache.get(owner.key) === manager) {
           this.cache.delete(owner.key);
         }
@@ -247,16 +240,7 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
     params: { agentId: string; purpose: MemoryIndexManagerPurpose },
     operation: () => Promise<R>,
   ): Promise<R> {
-    while (this.closePromise) {
-      const globalClose = this.closePromise;
-      try {
-        await globalClose;
-      } catch {
-        if (this.closePromise === globalClose) {
-          await this.closeAll();
-        }
-      }
-    }
+    await this.closePromise;
     return await enqueueKeyedTask({
       tails: this.scopeOperations,
       key: JSON.stringify([params.agentId, params.purpose]),

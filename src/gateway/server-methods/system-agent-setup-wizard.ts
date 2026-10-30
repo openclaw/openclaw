@@ -1,15 +1,14 @@
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { WizardSession } from "../../wizard/session.js";
 import {
   createAdmittedWizardSession,
-  respondSetupAdmissionBusy,
+  startGatewayWizard,
   whenAdmittedWizardSessionSettled,
 } from "./setup-admission.js";
 import {
   activateGatewaySetupInference,
   createSystemAgentGatewayRuntime,
 } from "./system-agent-execution.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestOptions } from "./types.js";
 
 type SetupActivation = Pick<
   Parameters<typeof activateGatewaySetupInference>[0],
@@ -21,6 +20,7 @@ type SetupActivation = Pick<
   | "apiKey"
   | "workspace"
   | "nativeSessionCatalogsEnabled"
+  | "selectModel"
 >;
 type AuthWizardRequest = {
   ownerKey: string;
@@ -34,15 +34,16 @@ const authWizardRequests = new WeakMap<
   AuthWizardRequest
 >();
 
-async function createSetupActivationSession(
+/** One provider-auth retry per owner replaces its predecessor; other starts admit directly. */
+async function admitSetupActivationSession(
   params: {
     sessionId: string;
     ownerKey?: string;
-    assertCurrent?: () => void;
     activation: SetupActivation;
     context: GatewayRequestContext;
   },
   createSession: () => WizardSession,
+  assertCurrent: () => void,
 ): Promise<WizardSession | undefined> {
   const { ownerKey, activation } = params;
   if (!ownerKey || activation.kind !== "provider-auth") {
@@ -58,6 +59,7 @@ async function createSetupActivationSession(
       previous.activation.agentId !== activation.agentId ||
       previous.activation.workspace !== activation.workspace ||
       previous.activation.modelTarget !== activation.modelTarget ||
+      previous.activation.selectModel !== activation.selectModel ||
       previous.activation.nativeSessionCatalogsEnabled !== activation.nativeSessionCatalogsEnabled)
   ) {
     return undefined;
@@ -67,7 +69,7 @@ async function createSetupActivationSession(
     previous.pending = true;
     try {
       const predecessor = await previous.session;
-      params.assertCurrent?.();
+      assertCurrent();
       if (predecessor) {
         if (predecessor.getStatus() === "running" && !predecessor.cancel()) {
           return undefined;
@@ -84,10 +86,7 @@ async function createSetupActivationSession(
     activation,
     sessionId: params.sessionId,
     pending: true,
-    session: createAdmittedWizardSession(() => {
-      params.assertCurrent?.();
-      return createSession();
-    }),
+    session: createAdmittedWizardSession(createSession),
   };
   authWizardRequests.set(sessions, request);
   const release = () => {
@@ -111,42 +110,26 @@ async function createSetupActivationSession(
   }
 }
 
-export function rejectExistingSetupWizardSession(params: {
-  sessionId: string;
-  context: GatewayRequestContext;
-  respond: RespondFn;
-}): boolean {
-  const sessions = params.context.wizardSessions;
-  if (
-    !sessions.has(params.sessionId) &&
-    authWizardRequests.get(sessions)?.sessionId !== params.sessionId
-  ) {
-    return false;
-  }
-  params.respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, "wizard session already exists"),
-  );
-  return true;
-}
-
 export async function startSetupActivationWizard(params: {
+  request: GatewayRequestOptions;
   sessionId: string;
   ownerKey?: string;
+  /** Browser provider sign-in belongs to the connection that opened it. */
+  connectionBound?: boolean;
+  isLocalClient?: boolean;
   assertCurrent?: () => void;
   activation: SetupActivation;
-  isLocalClient?: boolean;
   timeoutMs: number;
-  context: GatewayRequestContext;
-  respond: RespondFn;
 }) {
-  if (rejectExistingSetupWizardSession(params)) {
-    return;
-  }
-  const session = await createSetupActivationSession(
-    params,
-    () =>
+  const { context } = params.request;
+  await startGatewayWizard({
+    request: params.request,
+    sessionId: params.sessionId,
+    connectionBound: params.connectionBound,
+    assertCurrent: params.assertCurrent,
+    admit: (create, assertCurrent) =>
+      admitSetupActivationSession({ ...params, context }, create, assertCurrent),
+    createSession: (assertCurrent) =>
       new WizardSession(
         async (prompter, signal, runnerSession) => {
           const result = await activateGatewaySetupInference({
@@ -157,9 +140,19 @@ export async function startSetupActivationWizard(params: {
             prompter,
             signal,
             isCancelled: () => signal.aborted,
-            beforePersistentEffect: () => runnerSession.lockCancellationForPreparation(),
-            onPreparationComplete: () => runnerSession.finishPreparation(),
-            onCommitStarted: () => runnerSession.lockCancellation(),
+            assertCurrent,
+            beforePersistentEffect: () => {
+              assertCurrent();
+              runnerSession.lockCancellationForPreparation();
+            },
+            onPreparationComplete: () => {
+              assertCurrent();
+              runnerSession.finishPreparation();
+            },
+            onCommitStarted: () => {
+              assertCurrent();
+              runnerSession.lockCancellation();
+            },
           });
           signal.throwIfAborted();
           if (!result.ok) {
@@ -173,18 +166,12 @@ export async function startSetupActivationWizard(params: {
           }
           runnerSession.setModelActivation({
             modelRef: result.modelRef,
+            ...(result.modelName ? { modelName: result.modelName } : {}),
             ...(result.modelTarget ? { modelTarget: result.modelTarget } : {}),
             ...(result.gatewayRestartRequired ? { gatewayRestartRequired: true } : {}),
           });
         },
         { timeoutMs: params.timeoutMs },
       ),
-  );
-  if (!session) {
-    respondSetupAdmissionBusy(params.respond);
-    return;
-  }
-  params.context.wizardSessions.set(params.sessionId, session);
-  // Return ownership before any prompt so cancellation survives a lost start reply.
-  params.respond(true, { sessionId: params.sessionId, done: false, status: "running" }, undefined);
+  });
 }

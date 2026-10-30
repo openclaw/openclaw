@@ -1,204 +1,237 @@
-import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { ContextNotFoundError, createErrorBoundary } from "@solidjs/signals";
-import { dynamic, type JSX as SolidJSX } from "@solidjs/web";
+import { createErrorBoundary } from "@solidjs/signals";
+import type { JSX as SolidJSX } from "@solidjs/web";
 import {
   createEffect,
   createMemo,
   createSignal,
+  Errored,
   onCleanup,
-  onSettled,
   Show,
   Switch,
   Match,
-  untrack,
 } from "solid-js";
-import type { ApplicationContext } from "../../app/context.ts";
-import {
-  ensureCustomElementDefined,
-  isOptionalElementDefined,
-  LazyCustomElementRequestController,
-} from "../../app/lazy-custom-element.ts";
+import { registerBoardDocumentEnglish } from "../../i18n/locales/en-board-document.ts";
+import { registerBoardEnglish } from "../../i18n/locales/en-board.ts";
 import {
   BOARD_DOCUMENT_AUTO_MAX_ROWS,
   boardChromeRowPx,
   exactBoardWidgetHeightPx,
 } from "../../lib/board/grid.ts";
-import type { BoardWidget } from "../../lib/board/types.ts";
 import {
-  CORE_BOARD_WIDGET_ELEMENTS,
   getPluginWidgetKindContribution,
   pluginIdForWidgetKind,
 } from "../../lib/board/widgets/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { useApplication } from "../../lib/reactive/context.ts";
-import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectGateway } from "../../lib/reactive/application.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { createIntersectionObserver } from "../../lib/reactive/observers.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
+import { sharedPluginsProjection } from "../../lib/reactive/shared-application-projections.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { showToast } from "../../lib/toast.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { CustomPluginUiDisabled } from "../../plugins/control-ui-disabled.solid.tsx";
 import { PluginContribution } from "../../plugins/control-ui-view.solid.tsx";
-import { LazyViewError } from "../solid/lazy-view-error.tsx";
+import type { MenuHandle } from "../solid/menu.tsx";
 import { BoardMcpAppContent } from "./board-mcp-app-content.tsx";
-import { BoardMcpAppLifecycle } from "./board-mcp-app-lifecycle.ts";
+import { createBoardMcpAppLifecycle } from "./board-mcp-app-lifecycle.ts";
 import {
   BoardGrantedCapabilities,
   BoardPendingCapabilities,
 } from "./board-widget-capabilities.solid.tsx";
 import {
   BOARD_SIZE_PRESETS,
-  closeBoardWidgetMenu,
   type BoardWidgetCellHandle,
   type BoardWidgetCellMethods,
   type BoardWidgetCellProps,
 } from "./board-widget-cell-options.ts";
-import {
-  BoardDisabledPlugin,
-  BoardWidgetError,
-  BoardWidgetMenu,
-  BoardWidgetRejected,
-} from "./board-widget-cell-render.solid.tsx";
-import { BoardWidgetFrameLifecycle } from "./board-widget-frame.tsx";
-import "../web-awesome.ts";
+import { BoardWidgetError } from "./board-widget-error.tsx";
+import { createBoardWidgetFrame, BoardWidgetFrame } from "./board-widget-frame.tsx";
+import { BoardWidgetMenu } from "./board-widget-menu.tsx";
+import { CoreBoardWidget } from "./core-board-widget.tsx";
 
-const loadMcpAppView = () => import("../mcp-app-view-registration.ts");
+registerEnglishCatalog(registerBoardDocumentEnglish);
+
+registerEnglishCatalog(registerBoardEnglish);
+
 const cells = new WeakMap<HTMLElement, BoardWidgetCellHandle>();
+
+export function boardWidgetPresentationReady(host: HTMLElement): boolean {
+  return cells.get(host)?.presentationReady ?? false;
+}
 
 function BoardWidgetCellContent(
   props: BoardWidgetCellProps,
   host: SolidBridgeElement<BoardWidgetCellProps, BoardWidgetCellMethods>,
 ) {
-  let context: ApplicationContext | undefined;
-  try {
-    context = useApplication();
-  } catch (error) {
-    // Standalone capless cells have no application provider.
-    if (!(error instanceof ContextNotFoundError)) {
-      throw error;
-    }
-  }
+  const context = useOptionalApplication();
   Object.defineProperty(host, "presentationReady", {
     configurable: true,
-    get: () => cells.get(host)?.presentationReady ?? false,
+    get: () => boardWidgetPresentationReady(host),
   });
   onCleanup(() => cells.delete(host));
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const requestUpdate = () => {
-    if (connected) {
-      setRevision((value) => value + 1);
-    }
-  };
-  let actionError = "";
-  let actionPending = false;
-  let bodyErrored = false;
-  let resetBodyError: (() => void) | undefined;
-  let connected = true;
-  const [renderedMcp, setRenderedMcp] = createSignal(
-    untrack(() => props.widget?.contentKind === "mcp-app"),
-    { ownedWrite: true },
+  const actionBinding = createMemo(
+    () =>
+      [
+        props.boardRevision,
+        props.widget?.name,
+        props.widget?.instanceId,
+        props.widget?.revision,
+      ] as const,
+    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
   );
+  // A pending receipt would hold sibling bridge roots; observe only settled failures here.
+  const [actionFailure, setActionFailure] = createSignal<Promise<void> | undefined>(() => {
+    actionBinding();
+    return undefined;
+  });
+  const actionFailed = () => actionFailure() !== undefined;
+  const actionOutcome = createMemo(() => actionFailure()?.then(() => null), {
+    loadingValue: undefined,
+  });
+  const [actionPending, setActionPending] = createSignal(false);
+  const [widgetRoot, setWidgetRoot] = createSignal<HTMLElement>();
+  let mcpElement: HTMLElementTagNameMap["mcp-app-view"] | undefined;
+  // Signals commit later; admission must reject a second action in the same tick.
+  let actionInFlight = false;
+  let menu: MenuHandle | undefined;
+  let connected = true;
   const active = () => props.active !== false;
   const canMutate = () => props.canMutate !== false;
   const canGrant = () => props.canGrant !== false;
-  const plugins = projectSource(context?.plugins, {
-    read: (runtime) => runtime,
-    subscribe: (runtime, notify) => runtime?.subscribe(notify) ?? (() => {}),
-    equality: "revision",
+  const plugins = context?.plugins ? sharedPluginsProjection(context.plugins) : undefined;
+  const gateway = context ? projectGateway(context.gateway) : undefined;
+  // Usage and other Gateway publications do not change a frame's connection
+  // authority. Sample mutable lifecycle facts before comparing the binding.
+  const gatewayBinding = createMemo(
+    () => {
+      const snapshot = gateway?.read().snapshot;
+      return [
+        snapshot?.phase,
+        snapshot?.client,
+        snapshot?.hello,
+        snapshot?.restartPending,
+        snapshot?.suspensionPhase,
+        context?.gateway.connectionRevision,
+      ] as const;
+    },
+    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
+  );
+  // A replacement binding retries a failed body; healthy bindings retain their subtree.
+  const [bodyError, setBodyError] = createSignal<{ error: unknown } | undefined>(
+    () => {
+      void props.widget;
+      void props.boardRevision;
+      void props.widgetFrameUrl;
+      plugins?.revision();
+      gatewayBinding();
+      return undefined;
+    },
+    { ownedWrite: true },
+  );
+  const bodyErrored = () => bodyError() !== undefined;
+  // Unticketed native widgets do not need these owners. Retain the pair for
+  // the cell lifetime, including HTML/MCP/native transitions and body retries.
+  const needsResources = createMemo((previous = false) => {
+    void props.boardRevision;
+    return (
+      previous ||
+      props.widget?.contentKind === "html" ||
+      props.widget?.contentKind === "mcp-app" ||
+      Boolean(props.widget?.frameUrl || props.widget?.viewTicket)
+    );
   });
-  const gateway = projectSource(context?.gateway, {
-    read: (owner) => owner?.snapshot,
-    subscribe: (owner, notify) => owner?.subscribe?.(notify) ?? (() => {}),
-    equality: "revision",
-  });
-  const loader = new LazyCustomElementRequestController({ requestUpdate });
-  const loadError = () => {
-    revision();
-    const value = loader.visibleState;
-    return value?.status === "error" ? value : undefined;
-  };
-  const appView = new BoardMcpAppLifecycle({
-    active: () => untrack(active),
-    connected: () => connected,
-    requestUpdate,
-    sessionKey: () => untrack(() => props.sessionKey ?? ""),
-    widget: () => untrack(() => props.widget),
-  });
-  const frame = new BoardWidgetFrameLifecycle({
-    active: () => untrack(active),
-    connected: () => connected,
-    loadingCovered: () => untrack(() => props.loadingCovered ?? false),
-    bridgeEnabled: () => untrack(() => props.bridgeEnabled !== false),
-    context: () => context,
-    refreshFrame: () => untrack(() => props.callbacks?.frameLoadFailed),
-    reportContentHeight: (name, height) =>
-      untrack(() => props.callbacks?.reportContentHeight(name, height)),
-    scrollBy: (deltaY) =>
-      host.closest("openclaw-board-view")?.scrollBy({ top: deltaY, behavior: "auto" }),
-    requestUpdate,
-    resolveFrameUrl: () => untrack(() => props.widgetFrameUrl),
-    root: () => host,
-    widget: () => untrack(() => props.widget),
-  });
-  const state = createMemo(() => {
-    revision();
-    return {
-      // Publish activity with observed visibility, not ahead of the lifecycle effects.
-      active: untrack(active),
-      error: actionError,
-      pending: actionPending,
-      frameError: frame.error,
-      appView: appView.state,
-      loading: appView.loading,
-      nearVisible: appView.nearVisible,
-    };
-  });
-  const activeKinds = () => gateway.read()?.hello?.controlUiWidgetKinds ?? [];
-  const contribution = () =>
+  let disconnectFrame: (() => void) | undefined;
+  // Constructor inputs stay deferred so this memo tracks only the latch.
+  const resources = createMemo(
+    () => {
+      if (!needsResources()) {
+        return undefined;
+      }
+      // Retain the MCP renderer until its teardown acknowledgement releases it.
+      const [renderedMcp, setRenderedMcp] = createSignal(
+        (previous = false) => props.widget?.contentKind === "mcp-app" || previous,
+      );
+      const appView = createBoardMcpAppLifecycle({
+        active,
+        connected: () => connected,
+        sessionKey: () => props.sessionKey ?? "",
+        widget: () => props.widget,
+      });
+      const frame = createBoardWidgetFrame({
+        active,
+        connected: () => connected,
+        loadingCovered: () => props.loadingCovered ?? false,
+        bridgeEnabled: () => props.bridgeEnabled !== false,
+        context: () => context,
+        refreshFrame: () => props.callbacks?.frameLoadFailed,
+        reportContentHeight: (name, height) => props.callbacks?.reportContentHeight(name, height),
+        scrollBy: (deltaY) =>
+          host.closest("openclaw-board-view")?.scrollBy({ top: deltaY, behavior: "auto" }),
+        resolveFrameUrl: () => props.widgetFrameUrl,
+        widget: () => props.widget,
+      });
+      disconnectFrame = () => frame.disconnect();
+      return {
+        appView,
+        frame,
+        frameState: projectOwner(frame, (owner) => owner),
+        renderedMcp,
+        setRenderedMcp,
+      };
+    },
+    { lazy: false },
+  );
+  const activeKinds = () => gateway?.read().snapshot.hello?.controlUiWidgetKinds ?? [];
+  const contribution = createMemo(() =>
     props.widget?.contentKind === "plugin" && !props.widget.frameUrl
       ? getPluginWidgetKindContribution(props.widget.pluginKind, activeKinds())
-      : null;
-  const CoreElement = dynamic(() => contribution()?.tagName);
-  const CoreWidget = () => {
-    let element!: HTMLElement & {
-      widget?: BoardWidget;
-      session?: BoardGetParams;
-      active?: boolean;
-    };
-    createEffect(
-      () => ({ widget: props.widget, session: props.session, active: active() }),
-      (value) => {
-        element.widget = value.widget;
-        element.session = value.session ?? { sessionKey: "" };
-        element.active = value.active;
-      },
-    );
-    return (
-      <CoreElement
-        ref={(node: typeof element) => {
-          element = node;
-        }}
-      />
-    );
-  };
+      : null,
+  );
+  const fixedReport = () =>
+    props.widget?.heightMode === "fixed" && contribution()?.kind === "session:report";
+  const [reportEntered, setReportEntered] = createSignal(false);
+  // Fixed reports already reserve their full height. Build nearby bodies once,
+  // then let the existing core-widget latch retain them across tab switches.
+  // Observe the card because the display:contents host has no intersection box.
+  createIntersectionObserver(
+    () => (fixedReport() && !reportEntered() && widgetRoot() ? [widgetRoot()!] : []),
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        setReportEntered(true);
+      }
+    },
+    { rootMargin: "300px" },
+  );
 
-  async function runAction(action: () => Promise<void>, failureMessage?: string) {
-    if (actionPending || props.busy) {
+  function runAction(run: () => Promise<void>, failureMessage?: string) {
+    if (actionInFlight || props.busy) {
       return;
     }
-    actionPending = true;
-    actionError = "";
-    requestUpdate();
-    closeBoardWidgetMenu(host);
-    try {
-      await action();
-    } catch (error) {
-      actionError = formatUiError(error);
+    actionInFlight = true;
+    const binding = actionBinding();
+    // A cell-local action would hold the shared owner's busy updates across bridge roots.
+    setActionPending(true);
+    setActionFailure(undefined);
+    menu?.close();
+    const completion = (async () => {
+      try {
+        await run();
+      } finally {
+        actionInFlight = false;
+        if (connected) {
+          setActionPending(false);
+        }
+      }
+    })();
+    void completion.catch(() => {
+      if (connected && actionBinding() === binding) {
+        void setActionFailure(completion);
+      }
       if (failureMessage) {
         showToast({ message: failureMessage });
       }
-    } finally {
-      actionPending = false;
-      requestUpdate();
-    }
+    });
   }
   function selectMenuItem(value: string | undefined) {
     const widget = props.widget;
@@ -207,18 +240,18 @@ function BoardWidgetCellContent(
       return;
     }
     if (value === "remove") {
-      void runAction(() => callbacks.remove(widget));
+      runAction(() => callbacks.remove(widget));
     } else if (value?.startsWith("move:")) {
-      void runAction(() => callbacks.moveToTab(widget, value.slice(5)));
+      runAction(() => callbacks.moveToTab(widget, value.slice(5)));
     } else if (value?.startsWith("resize:")) {
       const size = Object.entries(BOARD_SIZE_PRESETS).find(
         ([preset]) => preset === value.slice(7),
       )?.[1];
       if (size) {
-        void runAction(() => callbacks.resizeTo(widget, size.w, size.h));
+        runAction(() => callbacks.resizeTo(widget, size.w, size.h));
       }
     } else if (value === "height:auto") {
-      void runAction(() =>
+      runAction(() =>
         callbacks.setHeightMode(widget, widget.heightMode !== "fixed" ? "fixed" : "auto"),
       );
     }
@@ -227,151 +260,122 @@ function BoardWidgetCellContent(
     !props.widget?.viewTicket ||
     props.widget.grantState === "pending" ||
     props.widget.grantState === "rejected" ||
-    bodyErrored ||
-    frame.presentationReady;
+    bodyErrored() ||
+    (resources()?.frame.presentationReady ?? false);
   cells.set(host, {
     get presentationReady() {
-      return untrack(presentationReady);
+      return presentationReady();
     },
+    focusWidget: () => widgetRoot()?.focus(),
     selectMenuItem,
-    async teardown() {
-      await host
-        .querySelector<HTMLElement & { teardown?: () => Promise<void> }>("mcp-app-view")
-        ?.teardown?.();
-    },
-    restartAfterTeardown() {
-      host
-        .querySelector<HTMLElement & { restartAfterTeardown?: () => void }>("mcp-app-view")
-        ?.restartAfterTeardown?.();
-    },
+    teardown: async () => mcpElement?.teardown(),
+    restartAfterTeardown: () => mcpElement?.restartAfterTeardown(),
   });
-  let previousWidget = untrack(() => props.widget);
-  let previousBoardRevision = untrack(() => props.boardRevision);
   createEffect(
+    // Native widgets retain identity history without subscribing to frame activity.
     () =>
-      [
-        props.widget,
-        props.boardRevision,
-        props.callbacks,
-        props.sessionKey,
-        active(),
-        contribution(),
-        gateway.read(),
-      ] as const,
-    () =>
-      untrack(() => {
-        if (previousBoardRevision !== props.boardRevision) {
-          actionError = "";
-        }
-        previousBoardRevision = props.boardRevision;
-        if (previousWidget && previousWidget !== props.widget) {
-          if (
-            previousWidget.name !== props.widget?.name ||
-            previousWidget.instanceId !== props.widget?.instanceId ||
-            previousWidget.revision !== props.widget?.revision
-          ) {
-            actionError = "";
-          }
-          frame.widgetChanged(previousWidget, props.widget);
-          requestUpdate();
-        }
-        previousWidget = props.widget;
-        appView.update(props.widget, props.callbacks);
-        appView.activityChanged();
-        frame.activityChanged();
-        for (const element of CORE_BOARD_WIDGET_ELEMENTS) {
-          loader.requestWhileActive(element, active() && contribution() === element);
-        }
-        if (props.widget?.contentKind === "mcp-app") {
-          void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch(() => undefined);
-        }
-        requestUpdate();
-      }),
+      resources()
+        ? ([props.widget, resources(), props.boardRevision, active(), gatewayBinding()] as const)
+        : ([props.widget, undefined] as const),
+    ([widget, current], previous) => {
+      const previousWidget = previous?.[0];
+      if (previousWidget && previousWidget !== widget) {
+        current?.frame.widgetChanged(previousWidget, widget);
+      }
+      current?.frame.activityChanged();
+    },
   );
   createEffect(
-    () => [revision(), props.widget, active(), props.loadingCovered, props.bridgeEnabled] as const,
     () =>
-      untrack(() => {
-        appView.observe(
-          host.querySelector(".board-widget"),
-          active() && props.widget?.contentKind === "mcp-app",
-        );
-        queueMicrotask(() => {
-          if (connected) {
-            appView.sync();
-          }
-        });
-        frame.update();
-        if (props.loadingCovered && presentationReady()) {
-          host.dispatchEvent(new Event("openclaw-board-widget-presentation", { bubbles: true }));
-        }
-      }),
-  );
-  createEffect(
-    () => props.widget?.contentKind,
-    (kind) => {
-      if (kind === "mcp-app") {
-        setRenderedMcp(true);
-      } else if (!host.querySelector("mcp-app-view")) {
-        setRenderedMcp(false);
+      resources() || props.loadingCovered
+        ? ([
+            widgetRoot(),
+            resources(),
+            resources()?.frameState.revision(),
+            props.widget,
+            props.boardRevision,
+            props.callbacks,
+            props.sessionKey,
+            gatewayBinding(),
+            active(),
+            props.loadingCovered,
+            props.bridgeEnabled,
+            props.widgetFrameUrl,
+            bodyErrored(),
+          ] as const)
+        : undefined,
+    (next) => {
+      if (!next) {
+        return;
+      }
+      const [root, current] = next;
+      current?.appView.synchronize(props.callbacks, root ?? null);
+      current?.frame.update();
+      if (props.loadingCovered && presentationReady()) {
+        props.callbacks?.presentationReady?.();
       }
     },
   );
-  let observedErrorBinding = false;
-  createEffect(
-    () => [props.widget, props.widgetFrameUrl, plugins.revision(), gateway.revision()] as const,
-    () => {
-      // The first observation belongs to the initial render, including its error fallback.
-      if (observedErrorBinding && bodyErrored) {
-        bodyErrored = false;
-        resetBodyError?.();
-      }
-      observedErrorBinding = true;
-    },
-  );
-  onSettled(() => {
-    frame.connect();
-    requestUpdate();
-  });
   onCleanup(() => {
     connected = false;
-    for (const element of CORE_BOARD_WIDGET_ELEMENTS) {
-      loader.requestWhileActive(element, false);
-    }
-    appView.disconnect();
-    frame.disconnect();
+    disconnectFrame?.();
   });
-  const unavailable = () => props.busy || state().pending || !canMutate();
+  const unavailable = () => props.busy || actionPending() || !canMutate();
+  const RemoveButton = () => (
+    <button
+      class="btn btn--small"
+      type="button"
+      disabled={unavailable()}
+      onClick={() => runAction(() => props.callbacks!.remove(props.widget!))}
+    >
+      {t("board.widget.remove")}
+    </button>
+  );
   const AccessNotice = () => (
     <Show
       when={props.widget?.grantState === "pending"}
       fallback={
         <Show when={props.widget?.grantState === "rejected"}>
-          <BoardWidgetRejected
-            disabled={unavailable()}
-            onRemove={() => void runAction(() => props.callbacks!.remove(props.widget!))}
-          />
+          <div
+            class="board-widget__grant board-widget__grant--rejected"
+            data-test-id="board-rejected"
+          >
+            <strong>{t("board.widget.rejected")}</strong>
+            <span>{t("board.widget.rejectedDetail")}</span>
+            <RemoveButton />
+          </div>
         </Show>
       }
     >
       <BoardPendingCapabilities
         widget={props.widget!}
-        disabled={props.busy || state().pending || !canGrant()}
+        disabled={props.busy || actionPending() || !canGrant()}
         onGrant={(decision) =>
-          void runAction(
+          runAction(
             () => props.callbacks!.grant(props.widget!.name, decision),
             t(decision === "granted" ? "board.widget.allowFailed" : "board.widget.rejectFailed"),
           )
         }
         error={
-          <Show when={state().error}>
-            <BoardWidgetError error={state().error} action inline />
+          <Show when={actionFailed()}>
+            <Errored
+              fallback={(error) => (
+                <BoardWidgetError error={formatUiError(error())} action inline />
+              )}
+            >
+              {actionOutcome()}
+            </Errored>
           </Show>
         }
       />
     </Show>
   );
-  const Frame = () => frame.render(() => props.widget!, revision);
+  const currentFrameWidget = () => {
+    // Reused widget objects still change with board and gateway bindings.
+    void props.boardRevision;
+    gatewayBinding();
+    return props.widget!;
+  };
   const Plugin = () => {
     const pluginId = () => pluginIdForWidgetKind(props.widget?.pluginKind);
     const key = () => `${pluginId()}/${props.widget?.pluginKind?.slice(pluginId().length + 1)}`;
@@ -382,32 +386,25 @@ function BoardWidgetCellContent(
     const native = () =>
       advertised() &&
       plugins
-        .read()
+        ?.read()
         ?.registrations("widgets")
         .some((entry) => entry.key === key());
     const disabled = () =>
       plugins
-        .read()
+        ?.read()
         ?.errors.some(
           (entry) => entry.pluginId === pluginId() && entry.code === "custom-plugin-ui-disabled",
         );
     const runtimeError = () =>
       !disabled() && advertised()
         ? plugins
-            .read()
+            ?.read()
             ?.errors.find((entry) => entry.pluginId === pluginId() || entry.pluginId === "host")
         : undefined;
-    const Loading = () => (
-      <p class="board-widget__plugin-loading">{t("board.widget.pluginLoading")}</p>
-    );
     return (
       <Switch
         fallback={
-          <BoardDisabledPlugin
-            pluginId={pluginId()}
-            disabled={unavailable()}
-            onRemove={() => void runAction(() => props.callbacks!.remove(props.widget!))}
-          >
+          <div class="board-widget__disabled-plugin" data-test-id="board-disabled-plugin">
             <Show
               when={disabled()}
               fallback={
@@ -416,30 +413,19 @@ function BoardWidgetCellContent(
             >
               <CustomPluginUiDisabled context={context} pluginId={pluginId()} />
             </Show>
-          </BoardDisabledPlugin>
+            <RemoveButton />
+          </div>
         }
       >
-        <Match when={contribution()}>
-          <Show
-            when={loadError()}
-            fallback={
-              <Show
-                when={(revision(), isOptionalElementDefined(contribution()!))}
-                fallback={<Loading />}
-              >
-                <CoreWidget />
-              </Show>
-            }
-          >
-            {(error) => (
-              <LazyViewError
-                error={error().error}
-                stale={error().stale}
-                subtitle={error().element.label}
-                onRetry={() => loader.retry()}
-              />
-            )}
-          </Show>
+        <Match when={contribution()} keyed>
+          {(core) => (
+            <CoreBoardWidget
+              contribution={core}
+              widget={props.widget}
+              session={props.session}
+              active={active() && (!fixedReport() || reportEntered())}
+            />
+          )}
         </Match>
         <Match when={native()}>
           <PluginContribution
@@ -456,45 +442,58 @@ function BoardWidgetCellContent(
         </Match>
         <Match
           when={
-            (context && gateway.read()?.phase !== "connected") ||
-            plugins.read()?.isLoading(pluginId())
+            (context && gateway?.read().snapshot.phase !== "connected") ||
+            plugins?.read().isLoading(pluginId())
           }
         >
-          <Loading />
+          <p class="board-widget__plugin-loading">{t("board.widget.pluginLoading")}</p>
         </Match>
         <Match when={runtimeError()}>
           <BoardWidgetError
             error={runtimeError()?.message}
-            onRetry={() => void plugins.read()?.refresh()}
+            onRetry={() => void plugins?.read().refresh()}
           />
         </Match>
       </Switch>
     );
   };
   const Body = () => (
-    <Switch fallback={<Frame />}>
-      <Match when={state().frameError}>
-        <BoardWidgetError error={state().frameError} />
+    <Switch
+      fallback={
+        <Show when={resources()}>
+          {(current) => (
+            <BoardWidgetFrame state={current().frameState.read} current={currentFrameWidget} />
+          )}
+        </Show>
+      }
+    >
+      <Match when={resources()?.frameState.read().error}>
+        <BoardWidgetError error={resources()?.frameState.read().error} />
       </Match>
-      <Match when={renderedMcp()}>
-        <BoardMcpAppContent
-          accessNotice={<AccessNotice />}
-          active={state().active}
-          appView={state().appView}
-          busy={unavailable()}
-          loading={state().loading}
-          nearVisible={state().nearVisible}
-          sessionKey={props.sessionKey ?? ""}
-          widget={props.widget!}
-          expired={() => appView.expire()}
-          remove={() => void runAction(() => props.callbacks!.remove(props.widget!))}
-          retry={() => appView.retry()}
-          retired={() => {
-            if (props.widget?.contentKind !== "mcp-app") {
-              setRenderedMcp(false);
-            }
-          }}
-        />
+      <Match when={resources()?.renderedMcp() && resources()}>
+        {(current) => (
+          <BoardMcpAppContent
+            accessNotice={<AccessNotice />}
+            active={current().appView.snapshot().active}
+            appView={current().appView.snapshot().state}
+            busy={unavailable()}
+            loading={current().appView.snapshot().loading}
+            nearVisible={current().appView.snapshot().nearVisible}
+            sessionKey={props.sessionKey ?? ""}
+            widget={props.widget!}
+            expired={() => current().appView.expire()}
+            remove={() => runAction(() => props.callbacks!.remove(props.widget!))}
+            retry={() => current().appView.retry()}
+            viewRef={(element) => {
+              mcpElement = element;
+            }}
+            retired={() => {
+              if (props.widget?.contentKind !== "mcp-app") {
+                current().setRenderedMcp(false);
+              }
+            }}
+          />
+        )}
       </Match>
       <Match
         when={props.widget?.grantState === "pending" || props.widget?.grantState === "rejected"}
@@ -507,24 +506,37 @@ function BoardWidgetCellContent(
     </Switch>
   );
 
+  const BodyBoundary = () => (
+    <>
+      {createErrorBoundary(
+        () => (
+          <Body />
+        ),
+        (error) => {
+          const caught = error();
+          setBodyError((current) => current ?? { error: caught });
+          return null;
+        },
+      )}
+    </>
+  );
+
   const presentation = () =>
     props.widget?.contentKind === "html" || props.widget?.frameUrl
       ? (props.widget.presentation ?? "card")
       : undefined;
   const label = () => props.widget?.title || props.widget?.name || "";
   const scrollable = () =>
-    Boolean(
-      bodyErrored ||
-      state().error ||
-      props.widget?.grantState === "pending" ||
-      props.widget?.grantState === "rejected" ||
-      props.widget?.contentKind === "mcp-app" ||
-      (props.widget?.contentKind === "plugin" && !props.widget.frameUrl),
-    );
+    bodyErrored() ||
+    actionFailed() ||
+    props.widget?.grantState === "pending" ||
+    props.widget?.grantState === "rejected" ||
+    props.widget?.contentKind === "mcp-app" ||
+    (props.widget?.contentKind === "plugin" && !props.widget.frameUrl);
   const style = (): SolidJSX.CSSProperties => {
     const rect = props.rect!;
     const height =
-      props.dragging || props.pageChrome
+      props.dragging || props.pageChrome || props.widget!.contentKind !== "html"
         ? undefined
         : exactBoardWidgetHeightPx(
             props.widget!,
@@ -563,7 +575,7 @@ function BoardWidgetCellContent(
     }
     event.preventDefault();
     if (event.altKey) {
-      void runAction(() => props.callbacks!.nudge(props.widget!, direction));
+      runAction(() => props.callbacks!.nudge(props.widget!, direction));
     } else {
       props.callbacks!.focus(props.widget!, direction);
     }
@@ -571,11 +583,13 @@ function BoardWidgetCellContent(
   return (
     <Show when={props.widget && props.rect && props.callbacks}>
       <section
+        ref={setWidgetRoot}
         class={[
           "board-widget",
           {
             "board-widget--page-chrome": props.pageChrome,
             "board-widget--dragging": props.dragging,
+            "board-widget--fixed-report": fixedReport(),
           },
           presentation() && `board-widget--${presentation()}`,
         ]}
@@ -595,37 +609,42 @@ function BoardWidgetCellContent(
         onKeyDown={keyDown}
       >
         <Show when={!props.pageChrome}>
-          <header class="board-widget__bar">
-            <Show when={canMutate()}>
-              <span
-                class="board-widget__drag-handle"
-                aria-hidden="true"
-                title={t("board.widget.moveHandle", { title: label() })}
-                onPointerDown={(event) => props.callbacks!.movePointerDown(props.widget!, event)}
-              >
-                <span aria-hidden="true">⠿</span>
+          <div class="board-widget__chrome">
+            <header class="board-widget__bar">
+              <Show when={canMutate()}>
+                <span
+                  class="board-widget__drag-handle"
+                  aria-hidden="true"
+                  title={t("board.widget.moveHandle", { title: label() })}
+                  onPointerDown={(event) => props.callbacks!.movePointerDown(props.widget!, event)}
+                >
+                  <span aria-hidden="true">⠿</span>
+                </span>
+              </Show>
+              <span class="board-widget__title" title={label()}>
+                {label()}
               </span>
-            </Show>
-            <span class="board-widget__title" title={label()}>
-              {label()}
-            </span>
-            <span class="board-widget__kind">
-              {props.widget!.contentKind === "mcp-app"
-                ? t("board.widget.kindMcp")
-                : props.widget!.contentKind === "plugin"
-                  ? props.widget!.kindLabel || contribution()?.label || t("board.widget.kindPlugin")
-                  : t("board.widget.kindHtml")}
-            </span>
-            <BoardGrantedCapabilities widget={props.widget!} />
-            <Show when={canMutate()}>
-              <BoardWidgetMenu
-                widget={props.widget!}
-                tabs={props.tabs ?? []}
-                disabled={props.busy || state().pending}
-                onSelect={(event) => selectMenuItem(event.detail.item.value)}
-              />
-            </Show>
-          </header>
+              <span class="board-widget__kind">
+                {props.widget!.contentKind === "mcp-app"
+                  ? t("board.widget.kindMcp")
+                  : props.widget!.contentKind === "plugin"
+                    ? contribution()?.label || t("board.widget.kindPlugin")
+                    : t("board.widget.kindHtml")}
+              </span>
+              <BoardGrantedCapabilities widget={props.widget!} />
+              <Show when={canMutate() && (!fixedReport() || reportEntered())}>
+                <BoardWidgetMenu
+                  widget={props.widget!}
+                  tabs={props.tabs ?? []}
+                  disabled={props.busy || actionPending()}
+                  onSelect={selectMenuItem}
+                  ref={(handle) => {
+                    menu = handle;
+                  }}
+                />
+              </Show>
+            </header>
+          </div>
         </Show>
         <div
           class={[
@@ -633,26 +652,20 @@ function BoardWidgetCellContent(
             {
               "board-widget__body--scrollable": scrollable(),
               "board-widget__body--card": presentation() === "card",
+              "board-widget__body--fixed-report": fixedReport(),
             },
           ]}
         >
-          {createErrorBoundary(
-            () => (
-              <Body />
-            ),
-            (error, reset) => {
-              resetBodyError = reset;
-              // Publishing the same failure retriggers the frame that produced it.
-              if (!bodyErrored) {
-                bodyErrored = true;
-                requestUpdate();
-              }
-              return <BoardWidgetError error={error()} />;
-            },
-          )}
-          <Show when={state().error && props.widget!.grantState !== "pending"}>
+          <Show when={bodyError()} fallback={<BodyBoundary />}>
+            {(failure) => <BoardWidgetError error={failure().error} />}
+          </Show>
+          <Show when={actionFailed() && props.widget!.grantState !== "pending"}>
             <div class="board-widget__error-overlay">
-              <BoardWidgetError error={state().error} action />
+              <Errored
+                fallback={(error) => <BoardWidgetError error={formatUiError(error())} action />}
+              >
+                {actionOutcome()}
+              </Errored>
             </div>
           </Show>
         </div>
@@ -700,6 +713,7 @@ export const BoardWidgetCell = defineSolidBridge<BoardWidgetCellProps, BoardWidg
       loadingCovered: { default: false, type: Boolean },
     },
     methods: {
+      focusWidget: (host) => cells.get(host)?.focusWidget(),
       selectMenuItem: (host, value) => cells.get(host)?.selectMenuItem(value),
       teardown: async (host) => {
         await cells.get(host)?.teardown();

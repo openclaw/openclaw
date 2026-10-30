@@ -34,170 +34,133 @@ export function toolPostureFindings(
         : entries.filter((entry) =>
             scopedAgentEvidenceMatches(entry, agentId, entries, entry.scope === "global"),
           );
-    for (const collect of [
-      toolValuePostureFindings,
-      toolAlsoAllowExpectedFindings,
-      toolRequiredDenyFindings,
-    ]) {
-      findings.push(
-        ...collect(target.policy, policyDocName, target.requirementBase, scopedEntries),
-      );
-    }
-  }
-  return findings;
-}
-
-function toolValuePostureFindings(
-  toolsPolicy: Record<string, unknown>,
-  policyDocName: string,
-  requirementBase: string,
-  entries: readonly PolicyToolPostureEvidence[],
-): readonly HealthFinding[] {
-  // Keep rule order stable: findings participate in the policy attestation.
-  const rules: readonly (Omit<PolicyEvidenceRule<PolicyToolPostureEvidence>, "violates"> & {
-    required?: boolean;
-  })[] = [
-    {
-      path: ["profiles", "allow"],
-      kind: "profile",
-      checkId: CHECK_IDS.policyToolsProfileUnapproved,
-      message: (entry) =>
-        `${toolPostureLabel(entry)} uses unapproved tool profile '${entry.value ?? ""}'.`,
-      fixHint: "Use an approved tools.profile value or update policy after review.",
-    },
-    {
-      path: ["fs", "requireWorkspaceOnly"],
-      kind: "fsWorkspaceOnly",
-      required: true,
-      checkId: CHECK_IDS.policyToolsFsWorkspaceOnlyRequired,
-      message: (entry) =>
-        `${toolPostureLabel(entry)} does not require workspace-only filesystem tools.`,
-      fixHint: "Set tools.fs.workspaceOnly=true or update policy after review.",
-    },
-    ...(
-      [
+    // Keep rule order stable: findings participate in the policy attestation.
+    const rules: readonly (Omit<PolicyEvidenceRule<PolicyToolPostureEvidence>, "violates"> & {
+      required?: boolean;
+    })[] = [
+      {
+        path: ["profiles", "allow"],
+        kind: "profile",
+        checkId: CHECK_IDS.policyToolsProfileUnapproved,
+        message: (entry) =>
+          `${toolPostureLabel(entry)} uses unapproved tool profile '${entry.value ?? ""}'.`,
+        fixHint: "Use an approved tools.profile value or update policy after review.",
+      },
+      {
+        path: ["fs", "requireWorkspaceOnly"],
+        kind: "fsWorkspaceOnly",
+        required: true,
+        checkId: CHECK_IDS.policyToolsFsWorkspaceOnlyRequired,
+        message: (entry) =>
+          `${toolPostureLabel(entry)} does not require workspace-only filesystem tools.`,
+        fixHint: "Set tools.fs.workspaceOnly=true or update policy after review.",
+      },
+      ...(
         [
-          "allowSecurity",
-          "execSecurity",
-          "exec security",
-          CHECK_IDS.policyToolsExecSecurityUnapproved,
-        ],
-        ["requireAsk", "execAsk", "exec ask", CHECK_IDS.policyToolsExecAskUnapproved],
-        ["allowHosts", "execHost", "exec host", CHECK_IDS.policyToolsExecHostUnapproved],
-      ] as const
-    ).map(([key, kind, label, checkId]) => ({
-      path: ["exec", key],
-      kind,
-      checkId,
-      message: (entry: PolicyToolPostureEvidence) =>
-        `${toolPostureLabel(entry)} uses unapproved ${label} '${entry.value ?? ""}'.`,
-      fixHint: "Adjust the configured tool posture or update policy after review.",
-    })),
-    {
-      path: ["elevated", "allow"],
-      kind: "elevatedEnabled",
-      required: false,
-      checkId: CHECK_IDS.policyToolsElevatedEnabled,
-      message: (entry) => `${toolPostureLabel(entry)} permits elevated tool mode.`,
-      fixHint: "Set tools.elevated.enabled=false or update policy after review.",
-    },
-  ];
-  return rules.flatMap((rule) => {
-    const allowed = new Set(readStringList(toolsPolicy, rule.path));
-    if (
-      rule.required === undefined
-        ? allowed.size === 0
-        : readPolicyBoolean(toolsPolicy, rule.path) !== rule.required
-    ) {
-      return [];
-    }
-    return policyEvidenceRuleFindings(
-      entries,
-      [
-        {
-          ...rule,
-          violates: (entry) =>
-            rule.required === undefined
-              ? typeof entry.value === "string" && !allowed.has(entry.value.toLowerCase())
-              : entry.value !== rule.required,
-        },
-      ],
-      policyDocName,
-      requirementBase,
+          [
+            "allowSecurity",
+            "execSecurity",
+            "exec security",
+            CHECK_IDS.policyToolsExecSecurityUnapproved,
+          ],
+          ["requireAsk", "execAsk", "exec ask", CHECK_IDS.policyToolsExecAskUnapproved],
+          ["allowHosts", "execHost", "exec host", CHECK_IDS.policyToolsExecHostUnapproved],
+        ] as const
+      ).map(([key, kind, label, checkId]) => ({
+        path: ["exec", key],
+        kind,
+        checkId,
+        message: (entry: PolicyToolPostureEvidence) =>
+          `${toolPostureLabel(entry)} uses unapproved ${label} '${entry.value ?? ""}'.`,
+        fixHint: "Adjust the configured tool posture or update policy after review.",
+      })),
+      {
+        path: ["elevated", "allow"],
+        kind: "elevatedEnabled",
+        required: false,
+        checkId: CHECK_IDS.policyToolsElevatedEnabled,
+        message: (entry) => `${toolPostureLabel(entry)} permits elevated tool mode.`,
+        fixHint: "Set tools.elevated.enabled=false or update policy after review.",
+      },
+    ];
+    findings.push(
+      ...rules.flatMap((rule) => {
+        const allowed = new Set(readStringList(target.policy, rule.path));
+        if (
+          rule.required === undefined
+            ? allowed.size === 0
+            : readPolicyBoolean(target.policy, rule.path) !== rule.required
+        ) {
+          return [];
+        }
+        return policyEvidenceRuleFindings(
+          scopedEntries,
+          [
+            {
+              ...rule,
+              violates: (entry) =>
+                rule.required === undefined
+                  ? typeof entry.value === "string" && !allowed.has(entry.value.toLowerCase())
+                  : entry.value !== rule.required,
+            },
+          ],
+          policyDocName,
+          target.requirementBase,
+        );
+      }),
     );
-  });
-}
-
-function toolAlsoAllowExpectedFindings(
-  toolsPolicy: Record<string, unknown>,
-  policyDocName: string,
-  requirementBase: string,
-  entries: readonly PolicyToolPostureEvidence[],
-): readonly HealthFinding[] {
-  const alsoAllowPolicy = isRecord(toolsPolicy.alsoAllow) ? toolsPolicy.alsoAllow : {};
-  if (alsoAllowPolicy.expected === undefined) {
-    return [];
-  }
-  const expected = new Set(readStringList(toolsPolicy, ["alsoAllow", "expected"]).toSorted());
-  const findings: HealthFinding[] = [];
-  for (const entry of entries.filter((candidate) => candidate.kind === "alsoAllow")) {
-    const actual = new Set(normalizeStringEntriesLower(entry.entries).toSorted());
-    for (const expectedTool of expected) {
-      if (actual.has(expectedTool)) {
-        continue;
+    const alsoAllowPolicy = isRecord(target.policy.alsoAllow) ? target.policy.alsoAllow : {};
+    if (alsoAllowPolicy.expected !== undefined) {
+      const expected = new Set(readStringList(target.policy, ["alsoAllow", "expected"]).toSorted());
+      for (const entry of scopedEntries.filter((candidate) => candidate.kind === "alsoAllow")) {
+        const actual = new Set(normalizeStringEntriesLower(entry.entries).toSorted());
+        for (const expectedTool of expected) {
+          if (actual.has(expectedTool)) {
+            continue;
+          }
+          findings.push(
+            policyEvidenceFinding(entry, {
+              checkId: CHECK_IDS.policyToolsAlsoAllowMissing,
+              message: `${toolPostureLabel(entry)} is missing expected tools.alsoAllow entry '${expectedTool}'.`,
+              requirement: `oc://${policyDocName}/${target.requirementBase}/alsoAllow/expected`,
+              fixHint: "Add the expected tools.alsoAllow entry or update policy after review.",
+            }),
+          );
+        }
+        for (const actualTool of actual) {
+          if (expected.has(actualTool)) {
+            continue;
+          }
+          findings.push(
+            policyEvidenceFinding(entry, {
+              checkId: CHECK_IDS.policyToolsAlsoAllowUnexpected,
+              message: `${toolPostureLabel(entry)} has unexpected tools.alsoAllow entry '${actualTool}'.`,
+              requirement: `oc://${policyDocName}/${target.requirementBase}/alsoAllow/expected`,
+              fixHint: "Remove the unexpected tools.alsoAllow entry or update policy after review.",
+            }),
+          );
+        }
       }
-      findings.push(
-        policyEvidenceFinding(entry, {
-          checkId: CHECK_IDS.policyToolsAlsoAllowMissing,
-          message: `${toolPostureLabel(entry)} is missing expected tools.alsoAllow entry '${expectedTool}'.`,
-          requirement: `oc://${policyDocName}/${requirementBase}/alsoAllow/expected`,
-          fixHint: "Add the expected tools.alsoAllow entry or update policy after review.",
-        }),
-      );
     }
-    for (const actualTool of actual) {
-      if (expected.has(actualTool)) {
-        continue;
+    const required = readStringList(target.policy, ["denyTools"]);
+    if (required.length > 0) {
+      const requiredTools = uniqueStrings(required.flatMap(expandPolicyToolRequirement));
+      for (const entry of scopedEntries.filter((candidate) => candidate.kind === "deny")) {
+        for (const tool of requiredTools) {
+          if (toolListCoversTool(entry.entries ?? [], tool)) {
+            continue;
+          }
+          findings.push(
+            policyEvidenceFinding(entry, {
+              checkId: CHECK_IDS.policyToolsRequiredDenyMissing,
+              message: `${toolPostureLabel(entry)} does not deny required tool '${tool}'.`,
+              requirement: `oc://${policyDocName}/${target.requirementBase}/denyTools`,
+              fixHint:
+                "Add the tool or group to tools.deny/agents.entries.<id>.tools.deny, or update policy after review.",
+            }),
+          );
+        }
       }
-      findings.push(
-        policyEvidenceFinding(entry, {
-          checkId: CHECK_IDS.policyToolsAlsoAllowUnexpected,
-          message: `${toolPostureLabel(entry)} has unexpected tools.alsoAllow entry '${actualTool}'.`,
-          requirement: `oc://${policyDocName}/${requirementBase}/alsoAllow/expected`,
-          fixHint: "Remove the unexpected tools.alsoAllow entry or update policy after review.",
-        }),
-      );
-    }
-  }
-  return findings;
-}
-
-function toolRequiredDenyFindings(
-  toolsPolicy: Record<string, unknown>,
-  policyDocName: string,
-  requirementBase: string,
-  entries: readonly PolicyToolPostureEvidence[],
-): readonly HealthFinding[] {
-  const required = readStringList(toolsPolicy, ["denyTools"]);
-  if (required.length === 0) {
-    return [];
-  }
-  const requiredTools = uniqueStrings(required.flatMap(expandPolicyToolRequirement));
-  const findings: HealthFinding[] = [];
-  for (const entry of entries.filter((candidate) => candidate.kind === "deny")) {
-    for (const tool of requiredTools) {
-      if (toolListCoversTool(entry.entries ?? [], tool)) {
-        continue;
-      }
-      findings.push(
-        policyEvidenceFinding(entry, {
-          checkId: CHECK_IDS.policyToolsRequiredDenyMissing,
-          message: `${toolPostureLabel(entry)} does not deny required tool '${tool}'.`,
-          requirement: `oc://${policyDocName}/${requirementBase}/denyTools`,
-          fixHint:
-            "Add the tool or group to tools.deny/agents.entries.<id>.tools.deny, or update policy after review.",
-        }),
-      );
     }
   }
   return findings;

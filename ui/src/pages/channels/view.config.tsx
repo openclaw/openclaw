@@ -1,16 +1,11 @@
 import { createMemo, For, Show } from "solid-js";
-import {
-  analyzeConfigSchema,
-  renderConfigTierGroups,
-  renderNode,
-  schemaType,
-  type JsonSchema,
-} from "../../components/config-form.ts";
+import { analyzeConfigSchema } from "../../components/config-form.analyze.ts";
+import { ConfigNode } from "../../components/config-form.node.tsx";
+import { ConfigTierGroups } from "../../components/config-form.render.tsx";
+import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
 import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
-import { i18n } from "../../i18n/index.ts";
 import { formatChannelExtraValue, resolveChannelConfigValue } from "../../lib/channels/index.ts";
-import { projectI18n, t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import type { ChannelsProps } from "./view.types.ts";
 
 function resolveSchemaNode(schema: JsonSchema | null, path: string[]): JsonSchema | null {
@@ -30,7 +25,6 @@ function resolveSchemaNode(schema: JsonSchema | null, path: string[]): JsonSchem
 const EXTRA_CHANNEL_FIELDS = ["groupPolicy", "streamMode", "dmPolicy"] as const;
 
 export function ChannelConfig(params: { channelId: string; props: ChannelsProps }) {
-  const locale = projectI18n(i18n);
   const analysis = createMemo(() => analyzeConfigSchema(params.props.config.configSchema));
   const node = createMemo(() =>
     resolveSchemaNode(analysis().schema, ["channels", params.channelId]),
@@ -38,38 +32,14 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
   const value = createMemo(
     () => resolveChannelConfigValue(params.props.config.configForm ?? {}, params.channelId) ?? {},
   );
-  const extraFields = createMemo(() => EXTRA_CHANNEL_FIELDS.filter((field) => field in value()));
+  const extraFields = () => EXTRA_CHANNEL_FIELDS.filter((field) => field in value());
   const unsupported = createMemo(() => new Set(analysis().unsupportedPaths));
   const disabled = createMemo(
-    () => params.props.config.configSaving || params.props.config.configSchemaLoading,
+    () =>
+      params.props.mutationBusy?.config ||
+      params.props.config.configSaving ||
+      params.props.config.configSchemaLoading,
   );
-  const form = createMemo(() => {
-    locale.revision();
-    const schema = node();
-    if (!schema) {
-      return undefined;
-    }
-    return renderConfigTierGroups({
-      schema,
-      path: ["channels", params.channelId],
-      hints: params.props.config.configUiHints,
-      revealAdvanced: params.props.showAdvancedSettings,
-      onShowAdvanced: () => params.props.onShowAdvancedSettings(true),
-      onHideAdvanced: () => params.props.onShowAdvancedSettings(false),
-      renderTier: (tier) =>
-        renderNode({
-          schema: tier,
-          value: value(),
-          path: ["channels", params.channelId],
-          hints: params.props.config.configUiHints,
-          unsupported: unsupported(),
-          disabled: disabled(),
-          showLabel: false,
-          maskSensitive: true,
-          onPatch: params.props.onConfigPatch,
-        }),
-    });
-  });
   return (
     <Show
       when={!params.props.config.configSchemaLoading}
@@ -88,20 +58,46 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
             </div>
           }
         >
-          <div class="config-form">
-            <LitContent render={() => form()} />
-          </div>
-          <Show when={extraFields().length > 0}>
-            <div>
-              <For each={extraFields()}>
-                {(field) => (
-                  <div class="settings-row__desc">
-                    {field}: {formatChannelExtraValue(value()[field])}
-                  </div>
-                )}
-              </For>
-            </div>
-          </Show>
+          {(schema) => (
+            <>
+              <div class="config-form">
+                <ConfigTierGroups
+                  schema={schema()}
+                  path={["channels", params.channelId]}
+                  hints={params.props.config.configUiHints}
+                  revealAdvanced={params.props.showAdvancedSettings}
+                  onShowAdvanced={() => params.props.onShowAdvancedSettings(true)}
+                  onHideAdvanced={() => params.props.onShowAdvancedSettings(false)}
+                  renderTier={(tier) => (
+                    <ConfigNode
+                      params={{
+                        schema: tier(),
+                        value: value(),
+                        path: ["channels", params.channelId],
+                        hints: params.props.config.configUiHints,
+                        unsupported: unsupported(),
+                        disabled: disabled(),
+                        showLabel: false,
+                        maskSensitive: true,
+                        onPatch: params.props.onConfigPatch,
+                      }}
+                    />
+                  )}
+                />
+              </div>
+              <Show when={extraFields().length > 0}>
+                <div>
+                  <For each={extraFields()}>
+                    {(field) => (
+                      <div class="settings-row__desc">
+                        {field}: {formatChannelExtraValue(value()[field])}
+                      </div>
+                    )}
+                  </For>
+                </div>
+              </Show>
+            </>
+          )}
         </Show>
         {params.props.config.lastError ? (
           <div class="callout danger" role="alert">
@@ -111,12 +107,20 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
         <div class="settings-row__control">
           <button
             class="btn primary"
-            disabled={disabled() || !params.props.config.configFormDirty}
+            disabled={
+              !params.props.channels.connected || disabled() || !params.props.config.configFormDirty
+            }
             onClick={() => params.props.onConfigSave()}
           >
-            {params.props.config.configSaving ? t("common.saving") : t("common.save")}
+            {params.props.mutationBusy?.config || params.props.config.configSaving
+              ? t("common.saving")
+              : t("common.save")}
           </button>
-          <button class="btn" disabled={disabled()} onClick={() => params.props.onConfigReload()}>
+          <button
+            class="btn"
+            disabled={!params.props.channels.connected || disabled()}
+            onClick={() => params.props.onConfigReload()}
+          >
             {t("common.reload")}
           </button>
         </div>

@@ -49,12 +49,12 @@ export function createPluginCacheSdk() {
   return {
     hosts: new Map<string, PluginSdkHostFacts>(),
     contexts: new Map<string, PreparedPluginAliases>(),
+    roots: new Set<string>(),
     packageNames: new Map<string, string | null>(),
     packageSearches: new Map<string, { first?: string | null; all?: string[] }>(),
     argvDirectories: new Map<string, string[]>(),
     devSourceRoots: new Map<string, string | null>(),
     runtimeModules: new Map<string, PluginRuntimeModuleResolution>(),
-    usableDistArtifacts: new Map<string, boolean>(),
     normalizedJitiAliases: new Map<string, PluginSdkAliasMap>(),
     aliasFacts: new WeakMap<
       PluginSdkAliasMap,
@@ -87,6 +87,14 @@ export function createPluginCacheSdk() {
 }
 
 export type PluginCacheSdk = ReturnType<typeof createPluginCacheSdk>;
+
+export function cachePluginSdkAliases(cache: PluginCacheSdk, aliases: PreparedPluginAliases) {
+  cache.contexts.set(aliases.cacheKey, aliases);
+  for (const root of aliases.sdkRoots) {
+    cache.roots.add(root);
+  }
+  return aliases;
+}
 
 export function getPluginSdkHostFacts(
   cache: PluginCacheSdk,

@@ -1,10 +1,12 @@
 import type { ChildProcess, SendHandle } from "node:child_process";
 import { Socket } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
+import { spawnInAgentExecCgroup } from "../linux-exec-cgroup.js";
 import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
 import { waitForBrokerChildCompletion } from "./child-completion.js";
 import {
@@ -23,7 +25,11 @@ import {
   type BrokerRequest,
   type BrokerResponse,
 } from "./protocol.js";
-import type { BrokerResourceRequest, BrokerResourceResponse } from "./resource-protocol.js";
+import type {
+  BrokerBootstrap,
+  BrokerResourceRequest,
+  BrokerResourceResponse,
+} from "./resource-protocol.js";
 import { createBrokerNativeResourceServer } from "./resource-server.js";
 import { createWorkerSender } from "./worker-sender.js";
 
@@ -52,6 +58,7 @@ let resources: Awaited<ReturnType<typeof createBrokerNativeResourceServer>> | un
 let startup: "waiting" | "initializing" | "ready" = "waiting";
 let initialization = Promise.resolve();
 const launches = new Set<Promise<void>>();
+const fileReads = new Map<number, { canceled: boolean }>();
 
 const sender = createWorkerSender((message, handle, callback) => {
   if (!process.send || !process.connected) {
@@ -112,7 +119,7 @@ function stopChild(entry: Owned): Promise<void> {
       (entry.groupIdentity ? isBrokerChildGroupAlive(entry.groupIdentity) : directChildAlive);
     const termination =
       child.pid && groupAlive
-        ? terminateLostBrokerChild(child.pid, entry.detached, undefined, entry.groupIdentity)
+        ? terminateLostBrokerChild(child.pid, entry.detached, entry.groupIdentity)
         : undefined;
     void termination?.settled.catch(() => {});
     if (groupAlive && directChildAlive) {
@@ -157,12 +164,7 @@ function shutdown(): void {
         ...[...owned.values()].map(stopChild),
         resources?.close(),
       ]);
-      const failures = outcomes.flatMap((outcome) =>
-        outcome.status === "rejected" ? [outcome.reason] : [],
-      );
-      if (failures.length) {
-        throw new AggregateError(failures, "Spawn broker native cleanup failed");
-      }
+      throwSettledAggregate(outcomes, "Spawn broker native cleanup failed");
       // Native owners have settled. Only abandoned members of our private group
       // remain; never signal the broker or tear down its isolate during cleanup.
       await drainCurrentBrokerProcessGroup();
@@ -195,10 +197,48 @@ function disposeFailedChild(child: ChildProcess | undefined): void {
   }
 }
 
+async function readFile(message: Extract<BrokerRequest, { type: "read-file" }>): Promise<void> {
+  const pending = { canceled: false };
+  try {
+    // Resource brokers can hold SQLite locks; only the command broker is a safe reader.
+    if (resources || owned.size + starting.size + fileReads.size >= 256) {
+      throw new SpawnBrokerError("Spawn broker cannot admit a raw file read");
+    }
+    fileReads.set(message.id, pending);
+    const { buffer } = await readRegularFile({ filePath: message.filePath });
+    // Bound each IPC message, not the file size. Await sends to avoid retaining a second payload.
+    for (let offset = 0; offset < buffer.length; offset += 512 * 1024) {
+      if (stopping || pending.canceled) {
+        return;
+      }
+      await report({
+        type: "file-read-chunk",
+        id: message.id,
+        bytes: buffer.subarray(offset, offset + 512 * 1024),
+      });
+    }
+    if (!stopping && !pending.canceled) {
+      await report({ type: "file-read-result", id: message.id });
+    }
+  } catch (error) {
+    if (!stopping && !pending.canceled) {
+      const failure = toErrorObject(error, "File read failed");
+      await report({
+        type: "file-read-result",
+        id: message.id,
+        error: failure,
+        code: serializeBrokerError(failure).code,
+      });
+    }
+  } finally {
+    fileReads.delete(message.id);
+  }
+}
+
 async function launch(
   message: Extract<BrokerRequest, { type: "spawn" | "prepare-spawn" | "spawn-execa" }>,
 ): Promise<void> {
-  if (stopping || owned.size + starting.size + (resources?.size ?? 0) >= 256) {
+  if (stopping || owned.size + starting.size + fileReads.size + (resources?.size ?? 0) >= 256) {
     const error = new SpawnBrokerError("Spawn broker request capacity exceeded");
     // The ordered failed-admission result proves no native work was started.
     // No command metadata exists because this guard precedes spawn preparation.
@@ -267,12 +307,14 @@ async function launch(
       }
       const execa =
         message.type === "spawn-execa"
-          ? await startBrokerExeca(message.argv, message.options, assertActive)
+          ? await startBrokerExeca(message.argv, message.options, assertActive, message.execCgroup)
           : undefined;
       const child =
         execa?.child ??
         (message.type !== "spawn-execa"
-          ? spawnWithInheritedOomScore(message.argv[0]!, message.argv.slice(1), message.options)
+          ? spawnInAgentExecCgroup(message.execCgroup, () =>
+              spawnWithInheritedOomScore(message.argv[0]!, message.argv.slice(1), message.options),
+            )
           : undefined);
       spawnedChild = child;
       if (!child) {
@@ -448,7 +490,7 @@ async function launch(
       await stopChild(current);
     } else {
       const termination = spawnedGroupIdentity
-        ? terminateLostBrokerChild(spawnedGroupIdentity.pid, true, undefined, spawnedGroupIdentity)
+        ? terminateLostBrokerChild(spawnedGroupIdentity.pid, true, spawnedGroupIdentity)
         : undefined;
       void termination?.settled.catch(() => {});
       disposeFailedChild(spawnedChild);
@@ -488,7 +530,8 @@ process.on("message", (raw: unknown, handle: SendHandle) => {
   }
   if (startup === "waiting") {
     startup = "initializing";
-    initialization = initialize(raw);
+    // SAFETY: The version-matched spawning host owns this private bootstrap channel.
+    initialization = initialize(raw as BrokerBootstrap);
     void initialization.catch(shutdown);
     return;
   }
@@ -521,6 +564,19 @@ process.on("message", (raw: unknown, handle: SendHandle) => {
   }
   if (message.type === "pipe-received") {
     sender.acknowledge(message.id, message.fd);
+    return;
+  }
+  if (message.type === "cancel-read-file") {
+    const read = fileReads.get(message.id);
+    if (read) {
+      read.canceled = true;
+    }
+    return;
+  }
+  if (message.type === "read-file") {
+    const reading = readFile(message).catch(shutdown);
+    launches.add(reading);
+    void reading.finally(() => launches.delete(reading));
     return;
   }
   if (
@@ -597,34 +653,27 @@ process.on("message", (raw: unknown, handle: SendHandle) => {
     }
   }
 });
-async function initialize(raw: unknown): Promise<void> {
-  if (!isRecord(raw) || raw.type !== "bootstrap") {
-    throw new Error("Invalid spawn broker bootstrap");
-  }
+async function initialize(bootstrap: BrokerBootstrap): Promise<void> {
   if (stopping || !process.connected) {
     return;
   }
-  if (raw.nativeResource !== undefined) {
-    const authority = raw.nativeResource;
-    if (
-      !isRecord(authority) ||
-      typeof authority.endpoint !== "string" ||
-      !authority.endpoint ||
-      typeof authority.secret !== "string" ||
-      !authority.secret ||
-      typeof authority.generation !== "number" ||
-      !Number.isSafeInteger(authority.generation) ||
-      authority.generation < 0
-    ) {
-      throw new Error("Invalid native resource bootstrap authority");
+  if (bootstrap.nativeResource) {
+    const authority = bootstrap.nativeResource;
+    try {
+      resources = await createBrokerNativeResourceServer({
+        endpoint: authority.endpoint,
+        secret: authority.secret,
+        generation: authority.generation,
+        reportParent: report,
+        canAdmit: () => !stopping && owned.size + starting.size + (resources?.size ?? 0) < 256,
+      });
+    } catch (error) {
+      await report({
+        type: "startup-failed",
+        error: serializeBrokerError(toErrorObject(error, "Native resource server startup failed")),
+      }).catch(() => {});
+      throw error;
     }
-    resources = await createBrokerNativeResourceServer({
-      endpoint: authority.endpoint,
-      secret: authority.secret,
-      generation: authority.generation,
-      reportParent: report,
-      canAdmit: () => !stopping && owned.size + starting.size + (resources?.size ?? 0) < 256,
-    });
     if (stopping) {
       resources.disconnect();
       return;

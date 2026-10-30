@@ -9,6 +9,7 @@ import {
   isTypeScriptPackageEntry,
   PUBLIC_SURFACE_SOURCE_EXTENSIONS,
 } from "./package-entrypoints.js";
+import { relativePluginPathInsideRootSync } from "./path-safety.js";
 import type { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import type { PluginModuleLoaderOwner } from "./plugin-instance.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -24,23 +25,25 @@ export function bindPluginStateOperationModuleSource(params: {
   rootDir: string;
   source: string;
   origin: PluginOrigin;
-  artifact: ReturnType<typeof capturePluginGenerationArtifact>;
+  artifact: Pick<
+    ReturnType<typeof capturePluginGenerationArtifact>,
+    "rootDir" | "hasSource" | "resolve" | "prepareModule"
+  >;
   assertCodeCurrent?: () => void;
 }) {
   const { instance, artifact, origin } = params;
   const rejectHardlinks = shouldRejectHardlinkedPluginFiles({ origin, rootDir: params.rootDir });
   const sourceFamily = isTypeScriptPackageEntry(params.source);
-  const familyDirectory = sourceFamily
-    ? path.resolve(params.rootDir)
-    : path.dirname(path.resolve(params.source));
-  const familyRelative = path.relative(path.resolve(params.rootDir), familyDirectory);
-  if (
-    familyRelative.startsWith(`..${path.sep}`) ||
-    familyRelative === ".." ||
-    path.isAbsolute(familyRelative)
-  ) {
+  const rootDir = path.resolve(params.rootDir);
+  // Windows can spell the root and its source differently (8.3 aliases); the
+  // captured artifact is keyed by the root's spelling.
+  const familyRelative = sourceFamily
+    ? ""
+    : relativePluginPathInsideRootSync(rootDir, path.dirname(path.resolve(params.source)));
+  if (familyRelative === undefined) {
     throw new Error("Plugin operation source family is outside its plugin root");
   }
+  const familyDirectory = path.join(rootDir, familyRelative);
   const extensions = PUBLIC_SURFACE_SOURCE_EXTENSIONS.filter(
     (extension) => isTypeScriptPackageEntry(`module${extension}`) === sourceFamily,
   );

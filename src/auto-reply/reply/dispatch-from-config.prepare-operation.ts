@@ -3,6 +3,7 @@ import { resolveAgentIdentity } from "../../agents/identity.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
 import { scopeCommandTranscriptId } from "../../config/sessions/command-transcript.js";
+import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import {
@@ -15,9 +16,8 @@ import {
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import { resolveCommandAuthorizationAsync } from "../command-auth.js";
-import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
-import { setReplyPayloadMetadata } from "../reply-payload.js";
-import type { ReplyPayload } from "../reply-payload.js";
+import { isNativeCommandTurn } from "../command-turn-context.js";
+import { markCommandReplyForDelivery, type ReplyPayload } from "../reply-payload.js";
 import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
@@ -29,11 +29,12 @@ import {
   loadFastApproveRuntime,
 } from "./dispatch-from-config.runtime-loaders.js";
 import {
-  captureDeliveredTranscriptMirror,
   mirrorDeliveredReplyToTranscript,
+  sendReplyWithTranscriptMirror,
 } from "./dispatch-from-config.transcript.js";
+import { restoreArchivedDispatchSession } from "./dispatch-session-archive.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
-import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
+import { readReplySourceInput } from "./reply-source-binding.js";
 import { extractShortModelName } from "./response-prefix-template.js";
 import { assertPreparedConversationBindingRouteCurrent } from "./session-conversation-binding.js";
 
@@ -63,6 +64,59 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     suppressDelivery,
     turnLedger,
   } = state;
+  const input = readReplySourceInput(params.replyOptions);
+  const assertRequestCurrent = () => {
+    params.replyOptions?.assertChannelAuthority?.();
+    const sourceAuthority = input?.sourceAdapter?.authority;
+    sourceAuthority?.assertCurrent();
+    if (params.replyOptions?.operatorAuthority !== sourceAuthority) {
+      params.replyOptions?.operatorAuthority?.assertCurrent();
+    }
+    params.replyOptions?.internalEventExecution?.assertCurrent?.();
+    if (isPreDispatchOperationAborted() || input?.retirementRequested) {
+      throw new DispatchReplyOperationAbortedError();
+    }
+  };
+  const archivedSource = state.operationSessionStoreEntry.entry;
+  const sourceSessionKey = state.dispatchOperationSessionKey;
+  // Native controls do not claim a reply turn, but must restore their source before side effects.
+  if (
+    isNativeCommandTurn(ctx.CommandTurn) &&
+    archivedSource?.archivedAt !== undefined &&
+    sourceSessionKey
+  ) {
+    assertRequestCurrent();
+    const entry = await restoreArchivedDispatchSession({
+      assertCurrent: assertRequestCurrent,
+      ctx,
+      entry: archivedSource,
+      hasPluginOwnedBinding: Boolean(pluginOwnedBinding),
+      placementContext: params.sessionWorkerPlacementContext,
+      sessionKey: sourceSessionKey,
+      storePath: state.operationSessionStoreEntry.storePath,
+    });
+    assertRequestCurrent();
+    const error = resolveSessionWorkStartError(sourceSessionKey, entry, {
+      expectedSessionId: archivedSource.sessionId,
+    });
+    if (error) {
+      const payload: ReplyPayload = { text: error, isError: true };
+      markCommandReplyForDelivery(payload);
+      const queuedFinal = !state.sendPolicyDenied && dispatcher.sendFinalReply(payload);
+      recordProcessed("skipped", { reason: "session-directive-rejected" });
+      markIdle("message_completed");
+      commitInboundDedupeIfClaimed();
+      return {
+        status: "complete" as const,
+        result: attachSourceReplyDeliveryMode({
+          queuedFinal,
+          counts: dispatcher.getQueuedCounts(),
+          ...(state.sendPolicyDenied ? { deliberateSilentTerminalReply: true as const } : {}),
+        }),
+      };
+    }
+    state.operationSessionStoreEntry.entry = entry;
+  }
   const abortRuntime = params.fastAbortResolver ? null : await loadAbortRuntime();
   const fastAbortResolver = params.fastAbortResolver ?? abortRuntime?.tryFastAbortFromMessage;
   const formatAbortReplyTextResolver =
@@ -135,22 +189,14 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       } else {
         state.markInboundDedupeReplayUnsafe();
         params.replyOptions?.onModelSelected?.(modelSelection);
-        const captureToken = {};
-        const delivered = captureDeliveredTranscriptMirror({
+        const sent = sendReplyWithTranscriptMirror({
           dispatcher,
+          cfg,
           metadata,
-          captureToken,
+          payload: fast.payload,
+          send: (payload) => turnLedger.sendQueued("final", payload),
         });
-        setReplyPayloadMetadata(fast.payload, { finalDeliveryCapture: captureToken });
-        const sent = turnLedger.sendQueued("final", fast.payload);
         queuedFinal = sent.queued;
-        if (sent.queued && sent.outcome) {
-          registerReplyDispatcherSettledTask(dispatcher, async () => {
-            if ((await sent.outcome) === "delivered") {
-              await mirrorDeliveredReplyToTranscript({ metadata: delivered(), cfg });
-            }
-          });
-        }
       }
     } else if (suppressDelivery) {
       logVerbose(
@@ -183,6 +229,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
           fastAbort.stoppedSubagents,
           fastAbort.rejectionReason,
           fastAbort.failedSubagents,
+          fastAbort.localModelMayStillBeFinishing,
         ),
       },
       reason: "fast_abort",
@@ -206,18 +253,8 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       });
     }
   }
-  // Own the session before plugin-bound handlers or message hooks can perform
-  // work. Fast abort, fast approval, and inbound dedupe remain ahead of this gate.
-  const admissionTicket = params.replyOptions?.[REPLY_ADMISSION_TICKET];
-  if (
-    !state.activeRunSafeCommandTurn &&
-    admissionTicket &&
-    !(await state.traceReplyPhase("reply.wait_admission_ticket", () =>
-      admissionTicket.wait(params.replyOptions?.abortSignal),
-    ))
-  ) {
-    return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
-  }
+  // Resolve the binding before claiming the turn for plugin handlers or message
+  // hooks. Fast abort, fast approval, and inbound dedupe remain ahead of this gate.
   const assertCurrentBindingRoute = async () => {
     if (ctx.InternalTurnSource === undefined && readConversationBindingRouteFacts(ctx)) {
       await assertPreparedConversationBindingRouteCurrent(ctx);
@@ -227,6 +264,37 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     }
   };
   await assertCurrentBindingRoute();
+  if (pluginOwnedBinding) {
+    // Keep the reserved source in preparation while a changed binding can still
+    // retry. A turn claim would terminalize that source when this attempt exits.
+    await runWithDispatchAbortSignal(
+      state.getPreDispatchAbortSignal(),
+      async () => {
+        assertRequestCurrent();
+        await getSessionBindingService().touchAsync(
+          pluginOwnedBinding.bindingId,
+          undefined,
+          pluginOwnedBinding,
+        );
+        const currentBinding =
+          await getSessionBindingService().resolveByConversationAsync(pluginOwnedBinding);
+        if (
+          currentBinding?.bindingId !== pluginOwnedBinding.bindingId ||
+          currentBinding.boundAt !== pluginOwnedBinding.boundAt ||
+          currentBinding.targetSessionKey !== state.pluginBindingSessionKey ||
+          currentBinding.targetKind !== state.pluginBindingTargetKind ||
+          currentBinding.metadata?.pluginBindingOwner !== "plugin" ||
+          currentBinding.metadata?.pluginId !== pluginOwnedBinding.pluginId ||
+          currentBinding.metadata?.pluginRoot !== pluginOwnedBinding.pluginRoot
+        ) {
+          throw new DispatchSessionRefreshRequiredError(
+            new Error("conversation binding changed while recording activity"),
+          );
+        }
+      },
+      state.trackDispatchLifecycleWork,
+    );
+  }
   const preDispatchAcquisition = await state.traceReplyPhase("reply.admit_pre_dispatch", () =>
     state.ensureDispatchReplyOperation("pre_dispatch", Boolean(pluginOwnedBinding)),
   );
@@ -265,37 +333,15 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     if (isPreDispatchOperationAborted()) {
       return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
     }
-    await getSessionBindingService().touchAsync(
-      pluginOwnedBinding.bindingId,
-      undefined,
-      pluginOwnedBinding,
-    );
-    const currentBinding =
-      await getSessionBindingService().resolveByConversationAsync(pluginOwnedBinding);
-    if (
-      currentBinding?.bindingId !== pluginOwnedBinding.bindingId ||
-      currentBinding.boundAt !== pluginOwnedBinding.boundAt ||
-      currentBinding.targetSessionKey !== state.pluginBindingSessionKey ||
-      currentBinding.targetKind !== state.pluginBindingTargetKind ||
-      currentBinding.metadata?.pluginBindingOwner !== "plugin" ||
-      currentBinding.metadata?.pluginId !== pluginOwnedBinding.pluginId ||
-      currentBinding.metadata?.pluginRoot !== pluginOwnedBinding.pluginRoot
-    ) {
-      throw new DispatchSessionRefreshRequiredError(
-        new Error("conversation binding changed while recording activity"),
-      );
-    }
-    if (isPreDispatchOperationAborted()) {
-      return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
-    }
     params.replyOptions ??= {};
-    if (shouldBypassPluginOwnedBindingForCommand(ctx, cfg, params.replyOptions)) {
-      logVerbose(
-        `plugin-bound inbound command escaped plugin binding (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to command processing`,
-      );
-    } else if (
-      state.sendPolicyDenied ||
-      (suppressDelivery && !state.suppressAutomaticSourceDelivery)
+    const bypassPluginBinding = shouldBypassPluginOwnedBindingForCommand(
+      ctx,
+      cfg,
+      params.replyOptions,
+    );
+    if (
+      !bypassPluginBinding &&
+      (state.sendPolicyDenied || (suppressDelivery && !state.suppressAutomaticSourceDelivery))
     ) {
       // Plugin-bound inbound handlers typically emit outbound replies we
       // cannot rewind. When automatic delivery is explicitly denied, skip the
@@ -305,10 +351,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       logVerbose(
         `plugin-bound inbound skipped under ${deliverySuppressionReason} (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to suppressed agent processing`,
       );
-    } else {
-      logVerbose(
-        `plugin-bound inbound routed to ${pluginOwnedBinding.pluginId} conversation=${pluginOwnedBinding.conversationId}`,
-      );
+    } else if (!bypassPluginBinding) {
       // Bound native runtimes need the current owner decision, not stale bind-time identity.
       // The resolver folds internal operator.admin authority into this owner decision.
       const bindingAuthorization = await resolveCommandAuthorizationAsync({

@@ -12,9 +12,7 @@ import { mattermostSetupWizard } from "./setup-surface.js";
 
 export const mattermostSetupPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   id: "mattermost",
-  meta: {
-    ...mattermostMeta,
-  },
+  meta: mattermostMeta,
   capabilities: {
     chatTypes: ["direct", "channel", "group", "thread"],
     reactions: true,

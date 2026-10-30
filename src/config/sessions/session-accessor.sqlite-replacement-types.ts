@@ -1,10 +1,19 @@
+import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { ResolvedSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import type {
   SessionEntryMaintenanceInput,
   SessionEntryMaintenancePlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
-import type { SessionEntryReplacement, TranscriptEvent } from "./session-accessor.types.js";
+import type {
+  SessionEntryCommitContext,
+  SessionEntryReplacement,
+  TranscriptEvent,
+} from "./session-accessor.types.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
+import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
+import type { SessionNativeBindingParticipants } from "./session-native-binding.types.js";
+import type { SessionSourcePredicate } from "./session-source-authority.js";
 import type { SessionEntry } from "./types.js";
 
 export type SqliteSessionEntryReplacement = SessionEntryReplacement & {
@@ -12,6 +21,13 @@ export type SqliteSessionEntryReplacement = SessionEntryReplacement & {
 };
 
 export type SessionEntryReplacementCommit = {
+  fieldPatch?: {
+    fields: readonly (keyof SessionEntry)[];
+    guardFields: readonly (keyof SessionEntry)[];
+    snapshotFields?: readonly SessionEntrySnapshotField[];
+  };
+  sources?: SessionSourcePredicate[];
+  nativeBindings?: SessionNativeBindingParticipants;
   expectedRows: Map<string, ResolvedSessionEntryRow>;
   labelOwnerKeys: string[];
   includeLabelOwners?: string;
@@ -30,9 +46,31 @@ export type SessionEntryReplacementCommit = {
 };
 
 export type SessionEntryReplacementCommitted = {
+  patchDiffBaselines?: SessionEntryReplacementPublication["patchDiffBaselines"];
   pendingArchiveRecovery: boolean;
   previous: Map<string, SessionEntry>;
   current: Map<string, SessionEntry>;
   maintenancePlans: SessionEntryMaintenancePlan[];
   membershipInvalidatedKeys: string[];
+};
+
+export type SessionEntryReplacementCandidate = {
+  kind: "session-entry-replacements";
+  result: Pick<SessionEntryReplacementCommitted, "maintenancePlans">;
+  publication: SessionEntryReplacementPublication;
+};
+
+export type SessionEntryWorkerLifecycle<T = unknown> = {
+  identityAgentId: string;
+  onResult?: (value: T | undefined) => void;
+  beforeCommit?: (
+    publication: SessionEntryReplacementPublication,
+    operation: RetainedWorkerTransactionAdmission,
+  ) => void;
+  afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
+  onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
+  onCommittedEntries?: (
+    entries: ReadonlyMap<string, SessionEntry>,
+    patchDiffBaselines?: SessionEntryReplacementPublication["patchDiffBaselines"],
+  ) => void;
 };

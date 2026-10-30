@@ -9,6 +9,7 @@ import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { getRuntimeConfig } from "../config.js";
 import { getCliSessionBinding } from "./cli-session-binding.js";
@@ -27,6 +28,7 @@ import type {
   SessionHistoryWorkerResult,
 } from "./session-history-types.js";
 import { SessionHistoryDeltaPreparationError } from "./session-history-worker-errors.js";
+import { readSessionTranscriptAccountingFromReplica } from "./session-transcript-accounting-replica.js";
 import type {
   SessionColdMetadataWorkerInput,
   SessionColdMetadataWorkerResult,
@@ -70,14 +72,26 @@ function receivePage(
       }
       if (page.kind === "rpc" && page.page.encodedResponse) {
         // Wire bytes are immutable; each reader still owns its mutable page metadata.
-        const { messages, ...response } = page.page.encodedResponse;
+        const response = page.page.encodedResponse;
+        const { encodedMessagesDeflate, ...metadata } = page.page;
         const copy = structuredClone({
           ...page,
-          page: { ...page.page, encodedResponse: response },
+          page: {
+            ...metadata,
+            encodedResponse: { ...response, messages: undefined, activity: undefined },
+          },
         });
         return {
           ...copy,
-          page: { ...copy.page, encodedResponse: { ...copy.page.encodedResponse, messages } },
+          page: {
+            ...copy.page,
+            encodedMessagesDeflate,
+            encodedResponse: {
+              ...copy.page.encodedResponse,
+              messages: response.messages,
+              activity: response.activity,
+            },
+          },
         };
       }
       return structuredClone(page);
@@ -117,18 +131,11 @@ function readQueuedHistory(
   const operation =
     input.kind === "cold-metadata"
       ? owner.readColdMetadata({ sessionId: input.sessionId, env: input.env })
-      : owner.run(
-          () => {
-            // Page callers cannot join a SQLite snapshot that has already started.
-            forget();
-            return input;
-          },
-          key.length * 2 +
-            (input.kind === "history-page" &&
-            (input.request.kind === "rpc" || input.request.kind === "rpc-message")
-              ? (input.request.params.cliHistoryRedaction?.retainedBytes ?? 0)
-              : 0),
-        );
+      : owner.run(() => {
+          // Page callers cannot join a SQLite snapshot that has already started.
+          forget();
+          return input;
+        }, key.length * 2);
   // Initial metadata probes share only in-flight work; queued restores bypass this map.
   void operation.then(
     (result) => {
@@ -172,9 +179,7 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
         sessionId: entry.sessionId,
         updatedAt: entry.updatedAt,
         sessionStartedAt: entry.sessionStartedAt,
-        ...(cliBinding
-          ? { cliSessionBindings: { "claude-cli": structuredClone(cliBinding) } }
-          : {}),
+        ...(cliBinding ? { cliSessionBindings: { "claude-cli": cliBinding } } : {}),
       }
     : undefined;
   if (request.kind === "rpc" || request.kind === "rpc-message") {
@@ -263,22 +268,7 @@ export async function readSessionHistoryPageInWorker(
     sessionId: scope.sessionId,
   });
   const admission = receipt ? { ...receipt } : undefined;
-  const redaction =
-    capturedRequest.kind === "rpc" || capturedRequest.kind === "rpc-message"
-      ? capturedRequest.params.cliHistoryRedaction
-      : undefined;
-  const keyedRequest =
-    (capturedRequest.kind === "rpc" || capturedRequest.kind === "rpc-message") && redaction
-      ? {
-          ...capturedRequest,
-          params: {
-            ...capturedRequest.params,
-            cliHistoryRedaction: { policyToken: redaction.policyToken },
-          },
-        }
-      : capturedRequest;
-  const redactionBytes = redaction?.retainedBytes ?? 0;
-  let inputBytes = JSON.stringify(keyedRequest).length * 2 + redactionBytes;
+  let inputBytes = JSON.stringify(capturedRequest).length * 2;
   // Retain caller admission across asynchronous target discovery as well as the page read.
   if (
     pendingHistoryReaders >= DEFAULT_WORKER_PENDING_TASKS ||
@@ -305,6 +295,19 @@ export async function readSessionHistoryPageInWorker(
       agentId: databaseOptions.agentId,
       path: resolveOpenClawAgentSqlitePath(databaseOptions),
     };
+    if (capturedRequest.kind === "active-accounting" && !admission && normalizedSessionKey) {
+      const accounting = readSessionTranscriptAccountingFromReplica(
+        {
+          path: currentSource.path,
+          sessionKey: normalizedSessionKey,
+          sessionId: resolved.sessionId,
+        },
+        capturedRequest.params.options,
+      );
+      if (accounting) {
+        return accounting;
+      }
+    }
     const preparedTarget = resolved;
     const acquired = await withSessionHistoryWorkerDatabase(databaseOptions, async (owner) => {
       // Only display-history projections resolve subagent lineage across stores.
@@ -345,7 +348,7 @@ export async function readSessionHistoryPageInWorker(
         target,
         ...(admission ? { admission } : {}),
       };
-      const key = JSON.stringify({ ...input, request: keyedRequest });
+      const key = JSON.stringify(input);
       const metadataInput: SessionColdMetadataWorkerInput = {
         kind: "cold-metadata",
         database: currentSource,
@@ -353,7 +356,7 @@ export async function readSessionHistoryPageInWorker(
         env,
       };
       const metadataKey = JSON.stringify(metadataInput);
-      const additionalBytes = (key.length + metadataKey.length) * 2 + redactionBytes - inputBytes;
+      const additionalBytes = (key.length + metadataKey.length) * 2 - inputBytes;
       if (pendingHistoryBytes + additionalBytes > DEFAULT_WORKER_PENDING_BYTES) {
         throw new WorkerTaskError("worker task capacity reached", "overloaded");
       }
@@ -370,7 +373,11 @@ export async function readSessionHistoryPageInWorker(
         capturedRequest.kind === "recent-page" &&
         capturedRequest.params.exactArchivePath !== undefined;
       const readOnly =
-        capturedRequest.kind === "active-accounting" || capturedRequest.kind === "bounded-tail"
+        capturedRequest.kind === "recent-usage" ||
+        capturedRequest.kind === "history-event-page" ||
+        capturedRequest.kind === "active-accounting" ||
+        capturedRequest.kind === "bounded-tail" ||
+        capturedRequest.kind === "recent-text"
           ? true
           : capturedRequest.kind === "artifacts"
             ? capturedRequest.params.query.kind === "image-page"
@@ -383,7 +390,16 @@ export async function readSessionHistoryPageInWorker(
                 ? capturedRequest.params.options.readOnly
                 : false;
       let retriedProjection = false;
-      const readPage = () => readQueuedHistory(input, key, owner, signal);
+      const readPage = () =>
+        capturedRequest.kind === "active-accounting"
+          ? runOpenClawAgentWriteAdmission(
+              databaseOptions,
+              () => readQueuedHistory(input, key, owner, signal),
+              true,
+              undefined,
+              signal,
+            )
+          : readQueuedHistory(input, key, owner, signal);
       try {
         if (exactArchiveRead) {
           const page = await readPage();
@@ -401,6 +417,7 @@ export async function readSessionHistoryPageInWorker(
               } catch (error) {
                 if (
                   (capturedRequest.kind === "active-accounting" ||
+                    capturedRequest.kind === "recent-text" ||
                     (capturedRequest.kind === "bounded-tail" &&
                       !capturedRequest.params.options.readOnly)) &&
                   isSessionTranscriptProjectionUnavailableError(error)

@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { DevicePairSetupCodeResult } from "../../packages/gateway-protocol/src/index.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
 import { defaultRuntime } from "../runtime.js";
 import { callGatewayFromCliWithTransport } from "./gateway-rpc.js";
@@ -40,12 +41,12 @@ export async function runDevicesJoinCodeCommand(opts: GatewayRpcOpts): Promise<v
     });
     return;
   }
-  defaultRuntime.log(joinUrl);
-  defaultRuntime.log(command);
+  defaultRuntime.log(terminalText`${joinUrl}`);
+  defaultRuntime.log(terminalText`${command}`);
   defaultRuntime.log("Installs a background node service that can run agent sessions.");
-  defaultRuntime.log(`Command-only node: ${serviceCommand}`);
-  defaultRuntime.log(`Already have OpenClaw installed? Run: ${installedCommand}`);
+  defaultRuntime.log(terminalText`Command-only node: ${serviceCommand}`);
+  defaultRuntime.log(terminalText`Already have OpenClaw installed? Run: ${installedCommand}`);
   if (versionNote) {
-    defaultRuntime.log(versionNote);
+    defaultRuntime.log(terminalText`${versionNote}`);
   }
 }

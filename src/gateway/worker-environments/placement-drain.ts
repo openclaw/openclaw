@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   isCurrentPlacementTurnClaim,
@@ -20,7 +20,7 @@ import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journa
 import { hasWorkerWorkspacePendingResult } from "./placement-workspace-result.js";
 
 export function drainWorkerSessionPlacement(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: {
     sessionId: string;
     environmentId: string;

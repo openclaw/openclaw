@@ -1,17 +1,37 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import * as utilityCompletion from "../agents/utility-completion.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import {
+  replaceSessionEntrySync,
+  persistSessionTranscriptTurn,
+  loadSessionEntryReadOnly,
+} from "../config/sessions/session-accessor.js";
+import { prewarmSessionHistoryWorker } from "../config/sessions/session-transcript-worker-runtime.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createGatewayBroadcaster } from "./server-broadcast.js";
-import { makeClient } from "./server-broadcast.test-helpers.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import type { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
-import { GatewayClientRegistry } from "./server/client-registry.js";
+import type { registerSessionPublicationTests } from "./server-runtime-subscriptions.publication.test-support.js";
+import {
+  activityRecapResult,
+  preparedActivityRecapModel,
+  seedRecapConversation,
+} from "./session-activity-summaries.test-support.js";
 import type { ActivitySummaryTarget } from "./session-activity-summary-state.js";
+import * as observerModel from "./session-observer-model.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
@@ -45,15 +65,6 @@ export function registerActivitySummaryPublicationTests(
     const producer = new AsyncWorkScope();
     const connectionWork = new GatewayConnectionWork();
     const { params, unsubs } = start(projection, connectionWork.signal);
-    const subscribed = makeClient("activity", "operator", ["operator.read"]);
-    const other = makeClient("unsubscribed", "operator", ["operator.read"]);
-    params.sessionEventSubscribers.subscribe(subscribed.client.connId);
-    const broadcaster = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([subscribed.client, other.client]),
-      canReceiveSessionEvent: (client) =>
-        params.sessionEventSubscribers.getAll().has(client.connId),
-    });
-    vi.mocked(params.broadcast).mockImplementation(broadcaster.broadcast);
     const entered = createDeferred();
     const release = createDeferred();
     const prepare = projection.withPreparedExactRows.bind(projection);
@@ -66,7 +77,6 @@ export function registerActivitySummaryPublicationTests(
     try {
       const onChanged = getOnChanged()!;
       producer.run(() => onChanged(target));
-      await entered.promise;
       projection.setEntry(target.key, { ...entry, label: "latest recap row" });
       producer.run(() => onChanged(target));
       await producer.drain();
@@ -81,22 +91,27 @@ export function registerActivitySummaryPublicationTests(
       onChanged(target);
       await vi.advanceTimersByTimeAsync(0);
       expect(closed).toBe(false);
-      expect(subscribed.socket.send).not.toHaveBeenCalled();
+      expect(params.broadcast).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await entered.promise;
       release.resolve();
       await vi.runAllTimersAsync();
       await closing;
-      expect(subscribed.socket.send).toHaveBeenCalledOnce();
-      expect(JSON.parse(subscribed.socket.send.mock.calls[0]![0])).toMatchObject({
-        event: "sessions.changed",
-        payload: {
+      expect(params.broadcast).toHaveBeenCalledExactlyOnceWith(
+        "sessions.changed",
+        expect.objectContaining({
           reason: "activity-summary",
-          session: { key: target.key, sessionId: entry.sessionId, label: "latest recap row" },
-        },
-      });
+          session: expect.objectContaining({
+            key: target.key,
+            sessionId: entry.sessionId,
+            label: "latest recap row",
+          }),
+        }),
+        expect.objectContaining({ sessionKeys: [target.key], agentId: target.agentId }),
+      );
       onChanged(target);
       await vi.runAllTimersAsync();
-      expect(subscribed.socket.send).toHaveBeenCalledOnce();
-      expect(other.socket.send).not.toHaveBeenCalled();
+      expect(params.broadcast).toHaveBeenCalledOnce();
     } finally {
       release.resolve();
       await vi.runAllTimersAsync();
@@ -117,16 +132,11 @@ export function registerActivitySummaryPublicationTests(
         agentId: "main",
         storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
       };
-      const parent = { ...target, key: "agent:main:recap-parent" };
-      for (const [key, sessionId, parentSessionKey, archivedAt] of [
-        [parent.key, "recap-parent", undefined, 1],
-        [target.key, "recap", parent.key, undefined],
-        ["agent:main:unrelated", "unrelated", undefined, undefined],
+      for (const [key, sessionId] of [
+        [target.key, "recap"],
+        ["agent:main:unrelated", "unrelated"],
       ] as const) {
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: key },
-          { sessionId, updatedAt: 1, parentSessionKey, archivedAt },
-        );
+        replaceSessionEntrySync({ agentId: "main", sessionKey: key }, { sessionId, updatedAt: 1 });
       }
       const placements = createWorkerSessionPlacementStore();
       const releaseForeground = retainSessionListForegroundWork();
@@ -162,12 +172,7 @@ export function registerActivitySummaryPublicationTests(
           projection,
           () => [target],
           () => undefined,
-          {
-            includeAncestors: true,
-          },
         );
-        const row = projection.describe(target)!;
-        expect(projection.ancestorRows(row)?.map((ancestor) => ancestor.key)).toEqual([parent.key]);
         expect(projection.needsMaterialization).toBe(true);
         const onChanged = getOnChanged();
         if (!onChanged) {
@@ -176,7 +181,7 @@ export function registerActivitySummaryPublicationTests(
         vi.useFakeTimers();
         sql = observeHostDataSql();
         onChanged(target);
-        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(1_000);
         expect(params.broadcast).toHaveBeenCalledExactlyOnceWith(
           "sessions.changed",
           expect.objectContaining({
@@ -185,6 +190,7 @@ export function registerActivitySummaryPublicationTests(
           }),
           {
             sessionKeys: [target.key],
+            sessionEventSubscriptionKeys: [target.key],
             agentId: target.agentId,
             dropIfSlow: true,
             prepareSessionProjection: expect.any(Function),
@@ -209,4 +215,99 @@ export function registerActivitySummaryPublicationTests(
       }
     });
   });
+}
+
+export function registerActivitySummaryRunTests(
+  fixture: Parameters<typeof registerSessionPublicationTests>[0] & {
+    runtimeConfigState: { value: OpenClawConfig };
+  },
+) {
+  const { createParams, start, installHandlerFactory, runtimeConfigState } = fixture;
+  it.each([true, false])(
+    "recaps only completed runs when Gateway credentials are available=%s",
+    async (available) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const target = { key: "agent:main:recap", agentId: "main" };
+        const scope = {
+          sessionKey: target.key,
+          agentId: target.agentId,
+          sessionId: "recap-session",
+        };
+        const cfg: OpenClawConfig = { agents: { defaults: { utilityModel: "test/utility" } } };
+        runtimeConfigState.value = cfg;
+        setRuntimeConfigSnapshot(cfg);
+        using auth = vi.spyOn(utilityCompletion, "hasAvailableUtilityCompletionAuth");
+        auth.mockResolvedValue(available);
+        using prepare = vi.spyOn(observerModel, "defaultPrepareModel");
+        prepare.mockResolvedValue(preparedActivityRecapModel);
+        using complete = vi
+          .spyOn(observerModel, "defaultCompleteModel")
+          .mockResolvedValue(activityRecapResult("Completed the requested work."));
+        await seedRecapConversation(scope, "Check the fix.");
+        await prewarmSessionHistoryWorker({ agentId: "main", env: state.env });
+        const projection = await createSessionRowProjection({ cfg, getConfig: () => cfg });
+        await projection.ensureMaterialized();
+        installHandlerFactory(() =>
+          Object.assign(vi.fn(), { retireTranscript: vi.fn(), dispose: vi.fn(async () => {}) }),
+        );
+        const clock = createGatewaySchedulerClock(Date.now());
+        const unsubs = start({
+          ...createParams(),
+          scheduler: createTestGatewayScheduler(clock.clock),
+          getSessionRowProjection: () => projection,
+        });
+        const settle = async <T>(run: () => T | Promise<T>) => {
+          const work = new AsyncWorkScope();
+          const result = await work.track(run);
+          await work.drain();
+          return result;
+        };
+        const lifecycle = (phase: string) =>
+          emitAgentEvent({ runId: "recap-run", ...scope, stream: "lifecycle", data: { phase } });
+        const operation = createReplyOperation({
+          ...scope,
+          target: captureSessionTarget({
+            ...scope,
+            storeScope: resolveSessionStorePathCore(undefined, { agentId: scope.agentId }),
+            incarnation: scope.sessionId,
+          }),
+          resetTriggered: false,
+        });
+        try {
+          await settle(() => {
+            lifecycle("start");
+            emitSessionTranscriptUpdate({ target: scope });
+          });
+          expect(
+            await settle(() =>
+              unsubs.sessionActivitySummaries.ensure(target, loadSessionEntryReadOnly(scope)),
+            ),
+          ).toMatchObject({ state: "stale" });
+          const startCalls = complete.mock.calls.length;
+          await persistSessionTranscriptTurn(scope, {
+            messages: [
+              {
+                eventId: "answer",
+                parentId: `event-${scope.sessionKey}`,
+                message: { role: "assistant", content: "Verified the fix." },
+              },
+            ],
+            touchSessionEntry: false,
+          });
+          await settle(() => lifecycle("end"));
+          expect({ startCalls, totalCalls: complete.mock.calls.length }).toEqual({
+            startCalls: 0,
+            totalCalls: available ? 1 : 0,
+          });
+          await clock.advanceBy(3_600_000);
+          expect(auth).toHaveBeenCalledOnce();
+          expect(complete).toHaveBeenCalledTimes(available ? 1 : 0);
+        } finally {
+          operation.complete();
+          await unsubs.agentUnsub();
+          projection.dispose();
+        }
+      });
+    },
+  );
 }

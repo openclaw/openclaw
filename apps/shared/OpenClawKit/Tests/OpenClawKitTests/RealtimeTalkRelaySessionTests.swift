@@ -17,9 +17,10 @@ struct RealtimeTalkRelaySessionTests {
         #expect(RealtimeTalkRecovery.restartDelayNanoseconds(attempt: 3) == nil)
     }
 
-    @Test(arguments: [false, true])
+    @Test(arguments: [false, true], [false, true])
     func `voice selection is opt in and replacement carries its change id`(
-        supportsVoiceSelection: Bool) async throws
+        supportsVoiceSelection: Bool,
+        warmingCatalog: Bool) async throws
     {
         let requests = RealtimeRelayStartupRequestLog()
         let events = AsyncStream<EventFrame>.makeStream()
@@ -53,6 +54,19 @@ struct RealtimeTalkRelaySessionTests {
                         return resultData
                     }
                     if method == "talk.catalog" {
+                        if warmingCatalog,
+                           await requests.snapshot().filter({ $0.method == "talk.catalog" }).count == 1
+                        {
+                            throw GatewayResponseError(
+                                method: method,
+                                code: "UNAVAILABLE",
+                                message: "Talk catalog is warming",
+                                details: [
+                                    "reason": AnyCodable("talk-catalog-warming"),
+                                    "retryable": AnyCodable(true),
+                                    "retryAfterMs": AnyCodable(250),
+                                ])
+                        }
                         return try realtimeRelayCatalogData()
                     }
                     return Data("{\"ok\":true}".utf8)
@@ -70,6 +84,7 @@ struct RealtimeTalkRelaySessionTests {
 
         #expect(session.voiceSessionId == "relay-1")
         #expect(session.isReady)
+        #expect(await requests.snapshot().filter { $0.method == "talk.catalog" }.count == (warmingCatalog ? 2 : 1))
         let create = try #require(await requests.snapshot().first?.params)
         #expect(create["sessionKey"]?.stringValue == "chat-1")
         #expect(create["voiceChangeId"]?.stringValue == (supportsVoiceSelection ? "change-1" : nil))
@@ -791,5 +806,56 @@ struct RealtimeTalkRelaySessionTests {
         }
         let expectedMethods = routeLostDuringCreate ? ["talk.session.create", "talk.session.close"] : []
         #expect(await requests.snapshot().map(\.method) == expectedMethods)
+    }
+}
+
+extension RealtimeTalkRelaySessionTests {
+    @Test func `cancelling the start task closes a relay created before cancellation`() async throws {
+        let barrier = RealtimeRelayStartupBarrier()
+        let requests = RealtimeRelayStartupRequestLog()
+        let events = AsyncStream<EventFrame>.makeStream()
+        defer { events.continuation.finish() }
+        let result = TalkSessionCreateResult(
+            sessionid: "talk-session",
+            mode: AnyCodable("realtime"),
+            transport: AnyCodable("gateway-relay"),
+            brain: AnyCodable("agent-consult"),
+            relaysessionid: "relay-1")
+        let resultData = try JSONEncoder().encode(result)
+        let session = RealtimeTalkRelaySession(
+            transport: RealtimeTalkRelayTransport(
+                subscribeServerEvents: { _ in events.stream },
+                request: { method, params, _ in
+                    await requests.record(method: method, params: params)
+                    if method == "talk.catalog" {
+                        await barrier.suspend()
+                    }
+                    if method == "talk.session.create" {
+                        return resultData
+                    }
+                    return Data("{\"ok\":true}".utf8)
+                }),
+            options: .init(sessionKey: "main", provider: "openai", model: "gpt-realtime-2", voice: nil),
+            audioCapture: TestRealtimeTalkAudioCapture(),
+            pcmPlayer: UnusedPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onSpeakingChanged: { _ in })
+        let start = Task { @MainActor in try await session.start() }
+        defer {
+            session.stop()
+            start.cancel()
+        }
+        try await barrier.waitUntilEntered()
+        #expect(session.voiceSessionId == "relay-1")
+        start.cancel()
+        await barrier.release()
+        _ = try? await start.value
+
+        let recorded = await requests.snapshot()
+        #expect(recorded.map(\.method) == ["talk.session.create", "talk.catalog", "talk.session.close"])
+        #expect(recorded.last?.params?["sessionId"]?.stringValue == "relay-1")
+        #expect(session.voiceSessionId == nil)
+        #expect(!session.isReady)
+        try? await session.stopAndWait()
     }
 }

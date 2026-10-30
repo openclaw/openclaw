@@ -1,5 +1,7 @@
 import {
   ErrorCodes,
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
   GatewayErrorDetailCodes,
   readMissingScopeError,
 } from "@openclaw/gateway-client/browser";
@@ -37,12 +39,7 @@ export function isSetupAdmissionBusyError(err: unknown): boolean {
 }
 
 export function isMissingOperatorReadScopeError(err: unknown): boolean {
-  // Retained custom elements can hold an earlier client error class.
-  return (
-    err instanceof Error &&
-    err.name === "GatewayRequestError" &&
-    readMissingScopeError(err)?.missingScope === "operator.read"
-  );
+  return readMissingScopeError(err)?.missingScope === "operator.read";
 }
 
 export function isArchiveAccessDeniedError(err: unknown): boolean {
@@ -53,4 +50,23 @@ export function isArchiveAccessDeniedError(err: unknown): boolean {
 
 export function formatMissingOperatorReadScopeMessage(feature: string): string {
   return `You don't have permission to view ${feature}. Ask the person who manages OpenClaw for access.`;
+}
+
+/** Retry only a typed deadline or an explicitly retryable rejection of this read. */
+export function isRetryableGatewayReadError(
+  error: unknown,
+  method: string,
+): error is GatewayProtocolRequestError | GatewayProtocolRequestTimeoutError {
+  if (error instanceof GatewayProtocolRequestTimeoutError) {
+    return error.method === method;
+  }
+  if (
+    !(error instanceof GatewayProtocolRequestError) ||
+    error.gatewayCode !== ErrorCodes.UNAVAILABLE ||
+    !error.retryable
+  ) {
+    return false;
+  }
+  const detailMethod = asRecord(error.details)?.method;
+  return typeof detailMethod !== "string" || detailMethod === method;
 }

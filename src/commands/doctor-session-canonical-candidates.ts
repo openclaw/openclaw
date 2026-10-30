@@ -17,13 +17,14 @@ import {
   resolveTargetSqlitePath,
   type ExistingAgentDatabaseTarget,
 } from "../infra/session-sqlite-migration-readers.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { applyCanonicalOwnerEvidence } from "./doctor-session-canonical-owner-evidence.js";
+import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db.paths.js";
 
 export type CanonicalSessionCandidate = {
   agentId: string;
@@ -96,7 +97,56 @@ function collectCanonicalSessionCandidateFacts(
       };
     }),
   );
-  const canonicalKeysByStoredKey = applyCanonicalOwnerEvidence(inventory);
+  type CanonicalOwnerEvidenceItem = (typeof inventory)[number];
+  const bySessionKey = new Map(
+    inventory.map((item) => [`${item.target.sqlitePath}\0${item.sessionKey}`, item] as const),
+  );
+  const resolved = new Map<CanonicalOwnerEvidenceItem, string>();
+  const resolveCanonicalKey = (item: CanonicalOwnerEvidenceItem): string => {
+    const seen = new Set<CanonicalOwnerEvidenceItem>();
+    let current = item;
+    let canonicalKey: string;
+    for (;;) {
+      const cached = resolved.get(current);
+      if (cached !== undefined) {
+        canonicalKey = cached;
+        break;
+      }
+      if (seen.has(current)) {
+        // Cycles keep the repeated row's key; caching that choice would change later roots.
+        return current.canonicalKey;
+      }
+      seen.add(current);
+      const owner = current.canonicalOwnerSessionKey
+        ? bySessionKey.get(`${current.target.sqlitePath}\0${current.canonicalOwnerSessionKey}`)
+        : undefined;
+      if (!owner) {
+        canonicalKey = current.canonicalKey;
+        break;
+      }
+      current = owner;
+    }
+    // Resolve each acyclic suffix once, without consuming stack per owner link.
+    for (const visited of seen) {
+      resolved.set(visited, canonicalKey);
+    }
+    return canonicalKey;
+  };
+  const canonicalKeysByStoredKey = new Map<string, Set<string>>();
+  for (const item of inventory) {
+    item.canonicalKey = resolveCanonicalKey(item);
+    const ownerAgentId = parseAgentSessionKey(item.storedKey)?.agentId ?? item.target.agentId;
+    // Never synthesize folded aliases from a canonical row: the lowercase peer may be a
+    // distinct case-sensitive session whose row was pruned. Only inventoried keys are proof.
+    for (const key of [item.sessionKey, item.storedKey]) {
+      for (const sqlitePath of [item.target.sqlitePath, "*"]) {
+        const mappingKey = `${sqlitePath}\0${ownerAgentId}\0${key}`;
+        const mapped = canonicalKeysByStoredKey.get(mappingKey) ?? new Set<string>();
+        mapped.add(item.canonicalKey);
+        canonicalKeysByStoredKey.set(mappingKey, mapped);
+      }
+    }
+  }
   return inventory.map(
     ({ canonicalKey, canonicalOwnerSessionKey, inventoryFact, sessionKey, target }) => {
       const canonicalAgentId =
@@ -172,17 +222,14 @@ export function collectCanonicalSessionRepairGroups(
   stores: readonly ExistingAgentDatabaseTarget[],
 ): CanonicalSessionRepairGroup[] {
   const candidates = collectCanonicalSessionCandidateFacts(params, stores);
-  const byCanonicalKey = new Map<string, CanonicalSessionCandidateFact[]>();
-  for (const candidate of candidates) {
+  const isSameDatabasePath = createOpenClawAgentDatabasePathMatcher();
+  const byCanonicalKey = groupRecords(candidates, (candidate) => {
     const sentinelOwner =
       candidate.canonicalKey === "global" || candidate.canonicalKey === "unknown"
         ? candidate.agentId
         : "";
-    const groupKey = `${candidate.canonicalKey}\0${sentinelOwner}`;
-    const group = byCanonicalKey.get(groupKey) ?? [];
-    group.push(candidate);
-    byCanonicalKey.set(groupKey, group);
-  }
+    return `${candidate.canonicalKey}\0${sentinelOwner}`;
+  });
   return [...byCanonicalKey.values()].flatMap((group) => {
     const first = group[0]!;
     const destination = resolveCanonicalSessionDestination({
@@ -198,14 +245,14 @@ export function collectCanonicalSessionRepairGroups(
           candidate.inventoryFact.rawCompareRequired ||
           candidate.lineageRepairRequired ||
           candidate.sessionKey !== candidate.canonicalKey ||
-          candidate.sqlitePath !== destination.sqlitePath,
+          !isSameDatabasePath(candidate.sqlitePath, destination.sqlitePath),
       );
     if (!repairRequired) {
       return [];
     }
     const canonicalRowSurvives = group.some(
       (candidate) =>
-        candidate.sqlitePath === destination.sqlitePath &&
+        isSameDatabasePath(candidate.sqlitePath, destination.sqlitePath) &&
         candidate.sessionKey === candidate.canonicalKey,
     );
     return [{ candidates: group, removedRows: group.length - (canonicalRowSurvives ? 1 : 0) }];

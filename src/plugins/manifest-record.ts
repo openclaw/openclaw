@@ -85,61 +85,6 @@ function isPluginRootPath(params: {
   return true;
 }
 
-function resolveManifestPluginSourcePath(params: {
-  rootDir: string;
-  manifestPath: string;
-  pluginId: string;
-  entryName: "providerCatalogEntry" | "capabilityCatalogEntry";
-  entry: string;
-  rejectHardlinks: boolean;
-  diagnostics: PluginDiagnostic[];
-}): string | undefined {
-  const pushDiagnostic = () => {
-    params.diagnostics.push({
-      level: "warn",
-      pluginId: sanitizeForLog(params.pluginId),
-      source: sanitizeForLog(params.manifestPath),
-      message: `plugin manifest ${params.entryName} must resolve inside the plugin root; ignoring entry`,
-    });
-  };
-
-  if (!params.entry || path.isAbsolute(params.entry)) {
-    pushDiagnostic();
-    return undefined;
-  }
-
-  const rootPath = path.resolve(params.rootDir);
-  const rootRealPath = pluginCacheRealpathSync(rootPath) ?? rootPath;
-  const sourcePath = path.resolve(rootPath, params.entry);
-  if (
-    !isPluginRootPath({
-      rootPath,
-      targetPath: sourcePath,
-      rootRealPath,
-      rejectHardlinks: params.rejectHardlinks,
-      targetMustExist: pluginCacheExistsSync(sourcePath),
-    })
-  ) {
-    pushDiagnostic();
-    return undefined;
-  }
-
-  const resolvedSourcePath = resolvePluginSourcePath(sourcePath);
-  if (
-    !isPluginRootPath({
-      rootPath,
-      targetPath: resolvedSourcePath,
-      rootRealPath,
-      rejectHardlinks: params.rejectHardlinks,
-      targetMustExist: pluginCacheExistsSync(resolvedSourcePath),
-    })
-  ) {
-    pushDiagnostic();
-    return undefined;
-  }
-  return resolvedSourcePath;
-}
-
 function resolvePortablePluginIcons(params: {
   rootDir: string;
   rejectHardlinks: boolean;
@@ -326,17 +271,57 @@ export function buildPluginManifestRecord(params: {
   const pluginId = params.candidate.effectivePluginId ?? params.manifest.id;
   const resolveCatalogEntry = (entryName: "providerCatalogEntry" | "capabilityCatalogEntry") => {
     const entry = params.manifest[entryName];
-    return entry === undefined
-      ? undefined
-      : resolveManifestPluginSourcePath({
-          rootDir: params.candidate.rootDir,
-          manifestPath: params.manifestPath,
-          pluginId,
-          entryName,
-          entry,
-          rejectHardlinks: params.rejectHardlinks,
-          diagnostics: params.diagnostics,
-        });
+    if (entry === undefined) {
+      return undefined;
+    }
+    const rootDir = params.candidate.rootDir;
+    const manifestPath = params.manifestPath;
+    const rejectHardlinks = params.rejectHardlinks;
+    const diagnostics = params.diagnostics;
+    const pushDiagnostic = () => {
+      diagnostics.push({
+        level: "warn",
+        pluginId: sanitizeForLog(pluginId),
+        source: sanitizeForLog(manifestPath),
+        message: `plugin manifest ${entryName} must resolve inside the plugin root; ignoring entry`,
+      });
+    };
+
+    if (!entry || path.isAbsolute(entry)) {
+      pushDiagnostic();
+      return undefined;
+    }
+
+    const rootPath = path.resolve(rootDir);
+    const rootRealPath = pluginCacheRealpathSync(rootPath) ?? rootPath;
+    const sourcePath = path.resolve(rootPath, entry);
+    if (
+      !isPluginRootPath({
+        rootPath,
+        targetPath: sourcePath,
+        rootRealPath,
+        rejectHardlinks,
+        targetMustExist: pluginCacheExistsSync(sourcePath),
+      })
+    ) {
+      pushDiagnostic();
+      return undefined;
+    }
+
+    const resolvedSourcePath = resolvePluginSourcePath(sourcePath);
+    if (
+      !isPluginRootPath({
+        rootPath,
+        targetPath: resolvedSourcePath,
+        rootRealPath,
+        rejectHardlinks,
+        targetMustExist: pluginCacheExistsSync(resolvedSourcePath),
+      })
+    ) {
+      pushDiagnostic();
+      return undefined;
+    }
+    return resolvedSourcePath;
   };
   const manifestChannelConfigs =
     params.candidate.origin === "bundled" && params.bundledChannelConfigCollector
@@ -391,9 +376,12 @@ export function buildPluginManifestRecord(params: {
     format: params.candidate.format ?? "openclaw",
     bundleFormat: params.candidate.bundleFormat,
     kind: params.manifest.kind,
+    contextEngineIds: params.manifest.contextEngineIds,
+    reload: params.manifest.reload,
     channels: params.manifest.channels ?? [],
     channelAccountKeyPolicies: params.manifest.channelAccountKeyPolicies,
     providers: params.manifest.providers ?? [],
+    managesOwnAvailability: params.manifest.managesOwnAvailability,
     providerDiscoverySource: resolveCatalogEntry("providerCatalogEntry"),
     capabilityCatalogSource:
       params.manifest.capabilityCatalogEntry === undefined

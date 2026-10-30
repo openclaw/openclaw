@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
   errorShape,
@@ -21,12 +22,11 @@ import {
 import { fetchClawHubPluginSkill } from "../../infra/clawhub-plugin-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
-  encodePluginDiscoveryId,
-  encodeLocalPluginDiscoveryId,
   findLocalPluginByIdentity,
   joinClawHubPluginCatalog,
   joinClawHubPluginDetail,
   joinLocalPluginDetail,
+  pluginCatalogId,
   resolvePluginDiscoveryIdentity,
 } from "../../plugins/catalog-discovery.js";
 import { registerClawHubCatalogIconUrls } from "../../plugins/catalog-icon-registry.js";
@@ -34,12 +34,15 @@ import { searchInstallablePluginPackages } from "../../plugins/catalog-search.js
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
 import { inspectManagedPlugin, listManagedPlugins } from "../../plugins/management-service.js";
 import { readManagedPluginSkill } from "../../plugins/management-skill-read.js";
+import { getPluginInstance } from "../../plugins/plugin-instance-scope.js";
 import { getPluginRegistryVersion } from "../../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
+import { buildPluginSdkDeprecationNotices } from "../../plugins/sdk-deprecation-notices.js";
 import { listPluginServiceHealthFailures } from "../../plugins/service-health.js";
 import { validatePluginSkillPath } from "../../skills/loading/plugin-skill-bundle.js";
 import { catalogHandlers } from "./catalog.js";
 import { pluginCredentialHandlers } from "./plugins.credentials.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -109,7 +112,10 @@ export const pluginsHandlers: GatewayRequestHandlers = {
     "plugins.list",
     validatePluginsListParams,
     async ({ respond, context }) => {
-      const catalog = await listManagedPlugins({ config: context.getRuntimeConfig() });
+      const catalog = await listManagedPlugins({
+        config: context.getRuntimeConfig(),
+        cachedCatalogOnly: true,
+      });
       const registry = getPluginRegistryForContext();
       // The first loaded record owns shadowed IDs; read runtime facts after catalog I/O.
       const records = new Map(registry?.plugins.toReversed().map((record) => [record.id, record]));
@@ -128,9 +134,8 @@ export const pluginsHandlers: GatewayRequestHandlers = {
             const failure = failures.get(plugin.id);
             const error = failure ? `${failure.serviceId}: ${failure.error}` : record?.error;
             return Object.assign({}, plugin, {
-              catalogId: plugin.clawhubPackage
-                ? encodePluginDiscoveryId(plugin.clawhubPackage)
-                : encodeLocalPluginDiscoveryId(plugin.id),
+              compatibilityNotices: buildPluginSdkDeprecationNotices(plugin.id),
+              catalogId: pluginCatalogId(plugin),
               runtime: {
                 state:
                   record?.status === "loaded"
@@ -140,7 +145,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
                     : record?.status === "disabled"
                       ? "disabled"
                       : "unloaded",
-                ...(error ? { error: error.slice(0, 2000) } : {}),
+                ...(error ? { error: truncateUtf16Safe(error, 2000) } : {}),
               },
             });
           }),
@@ -153,7 +158,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
   "plugins.inspect": defineValidatedGatewayHandler(
     "plugins.inspect",
     validatePluginsInspectParams,
-    async ({ params, respond, context }) => {
+    async ({ params, respond, context, client, signal, hasCurrentClientAuthority }) => {
       let target: { pluginId: string } | { clawhub: { packageName: string; version?: string } };
       if ("pluginId" in params) {
         target = { pluginId: params.pluginId };
@@ -185,10 +190,26 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         ...target,
       });
       const { inspectDecisionProviders } = await import("../../decisions/runtime.js");
+      // Cross-session acquisition IDs are administrator diagnostics, not catalog metadata.
+      // Recheck the connection after inventory/module I/O and immediately before disclosure.
+      const canInspectRetentions =
+        !remote &&
+        client &&
+        !client.invalidated &&
+        !client.connectionSignal?.aborted &&
+        !signal?.aborted &&
+        client.connect.scopes?.includes("operator.admin") &&
+        (!hasCurrentClientAuthority || hasCurrentClientAuthority());
+      const registry = canInspectRetentions ? getPluginRegistryForContext() : undefined;
+      const record = registry?.plugins.find((entry) => entry.id === inspected.plugin.id);
+      const instance = record && getPluginInstance(record);
       respond(
         true,
         {
           ...inspected,
+          ...(canInspectRetentions
+            ? { runtimeRetention: instance?.retentionSnapshot() ?? null }
+            : {}),
           decisions: remote
             ? []
             : inspectDecisionProviders(context.getRuntimeConfig()).filter(
@@ -254,10 +275,10 @@ export const pluginsHandlers: GatewayRequestHandlers = {
     validatePluginsCatalogBrowseParams,
     async ({ params, respond, context }) => {
       if (params.query?.trim() && params.cursor) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "Plugin search does not accept a browse cursor."),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "Plugin search does not accept a browse cursor.",
         );
         return;
       }
@@ -348,18 +369,14 @@ export const pluginsHandlers: GatewayRequestHandlers = {
     async ({ params, respond, context }) => {
       const identity = resolvePluginDiscoveryIdentity(params.id);
       if (!identity) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "Unknown plugin discovery identity."),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "Unknown plugin discovery identity.");
         return;
       }
       if (identity.origin === "local" && params.version) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "Local plugin details do not select releases."),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "Local plugin details do not select releases.",
         );
         return;
       }
@@ -382,10 +399,10 @@ export const pluginsHandlers: GatewayRequestHandlers = {
           remoteError = `ClawHub details are unavailable: ${formatErrorMessage(error)}. Showing installed plugin metadata.`;
         }
       } else if (!localPlugin) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "Unknown local plugin discovery identity."),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "Unknown local plugin discovery identity.",
         );
         return;
       }

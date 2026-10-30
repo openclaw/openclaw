@@ -1,8 +1,6 @@
-import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { hasErrnoCode } from "../../infra/errno.js";
 import {
   createGitCommandError,
   enqueueGitRefMutation,
@@ -14,8 +12,10 @@ import {
   type GitBufferedCommandOptions,
   type GitCommandOptions,
 } from "../../infra/git-exec.js";
+import { appendGitConfig, gitMaintenanceEnvironment } from "../../infra/git-maintenance-env.js";
 import { withGitRepositoryRepair } from "../../infra/git-repository-repair.js";
 import { hasGitWorkerContext, requestGitWorkerCommand } from "../../infra/git-worker-context.js";
+import { lstatIfExists } from "../../infra/path-existence.js";
 import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-env.js";
 import {
   decodeWindowsOutputBuffer,
@@ -24,6 +24,7 @@ import {
 import type { BufferedCommandResult } from "../../process/exec.js";
 
 export type GitResult = Awaited<ReturnType<typeof executeGitCommand>>;
+export { findGitCheckoutRoot, insideGitCheckout } from "../workspace-git.js";
 
 // Materializing checkout objects gets extra time without extending other Git commands or setup.
 export const WORKTREE_CHECKOUT_TIMEOUT_MS = 300_000;
@@ -84,11 +85,10 @@ export function gitEnvironment(
   return {
     ...baseEnv,
     ...windowsNoGlob,
-    GIT_CONFIG_COUNT: "2",
-    GIT_CONFIG_KEY_0: "core.hooksPath",
-    GIT_CONFIG_VALUE_0: os.devNull,
-    GIT_CONFIG_KEY_1: "core.fsmonitor",
-    GIT_CONFIG_VALUE_1: "false",
+    ...appendGitConfig(gitMaintenanceEnvironment(), [
+      ["core.hooksPath", os.devNull],
+      ["core.fsmonitor", "false"],
+    ]),
   };
 }
 
@@ -363,14 +363,34 @@ function parseWorktreeList(output: string): WorktreeListEntry[] {
   return entries;
 }
 
+async function readGitWorktreeList(
+  repoRoot: string,
+  options: Parameters<typeof runGit>[2] = {},
+): Promise<string> {
+  return requireGitCommandOutput(
+    "git worktree list",
+    await runGit(repoRoot, ["worktree", "list", "--porcelain", "-z"], options),
+  );
+}
+
+function* worktreePaths(output: string): Generator<string, undefined> {
+  for (const match of output.matchAll(/(?:^|\0)worktree ([^\0]*)/gu)) {
+    yield normalizeGitPathForFilesystem(match[1]!);
+  }
+}
+
 export async function listGitWorktrees(
   repoRoot: string,
   options: Parameters<typeof runGit>[2] = {},
 ): Promise<WorktreeListEntry[]> {
-  return parseWorktreeList(
-    requireGitCommandOutput(
-      "git worktree list",
-      await runGit(repoRoot, ["worktree", "list", "--porcelain", "-z"], options),
+  return parseWorktreeList(await readGitWorktreeList(repoRoot, options));
+}
+
+/** Native registrations include external checkouts whose directories are currently missing. */
+export async function readGitWorktreePathInventory(repoRoot: string) {
+  return new Set(
+    Array.from(worktreePaths(await readGitWorktreeList(repoRoot)), (checkout) =>
+      path.resolve(checkout),
     ),
   );
 }
@@ -384,50 +404,16 @@ export async function resolveGitRepositoryPaths(
     await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"], options),
   );
   const commonDir = await fs.realpath(path.resolve(sourceRoot, commonRaw));
-  const primary = (await listGitWorktrees(sourceRoot, options))[0]?.path ?? sourceRoot;
-  const canonicalRoot = await fs.realpath(primary);
+  // Repository identity needs only the primary checkout, not every linked HEAD and branch.
+  const primary = worktreePaths(await readGitWorktreeList(sourceRoot, options)).next().value;
+  const canonicalRoot = await fs.realpath(primary ?? sourceRoot);
   return { canonicalRoot, commonDir };
 }
 
-/**
- * True when dir sits inside a git checkout: a .git entry on itself or any ancestor.
- * Existence, not directory-ness, is the signal — linked worktrees keep a .git file.
- * Mirrors `git rev-parse --show-toplevel` discovery without spawning git, so UI
- * capability checks and create-preflights cannot diverge from the worktree service.
- */
-export function findGitCheckoutRoot(start: string): string | null {
-  let current = path.resolve(start);
-  for (;;) {
-    if (existsSync(path.join(current, ".git"))) {
-      return current;
-    }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      return null;
-    }
-    current = parent;
-  }
-}
-
-export function insideGitCheckout(start: string): boolean {
-  return findGitCheckoutRoot(start) !== null;
-}
-
 export async function hasSelfContainedGitMetadata(checkoutRoot: string): Promise<boolean> {
-  return (await lstatIfExists(path.join(checkoutRoot, ".git")))?.isDirectory() ?? false;
+  return (await lstatIfExists(path.join(checkoutRoot, ".git"), "ENOENT"))?.isDirectory() ?? false;
 }
 
 export async function worktreePathExists(target: string): Promise<boolean> {
-  return (await lstatIfExists(target)) !== undefined;
-}
-
-export async function lstatIfExists(target: string) {
-  try {
-    return await fs.lstat(target);
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  }
+  return (await lstatIfExists(target, "ENOENT")) !== undefined;
 }

@@ -3,8 +3,6 @@ import type {
   GitHubPublicationInsert,
   PersonalPublicationMutation,
   PublicationMaintenanceMutation,
-  PublicationMutationReceipt,
-  PublicationReadOperations,
   RepositoryPublicationMutation,
   SharedPublicationMutation,
 } from "./github-publication-worker.types.js";
@@ -14,10 +12,11 @@ type MutationInput<Input> = Input & {
   source?: GitHubPublicationSourcePredicate;
 };
 
-export type PublicationWorkerOperations = PublicationReadOperations & {
+/** Results arrive through native commit receipts, independently of ordinary replies. */
+export type PublicationWorkerOperations = {
   "githubPublications.maintenance": {
     input: PublicationMaintenanceMutation & { operationId: string };
-    output: PublicationMutationReceipt;
+    output: void;
   };
   "githubPublications.insert": {
     input: GitHubPublicationInsert & {
@@ -25,18 +24,18 @@ export type PublicationWorkerOperations = PublicationReadOperations & {
       operationId: string;
       source: GitHubPublicationSourcePredicate;
     };
-    output: PublicationMutationReceipt;
+    output: void;
   };
   "githubPublications.shared": {
     input: MutationInput<SharedPublicationMutation>;
-    output: PublicationMutationReceipt;
+    output: void;
   };
   "githubPublications.personal": {
     input: MutationInput<PersonalPublicationMutation>;
-    output: PublicationMutationReceipt;
+    output: void;
   };
   "githubPublications.repository": {
     input: MutationInput<RepositoryPublicationMutation>;
-    output: PublicationMutationReceipt;
+    output: void;
   };
 };

@@ -1,10 +1,17 @@
 import path from "node:path";
 import { getRuntimeConfig } from "../../config/config.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { WorkshopChange } from "../../skills/workshop/changes.kernel.js";
 import { resolveSkillWorkshopConfig } from "../../skills/workshop/config.js";
+import {
+  discardWorkshopDraft,
+  listWorkshopDrafts,
+  saveWorkshopDraft,
+  viewWorkshopDraft,
+} from "../../skills/workshop/drafts.js";
 import {
   archiveWorkshopSkill,
   createWorkshopSkill,
@@ -21,7 +28,10 @@ import {
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import { skillWriteAdvisories } from "../../skills/workshop/skill-lint.js";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
-import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
+import {
+  captureAgentToolSourceExecutionGuard,
+  runWithAgentToolSourceExecutionScope,
+} from "../agent-tool-source-execution-guard.js";
 import { recordSkillUsed } from "../agent-tools.before-tool-call.diagnostics.js";
 import { SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 import { canonicalizePath } from "../utils/paths.js";
@@ -35,12 +45,13 @@ import { SkillWorkshopToolSchema } from "./skill-workshop-tool-schema.js";
 import { textResult } from "./tool-results.js";
 
 const SKILL_WORKSHOP_DESCRIPTION = `Your learned skills: reusable procedures saved as <name>/SKILL.md that load in future sessions. Changes apply immediately, are versioned, and are shown to the user.
-Actions: list | view name [file_path] [version] | create name content | patch name old_text new_text [file_path] | write_file name file_path content | remove_file name file_path | archive name (absorbed_into or reason) | restore name [version].
+Actions: list | view name [file_path] [version] | create name content | patch name old_text new_text [file_path] | write_file name file_path content | remove_file name file_path | archive name (absorbed_into or reason) | restore name [version] | draft name content | view draft [file_path] | discard draft.
 - create: content is the full SKILL.md: frontmatter name (= name) and description (aim for ≤160 bytes, triggers first), then the procedure.
 - patch: replaces one exact, unique old_text; view first and copy the text exactly. Prefer patch over rewrites.
 - file_path: SKILL.md or files under references/, templates/, scripts/, assets/. remove_file deletes one of those support files; archive removes a whole skill.
 - reason: one short line saying what changed; shown to the user.
 - restore without version undoes the last change.
+- draft: saves a proposed SKILL.md for the user to review later; skills stay unchanged. list shows waiting drafts. When reviewing drafts with the user, save approved changes with create/patch, then discard the drafts the user decided on.
 
 ${SKILL_AUTHORING_STANDARDS_PROMPT}`;
 
@@ -90,22 +101,27 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
   const execute = async (params: Record<string, unknown>, signal?: AbortSignal) => {
     // Captured before any await; library writes recheck it under the skill lock.
     const assertSourceCurrent = captureAgentToolSourceExecutionGuard(signal);
+    const action = readToolStringParam(params, "action", { required: true });
     const ctx: WorkshopMutationContext = {
       ...baseCtx,
-      assertLive: () => {
-        assertSourceCurrent();
-        // The operator may switch Learning Off mid-review.
-        if (
-          options.reviewOf &&
-          resolveSkillWorkshopConfig(getRuntimeConfig()).autonomous.mode !== "auto"
-        ) {
+      assertLive: composeSessionSourceAssertion([assertSourceCurrent], (assertSource) => {
+        assertSource();
+        // The operator may switch the learning mode mid-review.
+        const mode = resolveSkillWorkshopConfig(getRuntimeConfig()).autonomous.mode;
+        if (options.reviewOf && mode === "off") {
           throw new WorkshopWriteError(
             "Learning is off; background reviews may not change skills.",
           );
         }
-      },
+        if (options.reviewOf && mode === "propose" && action !== "draft") {
+          throw new WorkshopWriteError(
+            "Learning is in propose mode; save this change with action=draft instead.",
+          );
+        }
+      }),
     };
-    const action = readToolStringParam(params, "action", { required: true });
+    const runMutation = <T>(run: () => Promise<T>) =>
+      runWithAgentToolSourceExecutionScope(ctx.assertLive, run);
     if (action === "list") {
       const [skills, archive] = await Promise.all([
         listWorkshopSkills(options.config, options.agentId),
@@ -119,10 +135,44 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           ...archived.map((entry) => `- ${entry.name}`),
         );
       }
+      const drafts = await listWorkshopDrafts(options.config, options.agentId);
+      if (drafts.length > 0) {
+        lines.push(
+          "Drafts waiting for review (view with action=view draft=<id>):",
+          ...drafts.map(
+            (draft) => `- ${draft.id} (${draft.skillName}): ${draft.reason ?? draft.description}`,
+          ),
+        );
+      }
       return textResult(
         lines.length > 0 ? lines.join("\n") : "No learned skills yet. Add one with action=create.",
-        { skills, archived },
+        { skills, archived, drafts },
       );
+    }
+
+    const draftId = readToolStringParam(params, "draft", { required: action === "discard" });
+    if (draftId && (action === "view" || action === "discard")) {
+      if (action === "view") {
+        const filePath = readToolStringParam(params, "file_path");
+        const view = await viewWorkshopDraft(options.config, options.agentId, draftId, filePath);
+        const header = `Draft ${draftId} for skill "${view.draft.skillName}"${view.draft.reason ? ` (${view.draft.reason})` : ""}:`;
+        const others = view.draft.files.filter((file) => file !== view.filePath);
+        return textResult(
+          [
+            header,
+            view.content,
+            ...(others.length > 0 ? [`[Other files: ${others.join(", ")}]`] : []),
+          ].join("\n\n"),
+          { draft: view.draft, filePath: view.filePath },
+        );
+      }
+      if (options.reviewOf) {
+        throw new ToolInputError("Background reviews may not discard drafts.");
+      }
+      await runMutation(() =>
+        discardWorkshopDraft(options.config, options.agentId, draftId, ctx.assertLive),
+      );
+      return textResult(`Discarded draft ${draftId}.`, { draft: draftId });
     }
 
     const name = readToolStringParam(params, "name", { required: true });
@@ -163,6 +213,21 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       );
     }
 
+    if (action === "draft") {
+      const savedId = await runMutation(() =>
+        saveWorkshopDraft(options.config, options.agentId, {
+          name,
+          content: readToolStringParam(params, "content", { required: true, trim: false }),
+          ...(reason ? { reason } : {}),
+          assertLive: ctx.assertLive,
+        }),
+      );
+      return textResult(
+        `Saved draft ${savedId} for "${name}". Skills are unchanged; the user reviews drafts with /learn drafts.`,
+        { draft: savedId },
+      );
+    }
+
     if (
       options.reviewOf &&
       GUARDED_ACTIONS.has(action) &&
@@ -192,42 +257,55 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
     let change: WorkshopChange;
     let verb: string;
     switch (action) {
-      case "create":
-        written = readToolStringParam(params, "content", { required: true, trim: false });
-        change = await createWorkshopSkill(ctx, {
-          name,
-          content: written,
-          ...(reason ? { summary: reason } : {}),
-        });
+      case "create": {
+        const content = readToolStringParam(params, "content", { required: true, trim: false });
+        written = content;
+        change = await runMutation(() =>
+          createWorkshopSkill(ctx, {
+            name,
+            content,
+            ...(reason ? { summary: reason } : {}),
+          }),
+        );
         viewed.add(name);
         verb = "Created";
         break;
+      }
       case "patch":
-        change = await patchWorkshopSkill(ctx, {
-          name,
-          oldText: readToolStringParam(params, "old_text", { required: true, trim: false }),
-          newText: readToolStringParam(params, "new_text", { trim: false, allowEmpty: true }) ?? "",
-          ...(filePath ? { filePath } : {}),
-          ...(reason ? { summary: reason } : {}),
-        });
+        change = await runMutation(() =>
+          patchWorkshopSkill(ctx, {
+            name,
+            oldText: readToolStringParam(params, "old_text", { required: true, trim: false }),
+            newText:
+              readToolStringParam(params, "new_text", { trim: false, allowEmpty: true }) ?? "",
+            ...(filePath ? { filePath } : {}),
+            ...(reason ? { summary: reason } : {}),
+          }),
+        );
         verb = "Patched";
         break;
-      case "write_file":
-        written = readToolStringParam(params, "content", { required: true, trim: false });
-        change = await writeWorkshopSkillFile(ctx, {
-          name,
-          filePath: readToolStringParam(params, "file_path", { required: true }),
-          content: written,
-          ...(reason ? { summary: reason } : {}),
-        });
+      case "write_file": {
+        const content = readToolStringParam(params, "content", { required: true, trim: false });
+        written = content;
+        change = await runMutation(() =>
+          writeWorkshopSkillFile(ctx, {
+            name,
+            filePath: readToolStringParam(params, "file_path", { required: true }),
+            content,
+            ...(reason ? { summary: reason } : {}),
+          }),
+        );
         verb = "Updated";
         break;
+      }
       case "remove_file":
-        change = await removeWorkshopSkillFile(ctx, {
-          name,
-          filePath: readToolStringParam(params, "file_path", { required: true }),
-          ...(reason ? { summary: reason } : {}),
-        });
+        change = await runMutation(() =>
+          removeWorkshopSkillFile(ctx, {
+            name,
+            filePath: readToolStringParam(params, "file_path", { required: true }),
+            ...(reason ? { summary: reason } : {}),
+          }),
+        );
         verb = "Updated";
         break;
       case "archive": {
@@ -237,25 +315,29 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             "archive needs absorbed_into (the live skill that now covers this one) or a reason.",
           );
         }
-        change = await archiveWorkshopSkill(ctx, {
-          name,
-          ...(absorbedInto ? { absorbedInto } : {}),
-          ...(reason ? { reason } : {}),
-        });
+        change = await runMutation(() =>
+          archiveWorkshopSkill(ctx, {
+            name,
+            ...(absorbedInto ? { absorbedInto } : {}),
+            ...(reason ? { reason } : {}),
+          }),
+        );
         verb = "Archived";
         break;
       }
       case "restore":
-        change = await restoreWorkshopSkill(ctx, {
-          name,
-          ...(version ? { versionId: version } : {}),
-          ...(reason ? { summary: reason } : {}),
-        });
+        change = await runMutation(() =>
+          restoreWorkshopSkill(ctx, {
+            name,
+            ...(version ? { versionId: version } : {}),
+            ...(reason ? { summary: reason } : {}),
+          }),
+        );
         verb = "Restored";
         break;
       default:
         throw new ToolInputError(
-          `Unknown action "${action}". Use list, view, create, patch, write_file, remove_file, archive, or restore.`,
+          `Unknown action "${action}". Use list, view, create, patch, write_file, remove_file, archive, restore, draft, or discard.`,
         );
     }
     const after = skillFileWrite ? (written ?? (await readLiveSkillFile())) : undefined;

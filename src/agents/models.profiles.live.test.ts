@@ -7,11 +7,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { type Api, completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, readRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, type SecretInput } from "../config/types.secrets.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
-import { discoverAuthStorageFacts, discoverModels } from "./agent-model-discovery.js";
+import { discoverAuthStorageFacts, discoverModelsAsync } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
@@ -24,10 +25,12 @@ import {
   resolveLiveSystemPrompt,
 } from "./live-model-session-id.js";
 import {
+  createSingleUserPromptMessage,
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
   readLiveTestConfig,
   resolveLiveCredentialPrecedence,
+  useLiveTestRuntimeConfig,
 } from "./live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
 import {
@@ -47,6 +50,7 @@ import {
 import { normalizeDiscoveredAgentModel } from "./model-discovery-normalize.js";
 import { resolveBuiltInModelSuppressionFromManifest } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
+import { createConfiguredProviderLocalServiceAcquirer } from "./provider-local-service.js";
 import type { StreamFn } from "./runtime/index.js";
 import {
   appendLiveModelCandidates,
@@ -126,6 +130,35 @@ type OllamaRuntimeApi = {
 };
 
 const describeLive = LIVE ? describe : describe.skip;
+
+/** Keep direct transport inputs and plugin runtime readers on the same sweep config. */
+function useLiveCompletionConfig(config: OpenClawConfig): Disposable {
+  const runtimeConfig = useLiveTestRuntimeConfig(config);
+  activeLiveCompletionConfig = config;
+  return {
+    [Symbol.dispose]() {
+      activeLiveCompletionConfig = undefined;
+      runtimeConfig[Symbol.dispose]();
+    },
+  };
+}
+
+describe("direct live runtime config", () => {
+  it("prepares plugin provider reads for the sweep and releases them afterward", async () => {
+    clearRuntimeConfigSnapshot();
+    const baseUrl = "https://ollama.example.invalid";
+    const acquireLocalService = createConfiguredProviderLocalServiceAcquirer(readRuntimeConfig);
+    const target = { providerId: "ollama-cloud", baseUrl };
+    {
+      using _ = useLiveCompletionConfig({
+        models: { providers: { "ollama-cloud": { baseUrl, models: [] } } },
+      });
+      await expect(acquireLocalService(target)).resolves.toBeUndefined();
+      expect(readRuntimeConfig().models?.providers?.["ollama-cloud"]?.baseUrl).toBe(baseUrl);
+    }
+    await expect(acquireLocalService(target)).rejects.toThrow("Runtime config is not prepared");
+  });
+});
 
 function parseCsvFilter(raw?: string): Set<string> | null {
   return parseLiveCsvFilter(raw, { lowercase: false });
@@ -232,7 +265,13 @@ async function ensureLiveProviderApisRegistered(params: {
   config: OpenClawConfig;
   providers: readonly string[] | undefined;
 }): Promise<void> {
-  if (!params.providers?.some((provider) => normalizeProviderId(provider) === "ollama")) {
+  // Ollama Cloud models share the plugin's "ollama" API transport.
+  if (
+    !params.providers?.some((provider) => {
+      const id = normalizeProviderId(provider);
+      return id === "ollama" || id === "ollama-cloud";
+    })
+  ) {
     return;
   }
   // Live Vitest setup installs a stub plugin registry for channel tests; direct
@@ -1041,7 +1080,16 @@ describe("explicit live model discovery scope", () => {
     }
   });
 
-  it("honors configured local Ollama credentials before the live local marker", async () => {
+  it.each([
+    {
+      name: "honors configured local Ollama credentials before the live local marker",
+      baseUrl: "http://127.0.0.1:11434",
+    },
+    {
+      name: "reuses configured local Ollama credentials across canonical base URL forms",
+      baseUrl: "http://127.0.0.1:11434/v1",
+    },
+  ])("$name", async ({ baseUrl }) => {
     const oldEnv = process.env.LOCAL_OLLAMA_API_KEY;
     process.env.LOCAL_OLLAMA_API_KEY = "secured-local-key";
     try {
@@ -1052,54 +1100,7 @@ describe("explicit live model discovery scope", () => {
             providers: {
               ollama: {
                 api: "ollama",
-                baseUrl: "http://127.0.0.1:11434",
-                apiKey: { source: "env", provider: "default", id: "LOCAL_OLLAMA_API_KEY" },
-                models: [],
-              },
-            },
-          },
-        },
-        providers: ["ollama"],
-        env: {},
-      });
-
-      await expect(
-        resolveLiveModelApiKeyInfo({
-          model: {
-            provider: "ollama",
-            id: "gemma3:4b",
-            api: "ollama",
-            baseUrl: "http://127.0.0.1:11434",
-          } as Model,
-          cfg,
-          requireProfileKeys: false,
-        }),
-      ).resolves.toEqual({
-        apiKey: "secured-local-key",
-        source: "env: LOCAL_OLLAMA_API_KEY (models.json secretref)",
-        mode: "api-key",
-      });
-    } finally {
-      if (oldEnv === undefined) {
-        delete process.env.LOCAL_OLLAMA_API_KEY;
-      } else {
-        process.env.LOCAL_OLLAMA_API_KEY = oldEnv;
-      }
-    }
-  });
-
-  it("reuses configured local Ollama credentials across canonical base URL forms", async () => {
-    const oldEnv = process.env.LOCAL_OLLAMA_API_KEY;
-    process.env.LOCAL_OLLAMA_API_KEY = "secured-local-key";
-    try {
-      const cfg = applyLiveProviderDiscoveryPluginCompat({
-        config: {
-          plugins: {},
-          models: {
-            providers: {
-              ollama: {
-                api: "ollama",
-                baseUrl: "http://127.0.0.1:11434/v1",
+                baseUrl,
                 apiKey: { source: "env", provider: "default", id: "LOCAL_OLLAMA_API_KEY" },
                 models: [],
               },
@@ -1302,13 +1303,7 @@ async function completeOkWithRetry(params: {
       params.model,
       {
         systemPrompt: resolveLiveSystemPrompt(params.model),
-        messages: [
-          {
-            role: "user",
-            content: "Reply with the word ok.",
-            timestamp: Date.now(),
-          },
-        ],
+        messages: createSingleUserPromptMessage("Reply with the word ok."),
       },
       {
         apiKey: params.apiKey,
@@ -1557,11 +1552,11 @@ describeLive("live models (profile keys)", () => {
         providers: providerList,
         env: process.env,
       });
+      using _ = useLiveCompletionConfig(cfg);
       await ensureLiveProviderApisRegistered({
         config: cfg,
         providers: providerList,
       });
-      activeLiveCompletionConfig = cfg;
       logProgress("[live-models] preparing models.json");
       await withLiveStageTimeout(
         ensureOpenClawModelsJson(
@@ -1621,7 +1616,7 @@ describeLive("live models (profile keys)", () => {
         logProgress("[live-models] loading model registry");
         const modelRegistry = await withLiveStageTimeout(
           Promise.resolve().then(() =>
-            discoverModels(authStorage, agentDir, { config: cfg, normalizeModels: false }),
+            discoverModelsAsync(authStorage, agentDir, { config: cfg, normalizeModels: false }),
           ),
           "[live-models] load model registry",
         );
@@ -2024,6 +2019,10 @@ describeLive("live models (profile keys)", () => {
             break;
           } catch (err) {
             const message = String(err);
+            const recordSkip = (label: string) => {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (${label})`);
+            };
             if (
               model.provider === "anthropic" &&
               isLiveRateLimitDrift(message) &&
@@ -2033,8 +2032,7 @@ describeLive("live models (profile keys)", () => {
               continue;
             }
             if (model.provider === "anthropic" && isLiveRateLimitDrift(message)) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (anthropic rate limit)`);
+              recordSkip("anthropic rate limit");
               break;
             }
             if (model.provider === "anthropic" && isLiveBillingDrift(message)) {
@@ -2042,16 +2040,14 @@ describeLive("live models (profile keys)", () => {
                 logProgress(`${progressLabel}: billing issue, retrying with next key`);
                 continue;
               }
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (anthropic billing)`);
+              recordSkip("anthropic billing");
               break;
             }
             if (
               (model.provider === "google" || model.provider === "google-gemini-cli") &&
               isGoogleModelNotFoundError(err)
             ) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (google model not found)`);
+              recordSkip("google model not found");
               break;
             }
             if (
@@ -2059,8 +2055,7 @@ describeLive("live models (profile keys)", () => {
               model.provider === "minimax" &&
               message.includes("request ended without sending any chunks")
             ) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (minimax empty response)`);
+              recordSkip("minimax empty response");
               break;
             }
             if (
@@ -2070,8 +2065,7 @@ describeLive("live models (profile keys)", () => {
                 model.provider === "openrouter") &&
               isRateLimitErrorMessage(message)
             ) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (rate limit)`);
+              recordSkip("rate limit");
               break;
             }
             if (
@@ -2079,13 +2073,11 @@ describeLive("live models (profile keys)", () => {
               (model.provider === "opencode" || model.provider === "opencode-go") &&
               isRateLimitErrorMessage(message)
             ) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (rate limit)`);
+              recordSkip("rate limit");
               break;
             }
             if (allowNotFoundSkip && model.provider === "openai" && isRefreshTokenReused(message)) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (codex refresh token reused)`);
+              recordSkip("codex refresh token reused");
               break;
             }
             if (
@@ -2093,8 +2085,7 @@ describeLive("live models (profile keys)", () => {
               model.provider === "openai" &&
               isAccountIdExtractionError(message)
             ) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (codex account id extraction)`);
+              recordSkip("codex account id extraction");
               break;
             }
             if (
@@ -2102,8 +2093,7 @@ describeLive("live models (profile keys)", () => {
               model.provider === "openai" &&
               isChatGPTUsageLimitErrorMessage(message)
             ) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (chatgpt usage limit)`);
+              recordSkip("chatgpt usage limit");
               break;
             }
             if (
@@ -2111,8 +2101,7 @@ describeLive("live models (profile keys)", () => {
               model.provider === "openai" &&
               isInstructionsRequiredError(message)
             ) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (instructions required)`);
+              recordSkip("instructions required");
               break;
             }
             if (
@@ -2120,8 +2109,7 @@ describeLive("live models (profile keys)", () => {
               model.provider === "openai" &&
               isOpenAiCodexHtmlInterruption(message)
             ) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (codex html interruption)`);
+              recordSkip("codex html interruption");
               break;
             }
             const driftSkip = shouldSkipLiveProviderDrift({
@@ -2132,8 +2120,7 @@ describeLive("live models (profile keys)", () => {
               allowTimeout: allowNotFoundSkip,
             });
             if (driftSkip) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (${driftSkip.label})`);
+              recordSkip(driftSkip.label);
               break;
             }
             if (
@@ -2141,33 +2128,27 @@ describeLive("live models (profile keys)", () => {
               model.provider === "openrouter" &&
               isOpenRouterOpaqueBadRequestErrorMessage(message)
             ) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (openrouter upstream bad request)`);
+              recordSkip("openrouter upstream bad request");
               break;
             }
             if (allowNotFoundSkip && isModelNotFoundErrorMessage(message)) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (model not found)`);
+              recordSkip("model not found");
               break;
             }
             if (allowNotFoundSkip && isAudioOnlyModelErrorMessage(message)) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (audio-only model)`);
+              recordSkip("audio-only model");
               break;
             }
             if (allowNotFoundSkip && isUnsupportedReasoningEffortErrorMessage(message)) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (reasoning unsupported)`);
+              recordSkip("reasoning unsupported");
               break;
             }
             if (allowNotFoundSkip && isUnsupportedThinkingToggleErrorMessage(message)) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (thinking toggle unsupported)`);
+              recordSkip("thinking toggle unsupported");
               break;
             }
             if (allowNotFoundSkip && isUnsupportedPlanErrorMessage(message)) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (plan unsupported)`);
+              recordSkip("plan unsupported");
               break;
             }
             if (
@@ -2175,8 +2156,7 @@ describeLive("live models (profile keys)", () => {
               model.provider === "ollama" &&
               isOllamaUnavailableErrorMessage(message)
             ) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (ollama unavailable)`);
+              recordSkip("ollama unavailable");
               break;
             }
             logProgress(`${progressLabel}: failed`);

@@ -1,5 +1,6 @@
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import {
+  buildMutableAllowEntryDetector,
   collectStandardAllowlistLists,
   createDangerousNameMatchingMutableAllowlistWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
@@ -12,13 +13,29 @@ import {
   normalizeCompatibilityConfig as normalizeSlackCompatibilityConfig,
 } from "./doctor-contract.js";
 import { probeSlack } from "./probe.js";
-import { isSlackMutableAllowEntry } from "./security-doctor.js";
 import { parseSlackTarget } from "./target-parsing.js";
+
+const isSlackMutableUnqualifiedAllowEntry = buildMutableAllowEntryDetector({
+  stableIdPattern:
+    /^(?:(?:(?:[sS][lL][aA][cC][kK]|[uU][sS][eE][rR]):)?(?:[UWBCGDT][A-Z0-9]{2,}|[A-Za-z0-9]{8,})|<@[A-Za-z0-9]{8,}>)$/,
+});
 
 const collectSlackMutableAllowlistWarnings =
   createDangerousNameMatchingMutableAllowlistWarningCollector({
     channel: "slack",
-    detector: isSlackMutableAllowEntry,
+    detector: (entry) => {
+      if (/^team:/i.test(entry)) {
+        try {
+          const target = parseSlackTarget(entry);
+          if (target?.kind === "user" && target.teamId) {
+            return false;
+          }
+        } catch {
+          // Invalid qualified entries remain mutable so Doctor reports them.
+        }
+      }
+      return isSlackMutableUnqualifiedAllowEntry(entry);
+    },
     collectLists: (scope) =>
       collectStandardAllowlistLists(scope, {
         includeGroupAllowFrom: false,
@@ -161,7 +178,7 @@ function collectSlackNameKeyedChannelWarnings({ cfg }: { cfg: OpenClawConfig }):
         continue;
       }
       warnings.add(
-        `${channelsPrefix}.channels."${channelKey}" is keyed by a channel name or non-canonical ID form, not a routable Slack channel ID; ` +
+        `${channelsPrefix}.channels."${channelKey}" is keyed by a channel name or unsupported ID form, not a routable Slack channel ID; ` +
           `under groupPolicy: "${effectiveGroupPolicy}" inbound routing does not match this entry, so ${fallbackDescription}. ` +
           `Re-key it with the channel's ID (e.g. C0123ABCD, from the channel's About details or conversations.info).`,
       );

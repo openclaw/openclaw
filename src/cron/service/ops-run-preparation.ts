@@ -1,22 +1,19 @@
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
+import { cronSourceIdentity, ownsCronSource } from "../source-schedule.js";
 import { assertCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
-import type { InterruptedStartupRun } from "../store/run-recovery.types.js";
-import { ownsStreamSource } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
-import { enrollForeignReceipt, removeForeignReceipt } from "./foreign-receipt-monitor.js";
 import { findJobOrThrow, hasActiveCronRun, isJobEnabled } from "./jobs-scheduling.js";
-import { assertSupportedJobSpec } from "./jobs-validation.js";
+import { assertExternalSourceScheduleSupport, assertSupportedJobSpec } from "./jobs-validation.js";
 import type { ManualRunOptions } from "./run-options.js";
-import { emitInterruptedCronRun } from "./run-recovery-events.js";
-import { recoverCronRunProposals } from "./run-recovery.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
-import { recordSkippedCronRuns } from "./scheduler-mutations.js";
+import { refreshCronScheduler } from "./scheduler-actor.js";
+import { recordSkippedCronRuns } from "./skipped-runs.js";
 import type { CronRunMode, CronServiceState } from "./state.js";
-import { isImmediateCronRunMode } from "./state.js";
+import { assertCronHostExecutionAllowed, isImmediateCronRunMode } from "./state.js";
 import {
   captureCronServiceMutationSource,
   ensureLoaded,
@@ -25,7 +22,6 @@ import {
 } from "./store.js";
 import { emitCronRunFinished } from "./timer-outcome-events.js";
 import { isRunnableJob } from "./timer-runnable.js";
-import { armTimer } from "./timer.js";
 
 type ManualRunSkipped = {
   ok: true;
@@ -54,7 +50,7 @@ function admitsStreamSourceRun(
     streamScheduleKey !== undefined &&
     streamSourceIdentity !== undefined &&
     isJobEnabled(job) &&
-    ownsStreamSource(job, streamScheduleKey, streamSourceIdentity)
+    ownsCronSource(job, streamScheduleKey, streamSourceIdentity)
   );
 }
 
@@ -64,7 +60,6 @@ async function skipInvalidPersistedManualRun(params: {
   job: CronJob;
   mode?: CronRunMode;
   runId?: string;
-  commitGuard?: () => void;
   terminalTracker?: { emitted: boolean };
   error: unknown;
 }) {
@@ -78,7 +73,6 @@ async function skipInvalidPersistedManualRun(params: {
     state: params.state,
     source: params.source,
     nowMs: endedAt,
-    assertCurrent: params.commitGuard,
     change: {
       kind: "invalid-manual",
       jobId: params.job.id,
@@ -90,7 +84,7 @@ async function skipInvalidPersistedManualRun(params: {
     async afterCommit(outcome, historySource) {
       const job = outcome.jobs[0];
       if (!job) {
-        armTimer(params.state);
+        refreshCronScheduler(params.state);
         return;
       }
       applyCronRuntimeRowsToState(params.state, [job]);
@@ -119,11 +113,9 @@ async function skipInvalidPersistedManualRun(params: {
         { historySource },
       );
       for (const notification of outcome.notifications) {
-        historySource.assertCurrent();
         await runPostPersistCronNotifications(params.state, [notification]);
       }
-      historySource.assertCurrent();
-      armTimer(params.state);
+      refreshCronScheduler(params.state);
     },
   });
 }
@@ -139,46 +131,6 @@ async function recomputeManualRunPreflight(
   });
 }
 
-async function recoverManualRunPreflight(state: CronServiceState, id: string): Promise<void> {
-  const job = state.store?.jobs.find((entry) => entry.id === id);
-  const interrupted: InterruptedStartupRun[] = [];
-  let repaired = false;
-  try {
-    await recoverCronRunProposals(
-      state,
-      [
-        {
-          jobId: id,
-          queuedAtMs: job?.state.queuedAtMs,
-          runningAtMs: job?.state.runningAtMs,
-          runningReceiptId: job?.state.runningReceiptId,
-        },
-      ],
-      {
-        async onRecovery(_proposal, result) {
-          if (result.kind === "repaired") {
-            repaired = true;
-            removeForeignReceipt(state, id);
-            await runPostPersistCronNotifications(state, result.notifications);
-            if (result.interrupted) {
-              interrupted.push(result.interrupted);
-            }
-          } else if (result.receipt && result.receipt.ownerPid !== process.pid) {
-            enrollForeignReceipt(state, result.receipt);
-          }
-        },
-      },
-    );
-  } finally {
-    if (repaired) {
-      await ensureLoaded(state, { forceReload: true });
-    }
-    for (const result of interrupted) {
-      await emitInterruptedCronRun(state, result);
-    }
-  }
-}
-
 // The caller holds the store lock through preflight and request submission.
 export async function inspectManualRunPreflight(
   state: CronServiceState,
@@ -191,16 +143,12 @@ export async function inspectManualRunPreflight(
   if (state.stopped) {
     return { ok: true, ran: false, reason: "stopped" };
   }
-  source.assertCurrent();
-  await ensureLoaded(state, { forceReload: true });
-  source.assertCurrent();
+  // Classify source retirement before the generic service-generation fence.
   opts?.commitGuard?.();
-  if (state.stopped) {
-    return { ok: true, ran: false, reason: "stopped" };
-  }
-  await recoverManualRunPreflight(state, id);
   source.assertCurrent();
+  await ensureLoaded(state);
   opts?.commitGuard?.();
+  source.assertCurrent();
   if (state.stopped) {
     return { ok: true, ran: false, reason: "stopped" };
   }
@@ -211,9 +159,10 @@ export async function inspectManualRunPreflight(
   if (state.stopped) {
     return { ok: true, ran: false, reason: "stopped" };
   }
-  const job = opts?.onExit
-    ? state.store?.jobs.find((entry) => entry.id === id)
-    : findJobOrThrow(state, id);
+  const job =
+    opts?.onExit || opts?.event
+      ? state.store?.jobs.find((entry) => entry.id === id)
+      : findJobOrThrow(state, id);
   if (
     !job ||
     (opts?.onExit &&
@@ -223,6 +172,13 @@ export async function inspectManualRunPreflight(
   ) {
     return { ok: true, ran: false, reason: "not-due" };
   }
+  if (
+    opts?.event &&
+    (job.schedule.kind !== "event" || cronSourceIdentity(job) !== opts.event.input.sourceIdentity)
+  ) {
+    return { ok: true, ran: false, reason: "not-due" };
+  }
+  assertCronHostExecutionAllowed(state, job);
   assertCanonicalCronDeliveryMode(job.delivery);
   if (opts?.onExit && (!isJobEnabled(job) || job.state.autoDisabled)) {
     return { ok: true, ran: false, reason: "disabled" };
@@ -234,6 +190,7 @@ export async function inspectManualRunPreflight(
     return { ok: true, ran: false, reason: "not-due" };
   }
   try {
+    assertExternalSourceScheduleSupport(job);
     assertSupportedJobSpec(job);
   } catch (error) {
     await skipInvalidPersistedManualRun({
@@ -242,7 +199,6 @@ export async function inspectManualRunPreflight(
       mode,
       source,
       runId: opts?.runId,
-      commitGuard: opts?.commitGuard ?? opts?.onExit?.commitGuard,
       terminalTracker: opts?.terminalTracker,
       error,
     });

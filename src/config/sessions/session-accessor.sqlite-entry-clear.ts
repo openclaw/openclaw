@@ -1,6 +1,7 @@
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { retainLegacyAcpMigrationSourcesForEntry } from "./session-accessor.sqlite-acp-provenance.js";
+import { hasLegacyAcpMigrationProvenanceColumn } from "../../state/openclaw-agent-legacy-acp-schema.js";
+import { conversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
 import { hasSqliteSessionOwnerColumns } from "./session-accessor.sqlite-owner-projection.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { writeSessionEntrySnapshots } from "./session-entry-snapshots.js";
@@ -12,7 +13,6 @@ export function clearSqliteSessionEntryPreservingWindows(
   params: { sessionId: string; sessionKey: string; updatedAt: number },
 ): void {
   writeSessionEntrySnapshots(database, params.sessionKey, []);
-  retainLegacyAcpMigrationSourcesForEntry(database.db, params.sessionKey, undefined);
   const db = getSessionKysely(database.db);
   const cleared = {
     current_session_id: params.sessionId,
@@ -41,6 +41,9 @@ export function clearSqliteSessionEntryPreservingWindows(
     last_read_at: null,
     last_interaction_at: null,
     last_activity_at: null,
+    ...(hasLegacyAcpMigrationProvenanceColumn(database.db)
+      ? { legacy_acp_migration_json: null }
+      : {}),
     ...(hasSqliteSessionOwnerColumns(database.db)
       ? {
           owner_actor_type: null,
@@ -58,4 +61,5 @@ export function clearSqliteSessionEntryPreservingWindows(
       .values({ session_key: params.sessionKey, ...cleared })
       .onConflict((conflict) => conflict.column("session_key").doUpdateSet(cleared)),
   );
+  conversationPublication.stageRows(database, { removedNodes: [params.sessionKey] });
 }

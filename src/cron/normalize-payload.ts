@@ -1,6 +1,7 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { isRecord } from "../utils.js";
@@ -56,6 +57,8 @@ function hasAgentTurnOnlyPayloadHint(payload: UnknownRecord): boolean {
     "thinking" in payload ||
     "timeoutSeconds" in payload ||
     typeof payload.lightContext === "boolean" ||
+    typeof payload.skipIfScratchEmpty === "boolean" ||
+    typeof payload.includeReasoning === "boolean" ||
     typeof payload.allowUnsafeExternalContent === "boolean"
   );
 }
@@ -70,17 +73,18 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
   } else if (kindRaw) {
     next.kind = kindRaw;
   }
-  for (const field of ["message", "text"] as const) {
-    if (typeof next[field] === "string") {
-      next[field] = normalizeOptionalString(next[field]) ?? "";
-    }
+  // Preserve authored prompt bytes; blank input still fails the shared schema validation.
+  if (typeof next.message === "string" && !next.message.trim()) {
+    next.message = "";
+  }
+  if (typeof next.text === "string") {
+    next.text = normalizeOptionalString(next.text) ?? "";
   }
   if (typeof next.script === "string") {
     next.script = next.script.trim();
   }
   for (const field of ["model", "thinking"] as const) {
-    // Preserve explicit null so patches can clear stored overrides,
-    // matching the fallbacks/toolsAllow clear paths.
+    // Model/thinking nulls clear stored overrides.
     if (field in next && next[field] !== null) {
       const value = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next[field]);
       if (value !== undefined) {
@@ -90,12 +94,21 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
       }
     }
   }
-  if ("timeoutSeconds" in next && next.timeoutSeconds !== null) {
-    const timeoutSeconds = parseOptionalField(TimeoutSecondsFieldSchema, next.timeoutSeconds);
-    if (timeoutSeconds !== undefined) {
-      next.timeoutSeconds = timeoutSeconds;
+  for (const field of [
+    "timeoutSeconds",
+    "noOutputTimeoutSeconds",
+    "outputMaxBytes",
+    "toolBudget",
+  ] as const) {
+    if (!(field in next) || (field === "timeoutSeconds" && next[field] === null)) {
+      continue;
+    }
+    const value = parseOptionalField(TimeoutSecondsFieldSchema, next[field]);
+    const positiveInteger = field === "outputMaxBytes" || field === "toolBudget";
+    if (value !== undefined && (!positiveInteger || value > 0)) {
+      next[field] = positiveInteger ? Math.floor(value) : value;
     } else {
-      delete next.timeoutSeconds;
+      delete next[field];
     }
   }
   for (const field of ["fallbacks", "toolsAllow"] as const) {
@@ -117,7 +130,7 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
     }
   }
   if ("cwd" in next) {
-    const cwd = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.cwd);
+    const cwd = readNonBlankString(next.cwd);
     if (cwd !== undefined) {
       next.cwd = cwd;
     } else {
@@ -129,27 +142,6 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
   }
   if ("input" in next && typeof next.input !== "string") {
     delete next.input;
-  }
-  if ("noOutputTimeoutSeconds" in next) {
-    const noOutputTimeoutSeconds = parseOptionalField(
-      TimeoutSecondsFieldSchema,
-      next.noOutputTimeoutSeconds,
-    );
-    if (noOutputTimeoutSeconds !== undefined) {
-      next.noOutputTimeoutSeconds = noOutputTimeoutSeconds;
-    } else {
-      delete next.noOutputTimeoutSeconds;
-    }
-  }
-  for (const field of ["outputMaxBytes", "toolBudget"] as const) {
-    if (field in next) {
-      const value = parseOptionalField(TimeoutSecondsFieldSchema, next[field]);
-      if (value !== undefined && value > 0) {
-        next[field] = Math.floor(value);
-      } else {
-        delete next[field];
-      }
-    }
   }
   if (
     "allowUnsafeExternalContent" in next &&
@@ -174,6 +166,8 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
       delete next.fallbacks;
       delete next.thinking;
       delete next.lightContext;
+      delete next.skipIfScratchEmpty;
+      delete next.includeReasoning;
       delete next.allowUnsafeExternalContent;
     }
     if (kind !== "command") {

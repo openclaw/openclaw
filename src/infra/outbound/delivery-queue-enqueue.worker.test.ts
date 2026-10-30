@@ -6,17 +6,17 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { outboundDeliveryNotifications } from "../delivery-queue-cache.js";
 import { captureDeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
 import {
   getDeliveryQueueEntryStatus,
   seedDeliveryQueueEntry,
 } from "../delivery-queue-sqlite.test-support.js";
-import { holdEnqueueReply } from "./delivery-queue-enqueue.worker.test-support.js";
 import { createDeliveryQueueMediaRetention } from "./delivery-queue-media-staging.js";
 import {
-  DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
-  LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
-  OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
+  DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME as MEDIA_STAGE_QUEUE,
+  LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME as LEGACY_QUEUE,
+  OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME as PREPARATION_QUEUE,
 } from "./delivery-queue-namespaces.js";
 import {
   enqueueDelivery,
@@ -24,6 +24,7 @@ import {
   enqueuePreparedDeliveryOnce,
 } from "./delivery-queue-storage.js";
 import type { StableDeliveryPreparation } from "./delivery-queue-storage.types.js";
+import { holdEnqueueReply } from "./delivery-queue-worker-reply.test-support.js";
 import { installDeliveryQueueTmpDirHooks, readQueuedEntry } from "./delivery-queue.test-helpers.js";
 
 const payload = { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "original" }] };
@@ -31,16 +32,24 @@ const payload = { channel: "matrix", to: "!synthetic:example", payloads: [{ text
 describe("outbound enqueue worker", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
   afterEach(() => {
+    outboundDeliveryNotifications.onEnqueued = () => {};
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
 
+  const openState = (stateDir: string) =>
+    openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } });
+  const status = (queue: string, id: string) =>
+    getDeliveryQueueEntryStatus(queue, id, fixtures.tmpDir());
+  const seed = (queueName: string, entry: Parameters<typeof seedDeliveryQueueEntry>[0]["entry"]) =>
+    seedDeliveryQueueEntry({ queueName, entry, stateDir: fixtures.tmpDir() });
+
   it("keeps the event loop responsive under a held writer and captures JSON custody and state before yielding", async () => {
     const stateDir = fixtures.tmpDir();
-    const { db } = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
+    const { db } = openState(stateDir);
     await enqueueDelivery(payload, stateDir);
+    const enqueued = vi.fn();
+    outboundDeliveryNotifications.onEnqueued = enqueued;
     const reply = holdEnqueueReply();
     const channelData = {
       date: new Date("2026-09-01T00:00:00.000Z"),
@@ -65,8 +74,7 @@ describe("outbound enqueue worker", () => {
     });
     input.payloads[0]!.text = "after";
     channelData.nested.value = "after";
-    const otherState = path.join(stateDir, "other-state");
-    vi.stubEnv("OPENCLAW_STATE_DIR", otherState);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(stateDir, "other-state"));
     try {
       await Promise.race([
         reply.posted,
@@ -75,30 +83,24 @@ describe("outbound enqueue worker", () => {
         }),
       ]);
       await setImmediate();
-      expect(settled).toBe(false);
+      expect([settled, enqueued.mock.calls]).toEqual([false, []]);
       db.exec("COMMIT");
       expect(await reply.held).toBe("created");
+      expect(enqueued).toHaveBeenCalledExactlyOnceWith(stateDir);
       reply.release();
       const id = await enqueue;
       const stored = readQueuedEntry(stateDir, id);
       expect(stored.enqueuedAt).toBeGreaterThanOrEqual(before);
+      const serializedData = {
+        date: "2026-09-01T00:00:00.000Z",
+        finite: null,
+        custom: { canonical: true },
+        nested: { value: "before" },
+      };
       expect(stored.preparedBatch).toMatchObject({
-        entries: [
-          {
-            payload: {
-              text: "before",
-              channelData: {
-                date: "2026-09-01T00:00:00.000Z",
-                finite: null,
-                custom: { canonical: true },
-                nested: { value: "before" },
-              },
-            },
-          },
-        ],
+        entries: [{ payload: { text: "before", channelData: serializedData } }],
       });
-      expect(JSON.stringify(stored)).not.toContain("callable");
-      expect(JSON.stringify(stored)).not.toContain("absent");
+      expect(JSON.stringify(stored)).not.toMatch(/callable|absent/);
       expect(reply.attempts()).toBe(1);
     } finally {
       if (db.isTransaction) {
@@ -112,7 +114,7 @@ describe("outbound enqueue worker", () => {
 
   it("admits a cold enqueue without host data SQL", async () => {
     const stateDir = fixtures.tmpDir();
-    openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } });
+    openState(stateDir);
     await closeOpenClawStateDatabaseAsync();
     const context = captureDeliveryQueueStateContext(stateDir);
     const sql = observeHostDataSql();
@@ -143,20 +145,16 @@ describe("outbound enqueue worker", () => {
 
   it("keeps stages on conflicts and atomically consumes only a matching preparation", async () => {
     const stateDir = fixtures.tmpDir();
+    const enqueued = vi.fn();
+    outboundDeliveryNotifications.onEnqueued = enqueued;
     const id = "enqueue-preparation";
     const stage = await createDeliveryQueueMediaRetention([], "outbound-media-stage", stateDir);
-    seedDeliveryQueueEntry({
-      queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
-      stateDir,
-      entry: { id: "legacy-owner", enqueuedAt: Date.now(), retryCount: 0 },
-    });
+    seed(LEGACY_QUEUE, { id: "legacy-owner", enqueuedAt: Date.now(), retryCount: 0 });
     expect(await enqueueDeliveryOnce(payload, "legacy-owner", stateDir, stage)).toEqual({
       id: "legacy-owner",
       created: false,
     });
-    expect(
-      getDeliveryQueueEntryStatus(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, stage, stateDir),
-    ).toBe("pending");
+    expect(status(MEDIA_STAGE_QUEUE, stage)).toBe("pending");
     await expect(enqueueDeliveryOnce(payload, "missing-stage", stateDir, "absent")).rejects.toThrow(
       "media stage expired",
     );
@@ -169,35 +167,22 @@ describe("outbound enqueue worker", () => {
       preparationOwnerId: "owner",
       preparationLeaseExpiresAt: Date.now() + 60_000,
     };
-    seedDeliveryQueueEntry({
-      queueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
-      stateDir,
-      entry: preparation,
-    });
-    await expect(
-      enqueuePreparedDeliveryOnce(
-        payload,
-        id,
-        { ...preparation, preparationOwnerId: "stale" },
-        stateDir,
-        stage,
-      ),
-    ).rejects.toThrow("preparation");
-    expect(
-      getDeliveryQueueEntryStatus(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, stage, stateDir),
-    ).toBe("pending");
-    await expect(
-      enqueuePreparedDeliveryOnce(payload, id, preparation, stateDir, "absent"),
-    ).rejects.toThrow("media stage expired");
-    const pending = enqueuePreparedDeliveryOnce(payload, id, preparation, stateDir, stage);
+    seed(PREPARATION_QUEUE, preparation);
+    const publish = (owner = preparation, mediaStage = stage) =>
+      enqueuePreparedDeliveryOnce(payload, id, owner, stateDir, mediaStage);
+    await expect(publish({ ...preparation, preparationOwnerId: "stale" })).rejects.toThrow(
+      "preparation",
+    );
+    expect(status(MEDIA_STAGE_QUEUE, stage)).toBe("pending");
+    await expect(publish(preparation, "absent")).rejects.toThrow("media stage expired");
+    const pending = publish();
     preparation.preparationOwnerId = "changed-after-capture";
     expect(await pending).toEqual({ id, created: true });
-    expect(
-      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME, id, stateDir),
-    ).toBeUndefined();
-    expect(
-      getDeliveryQueueEntryStatus(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, stage, stateDir),
-    ).toBeUndefined();
+    expect(enqueued).toHaveBeenLastCalledWith(stateDir);
+    expect([status(PREPARATION_QUEUE, id), status(MEDIA_STAGE_QUEUE, stage)]).toEqual([
+      undefined,
+      undefined,
+    ]);
     expect(readQueuedEntry(stateDir, id).to).toBe(payload.to);
   });
 });

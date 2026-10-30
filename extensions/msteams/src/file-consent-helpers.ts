@@ -3,13 +3,11 @@ import { buildFileConsentCard } from "./file-consent.js";
 import { storePendingUploadFs } from "./pending-uploads-fs.js";
 import { storePendingUpload, type PendingUpload } from "./pending-uploads.js";
 
-export const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024;
-
-type FileConsentMedia = Pick<PendingUpload, "buffer" | "filename" | "contentType">;
+const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024;
 
 /** In-process replies keep consent bytes in memory; CLI sends use the persisted variant below. */
 export function prepareFileConsentActivity(params: {
-  media: FileConsentMedia;
+  media: Pick<PendingUpload, "buffer" | "filename" | "contentType">;
   conversationId: string;
   description?: string;
 }) {

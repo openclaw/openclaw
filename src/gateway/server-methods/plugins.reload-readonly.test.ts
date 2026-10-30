@@ -4,7 +4,7 @@ import { expect, it, vi } from "vitest";
 import { resolvePluginArtifactDeclaredSurface } from "../../plugins/capability-artifact.js";
 import { resolvePluginCapabilityConsent } from "../../plugins/capability-consent.js";
 import { computeDeclaredSurfaceHash } from "../../plugins/capability-summary.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../plugins/installed-plugin-index-records.js";
 import type { PluginLifecycleRuntimeApply } from "../../plugins/lifecycle.js";
 import { createColdPluginFixture } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
@@ -79,7 +79,9 @@ it.each([
         }
         const configBefore = await fs.readFile(state.configPath, "utf8");
         const includeBefore = await fs.readFile(includedPath, "utf8");
-        const recordsBefore = readPersistedInstalledPluginIndexInstallRecords({ env: state.env });
+        const recordsBefore = await readPersistedInstalledPluginIndexInstallRecordsAsync({
+          env: state.env,
+        });
         const applyRuntime = vi.fn<PluginLifecycleRuntimeApply>(async (request) => {
           request.assertInvokerOwned?.();
           expect(request.reason).toBe(reload ? "reload" : "metadata");
@@ -133,9 +135,9 @@ it.each([
         }
         expect(await fs.readFile(state.configPath, "utf8")).toBe(configBefore);
         expect(await fs.readFile(includedPath, "utf8")).toBe(includeBefore);
-        expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual(
-          recordsBefore,
-        );
+        expect(
+          await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+        ).toEqual(recordsBefore);
       },
     );
   },

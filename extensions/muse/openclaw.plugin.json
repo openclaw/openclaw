@@ -1,0 +1,19 @@
+{
+  "id": "muse",
+  "name": "Muse Code agent runtime",
+  "description": "Runs Meta models through the Muse Code CLI.",
+  "version": "2026.10.2",
+  "categories": ["agent-runtimes"],
+  "activation": { "onStartup": false, "onAgentHarnesses": ["muse"] },
+  "sessionRouteStateOwners": [
+    { "id": "muse", "label": "Muse Code", "providerIds": ["meta"], "runtimeIds": ["muse"], "cliSessionKeys": ["muse"], "authProfilePrefixes": ["meta:"] }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": { "binaryPath": { "type": "string", "minLength": 1, "default": "muse" } }
+  },
+  "uiHints": {
+    "binaryPath": { "label": "Muse binary", "help": "Muse executable path, or command resolved on PATH. Install Muse separately.", "advanced": true }
+  }
+}

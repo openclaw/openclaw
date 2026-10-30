@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import type { BigIntStats, Stats } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import {
   removePreparedBackupArchive,
   type BackupArchiveCleanupReceipt,
@@ -15,6 +16,7 @@ import {
   requireDirectorySync,
   syncDirectoryIfSupported,
 } from "./directory-durability.js";
+import { pathEntryExists } from "./path-existence.js";
 
 type BackupArchiveLogger = (message: string) => void;
 
@@ -26,7 +28,7 @@ export type BackupArchivePublication = {
   requestedOutputPath: string;
   requestedParentPath: string;
   stagingDir: string;
-  stagingIdentity: Stats;
+  stagingIdentity: BigIntStats;
   tempArchivePath: string;
 };
 
@@ -38,25 +40,13 @@ function pathsEqual(left: string, right: string): boolean {
     : resolvedLeft === resolvedRight;
 }
 
-async function assertTargetAbsent(targetPath: string): Promise<void> {
-  try {
-    await fs.lstat(targetPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return;
-    }
-    throw error;
-  }
-  throw new Error(`Refusing to overwrite existing backup archive: ${targetPath}`);
-}
-
 async function removeDirectoryIfOwned(
   directoryPath: string,
-  expectedIdentity: Stats,
+  expectedIdentity: BigIntStats,
 ): Promise<boolean> {
   // This is a cooperative same-user fence, not hostile local-user isolation;
   // SECURITY.md treats co-equal host mutation as inside the operator boundary.
-  const currentIdentity = await fs.lstat(directoryPath).catch(() => undefined);
+  const currentIdentity = await fs.lstat(directoryPath, { bigint: true }).catch(() => undefined);
   if (
     !currentIdentity ||
     !currentIdentity.isDirectory() ||
@@ -83,13 +73,15 @@ export async function createBackupArchivePublication(
     throw new Error(`Backup output parent is not a directory: ${requestedParentPath}`);
   }
   const canonicalOutputPath = path.join(canonicalParentPath, path.basename(requestedOutputPath));
-  await assertTargetAbsent(canonicalOutputPath);
+  if (await pathEntryExists(canonicalOutputPath)) {
+    throw new Error(`Refusing to overwrite existing backup archive: ${canonicalOutputPath}`);
+  }
   const stagingDir = await fs.mkdtemp(
     path.join(canonicalParentPath, `.openclaw-backup-publish-${randomUUID()}-`),
   );
-  let stagingIdentity: Stats | undefined;
+  let stagingIdentity: BigIntStats | undefined;
   try {
-    stagingIdentity = await fs.lstat(stagingDir);
+    stagingIdentity = await fs.lstat(stagingDir, { bigint: true });
     await fs.chmod(stagingDir, 0o700);
     return {
       canonicalOutputPath,
@@ -144,7 +136,7 @@ async function removePendingBackupArchive(
   let identity = receipt.identity;
   if (!identity) {
     try {
-      identity = await fs.lstat(receipt.archivePath);
+      identity = await fs.lstat(receipt.archivePath, { bigint: true });
     } catch (error) {
       return (error as NodeJS.ErrnoException).code === "ENOENT";
     }
@@ -185,6 +177,8 @@ export async function publishPreparedBackupArchive(params: {
   let publicationFailure: { error: unknown } | undefined;
   try {
     try {
+      // A cancelled operation retires prepared bytes through this same owner.
+      resolveCommandProcessSignal()?.throwIfAborted();
       const publication = await publishFileExclusive({
         sourcePath: prepared.archivePath,
         targetPath: plan.canonicalOutputPath,

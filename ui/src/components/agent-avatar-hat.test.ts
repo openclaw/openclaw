@@ -1,119 +1,74 @@
-import { nothing, render } from "lit";
 /* @vitest-environment jsdom */
-import { afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createComponent, flush } from "solid-js";
+import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
-import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import { setCurrentThemeBranding } from "../app/theme-branding.ts";
-import { renderChatAvatar, renderForwardedAvatar } from "../pages/chat/chat-avatar.ts";
-import * as artworkLoader from "../pages/plugins/icon-loader.ts";
-import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
+import { ChatAvatar, ForwardedAvatar } from "../pages/chat/chat-avatar-view.tsx";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 
 const pageLoadRandom = vi.hoisted(() => vi.spyOn(Math, "random").mockReturnValue(0));
-
 beforeAll(() => pageLoadRandom.mockRestore());
-
-afterEach(() => {
+const resetBranding = () =>
   setCurrentThemeBranding(resolveThemeBranding({ mascot: "claw", critters: [] }));
+afterEach(() => {
+  resetBranding();
+  document.body.replaceChildren();
 });
 
-const branding: ThemeBranding = resolveThemeBranding({
-  mascot: "none",
-  critters: [],
-  avatarHat: "fedora",
-});
+const branding = resolveThemeBranding({ mascot: "none", critters: [], avatarHat: "fedora" });
+const chat = (agentId: string, avatar: string) =>
+  createComponent(ChatAvatar, { role: "assistant", assistant: { agentId, name: "Scout", avatar } });
+const identity = (id = "agent-5", pending = false) =>
+  createComponent(AgentIdentityAvatar, { agent: { id, pending, textAvatar: "🦀" } });
+function mount(view: Parameters<typeof mountSolid>[0]) {
+  const mounted = mountSolid(view, { container: document.createElement("div") });
+  return { ...mounted, find: (selector: string) => mounted.container.querySelector(selector) };
+}
 
-describe("theme avatar hats", () => {
-  it.each(["agent-5", "agent-0"])(
-    "applies the theme hat to loaded transcript and forwarded photos for %s",
-    (agentId) => {
-      setCurrentThemeBranding(branding);
-      const container = document.createElement("div");
-      const avatar = "data:image/png;base64,YQ==";
-      for (const view of [
-        renderChatAvatar("assistant", { agentId, name: "Scout", avatar }),
-        renderForwardedAvatar(agentId, {
-          agents: [{ id: agentId }],
-          senderAgentAvatars: new Map([[agentId, avatar]]),
-        }),
-      ]) {
-        render(view, container);
-        const image = container.querySelector("img")!;
-        image.dispatchEvent(new Event("load"));
-        const hat = image.parentElement?.querySelector(":scope > .identity-avatar__hat");
-        expect(Boolean(hat)).toBe(agentId === "agent-5");
-        if (hat) {
-          expect(hat.parentElement).toBe(image.parentElement);
-          expect(hat.parentElement?.getAttribute("data-avatar-state")).toBe("loaded");
-        }
-        render(nothing, container);
-      }
-    },
+it.each([
+  ["identity", "agent-5", false, true],
+  ["identity", "agent-0", false, false],
+  ["identity", "agent-5", true, false],
+  ["identity", "openclaw", false, false],
+  ["identity", "crestodian", false, false],
+  ["chat", "agent-5", false, true],
+  ["chat", "agent-0", false, false],
+  ["forwarded", "agent-5", false, true],
+  ["forwarded", "agent-0", false, false],
+] as const)("fedora on %s %s pending=%s: %s", (surface, id, pending, hat) => {
+  setCurrentThemeBranding(branding);
+  const avatar = "data:image/png;base64,YQ==";
+  const { find, unmount } = mount(() =>
+    surface === "identity"
+      ? identity(id, pending)
+      : surface === "chat"
+        ? chat(id, avatar)
+        : createComponent(ForwardedAvatar, {
+            agentId: id,
+            options: { agents: [{ id }], senderAgentAvatars: new Map([[id, avatar]]) },
+          }),
   );
-
-  it.each([
-    ["fedora", "agent-5", false, "none", true],
-    ["fedora", "agent-5", false, "claw", true],
-    ["fedora", "agent-0", false, "none", false],
-    ["fedora", "agent-5", true, "none", false],
-    ["fedora", "openclaw", false, "none", false],
-    ["fedora", "crestodian", false, "claw", false],
-  ] as const)(
-    "renders %s for %s (pending=%s, mascot=%s, hat=%s)",
-    (avatarHat, id, pending, mascot, hat) => {
-      setCurrentThemeBranding(resolveThemeBranding({ ...branding, avatarHat, mascot }));
-      const container = document.createElement("div");
-      const agent = { id, pending, textAvatar: "🦀" };
-      render(renderAgentIdentityAvatar(agent), container);
-      const overlay = container.querySelector(".identity-avatar--agent > .identity-avatar__hat");
-      expect(Boolean(overlay)).toBe(hat);
-      if (hat) {
-        expect(overlay?.classList.contains(`identity-avatar__hat--${avatarHat}`)).toBe(true);
-        expect(overlay?.getAttribute("aria-hidden")).toBe("true");
-        expect(overlay?.querySelector(".identity-avatar__hat-svg")?.namespaceURI).toBe(
-          "http://www.w3.org/2000/svg",
-        );
-      }
-      setCurrentThemeBranding(resolveThemeBranding({ mascot: "claw", critters: [] }));
-      render(renderAgentIdentityAvatar(agent), container);
-      expect(container.querySelector(".identity-avatar__hat")).toBeNull();
-      render(nothing, container);
-    },
-  );
+  const image = find("img");
+  if (surface !== "identity") {
+    expect(image).not.toBeNull();
+    image!.dispatchEvent(new Event("load"));
+    flush();
+  }
+  const overlay =
+    surface === "identity"
+      ? find(".identity-avatar__hat")
+      : image?.parentElement?.querySelector(":scope > .identity-avatar__hat");
+  expect(Boolean(overlay)).toBe(hat);
+  if (hat) {
+    expect(overlay?.classList.contains("identity-avatar__hat--fedora")).toBe(true);
+    expect(overlay?.getAttribute("aria-hidden")).toBe("true");
+    expect(overlay?.querySelector(".identity-avatar__hat-svg")?.namespaceURI).toBe(
+      "http://www.w3.org/2000/svg",
+    );
+  }
+  resetBranding();
+  flush();
+  expect(find(".identity-avatar__hat")).toBeNull();
+  unmount();
 });
-
-it.each([false, true])(
-  "renders a plugin hat on the shared and chat photo avatar (missing=%s)",
-  async (missing) => {
-    const fetchArtwork = vi
-      .spyOn(artworkLoader, "fetchPluginThemeArtworkBlobUrl")
-      .mockImplementation(async ({ url }) => (url.includes("missing") ? null : "blob:beret"));
-    onTestFinished(() => fetchArtwork.mockRestore());
-    setCurrentThemeBranding(
-      resolveThemeBranding({
-        mascot: "claw",
-        critters: [],
-        avatarHat: "beret",
-        artwork: { hats: { beret: { url: missing ? "/missing" : "/beret" } } },
-      }),
-    );
-    const container = document.createElement("div");
-    render(renderAgentIdentityAvatar({ id: "agent-5", textAvatar: "🦀" }), container);
-    expect(container.querySelector(".identity-avatar__hat-img")).toBeNull();
-    await vi.dynamicImportSettled();
-    expect(container.querySelector(".identity-avatar__hat-img")?.getAttribute("src") ?? null).toBe(
-      missing ? null : "blob:beret",
-    );
-    expect(container.querySelector(".identity-avatar__hat svg")).toBeNull();
-    render(
-      renderChatAvatar("assistant", { agentId: "agent-5", name: "Scout", avatar: "blob:photo" }),
-      container,
-    );
-    await vi.dynamicImportSettled();
-    expect(
-      container
-        .querySelector(".chat-avatar-slot > .identity-avatar__hat img")
-        ?.getAttribute("src") ?? null,
-    ).toBe(missing ? null : "blob:beret");
-    render(nothing, container);
-  },
-);

@@ -148,8 +148,10 @@ suite.define(() => {
       ]);
       expect(await chat.locator(".chat-bubble-dots").count()).toBe(0);
       expect(await chat.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+      // Bubble mode keeps narration in place: one activity disclosure, no completed-work rollup.
+      await browserExpect(chat.locator(".chat-work-group")).toHaveCount(0);
       const activity = chat.locator(".chat-activity-group > button").first();
-      await browserExpect(activity).toHaveText(/operation|Read|Worked|Raw details/);
+      await browserExpect(activity).toHaveText(/operation|Read|Raw details/);
       expect((await activity.boundingBox())!.height).toBeLessThanOrEqual(36);
       await activity.click();
       await browserExpect(chat.locator(".chat-tool-msg-summary").first()).toBeVisible();
@@ -241,10 +243,7 @@ suite.define(() => {
         latency,
         "ms (not provider first-token latency)",
       );
-      await browserExpect(chat.locator(".chat-bubble-dots--working")).toHaveCount(1);
-      const working = chat.locator(".chat-bubble-activity--working");
-      await working.locator("summary").click();
-      await browserExpect(working).toHaveAttribute("open", "");
+      await browserExpect(chat.locator(".chat-bubble-dots--working")).toHaveCount(0);
       // The producer retires the live text tail when its keyed preamble is published.
       // First-fragment visibility above deliberately precedes this boundary.
       await gateway.emitGatewayEvent("chat", {
@@ -278,6 +277,10 @@ suite.define(() => {
           args: { path: "layout.css" },
         },
       });
+      await browserExpect(chat.locator(".chat-bubble-dots--working")).toHaveCount(1);
+      const working = chat.locator(".chat-bubble-activity--working");
+      await working.locator("summary").click();
+      await browserExpect(working).toHaveAttribute("open", "");
       await browserExpect(
         chat.locator(".chat-text").getByText("I’ll", { exact: true }),
       ).toBeVisible();

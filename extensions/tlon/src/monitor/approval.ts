@@ -4,25 +4,22 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { PendingApproval } from "../settings.js";
 
-function generateApprovalId(type: PendingApproval["type"]): string {
-  const timestamp = Date.now();
-  const randomPart = randomBytes(3).toString("hex");
-  return `${type}-${timestamp}-${randomPart}`;
-}
-
 export function createPendingApproval(
   params: Omit<PendingApproval, "id" | "timestamp">,
 ): PendingApproval {
+  const timestamp = Date.now();
   return {
-    id: generateApprovalId(params.type),
+    id: `${params.type}-${timestamp}-${randomBytes(3).toString("hex")}`,
     type: params.type,
     requestingShip: params.requestingShip,
+    ...(params.clubId !== undefined ? { clubId: params.clubId } : {}),
+    ...(params.verifiedDirect === true ? { verifiedDirect: true } : {}),
     channelNest: params.channelNest,
     groupFlag: params.groupFlag,
     messagePreview:
       params.messagePreview != null ? sliceUtf16Safe(params.messagePreview, 0, 100) : undefined,
     originalMessage: params.originalMessage,
-    timestamp: Date.now(),
+    timestamp,
   };
 }
 
@@ -33,28 +30,45 @@ function truncate(text: string, maxLength: number): string {
   return sliceUtf16Safe(text, 0, maxLength - 3) + "...";
 }
 
+function formatApprovalInstructions(id: string): string {
+  return (
+    `Reply "approve", "deny", or "block" if this is the only pending request. ` +
+    `If multiple are pending, reply "approve ${id}", "deny ${id}", or "block ${id}".`
+  );
+}
+
 export function formatApprovalRequest(approval: PendingApproval): string {
   const preview = approval.messagePreview ? `\n"${truncate(approval.messagePreview, 100)}"` : "";
 
   switch (approval.type) {
     case "dm":
+      if (approval.clubId !== undefined) {
+        // A club message claiming the owner is queued without originalMessage, so approval only
+        // updates the allowlist and never processes that message; the notice must not promise a reply.
+        const replayLine = approval.originalMessage
+          ? `The message is answered as an unverified group DM sender, never as ${approval.requestingShip}.`
+          : `The message is not kept, so it will not be answered; have ${approval.requestingShip} send it again in a normal direct message to get a reply.`;
+        return (
+          `New group DM message claiming to be from ${approval.requestingShip} (unverified; group DM ${approval.clubId}):${preview}\n\n` +
+          `Approving adds ${approval.requestingShip} to the DM allowlist. ${replayLine}\n` +
+          formatApprovalInstructions(approval.id)
+        );
+      }
       return (
         `New DM request from ${approval.requestingShip}:${preview}\n\n` +
-        `Reply "approve", "deny", or "block" (ID: ${approval.id})`
+        formatApprovalInstructions(approval.id)
       );
 
     case "channel":
       return (
         `${approval.requestingShip} mentioned you in ${approval.channelNest}:${preview}\n\n` +
-        `Reply "approve", "deny", or "block"\n` +
-        `(ID: ${approval.id})`
+        formatApprovalInstructions(approval.id)
       );
 
     case "group":
       return (
         `Group invite from ${approval.requestingShip} to join ${approval.groupFlag}\n\n` +
-        `Reply "approve", "deny", or "block"\n` +
-        `(ID: ${approval.id})`
+        formatApprovalInstructions(approval.id)
       );
   }
   throw new Error("Unsupported approval type");
@@ -83,10 +97,11 @@ export function findPendingApproval(
   pendingApprovals: PendingApproval[],
   id?: string,
 ): PendingApproval | undefined {
-  if (id) {
-    return pendingApprovals.find((a) => a.id === id);
-  }
-  return pendingApprovals[pendingApprovals.length - 1];
+  return id
+    ? pendingApprovals.find((approval) => approval.id === id)
+    : pendingApprovals.length === 1
+      ? pendingApprovals[0]
+      : undefined;
 }
 
 export function removePendingApproval(
@@ -94,6 +109,19 @@ export function removePendingApproval(
   id: string,
 ): PendingApproval[] {
   return pendingApprovals.filter((a) => a.id !== id);
+}
+
+/**
+ * DM requests saved before sender provenance was recorded cannot be told apart from unverified
+ * group DM claims, so their stored message is never replayed; the sender must send it again.
+ */
+export function requiresResendAfterApproval(approval: PendingApproval): boolean {
+  return (
+    approval.type === "dm" &&
+    approval.originalMessage !== undefined &&
+    approval.clubId === undefined &&
+    approval.verifiedDirect !== true
+  );
 }
 
 export function formatApprovalConfirmation(
@@ -109,6 +137,13 @@ export function formatApprovalConfirmation(
   switch (approval.type) {
     case "dm":
       if (action === "approve") {
+        if (requiresResendAfterApproval(approval)) {
+          return (
+            `${actionText} DM access for ${approval.requestingShip}. They can now message the bot.\n` +
+            `Their earlier message was saved before this version and its sender cannot be verified, ` +
+            `so it was not processed. Ask ${approval.requestingShip} to send it again.`
+          );
+        }
         return `${actionText} DM access for ${approval.requestingShip}. They can now message the bot.`;
       }
       return `${actionText} DM request from ${approval.requestingShip}.`;

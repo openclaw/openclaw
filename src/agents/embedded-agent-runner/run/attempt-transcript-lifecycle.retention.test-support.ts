@@ -1,64 +1,42 @@
-/** Retention child: disposed attempt stores collect while deliberately retained controls stay live. */
+/** Retention child: disposed attempts collect while deliberately retained controls stay live. */
 import assert from "node:assert/strict";
-import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate } from "node:timers/promises";
 import {
   createEmbeddedAttemptTranscriptLifecycle,
-  type LifecycleOwner,
+  type EmbeddedAttemptTranscriptLifecycle,
 } from "./attempt-transcript-lifecycle.js";
 
 const gc = globalThis.gc as () => void;
 assert.ok(globalThis.gc, "The retention child requires --expose-gc");
-const retainedStores: AsyncLocalStorage<LifecycleOwner>[] = [];
+const retainedAttempts: EmbeddedAttemptTranscriptLifecycle[] = [];
 
-function runLifecycle(disposeAfter: boolean) {
-  const lifecycleStore = new AsyncLocalStorage<LifecycleOwner>();
-  const lifecycle = createEmbeddedAttemptTranscriptLifecycle(
-    { runId: "retention", sessionId: "retention" },
-    { createLifecycleStore: () => lifecycleStore },
-  );
-  return Promise.resolve().then(async () => {
-    await lifecycle.withTranscriptWrite(async () => {
-      await Promise.resolve();
-    });
-    if (disposeAfter) {
-      await lifecycle.dispose();
-    } else {
-      retainedStores.push(lifecycleStore);
-    }
-    return new WeakRef(lifecycleStore);
+async function runLifecycle(retain: boolean) {
+  const lifecycle = createEmbeddedAttemptTranscriptLifecycle({
+    runId: "retention",
+    sessionId: "retention",
   });
-}
-
-async function countCollected(instances: WeakRef<AsyncLocalStorage<LifecycleOwner>>[]) {
-  for (let pass = 0; pass < 8; pass += 1) {
-    await setImmediate();
-    gc();
+  await lifecycle.withTranscriptWrite(async () => {
+    await Promise.resolve();
+  });
+  await lifecycle.dispose();
+  if (retain) {
+    retainedAttempts.push(lifecycle);
   }
-  return instances.filter((reference) => reference.deref() === undefined).length;
+  return new WeakRef(lifecycle);
 }
 
-// A disposed lifecycle must let its per-attempt store be collected.
-const disposed = await Promise.all(Array.from({ length: 40 }, () => runLifecycle(true)));
-const retained = await Promise.all(Array.from({ length: 40 }, () => runLifecycle(false)));
-
-const collectedDisposed = await countCollected(disposed);
-const collectedRetained = await countCollected(retained);
-
-// Sanity: with --expose-gc the control path actually collects.
+const disposed = await Promise.all(Array.from({ length: 40 }, () => runLifecycle(false)));
+const retained = await Promise.all(Array.from({ length: 40 }, () => runLifecycle(true)));
+for (let pass = 0; pass < 8; pass += 1) {
+  await setImmediate();
+  gc();
+}
+const collectedDisposed = disposed.filter((reference) => reference.deref() === undefined).length;
 assert.ok(
   collectedDisposed >= 30,
-  `disposed stores must be collectable, collected=${collectedDisposed}/40`,
+  `disposed attempts must be collectable, collected=${collectedDisposed}/40`,
 );
-assert.equal(
-  collectedRetained,
-  0,
-  `strongly retained controls must stay live, collected=${collectedRetained}/40`,
-);
-for (const [index, store] of retainedStores.entries()) {
-  assert.equal(retained[index]?.deref(), store);
+for (const [index, lifecycle] of retainedAttempts.entries()) {
+  assert.equal(retained[index]?.deref(), lifecycle);
 }
-
-console.log(
-  `retention ok: disposed collected=${collectedDisposed}/40 retained collected=${collectedRetained}/40`,
-);
+console.log(`retention ok: disposed collected=${collectedDisposed}/40 retained live=40/40`);

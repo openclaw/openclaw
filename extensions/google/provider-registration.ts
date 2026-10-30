@@ -1,4 +1,4 @@
-import type { ProviderReasoningOutputModeContext } from "openclaw/plugin-sdk/plugin-entry";
+import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
@@ -18,43 +18,15 @@ import {
   normalizeGoogleProviderConfig,
   resolveGoogleGenerativeAiTransport,
 } from "./provider-policy.js";
-import {
-  createGoogleGenerativeAiTransportStreamFn,
-  createGoogleVertexTransportStreamFn,
-} from "./transport-stream.js";
 
-function normalizeGoogleVideoInput(
-  ctx: Parameters<NonNullable<ProviderPlugin["normalizeResolvedModel"]>>[0],
-) {
-  const input = (ctx.model.input as string[]).filter((type) => type !== "video");
-  const supportsVideo =
-    ctx.provider === "google" &&
-    ctx.model.api === "google-generative-ai" &&
-    isOfficialGoogleAiStudioBaseUrl(ctx.model.baseUrl) &&
-    isGoogleNativeVideoModelId(ctx.modelId);
-  return { ...ctx.model, input: supportsVideo ? [...input, "video"] : input } as typeof ctx.model;
-}
-
-function resolveGoogleReasoningOutputMode(
-  ctx: ProviderReasoningOutputModeContext,
-): "native" | "tagged" {
-  if (
-    ctx.provider === "google" ||
-    ctx.provider === "google-vertex" ||
-    ctx.provider === "google-interactions"
-  ) {
-    const api = ctx.model?.api ?? ctx.modelApi;
-    if (
-      !api ||
-      api === "google-generative-ai" ||
-      api === "google-vertex" ||
-      api === "google-interactions"
-    ) {
-      return "native";
-    }
-  }
-  return "tagged";
-}
+const loadGenerativeAiStream = createLazyRuntimeSurface(
+  () => import("./transport-stream.js"),
+  (runtime) => runtime.createGoogleGenerativeAiTransportStreamFn(),
+);
+const loadVertexStream = createLazyRuntimeSurface(
+  () => import("./transport-stream.js"),
+  (runtime) => runtime.createGoogleVertexTransportStreamFn(),
+);
 
 export function buildGoogleProvider(): ProviderPlugin {
   return {
@@ -113,7 +85,18 @@ export function buildGoogleProvider(): ProviderPlugin {
       },
     },
     normalizeModelId: ({ modelId }) => normalizeGoogleModelId(modelId),
-    normalizeResolvedModel: normalizeGoogleVideoInput,
+    normalizeResolvedModel: (ctx) => {
+      const input = (ctx.model.input as string[]).filter((type) => type !== "video");
+      const supportsVideo =
+        ctx.provider === "google" &&
+        ctx.model.api === "google-generative-ai" &&
+        isOfficialGoogleAiStudioBaseUrl(ctx.model.baseUrl) &&
+        isGoogleNativeVideoModelId(ctx.modelId);
+      return {
+        ...ctx.model,
+        input: supportsVideo ? [...input, "video"] : input,
+      } as typeof ctx.model;
+    },
     resolveDynamicModel: (ctx) =>
       resolveGoogleGeminiForwardCompatModel({
         providerId: ctx.provider,
@@ -125,10 +108,10 @@ export function buildGoogleProvider(): ProviderPlugin {
         (model.api === "google-generative-ai" &&
           (model.provider === "google-vertex" || isGoogleVertexBaseUrl(model.baseUrl)))
       ) {
-        return createGoogleVertexTransportStreamFn();
+        return async (...args) => (await loadVertexStream())(...args);
       }
       if (model.api === "google-generative-ai") {
-        return createGoogleGenerativeAiTransportStreamFn();
+        return async (...args) => (await loadGenerativeAiStream())(...args);
       }
       return undefined;
     },
@@ -137,7 +120,24 @@ export function buildGoogleProvider(): ProviderPlugin {
     // Tagged mode simultaneously injects <think>/<final> which the model opens before a tool
     // call, never closes, leaving the post-tool turn empty (payloads=0). The CLI backend keeps
     // tagged mode because it emits JSON text, not native thought parts.
-    resolveReasoningOutputMode: resolveGoogleReasoningOutputMode,
+    resolveReasoningOutputMode: (ctx): "native" | "tagged" => {
+      if (
+        ctx.provider === "google" ||
+        ctx.provider === "google-vertex" ||
+        ctx.provider === "google-interactions"
+      ) {
+        const api = ctx.model?.api ?? ctx.modelApi;
+        if (
+          !api ||
+          api === "google-generative-ai" ||
+          api === "google-vertex" ||
+          api === "google-interactions"
+        ) {
+          return "native";
+        }
+      }
+      return "tagged";
+    },
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
   };
 }

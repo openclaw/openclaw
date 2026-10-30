@@ -5,13 +5,13 @@ import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-
 import type { ChatAttachmentSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
+import type { ImageContent } from "../llm/types.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { prepareMediaAttachment } from "../media/attachment-processor.js";
 import {
   ATTACHMENT_OFFLOAD_THRESHOLD_BYTES,
   isGenericContainerMime,
 } from "../media/attachment-processor.runtime.js";
-import { parseInboundMediaUri } from "../media/inbound-media-uri.js";
 import type { MediaFact } from "../media/media-facts.js";
 import { probeMediaFilesWithinBudget } from "../media/media-probe.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
@@ -25,13 +25,17 @@ export type ChatAttachment = SchemaContract<Omit<Static<typeof ChatAttachmentSch
   origin?: MediaFact["origin"];
 };
 
-export type ChatImageContent = {
-  type: "image";
-  data: string;
-  mimeType: string;
+export type ChatImageContent = ImageContent;
+
+type InlineImageMetadata = {
   fileName?: string;
   sourceIndex: number;
+  width?: number;
+  height?: number;
 };
+
+// Upload metadata belongs to persistence, never the serialized model-facing image part.
+const inlineImageMetadata = new WeakMap<ChatImageContent, InlineImageMetadata>();
 
 export type OffloadedRef = {
   mediaRef: string;
@@ -51,7 +55,7 @@ export type OffloadedRef = {
 function projectOffloadedMediaFact(ref: OffloadedRef, durable: boolean): MediaFact {
   const fact: MediaFact = {
     ...(durable ? {} : { path: ref.path }),
-    url: durable ? buildManagedInboundMediaRef(ref.id) : ref.mediaRef,
+    url: durable ? `media://inbound/${ref.id}` : ref.mediaRef,
     contentType: ref.mimeType,
     kind: ref.kind,
     fileName: ref.label,
@@ -87,14 +91,6 @@ export async function discardPreparedInboundMedia(
     }
   }
 }
-
-type ParsedMessageWithImages = {
-  message: string;
-  images: ChatImageContent[];
-  imageOrder: PromptImageOrderEntry[];
-  media: MediaFact[];
-  offloadedRefs: OffloadedRef[];
-};
 
 type AttachmentLog = {
   info?: (message: string) => void;
@@ -178,8 +174,8 @@ export async function persistInboundImagesForTranscript(params: {
   const entries: PersistInboundImagesResult["entries"] = [];
   let omission: PersistInboundImagesResult["omission"] = "none";
   try {
-    params.assertCurrent?.();
-    for (const image of params.images) {
+    for (const [imageIndex, image] of params.images.entries()) {
+      const metadata = inlineImageMetadata.get(image);
       try {
         params.assertCurrent?.();
         const saved = await saveMediaBuffer(
@@ -187,21 +183,23 @@ export async function persistInboundImagesForTranscript(params: {
           image.mimeType,
           "inbound",
           undefined,
-          image.fileName,
+          metadata?.fileName,
           undefined,
           { assertCommitAllowed: params.assertCurrent },
         );
         entries.push({
           id: saved.id,
           path: saved.path,
-          sourceIndex: image.sourceIndex,
+          sourceIndex: metadata?.sourceIndex ?? imageIndex,
           imageKind: "inline",
           fact: {
-            url: buildManagedInboundMediaRef(saved.id),
+            url: `media://inbound/${saved.id}`,
             contentType: saved.contentType ?? image.mimeType,
             kind: "image",
-            ...(image.fileName ? { fileName: image.fileName } : {}),
+            ...(metadata?.fileName ? { fileName: metadata.fileName } : {}),
             sizeBytes: saved.size,
+            width: metadata?.width,
+            height: metadata?.height,
           },
         });
       } catch (err) {
@@ -269,15 +267,6 @@ function ensureExtension(label: string, mime: string): string {
   return ext ? `${label}${ext}` : label;
 }
 
-function buildManagedInboundMediaRef(id: string): string {
-  const candidate = `media://inbound/${id}`;
-  const parsed = parseInboundMediaUri(candidate);
-  if (!parsed || parsed.id !== id) {
-    throw new Error("Saved media ID failed canonical validation");
-  }
-  return parsed.normalizedSource;
-}
-
 function normalizeAttachment(att: ChatAttachment, idx: number): NormalizedAttachment {
   const mime = att.mimeType ?? "";
   const content = att.content;
@@ -309,7 +298,13 @@ export async function parseMessageWithAttachments(
     signal?: AbortSignal;
     assertCurrent?: () => void;
   },
-): Promise<ParsedMessageWithImages> {
+): Promise<{
+  message: string;
+  images: ChatImageContent[];
+  imageOrder: PromptImageOrderEntry[];
+  media: MediaFact[];
+  offloadedRefs: OffloadedRef[];
+}> {
   const maxBytes = opts?.maxBytes ?? DEFAULT_CHAT_ATTACHMENT_MAX_BYTES;
   const log = opts?.log;
   const supportsInlineImages = opts?.supportsInlineImages !== false;
@@ -411,18 +406,22 @@ export async function parseMessageWithAttachments(
         (opts?.imageStorage !== "inline" && sizeBytes > ATTACHMENT_OFFLOAD_THRESHOLD_BYTES);
 
       if (!shouldOffload) {
-        images.push({
+        const image: ChatImageContent = {
           type: "image",
           data: b64,
           mimeType: finalMime,
+        };
+        inlineImageMetadata.set(image, {
           ...(att.fileName ? { fileName: att.fileName } : {}),
           sourceIndex: idx,
+          width: prepared.width,
+          height: prepared.height,
         });
+        images.push(image);
         imageOrder.push("inline");
         continue;
       }
 
-      opts?.assertCurrent?.();
       const bytes = prepared.buffer;
       const buffer = bytes
         ? Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
@@ -441,7 +440,7 @@ export async function parseMessageWithAttachments(
           undefined,
           { assertCommitAllowed: opts?.assertCurrent },
         );
-        mediaRef = buildManagedInboundMediaRef(savedMedia.id);
+        mediaRef = `media://inbound/${savedMedia.id}`;
       } catch (err) {
         if (err instanceof SessionMutationAuthorizationChangedError) {
           throw err;
@@ -474,7 +473,8 @@ export async function parseMessageWithAttachments(
         ...(att.origin === "paste" || att.origin === "file" ? { origin: att.origin } : {}),
       };
       for (const field of ["durationMs", "width", "height"] as const) {
-        const value = att[field];
+        // Only byte-derived image geometry is authoritative; absent metadata stays unknown.
+        const value = isImage && field !== "durationMs" ? prepared[field] : att[field];
         if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
           offloaded[field] = value;
         }

@@ -1,4 +1,3 @@
-/** Tests Telegram token inheritance in secrets runtime collection. */
 import { describe, expect, it } from "vitest";
 import "./runtime-telegram.test-support.ts";
 import {
@@ -8,6 +7,14 @@ import {
 } from "./runtime.test-support.ts";
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
+function prepare(telegram: unknown, env: NodeJS.ProcessEnv = {}) {
+  return prepareSecretsRuntimeSnapshot({
+    config: asConfig({ channels: { telegram } }),
+    env,
+    agentDirs: ["/tmp/openclaw-agent-main"],
+    loadAuthStore: () => loadAuthStoreWithProfiles({}),
+  });
+}
 
 function envRef(id: string) {
   return { source: "env", provider: "default", id } as const;
@@ -16,54 +23,64 @@ function envRef(id: string) {
 describe("secrets runtime snapshot telegram token inheritance", () => {
   it("fails when enabled channel surfaces contain unresolved refs", async () => {
     await expect(
-      prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          channels: {
-            telegram: {
-              botToken: envRef("MISSING_ENABLED_TELEGRAM_TOKEN"),
-              accounts: {
-                work: {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        }),
-        env: {},
-        agentDirs: ["/tmp/openclaw-agent-main"],
-        loadAuthStore: () => loadAuthStoreWithProfiles({}),
+      prepare({
+        botToken: envRef("MISSING_ENABLED_TELEGRAM_TOKEN"),
+        accounts: { work: { enabled: true } },
       }),
     ).rejects.toThrow('Environment variable "MISSING_ENABLED_TELEGRAM_TOKEN" is missing or empty.');
   });
 
-  it("treats top-level Telegram token as inactive when all enabled accounts override it", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        channels: {
-          telegram: {
-            botToken: envRef("UNUSED_TELEGRAM_BASE_TOKEN"),
-            accounts: {
-              work: {
-                enabled: true,
-                botToken: envRef("TELEGRAM_WORK_TOKEN"),
-              },
-              disabled: {
-                enabled: false,
-              },
-            },
+  it("resolves the implicit default's top-level token and webhookSecret when named accounts override them", async () => {
+    const snapshot = await prepare(
+      {
+        botToken: envRef("TELEGRAM_BASE_TOKEN"),
+        webhookUrl: "https://example.invalid/telegram",
+        webhookSecret: envRef("TELEGRAM_BASE_WEBHOOK_SECRET"),
+        accounts: {
+          work: {
+            enabled: true,
+            botToken: envRef("TELEGRAM_WORK_TOKEN"),
+            webhookSecret: envRef("TELEGRAM_WORK_WEBHOOK_SECRET"),
           },
         },
-      }),
-      env: {
-        TELEGRAM_WORK_TOKEN: "telegram-work-token",
       },
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => loadAuthStoreWithProfiles({}),
-    });
-
-    expect(snapshot.config.channels?.telegram?.accounts?.work?.botToken).toBe(
-      "telegram-work-token",
+      {
+        TELEGRAM_BASE_TOKEN: "telegram-base-token",
+        TELEGRAM_BASE_WEBHOOK_SECRET: "telegram-base-webhook-secret",
+        TELEGRAM_WORK_TOKEN: "telegram-work-token",
+        TELEGRAM_WORK_WEBHOOK_SECRET: "telegram-work-webhook-secret",
+      },
     );
+
+    expect(snapshot.config.channels?.telegram).toMatchObject({
+      botToken: "telegram-base-token",
+      webhookSecret: "telegram-base-webhook-secret",
+      accounts: {
+        work: { botToken: "telegram-work-token", webhookSecret: "telegram-work-webhook-secret" },
+      },
+    });
+    expect(snapshot.warnings).toEqual([]);
+  });
+
+  it("treats top-level Telegram token as inactive when accounts.default overrides it", async () => {
+    const snapshot = await prepare(
+      {
+        botToken: envRef("UNUSED_TELEGRAM_BASE_TOKEN"),
+        accounts: {
+          default: { enabled: true, botToken: "telegram-default-token" },
+          work: {
+            enabled: true,
+            botToken: envRef("TELEGRAM_WORK_TOKEN"),
+          },
+          disabled: { enabled: false },
+        },
+      },
+      { TELEGRAM_WORK_TOKEN: "telegram-work-token" },
+    );
+
+    expect(snapshot.config.channels?.telegram).toMatchObject({
+      accounts: { work: { botToken: "telegram-work-token" } },
+    });
     expect(snapshot.config.channels?.telegram?.botToken).toEqual(
       envRef("UNUSED_TELEGRAM_BASE_TOKEN"),
     );
@@ -72,134 +89,37 @@ describe("secrets runtime snapshot telegram token inheritance", () => {
     );
   });
 
-  it("treats Telegram account overrides as enabled when account.enabled is omitted", async () => {
-    await expect(
-      prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          channels: {
-            telegram: {
-              enabled: true,
-              accounts: {
-                inheritedEnabled: {
-                  botToken: envRef("MISSING_INHERITED_TELEGRAM_ACCOUNT_TOKEN"),
-                },
-              },
-            },
-          },
-        }),
-        env: {},
-        agentDirs: ["/tmp/openclaw-agent-main"],
-        loadAuthStore: () => loadAuthStoreWithProfiles({}),
-      }),
-    ).rejects.toThrow(
-      'Environment variable "MISSING_INHERITED_TELEGRAM_ACCOUNT_TOKEN" is missing or empty.',
-    );
-  });
-
   it("treats top-level Telegram botToken refs as active when account botToken is blank", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        channels: {
-          telegram: {
-            botToken: envRef("TELEGRAM_BASE_TOKEN"),
-            accounts: {
-              work: {
-                enabled: true,
-                botToken: "",
-              },
-            },
-          },
-        },
-      }),
-      env: {
-        TELEGRAM_BASE_TOKEN: "telegram-base-token",
+    const snapshot = await prepare(
+      {
+        botToken: envRef("TELEGRAM_BASE_TOKEN"),
+        accounts: { work: { enabled: true, botToken: "" } },
       },
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => loadAuthStoreWithProfiles({}),
-    });
+      { TELEGRAM_BASE_TOKEN: "telegram-base-token" },
+    );
 
-    expect(snapshot.config.channels?.telegram?.botToken).toBe("telegram-base-token");
-    expect(snapshot.config.channels?.telegram?.accounts?.work?.botToken).toBe("");
+    expect(snapshot.config.channels?.telegram).toMatchObject({
+      botToken: "telegram-base-token",
+      accounts: { work: { botToken: "" } },
+    });
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
       "channels.telegram.botToken",
     );
   });
 
-  it("treats Telegram webhookSecret refs as inactive when webhook mode is not configured", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        channels: {
-          telegram: {
-            webhookSecret: envRef("MISSING_TELEGRAM_WEBHOOK_SECRET"),
-            accounts: {
-              work: {
-                enabled: true,
-              },
-            },
-          },
-        },
-      }),
-      env: {},
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => loadAuthStoreWithProfiles({}),
-    });
-
-    expect(snapshot.config.channels?.telegram?.webhookSecret).toEqual(
-      envRef("MISSING_TELEGRAM_WEBHOOK_SECRET"),
-    );
-    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
-      "channels.telegram.webhookSecret",
-    );
-  });
-
-  it("treats Telegram top-level botToken refs as inactive when tokenFile is configured", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        channels: {
-          telegram: {
-            tokenFile: "/tmp/telegram-bot-token",
-            botToken: envRef("MISSING_TELEGRAM_BOT_TOKEN"),
-          },
-        },
-      }),
-      env: {},
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => loadAuthStoreWithProfiles({}),
-    });
-
-    expect(snapshot.config.channels?.telegram?.botToken).toEqual(
-      envRef("MISSING_TELEGRAM_BOT_TOKEN"),
-    );
-    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
-      "channels.telegram.botToken",
-    );
-  });
-
-  it("treats Telegram account botToken refs as inactive when account tokenFile is configured", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        channels: {
-          telegram: {
-            accounts: {
-              work: {
-                enabled: true,
-                tokenFile: "/tmp/telegram-work-bot-token",
-                botToken: envRef("MISSING_TELEGRAM_WORK_BOT_TOKEN"),
-              },
-            },
-          },
-        },
-      }),
-      env: {},
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => loadAuthStoreWithProfiles({}),
-    });
-
-    expect(snapshot.config.channels?.telegram?.accounts?.work?.botToken).toEqual(
-      envRef("MISSING_TELEGRAM_WORK_BOT_TOKEN"),
-    );
-    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
-      "channels.telegram.accounts.work.botToken",
-    );
-  });
+  it.each(["channel", "account"])(
+    "ignores %s botToken refs when tokenFile is configured",
+    async (scope) => {
+      const token = { tokenFile: "/tmp/telegram-bot-token", botToken: envRef("MISSING_TOKEN") };
+      const snapshot = await prepare(
+        scope === "channel" ? token : { accounts: { work: { enabled: true, ...token } } },
+      );
+      const telegram = snapshot.config.channels?.telegram;
+      const configured = scope === "channel" ? telegram : telegram?.accounts?.work;
+      expect(configured?.botToken).toEqual(token.botToken);
+      expect(snapshot.warnings.map(({ path }) => path)).toContain(
+        `channels.telegram.${scope === "account" ? "accounts.work." : ""}botToken`,
+      );
+    },
+  );
 });

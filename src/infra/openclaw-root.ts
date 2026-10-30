@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getPluginCache } from "../plugins/plugin-cache.js";
 import { openClawRootFs, openClawRootFsSync } from "./openclaw-root.fs.runtime.js";
+import { runtimeProcessExternalPackageEntrypoints } from "./runtime-process-manifest.js";
 
 type PackageRootOptions = { cwd?: string; argv1?: string; moduleUrl?: string };
 
@@ -12,7 +13,7 @@ const PNPM_VERSIONED_OPENCLAW_ENTRY_PATTERN =
 export function rewritePnpmVersionedOpenClawEntryPath(entryPath: string): string {
   return entryPath.replace(
     PNPM_VERSIONED_OPENCLAW_ENTRY_PATTERN,
-    "$1$2node_modules$2openclaw$2openclaw.mjs",
+    `$1$2node_modules$2openclaw$2${runtimeProcessExternalPackageEntrypoints.cliLauncher}`,
   );
 }
 
@@ -23,7 +24,9 @@ export function resolveOpenClawInstallationRootSync(
 ): string {
   const launcherRoot = argv1 ? findPackageRootSync(path.dirname(path.resolve(argv1))) : null;
   const pnpmRoot = path.dirname(
-    rewritePnpmVersionedOpenClawEntryPath(path.join(runningRoot, "openclaw.mjs")),
+    rewritePnpmVersionedOpenClawEntryPath(
+      path.join(runningRoot, runtimeProcessExternalPackageEntrypoints.cliLauncher),
+    ),
   );
   for (const candidate of [launcherRoot, pnpmRoot]) {
     if (!candidate || candidate === runningRoot) {
@@ -47,17 +50,23 @@ function parsePackageName(raw: string): string | null {
   return typeof parsed.name === "string" ? parsed.name : null;
 }
 
-async function readPackageName(dir: string): Promise<string | null> {
+async function readPackageName(dir: string, signal?: AbortSignal): Promise<string | null> {
+  signal?.throwIfAborted();
   const packageNameCache = getPluginCache().sdk.packageNames;
   const packageJsonPath = path.join(path.resolve(dir), "package.json");
   if (packageNameCache.has(packageJsonPath)) {
     return packageNameCache.get(packageJsonPath) ?? null;
   }
   try {
-    const name = parsePackageName(await openClawRootFs.readFile(packageJsonPath, "utf-8"));
+    const name = parsePackageName(
+      await openClawRootFs.readFile(packageJsonPath, { encoding: "utf-8", signal }),
+    );
+    signal?.throwIfAborted();
     packageNameCache.set(packageJsonPath, name);
     return name;
   } catch {
+    // Cancelled discovery is not a cached package miss.
+    signal?.throwIfAborted();
     packageNameCache.set(packageJsonPath, null);
     return null;
   }
@@ -79,9 +88,9 @@ function readPackageNameSync(dir: string): string | null {
   }
 }
 
-async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string | null> {
-  for (const current of iterAncestorDirs(startDir, maxDepth)) {
-    const name = await readPackageName(current);
+async function findPackageRoot(startDir: string, signal?: AbortSignal): Promise<string | null> {
+  for (const current of iterAncestorDirs(startDir)) {
+    const name = await readPackageName(current, signal);
     if (name === "openclaw") {
       return current;
     }
@@ -89,8 +98,8 @@ async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string 
   return null;
 }
 
-function findPackageRootSync(startDir: string, maxDepth = 12): string | null {
-  for (const current of iterAncestorDirs(startDir, maxDepth)) {
+function findPackageRootSync(startDir: string): string | null {
+  for (const current of iterAncestorDirs(startDir)) {
     const name = readPackageNameSync(current);
     if (name === "openclaw") {
       return current;
@@ -99,9 +108,9 @@ function findPackageRootSync(startDir: string, maxDepth = 12): string | null {
   return null;
 }
 
-function* iterAncestorDirs(startDir: string, maxDepth: number): Generator<string> {
+function* iterAncestorDirs(startDir: string): Generator<string> {
   let current = path.resolve(startDir);
-  for (let i = 0; i < maxDepth; i += 1) {
+  for (let i = 0; i < 12; i += 1) {
     yield current;
     // Never walk above a node_modules boundary: a package.json up there belongs
     // to the workspace that installed the tooling (for example an enclosing
@@ -170,13 +179,16 @@ function preparePackageRootSearch(opts: PackageRootOptions, preserveInventory: b
   };
 }
 
-export async function resolveOpenClawPackageRoot(opts: PackageRootOptions): Promise<string | null> {
+export async function resolveOpenClawPackageRoot(
+  opts: PackageRootOptions & { signal?: AbortSignal },
+): Promise<string | null> {
+  opts.signal?.throwIfAborted();
   const search = preparePackageRootSearch(opts, true);
   if (search.first !== undefined) {
     return search.first;
   }
   for (const candidate of search.candidates) {
-    const found = await findPackageRoot(candidate);
+    const found = await findPackageRoot(candidate, opts.signal);
     if (found) {
       return search.complete(found);
     }

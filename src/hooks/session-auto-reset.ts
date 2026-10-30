@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import type { PluginHookSessionEndReason } from "../plugins/hook-types.js";
 import { runWithGatewayDetachedWorkContinuation } from "../process/gateway-work-admission.js";
+import { runWithSessionControllerCleanup } from "../sessions/session-controller.owner-context.js";
 import type { SessionMemoryTranscript } from "./bundled/session-memory/capture.js";
 import {
   createInternalHookEvent,
@@ -67,9 +68,12 @@ export function emitSessionAutoResetHook(params: {
     previousSessionMemory: params.previousSessionMemory,
   });
 
-  void runWithGatewayDetachedWorkContinuation(
-    () => triggerInternalHook(event),
-    "hooks:session-auto-reset",
+  // The unawaited hook outlives the resetting turn; it must not inherit that turn's ownership.
+  void runWithSessionControllerCleanup(() =>
+    runWithGatewayDetachedWorkContinuation(
+      () => triggerInternalHook(event),
+      "hooks:session-auto-reset",
+    ),
   ).catch((error: unknown) => {
     logVerbose(`session:auto-reset hook failed: ${String(error)}`);
   });

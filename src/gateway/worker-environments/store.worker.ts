@@ -11,17 +11,18 @@ import type {
   WorkerOperationContext,
   WorkerOperationHandlers,
 } from "../../state/worker-operation-registry.js";
+import { readWorkerPlacementsInDatabase } from "./placement-row-codec.js";
 import { createWorkerEnvironmentCommitAdmission } from "./store-commit-authority.js";
 import { reconcileAttachedSessionOwners } from "./store-mutations.js";
 import { createWorkerEnvironmentReceipt } from "./store-receipt.js";
 import { readWorkerEnvironmentFacts } from "./store-row-codec.js";
-import { readTotalChanges } from "./store-write.js";
+import { captureWorkerEnvironmentChanges } from "./store-write.js";
 import { createWorkerEnvironmentStoreKernel } from "./store.kernel.js";
 import type {
   WorkerEnvironmentMutationInput,
   WorkerEnvironmentMutationMethods,
 } from "./store.types.js";
-import { pruneObservedTerminalWorkerEnvironments } from "./terminal-environment-retention.js";
+import { pruneTerminalWorkerEnvironments } from "./terminal-environment-retention.js";
 
 type Method = keyof WorkerEnvironmentMutationMethods | "initialize";
 type Input<Name extends Method> = {
@@ -48,13 +49,22 @@ function mutation<Name extends Method, Result>(
         const { db } = transactionDatabase;
         const now = () => input.nowMs ?? Date.now();
         const store = createWorkerEnvironmentStoreKernel(transactionDatabase, now);
-        const changesBefore = readTotalChanges(db);
         const touched = new Set<string>();
-        const result = execute(input, { db, store, now, touch: (id) => touched.add(id.trim()) });
+        const { result, changed } = captureWorkerEnvironmentChanges(db, () =>
+          execute(input, { db, store, now, touch: (id) => touched.add(id.trim()) }),
+        );
         const facts = readWorkerEnvironmentFacts(db, [...touched]);
+        if (name === "refreshBootstrapReceipt") {
+          const sessionIds = facts.environments.flatMap((environment) =>
+            environment.state === "attached" ? environment.attachedSessionIds : [],
+          );
+          if (sessionIds.length > 0) {
+            facts.placements = readWorkerPlacementsInDatabase(db, sessionIds);
+          }
+        }
         const receipt = {
           result,
-          changed: readTotalChanges(db) !== changesBefore,
+          changed,
           publication: createWorkerEnvironmentReceipt(
             {
               identity: requireOpenClawStateDatabaseIdentity({ db }).key,
@@ -189,11 +199,10 @@ export const workerEnvironmentOperations = {
   ),
   "workerEnvironments.pruneTerminalEnvironments": mutation(
     "pruneTerminalEnvironments",
-    ({ input: { approved } }, { db, touch }) => {
-      for (const row of approved) {
-        touch(row.environment_id);
-      }
-      return pruneObservedTerminalWorkerEnvironments(db, approved);
+    ({ input }, { db, touch }) => {
+      const deleted = pruneTerminalWorkerEnvironments(db, input);
+      deleted.forEach(touch);
+      return deleted.length;
     },
   ),
 } satisfies WorkerOperationHandlers;

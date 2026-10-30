@@ -22,8 +22,9 @@
  * its reply adds cancelled (true when the save panel was dismissed).
  */
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import type { BrowserInspectedNode } from "../components/browser/browser-client.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { hasNativeBrowserBridge } from "./native-browser-host.ts";
 
 export { hasNativeBrowserBridge } from "./native-browser-host.ts";
@@ -79,6 +80,9 @@ type NativeBrowserWindow = Window & {
   };
 };
 const STATE_EVENT = "openclaw:native-browser-state";
+type StateSubscription = { revision: number; listener: (state: NativeBrowserState) => void };
+type StatePool = { subscribers: Set<StateSubscription>; stop: () => void };
+const statePools = new WeakMap<Window, StatePool>();
 
 function nativeWindow(): NativeBrowserWindow | undefined {
   return typeof window === "undefined" ? undefined : window;
@@ -105,47 +109,6 @@ function isRect(value: unknown): value is NativeBrowserRect {
     finite(value.height) &&
     value.height >= 0
   );
-}
-function validMessage(value: unknown): value is NativeBrowserMessage {
-  if (!isRecord(value)) {
-    return false;
-  }
-  if (value.type === "release-scope") {
-    return nonempty(value.scope);
-  }
-  if (value.type === "present") {
-    return (
-      nonempty(value.scope) &&
-      (value.tabId === null || nonempty(value.tabId)) &&
-      (value.rect === null || isRect(value.rect)) &&
-      typeof value.visible === "boolean"
-    );
-  }
-  if (!nonempty(value.tabId)) {
-    return false;
-  }
-  switch (value.type) {
-    case "open":
-      return (
-        browserUrl(value.url) &&
-        sessionKey(value.sessionKey) &&
-        (value.activate === undefined || typeof value.activate === "boolean")
-      );
-    case "navigate":
-      return browserUrl(value.url);
-    case "inspect":
-      return finite(value.x) && value.x >= 0 && finite(value.y) && value.y >= 0;
-    case "back":
-    case "forward":
-    case "reload":
-    case "stop":
-    case "close":
-    case "snapshot":
-    case "download":
-      return true;
-    default:
-      return false;
-  }
 }
 function isState(value: unknown): value is NativeBrowserState {
   if (
@@ -188,8 +151,7 @@ function isNode(value: unknown): value is BrowserInspectedNode | null {
     (isRecord(value) &&
       typeof value.tag === "string" &&
       typeof value.id === "string" &&
-      Array.isArray(value.classes) &&
-      value.classes.every((entry: unknown) => typeof entry === "string") &&
+      isStringArray(value.classes) &&
       typeof value.role === "string" &&
       typeof value.name === "string" &&
       typeof value.focusable === "boolean" &&
@@ -204,10 +166,8 @@ export async function postNativeBrowserMessage(
   if (typeof bridge?.postMessage !== "function") {
     return null;
   }
-  if (!validMessage(message)) {
-    return { ok: false, error: "Invalid native browser request" };
-  }
   try {
+    // Native hosts validate requests at the effect; malformed internal calls return their error.
     const post = bridge.postMessage.bind(bridge);
     const reply = await post(message);
     if (isRecord(reply) && reply.ok === false && typeof reply.error === "string") {
@@ -270,14 +230,42 @@ export function subscribeNativeBrowserState(
   if (!hasNativeBrowserBridge()) {
     return () => {};
   }
-  let revision = readNativeBrowserState()?.revision ?? -1;
-  const onState = (event: Event) => {
-    const state: unknown = event instanceof CustomEvent ? event.detail : null;
-    if (isState(state) && state.revision > revision) {
-      revision = state.revision;
-      listener(state);
+  let pool = statePools.get(window);
+  if (!pool) {
+    const subscribers = new Set<StateSubscription>();
+    pool = {
+      subscribers,
+      stop: listen(window, STATE_EVENT, (event) => {
+        const state: unknown = event instanceof CustomEvent ? event.detail : null;
+        if (!isState(state)) {
+          return;
+        }
+        const delivery = [...subscribers];
+        for (const subscriber of delivery) {
+          if (!subscribers.has(subscriber) || state.revision <= subscriber.revision) {
+            continue;
+          }
+          subscriber.revision = state.revision;
+          try {
+            subscriber.listener(state);
+          } catch (error) {
+            // Native dispatch isolates listeners; sharing must preserve that boundary.
+            reportError(error);
+          }
+        }
+      }),
+    };
+    statePools.set(window, pool);
+  }
+  const subscription = { revision: readNativeBrowserState()?.revision ?? -1, listener };
+  pool.subscribers.add(subscription);
+  return () => {
+    if (!pool.subscribers.delete(subscription)) {
+      return;
+    }
+    if (pool.subscribers.size === 0) {
+      pool.stop();
+      statePools.delete(window);
     }
   };
-  window.addEventListener(STATE_EVENT, onState);
-  return () => window.removeEventListener(STATE_EVENT, onState);
 }

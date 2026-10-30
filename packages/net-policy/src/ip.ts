@@ -1,7 +1,4 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import ipaddr from "ipaddr.js";
 
 /** Parsed IP address value returned by the net-policy parsing helpers. */
@@ -132,12 +129,20 @@ export function parseLooseIpAddress(raw: string | undefined): ParsedIpAddress | 
 
 /** Normalizes canonical IP literals and maps IPv4-mapped IPv6 addresses to IPv4 text. */
 export function normalizeIpAddress(raw: string | undefined): string | undefined {
+  return parseNormalizedIpAddress(raw)?.toString();
+}
+
+/** Parses canonical literals, normalizing mapped IPv4 and lowercase IPv6 zone IDs. */
+export function parseNormalizedIpAddress(raw: string | undefined): ParsedIpAddress | undefined {
   const parsed = parseCanonicalIpAddress(raw);
   if (!parsed) {
     return undefined;
   }
   const normalized = normalizeIpv4MappedAddress(parsed);
-  return normalizeLowercaseStringOrEmpty(normalized.toString());
+  if (isIpv6Address(normalized) && normalized.zoneId) {
+    normalized.zoneId = normalized.zoneId.toLowerCase();
+  }
+  return normalized;
 }
 
 /** True only for canonical four-part dotted-decimal IPv4 literals. */
@@ -370,11 +375,19 @@ export function parseIpAddressOrCidr(
 export function isIpInCidr(ip: string, cidr: string): boolean {
   const normalizedIp = parseCanonicalIpAddress(ip);
   const range = parseIpAddressOrCidr(cidr);
-  if (!normalizedIp || !range) {
+  return isParsedIpInCidr(normalizedIp, range);
+}
+
+/** Matches already-parsed addresses with the same mapped-IPv4 rules as isIpInCidr. */
+export function isParsedIpInCidr(
+  ip: ParsedIpAddress | undefined,
+  range: ReturnType<typeof parseIpAddressOrCidr>,
+): boolean {
+  if (!ip || !range) {
     return false;
   }
   const [baseAddress, prefixLength] = range;
-  const comparableIp = normalizeIpv4MappedAddress(normalizedIp);
+  const comparableIp = normalizeIpv4MappedAddress(ip);
   const comparableBase = normalizeIpv4MappedAddress(baseAddress);
   if (prefixLength === undefined) {
     return (

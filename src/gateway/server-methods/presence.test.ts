@@ -1,5 +1,5 @@
+import { Check } from "typebox/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { lazyCompile } from "../../../packages/gateway-protocol/src/protocol-validator.js";
 import {
   PresenceQueryResultSchema,
   type PresenceQueryParams,
@@ -15,7 +15,7 @@ import type { GatewayMethodDispatchResponse } from "../server-in-process-dispatc
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
 import { presenceHandlers } from "./presence.js";
-import type { GatewayClient, GatewayRequestHandlerOptions } from "./types.js";
+import type { GatewayClient } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   presence: vi.fn<() => PresenceEntry[]>(() => []),
@@ -25,17 +25,20 @@ vi.mock("../server-plugin-in-process-dispatch.js", () => ({
   dispatchGatewayMethodInProcessRaw: mocks.lookup,
 }));
 
-const validateResult = lazyCompile(PresenceQueryResultSchema);
 const now = 10_000;
+const profile = (profileId: string, displayName: string) => ({
+  profileId,
+  displayName,
+  avatarRevision: "1",
+  hasAvatar: false,
+  updatedAt: 1,
+});
 
 function row(conn: string, overrides: Partial<PresenceEntry> = {}): PresenceEntry {
   return {
     connectionId: conn,
     deviceId: conn,
-    host: conn,
     ts: now,
-    reason: "connect",
-    onlineSince: 1_000,
     user: { id: "alex", identity: { type: "profile", id: "alex" }, name: "Alex" },
     ...overrides,
   };
@@ -46,7 +49,6 @@ function node(id: string, overrides: Partial<NodeSession> = {}): NodeSession {
     nodeId: id,
     connId: `conn-${id}`,
     client: makeClient(`conn-${id}`, id),
-    displayName: id,
     declaredCaps: [],
     caps: [],
     declaredCommands: [],
@@ -75,7 +77,7 @@ function request(
   vi.spyOn(nodeRegistry, "listCurrentConnectedSync").mockImplementation(() => options.nodes ?? []);
   const context = createGatewayRequestContext(makeContextParams({ nodeRegistry }));
   context.getPresenceSnapshot = mocks.presence;
-  const invocation: GatewayRequestHandlerOptions = {
+  const run = presenceHandlers["presence.query"]!({
     req: { type: "req", id: "presence-query", method: "presence.query", params },
     params,
     client: options.client === undefined ? caller() : options.client,
@@ -83,8 +85,7 @@ function request(
     isWebchatConnect: () => false,
     hasCurrentClientAuthority: options.current,
     context,
-  };
-  const run = presenceHandlers["presence.query"]!(invocation);
+  });
   return { respond, run };
 }
 
@@ -95,10 +96,9 @@ async function query(
   const result = request(params, options);
   await result.run;
   const [ok, payload, error] = result.respond.mock.calls[0] ?? [];
-  expect(ok).toBe(true);
-  expect(error).toBeUndefined();
-  if (!validateResult(payload)) {
-    throw new Error(JSON.stringify(validateResult.errors));
+  expect([ok, error]).toEqual([true, undefined]);
+  if (!Check(PresenceQueryResultSchema, payload)) {
+    throw new Error("Invalid presence result");
   }
   return payload;
 }
@@ -125,10 +125,7 @@ describe("presence.query", () => {
         instanceId: "collision",
         user: { id: "alex", name: "Other Alex" },
       }),
-      row("disconnected", {
-        user: { id: "offline", name: "Offline" },
-        reason: "disconnect",
-      }),
+      row("disconnected", { user: { id: "offline", name: "Offline" }, reason: "disconnect" }),
       { ts: now, reason: "self", host: "Gateway" },
     ]);
     const result = await query();
@@ -145,13 +142,9 @@ describe("presence.query", () => {
     expect(JSON.stringify(result)).not.toMatch(/private-session|203\.0\.113\.2|watchedSessions/);
     expect(result.people.every((person) => person.devices === undefined)).toBe(true);
     const detailed = await query({ include: ["devices"] });
-    const instanceIds = detailed.people.flatMap(
-      (person) =>
-        person.devices
-          ?.filter((device) => device.id.startsWith("instance:"))
-          .map((device) => device.id) ?? [],
-    );
-    expect(new Set(instanceIds).size).toBe(2);
+    expect(
+      detailed.people.flatMap((person) => person.devices?.map((device) => device.id) ?? []),
+    ).toEqual(["device:tab-b", "instance:profile:alex:collision", "instance:raw:alex:collision"]);
     expect(await query({ limit: 1 })).toMatchObject({
       totalPeople: 2,
       truncated: true,
@@ -161,13 +154,7 @@ describe("presence.query", () => {
 
   it("binds me to the admitted operator and retains activity on its originating device", async () => {
     const native = node("laptop", { lastActiveAtMs: 8_000, presenceActivitySource: "app" });
-    native.client.authenticatedUserProfile = {
-      profileId: "alex",
-      displayName: "Alex",
-      avatarRevision: "1",
-      hasAvatar: false,
-      updatedAt: 1,
-    };
+    native.client.authenticatedUserProfile = profile("alex", "Alex");
     mocks.presence.mockReturnValue([
       row("tab-a", { deviceId: "desktop", connectionLastActivityAt: 6_000, lastActivityAt: 9_000 }),
       row("tab-b", { deviceId: "desktop", lastActivityAt: 9_000 }),
@@ -188,22 +175,20 @@ describe("presence.query", () => {
         ],
       },
     );
-    expect(result.people).toHaveLength(1);
-    expect(result.people[0]).toMatchObject({
-      id: "profile:alex",
-      deviceCount: 4,
-      activity: { at: 8_000, source: "app-input", deviceId: "device:laptop" },
-    });
-    expect(
-      result.people[0]?.devices?.find((device) => device.id === "device:desktop"),
-    ).toMatchObject({
+    expect(result.people).toMatchObject([
+      {
+        id: "profile:alex",
+        deviceCount: 4,
+        activity: { at: 8_000, source: "app-input", deviceId: "device:laptop" },
+      },
+    ]);
+    const devices = result.people[0]?.devices;
+    expect(devices?.find((device) => device.id === "device:desktop")).toMatchObject({
       activity: { at: 6_000, source: "openclaw-interaction" },
       connections: [{ id: "tab-a" }, { id: "tab-b" }],
     });
-    expect(result.people[0]?.devices?.some((device) => device.id === "connection:no-device")).toBe(
-      true,
-    );
-    expect(result.people[0]?.devices?.some((device) => device.id === "device:shared")).toBe(false);
+    expect(devices?.some((device) => device.id === "connection:no-device")).toBe(true);
+    expect(devices?.some((device) => device.id === "device:shared")).toBe(false);
   });
 
   it("keeps shared nodes inspectable without assigning them to the only online person", async () => {
@@ -213,34 +198,31 @@ describe("presence.query", () => {
       presenceActivitySource: "system",
       remoteIp: "192.0.2.3",
     });
-    shared.client.authenticatedUserProfile = {
-      profileId: GATEWAY_OWNER_PROFILE_ID,
-      displayName: "Owner",
-      avatarRevision: "1",
-      hasAvatar: false,
-      updatedAt: 1,
-    };
-    const listed = await query({ include: ["devices"] }, { nodes: [shared] });
-    expect(listed.devices).toMatchObject([
-      { id: "device:shared", personIds: [], activity: { source: "system-input" } },
-    ]);
-    const inspected = await query(
+    shared.client.authenticatedUserProfile = profile(GATEWAY_OWNER_PROFILE_ID, "Owner");
+    const inspect = async (params: PresenceQueryParams, expected: object, client = caller()) =>
+      expect(await query(params, { nodes: [shared], client })).toMatchObject(expected);
+    await inspect(
+      { include: ["devices"] },
+      {
+        devices: [{ id: "device:shared", personIds: [], activity: { source: "system-input" } }],
+      },
+    );
+    await inspect(
       { action: "device", deviceId: "device:shared", include: ["network"] },
-      { nodes: [shared] },
+      {
+        devices: [{ nodeId: "shared", connections: [{ network: { ip: "192.0.2.3" } }] }],
+        people: [],
+      },
     );
-    expect(inspected.devices).toMatchObject([
-      { nodeId: "shared", connections: [{ network: { ip: "192.0.2.3" } }] },
-    ]);
-    expect(inspected.people).toEqual([]);
-    const own = await query(
+    await inspect(
       { action: "person", person: "me", include: ["devices"] },
-      { nodes: [shared], client: caller(GATEWAY_OWNER_PROFILE_ID) },
+      {
+        status: "not-found",
+        people: [],
+        devices: [{ id: "device:shared", personIds: [] }],
+      },
+      caller(GATEWAY_OWNER_PROFILE_ID),
     );
-    expect(own).toMatchObject({
-      status: "not-found",
-      people: [],
-      devices: [{ id: "device:shared", personIds: [] }],
-    });
   });
 
   it("reports ambiguity and unavailable requester identity instead of guessing", async () => {
@@ -250,27 +232,24 @@ describe("presence.query", () => {
         user: { id: "another", identity: { type: "profile", id: "another" }, name: "Alex" },
       }),
     ]);
-    expect(await query({ action: "person", person: "alex" })).toMatchObject({
-      status: "ok",
-      people: [{ id: "profile:alex" }],
-    });
-    expect(await query({ action: "person", person: "ALEX" })).toMatchObject({
-      status: "ambiguous",
-      totalPeople: 2,
-    });
-    expect(await query({ action: "person", person: "nobody" })).toMatchObject({
-      status: "not-found",
-      people: [],
-    });
-    expect(await query({ action: "person", person: "me" }, { client: null })).toMatchObject({
-      status: "identity-unavailable",
-    });
-    expect(
-      await query(
-        { action: "person", person: "me" },
-        { client: { ...caller(), internal: { operatorRoleActor: { kind: "system" } } } },
-      ),
-    ).toMatchObject({ status: "identity-unavailable" });
+    const person = async (
+      name: string,
+      expected: object,
+      client: GatewayClient | null = caller(),
+    ) =>
+      expect(await query({ action: "person", person: name }, { client })).toMatchObject(expected);
+    await person("alex", { status: "ok", people: [{ id: "profile:alex" }] });
+    await person("ALEX", { status: "ambiguous", totalPeople: 2 });
+    await person("nobody", { status: "not-found", people: [] });
+    await person("me", { status: "identity-unavailable" }, null);
+    await person(
+      "me",
+      { status: "identity-unavailable" },
+      {
+        ...caller(),
+        internal: { operatorRoleActor: { kind: "system" } },
+      },
+    );
   });
 
   it.each([
@@ -293,15 +272,7 @@ describe("presence.query", () => {
     mocks.lookup.mockResolvedValue({
       ok: true,
       payload: {
-        results: [
-          {
-            ip: "203.0.113.2",
-            status: "found",
-            city: "Vienna",
-            country: "Austria",
-            attribution: { text: "Example database", url: "https://example.test" },
-          },
-        ],
+        results: [{ ip: "203.0.113.2", status: "found", city: "Vienna" }],
       },
     });
     const result = await query({ include: ["location"] });

@@ -68,6 +68,18 @@ public struct OpenClawChatUsageCost: Codable, Hashable, Sendable {
     public let total: Double?
 }
 
+/// Latest model call's context snapshot. Only an available marker decodes; an
+/// unavailable or unknown state reads as no marker.
+public struct OpenClawChatUsageContextSnapshot: Codable, Hashable, Sendable {
+    public enum State: String, Codable, Sendable {
+        case available
+    }
+
+    public let state: State
+    public let promptTokens: Int
+    public let totalTokens: Int
+}
+
 public struct OpenClawChatUsage: Codable, Hashable, Sendable {
     public let input: Int?
     public let output: Int?
@@ -75,6 +87,8 @@ public struct OpenClawChatUsage: Codable, Hashable, Sendable {
     public let cacheWrite: Int?
     public let cost: OpenClawChatUsageCost?
     public let total: Int?
+    /// Counters can cover a whole multi-call turn; context readers size the window from this.
+    public let contextUsage: OpenClawChatUsageContextSnapshot?
 
     private enum DecodingKeys: String, CodingKey {
         case input
@@ -84,6 +98,7 @@ public struct OpenClawChatUsage: Codable, Hashable, Sendable {
         case cost
         case total
         case totalTokens
+        case contextUsage
     }
 
     public init(from decoder: Decoder) throws {
@@ -96,6 +111,10 @@ public struct OpenClawChatUsage: Codable, Hashable, Sendable {
         self.total =
             try container.decodeIfPresent(Int.self, forKey: .total) ??
             container.decodeIfPresent(Int.self, forKey: .totalTokens)
+        // A malformed marker must not fail the message; readers fall back to the counters.
+        self.contextUsage = try? container.decodeIfPresent(
+            OpenClawChatUsageContextSnapshot.self,
+            forKey: .contextUsage)
     }
 }
 
@@ -478,6 +497,11 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     var senderSession: AnyCodable?
     public let model: String?
 
+    // Transient projection fields; deliberately absent from CodingKeys.
+    var presentationBlockIndex: Int?
+    var presentationOwnsFooter = true
+    var presentationCompletedReply: Bool?
+    var presentationRecordedToolResults: [OpenClawChatMessageContent] = []
     public var id: UUID = .init()
     public var transcriptMessageID: String?
     public var activity: [OpenClawAgentActivityItem]?
@@ -540,6 +564,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         case senderLabel
         case senderSession
         case phase
+        case activity
         case streamFallback = "openclawStreamFallback"
         case content
         case timestamp
@@ -640,6 +665,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         self.senderSession = try? container.decode(AnyCodable.self, forKey: .senderSession)
         self.sourceMetadata = decodedOpenClaw
         self.phase = try container.decodeIfPresent(String.self, forKey: .phase)
+        self.activity = try? container.decodeIfPresent([OpenClawAgentActivityItem].self, forKey: .activity)
         self.turnBoundary = decodedOpenClaw?.turnBoundary
         self.steerTargetRunID = decodedOpenClaw?.steerTargetRunId
         self.streamFallback = try? container.decode(OpenClawChatStreamFallback.self, forKey: .streamFallback)
@@ -746,6 +772,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         try container.encodeIfPresent(self.senderLabel, forKey: .senderLabel)
         try container.encodeIfPresent(self.senderSession, forKey: .senderSession)
         try container.encodeIfPresent(self.phase, forKey: .phase)
+        try container.encodeIfPresent(self.activity, forKey: .activity)
         try container.encodeIfPresent(self.streamFallback, forKey: .streamFallback)
         try container.encodeIfPresent(self.timestamp, forKey: .timestamp)
         if self.transcriptMessageID != nil || self.transcriptRunID != nil || self.isTruncated || self
@@ -832,6 +859,7 @@ public struct OpenClawChatSessionInfo: Codable, Sendable {
     public let agentId: String?
     public let hasActiveRun: Bool?
     public let activeRunIds: [String]?
+    public let reasoningLevel: String?
 
     // periphery:ignore - package tests construct history fixtures; app consumers decode this payload.
     public init(hasActiveRun: Bool?, activeRunIds: [String]? = nil, key: String? = nil, agentId: String? = nil) {
@@ -839,6 +867,7 @@ public struct OpenClawChatSessionInfo: Codable, Sendable {
         self.agentId = agentId
         self.hasActiveRun = hasActiveRun
         self.activeRunIds = activeRunIds
+        self.reasoningLevel = nil
     }
 }
 
@@ -1007,6 +1036,15 @@ public struct OpenClawChatEventPayload: Codable, Sendable {
     public let state: String?
     public let message: AnyCodable?
     public let errorMessage: String?
+    /// With `state == "status"`: what the run is doing before it produces anything.
+    public var phase: String?
+    public var retry: Retry?
+    public var seq: Int?
+
+    public struct Retry: Codable, Sendable {
+        public let attempt: Int
+        public let maxAttempts: Int
+    }
 
     // periphery:ignore - package tests construct transport events; app consumers decode them.
     public init(
@@ -1101,6 +1139,14 @@ public struct OpenClawSessionMessageEventPayload: Codable, Sendable {
         case hasActiveRun
         case activeRunIds
     }
+}
+
+/// The existing Gateway refresh receipt, including the authoritative pre-refresh baseline.
+public struct OpenClawChatProgressCardRefreshResult: Decodable, Sendable {
+    private enum Status: String, Decodable, Sendable { case accepted }
+    public let runId: String
+    public let revision: Int
+    private let status: Status
 }
 
 public struct OpenClawAgentEventPayload: Codable, Sendable, Identifiable {

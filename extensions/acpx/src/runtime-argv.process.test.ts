@@ -1,11 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   AcpxRuntime as BaseAcpxRuntime,
+  type AcpRuntimeOptions,
   createAgentRegistry,
   createFileSessionStore,
-  type AcpRuntimeOptions,
 } from "acpx/runtime";
 import {
   createPluginStateKeyedStoreForTests,
@@ -21,20 +20,39 @@ import {
   openAcpxProcessLeaseStateStore,
   readAcpxProcessLeaseIdentity,
 } from "./process-lease.js";
+import {
+  copyNodeExecutable,
+  ownerAgentScript as script,
+  ownerRuntimeOptions,
+  promptJson as prompt,
+  fixtureSession,
+  withProcessRuntime,
+} from "./runtime-process.test-support.js";
 import { AcpxRuntime } from "./runtime.js";
-
-const script = fileURLToPath(
-  new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url),
-);
 const sessionKey = "agent:main:acp:argv";
 const samples = ["", "space value", `owner's "choice"`, String.raw`C:\tools\adapter`];
+type Agents = Record<string, { command: string; args: string[] }>;
+const agentConfig = (workspaceDir: string, agents: Agents) =>
+  resolveAcpxPluginConfig({ workspaceDir, rawConfig: { agents } });
+
+async function prepareWrappers(
+  root: string,
+  pluginConfig: ReturnType<typeof resolveAcpxPluginConfig>,
+) {
+  const codexHome = path.join(root, "empty-codex-home");
+  await fs.mkdir(codexHome);
+  vi.stubEnv("CODEX_HOME", codexHome);
+  return prepareAcpxCodexAuthConfig({
+    pluginConfig,
+    stateDir: root,
+  });
+}
 
 it("does not reinterpret a legacy command when a workspace file has the same name", async () => {
   await withOpenClawTestState({ label: "acpx-command-source" }, async (state) => {
     await fs.writeFile(path.join(state.root, "node --version"), "workspace content");
-    const config = resolveAcpxPluginConfig({
-      rawConfig: { agents: { fixture: { command: "node --version", args: ["suffix"] } } },
-      workspaceDir: state.root,
+    const config = agentConfig(state.root, {
+      fixture: { command: "node --version", args: ["suffix"] },
     });
     expect(config.agents.fixture).toEqual(["node", "--version", "suffix"]);
   });
@@ -42,50 +60,23 @@ it("does not reinterpret a legacy command when a workspace file has the same nam
 
 afterEach(() => vi.unstubAllEnvs());
 
-async function prompt(
-  runtime: AcpxRuntime,
-  handle: Awaited<ReturnType<AcpxRuntime["ensureSession"]>>,
-  text: string,
-) {
-  const turn = runtime.startTurn({ handle, text, mode: "prompt", requestId: text });
-  const chunks: string[] = [];
-  for await (const event of turn.events) {
-    if (event.type === "text_delta") {
-      chunks.push(event.text);
-    }
-  }
-  expect(await turn.result).toMatchObject({ status: "completed" });
-  return JSON.parse(chunks.join(""));
-}
-
 it("passes child-only environment through the ACPX process factory", async () => {
-  await withOpenClawTestState({ label: "acpx-agent-env" }, async (state) => {
-    const peerDirectory = path.join(state.root, "peer");
-    await fs.mkdir(peerDirectory);
-    const runtime = new AcpxRuntime({
-      cwd: state.root,
-      agentProcessEnv: { TOKIO_WORKER_THREADS: "7" },
-      permissionMode: "deny-all",
-      sessionStore: createFileSessionStore({ stateDir: path.join(state.root, "state") }),
-      agentRegistry: createAgentRegistry({
-        overrides: { fixture: [process.execPath, script, peerDirectory, "--capture-worker-env"] },
-      }),
-    });
-    let handle: Awaited<ReturnType<AcpxRuntime["ensureSession"]>> | undefined;
-    try {
-      handle = await runtime.ensureSession({ sessionKey, agent: "fixture", mode: "persistent" });
+  await withProcessRuntime(
+    "acpx-agent-env",
+    async ({ runtime }) => {
+      const handle = await runtime.ensureSession(fixtureSession(sessionKey));
       expect(await prompt(runtime, handle, "inspect")).toMatchObject({ workerThreads: "7" });
-    } finally {
-      if (handle) {
-        await runtime.close({ handle, reason: "test" });
-      }
-      await runtime.shutdown();
-    }
-  });
+    },
+    async ({ root }) => ({
+      agentProcessEnv: { TOKIO_WORKER_THREADS: "7" },
+      sessionStore: createFileSessionStore({ stateDir: path.join(root, "state") }),
+      args: ["--capture-worker-env"],
+      timeoutMs: undefined,
+    }),
+  );
 });
 
 it.each([
-  { wrapped: false, form: "path" },
   { wrapped: true, form: "path" },
   { wrapped: false, form: "relative" },
   { wrapped: false, form: "combined" },
@@ -95,44 +86,20 @@ it.each([
     await withOpenClawTestState({ label: "acpx-argv-process" }, async (state) => {
       const peerDirectory = path.join(state.root, "peer");
       await fs.mkdir(peerDirectory);
-      const executable = path.join(
-        state.root,
-        process.platform === "win32" ? "node program.exe" : "node program",
-      );
-      if (process.platform === "win32") {
-        await fs.copyFile(process.execPath, executable);
-      } else {
-        // Homebrew Node resolves libnode beside its real executable.
-        await fs.symlink(process.execPath, executable);
-      }
+      const executable = await copyNodeExecutable(state.root, "node program");
       const args = [script, peerDirectory, ...samples];
       const agent = wrapped ? "codex" : "fixture";
       const spawnExecutable =
         form === "relative" ? `.${path.sep}${path.basename(executable)}` : executable;
       const configuredCommand =
-        form === "combined"
-          ? `"${spawnExecutable}" "${script}" "${peerDirectory}"`
-          : form === "relative"
-            ? `"${spawnExecutable}"`
-            : executable;
-      let config = resolveAcpxPluginConfig({
-        rawConfig: {
-          agents: {
-            [agent]: { command: configuredCommand, args: form === "combined" ? samples : args },
-          },
-        },
-        workspaceDir: state.root,
+        form === "path"
+          ? executable
+          : `"${spawnExecutable}"${form === "combined" ? ` "${script}" "${peerDirectory}"` : ""}`;
+      let config = agentConfig(state.root, {
+        [agent]: { command: configuredCommand, args: form === "combined" ? samples : args },
       });
       if (wrapped) {
-        const codexHome = path.join(state.root, "empty-codex-home");
-        await fs.mkdir(codexHome);
-        vi.stubEnv("CODEX_HOME", codexHome);
-        config = await prepareAcpxCodexAuthConfig({
-          pluginConfig: config,
-          stateDir: state.root,
-          resolveInstalledCodexAcpBinPath: async () => script,
-          resolveInstalledClaudeAcpBinPath: async () => script,
-        });
+        config = await prepareWrappers(state.root, config);
       }
       const store = createFileSessionStore({ stateDir: config.stateDir });
       const leases = createAcpxProcessLeaseStore({
@@ -144,28 +111,22 @@ it.each([
         ),
       });
       const createRuntime = () =>
-        new AcpxRuntime({
-          cwd: state.root,
-          sessionStore: store,
-          agentRegistry: createAgentRegistry({ overrides: config.agents }),
-          permissionMode: "deny-all",
-          timeoutMs: 15_000,
-          ...(wrapped
-            ? {
-                openclawWrapperRoot: path.join(state.root, "acpx"),
-                openclawGatewayInstanceId: "argv-test",
-                openclawProcessLeaseStore: leases,
-              }
-            : {}),
-        });
+        new AcpxRuntime(
+          ownerRuntimeOptions(state.root, {
+            sessionStore: store,
+            agentRegistry: createAgentRegistry({ overrides: config.agents }),
+            timeoutMs: 15_000,
+            openclawWrapperRoot: wrapped ? path.join(state.root, "acpx") : undefined,
+            openclawGatewayInstanceId: wrapped ? "argv-test" : undefined,
+            openclawProcessLeaseStore: wrapped ? leases : undefined,
+          }),
+        );
       let runtime = createRuntime();
       let handle: Awaited<ReturnType<AcpxRuntime["ensureSession"]>> | undefined;
       try {
-        handle = await runtime.ensureSession({ sessionKey, agent, mode: "persistent" });
-        expect(await prompt(runtime, handle, "first")).toMatchObject({
-          argv: samples,
-          history: ["first"],
-        });
+        handle = await runtime.ensureSession({ ...fixtureSession(sessionKey), agent });
+        const expected = { argv: samples, history: ["first"] };
+        expect(await prompt(runtime, handle, "first")).toMatchObject(expected);
         const record = await store.load(handle.acpxRecordId!);
         const command = splitCommandParts(config.agents[agent]!);
         expect(record?.agentArgv?.slice(0, command.length)).toEqual(command);
@@ -182,28 +143,16 @@ it.each([
         }
         await runtime.close({ handle, reason: "restart" });
         runtime = createRuntime();
-        const resumed = await runtime.ensureSession({
-          sessionKey,
-          agent,
-          mode: "persistent",
-        });
+        const resumed = await runtime.ensureSession({ ...fixtureSession(sessionKey), agent });
         expect(resumed.backendSessionId).toBe(handle.backendSessionId);
         handle = resumed;
-        expect(await prompt(runtime, handle, "second")).toMatchObject({
-          argv: samples,
-          history: ["first", "second"],
-        });
-        expect(
-          readAcpxProcessLeaseIdentity((await store.load(handle.acpxRecordId!))?.agentArgv),
-        ).toEqual(identity);
+        expected.history.push("second");
+        expect(await prompt(runtime, handle, "second")).toMatchObject(expected);
+        const restored = await store.load(handle.acpxRecordId!);
+        expect(readAcpxProcessLeaseIdentity(restored?.agentArgv)).toEqual(identity);
       } finally {
-        try {
-          if (handle) {
-            await runtime.close({ handle, reason: "test-complete" });
-          }
-        } finally {
-          resetPluginStateStoreForTests();
-        }
+        const closing = handle ? runtime.close({ handle, reason: "done" }) : Promise.resolve();
+        await closing.finally(resetPluginStateStoreForTests);
       }
     });
   },
@@ -218,31 +167,16 @@ it.skipIf(process.platform === "win32")(
       const argv = [process.execPath, script, peerDirectory];
       const scalar = argv.map((arg) => JSON.stringify(arg)).join(" ");
       const store = createFileSessionStore({ stateDir: state.root });
-      const previous = new BaseAcpxRuntime({
-        cwd: state.root,
-        sessionStore: store,
-        agentRegistry: createAgentRegistry({ overrides: { fixture: scalar } }),
-        permissionMode: "deny-all",
-        timeoutMs: 5_000,
-      });
-      const original = await previous.ensureSession({
-        sessionKey,
-        agent: "fixture",
-        mode: "persistent",
-      });
+      const options = (command: string | string[]) =>
+        ownerRuntimeOptions(state.root, {
+          sessionStore: store,
+          agentRegistry: createAgentRegistry({ overrides: { fixture: command } }),
+        });
+      const previous = new BaseAcpxRuntime(options(scalar));
+      const original = await previous.ensureSession(fixtureSession(sessionKey));
       await previous.close({ handle: original, reason: "upgrade" });
-      const runtime = new AcpxRuntime({
-        cwd: state.root,
-        sessionStore: store,
-        agentRegistry: createAgentRegistry({ overrides: { fixture: argv } }),
-        permissionMode: "deny-all",
-        timeoutMs: 5_000,
-      });
-      const handle = await runtime.ensureSession({
-        sessionKey,
-        agent: "fixture",
-        mode: "persistent",
-      });
+      const runtime = new AcpxRuntime(options(argv));
+      const handle = await runtime.ensureSession(fixtureSession(sessionKey));
       try {
         expect(handle.backendSessionId).toBe(original.backendSessionId);
         expect((await store.load(handle.acpxRecordId!))?.agentCommand).toBe(scalar);
@@ -256,34 +190,20 @@ it.skipIf(process.platform === "win32")(
 
 it("keeps generated Codex and Claude wrapper commands as portable argv", async () => {
   await withOpenClawTestState({ label: "acpx-wrapper-argv" }, async (state) => {
-    const codexHome = path.join(state.root, "empty-codex-home");
-    await fs.mkdir(codexHome);
-    vi.stubEnv("CODEX_HOME", codexHome);
-    const config = resolveAcpxPluginConfig({
-      rawConfig: {
-        agents: {
-          codex: { command: "codex-acp", args: samples },
-          claude: { command: "claude-agent-acp", args: samples },
-        },
-      },
-      workspaceDir: state.root,
-    });
-    const prepared = await prepareAcpxCodexAuthConfig({
-      pluginConfig: config,
-      stateDir: state.root,
-      resolveInstalledCodexAcpBinPath: async () => script,
-      resolveInstalledClaudeAcpBinPath: async () => script,
-    });
-    expect(prepared.agents.codex).toEqual([
+    const prepared = await prepareWrappers(
+      state.root,
+      agentConfig(state.root, {
+        codex: { command: "codex-acp", args: samples },
+        claude: { command: "claude-agent-acp", args: samples },
+      }),
+    );
+    const wrapper = (agent: string) => [
       process.execPath,
-      path.join(state.root, "acpx", "codex-acp-wrapper.mjs"),
+      path.join(state.root, "acpx", `${agent}-acp-wrapper.mjs`),
       ...samples,
-    ]);
-    expect(prepared.agents.claude).toEqual([
-      process.execPath,
-      path.join(state.root, "acpx", "claude-agent-acp-wrapper.mjs"),
-      ...samples,
-    ]);
+    ];
+    expect(prepared.agents.codex).toEqual(wrapper("codex"));
+    expect(prepared.agents.claude).toEqual(wrapper("claude-agent"));
   });
 });
 

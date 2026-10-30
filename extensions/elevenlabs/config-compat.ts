@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { ensureRecord } from "openclaw/plugin-sdk/collection-input-runtime";
 import { mergeMissing } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { asNullableRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -17,16 +18,6 @@ const LEGACY_TALK_FIELD_KEYS = [
 type JsonRecord = Record<string, unknown>;
 
 export const ELEVENLABS_TALK_PROVIDER_ID = "elevenlabs";
-
-function ensureRecord(root: JsonRecord, key: string): JsonRecord {
-  const existing = asNullableRecord(root[key]);
-  if (existing) {
-    return existing;
-  }
-  const next: JsonRecord = {};
-  root[key] = next;
-  return next;
-}
 
 function isBlockedObjectKey(key: string): boolean {
   return key === "__proto__" || key === "prototype" || key === "constructor";
@@ -86,8 +77,7 @@ export function migrateElevenLabsLegacyTalkConfig<T>(raw: T): { config: T; chang
   const nextRoot = structuredClone(raw) as JsonRecord;
   const nextTalk = ensureRecord(nextRoot, "talk");
   const providers = ensureRecord(nextTalk, "providers");
-  const existingProvider = asNullableRecord(providers[providerId]) ?? {};
-  const migratedProvider = structuredClone(existingProvider);
+  const migratedProvider = asNullableRecord(providers[providerId]) ?? {};
   const legacyFields: JsonRecord = {};
   const movedKeys: string[] = [];
 
@@ -102,8 +92,6 @@ export function migrateElevenLabsLegacyTalkConfig<T>(raw: T): { config: T; chang
 
   mergeMissing(migratedProvider, legacyFields);
   providers[providerId] = migratedProvider;
-  nextTalk.providers = providers;
-  nextRoot.talk = nextTalk;
 
   return {
     config: nextRoot as T,
@@ -117,9 +105,6 @@ function readApiKeyFromProfile(): string | null {
   const home = os.homedir();
   for (const candidate of PROFILE_CANDIDATES) {
     const fullPath = path.join(home, candidate);
-    if (!fs.existsSync(fullPath)) {
-      continue;
-    }
     try {
       const text = fs.readFileSync(fullPath, "utf-8");
       const match = text.match(

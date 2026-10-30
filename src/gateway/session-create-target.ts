@@ -2,10 +2,10 @@ import { isDeepStrictEqual } from "node:util";
 import type { Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
-import { isEmbeddedAgentRunActive } from "../agents/embedded-agent-runner/runs.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import {
   readSessionEntriesFromStoreInWorker,
   withSessionEntriesFromStoresInWorker,
@@ -14,10 +14,11 @@ import { sessionEntryCommitGuardOptions } from "../config/sessions/session-sourc
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import {
-  beginSessionWorkAdmission,
-  isSessionWorkAdmissionActive,
-} from "../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  isSessionControllerWorkActive,
+} from "../sessions/session-controller.lifecycle.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import { buildDashboardSessionKey, resolveSessionCreateTargetKey } from "./session-create-key.js";
 import type {
   CreatedGatewaySession,
   CreateGatewaySessionParams,
@@ -29,7 +30,7 @@ import { invalidSessionRequest, unavailableSessionRequest } from "./session-requ
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+import { loadIncognitoGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 
 /** Select and retain the agent's admission through creation, finalization, and rollback. */
@@ -38,6 +39,7 @@ export async function withSessionCreateAdmission(
   create: (
     params: CreateGatewaySessionParams,
     agentId: string,
+    generatedKey?: string,
   ) => Promise<CreateGatewaySessionResult>,
 ): Promise<CreateGatewaySessionResult> {
   const selectedAgent = resolveSessionCreateAgentId(params.cfg, {
@@ -53,7 +55,7 @@ export async function withSessionCreateAdmission(
     interrupted.signal.throwIfAborted();
     params.commitGuard?.();
   };
-  const admission = await beginSessionWorkAdmission({
+  const admission = await beginSessionEffect({
     agentId: selectedAgent.agentId,
     scope: `agent:${selectedAgent.agentId}`,
     identities: [params.key ?? selectedAgent.agentId],
@@ -62,11 +64,63 @@ export async function withSessionCreateAdmission(
   });
   try {
     return await admission.run(() =>
-      create({ ...params, commitGuard: assertCurrent }, selectedAgent.agentId),
+      createAdmittedGatewaySession(
+        { ...params, commitGuard: assertCurrent },
+        selectedAgent.agentId,
+        create,
+      ),
     );
   } finally {
     admission.release();
   }
+}
+
+async function createAdmittedGatewaySession(
+  params: CreateGatewaySessionParams,
+  agentId: string,
+  create: (
+    params: CreateGatewaySessionParams,
+    agentId: string,
+    generatedKey?: string,
+  ) => Promise<CreateGatewaySessionResult>,
+): Promise<CreateGatewaySessionResult> {
+  const incognito = params.incognito === true || isIncognitoSessionKey(params.parentSessionKey);
+  const generatedKey =
+    !params.key?.trim() && incognito
+      ? buildDashboardSessionKey(agentId, { incognito: true })
+      : undefined;
+  const sessionKey =
+    generatedKey ??
+    resolveSessionCreateTargetKey({
+      cfg: params.cfg,
+      agentId,
+      requestedKey: normalizeOptionalString(params.key),
+    });
+  const assertCurrent = () => params.commitGuard?.();
+  const created = await withSessionActorStorage(
+    { sessionKey, agentId },
+    {
+      create: true,
+      lifetime: { assertCurrent, assertReadable: assertCurrent },
+      authority: { assertCurrent, authorize() {} },
+    },
+    async (memory) => {
+      try {
+        return await create(params, agentId, generatedKey);
+      } finally {
+        const captured = captureSessionActorStorageOwner({ sessionActor: memory });
+        // Failed creation may outlive its caller's authority; only empty state is discarded.
+        const entry = captured?.owner?.readSession(memory.actor.target.sessionKey, {
+          assertCurrent() {},
+          authorize() {},
+        })?.entry;
+        if (!entry) {
+          captured?.owner?.closeSession(memory.actor.target.sessionKey);
+        }
+      }
+    },
+  );
+  return created ?? create(params, agentId, generatedKey);
 }
 
 export async function validateSessionCreateIncognitoTarget(
@@ -89,15 +143,21 @@ export async function validateSessionCreateIncognitoTarget(
       return invalidSessionRequest("incognito sessions are web-only");
     }
     const durableStorePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-    const durable = await readSessionEntriesFromStoreInWorker({
-      agentId,
-      storePath: durableStorePath,
-      sessionKeys: [explicitTargetKey],
-      projection: "list",
-    });
+    // A legacy durable collision contains user data and must still block creation.
+    const durableEntry = await withSessionEntriesFromStoresInWorker(
+      [
+        {
+          agentId,
+          storePath: durableStorePath,
+          sessionKeys: [explicitTargetKey],
+          projection: "list",
+        },
+      ],
+      ([read]) => read!.result.entries[0]?.entry,
+    );
     commitGuard?.();
     if (
-      durable.entries.length > 0 ||
+      durableEntry ||
       (
         await loadGatewaySessionEntryReadOnlyInWorker({
           cfg: params.cfg,
@@ -174,10 +234,7 @@ export async function readSessionCreateTarget(
             `Session ${target.canonicalKey} changed before workspace preparation; retry.`,
           );
         }
-        if (
-          isSessionWorkAdmissionActive(target.storePath, lifecycleIdentities) ||
-          isEmbeddedAgentRunActive(currentTargetEntry.sessionId)
-        ) {
+        if (isSessionControllerWorkActive(target.storePath, lifecycleIdentities, target.agentId)) {
           return unavailableSessionRequest(
             `Session ${target.canonicalKey} is still active; retry workspace preparation after its work finishes.`,
           );
@@ -199,45 +256,25 @@ export async function readSessionCreateTarget(
     return { ok: true, value: currentTargetEntry };
   };
   assertCurrent();
-  const memory = getSessionActorStorageBinding({
-    agentId: target.agentId,
-    sessionKey: target.canonicalKey,
-    storePath: target.storePath,
-  });
-  if (memory) {
-    return validate(
-      memory.actor.storage!.readCurrent(
-        { type: "session.entry.read", input: {} },
-        memory.authority,
-      ),
-    );
-  }
-  // Process-held incognito stores retain their native owner until its complete cutover.
   if (isIncognitoSessionKey(target.canonicalKey)) {
     return validate(
-      loadGatewaySessionEntryReadOnly(target.canonicalKey, { agentId: target.agentId }).entry,
+      loadIncognitoGatewaySessionEntryReadOnly(
+        target.canonicalKey,
+        { agentId: target.agentId },
+        params.cfg,
+      ).entry,
     );
   }
-  const result = await withSessionEntriesFromStoresInWorker(
-    [
-      {
-        agentId: target.agentId,
-        storePath: target.storePath,
-        sessionKeys: target.storeKeys,
-        projection: "exact",
-      },
-    ],
-    ([read]) => {
-      read!.assertCurrent();
-      const store = Object.fromEntries(
-        read!.result.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-      );
-      return validate(findCanonicalStoreMatch(store, target.storeKeys)?.entry);
-    },
-    { ordered: true },
+  const read = await readSessionEntriesFromStoreInWorker({
+    agentId: target.agentId,
+    storePath: target.storePath,
+    sessionKeys: target.storeKeys,
+    projection: "exact",
+  });
+  const store = Object.fromEntries(
+    read.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
-  assertCurrent();
-  return result;
+  return validate(findCanonicalStoreMatch(store, target.storeKeys)?.entry);
 }
 
 export async function finalizeSessionCreateTarget(

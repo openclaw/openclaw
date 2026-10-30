@@ -7,17 +7,6 @@ import { observedRunInputSendId } from "./stream-causal-boundary.ts";
 import type { AgentEventPayload, ToolStreamHost } from "./tool-stream-contract.ts";
 import { acceptsToolStreamSession } from "./tool-stream-status.ts";
 
-function normalizePreambleProgressText(value: unknown): string {
-  if (typeof value !== "string") {
-    return "";
-  }
-  const stripped = stripInlineDirectiveTagsForDelivery(value)
-    .text.replace(/^(?:[ \t]*\r?\n)+/u, "")
-    .trimEnd();
-  const normalized = stripped.replace(/^[\s*_`~]+|[\s*_`~]+$/gu, "").trim();
-  return /^NO_REPLY$/iu.test(normalized) ? "" : stripped;
-}
-
 export function handlePreambleProgress(
   host: ToolStreamHost,
   payload: AgentEventPayload,
@@ -31,7 +20,13 @@ export function handlePreambleProgress(
     return false;
   }
   const reportedItemId = normalizeOptionalString(data.itemId) ?? normalizeOptionalString(data.id);
-  const text = normalizePreambleProgressText(data.progressText);
+  const progressText = data.progressText;
+  const text =
+    typeof progressText === "string"
+      ? stripInlineDirectiveTagsForDelivery(progressText)
+          .text.replace(/^(?:[ \t]*\r?\n)+/u, "")
+          .trimEnd()
+      : "";
   if (!text && !reportedItemId) {
     return false;
   }

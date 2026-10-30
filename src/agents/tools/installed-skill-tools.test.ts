@@ -1,10 +1,6 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
-import { readLocalFileSafely } from "../../infra/fs-safe.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { withTempDir } from "../../test-utils/temp-dir.js";
 import {
   finalizeAgentToolAvailability,
   markAgentToolExecutionUnavailable,
@@ -12,157 +8,126 @@ import {
 import type { InstalledSkill } from "../installed-skill-catalog.js";
 import { createInstalledSkillTools } from "./installed-skill-tools.js";
 
+const guideMetadata = {
+  name: "guide",
+  description: "Operations",
+  location: "/skills/guide/SKILL.md",
+};
+
 function skill(overrides: Partial<InstalledSkill> = {}): InstalledSkill {
-  return {
-    name: "guide",
-    description: "Operations",
-    location: "/skills/guide/SKILL.md",
-    source: { filePath: "/skills/guide/SKILL.md" },
-    ...overrides,
-  };
+  return { ...guideMetadata, source: { filePath: guideMetadata.location }, ...overrides };
 }
 
-function admittedTools(skills: InstalledSkill[]) {
+function skillTools(skills: InstalledSkill[]) {
   const tools = createInstalledSkillTools(skills);
   finalizeAgentToolAvailability(tools);
-  return { search: expectDefined(tools[0], "search"), read: expectDefined(tools[1], "read") };
+  const search = expectDefined(tools[0], "search");
+  const read = expectDefined(tools[1], "read");
+  return {
+    tools,
+    search,
+    read,
+    find: (id: string, query = "canary", signal?: AbortSignal) =>
+      search.execute(id, { query }, signal),
+    load: (id: string, name = "guide") => read.execute(id, { name }),
+  };
 }
-
 it("requires the effective native read tool for body I/O and cached body matches", async () => {
-  await withTempDir("installed-skill-authority-", async (dir) => {
-    const filePath = path.join(dir, "SKILL.md");
-    await writeFile(filePath, "Private canary deployment instructions");
-    let reads = 0;
-    const tools = createInstalledSkillTools([
-      skill({
-        location: filePath,
-        source: { filePath },
-        readSearchContent: async (maxBytes) => {
-          reads += 1;
-          return (await readLocalFileSafely({ filePath, maxBytes })).buffer.toString("utf8");
-        },
-      }),
-    ]);
-    const search = expectDefined(tools[0], "search");
-    const read = expectDefined(tools[1], "read");
-    finalizeAgentToolAvailability([search]);
-    expect((await search.execute("denied", { query: "canary" })).details).toMatchObject({
-      skills: [],
-      coverage: { bodyIndexed: 0, metadataOnly: 1 },
-    });
-    expect((await search.execute("metadata", { query: "operations" })).details).toMatchObject({
-      skills: [{ name: "guide" }],
-    });
-    expect(reads).toBe(0);
-    finalizeAgentToolAvailability(tools);
-    expect((await search.execute("allowed", { query: "canary" })).details).toMatchObject({
-      skills: [{ name: "guide" }],
-    });
-    expect(reads).toBe(1);
-    finalizeAgentToolAvailability(tools, { toolExecutionAllow: ["skills_search"] });
-    expect((await search.execute("revoked", { query: "canary" })).details).toMatchObject({
-      skills: [],
-    });
-    finalizeAgentToolAvailability([search, { ...read }]);
-    expect((await search.execute("shadowed", { query: "canary" })).details).toMatchObject({
-      skills: [],
-    });
-    markAgentToolExecutionUnavailable(read);
-    finalizeAgentToolAvailability(tools);
-    expect((await search.execute("execution-denied", { query: "canary" })).details).toMatchObject({
-      skills: [],
-    });
-    expect(reads).toBe(1);
+  const reader = vi.fn(async () => "Private canary deployment instructions");
+  const { tools, search, read, find } = skillTools([skill({ readSearchContent: reader })]);
+  const check = async (id: string, names: string[], reads: number, query = "canary") => {
+    const skills = names.map((name) => ({ name }));
+    expect((await find(id, query)).details).toMatchObject({ skills });
+    expect(reader).toHaveBeenCalledTimes(reads);
+  };
+  finalizeAgentToolAvailability([search]);
+  expect((await find("denied")).details).toMatchObject({
+    skills: [],
+    coverage: { bodyIndexed: 0, metadataOnly: 1 },
   });
+  await check("metadata", ["guide"], 0, "operations");
+  finalizeAgentToolAvailability(tools);
+  await check("allowed", ["guide"], 1);
+  finalizeAgentToolAvailability(tools, { toolExecutionAllow: ["skills_search"] });
+  await check("revoked", [], 1);
+  finalizeAgentToolAvailability([search, { ...read }]);
+  await check("shadowed", [], 1);
+  markAgentToolExecutionUnavailable(read);
+  finalizeAgentToolAvailability(tools);
+  await check("execution-denied", [], 1);
 });
-
 it("does not publish an in-flight body index across read revocation and regrant", async () => {
   const body = createDeferredCore<string>();
   const reader = vi.fn(() => body.promise);
-  const tools = createInstalledSkillTools([skill({ readSearchContent: reader })]);
-  const search = expectDefined(tools[0], "search");
-  finalizeAgentToolAvailability(tools);
-  const pending = search.execute("in-flight", { query: "canary" });
+  const { tools, search, find } = skillTools([skill({ readSearchContent: reader })]);
+  const pending = find("in-flight");
   const rejected = expect(pending).rejects.toThrow("permission changed");
   finalizeAgentToolAvailability([search]);
   finalizeAgentToolAvailability(tools);
   body.resolve("Canary deployment");
   await rejected;
-  expect((await search.execute("regranted", { query: "canary" })).details).toMatchObject({
+  expect((await find("regranted")).details).toMatchObject({
     skills: [{ name: "guide" }],
   });
   expect(reader).toHaveBeenCalledTimes(2);
 });
 
-it.each(["inline", "reader", "partial"] as const)(
-  "searches metadata and reads whole instructions from %s content",
-  async (mode) => {
-    const content =
-      mode === "partial"
-        ? `${"x".repeat(16 * 1024)}\nUnabridged ending`
-        : mode === "reader"
-          ? "# Release\n\nUse a canary deployment.\nPreserve the complete rollback procedure."
-          : "# Release\n\nCheck everything.\n";
-    const reader = vi.fn(async () => content);
-    const entry = skill({
-      name: mode === "partial" ? "large" : "release-guide",
-      description: mode === "partial" ? "Deployment guide" : "Publish a software release",
-      location: mode === "partial" ? "/skills/large/SKILL.md" : "/skills/release/SKILL.md",
-      source: {
-        filePath: mode === "partial" ? "/skills/large/SKILL.md" : "/skills/release/SKILL.md",
-        ...(mode === "reader" ? {} : { readContent: content }),
-      },
-      ...(mode === "reader" ? { reader, readSearchContent: reader } : {}),
-    });
-    const unavailable = skill({
-      name: "unavailable",
-      description: "Deployment guide",
-      location: "/skills/unavailable/SKILL.md",
-      source: { filePath: "/skills/unavailable/SKILL.md" },
-      reader: async () => {
-        throw new Error("Unavailable");
-      },
-    });
-    const { search, read } = admittedTools(mode === "partial" ? [entry, unavailable] : [entry]);
-    const result = await search.execute("find", {
-      query: mode === "partial" ? "deployment" : mode === "reader" ? "canary" : "publish release",
-    });
-    if (mode === "partial") {
-      expect(result.details).toMatchObject({
-        skills: [{ name: "large" }, { name: "unavailable" }],
-        coverage: { bodyIndexed: 1, metadataOnly: 1, truncatedBodies: 1 },
-      });
-    } else {
-      expect(result.details).toEqual({
-        skills: [
-          {
-            name: "release-guide",
-            description: "Publish a software release",
-            location: "/skills/release/SKILL.md",
-          },
-        ],
-        hasMore: false,
-      });
-      if (mode === "reader") {
-        expect(JSON.stringify(result)).not.toContain("rollback");
-        await search.execute("cached-search", { query: "rollback" });
-        expect(reader).toHaveBeenCalledTimes(1);
-      } else {
-        await expect(read.execute("invalid", { name: "/etc/passwd" })).rejects.toThrow(
-          "is not available to this agent",
-        );
-        expect(createInstalledSkillTools([])).toEqual([]);
-      }
-    }
-    expect((await read.execute("load", { name: entry.name })).content).toEqual([
-      { type: "text", text: content },
-    ]);
-  },
-);
-
+it.each([
+  ["inline", "/skills/guide/SKILL.md"],
+  ["reader", "/skills/guide/SKILL.md"],
+  ["partial", "/skills/guide/SKILL.md"],
+] as const)("searches and reads whole %s instructions at %s", async (mode, location) => {
+  const name = mode === "reader" ? "release-guide" : "guide";
+  const content =
+    mode === "partial"
+      ? "x".repeat(16 * 1024) + "\nUnabridged ending"
+      : "# Guide\n\nUse a canary deployment.\nPreserve the complete rollback procedure.";
+  const reader = vi.fn(async () => content);
+  const source = { filePath: "/private/gateway/guide/SKILL.md" };
+  const entry = skill({
+    name,
+    location,
+    source: mode === "reader" ? source : { ...source, readContent: content },
+    ...(mode === "reader" ? { reader, readSearchContent: reader } : {}),
+  });
+  const unreadable = skill({
+    name: "unavailable",
+    async reader() {
+      throw new Error("Unavailable");
+    },
+  });
+  const { find, load } = skillTools(mode === "partial" ? [entry, unreadable] : [entry]);
+  const result = await find("find", mode === "reader" ? "canary" : "operations");
+  expect(result.details).toEqual({
+    skills: [
+      { ...guideMetadata, name, location },
+      ...(mode === "partial" ? [{ ...guideMetadata, name: "unavailable" }] : []),
+    ],
+    hasMore: false,
+    ...(mode === "partial"
+      ? { coverage: { bodyIndexed: 1, metadataOnly: 1, truncatedBodies: 1 } }
+      : {}),
+  });
+  if (mode === "reader") {
+    expect(JSON.stringify(result)).not.toContain("rollback");
+    await find("cached-search", "rollback");
+    expect(reader).toHaveBeenCalledTimes(1);
+  } else if (mode === "inline") {
+    await expect(load("invalid", "/etc/passwd")).rejects.toThrow("is not available to this agent");
+    expect(createInstalledSkillTools([])).toEqual([]);
+  }
+  const loaded = await load("load", name);
+  const text = `Skill location: ${location}\nResolve relative resource paths from the directory containing this SKILL.md.\n\n${content}`;
+  expect(loaded.content).toEqual([{ type: "text", text }]);
+  expect(loaded.details).toMatchObject({ name, location, content });
+  expect(JSON.stringify(loaded)).not.toContain("/private/gateway");
+  if (mode === "reader") {
+    expect(reader).toHaveBeenCalledTimes(2);
+  }
+});
 it("does not serve a cached body index after its owner loses authority", async () => {
   let current = true;
-  const { search } = admittedTools([
+  const { find } = skillTools([
     skill({
       source: { filePath: "/skills/guide/SKILL.md", readContent: "Canary deployment" },
       assertCurrent: () => {
@@ -172,45 +137,30 @@ it("does not serve a cached body index after its owner loses authority", async (
       },
     }),
   ]);
-  await search.execute("first", { query: "canary" });
+  await find("first");
   current = false;
-  await expect(search.execute("retained", { query: "canary" })).rejects.toThrow(
-    "no longer current",
-  );
+  await expect(find("retained")).rejects.toThrow("no longer current");
 });
 
 it.each(["owner", "waiter"] as const)(
   "cancels the index %s without poisoning the other caller",
-  async (cancelledCaller) => {
+  async (cancelled) => {
     const body = createDeferredCore<string>();
     const controller = new AbortController();
-    const reader = vi.fn(async ({ signal }: { signal?: AbortSignal }) => {
-      if (cancelledCaller === "owner" && signal === controller.signal) {
+    const reader = vi.fn(async (_maxBytes: number, signal?: AbortSignal) => {
+      if (cancelled === "owner" && signal === controller.signal) {
         controller.abort();
       }
       return body.promise;
     });
-    const { search } = admittedTools([
-      skill({
-        reader,
-        readSearchContent: (_maxBytes, signal) => reader({ signal }),
-      }),
-    ]);
-    const owner = search.execute(
-      "owner",
-      { query: "canary" },
-      cancelledCaller === "owner" ? controller.signal : undefined,
-    );
-    const waiter = search.execute(
-      "waiter",
-      { query: "canary" },
-      cancelledCaller === "waiter" ? controller.signal : undefined,
-    );
-    const cancelled = expect(cancelledCaller === "owner" ? owner : waiter).rejects.toThrow();
-    if (cancelledCaller === "waiter") {
+    const { find } = skillTools([skill({ readSearchContent: reader })]);
+    const owner = find("owner", "canary", cancelled === "owner" ? controller.signal : undefined);
+    const waiter = find("waiter", "canary", cancelled === "waiter" ? controller.signal : undefined);
+    const rejected = expect(cancelled === "owner" ? owner : waiter).rejects.toThrow();
+    if (cancelled === "waiter") {
       controller.abort();
       try {
-        await cancelled;
+        await rejected;
       } finally {
         body.resolve("Canary deployment");
         await owner;
@@ -218,9 +168,9 @@ it.each(["owner", "waiter"] as const)(
       expect(reader).toHaveBeenCalledOnce();
     } else {
       body.resolve("Canary deployment");
-      await cancelled;
+      await rejected;
     }
-    expect((await (cancelledCaller === "owner" ? waiter : owner)).details).toMatchObject({
+    expect((await (cancelled === "owner" ? waiter : owner)).details).toMatchObject({
       skills: [{ name: "guide" }],
     });
   },
@@ -236,18 +186,15 @@ it("bounds concurrent cold searches and retains metadata outside the body budget
     active -= 1;
     return "Canary";
   });
-  const tools = createInstalledSkillTools(
-    Array.from({ length: 1_025 }, (_, index) => ({
-      name: `guide-${String(index).padStart(4, "0")}`,
-      description: "Deployment",
-      location: `/skills/guide-${index}/SKILL.md`,
-      source: { filePath: `/skills/guide-${index}/SKILL.md` },
-      reader,
-      readSearchContent: reader,
-    })).toReversed(),
+  const { search } = skillTools(
+    Array.from({ length: 1_025 }, (_, index) =>
+      skill({
+        name: `guide-${String(index).padStart(4, "0")}`,
+        location: `/skills/guide-${index}/SKILL.md`,
+        readSearchContent: reader,
+      }),
+    ).toReversed(),
   );
-  finalizeAgentToolAvailability(tools);
-  const search = expectDefined(tools[0], "search tool");
   const [result] = await Promise.all([
     search.execute("budget", { query: "guide-1024", limit: 1 }),
     search.execute("concurrent", { query: "canary" }),

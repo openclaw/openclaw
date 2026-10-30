@@ -1,16 +1,28 @@
 import { isProxy } from "node:util/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { copyPreparedModelVisibleToolText } from "../../logging/redact-internal.js";
 
 // Keep only immutable payload roots across appends, not every retained descendant.
 const ownedTranscriptRoots = new WeakSet<object>();
 
+/** Normalization seals these payload roots before they can be shared across views. */
+export function isOwnedTranscriptPayload(value: object): boolean {
+  return ownedTranscriptRoots.has(value);
+}
+
+/** Keep admitted children shared when replacing an immutable payload's envelope. */
+export function cloneTranscriptEnvelope<T extends object>(value: T): T {
+  if (ownedTranscriptRoots.has(value)) {
+    for (const child of Object.values(value)) {
+      if (child && typeof child === "object") {
+        ownedTranscriptRoots.add(child);
+      }
+    }
+  }
+  return { ...value };
+}
+
 /** Preserve ordinary transcript objects while admitting their JSON storage shape. */
-export function normalizeTranscriptJsonValue(
-  value: unknown,
-  key: string,
-  preserveSource = false,
-): unknown {
+export function normalizeTranscriptJsonValue(value: unknown, key: string): unknown {
   const visited = new Set<object>();
   if (requiresNativeJson(value, visited)) {
     // SDK v2026.9.8 accepts arbitrary custom data. Finish its observable serialization
@@ -19,17 +31,18 @@ export function normalizeTranscriptJsonValue(
     const projected: unknown = JSON.parse(JSON.stringify({ __proto__: null, [key]: value }));
     const normalized =
       isRecord(projected) && Object.hasOwn(projected, key) ? projected[key] : undefined;
-    if (isRecord(value) && isRecord(normalized)) {
-      copyPreparedModelVisibleToolText(value, normalized);
-    }
-    return normalizePlainJson(normalized, false, visited, false);
+    return normalizePlainJson(normalized, visited, false);
   }
-  return normalizePlainJson(value, preserveSource, visited);
+  return normalizePlainJson(value, visited);
 }
 
 function requiresNativeJson(value: unknown, ancestors: Set<object>): boolean {
   if (value === null || typeof value !== "object") {
     return typeof value === "bigint" || typeof value === "function";
+  }
+  // Admission already checked and sealed the entire payload, including its descendants.
+  if (ownedTranscriptRoots.has(value)) {
+    return false;
   }
   if (isProxy(value)) {
     return true;
@@ -75,7 +88,6 @@ function requiresNativeJson(value: unknown, ancestors: Set<object>): boolean {
 
 function normalizePlainJson(
   value: unknown,
-  preserveSource: boolean,
   admitted: Set<object>,
   copyStrings = true,
   retainRoots = true,
@@ -97,15 +109,15 @@ function normalizePlainJson(
     return value;
   }
   const array = Array.isArray(value);
-  const keys = Object.keys(value);
-  const mutable = !preserveSource && Object.isExtensible(value);
+  const keys = array ? undefined : Object.keys(value);
+  const mutable = Object.isExtensible(value);
   let normalized = value;
-  const length = array ? value.length : keys.length;
+  const length = array ? value.length : keys!.length;
   for (let index = 0; index < length; index++) {
-    const member = array ? String(index) : keys[index]!;
+    const member = array ? String(index) : keys![index]!;
     const descriptor = Object.getOwnPropertyDescriptor(value, member);
     const current: unknown = descriptor?.value;
-    const next = normalizePlainJson(current, preserveSource, admitted, copyStrings, false);
+    const next = normalizePlainJson(current, admitted, copyStrings, false);
     const retained = array && next === undefined ? null : next;
     if (retained && typeof retained === "object") {
       Object.freeze(retained);
@@ -138,9 +150,6 @@ function normalizePlainJson(
         writable: true,
       });
     }
-  }
-  if (isRecord(value) && isRecord(normalized)) {
-    copyPreparedModelVisibleToolText(value, normalized);
   }
   return normalized;
 }

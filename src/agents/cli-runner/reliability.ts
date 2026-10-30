@@ -28,7 +28,7 @@ export function resolveCliNoOutputTimeoutMs(params: {
     return params.timeoutMs;
   }
   const hasExplicitRunTimeout =
-    typeof params.runTimeoutOverrideMs === "number" &&
+    params.runTimeoutOverrideMs !== undefined &&
     Number.isFinite(params.runTimeoutOverrideMs) &&
     params.runTimeoutOverrideMs > 0;
   const configured = params.useResume
@@ -68,8 +68,7 @@ export function resolveCliRunTimeoutOverrideMs(params: {
   const configuredTimeoutSeconds = params.config?.agents?.defaults?.timeoutSeconds;
   const hasConfiguredTimeout =
     params.lane !== AGENT_LANE_SUBAGENT &&
-    typeof configuredTimeoutSeconds === "number" &&
-    Number.isFinite(configuredTimeoutSeconds) &&
+    configuredTimeoutSeconds !== undefined &&
     configuredTimeoutSeconds > 0;
   return hasConfiguredTimeout ? params.timeoutMs : undefined;
 }

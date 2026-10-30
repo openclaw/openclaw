@@ -5,7 +5,6 @@ import os from "node:os";
 import { performance } from "node:perf_hooks";
 import { AWS_SECRET_ACCESS_KEY_MATCHER } from "../src/logging/redact-patterns.js";
 import {
-  redactModelVisibleToolPayloadTextWithConfig,
   redactSensitiveFieldValue,
   redactSensitiveText,
   redactToolPayloadTextWithConfig,
@@ -66,7 +65,6 @@ const operations: Record<string, (text: string) => unknown> = large
   : {
       candidate: (text: string) => AWS_SECRET_ACCESS_KEY_MATCHER.couldMatch(text),
       matcher: (text: string) => [...AWS_SECRET_ACCESS_KEY_MATCHER.exec(text)].length,
-      tool: (text: string) => redactModelVisibleToolPayloadTextWithConfig(text, {}),
       diagnostic: (text: string) => redactToolPayloadTextWithConfig(text, {}),
     };
 let checksum = 0;

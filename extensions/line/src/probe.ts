@@ -9,7 +9,7 @@ import {
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asSafeIntegerInRange, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveLineAccount } from "./accounts.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
@@ -57,20 +57,15 @@ async function readLineMessageQuota(
     if (quota.type === "none") {
       return { kind: "unlimited" };
     }
-    if (
-      quota.type !== "limited" ||
-      typeof quota.value !== "number" ||
-      !Number.isSafeInteger(quota.value) ||
-      quota.value < 0
-    ) {
+    const limit = asSafeIntegerInRange(quota.value, { min: 0 });
+    if (quota.type !== "limited" || limit === undefined) {
       return undefined;
     }
     const { totalUsage } = await read<messagingApi.QuotaConsumptionResponse>(
       "message/quota/consumption",
     );
-    return typeof totalUsage === "number" && Number.isSafeInteger(totalUsage) && totalUsage >= 0
-      ? { kind: "limited", limit: quota.value, used: totalUsage }
-      : undefined;
+    const used = asSafeIntegerInRange(totalUsage, { min: 0 });
+    return used === undefined ? undefined : { kind: "limited", limit, used };
   } catch {
     return undefined;
   }

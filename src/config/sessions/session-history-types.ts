@@ -1,8 +1,8 @@
-import type { TranscriptRedactionSnapshot } from "../../agents/transcript-redact-text.js";
 import type {
   SessionArtifactReadQuery,
   SessionArtifactReadResult,
 } from "../../gateway/session-artifact-read.js";
+import type { SessionTranscriptUsageSnapshot } from "../../gateway/session-transcript-derived-readers.js";
 import type {
   ReadRecentSessionMessagesResult,
   ReadSessionMessageByIdResult,
@@ -10,6 +10,7 @@ import type {
   ReadSessionMessagesResult,
   SessionTranscriptDisplayDeltaResult,
   SessionTranscriptMessageByIdOptions,
+  SessionTranscriptPageOptions,
   SessionTranscriptReader,
 } from "../../gateway/session-transcript-read.types.js";
 import type {
@@ -22,6 +23,7 @@ import type { LegacyCompactionMetrics } from "./legacy-compaction-history.js";
 import type {
   SessionTranscriptBoundedMessageTailOptions,
   SessionTranscriptBoundedMessageTailPage,
+  SessionTranscriptMessageEventPage,
 } from "./session-accessor.sqlite-projection-read.js";
 import type {
   SessionTranscriptRawDeltaLimits,
@@ -33,10 +35,14 @@ import type {
   SessionTranscriptAccountingSnapshot,
 } from "./session-transcript-accounting.types.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
+import type {
+  ReadRecentSessionConversationTurnOptions,
+  SessionRecentConversationTurn,
+} from "./transcript-recent-text.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
-export type ChatHistoryResponsePage<Messages extends unknown[] | Uint8Array = unknown[]> = {
-  messages: Messages;
+export type ChatHistoryResponsePage = {
+  messages: unknown[];
   activity?: AgentHistoryActivity[];
   messagesBytes: number;
   responseHistoryBytes: number;
@@ -65,7 +71,11 @@ export type ChatHistoryPageAnchor = Pick<ChatHistoryPageCursor, "sessionId" | "s
 };
 
 export type ChatHistoryPage = {
-  encodedResponse?: ChatHistoryResponsePage<Uint8Array<ArrayBuffer>>;
+  encodedResponse?: Omit<ChatHistoryResponsePage, "messages" | "activity"> & {
+    messages: Uint8Array<ArrayBuffer>;
+    activity?: Uint8Array<ArrayBuffer>;
+  };
+  encodedMessagesDeflate?: Uint8Array<ArrayBuffer>;
   windowReset?: boolean;
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
@@ -85,6 +95,8 @@ export type ChatHistoryPage = {
 
 export type ChatHistoryPageParams = {
   encodeResponse?: boolean;
+  deflateResponse?: boolean;
+  includePluginSteering?: boolean;
   compactionMetrics?: LegacyCompactionMetrics;
   entry: InternalSessionEntry | undefined;
   provider: string | undefined;
@@ -102,13 +114,13 @@ export type ChatHistoryPageParams = {
   pageCursor?: ChatHistoryPageCursor;
   ignoreCliSessionImports?: boolean;
   cliHistoryHomeDir?: string;
-  cliHistoryRedaction?: TranscriptRedactionSnapshot;
 };
 
 type SessionHistoryTranscriptMeta = {
   idempotencyKey?: string;
   seq?: number;
   turnBoundary?: boolean;
+  pluginSteering?: { pluginId: string; pluginName?: string; displayText?: string };
 };
 
 export type SessionHistoryMessage = Record<string, unknown> & {
@@ -180,6 +192,24 @@ export type ChatHistoryDisplayResult =
   | { kind: "rpc-message"; result: ReadSessionMessageByIdResult };
 
 export type SessionHistoryWorkerRequest =
+  | {
+      kind: "recent-usage";
+      params: { target: SessionTranscriptReadScope; maxBytes: number };
+    }
+  | {
+      kind: "history-event-page";
+      params: {
+        target: SessionTranscriptReadScope;
+        options: SessionTranscriptPageOptions;
+      };
+    }
+  | {
+      kind: "recent-text";
+      params: {
+        target: SessionTranscriptReadScope;
+        options: ReadRecentSessionConversationTurnOptions;
+      };
+    }
   | {
       kind: "active-accounting";
       params: { target: SessionTranscriptReadScope; options: SessionTranscriptAccountingOptions };
@@ -271,6 +301,9 @@ export type SessionHistoryWorkerRequest =
   | { kind: "http"; params: SessionHistoryReadParams };
 
 export type SessionHistoryWorkerResult =
+  | { kind: "recent-usage"; result: SessionTranscriptUsageSnapshot | null }
+  | { kind: "history-event-page"; result: SessionTranscriptMessageEventPage }
+  | { kind: "recent-text"; result: SessionRecentConversationTurn[] }
   | { kind: "active-accounting"; result: SessionTranscriptAccountingSnapshot }
   | { kind: "bounded-tail"; result: SessionTranscriptBoundedMessageTailPage }
   | { kind: "inline-visibility"; subagentCoordination: SessionHistorySubagentFacts }

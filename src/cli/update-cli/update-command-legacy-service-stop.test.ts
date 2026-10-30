@@ -1,43 +1,94 @@
-import { expect, it } from "vitest";
-import { needsCandidateManagedServiceStop } from "./update-command-legacy-service-stop.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { adoptCandidateManagedServiceStop } from "../../infra/update-candidate-predecessor-stop.js";
+import * as updateRunReader from "../../infra/update-run-reader.js";
+import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
+import * as serviceMaintenance from "./update-command-service-maintenance.js";
 
 const uninspected: PreManagedServiceStop = {
   stopped: false,
   inspected: false,
   runtimeInspected: false,
   running: false,
-  serviceMutationAllowed: false,
   serviceUpdateVerdict: { kind: "unavailable", message: "inspection unavailable" },
 };
 
-it.each([
-  { name: "restart disabled", shouldRestart: false },
-  { name: "unknown install mode", mode: "unknown" as const },
-  { name: "no transferred state", preManagedServiceStop: undefined },
-  {
-    name: "parent inspected the service",
-    preManagedServiceStop: {
-      ...uninspected,
-      inspected: true,
-      serviceUpdateVerdict: { kind: "unresolved" as const, root: "/r", fingerprint: "f" },
+type AdoptionParams = Parameters<typeof adoptCandidateManagedServiceStop>[0];
+let params: AdoptionParams;
+
+beforeEach(() => {
+  params = {
+    transferred: uninspected,
+    shouldRestart: true,
+    mode: "npm",
+    status: "ok",
+    runId: "synthetic-run",
+    ledger: {},
+    root: "/synthetic",
+    assertCurrent: vi.fn(),
+    onStopped: vi.fn(),
+    onStep: vi.fn(),
+  };
+  mockProcessPlatform("linux");
+  vi.spyOn(updateRunReader, "getUpdateRunAsync").mockResolvedValue(undefined);
+  vi.spyOn(serviceMaintenance, "maybeStopManagedServiceBeforeMutableUpdate").mockResolvedValue(
+    uninspected,
+  );
+});
+
+afterEach(() => vi.restoreAllMocks());
+
+it.each<[string, Partial<AdoptionParams>]>([
+  ["restart disabled", { shouldRestart: false }],
+  ["unknown install mode", { mode: "unknown" }],
+  ["no transferred state", { transferred: undefined }],
+  ["parent inspected the service", { transferred: { ...uninspected, inspected: true } }],
+  [
+    "not an unavailable legacy verdict",
+    {
+      transferred: {
+        ...uninspected,
+        serviceUpdateVerdict: { kind: "unresolved", root: "/r", fingerprint: "f" },
+      },
     },
-  },
-  {
-    name: "parent already stopped the service",
-    preManagedServiceStop: { ...uninspected, stopped: true },
-  },
-  {
-    name: "parent suspended Windows autostart",
-    windowsTaskAutoStartSuspended: true,
-  },
-])("leaves the transferred state alone when $name", ({ name: _name, ...params }) => {
+  ],
+  ["parent already stopped the service", { transferred: { ...uninspected, stopped: true } }],
+  ["parent suspended Windows autostart", { windowsTaskAutoStartSuspended: true }],
+])("leaves the transferred state alone when %s", async (_name, overrides) => {
+  Object.assign(params, overrides);
+  await expect(adoptCandidateManagedServiceStop(params)).resolves.toEqual({
+    stopped: params.transferred,
+    restartRequired: false,
+  });
+  expect(serviceMaintenance.maybeStopManagedServiceBeforeMutableUpdate).not.toHaveBeenCalled();
+  expect(params.onStopped).not.toHaveBeenCalled();
+  expect(params.onStep).not.toHaveBeenCalled();
+});
+
+it("stops a transferred uninspected service when restart is allowed", async () => {
+  const stopped = { ...uninspected, stopped: true, inspected: true };
+  vi.mocked(serviceMaintenance.maybeStopManagedServiceBeforeMutableUpdate).mockImplementation(
+    async (request) => {
+      request.onStopped?.(stopped);
+      return stopped;
+    },
+  );
+  await expect(adoptCandidateManagedServiceStop(params)).resolves.toEqual({
+    stopped,
+    restartRequired: false,
+  });
   expect(
-    needsCandidateManagedServiceStop({
-      preManagedServiceStop: uninspected,
+    serviceMaintenance.maybeStopManagedServiceBeforeMutableUpdate,
+  ).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      root: "/synthetic",
+      phase: "prepare",
       shouldRestart: true,
-      mode: "npm",
-      ...params,
+      assertCurrent: params.assertCurrent,
     }),
-  ).toBe(false);
+  );
+  expect(params.onStopped).toHaveBeenCalledExactlyOnceWith(stopped);
+  expect(params.onStep).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ name: "managed-service", exitCode: 0 }),
+  );
 });

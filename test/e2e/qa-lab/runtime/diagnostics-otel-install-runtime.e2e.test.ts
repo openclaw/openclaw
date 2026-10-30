@@ -301,12 +301,7 @@ async function startInstallGateway(params: {
   });
 }
 
-async function installAndConfigure(params: {
-  gateway: QaGatewayChild;
-  configTraceEndpoint: string;
-  packageVersion: string;
-  sampleRate?: number;
-}) {
+async function installPlugin(params: { gateway: QaGatewayChild; packageVersion: string }) {
   const { gateway } = params;
   const spec = `npm:${PACKAGE_NAME}@${params.packageVersion}`;
   await gateway.runCli(["plugins", "install", spec, "--force", "--accept-capabilities"]);
@@ -327,14 +322,14 @@ async function installAndConfigure(params: {
   });
   expect(records["diagnostics-otel"]?.installPath).toContain("diagnostics-otel");
   expect(records["diagnostics-otel"]?.integrity).toMatch(/^sha512-/u);
+}
 
-  await gateway.runCli(["plugins", "disable", "diagnostics-otel"]);
-  let config = JSON.parse(await readFile(gateway.configPath, "utf8")) as MutableConfig;
-  expect(config.plugins?.entries?.["diagnostics-otel"]?.enabled).toBe(false);
-  await gateway.runCli(["plugins", "enable", "diagnostics-otel"]);
-  config = JSON.parse(await readFile(gateway.configPath, "utf8")) as MutableConfig;
-  expect(config.plugins?.entries?.["diagnostics-otel"]?.enabled).toBe(true);
-
+async function configureInstalledPlugin(params: {
+  gateway: QaGatewayChild;
+  configTraceEndpoint: string;
+  sampleRate?: number;
+}) {
+  const { gateway } = params;
   await restartWithOtelConfig({
     gateway,
     sampleRate: params.sampleRate ?? 1,
@@ -399,10 +394,10 @@ describe("managed diagnostics-otel install runtime", () => {
         registryBaseUrl: registry.baseUrl,
         repoRoot,
       });
-      await installAndConfigure({
+      await installPlugin({ gateway, packageVersion: packed.version });
+      await configureInstalledPlugin({
         gateway,
         configTraceEndpoint: configured.baseUrl,
-        packageVersion: packed.version,
         sampleRate: 0,
       });
       await runTurn(gateway, "OTEL-MANAGED-SAMPLED-OUT");
@@ -474,7 +469,7 @@ describe("managed diagnostics-otel install runtime", () => {
       dependencies?: Record<string, string>;
       devDependencies?: Record<string, string>;
     };
-    expect(rootPackage.devDependencies?.["@opentelemetry/sdk-node"]).toBe("0.222.0");
+    expect(rootPackage.devDependencies?.["@opentelemetry/sdk-node"]).toBe("0.223.0");
     expect(sourcePluginPackage.dependencies?.["@opentelemetry/sdk-node"]).toBeUndefined();
     expect(sourcePluginPackage.devDependencies?.["@opentelemetry/sdk-node"]).toBeUndefined();
     const scratch = await mkdtemp(path.join(tmpdir(), "openclaw-otel-preloaded-"));
@@ -524,10 +519,16 @@ describe("managed diagnostics-otel install runtime", () => {
         registryBaseUrl: registry.baseUrl,
         repoRoot,
       });
-      await installAndConfigure({
+      await installPlugin({ gateway, packageVersion: packed.version });
+      await gateway.runCli(["plugins", "disable", "diagnostics-otel"]);
+      let config = JSON.parse(await readFile(gateway.configPath, "utf8")) as MutableConfig;
+      expect(config.plugins?.entries?.["diagnostics-otel"]?.enabled).toBe(false);
+      await gateway.runCli(["plugins", "enable", "diagnostics-otel"]);
+      config = JSON.parse(await readFile(gateway.configPath, "utf8")) as MutableConfig;
+      expect(config.plugins?.entries?.["diagnostics-otel"]?.enabled).toBe(true);
+      await configureInstalledPlugin({
         gateway,
         configTraceEndpoint: ignoredConfig.baseUrl,
-        packageVersion: packed.version,
       });
       const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
       if (!stateDir) {

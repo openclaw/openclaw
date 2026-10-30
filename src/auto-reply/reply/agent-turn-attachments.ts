@@ -18,10 +18,7 @@ const AGENT_TURN_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 const AGENT_TURN_ATTACHMENT_TIMEOUT_MS = 1_000;
 
 function hasInboundHistoryMedia(ctx: MsgContext): boolean {
-  return (
-    Array.isArray(ctx.InboundHistory) &&
-    ctx.InboundHistory.some((entry) => Array.isArray(entry.media) && entry.media.length > 0)
-  );
+  return ctx.InboundHistory?.some((entry) => (entry.media?.length ?? 0) > 0) ?? false;
 }
 
 /** Current-turn image indexes already represented by media-understanding text. */
@@ -154,10 +151,7 @@ export async function resolveAgentTurnAttachments(params: {
 export function resolveInlineAgentImageAttachments(
   images: Array<{ data: string; mimeType: string }> | undefined,
 ): AgentTurnAttachment[] {
-  if (!Array.isArray(images)) {
-    return [];
-  }
-  return images
+  return (images ?? [])
     .map((image) => ({
       mediaType: image.mimeType,
       data: image.data,

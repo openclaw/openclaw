@@ -5,10 +5,12 @@ use crate::native_browser_platform::NavigationEvent;
 use crate::remote_gateway::{self, RemoteGatewayRequest, SshTunnel};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};
 #[cfg(any(target_os = "windows", test))]
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     time::{Duration, Instant},
 };
 use tauri::ipc::CapabilityBuilder;
@@ -248,6 +250,27 @@ struct Routing {
 }
 
 impl Routing {
+    fn capture_remote_destinations(
+        &mut self,
+        mut current_url: impl FnMut(&str) -> Option<Url>,
+    ) -> Result<(), String> {
+        if self.primary_ownership != Some(GatewayOwnership::Remote) {
+            return Err(STALE.into());
+        }
+        // The ready handshake follows the first committed page. Before then,
+        // keep the requested destination already recorded by navigation.
+        for (label, route) in &mut self.windows {
+            if let Some(document) = route.document.as_mut().filter(|document| {
+                document.phase == NavigationPhase::Active && document.nonce.is_some()
+            }) {
+                if let Some(url) = current_url(label) {
+                    document.navigation_url = url;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn select_primary(
         &mut self,
         url: &Url,
@@ -1046,6 +1069,8 @@ pub(crate) struct DocumentRegistration {
     pub lifetime: String,
     #[cfg(target_os = "windows")]
     browser_data: Option<Arc<TemporaryBrowserData>>,
+    #[cfg(target_os = "linux")]
+    profile_data: Option<PathBuf>,
 }
 
 type DocumentReady = Arc<dyn Fn(&Webview) + Send + Sync>;
@@ -1095,6 +1120,13 @@ impl DocumentRegistration {
         #[cfg(target_os = "windows")]
         if let Some(data) = &self.browser_data {
             return builder.data_directory(data.path.clone());
+        }
+        // A saved Gateway keeps its dashboard storage, and with it the Control
+        // UI's paired device identity, across switches and restarts. Native
+        // macOS keeps one persistent website data store per saved profile.
+        #[cfg(target_os = "linux")]
+        if let Some(path) = &self.profile_data {
+            return builder.incognito(false).data_directory(path.clone());
         }
         builder
     }
@@ -1256,6 +1288,25 @@ impl Drop for TemporaryBrowserData {
     }
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn profile_browser_root(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_local_data_dir()
+        .map(|dir| dir.join("gateway-profiles"))
+        .map_err(|_| "Could not locate saved Gateway browser storage.".to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn private_profile_dir(path: PathBuf) -> Result<PathBuf, String> {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&path)
+        .map_err(|_| "Could not create saved Gateway browser storage.")?;
+    Ok(path)
+}
+
 #[cfg(any(target_os = "windows", test))]
 fn isolated_browser_document(label: &str, target: &str) -> bool {
     label != "main" || target != PRIMARY
@@ -1281,6 +1332,9 @@ fn scoped_script(document: &Document, body: &str) -> String {
 }
 
 impl GatewayWindows {
+    pub(crate) fn has_saved_profiles(&self) -> Result<bool, String> {
+        self.profiles.list().map(|profiles| !profiles.is_empty())
+    }
     pub fn new(profiles: Arc<GatewayProfiles>) -> Self {
         Self {
             profiles,
@@ -1341,20 +1395,14 @@ impl GatewayWindows {
             let mut state = self.routing.lock().map_err(|_| STALE)?;
             // History API transitions do not necessarily trigger a navigation
             // callback. Capture the live destination before fencing replacement.
-            for (label, route) in &mut state.windows {
-                if let (Some(document), Some(url)) = (
-                    route.document.as_mut(),
-                    app.get_webview(label).and_then(|view| view.url().ok()),
-                ) {
-                    document.navigation_url = url;
-                }
-            }
+            state.capture_remote_destinations(|label| {
+                app.get_webview(label).and_then(|view| view.url().ok())
+            })?;
             client.with_native_control_bootstrap(generation, |dashboard, script| {
-                if state.primary_ownership != Some(GatewayOwnership::Remote)
-                    || state
-                        .primary
-                        .as_ref()
-                        .is_none_or(|route| route.url != dashboard)
+                if state
+                    .primary
+                    .as_ref()
+                    .is_none_or(|route| route.url != dashboard)
                 {
                     return Err(STALE.into());
                 }
@@ -1498,6 +1546,14 @@ impl GatewayWindows {
         } else {
             Some(self.profiles.get(target_id)?.revision)
         };
+        #[cfg(target_os = "linux")]
+        let profile_data = match profile_revision {
+            Some(_) => Some(private_profile_dir(
+                self.profiles
+                    .browser_data_dir(&profile_browser_root(app)?, target_id)?,
+            )?),
+            None => None,
+        };
         #[cfg(target_os = "windows")]
         let browser_data = if isolated_browser_document(label, target_id) {
             let parent = app
@@ -1564,6 +1620,8 @@ impl GatewayWindows {
             lifetime,
             #[cfg(target_os = "windows")]
             browser_data,
+            #[cfg(target_os = "linux")]
+            profile_data,
         })
     }
 
@@ -2425,8 +2483,7 @@ fn replace_document(
     let browser_app = app.clone();
     let page_registration = registration.clone();
     let builder = registration
-        .configure(WebviewBuilder::new(label, registration.initial_url()))
-        .incognito(true)
+        .configure(WebviewBuilder::new(label, registration.initial_url()).incognito(true))
         .initialization_script(script)
         .auto_resize()
         .on_new_window(move |url, _| {
@@ -3391,6 +3448,64 @@ mod tests {
     }
 
     #[test]
+    fn remote_auth_refresh_reads_only_ready_remote_document_destinations() {
+        let mut routing = Routing::default();
+        for (label, phase) in [
+            ("active", NavigationPhase::Active),
+            ("preparing", NavigationPhase::Preparing),
+            ("failed", NavigationPhase::Failed),
+        ] {
+            routing.windows.insert(
+                label.into(),
+                WindowRoute {
+                    document: Some(Document {
+                        phase,
+                        ..document(label)
+                    }),
+                    ..Default::default()
+                },
+            );
+        }
+        routing.windows.insert(
+            "loading".into(),
+            WindowRoute {
+                document: Some(loading_document("loading", SelectionCompletion::Automatic)),
+                ..Default::default()
+            },
+        );
+        routing
+            .windows
+            .insert("empty".into(), WindowRoute::default());
+        routing.primary_ownership = Some(GatewayOwnership::Local);
+        assert!(routing
+            .capture_remote_destinations(|_| panic!("local startup has no remote auth to refresh"))
+            .is_err());
+
+        routing.primary_ownership = Some(GatewayOwnership::Remote);
+        let destination = Url::parse("https://gateway.example/team/chat/session").unwrap();
+        let mut reads = Vec::new();
+        routing
+            .capture_remote_destinations(|label| {
+                reads.push(label.to_string());
+                Some(destination.clone())
+            })
+            .unwrap();
+        assert_eq!(reads, ["active"]);
+        assert_eq!(
+            routing.windows["active"]
+                .document
+                .as_ref()
+                .unwrap()
+                .navigation_url,
+            destination
+        );
+        for label in ["preparing", "failed", "loading"] {
+            let document = routing.windows[label].document.as_ref().unwrap();
+            assert_eq!(document.navigation_url, document.url);
+        }
+    }
+
+    #[test]
     fn fast_native_hello_installs_accepted_auth_in_the_first_main_document() {
         let url = Url::parse("https://gateway.example/control").unwrap();
         let gateway = Url::parse("wss://gateway.example/control").unwrap();
@@ -4132,21 +4247,27 @@ mod tests {
 
     #[test]
     fn dashboard_authority_stays_inside_its_origin_and_path() {
-        let expected = Url::parse("https://gateway.example/team").unwrap();
-        for (url, allowed) in [
-            ("https://gateway.example/team", true),
-            ("https://gateway.example/team/chat/main", true),
-            ("https://gateway.example/teamwork", false),
-            ("https://gateway.example/", false),
-            ("https://other.example/team", false),
-            ("http://gateway.example/team", false),
-            ("https://user@gateway.example/team", false),
+        for base in [
+            "https://gateway.example/team",
+            "https://gateway.example/team/",
         ] {
-            assert_eq!(
-                matches_route(&Url::parse(url).unwrap(), &expected),
-                allowed,
-                "{url}"
-            );
+            let expected = Url::parse(base).unwrap();
+            for (url, allowed) in [
+                ("https://gateway.example/team", true),
+                ("https://gateway.example/team/chat/main", true),
+                ("https://gateway.example/teamwork", false),
+                ("https://gateway.example/", false),
+                ("https://gateway.example:444/team", false),
+                ("https://other.example/team", false),
+                ("http://gateway.example/team", false),
+                ("https://user@gateway.example/team", false),
+            ] {
+                assert_eq!(
+                    matches_route(&Url::parse(url).unwrap(), &expected),
+                    allowed,
+                    "{base}: {url}"
+                );
+            }
         }
         assert!(local_settings_url(
             &Url::parse("tauri://localhost/gateways.html").unwrap()
@@ -4242,6 +4363,7 @@ mod tests {
                 remote_port: None,
                 tls_fingerprint: None,
             },
+            browser_storage: None,
         };
         let intent = state
             .begin(

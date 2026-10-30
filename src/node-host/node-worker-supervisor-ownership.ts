@@ -5,24 +5,41 @@ import type {
   NodeWorkerLaunchInput,
   NodeWorkerSupervisorIdentity,
 } from "../worker/node-supervisor-protocol.js";
+import type { NodeWorkerProcessesChanged } from "../worker/worker-process-observation.js";
+import type { NodeWorkerCapacity } from "./node-worker-capacity.js";
 import type { NodeWorkerContainerEngine } from "./node-worker-container-engine.js";
+import type { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
+import {
+  snapshotNodeWorkerExecutionEnv,
+  type NodeWorkerManagedIdentityTransport,
+  type NodeWorkerPlatformTrust,
+} from "./node-worker-environment.js";
 import type { NodeWorkerTerminalOutcome } from "./node-worker-launch-observation.js";
 import type {
   NodeWorkerContainerIdentity,
   NodeWorkerLaunchClaim,
   NodeWorkerLaunchReceipt,
+  NodeWorkerLaunchStore,
   NodeWorkerTerminalState,
 } from "./node-worker-launch-store.js";
 import type { NodeWorkerChildAdapter } from "./node-worker-launch-transport.js";
 import type { NodeWorkerNativeInferenceSnapshot } from "./node-worker-native-inference.js";
 import type { NodeWorkerCredentialScrubber } from "./node-worker-output.js";
 import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
+import type { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
 import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 export const NODE_WORKER_STOP_GRACE_MS = 1_000;
 export const NODE_WORKER_FORCE_STOP_WAIT_MS = 4_000;
 
 export type NodeWorkerStopState = Extract<NodeWorkerTerminalState, "cancelled" | "interrupted">;
+
+type NodeWorkerLaunchRecovery = (
+  receipt: NodeWorkerLaunchReceipt,
+  notifyCapacity?: boolean,
+  state?: NodeWorkerStopState,
+  awaitCleanup?: boolean,
+) => Promise<NodeWorkerLaunchReceipt>;
 
 export type NodeWorkerEnvironmentBinding = ReturnType<typeof nodeWorkerEnvironmentBinding>;
 
@@ -151,14 +168,45 @@ export type NodeWorkerSupervisorOptions = {
   bundleRoot?: string;
   env?: NodeJS.ProcessEnv;
   capacity?: number;
-  capacityWaitMs?: number;
   onCapacityChanged?: (capacity: NodeWorkerCapacitySnapshot) => void;
+  onProcessesChanged?: (binding: NodeWorkerProcessesChanged) => void;
   workspace?: NodeWorkerWorkspaceRuntime;
   containerEngine?: NodeWorkerContainerEngine;
   containerImage?: string;
   /** Node-local canonical models captured before the runtime yields. */
   nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
+  /** Captured by the dedicated ephemeral node owner, never a launch descriptor. */
+  managedIdentityTransport?: NodeWorkerManagedIdentityTransport;
+  /** Platform trust captured by that same dedicated node owner. */
+  platformTrust?: NodeWorkerPlatformTrust;
 };
+
+/** Capture the dedicated node environment once; HOME projections retain the same custody. */
+export function prepareNodeWorkerSupervisorEnvironment(
+  env: NodeJS.ProcessEnv,
+  options: NodeWorkerSupervisorOptions,
+) {
+  const managedIdentityTransport = options.containerEngine
+    ? undefined
+    : options.managedIdentityTransport;
+  const platformTrust = options.containerEngine ? undefined : options.platformTrust;
+  const workerEnv = snapshotNodeWorkerExecutionEnv(env, managedIdentityTransport, platformTrust);
+  return {
+    nativeInferenceSnapshot: options.nativeInferenceSnapshot,
+    workerEnv,
+    managedIdentityTransport,
+    engineEnv: { ...process.env, ...env },
+    projectWorkerEnv: (homeDir?: string) =>
+      homeDir
+        ? snapshotNodeWorkerExecutionEnv(
+            workerEnv,
+            managedIdentityTransport,
+            platformTrust,
+            homeDir,
+          )
+        : workerEnv,
+  };
+}
 
 /** Match both process bookkeeping and exact authoritative container identity. */
 export function nodeWorkerReceiptMatchesOwner(
@@ -182,3 +230,25 @@ export function nodeWorkerReceiptMatchesOwner(
     receipt.container?.engineTarget === container?.engineTarget
   );
 }
+
+export type NodeWorkerChildLifecycleOptions = {
+  onProcessesChanged?: NodeWorkerSupervisorOptions["onProcessesChanged"];
+  bundleRoot: string;
+  nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
+  /** Captured by the dedicated ephemeral node owner, never a launch descriptor. */
+  managedIdentityTransport?: NodeWorkerManagedIdentityTransport;
+  engineEnv: NodeJS.ProcessEnv;
+  store: NodeWorkerLaunchStore;
+  turns: NodeWorkerTurnStore;
+  capacity: NodeWorkerCapacity;
+  containerEngine?: NodeWorkerContainerEngine;
+  containerLifecycle?: NodeWorkerContainerLifecycle;
+  containerImage?: string;
+  starting: ReadonlyMap<string, Promise<NodeWorkerLaunchReceipt>>;
+  initialize: () => Promise<void>;
+  isClosed: () => boolean;
+  cancelTurn: (
+    expected: NodeWorkerSupervisorIdentity,
+  ) => Promise<NodeWorkerLaunchReceipt | undefined>;
+  recoverRunning: NodeWorkerLaunchRecovery;
+};

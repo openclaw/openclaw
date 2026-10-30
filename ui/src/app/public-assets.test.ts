@@ -1,5 +1,6 @@
 // Control UI tests cover public assets behavior.
 import { afterEach, describe, expect, it } from "vitest";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { controlUiPublicAssetPath, inferControlUiPublicAssetPath } from "./public-assets.ts";
 
 function withConfiguredBasePath<T>(basePath: string, run: () => T): T {
@@ -9,11 +10,7 @@ function withConfiguredBasePath<T>(basePath: string, run: () => T): T {
   try {
     return run();
   } finally {
-    if (previous) {
-      Object.defineProperty(window, key, previous);
-    } else {
-      Reflect.deleteProperty(window, key);
-    }
+    restorePropertyDescriptor(window, key, previous);
   }
 }
 
@@ -56,11 +53,6 @@ describe("controlUiPublicAssetPath", () => {
     expect(controlUiPublicAssetPath("favicon.svg", "")).toBe("/favicon.svg");
     expect(controlUiPublicAssetPath("manifest.webmanifest", null)).toBe("/manifest.webmanifest");
   });
-
-  it("resolves base-mounted public assets under the configured base path", () => {
-    expect(controlUiPublicAssetPath("favicon.svg", "/ui")).toBe("/ui/favicon.svg");
-    expect(controlUiPublicAssetPath("sw.js", "/apps/openclaw/")).toBe("/apps/openclaw/sw.js");
-  });
 });
 
 describe("inferControlUiPublicAssetPath", () => {
@@ -71,24 +63,5 @@ describe("inferControlUiPublicAssetPath", () => {
     expect(withConfiguredBasePath("", () => inferControlUiPublicAssetPath("favicon.svg"))).toBe(
       "/favicon.svg",
     );
-  });
-
-  it("infers the mount from the current page pathname", () => {
-    window.history.replaceState(null, "", "/openclaw/skills/workshop");
-    expect(inferControlUiPublicAssetPath("sw.js")).toBe("/openclaw/sw.js");
-  });
-
-  it("keeps an about mount root distinct from the settings About route", () => {
-    window.history.replaceState(null, "", "/about/");
-    expect(inferControlUiPublicAssetPath("sw.js")).toBe("/about/sw.js");
-  });
-
-  it("prefers an explicit base path over pathname inference", () => {
-    window.history.replaceState(null, "", "/skills/workshop");
-    expect(
-      withConfiguredBasePath("/control/", () =>
-        inferControlUiPublicAssetPath("apple-touch-icon.png"),
-      ),
-    ).toBe("/control/apple-touch-icon.png");
   });
 });

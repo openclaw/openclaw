@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hashCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import type { CliSessionReseedReceipt, SessionEntry } from "../config/sessions.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
+import type { CliHistoryIndex } from "./cli-session-history-index-policy.js";
 import { CliSessionHistoryIndex } from "./cli-session-history-index.worker.js";
 import {
   resolveClaudeCliHistorySource,
@@ -18,21 +19,19 @@ export async function readClaudeCliSessionMessagesAsync(
   const source = await resolveClaudeCliHistorySource(params);
   const messages: Record<string, unknown>[] = [];
   if (source) {
-    await visitClaudeCliSessionMessages(
-      source[0],
-      params,
-      (message) => messages.push(message),
-      source[2],
-    );
+    const [file, , bytes] = source;
+    await visitClaudeCliSessionMessages(file, params, (message) => messages.push(message), bytes);
   }
   return messages;
 }
 
-export function mergeImportedChatHistoryMessages(params: {
-  localMessages: unknown[];
-  importedMessages: unknown[];
-}): unknown[] {
-  const index = new CliSessionHistoryIndex();
+export function mergeImportedChatHistoryMessages(
+  params: {
+    localMessages: unknown[];
+    importedMessages: unknown[];
+  },
+  index: CliHistoryIndex = new CliSessionHistoryIndex(),
+): unknown[] {
   try {
     index.appendLocal(
       params.localMessages.map((message, position) => ({ message, seq: position + 1 })),
@@ -41,28 +40,21 @@ export function mergeImportedChatHistoryMessages(params: {
       index.appendImported(message);
     }
     index.finish();
-    const messages: unknown[] = [];
-    for (const row of index.rows(0, index.count)) {
+    return Array.from(index.rows(0, index.count), (row) => {
       const message =
         row.local_seq === null ? index.message(row.id) : params.localMessages[row.local_seq - 1];
       const record = asOptionalRecord(message);
-      messages.push(
-        record
-          ? { ...record, ...(row.metadata ? { __openclaw: JSON.parse(row.metadata) } : {}) }
-          : message,
-      );
-    }
-    return messages;
+      return record
+        ? { ...record, ...(row.metadata ? { __openclaw: JSON.parse(row.metadata) } : {}) }
+        : message;
+    });
   } finally {
     index.close();
   }
 }
 export function cliMeta(externalId: string, cliSessionId: string | null = "session-1") {
-  return {
-    importedFrom: "claude-cli",
-    externalId,
-    ...(cliSessionId === null ? {} : { cliSessionId }),
-  };
+  const binding = cliSessionId === null ? {} : { cliSessionId };
+  return { importedFrom: "claude-cli", externalId, ...binding };
 }
 
 export function answer(
@@ -70,12 +62,8 @@ export function answer(
   externalId?: string,
   cliSessionId: string | null = "session-1",
 ) {
-  return {
-    role: "assistant",
-    content: "Repeated answer",
-    ...(timestamp === undefined ? {} : { timestamp }),
-    ...(externalId === undefined ? {} : { __openclaw: cliMeta(externalId, cliSessionId) }),
-  };
+  const meta = externalId === undefined ? undefined : cliMeta(externalId, cliSessionId);
+  return { ...user("Repeated answer", timestamp, meta), role: "assistant" };
 }
 
 export function boundEntry(sessionId: string): SessionEntry {
@@ -86,14 +74,11 @@ export function boundEntry(sessionId: string): SessionEntry {
   };
 }
 
-export function receipt(
-  prompt: string,
-  localSessionId = "openclaw-session",
-): CliSessionReseedReceipt {
+export function receipt(prompt: string, sessionId = "openclaw-session"): CliSessionReseedReceipt {
   return {
     version: 1,
     promptHash: hashCliReseedPrompt(prompt),
-    localSessionId,
+    localSessionId: sessionId,
     userTurnDisposition: "persisted",
   };
 }
@@ -126,30 +111,24 @@ export function createClaudeTextHistoryLines(
     .join("\n");
 }
 
-type ClaudeHistoryReadOptions = Omit<
-  Parameters<typeof readClaudeCliSessionMessagesAsync>[0],
-  "cliSessionId" | "homeDir"
->;
+type ClaudeHistoryReadOptions = Omit<ClaudeCliHistoryParams, "cliSessionId" | "homeDir">;
 
-export async function withClaudeProjectsDir<T>(
+export function withClaudeProjectsDir<T>(
   run: (params: {
     homeDir: string;
     sessionId: string;
     filePath: string;
-    readMessages: (
-      options?: ClaudeHistoryReadOptions,
-    ) => ReturnType<typeof readClaudeCliSessionMessagesAsync>;
+    readMessages: (options?: ClaudeHistoryReadOptions) => Promise<Record<string, unknown>[]>;
   }) => Promise<T>,
 ): Promise<T> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-claude-history-"));
-  const homeDir = path.join(root, "home");
-  const sessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
-  const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
-  const filePath = path.join(projectsDir, `${sessionId}.jsonl`);
-  await fs.mkdir(projectsDir, { recursive: true });
-  await fs.writeFile(filePath, createClaudeHistoryLines(sessionId), "utf-8");
-  try {
-    return await withEnvAsync({ HOME: homeDir }, () =>
+  return withTempDir("openclaw-claude-history-", async (root) => {
+    const homeDir = path.join(root, "home");
+    const sessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
+    const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
+    const filePath = path.join(projectsDir, `${sessionId}.jsonl`);
+    await fs.mkdir(projectsDir, { recursive: true });
+    await fs.writeFile(filePath, createClaudeHistoryLines(), "utf-8");
+    return withEnvAsync({ HOME: homeDir }, () =>
       run({
         homeDir,
         sessionId,
@@ -158,100 +137,56 @@ export async function withClaudeProjectsDir<T>(
           readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId, homeDir, ...options }),
       }),
     );
-  } finally {
-    await fs.rm(root, { recursive: true, force: true });
-  }
+  });
 }
 
 export function buildLegacyReseedPrompt(current = "current"): string {
-  return [
-    "Continue this conversation using the OpenClaw transcript below as prior session history.",
-    "Treat it as authoritative context for this fresh CLI session.",
-    "",
-    "<conversation_history>",
-    "User: previous",
-    "</conversation_history>",
-    "",
-    "<next_user_message>",
-    current,
-    "</next_user_message>",
-  ].join("\n");
+  return `Continue this conversation using the OpenClaw transcript below as prior session history.
+Treat it as authoritative context for this fresh CLI session.
+
+<conversation_history>
+User: previous
+</conversation_history>
+
+<next_user_message>
+${current}
+</next_user_message>`;
 }
 
-function createClaudeHistoryLines(sessionId: string) {
+function createClaudeHistoryLines() {
+  const message = (
+    role: "user" | "assistant",
+    id: number,
+    time: string,
+    fields: Record<string, unknown>,
+  ) => ({
+    type: role,
+    uuid: `${role}-${id}`,
+    timestamp: `2026-03-26T16:29:${time}Z`,
+    message: { role, ...fields },
+  });
   return [
-    JSON.stringify({
-      type: "queue-operation",
-      operation: "enqueue",
-      timestamp: "2026-03-26T16:29:54.722Z",
-      sessionId,
-      content: "[Thu 2026-03-26 16:29 GMT] Reply with exactly: AGENT CLI OK.",
+    { type: "queue-operation" },
+    message("user", 1, "54.800", {
+      content:
+        'Sender: ⟦openclaw:ctx⟧\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
     }),
-    JSON.stringify({
-      type: "user",
-      uuid: "user-1",
-      timestamp: "2026-03-26T16:29:54.800Z",
-      message: {
-        role: "user",
-        content:
-          'Sender: ⟦openclaw:ctx⟧\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
-      },
+    message("assistant", 1, "55.500", {
+      content: [{ type: "text", text: "hello from Claude" }],
+      model: "claude-sonnet-4-6",
+      stop_reason: "end_turn",
+      usage: { input_tokens: 11, output_tokens: 7, cache_read_input_tokens: 22 },
     }),
-    JSON.stringify({
-      type: "assistant",
-      uuid: "assistant-1",
-      timestamp: "2026-03-26T16:29:55.500Z",
-      message: {
-        role: "assistant",
-        model: "claude-sonnet-4-6",
-        content: [{ type: "text", text: "hello from Claude" }],
-        stop_reason: "end_turn",
-        usage: {
-          input_tokens: 11,
-          output_tokens: 7,
-          cache_read_input_tokens: 22,
-        },
-      },
+    message("assistant", 2, "56.000", {
+      content: [{ type: "tool_use", id: "toolu_123", name: "Bash", input: { command: "pwd" } }],
+      model: "claude-sonnet-4-6",
+      stop_reason: "tool_use",
     }),
-    JSON.stringify({
-      type: "assistant",
-      uuid: "assistant-2",
-      timestamp: "2026-03-26T16:29:56.000Z",
-      message: {
-        role: "assistant",
-        model: "claude-sonnet-4-6",
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_123",
-            name: "Bash",
-            input: {
-              command: "pwd",
-            },
-          },
-        ],
-        stop_reason: "tool_use",
-      },
+    message("user", 2, "56.400", {
+      content: [{ type: "tool_result", tool_use_id: "toolu_123", content: "/tmp/demo" }],
     }),
-    JSON.stringify({
-      type: "user",
-      uuid: "user-2",
-      timestamp: "2026-03-26T16:29:56.400Z",
-      message: {
-        role: "user",
-        content: [
-          {
-            type: "tool_result",
-            tool_use_id: "toolu_123",
-            content: "/tmp/demo",
-          },
-        ],
-      },
-    }),
-    JSON.stringify({
-      type: "last-prompt",
-      sessionId,
-      lastPrompt: "ignored",
-    }),
-  ].join("\n");
+    { type: "last-prompt" },
+  ]
+    .map((entry) => JSON.stringify(entry))
+    .join("\n");
 }

@@ -4,7 +4,7 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveIsNixMode } from "../config/paths.js";
+import { resolveIsNixMode, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import {
@@ -14,6 +14,7 @@ import {
   launchAgentPlistExists,
   resolveLaunchAgentLabel,
 } from "../daemon/launchd.js";
+import { mergeGatewayServiceEnv } from "../daemon/service-env-merge.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { runExec } from "../process/exec.js";
 import { shortenHomePath } from "../utils.js";
@@ -24,11 +25,7 @@ function collectMacLaunchAgentOverrideWarning(): string | null {
   if (process.platform !== "darwin") {
     return null;
   }
-  const markerPath = path.join(
-    process.env.HOME ?? os.homedir(),
-    ".openclaw",
-    "disable-launchagent",
-  );
+  const markerPath = path.join(resolveStateDir(), "disable-launchagent");
   if (!fs.existsSync(markerPath)) {
     return null;
   }
@@ -74,7 +71,10 @@ async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(): Promise<string
   if (process.platform !== "darwin") {
     return null;
   }
-  const scanEnv = await resolveGatewayServiceEnvForPlatformNotes();
+  const baseEnv = process.env;
+  const service = resolveGatewayService();
+  const command = await service.readCommand(baseEnv).catch(() => null);
+  const scanEnv = mergeGatewayServiceEnv(baseEnv, command);
   const jobs = await findStaleOpenClawUpdateLaunchdJobs(scanEnv).catch(() => []);
   if (jobs.length === 0) {
     return null;
@@ -106,22 +106,20 @@ async function launchctlGetenv(name: string): Promise<string | undefined> {
   }
 }
 
-function hasConfigGatewayCreds(cfg: OpenClawConfig): boolean {
-  return [
-    cfg.gateway?.auth?.token,
-    cfg.gateway?.auth?.password,
-    cfg.gateway?.remote?.token,
-    cfg.gateway?.remote?.password,
-  ].some((credential) => hasConfiguredSecretInput(credential, cfg.secrets?.defaults));
-}
-
 async function collectMacLaunchctlGatewayEnvOverrideWarning(
   cfg: OpenClawConfig,
 ): Promise<string | null> {
   if (process.platform !== "darwin") {
     return null;
   }
-  if (!hasConfigGatewayCreds(cfg)) {
+  if (
+    ![
+      cfg.gateway?.auth?.token,
+      cfg.gateway?.auth?.password,
+      cfg.gateway?.remote?.token,
+      cfg.gateway?.remote?.password,
+    ].some((credential) => hasConfiguredSecretInput(credential, cfg.secrets?.defaults))
+  ) {
     return null;
   }
 
@@ -154,18 +152,6 @@ export async function noteMacGatewayPlatformWarnings(cfg: OpenClawConfig): Promi
   noteMacGatewayWarning(await collectMacLaunchctlGatewayEnvOverrideWarning(cfg));
 }
 
-async function resolveGatewayServiceEnvForPlatformNotes(): Promise<NodeJS.ProcessEnv> {
-  const baseEnv = process.env;
-  const service = resolveGatewayService();
-  const command = await service.readCommand(baseEnv).catch(() => null);
-  return command?.environment
-    ? {
-        ...baseEnv,
-        ...command.environment,
-      }
-    : baseEnv;
-}
-
 export async function collectGatewayPlatformWarnings(
   cfg: OpenClawConfig,
 ): Promise<readonly string[]> {
@@ -182,15 +168,18 @@ export async function collectGatewayPlatformWarnings(
       .filter(
         (issue) =>
           issue.code === SERVICE_AUDIT_CODES.systemdKillModeControlGroup ||
-          issue.code === SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
+          issue.code === SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone ||
+          issue.repair === "host",
       )
       .map((issue) =>
-        [
-          issue.detail ? `${issue.message} (${issue.detail})` : issue.message,
-          // Structured Doctor keeps this second line in fixHint, so triage
-          // message truncation cannot discard the supported repair command.
-          `Run ${formatCliCommand("openclaw gateway install --force")} only after verification; inspect drop-ins separately.`,
-        ].join("\n"),
+        issue.repair === "host"
+          ? `${issue.message} (${issue.detail})`
+          : [
+              issue.detail ? `${issue.message} (${issue.detail})` : issue.message,
+              // Structured Doctor keeps this second line in fixHint, so triage
+              // message truncation cannot discard the supported repair command.
+              `Run ${formatCliCommand("openclaw gateway install --force")} only after verification; inspect drop-ins separately.`,
+            ].join("\n"),
       );
   }
   return [

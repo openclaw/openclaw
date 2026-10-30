@@ -1,17 +1,10 @@
-import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { readLoggingConfig } from "../logging/config.js";
-import {
-  captureModelVisibleRedactionPolicy,
-  matchesModelVisibleRedactionPolicy,
-} from "../logging/redact-internal-state.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import type {
   RuntimeSessionFacts,
   RuntimeSessionFactsSelectionResult,
 } from "../plugins/runtime/types-session-facts.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { stripMarkdown } from "../shared/text/strip-markdown.js";
 import type { ControlUiSessionPullRequestSnapshot } from "./control-ui-contract.js";
 import {
@@ -21,7 +14,10 @@ import {
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { ResolvedInProcessGatewayDispatch } from "./server-plugin-in-process-dispatch.types.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
-import type { SessionRowReadView } from "./session-row-prepared-read.js";
+import {
+  toProjectedSessionSharingTarget,
+  type SessionRowReadView,
+} from "./session-row-prepared-read.js";
 import type { MaterializedRow } from "./session-row-projection-record.js";
 import { prepareProjectedSessionSharing, resolveSessionVisibility } from "./session-sharing.js";
 import { projectGatewaySessionRunState } from "./session-utils-display.js";
@@ -34,13 +30,12 @@ export type SelectedFacts = RuntimeSessionFactsSelectionResult["sessions"][numbe
 export type SelectedPrFacts = {
   generation: MaterializedRow["generation"];
   databaseFactsRevision: number;
-  redaction: ReturnType<typeof sessionFactsRedactionPolicy>;
   owner: ResolvedInProcessGatewayDispatch["context"]["controlUiSessionPullRequests"];
   facts: RuntimeSessionFacts;
   selected: SelectedFacts;
   retry?: { at: number; delayMs: number };
 };
-let rowFacts = new WeakMap<
+const rowFacts = new WeakMap<
   GatewaySessionRow,
   {
     owner: ResolvedInProcessGatewayDispatch["context"]["controlUiSessionPullRequests"];
@@ -52,33 +47,18 @@ let rowFacts = new WeakMap<
   }
 >();
 
-let redactionPolicy:
-  | (ReturnType<typeof captureModelVisibleRedactionPolicy> & { revision: string })
-  | undefined;
-
-// Row identity survives redaction changes; cached text must follow the policy owner.
-export function sessionFactsRedactionPolicy() {
-  const logging = readLoggingConfig();
-  if (!redactionPolicy || !matchesModelVisibleRedactionPolicy(redactionPolicy, logging)) {
-    redactionPolicy = { ...captureModelVisibleRedactionPolicy(logging), revision: randomUUID() };
-    rowFacts = new WeakMap();
-  }
-  return redactionPolicy;
-}
-
 export function safeText(value: string | undefined, limit: number): string | undefined {
-  return value ? truncateUtf16Safe(redactToolPayloadText(value), limit) : undefined;
+  return value ? truncateUtf16Safe(value, limit) : undefined;
 }
 
 function projectPullRequests(
   pullRequests: ReadonlyArray<RuntimeSessionFacts["pullRequests"][number]>,
-  source: "snapshot" | "retained" = "snapshot",
 ) {
   return pullRequests.map(({ number, state, url, title }) => ({
     number,
     state,
     ...(url ? { url } : {}),
-    ...(source === "snapshot" && title ? { title: safeText(title, 120) } : {}),
+    ...(title ? { title: safeText(title, 120) } : {}),
   }));
 }
 
@@ -89,7 +69,6 @@ export function prepareFactsRead(
   authority?: { visibility: WeakMap<object, boolean> },
   prFacts?: Map<string, SelectedPrFacts>,
 ) {
-  const redaction = sessionFactsRedactionPolicy();
   const now = Date.now();
   const { cfg, policyConfig, rowContext } = read.state;
   const sharing = prepareProjectedSessionSharing({
@@ -105,8 +84,10 @@ export function prepareFactsRead(
         ?.has(identityId) ?? false,
   });
   const active = createVisibleActiveSessionRunProjector(
-    resolved.context,
     rowContext.projectedAgentRuns,
+    undefined,
+    resolved.context.resolveGatewayContext,
+    read.physicalPaths,
   );
   const currentRows = { ...rowContext, subagentRuns: rowContext.subagentRuns.atTime(now) };
   const prOwner = resolved.context.controlUiSessionPullRequests;
@@ -122,16 +103,18 @@ export function prepareFactsRead(
       ) {
         return undefined;
       }
-      let visible = authority?.visibility.get(record.entry);
+      const visibilityCache = sharing.sessionCap === "invited" ? undefined : authority?.visibility;
+      let visible = visibilityCache?.get(record.entry);
       if (visible === undefined) {
-        visible = sharing.entryFilter?.(record.key, record.entry) !== false;
-        authority?.visibility.set(record.entry, visible);
+        visible = sharing.canReadTarget(toProjectedSessionSharingTarget(record));
+        visibilityCache?.set(record.entry, visible);
       }
       if (!visible) {
         return undefined;
       }
       const row = record.materialized.row;
       const live = active({
+        storePath: record.storeTarget.storePath,
         requestedKey: record.key,
         canonicalKey: record.key,
         sessionId: record.entry.sessionId,
@@ -201,7 +184,7 @@ export function prepareFactsRead(
       const digest = row.observerDigest ? record.entry.observerDigest : undefined;
       const facts: RuntimeSessionFacts =
         cached?.facts ??
-        freezeJsonSnapshot({
+        freezeTrustedJsonSnapshot({
           key: record.key,
           sessionId: record.entry.sessionId,
           ...(record.entry.lifecycleRevision
@@ -262,7 +245,6 @@ export function prepareFactsRead(
             ? previous.retry
             : { at: now + delayMs, delayMs }
           : undefined;
-        // Truncated retained titles cannot be re-redacted under a different policy.
         const selected = !stale
           ? result.selected
           : previous.facts === facts && previous.selected.pullRequestsStale
@@ -270,18 +252,12 @@ export function prepareFactsRead(
             : Object.freeze({
                 ...facts,
                 isMain: row.isMain,
-                pullRequests:
-                  previous.redaction === redaction
-                    ? previous.selected.pullRequests
-                    : freezeJsonSnapshot(
-                        projectPullRequests(previous.selected.pullRequests, "retained"),
-                      ),
+                pullRequests: previous.selected.pullRequests,
                 pullRequestsStale: true as const,
               });
         prFacts.set(record.key, {
           generation: record.generation,
           databaseFactsRevision: record.databaseFactsRevision,
-          redaction,
           owner: prOwner,
           facts,
           selected,

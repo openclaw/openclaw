@@ -22,19 +22,14 @@ export function readOriginalUpdateRecovery(
     : verifyPackageUpdateRecovery(params.root);
 }
 
-/** Refuse retained recovery before any package-only effects or diagnostic writes. */
-export function assertUpdateCommandRecovery(opts: UpdateCommandOptions): void {
-  opts.run?.executorFence?.assertCurrent();
-  assertUpdateCommandRecoveryState(opts);
-}
-
 export function assertUpdateCommandRecoveryState(opts: UpdateCommandOptions): void {
   if (opts.recovery) {
     throw new UpdateCommandRecoveryPendingError(
       "Full-state checkpoint recovery is deferred; retained state was left unchanged.",
     );
   }
-  const current = opts.run && loadUpdateRecovery(opts.run.runId, { env: opts.run.env });
+  const current =
+    opts.run && loadUpdateRecovery(opts.run.runId, { env: opts.run.env, allowNativeRead: true });
   if (current) {
     throw new UpdateRecoveryRequiredError(current);
   }

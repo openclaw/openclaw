@@ -1,7 +1,7 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { FastMode } from "../../api/types.ts";
+import type { CyberAccessProgram, FastMode } from "../../api/types.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { DraftRemoteProject } from "./project-chip.ts";
@@ -37,6 +37,8 @@ export function decodePalettePreference(value: unknown): PaletteSessionPreferenc
   delete selection.agentRuntime;
   delete selection.thinkingLevel;
   delete selection.fastMode;
+  delete selection.cyberAccessProgram;
+  delete selection.daybreakAccessProgram;
   delete selection.worktreeName;
   return { agentId: normalizeAgentId(value.agentId), selection };
 }
@@ -76,13 +78,18 @@ export type NewSessionPreference = {
   agentRuntime?: string;
   thinkingLevel?: string;
   fastMode?: FastMode;
+  cyberAccessProgram?: CyberAccessProgram;
+  daybreakAccessProgram?: Exclude<CyberAccessProgram, "standard">;
 };
 
 export function hasNewSessionModelPreference(
   preference: NewSessionPreference | null | undefined,
 ): preference is NewSessionPreference {
   return Boolean(
-    preference?.model || preference?.thinkingLevel || preference?.fastMode !== undefined,
+    preference?.model ||
+    preference?.thinkingLevel ||
+    preference?.fastMode !== undefined ||
+    preference?.cyberAccessProgram !== undefined,
   );
 }
 
@@ -143,6 +150,19 @@ function normalizePreference(value: unknown): NewSessionPreference | null {
   ) {
     preference.fastMode = value.fastMode;
   }
+  if (
+    value.cyberAccessProgram === "standard" ||
+    value.cyberAccessProgram === "daybreak_blue" ||
+    value.cyberAccessProgram === "daybreak_red"
+  ) {
+    preference.cyberAccessProgram = value.cyberAccessProgram;
+  }
+  if (
+    value.daybreakAccessProgram === "daybreak_blue" ||
+    value.daybreakAccessProgram === "daybreak_red"
+  ) {
+    preference.daybreakAccessProgram = value.daybreakAccessProgram;
+  }
   if (typeof value.worktree === "boolean") {
     preference.worktree = value.worktree;
   }
@@ -182,6 +202,9 @@ function normalizeBrowserPreference(value: unknown): NewSessionPreference | null
   if (!preference) {
     return null;
   }
+  // Access choices belong to the authenticated user, never a shared browser origin.
+  delete preference.cyberAccessProgram;
+  delete preference.daybreakAccessProgram;
   delete preference.remoteProject;
   delete preference.defaultRepositoryOptOut;
   return Object.keys(preference).length ? preference : null;

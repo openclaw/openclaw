@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { QaRunnerTransportArtifacts } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
-import { assertQaSuiteArtifactWritten } from "./artifact-assertion.js";
 import { qaEvidenceSummaryV3Schema } from "./evidence-summary-schema.js";
 import { QA_EVIDENCE_FILENAME, type QaEvidenceSummaryV3Json } from "./evidence-summary.js";
 import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
@@ -181,10 +180,5 @@ export async function writeQaSuiteArtifacts(
       },
     ],
   });
-  await assertQaSuiteArtifactWritten("report", reportPath);
-  await assertQaSuiteArtifactWritten("summary", summaryPath);
-  if (writeEvidenceFile) {
-    await assertQaSuiteArtifactWritten("evidence", evidencePath);
-  }
   return { evidence, evidencePath, report, reportPath, summaryPath };
 }

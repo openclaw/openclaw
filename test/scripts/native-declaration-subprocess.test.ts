@@ -58,3 +58,51 @@ syncBuiltinESMExports();
     expect(fs.existsSync(exited)).toBe(true);
   },
 );
+
+function revisionFixture(typescriptPackage: Record<string, unknown>) {
+  const root = fs.realpathSync.native(roots.make("native-declaration-revision-"));
+  const write = (file: string, text: string) => {
+    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    fs.writeFileSync(path.join(root, file), text);
+  };
+  write("package.json", '{"type":"module"}');
+  write(
+    "tsconfig.json",
+    JSON.stringify({
+      compilerOptions: { module: "NodeNext", target: "ES2023", types: [], declaration: true },
+      files: ["src/index.ts"],
+    }),
+  );
+  write("src/index.ts", "export const answer: number = 42;\n");
+  write("node_modules/typescript/package.json", JSON.stringify(typescriptPackage));
+  write(
+    "node_modules/typescript/revision-api.js",
+    'throw new Error("revision TypeScript API selected");\n',
+  );
+  return {
+    cwd: root,
+    compilerRoot: root,
+    configFile: path.join(root, "tsconfig.json"),
+    roots: [path.join(root, "src/index.ts")],
+    diagnostics: "declarations" as const,
+  };
+}
+
+it("loads the compiler root's own pre-stable native API", async () => {
+  await expect(
+    emitNativeDeclarationsInSubprocess(
+      revisionFixture({
+        name: "typescript",
+        exports: { "./package.json": "./package.json", "./unstable/async": "./revision-api.js" },
+      }),
+    ),
+  ).rejects.toThrow(/revision TypeScript API selected/u);
+});
+
+it("keeps the installed compiler for roots without a native API", async () => {
+  const request = revisionFixture({ name: "typescript", version: "6.0.3" });
+  const emitted = await emitNativeDeclarationsInSubprocess(request);
+  expect(emitted.declarations.get(request.roots[0]!)?.code).toContain(
+    "export declare const answer: number;",
+  );
+});

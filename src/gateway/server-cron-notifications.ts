@@ -1,21 +1,23 @@
-// Gateway cron notification delivery.
 // Sends announce and webhook notifications for cron completion/failure events.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveUserTimezone } from "../agents/date-time.js";
+import { resolveAgentTimeoutMs } from "../agents/timeout.js";
+import { enqueueSessionEventForHost } from "../auto-reply/reply/session-event-handoff.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../cron/agent-id.js";
+import { CronAgentSelectionRequiredError } from "../cron/agent-id.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
+import { commitCronConversationResult } from "../cron/conversation-result.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
 import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
 import { createCronExecutionId } from "../cron/run-id.js";
 import type { CronEvent, CronService } from "../cron/service.js";
-import type { CronFailureRepairRequest } from "../cron/service/state.js";
+import type { CronFailureRepairRequest, CronServiceDeps } from "../cron/service/state.js";
 import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
 import type {
   CronFailureNotificationDelivery,
@@ -29,10 +31,16 @@ import { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
-import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
+import { redactSensitiveText } from "../logging/redact.js";
+import {
+  runWithGatewayDetachedWorkContinuation,
+  runWithGatewayIndependentRootWorkContinuation,
+} from "../process/gateway-work-admission.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
+import { captureCronJobTurnTarget } from "./cron-job-turn-target.js";
 import type { GatewayContextResolver } from "./server-methods/shared-types.js";
-import { dispatchGatewayLifecycleMethod } from "./server-recovery-runtime-context.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
 const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
 
@@ -55,40 +63,83 @@ type CronFailureAlertParams = Parameters<
   ssrfPolicy?: SsrFPolicy;
 };
 
+type GatewayCronFailureRepairDeps = {
+  failureRepairTimeoutMs: NonNullable<CronServiceDeps["failureRepairTimeoutMs"]>;
+  runCronFailureRepair: NonNullable<CronServiceDeps["runCronFailureRepair"]>;
+};
+
+/** Keeps the scheduler's persisted deadline and the repair turn's timeout identical. */
+export function createGatewayCronFailureRepair(
+  cfg: OpenClawConfig,
+  resolveGatewayContext: GatewayContextResolver | undefined,
+): GatewayCronFailureRepairDeps {
+  return {
+    failureRepairTimeoutMs: resolveAgentTimeoutMs({ cfg }),
+    runCronFailureRepair: (request) => runGatewayCronFailureRepair(request, resolveGatewayContext),
+  };
+}
+
 /**
- * The owner conversation receives the repair request as an ordinary turn: its own session,
- * workspace, and tool policy, with the reply delivered to its last route (thread included).
- * Only its authored reply reaches the chat: runtime failure payloads (timeouts, provider
- * errors) are not posted, and the job's next failure alert owns escalation.
+ * The owner conversation receives the repair request as a host system turn, with the reply
+ * delivered to its last route (thread included). The turn acts for the job's requester, as
+ * the job's own runs do, so an owner requester can inspect and update the job it repairs.
+ * Runtime error payloads (timeouts, provider errors) are not posted; the job's next failure
+ * alert owns escalation.
  */
-export async function runGatewayCronFailureRepair(
+async function runGatewayCronFailureRepair(
   request: CronFailureRepairRequest,
   resolveGatewayContext: GatewayContextResolver | undefined,
 ): Promise<void> {
-  await runWithGatewayIndependentRootWorkContinuation(
-    () =>
-      dispatchGatewayLifecycleMethod(
-        "agent",
-        {
-          ...(request.agentId ? { agentId: request.agentId } : {}),
-          sessionKey: request.sessionKey,
-          message: request.message,
-          deliver: true,
-          bestEffortDeliver: true,
-          inputProvenance: {
-            kind: "internal_system",
-            sourceTool: "cron_failure_repair",
-            jobId: request.jobId,
-          },
-          idempotencyKey: `cron-failure-repair:${request.repairId}`,
-        },
-        {
-          internalDeliverySuppressErrors: true,
-          ...(resolveGatewayContext ? { resolveGatewayContext } : {}),
-        },
-      ),
-    "cron:failure-repair",
-  );
+  const deadlineAtMs = performance.now() + request.timeoutMs;
+  // The cron run may retire its async scope before this independent repair settles.
+  await runWithGatewayDetachedWorkContinuation(async () => {
+    const context = resolveGatewayContext?.();
+    const job = context?.cron.getJob(request.jobId);
+    if (!context || !job) {
+      throw new Error("Cron failure repair job or Gateway is unavailable.");
+    }
+    const agentId = request.agentId ?? parseAgentSessionKey(request.sessionKey)?.agentId;
+    if (!agentId) {
+      throw new Error("Cron failure repair owner conversation names no agent.");
+    }
+    const { target, release } = await captureCronJobTurnTarget({
+      job,
+      agentId,
+      sessionKey: request.sessionKey,
+      context,
+    });
+    let receipt: ReturnType<typeof enqueueSessionEventForHost>;
+    try {
+      receipt = enqueueSessionEventForHost(request.message, {
+        agentId,
+        sessionKey: request.sessionKey,
+        source: "cron_failure_repair",
+        contextKey: `cron-failure-repair:${request.repairId}`,
+        expectedTarget: target,
+        // Only the agent's authored reply reaches the chat; the next alert owns escalation.
+        suppressErrorDelivery: true,
+      });
+      const accepted = await receipt.accepted;
+      if (!accepted.ok) {
+        throw new Error(`Cron failure repair was not accepted: ${accepted.error}`);
+      }
+    } finally {
+      // The accepted event retains its own custody of the restored operator source.
+      release();
+    }
+    const outcome = await withTimeout(
+      receipt.settled,
+      Math.max(1, deadlineAtMs - performance.now()),
+      "cron failure repair",
+    ).catch((error: unknown) => {
+      receipt.cancel();
+      throw error;
+    });
+    // A turn that ran settles the repair whatever it concluded; the next run verifies it.
+    if (outcome.status === "cancelled" || !outcome.executionStarted) {
+      throw new Error(`Cron failure repair did not run: ${outcome.error ?? outcome.status}`);
+    }
+  }, "cron:failure-repair");
 }
 
 function redactWebhookUrl(url: string): string {
@@ -172,7 +223,6 @@ function resolveCronCompletionWebhook(delivery: CronJob["delivery"]): string | u
 
 function appendCronFailureAlertDetails(
   message: string,
-  jobId: string,
   runAtMs: number | undefined,
   config: OpenClawConfig,
 ): string {
@@ -185,11 +235,7 @@ function appendCronFailureAlertDetails(
       text += `\nRun started: ${timestamp}`;
     }
   }
-  const inspectUrl = resolveControlUiAutomationRunUrl(config, {
-    jobId,
-    runId: runAtMs ? createCronExecutionId(jobId, runAtMs) : undefined,
-  });
-  return inspectUrl ? `${text}\nInspect: ${inspectUrl}` : text;
+  return text;
 }
 
 function buildCronFinishedWebhookPayload(evt: CronEvent) {
@@ -372,32 +418,27 @@ export async function sendGatewayCronWebhook(params: {
   }
 }
 
-/** Detached sends outlive cron ticks; own roots block mid-delivery suspension snapshots. */
-function dispatchDetachedCronNotification(params: {
-  jobId: string;
-  logger: CronLogger;
-  deliver: () => Promise<void>;
-}): void {
-  void runWithGatewayIndependentRootWorkContinuation(
-    params.deliver,
-    "cron:notification-delivery",
-  ).catch((err: unknown) => {
-    params.logger.warn(
-      { jobId: params.jobId, err: formatErrorMessage(err) },
-      "cron: detached notification delivery failed",
-    );
-  });
-}
-
 /** Transports a scheduler-authorized cron failure alert. */
 export async function sendGatewayCronFailureAlert(params: CronFailureAlertParams): Promise<void> {
+  let enteredAdmission = false;
   await runWithGatewayIndependentRootWorkContinuation(async () => {
+    enteredAdmission = true;
     const settled = await sendGatewayCronFailureAlertUnderAdmission(params);
     await params.onDeliverySettled(settled.outcome);
     if (settled.kind === "failed") {
       throw settled.error;
     }
-  }, "cron:failure-alert");
+  }, "cron:failure-alert").catch(async (error: unknown) => {
+    // Refused admission proves no send ran; admitted transports own their outcomes.
+    if (!enteredAdmission) {
+      await params.onDeliverySettled({
+        delivered: false,
+        status: "not-delivered",
+        error: formatErrorMessage(error),
+      });
+    }
+    throw error;
+  });
 }
 
 type FailureAlertTransportResult =
@@ -416,7 +457,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
       normalizeOptionalString(params.job.agentId) ??
       normalizeOptionalString(params.routing.defaultAgentId);
     if (!requestedAgentId) {
-      throw new Error(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
+      throw new CronAgentSelectionRequiredError();
     }
     const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(requestedAgentId);
     if (params.mode === "webhook") {
@@ -469,19 +510,26 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           cfg: runtimeConfig,
           agentId,
           jobId: params.job.id,
-          target: {
-            ...resolved,
-            sessionKey: resolveCronDeliverySessionKey(params.job),
+          target: resolved,
+          transcriptRoute: resolved.sessionRoute,
+          onTranscriptDiagnostic: (message) => {
+            params.logger.warn({ jobId: params.job.id }, message);
           },
           payload: {
             ...params.payload,
             text: appendCronFailureAlertDetails(
               params.payload.text ?? "",
-              params.job.id,
               params.runAtMs,
               runtimeConfig,
             ),
           },
+          inspectionUrl: resolveControlUiAutomationRunUrl(runtimeConfig, {
+            jobId: params.job.id,
+            runId:
+              params.runAtMs === undefined
+                ? undefined
+                : createCronExecutionId(params.job.id, params.runAtMs),
+          }),
           abortSignal: abortController.signal,
           onDeliveryAttempt,
         });
@@ -520,14 +568,67 @@ async function sendGatewayCronFailureAlertUnderAdmission(
   }
 }
 
-/** Fans out completion webhooks after a cron run finishes. */
+/** Records unstarted outcomes and fans out completion webhooks. */
 export function dispatchGatewayCronFinishedNotifications(params: {
   evt: CronEvent;
   job?: CronJob;
+  runNotStarted?: boolean;
+  resolveCronAgent?: CronAgentResolver;
   logger: CronLogger;
   webhookToken?: unknown;
   ssrfPolicy?: SsrFPolicy;
 }): void {
+  if (
+    params.job &&
+    params.resolveCronAgent &&
+    (params.evt.status === "skipped" || (params.evt.status === "error" && params.runNotStarted))
+  ) {
+    const job = params.job;
+    const resolveCronAgent = params.resolveCronAgent;
+    void runWithGatewayIndependentRootWorkContinuation(async () => {
+      const { agentId, cfg } = resolveCronAgent(job.owner?.agentId ?? job.agentId);
+      const sessionKey = job.owner?.sessionKey ?? resolveCronDeliverySessionKey(job);
+      if (!sessionKey || params.evt.runAtMs === undefined) {
+        return;
+      }
+      const { entry } = await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg,
+        agentId,
+        key: sessionKey,
+      });
+      if (!entry) {
+        throw new Error("Automation owner conversation is unavailable");
+      }
+      const reason = params.evt.error ?? params.evt.summary ?? "The run was skipped.";
+      const result = await commitCronConversationResult({
+        config: cfg,
+        agentId,
+        jobId: job.id,
+        runStartedAt: params.evt.runAtMs,
+        conversation: {
+          sessionKey,
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+        },
+        payloads: [
+          {
+            text: redactSensitiveText(
+              `Automation "${job.name}" did not start: ${reason} Check automation history, resolve the cause, then run it again.`,
+            ),
+          },
+        ],
+        deliveryAttemptFence: null,
+      });
+      if (!result.ok) {
+        throw new Error(result.reason);
+      }
+    }, "cron:run-outcome-notice").catch((error: unknown) => {
+      params.logger.warn(
+        { jobId: job.id, err: formatErrorMessage(error) },
+        "cron: run outcome notice failed",
+      );
+    });
+  }
   const webhookToken = normalizeOptionalString(params.webhookToken);
   const redactedWebhookEvent = redactCommandCronEventForExternalDelivery(params.evt, params.job);
   const completionSummary =
@@ -549,14 +650,12 @@ export function dispatchGatewayCronFinishedNotifications(params: {
     );
   }
 
-  // Script notify is carried as the completion summary, so its absence uses
-  // the same silent-summary suppression path as NO_REPLY output.
+  // Script notify is carried as the prepared completion summary.
   if (completionWebhookUrl && (completionSummary || params.evt.completionStatus === "failed")) {
     const payload = buildCronFinishedWebhookPayload(redactedWebhookEvent);
-    dispatchDetachedCronNotification({
-      jobId: params.evt.jobId,
-      logger: params.logger,
-      deliver: () =>
+    // Detached sends own roots so suspension cannot snapshot mid-delivery.
+    void runWithGatewayIndependentRootWorkContinuation(
+      () =>
         postCronWebhook({
           webhookUrl: completionWebhookUrl,
           webhookToken,
@@ -565,6 +664,12 @@ export function dispatchGatewayCronFinishedNotifications(params: {
           jobId: params.evt.jobId,
           logger: params.logger,
         }),
+      "cron:notification-delivery",
+    ).catch((err: unknown) => {
+      params.logger.warn(
+        { jobId: params.evt.jobId, err: formatErrorMessage(err) },
+        "cron: detached notification delivery failed",
+      );
     });
   }
 }

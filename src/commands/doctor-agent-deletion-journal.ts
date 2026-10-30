@@ -13,6 +13,7 @@ import { prepareStateDatabaseInitialization } from "../state/openclaw-state-db-i
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { quarantineAgentDeletionJournal } from "./doctor-agent-deletion-journal-quarantine.js";
+import { restoreDoctorMissingJournalStores } from "./doctor-agent-deletion-journal-restore.js";
 import type { DoctorDatabasePreflight } from "./doctor-database-preflight.js";
 
 /** Doctor alone reconstructs lost deletion history and records the stores it cannot verify. */
@@ -84,15 +85,10 @@ export async function repairDoctorAgentDeletionJournal(params: {
     };
   }
   if (params.shouldRepair) {
-    if (params.preflight.pendingMigrations?.some((entry) => entry.kind === "state")) {
-      const { prepareLegacyStateDatabaseSchema } =
-        await import("../infra/state-migrations.doctor.js");
-      const { throwIfDoctorStateMigrationRefused } =
-        await import("../infra/state-migrations.messages.js");
-      throwIfDoctorStateMigrationRefused([await prepareLegacyStateDatabaseSchema(params.env)]);
-    }
     const recovery = await quarantineAgentDeletionJournal({
       inventory: [...discovery.targets, ...discovery.retainedTargets, ...held],
+      configuredTargets:
+        params.preflight.agentDatabaseMigrationDiscovery?.configuredAgentDatabaseTargets ?? [],
       env: params.env,
     });
     if (recovery) {
@@ -112,9 +108,18 @@ export async function repairDoctorAgentDeletionJournal(params: {
         ),
       );
     }
+    const automatic = await restoreDoctorMissingJournalStores({ env: params.env, held });
+    changes.push(...automatic.changes.map(sanitizeForLog));
+    recoveryWarnings.push(...automatic.warnings.map(sanitizeForLog));
+    held = held.filter(
+      (target) =>
+        !automatic.restored.some(
+          (restored) => restored.agentId === target.agentId && restored.path === target.path,
+        ),
+    );
   }
   if (held.length === 0 && (!missing || params.shouldRepair)) {
-    return { changes, warnings: [] };
+    return { changes, warnings: recoveryWarnings };
   }
   const snapshot = await createConfigIO({
     env: params.env,
@@ -133,7 +138,7 @@ export async function repairDoctorAgentDeletionJournal(params: {
       }
       if (isReservedSystemAgentId(target.agentId)) {
         return sanitizeForLog(
-          `${target.path}: ${target.agentId} is a reserved system agent and cannot be added or deleted. Its store remains untouched; review its deletion recovery receipt, then run ${formatCliCommand("openclaw doctor --fix", params.env)}.`,
+          `${target.path}: ${target.agentId} is a reserved system agent and cannot be added or deleted. Run ${formatCliCommand("openclaw doctor --fix", params.env)} to restore its canonical store after ownership, integrity, and backup verification; unverified stores remain untouched.`,
         );
       }
       const workspace = resolveAgentWorkspaceDir(snapshot.sourceConfig, target.agentId, params.env);
@@ -150,7 +155,7 @@ export async function repairDoctorAgentDeletionJournal(params: {
     }),
     ...(missing && !params.shouldRepair
       ? [
-          `Run ${formatCliCommand("openclaw doctor --fix", params.env)} to reconstruct the journal without activating held stores.`,
+          `Run ${formatCliCommand("openclaw doctor --fix", params.env)} to reconstruct the journal and restore verified configured stores automatically after verified backups. Other stores remain held.`,
         ]
       : []),
   ];

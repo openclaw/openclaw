@@ -215,16 +215,27 @@ export function registerDefaultAuthTokenSuite(): void {
 
     test("hello-ok separates effective scopes from a reused device token grant", async () => {
       const { randomUUID } = await import("node:crypto");
-      const os = await import("node:os");
       const path = await import("node:path");
       const token = resolveGatewayTokenOrEnv();
       const deviceIdentityPath = path.join(
-        os.homedir(),
-        `openclaw-shared-auth-scope-reuse-${randomUUID()}.json`,
+        process.env.OPENCLAW_STATE_DIR!,
+        `shared-auth-scope-reuse-${randomUUID()}`,
+        "client",
+        "credentials.sqlite",
       );
       const wsInitial = await openWs(port);
       let pairedDeviceToken: string | undefined;
       let recoveryScope: string | undefined;
+      const expectedAuthKeys = [
+        "deviceToken",
+        "issuedAtMs",
+        "method",
+        "recoveryMigrationAllowed",
+        "recoveryScope",
+        "role",
+        "roleAllowsAdmin",
+        "scopes",
+      ];
       try {
         const initial = await connectReq(wsInitial, {
           token,
@@ -234,19 +245,12 @@ export function registerDefaultAuthTokenSuite(): void {
         expect(initial.ok).toBe(true);
         const auth = readHelloOkAuth(initial.payload);
         expect(auth?.role).toBe("operator");
+        expect(auth?.roleAllowsAdmin).toBe(true);
         expect(auth?.scopes).toEqual(["operator.admin"]);
         expect(typeof auth?.deviceToken).toBe("string");
         expect(auth?.recoveryScope).toMatch(/^[A-Za-z0-9_-]+$/u);
         expect(auth?.recoveryMigrationAllowed).toBe(true);
-        expect(Object.keys(auth ?? {}).toSorted()).toEqual([
-          "deviceToken",
-          "issuedAtMs",
-          "method",
-          "recoveryMigrationAllowed",
-          "recoveryScope",
-          "role",
-          "scopes",
-        ]);
+        expect(Object.keys(auth ?? {}).toSorted()).toEqual(expectedAuthKeys);
         pairedDeviceToken = auth?.deviceToken as string | undefined;
         recoveryScope = auth?.recoveryScope;
       } finally {
@@ -263,19 +267,12 @@ export function registerDefaultAuthTokenSuite(): void {
         expect(reconnect.ok).toBe(true);
         const auth = readHelloOkAuth(reconnect.payload);
         expect(auth?.role).toBe("operator");
+        expect(auth?.roleAllowsAdmin).toBe(true);
         expect(auth?.deviceToken).toBe(pairedDeviceToken);
         expect(auth?.recoveryScope).toBe(recoveryScope);
         expect(auth?.recoveryMigrationAllowed).toBe(true);
         expect(auth?.scopes).toEqual(["operator.read"]);
-        expect(Object.keys(auth ?? {}).toSorted()).toEqual([
-          "deviceToken",
-          "issuedAtMs",
-          "method",
-          "recoveryMigrationAllowed",
-          "recoveryScope",
-          "role",
-          "scopes",
-        ]);
+        expect(Object.keys(auth ?? {}).toSorted()).toEqual(expectedAuthKeys);
         const schema = await rpcReq(wsReconnect, "config.schema");
         expect(schema.ok).toBe(true);
         const admin = await rpcReq(wsReconnect, "config.patch");
@@ -292,7 +289,6 @@ export function registerDefaultAuthTokenSuite(): void {
       const nonce = await readConnectChallengeNonce(ws);
 
       const { randomUUID } = await import("node:crypto");
-      const os = await import("node:os");
       const path = await import("node:path");
       // Fresh identity avoids inheriting a previously paired device's grant.
       const { device } = await createSignedDevice({
@@ -300,7 +296,13 @@ export function registerDefaultAuthTokenSuite(): void {
         scopes: [],
         clientId: GATEWAY_CLIENT_NAMES.TEST,
         clientMode: GATEWAY_CLIENT_MODES.TEST,
-        identityPath: path.join(os.homedir(), `openclaw-test-device-${randomUUID()}.sqlite`),
+        identityPath: path.join(
+          process.env.OPENCLAW_STATE_DIR!,
+          "test-device-identities",
+          randomUUID(),
+          "client",
+          "credentials.sqlite",
+        ),
         nonce,
       });
 
@@ -349,6 +351,27 @@ export function registerDefaultAuthTokenSuite(): void {
       await new Promise<void>((resolve) => {
         ws.once("close", () => resolve());
       });
+    });
+
+    test("keeps protocol-v4 Mac apps connected after widget retirement", async () => {
+      const ws = await openWs(port);
+      try {
+        const res = await connectReq(ws, {
+          minProtocol: 4,
+          maxProtocol: 4,
+          client: {
+            id: GATEWAY_CLIENT_NAMES.MACOS_APP,
+            version: "2026.10.3",
+            platform: "macos",
+            mode: GATEWAY_CLIENT_MODES.UI,
+          },
+        });
+        expect(res.ok, JSON.stringify(res)).toBe(true);
+        expect(res.payload).toMatchObject({ type: "hello-ok", protocol: 4 });
+        expect((await rpcReq(ws, "health")).ok).toBe(true);
+      } finally {
+        ws.close();
+      }
     });
 
     test("allows previous protocol for restart health probes", async () => {

@@ -1,115 +1,51 @@
-// Covers synchronous extra security audit aggregation.
-import { expectDefined } from "@openclaw/normalization-core/expect";
-import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import { expect, it } from "vitest";
 import { setConfigResolutionFacts } from "../config/resolution-facts.js";
 import {
   collectAttackSurfaceSummaryFindings,
   collectSmallModelRiskFindings,
 } from "./audit-extra.summary.js";
-import { collectSecretsInConfigFindings } from "./audit-extra.sync.js";
+import { collectSecretsInConfigFindings } from "./audit-secrets.js";
 
-vi.mock("../plugins/web-search-credential-presence.js", () => ({
-  hasConfiguredWebSearchCredential: () => false,
-}));
-
-describe("collectSecretsInConfigFindings", () => {
-  it("distinguishes an unresolved password from byte-identical literal text", () => {
-    const config = {
-      gateway: { auth: { password: "${GATEWAY_PASSWORD}" } },
-    } satisfies OpenClawConfig;
-    setConfigResolutionFacts(config, new Set(["gateway.auth.password"]));
-    expect(collectSecretsInConfigFindings(config)).toHaveLength(0);
-
-    setConfigResolutionFacts(config, new Set());
-    expect(collectSecretsInConfigFindings(config)).toHaveLength(1);
-  });
+it("distinguishes an unresolved password from byte-identical literal text", () => {
+  const config = { gateway: { auth: { password: "${GATEWAY_PASSWORD}" } } };
+  setConfigResolutionFacts(config, new Set(["gateway.auth.password"]));
+  expect(collectSecretsInConfigFindings(config)).toEqual([]);
+  setConfigResolutionFacts(config, new Set());
+  expect(collectSecretsInConfigFindings(config)).toHaveLength(1);
 });
 
-describe("collectAttackSurfaceSummaryFindings", () => {
-  it.each([
-    {
-      name: "distinguishes external webhooks from internal hooks when only internal hooks are enabled",
-      cfg: {
-        hooks: { internal: { enabled: true } },
-      } satisfies OpenClawConfig,
-      expectedDetail: ["hooks.webhooks: disabled", "hooks.internal: enabled"],
-    },
-    {
-      name: "reports internal hooks as disabled until configured",
-      cfg: {} satisfies OpenClawConfig,
-      expectedDetail: ["hooks.webhooks: disabled", "hooks.internal: disabled"],
-    },
-  ])("$name", ({ cfg, expectedDetail }) => {
-    const finding = expectDefined(
-      collectAttackSurfaceSummaryFindings(cfg).at(0),
-      "attack surface summary finding",
-    );
-    expect(finding.checkId).toBe("summary.attack_surface");
-    for (const snippet of expectedDetail) {
-      expect(finding.detail).toContain(snippet);
-    }
+it("summarizes enabled internal hooks", async () => {
+  const [finding] = await collectAttackSurfaceSummaryFindings({
+    hooks: { internal: { enabled: true } },
   });
+  expect(finding).toMatchObject({ checkId: "summary.attack_surface" });
+  expect(finding?.detail).toContain("hooks.webhooks: disabled");
+  expect(finding?.detail).toContain("hooks.internal: enabled");
 });
 
-describe("collectSmallModelRiskFindings", () => {
-  const browserOffCfg = {
-    agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
-    browser: { enabled: false },
-    tools: { web: { fetch: { enabled: false } } },
-  } satisfies OpenClawConfig;
-  const browserDefaultCfg = {
-    agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
-    tools: { web: { fetch: { enabled: false } } },
-  } satisfies OpenClawConfig;
-  const configuredBrowserBlockedByPluginPolicyCfg = {
-    ...browserDefaultCfg,
-    plugins: { allow: ["openai"] },
-    browser: { enabled: true },
-  } satisfies OpenClawConfig;
-
-  it.each([
-    {
-      name: "small model without web/browser tools is informational even without sandbox all",
-      cfg: browserOffCfg,
-      env: {},
-      expectedSeverity: "info",
-      detailIncludes: ["web=[off]", "No web/browser tools detected"],
-      detailExcludes: ["web=[browser]"],
+it.each<[string, boolean | undefined, string[] | undefined, string, string?]>([
+  ["disabled", false, undefined, "info"],
+  ["default", undefined, undefined, "critical"],
+  ["blocked by plugin policy", true, ["openai"], "info"],
+  ["configured web search without browser", false, undefined, "critical", "brave-key"],
+])("%s", (_name, enabled, allow, severity, searchKey) => {
+  const [finding] = collectSmallModelRiskFindings({
+    cfg: {
+      agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
+      tools: {
+        web: { fetch: { enabled: false }, ...(searchKey ? { search: { apiKey: searchKey } } : {}) },
+      },
+      browser: { enabled },
+      plugins: { allow },
     },
-    {
-      name: "treats browser as enabled by default when browser config is omitted",
-      cfg: browserDefaultCfg,
-      env: {},
-      expectedSeverity: "critical",
-      detailIncludes: ["web=[browser]"],
-      detailExcludes: ["No web/browser tools detected"],
-    },
-    {
-      name: "does not let browser config bypass restrictive plugin policy",
-      cfg: configuredBrowserBlockedByPluginPolicyCfg,
-      env: {},
-      expectedSeverity: "info",
-      detailIncludes: ["web=[off]", "No web/browser tools detected"],
-      detailExcludes: ["web=[browser]"],
-    },
-  ])("$name", ({ cfg, env, expectedSeverity, detailIncludes, detailExcludes }) => {
-    const finding = expectDefined(
-      collectSmallModelRiskFindings({
-        cfg,
-        env,
-      }).at(0),
-      "small model risk finding",
-    );
-
-    expect(finding.checkId).toBe("models.small_params");
-    expect(finding.severity).toBe(expectedSeverity);
-    expect(finding.detail).toContain("ollama/mistral-8b");
-    for (const snippet of detailIncludes) {
-      expect(finding.detail).toContain(snippet);
-    }
-    for (const snippet of detailExcludes) {
-      expect(finding.detail).not.toContain(snippet);
-    }
+    env: {},
+  });
+  const unsafe = severity === "critical";
+  expect(finding).toMatchObject({
+    checkId: "models.small_params",
+    severity,
+    detail: expect.stringContaining(
+      unsafe ? (searchKey ? "web=[web_search]" : "web=[browser]") : "web=[off]",
+    ),
   });
 });

@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { formatExternalSupervisorActionRequired } from "../infra/gateway-supervision.js";
 import type { detectGatewayRespawnSupervisor } from "../infra/supervisor-markers.js";
-import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { prepareHostedStopExecutor } from "./hosted-stop-executor.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { probeLaunchAgentState, resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
@@ -68,16 +67,9 @@ export async function prepareHostedGatewayStop(
     };
   }
   const pid = process.pid;
-  const start = getFileLockProcessStartTime(pid);
-  if (start === null) {
-    throw new Error("Cannot verify the Gateway process identity. Stop it from an external shell.");
-  }
   const assertProcess = (assertCurrent: () => void) => {
     signal.throwIfAborted();
     assertCurrent();
-    if (getFileLockProcessStartTime(pid) !== start) {
-      throw new Error("Gateway process identity changed before native stop.");
-    }
   };
   const assertPreparing = () => assertProcess(assertCaller);
   assertPreparing();
@@ -132,7 +124,9 @@ export async function prepareHostedGatewayStop(
 
   const cgroup = await readProcessCgroup(pid);
   assertPreparing();
-  const unit = cgroup.split("/").at(-1);
+  // DelegateSubgroup places the service's main process in this one managed leaf.
+  const serviceCgroup = cgroup.replace(/\/gateway$/u, "");
+  const unit = serviceCgroup.split("/").at(-1);
   if (!unit || !/^[A-Za-z0-9_.:@\\-]+\.service$/.test(unit)) {
     throw new Error(
       "This Gateway is not the main process of a systemd service. Stop it through the host that started it.",
@@ -140,7 +134,7 @@ export async function prepareHostedGatewayStop(
   }
   const uid = process.getuid?.();
   const scope =
-    uid !== undefined && cgroup.includes(`/user@${uid}.service/`) ? "--user" : "--system";
+    uid !== undefined && serviceCgroup.includes(`/user@${uid}.service/`) ? "--user" : "--system";
   // Freeze one manager route. Do not use installed-service discovery's user-first
   // fallback, which can select a different Gateway when both scopes exist.
   const readIdentity = async (assertCurrent: () => void) => {
@@ -164,7 +158,7 @@ export async function prepareHostedGatewayStop(
       fields.activestate !== "active" ||
       fields.substate !== "running" ||
       fields.mainpid !== String(pid) ||
-      fields.controlgroup !== cgroup ||
+      fields.controlgroup !== serviceCgroup ||
       !/^[a-f0-9]{32}$/i.test(fields.invocationid ?? "") ||
       !/^[1-9]\d*$/.test(fields.execmainstarttimestampmonotonic ?? "") ||
       !/^(?:0|)$/.test(fields.job ?? "missing")
@@ -204,7 +198,10 @@ export async function prepareHostedGatewayStop(
     verifyPlacement: async (executorPid) => {
       const executorCgroup = await readProcessCgroup(executorPid);
       assertPreparing();
-      if (!executorCgroup.endsWith(`/${scopeUnit}`) || executorCgroup.startsWith(`${cgroup}/`)) {
+      if (
+        !executorCgroup.endsWith(`/${scopeUnit}`) ||
+        executorCgroup.startsWith(`${serviceCgroup}/`)
+      ) {
         throw new Error("Native stop executor did not leave the Gateway service cgroup.");
       }
     },

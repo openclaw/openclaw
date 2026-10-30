@@ -1,7 +1,8 @@
-import { nothing, render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
-import { renderComposerQuestionDock } from "./chat-composer-question.tsx";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { ComposerQuestionDock } from "./chat-composer-question.tsx";
 import { questionPanelIn } from "./chat-question-card.test-support.ts";
 import type { QuestionPanelProps } from "./chat-question-card.ts";
 import baseStyles from "../../../styles/base.css?inline";
@@ -19,7 +20,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  render(nothing, container);
   container.remove();
   styles.remove();
 });
@@ -61,10 +61,12 @@ it.each([320, 400, 440, 480])(
       },
       onSubmit: vi.fn(),
     };
-    render(renderComposerQuestionDock(props), container);
+    mountSolid(() => createComponent(ComposerQuestionDock, { panel: props }), { container });
     await questionPanelIn(container);
     await document.fonts.ready;
-    for (const option of container.querySelectorAll<HTMLElement>('[role="radio"]')) {
+    const options = container.querySelectorAll<HTMLElement>('[role="radio"]');
+    expect(options).toHaveLength(3);
+    for (const option of options) {
       const tile = option
         .querySelector<HTMLElement>(".chat-question-panel__thumbnail")!
         .getBoundingClientRect();

@@ -3,7 +3,8 @@
 import { formatErrorMessage } from "./lib/error-format.mts";
 import { mergeExtensionTestPlans, resolveExtensionTestPlan } from "./lib/extension-test-plan.mts";
 import { isDirectScriptRun } from "./lib/vitest-batch-runner.mts";
-import { runExtensionBatchPlan } from "./test-extension-batch.mts";
+import { runVitestCli } from "./lib/vitest-process.mts";
+import { runExtensionBatchPlan } from "./test-extension-batch-run.mts";
 
 const ALLOW_NO_TESTS_FLAG = "--allow-no-tests";
 
@@ -59,5 +60,5 @@ async function run(): Promise<void> {
 }
 
 if (isDirectScriptRun(import.meta.url)) {
-  await run();
+  await runVitestCli(undefined, run);
 }

@@ -47,7 +47,7 @@ describe("xAI OAuth runtime materialization", () => {
     expect(materialized?.id).toBe("grok-4.6");
     expect(materialized?.thinkingLevelMap?.xhigh).toBe("xhigh");
     let wireModelId: string | undefined;
-    let wireHeaders: Record<string, string> | undefined;
+    let wireHeaders: NonNullable<Parameters<StreamFn>[2]>["headers"];
     const streamFn: StreamFn = (wireModel, _context, options) => {
       wireModelId = wireModel.id;
       wireHeaders = options?.headers;

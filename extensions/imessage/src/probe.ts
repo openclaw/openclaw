@@ -1,11 +1,7 @@
 import path from "node:path";
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { detectBinary } from "openclaw/plugin-sdk/setup";
 import {
@@ -28,13 +24,6 @@ import {
   IMESSAGE_UPDATE_COMMAND,
   isAutoManagedIMessageCliPath,
 } from "./setup-core.js";
-
-// Re-export for backwards compatibility
-export { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
-export {
-  getCachedIMessagePrivateApiStatus,
-  imessageRpcSupportsMethod,
-} from "./private-api-status.js";
 
 export type IMessageProbe = BaseProbeResult & {
   fatal?: boolean;
@@ -71,29 +60,21 @@ function cacheIMessagePrivateApiStatus(
   cliPath: string,
   status: NonNullable<IMessageProbe["privateApi"]>,
 ): void {
-  if (status.available) {
-    setCachedIMessagePrivateApiStatus(cliPath, status, 0);
-    return;
-  }
-  const expiresAt = resolveExpiresAtMsFromDurationMs(PRIVATE_API_NEGATIVE_TTL_MS);
-  if (expiresAt !== undefined) {
-    setCachedIMessagePrivateApiStatus(cliPath, status, expiresAt);
-  }
+  setCachedIMessagePrivateApiStatus(
+    cliPath,
+    status,
+    status.available ? 0 : Date.now() + PRIVATE_API_NEGATIVE_TTL_MS,
+  );
 }
 
 function setCachedRpcSupport(cliPath: string, result: RpcSupportResult): void {
-  const expiresAt = resolveExpiresAtMsFromDurationMs(RPC_SUPPORT_CACHE_TTL_MS);
-  if (expiresAt === undefined) {
-    return;
-  }
-  rpcSupportCache.set(cliPath, { result, expiresAt });
+  rpcSupportCache.set(cliPath, { result, expiresAt: Date.now() + RPC_SUPPORT_CACHE_TTL_MS });
 }
 
 async function probeRpcSupport(cliPath: string, timeoutMs: number): Promise<RpcSupportResult> {
   const cached = rpcSupportCache.get(cliPath);
   if (cached) {
-    const now = asDateTimestampMs(Date.now());
-    if (now !== undefined && cached.expiresAt > now) {
+    if (cached.expiresAt > Date.now()) {
       return cached.result;
     }
     rpcSupportCache.delete(cliPath);
@@ -161,6 +142,22 @@ export async function probeIMessagePrivateApi(
       return cached;
     }
   }
+  const unavailable = (error: string) => {
+    const status: NonNullable<IMessageProbe["privateApi"]> = {
+      available: false,
+      v2Ready: false,
+      selectors: {},
+      rpcMethods: [],
+      cliCapabilities: {
+        sendRichSupportsAttachment: false,
+        pollSendSupportsNoComment: false,
+      },
+      error,
+    };
+    cacheIMessagePrivateApiStatus(key, status);
+    return status;
+  };
+
   try {
     const result = await runCommandWithTimeout([expandIMessageUserPath(key), "status", "--json"], {
       timeoutMs,
@@ -172,19 +169,9 @@ export async function probeIMessagePrivateApi(
       normalized.includes("unknown subcommand") &&
       normalized.includes("status")
     ) {
-      const status: NonNullable<IMessageProbe["privateApi"]> = {
-        available: false,
-        v2Ready: false,
-        selectors: {},
-        rpcMethods: [],
-        cliCapabilities: {
-          sendRichSupportsAttachment: false,
-          pollSendSupportsNoComment: false,
-        },
-        error: `imsg CLI does not support the "status" subcommand. Update imsg on the Messages Mac: ${IMESSAGE_UPDATE_COMMAND}`,
-      };
-      cacheIMessagePrivateApiStatus(key, status);
-      return status;
+      return unavailable(
+        `imsg CLI does not support the "status" subcommand. Update imsg on the Messages Mac: ${IMESSAGE_UPDATE_COMMAND}`,
+      );
     }
     const lines = normalizeStringEntries(result.stdout.split(/\r?\n/));
     let payload: Record<string, unknown> | null = null;
@@ -252,19 +239,7 @@ export async function probeIMessagePrivateApi(
     cacheIMessagePrivateApiStatus(key, status);
     return status;
   } catch (err) {
-    const status: NonNullable<IMessageProbe["privateApi"]> = {
-      available: false,
-      v2Ready: false,
-      selectors: {},
-      rpcMethods: [],
-      cliCapabilities: {
-        sendRichSupportsAttachment: false,
-        pollSendSupportsNoComment: false,
-      },
-      error: String(err),
-    };
-    cacheIMessagePrivateApiStatus(key, status);
-    return status;
+    return unavailable(String(err));
   }
 }
 
@@ -272,7 +247,7 @@ export async function probeIMessage(
   timeoutMs?: number,
   opts: IMessageProbeOptions = {},
 ): Promise<IMessageProbe> {
-  const cfg = opts.cliPath || opts.dbPath ? undefined : getRuntimeConfig();
+  const cfg = opts.cliPath || opts.dbPath ? undefined : await captureRuntimeConfigAsyncReader()();
   const explicitCliPath = opts.cliPath?.trim() || cfg?.channels?.imessage?.cliPath?.trim();
   const cliPath = explicitCliPath || "imsg";
   const dbPath = opts.dbPath?.trim() || cfg?.channels?.imessage?.dbPath?.trim();

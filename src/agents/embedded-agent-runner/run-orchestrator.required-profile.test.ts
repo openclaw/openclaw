@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -16,6 +17,7 @@ it("resolves the admitted canonical agent before mandatory placement preparation
     cloudWorkers: { requiredProfile: "dedicated" },
   };
   await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
   await upsertSessionEntryCore({ agentId, sessionKey }, { sessionId, updatedAt: Date.now() });
   const reached = new Error("placement owner reached before model execution");
   const prepare = vi.fn(

@@ -34,6 +34,9 @@ openclaw channels dead-letters list --channel telegram --account default
 
 `channels list` shows chat channels only: configured accounts by default, with `installed`, `configured`, and `enabled` status tags per account (`--json` for machine output). Pass `--all` to also surface bundled channels that have no configured account yet and installable catalog channels that are not yet on disk. Provider auth and model usage live elsewhere: `openclaw models auth list` for provider auth profiles, `openclaw status` or `openclaw models list` for usage/quota.
 
+Human-readable catalog labels neutralize terminal control sequences and display
+embedded tabs and line breaks as visible escapes. JSON preserves the original labels.
+
 `--json` returns a local account inventory from plugin metadata without contacting the Gateway or executing channel setup/runtime code. Configured accounts remain visible even when their plugin has a setup entry. Use `channels status --probe` for live checks.
 
 Disabling a plugin does not uninstall it. Its channels remain `installed: true` in the inventory; with `--all`, an installed channel without configured accounts has `origin: "available"` even when its plugin is disabled.
@@ -60,6 +63,9 @@ did not name.
 With `--json`, every channel entry includes `label` alongside its accounts, install state, and origin. Entries also include `docsPath` when verified official channel metadata provides a validated root-relative docs path. Automation can join this path with `https://docs.openclaw.ai` without trusting plugin-supplied URLs. Untracked or inconsistent installed-plugin provenance omits `docsPath`; repair verified legacy provenance with `openclaw doctor --fix` or reinstall the official package.
 
 ## Status / capabilities / resolve / logs
+
+Human-readable capability probe and diagnostic lines neutralize terminal control
+sequences. `--json` preserves the original values.
 
 `capabilities` and `resolve` reject explicitly empty or whitespace-only `--account`
 values. Omit the option to keep each command's default or broader account scope;
@@ -123,6 +129,8 @@ Run these commands on the Gateway host so they access the same shared state data
 
 `openclaw health` reports dead-letter counts and oldest failure age per channel account. `openclaw doctor` names affected accounts and points back to the inspection command.
 
+Resubmission writes directly to the queue without waking the channel. A running channel picks it up on its next recovery sweep, within five minutes by default plus scheduling and execution time (longer if its plugin configures a larger interval). A stopped channel sweeps immediately when it starts.
+
 Do not use `openclaw sessions`, Gateway `sessions.list`, or the agent
 `sessions_list` tool as a channel socket-health signal. Those surfaces report
 stored conversation rows, not provider runtime state. After a Discord provider
@@ -182,6 +190,16 @@ Examples of channel-owned flags include:
 If a channel plugin needs to be installed during a flag-driven add command, OpenClaw uses the channel's default install source without opening the interactive plugin install prompt.
 
 Both guided setup and flag-driven setup pass through the selected channel's parser, validation, account resolution, config writer, and post-write hooks. Unsupported flags fail with the owning channel's setup error instead of being accepted through a global input bag.
+
+New or changed SecretRef-supported channel credentials are saved as protected
+entries in the [shared secret store](/gateway/secrets/secret-store-and-egress).
+`openclaw.json` keeps a `store` SecretRef instead of the credential. Existing
+references, environment-backed setup, and token-file choices are preserved.
+Store writes use the local Gateway when it is running, or exclusive offline
+ownership when it is stopped. If config publication fails, setup retains saved
+entries and reports their names so you can inspect the config before cleanup.
+Unchanged plaintext credentials are left for the existing Doctor and secrets
+migration workflows; upgrading does not silently rewrite them.
 
 When you run `openclaw channels add` with no direct account, credential, or channel-config flags, the interactive wizard can prompt. A positional channel id and `--channel <id>` both open that channel's guided setup immediately. Back returns to the full channel picker:
 
@@ -254,6 +272,11 @@ Host-thaw recovery detects maintenance gaps at least 45 seconds beyond the norma
 - `{ status: "handed-off" }`: startup was handed to the account runtime. Check status for provider connectivity.
 - `{ status: "retry", reason }`: an existing task, start, or stop still owns the account (`task-owned`, `start-in-flight`, or `stop-in-flight`). A running account can return `task-owned` with `started: true`; another start was unnecessary. Wait for an in-flight stop to finish before starting again.
 - `{ status: "skipped", reason }`: startup was skipped, for example because the account is `disabled`, `unconfigured`, or `unlinked`. Repair the named account condition before retrying. Other manager reasons are `unsupported`, `autostart-suppressed`, `ambient-suppressed`, `secret-unavailable`, and `manual-stop`; the manual RPC bypasses automatic-start suppression but does not bypass account configuration or secret checks.
+
+If a manual stop times out because an account task ignores cancellation,
+`channels.start` can recover that timed-out slot after cleanup succeeds.
+Automatic restarts remain suppressed until the manual start; failed cleanup
+still reports an error.
 
 Accounts explicitly disabled in channel or account configuration are skipped without resolving inactive credentials. An unavailable configured secret on an enabled account still returns an RPC error instead of starting with another credential.
 

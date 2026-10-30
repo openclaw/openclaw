@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
@@ -8,11 +7,14 @@ import {
   CONTROL_UI_PLUGIN_MAX_ASSETS,
   CONTROL_UI_PLUGIN_MAX_BUILD_BYTES,
   isPluginControlUiAssetPath,
+  pluginControlUiGenerationHash,
 } from "../plugins/control-ui-assets.js";
+import { normalizeManifestControlUi } from "../plugins/manifest-control-ui.js";
 import type { PluginManifestControlUi } from "../plugins/manifest-types.js";
 import { PLUGIN_MANIFEST_FILENAME } from "../plugins/manifest.js";
 import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
 import { buildPluginBundle } from "./plugins-build-bundle.js";
+import { nameControlUiChunks } from "./plugins-control-ui-chunks.js";
 
 export async function writePluginBuildManifest(
   rootDir: string,
@@ -39,6 +41,22 @@ export async function buildPluginControlUi(params: {
   check?: boolean;
 }): Promise<PluginManifestControlUi> {
   const rootDir = await fs.realpath(params.rootDir);
+  const manifestText = await fs
+    .readFile(path.join(rootDir, PLUGIN_MANIFEST_FILENAME), "utf8")
+    .catch((error: unknown) => {
+      if (isRecord(error) && error.code === "ENOENT") {
+        return "{}";
+      }
+      throw error;
+    });
+  const authored: unknown = JSON.parse(manifestText);
+  const presentation = normalizeManifestControlUi(
+    isRecord(authored) ? authored.controlUi : undefined,
+    isRecord(authored) ? authored.channels : undefined,
+  );
+  if (!presentation.ok) {
+    throw new Error(presentation.error);
+  }
   const entry = await fs.realpath(path.resolve(rootDir, params.source));
   const relative = path.relative(rootDir, entry);
   if (relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
@@ -65,39 +83,24 @@ export async function buildPluginControlUi(params: {
     // bytes change the content hash that openclaw.plugin.json commits.
     alias: buildPluginLoaderAliasMap(entry, process.argv[1], import.meta.url, "src"),
   });
-  const files = outputs.map((file) => ({
+  // esbuild hashes input paths into JS chunk names, including physical package
+  // store paths. Preserve module graph identity without binding asset identity
+  // to checkout location; the generation hash below covers every final byte.
+  const rawFiles = outputs.map((file) => ({
     name: path.relative(buildDir, file.path),
     contents: file.contents,
   }));
-  if (files.length > CONTROL_UI_PLUGIN_MAX_ASSETS) {
-    throw new Error(`Control UI builds allow at most ${CONTROL_UI_PLUGIN_MAX_ASSETS} assets.`);
-  }
-  if (
-    files.some((file) => file.contents.length > CONTROL_UI_PLUGIN_MAX_ASSET_BYTES) ||
-    files.reduce((total, file) => total + file.contents.length, 0) >
-      CONTROL_UI_PLUGIN_MAX_BUILD_BYTES
-  ) {
-    throw new Error(
-      "Control UI builds allow at most 4 MiB per asset and 8 MiB per plugin. Reduce the browser bundle before installing.",
-    );
-  }
-  if (
-    !files.some((file) => file.name === "index.js") ||
-    files.some(
-      (file) => file.name !== path.basename(file.name) || !isPluginControlUiAssetPath(file.name),
-    )
-  ) {
-    throw new Error(
-      "Control UI build must produce a JavaScript entrypoint and only flat JavaScript/CSS assets.",
-    );
-  }
-  const hash = createHash("sha256");
-  for (const file of files) {
-    hash.update(`${file.name}\0${file.contents.length}\0`).update(file.contents);
-  }
-  const output = `dist/control-ui/${hash.digest("hex")}`;
+  // Reject unsafe or oversized raw output before graph parsing or renaming.
+  validateControlUiFiles(rawFiles);
+  const files = nameControlUiChunks(rawFiles);
+  validateControlUiFiles(files);
+  const output = `dist/control-ui/${pluginControlUiGenerationHash(files)}`;
   const outputDir = path.join(rootDir, output);
   const declaration = {
+    ...(presentation.value?.activation ? { activation: presentation.value.activation } : {}),
+    ...(presentation.value?.settingsViews
+      ? { settingsViews: presentation.value.settingsViews }
+      : {}),
     entry: `${output}/index.js`,
     ...(files.some((file) => file.name === "index.css") ? { styles: [`${output}/index.css`] } : {}),
   };
@@ -150,6 +153,31 @@ export async function buildPluginControlUi(params: {
     await fs.rm(staging, { recursive: true, force: true });
   }
   return declaration;
+}
+
+function validateControlUiFiles(files: Array<{ name: string; contents: Uint8Array }>): void {
+  if (files.length > CONTROL_UI_PLUGIN_MAX_ASSETS) {
+    throw new Error(`Control UI builds allow at most ${CONTROL_UI_PLUGIN_MAX_ASSETS} assets.`);
+  }
+  if (
+    files.some((file) => file.contents.length > CONTROL_UI_PLUGIN_MAX_ASSET_BYTES) ||
+    files.reduce((total, file) => total + file.contents.length, 0) >
+      CONTROL_UI_PLUGIN_MAX_BUILD_BYTES
+  ) {
+    throw new Error(
+      "Control UI builds allow at most 4 MiB per asset and 8 MiB per plugin. Reduce the browser bundle before installing.",
+    );
+  }
+  if (
+    !files.some((file) => file.name === "index.js") ||
+    files.some(
+      (file) => file.name !== path.basename(file.name) || !isPluginControlUiAssetPath(file.name),
+    )
+  ) {
+    throw new Error(
+      "Control UI build must produce a JavaScript entrypoint and only flat JavaScript/CSS assets.",
+    );
+  }
 }
 
 // mkdtemp is owner-only and file creation follows umask. Normalize generated

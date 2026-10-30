@@ -1,12 +1,6 @@
-export type CapabilityTransport = "local" | "gateway";
+import type { NormalizedUsage } from "../../agents/usage.js";
 
-type CapabilityMetadata = {
-  id: string;
-  description: string;
-  transports: Array<CapabilityTransport>;
-  flags: string[];
-  resultShape: string;
-};
+export type CapabilityTransport = "local" | "gateway";
 
 export type CapabilityEnvelope = {
   ok: boolean;
@@ -14,6 +8,8 @@ export type CapabilityEnvelope = {
   transport: CapabilityTransport;
   provider?: string;
   model?: string;
+  usage?: NormalizedUsage;
+  lastCallUsage?: NormalizedUsage;
   attempts: Array<Record<string, unknown>>;
   inputs?: Array<Record<string, unknown>>;
   outputs: Array<Record<string, unknown>>;
@@ -39,7 +35,13 @@ const IMAGE_GENERATION_FLAGS = [
   "--json",
 ];
 
-export const CAPABILITY_METADATA: CapabilityMetadata[] = [
+export const CAPABILITY_METADATA: {
+  id: string;
+  description: string;
+  transports: Array<CapabilityTransport>;
+  flags: string[];
+  resultShape: string;
+}[] = [
   {
     id: "model.run",
     description: "Run a one-shot inference turn through the selected model provider.",
@@ -263,10 +265,10 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
   },
   {
     id: "web.fetch",
-    description: "Fetch URL content through configured web fetch providers.",
+    description: "Fetch URL content directly or through a selected web fetch provider.",
     transports: ["local"],
     flags: ["--url", "--provider", "--format", "--json"],
-    resultShape: "fetch provider result",
+    resultShape: "page content with fetch metadata",
   },
   {
     id: "web.providers",

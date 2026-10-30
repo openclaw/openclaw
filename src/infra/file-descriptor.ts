@@ -3,11 +3,7 @@ import path from "node:path";
 import { openRootFileSync } from "@openclaw/fs-safe/advanced";
 import { sha256FileSync } from "@openclaw/fs-safe/durability";
 
-export {
-  copyFileHandle,
-  overwriteFileHandle,
-  writeFileWindowFully,
-} from "@openclaw/fs-safe/advanced";
+export { copyFileHandle, writeFileWindowFully } from "@openclaw/fs-safe/advanced";
 
 export type FileMutationFingerprint = Pick<
   BigIntStats,
@@ -37,10 +33,10 @@ export function sameFileMutationMetadata(
   left: FileMutationMetadata,
   right: FileMutationMetadata,
 ): boolean {
-  // Without statx, Linux libuv synthesizes birthtime from ctime. Real birthtime
+  // Without statx, Linux/Android libuv synthesizes birthtime from ctime. Real birthtime
   // changes still fail; this exact fallback shape requires the caller's byte proof.
   const derivedBirthtime =
-    process.platform === "linux" &&
+    (process.platform === "linux" || process.platform === "android") &&
     left.birthtimeNs === left.ctimeNs &&
     right.birthtimeNs === right.ctimeNs;
   return (
@@ -113,4 +109,15 @@ export function hashFileDescriptorSync(
 ): { sha256: string; sizeBytes: number } {
   const { digest, bytes } = sha256FileSync(fd, { maxBytes });
   return { sha256: digest, sizeBytes: bytes };
+}
+
+/** Flush an owned writable file before hashing it and always close the descriptor. */
+export function flushAndHashFileSync(filePath: string): { sha256: string; sizeBytes: number } {
+  const descriptor = fs.openSync(filePath, "r+");
+  try {
+    fs.fsyncSync(descriptor);
+    return hashFileDescriptorSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
 }

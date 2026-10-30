@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
-import "./session-accessor.sqlite-replacement-publication.test-support.js";
+import { isDeepStrictEqual } from "node:util";
 import { expect, it } from "vitest";
+import "./session-accessor.sqlite-replacement-publication.test-support.js";
 import { createSessionMembershipProjection } from "../../gateway/session-membership-projection.js";
 import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import {
@@ -15,16 +16,14 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   retainPreparedSessionEntryPredicate,
   retainPreparedSessionGenerationFacts,
   retainPreparedSessionSharingFacts,
 } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
-import {
-  projectSessionSharingEntry,
-  type SessionEntryReplacementPublication,
-} from "./session-accessor.sqlite-entry-cache.types.js";
+import { projectSessionSharingEntry } from "./session-accessor.sqlite-entry-cache.types.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { retainSessionEntryWorkerPublication } from "./session-accessor.sqlite-entry-worker-publication.js";
@@ -38,18 +37,34 @@ import {
   applySessionEntryExactReplacements,
 } from "./session-accessor.sqlite-replacement-projection.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
-import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
-import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { captureSessionEntryMetadataReceipts } from "./session-entry-metadata-receipt.js";
 import { updateSessionGroupCategoriesInWorker } from "./session-group-categories.js";
 import { readPreparedSessionParticipants } from "./session-participant-prepared-read.js";
+import { recordSessionParticipantInWorker } from "./session-sharing-store.async.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
+import { createRetainedSkillsSnapshotFixture } from "./session-skills-snapshot.test-support.js";
+import { promptReport } from "./system-prompt-report.test-support.js";
 import type { SessionEntry } from "./types.js";
 
 const { getReplacementPublicationDelivery } =
   await import("./session-accessor.sqlite-replacement-publication.test-support.js");
 const delivery = getReplacementPublicationDelivery();
+
+function setup(name: string) {
+  const database = openOpenClawAgentDatabase({ agentId: "main" });
+  const scope = { agentId: "main", storePath: database.path, sessionKey: `agent:main:${name}` };
+  const replace = (patch: Partial<SessionEntry>) =>
+    applySessionEntryExactReplacements({
+      storePath: database.path,
+      sessionKeys: [scope.sessionKey],
+      update: ([row]) => ({
+        result: undefined,
+        replacements: [{ sessionKey: scope.sessionKey, entry: { ...row!.entry, ...patch } }],
+      }),
+    });
+  return { database, scope, replace };
+}
 
 it("sheds aggregate optional snapshots while committing every required receipt row", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -92,6 +107,10 @@ it("sheds aggregate optional snapshots while committing every required receipt r
     expect(result.replacement.source?.writeToken).toBeUndefined();
     expect([...result.replacement.current.keys()]).toEqual(keys);
     expect(result.metadata).toHaveLength(keys.length);
+    const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+    if (typeof identity !== "string") {
+      throw new Error("Expected durable snapshot fixture");
+    }
     for (const [index, key] of keys.entries()) {
       expect(readExactSessionEntryRow(database, key, "list")?.entry.label).toBe(key);
       const metadata = result.metadata[index]!;
@@ -104,6 +123,93 @@ it("sheds aggregate optional snapshots while committing every required receipt r
       expect(metadata.source.writeToken).toBeUndefined();
       expect(result.replacement.current.get(key)).toMatchObject({ label: key });
       expect(result.replacement.current.get(key)?.skillsSnapshot).toBeUndefined();
+      const predicate = retainPreparedSessionEntryPredicate({
+        databaseIdentity: `file:${identity}`,
+        sessionKey: key,
+        entry: readExactSessionEntryRow(database, key, "full")!.entry,
+        projection: ["skillsSnapshot"],
+        matches: (before, after) =>
+          isDeepStrictEqual(before?.skillsSnapshot, after?.skillsSnapshot),
+      });
+      const publication = retainSessionEntryWorkerPublication({
+        agentId: "main",
+        storePath: database.path,
+        databaseIdentity: identity,
+      });
+      try {
+        publication.beginChanges([key]);
+        publication.settleMetadata([metadata], [], () => {});
+        expect(predicate.isCurrent()).toBe(false);
+        expect(predicate.canRefresh()).toBe(true);
+      } finally {
+        publication.settle(undefined, false);
+        predicate.release();
+      }
+    }
+  });
+});
+
+it("preserves retained snapshot authority through title writes and revokes library changes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { database, scope, replace } = setup("snapshot-authority");
+    const entry: SessionEntry = {
+      sessionId: "snapshot-authority",
+      updatedAt: 1,
+      skillsSnapshot: createRetainedSkillsSnapshotFixture(),
+    };
+    replaceSessionEntrySync(scope, entry);
+    const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+    if (typeof identity !== "string") {
+      throw new Error("Expected durable snapshot fixture");
+    }
+    const retained = { databaseIdentity: `file:${identity}`, sessionKey: scope.sessionKey };
+    const snapshot = retainPreparedSessionEntryPredicate({
+      ...retained,
+      entry,
+      projection: ["skillsSnapshot"],
+      matches: (before, after) =>
+        before?.sessionId === after?.sessionId &&
+        isDeepStrictEqual(
+          before?.skillsSnapshot?.librarySelections,
+          after?.skillsSnapshot?.librarySelections,
+        ),
+    });
+    const list = retainPreparedSessionEntryPredicate({
+      ...retained,
+      entry: readExactSessionEntryRow(database, scope.sessionKey, "list")!.entry,
+      projection: "list",
+      matches: (before, after) =>
+        before?.sessionId === after?.sessionId && after?.skillsSnapshot === undefined,
+    });
+    try {
+      replaceSessionEntrySync(scope, { ...entry, displayName: "Native title" });
+      expect(snapshot.isCurrent()).toBe(true);
+      expect(list.isCurrent()).toBe(true);
+      await upsertSessionEntryCore(scope, { displayName: "Worker title" });
+      expect(snapshot.isCurrent()).toBe(true);
+      let pendingCurrent: boolean | undefined;
+      delivery.afterResult = () => {
+        pendingCurrent = snapshot.isCurrent();
+      };
+      await replace({ displayName: "Replacement title" });
+      expect(pendingCurrent).toBe(true);
+      expect(snapshot.isCurrent()).toBe(true);
+      expect(snapshot.readRetainedEntry()?.skillsSnapshot).toEqual(entry.skillsSnapshot);
+      await recordSessionParticipantInWorker(scope, {
+        identity: { type: "agent", id: "other" },
+        promptedAt: 1,
+      });
+      expect(snapshot.isCurrent()).toBe(true);
+      await upsertSessionEntryCore(scope, {
+        skillsSnapshot: { prompt: "", skills: [], librarySelections: [] },
+      });
+      expect(snapshot.isCurrent()).toBe(false);
+      expect(snapshot.canRefresh()).toBe(false);
+      expect(list.isCurrent()).toBe(true);
+    } finally {
+      delivery.afterResult = undefined;
+      snapshot.release();
+      list.release();
     }
   });
 });
@@ -112,6 +218,7 @@ it.each(["autocommit", "transaction"] as const)(
   "seals native metadata before observers for %s",
   async (mode) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:native-metadata-seal";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey, env },
@@ -198,12 +305,7 @@ it.each([false, true])(
   "seals full replacement facts without retaining prompts in display rows (later raw write=%s)",
   async (rawWrite) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const database = openOpenClawAgentDatabase({ agentId: "main" });
-      const scope = {
-        agentId: "main",
-        storePath: database.path,
-        sessionKey: "agent:main:full-receipt",
-      };
+      const { database, scope, replace } = setup("full-receipt");
       const snapshots = {
         sessionDiffBaseline: {
           version: 1,
@@ -212,14 +314,7 @@ it.each([false, true])(
           files: [],
         },
         skillsSnapshot: { prompt: "Persisted skill prompt", skills: [] },
-        systemPromptReport: {
-          source: "run",
-          generatedAt: 1,
-          systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
-          injectedWorkspaceFiles: [],
-          skills: { promptChars: 0, entries: [] },
-          tools: { listChars: 0, schemaChars: 0, entries: [] },
-        },
+        systemPromptReport: promptReport(1, 1, 0),
       } satisfies Partial<SessionEntry>;
       replaceSessionEntrySync(scope, { sessionId: "full-receipt", updatedAt: 1, ...snapshots });
       let published: ReturnType<typeof readPreparedSessionEntryChange>;
@@ -238,16 +333,7 @@ it.each([false, true])(
         }
       };
       try {
-        await applySessionEntryExactReplacements({
-          storePath: database.path,
-          sessionKeys: [scope.sessionKey],
-          update: ([row]) => ({
-            result: undefined,
-            replacements: [
-              { sessionKey: scope.sessionKey, entry: { ...row!.entry, label: "committed" } },
-            ],
-          }),
-        });
+        await replace({ label: "committed" });
         expect(published?.entry?.label).toBe("committed");
         expect(published?.entry?.skillsSnapshot).toBeUndefined();
         expect(published?.entry?.systemPromptReport).toBeUndefined();
@@ -271,12 +357,7 @@ it.each(["native", "worker"] as const)(
   "publishes %s category changes to retained authority before observers",
   async (writer) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const database = openOpenClawAgentDatabase({ agentId: "main" });
-      const scope = {
-        agentId: "main",
-        storePath: database.path,
-        sessionKey: "agent:main:category-authority",
-      };
+      const { database, scope } = setup("category-authority");
       const entry = { sessionId: "category-authority", updatedAt: 1, category: "before" };
       replaceSessionEntrySync(scope, entry);
       const source = readOpenClawAgentDatabaseIdentity(database);
@@ -320,14 +401,154 @@ it.each(["native", "worker"] as const)(
   },
 );
 
+it("keeps unrelated predicates current through participant publication", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { database, scope } = setup("participant-authority");
+    const entry = { sessionId: "participant-authority", updatedAt: 1, sandboxMode: "off" } as const;
+    replaceSessionEntrySync(scope, entry);
+    const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+    if (typeof identity !== "string") {
+      throw new Error("Expected durable participant fixture");
+    }
+    const retained = { databaseIdentity: `file:${identity}`, sessionKey: scope.sessionKey, entry };
+    const policy = retainPreparedSessionEntryPredicate({
+      ...retained,
+      matches: (before, after) =>
+        before?.sessionId === after?.sessionId && before?.sandboxMode === after?.sandboxMode,
+    });
+    const participants = retainPreparedSessionEntryPredicate({
+      ...retained,
+      matches: (before, after) => before?.participantCount === after?.participantCount,
+    });
+    const publication = retainSessionEntryWorkerPublication({
+      ...scope,
+      databaseIdentity: identity,
+    });
+    publication.beginChanges(
+      [scope.sessionKey],
+      new Map(),
+      [scope.sessionKey],
+      new Map([
+        [
+          scope.sessionKey,
+          { participants: [{ identity: { type: "agent", id: "other" } }], participantCount: 1 },
+        ],
+      ]),
+    );
+    const observations: boolean[] = [];
+    const stop = sessionChanges.subscribe((change) => {
+      if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+        observations.push(policy.isCurrent() && !participants.isCurrent());
+      }
+    });
+    try {
+      expect(policy.isCurrent()).toBe(true);
+      expect(participants.isCurrent()).toBe(false);
+      expect(
+        await recordSessionParticipantInWorker(scope, {
+          identity: { type: "agent", id: "other" },
+          promptedAt: 1,
+        }),
+      ).toBe("inserted");
+      expect(policy.isCurrent()).toBe(true);
+      expect(participants.canRefresh()).toBe(false);
+      expect(observations.length).toBeGreaterThan(0);
+      expect(observations.every(Boolean)).toBe(true);
+      expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry.participantCount).toBe(1);
+    } finally {
+      stop();
+      publication.settle(undefined, false);
+      policy.release();
+      participants.release();
+    }
+  });
+});
+
+it.each([
+  { successor: "metadata", authorityChanged: false, acquiring: false },
+  { successor: "metadata", authorityChanged: true, acquiring: false },
+  { successor: "member", authorityChanged: true, acquiring: false },
+  { successor: "metadata", authorityChanged: false, acquiring: true },
+  { successor: "metadata", authorityChanged: true, acquiring: true },
+  { successor: "member", authorityChanged: true, acquiring: true },
+] as const)(
+  "keeps newer $successor facts when an older replacement settles (authority changed=$authorityChanged, acquiring=$acquiring)",
+  async ({ successor, authorityChanged, acquiring }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const { database, scope, replace } = setup("late-replacement");
+      replaceSessionEntrySync(scope, {
+        sessionId: "late-replacement",
+        updatedAt: 1,
+        category: "shared",
+        sandboxMode: "off",
+      });
+      addSessionMember(scope, { identityId: "member", addedBy: "owner", addedAt: 1 });
+      const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+      if (typeof identity !== "string") {
+        throw new Error("Expected durable publication fixture");
+      }
+      const entry = readExactSessionEntryRow(database, scope.sessionKey)!.entry;
+      const retained = {
+        databaseIdentity: `file:${identity}`,
+        sessionKey: scope.sessionKey,
+        entry,
+      };
+      const predicate = retainPreparedSessionEntryPredicate({
+        ...retained,
+        acquiring,
+        matches: (before, after) =>
+          before?.sessionId === after?.sessionId && before?.sandboxMode === after?.sandboxMode,
+      });
+      const revision = predicate.captureRevision();
+      const generation = retainPreparedSessionGenerationFacts(retained);
+      const sharing = retainPreparedSessionSharingFacts({
+        ...retained,
+        membership: new Set(["member"]),
+      });
+      delivery.afterResult = () => {
+        if (successor === "member") {
+          addSessionMember(scope, { identityId: "later-member", addedBy: "owner", addedAt: 2 });
+        } else {
+          replaceSessionEntrySync(scope, {
+            ...readExactSessionEntryRow(database, scope.sessionKey)!.entry,
+            label: "newer commit",
+            sandboxMode: authorityChanged ? undefined : "off",
+          });
+        }
+      };
+      try {
+        await replace({
+          label: "older commit",
+          sandboxMode: successor === "member" ? undefined : "off",
+        });
+        expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry.label).toBe(
+          successor === "member" ? "older commit" : "newer commit",
+        );
+        if (!authorityChanged) {
+          expect(predicate.readRetainedEntry()?.label).toBe("newer commit");
+        }
+        if (acquiring) {
+          expect(predicate.acknowledge(entry, revision)).toBe(!authorityChanged);
+        }
+        expect(predicate.isCurrent()).toBe(!authorityChanged);
+        expect(generation.readCurrent()).toMatchObject({ sessionId: entry.sessionId });
+        expect(sharing.readCurrent()).toMatchObject({
+          entry: { sessionId: entry.sessionId, category: "shared" },
+          membership: new Set(successor === "member" ? ["member", "later-member"] : ["member"]),
+        });
+      } finally {
+        delivery.afterResult = undefined;
+        predicate.release();
+        generation.release();
+        sharing.release();
+      }
+    });
+  },
+);
+
 it("fences every retained reader after a native installer fails, including older pending receipts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const scope = {
-      agentId: "main",
-      storePath: database.path,
-      sessionKey: "agent:main:failed-native",
-    };
+    const { database, scope } = setup("failed-native");
     replaceSessionEntrySync(scope, { sessionId: "before", updatedAt: 1 });
     const source = readOpenClawAgentDatabaseIdentity(database);
     if (typeof source.identity !== "string") {
@@ -380,130 +601,60 @@ it("fences every retained reader after a native installer fails, including older
   });
 });
 
-it.each([
-  { boundary: "before settlement", notify: false },
-  { boundary: "before settlement", notify: true },
-  { boundary: "during facts delivery", notify: true },
-] as const)(
-  "withholds a watermark receipt after a native append $boundary (notification=$notify)",
-  async ({ boundary, notify }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const database = openOpenClawAgentDatabase({ agentId: "main" });
-      const scope = {
-        agentId: "main",
-        storePath: database.path,
-        sessionKey: "agent:main:late-watermark",
-        sessionId: "late-watermark",
-      };
-      replaceSessionEntrySync(scope, {
-        sessionId: scope.sessionId,
+it("preserves a replacement receipt across another session's transcript notification", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { scope: target, replace } = setup("late-watermark");
+    const scope = { ...target, sessionId: "late-watermark" };
+    replaceSessionEntrySync(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      activitySummary: {
+        version: 1,
+        text: "Empty transcript",
         updatedAt: 1,
-        activitySummary: {
-          version: 1,
-          text: "Empty transcript",
-          updatedAt: 1,
-          sessionId: scope.sessionId,
-          generation: null,
-          maxSeq: null,
-          leafEntryId: null,
-          coveredMessages: 0,
-          totalMessages: 0,
-          omittedContent: false,
-        },
-      });
-      const source = readOpenClawAgentDatabaseIdentity(database);
-      if (typeof source.identity !== "string") {
-        throw new Error("Expected durable sharing fixture");
-      }
-      const sharing = retainPreparedSessionSharingFacts({
-        databaseIdentity: `file:${source.identity}`,
-        sessionKey: scope.sessionKey,
-        entry: projectSessionSharingEntry(
-          readExactSessionEntryRow(database, scope.sessionKey)!.entry,
-        ),
-        membership: new Set(),
-      });
-      const acquiring = retainPreparedSessionSharingFacts({
-        databaseIdentity: `file:${source.identity}`,
-        sessionKey: scope.sessionKey,
-        acquiring: true,
-      });
-      const sharingSnapshot = sharing.readCurrent();
-      if (!sharingSnapshot) {
-        throw new Error("Expected prepared sharing snapshot");
-      }
-      let published: ReturnType<typeof readPreparedSessionEntryChange>;
-      let appended = false;
-      const append = () => {
-        appended = true;
-        expect(appendTranscriptEventSync(scope, { type: "proof", id: "late-event" }).ok).toBe(true);
-        if (notify) {
-          emitSessionTranscriptUpdate({ target: scope });
-        }
-      };
-      const stop = sessionChanges.subscribeFacts((change) => {
-        if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
-          if (
-            boundary === "during facts delivery" &&
-            !appended &&
-            change.facts?.kind === "replacement"
-          ) {
-            append();
-          }
-          published = readPreparedSessionEntryChange(change, scope.sessionKey) ?? published;
-        }
-      });
-      delivery.afterResult = (result) => {
-        const receipt = (result as { publication: SessionEntryReplacementPublication }).publication;
-        expect(receipt.projection?.get(scope.sessionKey)?.activitySummaryWatermark).toEqual({
-          generation: null,
-          maxSeq: null,
-        });
-        if (boundary === "before settlement") {
-          append();
-        }
-      };
-      try {
-        await applySessionEntryExactReplacements({
-          storePath: database.path,
-          sessionKeys: [scope.sessionKey],
-          update: ([row]) => ({
-            result: undefined,
-            replacements: [
-              { sessionKey: scope.sessionKey, entry: { ...row!.entry, label: "committed" } },
-            ],
-          }),
-        });
-        expect(appended).toBe(true);
-        expect(published?.entry?.label).toBe("committed");
-        expect(published?.projection).toBeUndefined();
-        expect(sharing.readCurrent()).toMatchObject({
-          entry: { sessionId: scope.sessionId },
-          membership: new Set(),
-        });
-        acquiring.initialize(sharingSnapshot);
-        expect(acquiring.readCurrent()).toEqual(sharing.readCurrent());
-        expect(readSessionTranscriptWatermarkInDatabase(database, scope.sessionId).maxSeq).toBe(0);
-      } finally {
-        delivery.afterResult = undefined;
-        sharing.release();
-        acquiring.release();
-        stop();
+        sessionId: scope.sessionId,
+        generation: null,
+        maxSeq: null,
+        leafEntryId: null,
+        coveredMessages: 0,
+        totalMessages: 0,
+        omittedContent: false,
+      },
+    });
+    let published: ReturnType<typeof readPreparedSessionEntryChange>;
+    const stop = sessionChanges.subscribeFacts((change) => {
+      if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+        published = readPreparedSessionEntryChange(change, scope.sessionKey) ?? published;
       }
     });
-  },
-);
+    delivery.afterResult = () => {
+      emitSessionTranscriptUpdate({
+        target: {
+          ...scope,
+          sessionKey: "agent:main:another-transcript",
+          sessionId: "another-transcript",
+        },
+      });
+    };
+    try {
+      await replace({ label: "committed" });
+      expect(published?.entry?.label).toBe("committed");
+      expect(published?.projection).toMatchObject({
+        hasBoard: false,
+        activitySummaryWatermark: { generation: null, maxSeq: null },
+      });
+    } finally {
+      delivery.afterResult = undefined;
+      stop();
+    }
+  });
+});
 
 it.each(["before preparation", "before settlement", "during facts delivery"] as const)(
   "publishes revocation before observers with a member write %s",
   async (boundary) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const database = openOpenClawAgentDatabase({ agentId: "main" });
-      const scope = {
-        agentId: "main",
-        storePath: database.path,
-        sessionKey: "agent:main:compact-receipt",
-      };
+      const { database, scope, replace } = setup("compact-receipt");
       replaceSessionEntrySync(scope, {
         sessionId: "compact-receipt",
         updatedAt: 1,
@@ -576,16 +727,7 @@ it.each(["before preparation", "before settlement", "during facts delivery"] as 
             removeSessionMember(scope, "revoked");
           };
         }
-        await applySessionEntryExactReplacements({
-          storePath: database.path,
-          sessionKeys: [scope.sessionKey],
-          update: ([row]) => ({
-            result: undefined,
-            replacements: [
-              { sessionKey: scope.sessionKey, entry: { ...row!.entry, category: "after" } },
-            ],
-          }),
-        });
+        await replace({ category: "after" });
         expect(revokedDuringFacts).toBe(boundary === "during facts delivery");
         expect(observed.length).toBeGreaterThan(0);
         expect(predicate.isCurrent()).toBe(false);
@@ -711,12 +853,7 @@ it.each(["facts", "projection"] as const)(
   "preserves a native commit and fences a failed %s installation before notification",
   async (phase) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const database = openOpenClawAgentDatabase({ agentId: "main" });
-      const scope = {
-        agentId: "main",
-        storePath: database.path,
-        sessionKey: "agent:main:failed-install",
-      };
+      const { database, scope } = setup("failed-install");
       replaceSessionEntrySync(scope, {
         sessionId: "failed-install",
         updatedAt: 1,

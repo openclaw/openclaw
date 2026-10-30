@@ -5,6 +5,8 @@ import type {
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 
 export type AgentTurnCompletion = {
+  /** The retained completion owner must still own its source before a transcript write. */
+  assertCurrent(): SessionEntry | undefined;
   current(): SessionEntry;
   refresh(): Promise<SessionEntry>;
   patch(

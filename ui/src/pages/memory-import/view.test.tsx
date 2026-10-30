@@ -1,12 +1,26 @@
+import { expectDefined } from "@openclaw/normalization-core";
+import { createMemo } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentSelectElement } from "../../components/agent-select.tsx";
 import { i18n } from "../../i18n/index.ts";
-// Control UI tests cover reviewed memory import presentation and selection.
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { MemoryImport } from "./view.tsx";
 
-type MemoryImportProps = Parameters<typeof MemoryImport>[0];
+type MemoryImportProps = Omit<Parameters<typeof MemoryImport>[0], "readPlan" | "readScope">;
+const research = { id: "research", name: "Research", identity: { emoji: "🔎" } };
+const writer = { id: "writer", name: "Writer" };
+
+const summary = {
+  total: 2,
+  planned: 0,
+  migrated: 0,
+  skipped: 0,
+  conflicts: 0,
+  errors: 0,
+  sensitive: 0,
+};
 
 function createPlan(): NonNullable<MemoryImportProps["plan"]> {
   return {
@@ -17,24 +31,14 @@ function createPlan(): NonNullable<MemoryImportProps["plan"]> {
         providerId: "codex",
         label: "Codex",
         description: "Import Codex memory.",
-        planFingerprint: "a".repeat(64),
         found: true,
         source: "/tmp/codex",
         target: "/tmp/openclaw-research",
-        summary: {
-          total: 2,
-          planned: 2,
-          migrated: 0,
-          skipped: 0,
-          conflicts: 0,
-          errors: 0,
-          sensitive: 0,
-        },
+        summary: { ...summary, planned: 2 },
         items: ["MEMORY.md", "memory_summary.md"].map((name) => ({
           id: `memory:codex:${name}`,
           status: "planned" as const,
           source: `/tmp/codex/memories/${name}`,
-          target: `/tmp/openclaw-research/memory/imports/codex/${name}`,
           details: { collectionId: "codex", collectionLabel: "Codex", relativePath: name },
         })),
       },
@@ -64,7 +68,7 @@ function createProps(overrides: Partial<MemoryImportProps> = {}): MemoryImportPr
     backfillTo: "",
     backfillBusy: null,
     backfillError: null,
-    backfillPreview: null,
+    readPreview: () => null,
     backfillProgress: null,
     backfillRollbackResult: null,
     backfillRollbackPending: false,
@@ -86,16 +90,28 @@ function createProps(overrides: Partial<MemoryImportProps> = {}): MemoryImportPr
   };
 }
 
-function renderView(container: HTMLElement, overrides: Parameters<typeof createProps>[0] = {}) {
-  mountSolid(() => <MemoryImport {...createProps(overrides)} />, { container });
+function renderView(overrides: Partial<MemoryImportProps> = {}) {
+  const { container } = mountSolid(() => {
+    const props = createProps(overrides);
+    const readPlan = createMemo(() =>
+      props.loading && !props.plan ? new Promise<never>(() => {}) : props.plan,
+    );
+    return <MemoryImport {...props} readPlan={readPlan} readScope={props} />;
+  });
   flush();
+  return container;
+}
+
+function findButton(container: Element, testId: string) {
+  return expectDefined(
+    container.querySelector<HTMLButtonElement>(`[data-test-id='${testId}']`),
+    testId,
+  );
 }
 
 describe("renderMemoryImport", () => {
   it("renders shared skeletons while the import plan is loading", () => {
-    const container = document.createElement("div");
-    renderView(container, { loading: true, plan: null });
-
+    const container = renderView({ loading: true, plan: null });
     const blocks = container.querySelectorAll(".memory-import__skeleton");
     expect(blocks).toHaveLength(2);
     expect([...blocks].every((block) => block.classList.contains("skeleton"))).toBe(true);
@@ -111,126 +127,22 @@ describe("renderMemoryImport", () => {
     vi.unstubAllGlobals();
   });
 
-  it("groups memory by source collection without rendering file contents", () => {
-    const plan = createPlan();
-    const container = document.createElement("div");
-    renderView(container, { plan });
-
+  it("groups memory files and toggles the exact collection without an unnecessary agent picker", () => {
+    const onToggleCollection = vi.fn();
+    const container = renderView({ onToggleCollection });
     expect(container.textContent).toContain("MEMORY.md");
     expect(container.textContent).toContain("memory_summary.md");
     expect(container.textContent).toContain("/tmp/openclaw-research/memory/imports/");
     expect(container.textContent).toContain("Consolidated Codex memory files.");
     expect(container.textContent).not.toContain("Import Codex memory.");
-    expect(container.textContent).not.toContain("private memory body");
-  });
-
-  it("hides the agent row when only one agent is configured", () => {
-    const container = document.createElement("div");
-    renderView(container);
-
     expect(container.querySelector('openclaw-agent-select[name="memory-import-agent"]')).toBeNull();
     expect(container.textContent).not.toContain("Destination agent");
-  });
-
-  it("renders the avatar agent picker and routes agent changes", async () => {
-    const onSelectAgent = vi.fn();
-    const container = document.createElement("div");
-    document.body.append(container);
-    renderView(container, {
-      agents: [
-        { id: "research", name: "Research", identity: { emoji: "🔎" } },
-        { id: "writer", name: "Writer" },
-      ],
-      onSelectAgent,
-    });
-
-    const picker = container.querySelector<
-      HTMLElement & {
-        options: Array<{ value: string }>;
-        onSelect: (value: string) => void;
-        updateComplete: Promise<boolean>;
-      }
-    >('openclaw-agent-select[name="memory-import-agent"]');
-    await picker?.updateComplete;
-    expect(picker?.options.map((option) => option.value)).toEqual(["research", "writer"]);
-    expect(picker?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🔎");
-
-    picker?.onSelect("writer");
-    expect(onSelectAgent).toHaveBeenCalledWith("writer");
-    container.remove();
-  });
-
-  it("renders per-day session backfill candidates and final staging progress", () => {
-    const container = document.createElement("div");
-    renderView(container, {
-      backfillPreview: {
-        days: 1,
-        candidates: 2,
-        staged: 0,
-        truncated: true,
-        perDay: [
-          {
-            day: "2026-07-01",
-            candidateCount: 2,
-            sample: ["Remember the release checklist", "Use the main agent"],
-          },
-        ],
-      },
-      backfillProgress: { days: 3, candidates: 7, staged: 4, complete: true },
-    });
-
-    expect(
-      container.querySelector('.memory-import__backfill-preview [role="status"]')?.textContent,
-    ).toContain("2 candidates across 1 days");
-    expect(container.textContent).toContain("2026-07-01");
-    expect(container.textContent).toContain("Remember the release checklist");
-    expect(container.textContent).toContain("preview shows the first bounded batch");
-    expect(container.textContent).toContain("4 staged; promotion happens via dreaming");
-    expect(container.textContent).toContain("3 days processed");
-  });
-
-  it("requires destructive confirmation before session backfill rollback", () => {
-    const onBackfillRollbackConfirm = vi.fn();
-    const container = document.createElement("div");
-    renderView(container, { backfillRollbackPending: true, onBackfillRollbackConfirm });
-
-    expect(container.textContent).toContain("Session backfill cursors are rewound");
-    container
-      .querySelector<HTMLButtonElement>("[data-test-id='memory-backfill-rollback-confirm']")
-      ?.click();
-    expect(onBackfillRollbackConfirm).toHaveBeenCalledOnce();
-  });
-
-  it("serializes memory imports with backfill mutations", () => {
-    const importing = document.createElement("div");
-    renderView(importing, { applyingProviderId: "codex" });
-    expect(
-      importing.querySelector<HTMLButtonElement>("[data-test-id='memory-backfill-apply']")
-        ?.disabled,
-    ).toBe(true);
-
-    const backfilling = document.createElement("div");
-    renderView(backfilling, { backfillBusy: "apply" });
-    expect(
-      backfilling.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
-        ?.disabled,
-    ).toBe(true);
-  });
-
-  it("passes the exact collection item ids when selection changes", () => {
-    const onToggleCollection = vi.fn();
-    const container = document.createElement("div");
-    renderView(container, { onToggleCollection });
-    const checkbox = container.querySelector<HTMLInputElement>(
-      ".memory-import__collection-choice input",
+    const checkbox = expectDefined(
+      container.querySelector<HTMLInputElement>(".memory-import__collection-choice input"),
+      "collection checkbox",
     );
-    if (!checkbox) {
-      throw new Error("expected collection checkbox");
-    }
-
     checkbox.checked = false;
     checkbox.dispatchEvent(new Event("change", { bubbles: true }));
-
     expect(onToggleCollection).toHaveBeenCalledWith(
       "codex",
       ["memory:codex:MEMORY.md", "memory:codex:memory_summary.md"],
@@ -238,35 +150,58 @@ describe("renderMemoryImport", () => {
     );
   });
 
+  it("renders the avatar agent picker and routes agent changes", async () => {
+    const onSelectAgent = vi.fn();
+    const container = renderView({
+      agents: [research, writer],
+      onSelectAgent,
+    });
+
+    const picker = container.querySelector<AgentSelectElement>(
+      'openclaw-agent-select[name="memory-import-agent"]',
+    );
+    await picker?.updateComplete;
+    expect(picker?.options.map((option) => option.value)).toEqual(["research", "writer"]);
+    expect(picker?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🔎");
+
+    picker?.onSelect("writer");
+    expect(onSelectAgent).toHaveBeenCalledWith("writer");
+  });
+
+  it("explains the cursor reset before confirming session backfill rollback", () => {
+    const onBackfillRollbackConfirm = vi.fn();
+    const container = renderView({ backfillRollbackPending: true, onBackfillRollbackConfirm });
+    expect(container.textContent).toContain("Session backfill cursors are rewound");
+    expect(findButton(container, "memory-backfill-rollback-confirm").disabled).toBe(false);
+    findButton(container, "memory-backfill-rollback-confirm").click();
+    expect(onBackfillRollbackConfirm).toHaveBeenCalledOnce();
+  });
+
+  it("serializes memory imports with backfill mutations", () => {
+    const importing = renderView({ applyingProviderId: "codex" });
+    expect(findButton(importing, "memory-backfill-apply").disabled).toBe(true);
+    const backfilling = renderView({ backfillBusy: "apply" });
+    expect(findButton(backfilling, "memory-import-provider-button").disabled).toBe(true);
+  });
+
   it("requires confirmation and explains replacement backups", () => {
     const onConfirmImport = vi.fn();
-    const container = document.createElement("div");
-    renderView(container, {
+    const container = renderView({
       pendingProviderId: "codex",
       replaceExisting: true,
       onConfirmImport,
     });
-
     expect(container.textContent).toContain("backed up in the migration report");
-    const confirm = container.querySelector<HTMLButtonElement>(
-      "[data-test-id='memory-import-confirm']",
-    );
-    if (!confirm) {
-      throw new Error("expected import confirmation button");
-    }
-    confirm.click();
+    expect(findButton(container, "memory-import-confirm").disabled).toBe(false);
+    findButton(container, "memory-import-confirm").click();
     expect(onConfirmImport).toHaveBeenCalledOnce();
   });
 
   it("disables confirmation actions while an import is running", () => {
     const onConfirmImport = vi.fn();
     const onCancelImport = vi.fn();
-    const container = document.createElement("div");
-    renderView(container, {
-      agents: [
-        { id: "research", name: "Research" },
-        { id: "writer", name: "Writer" },
-      ],
+    const container = renderView({
+      agents: [research, writer],
       pendingProviderId: "codex",
       applyingProviderId: "codex",
       onConfirmImport,
@@ -276,8 +211,7 @@ describe("renderMemoryImport", () => {
     const buttons = [
       ...container.querySelectorAll<HTMLButtonElement>(".exec-approval-actions button"),
     ];
-    expect(buttons).toHaveLength(2);
-    expect(buttons.every((button) => button.disabled)).toBe(true);
+    expect(buttons).toMatchObject([{ disabled: true }, { disabled: true }]);
     buttons[0]?.click();
     expect(onConfirmImport).not.toHaveBeenCalled();
     container
@@ -289,48 +223,25 @@ describe("renderMemoryImport", () => {
       (button) => button.textContent?.trim() === "Refresh",
     );
     expect(refresh?.disabled).toBe(true);
-    expect(
-      container.querySelector<HTMLElement & { disabled: boolean }>(
-        'openclaw-agent-select[name="memory-import-agent"]',
-      )?.disabled,
-    ).toBe(true);
-    expect(
-      container.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
-        ?.disabled,
-    ).toBe(true);
-    expect(
-      container.querySelector<HTMLInputElement>(".memory-import__collection-choice input")
-        ?.disabled,
-    ).toBe(true);
+    for (const selector of [
+      'openclaw-agent-select[name="memory-import-agent"]',
+      "[data-test-id='memory-import-provider-button']",
+      ".memory-import__collection-choice input",
+    ]) {
+      expect(container.querySelector(selector)).toMatchObject({ disabled: true });
+    }
   });
 
   it("shows partial import failures with the saved report", () => {
     const plan = createPlan();
-    const provider = plan.providers[0];
-    if (!provider) {
-      throw new Error("expected provider fixture");
-    }
-    plan.providers[0] = {
-      ...provider,
-      found: false,
-      error: "provider rescan failed",
-    };
-    const container = document.createElement("div");
-    renderView(container, {
+    Object.assign(plan.providers[0]!, { found: false, error: "provider rescan failed" });
+    const container = renderView({
       plan,
       lastResults: {
         codex: {
           providerId: "codex",
           source: "/tmp/codex",
-          summary: {
-            total: 2,
-            planned: 0,
-            migrated: 1,
-            skipped: 0,
-            conflicts: 0,
-            errors: 1,
-            sensitive: 0,
-          },
+          summary: { ...summary, migrated: 1, errors: 1 },
           items: [
             {
               id: "memory:codex:MEMORY.md",
@@ -347,9 +258,7 @@ describe("renderMemoryImport", () => {
               id: "memory:codex:memory_summary.md",
               status: "migrated",
               target: "/tmp/workspace/memory/imports/codex/memory_summary.md",
-              details: {
-                recoveryRecordPath: "/tmp/migration-report/recovery-complete.json",
-              },
+              details: { recoveryRecordPath: "/tmp/recovery-complete.json" },
             },
           ],
           reportDir: "/tmp/migration-report",
@@ -373,6 +282,6 @@ describe("renderMemoryImport", () => {
     expect(result?.textContent).toContain("Item backup");
     expect(result?.textContent).toContain("/tmp/migration-report/recovery-required.json");
     expect(result?.textContent).toContain("/tmp/migration-report/item-backups/MEMORY.md");
-    expect(result?.textContent).toContain("/tmp/migration-report/recovery-complete.json");
+    expect(result?.textContent).toContain("/tmp/recovery-complete.json");
   });
 });

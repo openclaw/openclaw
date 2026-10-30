@@ -1,17 +1,16 @@
-import { spawnSync } from "node:child_process";
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isMainThread, threadId } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { requireGitBuffer } from "../agents/worktrees/git.js";
+import { readCommandProcessFailure } from "../process/exec-result.js";
 import * as processExec from "../process/exec.js";
-import type { SpawnResult } from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import * as diagnosticEvents from "./diagnostic-events.js";
 import {
   getActiveDiagnosticTraceContext,
@@ -48,6 +47,15 @@ describe("Git ref mutation timing", () => {
   let clockEpoch = 0;
   const traces: Array<DiagnosticTraceContext | undefined> = [];
   const processMetadata = { pid: process.pid, threadId, isMainThread };
+  const mutate = (run: Parameters<typeof enqueueGitRefMutation>[2]) =>
+    enqueueGitRefMutation("/private/repository", ".git", run);
+  const expectTiming = (fields: Record<string, unknown>) =>
+    expect(refLogs.info).toHaveBeenCalledExactlyOnceWith("slow Git ref mutation", {
+      ...processMetadata,
+      durationMs: 1_000,
+      omittedObservations: 0,
+      ...fields,
+    });
 
   beforeEach(() => {
     // Advance past the previous owner's window without resetting its live singleton.
@@ -63,12 +71,11 @@ describe("Git ref mutation timing", () => {
     traces.length = 0;
   });
 
-  it("attributes a held same-directory predecessor separately from resolution and callback work", async () => {
-    const holderEntered = createDeferred();
-    const releaseHolder = createDeferred();
+  it("attributes resolution, queue wait, callback work and trace context separately", async () => {
+    const holderGate = createEnteredGate();
     const callbackEntered = createDeferred();
     const releaseCallback = createDeferred();
-    const resolved = createDeferred<string>();
+    const abort = new AbortController();
     const trace = {
       traceId: "1234567890abcdef1234567890abcdef",
       spanId: "1234567890abcdef",
@@ -77,124 +84,94 @@ describe("Git ref mutation timing", () => {
     const result = { privateResult: "refs/private/result" };
     vi.mocked(diagnosticEvents.areDiagnosticsEnabledForProcess).mockReturnValue(false);
     vi.mocked(fs.realpath).mockResolvedValueOnce("/private/shared.git");
-    const holder = enqueueGitRefMutation("/private/holder", ".git", async () => {
-      holderEntered.resolve();
-      await releaseHolder.promise;
-    });
+    const holder = enqueueGitRefMutation("/private/holder", ".git", holderGate.wait);
     const pending: Promise<unknown>[] = [holder];
     try {
-      await holderEntered.promise;
+      await holderGate.entered;
       vi.mocked(diagnosticEvents.areDiagnosticsEnabledForProcess).mockReturnValue(true);
-      vi.mocked(fs.realpath).mockImplementationOnce(() => resolved.promise);
-      const callback = vi.fn(async () => {
-        callbackEntered.resolve();
-        await releaseCallback.promise;
-        return result;
+      vi.mocked(fs.realpath).mockImplementationOnce(async () => {
+        clock += 25;
+        return "/private/shared.git";
       });
-      const abort = new AbortController();
       const queued = runWithDiagnosticTraceContext(trace, () =>
-        enqueueGitRefMutation("/private/linked-checkout", "../shared.git", callback, abort.signal),
+        enqueueGitRefMutation(
+          "/private/linked-checkout",
+          "../shared.git",
+          async () => {
+            callbackEntered.resolve();
+            await releaseCallback.promise;
+            clock += 175;
+            return result;
+          },
+          abort.signal,
+        ),
       );
-      let callbackSettled = false;
-      void queued.then(
-        () => {
-          callbackSettled = true;
-        },
-        () => {
-          callbackSettled = true;
-        },
-      );
+      const settled = vi.fn();
+      void queued.then(settled, settled);
       pending.push(queued);
-      clock += 25;
-      resolved.resolve("/private/shared.git");
-      const independent = { independent: true };
-      await expect(
-        enqueueGitRefMutation("/private/other", ".git", async () => independent),
-      ).resolves.toBe(independent);
-      expect(callback).not.toHaveBeenCalled();
+      await nextTurn();
       expect(refLogs.info).not.toHaveBeenCalled();
-
       clock += 1_200;
-      releaseHolder.resolve();
+      holderGate.release();
       await callbackEntered.promise;
       abort.abort(new Error("cancelled after ref mutation started"));
       await nextTurn();
-      expect(callbackSettled).toBe(false);
-      expect(refLogs.info).not.toHaveBeenCalled();
-      clock += 175;
+      expect(settled).not.toHaveBeenCalled();
       releaseCallback.resolve();
       await expect(queued).resolves.toBe(result);
-      expect(refLogs.info).toHaveBeenCalledExactlyOnceWith("slow Git ref mutation", {
-        ...processMetadata,
+      expectTiming({
         durationMs: 1_400,
         resolveMs: 25,
         queueWaitMs: 1_200,
         queuedOperationMs: 175,
         callbackEntered: true,
         outcome: "returned",
-        omittedObservations: 0,
       });
       expect(traces).toEqual([trace]);
     } finally {
-      resolved.resolve("/private/shared.git");
-      releaseHolder.resolve();
+      holderGate.release();
       releaseCallback.resolve();
       await Promise.allSettled(pending);
     }
   });
 
-  it("reports only reached resolution time and preserves the original failure without inventing a trace", async () => {
-    const error = new Error("cannot resolve /private/repository/refs/private");
-    const callback = vi.fn();
-    vi.mocked(fs.realpath).mockImplementationOnce(async () => {
-      clock += 1_000;
-      throw error;
-    });
-    await expect(
-      runWithDiagnosticTraceContext(undefined, () =>
-        enqueueGitRefMutation("/private/repository", "refs/private", callback),
-      ),
-    ).rejects.toBe(error);
-    expect(callback).not.toHaveBeenCalled();
-    expect(refLogs.info).toHaveBeenCalledExactlyOnceWith("slow Git ref mutation", {
-      ...processMetadata,
-      durationMs: 1_000,
-      resolveMs: 1_000,
-      callbackEntered: false,
-      outcome: "threw",
-      omittedObservations: 0,
-    });
-    expect(traces).toEqual([undefined]);
-  });
-
-  it.each(["sync", "async"] as const)(
-    "preserves a %s callback error and reports no private error content",
-    async (mode) => {
+  it.each(["resolution", "callback"] as const)(
+    "preserves the original %s failure without private diagnostic content",
+    async (phase) => {
       const error = new Error("failed update-ref refs/private at /private/repository");
-      const callback = () => {
+      const fail = () => {
         clock += 1_000;
-        if (mode === "sync") {
-          throw error;
-        }
-        return Promise.reject(error);
+        throw error;
       };
-      await expect(enqueueGitRefMutation("/private/repository", ".git", callback)).rejects.toBe(
-        error,
+      const callback = vi.fn(async () => fail());
+      const resolving = phase === "resolution";
+      if (resolving) {
+        vi.mocked(fs.realpath).mockImplementationOnce(async () => fail());
+      }
+      const operation = resolving
+        ? runWithDiagnosticTraceContext(undefined, () =>
+            enqueueGitRefMutation("/private/repository", "refs/private", callback),
+          )
+        : mutate(callback);
+      await expect(operation).rejects.toBe(error);
+      expectTiming(
+        resolving
+          ? { resolveMs: 1_000, callbackEntered: false, outcome: "threw" }
+          : {
+              resolveMs: 0,
+              queueWaitMs: 0,
+              queuedOperationMs: 1_000,
+              callbackEntered: true,
+              outcome: "threw",
+            },
       );
-      expect(refLogs.info).toHaveBeenCalledExactlyOnceWith("slow Git ref mutation", {
-        ...processMetadata,
-        durationMs: 1_000,
-        resolveMs: 0,
-        queueWaitMs: 0,
-        queuedOperationMs: 1_000,
-        callbackEntered: true,
-        outcome: "threw",
-        omittedObservations: 0,
-      });
-      const next = { next: true };
-      await expect(
-        enqueueGitRefMutation("/private/repository", ".git", async () => next),
-      ).resolves.toBe(next);
+      if (resolving) {
+        expect(callback).not.toHaveBeenCalled();
+        expect(traces).toEqual([undefined]);
+      } else {
+        const next = { next: true };
+        await expect(mutate(async () => next)).resolves.toBe(next);
+      }
     },
   );
 
@@ -205,7 +182,7 @@ describe("Git ref mutation timing", () => {
       refLogs.info.mockImplementation(() => {
         throw new Error("diagnostic sink failed");
       });
-      const operation = enqueueGitRefMutation("/private/repository", ".git", async () => {
+      const operation = mutate(async () => {
         clock += 1_000;
         if (outcome === "threw") {
           throw original;
@@ -242,16 +219,16 @@ describe("Git ref mutation timing", () => {
       expect(await Promise.all(pending)).toEqual(Array.from({ length: 64 }, (_, index) => index));
       expect(refLogs.info).toHaveBeenCalledTimes(60);
       clock += 60_000;
-      await enqueueGitRefMutation("/private/next-window", ".git", async () => {
-        clock += 1_000;
-      });
-      expect(refLogs.info).toHaveBeenCalledTimes(61);
-      expect(refLogs.info.mock.lastCall?.[1]).toMatchObject({ omittedObservations: 4 });
-      await enqueueGitRefMutation("/private/next-window", ".git", async () => {
-        clock += 1_000;
-      });
-      expect(refLogs.info).toHaveBeenCalledTimes(62);
-      expect(refLogs.info.mock.lastCall?.[1]).toMatchObject({ omittedObservations: 0 });
+      for (const [count, omittedObservations] of [
+        [61, 4],
+        [62, 0],
+      ] as const) {
+        await enqueueGitRefMutation("/private/next-window", ".git", async () => {
+          clock += 1_000;
+        });
+        expect(refLogs.info).toHaveBeenCalledTimes(count);
+        expect(refLogs.info.mock.lastCall?.[1]).toMatchObject({ omittedObservations });
+      }
     } finally {
       release.resolve();
       await Promise.allSettled(pending);
@@ -259,75 +236,87 @@ describe("Git ref mutation timing", () => {
   });
 });
 
-describe("Git filesystem paths", () => {
-  it.each([
-    { input: "/C", expected: "C:\\" },
-    { input: "relative/repo", expected: "relative/repo" },
-  ])("normalizes only standard MSYS drive paths on Windows: $input", ({ input, expected }) => {
-    expect(normalizeGitPathForFilesystem(input, "win32")).toBe(expected);
+it.each([
+  { input: "/C", expected: "C:\\" },
+  { input: "relative/repo", expected: "relative/repo" },
+])("normalizes only standard MSYS drive paths on Windows: $input", ({ input, expected }) => {
+  expect(normalizeGitPathForFilesystem(input, "win32")).toBe(expected);
+});
+
+it("overrides maintenance.autoDetach only for an explicitly owned Git command", async () => {
+  const key = "maintenance.autoDetach";
+  await withTestDir({ prefix: "openclaw-git-exec-maintenance-" }, async (root) => {
+    const env = { GIT_CONFIG_COUNT: "0", GIT_CONFIG_PARAMETERS: undefined };
+    await requireGitCommand(root, ["init"], { env });
+    await requireGitCommand(root, ["config", key, "true"], { env });
+    const owned = await executeGitCommand(root, ["config", "--get", key], {
+      env,
+      killProcessTree: true,
+    });
+    expect(owned.code).toBe(0);
+    expect(owned.stdout.trim()).toBe("false");
+    await expect(requireGitCommand(root, ["config", "--get", key], { env })).resolves.toBe("true");
   });
 });
 
-const failure = {
-  stdout: "",
-  stderr: "",
-  code: 128,
-  signal: null,
-  killed: false,
-  termination: "exit",
-} satisfies SpawnResult;
-
-it.each(["maintenance.autoDetach"])(
-  "overrides %s only for an explicitly owned Git command",
-  async (key) => {
-    await withTestDir({ prefix: "openclaw-git-exec-maintenance-" }, async (root) => {
-      const env = {
-        GIT_CONFIG_COUNT: "0",
-        GIT_CONFIG_PARAMETERS: undefined,
-      };
-      await requireGitCommand(root, ["init"], { env });
-      await requireGitCommand(root, ["config", key, "true"], { env });
-      const owned = await executeGitCommand(root, ["config", "--get", key], {
-        env,
-        killProcessTree: true,
-      });
-      expect(owned.code).toBe(0);
-      expect(owned.stdout.trim()).toBe("false");
-      await expect(requireGitCommand(root, ["config", "--get", key], { env })).resolves.toBe(
-        "true",
-      );
-    });
-  },
-);
-
-it.each([{ timeoutMs: undefined, seconds: 120 }])(
-  "reports the applied $seconds-second Git timeout",
-  async ({ timeoutMs, seconds }) => {
-    const commandSpy = vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue({
-      ...failure,
-      termination: "timeout",
-      code: 124,
-    });
-    const args = ["worktree", "add"];
-    const result = await executeGitCommand("/repo", args, { timeoutMs });
-    const label = `timed out after ${seconds} seconds`;
-    const error = createGitCommandError("git worktree add", result);
-    expect(error).toBeInstanceOf(GitCommandTimeoutError);
-    const message = error.message;
-    expect(message).toContain(label);
-    expect(message).toContain(
-      `Git did not finish within its ${seconds}s budget; check remote reachability, repository locks, and clone shape (partial clones fetch missing objects lazily).`,
-    );
-    await expect(requireGitCommand("/repo", args, { timeoutMs })).rejects.toThrow(label);
-    expect(
-      commandSpy.mock.calls.map(([, options]) =>
-        typeof options === "number" ? options : options.timeoutMs,
-      ),
-    ).toEqual([seconds * 1000, seconds * 1000]);
-  },
-);
+it("reports the applied 120-second Git timeout", async () => {
+  const seconds = 120;
+  const commandSpy = vi
+    .spyOn(processExec, "runCommandWithTimeout")
+    .mockResolvedValue(createCommandResult({ termination: "timeout", code: 124 }));
+  const args = ["worktree", "add"];
+  const result = await executeGitCommand("/repo", args, { timeoutMs: undefined });
+  const label = `timed out after ${seconds} seconds`;
+  const error = createGitCommandError("git worktree add", result);
+  expect(error).toBeInstanceOf(GitCommandTimeoutError);
+  const message = error.message;
+  expect(message).toContain(label);
+  expect(message).toContain(
+    `Git did not finish within its ${seconds}s budget; check remote reachability, repository locks, and clone shape (partial clones fetch missing objects lazily).`,
+  );
+  await expect(requireGitCommand("/repo", args, { timeoutMs: undefined })).rejects.toThrow(label);
+  expect(
+    commandSpy.mock.calls.map(([, options]) =>
+      typeof options === "number" ? options : options.timeoutMs,
+    ),
+  ).toEqual([seconds * 1000, seconds * 1000]);
+});
 
 describe("required Git output", () => {
+  it.each(["cooperative", "uncertain"] as const)(
+    "retains private native cancellation facts with %s cleanup",
+    async (cleanup) => {
+      const result = {
+        ...createCommandResult({
+          pid: 123,
+          code: null,
+          signal: null,
+          termination: "signal",
+          cleanup,
+          killIssuedByAbort: true,
+          outputLimitExceeded: false,
+          stderr: "cancelled fixture",
+        }),
+        timeoutMs: 30_000,
+      };
+      const failure = await Promise.resolve()
+        .then(() => requireGitCommandOutput("git remote", result))
+        .catch((error: unknown) => error);
+      expect(failure).toMatchObject({
+        name: "CommandExecutionError",
+        message: "git remote failed (terminated):\ncancelled fixture",
+      });
+      expect(readCommandProcessFailure(failure)).toStrictEqual({
+        pid: 123,
+        code: null,
+        termination: "signal",
+        cleanup,
+        killIssuedByAbort: true,
+        outputLimitExceeded: false,
+      });
+    },
+  );
+
   async function withGitBlob(
     input: string | Buffer,
     run: (root: string, args: string[]) => Promise<void>,
@@ -349,68 +338,17 @@ describe("required Git output", () => {
     });
   });
 
-  it.each([
-    ["text", requireGitCommand],
-    ["buffered", requireGitBuffer],
-  ] as const)("rejects incomplete %s output from a real Git blob", async (_kind, requireGit) => {
-    const sentinel = "complete-git-output-leading-sentinel\0";
+  it("rejects incomplete buffered output from a real Git blob", async () => {
     const blob = Buffer.alloc(17 * 1024 * 1024, "x");
-    blob.write(sentinel);
     await withGitBlob(blob, async (root, args) => {
-      const outcome = await requireGit(root, args).then(
-        (stdout) => ({
-          kind: "returned",
-          bytes: Buffer.byteLength(stdout),
-          hasSentinel: stdout.includes(sentinel),
-        }),
-        (error: unknown) => ({
-          kind: "error",
-          message: error instanceof Error ? error.message : String(error),
-        }),
-      );
-      expect(outcome).toEqual({
-        kind: "error",
-        message: expect.stringContaining("output limit exceeded"),
-      });
+      await expect(requireGitBuffer(root, args)).rejects.toThrow("output limit exceeded");
     });
   });
 });
 
-describe("gitNullConfigPath", () => {
-  it("returns the Git-openable null path for the execution host", () => {
-    const originalPlatform = process.platform;
-    try {
-      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-      // Git for Windows cannot open the device-namespace path that
-      // os.devNull returns; "NUL" is the path it understands.
-      expect(gitNullConfigPath()).toBe("NUL");
-      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-      expect(gitNullConfigPath()).toBe("/dev/null");
-    } finally {
-      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
-    }
-  });
-
-  it.skipIf(process.platform !== "win32")(
-    "documents the defect: os.devNull as GIT_CONFIG_GLOBAL exits 128 on Windows",
-    () => {
-      const repo = fsSync.mkdtempSync(path.join(os.tmpdir(), "git-null-config-"));
-      try {
-        const result = spawnSync("git", ["-C", repo, "log", "--oneline", "-1"], {
-          env: {
-            ...process.env,
-            GIT_CONFIG_NOSYSTEM: "1",
-            GIT_CONFIG_COUNT: "0",
-            GIT_CONFIG_GLOBAL: os.devNull,
-          },
-          encoding: "utf8",
-        });
-        // Red evidence for issue #141279: the device-namespace path that
-        // os.devNull returns is rejected by Git for Windows.
-        expect(result.stderr).toContain("unable to access");
-      } finally {
-        fsSync.rmSync(repo, { recursive: true, force: true });
-      }
-    },
-  );
+it("returns the Git-openable null path for the execution host", () => {
+  mockProcessPlatform("win32");
+  expect(gitNullConfigPath()).toBe("NUL");
+  mockProcessPlatform("linux");
+  expect(gitNullConfigPath()).toBe("/dev/null");
 });

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { getOwedHarnessCompletionTask } from "../../agents/agent-harness-completion-recovery.js";
 import { resolveMessageReceiptPrimaryId } from "../../channels/message/receipt.js";
 import {
   ConversationDeliveryMissingError,
@@ -14,20 +13,19 @@ import type {
   ConversationRegistryScope,
   PreparedConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
-import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import type { SessionActorAuthority } from "../../config/sessions/session-actor-contract.js";
+import type {
+  SessionActorDeliveryEvidence,
+  SessionActorAuthority,
+} from "../../config/sessions/session-actor-contract.js";
 import {
   runSessionActorCommand,
   withSessionActor,
 } from "../../config/sessions/session-actor-scope.js";
-import {
-  projectPendingFinalDeliverySettlement,
-  type PendingFinalDeliverySettlementInput,
-} from "../../config/sessions/session-pending-final-settlement.js";
+import type { PendingFinalDeliverySettlementInput } from "../../config/sessions/session-pending-final-settlement.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -36,13 +34,23 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
 import { isGatewayExternallySupervised } from "../gateway-supervision.js";
-import { SqliteWorkerError } from "../sqlite-worker-contract.js";
-import type { OutboundDeliveryResult } from "./deliver-types.js";
+import { wrapSqliteWorkerError } from "../sqlite-worker-contract.js";
+import {
+  countPhysicalOutboundSends,
+  type OutboundDeliveryBatch as DeliveryEvidenceBatch,
+  type OutboundDeliveryResult,
+} from "./deliver-types.js";
+import {
+  captureDeliveryPlacementEvidence,
+  deliveryPlacementMatchesContext,
+  type DeliveryPlacementEvidence,
+} from "./delivery-placement-evidence.js";
 import type { DurableDeliveryCompletion } from "./delivery-queue-types.js";
 
 /** In-process locator captured before delivery preparation; never queue payload data. */
@@ -142,10 +150,12 @@ export async function settlePendingFinalDelivery(
     preserveActivity?: boolean;
     stateContext?: DeliveryQueueStateContext;
     identifiedResult?: OutboundDeliveryResult;
+    batch?: DeliveryEvidenceBatch;
+    /** Delivery has settled; durable queue owners must retain their receipt until ACK. */
+    clearAfterSettled?: true;
   } = {},
 ): Promise<DurableDeliveryCompletionResult> {
   let settled: DurableDeliveryCompletionResult["state"] = "stale";
-  let wakeRecovery = false;
   const scope = {
     agentId: completion.agentId,
     sessionKey: completion.sessionKey,
@@ -158,9 +168,17 @@ export async function settlePendingFinalDelivery(
     deliveryId: completion.deliveryId,
     state,
     expectedStates: expectedStates?.slice(),
+    ...(options.clearAfterSettled
+      ? {
+          cleanup: {
+            sessionKey: completion.sessionKey,
+            now: Date.now(),
+            preserveActivity: options.preserveActivity,
+          },
+        }
+      : {}),
   };
   const authority = completion.sessionWriterDeliveryAuthority;
-  const claim = authority?.harnessCompletion;
   if (
     completion.agentId !== undefined &&
     authority?.agentId !== undefined &&
@@ -169,71 +187,47 @@ export async function settlePendingFinalDelivery(
     return { state: "stale" };
   }
   let refused = false;
-  let preimage: SessionEntry | undefined;
-  const hasCurrentClaim = (entry: SessionEntry | undefined, previous = entry) =>
-    !claim ||
-    Boolean(
-      entry &&
-      previous &&
-      entry.sessionId === completion.sessionId &&
-      entry.pendingFinalDelivery?.intentId === completion.intentId &&
-      entry.pendingFinalDelivery.deliveries?.some(({ id }) => id === completion.deliveryId) &&
-      authority &&
-      authority.sessionKey === completion.sessionKey &&
-      (authority.storePath === undefined || authority.storePath === completion.storePath) &&
-      claim.requesterSessionKey === completion.sessionKey &&
-      claim.sessionId === completion.sessionId &&
-      authority.expectedSessionId === completion.sessionId &&
-      (authority.agentId === undefined || authority.agentId === claim.requesterAgentId) &&
-      (completion.agentId === undefined ||
-        normalizeAgentId(claim.requesterAgentId) === normalizeAgentId(completion.agentId)) &&
-      (authority.expectedLifecycleRevision === undefined ||
-        authority.expectedLifecycleRevision === entry.lifecycleRevision) &&
-      (authority.expectedWriterRunId === undefined ||
-        authority.expectedWriterRunId === entry.activeWriterRunId) &&
-      getOwedHarnessCompletionTask(claim, previous),
-    );
-  const evidence = claim
-    ? {
-        claim,
-        result: options.identifiedResult
-          ? {
-              channel: options.identifiedResult.channel,
-              target: options.identifiedResult.target,
-              platformMessageId: readPlatformMessageId(options.identifiedResult),
-            }
-          : undefined,
-      }
-    : undefined;
+  const evidence = (entry: SessionEntry | undefined): SessionActorDeliveryEvidence => ({
+    result: resolvePendingFinalResultEvidence(options, entry?.pendingFinalDelivery?.context),
+  });
   const live: SessionActorAuthority = {
     assertCurrent() {},
-    authorize(stage, facts) {
-      if (stage === "transaction" || !preimage) {
-        preimage = facts.entry;
-      }
-      if (!hasCurrentClaim(facts.entry, preimage)) {
+    authorize(_stage, facts) {
+      const entry = facts.entry;
+      if (
+        authority &&
+        (!entry ||
+          authority.sessionKey !== completion.sessionKey ||
+          (authority.storePath !== undefined && authority.storePath !== completion.storePath) ||
+          authority.expectedSessionId !== entry.sessionId ||
+          (authority.expectedLifecycleRevision !== undefined &&
+            authority.expectedLifecycleRevision !== entry.lifecycleRevision) ||
+          (authority.expectedWriterRunId !== undefined &&
+            authority.expectedWriterRunId !== entry.activeWriterRunId))
+      ) {
         refused = true;
         throw new Error("Pending final delivery authority was revoked");
       }
     },
   };
-  let actorOwned = false;
   await withSessionActor(scope, { assertCurrent() {}, assertReadable() {} }, async (actor) => {
-    actorOwned = true;
     let outcome;
     try {
-      outcome = await runSessionActorCommand(actor, live, (snapshot) =>
-        actor.deliverySettled(
+      outcome = await runSessionActorCommand(actor, live, async (snapshot) => {
+        // Only receipt evidence needs a captured route/version. State-only custody
+        // changes validate atomically in deliverySettled without a preparatory read.
+        const current = snapshot ?? (options.identifiedResult ? await actor.read(live) : undefined);
+        return actor.deliverySettled(
           {
             commandId: randomUUID(),
             phaseId: randomUUID(),
-            expected: snapshot?.version,
+            expected: current?.version,
             settlement,
-            ...(evidence ? { evidence } : {}),
+            evidence: evidence(current?.entry),
           },
           live,
-        ),
-      );
+        );
+      });
     } catch (error) {
       // No command was accepted if its read's live authorization refused.
       if (refused) {
@@ -245,54 +239,70 @@ export async function settlePendingFinalDelivery(
       if (outcome.kind === "rolled-back" && (refused || outcome.reason === "stale-state")) {
         return;
       }
-      throw new SqliteWorkerError(
+      throw wrapSqliteWorkerError(
         outcome.error.message,
         outcome.kind === "unknown" ? "outcome-unknown" : "unavailable",
+        outcome.error,
       );
     }
     if (!("state" in outcome.value)) {
       throw new Error("Pending final delivery returned another settlement");
     }
     settled = outcome.value.state;
-    wakeRecovery = outcome.value.wakeRecovery;
     if (outcome.failure) {
       throw new Error(outcome.failure.message);
     }
   });
-  if (!actorOwned) {
-    // Native incognito retains its existing patch owner until its actor cutover.
-    const patchOptions = {
-      skipMaintenance: true,
-      takeCacheOwnership: true,
-      preserveActivity: options.preserveActivity,
-      workerGuard: {},
-    };
-    await patchSessionEntryCore(
-      scope,
-      (entry) => {
-        if (!hasCurrentClaim(entry)) {
-          return null;
-        }
-        const projected = projectPendingFinalDeliverySettlement(entry, settlement, evidence);
-        settled = projected.state;
-        wakeRecovery = projected.wakeRecovery;
-        return projected.patch;
-      },
-      patchOptions,
-    );
-  }
-  if (wakeRecovery) {
-    const { scheduleMainSessionRecoveryPendingTarget } =
-      await import("../../agents/main-session-recovery/main-session-recovery-owner-release.js");
-    scheduleMainSessionRecoveryPendingTarget({
-      ...(completion.agentId !== undefined ? { agentId: completion.agentId } : {}),
-      sessionId: completion.sessionId,
-      sessionKey: completion.sessionKey,
-      ...(options.stateDir !== undefined ? { stateDir: options.stateDir } : {}),
-      storePath: completion.storePath,
-    });
-  }
   return { state: settled };
+}
+
+/** Keep contradictions until every physical send has been checked against captured routing. */
+function resolvePendingFinalResultEvidence(
+  options: { identifiedResult?: OutboundDeliveryResult; batch?: DeliveryEvidenceBatch },
+  context: DeliveryContext | undefined,
+): SessionActorDeliveryEvidence["result"] {
+  if (!context?.channel || !context.to || !options.identifiedResult) {
+    return undefined;
+  }
+  const destination = { channel: context.channel, to: context.to, threadId: context.threadId };
+  const matchesPlacement = (placement: DeliveryPlacementEvidence | undefined): boolean =>
+    deliveryPlacementMatchesContext(placement, destination);
+  const matches = (result: OutboundDeliveryResult): boolean =>
+    result.channel === context.channel &&
+    result.outcome !== "not_sent" &&
+    Boolean(readPlatformMessageId(result)) &&
+    matchesPlacement(captureDeliveryPlacementEvidence(result));
+  const batch = options.batch;
+  const results = batch?.results ?? [options.identifiedResult];
+  if (batch) {
+    const indices = new Set(batch.payloadOutcomes.map((outcome) => outcome.index));
+    if (
+      batch.payloadCount < 1 ||
+      batch.payloadOutcomes.length !== batch.payloadCount ||
+      indices.size !== batch.payloadCount ||
+      batch.payloadOutcomes.some(
+        (outcome) =>
+          outcome.index < 0 ||
+          outcome.index >= batch.payloadCount ||
+          outcome.status !== "sent" ||
+          outcome.incompleteReason !== undefined ||
+          !matchesPlacement(outcome.reportedPlacement) ||
+          !outcome.results.length ||
+          !outcome.results.every(matches),
+      )
+    ) {
+      return undefined;
+    }
+  }
+  if (!results.length || !results.every(matches) || !matches(options.identifiedResult)) {
+    return undefined;
+  }
+  return {
+    channel: context.channel,
+    platformMessageId: readPlatformMessageId(options.identifiedResult),
+    resultCount: countPhysicalOutboundSends(results),
+    verifiedContext: structuredClone(context),
+  };
 }
 
 function readPlatformMessageId(result: OutboundDeliveryResult): string | undefined {
@@ -334,12 +344,13 @@ export async function completeDurableDelivery(
   stateDir?: string,
   stateContext?: DeliveryQueueStateContext,
   target?: ConversationDeliveryTarget,
+  batch?: DeliveryEvidenceBatch,
 ): Promise<DurableDeliveryCompletionResult> {
-  return settleDurableDelivery(completion, { result }, stateDir, stateContext, target);
+  return settleDurableDelivery(completion, { result, batch }, stateDir, stateContext, target);
 }
 
 type DurableDeliveryTerminalEvidence =
-  | { result: OutboundDeliveryResult }
+  | { result: OutboundDeliveryResult; batch?: DeliveryEvidenceBatch }
   | { rejectionError: string }
   | { platformSendStarted: boolean };
 
@@ -363,7 +374,9 @@ export async function settleDurableDelivery(
     ? await settlePendingFinalDelivery(completion, state, undefined, {
         stateDir,
         stateContext,
-        ...("result" in evidence ? { identifiedResult: evidence.result } : {}),
+        ...("result" in evidence
+          ? { identifiedResult: evidence.result, batch: evidence.batch }
+          : {}),
       })
     : conversationResult(
         completion,

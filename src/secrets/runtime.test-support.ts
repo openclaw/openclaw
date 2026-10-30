@@ -9,11 +9,9 @@ import {
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
+import { buildTestWebSearchProviders as baseProviders } from "./runtime-web-tools-provider.test-support.js";
 // Keep static: compiled-worker preparation belongs at collection, not in a hook or test deadline.
 import { clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } from "./runtime.js";
-
-type PrepareSecretsRuntimeSnapshot = typeof prepareSecretsRuntimeSnapshot;
-type WebProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
 
 const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
   resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
@@ -34,82 +32,34 @@ export function asConfig(value: unknown): OpenClawConfig {
 export function loadAuthStoreWithProfiles(
   profiles: AuthProfileStore["profiles"],
 ): AuthProfileStore {
-  return {
-    version: 1,
-    profiles,
-  };
-}
-
-function createTestProvider(params: {
-  id: WebProviderUnderTest;
-  pluginId: string;
-  order: number;
-}): PluginWebSearchProviderEntry {
-  const credentialPath = `plugins.entries.${params.pluginId}.config.webSearch.apiKey`;
-  const readSearchConfigKey = (searchConfig?: Record<string, unknown>): unknown => {
-    const providerConfig =
-      searchConfig?.[params.id] && typeof searchConfig[params.id] === "object"
-        ? (searchConfig[params.id] as { apiKey?: unknown })
-        : undefined;
-    return providerConfig?.apiKey ?? searchConfig?.apiKey;
-  };
-  return {
-    pluginId: params.pluginId,
-    id: params.id,
-    label: params.id,
-    hint: `${params.id} test provider`,
-    envVars: [`${params.id.toUpperCase()}_API_KEY`],
-    placeholder: `${params.id}-...`,
-    signupUrl: `https://example.com/${params.id}`,
-    autoDetectOrder: params.order,
-    credentialPath,
-    inactiveSecretPaths: [credentialPath],
-    getCredentialValue: readSearchConfigKey,
-    setCredentialValue: (searchConfigTarget, value) => {
-      const providerConfig =
-        params.id === "brave"
-          ? searchConfigTarget
-          : ((searchConfigTarget[params.id] ??= {}) as { apiKey?: unknown });
-      providerConfig.apiKey = value;
-    },
-    getConfiguredCredentialValue: (config) =>
-      (config?.plugins?.entries?.[params.pluginId]?.config as { webSearch?: { apiKey?: unknown } })
-        ?.webSearch?.apiKey,
-    getConfiguredCredentialFallback:
-      params.id === "gemini"
-        ? (config) => {
-            const provider = (config?.models?.providers?.google ?? {}) as { apiKey?: unknown };
-            return provider.apiKey !== undefined
-              ? { path: "models.providers.google.apiKey", value: provider.apiKey }
-              : undefined;
-          }
-        : undefined,
-    setConfiguredCredentialValue: (configTarget, value) => {
-      const plugins = (configTarget.plugins ??= {}) as { entries?: Record<string, unknown> };
-      const entries = (plugins.entries ??= {});
-      const entry = (entries[params.pluginId] ??= {}) as { config?: Record<string, unknown> };
-      const config = (entry.config ??= {});
-      const webSearch = (config.webSearch ??= {}) as { apiKey?: unknown };
-      webSearch.apiKey = value;
-    },
-    resolveRuntimeMetadata:
-      params.id === "perplexity"
-        ? () => ({
-            perplexityTransport: "search_api" as const,
-          })
-        : undefined,
-    createTool: () => null,
-  };
+  return { version: 1, profiles };
 }
 
 export function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
-  return [
-    createTestProvider({ id: "brave", pluginId: "brave", order: 10 }),
-    createTestProvider({ id: "gemini", pluginId: "google", order: 20 }),
-    createTestProvider({ id: "grok", pluginId: "xai", order: 30 }),
-    createTestProvider({ id: "kimi", pluginId: "moonshot", order: 40 }),
-    createTestProvider({ id: "perplexity", pluginId: "perplexity", order: 50 }),
-  ];
+  return baseProviders()
+    .filter(({ id }) => id !== "duckduckgo")
+    .map((provider) => {
+      const { id } = provider;
+      return Object.assign(provider, {
+        getCredentialValue: (searchConfig) => {
+          const candidate = searchConfig?.[id];
+          const providerConfig =
+            candidate && typeof candidate === "object"
+              ? (candidate as { apiKey?: unknown })
+              : undefined;
+          return providerConfig?.apiKey ?? searchConfig?.apiKey;
+        },
+        setCredentialValue: (searchConfigTarget, value) => {
+          const providerConfig =
+            id === "brave"
+              ? searchConfigTarget
+              : ((searchConfigTarget[id] ??= {}) as { apiKey?: unknown });
+          providerConfig.apiKey = value;
+        },
+        getConfiguredCredentialFallback:
+          id === "gemini" ? provider.getConfiguredCredentialFallback : undefined,
+      } satisfies Partial<PluginWebSearchProviderEntry>);
+    });
 }
 
 export function resetPluginWebSearchProvidersMock() {
@@ -118,11 +68,9 @@ export function resetPluginWebSearchProvidersMock() {
 }
 
 export function setupSecretsRuntimeSnapshotTestHooks(): {
-  prepareSecretsRuntimeSnapshot: PrepareSecretsRuntimeSnapshot;
+  prepareSecretsRuntimeSnapshot: typeof prepareSecretsRuntimeSnapshot;
 } {
-  beforeEach(() => {
-    resetPluginWebSearchProvidersMock();
-  });
+  beforeEach(resetPluginWebSearchProvidersMock);
 
   afterEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -131,7 +79,5 @@ export function setupSecretsRuntimeSnapshotTestHooks(): {
     clearConfigCache();
   });
 
-  return {
-    prepareSecretsRuntimeSnapshot,
-  };
+  return { prepareSecretsRuntimeSnapshot };
 }

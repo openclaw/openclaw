@@ -129,6 +129,17 @@ export const WorktreesGcResultSchema = closedObject({
   removed: Type.Array(NonEmptyString),
   orphansDeleted: Type.Integer({ minimum: 0 }),
   snapshotsPruned: Type.Integer({ minimum: 0 }),
+  gitMaintenance: Type.Optional(
+    closedObject({
+      repoRoot: NonEmptyString,
+      stage: Type.String({
+        enum: ["packs", "objects", "maintenance", "completed", "suspended", "throttled"],
+      }),
+      packsBefore: Type.Optional(Type.Integer({ minimum: 0 })),
+      packsAfter: Type.Optional(Type.Integer({ minimum: 0 })),
+    }),
+  ),
+  packsRemoved: Type.Optional(Type.Integer({ minimum: 0 })),
   orphansRetired: Type.Optional(Type.Integer({ minimum: 0 })),
   retiredCheckoutPaths: Type.Optional(Type.Array(NonEmptyString)),
   outcome: Type.Optional(Type.String({ enum: ["completed", "deferred", "partial"] })),
@@ -137,7 +148,7 @@ export const WorktreesGcResultSchema = closedObject({
       closedObject({
         id: Type.Optional(NonEmptyString),
         stage: Type.String({
-          enum: ["idle", "templates", "limits", "size", "orphans", "snapshots"],
+          enum: ["idle", "templates", "limits", "size", "orphans", "snapshots", "git-maintenance"],
         }),
         outcome: Type.String({ enum: ["failed", "deferred", "retired"] }),
         reason: Type.String(),
@@ -152,6 +163,13 @@ export const WorktreesGcResultSchema = closedObject({
   protectionReasons: Type.Optional(Type.Record(Type.String(), Type.Integer({ minimum: 0 }))),
   limitsSatisfied: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
   evictions: Type.Optional(Type.Record(Type.String(), Type.Integer({ minimum: 0 }))),
+});
+
+export const WorktreesRecoverFileParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  path: NonEmptyString,
+  recoveryId: Type.String({ format: "uuid" }),
+  expectedOwnerId: NonEmptyString,
 });
 
 export const WorktreesRecoverRemovalParamsSchema = closedObject({
@@ -188,6 +206,7 @@ export type WorktreesRemoveResult = Static<typeof WorktreesRemoveResultSchema>;
 export type WorktreesRestoreParams = Static<typeof WorktreesRestoreParamsSchema>;
 export type WorktreesGcParams = Static<typeof WorktreesGcParamsSchema>;
 export type WorktreesGcResult = Static<typeof WorktreesGcResultSchema>;
+export type WorktreesRecoverFileParams = Static<typeof WorktreesRecoverFileParamsSchema>;
 export type WorktreesRecoverRemovalParams = Static<typeof WorktreesRecoverRemovalParamsSchema>;
 export type WorktreesRecoverRemovalResult = Static<typeof WorktreesRecoverRemovalResultSchema>;
 export type WorktreesRetireSnapshotParams = Static<typeof WorktreesRetireSnapshotParamsSchema>;

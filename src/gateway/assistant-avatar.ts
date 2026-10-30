@@ -1,4 +1,5 @@
 import {
+  localAgentAvatarDataUrl,
   prepareLocalAgentAvatarFile,
   type PreparedLocalAgentAvatarFile,
 } from "../agents/identity-avatar-file.js";
@@ -15,7 +16,6 @@ import {
   looksLikeAvatarPath,
 } from "../shared/avatar-policy.js";
 import {
-  gatewayAvatarFileDataUrl,
   prepareGatewayAvatarDataUrl,
   prepareGatewayAvatarFile,
   type GatewayAvatarImageSource,
@@ -47,11 +47,6 @@ type GatewayAssistantIdentity = {
   agentId: string;
   avatar: string;
   emoji?: string;
-};
-
-type GatewayAssistantAvatarProjection = {
-  avatar: string;
-  resolution: AgentAvatarResolution | null;
 };
 
 type PreparedGatewayAssistantAvatarProjection = {
@@ -130,7 +125,7 @@ export async function resolveGatewayAssistantAvatar(params: {
   identity: GatewayAssistantIdentity;
   /** Browser clients use authenticated images; native/CLI RPC retains inline avatars. */
   httpBasePath?: string;
-}): Promise<GatewayAssistantAvatarProjection> {
+}): Promise<{ avatar: string; resolution: AgentAvatarResolution | null }> {
   const { cfg, identity } = params;
   const source = identity.avatar;
   const sameOriginAvatarUrl = resolveSameOriginAvatarUrl(
@@ -160,7 +155,7 @@ export async function resolveGatewayAssistantAvatar(params: {
     return { avatar: source, resolution: prepared.resolution };
   }
 
-  const dataUrl = gatewayAvatarFileDataUrl(prepared.file);
+  const dataUrl = localAgentAvatarDataUrl(prepared.file);
   if (!dataUrl) {
     return {
       avatar: identity.emoji ?? DEFAULT_ASSISTANT_IDENTITY.avatar,

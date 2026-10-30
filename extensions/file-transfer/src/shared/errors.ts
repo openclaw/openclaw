@@ -4,6 +4,6 @@ export function throwFromNodePayload(operation: string, payload: Record<string, 
   const code = typeof payload.code === "string" ? payload.code : "ERROR";
   const message = typeof payload.message === "string" ? payload.message : `${operation} failed`;
   const canonical =
-    typeof payload.canonicalPath === "string" ? ` (canonical=${payload.canonicalPath})` : "";
+    typeof payload.canonicalPath === "string" ? ` (resolved=${payload.canonicalPath})` : "";
   throw Object.assign(new Error(`${operation} ${code}: ${message}${canonical}`), { code });
 }

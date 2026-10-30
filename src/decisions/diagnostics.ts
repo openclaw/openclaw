@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { createFixedWindowBudget } from "../infra/fixed-window-rate-limit.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { DecisionOutcome, DecisionRuntimeV1 } from "./types.js";
+import type { DecisionEvaluateOptions } from "./execution-types.js";
+import type { DecisionOutcome } from "./types.js";
 
 const log = createSubsystemLogger("decisions");
 const warnings = createFixedWindowBudget({ maxRequests: 1, windowMs: 60_000 });
@@ -17,16 +18,27 @@ export function decisionDebugEnabled(): boolean {
   return log.isEnabled("debug");
 }
 
+/** Consumer observations describe policy changes, not provider success or task completion. */
+export function logDecisionToolPrefilter(params: {
+  effect: "proposed" | "retained" | "skipped" | "unavailable" | "applied" | "restored";
+  modelFacingToolsBefore?: number;
+  modelFacingToolsAfter?: number;
+}) {
+  if (decisionDebugEnabled()) {
+    log.debug("Decision tool prefilter observed", params);
+  }
+}
+
 // Caller/plugin-authored identifiers can contain private text too.
 const reference = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 24);
 
 export function logDecisionEvaluation(params: {
-  options: Parameters<DecisionRuntimeV1["evaluate"]>[1];
+  options: DecisionEvaluateOptions;
   providerId?: string;
   model?: string;
   facts: DecisionEvaluationFacts;
   started: number;
-  outcome?: DecisionOutcome;
+  outcome?: DecisionOutcome | import("./types-v2.js").DecisionOutcomeV2;
 }): void {
   const { options, facts, outcome } = params;
   if (

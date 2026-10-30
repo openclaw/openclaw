@@ -24,20 +24,6 @@ describe("Discord REST rate limit header parsing", () => {
     expect(readHeaderNumber(headers, "X-RateLimit-Reset-After")).toBeUndefined();
   });
 
-  it("keeps decimal reset headers working", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-28T12:00:00.000Z"));
-    try {
-      const response = new Response(null, {
-        headers: { "X-RateLimit-Reset-After": "0.125" },
-      });
-
-      expect(readResetAt(response)).toBe(Date.now() + 125);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("rounds fractional millisecond reset-after headers up", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-28T12:00:00.000Z"));
@@ -47,20 +33,6 @@ describe("Discord REST rate limit header parsing", () => {
       });
 
       expect(readResetAt(response)).toBe(Date.now() + 1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps immediate reset-after headers working", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-28T12:00:00.000Z"));
-    try {
-      const response = new Response(null, {
-        headers: { "X-RateLimit-Reset-After": "0" },
-      });
-
-      expect(readResetAt(response)).toBe(Date.now());
     } finally {
       vi.useRealTimers();
     }

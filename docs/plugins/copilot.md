@@ -68,6 +68,12 @@ The runtime resolves the SDK in this order:
 A missing SDK surfaces one error with code `COPILOT_SDK_MISSING` and the
 reinstall command above.
 
+Setup verification binds the installed SDK and packaged native runtime to the
+verified session. Replacing either implementation invalidates that binding;
+restart OpenClaw after an SDK update and repeat verification. Verified setup
+currently requires the SDK's packaged stdio runtime; a custom `COPILOT_CLI_PATH`
+outside that bundle or an in-process default transport cannot supply this binding.
+
 ## Quickstart
 
 Pin one model (or one provider) to the harness:
@@ -255,6 +261,18 @@ groups, so a crash between groups leaves a valid transcript prefix.
 tool topology; a structurally destructive rewrite suppresses the whole group
 instead of persisting a false replay.
 
+Ephemeral helper turns, including setup inference probes, use the caller-owned
+in-memory session manager. The journal retains the same hooks, event identity,
+and complete tool groups without creating durable session state. Ordinary
+persistent attempts still require an exact runtime session target.
+
+Explicitly detached one-shot turns never look up or retain SDK session bindings.
+They create their own native session and delete only that fresh history after
+accepted tool work and background compaction settle, including on failure or
+cancellation. Cleanup failures are reported rather than treated as success.
+Caller-owned in-memory conversations without detached persistence remain
+resumable; they are not disposable merely because their transcript is in memory.
+
 Persistence failures stop the attempt. The first write failure marks the journal
 failed, aborts the in-flight SDK session, and flags the attempt's replay as
 unvalidated so the next run creates a fresh SDK session instead of trusting a
@@ -361,7 +379,7 @@ filtering, and catalog cleanup stay in the shared helper.
 
 For Copilot, `tools.toolSearch.mode: "directory"` uses structured `tools`
 semantics: discover with `tool_search` or `tool_describe`, then execute through
-`tool_call` with `id` and `args`. Hidden OpenClaw catalog names are not registered
+`dispatch_action` with `id` and `args`. Hidden OpenClaw catalog names are not registered
 as SDK tool handlers and cannot be called directly. The pinned Copilot SDK
 1.0.13 supports native deferral of registered tool declarations through
 `Tool.defer`; that is a separate SDK catalog, not a resolver for omitted

@@ -148,19 +148,10 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
   if (observer.check) {
     return observer.check;
   }
-  // A suspend-and-resume can finish during this read. Do not publish its transient
-  // pointer as a replacement, even if admission is open again when the read settles.
-  let admissionChanged = false;
-  const releaseObservation = onGatewaySuspendAdmissionChange(() => {
-    admissionChanged = true;
-  });
   observer.check = tryReadJson(path.join(root, "dist", "build-info.json"), {
     maxBytes: 16 * 1024,
   })
     .then((value) => {
-      if (admissionChanged) {
-        return;
-      }
       const metadata = asNullableRecord(value);
       const version = normalizeNullableString(metadata?.version);
       const buildId = normalizeNullableString(metadata?.buildId);
@@ -173,18 +164,15 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
       }
     })
     .finally(() => {
-      releaseObservation();
       observer.check = undefined;
     });
   return observer.check;
 }
 
-type GatewayStaleInstall = {
+export function classifyGatewayStaleInstall(error: unknown): {
   error: ErrorShape;
   restartCommand: string;
-};
-
-export function classifyGatewayStaleInstall(error: unknown): GatewayStaleInstall | null {
+} | null {
   const observer = installationState.observer;
   const root = observer?.root ?? gatewayInstallRoot;
   const missingRuntime = collectErrorGraphCandidates(error, readErrorCauses).some((candidate) =>

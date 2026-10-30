@@ -45,7 +45,7 @@ it("reuses prepared metadata while resolving an alias-owned provider policy", as
           },
     );
   const { planModelsJsonForTest } = await import("./models-config.plan.test-support.js");
-  const modelsConfigProviders = await import("./models-config.providers.js");
+  const modelsConfigProviders = await import("./models-config.providers.implicit.js");
   vi.spyOn(modelsConfigProviders, "resolveImplicitProviders").mockResolvedValue({
     "x-ai": {
       baseUrl: "https://mock.example/v1",

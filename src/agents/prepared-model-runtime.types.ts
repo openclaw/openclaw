@@ -97,7 +97,7 @@ export type PreparedModelRuntimeSnapshot = Omit<PublishedModelCatalogOwnerCandid
     /** Inventory demand may renew expired providers without waiting or replacing saved rows. */
     refreshExpiredModelCatalog?: () => void;
     /** Rechecks native CLI login availability without refreshing provider inventory. */
-    recheckNativeLogin?: () => void;
+    recheckNativeLogin?: (options?: { force?: boolean }) => void | Promise<void>;
     /** Reads validated executable rows from this owner's accepted provider publication. */
     readPublishedModels?: () => ReadonlyMap<string, readonly Model[]> | undefined;
     /** Builds this generation's full control-plane catalog without replacing turn facts. */
@@ -123,7 +123,9 @@ export type PreparedModelRuntimeSnapshot = Omit<PublishedModelCatalogOwnerCandid
     }>[];
     /** Inline provider projection prepared once for all resolutions owned by this snapshot. */
     inlineProviderModels: readonly InlineModelEntry[];
-    createStores: () => PreparedModelRuntimeStores;
+    createStores: (
+      publishedModels?: ReadonlyMap<string, readonly Model[]>,
+    ) => PreparedModelRuntimeStores;
     /** Bounded metadata shared by runs; replacing the model/auth generation drops the memo. */
     routeModelResolutionMemo?: Map<string, Promise<Model>>;
   }>;
@@ -175,6 +177,12 @@ export type PreparedModelRuntimeLeaseOptions = {
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   abortSignal?: AbortSignal;
+  /**
+   * A plugin-runtime refresh continuation already ran tools on
+   * the previous generation, so it waits for every pending reload to settle
+   * instead of failing after the usual three publication gates.
+   */
+  waitForReplacementPublication?: boolean;
   /** Pure planning against admitted facts; requested selections remain explicit and additive. */
   deriveRuntimePluginSelections?: (context: {
     config: OpenClawConfig;
@@ -236,7 +244,9 @@ export type PreparedModelCatalogProviderFacts = {
   expiresAt?: number;
   /** Consecutive failed discoveries; their backed-off retry deadline is `expiresAt`. */
   discoveryFailures?: number;
-  legacyRows?: ReadonlySet<string>;
+  /** Rows carried from another plugin generation; visible until this generation reacquires them. */
+  provisional?: true;
+  legacyAcquired?: boolean;
 };
 
 export type PreparedModelCatalogInventory = {
@@ -278,12 +288,13 @@ export type PreparedModelRuntimeOwner = {
   /** Source-bound attempt status, including failure before any inventory was published. */
   catalogAttempt?: PreparedModelCatalogAttempt;
   refreshError?: Error;
-  /** Demand may recheck a failed catalog-worker replacement; scheduled demand gets one attempt. */
+  /** Demand may recheck a failed publication; scheduled demand gets one attempt. */
   catalogRecovery?: {
     error: Error;
     scheduledAttempted: boolean;
     retryAfter: number;
     replacementGateId?: PreparedModelRuntimeReplacementGateId;
+    pending?: Promise<void>;
   };
   /** The configured publication owner recovers when an idle Gateway lender retires. */
   onPluginGenerationRetired?: () => void;

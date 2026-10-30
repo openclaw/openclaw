@@ -1,10 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { setTimeout as sleep } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFailed, vi } from "vitest";
 import { z } from "zod";
 import { isInternalRuntimeContextCarrierText } from "../../../../extensions/qa-lab/api.js";
 import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
@@ -13,23 +10,14 @@ import {
   disconnectGatewayClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
-
-type GatewayChatMessage = {
-  role?: unknown;
-  content?: unknown;
-  text?: unknown;
-};
-
-type GatewayChatHistory = {
-  sessionKey?: string;
-  sessionId?: string;
-  messages?: GatewayChatMessage[];
-};
-
-type GatewayChatRun = {
-  runId?: unknown;
-  status?: unknown;
-};
+import {
+  pollHistory,
+  sendChat,
+  waitForRun,
+  type GatewayChatRun,
+  type GatewayChatHistory,
+  type GatewayChatMessage,
+} from "./gateway-recovery.test-support.js";
 
 type MockRequestCursor = { cursor: number };
 
@@ -48,8 +36,6 @@ type GatewayHandle = Awaited<
 
 const HISTORY_RETRY_TIMEOUT_MS = 10_000;
 const HISTORY_RETRY_DEFAULT_MS = 250;
-const HISTORY_RETRY_MIN_MS = 100;
-const HISTORY_RETRY_MAX_MS = 5_000;
 const requestSnapshotsSchema = z.array(
   z.object({ cursor: z.number().int(), model: z.string(), raw: z.string() }),
 );
@@ -61,6 +47,15 @@ const responsesInputSchema = z.object({
       content: z.array(z.object({ type: z.string(), text: z.string().optional() })).optional(),
     }),
   ),
+});
+const describedSessionSchema = z.object({
+  session: z.object({
+    agentId: z.string().optional(),
+    key: z.string(),
+    sessionId: z.string().optional(),
+    placement: z.object({ state: z.string() }).optional(),
+    hasActiveRun: z.boolean().optional(),
+  }),
 });
 const historyTextSchema = z.union([
   z.string(),
@@ -125,54 +120,15 @@ function messageContains(message: GatewayChatMessage, expected: string): boolean
 function historyContainsExpectedTurns(
   history: GatewayChatHistory,
   expectedUser: string,
-  expectedAssistant?: string,
+  expectedAssistant: string,
 ): boolean {
   const messages = history.messages ?? [];
   return (
     messages.some((message) => message.role === "user" && messageContains(message, expectedUser)) &&
-    (expectedAssistant === undefined ||
-      messages.some(
-        (message) => message.role === "assistant" && messageContains(message, expectedAssistant),
-      ))
+    messages.some(
+      (message) => message.role === "assistant" && messageContains(message, expectedAssistant),
+    )
   );
-}
-
-// Transcript projection rebuilds can briefly reject chat.history. Retry only
-// that structured protocol response; every other failure remains immediate.
-function resolveRetryableHistoryDelayMs(error: unknown): number | null {
-  let current = error;
-  for (let depth = 0; depth < 4; depth += 1) {
-    if (typeof current !== "object" || current === null || Array.isArray(current)) {
-      break;
-    }
-    const shaped = current as {
-      cause?: unknown;
-      code?: unknown;
-      details?: unknown;
-      gatewayCode?: unknown;
-      retryable?: unknown;
-      retryAfterMs?: unknown;
-    };
-    const code = shaped.gatewayCode ?? shaped.code;
-    if (code === "UNAVAILABLE" && shaped.retryable === true) {
-      const detailMethod =
-        typeof shaped.details === "object" && shaped.details !== null
-          ? (shaped.details as { method?: unknown }).method
-          : undefined;
-      if (typeof detailMethod !== "string" || detailMethod === "chat.history") {
-        const rawDelayMs =
-          typeof shaped.retryAfterMs === "number" && Number.isFinite(shaped.retryAfterMs)
-            ? shaped.retryAfterMs
-            : HISTORY_RETRY_DEFAULT_MS;
-        return Math.min(
-          Math.max(Math.floor(rawDelayMs), HISTORY_RETRY_MIN_MS),
-          HISTORY_RETRY_MAX_MS,
-        );
-      }
-    }
-    current = shaped.cause;
-  }
-  return null;
 }
 
 function resolveGatewayErrorReason(error: unknown): string | undefined {
@@ -198,78 +154,44 @@ async function waitForChatHistory(params: {
   sessionKey: string;
   agentId?: string;
   expectedUser: string;
-  expectedAssistant?: string;
+  expectedAssistant: string;
   timeoutMs?: number;
   intervalMs?: number;
 }): Promise<GatewayChatHistory> {
   const timeoutMs = params.timeoutMs ?? HISTORY_RETRY_TIMEOUT_MS;
-  const intervalMs = params.intervalMs ?? HISTORY_RETRY_DEFAULT_MS;
-  const startedAt = Date.now();
-  let lastRetryableHistoryError: unknown;
-  while (Date.now() - startedAt < timeoutMs) {
-    let delayMs = intervalMs;
-    try {
-      const history = (await params.gateway.call(
+  return pollHistory(
+    () =>
+      params.gateway.call(
         "chat.history",
         { sessionKey: params.sessionKey, agentId: params.agentId, limit: 20 },
         { timeoutMs: 10_000 },
-      )) as GatewayChatHistory;
-      lastRetryableHistoryError = undefined;
-      if (historyContainsExpectedTurns(history, params.expectedUser, params.expectedAssistant)) {
-        return history;
-      }
-    } catch (error) {
-      const retryDelayMs = resolveRetryableHistoryDelayMs(error);
-      if (retryDelayMs === null) {
-        throw error;
-      }
-      lastRetryableHistoryError = error;
-      delayMs = retryDelayMs;
-    }
-    const remainingMs = timeoutMs - (Date.now() - startedAt);
-    if (remainingMs <= 0) {
-      break;
-    }
-    await sleep(Math.min(delayMs, remainingMs));
-  }
-  const message = `timed out waiting for complete chat.history after ${timeoutMs}ms`;
-  throw lastRetryableHistoryError === undefined
-    ? new Error(message)
-    : new Error(message, { cause: lastRetryableHistoryError });
+      ) as Promise<GatewayChatHistory>,
+    (history) =>
+      historyContainsExpectedTurns(history, params.expectedUser, params.expectedAssistant),
+    timeoutMs,
+    params.intervalMs ?? HISTORY_RETRY_DEFAULT_MS,
+    () => `timed out waiting for complete chat.history after ${timeoutMs}ms`,
+  );
 }
 
-async function sendAndWait(params: {
+async function sendAndWait({
+  gateway,
+  sessionKey,
+  message,
+  ...settings
+}: {
   gateway: GatewayHandle;
   sessionKey: string;
   message: string;
   expectedPermissionMode?: string;
   expectedToolOverrides?: Record<string, unknown>;
 }): Promise<void> {
-  const started = (await params.gateway.call(
-    "chat.send",
-    {
-      sessionKey: params.sessionKey,
-      message: params.message,
-      deliver: false,
-      idempotencyKey: randomUUID(),
-      ...(params.expectedPermissionMode === undefined
-        ? {}
-        : { expectedPermissionMode: params.expectedPermissionMode }),
-      ...(params.expectedToolOverrides === undefined
-        ? {}
-        : { expectedToolOverrides: params.expectedToolOverrides }),
-    },
-    { timeoutMs: 30_000 },
-  )) as GatewayChatRun;
+  const started = await sendChat(gateway, sessionKey, message, settings);
   expect(started.status).toBe("started");
   expect(typeof started.runId).toBe("string");
 
-  const terminal = (await params.gateway.call(
-    "agent.wait",
-    { runId: started.runId, timeoutMs: 30_000 },
-    { timeoutMs: 35_000 },
-  )) as GatewayChatRun;
-  expect(terminal.status).toBe("ok");
+  const terminal = await waitForRun(gateway, started.runId);
+  expect(terminal, JSON.stringify(terminal)).toMatchObject({ status: "ok" });
 }
 
 async function readMockJson<T>(baseUrl: string, requestPath: string): Promise<T> {
@@ -318,129 +240,78 @@ describe("Gateway chat RPCs", () => {
     }
   });
 
-  it(
-    "preserves model-input whitespace independently from canonical chat history",
-    { timeout: 120_000 },
-    async () => {
-      harness = await startChatGateway();
-      const { gateway } = harness;
-      const mock = expectDefined(harness.mock, "mock provider");
-      const sessionKey = `agent:qa:gateway-rpc-chat-${randomUUID()}`;
-      const turns = ["/think high\n", ""].map((directive, index) => {
-        const marker = randomUUID();
-        const reply = `GATEWAY_RPC_CHAT_OK_${index}`;
-        const interior =
-          "\n```python\nif True:\n    value = 'a  b'\n    if value:\n        print(value)\n\t\t# tabs stay  \n \t \n```\n";
-        return {
-          marker,
-          reply,
-          interior,
-          prompt: `${directive}Gateway chat RPC QA. Reply exactly \`${reply}\`.\nBEGIN_${marker}${interior}END_${marker}`,
-        };
+  it("preserves model and history whitespace", { timeout: 120_000 }, async () => {
+    harness = await startChatGateway();
+    const { gateway } = harness;
+    const mock = expectDefined(harness.mock, "mock provider");
+    const sessionKey = `agent:qa:gateway-rpc-chat-${randomUUID()}`;
+    const turns = ["/think high\n", ""].map((directive, index) => {
+      const marker = randomUUID();
+      const reply = `GATEWAY_RPC_CHAT_OK_${index}`;
+      const interior =
+        "\n```python\nif True:\n    value = 'a  b'\n    if value:\n        print(value)\n\t\t# tabs stay  \n \t \n```\n";
+      return {
+        marker,
+        reply,
+        interior,
+        prompt: `${directive}Gateway chat RPC QA. Reply exactly \`${reply}\`.\nBEGIN_${marker}${interior}END_${marker}`,
+      };
+    });
+
+    for (const [index, turn] of turns.entries()) {
+      const { cursor } = z
+        .object({ cursor: z.number().int() })
+        .parse(await readMockJson(mock.baseUrl, "/debug/request-cursor"));
+      await sendAndWait({ gateway, sessionKey, message: turn.prompt });
+
+      const requests = requestSnapshotsSchema.parse(
+        await readMockJson(mock.baseUrl, `/debug/requests?after=${cursor}`),
+      );
+      // Pin by request identity before checking content: a later retry must not
+      // hide a damaged initial prompt, and mock convenience fields trim text.
+      const request = expectDefined(
+        requests
+          .filter((entry) => entry.model === "gpt-5.6-luna")
+          .toSorted((a, b) => a.cursor - b.cursor)[0],
+        "first provider request",
+      );
+      const { input, reasoning } = responsesInputSchema.parse(JSON.parse(request.raw));
+      expect(reasoning.effort).toBe(index === 0 ? "high" : "medium");
+      const inputTexts = input.flatMap((item) =>
+        (item.content ?? [])
+          .filter((part) => part.type === "input_text")
+          .map((part) => expectDefined(part.text, "provider input text")),
+      );
+      const userTexts = input
+        .filter((item) => item.role === "user")
+        .map((item) => {
+          expect(item.content).toHaveLength(1);
+          const part = expectDefined(item.content?.[0], "user content");
+          expect(part.type).toBe("input_text");
+          return expectDefined(part.text, "user text");
+        })
+        .filter((text) => !isInternalRuntimeContextCarrierText(text));
+      expect(userTexts).toHaveLength(index + 1);
+      const history = await waitForChatHistory({
+        gateway,
+        sessionKey,
+        expectedUser: `BEGIN_${turn.marker}`,
+        expectedAssistant: turn.reply,
       });
-
-      for (const [index, turn] of turns.entries()) {
-        const cursorResponse = await fetch(`${mock.baseUrl}/debug/request-cursor`);
-        expect(cursorResponse.ok).toBe(true);
-        const { cursor } = z
-          .object({ cursor: z.number().int() })
-          .parse(await cursorResponse.json());
-        const started = (await gateway.call(
-          "chat.send",
-          {
-            sessionKey,
-            message: turn.prompt,
-            deliver: false,
-            idempotencyKey: randomUUID(),
-          },
-          { timeoutMs: 30_000 },
-        )) as GatewayChatRun;
-        expect(started.status).toBe("started");
-        expect(typeof started.runId).toBe("string");
-        const terminal = (await gateway.call(
-          "agent.wait",
-          { runId: started.runId, timeoutMs: 30_000 },
-          { timeoutMs: 35_000 },
-        )) as GatewayChatRun;
-        expect(terminal.status).toBe("ok");
-
-        const response = await fetch(`${mock.baseUrl}/debug/requests?after=${cursor}`);
-        expect(response.ok).toBe(true);
-        const requests = requestSnapshotsSchema.parse(await response.json());
-        // Pin by request identity before checking content: a later retry must not
-        // hide a damaged initial prompt, and mock convenience fields trim text.
-        const request = expectDefined(
-          requests
-            .filter((entry) => entry.model === "gpt-5.6-luna")
-            .toSorted((a, b) => a.cursor - b.cursor)[0],
-          "first provider request",
-        );
-        const { input, reasoning } = responsesInputSchema.parse(JSON.parse(request.raw));
-        expect(reasoning.effort).toBe(index === 0 ? "high" : "medium");
-        const inputTexts = input.flatMap((item) =>
-          (item.content ?? [])
-            .filter((part) => part.type === "input_text")
-            .map((part) => expectDefined(part.text, "provider input text")),
-        );
-        const userTexts = input
-          .filter((item) => item.role === "user")
-          .map((item) => {
-            expect(item.content).toHaveLength(1);
-            const part = expectDefined(item.content?.[0], "user content");
-            expect(part.type).toBe("input_text");
-            return expectDefined(part.text, "user text");
-          })
-          .filter((text) => !isInternalRuntimeContextCarrierText(text));
-        expect(userTexts).toHaveLength(index + 1);
-        const history = await waitForChatHistory({
-          gateway,
-          sessionKey,
-          expectedUser: `BEGIN_${turn.marker}`,
-          expectedAssistant: turn.reply,
-        });
-        const userMessages = (history.messages ?? []).filter((message) => message.role === "user");
-        expect(userMessages).toHaveLength(index + 1);
-        for (const [turnIndex, expected] of turns.slice(0, index + 1).entries()) {
-          const modelText = expectDefined(userTexts[turnIndex], "model user turn");
-          expectWhitespaceInterior(inputTexts, modelText, expected.marker, expected.interior);
-          const content = historyTextSchema.parse(userMessages[turnIndex]?.content);
-          const recorded =
-            typeof content === "string" ? content : expectDefined(content[0], "history text").text;
-          expectWhitespaceInterior([recorded], recorded, expected.marker, expected.interior);
-        }
-        console.log(
-          "[gateway-rpc-chat-runtime-proof]",
-          JSON.stringify({
-            turn: index + 1,
-            gatewayRunStatus: terminal.status,
-            serializedRuntimeCarriersSkipped: input
-              .filter((item) => item.role === "user")
-              .map((item) =>
-                (item.content ?? [])
-                  .filter((part) => part.type === "input_text")
-                  .map((part) => part.text ?? "")
-                  .join(""),
-              )
-              .filter(isInternalRuntimeContextCarrierText).length,
-            selectedUserTurns: userTexts.length,
-            latestPromptSelected: userTexts.at(-1)?.includes(`BEGIN_${turn.marker}`) ?? false,
-            persistedHistoryContainsPrompt: userMessages.some((message) => {
-              const content = historyTextSchema.safeParse(message.content);
-              return (
-                content.success &&
-                (typeof content.data === "string"
-                  ? content.data
-                  : (content.data[0]?.text ?? "")
-                ).includes(`BEGIN_${turn.marker}`)
-              );
-            }),
-          }),
-        );
-        // The first-sent model prompt replays as projected, so its directive stays stripped.
-        expect(userTexts[0]).not.toContain("/think high");
+      const userMessages = (history.messages ?? []).filter((message) => message.role === "user");
+      expect(userMessages).toHaveLength(index + 1);
+      for (const [turnIndex, expected] of turns.slice(0, index + 1).entries()) {
+        const modelText = expectDefined(userTexts[turnIndex], "model user turn");
+        expectWhitespaceInterior(inputTexts, modelText, expected.marker, expected.interior);
+        const content = historyTextSchema.parse(userMessages[turnIndex]?.content);
+        const recorded =
+          typeof content === "string" ? content : expectDefined(content[0], "history text").text;
+        expectWhitespaceInterior([recorded], recorded, expected.marker, expected.interior);
       }
-    },
-  );
+      // The first-sent model prompt replays as projected, so its directive stays stripped.
+      expect(userTexts[0]).not.toContain("/think high");
+    }
+  });
 
   it("keeps inline trace diagnostics on their own turn", { timeout: 120_000 }, async () => {
     const { gateway, mock } = await startChatGateway();
@@ -540,18 +411,6 @@ describe("Gateway chat RPCs", () => {
           "trace session",
         );
         expect(row.traceLevel).toBe(turn.stored);
-        console.log(
-          `[inline-trace-proof] ${JSON.stringify({
-            turn: index,
-            runId,
-            settled: settledRunIds.has(runId),
-            modelReplyDelivered: text.includes(reply),
-            rawExpected: turn.raw,
-            rawInput: text.includes("Model Input (User Role)"),
-            rawOutput: text.includes("Model Output (Assistant Role)"),
-            storedTrace: row.traceLevel ?? null,
-          })}`,
-        );
       }
     } finally {
       await disconnectGatewayClient(client);
@@ -559,12 +418,10 @@ describe("Gateway chat RPCs", () => {
   });
 
   it.each([
-    ...[
-      { first: "main", second: "work" },
-      { first: "work", second: "main" },
-    ].flatMap(({ first, second }) =>
-      [false, true].map((withAttachment) => ({ first, second, withAttachment, seedChat: true })),
-    ),
+    { first: "main", second: "work", withAttachment: false, seedChat: true },
+    { first: "main", second: "work", withAttachment: true, seedChat: true },
+    { first: "work", second: "main", withAttachment: false, seedChat: true },
+    { first: "work", second: "main", withAttachment: true, seedChat: true },
     { first: "main", second: "work", withAttachment: false, seedChat: false },
   ])(
     "keeps explicit $first then $second ownership through global chat and native agent dispatch and history (chatAttachment=$withAttachment, seedChat=$seedChat)",
@@ -572,24 +429,16 @@ describe("Gateway chat RPCs", () => {
     async ({ first, second, withAttachment, seedChat }) => {
       const { gateway, mock: provider } = await startChatGateway({
         mockAuthAgentIds: ["main", "work"],
-        mutateConfig: (config) => ({
-          ...config,
-          agents: {
-            ...config.agents,
-            ownership: "explicit",
-            entries: { main: {}, work: {} },
-            defaults: {
-              ...config.agents?.defaults,
-              models: Object.fromEntries(
-                Object.entries(config.agents?.defaults?.models ?? {}).map(([ref, model]) => [
-                  ref,
-                  { ...model, agentRuntime: { id: "openclaw" } },
-                ]),
-              ),
-            },
-          },
-          session: { ...config.session, scope: "global" },
-        }),
+        mutateConfig: (config) => {
+          const agents = (config.agents ??= {});
+          agents.ownership = "explicit";
+          agents.entries = { main: {}, work: {} };
+          for (const model of Object.values(agents.defaults?.models ?? {})) {
+            model.agentRuntime = { id: "openclaw" };
+          }
+          config.session = { ...config.session, scope: "global" };
+          return config;
+        },
       });
       const mock = expectDefined(provider, "mock provider");
       expect(gateway.cfg.plugins?.allow).toEqual(["qa-lab"]);
@@ -631,35 +480,31 @@ describe("Gateway chat RPCs", () => {
         )) as GatewayChatRun;
         expect(started.status).toBe(method === "agent" ? "accepted" : "started");
         expect(typeof started.runId).toBe("string");
-        const terminal = (await gateway.call(
-          "agent.wait",
-          { runId: started.runId, timeoutMs: 30_000 },
-          { timeoutMs: 35_000 },
-        )) as GatewayChatRun;
-        const response = await fetch(`${mock.baseUrl}/debug/requests?after=${cursor}`);
-        expect(response.ok).toBe(true);
-        const requests = requestSnapshotsSchema.parse(await response.json());
+        const terminal = await waitForRun(gateway, started.runId);
+        const requests = requestSnapshotsSchema.parse(
+          await readMockJson(mock.baseUrl, `/debug/requests?after=${cursor}`),
+        );
         cursor = Math.max(cursor, ...requests.map((request) => request.cursor));
-        expect
-          .soft(
-            requests.some((request) => request.raw.includes(prompt)),
-            `${agentId} ${method} must reach the provider`,
-          )
-          .toBe(true);
-        if (attachments) {
+        const expectInput = (text: string, present: boolean, label: string) =>
           expect
             .soft(
-              requests.some((request) => request.raw.includes(`${agentId} attachment ${reply}`)),
-              `${agentId} attachment must reach the provider`,
+              requests.some((request) => request.raw.includes(text)),
+              label,
             )
-            .toBe(true);
+            .toBe(present);
+        expectInput(prompt, true, `${agentId} ${method} must reach the provider`);
+        if (attachments) {
+          expectInput(
+            `${agentId} attachment ${reply}`,
+            true,
+            `${agentId} attachment must reach the provider`,
+          );
         }
-        expect
-          .soft(
-            requests.some((request) => request.raw.includes(otherReply)),
-            `${agentId} provider input must exclude ${otherAgentId} history`,
-          )
-          .toBe(false);
+        expectInput(
+          otherReply,
+          false,
+          `${agentId} provider input must exclude ${otherAgentId} history`,
+        );
         expect.soft(terminal, JSON.stringify(terminal)).toMatchObject({
           runId: started.runId,
           status: "ok",
@@ -701,155 +546,149 @@ describe("Gateway chat RPCs", () => {
           (otherHistory.messages ?? []).some((message) => messageContains(message, reply)),
         ).toBe(false);
       }
-      const database = new DatabaseSync(
-        path.join(gateway.tempRoot, "state", "state", "openclaw.sqlite"),
-        { readOnly: true },
-      );
-      try {
-        const placements = database.prepare(
-          "SELECT agent_id, session_key, session_id, state, turn_claim_id FROM worker_session_placements WHERE agent_id IN (?, ?) ORDER BY agent_id",
-        );
-        // The terminal event can precede the placement owner's final claim release.
-        await expect
-          .poll(() => placements.all(first, second))
-          .toEqual(
-            [first, second].toSorted().map((agentId) => ({
-              agent_id: agentId,
-              session_key: sessionKey,
-              session_id: expectDefined(sessionIds.get(agentId), "owner session id"),
-              state: "local",
-              turn_claim_id: null,
-            })),
-          );
-      } finally {
-        database.close();
+      // Plain-local turn claims are owner-only; a leaked final claim rejects the next turn.
+      for (const agentId of [first, second]) {
+        const reply = `GLOBAL_OWNER_CLAIM_RELEASED_${agentId}`;
+        const started = (await gateway.call(
+          "agent",
+          {
+            sessionKey,
+            agentId,
+            message: `Gateway claim release QA for ${agentId}. Reply exactly \`${reply}\`.`,
+            deliver: false,
+            idempotencyKey: randomUUID(),
+          },
+          { timeoutMs: 30_000 },
+        )) as GatewayChatRun;
+        const terminal = await waitForRun(gateway, started.runId);
+        expect(terminal, JSON.stringify(terminal)).toMatchObject({ status: "ok" });
       }
+      // Plain-local placements live with the Gateway placement owner, not in SQL rows.
+      // The terminal event can precede the final session row projection.
+      await expect
+        .poll(() =>
+          Promise.all(
+            [first, second].map(async (agentId) => {
+              const { session } = describedSessionSchema.parse(
+                await gateway.call("sessions.describe", { key: sessionKey, agentId }),
+              );
+              return {
+                agentId: session.agentId,
+                key: session.key,
+                sessionId: session.sessionId,
+                placement: session.placement?.state,
+                active: session.hasActiveRun === true,
+              };
+            }),
+          ),
+        )
+        .toEqual(
+          [first, second].map((agentId) => ({
+            agentId,
+            key: sessionKey,
+            sessionId: expectDefined(sessionIds.get(agentId), "owner session id"),
+            placement: "local",
+            active: false,
+          })),
+        );
     },
   );
 
-  it(
-    "enforces admitted session settings at final effect and rejects stale sends before dispatch",
-    { timeout: 120_000 },
-    async () => {
-      harness = await startChatGateway({
-        mutateConfig: (config) => ({
-          ...config,
-          tools: { ...config.tools, profile: "coding" },
-        }),
-      });
-      const { gateway, mock } = harness;
-      if (!mock) {
-        throw new Error("mock provider did not start");
-      }
+  it("enforces session authority before side effects", { timeout: 120_000 }, async () => {
+    harness = await startChatGateway({
+      mutateConfig: (config) => ({
+        ...config,
+        tools: { ...config.tools, profile: "coding" },
+      }),
+    });
+    const { gateway, mock } = harness;
+    if (!mock) {
+      throw new Error("mock provider did not start");
+    }
 
-      const sessionKey = `agent:qa:gateway-settings-authority-${randomUUID()}`;
-      await sendAndWait({ gateway, sessionKey, message: "Create the proof session." });
-      await expect(
-        gateway.call("sessions.patch", {
-          key: sessionKey,
-          permissionMode: "read-only",
-          toolOverrides: { webSearch: false },
-        }),
-      ).resolves.toMatchObject({ entry: { permissionMode: "read-only" } });
+    const sessionKey = `agent:qa:gateway-settings-authority-${randomUUID()}`;
+    onTestFailed(() => {
+      process.stderr.write(gateway.logs().slice(-12_000) + "\n");
+    });
+    await sendAndWait({ gateway, sessionKey, message: "Create the proof session." });
+    await expect(
+      gateway.call("sessions.patch", {
+        key: sessionKey,
+        permissionMode: "read-only",
+        toolOverrides: { webSearch: false },
+      }),
+    ).resolves.toMatchObject({ entry: { permissionMode: "read-only" } });
 
-      const cursorBeforeRestricted = await readMockJson<MockRequestCursor>(
-        mock.baseUrl,
-        "/debug/request-cursor",
-      );
-      const restrictedReply = "SESSION_SETTINGS_READ_ONLY_OK";
-      const sentinelPath = `${gateway.workspaceDir}/forbidden-session-settings-write.txt`;
-      const restrictedPrompt = [
-        "Tool progress QA check.",
-        `Call the exec tool exactly once with this exact command before answering: \`printf forbidden > ${JSON.stringify(sentinelPath)}\`.`,
-        `Reply exactly \`${restrictedReply}\`.`,
-      ].join(" ");
-      await sendAndWait({
-        gateway,
+    const readCursor = () => readMockJson<MockRequestCursor>(mock.baseUrl, "/debug/request-cursor");
+    const cursorBeforeRestricted = await readCursor();
+    const restrictedReply = "SESSION_SETTINGS_READ_ONLY_OK";
+    const sentinelPath = `${gateway.workspaceDir}/forbidden-session-settings-write.txt`;
+    const restrictedPrompt = [
+      "Tool progress QA check.",
+      `Call the exec tool exactly once with this exact command before answering: \`printf forbidden > ${JSON.stringify(sentinelPath)}\`.`,
+      `Reply exactly \`${restrictedReply}\`.`,
+    ].join(" ");
+    await sendAndWait({
+      gateway,
+      sessionKey,
+      message: restrictedPrompt,
+      expectedPermissionMode: "read-only",
+      expectedToolOverrides: { webSearch: false },
+    });
+
+    const restrictedRequests = await readMockJson<MockRequestSnapshot[]>(
+      mock.baseUrl,
+      `/debug/requests?after=${cursorBeforeRestricted.cursor}`,
+    );
+    const plannedExec = restrictedRequests.find(
+      (request) =>
+        request.prompt?.includes("Tool progress QA check") && request.plannedToolName === "exec",
+    );
+    expect(plannedExec?.plannedToolArgs?.command).toContain(sentinelPath);
+    await expect(fs.access(sentinelPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(
+      restrictedRequests.some((request) =>
+        /exec denied|security=deny|execution policy/iu.test(request.toolOutput ?? ""),
+      ),
+    ).toBe(true);
+    expect(plannedExec?.body?.tools).not.toEqual(
+      expect.arrayContaining(
+        ["write", "edit", "apply_patch", "web_search"].map((name) =>
+          expect.objectContaining({ name }),
+        ),
+      ),
+    );
+
+    await expect(
+      gateway.call("sessions.patch", {
+        key: sessionKey,
+        permissionMode: "full",
+        toolOverrides: null,
+      }),
+    ).resolves.toMatchObject({ entry: { permissionMode: "full" } });
+    const cursorBeforeRejected = await readCursor();
+    const rejectedPrompt = "REJECT_CHANGED_SETTINGS_BEFORE_IO";
+    const rejectedError = await gateway
+      .call("chat.send", {
         sessionKey,
-        message: restrictedPrompt,
+        message: rejectedPrompt,
+        deliver: false,
+        idempotencyKey: randomUUID(),
         expectedPermissionMode: "read-only",
         expectedToolOverrides: { webSearch: false },
-      });
-
-      const restrictedRequests = await readMockJson<MockRequestSnapshot[]>(
-        mock.baseUrl,
-        `/debug/requests?after=${cursorBeforeRestricted.cursor}`,
+      })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
       );
-      const plannedExec = restrictedRequests.find(
-        (request) =>
-          request.prompt?.includes("Tool progress QA check") && request.plannedToolName === "exec",
-      );
-      expect(plannedExec?.plannedToolArgs?.command).toContain(sentinelPath);
-      expect(
-        await fs.access(sentinelPath).then(
-          () => true,
-          () => false,
-        ),
-      ).toBe(false);
-      expect(
-        restrictedRequests.some((request) =>
-          /exec denied|security=deny|execution policy/iu.test(request.toolOutput ?? ""),
-        ),
-      ).toBe(true);
-      const declaredToolNames = (
-        Array.isArray(plannedExec?.body?.tools) ? plannedExec.body.tools : []
-      ).flatMap((tool) => {
-        const name =
-          typeof tool === "object" && tool !== null ? (tool as { name?: unknown }).name : undefined;
-        return typeof name === "string" ? [name] : [];
-      });
-      expect(declaredToolNames).not.toEqual(
-        expect.arrayContaining(["write", "edit", "apply_patch", "web_search"]),
-      );
-
-      await expect(
-        gateway.call("sessions.patch", {
-          key: sessionKey,
-          permissionMode: "full",
-          toolOverrides: null,
-        }),
-      ).resolves.toMatchObject({ entry: { permissionMode: "full" } });
-      const cursorBeforeRejected = await readMockJson<MockRequestCursor>(
-        mock.baseUrl,
-        "/debug/request-cursor",
-      );
-      const rejectedPrompt = "REJECT_CHANGED_SETTINGS_BEFORE_IO";
-      const rejectedError = await gateway
-        .call("chat.send", {
-          sessionKey,
-          message: rejectedPrompt,
-          deliver: false,
-          idempotencyKey: randomUUID(),
-          expectedPermissionMode: "read-only",
-          expectedToolOverrides: { webSearch: false },
-        })
-        .then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-      expect(resolveGatewayErrorReason(rejectedError)).toBe("session-settings-changed");
-      const cursorAfterRejected = await readMockJson<MockRequestCursor>(
-        mock.baseUrl,
-        "/debug/request-cursor",
-      );
-      expect(cursorAfterRejected).toEqual(cursorBeforeRejected);
-      const history = (await gateway.call(
-        "chat.history",
-        { sessionKey, limit: 50 },
-        { timeoutMs: 10_000 },
-      )) as GatewayChatHistory;
-      expect(JSON.stringify(history.messages ?? [])).not.toContain(rejectedPrompt);
-
-      console.log(
-        `[session-settings-authority-proof] ${JSON.stringify({
-          restrictedRun: "completed",
-          deniedFinalEffect: true,
-          sentinelCreated: false,
-          changedSettingsRejected: true,
-          rejectedRequestReachedProvider: false,
-          rejectedRequestReachedTranscript: false,
-        })}`,
-      );
-    },
-  );
+    expect(resolveGatewayErrorReason(rejectedError)).toBe("session-settings-changed");
+    const cursorAfterRejected = await readCursor();
+    expect(cursorAfterRejected).toEqual(cursorBeforeRejected);
+    const history = (await gateway.call(
+      "chat.history",
+      { sessionKey, limit: 50 },
+      { timeoutMs: 10_000 },
+    )) as GatewayChatHistory;
+    expect(JSON.stringify(history.messages ?? [])).not.toContain(rejectedPrompt);
+  });
 });
