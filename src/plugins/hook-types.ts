@@ -36,6 +36,12 @@ import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
 } from "./hook-message.types.js";
+import type {
+  PluginHookAgentTrigger,
+  PluginHookRegistrationScopeOptions,
+  PluginHookReplyDispatchKind,
+  PluginToolMatcher,
+} from "./hook-registration-scopes.js";
 import type { PluginHookReplyDispatchEvent } from "./hook-reply-dispatch-event.types.js";
 import type { PluginHookSkillChangedEvent, PluginHookSkillContext } from "./hook-skill.types.js";
 import type {
@@ -51,6 +57,14 @@ import type {
 } from "./host-hook-turn-types.js";
 import type { SkillInstallSpecMetadata } from "./install-security-scan.types.js";
 import type { PluginHookSessionContext } from "./session-end-transcript.js";
+
+export {
+  isPluginHookAgentTrigger,
+  isPluginHookReplyDispatchKind,
+  type PluginHookAgentTrigger,
+  type PluginHookReplyDispatchKind,
+  type PluginToolMatcher,
+} from "./hook-registration-scopes.js";
 
 export type { PluginHookReplyDispatchEvent } from "./hook-reply-dispatch-event.types.js";
 
@@ -190,50 +204,11 @@ export const isPluginHookName = (hookName: unknown): hookName is PluginHookName 
 export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
   PLUGIN_HOOK_METADATA[hookName]?.promptInjection === true;
 
-const PLUGIN_HOOK_AGENT_TRIGGERS = ["cron", "heartbeat", "user"] as const;
-
-export type PluginHookAgentTrigger = (typeof PLUGIN_HOOK_AGENT_TRIGGERS)[number];
-
-const pluginHookAgentTriggerSet = new Set<PluginHookAgentTrigger>(PLUGIN_HOOK_AGENT_TRIGGERS);
-
-export const isPluginHookAgentTrigger = (trigger: unknown): trigger is PluginHookAgentTrigger =>
-  typeof trigger === "string" && pluginHookAgentTriggerSet.has(trigger as PluginHookAgentTrigger);
-
-export type PluginHookReplyDispatchKind = "agent" | "acp";
-
-export const isPluginHookReplyDispatchKind = (kind: unknown): kind is PluginHookReplyDispatchKind =>
-  kind === "agent" || kind === "acp";
-
-export type PluginToolMatcher = readonly [string, ...string[]];
-
 export type PluginHookRegistrationOptions<K extends PluginHookName> = {
   priority?: number;
   registrationId?: string;
   timeoutMs?: number;
-} & (K extends "before_agent_reply"
-  ? {
-      /** Host-enforced turn triggers that may invoke this reply hook. */
-      eligibleTriggers?: readonly [PluginHookAgentTrigger, ...PluginHookAgentTrigger[]];
-    }
-  : { eligibleTriggers?: never }) &
-  (K extends "reply_dispatch"
-    ? {
-        /** Host-enforced dispatch paths that may invoke this hook; unknown paths remain eligible. */
-        eligibleDispatchKinds?: readonly [
-          PluginHookReplyDispatchKind,
-          ...PluginHookReplyDispatchKind[],
-        ];
-      }
-    : { eligibleDispatchKinds?: never }) &
-  (K extends "before_tool_call" | "after_tool_call"
-    ? { matcher?: PluginToolMatcher }
-    : { matcher?: never }) &
-  (K extends "before_prompt_build"
-    ? {
-        /** Run only after the host has finalized the turn's policy-filtered tool surface. */
-        requiresToolAuthority?: true;
-      }
-    : { requiresToolAuthority?: never });
+} & PluginHookRegistrationScopeOptions<K>;
 
 type PluginHookUsage = Pick<
   NormalizedUsage,
@@ -930,6 +905,7 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   timeoutMs?: number;
   eligibleTriggers?: readonly PluginHookAgentTrigger[];
   eligibleDispatchKinds?: readonly PluginHookReplyDispatchKind[];
+  eligibleAgentIds?: readonly string[];
   requiresToolAuthority?: true;
   /** Host-resolved transcript authority. Never infer this again from plugin identity. */
   conversationAccessAllowed?: true;

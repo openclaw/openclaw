@@ -28,6 +28,7 @@ import {
   isHookDecision,
 } from "./hook-decision-types.js";
 import { HOOK_REPLACED, HookDispatchSelection } from "./hook-dispatch-replacement.js";
+import { isHookContextEligible, resolveHookDispatchScopeContext } from "./hook-eligibility.js";
 import {
   cloneHookIsolationValue,
   clonePromptHookEvent,
@@ -49,10 +50,9 @@ import type {
   VoidHookRunOptions,
 } from "./hook-runner-types.js";
 import { withHookTimeout } from "./hook-timeout.js";
-import { isPluginHookReplyDispatchKind, PLUGIN_HOOK_METADATA } from "./hook-types.js";
+import { PLUGIN_HOOK_METADATA } from "./hook-types.js";
 import type {
   PluginHookAgentContext,
-  PluginHookAgentTrigger,
   PluginHookBeforeAgentFinalizeResult,
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
@@ -134,27 +134,6 @@ type PluginTargetedInboundClaimOutcome =
 type SyncHookName = "tool_result_persist" | "before_message_write";
 type SyncHookMessage = PluginHookToolResultPersistEvent["message"];
 type SyncMessageHookStepResult = { message?: SyncHookMessage; block?: true };
-
-function isHookContextEligible(hook: PluginHookRegistration, ctx?: unknown): boolean {
-  if (hook.hookName === "reply_dispatch" && hook.eligibleDispatchKinds !== undefined) {
-    const kind =
-      typeof ctx === "object" && ctx !== null && "dispatchKind" in ctx
-        ? ctx.dispatchKind
-        : undefined;
-    // Unknown callers cannot prove exclusion from a hook, including during recovery checks.
-    return !isPluginHookReplyDispatchKind(kind) || hook.eligibleDispatchKinds.includes(kind);
-  }
-  if (hook.hookName !== "before_agent_reply" || hook.eligibleTriggers === undefined) {
-    return true;
-  }
-  const trigger =
-    typeof ctx === "object" && ctx !== null && "trigger" in ctx
-      ? (ctx as { trigger?: unknown }).trigger
-      : undefined;
-  return (
-    typeof trigger === "string" && hook.eligibleTriggers.includes(trigger as PluginHookAgentTrigger)
-  );
-}
 
 /** Get hooks for a specific hook name, sorted by priority (higher first). */
 function getHooksForName<K extends PluginHookName>(
@@ -608,7 +587,8 @@ export function createHookRunner(
     policy: ModifyingHookPolicy<K> = {},
     matcherToolName?: string,
   ): Promise<HookResult<K> | undefined> {
-    const hooks = getHooksForName(registry, hookName, undefined, matcherToolName);
+    const scopeCtx = resolveHookDispatchScopeContext(hookName, ctx);
+    const hooks = getHooksForName(registry, hookName, scopeCtx, matcherToolName);
     const selectedHooks = policy.includeRegistration
       ? hooks.filter(policy.includeRegistration)
       : hooks;
@@ -630,7 +610,7 @@ export function createHookRunner(
     let result: HookResult<K> | undefined;
 
     const selection = new HookDispatchSelection(selectedHooks, () => {
-      const current = getHooksForName(registry, hookName, undefined, matcherToolName);
+      const current = getHooksForName(registry, hookName, scopeCtx, matcherToolName);
       return policy.includeRegistration ? current.filter(policy.includeRegistration) : current;
     });
     for (const hook of selectedHooks) {

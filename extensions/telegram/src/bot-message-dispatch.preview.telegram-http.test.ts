@@ -248,6 +248,35 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     expect(http.texts()).toEqual(["Allowed final"]);
   });
 
+  it.each([
+    { eligibleAgentIds: ["other-agent"] as const, preview: true },
+    { eligibleAgentIds: ["default"] as const, preview: false },
+  ])(
+    "previews only when send hooks are scoped away from the turn agent ($eligibleAgentIds)",
+    async ({ eligibleAgentIds, preview }) => {
+      installHook({
+        hookName: "reply_payload_sending",
+        eligibleAgentIds,
+        handler: (event: PluginHookReplyPayloadSendingEvent) => ({
+          payload: { ...event.payload, text: "Allowed final" },
+        }),
+      });
+      await runTurn(
+        async (options) => {
+          await options?.onPartialReply?.({ text: "Streaming draft visible before the final" });
+          if (preview) {
+            await http.waitForText("Streaming draft visible before the final");
+          }
+        },
+        { mode: "partial", finalReply: { text: "Pre-hook final" } },
+      );
+      expect(JSON.stringify(calls).includes("Streaming draft visible")).toBe(preview);
+      if (!preview) {
+        expect(http.texts()).toEqual(["Allowed final"]);
+      }
+    },
+  );
+
   it("paginates quoted block finals without losing text or replacing the accepted preview", async () => {
     const mode = "block";
     const context = http.createContext();
