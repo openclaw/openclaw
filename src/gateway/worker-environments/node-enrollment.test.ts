@@ -174,44 +174,53 @@ describe("worker node enrollment", () => {
     expect(prepareArtifact).not.toHaveBeenCalled();
   });
 
-  it("delivers only explicitly configured Codex inputs at lease enrollment, never warm preparation", async () => {
-    const directory = path.join(root, "worker-provisioning", "codex");
-    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-    const configPath = path.join(directory, "config.toml");
-    const helperPath = path.join(directory, "token.mjs");
-    const configToml =
-      'model_provider = "worker"\n[model_providers.worker]\nwire_api = "responses"\nauth = { command = "node", args = [' +
-      JSON.stringify(helperPath) +
-      "] }\n";
-    const helperScript = 'process.stdout.write("synthetic-worker-token")\n';
-    await fs.writeFile(configPath, configToml, { mode: 0o600 });
-    await fs.writeFile(helperPath, helperScript, { mode: 0o600 });
-    vi.stubEnv("OPENAI_API_KEY", "synthetic-gateway-only-token");
-    const record = await createProvisioning();
-    const manager = createManager();
-    const runtime = await manager.prepareRuntime(record, bundle());
-    expect(runtime).not.toHaveProperty("workerCodex");
-    const enrollment = await manager.begin(record);
-    expect(enrollment.workerCodex).toEqual({
-      configToml,
-      helperScript,
-      helperPath,
-      configVersion: expect.stringMatching(/^[a-f0-9]{64}$/),
-    });
-    const { resolveCodexWorkerAppServerCommand } = loadBundledPluginPublicArtifactModuleSync<{
-      resolveCodexWorkerAppServerCommand: (env: NodeJS.ProcessEnv, required: boolean) => string;
-    }>({ dirName: "codex", artifactBasename: "worker-provisioning-api.js" });
-    const command = resolveCodexWorkerAppServerCommand(process.env, true);
-    expect(command).toBe("codex.app-server.stdio.v1." + enrollment.workerCodex!.configVersion);
-    await fs.writeFile(helperPath, helperScript + "// changed\n");
-    const changed = await manager.begin(record);
-    expect(changed.workerCodex!.configVersion).not.toBe(enrollment.workerCodex!.configVersion);
-    expect(resolveCodexWorkerAppServerCommand(process.env, true)).toBe(
-      "codex.app-server.stdio.v1." + changed.workerCodex!.configVersion,
-    );
-    expect(JSON.stringify(enrollment.nodeBootstrap)).not.toContain("synthetic-worker-token");
-    expect(JSON.stringify(enrollment)).not.toContain("synthetic-gateway-only-token");
-  });
+  it.each(["codex", "runtime-plugin"])(
+    "scopes private Codex inputs to the selected %s runtime at enrollment",
+    async (pluginId) => {
+      const directory = path.join(root, "worker-provisioning", "codex");
+      await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+      const configPath = path.join(directory, "config.toml");
+      const helperPath = path.join(directory, "token.mjs");
+      const configToml =
+        'model_provider = "worker"\n[model_providers.worker]\nwire_api = "responses"\nauth = { command = "node", args = [' +
+        JSON.stringify(helperPath) +
+        "] }\n";
+      const helperScript = 'process.stdout.write("synthetic-worker-token")\n';
+      await fs.writeFile(configPath, configToml, { mode: 0o600 });
+      await fs.writeFile(helperPath, helperScript, { mode: 0o600 });
+      vi.stubEnv("OPENAI_API_KEY", "synthetic-gateway-only-token");
+      const record = await createProvisioning();
+      const manager = createManager({
+        prepareArtifact: async () => ({ ...artifact(), enabledPluginIds: [pluginId] }),
+      });
+      const runtime = await manager.prepareRuntime(record, bundle());
+      expect(runtime).not.toHaveProperty("workerCodex");
+      const enrollment = await manager.begin(record);
+      if (pluginId !== "codex") {
+        expect(enrollment).not.toHaveProperty("workerCodex");
+        return;
+      }
+      expect(enrollment.workerCodex).toEqual({
+        configToml,
+        helperScript,
+        helperPath,
+        configVersion: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
+      const { resolveCodexWorkerAppServerCommand } = loadBundledPluginPublicArtifactModuleSync<{
+        resolveCodexWorkerAppServerCommand: (env: NodeJS.ProcessEnv, required: boolean) => string;
+      }>({ dirName: "codex", artifactBasename: "worker-provisioning-api.js" });
+      const command = resolveCodexWorkerAppServerCommand(process.env, true);
+      expect(command).toBe("codex.app-server.stdio.v1." + enrollment.workerCodex!.configVersion);
+      await fs.writeFile(helperPath, helperScript + "// changed\n");
+      const changed = await manager.begin(record);
+      expect(changed.workerCodex!.configVersion).not.toBe(enrollment.workerCodex!.configVersion);
+      expect(resolveCodexWorkerAppServerCommand(process.env, true)).toBe(
+        "codex.app-server.stdio.v1." + changed.workerCodex!.configVersion,
+      );
+      expect(JSON.stringify(enrollment.nodeBootstrap)).not.toContain("synthetic-worker-token");
+      expect(JSON.stringify(enrollment)).not.toContain("synthetic-gateway-only-token");
+    },
+  );
 
   it.each([
     "incomplete",
@@ -247,7 +256,9 @@ describe("worker node enrollment", () => {
       await fs.rename(helperPath, path.join(root, "actual.mjs"));
       await fs.symlink(path.join(root, "actual.mjs"), helperPath);
     }
-    const manager = createManager();
+    const manager = createManager({
+      prepareArtifact: async () => ({ ...artifact(), enabledPluginIds: ["codex"] }),
+    });
     vi.mocked(ensureDevicePairSetupBootstrapToken).mockClear();
     await expect(manager.begin(await createProvisioning())).rejects.toThrow(
       /Worker Codex|Cloud worker Codex/,

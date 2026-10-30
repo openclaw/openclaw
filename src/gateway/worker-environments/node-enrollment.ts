@@ -259,10 +259,14 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     const { binding, enrollmentSignal, current: requireCurrent } = reserve(record, operationSignal);
     try {
       const prepared = await prepare(record, enrollmentSignal);
-      const { readCodexWorkerProvisioningBundle } = loadBundledPluginPublicArtifactModuleSync<{
-        readCodexWorkerProvisioningBundle: () => WorkerNodeEnrollment["workerCodex"];
-      }>({ dirName: "codex", artifactBasename: "worker-provisioning-api.js" });
-      const workerCodex = readCodexWorkerProvisioningBundle();
+      let workerCodex: WorkerNodeEnrollment["workerCodex"];
+      // Only the prepared runtime's plugin inventory may opt into private Codex inputs.
+      if (prepared.artifact.enabledPluginIds.includes("codex")) {
+        const { readCodexWorkerProvisioningBundle } = loadBundledPluginPublicArtifactModuleSync<{
+          readCodexWorkerProvisioningBundle: () => WorkerNodeEnrollment["workerCodex"];
+        }>({ dirName: "codex", artifactBasename: "worker-provisioning-api.js" });
+        workerCodex = readCodexWorkerProvisioningBundle();
+      }
       requireCurrent();
       await options.store.ensureNodeEnrollment(record.environmentId);
       let current = requireCurrent();

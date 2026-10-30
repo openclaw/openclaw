@@ -282,7 +282,9 @@ an incomplete bundle fails closed. Publish both files while the Gateway is stopp
 then restart and reprovision affected workers when changing them. Existing lease
 replay rejects changed bytes or identity; runtime verifies the enrolled content.
 Enrollment delivers the bundle privately into the lease's `codex-runtime`
-directory; image preparation does not capture it.
+directory only when the prepared node runtime includes the Codex plugin. Other
+worker runtimes neither load nor receive the private bundle, and image preparation
+does not capture it.
 
 Only dedicated ephemeral, non-container nodes retain their platform-managed
 identity transport and CA settings. Ordinary paired nodes and container workers
