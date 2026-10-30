@@ -43,6 +43,14 @@ export function createSandboxFsBridge(params: {
   return new SandboxFsBridgeImpl(params.sandbox, params.containerOnlyMounts);
 }
 
+/** stdout marker for a parent directory that does not exist inside the sandbox. */
+const MISSING_PARENT_MARKER = "openclaw-missing-parent";
+
+/** stat's own ENOENT report, which stays English under LC_ALL=C in every shell. */
+function isMissingFileStderr(result: { stderr: Buffer }): boolean {
+  return result.stderr.toString("utf8").includes("No such file or directory");
+}
+
 class SandboxFsBridgeImpl implements SandboxFsBridge {
   private readonly sandbox: MountedSandboxFsBridgeContext;
   private readonly mounts: ReturnType<typeof buildSandboxFsMounts>;
@@ -299,20 +307,27 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       // Keep stat's original parent/basename metadata semantics, while its
       // boundary check validates the container-visible backing rather than a hidden host alias.
       checks: [{ target: resolved.target, options: { action: "stat files" } }],
-      script: 'set -eu\ncd -- "$1"\nLC_ALL=C stat -c "%F|%s|%y" -- "$2"',
+      // Report a missing parent on stdout: `cd` failures carry a shell-specific
+      // message (bash "No such file or directory", dash "can't cd to"), so stderr
+      // text cannot classify the outcome. A missing parent means ENOENT for the
+      // entry, matching stat's own ENOENT result.
+      script:
+        'if cd -- "$1" 2>/dev/null; then LC_ALL=C stat -c "%F|%s|%y" -- "$2"; ' +
+        'elif [ ! -d "$1" ]; then printf "openclaw-missing-parent"; else exit 1; fi',
       args: [anchoredTarget.canonicalParentPath, anchoredTarget.basename],
       allowFailure: true,
       signal: params.signal,
     });
+    const stdout = result.stdout.toString("utf8").trim();
+    if (stdout === MISSING_PARENT_MARKER || (result.code !== 0 && isMissingFileStderr(result))) {
+      return null;
+    }
     if (result.code !== 0) {
       const stderr = result.stderr.toString("utf8");
-      if (stderr.includes("No such file or directory")) {
-        return null;
-      }
       const message = stderr.trim() || `stat failed with code ${result.code}`;
       throw new Error(`stat failed for ${target.containerPath}: ${message}`);
     }
-    const text = result.stdout.toString("utf8").trim();
+    const text = stdout;
     const [typeRaw, sizeRaw, mtimeRaw] = text.split("|");
     return {
       type: coerceStatType(typeRaw),
