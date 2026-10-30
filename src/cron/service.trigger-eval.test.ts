@@ -662,7 +662,6 @@ describe("cron trigger cadence", () => {
     expect(h.runSessionEvent).toHaveBeenCalledOnce();
     expect(h.cron.getJob(job.id)?.state.nextRunAtMs).toBe(nextAt);
   });
-
   it.each([
     { name: "quiet immediate-wake", wakeMode: "now", result: evaluated(false) },
     { name: "fired", wakeMode: "next-heartbeat", result: evaluated(true) },
