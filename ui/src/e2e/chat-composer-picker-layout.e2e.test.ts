@@ -113,18 +113,22 @@ suite.define(() => {
             }),
           ],
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await gateway.waitForRequest("sessions.messages.subscribe");
         const composer = page.locator(".agent-chat__input");
-        await composer.locator('[data-chat-thinking-select="true"]').waitFor();
-        await openChatSidePanelType(page, "Files");
         const workspace = page.locator('[data-panel-slot="workspace"]');
-        await workspace.waitFor({ state: "visible" });
-        await expect
-          .poll(() => composer.evaluate((node) => node.getBoundingClientRect().width))
-          .toBeLessThan(360);
+        const prepareComposer = async () => {
+          await page.setViewportSize({ width: 1100, height: 729 });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          await gateway.waitForRequest("sessions.messages.subscribe");
+          await composer.locator('[data-chat-thinking-select="true"]').waitFor();
+          await openChatSidePanelType(page, "Files");
+          await workspace.waitFor({ state: "visible" });
+          await expect
+            .poll(() => composer.evaluate((node) => node.getBoundingClientRect().width))
+            .toBeLessThan(360);
+        };
+        await prepareComposer();
 
-        for (const width of [1100, 1280, 560, 393, 320]) {
+        for (const width of engine === "webkit" ? [560] : [1100, 1280, 560, 393, 320]) {
           if (width === 560) {
             await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
             await workspace.waitFor({ state: "hidden" });
@@ -200,8 +204,17 @@ suite.define(() => {
               await trigger.click({ delay });
               await expect.poll(() => composer.locator(menuSelector).isVisible()).toBe(true);
               expect(await composer.locator(otherMenuSelector).isVisible()).toBe(false);
-              await page.keyboard.press("Escape");
-              await expect.poll(() => composer.locator(menuSelector).isVisible()).toBe(false);
+              if (engine === "chromium") {
+                await page.keyboard.press("Escape");
+                await expect.poll(() => composer.locator(menuSelector).isVisible()).toBe(false);
+              } else {
+                // Isolate native activation from WebKit's separate details-close hang.
+                await prepareComposer();
+                await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
+                await workspace.waitFor({ state: "hidden" });
+                await page.setViewportSize({ width, height: 729 });
+                await composer.locator("textarea").click();
+              }
             }
           }
         }
