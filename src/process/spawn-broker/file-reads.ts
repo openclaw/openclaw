@@ -1,3 +1,7 @@
+import type {
+  ReadFilePage,
+  ReadFilePageParams,
+} from "../../agents/sessions/tools/read-file-page.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { SpawnBrokerError, type BrokerRequest, type BrokerResponse } from "./protocol.js";
 import type { BrokerResourceResponse } from "./resource-protocol.js";
@@ -8,7 +12,10 @@ type ReadResponse = Extract<BrokerResponse, { type: "file-read-chunk" | "file-re
 export class BrokerFileReads {
   private readonly pending = new Map<
     number,
-    { chunks: Buffer[]; result: ReturnType<typeof createDeferredCore<Buffer>> }
+    {
+      chunks: Buffer[];
+      result: ReturnType<typeof createDeferredCore<ReadFilePage>>;
+    }
   >();
   private sequence = 0;
 
@@ -27,6 +34,21 @@ export class BrokerFileReads {
   }
 
   async read(filePath: string, signal?: AbortSignal): Promise<Buffer> {
+    return (await this.request({ filePath }, signal)).buffer;
+  }
+
+  async readPage(
+    filePath: string,
+    page: ReadFilePageParams,
+    signal?: AbortSignal,
+  ): Promise<ReadFilePage> {
+    return this.request({ filePath, page }, signal);
+  }
+
+  private async request(
+    input: Pick<Extract<BrokerRequest, { type: "read-file" }>, "filePath" | "page">,
+    signal?: AbortSignal,
+  ): Promise<ReadFilePage> {
     signal?.throwIfAborted();
     await this.host.ready();
     signal?.throwIfAborted();
@@ -34,14 +56,14 @@ export class BrokerFileReads {
       throw new SpawnBrokerError("Spawn broker cannot admit a raw file read");
     }
     const id = ++this.sequence;
-    const result = createDeferredCore<Buffer>();
+    const result = createDeferredCore<ReadFilePage>();
     this.pending.set(id, { chunks: [], result });
     const abort = () => {
       result.reject(signal?.reason);
       void this.host.send({ type: "cancel-read-file", id }).catch(() => {});
     };
     signal?.addEventListener("abort", abort, { once: true });
-    void this.host.send({ type: "read-file", id, filePath }).catch(result.reject);
+    void this.host.send({ type: "read-file", id, ...input }).catch(result.reject);
     try {
       return await result.promise;
     } finally {
@@ -61,7 +83,7 @@ export class BrokerFileReads {
       } else if (reply.error) {
         read.result.reject(Object.assign(reply.error, { code: reply.code }));
       } else {
-        read.result.resolve(Buffer.concat(read.chunks));
+        read.result.resolve(reply.page ?? { buffer: Buffer.concat(read.chunks) });
       }
     }
     return true;

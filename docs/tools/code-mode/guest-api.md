@@ -317,3 +317,15 @@ with the same path and the returned `offset`, optional `cursor`, and optional
 Do not strip display-notice patterns from file data: those strings may be actual
 file contents. Each call still honors its explicit `limit`; if more file data
 remains, the result is `"truncated"` and its continuation describes the next page.
+
+Large local text reads stop after capturing a page. In a truncated result,
+`truncation.totalLines` and `truncation.totalBytes` are absent until the reader
+reaches EOF and can count the complete source and selection exactly. Use `continuation`, not a total
+or a display notice, to request more data. Reads that reach EOF retain exact totals.
+
+On Windows, files without a UTF-16 BOM choose UTF-8 or the system encoding from
+the first 1 MiB. Every offset and page uses that same leading window. Invalid
+bytes beyond the window no longer change the encoding of earlier text; they
+use the selected decoder’s replacement behavior. BOM-marked UTF-16 and
+non-Windows UTF-8 decoding are unchanged. Later offsets still require scanning
+the preceding text, but a page never requires scanning the remainder of the file.
