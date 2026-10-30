@@ -91,6 +91,30 @@ export function deriveSessionMetaPatch(params: {
   });
 }
 
+/** Capabilities an external operator turn records; later wakes list tools by them. */
+export function resolveRecordedClientCapabilities(
+  ctx: Pick<
+    MsgContext,
+    | "InternalTurnSource"
+    | "InputProvenance"
+    | "OriginatingChannel"
+    | "Surface"
+    | "Provider"
+    | "GatewayClientCaps"
+  >,
+): string[] | undefined {
+  // WebChat is also the internal routing sentinel; provenance distinguishes wakes.
+  const clientChannel = normalizeMessageChannel(
+    ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider,
+  );
+  return ctx.InternalTurnSource === undefined &&
+    (ctx.InputProvenance === undefined || ctx.InputProvenance.kind === "external_user") &&
+    clientChannel !== undefined &&
+    !isInternalNonDeliveryChannel(clientChannel)
+    ? [...new Set(ctx.GatewayClientCaps ?? [])].toSorted()
+    : undefined;
+}
+
 /** Resolve plugin-owned ingress facts once, before handing pure metadata to the writer. */
 export function prepareSessionMetaPatch(params: {
   ctx: MsgContext;
@@ -100,19 +124,8 @@ export function prepareSessionMetaPatch(params: {
   const sourceChannel = normalizeMessageChannel(
     params.ctx.Provider ?? params.ctx.Surface ?? params.ctx.OriginatingChannel,
   );
-  // WebChat is also the internal routing sentinel; provenance distinguishes wakes.
-  const clientChannel = normalizeMessageChannel(
-    params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
-  );
   return {
-    clientCapabilities:
-      params.ctx.InternalTurnSource === undefined &&
-      (params.ctx.InputProvenance === undefined ||
-        params.ctx.InputProvenance.kind === "external_user") &&
-      clientChannel !== undefined &&
-      !isInternalNonDeliveryChannel(clientChannel)
-        ? [...new Set(params.ctx.GatewayClientCaps ?? [])].toSorted()
-        : undefined,
+    clientCapabilities: resolveRecordedClientCapabilities(params.ctx),
     group: prepareGroupSessionPatch(params),
     privateTelegramTopicName:
       params.ctx.ChatType === "direct" &&

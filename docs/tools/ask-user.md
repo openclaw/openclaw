@@ -17,11 +17,12 @@ question input: Discord, Slack, Telegram, and WebChat (including the Control UI
 and native OpenClaw clients). Subagents and other non-primary runs do not
 receive it, and an explicit tool denial still takes precedence.
 
-On the ACP bridge, iMessage, Mattermost, Signal, WhatsApp, and other surfaces without
-question input, the agent asks in ordinary plain text instead of calling
-`ask_user`. Approval reactions are separate and remain available. Native agent
-runtimes can have their own question tools; this availability rule applies to
-OpenClaw's built-in `ask_user` tool.
+On the ACP bridge, Gateway-backed `openclaw agent` runs without `--deliver`,
+iMessage, Mattermost, Signal, WhatsApp, and other surfaces without question
+input, the agent asks in ordinary plain text instead of calling `ask_user`.
+Approval reactions are separate and remain available. Native agent runtimes can
+have their own question tools; this availability rule applies to OpenClaw's
+built-in `ask_user` tool.
 
 ## Answer a question
 

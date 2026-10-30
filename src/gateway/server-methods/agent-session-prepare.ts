@@ -7,9 +7,11 @@ import {
   resolveSessionResetPolicy,
   resolveSessionResetType,
 } from "../../config/sessions.js";
+import { resolveRecordedClientCapabilities } from "../../config/sessions/metadata.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import {
@@ -17,6 +19,7 @@ import {
   resolveAgentSessionWorkStartError,
   type RestoredCronContinuation,
 } from "../agent-turn/agent-handler-helpers.js";
+import type { AgentTurnPrincipal } from "../agent-turn/types.js";
 import {
   takeInProcessFreshChildSession,
   type FreshChildSession,
@@ -24,6 +27,8 @@ import {
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
+import { resolveChatSendCallerContext } from "./gateway-client-identity.js";
+import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
 import { respondError } from "./response.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -35,6 +40,8 @@ type PrepareAgentSessionParams = {
   agentId?: string;
   recipientChannel?: string;
   request: AgentRunRequest;
+  client?: AgentTurnPrincipal | null;
+  inputProvenance?: InputProvenance;
   canUseCronRunContinuation: boolean;
   lifecycleGeneration: string;
   effectiveBootstrapContextRunKind?: "default" | "cron";
@@ -207,6 +214,15 @@ async function prepareAdmittedAgentSession(
     mainSessionKey,
     isSystemGatewayRun,
     touchInteraction: visibleRequest,
+    // Same rule as chat.send ingress, so the session's wakes list this client's tools.
+    // In-process callers (plugin runtime, agent tools) use synthetic clients; recorded caps stay.
+    clientCapabilities:
+      visibleRequest && params.client && !isSyntheticGatewayCaller(params.client)
+        ? resolveRecordedClientCapabilities({
+            ...resolveChatSendCallerContext(params.client),
+            InputProvenance: params.inputProvenance,
+          })
+        : undefined,
     sessionPersistedBeforeGatewayAdmission: entry !== undefined,
     effectiveBootstrapContextRunKind,
     restoredCronContinuationIdentity,
