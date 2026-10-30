@@ -29,6 +29,7 @@ export type ManagedServiceManagerBoundaryOptions = {
   rollbackRestoration?: boolean;
   cancelAfterPark?: boolean;
   parentExitTimeoutMs?: number;
+  launchdOutputPadding?: number;
   launchdFault?:
     | "wrong-parent"
     | "nested-parent"
@@ -350,7 +351,7 @@ if (${JSON.stringify(kind)} === "systemd") {
     const nested = nestedPid ? "\\tresource coalition = {\\n\\t\\tpid = " + nestedPid + "\\n\\t}\\n" : "";
     const foreign = (!state.parked && fault === "foreign-job") || (state.restored && fault === "foreign-restored-job");
     const duplicate = (!state.parked && fault === "duplicate-pid") || (state.restored && fault === "duplicate-restored-pid");
-    process.stdout.write((foreign ? "gui/501/ai.openclaw.other" : args[1]) + " = {\\n\\tstate = running\\n" + nested + pidLine + (duplicate ? pidLine : "") + "}\\n");
+    process.stdout.write((foreign ? "gui/501/ai.openclaw.other" : args[1]) + " = {\\n\\tstate = running\\n" + "\\tenvironment = {\\n\\t\\tPADDING = " + "x".repeat(${options?.launchdOutputPadding ?? 0}) + "\\n\\t}\\n" + nested + pidLine + (duplicate ? pidLine : "") + "}\\n");
   }
 }
   `,

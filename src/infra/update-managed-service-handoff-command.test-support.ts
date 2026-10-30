@@ -533,6 +533,22 @@ export function registerManagedLaunchdTeardownTests(
     expect(sentinel).toMatchObject(restoreOutcome(expect, "error", restoreFailed, 1));
   });
 
+  itUnix.each([true, false])(
+    "preserves large launchd inspection framing (cancel=%s)",
+    async (cancel) => {
+      const { sentinel, state } = await runBoundary("launchd", {
+        launchdOutputPadding: 9_000,
+        ...(cancel
+          ? { cancelAfterPark: true }
+          : { updaterNotification: "published", updaterResult: failedUpdate() }),
+      });
+      expect(state).toMatchObject({ parked: true, restored: true, healthProbed: true });
+      expect(sentinel).toMatchObject(
+        restoreOutcome(expect, cancel ? "skipped" : "error", cancel ? cancelled : failed, 0),
+      );
+    },
+  );
+
   itUnix.each([
     ["nested-restored-pid", true],
     ["nested-restored-pid", false],
@@ -554,7 +570,7 @@ export function registerManagedLaunchdTeardownTests(
       commands.filter((command) => command.startsWith("kickstart ")).length,
     ).toBeLessThanOrEqual(1);
     expect(sentinel).toMatchObject(
-      restoreOutcome(expect, "error", cancel ? restoreFailed : failed, 1),
+      restoreOutcome(expect, "error", cancel ? restoreFailed : failed, 1, !cancel),
     );
   });
 }
