@@ -12,6 +12,7 @@ import { inspectOpenDictionaryToolSchemas } from "../plugins/tool-schema-diagnos
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import {
   applyCodeModeCatalog,
@@ -19,7 +20,9 @@ import {
   createCodeModeTools,
 } from "./code-mode.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import { createLazyExecTool } from "./lazy-exec-tool.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search-catalog.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
@@ -266,6 +269,31 @@ it.each<[string, ToolOptions]>([
     surface(createOpenClawCodingTools(userTurn)),
   );
 });
+it("keeps the exec definition when the session offers process but this turn cannot call it", () => {
+  const render = (turnCallsProcess: boolean) => {
+    const processToolAvailabilityRef: { value?: boolean } = {};
+    const tools = [
+      createLazyExecTool({ processToolAvailabilityRef }),
+      fakeTool("process", "process tool"),
+    ];
+    // Tool-search catalogs finalize the offered tools with this run's execution allowlist.
+    finalizeAgentToolAvailability(tools, {
+      toolExecutionAllow: turnCallsProcess ? ["exec", "process"] : ["exec"],
+    });
+    return {
+      definition: surface(tools.filter((tool) => tool.name === "exec")),
+      backgroundCallable: processToolAvailabilityRef.value,
+    };
+  };
+  const gated = render(false);
+  const callable = render(true);
+
+  expect(gated.definition).toEqual(callable.definition);
+  // Execution still follows this turn's authority.
+  expect(gated.backgroundCallable).toBe(false);
+  expect(callable.backgroundCallable).toBe(true);
+});
+
 it("offers the same message definition on a source-bound completion turn", () => {
   const assemble = (sourceReplyOnly: boolean) =>
     surface(

@@ -44,7 +44,9 @@ export function createLazyExecTool(
     runId: defaults?.runId,
     sessionId: defaults?.sessionId,
   });
+  // The offered process tool shapes exec's definition; the callable one gates backgrounding.
   const processToolAvailabilityRef = defaults?.processToolAvailabilityRef ?? {};
+  let processToolOffered: boolean | undefined;
   const execSchema = createExecSchema(defaults);
   const execCompletionSchema = createExecCompletionSchema(defaults);
   let loadedTool: LoadedExecTool | undefined;
@@ -72,7 +74,7 @@ export function createLazyExecTool(
           presentation?.description ??
           describeExecTool({
             hasCronTool: defaults?.hasCronTool === true,
-            hasProcessTool: processToolAvailabilityRef.value,
+            hasProcessTool: processToolOffered,
             autoReview: defaults?.mode === "auto",
           })
         );
@@ -80,7 +82,7 @@ export function createLazyExecTool(
       get parameters() {
         return (
           presentation?.parameters ??
-          (processToolAvailabilityRef.value === false ? execCompletionSchema : execSchema)
+          (processToolOffered === false ? execCompletionSchema : execSchema)
         );
       },
       prepareBeforeToolCallParams: async (...args) =>
@@ -97,8 +99,9 @@ export function createLazyExecTool(
     } as AnyAgentTool,
     {
       prepareBeforeNormalization: true,
-      prepare: (_tool, callableTools) => {
+      prepare: (_tool, callableTools, offeredTools) => {
         processToolAvailabilityRef.value = callableTools.has("process");
+        processToolOffered = offeredTools.has("process");
       },
       executionSchema: presentation?.parameters ? undefined : () => execExecutionSchema,
     },
