@@ -413,18 +413,21 @@ export function readHistoricalHistoryAnchorPage(
     excludeClosingReset ? total - 1 : anchorPosition,
     options,
   );
+  const requested = range.endExclusive - range.readStart;
+  const events = readHistoricalDisplayEventRange(
+    projection,
+    displaySource,
+    interval,
+    range.readStart,
+    requested,
+    { activePosition: row.active_position, displayPosition: anchorPosition },
+    options.maxBytes,
+  );
   return {
-    events: readHistoricalDisplayEventRange(
-      projection,
-      displaySource,
-      interval,
-      range.readStart,
-      range.endExclusive - range.readStart,
-      { activePosition: row.active_position, displayPosition: anchorPosition },
-      options.maxBytes,
-    ),
+    events,
     found: true,
-    hasOverreadContext: range.hasOverreadContext,
+    // Byte trimming drops the oldest events first, so a short page no longer carries the overread context.
+    hasOverreadContext: range.hasOverreadContext && events.length === requested,
     offset: range.offset,
     displaySource,
     totalMessages: total,
