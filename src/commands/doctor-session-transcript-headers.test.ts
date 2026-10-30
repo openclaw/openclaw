@@ -9,10 +9,6 @@ import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/sessi
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as agentDatabase from "../state/openclaw-agent-db.js";
-import {
-  openOpenClawAgentDatabase,
-  type OpenClawAgentDatabaseOptions,
-} from "../state/openclaw-agent-db.js";
 import { observeMainThreadReads } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   createOpenClawTestState,
@@ -43,7 +39,7 @@ function message(content = "hello", id = "user-1", parentId: string | null = nul
 describe("doctor SQLite session transcript header repair", () => {
   let state: OpenClawTestState;
   let cfg: OpenClawConfig;
-  let transcriptDatabaseOptions: OpenClawAgentDatabaseOptions;
+  let transcriptDatabaseOptions: agentDatabase.OpenClawAgentDatabaseOptions;
   let scope: {
     agentId: string;
     env: NodeJS.ProcessEnv;
@@ -51,7 +47,7 @@ describe("doctor SQLite session transcript header repair", () => {
     sessionKey: string;
     storePath: string;
   };
-  const database = () => openOpenClawAgentDatabase(transcriptDatabaseOptions);
+  const database = () => agentDatabase.openOpenClawAgentDatabase(transcriptDatabaseOptions);
   const rows = () => readTranscriptStorageRows(database(), SESSION_ID);
   const health = (shouldRepair = true) =>
     noteSessionTranscriptHeaderHealth({ cfg, env: state.env, shouldRepair });
@@ -304,7 +300,7 @@ describe("doctor SQLite session transcript header repair", () => {
     if (kind === "shared store") {
       const storePath = state.path("shared.sqlite");
       transcriptDatabaseOptions = { agentId: "alpha", env: state.env, path: storePath };
-      openOpenClawAgentDatabase(transcriptDatabaseOptions);
+      agentDatabase.openOpenClawAgentDatabase(transcriptDatabaseOptions);
       cfg = {
         agents: { entries: { beta: { workspace: state.workspaceDir } } },
         session: { store: storePath },

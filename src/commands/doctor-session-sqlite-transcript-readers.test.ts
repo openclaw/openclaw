@@ -11,14 +11,11 @@ beforeEach(() => {
 afterEach(() => database.close());
 function tables(table = "transcript_events", extraColumns = "") {
   database.exec(`
-        CREATE TABLE ${table} (
-          session_id TEXT, seq INTEGER, created_at INTEGER, event_json TEXT ${extraColumns}
-        );
+        CREATE TABLE ${table} (session_id TEXT, seq INTEGER, created_at INTEGER, event_json TEXT ${extraColumns});
         CREATE TABLE session_windows (session_id TEXT${table === "source_rows" ? " PRIMARY KEY" : ""}, session_key TEXT);
       `);
 }
-type StoredPayload = string | Uint8Array | null;
-function seed(sessionId: string, events: StoredPayload[], table = "transcript_events") {
+function seed(sessionId: string, events: (string | null)[], table = "transcript_events") {
   database
     .prepare("INSERT INTO session_windows VALUES (?, ?)")
     .run(sessionId, `agent:main:${sessionId}`);
@@ -37,58 +34,66 @@ function snapshot(events: string[], headerSession?: string, firstSeq = 0) {
   };
 }
 
-it.each([false, true])("detects headerless sessions (compressed: %s)", (compressed) => {
+it("selects legacy headerless sessions by first sequence and full JSON semantics", () => {
   tables();
+  const event = '{"type":"message"}';
+  for (const [id, events] of [
+    ["candidate", [event]],
+    ["\uE000", ['{"type":"session","type":"message"}']],
+    ["healthy", ['{"type":"message","type":"session"}']],
+    ["invalid", [null]],
+    ["malformed", ["{", event]],
+    ["\u{10000}", [event]],
+  ] as const) {
+    seed(id, [...events]);
+  }
+  database.exec("UPDATE transcript_events SET seq = seq + 7");
+  const reader = new ReadOnlySqliteTranscriptReader(database);
+  expect(reader.headerlessSessionIds(() => {})).toEqual([
+    "candidate",
+    "invalid",
+    "\uE000",
+    "\u{10000}",
+  ]);
+  expect(reader.headerlessSnapshot("invalid", accept)).toMatchObject({ ok: false });
+  expect(reader.headerlessSnapshot("candidate", accept)).toEqual(snapshot([event], "candidate", 7));
+});
+
+it("preserves exact compressed payloads in label and header repair snapshots", () => {
+  tables("transcript_events", ", event_zstd BLOB, event_utf8_bytes INTEGER, navigation_json TEXT");
+  database.exec("INSERT INTO session_windows VALUES ('compressed', 'agent:main:compressed')");
   const originals = [
     ` { "type": "message", "id": "first", "message": {"role":"user","content":"${"🦞".repeat(500)}"} } `,
     `{"type":"message","id":"second","message":{"role":"assistant","content":"${"kept".repeat(500)}"}}`,
     `{"type":"message","id":"tool","message":{"role":"toolResult","content":"${"tool output".repeat(200)}"}}`,
   ];
-  for (const [sessionId, events] of [
-    ["candidate", originals],
-    ["\uE000", ['{"type":"session","type":"message"}']],
-    ["healthy", ['{"type":"message","type":"session"}']],
-    ["invalid", [compressed ? new Uint8Array([123]) : null]],
-    ["malformed", ["{", originals[0]!]],
-    ["\u{10000}", [originals[0]!]],
-  ] as const) {
-    seed(sessionId, [...events]);
-  }
-  database.exec("UPDATE transcript_events SET seq = seq + 7");
-  if (compressed) {
-    database.exec(
-      "ALTER TABLE transcript_events ADD COLUMN event_zstd BLOB; ALTER TABLE transcript_events ADD COLUMN event_utf8_bytes INTEGER; ALTER TABLE transcript_events ADD COLUMN navigation_json TEXT",
+  const insert = database.prepare("INSERT INTO transcript_events VALUES (?, ?, ?, NULL, ?, ?, ?)");
+  for (const [seq, eventJson] of originals.entries()) {
+    const { event_zstd, event_utf8_bytes, navigation_json } = prepareTranscriptPayload(
+      database,
+      eventJson,
+      undefined,
+      "UTF-8",
     );
-    for (const eventJson of originals) {
-      const payload = prepareTranscriptPayload(database, eventJson, undefined, "UTF-8");
-      expect(payload.event_zstd).toBeInstanceOf(Uint8Array);
-      database
-        .prepare(
-          "UPDATE transcript_events SET event_json = NULL, event_zstd = ?, event_utf8_bytes = ?, navigation_json = ? WHERE event_json = ?",
-        )
-        .run(payload.event_zstd, payload.event_utf8_bytes, payload.navigation_json, eventJson);
-    }
+    expect(event_zstd).toBeInstanceOf(Uint8Array);
+    insert.run("compressed", seq, 20 + seq, event_zstd, event_utf8_bytes, navigation_json);
   }
   const reader = new ReadOnlySqliteTranscriptReader(database);
+  expect(reader.headerlessSessionIds(() => {})).toEqual(["compressed"]);
+  expect(reader.labelRepairSnapshot("compressed", accept, accept)).toEqual(snapshot(originals));
+  expect(reader.headerlessSnapshot("compressed", accept)).toEqual(
+    snapshot(originals, "compressed"),
+  );
+  database
+    .prepare("UPDATE transcript_events SET event_zstd = ? WHERE session_id = ? AND seq = 2")
+    .run(new Uint8Array([0]), "compressed");
+  expect(reader.labelRepairSnapshot("compressed", accept, accept)).toMatchObject({ ok: false });
+  database
+    .prepare("UPDATE transcript_events SET event_zstd = ? WHERE seq = 0")
+    .run(new Uint8Array([0]));
   const errors: string[] = [];
-  const candidates = () => reader.headerlessSessionIds((sessionId) => errors.push(sessionId));
-  expect(candidates()).toEqual(["candidate", "invalid", "\uE000", "\u{10000}"]);
-  expect(errors).toEqual([]);
-  expect(reader.headerlessSnapshot("invalid", accept)).toMatchObject({ ok: false });
-  expect(reader.labelRepairSnapshot("candidate", accept, accept)).toEqual(
-    snapshot(originals, undefined, 7),
-  );
-  expect(reader.headerlessSnapshot("candidate", accept)).toEqual(
-    snapshot(originals, "candidate", 7),
-  );
-  if (compressed) {
-    database
-      .prepare("UPDATE transcript_events SET event_zstd = ? WHERE session_id = ? AND seq = 7")
-      .run(new Uint8Array([0]), "candidate");
-    expect(candidates()).toEqual(["invalid", "\uE000", "\u{10000}"]);
-    expect(errors).toEqual(["candidate"]);
-    expect(reader.labelRepairSnapshot("candidate", accept, accept)).toMatchObject({ ok: false });
-  }
+  expect(reader.headerlessSessionIds((id) => errors.push(id))).toEqual([]);
+  expect(errors).toEqual(["compressed"]);
 });
 
 it("closes a rejected header snapshot before the next database operation", () => {
