@@ -530,7 +530,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
                     : sharedStore!,
                 );
           try {
-            blockedStore?.exec("BEGIN IMMEDIATE");
+            blockedStore?.exec("PRAGMA busy_timeout = 5000; BEGIN IMMEDIATE");
             expect(child.kill("SIGTERM")).toBe(true);
             if (mode === "SIGTERM") {
               await delay(1_400);
