@@ -15,7 +15,9 @@ export async function runDiscordListenerWithSlowLog(params: {
   run: () => Promise<void>;
   onError?: (err: unknown) => void;
 }) {
-  const startedAt = Date.now();
+  // Listener duration is measured, not wall-clock read: a system-clock step during the
+  // run must not fabricate or hide a slow-listener warning.
+  const startedAt = performance.now();
   try {
     await params.run();
   } catch (err) {
@@ -26,7 +28,7 @@ export async function runDiscordListenerWithSlowLog(params: {
     throw err;
   } finally {
     const { logger, listener, event } = params;
-    const durationMs = Date.now() - startedAt;
+    const durationMs = performance.now() - startedAt;
     if (!(durationMs < DISCORD_SLOW_LISTENER_THRESHOLD_MS)) {
       const duration = formatDurationSeconds(durationMs, {
         decimals: 1,
