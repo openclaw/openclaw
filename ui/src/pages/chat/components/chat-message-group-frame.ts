@@ -180,7 +180,8 @@ export function prepareMessageGroupFrame(
   // no identity, footer or actions of their own, only the run-block gap.
   const isTurnBlock =
     normalizedRole === "tool" ||
-    group.messages.every(({ message }) => isProviderVoiceTranscript(message)) ||
+    (group.messages.length > 0 &&
+      group.messages.every(({ message }) => isProviderVoiceTranscript(message))) ||
     (normalizedRole === "assistant" &&
       !opts.searchResult &&
       !ownsRunFrame &&
@@ -199,12 +200,12 @@ export function prepareMessageGroupFrame(
   const hasUserFooterActions =
     normalizedRole === "user" &&
     ((opts.onRewind && !opts.rewindDisabled) || hasMessageActionButtons(footerActionDetails, opts));
-  // Source sessions share the stable sender hue machinery; CSS owns contrast
-  // in each theme. Unattributed local messages keep the accent skin.
+  // Source sessions share stable sender hues; the shared participant palette owns contrast
+  // in each theme. Own and unattributed messages keep the theme-derived accent skin.
   const senderHue =
     isForwarded && sourceSessionKey
       ? resolveIdentityHue({ id: sourceSessionKey })
-      : normalizedRole === "user" && group.sender
+      : normalizedRole === "user" && group.sender && !isOwnGroup
         ? resolveIdentityHue(group.sender)
         : null;
   const pendingSend = readPendingSendStatus(group.messages.at(-1)?.message);
@@ -266,7 +267,7 @@ export function prepareMessageGroupFrame(
         "chat-group--reply": holdsReplyRow,
       },
     ],
-    style: senderHue === null ? undefined : `--chat-sender-hue: ${senderHue}`,
+    senderHue,
     sessionKey: sourceSessionKey ?? undefined,
   };
 }

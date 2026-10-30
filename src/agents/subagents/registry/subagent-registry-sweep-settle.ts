@@ -1,4 +1,3 @@
-import { hasLiveAgentRunContext } from "../../../infra/agent-run-registry.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -7,95 +6,12 @@ import type { createSubagentRegistryCompletionRuntime } from "./subagent-registr
 import { resolveYieldedRunContinuation } from "./subagent-registry-run-pause.js";
 import type { createSubagentSweepReadScope } from "./subagent-registry-sweep-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { isStaleUnendedSubagentRun, isYieldedSubagentRun } from "./subagent-run-liveness.js";
-import {
-  loadSubagentSessionEntry,
-  resolveCompletionForSubagentRun,
-  resolveSubagentRunOrphanReason,
-} from "./subagent-session-reconciliation.js";
+import { isYieldedSubagentRun } from "./subagent-run-liveness.js";
 
 type CompleteRun = ReturnType<
   typeof createSubagentRegistryCompletionRuntime
 >["completeSubagentRunWithRecovery"];
 type SweepReadScope = ReturnType<typeof createSubagentSweepReadScope>;
-
-/** Settles a run with no live execution owner, from its session or as lost. */
-export async function settleStaleActiveSubagentRun(params: {
-  runId: string;
-  entry: SubagentRunRecord;
-  now: number;
-  readScope: SweepReadScope;
-  complete: CompleteRun;
-}): Promise<void> {
-  const { runId, entry, now, readScope, complete } = params;
-  const assertActiveReadCurrent = () => {
-    readScope.assertRunCurrent(entry);
-    if (
-      typeof entry.execution.endedAt === "number" ||
-      entry.execution.status === "queued" ||
-      entry.killIntent ||
-      entry.killReconciliation ||
-      hasLiveAgentRunContext(runId)
-    ) {
-      throw readScope.retiredRead;
-    }
-  };
-  let observation;
-  let completion;
-  try {
-    assertActiveReadCurrent();
-    const classification = resolveSubagentRunOrphanReason({ entry });
-    observation =
-      typeof classification === "object" && classification !== null
-        ? await classification.read(assertActiveReadCurrent)
-        : {
-            orphanReason: classification,
-            sessionEntry: await loadSubagentSessionEntry({
-              childSessionKey: entry.childSessionKey,
-              childAgentId: entry.childAgentId,
-              assertCurrent: assertActiveReadCurrent,
-            }),
-          };
-    assertActiveReadCurrent();
-    completion = await resolveCompletionForSubagentRun(
-      entry,
-      observation.sessionEntry,
-      assertActiveReadCurrent,
-    );
-  } catch (error) {
-    if (error === readScope.retiredRead) {
-      return;
-    }
-    throw error;
-  }
-  const { orphanReason } = observation;
-  // Unknown execution identity is not completion evidence. Keep the existing
-  // wait/recovery owners until orphanhood or the bounded stale-run cutoff.
-  if (!completion && !orphanReason && !isStaleUnendedSubagentRun(entry, now)) {
-    return;
-  }
-  await complete(
-    {
-      runId,
-      expectedEntry: entry,
-      recoveryCurrent: readScope.completionCurrent,
-      ...(completion ?? {
-        endedAt: now,
-        outcome: {
-          status: "error" as const,
-          error: orphanReason
-            ? `subagent run orphaned: ${orphanReason}`
-            : "subagent run lost active execution context",
-        },
-        reason: SUBAGENT_ENDED_REASON_ERROR,
-      }),
-      sendFarewell: true,
-      accountId: entry.requesterOrigin?.accountId,
-      triggerCleanup: true,
-    },
-    completion ? "sweeper-session-completion" : "sweeper-lost-context",
-  );
-}
 
 /**
  * Settles a yielded run that no continuation can reach (see

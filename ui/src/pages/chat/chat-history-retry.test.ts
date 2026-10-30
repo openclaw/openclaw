@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getLatestWebSocket,
   MockWebSocket,
@@ -8,14 +8,18 @@ import {
 } from "../../api/gateway-socket.test-support.ts";
 import { GatewayBrowserClient, GatewayRequestError } from "../../api/gateway.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { requestSharedHistory } from "./chat-history-request.ts";
+import { loadOlderChatHistoryPage, requestSharedHistory } from "./chat-history-request.ts";
 import { getChatHistoryLoadState, isChatHistoryRetrying } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
 
+let historyClient: GatewayBrowserClient | undefined;
 beforeEach(() => vi.useFakeTimers());
-afterEach(() => {
+afterEach(async () => {
+  historyClient?.stop();
+  historyClient = undefined;
+  await vi.advanceTimersByTimeAsync(0);
   expect(vi.getTimerCount()).toBe(0);
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -47,7 +51,7 @@ async function connectHistoryClient() {
   vi.stubGlobal("crypto", { randomUUID: () => "history-read-fixture" });
   const timing = vi.fn();
   const client = new GatewayBrowserClient({ url: "ws://127.0.0.1:18789", onRequestTiming: timing });
-  onTestFinished(() => client.stop());
+  historyClient = client;
   client.start();
   const socket = getLatestWebSocket();
   const send = socket.send.bind(socket);
@@ -60,11 +64,7 @@ async function connectHistoryClient() {
     }
   });
   socket.emitOpen();
-  socket.emitMessage({
-    type: "event",
-    event: "connect.challenge",
-    payload: { nonce: "fixture", ts: Date.now() },
-  });
+  socket.emitConnectChallenge({ nonce: "fixture", ts: Date.now() });
   await vi.advanceTimersByTimeAsync(0);
   const connect = JSON.parse(socket.sent[0]!);
   socket.emitMessage({
@@ -79,7 +79,10 @@ async function connectHistoryClient() {
     },
   });
   expect(client.connected).toBe(true);
-  return { client, socket, timing };
+  const reads = () => socket.sent.map((frame) => JSON.parse(frame));
+  const reply = (id: string, messages: unknown[]) =>
+    socket.emitMessage({ type: "res", id, ok: true, payload: { messages } });
+  return { client, socket, timing, reads, reply };
 }
 const timeout = (method = "chat.history") =>
   new GatewayProtocolRequestTimeoutError({ method, timeoutMs: 30_000, requestSent: true });
@@ -88,6 +91,48 @@ const requestError = (code: string, message: string, retryable: boolean, retryAf
   new GatewayRequestError({ code, message, retryable, retryAfterMs });
 
 describe("shared chat history transient recovery", () => {
+  it.each([
+    ["older", "recover"],
+    ["older", "retire"],
+    ["older", "denied"],
+    ["shared", "recover"],
+    ["shared", "retire"],
+  ])("settles a %s read after %s without stale or denied replay", async (kind, outcome) => {
+    const error =
+      kind === "shared"
+        ? timeout()
+        : requestError(
+            outcome === "denied" ? "PERMISSION_DENIED" : "UNAVAILABLE",
+            "Earlier history unavailable",
+            outcome !== "denied",
+            250,
+          );
+    const page = { messages: [{ role: "assistant", content: "Recovered" }], hasMore: false };
+    const request = vi.fn().mockRejectedValueOnce(error).mockResolvedValue(page);
+    const state = makeChatHost({ requestHandlers: { "chat.history": request } });
+    const isCurrent = () => state.sessionKey !== "agent:main:replacement";
+    const reads =
+      kind === "older"
+        ? [loadOlderChatHistoryPage(state, { cursor: "older-80" })]
+        : [
+            readHistory(state.client!, "shared", isCurrent),
+            readHistory(state.client!, "shared", isCurrent),
+          ];
+    const outcomes = Promise.all(reads).catch((failure: unknown) => failure);
+    await vi.advanceTimersByTimeAsync(0);
+    if (outcome === "retire") {
+      state.sessionKey = "agent:main:replacement";
+    }
+    await vi.advanceTimersByTimeAsync(499);
+    expect(request).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    if (outcome === "recover") {
+      expect(await outcomes).toEqual(reads.map(() => page));
+    } else {
+      expect(await outcomes).toBe(error);
+    }
+    expect(request).toHaveBeenCalledTimes(outcome === "recover" ? 2 : 1);
+  });
   it.each([false, true])(
     "keeps manual Retry after the recovery deadline (startup=%s)",
     async (startup) => {
@@ -193,75 +238,46 @@ describe("shared chat history transient recovery", () => {
   });
 
   it("retries a missing WebSocket response through the browser client's real request deadline", async () => {
-    const { client, socket } = await connectHistoryClient();
-    try {
-      const read = readHistory(client, "real-wire");
-      const outcome = read.catch((error: unknown) => error);
-      await vi.advanceTimersByTimeAsync(29_000);
-      socket.emitMessage({ type: "event", event: "tick", payload: {} });
-      await vi.advanceTimersByTimeAsync(1_499);
-      const reads = () =>
-        socket.sent
-          .map((frame) => JSON.parse(frame))
-          .filter((frame) => frame.method === "chat.history");
-      expect(reads()).toHaveLength(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(reads()).toHaveLength(2);
-      const retry = reads()[1]!;
-      socket.emitMessage({ type: "res", id: retry.id, ok: true, payload: { messages: [] } });
-      await expect(outcome).resolves.toEqual({ messages: [] });
-      expect(client.connected).toBe(true);
-    } finally {
-      client.stop();
-      await vi.advanceTimersByTimeAsync(0);
-    }
+    const { client, socket, reads, reply } = await connectHistoryClient();
+    const read = readHistory(client, "real-wire");
+    const outcome = read.catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(29_000);
+    socket.emitMessage({ type: "event", event: "tick", payload: {} });
+    await vi.advanceTimersByTimeAsync(1_499);
+    const historyReads = () => reads().filter((frame) => frame.method === "chat.history");
+    expect(historyReads()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(historyReads()).toHaveLength(2);
+    const retry = historyReads()[1]!;
+    reply(retry.id, []);
+    await expect(outcome).resolves.toEqual({ messages: [] });
+    expect(client.connected).toBe(true);
   });
 
-  it("releases retired consumers without canceling a joined reader, then retires the last wire correlation", async () => {
-    const { client, socket, timing } = await connectHistoryClient();
-    try {
-      const retired = new AbortController();
-      const current = new AbortController();
-      let retiredSettled = false;
-      const first = readHistory(client, "joined-wire", () => true, retired.signal)
-        .catch((error: unknown) => error)
-        .finally(() => {
-          retiredSettled = true;
-        });
-      const second = readHistory(client, "joined-wire", () => true, current.signal);
-      // Cleanup also rejects the joined read when the baseline stops at its red assertion.
-      void second.catch(() => undefined);
-      await vi.advanceTimersByTimeAsync(0);
-      const joined = JSON.parse(socket.sent[1]!);
-      retired.abort();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(retiredSettled).toBe(true);
-      await first;
-      expect(socket.sent).toHaveLength(2);
+  it.each([false, true])("releases a retired wire consumer (joined=%s)", async (joined) => {
+    const { client, timing, reads, reply } = await connectHistoryClient();
+    const retired = new AbortController();
+    const settled = vi.fn();
+    const first = readHistory(client, "retirement-wire", () => true, retired.signal)
+      .catch((error: unknown) => error)
+      .finally(settled);
+    const second = joined
+      ? readHistory(client, "retirement-wire", () => true, new AbortController().signal)
+      : undefined;
+    void second?.catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    const obsolete = reads()[1]!;
+    retired.abort();
+    // Rejoin synchronously: cleanup of the retired producer may still be queued.
+    const replacement = second ?? readHistory(client, "retirement-wire");
+    void replacement.catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toHaveBeenCalledOnce();
+    await first;
+    expect(reads()).toHaveLength(joined ? 2 : 3);
+    if (joined) {
       expect(timing.mock.calls.filter(([event]) => event.method === "chat.history")).toEqual([]);
-      socket.emitMessage({
-        type: "res",
-        id: joined.id,
-        ok: true,
-        payload: { messages: ["current"] },
-      });
-      await expect(second).resolves.toEqual({ messages: ["current"] });
-
-      const last = new AbortController();
-      let lastSettled = false;
-      const abandoned = readHistory(client, "retired-wire", () => true, last.signal)
-        .catch((error: unknown) => error)
-        .finally(() => {
-          lastSettled = true;
-        });
-      await vi.advanceTimersByTimeAsync(0);
-      const obsolete = JSON.parse(socket.sent[2]!);
-      last.abort();
-      const replacement = readHistory(client, "retired-wire");
-      void replacement.catch(() => undefined);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(lastSettled).toBe(true);
-      await abandoned;
+    } else {
       expect(timing).toHaveBeenCalledWith(
         expect.objectContaining({
           id: obsolete.id,
@@ -270,20 +286,11 @@ describe("shared chat history transient recovery", () => {
           errorCode: "CLIENT_ABORTED",
         }),
       );
-      const fresh = JSON.parse(socket.sent[3]!);
-      expect(fresh.id).not.toBe(obsolete.id);
-      socket.emitMessage({
-        type: "res",
-        id: obsolete.id,
-        ok: true,
-        payload: { messages: ["obsolete"] },
-      });
-      socket.emitMessage({ type: "res", id: fresh.id, ok: true, payload: { messages: ["fresh"] } });
-      await expect(replacement).resolves.toEqual({ messages: ["fresh"] });
-    } finally {
-      client.stop();
-      await vi.advanceTimersByTimeAsync(0);
+      expect(reads()[2]!.id).not.toBe(obsolete.id);
+      reply(obsolete.id, ["obsolete"]);
     }
+    reply((joined ? obsolete : reads()[2]!).id, [joined ? "current" : "fresh"]);
+    await expect(replacement).resolves.toEqual({ messages: [joined ? "current" : "fresh"] });
   });
 
   it("expires staggered readers before a long server hint", async () => {
@@ -291,48 +298,14 @@ describe("shared chat history transient recovery", () => {
     const client = createTestGatewayClient(request);
     const first = readHistory(client, "long-delay").catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(30_000);
-    let secondSettled = false;
+    const secondSettled = vi.fn();
     const second = readHistory(client, "long-delay")
       .catch((error: unknown) => error)
-      .finally(() => {
-        secondSettled = true;
-      });
+      .finally(secondSettled);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(await first).toMatchObject({ message: expect.stringContaining("timed out") });
     expect(request).toHaveBeenCalledTimes(1);
-    expect(secondSettled).toBe(true);
+    expect(secondSettled).toHaveBeenCalledOnce();
     expect(await second).toMatchObject({ message: expect.stringContaining("timed out") });
-  });
-
-  it("never retries a timed-out read once all pane owners have changed", async () => {
-    const request = rejectedTimeout();
-    const client = createTestGatewayClient(request);
-    let current = true;
-    const outcome = readHistory(client, "retired", () => current).catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(0);
-    current = false;
-    await vi.advanceTimersByTimeAsync(500);
-    expect(await outcome).toBeInstanceOf(GatewayProtocolRequestTimeoutError);
-    expect(request).toHaveBeenCalledTimes(1);
-  });
-
-  it("retries one timed-out read for current panes and preserves the shared request", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(timeout())
-      .mockResolvedValueOnce({ messages: [{ role: "assistant", content: "Recovered" }] });
-    const client = createTestGatewayClient(request);
-    const first = readHistory(client, "shared");
-    const second = readHistory(client, "shared");
-    const outcomes = Promise.allSettled([first, second]);
-    await vi.advanceTimersByTimeAsync(499);
-    expect(request).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(request).toHaveBeenCalledTimes(2);
-    const fulfilled = {
-      status: "fulfilled",
-      value: { messages: [{ role: "assistant", content: "Recovered" }] },
-    };
-    expect(await outcomes).toEqual([fulfilled, fulfilled]);
   });
 });

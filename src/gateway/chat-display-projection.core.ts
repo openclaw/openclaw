@@ -29,6 +29,7 @@ import {
   isOpenClawMessageToolMirrorAssistantMessage,
   isTranscriptOnlyOpenClawAssistantMessage,
 } from "../shared/transcript-only-openclaw-assistant.js";
+import { projectAssistantCommentaryFallbacks } from "./chat-display-projection.commentary.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   extractAssistantTextForSilentCheck,
@@ -391,10 +392,22 @@ export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecover
       pendingIndexes.push(index);
       return;
     }
+    const hasVisibleAssistant = hasVisibleAssistantDisplayContent(message);
     if (
-      (!unseenPending && pendingIndexes.length === 0) ||
-      !hasVisibleAssistantDisplayContent(message)
+      message.role === "assistant" &&
+      (message.stopReason === "stop" || message.stopReason === "length") &&
+      !hasVisibleAssistant &&
+      !unseenPending &&
+      pendingIndexes.length === 0 &&
+      // Commentary is not a final answer, but its fallback owner may retain it.
+      (!options?.includeCommentaryFallbacks ||
+        projectAssistantCommentaryFallbacks(message, Number.MAX_SAFE_INTEGER).fallbacks.length ===
+          0)
     ) {
+      messages.pop();
+      return;
+    }
+    if ((!unseenPending && pendingIndexes.length === 0) || !hasVisibleAssistant) {
       return;
     }
     // An incremental reader carries only a pending bit. It must reload raw
@@ -506,7 +519,11 @@ function projectEmptyAssistantErrorMessages(
 
 type ChatHistoryRecoveryOptions = Pick<
   ChatDisplayProjectionOptions,
-  "maxChars" | "stripEnvelope" | "assistantErrorPending" | "subagentCoordination"
+  | "maxChars"
+  | "stripEnvelope"
+  | "assistantErrorPending"
+  | "subagentCoordination"
+  | "includeCommentaryFallbacks"
 >;
 
 export function prepareChatHistoryRecoveryMessages(

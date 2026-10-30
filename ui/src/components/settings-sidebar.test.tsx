@@ -650,7 +650,11 @@ it("follows agent owner replacement and publications without remounting", async 
   const selectionSubscriptions = [...selectionListeners];
   const identitySubscriptions = [...identityListeners];
   const subscriptions = [selectionSubscriptions, identitySubscriptions];
+  const optionCopy = selector.querySelector(".agent-select__option-copy");
+  expect(optionCopy).not.toBeNull();
   render({ ...props, gatewayVersion: "test" });
+  await selector.updateComplete;
+  expect(selector.querySelector(".agent-select__option-copy")).toBe(optionCopy);
   expect([[...selectionListeners], [...identityListeners]]).toEqual(subscriptions);
   settingsAgentSelection.state.selectedId = "research";
   settingsAgentSelection.state.scopeId = "research";
@@ -684,5 +688,13 @@ it("follows agent owner replacement and publications without remounting", async 
     expect(replacement.agentIdentity.ensure).toHaveBeenLastCalledWith(["research"]);
     expect(avatar()).toBe("🦊");
   });
+  render({
+    ...props,
+    ...replacement,
+    agents: props.agents.map((agent) =>
+      agent.id === "research" ? Object.assign({}, agent, { name: "Research renamed" }) : agent,
+    ),
+  });
+  await waitForSolid(() => expect(label()).toContain("Research renamed"));
   expect(container.querySelector<HTMLElement>("openclaw-agent-select")).toBe(selector);
 });

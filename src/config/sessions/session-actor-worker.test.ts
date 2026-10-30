@@ -3,7 +3,6 @@ import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-sta
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
-import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
@@ -15,7 +14,7 @@ import type {
 import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
 import { readPendingInput } from "./session-pending-input-operations.kernel.js";
 import type { PendingInputMutation } from "./session-pending-input-operations.types.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import type { InternalSessionEntry } from "./types.js";
 
 // mock-isolation: Actor ownership proof must not schedule unrelated background maintenance.
@@ -43,7 +42,7 @@ it.each(["commit", "preparation", "abort"] as const)(
           commandId: `single-node-${mode}`,
           phaseId: "adoption",
           sessionId: f.scope.sessionId,
-          expectedState: buildRestartRecoveryExpectedState(initial.entry!),
+          expectedState: buildSessionTranscriptTurnExpectedState(initial.entry!),
           runId: "next-run",
           lifecycle: {},
         },
@@ -150,22 +149,6 @@ function pendingInput(
   const expected = readPendingInput(f.database, pending);
   assert(expected.kind === "stage", "Expected pending-input preparation");
   return { ...pending, expected };
-}
-
-function recoveryClaim(
-  f: Fixture,
-  overrides: Partial<HarnessCompletionRecovery> = {},
-): HarnessCompletionRecovery {
-  return {
-    taskId: "task",
-    taskStatus: "succeeded",
-    taskRunId: "task-run",
-    sourceRunId: "source",
-    requesterSessionKey: f.target.sessionKey,
-    requesterAgentId: "main",
-    sessionId: f.scope.sessionId,
-    ...overrides,
-  };
 }
 
 function expectRollback(outcome: ReturnType<Fixture["mutate"]>, message: string) {
@@ -425,9 +408,9 @@ it("adopts a run only under the exact lifecycle and current transaction and comm
       input: {
         ...commandInput(initial, "adopt-first", "adoption"),
         sessionId: f.scope.sessionId,
-        expectedState: buildRestartRecoveryExpectedState(initial.entry!),
+        expectedState: buildSessionTranscriptTurnExpectedState(initial.entry!),
         runId: "current-run",
-        lifecycle: { restartRecoveryBeforeAgentReplyState: "pending", startedAt: 2 },
+        lifecycle: { abortedLastRun: false, startedAt: 2 },
       },
     };
     await f.prepare(command);
@@ -435,7 +418,7 @@ it("adopts a run only under the exact lifecycle and current transaction and comm
     const adopted = f.read();
     expect(adopted.entry).toMatchObject({
       activeWriterRunId: "current-run",
-      restartRecoveryBeforeAgentReplyState: "pending",
+      abortedLastRun: false,
     });
     expectRollback(
       f.mutate({ ...command, input: { ...command.input, expected: adopted.version } }),
@@ -447,13 +430,14 @@ it("adopts a run only under the exact lifecycle and current transaction and comm
     delete f.hooks.admit;
     expect(f.nativeEntry()).toMatchObject({
       activeWriterRunId: "current-run",
-      restartRecoveryBeforeAgentReplyState: "pending",
+      abortedLastRun: false,
     });
     expect(f.nativeEntry()?.updatedAt).not.toBe(50);
   }));
 
 it.each([
   { phase: "acceptInput", initial: true, cold: false },
+  { phase: "acceptInput", initial: false, cold: false },
   { phase: "adoptRun", initial: false, cold: false },
   { phase: "acceptInput", initial: false, cold: true },
 ] as const)(
@@ -464,14 +448,14 @@ it.each([
         ? { ...f.target, sessionKey: "agent:main:first-input" }
         : f.target;
       if (mode.cold) {
-        seedEntry(f, { status: "done", restartRecoveryTerminalRunIds: ["previous-run"] });
+        seedEntry(f, { status: "done" });
       }
       const before = mode.cold ? undefined : f.read(target);
       const sessionId = mode.initial ? "first-input" : f.scope.sessionId;
-      const expectedState = buildRestartRecoveryExpectedState(
+      const expectedState = buildSessionTranscriptTurnExpectedState(
         (mode.cold ? f.nativeEntry() : before?.entry) ?? { sessionId, updatedAt: 1 },
       );
-      const lifecycle = { restartRecoveryDeliveryRunId: "input-run", startedAt: 2 };
+      const lifecycle = { status: undefined, startedAt: 2 };
       const turn = {
         agentId: "main",
         sessionKey: target.sessionKey,
@@ -492,6 +476,7 @@ it.each([
         expected: before?.version,
         commandId: "accept-transcript",
         phaseId: "input",
+        entryReference: before?.writeToken,
         expectedState,
         lifecycle,
         turn,
@@ -501,11 +486,13 @@ it.each([
           ? { type: "session.actor.acceptInput", input }
           : { type: "session.actor.adoptRun", input: { ...input, sessionId } };
       await f.prepare(command);
-      expectCommitted(f.mutate(command));
-      expect(f.read(target)).toMatchObject({
-        entry: { sessionId, ...lifecycle },
+      const committed = expectCommitted(f.mutate(command));
+      expect(committed.receipt.postimage).toEqual(f.read(target));
+      expect(committed.receipt.postimage).toMatchObject({
+        entry: { sessionId, startedAt: 2 },
         pendingInputs: [],
       });
+      expect(f.read(target)?.entry?.status).toBeUndefined();
       expect(
         readTranscriptEventRows(f.database, sessionId).map((row) => JSON.parse(row.eventJson)),
       ).toMatchObject([
@@ -516,9 +503,6 @@ it.each([
           message: { content: "accepted bytes" },
         },
       ]);
-      if (mode.cold) {
-        expect(f.nativeEntry()?.restartRecoveryTerminalRunIds).toEqual(["previous-run"]);
-      }
     }),
 );
 
@@ -567,7 +551,7 @@ it("stages queued custody without rewriting the active session lifecycle", () =>
         type: "session.actor.acceptInput",
         input: {
           ...commandInput(before, "stage-only", "input"),
-          expectedState: buildRestartRecoveryExpectedState(before.entry!),
+          expectedState: buildSessionTranscriptTurnExpectedState(before.entry!),
           lifecycle: {},
           pending,
         },
@@ -588,7 +572,7 @@ it("rejects bookkeeping from a superseded writer without changing durable state"
             sessionId: f.scope.sessionId,
             lifecycleRevision: before.entry!.lifecycleRevision ?? null,
             writerRunId: "superseded",
-            expectedState: buildRestartRecoveryExpectedState(before.entry!),
+            expectedState: buildSessionTranscriptTurnExpectedState(before.entry!),
           },
         },
       }),
@@ -642,7 +626,7 @@ it.each(["assistant append", "empty append"] as const)(
             options: {
               expectedSessionId: f.scope.sessionId,
               expectedWriterRunId: writerRunId,
-              expectedSessionState: buildRestartRecoveryExpectedState(initial.entry!),
+              expectedSessionState: buildSessionTranscriptTurnExpectedState(initial.entry!),
               sessionLifecyclePatch: lifecycle,
               sessionFile: "synthetic.jsonl",
               messages: mode === "assistant append" ? messages : [],
@@ -713,69 +697,10 @@ it.each(["assistant append", "empty append"] as const)(
     }),
 );
 
-it("keeps restart receipt custody across retries and settles only the exact provider claim", () =>
-  withActor((f) => {
-    const claim = { sessionId: f.scope.sessionId, sourceTurnId: "source", toolCallId: "tool" };
-    seedEntry(f, {
-      restartRecoveryDeliveryRunId: "run",
-      restartRecoveryDeliverySourceRunId: claim.sourceTurnId,
-    });
-    let sequence = 0;
-    const common = () => commandInput(f.read(), `receipt-${++sequence}`, "delivery");
-    const pending = (updatedAt: number) =>
-      f.mutate({
-        type: "session.actor.deliveryPending",
-        input: { ...common(), claim, updatedAt },
-      });
-    const settle = (outcome: "confirmed" | "not-sent", toolCallId = claim.toolCallId) =>
-      f.mutate({
-        type: "session.actor.deliverySettled",
-        input: {
-          ...common(),
-          restart: { claim: { ...claim, toolCallId }, outcome, updatedAt: 20 },
-        },
-      });
-    expectCommitted(pending(10), { value: { disposition: "started" } });
-    expect(f.nativeEntry()).toMatchObject({
-      restartRecoveryDeliveryReceiptState: "terminal-pending",
-      restartRecoveryDeliveryToolCallId: claim.toolCallId,
-    });
-    expectCommitted(pending(11), { value: { disposition: "delivery-ambiguous" } });
-    expect(settle("confirmed", "unrelated-tool")).toMatchObject({ kind: "rolled-back" });
-    expect(f.nativeEntry()?.restartRecoveryDeliveryReceiptState).toBe("terminal-pending");
-    for (let attempt = 0; attempt < 2; attempt++) {
-      expectCommitted(settle("confirmed"), { value: { disposition: "recorded" } });
-    }
-    expectCommitted(settle("not-sent"), { value: { disposition: "stale" } });
-    expect(f.nativeEntry()?.restartRecoveryDeliveryReceiptState).toBe("delivered-terminal");
-    const nextClaim = { ...claim, sourceTurnId: "next-source" };
-    seedEntry(f, {
-      restartRecoveryDeliverySourceRunId: nextClaim.sourceTurnId,
-      restartRecoveryDeliveryReceiptState: "terminal-pending",
-    });
-    for (const commandId of ["cancel", "cancel-replay"]) {
-      expectCommitted(
-        f.mutate({
-          type: "session.actor.deliverySettled",
-          input: {
-            ...common(),
-            commandId,
-            restart: { claim: nextClaim, outcome: "not-sent", updatedAt: 30 },
-          },
-        }),
-        { value: { disposition: "cleared" } },
-      );
-    }
-    expect(f.nativeEntry()?.restartRecoveryDeliveryReceiptState).toBeUndefined();
-    expect(f.nativeEntry()?.restartRecoveryDeliveryToolCallId).toBeUndefined();
-  }));
-
 it("publishes actual pending-final state and evidence only after live commit authority", () =>
   withActor((f) => {
-    const claim = recoveryClaim(f);
     seedEntry(f, {
       abortedLastRun: true,
-      mainRestartRecovery: { cycleId: "cycle", revision: 2, chargedAttempts: 0 },
       pendingFinalDelivery: {
         kind: "replayable",
         text: "answer",
@@ -797,7 +722,6 @@ it("publishes actual pending-final state and evidence only after live commit aut
           state: "delivered",
         },
         evidence: {
-          claim,
           result: { channel: "telegram", target: { id: "chat" }, platformMessageId: "message" },
         },
       },
@@ -808,21 +732,15 @@ it("publishes actual pending-final state and evidence only after live commit aut
     delete f.hooks.admit;
     const committed = expectCommitted(
       f.mutate({ ...command, input: { ...command.input, expected: f.read().version } }),
-      { value: { state: "delivered", wakeRecovery: true } },
+      { value: { state: "delivered" } },
     );
-    expect(committed.receipt.postimage.entry).toMatchObject({
-      mainRestartRecovery: { revision: 3 },
-      restartRecoveryTerminalDeliveryEvidence: [
-        {
-          harnessCompletion: claim,
-          durableFinalReceipt: {
-            intentId: "intent",
-            deliveryId: "payload",
-            platformMessageId: "message",
-          },
-        },
-      ],
-    });
+    expect(committed.receipt.postimage.entry?.pendingFinalDelivery?.deliveries).toEqual([
+      {
+        id: "payload",
+        state: "delivered",
+        receipt: { platformMessageId: "message", resultCount: 1 },
+      },
+    ]);
     expectCommitted(
       f.mutate({
         ...command,
@@ -833,68 +751,6 @@ it("publishes actual pending-final state and evidence only after live commit aut
           evidence: undefined,
         },
       }),
-      { value: { state: "delivered", wakeRecovery: false } },
+      { value: { state: "delivered" } },
     );
-  }));
-
-it("checks recovery provenance in the actor transaction and refuses a later unrelated input", () =>
-  withActor(async (f) => {
-    const claim = recoveryClaim(f, {
-      sourceRunId: "source-run",
-      lifecycleRevision: "recovery-generation",
-    });
-    seedConversation(
-      f,
-      {
-        activeWriterRunId: "recovery-run",
-        restartRecoveryDeliveryRunId: "recovery-run",
-        lifecycleRevision: claim.lifecycleRevision,
-      },
-      userEvent("completion-source", "task completed", {
-        idempotencyKey: "source-run:user",
-        __openclaw: { runId: "source-run" },
-        provenance: {
-          kind: "inter_session",
-          sourceChannel: "internal",
-          sourceTool: "agent_harness_completion",
-          sourceSessionKey: "task-run",
-        },
-      }),
-    );
-    const makeCommand = (key: string): Mutation => {
-      const current = f.read();
-      const pending = pendingInput(f, key, "resume", {});
-      return {
-        type: "session.actor.acceptInput",
-        input: {
-          ...commandInput(current, key, "recovery"),
-          expectedState: buildRestartRecoveryExpectedState(current.entry!),
-          lifecycle: { restartRecoveryBeforeAgentReplyState: "admitted" },
-          recovery: { expectedRunId: "recovery-run", sources: [], harnessCompletion: claim },
-          pending,
-        },
-      };
-    };
-    const command = makeCommand("accepted-recovery");
-    await f.prepare(command);
-    expectCommitted(f.mutate(command));
-    expect(f.read().pendingInputs).toMatchObject([{ input_id: "accepted-recovery" }]);
-    runSqliteImmediateTransactionSync(f.database.db, () =>
-      appendTranscriptEventsInTransaction(f.database, f.scope, [
-        {
-          ...userEvent(
-            "later-human",
-            "a different request",
-            { idempotencyKey: "unrelated-input" },
-            "completion-source",
-          ),
-          timestamp: "2026-01-01T00:00:02Z",
-        },
-      ]),
-    );
-    expectRollback(
-      f.mutate(makeCommand("refused-recovery")),
-      "Session actor recovery input no longer matches its source",
-    );
-    expect(f.read().pendingInputs.map((row) => row.input_id)).toEqual(["accepted-recovery"]);
   }));

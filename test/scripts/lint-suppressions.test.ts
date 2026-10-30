@@ -234,6 +234,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/trajectory-runtime-append.ts|typescript/unbound-method|2",
         // The browser probe forwards IndexedDB writes with each store receiver and restores both methods.
         "scripts/perf/ui-streaming-render-measure.ts|typescript/unbound-method|2",
+        // Rollback failure retains both caught errors in one AggregateError cause.
+        "scripts/pr-lib/cache-lifetime.mjs|preserve-caught-error|1",
         // These owners sort only fresh private arrays, preserving their source collections.
         "src/agents/agent-bundle-lsp-env.ts|unicorn/no-array-sort|1",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
@@ -294,7 +296,7 @@ describe("production lint suppressions", () => {
         "src/gateway/node-connection-notifications.ts|unicorn/no-array-sort|1",
         "src/gateway/node-plugin-tool-snapshot.ts|unicorn/no-array-sort|1",
         // These handlers sort only fresh private arrays, preserving their upstream sources.
-        "src/gateway/server-methods/sessions-files.ts|unicorn/no-array-sort|1",
+        "src/gateway/server-methods/session-files-root.ts|unicorn/no-array-sort|1",
         "src/gateway/server-methods/sessions-read.ts|unicorn/no-array-sort|1",
         "src/gateway/server-methods/sessions-search-projected.ts|unicorn/no-array-sort|1",
         "src/gateway/server-methods/tools-catalog.ts|unicorn/no-array-sort|1",
@@ -304,9 +306,9 @@ describe("production lint suppressions", () => {
         "src/gateway/session-companion-prompt.ts|unicorn/no-array-sort|1",
         // Preserve the measured indexed fanout loop while reusing envelope tuples.
         "src/gateway/session-event-projection.ts|typescript/prefer-for-of|1",
-        // Event field ordering sorts only the freshly filtered, audience-private key array.
+        // Session presentation keys, event fields, and sharing aliases sort fresh private arrays.
         "src/gateway/session-event-projection.ts|unicorn/no-array-sort|1",
-        // Sharing keys sort the private alias spread without copying it a second time.
+        "src/gateway/session-row-presentation.ts|unicorn/no-array-sort|1",
         "src/gateway/session-sharing-read.ts|unicorn/no-array-sort|1",
         "src/gateway/session-swarm-summary.ts|unicorn/no-array-sort|2",
         // Node worker ports do not accept a browser target origin.

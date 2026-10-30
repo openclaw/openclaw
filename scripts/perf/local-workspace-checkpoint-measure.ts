@@ -17,6 +17,20 @@
  * Lease broker counts also report a simulated idle minute at 16 serial polls.
  * The synthetic checkout uses a relative Git pointer and fixed file mtimes so
  * independently rooted fixtures return identical Files metadata.
+ * --mode maintenance measures idle artifact sweeps through the real allocation
+ * lease owner; --mode publication measures settled-workspace custody. Use
+ * --lease-sources for a separate caller-stack census (never for timing).
+ * --mode heartbeat retains one independent worker lease across the warm run;
+ * each operation verifies and renews it. Acquisition and release are outside
+ * its warm counts, as they are outside recurring heartbeat ticks.
+ * Maintenance also holds this sibling lease so recurring sweeps share a warm
+ * heartbeat carrier, as they do with other active owners on a busy Gateway.
+ * --instrument retention samples memory after collecting the main isolate and
+ * observed direct workers, outside timing/GC measurements. Use identical-code controls
+ * to separate retained memory from different natural-GC/worker-idle schedules.
+ * --retention-ms 120000 gives both revisions the same minimum elapsed time
+ * after warmup before collection, including their normal idle-worker retirement.
+ * These modes report 16 operations per simulated minute, not production rates.
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -31,6 +45,7 @@ import path from "node:path";
 import { monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import type { Worker } from "node:worker_threads";
 import { transformSync } from "esbuild";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.ts";
 import type { LocalWorkspaceOwner } from "../../src/gateway/worker-environments/local-workspace-types.ts";
@@ -52,19 +67,40 @@ const { values } = parseArgs({
     port: { type: "string", default: "44984" },
     instrument: { type: "string", default: "timing" },
     absent: { type: "boolean", default: false },
+    "lease-sources": { type: "boolean", default: false },
+    worktrees: { type: "string", default: "64" },
+    "retention-ms": { type: "string", default: "0" },
   },
 });
-assert(values.output && ["owner", "path", "gateway"].includes(values.mode!));
+assert(
+  values.output &&
+    ["owner", "path", "gateway", "maintenance", "publication", "heartbeat"].includes(values.mode!),
+);
 assert(!values.absent || values.mode !== "owner");
 const requests = Number(values.requests),
   burst = Number(values.burst),
   files = Number(values.files),
-  port = Number(values.port);
-for (const value of [requests, burst, files, port]) {
+  port = Number(values.port),
+  worktrees = Number(values.worktrees);
+for (const value of [requests, burst, files, port, worktrees]) {
   assert(Number.isSafeInteger(value) && value > 0);
 }
 assert(port >= 40000 && port <= 65535);
-assert(["timing", "allocation"].includes(values.instrument!));
+assert(["timing", "allocation", "retention"].includes(values.instrument!));
+const retentionMs = Number(values["retention-ms"]);
+assert(Number.isSafeInteger(retentionMs) && retentionMs >= 0);
+const workers = new Set<Worker>();
+const observeWorker = (worker: Worker) => {
+  workers.add(worker);
+  worker.once("exit", () => workers.delete(worker));
+};
+if (values.instrument === "retention") {
+  assert(globalThis.gc, "Retention samples require --expose-gc");
+  process.on("worker", observeWorker);
+}
+if (values["lease-sources"]) {
+  Error.stackTraceLimit = 32;
+}
 const output = path.resolve(values.output);
 fs.mkdirSync(output);
 for (const name of ["home", "tmp", "repo"]) {
@@ -75,6 +111,7 @@ const owners = [
   "src/gateway/worker-environments/local-workspace-projection.ts",
   "src/agents/sandbox/local-workspace.ts",
   "src/gateway/server-methods/sessions-files.ts",
+  "src/agents/worktrees/gc-artifacts.ts",
 ];
 const source = new Map(
   owners.map((file) => [
@@ -90,7 +127,18 @@ const source = new Map(
 );
 let acquisitions = 0,
   scans = 0;
+const leaseSources = new Map<string, { scope: string; stack: string; calls: number }>();
 Object.assign(globalThis, {
+  __leaseSourceMeasure: (scope: string, stack: string) => {
+    const key = JSON.stringify([scope, stack]);
+    const entry = leaseSources.get(key) ?? {
+      scope,
+      stack: stack.replaceAll(root, "<source>"),
+      calls: 0,
+    };
+    entry.calls++;
+    leaseSources.set(key, entry);
+  },
   __checkpointMeasure: (action?: string) => {
     if (action === "scan") {
       scans++;
@@ -103,6 +151,15 @@ registerHooks({
   load(url, context, nextLoad) {
     const relative = url.startsWith("file:") ? path.relative(root, fileURLToPath(url)) : "";
     let code = source.get(relative);
+    if (values["lease-sources"] && relative === "src/state/openclaw-state-lease.ts") {
+      code = fs.readFileSync(path.join(root, relative), "utf8");
+      const anchor = "const validated = validateOpenClawStateLeaseOptions(invocation.options);";
+      assert(code.includes(anchor));
+      code = code.replace(
+        anchor,
+        anchor + "\nglobalThis.__leaseSourceMeasure(invocation.options.scope, new Error().stack);",
+      );
+    }
     if (relative === "src/gateway/worker-environments/local-workspace-store.ts") {
       code = fs.readFileSync(path.join(root, relative), "utf8");
       const anchor =
@@ -202,12 +259,15 @@ const state = await import("../../src/state/openclaw-state-db.js");
 const agent = await import("../../src/state/openclaw-agent-db.js");
 (await import("../../src/config/runtime-snapshot.js")).setRuntimeConfigSnapshot(config);
 state.openOpenClawStateDatabase();
-await (
-  await import("../../src/agents/worktrees/registry.js")
-).insertRegistryWorktree(process.env, owner.worktree);
-const workspace = values.absent
-  ? undefined
-  : await projection.withLocalWorkspaceProjection(owner, (operations) => operations.prepare());
+if (values.mode !== "maintenance") {
+  await (
+    await import("../../src/agents/worktrees/registry.js")
+  ).insertRegistryWorktree(process.env, owner.worktree);
+}
+const workspace =
+  values.absent || values.mode === "maintenance" || values.mode === "heartbeat"
+    ? undefined
+    : await projection.withLocalWorkspaceProjection(owner, (operations) => operations.prepare());
 for (const directory of workspace ? [canonical, workspace] : [canonical]) {
   for (let i = 0; i < files; i++) {
     fs.utimesSync(path.join(directory, `file-${i}.txt`), 1_767_225_600, 1_767_225_600);
@@ -224,6 +284,30 @@ const checkpoint = () =>
           operations.synchronize("canonical"),
         )
       : projection.checkpointLocalWorkspace(owner);
+const { collectRetiredWorktreeArtifacts } =
+  await import("../../src/agents/worktrees/gc-artifacts.js");
+const { WorktreeGcProgress } = await import("../../src/agents/worktrees/gc-progress.js");
+const { withWorktreeAllocationLease } = await import("../../src/agents/worktrees/allocation.js");
+// A populated default root with only registered checkouts is the recurring idle case.
+const maintained: LocalWorkspaceOwner["worktree"][] = [];
+if (values.mode === "maintenance") {
+  const { insertRegistryWorktree } = await import("../../src/agents/worktrees/registry.js");
+  for (let i = 0; i < worktrees; i++) {
+    const record = {
+      ...owner.worktree,
+      id: `22222222-2222-4222-8222-${String(i).padStart(12, "0")}`,
+      path: path.join(
+        process.env.OPENCLAW_STATE_DIR!,
+        "worktrees",
+        `repo-${i % 8}`,
+        `registered-${i}`,
+      ),
+    };
+    fs.mkdirSync(record.path, { recursive: true });
+    await insertRegistryWorktree(process.env, record);
+    maintained.push(record);
+  }
+}
 let server:
   | Awaited<ReturnType<typeof import("../../src/gateway/server.js").startGatewayServer>>
   | undefined;
@@ -231,7 +315,34 @@ const clients: Array<import("../../src/gateway/client.js").GatewayClient> = [];
 const handlerDurations: number[] = [];
 let stopRpcDiagnostics = () => {};
 let stopLeaseDiagnostics = () => {};
+const endHeartbeat = Promise.withResolvers<void>();
+let heartbeatDone: Promise<void> | undefined;
+let heartbeatLease:
+  | import("../../src/state/openclaw-state-lease.js").OpenClawStateAsyncLeaseContext
+  | undefined;
 try {
+  if (values.mode === "heartbeat" || values.mode === "maintenance") {
+    const ready = Promise.withResolvers<NonNullable<typeof heartbeatLease>>();
+    const { withOpenClawStateLeaseAsync } = await import("../../src/state/openclaw-state-lease.js");
+    const { captureOpenClawStateWorkerContext } =
+      await import("../../src/state/openclaw-state-worker-context.js");
+    heartbeatDone = withOpenClawStateLeaseAsync(
+      {
+        scope: "synthetic.heartbeat",
+        key: "held",
+        leaseMs: 600_000,
+        waitMs: 0,
+        heartbeat: "worker",
+      },
+      captureOpenClawStateWorkerContext(),
+      async (lease) => {
+        ready.resolve(lease);
+        await endHeartbeat.promise;
+      },
+    );
+    void heartbeatDone.catch(ready.reject);
+    heartbeatLease = await ready.promise;
+  }
   if (values.mode === "gateway") {
     const db = agent.openOpenClawAgentDatabase({ agentId: "main" });
     const { writeSessionEntry } =
@@ -279,10 +390,38 @@ try {
       await ready.promise;
     }
   }
+  const sweep = async () => {
+    const progress = new WorktreeGcProgress();
+    const result = await collectRetiredWorktreeArtifacts({
+      env: process.env,
+      records: maintained,
+      expiresBefore: 0,
+      progress,
+      orphanFailures: new Map(),
+      withAllocationLease: (run) => withWorktreeAllocationLease({ env: process.env }, run),
+    });
+    assert.equal(
+      progress.result.outcome,
+      "completed",
+      "A failed sweep is not a performance sample",
+    );
+    assert.equal(progress.result.issueCount, 0);
+    assert.deepEqual(result, { orphansDeleted: 0, snapshotsPruned: 0 });
+    return result;
+  };
   const runOne = (i: number) =>
     values.mode === "gateway"
       ? clients[i % clients.length]!.request("sessions.files.list", { sessionKey })
-      : checkpoint();
+      : values.mode === "maintenance"
+        ? sweep()
+        : values.mode === "publication"
+          ? projection.withSettledLocalWorkspace(
+              { worktree: owner.worktree, env: process.env },
+              async () => {},
+            )
+          : values.mode === "heartbeat"
+            ? heartbeatLease!.assertOwned().then(() => heartbeatLease!.renew())
+            : checkpoint();
   await runOne(0);
   if (values.mode === "gateway") {
     const rpcDiagnostics = channel("openclaw.gateway.rpc");
@@ -302,6 +441,7 @@ try {
   assert.equal(initial, "synthetic 0\n");
   acquisitions = 0;
   scans = 0;
+  leaseSources.clear();
   const { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } =
     await import("../../src/infra/diagnostic-events.js");
   await waitForDiagnosticEventsDrained();
@@ -329,9 +469,21 @@ try {
   const loop = monitorEventLoopDelay({ resolution: 10 });
   loop.enable();
   let gcMs = 0;
+  const gcByKind: Record<string, { count: number; ms: number; maxMs: number }> = {};
   const observer = new PerformanceObserver((events) => {
     for (const entry of events.getEntries()) {
       gcMs += entry.duration;
+      if (
+        "detail" in entry &&
+        typeof entry.detail === "object" &&
+        entry.detail !== null &&
+        "kind" in entry.detail
+      ) {
+        const summary = (gcByKind[String(entry.detail.kind)] ??= { count: 0, ms: 0, maxMs: 0 });
+        summary.count++;
+        summary.ms += entry.duration;
+        summary.maxMs = Math.max(summary.maxMs, entry.duration);
+      }
     }
   });
   observer.observe({ entryTypes: ["gc"] });
@@ -388,6 +540,7 @@ try {
     requests,
     burst,
     files,
+    worktrees: maintained.length,
     sources: Object.fromEntries(
       [...source].map(([file, code]) => [file, createHash("sha256").update(code).digest("hex")]),
     ),
@@ -395,8 +548,13 @@ try {
     hostLoadAfter: loadavg(),
     acquisitions,
     scans,
-    absentProjection: values.absent,
+    absentProjection: workspace === undefined,
     leaseRequests,
+    leaseSources: [...leaseSources.values()].map(({ scope, stack, calls }) => ({
+      scope,
+      stack,
+      calls,
+    })),
     leaseRequestsPerSimulatedIdleMinute:
       (Object.values(leaseRequests).reduce((sum, count) => sum + count, 0) * 16) / requests,
     elapsedMs,
@@ -415,6 +573,7 @@ try {
         }
       : {}),
     gcMs,
+    gcByKind,
     gcMsPerMinute: (gcMs * 60_000) / elapsedMs,
     memory: process.memoryUsage(),
     resultHash,
@@ -424,6 +583,12 @@ try {
     fs.writeFileSync(
       path.join(output, "response.json"),
       JSON.stringify(representativeResult, null, 2),
+    );
+  }
+  for (const record of maintained) {
+    assert(
+      fs.statSync(record.path).isDirectory(),
+      "Maintenance must preserve registered checkouts",
     );
   }
   if (workspace) {
@@ -436,7 +601,33 @@ try {
   } else {
     assert.equal(fs.readFileSync(path.join(canonical, "file-0.txt"), "utf8"), initial);
   }
-  const verified = { ...report, freshness: workspace ? "passed" : "absent projection unchanged" };
+  let retainedMemory;
+  if (values.instrument === "retention") {
+    const remainingMs = start + retentionMs - performance.now();
+    if (remainingMs > 0) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, remainingMs);
+      });
+    }
+    const heaps = [];
+    for (const worker of workers) {
+      const workerProfile = await worker.startHeapProfile({ forceGC: true });
+      await workerProfile.stop();
+      heaps.push(await worker.getHeapStatistics());
+    }
+    globalThis.gc!();
+    retainedMemory = {
+      ...process.memoryUsage(),
+      workerHeaps: heaps,
+      elapsedMs: performance.now() - start,
+      minimumElapsedMs: retentionMs,
+    };
+  }
+  const verified = {
+    ...report,
+    retainedMemory,
+    freshness: workspace ? "passed" : "absent projection unchanged",
+  };
   fs.writeFileSync(path.join(output, "report.json"), JSON.stringify(verified, null, 2));
   console.log(JSON.stringify(verified));
 } finally {
@@ -445,6 +636,9 @@ try {
   for (const client of clients) {
     client.stop();
   }
+  endHeartbeat.resolve();
+  await heartbeatDone;
+  process.off("worker", observeWorker);
   await server?.close({ reason: "synthetic checkpoint measurement complete" });
   await agent.closeOpenClawAgentDatabasesAsync();
   await state.closeOpenClawStateDatabaseAsync();

@@ -4,14 +4,13 @@ import { DatabaseSync } from "node:sqlite";
 import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it, vi } from "vitest";
 import {
   executeSqliteQueryTakeFirstSync,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import * as snapshotStaging from "../infra/sqlite-snapshot-staging-owner.js";
+import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import {
   findStartupMaintenanceRequiredError,
   StartupMaintenanceRequiredError,
@@ -36,6 +35,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as worker from "../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import {
   captureConfigHealthStateStore as captureHealth,
   readConfigHealthStateFromStore as readHealth,
@@ -50,14 +50,7 @@ import { createConfigHealthFingerprint } from "./io.observe-state.js";
 import { observeConfigSnapshot, observeConfigSnapshotSync } from "./io.observe.js";
 import { hashConfigRaw, normalizeConfigIoDeps } from "./io.read-helpers.js";
 
-const directories = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeDatabase();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
+const directories = useStateDatabaseTempDirs();
 
 function createHealthFixture(home: string, warn = vi.fn(), stateSubdir = "") {
   const configPath = path.join(home, "openclaw.json");
@@ -384,11 +377,11 @@ describe("observation scope", () => {
     const { configPath, capture, setSignature } = fixture();
     await closeDatabase();
     const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-    const stagingOwner = vi.spyOn(snapshotStaging, "captureSqliteSnapshotStagingOwner");
+    const copies = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationAwaited");
     const observe = () => withArtifactPreservingStateReads(() => capture().read());
     const before = await observe();
     expect(before.state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe("before");
-    expect(stagingOwner).not.toHaveBeenCalled();
+    expect(copies).not.toHaveBeenCalled();
     expect(await observe()).toEqual(before);
     expect(reads).toHaveBeenCalledTimes(1);
 

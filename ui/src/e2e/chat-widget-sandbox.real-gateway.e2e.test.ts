@@ -180,12 +180,12 @@ suite.define(() => {
             storageKey.startsWith("openclaw.control.bootRecord.v1:"),
           ),
         );
-        const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
-          sessionKey: key,
-          sidebarView: "sessions",
-        };
         for (let reload = 0; reload < 2; reload++) {
-          await page.evaluate(persistColdLoadWarmState, warmInput);
+          await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
+          await page.evaluate(persistColdLoadWarmState, {
+            sessionKey: key,
+            sidebarView: "sessions",
+          } satisfies Parameters<typeof persistColdLoadWarmState>[0]);
           if (reload === 0) {
             await page.evaluate(() => sessionStorage.setItem("warm-connect-hold-identity", "1"));
           }

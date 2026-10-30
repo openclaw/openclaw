@@ -58,6 +58,33 @@ describe("memory index", () => {
   const providersSince = (index: number) =>
     providerFixture.providerCalls.slice(index).map((call) => call.provider);
 
+  it("indexes and searches NoNe without an embedding provider", async () => {
+    const manager = await getPersistentManager(createCfg({ provider: "NoNe", minScore: 0 }));
+    await manager.sync({ reason: "test" });
+
+    expect(await manager.search("zebra")).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+    );
+    expect(await manager.statusAsync({ includeCounts: false })).toMatchObject({
+      provider: "none",
+      custom: { searchMode: "fts-only" },
+    });
+    expect(providerFixture.providerCalls).toEqual([]);
+  });
+
+  it("keeps keyword recall available when Auto cannot initialize embeddings", async () => {
+    const indexed = await getPersistentManager(createCfg({ provider: "none" }));
+    await indexed.sync({ reason: "test" });
+    await indexed.close();
+    providerFixture.providerCreationFailure = "openai";
+
+    const manager = await getFreshManager(createCfg({ provider: "Auto" }));
+    expect(await manager.search("zebra")).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+    );
+    expect(providersSince(0)).toEqual(["openai"]);
+  });
+
   it.each([false, true])(
     "drains startup transcript discovery before closing (scan failure: %s)",
     async (failScan) => {

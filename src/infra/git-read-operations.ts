@@ -10,6 +10,12 @@ export type GitCheckoutContext = {
   branch: string | null;
   root?: string;
   defaultBranch?: string;
+  /**
+   * Candidate head repositories from non-origin GitHub remotes tracking `branch`.
+   * The PR response must identify the same head repository; remote names alone
+   * do not establish fork membership. `owner`/`repo` stay the base identity.
+   */
+  forkHeadCandidates?: Array<{ owner: string; repo: string }>;
 };
 
 /** Lowercased merged-PR head, its target branch, and its merge commit. */

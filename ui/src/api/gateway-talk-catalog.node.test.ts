@@ -41,7 +41,7 @@ it.each([
   await vi.advanceTimersByTimeAsync(1);
   expect(await result).toMatchObject({ code: "CLIENT_TIMEOUT" });
   expect(settled).toHaveBeenCalledOnce();
-  expect(ws.sent).toHaveLength(2);
+  expect(ws.sent.filter((raw) => JSON.parse(raw).method !== "health")).toHaveLength(2);
 });
 
 it.each(["ready", "abort", "disconnect", "stop", "timeout"] as const)(

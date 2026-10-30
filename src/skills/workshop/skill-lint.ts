@@ -6,7 +6,8 @@ import {
 
 const MAX_DESCRIPTION_BYTES = 160;
 const MAX_BODY_LINES = 250;
-const MAX_BODY_BYTES = 12_000;
+/** Body size past which a skill gets the sprawl advisory and becomes eligible for a diet. */
+export const MAX_BODY_BYTES = 12_000;
 const MIN_NEGATION_LINES = 3;
 const MAX_ADVISORIES = 3;
 

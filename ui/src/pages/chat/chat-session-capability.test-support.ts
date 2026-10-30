@@ -50,6 +50,7 @@ export function createSessionCapabilityFixture(
     }),
     observeList: () => ({ refresh: async () => {}, dispose: () => {} }),
     deletionState: () => undefined,
+    acknowledgeHiddenRuns: async () => [],
     think: () => undefined,
     settingsPreview: () => undefined,
     archiveVisibility: archiveState.visibility,

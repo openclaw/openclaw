@@ -7,10 +7,8 @@ import type { ModelCatalogProvider } from "./model-catalog-types.js";
 import {
   parseRemoteModelCatalogBundle as parseV1,
   parseRemoteModelCatalogBundleV2 as parseV2,
-  parseRemoteModelCatalogBundleV3 as parseV3,
   validateAndSanitizeRemoteModelCatalogBundle as sanitizeV1,
   validateAndSanitizeRemoteModelCatalogBundleV2 as sanitizeV2,
-  validateAndSanitizeRemoteModelCatalogBundleV3 as sanitizeV3,
 } from "./remote-catalog-bundle.js";
 
 const normalize = (value: unknown, ownedProviders = [" OpenAI "]) =>
@@ -27,6 +25,7 @@ const windows = [
 const wire = { api: "openai-responses", baseUrl: "https://api.test", headers: { x: "y" } };
 const scope = { baseUrlHosts: ["api.test"], providerConfigApiIn: ["qwen", "modelstudio"] };
 const suppression = { provider: "alias", model: "m", reason: "retired", when: scope };
+const utility = { defaultUtilityModel: "u", defaultUtilityModels: { vendor: "vendor/small" } };
 it.each<[string, unknown, unknown]>([
   [
     "providers",
@@ -35,11 +34,12 @@ it.each<[string, unknown, unknown]>([
         ...wire,
         defaultModel: " m ",
         defaultUtilityModel: " u ",
+        defaultUtilityModels: { " Vendor ": " vendor/small ", blank: " " },
         models: [{ id: "m" }, { id: "" }],
       },
       other: { models: [{ id: "x" }] },
     },
-    { openai: { ...wire, defaultModel: "m", defaultUtilityModel: "u", models: [{ id: "m" }] } },
+    { openai: { ...wire, defaultModel: "m", ...utility, models: [{ id: "m" }] } },
   ],
   [
     "aliases",
@@ -52,10 +52,7 @@ it.each<[string, unknown, unknown]>([
       {
         ...suppression,
         provider: "Alias",
-        when: {
-          baseUrlHosts: ["API.TEST"],
-          providerConfigApiIn: ["Qwen", "ModelStudio"],
-        },
+        when: { baseUrlHosts: ["API.TEST"], providerConfigApiIn: ["Qwen", "ModelStudio"] },
       },
     ],
     [suppression],
@@ -370,11 +367,7 @@ const invalidV2: Rejection[] = [
   [{ pricing: {} }],
 ];
 for (const recommendedModels of [["vendor/model", " vendor/model "], [" "], ["second-only"]]) {
-  invalidV2.push([
-    {
-      providers: { first: { recommendedModels }, second: {} },
-    },
-  ]);
+  invalidV2.push([{ providers: { first: { recommendedModels }, second: {} } }]);
 }
 for (const pricing of [
   { "vendor/model": { input: 1, output: 2 } },
@@ -479,43 +472,18 @@ it("strips v2 transport metadata while preserving transport-like provider identi
     },
     { ...validBundleV2.models[1], provider: "baseUrl" },
   ];
-  const bundle = sanitizeV2({
-    ...validBundleV2,
-    providers: { headers: {}, baseUrl: {} },
-    models,
-  });
+  const bundle = sanitizeV2({ ...validBundleV2, providers: { headers: {}, baseUrl: {} }, models });
   expect(Object.keys(bundle.providers)).toEqual(["headers", "baseUrl"]);
   expect(bundle.models.map((model) => model.provider)).toEqual(["headers", "baseUrl"]);
-  expect(bundle.models[0]).toEqual({
-    ...models[0],
-    compat: { supportsTools: true, nested: {} },
-  });
+  expect(bundle.models[0]).toEqual({ ...models[0], compat: { supportsTools: true, nested: {} } });
   expect(() => parseV2(bundle)).not.toThrow();
 });
 
-it("negotiates task metadata only on v3 and rejects malformed declarations per row", () => {
+it("rejects task metadata and unknown schema versions on the v2 wire", () => {
   const inference = { chat: false, decision: { protocol: "fixture", input: ["text"] } };
-  const native = { ...firstModel, inference, compat: { nested: transport } };
-  const candidate = {
-    ...validBundleV2,
-    schemaVersion: 3,
-    providers: { first: { recommendedModels: [native.id] } },
-    models: [native],
-  };
+  const candidate = { ...validBundleV2, models: [{ ...firstModel, inference }] };
   expect(() => parseV2(candidate)).toThrow();
-  expect(() => parseV2({ ...candidate, schemaVersion: 2 })).toThrow();
-  expect(parseV3(candidate).models[0]?.inference).toEqual(inference);
-  const warn = vi.fn();
-  const invalid = {
-    ...native,
-    id: "invalid",
-    inference: { ...inference, decision: { ...inference.decision, protocol: "invalid protocol" } },
-  };
-  const admitted = sanitizeV3({ ...candidate, models: [native, invalid] }, warn);
-  expect(admitted.models).toHaveLength(1);
-  expect(admitted.models[0]).toMatchObject({ inference, compat: { nested: {} } });
-  expect(admitted.providers.first?.recommendedModels).toEqual([]);
-  expect(warn).toHaveBeenCalledOnce();
+  expect(() => parseV2({ ...candidate, schemaVersion: 3 })).toThrow();
 });
 
 it("limits configured-origin discovery to owned runtime catalogs", () => {

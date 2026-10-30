@@ -3,7 +3,10 @@ import { listLiveAgentRunIds } from "../../../infra/agent-run-registry.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { listSwarmRunReservationIds } from "../swarm/swarm-scheduler.js";
-import { matchesSubagentChildSessionIdentity } from "./subagent-child-owner-match.js";
+import {
+  matchesSubagentChildSessionIdentity,
+  resolveRecordedRequester,
+} from "./subagent-child-owner-match.js";
 import {
   getRecordedSubagentChildAuthority,
   getSubagentChildSessionCandidates,
@@ -46,40 +49,52 @@ export type { SubagentRunRecord } from "./subagent-registry.types.js";
 export {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
+  isSubagentRunPausedForContinuation,
   resolveSubagentSessionStatus,
 } from "./subagent-session-metrics.js";
 
-/** Hydrate retained custody before resolving a private input's restart owner. */
-export async function getPrivateRequesterSettleRecoveryOwner(
-  requester: {
-    entry: { sessionId: string; lifecycleRevision?: string };
-    agentId: string;
-    canonicalKey: string;
-    storePath: string;
-    physicalStorePath?: string;
-  },
-  runId: string | undefined,
-) {
-  if (!runId) {
-    return undefined;
+export type SubagentRootRequester = {
+  sessionKey: string;
+  agentId?: string;
+  storePath?: string;
+};
+
+/** Shutdown follows the live registry's requester links, never persisted recovery claims. */
+export function resolveRootSubagentRequester(
+  sessionKey: string,
+  agentId?: string,
+): SubagentRootRequester {
+  let root: SubagentRootRequester = { sessionKey, agentId };
+  const visited = new Set<string>();
+  for (;;) {
+    const identity = JSON.stringify([root.agentId, root.sessionKey]);
+    if (visited.has(identity)) {
+      return root;
+    }
+    visited.add(identity);
+    const entry = latestSubagentRun(getSubagentRunsForChildSession(root.sessionKey, root.agentId));
+    if (!entry) {
+      return root;
+    }
+    root = {
+      sessionKey: entry.requesterSessionKey,
+      agentId: resolveRecordedRequester(entry),
+      storePath: entry.requesterStorePath,
+    };
   }
-  const { initSubagentRegistry } = await import("./subagent-registry.js");
-  await initSubagentRegistry();
-  const [
-    { prepareSqliteTargetFromSessionStorePath },
-    { resolvePrivateRequesterSettleRecoveryOwner },
-  ] = await Promise.all([
-    import("../../../config/sessions/session-sqlite-target.js"),
-    import("./subagent-registry-restart-recovery.js"),
-  ]);
-  const physical = await prepareSqliteTargetFromSessionStorePath(
-    requester.physicalStorePath ?? requester.storePath,
-    { agentId: requester.agentId },
-  );
-  return resolvePrivateRequesterSettleRecoveryOwner(
-    { ...requester, physicalStorePath: physical.path },
-    runId,
-  );
+}
+
+export function listLiveSubagentRootSessions(): SubagentRootRequester[] {
+  const roots = new Map<string, SubagentRootRequester>();
+  for (const runId of listLiveAgentRunIds()) {
+    const entry = subagentRuns.get(runId);
+    if (!entry || !isSubagentRunLive(entry)) {
+      continue;
+    }
+    const root = resolveRootSubagentRequester(entry.childSessionKey, entry.childAgentId);
+    roots.set(JSON.stringify([root.agentId, root.storePath, root.sessionKey]), root);
+  }
+  return [...roots.values()];
 }
 
 /** Resolve live owners through the existing aliases without scanning retained history. */

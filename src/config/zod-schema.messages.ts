@@ -44,6 +44,7 @@ export const QueueSchema = z
   .strictObject({
     mode: QueueModeSchema.optional(),
     allowCollaborativeSteering: z.boolean().optional(),
+    collaborativeSteeringFallback: z.enum(["queue", "reject"]).optional(),
     byChannel: QueueModeBySurfaceSchema,
     debounceMsByChannel: DebounceMsBySurfaceSchema,
     cap: z.number().int().positive().optional(),

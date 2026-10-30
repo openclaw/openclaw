@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createUpdateDoctorSectionTiming } from "../../infra/update-doctor-section-timing.js";
 import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import { getUpdateRunForProgressAsync } from "../../infra/update-run-reader.js";
@@ -7,10 +8,17 @@ import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { createUpdateRunRecordFixture } from "../../infra/update-run-record.test-support.js";
 import { UPDATE_RUN_HEARTBEAT_MS } from "../../infra/update-run-timeouts.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import type { CommandOptions } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliJsonFailure } from "../failure-output.js";
 import { createCliTtyMock } from "../test-runtime-capture.js";
-import { createUpdateProgress, prepareResult, printResult } from "./progress.js";
+import {
+  createUpdateDoctorProgress,
+  createUpdateProgress,
+  prepareResult,
+  printResult,
+} from "./progress.js";
 import { stepFixture } from "./update-command-fixtures.test-support.js";
 import {
   reportUpdateCommandPendingRecovery,
@@ -43,6 +51,60 @@ const recoveryStep = (overrides: Partial<UpdateRunResult["steps"][number]> = {})
     exitCode: 0,
     ...overrides,
   });
+
+describe("activation Doctor diagnostic display", () => {
+  afterEach(() => {
+    resetLogger();
+    vi.restoreAllMocks();
+  });
+
+  it.each(["pretty", "compact", "json"] as const)("uses %s stderr without JSON stdout", (style) => {
+    setLoggerOverride({ consoleLevel: "info", consoleStyle: style });
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const display = createUpdateDoctorProgress();
+    expect(display).toBeTypeOf("function");
+    display?.("Doctor: state schema");
+    expect(stderr).toHaveBeenCalledOnce();
+    const line = String(stderr.mock.calls[0]?.[0]);
+    if (style === "json") {
+      expect(JSON.parse(line)).toEqual({
+        time: expect.any(String),
+        level: "info",
+        message: "Doctor: state schema",
+      });
+    } else {
+      expect(line).toBe("Doctor: state schema\n");
+    }
+    expect(stdout).not.toHaveBeenCalled();
+  });
+
+  it.each(["warn", "error", "fatal", "silent"] as const)(
+    "respects %s filtering",
+    (consoleLevel) => {
+      setLoggerOverride({ consoleLevel });
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      expect(createUpdateDoctorProgress()).toBeUndefined();
+      expect(stderr).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps a synchronous stderr failure outside child cancellation", async () => {
+    setLoggerOverride({ consoleLevel: "info", consoleStyle: "compact" });
+    vi.spyOn(process.stderr, "write").mockImplementation(() => {
+      throw new Error("synchronous display failure");
+    });
+    const observer = vi.fn();
+    const timing = createUpdateDoctorSectionTiming({}, createUpdateDoctorProgress());
+    await expect(
+      timing.wrap(async (_argv: string[], options: CommandOptions) => {
+        options.onOutputChunk?.(Buffer.from("Doctor: state schema\n"), "stderr");
+        return { stderr: "captured diagnostic", exitCode: 0 };
+      })([], { onOutputChunk: observer }),
+    ).resolves.toEqual({ stderr: "captured diagnostic", exitCode: 0 });
+    expect(observer).toHaveBeenCalledOnce();
+  });
+});
 function observed(version: string, overrides: UpdateRunRecord["verification"] = {}) {
   return {
     serviceRunning: true,

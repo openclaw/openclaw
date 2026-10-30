@@ -2,6 +2,7 @@ import { addAbortListener } from "node:events";
 import path from "node:path";
 import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { sleepWithAbort } from "../infra/backoff.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { resolveAgentDatabaseIdleHandleTtlMs } from "../infra/sqlite-handle-lifecycle.js";
@@ -20,7 +21,10 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { notifyListeners } from "../shared/listeners.js";
 import * as creationClaims from "./agent-creation-claim.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
-import { captureAgentDatabaseAdmission } from "./agent-database-admission.js";
+import {
+  captureAgentDatabaseAdmission,
+  retainAgentDatabaseStartupWorker,
+} from "./agent-database-admission.js";
 import {
   assertAgentDeletionExecutionCleanupAccess,
   getAgentDeletionDatabaseCleanup,
@@ -184,6 +188,7 @@ export function createAgentDatabaseExecution(
           }
         },
         (error: unknown) => {
+          materializeErrorStack(error);
           cleanupFailure = { error };
           throw error;
         },
@@ -253,6 +258,9 @@ export function createAgentDatabaseExecution(
         reportTerminal,
         fileIdentity ? undefined : (creationIdentity ?? creatingTarget),
         creationClaim?.witness,
+        retainAgentDatabaseStartupWorker(agentId, { env: context.environment }, () =>
+          closeNative(created),
+        ),
       );
       generation = created;
     }

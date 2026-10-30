@@ -202,8 +202,6 @@ export const SessionRowSchema = Type.Object(
     providerReview: Type.Optional(SessionProviderReviewProjectionSchema),
     /** Exact run that produced the latest terminal lifecycle projection. */
     lastRunId: Type.Optional(NonEmptyString),
-    restartRecoveryStatus: Type.Optional(Type.Literal("tombstoned")),
-    restartRecoveryCycleId: Type.Optional(NonEmptyString),
     activeLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.String()),
     parentSessionKey: Type.Optional(Type.String()),

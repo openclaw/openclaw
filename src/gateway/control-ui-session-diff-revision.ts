@@ -211,6 +211,7 @@ export async function readCheckoutDiffRevision(
     ...installation.config,
   ];
   let hasExcludesFile = false;
+  let hasSparseCheckoutConfig = false;
   for (const file of configFiles) {
     if (!nodePath.isAbsolute(file)) {
       return unavailableDiffRevision(timing, "no-revision-config");
@@ -230,6 +231,7 @@ export async function readCheckoutDiffRevision(
       return unavailableDiffRevision(timing, "no-revision-config");
     }
     hasExcludesFile ||= /excludesfile\s*=/i.test(config);
+    hasSparseCheckoutConfig ||= /sparsecheckout/i.test(config);
   }
   if (hasExcludesFile) {
     // Git owns precedence, quoting and ~/ expansion; the external ignore file
@@ -283,6 +285,15 @@ export async function readCheckoutDiffRevision(
   const semanticBudget = remaining;
   const fingerprint = (() => {
     try {
+      // Sparse configuration can pair a large index with a small working tree.
+      // Otherwise skip likely oversized censuses; Git still establishes freshness.
+      if (
+        !summaryOnly &&
+        !hasSparseCheckoutConfig &&
+        (readStat(nodePath.join(gitDir, "index"))?.size ?? 0n) > 1_048_576n
+      ) {
+        return undefined;
+      }
       const files = [root];
       const pending = [root];
       let hasNestedRepository = false;

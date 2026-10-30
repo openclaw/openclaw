@@ -44,6 +44,15 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: NODE_WORKER_E2E_OWNER_GLOBS,
     sourceOnly: true,
   })),
+  // Busy fixture hubs stop the aggressive import walk at one hop. These
+  // consumers enter through the manifest fixture, so retain their second hop.
+  ...[
+    "test/scripts/ci-workflow-native-generated.test.ts",
+    "test/scripts/ci-workflow-ui-full.test.ts",
+  ].map((testFile): PolicyTestWatch => ({
+    testFile,
+    watchGlobs: ["test/scripts/ci-workflow.test-support.ts"],
+  })),
   {
     testFile: "test/scripts/ios-lifecycle-workflow.test.ts",
     watchGlobs: [
@@ -126,10 +135,11 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   // import graph reaches only the test-instance helper. Without owner watches
   // they ran on PRs only when that helper changed and drifted for days.
   {
-    testFile: "test/gateway-background-process-restart.e2e.test.ts",
+    testFile: "test/gateway-restart-resume.e2e.test.ts",
     watchGlobs: [
       "src/gateway/server-startup-observers.ts",
-      "src/agents/bash-tools.exec-notify.ts",
+      "src/gateway/session-restart-resume.ts",
+      "src/gateway/server-run-shutdown.ts",
       "src/infra/restart-intent{,-payload}.ts",
       "src/sessions/session-controller*.ts",
     ],
@@ -568,9 +578,9 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["src/agents/prepared-model-catalog.worker.ts"],
   })),
   {
-    testFile: "src/cli/claws-authoring-state.process.test.ts",
+    testFile: "src/cli/templates-authoring-state.process.test.ts",
     watchGlobs: [
-      "src/cli/claws-cli.project.ts",
+      "src/cli/templates-cli.project.ts",
       "src/cli/command-startup-policy.ts",
       "src/entry.ts",
     ],
@@ -1747,14 +1757,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   {
     testFile: "src/gateway/session-activity-summaries.test.ts",
     watchGlobs: ["src/config/sessions/session-cold-storage-worker.ts"],
-  },
-  {
-    testFile: "src/gateway/session-delivery-clock-jump.integration.test.ts",
-    watchGlobs: [
-      "src/infra/session-delivery-queue.worker.ts",
-      "src/state/openclaw-state.worker.ts",
-      "src/state/openclaw-state-worker-registry.ts",
-    ],
   },
   {
     testFile: "src/gateway/session-transcript-title-reader.test.ts",

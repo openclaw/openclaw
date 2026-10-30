@@ -206,9 +206,16 @@ class ArchiveSession {
           };
           // The FIFO has one request in flight on this private, paired worker port.
           const receive = (
-            response: SqliteArchiveSessionResponse | { type: "archive-temporary-file" },
+            response:
+              | SqliteArchiveSessionResponse
+              | { type: "archive-temporary-file" }
+              | { status: "memory" },
           ) => {
-            if (response.type === "archive-temporary-file" || connection.failure) {
+            if (
+              "status" in response ||
+              response.type === "archive-temporary-file" ||
+              connection.failure
+            ) {
               return;
             }
             cleanup();

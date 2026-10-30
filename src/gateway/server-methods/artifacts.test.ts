@@ -10,6 +10,7 @@ import { runWithSessionTranscriptReadFence } from "../../config/sessions/session
 import * as attachmentFrameBudget from "../../shared/chat-attachment-frame-budget.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import * as artifactBase64 from "../artifacts-base64.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import { artifactsHandlers } from "./artifacts.js";
 import {
@@ -223,106 +224,75 @@ describe("artifacts RPC handlers", () => {
     expect(expectArtifactList(listed.calls)).toEqual({ artifacts: [] });
   });
 
-  it("treats transcript non-base64 data URLs as unsupported downloads", async () => {
-    mockArtifactBlock(
-      4,
-      {
-        type: "input_image",
-        image_url: "data:text/plain,hello",
-        alt: "uploaded.txt",
-      },
-      "user",
-    );
-
-    const { calls } = await listArtifacts({ sessionKey: "agent:main:main" });
-    const artifacts = expectArtifactList(calls).artifacts;
+  it.each([
+    {
+      block: { type: "input_image", image_url: "data:text/plain,hello", alt: "uploaded.txt" },
+      role: "user",
+      expected: { type: "image", title: "uploaded.txt" },
+    },
+    ...["not-base64!", "AA=A", "A"].map((data) => ({
+      block: { type: "file", data, title: "bad.txt" },
+      role: "assistant",
+      expected: { title: "bad.txt" },
+    })),
+    {
+      block: { type: "file", title: "secret.txt", url: "file:///etc/passwd" },
+      role: "assistant",
+      expected: { title: "secret.txt" },
+    },
+  ])("rejects unsupported artifact payloads: $block", async ({ block, role, expected }) => {
+    mockArtifactBlock(4, block, role);
+    const artifacts = expectArtifactList(
+      (await listArtifacts({ sessionKey: "agent:main:main" })).calls,
+    ).artifacts;
     expect(artifacts).toHaveLength(1);
-    expectFields(artifacts?.[0], {
-      type: "image",
-      title: "uploaded.txt",
-    });
+    expectFields(artifacts?.[0], expected);
     expectFields(artifacts?.[0]?.download, { mode: "unsupported" });
     expect(artifacts?.[0]?.download).not.toHaveProperty("encoding", "base64");
-  });
-
-  it.each([
-    { type: "file", data: "not-base64!", title: "bad.txt" },
-    { type: "file", data: "AA=A", title: "bad.txt" },
-    { type: "file", data: "A", title: "bad.txt" },
-  ])("treats malformed artifact data as unsupported downloads: %j", async (block) => {
-    mockedMessages([
-      {
-        role: "assistant",
-        content: [block],
-        __openclaw: { seq: 6 },
-      },
-    ]);
-
-    const { calls } = await listArtifacts({ sessionKey: "agent:main:main" });
-    const artifacts = expectArtifactList(calls).artifacts;
-    expect(artifacts).toHaveLength(1);
-    expectFields(artifacts?.[0], {
-      title: "bad.txt",
-    });
-    expectFields(artifacts?.[0]?.download, { mode: "unsupported" });
     expect(artifacts?.[0]).not.toHaveProperty("data");
-  });
-
-  it.each([
-    { data: "JVBERi0", expected: "JVBERi0=", sizeBytes: 5 },
-    { data: " \t-_\r\n8=\n", expected: "+/8=", sizeBytes: 2 },
-  ])("normalizes downloadable artifact base64: %j", async ({ data, expected, sizeBytes }) => {
-    mockedMessages([
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "file",
-            data,
-            title: "report.pdf",
-          },
-        ],
-        __openclaw: { seq: 7 },
-      },
-    ]);
-
-    const listed = await listArtifacts({ sessionKey: "agent:main:main" });
-    const artifact = expectArtifactList(listed.calls).artifacts?.[0];
-    const artifactId = requireNonEmptyString(artifact?.id, "expected listed artifact id");
-    expectFields(artifact, {
-      title: "report.pdf",
-      sizeBytes,
-    });
-    expectFields(artifact?.download, { mode: "bytes" });
-
-    const download = await downloadArtifact({
-      sessionKey: "agent:main:main",
-      artifactId,
-    });
-    const downloadPayload = expectOkPayload(download.calls) as Record<string, unknown>;
-    expectFields(downloadPayload, {
-      encoding: "base64",
-      data: expected,
-    });
-  });
-
-  it("treats unsafe artifact URLs as unsupported downloads", async () => {
-    mockedMessages([
-      {
-        role: "assistant",
-        content: [{ type: "file", title: "secret.txt", url: "file:///etc/passwd" }],
-        __openclaw: { seq: 4 },
-      },
-    ]);
-
-    const { calls } = await listArtifacts({ sessionKey: "agent:main:main" });
-    const artifacts = expectArtifactList(calls).artifacts;
-    expectFields(artifacts?.[0], {
-      title: "secret.txt",
-    });
-    expectFields(artifacts?.[0]?.download, { mode: "unsupported" });
     expect(artifacts?.[0]).not.toHaveProperty("url");
   });
+
+  it.each([
+    { block: { data: "JVBERi0" }, expected: "JVBERi0=", sizeBytes: 5, inspected: ["JVBERi0"] },
+    { block: { data: " \t-_\r\n8=\n" }, expected: "+/8=", sizeBytes: 2, inspected: ["-_\r\n8="] },
+    ...[
+      { url: "data:text/plain;base64,Zmlyc3Q=", data: "bGF0ZXI=", inspected: ["Zmlyc3Q="] },
+      { data: "Zmlyc3Q=", inspected: ["Zmlyc3Q="] },
+      { data: "invalid!", inspected: ["invalid!", "Zmlyc3Q="] },
+    ].map(({ inspected, ...block }) => ({
+      block: { ...block, source: { data: "Zmlyc3Q=" }, content: "bGF0ZXI=" },
+      expected: "Zmlyc3Q=",
+      sizeBytes: 5,
+      inspected,
+    })),
+  ])(
+    "normalizes the first valid artifact payload without validating later aliases: $block",
+    async ({ block, expected, sizeBytes, inspected }) => {
+      mockArtifactBlock(7, { type: "file", title: "report.pdf", ...block });
+      const read = vi.spyOn(artifactBase64, "readArtifactBase64Payload");
+      try {
+        const query = { sessionKey: "agent:main:main" };
+        const artifact = expectArtifactList((await listArtifacts(query)).calls).artifacts?.[0];
+        const artifactId = requireNonEmptyString(artifact?.id, "expected listed artifact id");
+        expectFields(artifact, { title: "report.pdf", sizeBytes });
+        expectFields(artifact?.download, { mode: "bytes" });
+        expect(read.mock.calls.flatMap(([value]) => (value === undefined ? [] : [value]))).toEqual(
+          inspected,
+        );
+        read.mockClear();
+        expectFields(expectOkPayload((await downloadArtifact({ ...query, artifactId })).calls), {
+          encoding: "base64",
+          data: expected,
+        });
+        expect(read.mock.calls.flatMap(([value]) => (value === undefined ? [] : [value]))).toEqual(
+          inspected,
+        );
+      } finally {
+        read.mockRestore();
+      }
+    },
+  );
 
   it("returns typed errors for missing query scope and missing artifacts", async () => {
     const missingScope = await listArtifacts({}, { id: "5" });

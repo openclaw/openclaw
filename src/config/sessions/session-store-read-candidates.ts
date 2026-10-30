@@ -1,10 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import {
+  assertDatabasePathIdentity,
+  type DatabasePathIdentity,
   inspectDatabasePathIdentitySync,
   readDatabasePathIdentitySync,
 } from "../../infra/sqlite-worker-identity.js";
+import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import {
   matchesAgentDatabaseReadCandidatePath,
   type OpenClawAgentDatabaseReadCandidateResource,
@@ -47,7 +51,7 @@ export function resolveCapturedSessionStorePath(
 export type SessionStoreReadCandidate = Pick<
   OpenClawAgentDatabaseReadCandidateResource,
   "path" | "scope"
-> & { physicalPath: string };
+> & { physicalPath: string; identity?: DatabasePathIdentity };
 
 /** Capture exact candidates before discovery yields; sibling families have no file identity. */
 export function captureSessionStoreCandidateIdentities(
@@ -57,7 +61,7 @@ export function captureSessionStoreCandidateIdentities(
     candidates
       .filter((candidate) => !candidate.scope)
       .map((candidate) => {
-        const identity = readDatabasePathIdentitySync(candidate.path);
+        const identity = candidate.identity ?? readDatabasePathIdentitySync(candidate.path);
         return [identity.canonicalPath, identity] as const;
       }),
   );
@@ -170,6 +174,18 @@ export function assertSessionStoreReadCandidate(
   pathname: string,
   candidates: readonly SessionStoreReadCandidate[],
 ): string {
+  if (isMainThread && isArtifactPreservingStateRead()) {
+    const selected = candidates.find(
+      (candidate) =>
+        candidate.identity &&
+        (candidate.path === path.resolve(pathname) ||
+          candidate.physicalPath === path.resolve(pathname)),
+    );
+    if (!selected) {
+      throw new Error("Session inspection requires a worker-prepared physical candidate");
+    }
+    return selected.physicalPath;
+  }
   const physicalPath = resolveIdentityPathViaExistingAncestorSync(pathname);
   for (const candidate of candidates) {
     const matchesCapturedPhysicalPath =
@@ -189,6 +205,9 @@ export function assertSessionStoreReadCandidate(
         ? matchesSessionStoreReadCandidatePhysicalPath(candidate, physicalPath)
         : isSessionStoreReadCandidateCurrent(candidate))
     ) {
+      if (candidate.identity) {
+        assertDatabasePathIdentity(candidate.path, candidate.identity);
+      }
       return physicalPath;
     }
   }

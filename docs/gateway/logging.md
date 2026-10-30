@@ -335,6 +335,18 @@ including cache hits and worker queue/lock waits. Nested times overlap their par
 do not add them to the total. These are elapsed times, so event-loop stalls during
 awaited work also count. Unused or unreached sub-phases are absent.
 
+Profile preparation further reports `profileAccessIdentityMs` (Cloudflare Access
+verification or verified-assertion reuse), `profileGitHubMetadataMs` (GitHub public
+metadata lookup or reuse), `profileBindingReadMs` (the current local account/email
+or login binding), and `profileWriteMs` (canonical profile ensure/sync, which may
+be a no-op). `profileAuthorityMs` covers local authority acquisition;
+`profileProjectionMs` covers the resulting profile and recipient projection.
+These nested timings contain no identity, assertion, or profile contents. Warm
+account/email lookups use the existing profile catalog and its mutation settlement;
+standalone callers and login aliases retain worker reads. Expired external
+verification still blocks admission when roles or access policy require it.
+Optional avatar adoption remains after hello.
+
 The hello interval includes `snapshotMs` (presence, session defaults, update details,
 and cached health) and `helloDescriptorsMs` (method and event descriptors). These
 are nested wall times, not additional phases. Model catalog publication runs after

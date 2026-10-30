@@ -65,6 +65,7 @@ suite.define(() => {
                 sessionId: "uncached",
                 hasMore: true,
                 nextOffset: 40,
+                olderCursor: "older-cold-load",
                 totalMessages: 2040,
               },
             },
@@ -142,7 +143,9 @@ suite.define(() => {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         }
         await page.waitForFunction(() => (window.coldLoadSamples?.length ?? 0) >= 24);
-        expect(await gateway.getRequests("chat.history", { offset: 40 })).toHaveLength(0);
+        expect(
+          await gateway.getRequests("chat.history", { cursor: "older-cold-load" }),
+        ).toHaveLength(0);
         const frames = await page.evaluate(() => window.coldLoadSamples!);
         expect(frames[0]!.max).toBeGreaterThan(1000);
         expect(
@@ -228,7 +231,7 @@ suite.define(() => {
           subscriptionInitialHistory: false,
           authMode: "trusted-proxy",
           featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
-          heldMethods: ["connect", "sessions.messages.unsubscribe"],
+          heldMethods: ["connect"],
           sessions: [session],
           sessionInfo: session,
           historyMessages,
@@ -254,9 +257,6 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await gateway.waitForRequest("connect");
         await gateway.resolveDeferred("connect");
-        if ((await gateway.getRequests("sessions.messages.unsubscribe")).length > 0) {
-          await gateway.resolveDeferred("sessions.messages.unsubscribe");
-        }
         await page
           .getByText("Synthetic final reply: the report is ready.", { exact: true })
           .waitFor();
@@ -396,14 +396,16 @@ suite.define(() => {
         expect(titleWrites?.[0]?.title).toBe("expected-title");
         expect(titleWrites?.some((event) => event.title === "New session")).toBe(false);
         expectFrames(samples, session.label);
+        expect(await gateway.getRequests("sessions.messages.unsubscribe")).toHaveLength(0);
         await gateway.waitForRequest("connect");
         await page.evaluate(() => {
           window.coldLoadReconcileStart = window.coldLoadSamples?.length ?? 0;
           window.coldLoadTitleTrace?.mark("reconcile");
         });
-        await gateway.waitForRequest("sessions.messages.unsubscribe");
+        // Cached presentation must not send subscription traffic before hello admission.
+        expect(await gateway.getRequests("sessions.messages.subscribe")).toHaveLength(0);
+        expect(await gateway.getRequests("sessions.messages.unsubscribe")).toHaveLength(0);
         await gateway.resolveDeferred("connect");
-        await gateway.resolveDeferred("sessions.messages.unsubscribe");
         await gateway.waitForRequest("chat.startup");
         await gateway.waitForRequest("progressCard.get");
         await page.waitForFunction(() => {

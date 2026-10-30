@@ -127,6 +127,24 @@ function createClawPackBytes(duplicate: boolean) {
 }
 
 describe("collectPluginClawHubReleasePlan", () => {
+  it("plans native plugins with their repaired code-plugin family", async () => {
+    const nativeIds = ["acpx", "cloudflare", "diffs", "feishu"];
+    const rootDir = createTempPluginRepo({ extraExtensionIds: nativeIds });
+    const { fetchImpl } = createClawHubPlanFetch(
+      Object.fromEntries(
+        ["demo-plugin", ...nativeIds].map((id) => [`@openclaw/${id}`, "available"]),
+      ),
+    );
+    const plan = await collectPluginClawHubReleasePlan({ rootDir, fetchImpl });
+    expect(plan.candidates.map(({ packageName, family }) => ({ packageName, family }))).toEqual([
+      { packageName: "@openclaw/acpx", family: "code-plugin" },
+      { packageName: "@openclaw/cloudflare", family: "code-plugin" },
+      { packageName: "@openclaw/demo-plugin", family: "" },
+      { packageName: "@openclaw/diffs", family: "code-plugin" },
+      { packageName: "@openclaw/feishu", family: "code-plugin" },
+    ]);
+  });
+
   it.each([
     [{ state: "pending", stage: "checks", attemptId: "jd7abc_123-xyz" }, true],
     [{ state: "failed", recoverable: true, attemptId: "jd7abc_123-xyz" }, true],
@@ -413,9 +431,13 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
 });
 
 describe("plugin-clawhub-publish.sh", () => {
-  it.each(["--dry-run", "--pack"])(
-    "runs %s without publishing and preserves its output contract",
-    (mode) => {
+  it.each([
+    { mode: "--dry-run", family: "bundle-plugin" },
+    { mode: "--dry-run", family: "code-plugin" },
+    { mode: "--pack", family: "" },
+  ])(
+    "runs $mode with $family without publishing and preserves its output contract",
+    ({ mode, family }) => {
       const repoDir = createTempPluginRepo({ git: true });
       const binDir = join(repoDir, "bin");
       const markerPath = join(repoDir, "clawhub-invoked");
@@ -437,13 +459,13 @@ describe("plugin-clawhub-publish.sh", () => {
         publishOptions(
           repoDir,
           mode === "--dry-run"
-            ? { OPENCLAW_CLAWHUB_PACKAGE_FAMILY: "bundle-plugin" }
+            ? { OPENCLAW_CLAWHUB_PACKAGE_FAMILY: family }
             : { OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR: outputDir },
         ),
       );
       const invocations = readFileSync(markerPath, "utf8");
       if (mode === "--dry-run") {
-        expect(invocations).toContain("--family bundle-plugin");
+        expect(invocations).toContain(`--family ${family}`);
       } else {
         expect(output).toContain("Packed ClawPack:");
         expect(existsSync(join(outputDir, "openclaw-demo-plugin-2026.4.1.tgz"))).toBe(true);
@@ -548,6 +570,7 @@ fi
         ),
         publishOptions(repoDir, {
           ...env,
+          OPENCLAW_CLAWHUB_PACKAGE_FAMILY: "code-plugin",
           OPENCLAW_CLAWHUB_PUBLISH_ATTEMPTS: "8",
           OPENCLAW_CLAWHUB_PUBLISH_RETRY_DELAY_SECONDS: "60",
           OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0",
@@ -563,6 +586,7 @@ fi
       );
 
       const publishOutput = `${result.stdout}\n${result.stderr}`;
+      expect(readFileSync(markerPath, "utf8"), publishOutput).toContain("--family code-plugin");
       expect(existsSync(attemptsPath), publishOutput).toBe(true);
       expect(readFileSync(attemptsPath, "utf8"), publishOutput).toBe(String(attempts));
       expect(readFileSync(sleepsPath, "utf8")).toBe(sleeps.map((delay) => `${delay}\n`).join(""));

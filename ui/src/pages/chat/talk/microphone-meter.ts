@@ -9,29 +9,30 @@ const BAR_GAINS = [0.38, 0.62, 0.84, 1, 0.84, 0.62, 0.38];
 const BLEED = 8;
 const FRAME_INTERVAL = 1_000 / 30;
 
-// Sample CSS ease-in-out once; retain the old keyframe timing and stagger.
-const easeTable = Array.from({ length: 257 }, (_, index) => {
-  const x = index / 256;
-  let low = 0;
-  let high = 1;
-  for (let step = 0; step < 18; step += 1) {
-    const t = (low + high) / 2;
-    const point = 3 * (1 - t) ** 2 * t * 0.42 + 3 * (1 - t) * t ** 2 * 0.58 + t ** 3;
-    if (point < x) {
-      low = t;
-    } else {
-      high = t;
-    }
-  }
-  const t = (low + high) / 2;
-  return 3 * (1 - t) * t ** 2 + t ** 3;
-});
+// Chat boot and listening meters do not need the animation easing samples.
+let easeTable: number[] | undefined;
 const ease = (value: number) => {
+  const table = (easeTable ??= Array.from({ length: 257 }, (_, index) => {
+    const x = index / 256;
+    let low = 0;
+    let high = 1;
+    for (let step = 0; step < 18; step += 1) {
+      const t = (low + high) / 2;
+      const point = 3 * (1 - t) ** 2 * t * 0.42 + 3 * (1 - t) * t ** 2 * 0.58 + t ** 3;
+      if (point < x) {
+        low = t;
+      } else {
+        high = t;
+      }
+    }
+    const t = (low + high) / 2;
+    return 3 * (1 - t) * t ** 2 + t ** 3;
+  }));
   const position = Math.min(256, Math.max(0, value * 256));
   const left = Math.floor(position);
   // Position is clamped to the 257 samples constructed above.
-  const start = easeTable[left]!;
-  return start + (easeTable[Math.min(256, left + 1)]! - start) * (position - left);
+  const start = table[left]!;
+  return start + (table[Math.min(256, left + 1)]! - start) * (position - left);
 };
 
 /** One status/source lifetime; this owner never touches audio capture or playback. */

@@ -154,6 +154,9 @@ left untouched. Partial Git metadata or a linked worktree whose metadata is miss
 still blocks Git operations with checkout-preservation guidance; repair the original
 repository metadata before retrying.
 
+Commit timing follows your instructions and workspace conventions. A pending
+`BOOTSTRAP.md` does not require committing edits before you review them.
+
 Run these steps on the machine where the Gateway runs (that is where the workspace lives).
 
 <Steps>

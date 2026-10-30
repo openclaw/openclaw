@@ -112,3 +112,5 @@ A containerized Gateway creates sibling sandboxes through the host's local Podma
 - **Keep Podman access Gateway-only**: never mount the engine socket, connection material, or SSH identity into agent sandboxes. Arbitrary remote connections are unsupported; use the SSH backend instead.
 
 </Warning>
+
+Each running rootless Podman container holds a session keyring charged to the engine host user's kernel key quota. Busy hosts can exhaust the default quota and fail with `create keyring: Disk quota exceeded` even with free disk space. On the engine host, use `sudo sysctl -w kernel.keys.maxkeys=2000 kernel.keys.maxbytes=200000` and persist both values in a file under `/etc/sysctl.d/`. OpenClaw retries a quota failure once after stopping at most one least-recently-used inactive sandbox; active contexts, live or uncertain exec processes, and persistent Docker exec custody prevent reclamation. Stopping preserves the writable layer but ends processes and clears `tmpfs`; regular idle and age removal policies are unchanged.

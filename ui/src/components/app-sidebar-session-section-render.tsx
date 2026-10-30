@@ -17,7 +17,6 @@ import {
   rowDemandsVisibility,
   RowVisibilityReason,
   SIDEBAR_SESSION_PAGE_SIZE,
-  SIDEBAR_SESSION_SEE_LESS_THRESHOLD,
 } from "./app-sidebar-session-types.ts";
 import { createSidebarSessionWindow } from "./sidebar-session-window.tsx";
 import { Icon } from "./solid/icon.tsx";
@@ -35,7 +34,6 @@ export function renderSessionSection(params: {
     host,
     () => !(section().renderHeader && host().collapsedSessionSections.has(section().id)),
   );
-  const totalRowCount = createMemo(() => section().totalRowCount);
   const group = createMemo(() => section().category);
   // Created rows lead their section, so a create for this group takes that slot now.
   const pendingCreate = createMemo(() => {
@@ -192,13 +190,9 @@ export function renderSessionSection(params: {
   const labelText = createMemo(() =>
     renderHoverMarquee(label(), "sidebar-recent-sessions__label-text"),
   );
-  const showCount = createMemo(() => collapsed() && totalRowCount() > 0);
   const headerStatus = createMemo(() =>
-    showCount() || collapsedRunningDot() || collapsedAttentionDot() ? (
+    collapsedRunningDot() || collapsedAttentionDot() ? (
       <>
-        {showCount() ? (
-          <span class="sidebar-session-group-count">{totalRowCount()}</span>
-        ) : undefined}
         {collapsedRunningDot() ? (
           <span
             class="session-run-spinner sidebar-session-group-running"
@@ -441,9 +435,7 @@ function SessionPagination(params: {
     section = createMemo(() => params.section);
   const canShowMore = createMemo(() => section().visibleRowCount < section().totalRowCount);
   const canShowLess = createMemo(
-    () =>
-      section().visibleRowCount > SIDEBAR_SESSION_SEE_LESS_THRESHOLD &&
-      section().visibleRowCount > section().collapsedVisibleRowCount,
+    () => section().visibleRowCount > section().collapsedVisibleRowCount,
   );
   return (
     <Show when={canShowMore() || canShowLess()}>
@@ -470,7 +462,7 @@ function SessionPagination(params: {
             aria-label={t("usage.details.collapse")}
             onClick={() => {
               host().clearSessionSelection();
-              host().setVisibleSessionLimit(section().id, SIDEBAR_SESSION_PAGE_SIZE);
+              host().resetVisibleSessionLimit(section().id);
             }}
           >
             {t("usage.details.collapse")}

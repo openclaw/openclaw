@@ -123,11 +123,11 @@ it("keeps named glyphs visible and updates their kind without replacing the lead
   const { dom, session, setCurrent } = mountRow({ icon: "kanban" });
   const glyph = dom.query(".session-glyph");
   const art = dom.query<HTMLElement>(".session-glyph__icon .session-css-icon");
-  expect(art?.style.maskImage).toBe(sessionIconMask("kanban"));
+  expect(art?.style.maskImage).toBe(sessionIconMask("kanban", 1.75));
   setCurrent({ ...session, icon: "bot" });
   flush();
   expect(dom.query(".session-glyph__icon .session-css-icon")).toBe(art);
-  expect(art?.style.maskImage).toBe(sessionIconMask("bot"));
+  expect(art?.style.maskImage).toBe(sessionIconMask("bot", 1.75));
   expect(dom.query(".session-glyph")).toBe(glyph);
 });
 

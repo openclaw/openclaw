@@ -327,6 +327,12 @@ whole-card text fallbacks that must retain labels clipped by native limits. This
 shares core outbound rendering's fallback-text policy and removes the portable
 presentation fields after rendering. The callback may be synchronous or async.
 
+Before retaining a failure in a cache, owner field, or terminal abort signal, call
+`materializeErrorStack(error)` from `openclaw/plugin-sdk/error-runtime`. It formats
+lazy stacks throughout the nested error graph so captured frames can release
+request data, while preserving error identity, messages, codes, and causes.
+Formatting is best effort for immutable errors and custom stack accessors.
+
 Use `attachErrorDiagnostic(error, text)` from `openclaw/plugin-sdk/error-runtime`
 to attach supplemental operator diagnostics to a thrown error without changing
 its identity, message, or failure classification. Mask opaque credentials first;
@@ -425,6 +431,13 @@ Use `openclaw/plugin-sdk/pair-loop-guard-runtime` directly only for custom
 two-party event loops that do not go through the shared inbound reply runner.
 
 ### Bounded waits
+
+Use `performance.now()` for process-local elapsed measurements and budgets.
+Remaining time may be fractional; retain the operation's expiration, timeout
+normalization, and integer rounding policy. Never persist monotonic readings or
+send them as epoch timestamps. Persisted times, user-facing dates, and
+cross-process deadlines stay wall-clock values; translate an incoming epoch
+deadline into a local budget once when admitting the work.
 
 `openclaw/plugin-sdk/time-runtime` exports
 `raceWithTimeout(operation, timeoutMs, onTimeout, { ref?, signal?, onAbort? })`. Pass an existing

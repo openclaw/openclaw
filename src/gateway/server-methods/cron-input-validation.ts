@@ -7,7 +7,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AuthProfileAuthorization } from "../../agents/auth-profiles/authorization-contract.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
-import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
+import { captureScheduledOperatorSource } from "../../agents/operator-run-recovery-source.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-selection.js";
 import { attributeDelegatedSessionCreator } from "../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -347,7 +347,7 @@ export async function captureCronCreatorSession(
       loaded.canonicalKey,
     ) &&
     caller.client?.internal?.agentRuntimeIdentity
-      ? createRestartRecoveryOperatorSource({
+      ? captureScheduledOperatorSource({
           authority: operatorAuthority,
           entry: creatorSession,
           agentId: loaded.agentId,
@@ -502,25 +502,36 @@ export async function captureCronUpdatedInferenceBinding(
 export async function cronRunQueuesBehindCaller(params: {
   job: CronStoredJob;
   cfg: OpenClawConfig;
-  callerSessionKey?: string;
+  caller?: { agentId: string; sessionKey: string };
   resolveDefaultAgentId: () => string | undefined;
 }): Promise<boolean> {
-  const { job, cfg, callerSessionKey } = params;
-  if (!callerSessionKey) {
+  const { job, cfg, caller } = params;
+  if (!caller?.sessionKey) {
     return false;
   }
   if (job.sessionTarget === "main") {
     return true;
   }
   const agentId = normalizeAgentId(job.agentId ?? params.resolveDefaultAgentId());
-  const isCallerSession = (sessionKey: string | undefined) =>
-    sessionKey !== undefined &&
-    resolveCronAgentSessionKey({
-      sessionKey,
-      agentId,
-      mainKey: cfg.session?.mainKey,
-      cfg,
-    }) === callerSessionKey;
+  const isCallerSession = (sessionKey: string | undefined) => {
+    if (sessionKey === undefined) {
+      return false;
+    }
+    const targetKey =
+      cfg.session?.scope === "global" && sessionKey.trim() === "global"
+        ? "global"
+        : resolveCronAgentSessionKey({
+            sessionKey,
+            agentId,
+            mainKey: cfg.session?.mainKey,
+            cfg,
+          });
+    // The literal global key identifies separate conversations for different agents.
+    return (
+      targetKey === caller.sessionKey &&
+      (targetKey !== "global" || agentId === normalizeAgentId(caller.agentId))
+    );
+  };
   if (
     job.payload.kind === "agentTurn" &&
     isCallerSession(resolveCronSessionTargetSessionKey(job.sessionTarget))

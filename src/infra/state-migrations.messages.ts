@@ -109,6 +109,7 @@ export function createLegacyStateMigrationStepReceipt(
             : "skipped",
     changes: result.changes,
     warnings: result.warnings,
+    ...(result.leaseLoss ? { leaseLoss: result.leaseLoss } : {}),
     ...(result.deferred?.length ? { deferred: result.deferred } : {}),
     ...(result.sqliteFamilies?.length ? { sqliteFamilies: result.sqliteFamilies } : {}),
     ...(result.refusedAgentDatabasePaths?.length
@@ -146,7 +147,14 @@ export class DoctorStateMigrationRefusalError extends Error {
         .toSorted((left, right) => Number(isBlocked(left)) - Number(isBlocked(right)))
         .flatMap((receipt) =>
           receipt.refusal
-            ? [{ check: receipt.id, code: receipt.refusal.code, message: receipt.refusal.message }]
+            ? [
+                {
+                  check: receipt.id,
+                  code: receipt.refusal.code,
+                  message: receipt.refusal.message,
+                  leaseLoss: receipt.leaseLoss,
+                },
+              ]
             : [],
         ),
     );

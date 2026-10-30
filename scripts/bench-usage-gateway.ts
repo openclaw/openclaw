@@ -161,6 +161,10 @@ type Owner = {
   snapshot: () => Promise<Dispatch[]>;
   close: () => Promise<void>;
 };
+type PreparedFixture = {
+  start: () => Promise<Owner>;
+  close: () => Promise<void>;
+};
 type PageEntry = {
   owner: Owner;
   browser: Browser;
@@ -175,6 +179,7 @@ type PageEntry = {
   finishStructure?: () => Promise<unknown>;
 };
 const owners: Owner[] = [];
+const pendingFixtures = new Set<PreparedFixture>();
 type ColdFixture = {
   fixture: UsageBenchFixture;
   token: string;
@@ -258,7 +263,11 @@ async function inspectBuild(root: string) {
   return { root, source, entry, buildInfo, files, preloads, dist: await hashInstall(dist) };
 }
 
-async function start(root: string, role: Owner["role"], coldPair?: number): Promise<Owner> {
+async function prepareFixture(
+  root: string,
+  role: Owner["role"],
+  coldPair?: number,
+): Promise<PreparedFixture> {
   const retained = coldFixtures.get(role);
   if (retained) {
     assert(retained.available, `${role} previous Gateway must drain before restoration`);
@@ -422,130 +431,142 @@ async function start(root: string, role: Owner["role"], coldPair?: number): Prom
     }
     assert(fixture && claim);
     await writeFile(path.join(directory, "fixture.json"), JSON.stringify(fixture, null, 2));
-    const entry = buildRoots.get(root)!.entry;
-    const stopPreload = pathToFileURL(
-      path.join(root, "scripts/lib/gateway-bench-stop-preload.mjs"),
-    );
-    stopPreload.searchParams.set("parentPid", String(process.pid));
-    stopPreload.searchParams.set("entry", entry);
-    const command = buildGatewayBenchCommand(
-      buildGatewayBenchChildArgs(
-        entry,
-        claim.port,
-        [
-          "--expose-gc",
-          "--import",
-          path.join(root, "scripts/lib/gateway-bench-profile-preload.ts"),
-          "--import",
-          path.join(tooling, "lib/usage-bench-observer.mjs"),
-          "--import",
-          stopPreload.href,
-        ],
-        "token",
-      ),
-      { gatewayRuntime: process.execPath },
-    );
-    const started = Promise.withResolvers<ChildProcess>();
-    const startAt = performance.now();
-    run = runManagedCommand({
-      bin: command.command,
-      args: command.args,
-      cwd: root,
-      env: createGatewayBenchEnv(fixture.home, fixture.configPath, {
-        startupTrace: false,
-        caseEnv: {
-          OPENCLAW_STATE_DIR: fixture.stateDir,
-          TMPDIR: directory,
-          NODE_DISABLE_COMPILE_CACHE: "1",
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-        },
-      }),
-      stdio: ["ignore", "pipe", "pipe", "ipc"],
-      timeoutMs: MANAGED_CHILD_TIMEOUT_MS,
-      signal: abort.signal,
-      requireProcessTreeExit: true,
-      onReady(child) {
-        child.stdout!.on("data", output[0]!.write);
-        child.stderr!.on("data", output[1]!.write);
-        started.resolve(child);
-      },
-    });
-    void run.then(
-      (code) => started.reject(new Error(`${role} Gateway exited before start: ${code}`)),
-      started.reject,
-    );
-    const child = await started.promise;
-    const readiness = await waitForInitialProbe({
-      deadlineAt: startAt + 120_000,
-      startAt,
-      path: "/readyz",
-      port: claim.port,
-      isDone: () => child.exitCode !== null || child.signalCode !== null,
-    });
-    const readyAtMs = performance.now();
-    assert.equal(readiness.status, 200, `${role} built Gateway readiness`);
-    await writeFile(
-      path.join(directory, "startup.json"),
-      JSON.stringify(
-        {
-          seedMs,
-          startedAtMs: startAt,
-          readyAtMs,
-          readiness,
-          source: buildRoots.get(root)!.source,
-          pid: child.pid,
-        },
-        null,
-        2,
-      ),
-    );
-    const snapshot = () =>
-      new Promise<Dispatch[]>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          child.off("message", onMessage);
-          reject(new Error("Fixture snapshot timed out"));
-        }, 30_000);
-        const onMessage = (message: unknown) => {
-          if (
-            typeof message !== "object" ||
-            message === null ||
-            !("channel" in message) ||
-            message.channel !== "usage-volume-fixture" ||
-            !("action" in message) ||
-            message.action !== "snapshot"
-          ) {
-            return;
-          }
-          clearTimeout(timer);
-          child.off("message", onMessage);
-          resolve((message as Snapshot).dispatches);
-        };
-        child.on("message", onMessage);
-        child.send({ channel: "usage-volume-fixture", action: "snapshot" });
-      });
+    const ready: Ready = { ...fixture, port: claim.port, token };
     return {
-      role,
-      child,
-      deadlineAtMs: startAt + MANAGED_CHILD_TIMEOUT_MS,
-      ready: { ...fixture, port: claim.port, token },
-      snapshot,
-      async close() {
+      close: cleanup,
+      async start() {
+        activeStep = { role, phase: "startup" };
         try {
-          await stopGatewayGracefully(child, 30_000);
-          assert.equal(await run, 0, `${role} clean shutdown`);
-        } finally {
+          const entry = buildRoots.get(root)!.entry;
+          const stopPreload = pathToFileURL(
+            path.join(root, "scripts/lib/gateway-bench-stop-preload.mjs"),
+          );
+          stopPreload.searchParams.set("parentPid", String(process.pid));
+          stopPreload.searchParams.set("entry", entry);
+          const command = buildGatewayBenchCommand(
+            buildGatewayBenchChildArgs(
+              entry,
+              ready.port,
+              [
+                "--expose-gc",
+                "--import",
+                path.join(root, "scripts/lib/gateway-bench-profile-preload.ts"),
+                "--import",
+                path.join(tooling, "lib/usage-bench-observer.mjs"),
+                "--import",
+                stopPreload.href,
+              ],
+              "token",
+            ),
+            { gatewayRuntime: process.execPath },
+          );
+          const started = Promise.withResolvers<ChildProcess>();
+          const startAt = performance.now();
+          run = runManagedCommand({
+            bin: command.command,
+            args: command.args,
+            cwd: root,
+            env: createGatewayBenchEnv(ready.home, ready.configPath, {
+              startupTrace: false,
+              caseEnv: {
+                OPENCLAW_STATE_DIR: ready.stateDir,
+                TMPDIR: directory,
+                NODE_DISABLE_COMPILE_CACHE: "1",
+                OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+                OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+                OPENCLAW_SKIP_CANVAS_HOST: "1",
+                OPENCLAW_SKIP_CHANNELS: "1",
+                OPENCLAW_SKIP_CRON: "1",
+                OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+                OPENCLAW_SKIP_PROVIDERS: "1",
+              },
+            }),
+            stdio: ["ignore", "pipe", "pipe", "ipc"],
+            timeoutMs: MANAGED_CHILD_TIMEOUT_MS,
+            signal: abort.signal,
+            requireProcessTreeExit: true,
+            onReady(child) {
+              child.stdout!.on("data", output[0]!.write);
+              child.stderr!.on("data", output[1]!.write);
+              started.resolve(child);
+            },
+          });
+          void run.then(
+            (code) => started.reject(new Error(`${role} Gateway exited before start: ${code}`)),
+            started.reject,
+          );
+          const child = await started.promise;
+          const readiness = await waitForInitialProbe({
+            deadlineAt: startAt + 120_000,
+            startAt,
+            path: "/readyz",
+            port: ready.port,
+            isDone: () => child.exitCode !== null || child.signalCode !== null,
+          });
+          const readyAtMs = performance.now();
+          assert.equal(readiness.status, 200, `${role} built Gateway readiness`);
+          await writeFile(
+            path.join(directory, "startup.json"),
+            JSON.stringify(
+              {
+                seedMs,
+                startedAtMs: startAt,
+                readyAtMs,
+                readiness,
+                source: buildRoots.get(root)!.source,
+                pid: child.pid,
+              },
+              null,
+              2,
+            ),
+          );
+          const snapshot = () =>
+            new Promise<Dispatch[]>((resolve, reject) => {
+              const timer = setTimeout(() => {
+                child.off("message", onMessage);
+                reject(new Error("Fixture snapshot timed out"));
+              }, 30_000);
+              const onMessage = (message: unknown) => {
+                if (
+                  typeof message !== "object" ||
+                  message === null ||
+                  !("channel" in message) ||
+                  message.channel !== "usage-volume-fixture" ||
+                  !("action" in message) ||
+                  message.action !== "snapshot"
+                ) {
+                  return;
+                }
+                clearTimeout(timer);
+                child.off("message", onMessage);
+                resolve((message as Snapshot).dispatches);
+              };
+              child.on("message", onMessage);
+              child.send({ channel: "usage-volume-fixture", action: "snapshot" });
+            });
+          return {
+            role,
+            child,
+            deadlineAtMs: startAt + MANAGED_CHILD_TIMEOUT_MS,
+            ready,
+            snapshot,
+            async close() {
+              try {
+                await stopGatewayGracefully(child, 30_000);
+                assert.equal(await run, 0, `${role} clean shutdown`);
+              } finally {
+                await cleanup();
+              }
+              await writeFile(
+                path.join(directory, "close.json"),
+                JSON.stringify({ closedAtMs: performance.now() }),
+              );
+            },
+          };
+        } catch (error) {
           await cleanup();
+          throw error;
         }
-        await writeFile(
-          path.join(directory, "close.json"),
-          JSON.stringify({ closedAtMs: performance.now() }),
-        );
       },
     };
   } catch (error) {
@@ -1231,29 +1252,48 @@ try {
     assert.equal(Intl.DateTimeFormat().resolvedOptions().timeZone, "UTC");
     assert.equal(new Date().getTimezoneOffset(), 0);
   }
-  for (let coldPair = 0; coldPair < (coldPairs ?? 1); coldPair++) {
-    for (const [role, root] of [
-      ["base-a", base],
-      ["head", head],
-      ["base-b", base],
-    ] as const) {
-      activeStep = { role, phase: "startup" };
-      const owner = await start(root, role, coldPairs === undefined ? undefined : coldPair);
+  const roleRoots = [
+    ["base-a", base],
+    ["head", head],
+    ["base-b", base],
+  ] as const;
+  if (warmSetup) {
+    // Durable fixture writes must not consume an earlier Gateway's managed lifetime.
+    for (const [role, root] of roleRoots) {
+      activeStep = { role, phase: "seed" };
+      pendingFixtures.add(await prepareFixture(root, role));
+    }
+    for (const fixture of pendingFixtures) {
+      // start takes cleanup ownership even if launch or readiness fails.
+      pendingFixtures.delete(fixture);
+      const owner = await fixture.start();
       owners.push(owner);
-      if (values["cold-backend"]) {
-        try {
-          await prepareUsageBackend(
-            owner,
-            "cold",
-            coldPairs === undefined ? undefined : coldPair + 1,
-          );
-        } finally {
-          // Startup backfill must not overlap the next role's cold observation.
-          await owner.close();
-          owners.pop();
+      await prepareUsageBackend(owner, "warm");
+    }
+  } else {
+    for (let coldPair = 0; coldPair < (coldPairs ?? 1); coldPair++) {
+      for (const [role, root] of roleRoots) {
+        activeStep = { role, phase: "startup" };
+        const fixture = await prepareFixture(
+          root,
+          role,
+          coldPairs === undefined ? undefined : coldPair,
+        );
+        const owner = await fixture.start();
+        owners.push(owner);
+        if (values["cold-backend"]) {
+          try {
+            await prepareUsageBackend(
+              owner,
+              "cold",
+              coldPairs === undefined ? undefined : coldPair + 1,
+            );
+          } finally {
+            // Startup backfill must not overlap the next role's cold observation.
+            await owner.close();
+            owners.pop();
+          }
         }
-      } else if (warmSetup) {
-        await prepareUsageBackend(owner, "warm");
       }
     }
   }
@@ -1778,6 +1818,13 @@ try {
       await owner.close();
     } catch (error) {
       failures.push(`${owner.role} cleanup: ${errorText(error)}`);
+    }
+  }
+  for (const fixture of [...pendingFixtures].toReversed()) {
+    try {
+      await fixture.close();
+    } catch (error) {
+      failures.push(`Unstarted fixture cleanup: ${errorText(error)}`);
     }
   }
   for (const [role, retained] of coldFixtures) {

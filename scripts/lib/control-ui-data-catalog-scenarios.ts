@@ -1100,7 +1100,7 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
     ...fixture,
     id: "data-agent-tools-render",
     route: pathForAgentPanel("main", "overview"),
-    expected: "The tools tab displays 40 groups and 1,000 tool summaries with diagnostics.",
+    expected: "The tools tab displays 40 closed groups covering the 1,000-tool catalog.",
     rowSelector: ".agent-tool-card, .agent-tool-details",
     prepare: async (page) => {
       await page.getByRole("tab", { name: /^Tools/ }).waitFor();
@@ -1108,11 +1108,43 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
     run: async (page) => {
       await page.getByRole("tab", { name: /^Tools/ }).click();
       await countRows(page, ".agent-tools-group", toolGroupCount);
-      await countRows(page, ".agent-tool-card", toolGroupCount * toolsPerGroup);
+      await page
+        .locator(".agent-tools-group__title")
+        .last()
+        .filter({ hasText: "Data tools 0039" })
+        .waitFor();
+      await page.locator(".agent-tools-runtime-chip").nth(11).waitFor();
       await frames(page);
       return {
         fixtureAgents: agentCount,
         fixtureTools: toolGroupCount * toolsPerGroup,
+        mountedToolCards: await page.locator(".agent-tool-card").count(),
+        mountedDetailPanels: await page.locator(".agent-tool-details").count(),
+      };
+    },
+  },
+  {
+    ...fixture,
+    id: "data-agent-tool-group",
+    route: pathForAgentPanel("main", "tools"),
+    expected: "Opening a group displays its 25 tool summaries and controls.",
+    rowSelector: ".agent-tool-card",
+    prepare: async (page) => {
+      await countRows(page, ".agent-tools-group", toolGroupCount);
+    },
+    run: async (page) => {
+      const group = page.locator(".agent-tools-group").first();
+      await group.locator(":scope > summary").click();
+      await countRows(page, ".agent-tools-group:first-child .agent-tool-card", toolsPerGroup);
+      await group
+        .locator(".agent-tool-title")
+        .first()
+        .getByText("data_tool_0000", { exact: true })
+        .waitFor();
+      await frames(page);
+      return {
+        fixtureTools: toolGroupCount * toolsPerGroup,
+        mountedToolCards: await page.locator(".agent-tool-card").count(),
         mountedDetailPanels: await page.locator(".agent-tool-details").count(),
       };
     },
@@ -1124,8 +1156,9 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
     expected: "Opening a tool displays its current session diagnostics and policy sources.",
     rowSelector: ".agent-tool-details",
     prepare: async (page) => {
-      await countRows(page, ".agent-tool-card", toolGroupCount * toolsPerGroup);
+      await countRows(page, ".agent-tools-group", toolGroupCount);
       await page.locator(".agent-tools-group > summary").first().click();
+      await countRows(page, ".agent-tools-group:first-child .agent-tool-card", toolsPerGroup);
     },
     run: async (page) => {
       const tool = page.locator(".agent-tool-card").first();

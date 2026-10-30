@@ -117,3 +117,31 @@ it("retains PR artwork when a receipt confirms the displayed count", () => {
   flush();
   expect(badge(container, "pull-request")?.textContent).toBe("2");
 });
+
+it("keeps the two most urgent badges in reading order and caps counts", () => {
+  const container = renderBadges({
+    incognito: true,
+    ...pr("open", 1, 2),
+    outboxAttentionCount: 140,
+    hasComposerDraft: true,
+  });
+  expect(
+    [...container.querySelectorAll(".session-row-badge")].map((element) => element.className),
+  ).toEqual([
+    "session-row-badge session-row-badge--attention",
+    "session-row-badge session-row-badge--draft",
+  ]);
+  expect(badge(container, "attention")?.textContent).toBe("99+");
+  expect(badge(container, "attention")?.getAttribute("aria-label")).toBe(
+    "140 messages need attention",
+  );
+});
+
+it("shows cloud placement only when it needs attention", () => {
+  expect(badge(renderBadges({ placementState: "active" }), "cloud")).toBeNull();
+  expect(badge(renderBadges({ placementState: "provisioning" }), "cloud")).toBeNull();
+  expect(badge(renderBadges({ placementState: "failed" }), "cloud")).not.toBeNull();
+  expect(
+    badge(renderBadges({ placementState: "active", diskSpaceStatus: "warning" }), "cloud"),
+  ).not.toBeNull();
+});

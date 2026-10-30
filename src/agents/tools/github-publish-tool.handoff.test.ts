@@ -4,7 +4,10 @@ import type { SessionGitHubPublicationResult } from "../../../packages/gateway-p
 import { withinTest } from "../../../test/helpers/promise.js";
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
 import * as events from "../../auto-reply/reply/session-event-handoff.js";
-import { readSessionEventTargetOperatorAuthority } from "../../auto-reply/reply/session-event-target.js";
+import {
+  readSessionEventTargetOperatorAuthority,
+  readSessionEventTargetOwnerContinuation,
+} from "../../auto-reply/reply/session-event-target.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -201,7 +204,7 @@ it.for([
           [
             ["sessions.github.action", "operator.sessions.write", "sessions", endpoint],
             ["sessions.github.publish", "operator.sessions.write", "sessions", publish],
-            ["tools.effective", "operator.read", "tools", forbidden],
+            ["tools.catalog", "operator.read", "tools", forbidden],
             ["plugins.reload", "operator.admin", "plugins", forbidden],
           ],
           () => config,
@@ -229,7 +232,7 @@ it.for([
               ).toMatchObject({ status: "requested", requestId: "synthetic-publication" });
               await expect(
                 callAgentToolGatewayRequest({
-                  method: "tools.effective",
+                  method: "tools.catalog",
                   params: scope,
                 }),
               ).rejects.toThrow("operator.read");
@@ -283,8 +286,8 @@ it.for([
             const authority =
               options.expectedTarget &&
               readSessionEventTargetOperatorAuthority(options.expectedTarget);
-            expect(authority?.profileId).toBe(profileId);
-            expect(authority?.scopes).toEqual(scopes);
+            expect(authority).toMatchObject({ profileId, scopes });
+            expect(readSessionEventTargetOwnerContinuation(options.expectedTarget!)).toBe(false);
             expect(text.length).toBeLessThan(4096);
             expect(
               getSessionControllerEntryForOperation(operation).successorBarrier,

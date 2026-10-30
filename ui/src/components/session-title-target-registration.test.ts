@@ -4,7 +4,7 @@ import { expect, it, vi } from "vitest";
 import {
   installSessionTitleRegistrar,
   registerSessionTitleTarget,
-} from "./session-title-target-registration.ts";
+} from "./markdown-link-display.ts";
 
 it("keeps mounted targets until bootstrap and releases cancelled targets", async () => {
   const removed = document.createElement("a");

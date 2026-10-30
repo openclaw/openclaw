@@ -1,4 +1,5 @@
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import type {
   TranscriptStartRequest,
   TranscriptsStartResult,
@@ -328,9 +329,9 @@ export class MeetingSessionRuntime<
       Math.max(0, this.options.waitForInCallMs),
       Math.max(0, this.options.joinTimeoutMs),
     );
-    const deadline = Date.now() + waitMs;
-    while (Date.now() < deadline) {
-      await sleep(Math.min(250, Math.max(0, deadline - Date.now())));
+    const deadline = monotonicNow() + waitMs;
+    while (monotonicNow() < deadline) {
+      await sleep(Math.min(250, Math.max(0, deadline - monotonicNow())));
       result = await this.speak(session.id, instructions);
       if (result.spoken) {
         return true;

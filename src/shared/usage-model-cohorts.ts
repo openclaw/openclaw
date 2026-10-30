@@ -203,9 +203,6 @@ export function buildUsageModelCohortReport(
     overview.tableTotals.tokens += source.tableTotals.tokens;
     overview.tableTotals.cost += source.tableTotals.cost;
     overview.tableTotals.errors += source.tableTotals.errors;
-    if (source.tableTotals.usageReport) {
-      overview.tableTotals.usageReport = source.tableTotals.usageReport;
-    }
     overview.durationMs += source.durationMs;
     overview.durationCount += source.durationCount;
     overview.hasTimelineData ||= source.hasTimelineData;
@@ -255,7 +252,6 @@ export function buildUsageModelCohortReport(
   );
   /* oxlint-enable unicorn/no-array-sort */
   overview.selectedSessionCount = aggregates.sessionCount ?? 0;
-  overview.usageReport = accumulator.totals.usageReport;
   overview.unfilteredSessionCount = query.unfilteredSessionCount;
   overview.filterOptions = query.filterOptions;
   return {

@@ -174,39 +174,6 @@ export function hasRegisteredChatRunForSessionKey(
   );
 }
 
-/** Returns true when either requested or canonical session key has a visible active run. */
-export function hasTrackedActiveSessionRun(
-  params: SessionRuntimeScope & {
-    requestedKey: string;
-    canonicalKey: string;
-    agentId?: string;
-    defaultAgentId?: string;
-  },
-): boolean {
-  const activeRuns = collectTrackedActiveSessionRuns(
-    false,
-    undefined,
-    undefined,
-    captureGatewayScopeMatcher(params.resolveGatewayContext),
-  );
-  return activeRuns.some(
-    (active) =>
-      active.storePaths.includes(params.storePath) &&
-      (isTrackedActiveSessionRunForKey(
-        active,
-        params.canonicalKey,
-        params.agentId,
-        params.defaultAgentId,
-      ) ||
-        isTrackedActiveSessionRunForKey(
-          active,
-          params.requestedKey,
-          params.agentId,
-          params.defaultAgentId,
-        )),
-  );
-}
-
 export function resolveVisibleActiveSessionRunState(
   params: VisibleActiveSessionRunSelection & {
     trackedActiveRuns?: readonly TrackedActiveSessionRun[];

@@ -54,12 +54,16 @@ import { EmojiMenu } from "../chat/components/chat-composer-emoji.tsx";
 import type { HumanMentionMenuHost } from "../chat/components/chat-composer-mention-menu-state.ts";
 import { HumanMentionMenuView } from "../chat/components/chat-composer-mention-menu.tsx";
 import { resolveComposerMenus } from "../chat/components/chat-composer-menus.ts";
-import type { ChatComposerCapabilityMenuProps } from "../chat/components/chat-composer-plus-menu.types.ts";
+import type { ChatComposerCapabilityMenuSource } from "../chat/components/chat-composer-plus-menu.types.ts";
 import { SelectedHumanMentions } from "../chat/components/chat-composer-selected-mentions.tsx";
 import type { SkillMenuHost } from "../chat/components/chat-composer-skill-menu-state.ts";
 import { SkillMenu } from "../chat/components/chat-composer-skill-menu.tsx";
 import type { SlashMenuHost } from "../chat/components/chat-composer-slash-menu-state.ts";
 import { SlashMenu } from "../chat/components/chat-composer-slash-menu.tsx";
+import {
+  ComposerWidthEdge,
+  prepareComposerWidthEdge,
+} from "../chat/components/chat-composer-width-ref.tsx";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import {
@@ -102,11 +106,13 @@ export type NewSessionComposerOptions = {
   nativeTerminal?: boolean;
   onUnsupportedAttachment?: () => void;
   submitting: boolean;
+  chatMessageMaxWidth?: string | null;
+  onComposerWidthChange?: (value: string | undefined) => void;
   voiceControl?: JSX.Element;
   messageLocked?: boolean;
   visibility?: NewSessionVisibility;
   draftAvailable?: boolean;
-  capabilityMenu?: ChatComposerCapabilityMenuProps;
+  capabilityMenu?: ChatComposerCapabilityMenuSource;
   toolOverrides?: SessionToolOverrides | null;
   onInput: (message: string, mentions?: readonly HumanMention[]) => void;
   onOpenImage?: (item: ImageLightboxItem) => void;
@@ -426,6 +432,8 @@ export function NewSessionComposer(props: {
     <div
       ref={footerControl}
       class="agent-chat__composer-shell new-session-page__composer"
+      onPointerEnter={prepareComposerWidthEdge}
+      onKeyDown={prepareComposerWidthEdge}
       onDrop={(event) => {
         if (options().nativeTerminal && event.dataTransfer?.files.length) {
           event.preventDefault();
@@ -643,7 +651,12 @@ export function NewSessionComposer(props: {
               />
             </Show>
             {options().permissionControl}
-            <Show when={!options().nativeTerminal && options().draftAvailable}>
+            <Show
+              when={
+                !options().nativeTerminal &&
+                (options().draftAvailable || options().visibility === "draft")
+              }
+            >
               <NewSessionDraftVisibility options={options()} />
             </Show>
             <Show when={!options().nativeTerminal}>
@@ -688,6 +701,7 @@ export function NewSessionComposer(props: {
           </div>
         </div>
       </div>
+      <ComposerWidthEdge options={options} />
     </div>
   );
 }

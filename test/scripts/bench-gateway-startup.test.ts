@@ -699,7 +699,7 @@ server.listen(port, "127.0.0.1", () => {
     { fast: 5, slow: 9, errors: 0, valid: false },
     { fast: 5, slow: 11, errors: 1, valid: false },
   ])(
-    "enforces independent slow-agent recovery (fast=$fast, slow=$slow, errors=$errors)",
+    "enforces independent slow-agent database admission (fast=$fast, slow=$slow, errors=$errors)",
     ({ fast, slow, errors, valid }) => {
       const result = testing.summarizeCase(
         { config: {}, id: "slowAgentDatabase", name: "slow agent database" },

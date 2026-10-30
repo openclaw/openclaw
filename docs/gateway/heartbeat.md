@@ -63,7 +63,9 @@ workspace and state directory are on different filesystems, Doctor also keeps
 the original in a private `HEARTBEAT.md.doctor-archived.*` directory beside its
 former location. Writes through an already-open file descriptor remain
 recoverable there. A file recreated after completed migration is retained and
-reported; it does not overwrite the operator-owned job.
+reported by path without reading its contents or following a symlink, even when
+it could not safely be imported. It does not block Doctor or update admission
+and does not overwrite the operator-owned job.
 
 If existing scratch differs from `HEARTBEAT.md` and was not imported from that
 file, Doctor preserves the scratch and original file, prints a notice, and

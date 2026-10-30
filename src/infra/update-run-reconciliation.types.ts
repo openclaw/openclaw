@@ -5,10 +5,14 @@ type UpdateRunRecord = z.infer<typeof UpdateRunRecordSchema>;
 
 export type UpdateRunReconciliationInput = {
   explicit?: boolean;
+  /** Set only by the reconciliation owner while live repair custody is held. */
+  exclusiveRepair?: true;
   runIds?: readonly string[];
   excludeRunId?: string;
   requireAllActive?: boolean;
   legacyOnly?: boolean;
+  /** Status may heal proven handoff death as well as expired legacy admission. */
+  statusOnly?: boolean;
   /** Lightweight repair must still exclude unfinished post-core work at commit. */
   repairHistorySinceMs?: number;
 };

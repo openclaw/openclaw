@@ -18,6 +18,7 @@ import type { PreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-lo
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { acquireSqliteSnapshotReadToken } from "../infra/sqlite-snapshot-staging.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
+import type { SqliteSchemaErrorContext } from "../infra/sqlite-user-version.js";
 import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
 import {
   assertExistingDatabaseIdentity,
@@ -62,6 +63,11 @@ export type OpenClawStateReadConnection = {
   };
   close: (retain?: boolean) => boolean;
 };
+
+type StateReadSource =
+  | string
+  | PreparedSqliteReadOnlyLocation
+  | { location: string; connection: OpenClawStateReadConnection };
 
 type RetainedReader = {
   connection: OpenClawStateReadConnection;
@@ -200,19 +206,22 @@ export function assertStateReadSchema(
   database: EngineConnection,
   pathname: string,
   integrityPolicy?: OpenClawStateIntegrityPolicy,
+  context: SqliteSchemaErrorContext = "runtime",
 ): void {
   assertStateReadSchemaForPolicy(
     database,
     pathname,
     isExistingOpenClawStateSchema(pathname, database),
     integrityPolicy,
+    undefined,
+    context,
   );
 }
 
 export function withOpenClawStateReadOnlyLocation<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   pathname: string,
-  source: string | PreparedSqliteReadOnlyLocation,
+  source: StateReadSource,
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
   expectedIdentity?: string,
   snapshotRoot?: string,
@@ -239,17 +248,22 @@ export function withOpenClawStateReadOnlyLocation<T>(
 export function readOpenClawStateReadOnlyLocation<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   pathname: string,
-  source: string | PreparedSqliteReadOnlyLocation,
+  source: StateReadSource,
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
   expectedIdentity?: string,
   snapshotRoot?: string,
   retainConnection = false,
   readContentVersionRow?: StateSchemaContentVersionRowReader,
 ): OpenClawStateSettledRead<T> {
-  const opening =
-    retainConnection && source === pathname && !snapshotRoot
+  const retained =
+    typeof source !== "string" && "connection" in source ? source.connection : undefined;
+  const ownedSource =
+    typeof source !== "string" && "connection" in source ? source.location : source;
+  const opening = retained
+    ? ({ status: "available", value: retained } as const)
+    : retainConnection && ownedSource === pathname && !snapshotRoot
       ? borrowStateReadConnection(pathname, expectedIdentity)
-      : openStateReadConnectionResult(pathname, source, expectedIdentity, snapshotRoot, true);
+      : openStateReadConnectionResult(pathname, ownedSource, expectedIdentity, snapshotRoot, true);
   if (opening.status === "unavailable") {
     return opening;
   }
@@ -263,18 +277,20 @@ export function readOpenClawStateReadOnlyLocation<T>(
     }
     // Scope and path policy are authority, not ordinary schema SQL failure.
     const existingSchema = isExistingOpenClawStateSchema(pathname, opened.database.db);
+    const context = openStateSchemaReadAdmission ? "doctor-maintenance" : "runtime";
     try {
       let operationStarted = false;
       const snapshot = postgresStateReadSnapshot.getStore();
       const read = () =>
         runSqliteReadOperationSync(opened.database.db, () => {
-          admitStateSchemaFacts(opened.database.db, pathname);
+          admitStateSchemaFacts(opened.database.db, pathname, context);
           assertStateReadSchemaForPolicy(
             opened.database.db,
             pathname,
             existingSchema,
             undefined,
             readContentVersionRow,
+            context,
           );
           operationStarted = true;
           return operation(opened.database);
@@ -331,6 +347,7 @@ export function readOpenClawStateReadOnlyLocation<T>(
       result?.status === "available" &&
       !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources;
     if (
+      !retained &&
       !opened.close(
         errors.length === 0 &&
           result?.status === "available" &&

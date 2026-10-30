@@ -489,6 +489,25 @@ describe("AppSidebar session attention", () => {
     }
   });
 
+  it("keeps a parent approval visible while an older child question leads the row", async () => {
+    const parentKey = "agent:main:parent";
+    const childKey = "agent:main:subagent:question";
+    const gatewayHarness = questionsGateway();
+    const { sidebar, dom } = await mountAttention(
+      [{ key: parentKey, kind: "direct", updatedAt: 1, childSessions: [childKey] }, peerRow(0)],
+      gatewayHarness.gateway,
+      null,
+      [approvalRequest(parentKey, { createdAtMs: Date.now() })],
+    );
+    publishQuestion(gatewayHarness, "question-child", childKey, { createdAtMs: Date.now() - 1000 });
+    await settleLitElement(sidebar);
+    const row = dom.query(`[data-session-key="${parentKey}"]`)!;
+    expect(row.querySelector('[data-session-attention="question"]')).not.toBeNull();
+    expect(row.querySelector(".session-row-badge--approval")?.getAttribute("aria-label")).toBe(
+      "Approval needed",
+    );
+  });
+
   it("bubbles descendant attention and keeps its branch visible past the child cap", async () => {
     const parentKey = "agent:main:parent";
     const childKeys = Array.from(

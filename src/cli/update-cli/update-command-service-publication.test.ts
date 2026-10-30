@@ -136,6 +136,11 @@ it("keeps Task Scheduler timeout details in the source-build failure report", ()
 it("preserves the serving installation and the profiled doctor command", () =>
   withRuntimePublicationFixture(async ({ root, env, service }) => {
     const profile = "stale-profile";
+    const installedProfile = "serving-profile";
+    vi.mocked(service.readCommand).mockResolvedValue({
+      programArguments: serviceCommand(root),
+      environment: { OPENCLAW_PROFILE: installedProfile },
+    });
     vi.mocked(service.readRuntime).mockResolvedValue({
       status: "running",
       pid: 23456,
@@ -159,7 +164,7 @@ it("preserves the serving installation and the profiled doctor command", () =>
     expect(
       vi
         .mocked(service.readRuntime)
-        .mock.calls.some(([observedEnv]) => observedEnv?.OPENCLAW_PROFILE === profile),
+        .mock.calls.some(([observedEnv]) => observedEnv?.OPENCLAW_PROFILE === installedProfile),
     ).toBe(true);
     expect(await fs.readFile(entry, "utf8")).toBe(before);
   }));

@@ -208,33 +208,13 @@ async function acknowledgeUnreadHiddenRuns(
       runs.set(run.key, run);
     }
   }
-  await Promise.all(
-    [...runs.values()].map(async (run) => {
-      if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-        return;
-      }
-      const agentId = resolveUiSessionRowAgentId(run, scope.selectedAgentId);
-      const expectedSessionId = run.sessionId ? { expectedSessionId: run.sessionId } : {};
-      const access = readSessionMethodAccess(scope.gateway.snapshot, {
-        method: "sessions.patch",
-        params: { key: run.key, unread: false, agentId, ...expectedSessionId },
-        sessionScope: true,
-        session: run,
-      });
-      // Runs the caller cannot patch keep their state without a second error.
-      if (!access.allowed) {
-        return;
-      }
-      // The capability publishes request failures once.
-      await scope.sessions
-        .patch(
-          run.key,
-          { unread: false },
-          { agentId, expectedMarkedUnreadAt: null, ...expectedSessionId },
-        )
-        .catch(() => undefined);
-    }),
-  );
+  if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
+    return;
+  }
+  await scope.sessions.acknowledgeHiddenRuns([...runs.values()], {
+    agentId: scope.selectedAgentId ?? undefined,
+    publishErrors: true,
+  });
 }
 
 // A child may temporarily render as a root while its parent is archived.
@@ -496,7 +476,12 @@ export async function forkSession(
     agentId,
   };
   if (
-    !requireSessionMutationAccess(deps, scope, { method: "sessions.create", params: createParams })
+    !requireSessionMutationAccess(deps, scope, {
+      method: "sessions.create",
+      params: createParams,
+      sessionScope: true,
+      session,
+    })
   ) {
     return;
   }

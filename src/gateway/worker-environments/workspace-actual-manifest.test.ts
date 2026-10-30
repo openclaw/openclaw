@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { addAbortListener } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -89,7 +90,7 @@ it.each(["before traversal", "during traversal", "root resolution", "safe-root s
   },
 );
 
-it.for(["metadata", "files"] as const)(
+it.for(["metadata", "walk metadata", "files"] as const)(
   "bounds pending promise resources while %s operations are blocked",
   async (phase, { signal }) => {
     const { root, files, capture } = await inventoryFixture(512);
@@ -105,7 +106,7 @@ it.for(["metadata", "files"] as const)(
         await gate.promise;
       }
     };
-    if (phase === "metadata") {
+    if (phase !== "files") {
       const lstat = fs.lstat.bind(fs);
       vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
         await pause(args[0]);
@@ -129,7 +130,7 @@ it.for(["metadata", "files"] as const)(
         pendingPromises.delete(id);
       },
     }).enable();
-    const scan = capture({ includePaths: new Set(files) });
+    const scan = capture(phase === "walk metadata" ? {} : { includePaths: new Set(files) });
     const cancelWait = addAbortListener(signal, () => allStarted.reject(signal.reason));
     try {
       await Promise.race([allStarted.promise, scan]);
@@ -213,11 +214,12 @@ const metadataFailures = [
   "metadata error",
   "caller abort",
   "abort before metadata error",
+  "walk metadata error",
   "walk abort before metadata error",
 ] as const;
 it.each(metadataFailures)("settles metadata after %s", async (failure) => {
-  const walk = failure === "walk abort before metadata error";
-  const admitted = walk ? 1 : 4;
+  const walk = failure.startsWith("walk ");
+  const metadataError = failure === "metadata error" || failure === "walk metadata error";
   const { root, files, capture } = await inventoryFixture(9);
   const lstat = fs.lstat.bind(fs);
   const gates: Array<ReturnType<typeof createDeferred<void>>> = [];
@@ -251,19 +253,17 @@ it.each(metadataFailures)("settles metadata after %s", async (failure) => {
   });
   const settled = observeSettlement(scan);
   try {
-    await vi.waitFor(() => expect(gates).toHaveLength(admitted));
-    if (failure !== "metadata error") {
+    await vi.waitFor(() => expect(gates).toHaveLength(4));
+    if (!metadataError) {
       controller.abort(abortError);
     }
     gates[0]!.resolve();
     await failed.promise;
     expect(settled()).toBe(false);
-    expect(started).toBe(admitted);
-    if (failure === "metadata error") {
+    expect(started).toBe(4);
+    if (metadataError) {
       // Let the rejected operation reach the scan owner before the later cancellation.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await setImmediate();
       controller.abort(abortError);
     }
   } finally {
@@ -273,8 +273,8 @@ it.each(metadataFailures)("settles metadata after %s", async (failure) => {
     }
     await Promise.allSettled([scan]);
   }
-  await expect(scan).rejects.toBe(failure === "metadata error" ? error : abortError);
-  expect(started).toBe(admitted);
+  await expect(scan).rejects.toBe(metadataError ? error : abortError);
+  expect(started).toBe(4);
   expect(opened).not.toHaveBeenCalled();
 });
 

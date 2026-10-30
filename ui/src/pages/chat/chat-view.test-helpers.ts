@@ -70,6 +70,10 @@ export function requireElement(container: Element, selector: string, label: stri
   return expectDefined(container.querySelector(selector), label);
 }
 
+export function waitForElement(container: Element, selector: string, label = selector) {
+  return waitForSolid(() => requireElement(container, selector, label));
+}
+
 export function getComposerTextarea(container: Element): HTMLTextAreaElement {
   return requireElement(
     container,

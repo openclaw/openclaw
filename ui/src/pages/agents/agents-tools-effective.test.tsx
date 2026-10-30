@@ -20,7 +20,11 @@ import {
   ownedAgentsContext,
   snapshot,
 } from "./agents-page.test-support.ts";
-import { createBaseParams } from "./panels-tools-skills.test-support.ts";
+import {
+  createBaseParams,
+  createReadToolCatalog,
+  openToolGroups,
+} from "./panels-tools-skills.test-support.ts";
 import { AgentTools } from "./panels-tools-skills.tsx";
 
 afterEach(cleanupSolid);
@@ -55,18 +59,7 @@ async function mountEffective(
       return read();
     }
     if (method === "tools.catalog") {
-      return {
-        agentId: "main",
-        profiles: [],
-        groups: [
-          {
-            id: "core",
-            label: "Built-in tools",
-            source: "core",
-            tools: [{ id: "read", label: "Read", description: "Read", source: "core" }],
-          },
-        ],
-      };
+      return createReadToolCatalog();
     }
     throw new Error(`Unexpected gateway method: ${method}`);
   });
@@ -85,13 +78,12 @@ async function mountEffective(
     },
   } as unknown as ApplicationContext["sessions"];
   const context = await ownedAgentsContext(currentGateway, { sessions });
-  const agents = context.agents;
   const save = vi.fn(async () => true);
   Object.assign(context.runtimeConfig, { save, state: {} });
   const route = (next: AgentsPanel) => ({
     ...agentsRouteData(
       currentGateway,
-      agents.state.agentsList,
+      context.agents.state.agentsList,
       context.settingsAgentSelection.state.selectedId,
       context.settingsAgentSelection,
     ),
@@ -156,7 +148,7 @@ describe("Agents effective-tools read", () => {
     });
     expect(view.container.textContent).toContain("Loading…");
     await waitForSolid(() =>
-      expect(view.container.querySelector(".agent-tool-card")).not.toBeNull(),
+      expect(view.container.querySelector(".agent-tools-group")).not.toBeNull(),
     );
     expect(
       view.container.querySelector<HTMLButtonElement>(".agent-tools-buttons button")?.disabled,
@@ -182,6 +174,7 @@ describe("Agents effective-tools read", () => {
     await waitForSolid(() => expect(preview(view.container)).toContain("Accepted preview"));
     const github = view.container.querySelector("openclaw-github-identity");
     const preset = view.container.querySelector<HTMLButtonElement>(".agent-tools-buttons button")!;
+    openToolGroups(view.container);
     const card = view.container.querySelector<HTMLDetailsElement>("#agent-tool-read")!;
     const group = card.closest<HTMLDetailsElement>(".agent-tools-group")!;
     const toggle = card.querySelector<HTMLInputElement>("input.settings-toggle__input")!;
@@ -300,6 +293,7 @@ describe("Agents effective-tools read", () => {
     const view = await mountEffective(read);
     await waitForSolid(() => expect(preview(view.container)).toContain("Old session preview"));
     expect(view.container.textContent).toContain("Old session notice");
+    openToolGroups(view.container);
     emitGatewaySnapshot(view.currentGateway, {
       ...snapshot(view.client),
       sessionKey: "agent:main:replacement",
@@ -329,6 +323,7 @@ describe("Agents effective-tools read", () => {
       .mockReturnValue(next.promise);
     const view = await mountEffective(read);
     await waitForSolid(() => expect(preview(view.container)).toContain("Initial model preview"));
+    openToolGroups(view.container);
     view.modelOverrides.main = "openai/gpt-5-mini";
     view.publishSessions();
     await waitForSolid(() => expect(view.calls()).toHaveLength(2));

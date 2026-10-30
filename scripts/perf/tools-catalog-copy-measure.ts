@@ -16,6 +16,7 @@ import { registerHooks, stripTypeScriptTypes } from "node:module";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
 import type { ToolsCatalogResult } from "../../packages/gateway-protocol/src/index.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -119,12 +120,7 @@ const cpuUsage = (previous?: NodeJS.CpuUsage) =>
     : process.cpuUsage(previous);
 const cpuScope = typeof process.threadCpuUsage === "function" ? "main-thread" : "process";
 if (values.mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32768);
 }
 try {
   if (values.mode === "counts") {

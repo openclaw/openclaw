@@ -5,6 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
+import { withIsolatedBackupState } from "../infra/backup-create.test-support.js";
 import type { PostgresExportEnvelope } from "../snapshot/export-envelope.js";
 import {
   registerOpenClawAgentDatabase,
@@ -12,9 +14,7 @@ import {
 } from "../state/openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { backupRestoreCommand } from "./backup-restore.js";
-import { buildBackupArchivePath } from "./backup-shared.js";
 import type { BackupManifest } from "./backup-verify-manifest.js";
 import { backupVerifyCommand, verifyBackupArchive } from "./backup-verify.js";
 import { backupCreateCommand } from "./backup.js";
@@ -86,7 +86,7 @@ async function writeSmallArchive(
 
 describe("standalone backup database completeness", () => {
   it("restores configured, registered, and discovered WAL databases without workspaces and rejects each omission", async () => {
-    await withOpenClawTestState(
+    await withIsolatedBackupState(
       { layout: "home", prefix: "backup-inventory-wal-", scenario: "minimal" },
       async (state) => {
         const externalAgent = state.path("external-agent");
@@ -208,7 +208,7 @@ describe("standalone backup database completeness", () => {
   });
 
   it("captures an empty inventory for a config-only backup", async () => {
-    await withOpenClawTestState(
+    await withIsolatedBackupState(
       { layout: "home", prefix: "backup-empty-inventory-", scenario: "minimal" },
       async (state) => {
         openOpenClawAgentDatabase({
@@ -237,7 +237,7 @@ describe("standalone backup database completeness", () => {
   });
 
   it("does not require a registered database that was absent at capture time", async () => {
-    await withOpenClawTestState(
+    await withIsolatedBackupState(
       { layout: "home", prefix: "backup-absent-registration-", scenario: "minimal" },
       async (state) => {
         registerOpenClawAgentDatabase({

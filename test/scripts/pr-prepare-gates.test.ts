@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -67,7 +67,12 @@ function makeStaleGateRepo(docsOnly: boolean) {
     mkdirSync(join(repoDir, "docs"));
   }
   commitFile(repoDir, docsOnly ? "docs/proof.md" : "changed.ts", "change\n");
-  writeLocal(repoDir, "pr-meta.env", "PR_AUTHOR=steipete\n");
+  writeLocal(repoDir, "pr-meta.env", "PR_NUMBER=4242\nPR_AUTHOR=steipete\n");
+  writeLocal(
+    repoDir,
+    "prep-context.env",
+    `PR_NUMBER=4242\nPR_HEAD=topic\nPR_HEAD_SHA_BEFORE=${fixtureGit(repoDir, ["rev-parse", "HEAD"])}\n`,
+  );
   writeLocal(
     repoDir,
     "gates.env",
@@ -300,50 +305,87 @@ it.each([
   expect(existsSync(join(repoDir, ".local", "gh-called"))).toBe(false);
 });
 
-it("keeps the PR push URL process-local and reports a missing branch", () => {
-  const { repoDir } = makeRetryRepo();
+it("observes the exact PR branch without changing shared remotes and reports proved absence", () => {
+  const f = createPublisher();
+  f.git("push", "-q", "origin", `${f.candidate}:refs/heads/nested/refs/heads/topic`);
   const result = runGatesBash(
     [
-      "resolve_head_push_url() { printf '%s\\n' https://github.com/contributor/repo.git; }",
-      "pr_git() { touch .local/git-called; return 99; }",
+      `resolve_head_push_url() { printf '%s\\n' '${f.remote}'; }`,
+      'pr_git() { printf "%s\\n" "$*" >> .local/git-calls; command git "$@"; }',
       "setup_prhead_remote",
-      'test "$PRHEAD_REMOTE_URL" = https://github.com/contributor/repo.git',
-      "test ! -e .local/git-called",
-      "if remote_error=$(resolve_prhead_remote_sha topic 2>&1); then exit 97; fi",
-      'test "$remote_error" = "Remote branch refs/heads/topic not found on prhead"',
-      "test -e .local/git-called",
+      `test "$PRHEAD_REMOTE_URL" = '${f.remote}'`,
+      "test ! -e .local/git-calls",
+      "resolve_prhead_remote_sha topic",
+      `test "$PRHEAD_REMOTE_SHA" = '${f.source}'`,
+      "command git push -q origin :refs/heads/topic",
+      "if resolve_prhead_remote_sha topic; then exit 96; else status=$?; fi",
+      'test "$status" -eq 2',
+      'test -z "$PRHEAD_REMOTE_SHA"',
+      "if resolve_prhead_remote_sha missing; then exit 97; else status=$?; fi",
+      'test "$status" -eq 2',
+      'test -z "$PRHEAD_REMOTE_SHA"',
+      "if command git config --get remote.prhead.url; then exit 98; fi",
     ].join("\n"),
-    { cwd: repoDir, sourcePush: true },
+    { cwd: f.repoDir, env: f.env, sourcePush: true },
   );
 
   expect(result.status, result.stderr).toBe(0);
+  expect(result.stderr).toContain("Remote branch refs/heads/missing not found on prhead");
+  expect(f.read("git-calls").trim().split("\n")).toEqual([
+    `ls-remote --exit-code --heads ${f.remote} refs/heads/topic`,
+    `ls-remote --exit-code --heads ${f.remote} refs/heads/topic`,
+    `ls-remote --exit-code --heads ${f.remote} refs/heads/missing`,
+  ]);
 });
 
-it.each([true, false])("selects fork publication transport for signed=%s fixups", (signed) => {
-  const { repoDir } = makeRetryRepo();
-  const result = runGatesBash(
-    [
-      "PR_HEAD_OWNER=contributor",
-      "PR_HEAD_REPO_NAME=repo",
-      "PRHEAD_REMOTE_URL=https://github.com/contributor/repo.git",
-      `pr_git() { printf '%s\\n' "$*" >> .local/git-calls; case "$1" in rev-list) printf '%s\\n' prepared;; verify-commit) return ${signed ? 0 : 1};; esac; return 0; }`,
-      `graphql_push_to_fork() { touch .local/graphql-called; ${signed ? "return 99" : "printf '%s\\n' signed-head"}; }`,
-      ...(signed ? ["revalidate_pr_publication() { :; }"] : []),
-      "push_prep_head_once topic hosted prepared 42 '{}'",
-      ...(signed
-        ? [
-            "grep -F 'verify-commit prepared' .local/git-calls",
-            "grep -F 'push --force-with-lease=refs/heads/topic:hosted https://github.com/contributor/repo.git prepared:refs/heads/topic' .local/git-calls",
-            "test ! -e .local/graphql-called",
-          ]
-        : ["test -e .local/graphql-called"]),
-    ].join("\n"),
-    { cwd: repoDir, sourcePush: true },
-  );
+it.each(["empty", "partial", "parse"])(
+  "stops conditional publication after a failed %s observation",
+  (fault) => {
+    const f = createPublisher();
+    const prep = f.read("prep.md");
+    const gates = f.read("gates.env");
+    const result = runPublisher(
+      f,
+      [
+        `PRHEAD_REMOTE_SHA='${f.candidate}'`,
+        `if push_prep_head_to_pr_branch 4242 topic '${f.candidate}' '${f.source}'; then exit 97; else status=$?; fi`,
+        'test -z "$PRHEAD_REMOTE_SHA"',
+        'exit "$status"',
+      ].join("\n"),
+      [
+        "pr_git() {",
+        '  if [ "$1" = ls-remote ]; then',
+        ...(fault !== "empty" ? [`    printf '%s\\t%s\\n' '${f.candidate}' refs/heads/topic`] : []),
+        ...(fault === "parse"
+          ? ["    return 0"]
+          : ["    echo fixture-transport-diagnostic >&2", "    return 99"]),
+        "  fi",
+        '  command git "$@"',
+        "}",
+        ...(fault === "parse" ? ["awk() { echo fixture-parse-diagnostic >&2; return 2; }"] : []),
+        "revalidate_pr_publication() { touch .local/continued-publication; return 98; }",
+        "push_prep_head_once() { touch .local/continued-publication; return 98; }",
+      ],
+    );
 
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.stdout).toContain(signed ? "prepared" : "signed-head");
-});
+    const status = fault === "parse" ? 1 : 99;
+    expect(result.status, result.stdout + result.stderr).toBe(status);
+    expect(result.stderr).toContain(
+      fault === "parse" ? "fixture-parse-diagnostic" : "fixture-transport-diagnostic",
+    );
+    expect(result.stderr).toContain(
+      `Unable to inspect remote branch refs/heads/topic (remote branch probe exited ${status})`,
+    );
+    expect(result.stderr).not.toContain("not found");
+    expect(f.exists("continued-publication")).toBe(false);
+    expect(f.exists("push-result.env")).toBe(false);
+    expect(f.read("prep.md")).toBe(prep);
+    expect(f.read("gates.env")).toBe(gates);
+    expect(f.read("events")).toBe("");
+    expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(f.source);
+  },
+);
+
 const shardOwnershipPath = "test/tsconfig/tsconfig.core.test.agents-tools.json";
 it.each([
   ["overlapping source changes", "src/subject.ts", true, "Hosted CI reuse declined"],
@@ -413,15 +455,17 @@ fi
 it("does not stamp declined hosted proof in a conditional caller", () => {
   const dir = tempDirs.make("openclaw-pr-declined-proof-");
   mkdirSync(join(dir, ".local"));
-  writeFileSync(join(dir, ".local", "pr-meta.env"), "PR_AUTHOR=fixture\n");
+  const currentHead = "a".repeat(40);
+  writeFileSync(join(dir, ".local", "pr-meta.env"), "PR_NUMBER=42\nPR_AUTHOR=fixture\n");
   const result = runGatesBash(
     `
 enter_worktree() { PR_MAIN_SHA=fixture-main; }
-checkout_prep_branch() { :; }
+refresh_prep_branch_for_reviewed_head() { :; }
+checkout_prep_branch() { PR_NUMBER=42; PR_HEAD=topic; PR_HEAD_SHA_BEFORE=${currentHead}; }
 ${changePlan("fixture-main", "src/subject.ts")}
 pr_git() {
   case "$*" in
-    "rev-parse HEAD") printf '%s\\n' fixture-head ;;
+    "rev-parse HEAD") printf '%s\\n' ${currentHead} ;;
     *) echo "unexpected fixture Git query: $*" >&2; return 99 ;;
   esac
 }
@@ -432,7 +476,7 @@ else
   exit 1
 fi
 `,
-    { cwd: dir, env: { OPENCLAW_TESTBOX: "1" } },
+    { cwd: dir, env: { OPENCLAW_TESTBOX: "1" }, sourcePrepareCore: true },
   );
   expect(result.status, result.stdout + result.stderr).toBe(1);
   expect(result.stdout, result.stderr).toContain("fixture context declined");
@@ -467,7 +511,8 @@ it.each(["docs", "hosted", "github"])(
     const result = runGatesBash(
       [
         "enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }",
-        "checkout_prep_branch() { :; }",
+        "refresh_prep_branch_for_reviewed_head() { :; }",
+        "checkout_prep_branch() { source .local/prep-context.env; }",
         `path_is_docsish() { return ${docsOnly ? 0 : 1}; }`,
         "changelog_required_for_changed_files() { return 1; }",
         ...(docsOnly
@@ -478,6 +523,7 @@ it.each(["docs", "hosted", "github"])(
       ].join("\n"),
       {
         cwd: repoDir,
+        sourcePrepareCore: true,
         env: docsOnly
           ? { OPENCLAW_PR_GATES_REMOTE: "local" }
           : mode === "hosted"
@@ -506,6 +552,79 @@ it.each(["docs", "hosted", "github"])(
       expect(gates).toContain("REMOTE_GATES_LEASE_ID=''");
     }
     expect(result.stdout).not.toContain("tbx_stale");
+  },
+);
+
+function publishedAlias() {
+  const f = createPublisher();
+  f.git("push", "-q", "origin", `${f.sameTree}:refs/heads/topic`);
+  const completed = runPublisher(
+    f,
+    `source .local/prep-context.env
+PR_AUTHOR=fixture
+PUSH_REPLACED_HOSTED_ANCESTRY=false
+complete_prepare_push ${f.sameTree} ${f.candidate} ${f.base} ${f.source} ${f.sameTree}`,
+  );
+  expect(completed.status, completed.stdout + completed.stderr).toBe(0);
+  rmSync(join(f.local, "gates.env"));
+  return f;
+}
+
+it.each(["github", "hosted", "github fixup"])(
+  "requalifies the authenticated publication target with %s gates",
+  (mode) => {
+    const f = publishedAlias();
+    const prep = f.read("prep.env");
+    let localHead = f.candidate;
+    if (mode === "github fixup") {
+      f.git("reset", "--hard", f.sameTree);
+      f.git("commit", "-qm", "fixup after hosted publication", "--allow-empty");
+      localHead = f.git("rev-parse", "HEAD");
+    }
+    const expectedTarget = mode === "github fixup" ? localHead : f.sameTree;
+    if (mode === "hosted") {
+      f.env.OPENCLAW_TESTBOX = "1";
+    }
+    const result = runPublisher(f, "prepare_gates 4242", [
+      // Only the external verifier response is synthetic; its live-head check is real.
+      "run_quiet_logged() { cat >/dev/null; printf 'HOSTED_ARG:%s\\n' \"$@\"; printf '{}\\n' >.local/gates-hosted-checks.json; }",
+    ]);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(f.git("rev-parse", "HEAD")).toBe(localHead);
+    expect(f.read("prep.env")).toBe(prep);
+    const gates = f.read("gates.env");
+    expect(gates).toContain(`HOSTED_GATES_TARGET_HEAD_SHA=${expectedTarget}\n`);
+    if (mode !== "hosted") {
+      expect(gates).not.toMatch(/VERIFIED|PASSED|FULL_GATES|REMOTE_GATES/u);
+    } else {
+      expect(result.stdout).toContain(`HOSTED_ARG:${f.sameTree}\n`);
+      expect(gates).toContain(`LAST_VERIFIED_HEAD_SHA=${f.sameTree}\n`);
+    }
+  },
+);
+
+it.each(["foreign PR", "foreign branch", "different tree", "unpublished fixup"])(
+  "refuses %s alias authority before writing fresh hosted gates",
+  (fault) => {
+    const f = publishedAlias();
+    const prep = f.read("prep.env");
+    if (fault === "foreign PR") {
+      f.write("prep.env", prep.replace("PR_NUMBER=4242", "PR_NUMBER=99"));
+    } else if (fault === "foreign branch") {
+      f.write("prep.env", prep.replace("PR_HEAD=topic", "PR_HEAD=other"));
+    } else if (fault === "different tree") {
+      f.write(
+        "prep.env",
+        prep.replace(`PREP_HEAD_SHA=${f.sameTree}\n`, `PREP_HEAD_SHA=${f.source}\n`),
+      );
+    } else {
+      f.git("commit", "-qm", "unpublished fixup", "--allow-empty");
+    }
+    const retained = f.read("prep.env");
+    const result = runPublisher(f, "prepare_gates 4242");
+    expect(result.status, result.stdout + result.stderr).not.toBe(0);
+    expect(f.exists("gates.env")).toBe(false);
+    expect(f.read("prep.env")).toBe(retained);
   },
 );
 

@@ -7,6 +7,7 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { pathExists, root as fsRoot } from "../infra/fs-safe.js";
@@ -431,10 +432,8 @@ async function cloneMarketplaceRepo(params: {
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-marketplace-"));
   const repoDir = path.join(tmpDir, "repo");
-  const cleanup = async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
-  };
-  params.logger?.info?.(`Cloning marketplace source ${normalized.label}...`);
+  const cleanup = () => fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+  params.logger?.info?.(terminalText`Cloning marketplace source ${normalized.label}...`);
   const acquired = await acquireGitSource({
     ...normalized,
     repoDir,

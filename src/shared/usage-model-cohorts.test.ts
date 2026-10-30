@@ -164,7 +164,7 @@ it("preserves tied order and first-selected metadata when cohorts interleave", (
   expect(result).toEqual(buildUsageOverview({ rows, options, dayBucket: utc }));
 });
 
-it("merges daily, hourly, creator, latency and unavailable-cost facets without changing pages", () => {
+it("merges daily, hourly, creator, latency and missing-cost facets without changing pages", () => {
   const rows: SessionUsageEntry[] = [
     row("a", { Alpha: 10 }, { latency: { count: 2, avgMs: 10, minMs: 4, maxMs: 16, p95Ms: 16 } }),
     row("b", { Beta: 20 }, { latency: { count: 2, avgMs: 30, minMs: 20, maxMs: 40, p95Ms: 40 } }),
@@ -172,7 +172,6 @@ it("merges daily, hourly, creator, latency and unavailable-cost facets without c
       "a-b",
       { Alpha: 10, Beta: 10 },
       {
-        usageReport: { state: "unavailable" },
         missingCostEntries: 1,
         missingCostByModel: { "synthetic/Beta": 1 },
         dailyLatency: [{ date, count: 2, avgMs: 20, minMs: 10, maxMs: 30, p95Ms: 30 }],
@@ -192,7 +191,6 @@ it("merges daily, hourly, creator, latency and unavailable-cost facets without c
       } as const;
       const result = report(rows, prepared, options, dayBucket);
       expect(result.totals.totalTokens).toBe(50);
-      expect(result.totals.usageReport).toEqual({ state: "unavailable" });
       expect(result.aggregates.latency?.avgMs).toBe(20);
       expect(result.overview.selectedRowCount).toBe(4);
       expect(result).toEqual(buildUsageOverview({ rows, options, dayBucket }));
@@ -255,7 +253,6 @@ it("sorts packed cohort pages without losing sparse, stale, or missing-cost meta
       "a-last",
       { Alpha: 30 },
       {
-        usageReport: { state: "unavailable" },
         missingCostEntries: 1,
         missingCostByModel: { "synthetic/Alpha": 1 },
       },
@@ -300,7 +297,6 @@ it("sorts packed cohort pages without losing sparse, stale, or missing-cost meta
     computedAt: 30,
     staleSince: 20,
     refreshing: true,
-    usageReport: { state: "unavailable" },
     missingCostEntries: 1,
     missingCostByModel: { "synthetic/Alpha": 1 },
   });

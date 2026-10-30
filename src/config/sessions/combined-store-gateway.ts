@@ -14,8 +14,8 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import {
-  assertAgentDatabaseAdmitted,
-  readAgentDatabaseAdmissionRefusal,
+  assertAgentDatabaseReadAdmitted,
+  readAgentDatabaseReadAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
 import { getAgentDatabaseStartupAdmission } from "../../state/agent-database-startup.js";
 import { getPreparedAgentDeletionDiscovery } from "../../state/agent-deletion-journal-status.js";
@@ -407,7 +407,7 @@ export function resolveGatewaySessionStoreTargets(
 ): ResolvedGatewaySessionStoreTargets {
   const readOptions = gatewayDiscoveryReadOptions(cfg, opts.discovery);
   if (opts.agentId?.trim()) {
-    assertAgentDatabaseAdmitted(opts.agentId, { env: readOptions.env });
+    assertAgentDatabaseReadAdmitted(opts.agentId, { env: readOptions.env });
   }
   let resolved = resolveGatewaySessionStoreTopology(cfg, opts);
   if (opts.preserveSentinelOwners === "physical") {
@@ -463,7 +463,7 @@ export function applyGatewaySessionStoreAdmission(
   const diagnostics = [...resolved.diagnostics];
   const env = opts.discovery?.env ?? process.env;
   if (opts.agentId?.trim()) {
-    assertAgentDatabaseAdmitted(opts.agentId, { env });
+    assertAgentDatabaseReadAdmitted(opts.agentId, { env });
   }
   const isConfiguredDatabase =
     opts.preserveSentinelOwners === "physical" && getAgentDatabaseStartupAdmission()
@@ -475,8 +475,8 @@ export function applyGatewaySessionStoreAdmission(
       return false;
     }
     const refusal =
-      readAgentDatabaseAdmissionRefusal(target.agentId, { env }) ??
-      (physical && readAgentDatabaseAdmissionRefusal(physical.agentId, { env }));
+      readAgentDatabaseReadAdmissionRefusal(target.agentId, { env }) ??
+      (physical && readAgentDatabaseReadAdmissionRefusal(physical.agentId, { env }));
     if (!refusal) {
       return true;
     }
@@ -577,8 +577,8 @@ export function mergeCombinedSessionStore(
     const agentId = target.agentId;
     const storePath = target.storePath;
     const store = readEntries(storeTarget);
-    assertAgentDatabaseAdmitted(agentId, { env });
-    assertAgentDatabaseAdmitted(storeTarget.agentId, { env });
+    assertAgentDatabaseReadAdmitted(agentId, { env });
+    assertAgentDatabaseReadAdmitted(storeTarget.agentId, { env });
     // Legacy selector paths can be shared by distinct physical agent partitions.
     const rowAgentId =
       sharedStoreRowOwner?.target.storePath === storePath &&

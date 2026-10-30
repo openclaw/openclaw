@@ -12,6 +12,7 @@ import {
   isArchivePathWithin,
   normalizeArchivePath,
   normalizeArchiveRoot,
+  buildBackupArchivePath,
 } from "../infra/backup-archive-path-policy.js";
 import { readEngineAnchor } from "../infra/database-engine/open.js";
 import { loadSqliteVecExtension } from "../infra/database-engine/sqlite-vec.js";
@@ -24,10 +25,9 @@ import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import { readOpenClawAgentDatabaseRegistryRows } from "../state/openclaw-agent-db-registry.read.js";
-import { resolveUserPath } from "../utils.js";
 import { resolveBackupRecoveryConfig } from "./backup-recovery-config.js";
 import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
-import { BACKUP_MAX_DECOMPRESSION_RATIO, buildBackupArchivePath } from "./backup-shared.js";
+import { BACKUP_MAX_DECOMPRESSION_RATIO, resolveBackupArchivePath } from "./backup-shared.js";
 import {
   type BackupManifest,
   type NormalizedArchiveEntry,
@@ -697,7 +697,7 @@ export async function prepareBackupArchive(
   archive: string,
   requiredSnapshots: readonly BackupSqliteSnapshotFact[] = [],
 ) {
-  const archivePath = resolveUserPath(archive);
+  const archivePath = resolveBackupArchivePath(archive, "<archive>");
   return await verifyResolvedBackupArchive(archivePath, requiredSnapshots).catch(
     (error: unknown) => {
       const detail = error instanceof Error ? error.message : formatErrorMessage(error);

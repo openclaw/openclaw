@@ -42,6 +42,7 @@ it("shares model saturation across embedded sessions and preserves recovery with
     const realNow = Date.now.bind(Date);
     let offset = 0;
     const clock = vi.spyOn(Date, "now").mockImplementation(() => realNow() + offset);
+    const monotonic = vi.spyOn(performance, "now").mockImplementation(() => offset);
     const sleeps = vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async (delay) => {
       offset += delay;
     });
@@ -214,6 +215,7 @@ it("shares model saturation across embedded sessions and preserves recovery with
       network.mockRestore();
       sleeps.mockRestore();
       clock.mockRestore();
+      monotonic.mockRestore();
       await resetPreparedModelRuntimeSnapshotsForTest();
       resetPluginLoaderTestStateForTest();
       cleanupPluginLoaderFixturesForTest();

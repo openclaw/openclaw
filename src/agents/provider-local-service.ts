@@ -26,6 +26,7 @@ import {
 import { shouldDetachChildForProcessTree } from "../process/child-process-tree.js";
 import { prepareOomScoreAdjustedSpawnPreservingExecEnv as prepareLocalServiceSpawn } from "../process/linux-oom-score.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import {
   captureLocalServiceOutput,
   createLocalServiceLease,
@@ -467,7 +468,7 @@ async function startAndWaitForLocalService(params: {
   // intervals on the monotonic clock; the deadline must live there too, or a
   // wall-clock step (NTP correction, VM resume) keeps spawning probes past the
   // configured readiness bound. Spawn/ready timestamps stay wall-clock facts.
-  const deadline = performance.now() + readyTimeoutMs;
+  const deadline = monotonicNow() + readyTimeoutMs;
   for (;;) {
     if (await probeHealth(healthUrl, healthHeaders, signal, assertAuthCurrent)) {
       diagnostics.readyAt = Date.now();
@@ -485,7 +486,7 @@ async function startAndWaitForLocalService(params: {
         )}${formatLocalServiceDiagnosticTail(diagnostics)}`,
       );
     }
-    if (performance.now() >= deadline) {
+    if (monotonicNow() >= deadline) {
       throw new Error(`${provider} local service did not become ready at ${healthUrl}`);
     }
     await sleepWithAbort(PROBE_INTERVAL_MS, signal, { ref: false });

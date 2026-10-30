@@ -5,6 +5,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+} from "../../../test/helpers/fixture-receipts.js";
+import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
@@ -26,6 +30,7 @@ import {
 import { parseManagedHandoffLeasePayload } from "../../infra/update-managed-service-handoff-schema.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { isChildProcessTreeAlive } from "../../process/child-process-tree.js";
 import { settleCommandProcessGroups } from "../../process/command-process-custody.js";
 import type { CommandProcessIdentity } from "../../process/command-process-custody.types.js";
@@ -35,6 +40,7 @@ import * as processDeadline from "../../process/process-deadline.js";
 import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
 import { waitForPidToExit } from "../../test-utils/process-tree.js";
 import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
+import { createUpdateProgress, printResult } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
 import { runUpdateDoctorProcess } from "./update-command-doctor-child.js";
@@ -43,6 +49,7 @@ import { updateExecutorNativeEntrypoints } from "./update-command-executor-nativ
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { settleUpdateDoctorMaintenance } from "./update-command-maintenance.js";
 import { runPackageUpdateDoctor } from "./update-command-package.js";
+import { createUpdateRunProgress } from "./update-command-run.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let root: string;
@@ -77,6 +84,145 @@ beforeEach(() => {
   vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(path.join(root, "tmp"));
 });
 afterEach(cleanupUpdateCommandTest);
+afterEach(resetLogger);
+
+it("shows activation Doctor progress before child completion while JSON and ledger stay deferred", async ({
+  signal,
+}) => {
+  const channel = await openFixtureReceiptChannel();
+  const runId = randomUUID();
+  const runUtf8 = processRunner.runUtf8CommandWithTimeout;
+  const executorModule = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor);
+  const resultModule = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.doctorResult);
+  const sealedModule = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.sealedRuntime);
+  const ready = createDeferred();
+  const cleanup = new AbortController();
+  const steps: UpdateStepResult[] = [];
+  const recordStep = vi.fn(async () => undefined);
+  setLoggerOverride({ consoleLevel: "info", consoleStyle: "compact" });
+  const display = createUpdateProgress(false);
+  const progress = createUpdateRunProgress({ runId, env }, display.progress, recordStep);
+  display.suspend();
+  progress.deferLedgerWrites();
+  let stderr = "";
+  let stdout = "";
+  let observed = "";
+  let childPid: number | undefined;
+  let doctorResult: SpawnResult | undefined;
+  vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+    stderr += String(chunk);
+    return true;
+  });
+  vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+    stdout += String(chunk);
+    return true;
+  });
+  vi.spyOn(processRunner, "runUtf8CommandWithTimeout").mockImplementation(
+    async (_argv, options) => {
+      assert(typeof options !== "number");
+      const result = await runUtf8(
+        [
+          process.execPath,
+          "--input-type=module",
+          "-e",
+          `
+      import { readFileSync } from 'node:fs';
+      import * as json5 from ${JSON.stringify(import.meta.resolve("json5"))};
+      import { registerSealedRuntime } from ${JSON.stringify(sealedModule.href)};
+      registerSealedRuntime({ json5, resolveSecureTempRoot: () => ${JSON.stringify(path.join(root, "tmp"))} });
+      const { withDelegatedUpdateCommandExecutor } = await import(${JSON.stringify(executorModule.href)});
+      const { writeUpdatePostInstallDoctorResult } = await import(${JSON.stringify(resultModule.href)});
+      ${fixtureReceiptClientSource(channel.endpoint)}
+      const doctor = JSON.parse(readFileSync(0, 'utf8'));
+      await withDelegatedUpdateCommandExecutor(doctor.executor, doctor.runId, doctor.root, async () => {
+        process.stderr.write('private diagnostic /private/fixture-secret\\nDoctor: state schema\\n');
+        await awaitRelease('doctor', 'finish');
+        await writeUpdatePostInstallDoctorResult({
+          resultPath: process.env.${UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV}, result: { status: 'ok' }
+        });
+      });
+    `,
+        ],
+        {
+          ...options,
+          signal: AbortSignal.any([
+            signal,
+            cleanup.signal,
+            ...(options.signal ? [options.signal] : []),
+          ]),
+          beforeInput(pid, argv) {
+            childPid = pid;
+            options.beforeInput?.(pid, argv);
+          },
+          onOutputChunk(chunk, stream) {
+            const decision = options.onOutputChunk?.(chunk, stream);
+            if (stream === "stderr") {
+              observed += chunk.toString();
+              if (observed.includes("Doctor: state schema\n")) {
+                ready.resolve();
+              }
+            }
+            return decision;
+          },
+        },
+      );
+      doctorResult = result;
+      return result;
+    },
+  );
+  const work = withUpdateCommandExecutor(runId, async (executor) => {
+    const fence = await executor.enter(root, { serviceRoot });
+    const guards = createUpdateCommandExecutionGuards(
+      { run: { runId, env, executorFence: fence } },
+      root,
+    );
+    const step = await runPackageUpdateDoctor({
+      ...doctorOptions(runId, fence, guards),
+      workTimeoutMs: null,
+      progress,
+      results: steps,
+    });
+    assert(step);
+    expect(step.exitCode, doctorResult?.stderr || step.stderrTail || undefined).toBe(0);
+    fence.assertCurrent();
+  });
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(ready.promise, work, "Doctor settled before its phase"),
+      signal,
+    );
+    assert(childPid);
+    expect(isChildProcessTreeAlive({ pid: childPid })).toBe(true);
+    expect(stderr).toBe("Doctor: state schema\n");
+    expect(stdout).toBe("");
+    expect(recordStep).not.toHaveBeenCalled();
+    channel.release("doctor", "finish");
+    await withinTest(work, signal);
+    assert(doctorResult);
+    expect(doctorResult.cleanup).toBe("normal");
+    expect(isChildProcessTreeAlive({ pid: childPid })).toBe(false);
+    expect(readCommandClaims()).toEqual([]);
+    expect(recordStep).not.toHaveBeenCalled();
+    await progress.flushLedgerWrites();
+    expect(recordStep).toHaveBeenCalled();
+    await printResult(
+      { status: "ok", mode: "npm", root, steps, durationMs: 1 },
+      { json: true },
+      { readHistory: false },
+    );
+    expect(JSON.parse(stdout)).toMatchObject({
+      status: "ok",
+      steps: expect.arrayContaining([expect.objectContaining({ exitCode: 0 })]),
+    });
+    expect(stderr).not.toContain("fixture-secret");
+  } finally {
+    channel.release("doctor", "finish");
+    cleanup.abort();
+    await work.catch(() => {});
+    display.dispose();
+    await channel.close();
+  }
+});
 
 function doctorOptions(
   runId: string,

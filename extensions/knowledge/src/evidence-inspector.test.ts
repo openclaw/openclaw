@@ -55,8 +55,11 @@ it("EvidenceInspector matches inspectEvidence for every citation shape", async (
   const root = tempDirs.make("knowledge-inspector-");
   await mkdir(path.join(root, "artifacts"));
   const files = {
-    "artifacts/crlf.txt": Buffer.from('﻿first line\r\nsecond "quoted" line\r\nthird\r\n'),
+    "artifacts/crlf.txt": Buffer.from(
+      `﻿${"x".repeat(3999)}😀tail\r\nnext "quoted" line\r\nthird\r\n`,
+    ),
     "artifacts/lone-cr.txt": Buffer.from("alpha\rbeta\ngamma"),
+    "artifacts/whole.txt": Buffer.from("ok 😀"),
     "artifacts/binary.bin": Buffer.from([0, 1, 2, 255, 254]),
     "artifacts/invalid.txt": Buffer.from([0x61, 0xff, 0x0a, 0x62]),
   };
@@ -76,6 +79,7 @@ it("EvidenceInspector matches inspectEvidence for every citation shape", async (
     cite("artifacts/crlf.txt", { size: 1 }),
     { path: "artifacts/crlf.txt", sha256: "0".repeat(64) },
     cite("artifacts/lone-cr.txt", { start_line: 1, end_line: 2 }),
+    cite("artifacts/whole.txt"),
     cite("artifacts/binary.bin"),
     cite("artifacts/binary.bin", { quote: "x" }),
     cite("artifacts/binary.bin", { mediaType: "text/plain" }),
@@ -95,11 +99,16 @@ it("EvidenceInspector matches inspectEvidence for every citation shape", async (
   };
   const inspector = new EvidenceInspector(root);
   for (const citation of citations) {
-    for (const preview of [0, 5, 20000]) {
+    for (const preview of [0, 5, 4000, 20000]) {
       expect(
         outcome(() => inspector.inspect(citation, preview)),
         JSON.stringify({ citation, preview }),
       ).toStrictEqual(outcome(() => inspectEvidence(root, citation, preview)));
     }
   }
+  expect(inspector.inspect(cite("artifacts/crlf.txt"), 4000)).toMatchObject({
+    excerpt: "x".repeat(3999),
+    excerptTruncated: true,
+  });
+  expect(inspector.inspect(cite("artifacts/whole.txt"), 4000).excerpt).toBe("ok 😀");
 });

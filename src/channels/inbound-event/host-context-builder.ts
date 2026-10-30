@@ -127,22 +127,21 @@ export function createHostChannelInboundEventContextBuilder<
           const principal = batch.at(-1)?.verifiedPrincipal;
           const principalKey = principal && JSON.stringify(principal);
           const gateway = owner.resolveGatewayContext?.();
-          if (
-            !principal ||
-            !gateway ||
-            batch.some((input) => JSON.stringify(input?.verifiedPrincipal) !== principalKey)
-          ) {
+          if (!gateway) {
             return;
           }
           const requester = batch.at(-1)?.requesterProfile;
           if (
+            principal &&
             requester &&
             built.SenderId === principal.senderId &&
             (built.AccountId ?? DEFAULT_ACCOUNT_ID) === principal.accountId &&
             built.OriginatingChannel === principal.channelId &&
             batch.every(
               (input) =>
-                input?.requesterProfile?.id === requester.id && input.requesterProfile.isCurrent(),
+                JSON.stringify(input?.verifiedPrincipal) === principalKey &&
+                input?.requesterProfile?.id === requester.id &&
+                input.requesterProfile.isCurrent(),
             )
           ) {
             // Retain the remote provenance and record the attested human contribution too.
@@ -164,7 +163,19 @@ export function createHostChannelInboundEventContextBuilder<
             });
           }
           const authority = batch.at(-1)?.commandOwnerAuthority;
-          if (!authority?.source || !authority.isCurrent(gateway.getRuntimeConfig())) {
+          const ownerPrincipal = batch.at(-1)?.commandOwnerPrincipal;
+          if (
+            !authority?.source ||
+            !ownerPrincipal ||
+            built.SenderId !== ownerPrincipal.senderId ||
+            (built.AccountId ?? DEFAULT_ACCOUNT_ID) !== ownerPrincipal.accountId ||
+            built.OriginatingChannel !== ownerPrincipal.channelId ||
+            batch.some(
+              (input) =>
+                JSON.stringify(input?.commandOwnerPrincipal) !== JSON.stringify(ownerPrincipal),
+            ) ||
+            !authority.isCurrent(gateway.getRuntimeConfig())
+          ) {
             return;
           }
           bindCommandOwnerAuthority(built, {
