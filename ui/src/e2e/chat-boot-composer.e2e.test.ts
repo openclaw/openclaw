@@ -187,12 +187,20 @@ suite.define(() => {
         waitUntil: "domcontentloaded",
       });
       await page.locator("#openclaw-boot-composer").click();
+      const original = await page.locator("#openclaw-boot-composer").elementHandle();
       await page.keyboard.type("Send this only if the session opens");
       await page.keyboard.press("Enter");
       await gateway.waitForRequest("connect");
       await gateway.resolveDeferred("connect");
       const missing = page.locator(".session-route-not-found");
       await missing.waitFor({ state: "visible" });
+      const retained = page.locator("#openclaw-boot-composer");
+      await retained.waitFor({ state: "visible" });
+      expect(await original?.evaluate((element) => element.isConnected)).toBe(true);
+      expect(await retained.inputValue()).toBe("Send this only if the session opens");
+      await retained.fill("");
+      expect(await retained.inputValue()).toBe("");
+      await retained.fill("Still only for the original session");
       await missing.getByRole("button", { name: "Go to main session" }).click();
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible" });
