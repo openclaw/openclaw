@@ -198,6 +198,7 @@ async function planRefill(ctx: PassContext, eligible: Generations): Promise<Gene
           projectPreparation?.setupRecipe !== undefined &&
           projectPreparation.runSetupScript !== false,
         runSetupScript: projectPreparation?.runSetupScript,
+        assertCurrent: generation.assertImagePolicyCurrent,
         signal,
       });
       signal.throwIfAborted();

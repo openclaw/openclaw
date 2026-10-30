@@ -30,6 +30,7 @@ export type Generation = {
   activationEligible?: boolean;
   presenceOwned?: boolean;
   intent?: WorkerProviderPreparedIntent;
+  assertImagePolicyCurrent?: () => void;
   slots?: number;
 };
 export const DEFAULT_MAX_TOTAL = 4;
@@ -192,6 +193,10 @@ export function admitSources(ctx: PassContext): Generations {
       if (!provider) {
         throw new Error(`Worker provider is unavailable (${record.providerId})`);
       }
+      const assertImagePolicyCurrent =
+        workerPreparationSourceKey(record.profileSnapshot) === "image"
+          ? ctx.presence.captureImagePolicy()
+          : undefined;
       const timeout = provider.resolvePreparedIdleTimeoutMs?.(snapshotSettings(record));
       const presenceOwned = matchingPreparedPoolPresenceDemand(record, demand);
       const presenceExpiresAtMs = demand?.retireAtMs ?? Number.MAX_SAFE_INTEGER;
@@ -213,6 +218,7 @@ export function admitSources(ctx: PassContext): Generations {
         eligible.set(key, {
           source: record,
           preparation,
+          assertImagePolicyCurrent,
           demandAtMs: presenceOwned
             ? Math.max(presenceOwned.lastPresentAtMs, demandAtMs)
             : demandAtMs,
@@ -254,6 +260,7 @@ export function admitSources(ctx: PassContext): Generations {
 export function assertGenerationCurrent(ctx: PassContext, generation: Generation): void {
   const { options, presence, isAdmitted } = ctx;
   options.signal.throwIfAborted();
+  generation.assertImagePolicyCurrent?.();
   if (generation.presenceOwned && !generation.activationEligible) {
     if (!isAdmitted() || !presence.isDemandActive()) {
       throw new Error("Prepared capacity demand is unavailable for preparation");

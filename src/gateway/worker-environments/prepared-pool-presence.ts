@@ -64,6 +64,7 @@ export type PreparedPoolPresenceOptions = {
       projectRepository?: RepositoryWorkerProjectSnapshot;
       repository?: { agentId: string; url: string; ref?: string };
       executionMode?: "worker-turn" | "remote-exec";
+      assertCurrent?: () => void;
       signal?: AbortSignal;
     },
   ) => Promise<WorkerProviderPreparedIntent>;
@@ -98,8 +99,6 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
   let refResolvedAtMs: number | undefined;
   let standing:
     | {
-        source: { profileId: string; executionMode: "worker-turn" | "remote-exec" };
-        limits: { target: number; maxTotal: number };
         intent: WorkerProviderPreparedIntent;
         demand: StandingImageDemand;
       }
@@ -135,6 +134,18 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
     state.project.source.owner.agent.agentId === source.repository.agentId &&
     state.requestedRef === (source.repository.ref ?? null);
 
+  const captureImagePolicy = () => {
+    const integration = getRepositoryIntegration();
+    if (integration?.preparedCapacity !== "image") {
+      throw new Error("Runtime image capacity policy is unavailable");
+    }
+    return () => {
+      current();
+      if (getRepositoryIntegration() !== integration) {
+        throw new Error("Runtime image capacity policy changed during preparation");
+      }
+    };
+  };
   const standingSource = () => {
     if (getRepositoryIntegration()?.preparedCapacity !== "image") {
       return undefined;
@@ -153,20 +164,11 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
     );
   };
   const readStanding = () => {
-    if (
-      !standing ||
-      signal.aborted ||
-      !isDeepStrictEqual(standing.source, standingSource()) ||
-      !isDeepStrictEqual(standing.limits, standingLimits(standing.source.profileId))
-    ) {
+    if (!standing || signal.aborted) {
       return undefined;
     }
-    try {
-      options.assertIntentCurrent(standing.source.profileId, standing.intent);
-      return standing.demand;
-    } catch {
-      return undefined;
-    }
+    options.assertIntentCurrent(standing.demand.profileId, standing.intent);
+    return standing.demand;
   };
   const admitReserves = async (
     intent: WorkerProviderPreparedIntent,
@@ -214,8 +216,9 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
       standing = undefined;
       return undefined;
     }
+    const assertPolicyCurrent = captureImagePolicy();
     const assertSourceCurrent = () => {
-      current();
+      assertPolicyCurrent();
       if (
         !isDeepStrictEqual(source, standingSource()) ||
         !isDeepStrictEqual(limits, standingLimits(source.profileId))
@@ -228,6 +231,7 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
     const intent = await options.prepareIntent(source.profileId, {
       imageReserve: true,
       executionMode: source.executionMode,
+      assertCurrent: assertSourceCurrent,
       signal,
     });
     assertSourceCurrent();
@@ -243,7 +247,7 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
       lastPresentAtMs: preparedAtMs,
       retireAtMs: null,
     };
-    standing = { source, limits, intent, demand: active };
+    standing = { intent, demand: active };
     await admitReserves(intent, active, limits, assertSourceCurrent);
     return active;
   };
@@ -335,10 +339,8 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
     return state;
   };
 
-  return {
-    maintain,
-    ready: read,
-    current: (): EffectivePreparedDemand | undefined => {
+  const currentDemand = (): EffectivePreparedDemand | undefined => {
+    try {
       if (getRepositoryIntegration()?.preparedCapacity === "image") {
         return readStanding();
       }
@@ -351,7 +353,18 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
         return { ...demand, retireAtMs: absentAtMs + HUMAN_PRESENCE_RETIRE_AFTER_MS };
       }
       return demand;
-    },
+    } catch {
+      // Unavailable policy refuses demand, never inventory expiry or physical cleanup.
+      // maintain still reports the admission failure and owns its retry/settlement.
+      return undefined;
+    }
+  };
+
+  return {
+    maintain,
+    ready: read,
+    current: currentDemand,
+    captureImagePolicy,
     set: (present: boolean) => {
       humanPresenceObserved = true;
       if (humanPresent !== present) {
@@ -361,9 +374,9 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
       }
       return options.schedule();
     },
-    isDemandActive: () =>
-      getRepositoryIntegration()?.preparedCapacity === "image"
-        ? readStanding() !== undefined
-        : humanPresent,
+    isDemandActive: () => {
+      const active = currentDemand();
+      return active?.retireAtMs === null && (humanPresent || "sourceKey" in active);
+    },
   };
 }
