@@ -62,13 +62,19 @@ function readEnvironmentFiles(files) {
     try {
       content = fs.readFileSync(filename, "utf8");
     } catch (error) {
-      if (optional && error.code === "ENOENT") continue;
+      if (optional && error.code === "ENOENT") {
+        continue;
+      }
       throw error;
     }
     for (const line of content.split(/\r?\n/)) {
-      if (!line.trim() || line.startsWith("#")) continue;
+      if (!line.trim() || line.startsWith("#")) {
+        continue;
+      }
       const separator = line.indexOf("=");
-      if (separator <= 0) fail();
+      if (separator <= 0) {
+        fail();
+      }
       const raw = line.slice(separator + 1);
       // Match serializeSystemdEnvironmentFile; shell evaluation would expand credentials.
       const value =
@@ -551,8 +557,9 @@ function run() {
       args[9] !== "--collect" ||
       !path.isAbsolute(args[11]) ||
       fs.realpathSync(args[11]) !== fs.realpathSync(process.execPath)
-    )
+    ) {
       fail();
+    }
     const params = JSON.parse(fs.readFileSync(args[13], "utf8"));
     if (
       !path.isAbsolute(params.cwd) ||
@@ -562,8 +569,9 @@ function run() {
       params.action !== "update" ||
       args[13] !== path.join(params.cwd, "handoff.json") ||
       !params.sensitivePaths.includes(args[12])
-    )
+    ) {
       fail();
+    }
     const environment = readEnvironmentFiles([
       { filename: params.environmentPath, optional: false },
     ]);
