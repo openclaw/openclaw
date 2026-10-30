@@ -60,10 +60,8 @@ import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-
 import { sidebarPresentationProbe } from "../ui/src/test-helpers/control-ui-sidebar-presentation-probe.test-support.ts";
 import { installTeamScaleSidebarPresentation } from "../ui/src/test-helpers/control-ui-sidebar-presentation.test-support.ts";
 import { revealSidebarTarget } from "../ui/src/test-helpers/control-ui-sidebar-window.ts";
-import {
-  createControlUiStreamingReply,
-  createStreamingReplyProbeInitScript,
-} from "../ui/src/test-helpers/control-ui-streaming-reply.ts";
+import { createControlUiStreamingReply } from "../ui/src/test-helpers/control-ui-streaming-fixture.ts";
+import { createStreamingReplyProbeInitScript } from "../ui/src/test-helpers/control-ui-streaming-reply.ts";
 import { createControlUiTeamScaleFixture } from "../ui/src/test-helpers/control-ui-team-scale-fixture.ts";
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
 import { resolveColdLoadLatency } from "./lib/control-ui-bench-latency.ts";
