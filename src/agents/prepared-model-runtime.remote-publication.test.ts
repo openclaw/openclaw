@@ -39,6 +39,7 @@ import {
   acquirePublishedPreparedModelRuntime as acquirePublished,
   advancePreparedModelRuntimeConfig,
   applyRemoteModelCatalogUpdate,
+  beginPreparedModelRuntimePluginDrain as beginDrain,
   getPreparedModelRuntimeSnapshot as readSnapshot,
   loadPublishedGatewayReplyDispatchRuntime as loadPublishedDispatch,
   refreshPreparedModelRuntimeSnapshots as refresh,
@@ -179,6 +180,47 @@ it("shares catalog adoption without sharing observer cancellation and accepts th
     pricingSpy.mockRestore();
   }
 });
+
+it.each([
+  { drain: "absent" as const, expected: "published" as const },
+  { drain: "released before commit" as const, expected: "published" as const },
+  { drain: "pending at commit" as const, expected: "superseded" as const },
+])(
+  "revalidates the plugin replacement boundary at catalog publication ($drain)",
+  async ({ drain: drainState, expected }) => {
+    await setup();
+    const { preparing, commit, pricingSpy } = holdPricing();
+    const adoption = applyRemoteModelCatalogUpdate(() => config);
+    let drain: ReturnType<typeof beginDrain> | undefined;
+    try {
+      await preparing.promise;
+      // Preparation has passed its initial replacement wait; this drain starts inside the
+      // window where the old implementation still committed the catalog.
+      if (drainState !== "absent") {
+        drain = beginDrain();
+        if (drainState === "released before commit") {
+          drain.release();
+          drain = undefined;
+        }
+      }
+      commit.resolve();
+      expect(await adoption).toBe(expected);
+      expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(
+        expected === "published" ? 300 : 200,
+      );
+    } finally {
+      drain?.release();
+      commit.resolve();
+      await adoption.catch(() => undefined);
+      pricingSpy.mockRestore();
+    }
+    if (expected === "superseded") {
+      // The replacement generation retries the deferred update after its drain releases.
+      expect(await applyRemoteModelCatalogUpdate(() => config)).toBe("published");
+      expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(300);
+    }
+  },
+);
 
 it("preserves prospective tool and sandbox policy across catalog adoption", async () => {
   await setup();
