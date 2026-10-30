@@ -46,25 +46,25 @@ export function startSessionsSendReplyFlow(
   }
   const { completion } = params;
   const continueOwned = async <T>(run: () => Promise<T>) =>
-    completion
-      ? completion.request.custody.run(run)
-      : runWithGatewayToolContinuationContext(
-          run,
-          params.replyMode === "peer" ? { retainRequester: true } : undefined,
-        );
+    params.replyMode === "peer"
+      ? runWithGatewayToolContinuationContext(run, { retainRequester: true })
+      : completion
+        ? completion.request.custody.run(run)
+        : runWithGatewayToolContinuationContext(run);
   const run = async () => {
     const settledReply = params.reply ?? (await completion?.take());
+    const requesterCompletion = params.replyMode === "peer" ? undefined : completion;
     const deliverRequesterReply: Parameters<
       typeof runSessionsSendA2AFlow
-    >[0]["deliverRequesterReply"] = completion
+    >[0]["deliverRequesterReply"] = requesterCompletion
       ? async ({ message, extraSystemPrompt }) => {
           const {
             runAnnounceAgentCall,
             isGatewayAgentRunPending,
             resolvePrivateCompletionDeliveryResult,
           } = await import("../subagents/announce/subagent-announce-completion-delivery.js");
-          completion.assertCurrent();
-          const request = completion.request;
+          requesterCompletion.assertCurrent();
+          const request = requesterCompletion.request;
           const idempotencyKey = `announce:sessions-send:${request.runId}:completion`;
           const timeoutMs = resolveSubagentAnnounceTimeoutMs(getRuntimeConfig());
           let accepted = false;
