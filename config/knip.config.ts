@@ -37,6 +37,7 @@ const repositoryScriptEntries = [
   "scripts/bench-android-release-history.mts!",
   "scripts/bench-duplicate-paragraphs.mts!",
   "scripts/perf/agent-exec-cgroup-proof.ts!",
+  "scripts/perf/agent-startup-inspection.ts!",
   "scripts/perf/anthropic-request-construction.ts!",
   "scripts/perf/auth-file-watch-events-measure.ts!",
   "scripts/perf/backup-verify-fixture.mjs!",
@@ -83,6 +84,7 @@ const repositoryScriptEntries = [
   "scripts/perf/transcript-pool-idle-measure.ts!",
   "scripts/perf/transcript-turn-gateway.mts!",
   "scripts/perf/update-state-io-measure.ts!",
+  "scripts/perf/usage-cache-prune-measure.ts!",
   "scripts/perf/worktree-creation-measure.ts!",
   // The source header documents this matched Code Mode engine probe by path.
   "scripts/perf/code-mode-engine-measure.ts!",
