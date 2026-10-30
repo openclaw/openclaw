@@ -10,10 +10,7 @@ import { filterToolsByPolicy } from "../../agents/tool-policy-match.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
-import {
-  ensureStandalonePluginToolRegistryLoaded as loadRegistry,
-  resolvePluginTools as resolveTools,
-} from "../../plugins/tools.js";
+import { acquireStandalonePluginToolRegistry as acquireRegistry } from "../../plugins/tools.js";
 import * as profiles from "../../state/user-profile-list.js";
 import { toolsCatalogHandlers } from "./tools-catalog.js";
 
@@ -30,9 +27,12 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../plugins/tools.js", () => ({
-  ensureStandalonePluginToolRegistryLoaded: vi.fn(),
-  resolvePluginTools: vi.fn(),
+  acquireStandalonePluginToolRegistry: vi.fn(),
 }));
+
+const resolveTools = vi.fn();
+const releaseRegistry = vi.fn(async () => {});
+let toolRegistry: PluginRegistry | undefined;
 
 const getActivePluginRegistryMock = vi.hoisted(() =>
   vi.fn<() => PluginRegistry | null>(() => null),
@@ -102,7 +102,13 @@ describe("tools.catalog handler", () => {
     setPluginToolMeta(matrixRoom, { pluginId: "matrix", optional: false });
     vi.mocked(resolveTools).mockReturnValue([voiceCall, matrixRoom]);
     getActivePluginRegistryMock.mockReturnValue(null);
-    vi.mocked(loadRegistry).mockReturnValue(undefined);
+    toolRegistry = undefined;
+    releaseRegistry.mockReset();
+    vi.mocked(acquireRegistry).mockImplementation(async () => ({
+      registry: toolRegistry,
+      resolveTools,
+      release: releaseRegistry,
+    }));
   });
 
   it.each([
@@ -144,7 +150,7 @@ describe("tools.catalog handler", () => {
   });
 
   it.each([false, true])("projects plugin discovery metadata=%s", async (metadata) => {
-    const toolRegistry = metadataRegistry("voice-call", {
+    const registry = metadataRegistry("voice-call", {
       toolName: "voice_call",
       displayName: "Voice Call",
       description: "Place a voice call",
@@ -152,14 +158,7 @@ describe("tools.catalog handler", () => {
       tags: ["calling"],
     });
     if (metadata) {
-      getActivePluginRegistryMock.mockReturnValue(
-        metadataRegistry("voice-call", {
-          toolName: "voice_call",
-          displayName: "Wrong Workspace Voice Call",
-          risk: "low",
-        }),
-      );
-      vi.mocked(loadRegistry).mockReturnValue(toolRegistry);
+      toolRegistry = registry;
     }
     const groups = await pluginGroups();
     const tools = groups.flatMap((group) => group.tools);
@@ -180,18 +179,17 @@ describe("tools.catalog handler", () => {
       defaultProfiles: [],
     });
     expect(tools.find((tool) => tool.id === "matrix_room")?.description).toBe("Room summary");
-    for (const discover of [loadRegistry, resolveTools]) {
-      expect(discover).toHaveBeenCalledWith(
-        expect.objectContaining({
-          toolAllowlist: ["group:plugins"],
-          allowGatewaySubagentBinding: true,
-        }),
-      );
-    }
-    expect(resolveTools).toHaveBeenCalledWith(
+    expect(acquireRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolAllowlist: ["group:plugins"],
+        allowGatewaySubagentBinding: true,
+      }),
+    );
+    expect(acquireRegistry).toHaveBeenCalledWith(
       expect.objectContaining({ suppressNameConflicts: true }),
     );
-    expect(vi.mocked(resolveTools).mock.calls[0]?.[0].existingToolNames?.has("tts")).toBe(true);
+    expect(vi.mocked(acquireRegistry).mock.calls[0]?.[0].existingToolNames?.has("tts")).toBe(true);
+    expect(releaseRegistry).toHaveBeenCalledOnce();
   });
 
   it("sorts mixed groups without mutating or executing plugin sources", async () => {
@@ -216,7 +214,7 @@ describe("tools.catalog handler", () => {
     }
     [tools, registry.tools].forEach(Object.freeze);
     vi.mocked(resolveTools).mockReturnValue(tools);
-    vi.mocked(loadRegistry).mockReturnValue(registry);
+    toolRegistry = registry;
     const groups = await pluginGroups();
     expect(groups.map((group) => [group.id, group.tools.map((tool) => tool.id)])).toEqual([
       ["plugin:b", ["b_a", "b_z"]],
@@ -230,16 +228,30 @@ describe("tools.catalog handler", () => {
     }
   });
 
+  it("does not publish a catalog when inspection cleanup fails", async () => {
+    const failure = new Error("synthetic cleanup failure");
+    releaseRegistry.mockRejectedValueOnce(failure);
+    const respond = vi.fn();
+    await expect(invokeCatalog({}, {}, respond)).rejects.toBe(failure);
+    expect(respond).not.toHaveBeenCalled();
+    expect(releaseRegistry).toHaveBeenCalledOnce();
+  });
+
   it.each(["load", "resolve"] as const)(
     "propagates %s failure without partial publication",
     async (stage) => {
       const failure = new Error("synthetic producer failure");
-      vi.mocked(stage === "load" ? loadRegistry : resolveTools).mockImplementationOnce(() => {
-        throw failure;
-      });
+      if (stage === "load") {
+        vi.mocked(acquireRegistry).mockRejectedValueOnce(failure);
+      } else {
+        resolveTools.mockImplementationOnce(() => {
+          throw failure;
+        });
+      }
       const respond = vi.fn();
       await expect(invokeCatalog({}, {}, respond)).rejects.toBe(failure);
       expect(respond).not.toHaveBeenCalled();
+      expect(releaseRegistry).toHaveBeenCalledTimes(stage === "resolve" ? 1 : 0);
     },
   );
 });
