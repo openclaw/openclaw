@@ -2061,7 +2061,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
    same link-relative geometry as toggle-less rows, so one mask fits both. */
 .sidebar-recent-session:not(.sidebar-recent-session--child):has(> .sidebar-child-session-toggle)
   > .sidebar-recent-session__aside {
-  right: 34px;
+  right: calc(var(--sidebar-child-session-toggle-width) + 4px);
 }
 
 .sidebar-recent-session:not(

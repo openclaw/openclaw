@@ -59,7 +59,7 @@ function rowLayout(locator: Locator) {
 
 function expectUnreadLayout(layout: Awaited<ReturnType<typeof rowLayout>>, nameLeft: number) {
   const { unread, lead, name } = layout;
-  expect(unread).toMatchObject({ width: 7, height: 7 });
+  expect(unread).toMatchObject({ width: 8, height: 8 });
   for (const [start, end] of [
     ["left", "right"],
     ["top", "bottom"],

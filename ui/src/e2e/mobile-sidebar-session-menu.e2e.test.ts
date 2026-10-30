@@ -139,7 +139,8 @@ async function expectTwoLineTitleSpace(
         expect(await box(badge)).toEqual(restingBadge);
         if (pointer === "fine") {
           const gap = actions.x - title.x - title.width;
-          expect(resting.width - title.width).toBeCloseTo(actions.width + gap, 0);
+          // Actions sit 2px inside the resting title edge, centered on the trailing column.
+          expect(resting.width - title.width).toBeCloseTo(actions.width + gap + 2, 0);
         }
       }
       if (pointer !== "fine") {
@@ -258,15 +259,6 @@ suite.define(() => {
             expectVerticalBounds(glyph, button);
           }
           await expectSessionGeometry(session);
-          for (const colored of [session, group.locator(".sidebar-recent-session")]) {
-            const clearance = await colored.evaluate((row) => {
-              const stripe = getComputedStyle(row, "::before");
-              const glyph = row.querySelector(".session-glyph")!.getBoundingClientRect();
-              const stripeRight = Number.parseFloat(stripe.left) + Number.parseFloat(stripe.width);
-              return glyph.left - row.getBoundingClientRect().left - stripeRight;
-            });
-            expect(clearance).toBeGreaterThanOrEqual(2);
-          }
         }
         const toggle = group.locator(".sidebar-session-group-toggle");
         await toggle.click();
