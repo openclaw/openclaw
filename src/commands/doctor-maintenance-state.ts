@@ -201,7 +201,7 @@ export async function createDoctorMaintenanceState(options: {
   };
   const assertOwnerCurrent = (databasePath?: string) => {
     runOwnerCheck(() => {
-      owner!.assertCurrent(options.assertCurrent);
+      owner!.assertCurrent(resources ? undefined : options.assertCurrent);
       if (databasePath !== undefined) {
         owner!.assertDatabaseAccess(databasePath);
       }
