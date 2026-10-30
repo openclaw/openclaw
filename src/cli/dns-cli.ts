@@ -1,6 +1,7 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import type { Command } from "commander";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
@@ -59,24 +60,97 @@ function run(cmd: string, args: string[], opts?: RunOpts): string {
   return typeof res.stdout === "string" ? res.stdout : "";
 }
 
-function writeFileSudoIfNeeded(filePath: string, content: string): void {
-  // Zone/CoreDNS paths may be root-owned; fall back to sudo tee only after normal write fails.
+/** Resolve the real directory so a symlinked Homebrew prefix publishes to the same file. */
+function resolveConfigDir(dirPath: string): string {
+  return fs.realpathSync.native(dirPath);
+}
+
+function isPermissionFailure(error: unknown): boolean {
+  const code = (error as { code?: string }).code;
+  if (code === "EACCES" || code === "EPERM") {
+    return true;
+  }
+  const cause = (error as { cause?: unknown }).cause;
+  return cause instanceof Error && cause !== error && isPermissionFailure(cause);
+}
+
+/**
+ * Publish an operator-owned CoreDNS file through a same-directory rename.
+ *
+ * A plain write truncates the destination first, so an interrupted or failed
+ * write leaves the operator's Corefile empty or partial with no recovery copy.
+ */
+function publishConfigFile(filePath: string, content: string): void {
+  const resolvedDir = resolveConfigDir(path.dirname(filePath));
+  const target = path.join(resolvedDir, path.basename(filePath));
+  replaceFileAtomicSync({
+    filePath: target,
+    content,
+    // The atomic writer applies dirMode to the parent directory, so pass the
+    // operator's own mode instead of tightening the CoreDNS directory.
+    dirMode: fs.statSync(resolvedDir).mode & 0o7777,
+    mode: 0o644,
+    preserveExistingMode: true,
+    syncTempFile: true,
+    syncParentDir: true,
+    tempPrefix: ".openclaw-dns-config",
+    throwOnCleanupError: true,
+  });
+}
+
+/** Publish through a privileged staging file when the operator's path is not writable. */
+function publishConfigFileWithSudo(filePath: string, content: string): void {
+  const resolvedDir = resolveConfigDir(path.dirname(filePath));
+  const target = path.join(resolvedDir, path.basename(filePath));
+  const existing = fs.statSync(target, { throwIfNoEntry: false });
+  const tempPath = path.join(
+    resolvedDir,
+    `.${path.basename(filePath)}.openclaw-${process.pid}.tmp`,
+  );
   try {
-    fs.writeFileSync(filePath, content, "utf-8");
+    // Stage the content next to the destination so the rename below is the only
+    // step that can replace the operator's file.
+    const staged = spawnSync("sudo", ["tee", tempPath], {
+      input: content,
+      encoding: "utf-8",
+      stdio: ["pipe", "ignore", "inherit"],
+    });
+    assertSpawnSucceeded(`sudo tee ${tempPath}`, staged);
+    if (existing) {
+      // The rename replaces the file, so carry its permissions and ownership over.
+      run("sudo", ["chown", `${existing.uid}:${existing.gid}`, tempPath]);
+      run("sudo", ["chmod", (existing.mode & 0o7777).toString(8), tempPath]);
+    } else {
+      run("sudo", ["chmod", "644", tempPath]);
+    }
+    const published = spawnSync("sudo", ["mv", "-f", tempPath, target], {
+      encoding: "utf-8",
+      stdio: "inherit",
+    });
+    assertSpawnSucceeded(`sudo mv ${tempPath} ${target}`, published);
+  } catch (error) {
+    // The staged file is inert and the operator's file was never touched.
+    spawnSync("sudo", ["rm", "-f", tempPath], {
+      encoding: "utf-8",
+      stdio: "ignore",
+    });
+    throw error;
+  }
+}
+
+function publishConfigFileIfNeeded(filePath: string, content: string): void {
+  // Zone/CoreDNS paths may be root-owned; fall back to a privileged publish
+  // only after the ordinary atomic publish reports a permission failure.
+  try {
+    publishConfigFile(filePath, content);
     return;
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code !== "EACCES" && code !== "EPERM") {
-      throw err instanceof Error ? err : new Error(String(err));
+  } catch (error) {
+    if (!isPermissionFailure(error)) {
+      throw error instanceof Error ? error : new Error(String(error));
     }
   }
 
-  const res = spawnSync("sudo", ["tee", filePath], {
-    input: content,
-    encoding: "utf-8",
-    stdio: ["pipe", "ignore", "inherit"],
-  });
-  assertSpawnSucceeded(`sudo tee ${filePath}`, res);
+  publishConfigFileWithSudo(filePath, content);
 }
 
 function mkdirSudoIfNeeded(dirPath: string): void {
@@ -216,12 +290,12 @@ export function registerDnsCli(program: Command) {
       mkdirSudoIfNeeded(confDir);
 
       if (!fs.existsSync(corefilePath)) {
-        writeFileSudoIfNeeded(corefilePath, `import ${importGlob}\n`);
+        publishConfigFileIfNeeded(corefilePath, `import ${importGlob}\n`);
       } else {
         const existing = fs.readFileSync(corefilePath, "utf-8");
         if (!existing.includes(importGlob)) {
           const next = `${existing.replace(/\s*$/, "")}\n\nimport ${importGlob}\n`;
-          writeFileSudoIfNeeded(corefilePath, next);
+          publishConfigFileIfNeeded(corefilePath, next);
         }
       }
 
@@ -238,7 +312,7 @@ export function registerDnsCli(program: Command) {
         `}`,
         ``,
       ].join("\n");
-      writeFileSudoIfNeeded(serverPath, server);
+      publishConfigFileIfNeeded(serverPath, server);
 
       // Ensure the gateway can write its zone file path.
       if (zoneFileNeedsBootstrap(zonePath)) {
