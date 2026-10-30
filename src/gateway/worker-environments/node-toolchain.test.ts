@@ -160,7 +160,9 @@ it.each(["npm", "corepack"])(
       '#!/bin/sh\nprintf attempted > "$HOME/download-attempt"\nexit 17\n',
     );
     if (missing === "corepack") {
-      for (const name of ["npm", "npx"]) write(path.join(f.bin, name), "#!/bin/sh\nexit 0\n");
+      for (const name of ["npm", "npx"]) {
+        write(path.join(f.bin, name), "#!/bin/sh\nexit 0\n");
+      }
     }
     const env = { ...f.env, PATH: f.bin };
     expect(run("/bin/sh", ["-s"], env, BUNDLE_NODE_TOOLCHAIN_SETUP_SH)).toBe("");
