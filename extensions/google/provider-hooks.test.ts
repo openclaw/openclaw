@@ -42,10 +42,23 @@ describe("GOOGLE_GEMINI_PROVIDER_HOOKS.classifyFailoverReason", () => {
     { provider: "google", code: "UNAVAILABLE", expected: "overloaded" },
     { provider: "google-vertex", code: "DEADLINE_EXCEEDED", expected: "timeout" },
     { provider: "google-antigravity", code: "INTERNAL", expected: "server_error" },
+    {
+      provider: "google",
+      code: "",
+      errorMessage: "This model models/gemini-2.5-flash is no longer available to new users.",
+      expected: "model_not_found",
+    },
     { provider: "google-vertex", code: "INSUFFICIENT_QUOTA", expected: undefined },
-  ] as const)("classifies $provider $code as $expected", ({ provider, code, expected }) => {
-    expect(
-      GOOGLE_GEMINI_PROVIDER_HOOKS.classifyFailoverReason({ provider, errorMessage: "", code }),
-    ).toBe(expected);
-  });
+  ] as const)(
+    "classifies $provider $code as $expected",
+    ({ provider, code, expected, errorMessage }) => {
+      expect(
+        GOOGLE_GEMINI_PROVIDER_HOOKS.classifyFailoverReason({
+          provider,
+          errorMessage: errorMessage ?? "",
+          code,
+        }),
+      ).toBe(expected);
+    },
+  );
 });
