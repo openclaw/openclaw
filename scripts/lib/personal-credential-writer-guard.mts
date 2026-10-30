@@ -3,6 +3,7 @@ import { SymbolFlags, type Symbol } from "typescript/sync";
 import type { NativeTypeScriptProject } from "./native-typescript.mts";
 
 const accounts = "src/state/user-model-accounts.ts";
+const recordWrites = "src/state/user-model-account-record-writes.ts";
 const profileMerge = "src/state/user-profiles-merge.ts";
 const profileWrites = "src/state/user-profile-writes.worker.ts";
 const profileWorker = "src/state/user-profiles.worker.ts";
@@ -629,6 +630,8 @@ const callers = new Map<string, readonly string[]>([
       "setUserProfileAuthLink",
       "clearUserProfileAuthLink",
       "mergeUserModelAccounts",
+      // Removal publishes its explicitly cleared links in the same admitted transaction.
+      "removeUserModelAccount",
     ].map((name) => key(accounts, name)),
   ],
   [
@@ -732,7 +735,10 @@ const sinks = new Map<string, number>([
   [key("src/gateway/mention-inbox-store.worker.ts", "writeMentionStoreChanges/flushDeletes"), 1],
   ...[...publicationWriters.keys()].map((id): [string, number] => [id, 1]),
   [key(publicationDeletion, "deletePersonalGitHubSessionReceiptsInDatabase"), 2],
-  [key(accounts, "writeRecord"), 1],
+  // Personal model-account credential rows move through the state worker's
+  // admitted transaction; the extracted record module holds both raw writers.
+  [key(recordWrites, "writeUserModelAccountRecord"), 1],
+  [key(recordWrites, "deleteUserModelAccountCredentialRecord"), 1],
   [key(accounts, "renameUserProfileAuthLinks"), 1],
   [key(accounts, "mergeUserModelAccounts"), 2],
   // These writers cannot select personal-account rows: team scope or GitHub-only names.

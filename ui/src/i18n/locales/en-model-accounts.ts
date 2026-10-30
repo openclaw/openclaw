@@ -38,6 +38,13 @@ const enModelAccounts = {
       linkedStatus: "New chat default",
       gatewayAccount: "Selected saved account",
       selectAction: "Use for new chats",
+      removeAction: "Remove account",
+      removeConfirmAction: "Remove from this Gateway",
+      removalConfirm:
+        "Delete this saved credential from this Gateway and clear its current and rollback chat selections. Chats will resolve credentials using the remaining personal and Gateway defaults; provider access is not revoked. Shared credentials and other people's accounts are unchanged.",
+      removalPending:
+        "Credential removed. Some chat references could not be cleared. Retry cleanup; the credential will not be restored.",
+      retryCleanup: "Retry chat cleanup",
       savedAccounts: "Saved accounts",
       loadMore: accountList.loadMore,
       inventoryFailed: accountList.inventoryFailed,
@@ -51,6 +58,8 @@ const enModelAccounts = {
       statusFailed: "Could not check sign-in status. Check again or cancel this attempt.",
       statusTimedOut: "Sign-in has not finished. Check its status or cancel and sign in again.",
       notices: {
+        removed:
+          "Account removed from this Gateway and chat references cleared. Provider access was not revoked.",
         connected: "Account added.",
         cancelled: "Sign-in cancelled. No account was added by this attempt.",
         expired: "Sign-in expired. Sign in again to start a new attempt.",

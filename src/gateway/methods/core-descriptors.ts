@@ -148,6 +148,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["users.listAuthLinks", "users", "operator.read", "2026.8", PROFILE_DEPENDENT],
   ["users.listModelAccounts", "users", "operator.read", "2026.8", PROFILE_DEPENDENT],
   ["users.selectModelAccount", "users", "operator.write", "2026.8", PROFILE_DEPENDENT],
+  ["users.removeModelAccount", "users", "operator.write", "2026.10", PROFILE_DEPENDENT],
   ["users.linkAuthProfile", "users", "operator.admin", "2026.8", PROFILE_DEPENDENT],
   ["users.unlinkAuthProfile", "users", "operator.write", "2026.8", PROFILE_DEPENDENT],
   ["users.authConnect.start", "users", "operator.write", "2026.8"],

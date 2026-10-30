@@ -15,6 +15,7 @@ import { projectChatFields } from "../chat-field-projection.ts";
 registerModelAccountListEnglish();
 
 type AccountInventory = {
+  authRevision: number;
   model: string;
   selection: ChatAccountSelection;
   accounts: UserModelAccount[];
@@ -31,6 +32,7 @@ export type ChatModelAccountSection = NonNullable<ReturnType<typeof renderChatMo
 
 export function renderChatModelAccountControl(params: {
   modelAuthStatusResult?: ModelAuthStatusResult | null;
+  authRevision?: number;
   owner: object;
   client: GatewayBrowserClient | null | undefined;
   selection: ChatAccountSelection | null | undefined;
@@ -46,19 +48,27 @@ export function renderChatModelAccountControl(params: {
     return undefined;
   }
   let inventory = inventories.get(owner);
+  const authRevision = params.authRevision ?? 0;
+  const sameSelection =
+    inventory?.isCurrent() && inventory.model === params.model && inventory.selection === selection;
+  const refreshOpen = Boolean(
+    sameSelection && inventory?.open && inventory.authRevision !== authRevision,
+  );
   if (
     !inventory?.isCurrent() ||
     inventory.model !== params.model ||
-    inventory.selection !== selection
+    inventory.selection !== selection ||
+    inventory.authRevision !== authRevision
   ) {
     inventory = projectChatFields<AccountInventory>(
       {
+        authRevision,
         model: params.model,
         selection,
         accounts: [],
         nextCursor: undefined,
         loading: false,
-        open: false,
+        open: refreshOpen,
         error: null,
         isCurrent: params.ownsSelection,
       },
@@ -102,6 +112,11 @@ export function renderChatModelAccountControl(params: {
   const provider = params.model.includes("/")
     ? normalizeChatModelProviderId(params.model.slice(0, params.model.indexOf("/")))
     : "";
+  // An auth publication invalidates old pages and their in-flight replies. Keep an
+  // already-open picker open, but load the current inventory before accepting selection.
+  if (refreshOpen) {
+    void loadAccounts();
+  }
   const currentId = selection.kind === "automatic" ? undefined : selection.authProfileId;
   const profiles =
     params.modelAuthStatusResult?.providers
@@ -193,12 +208,10 @@ export function renderChatModelAccountControl(params: {
   };
   const toggleAccounts = () => {
     currentInventory.open = !currentInventory.open;
-    // Reopening retries an empty inventory after a failed load; loaded pages are reused.
-    if (
-      currentInventory.open &&
-      currentInventory.accounts.length === 0 &&
-      !currentInventory.loading
-    ) {
+    // Refresh on reopen too: a dropped best-effort metadata event must not cache removal forever.
+    if (currentInventory.open && !currentInventory.loading) {
+      currentInventory.accounts = [];
+      currentInventory.nextCursor = undefined;
       void loadAccounts();
     }
   };

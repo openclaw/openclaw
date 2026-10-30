@@ -19,6 +19,7 @@ import {
   setUserProfileAuthLink,
   listUserModelAccounts,
   readSelectedUserModelAccount,
+  removeUserModelAccount,
 } from "./user-model-accounts.js";
 import { ensureEnterpriseGitHubProfile } from "./user-profile-enterprise-github-write.worker.js";
 import {
@@ -214,6 +215,13 @@ export const userProfileOperations = {
       options,
       assertCurrent,
     ) => clearUserProfileAuthLink({ ...input, assertCurrent }, options),
+  ),
+  "userProfiles.modelAccount.remove": accountWrite(
+    (
+      input: Omit<Parameters<typeof removeUserModelAccount>[0], "assertCurrent">,
+      options,
+      assertCurrent,
+    ) => removeUserModelAccount({ ...input, assertCurrent }, options),
   ),
   "userProfiles.modelAccount.list": (
     input: Parameters<typeof listUserModelAccounts>[0],

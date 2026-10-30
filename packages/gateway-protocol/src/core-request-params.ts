@@ -96,6 +96,7 @@ export type GatewayCoreRequestParams = {
   "users.listAuthLinks": UsersSchema.UsersListAuthLinksParams;
   "users.listModelAccounts": UsersSchema.UsersListModelAccountsParams;
   "users.selectModelAccount": UsersSchema.UsersSelectModelAccountParams;
+  "users.removeModelAccount": UsersSchema.UsersRemoveModelAccountParams;
   "users.linkAuthProfile": UsersSchema.UsersLinkAuthProfileParams;
   "users.linkChannelIdentity": UsersSchema.UsersLinkChannelIdentityParams;
   "users.merge": UsersSchema.UsersMergeParams;

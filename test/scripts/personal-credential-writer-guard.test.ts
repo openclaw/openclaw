@@ -201,12 +201,14 @@ it("permits a named reader re-export without exposing its sibling writers", () =
 });
 
 it("allows reviewed sinks but rejects added sinks even in their owner function", () => {
+  const recordWrites = "src/state/user-model-account-record-writes.ts";
   const sink = `db.insertInto('secret_store_entries').values({ name: 'model-account:test' });`;
-  expectAllowed({}, `function writeRecord() { ${sink} }`);
+  const accounts = `export function unrelated() {}`;
+  expectAllowed({ [recordWrites]: `function writeUserModelAccountRecord() { ${sink} }` }, accounts);
   expectDenied(
-    {},
+    { [recordWrites]: `function writeUserModelAccountRecord() { ${sink} ${sink} }` },
     "unreviewed secret_store_entries writer",
-    `function writeRecord() { ${sink} ${sink} }`,
+    accounts,
   );
   expectDenied(
     { "src/new-writer.worker.ts": `function write() { ${sink} }` },

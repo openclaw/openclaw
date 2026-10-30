@@ -6,6 +6,7 @@ import type {
   UsersAuthConnectStatusResult,
   UsersListAuthLinksResult,
   UsersListModelAccountsResult,
+  UsersRemoveModelAccountResult,
   WizardStep,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -48,7 +49,8 @@ export class ModelAccountsState {
   inventoryReceipt = { result: Promise.resolve<string | null>(null) };
   action: AccountAction | null = null;
   error: string | null = null;
-  notice: "connected" | "cancelled" | "expired" | "selected" | "cleared" | null = null;
+  notice: "connected" | "cancelled" | "expired" | "selected" | "cleared" | "removed" | null = null;
+  removal: { authProfileId: string; label: string; credentialRemoved: boolean } | null = null;
   linkDraft = "";
   signIn: {
     providers: UsersAuthConnectCatalogResult["providers"];
@@ -140,6 +142,7 @@ export class ModelAccountsState {
         client && identityId && profileId ? { client, identityId, profileId, canAdmin } : null;
       this.links = [];
       this.accounts = [];
+      this.removal = null;
       this.nextCursor = undefined;
       this.linkDraft = "";
       this.signIn = null;
@@ -269,6 +272,59 @@ export class ModelAccountsState {
           this.linkDraft = "";
         }
         this.notice = action === "unlink" ? "cleared" : "selected";
+        void this.loadAccounts();
+      },
+    );
+  }
+
+  confirmRemoval(account: UserModelAccount) {
+    if (
+      this.busy ||
+      !this.accounts.some((entry) => entry.authProfileId === account.authProfileId)
+    ) {
+      return;
+    }
+    this.removal = {
+      authProfileId: account.authProfileId,
+      label: account.label,
+      credentialRemoved: false,
+    };
+    this.error = null;
+    this.notice = null;
+    this.publish();
+  }
+
+  cancelRemoval() {
+    if (!this.action) {
+      this.removal = null;
+      this.publish();
+    }
+  }
+
+  removeAccount() {
+    const removal = this.removal;
+    if (!removal) {
+      return undefined;
+    }
+    return this.runAction(
+      "request",
+      (target) => {
+        // Retire reads started before deletion; a late page must not restore the removed row.
+        this.inventoryRequest += 1;
+        this.inventoryLoading = false;
+        return target.client.request<UsersRemoveModelAccountResult>("users.removeModelAccount", {
+          profileId: target.profileId,
+          authProfileId: removal.authProfileId,
+        });
+      },
+      (result) => {
+        this.accounts = this.accounts.filter(
+          (account) => account.authProfileId !== result.authProfileId,
+        );
+        this.applyLinks(result.links);
+        this.removal =
+          result.sessionCleanup === "pending" ? { ...removal, credentialRemoved: true } : null;
+        this.notice = result.sessionCleanup === "complete" ? "removed" : null;
         void this.loadAccounts();
       },
     );

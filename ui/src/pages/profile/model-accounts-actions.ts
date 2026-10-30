@@ -124,6 +124,7 @@ export function createModelAccountsActions(readState: () => ModelAccountsState) 
       );
     },
     startConnect: () => run((state) => state.startConnect()),
+    removeAccount: () => run((state) => state.removeAccount()),
     answerStep: (stepId: string, value: unknown) => run((state) => state.answerStep(stepId, value)),
     cancel: () => run((state) => state.connectStatus("cancel")),
   };

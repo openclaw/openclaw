@@ -11,6 +11,7 @@ import type {
   UsersAuthConnectStatusResult,
   UsersListModelAccountsResult,
   UsersSelectModelAccountResult,
+  UsersRemoveModelAccountResult,
   UsersSelfResult,
   UsersUnlinkAuthProfileResult,
 } from "../../../packages/gateway-protocol/src/schema/users.js";
@@ -374,6 +375,62 @@ export async function modelsAccountsUpdateDefaultCommand(
           options.action === "use"
             ? `Selected ${sanitizeTerminalText(options.authProfileId)}. ${SESSION_DEFAULT_NOTE}`
             : `Cleared the ${sanitizeTerminalText(options.provider)} new-session default. Saved credentials and existing session accounts are unchanged.`,
+        );
+      }
+    },
+  );
+}
+
+export async function modelsAccountsRemoveCommand(
+  options: ModelsAccountsOptions & { authProfileId: string; yes?: boolean },
+  runtime: RuntimeEnv,
+): Promise<void> {
+  if (!options.yes && (options.json || !isTerminalInteractive())) {
+    throw new Error(
+      "Removing a personal account requires confirmation. Use --yes to confirm removal from this Gateway, without provider revoke.",
+    );
+  }
+  await withModelsAccountsGateway(
+    options,
+    "write",
+    runtime,
+    async ({ client, signal, profile }) => {
+      if (!options.yes) {
+        const confirmed = await createClackPrompter(process.stderr, signal).confirm({
+          message: `Remove ${sanitizeTerminalText(options.authProfileId)} from this Gateway and clear its current and rollback chat selections? Provider access will not be revoked.`,
+          initialValue: false,
+        });
+        if (!confirmed) {
+          throw new ExitError(130, "Account removal cancelled.");
+        }
+      }
+      signal.throwIfAborted();
+      const result = await client.request<UsersRemoveModelAccountResult>(
+        "users.removeModelAccount",
+        {
+          profileId: profile.id,
+          authProfileId: options.authProfileId,
+        },
+        { signal },
+      );
+      if (options.json) {
+        writeRuntimeJson(runtime, { profileId: profile.id, ...result });
+      } else {
+        runtime.log(
+          `Account removed from this Gateway: ${sanitizeTerminalText(result.authProfileId)}. Provider access was not revoked.`,
+        );
+      }
+      if (result.sessionCleanup === "pending") {
+        runtime.error(
+          "Credential removed; some chat references remain. Run the same remove command again to retry cleanup without restoring the credential.",
+        );
+        throw new ExitError(1);
+      }
+      if (!options.json) {
+        runtime.log(
+          typeof result.clearedSessions === "number"
+            ? `Cleared the removed account's selection from ${result.clearedSessions} chat${result.clearedSessions === 1 ? "" : "s"}. Chats resolve credentials using remaining personal and Gateway defaults.`
+            : "Chat selections cleared. Chats resolve credentials using remaining personal and Gateway defaults.",
         );
       }
     },

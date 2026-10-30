@@ -54,9 +54,12 @@ describe("chat account selection", () => {
   ) {
     const container = document.createElement("div");
     let current = true;
-    const state = projectChatFields<Pick<ChatPageHost, "client" | "chatAccountSelection">>({
+    const state = projectChatFields<
+      Pick<ChatPageHost, "client" | "chatAccountSelection" | "modelAuthStatusRequestVersion">
+    >({
       client: createTestGatewayClient(request),
       chatAccountSelection: selection,
+      modelAuthStatusRequestVersion: 0,
     });
     const onSelect = vi.fn(async () => true);
     const onManage = vi.fn();
@@ -67,6 +70,7 @@ describe("chat account selection", () => {
             owner: state,
             client: state.client,
             selection: state.chatAccountSelection,
+            authRevision: state.modelAuthStatusRequestVersion,
             model: "openai/gpt-5.5",
             disabled: false,
             ownsSelection: () => current,
@@ -169,6 +173,48 @@ describe("chat account selection", () => {
     );
     view.select("manage");
     expect(view.onManage).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes an open picker on auth changes and discards an older inventory response", async () => {
+    const old = createDeferred<UsersListModelAccountsResult>();
+    const fresh: UsersListModelAccountsResult = { profileId: "owner", links: [], accounts: [] };
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => old.promise)
+      .mockResolvedValue(fresh);
+    const view = mountAccountControl(request, {
+      kind: "automatic",
+      label: "Gateway default",
+    });
+    view.open();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    view.state.modelAuthStatusRequestVersion += 1;
+    flush();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    old.resolve({
+      profileId: "owner",
+      links: [],
+      accounts: [
+        {
+          authProfileId: "openai:removed",
+          provider: "openai",
+          label: "Removed account",
+          authType: "oauth",
+          selected: false,
+        },
+      ],
+    });
+    await old.promise;
+    flush();
+    expect(view.container.textContent).not.toContain("Removed account");
+    expect(
+      view.container
+        .querySelector("[data-chat-account-group-toggle]")
+        ?.getAttribute("aria-expanded"),
+    ).toBe("true");
+    view.open();
+    view.open();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
   });
 
   it("retries a failed inventory when the section is reopened", async () => {

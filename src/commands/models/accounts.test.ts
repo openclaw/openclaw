@@ -27,6 +27,7 @@ import {
   modelsAccountsUpdateDefaultCommand,
   modelsAccountsLoginCommand,
   modelsAccountsListCommand,
+  modelsAccountsRemoveCommand,
 } from "./accounts.js";
 
 const mocks = vi.hoisted(() => ({
@@ -377,6 +378,68 @@ describe("personal model account CLI over an identified Gateway connection", () 
       );
     },
   );
+
+  it.each(["complete", "pending"] as const)(
+    "reports account removal and %s cleanup separately",
+    async (sessionCleanup) => {
+      const output = runtime();
+      const result = {
+        authProfileId: ACCOUNT_ID,
+        removed: true,
+        links: [],
+        sessionCleanup,
+        clearedSessions: sessionCleanup === "complete" ? 1 : undefined,
+      };
+      await withGateway(
+        (request) => (request.method === "users.removeModelAccount" ? result : undefined),
+        async ({ port, requests }) => {
+          const run = modelsAccountsRemoveCommand(
+            { port, authProfileId: ACCOUNT_ID, yes: true, json: true },
+            output,
+          );
+          if (sessionCleanup === "pending") {
+            await expect(run).rejects.toBeInstanceOf(ExitError);
+            expect(output.error).toHaveBeenCalledWith(
+              expect.stringContaining("Credential removed; some chat references remain"),
+            );
+          } else {
+            await run;
+          }
+          expectJsonOutput(output, { profileId: PROFILE_ID, ...result });
+          expect(requestData(requests)).toEqual([
+            rpc("users.self"),
+            rpc("users.removeModelAccount", { profileId: PROFILE_ID, authProfileId: ACCOUNT_ID }),
+          ]);
+        },
+      );
+    },
+  );
+
+  it("requires explicit confirmation for JSON account removal", async () => {
+    await expect(
+      modelsAccountsRemoveCommand({ authProfileId: ACCOUNT_ID, json: true }, runtime()),
+    ).rejects.toThrow("--yes");
+  });
+
+  it("reports how many chats had the removed account's selection cleared", async () => {
+    const output = runtime();
+    const result = {
+      authProfileId: ACCOUNT_ID,
+      removed: true,
+      links: [],
+      sessionCleanup: "complete" as const,
+      clearedSessions: 2,
+    };
+    await withGateway(
+      (request) => (request.method === "users.removeModelAccount" ? result : undefined),
+      async ({ port }) => {
+        await modelsAccountsRemoveCommand({ port, authProfileId: ACCOUNT_ID, yes: true }, output);
+      },
+    );
+    expect(output.log).toHaveBeenCalledWith(
+      expect.stringContaining("Cleared the removed account's selection from 2 chats"),
+    );
+  });
 
   it("guides an unidentified person through login without prompting for provider credentials", async () => {
     const output = runtime();

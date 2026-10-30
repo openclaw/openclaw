@@ -7,6 +7,7 @@ import type {
   UsersAuthConnectStatusResult,
   UsersListAuthLinksResult,
   UsersListModelAccountsResult,
+  UsersRemoveModelAccountResult,
   WizardStep,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -73,7 +74,10 @@ function inventory(accounts: UserModelAccount[] = []): UsersListModelAccountsRes
   };
 }
 
-type AccountReply = UsersAuthConnectStatusResult | UsersListAuthLinksResult;
+type AccountReply =
+  | UsersAuthConnectStatusResult
+  | UsersListAuthLinksResult
+  | UsersRemoveModelAccountResult;
 async function mount(
   handle: (method: string, params?: unknown) => Promise<AccountReply> = async () => {
     throw new Error("Unexpected account mutation");
@@ -594,4 +598,96 @@ it("adds a catalog-provided account through its masked auth step without provide
     { ...target, stepId: step.id, value: "invalid" },
     { ...target, stepId: step.id, value: "synthetic-grok-key" },
   ]);
+});
+
+it("requires confirmation, leaves cancellation untouched and waits for confirmed deletion", async () => {
+  const pending = createDeferred<UsersRemoveModelAccountResult>();
+  const harness = await mount(
+    async () => {
+      const result = await pending.promise;
+      harness.showAccounts([work]);
+      return result;
+    },
+    {
+      accounts: [personal, work],
+    },
+  );
+  harness.button(".profile-auth-account-remove").click();
+  flush();
+  expect(harness.accounts.textContent).toContain(t("profilePage.modelAccounts.removalConfirm"));
+  harness.button(".profile-auth-remove-cancel").click();
+  flush();
+  expect(harness.request.mock.calls.some(([method]) => method === "users.removeModelAccount")).toBe(
+    false,
+  );
+  expect(harness.accounts.querySelectorAll(".profile-auth-account-remove")).toHaveLength(2);
+  harness.button(".profile-auth-account-remove").click();
+  flush();
+  harness.button(".profile-auth-remove-confirm").click();
+  await waitForSolid(() =>
+    expect(harness.request).toHaveBeenCalledWith("users.removeModelAccount", {
+      profileId: "profile-1",
+      authProfileId: personal.authProfileId,
+    }),
+  );
+  expect(harness.accounts.querySelectorAll(".profile-auth-account-remove")).toHaveLength(2);
+  pending.resolve({
+    authProfileId: personal.authProfileId,
+    removed: true,
+    sessionCleanup: "complete",
+    links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
+  });
+  await waitForSolid(() =>
+    expect(harness.accounts.querySelectorAll(".profile-auth-account-remove")).toHaveLength(1),
+  );
+  expect(harness.accounts.textContent).toContain(work.label);
+  expect(harness.accounts.textContent).not.toContain(personal.label);
+});
+
+it("keeps a partial removal honest and retries cleanup using the deleted account ID", async () => {
+  const handle = vi
+    .fn()
+    .mockResolvedValueOnce({
+      authProfileId: personal.authProfileId,
+      removed: true,
+      sessionCleanup: "pending",
+      links: [],
+    })
+    .mockResolvedValueOnce({
+      authProfileId: personal.authProfileId,
+      removed: false,
+      sessionCleanup: "complete",
+      links: [],
+    });
+  const harness = await mount(
+    async (method, params) => {
+      const result = await handle(method, params);
+      harness.showAccounts([]);
+      return result;
+    },
+    { accounts: [personal] },
+  );
+  harness.button(".profile-auth-account-remove").click();
+  flush();
+  harness.button(".profile-auth-remove-confirm").click();
+  await waitForSolid(() =>
+    expect(harness.accounts.textContent).toContain(t("profilePage.modelAccounts.removalPending")),
+  );
+  expect(harness.accounts.querySelector(".profile-auth-account-remove")).toBeNull();
+  expect(harness.accounts.textContent).not.toContain(
+    t("profilePage.modelAccounts.notices.removed"),
+  );
+  await waitForSolid(() =>
+    expect(harness.button(".profile-auth-remove-confirm").disabled).toBe(false),
+  );
+  harness.button(".profile-auth-remove-confirm").click();
+  await waitForSolid(() =>
+    expect(harness.accounts.textContent).toContain(t("profilePage.modelAccounts.notices.removed")),
+  );
+  expect(handle.mock.calls).toEqual(
+    Array.from({ length: 2 }, () => [
+      "users.removeModelAccount",
+      { profileId: "profile-1", authProfileId: personal.authProfileId },
+    ]),
+  );
 });

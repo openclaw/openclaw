@@ -344,6 +344,7 @@ openclaw models accounts login openai --method device-code
 openclaw models accounts login xai --method api-key
 openclaw models accounts use <account-id>
 openclaw models accounts clear-default <provider>
+openclaw models accounts remove <account-id>
 ```
 
 Every account command shows **Gateway**, **Person**, and **Scope: Personal** before accessing accounts or asking for provider credentials. This context goes to stderr so `--json` output stays pipeable. The person is the Gateway's saved, verified profile, not your operating-system username or an unsaved display-name edit.
@@ -363,6 +364,10 @@ Anthropic uses an API key for personal setup, not a Claude subscription token. O
 Keep the command running until it reports a terminal result. Ctrl-C cancels that exact sign-in attempt and waits for the Gateway's acknowledgment; a closed connection must start a fresh attempt. Saving an account does not by itself prove that a model request will succeed.
 
 `use` selects an already-saved account for new sessions without signing in again. `clear-default` removes only the personal default for that provider: it keeps saved credentials and existing session selections. Neither operation revokes provider access. See [Per-person model accounts](/concepts/multi-user#per-person-model-accounts) for collaborator, fork, and failover behavior.
+
+`remove` requires `operator.write` and deletes one account owned by your signed-in person from this Gateway. It removes the stored credential, clears matching defaults and current/rollback chat references, and preserves other accounts and model choices. It does not revoke access at the provider or delete shared System/agent credentials. Existing account-selection and fallback rules apply after the reference is cleared; this is not a promise about which account will be billed.
+
+Interactive removal asks for confirmation. Use `remove <account-id> --yes` in scripts; `--json` also requires `--yes`. If the credential was removed but some chat references could not be cleared, the command exits with status 1 and reports `sessionCleanup: "pending"`. Retry the same account ID to finish cleanup; the credential is not restored. A completed retry reports `removed: false` with `sessionCleanup: "complete"`. Completed removals report how many chats had the account's selection cleared (`clearedSessions`); a pending or older reply may omit it.
 
 All account subcommands accept `--url <url>`, `--port <port>`, `--token-file <path>`, `--password-file <path>`, `--timeout <ms>` (default `30000`), and `--json`. The token/password files authenticate the **Gateway**, not the provider, and do not establish a personal identity for this CLI. An explicit `--url` can use an identity-bearing endpoint without supplying a shared token. It does not send ambient or configured shared credentials to the override; configured edge credentials remain bound to their own endpoint. Flags may precede or follow the leaf command:
 

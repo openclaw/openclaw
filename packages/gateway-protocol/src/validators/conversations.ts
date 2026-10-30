@@ -182,6 +182,11 @@ export const validateUsersSelectModelAccountParams = createProtocolValidator(
   S.UsersSelectModelAccountParamsSchema,
   Checks.isUsersSelectModelAccountParams,
 );
+
+export const validateUsersRemoveModelAccountParams = createProtocolValidator(
+  S.UsersRemoveModelAccountParamsSchema,
+  Checks.isUsersRemoveModelAccountParams,
+);
 export const validateUsersAuthConnectCatalogParams = createProtocolValidator(
   S.UsersAuthConnectCatalogParamsSchema,
   Checks.isUsersAuthConnectCatalogParams,

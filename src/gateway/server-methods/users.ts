@@ -23,6 +23,7 @@ import {
   validateUsersUnlinkAuthProfileParams,
   validateUsersListModelAccountsParams,
   validateUsersSelectModelAccountParams,
+  validateUsersRemoveModelAccountParams,
   type UsersLinkChannelIdentityParams,
   validateUsersLinkChannelIdentityParams,
   validateUsersListChannelIdentitiesParams,
@@ -67,6 +68,7 @@ import {
   ModelAccountConnectAuthorityError,
   ModelAccountConnectInputError,
 } from "../model-account-connect-errors.js";
+import { getModelAccountRemoval } from "../model-account-connect.js";
 import {
   invalidateOperatorRolePolicy,
   resolveOperatorRoleSelection,
@@ -277,6 +279,19 @@ export const usersHandlers: GatewayRequestHandlers = {
     "users.selectModelAccount",
     validateUsersSelectModelAccountParams,
     (service, action, params) => service.selectAsync(action, params.authProfileId),
+  ),
+  "users.removeModelAccount": connectHandler(
+    "users.removeModelAccount",
+    validateUsersRemoveModelAccountParams,
+    (service, action, params) => {
+      // Destructive removal is not part of the shipped service contract; resolve
+      // the Gateway-internal operation bound to this exact service instance.
+      const removal = getModelAccountRemoval(service);
+      if (!removal) {
+        throw new Error("Model-account service is not running.");
+      }
+      return removal.removeAsync(action, params.authProfileId);
+    },
   ),
   "users.authConnect.start": connectHandler(
     "users.authConnect.start",

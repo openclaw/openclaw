@@ -45,6 +45,7 @@ export {
   isUsersListAuthLinksParams,
   isUsersListModelAccountsParams,
   isUsersSelectModelAccountParams,
+  isUsersRemoveModelAccountParams,
   isUsersAuthConnectCatalogParams,
   isUsersAuthConnectStartParams,
   isUsersAuthConnectAnswerParams,

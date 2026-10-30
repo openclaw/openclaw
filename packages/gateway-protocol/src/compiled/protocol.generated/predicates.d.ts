@@ -687,6 +687,11 @@ export function isUsersSelectModelAccountParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").UsersSelectModelAccountParamsSchema
 >;
+export function isUsersRemoveModelAccountParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").UsersRemoveModelAccountParamsSchema
+>;
 export function isUsersAuthConnectCatalogParams(
   value: unknown,
 ): value is import("typebox").Static<
