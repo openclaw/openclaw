@@ -94,6 +94,10 @@ Session-state changes before prompt admission also stop model fallback. If the
 persisted user turn changes or the session reader is no longer current, OpenClaw
 preserves the session-state error for the session's retry owner or reports it to
 the caller. These errors do not produce an `unknown` provider-failure notice.
+This includes a session entry changing during a read. Existing bounded recovery
+stays with the reader; a read that still cannot be accepted surfaces the local
+failure. Check the conversation for saved work before trying again with the
+selected model.
 
 Losing the canonical user turn during prompt projection also stops unchanged
 retries and model fallback. If MCP cleanup cannot confirm closure, OpenClaw
