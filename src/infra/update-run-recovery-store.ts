@@ -33,9 +33,16 @@ export function readRecovery(
   db: EngineConnection,
   runId: string,
 ): UpdateRecoveryRecord | undefined {
-  const row = readRecoveryRows(db).find(
-    (entry) => entry.state_key === UPDATE_RECOVERY_KEY_PREFIX + runId,
-  );
+  if (!tableExists(db, "config_machine_state")) {
+    return undefined;
+  }
+  const row = executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<RecoveryDatabase>(db)
+      .selectFrom("config_machine_state")
+      .select("value_json")
+      .where("state_key", "=", UPDATE_RECOVERY_KEY_PREFIX + runId),
+  ).rows[0];
   return row ? decodeUpdateRecovery(row.value_json, runId) : undefined;
 }
 
