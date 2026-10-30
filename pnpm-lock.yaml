@@ -1011,8 +1011,8 @@ importers:
         specifier: 0.164.0
         version: 0.164.0
       '@openclaw/fs-safe':
-        specifier: 0.26.14
-        version: 0.26.14
+        specifier: 0.26.15
+        version: 0.26.15
       acorn:
         specifier: 8.19.0
         version: 8.19.0

@@ -63,7 +63,7 @@ async function fixture(
     type: "module",
     files: [],
     devDependencies: { private: "9.0.0" },
-    dependencies: { bundled: "1.0.0", external: "1.0.0", left: "1.0.0" },
+    dependencies: { bundled: "1.0.0", external: "1.0.0", fs: "1.0.0" },
   };
   const build = { version: "1.0.0", commit: runtimeCommit, buildId: "fixture-a" };
   for (const dir of [source, deps, pack]) {
@@ -184,8 +184,8 @@ async function fixture(
     await fs.symlink("../.store/node_modules/external", path.join(deps, "node_modules/external"));
     await write(deps, "._authored", "authored input, not generated transport metadata\n");
   }
-  await addPackage(path.join(deps, "node_modules/left"), "left", "1.0.0", { nested: "1.0.0" });
-  await addPackage(path.join(deps, "node_modules/left/node_modules/nested"), "nested", "1.0.0");
+  await addPackage(path.join(deps, "node_modules/fs"), "fs", "1.0.0", { nested: "1.0.0" });
+  await addPackage(path.join(deps, "node_modules/fs/node_modules/nested"), "nested", "1.0.0");
   await addPackage(
     path.join(deps, "extensions/demo/node_modules/private"),
     "private",
@@ -365,7 +365,7 @@ describe("offline installed runtime composition", () => {
       let expected = "Dependency inventory mismatch: node-runtime-dependencies/linux-x64/";
       if (failure === "target") {
         await fs.unlink(path.join(deps, "node_modules/external"));
-        await fs.symlink("left", path.join(deps, "node_modules/external"));
+        await fs.symlink("fs", path.join(deps, "node_modules/external"));
         expected += "node_modules/external";
       } else if (failure === "extra-entry") {
         await write(deps, "._transport-extra", "unexpected\n");
@@ -435,7 +435,7 @@ describe("offline installed runtime composition", () => {
       if (failure === "link" || failure === "escape") {
         await fs.unlink(path.join(donor, "node_modules/external"));
         await fs.symlink(
-          failure === "link" ? "left" : path.join(relocated, ".store/node_modules/external"),
+          failure === "link" ? "fs" : path.join(relocated, ".store/node_modules/external"),
           path.join(donor, "node_modules/external"),
         );
       }
@@ -518,7 +518,7 @@ describe("offline installed runtime composition", () => {
       [
         "--input-type=module",
         "-e",
-        `import {createRequire} from 'node:module'; const r=createRequire(${JSON.stringify(path.join(app, "package.json"))}); const e=r.resolve('external'); const l=r.resolve('left'); console.log(r(r.resolve('nested',{paths:[e]})).default); const b=r.resolve('bundled'); for (const name of ['bundled-transitive','bundled-native']) console.log(r(r.resolve(name,{paths:[b]})).default); const p=createRequire(${JSON.stringify(path.join(app, "extensions/demo/package.json"))}); console.log(p('hoisted-only').default); console.log(r('external/implementation').default)`,
+        `import {createRequire} from 'node:module'; const r=createRequire(${JSON.stringify(path.join(app, "package.json"))}); const e=r.resolve('external'); console.log(r(r.resolve('nested',{paths:[e]})).default); const b=r.resolve('bundled'); for (const name of ['bundled-transitive','bundled-native']) console.log(r(r.resolve(name,{paths:[b]})).default); const p=createRequire(${JSON.stringify(path.join(app, "extensions/demo/package.json"))}); console.log(p('hoisted-only').default); console.log(r('external/implementation').default)`,
       ],
       { encoding: "utf8" },
     );
@@ -526,7 +526,7 @@ describe("offline installed runtime composition", () => {
     const moduleVersion = async (file: string) =>
       JSON.parse(await fs.readFile(file, "utf8")).version;
     expect(
-      await moduleVersion(path.join(app, "node_modules/left/node_modules/nested/package.json")),
+      await moduleVersion(path.join(app, "node_modules/fs/node_modules/nested/package.json")),
     ).toBe("1.0.0");
     expect(
       await moduleVersion(path.join(app, "extensions/demo/node_modules/private/package.json")),
