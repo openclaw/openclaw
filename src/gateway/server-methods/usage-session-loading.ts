@@ -20,6 +20,7 @@ import {
   getAsyncWorkSignal,
   trackAsyncWork,
 } from "../../shared/async-work-scope.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import type { SessionUsageEntry } from "../../shared/usage-types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
@@ -149,6 +150,7 @@ export async function loadUsageSessionSummaries(params: {
     Array.from(sessionsByAgent.entries()).map(([agentId, agentSessions]) => async () => {
       let usage: ReturnType<typeof createSessionCostSummaryAccumulator> | undefined;
       let reportBudgetBytes: number | undefined;
+      const publicationDeadline = monotonicNow() + USAGE_REPORT_PUBLICATION_WAIT_MS;
       for (let offset = 0; offset < agentSessions.length;) {
         // Concurrent reports share the worker pool's input-byte budget.
         const batch = agentSessions.slice(offset, offset + USAGE_REPORT_BATCH_SIZE);
@@ -162,7 +164,7 @@ export async function loadUsageSessionSummaries(params: {
               endMs,
               includeUntimestamped,
               dayBucket,
-              maxPublicationWaitMs: USAGE_REPORT_PUBLICATION_WAIT_MS,
+              maxPublicationWaitMs: Math.max(0, publicationDeadline - monotonicNow()),
               reportBudgetBytes,
             }),
           () => ({

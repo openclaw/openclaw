@@ -133,22 +133,27 @@ it(
         Object.fromEntries(result.aggregates.costDaily.map((day) => [day.date, day.totalTokens])),
       ).toEqual(TRUTH.daily);
       const { startDate, endDate, mode, timeZone } = OVERVIEW;
-      const cost = (await client!.request("usage.cost", {
-        agentId: "main",
-        startDate,
-        endDate,
-        mode,
-        timeZone,
-      })) as {
-        totals: { totalTokens: number };
-        daily: Array<{ date: string; totalTokens: number }>;
-        cacheStatus: { status: string };
-      };
-      expect(cost.cacheStatus.status).toBe("fresh");
+      const readCost = () =>
+        client!.request("usage.cost", {
+          agentId: "main",
+          startDate,
+          endDate,
+          mode,
+          timeZone,
+        }) as Promise<{
+          totals: { totalTokens: number };
+          daily: Array<{ date: string; totalTokens: number }>;
+          cacheStatus: { status: string };
+        }>;
+      const cost = await readCost();
       expect(cost.totals.totalTokens).toBe(TRUTH.tokens);
       expect(Object.fromEntries(cost.daily.map((day) => [day.date, day.totalTokens]))).toEqual(
         TRUTH.daily,
       );
+      // Committed quarters can be complete before the refresh owner closes its writer.
+      await expect
+        .poll(async () => (await readCost()).cacheStatus.status, { timeout: 10_000 })
+        .toBe("fresh");
     };
     const sessionFiles = SESSIONS.map(({ id }) =>
       formatSqliteSessionFileMarker({ agentId: "main", sessionId: id, storePath }),

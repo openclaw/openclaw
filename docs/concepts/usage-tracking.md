@@ -39,6 +39,7 @@ cold cache has any usage data, the page shows a loading placeholder instead of
 zero totals. Available partial totals stay visible; if a refresh fails, select
 **Refresh** to try again.
 
+Detailed report batches share one short wait per agent for pending usage updates.
 Session reports have a 15-second data-read budget. If it expires, completed
 batches remain visible as a partial report, with a hint to narrow the date
 range or select a session. Partial totals are not complete billing totals.

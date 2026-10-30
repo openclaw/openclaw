@@ -321,19 +321,26 @@ it("returns complete family usage while other reports occupy worker input capaci
 it("keeps completed batches after exhausting the report allowance", async () => {
   const originalDiscovery = discovery.getMockImplementation()!;
   const originalLoad = summaryLoader.getMockImplementation()!;
+  let elapsed = 0;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
   discovery.mockResolvedValue(discoveredRows("budget", 1025, true));
-  summaryLoader.mockImplementation(async ({ sessions, reportBudgetBytes }) => ({
-    summaries: sessions.map(() =>
-      reportBudgetBytes === 0 ? null : { ...createEmptyCostUsageTotals(), totalTokens: 7 },
-    ),
-    remainingReportBytes: 0,
-    cacheStatus: {
-      status: reportBudgetBytes === 0 ? "partial" : "fresh",
-      cachedFiles: reportBudgetBytes === 0 ? 0 : sessions.length,
-      pendingFiles: reportBudgetBytes === 0 ? sessions.length : 0,
-      staleFiles: 0,
+  summaryLoader.mockImplementation(
+    async ({ sessions, reportBudgetBytes, maxPublicationWaitMs }) => {
+      elapsed += maxPublicationWaitMs ?? 0;
+      return {
+        summaries: sessions.map(() =>
+          reportBudgetBytes === 0 ? null : { ...createEmptyCostUsageTotals(), totalTokens: 7 },
+        ),
+        remainingReportBytes: 0,
+        cacheStatus: {
+          status: reportBudgetBytes === 0 ? "partial" : "fresh",
+          cachedFiles: reportBudgetBytes === 0 ? 0 : sessions.length,
+          pendingFiles: reportBudgetBytes === 0 ? sessions.length : 0,
+          staleFiles: 0,
+        },
+      };
     },
-  }));
+  );
   try {
     const result = await readSessionsUsage({});
     expect(result).toMatchObject({
@@ -341,7 +348,9 @@ it("keeps completed batches after exhausting the report allowance", async () => 
       cacheStatus: { status: "partial", cachedFiles: 256, pendingFiles: 769 },
     });
     expect(summaryLoader.mock.calls[1]?.[0].reportBudgetBytes).toBe(0);
+    expect(elapsed, "publication waiting is shared by every batch in the report").toBe(100);
   } finally {
+    clock.mockRestore();
     discovery.mockImplementation(originalDiscovery);
     summaryLoader.mockImplementation(originalLoad);
   }
