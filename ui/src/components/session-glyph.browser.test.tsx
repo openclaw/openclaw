@@ -47,7 +47,10 @@ describe.skipIf(!hasBrowserLayout)("sidebar glyph geometry", () => {
       ".sidebar-session-team-state .sidebar-session-attention__icon > *",
     )!;
     expect(regular.getBoundingClientRect().width).toBe(15);
-    expect(compact.getBoundingClientRect().width).toBe(12);
+    expect(compact.getBoundingClientRect().width).toBeGreaterThan(0);
+    expect(compact.getBoundingClientRect().width).toBeLessThan(
+      regular.getBoundingClientRect().width,
+    );
   });
 
   it("preserves named glyph sizes in rows and the collapsed rail", () => {

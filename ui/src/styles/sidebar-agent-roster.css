@@ -45,7 +45,6 @@ openclaw-sidebar-agent-roster {
 /* Session rows in the roster keep the list's grid and stay on one line. */
 .sidebar-recent-session.sidebar-recent-session--team {
   gap: 0;
-  padding: 0 4px 0 var(--sidebar-session-row-inset);
 }
 .sidebar-recent-session--team .sidebar-recent-session__text,
 .sidebar-recent-session--team .sidebar-recent-session__details {
@@ -86,6 +85,34 @@ openclaw-sidebar-agent-roster {
 .sidebar-recent-session--team:is(:hover, :focus-within) .sidebar-recent-session__title-row {
   padding-right: var(--session-row-actions-reserve);
 }
+/* The drawer menu is visible without hover, including with a mouse. */
+.shell--mobile-nav .sidebar-recent-session--team .sidebar-recent-session__title-row {
+  padding-right: var(--session-row-actions-reserve);
+}
+
+.shell--mobile-nav .sidebar-recent-session--team .sidebar-recent-session__name {
+  text-overflow: ellipsis;
+  mask-image: none;
+}
+
+.shell--mobile-nav
+  .sidebar-recent-session--team
+  .sidebar-recent-session__name
+  > .hover-marquee__text {
+  display: inline;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .sidebar-recent-session--team .sidebar-recent-session__title-row {
+    padding-right: var(--session-row-actions-reserve);
+  }
+
+  .sidebar-recent-session.sidebar-recent-session--team:has(> .sidebar-child-session-toggle)
+    > .sidebar-recent-session__aside {
+    right: calc(var(--sidebar-child-session-toggle-width) + 4px);
+  }
+}
+
 .sidebar-session-team-state .session-css-icon,
 .sidebar-session-team-state .sidebar-session-attention__icon {
   width: 14px;

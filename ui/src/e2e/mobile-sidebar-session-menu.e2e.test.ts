@@ -20,6 +20,7 @@ import {
   waitForMobileSidebarDrawerOpen,
   waitForSessionRosterHydration,
 } from "./session-management.test-support.ts";
+import { seedSidebarSettings } from "./sidebar-contract.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 const menuItem = (root: Page | Locator, name: string) =>
@@ -267,6 +268,41 @@ suite.define(() => {
         await group.locator(".sidebar-recent-session").waitFor();
         expect(await gateway.getRequests("sessions.patch")).toEqual([]);
         expect(await gateway.getRequests("config.patch")).toEqual([]);
+      });
+    },
+  );
+
+  it.each(["coarse", "fine"] as const)(
+    "keeps roster mobile menus clear of titles and child toggles with a %s pointer",
+    async (pointer) => {
+      const key = "agent:main:roster-parent";
+      const childKey = "agent:main:roster-child";
+      const title = "Investigate the long shared project session title";
+      await suite.withPage(pageOptions(390, 650, pointer === "coarse"), async ({ page }) => {
+        await seedSidebarSettings(page, suite.server.baseUrl, {
+          sidebarAgentsMode: "roster",
+          railShortcuts: [`session:${key}`],
+        });
+        await installMockGateway(page, {
+          sessions: [
+            sessionRow(key, title, 2, { childSessions: [childKey] }),
+            sessionRow(childKey, "Child", 1, { spawnedBy: key }),
+          ],
+          sessionKey: key,
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+        await openDrawer(page, true);
+        const row = page.locator(`[data-session-section="pinned"] [data-session-key="${key}"]`);
+        await row.waitFor({ state: "visible" });
+        expect(await row.getAttribute("class")).toContain("sidebar-recent-session--team");
+        await page.mouse.move(389, 649);
+        await expectSessionGeometry(row);
+        const menu = row.locator("[data-sidebar-session-menu]");
+        const toggle = row.locator("[data-child-session-toggle]");
+        const menuBox = await box(menu);
+        expect(menuBox.x + menuBox.width).toBeLessThanOrEqual((await box(toggle)).x);
+        await (pointer === "coarse" ? menu.tap() : menu.click());
+        await page.getByRole("menu", { name: `Actions for ${title}` }).waitFor();
       });
     },
   );
