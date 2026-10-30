@@ -198,6 +198,17 @@ it("extracts quote metadata and implicit mentions", async () => {
   });
 });
 
+it("keeps the line breaks of a command after the own mention", async () => {
+  const [message] = await captureInbound([
+    {
+      content: "@Bot /btw why?\n  at a (a.ts:1)",
+      mentions: [{ uid: "555444333", pos: 0, len: 4 }],
+    },
+  ]);
+
+  expect(message?.commandContent).toBe("/btw why?\n  at a (a.ts:1)");
+});
+
 it.each([
   [1_764_000_000, 1_764_000_000_000],
   ["1764000000.5", 1_764_000_000_500],

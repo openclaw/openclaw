@@ -268,10 +268,10 @@ function stripOwnMentionsForCommandBody(
     }
     cursor = Math.max(cursor, span.end);
   }
-  if (cursor < content.length) {
-    output += content.slice(cursor);
-  }
-  return output.replace(/\s+/g, " ").trim();
+  output += content.slice(cursor);
+  const stripped = output.trim();
+  // A slash command keeps its line breaks and indentation for multiline arguments (/btw, /loop).
+  return stripped.startsWith("/") ? stripped : stripped.replace(/\s+/g, " ");
 }
 
 function stripLeadingAtMentionForCommand(content: string): string {

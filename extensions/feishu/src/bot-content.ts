@@ -194,11 +194,12 @@ function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string): boolea
 }
 
 export function normalizeFeishuCommandProbeBody(text: string): string {
-  return text
+  const stripped = text
     .replace(/<at\b[^>]*>[^<]*<\/at>/giu, " ")
     .replace(/(^|\s)@[^/\s]+(?=\s|$|\/)/gu, "$1")
-    .replace(/\s+/g, " ")
     .trim();
+  // A slash command keeps its line breaks and indentation for multiline arguments (/btw, /loop).
+  return stripped.startsWith("/") ? stripped : stripped.replace(/\s+/g, " ");
 }
 
 function parseMediaResource(
