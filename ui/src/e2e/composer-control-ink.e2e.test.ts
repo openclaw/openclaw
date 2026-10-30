@@ -140,7 +140,7 @@ suite.define(() => {
           for (const glyph of ["attach", "permission", "microphone"] as const) {
             expect(ink[glyph], `${id}: ${glyph} glyph`).toBeGreaterThanOrEqual(3);
             expect(
-              ink[glyph] - ink.disabled!,
+              ink[glyph]! - ink.disabled!,
               `${id}: ${glyph} above disabled`,
             ).toBeGreaterThanOrEqual(0.5);
           }
