@@ -151,7 +151,7 @@ export function updateCodeBlockWidthOverflow(wrapper: HTMLElement): void {
   measureCodeBlockWidthOverflow(wrapper)?.();
 }
 
-/** Read together during resize delivery; apply after the observed layout settles. */
+/** Read geometry before applying overflow chrome. */
 export function measureCodeBlockWidthOverflow(wrapper: HTMLElement): (() => void) | undefined {
   const viewport = wrapper.querySelector<HTMLElement>(".code-block-viewport");
   const code = viewport?.querySelector<HTMLElement>("code");

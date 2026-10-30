@@ -1,6 +1,7 @@
 // One lifecycle owner for interactive Markdown in transcripts and previews.
 import { t } from "../i18n/index.ts";
 import { registerCodeBlocksEnglish } from "../i18n/locales/en-code-blocks.ts";
+import { cancelLayout, scheduleLayout } from "../lib/layout-frame.ts";
 import { subscribeDocumentVisibility } from "../lib/reactive/platform.ts";
 import { measureCodeBlockWidthOverflow } from "./markdown-code-blocks.ts";
 import { MarkdownCodeHighlights } from "./markdown-code-highlight.ts";
@@ -30,8 +31,7 @@ export class MarkdownBlocks {
 
   private readonly pendingBlocks = new Set<HTMLElement>();
   private readonly observedNodes = new Set<HTMLElement>();
-  private readonly widthUpdates = new Map<HTMLElement, () => void>();
-  private widthFrame: number | undefined;
+  private readonly pendingWidths = new Set<HTMLElement>();
   private readonly resizeObserver = new ResizeObserver((entries) => {
     if (!this.active || this.disposed) {
       return;
@@ -41,22 +41,17 @@ export class MarkdownBlocks {
     );
     for (const wrapper of wrappers) {
       if (wrapper) {
-        const update = measureCodeBlockWidthOverflow(wrapper);
-        if (update) {
-          this.widthUpdates.set(wrapper, update);
-        }
+        this.pendingWidths.add(wrapper);
       }
     }
-    if (this.widthUpdates.size && this.widthFrame === undefined) {
-      // Overflow chrome can resize the observed code. Keep writes out of delivery.
-      this.widthFrame = requestAnimationFrame(() => {
-        this.widthFrame = undefined;
-        for (const [wrapper, update] of this.widthUpdates) {
-          if (this.root.contains(wrapper)) {
-            update();
-          }
-        }
-        this.widthUpdates.clear();
+    if (this.pendingWidths.size) {
+      // Geometry reads can force WebKit to relayout during resize delivery too.
+      scheduleLayout(this.pendingWidths, () => {
+        const updates = [...this.pendingWidths].map((wrapper) =>
+          this.root.contains(wrapper) ? measureCodeBlockWidthOverflow(wrapper) : undefined,
+        );
+        this.pendingWidths.clear();
+        return () => updates.forEach((update) => update?.());
       });
     }
   });
@@ -121,11 +116,8 @@ export class MarkdownBlocks {
     this.pendingBlocks.clear();
     this.resizeObserver.disconnect();
     this.observedNodes.clear();
-    if (this.widthFrame !== undefined) {
-      cancelAnimationFrame(this.widthFrame);
-      this.widthFrame = undefined;
-    }
-    this.widthUpdates.clear();
+    cancelLayout(this.pendingWidths);
+    this.pendingWidths.clear();
     this.codeHighlights?.pause();
     releaseMarkdownTables(this.root);
   }

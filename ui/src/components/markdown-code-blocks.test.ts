@@ -251,7 +251,7 @@ it("does not remeasure settled Markdown while neighboring prose streams", async 
   expect(expand.getAttribute("aria-controls")).toBe(viewport.id);
 });
 
-it("defers code overflow writes out of resize delivery and retires them on hide", async () => {
+it("defers code overflow measurement out of resize delivery and retires it on hide", async () => {
   vi.useFakeTimers();
   const observations = new Map<Element, () => void>();
   vi.stubGlobal(
@@ -274,16 +274,19 @@ it("defers code overflow writes out of resize delivery and retires them on hide"
   const viewport = wrapper.querySelector<HTMLElement>(".code-block-viewport")!;
   const code = viewport.querySelector("code")!;
   Object.defineProperty(viewport, "clientWidth", { configurable: true, value: 100 });
-  Object.defineProperty(code, "scrollWidth", { configurable: true, value: 300 });
+  const width = vi.fn(() => 300);
+  Object.defineProperty(code, "scrollWidth", { configurable: true, get: width });
   observations.get(code)!();
+  expect(width).not.toHaveBeenCalled();
   expect(wrapper.classList.contains("has-horizontal-overflow")).toBe(false);
   vi.advanceTimersToNextFrame();
   expect(wrapper.classList.contains("has-horizontal-overflow")).toBe(true);
 
-  Object.defineProperty(code, "scrollWidth", { configurable: true, value: 50 });
+  width.mockReturnValue(50).mockClear();
   observations.get(code)!();
   blocks.update(false);
   vi.advanceTimersToNextFrame();
+  expect(width).not.toHaveBeenCalled();
   expect(wrapper.classList.contains("has-horizontal-overflow")).toBe(true);
 });
 

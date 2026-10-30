@@ -154,10 +154,11 @@ describe("Markdown table interactions", () => {
     expect(changedWidth).not.toHaveBeenCalled();
     expect(otherWidth).not.toHaveBeenCalled();
     deliverTableResize(viewport);
-    expect(changedWidth).toHaveBeenCalled();
+    expect(changedWidth).not.toHaveBeenCalled();
     expect(otherWidth).not.toHaveBeenCalled();
     expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(true);
     vi.advanceTimersToNextFrame();
+    expect(changedWidth).toHaveBeenCalled();
     expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
 
     changedWidth.mockClear();

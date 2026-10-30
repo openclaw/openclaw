@@ -2,6 +2,7 @@ import type { MarkdownIt } from "markdown-it";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { t } from "../i18n/index.ts";
 import { formatUiError, UserFacingError } from "../lib/format-error.ts";
+import { cancelLayout, scheduleLayout } from "../lib/layout-frame.ts";
 import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { showToast } from "../lib/toast.ts";
@@ -94,30 +95,24 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
   let state = tableOwnerStates.get(owner);
   if (!state) {
     const observedNodes = new Set<HTMLElement>();
-    const overflowUpdates = new Map<HTMLElement, () => void>();
-    let overflowFrame: number | undefined;
+    const pendingOverflow = new Set<HTMLElement>();
     const resizeObserver = new ResizeObserver((entries) => {
       const shells = new Set(
         entries.map((entry) => entry.target.closest<HTMLElement>(tableShellSelector)),
       );
       for (const shell of shells) {
         if (shell) {
-          const update = measureTableOverflow(shell);
-          if (update) {
-            overflowUpdates.set(shell, update);
-          }
+          pendingOverflow.add(shell);
         }
       }
-      if (overflowUpdates.size && overflowFrame === undefined) {
-        // WebKit can resize masked scrollports; write after ResizeObserver delivery.
-        overflowFrame = requestAnimationFrame(() => {
-          overflowFrame = undefined;
-          for (const [shell, update] of overflowUpdates) {
-            if (owner.contains(shell)) {
-              update();
-            }
-          }
-          overflowUpdates.clear();
+      if (pendingOverflow.size) {
+        // Even reading a masked scrollport can force WebKit layout mid-delivery.
+        scheduleLayout(pendingOverflow, () => {
+          const updates = [...pendingOverflow].map((shell) =>
+            owner.contains(shell) ? measureTableOverflow(shell) : undefined,
+          );
+          pendingOverflow.clear();
+          return () => updates.forEach((update) => update?.());
         });
       }
     });
@@ -198,7 +193,7 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
         }
         const shell = viewport.closest<HTMLElement>(tableShellSelector);
         if (shell) {
-          overflowUpdates.delete(shell);
+          pendingOverflow.delete(shell);
           measureTableOverflow(shell)?.();
         }
       },
@@ -209,10 +204,8 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
         stopScroll();
         mutationObserver.disconnect();
         resizeObserver.disconnect();
-        if (overflowFrame !== undefined) {
-          cancelAnimationFrame(overflowFrame);
-        }
-        overflowUpdates.clear();
+        cancelLayout(pendingOverflow);
+        pendingOverflow.clear();
       },
     };
     tableOwnerStates.set(owner, state);
