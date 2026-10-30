@@ -276,7 +276,7 @@ export function runOpenClawAgentBoardReadAdmission<T>(
 
 /** Compose the existing foreground queues without inverting inherited acquisition order. */
 export async function runOpenClawAgentWriteAdmissions<T>(
-  options: readonly OpenClawAgentDatabaseOptions[],
+  options: readonly (OpenClawAgentDatabaseOptions & { readIdentity?: DatabasePathIdentity })[],
   run: () => Promise<T> | T,
   signal?: AbortSignal,
 ): Promise<T> {
@@ -288,13 +288,17 @@ export async function runOpenClawAgentWriteAdmissions<T>(
   if (selected.size > 1) {
     const physicalKey = (pathname: string) => {
       const identity =
+        selected.get(pathname)?.readIdentity ??
         getSqliteDatabaseAdmissionIdentityForPath(pathname) ??
         readDatabasePathIdentitySync(pathname);
       return `${identity.key}:${identity.birthtime ?? ""}`;
     };
     // Borrow the held queue's spelling when multiple locators name the same file.
     const representatives = new Map(inherited.map((pathname) => [physicalKey(pathname), pathname]));
-    const physical = new Map<string, OpenClawAgentDatabaseOptions>();
+    const physical = new Map<
+      string,
+      OpenClawAgentDatabaseOptions & { readIdentity?: DatabasePathIdentity }
+    >();
     for (const [pathname, option] of selected) {
       const identity = physicalKey(pathname);
       const representative = representatives.get(identity) ?? pathname;
@@ -339,11 +343,33 @@ export async function runOpenClawAgentWriteAdmissions<T>(
         const pathname = paths[index];
         return pathname === undefined
           ? Promise.resolve().then(run)
-          : observeWriteAdmission("ordered-read", undefined, (timing) =>
-              runOpenClawAgentWriteAdmission(selected.get(pathname)!, next, true, timing, signal),
-            );
+          : observeWriteAdmission("ordered-read", undefined, (timing) => {
+              const option = selected.get(pathname)!;
+              if (!option.readIdentity) {
+                return runOpenClawAgentWriteAdmission(option, next, true, timing, signal);
+              }
+              if (option.readIdentity.canonicalPath !== pathname) {
+                throw new Error("Prepared session read lost its physical FIFO target");
+              }
+              return runQueuedStoreWrite({
+                queues: admission.queues,
+                storePath: pathname,
+                label: "agent database ordered read admission",
+                reentrant: true,
+                fn: next,
+                timing,
+                signal,
+              });
+            });
       }),
     [],
     signal,
+    {
+      readIdentities: new Map(
+        [...selected].flatMap(([pathname, option]) =>
+          option.readIdentity ? [[pathname, option.readIdentity] as const] : [],
+        ),
+      ),
+    },
   );
 }

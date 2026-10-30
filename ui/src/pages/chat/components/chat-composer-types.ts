@@ -185,6 +185,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   getPendingAttachmentReads?: () => number;
   replyTarget?: ChatReplyTarget | null;
   gatewayClient?: GatewayBrowserClient | null;
+  chatMessageMaxWidth?: string | null;
+  onComposerWidthChange?: (value: string | undefined) => void;
   composerHoldToRecord?: boolean;
   realtimeTalkInputDeviceId?: string;
   onComposerHoldToRecordChange?: (enabled: boolean) => void;
@@ -258,12 +260,14 @@ export type ChatComposerState = {
   presentation: {
     dictationError: string | null;
     goalExpandedId: string | null;
+    queuedSubmit: string | null;
   };
   updatePresentation: StoreSetter<ChatComposerState["presentation"]>;
   questionTakeoverActive: boolean;
   restoreComposerFocus: boolean;
   composerInput: HTMLElement | null;
   composerTextarea: HTMLTextAreaElement | null;
+  composerContext: HTMLElement | null;
   microphonePicker: ComposerMicrophoneOwner | null;
   // Stable refs keep layout observers attached across frame updates.
   composerInputRef: ((element?: Element) => void) | null;

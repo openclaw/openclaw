@@ -158,17 +158,17 @@ export function isFreshUnacknowledgedAbandonedUpdateRun(record: UpdateRunRecord)
   );
 }
 
-/** Recorded drivers require positive death evidence; untouched legacy admissions have a fixed expiry. */
+/** Recorded drivers need death proof or exclusive repair custody; legacy admissions have a fixed expiry. */
 export function inspectUpdateRunAbandonment(
   record: UpdateRunRecord,
-  input: { explicit?: boolean } = {},
+  input: { explicit?: boolean; exclusiveRepair?: boolean } = {},
 ): string | undefined {
   return record.status === "running" ? inspectUpdateRunDriverAbandonment(record, input) : undefined;
 }
 
 function inspectUpdateRunDriverAbandonment(
   record: UpdateRunRecord,
-  input: { explicit?: boolean },
+  input: { explicit?: boolean; exclusiveRepair?: boolean },
 ): string | undefined {
   if (isExpiredLegacyUpdateRun(record)) {
     return LEGACY_UPDATE_RUN_EXPIRED_REASON;
@@ -197,11 +197,19 @@ function inspectUpdateRunDriverAbandonment(
     return undefined;
   }
   if (drivers.length) {
-    return drivers.every((driver) => inspectUpdateRunDriver(driver) === "dead")
-      ? handoff
-        ? "handoff-terminated"
-        : "inactive-driver-dead"
-      : undefined;
+    if (drivers.every((driver) => inspectUpdateRunDriver(driver) === "dead")) {
+      return handoff ? "handoff-terminated" : "inactive-driver-dead";
+    }
+    // Repair's live executor and state custody exclude these drivers even after
+    // a machine rename. Elapsed time or a foreign hostname alone cannot do so.
+    if (
+      input.exclusiveRepair &&
+      !identityUnavailable &&
+      drivers.every((driver) => inspectUpdateRunDriver(driver) !== "alive")
+    ) {
+      return "exclusive-repair-ownership";
+    }
+    return undefined;
   }
   return input.explicit ? "operator-reconciled-inactive-run" : undefined;
 }

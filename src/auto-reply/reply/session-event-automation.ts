@@ -139,7 +139,11 @@ export async function settleSessionEventTurn(params: {
 }): Promise<
   Pick<
     SessionEventOutcome,
-    "summary" | "nextCheckMs" | "sourceDeliveryOutcome" | "automationResult"
+    | "summary"
+    | "nextCheckMs"
+    | "sourceDeliveryOutcome"
+    | "automationResult"
+    | "conversationResultCommitted"
   >
 > {
   const { automation, runId, deliveryEvidence } = params;
@@ -251,6 +255,7 @@ export async function settleSessionEventTurn(params: {
         committed.diagnostics,
       );
     }
+    return { ...settled, conversationResultCommitted: committed.skipped ? undefined : true };
   }
   return settled;
 }

@@ -3,6 +3,8 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
+import * as processGroups from "../process/supervisor/service-child-group-ownership.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -11,6 +13,8 @@ import {
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { isContainerEnvironment } from "./container-environment.js";
+import { withDatabaseEngineSelection } from "./database-engine/context.js";
+import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import { prepareStagedPackageInstall } from "./package-update-lifecycle.js";
 import { createNpmTarget } from "./package-update-steps.test-support.js";
 import { holdForeignWriter } from "./sqlite-worker-shared-state-admission.test-support.js";
@@ -133,9 +137,13 @@ it("status projects recent driver loss until explicit reconciliation", async () 
     finishedAtMs: expect.any(Number),
   });
 });
-it.each([false, true])(
-  "status recovers a killed validating handoff (pruned helper: %s)",
-  async (pruned) => {
+it.each([
+  { pruned: false, repair: false },
+  { pruned: true, repair: false },
+  { pruned: false, repair: true },
+])(
+  "recovers a killed validating handoff (pruned helper: $pruned, repair custody: $repair)",
+  async ({ pruned, repair }) => {
     const helper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
       stdio: "ignore",
     });
@@ -173,6 +181,28 @@ it.each([false, true])(
       const exited = once(helper, "exit");
       helper.kill("SIGKILL");
       await exited;
+      if (repair) {
+        await closeOpenClawStateDatabaseAsync();
+      }
+      // Native census contracts cover the host-wide table. This worker fixture
+      // owns only its exited helper; unrelated host processes may be unreadable.
+      vi.spyOn(processGroups, "readProcessGroupMembers").mockImplementation(function* () {
+        yield {
+          pid: process.pid,
+          pgid: process.pid,
+          state: "S",
+          command: { ppid: process.ppid, argv: [process.execPath] },
+        };
+      });
+      if (repair) {
+        await withUpdateCommandExecutor(run.id, async (executor) => {
+          const repairOwnership = await executor.enter(env.OPENCLAW_STATE_DIR);
+          await reconcileAbandonedUpdateRunsAsync(
+            { explicit: true, runIds: [run.id] },
+            { ...run.options, repairOwnership },
+          );
+        });
+      }
       expect(await readUpdateRunStatus()).toMatchObject({
         lastRun: { runId: run.id, status: "failed", reason: "handoff-terminated" },
       });
@@ -218,6 +248,63 @@ it("rejects cancellation at commit instead of returning stale history", async ()
   await expect(run.history(controller.signal)).rejects.toThrow(failure.message);
   expect(await run.readAsync()).toEqual(before);
 });
+
+it.each(["sqlite", "postgres"] as const)(
+  "preserves history without current exclusive %s repair custody",
+  async (engine) => {
+    const driver = readUpdateRunDriver();
+    expect(driver).toBeDefined();
+    const run = fixture({
+      trigger: "cli",
+      origin: { driver: { ...driver!, host: "previous-mac.invalid" } },
+    });
+    const before = run.read();
+    await closeOpenClawStateDatabaseAsync();
+    const failure = new Error("fixture repair ownership lost");
+    await withUpdateCommandExecutor(run.id, async (executor) => {
+      const fence = await executor.enter(run.options.env.OPENCLAW_STATE_DIR);
+      let current = true;
+      admission.beforeGrant = (stage) => {
+        if (stage === "commit") {
+          current = false;
+        }
+      };
+      const reconcile = () =>
+        reconcileAbandonedUpdateRunsAsync(
+          { explicit: true, runIds: [run.id] },
+          {
+            ...run.options,
+            repairOwnership: {
+              assertCurrent() {
+                fence.assertCurrent();
+                if (!current) {
+                  throw failure;
+                }
+              },
+            },
+          },
+        );
+      if (engine === "postgres") {
+        await withDatabaseEngineSelection(
+          {
+            effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine } }),
+            postgres: {
+              connection: "postgresql://synthetic.invalid/unused",
+              schemaPrefix: "synthetic",
+            },
+          },
+          () =>
+            expect(reconcile()).rejects.toThrow(
+              "Local repair ownership cannot prove PostgreSQL update drivers inactive",
+            ),
+        );
+      } else {
+        await expect(reconcile()).rejects.toThrow(failure.message);
+      }
+    });
+    expect(await run.readAsync()).toEqual(before);
+  },
+);
 it("retains recovery recorded after selection and before writer admission", async () => {
   const run = await expiredLegacyRun();
   const before = await run.readAsync();

@@ -44,6 +44,7 @@ afterEach(() => {
 
 it.each([
   "activate",
+  "unsafe-temp",
   "refuse",
   "directory",
   "activation-refusal",
@@ -58,10 +59,19 @@ it.each([
     const canonicalConfig = path.join(canonicalState, "openclaw.json");
     const canonicalTmp = path.join(base, "inherited-tmp");
     const control = path.join(base, "control");
-    await fs.mkdir(canonicalState, { recursive: true });
+    await fs.mkdir(home, { mode: 0o700 });
+    await fs.mkdir(canonicalState, { mode: 0o700 });
     await fs.mkdir(canonicalTmp);
     await fs.mkdir(control, { mode: 0o700 });
-    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+    const resolveTempRoot = tempRoot.resolvePreferredOpenClawTmpDir;
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockImplementation(() =>
+      action === "unsafe-temp"
+        ? resolveTempRoot({ preferredDir: path.join(control, "openclaw"), tmpdir: () => control })
+        : control,
+    );
+    if (action === "unsafe-temp") {
+      await fs.chmod(control, 0o775);
+    }
     await fs.writeFile(canonicalConfig, "{}\n");
     vi.stubEnv("HOME", home);
     vi.stubEnv("OPENCLAW_STATE_DIR", canonicalState);
@@ -249,12 +259,18 @@ it.each([
           await fs.readFile(path.join(stage.root, "lifecycle-paths.json"), "utf8"),
         );
         isolatedHome = paths.openclawHome;
+        if (action === "unsafe-temp") {
+          expect(path.relative(canonicalState, paths.openclawHome).split(path.sep)[0]).toBe("tmp");
+          expect((await fs.stat(paths.openclawHome)).mode & 0o7777).toBe(0o700);
+        }
         expect(paths.home).toBe(home);
         expect(paths.state).not.toBe(canonicalState);
         expect(await fs.readFile(path.join(paths.state, "lifecycle"), "utf8")).toBe("private");
         expect(await fs.readFile(path.join(paths.tmp, "lifecycle"), "utf8")).toBe("private");
         expect(initialization.target.targetVersion).toBe("1.0.1");
-        expect(await fs.readdir(canonicalState)).toEqual(["openclaw.json"]);
+        expect((await fs.readdir(canonicalState)).toSorted()).toEqual(
+          action === "unsafe-temp" ? ["openclaw.json", "tmp"] : ["openclaw.json"],
+        );
         expect(await fs.readdir(canonicalTmp)).toEqual([]);
         expect(await fs.readFile(canonicalConfig, "utf8")).toBe("{}\n");
         if (action === "replace-workspace") {
@@ -312,10 +328,14 @@ it.each([
     } else {
       await outcome;
     }
-    const activated = action === "activate" || action === "directory";
+    const activated = action === "activate" || action === "directory" || action === "unsafe-temp";
     expect(await fs.readdir(canonicalTmp)).toEqual([]);
     expect((await fs.readdir(canonicalState)).toSorted()).toEqual(
-      activated ? ["openclaw.json", "openclaw.json.pre-update"] : ["openclaw.json"],
+      action === "unsafe-temp"
+        ? ["openclaw.json", "openclaw.json.pre-update", "tmp"]
+        : activated
+          ? ["openclaw.json", "openclaw.json.pre-update"]
+          : ["openclaw.json"],
     );
     expect(isolatedHome).toBeDefined();
     await expect(fs.stat(isolatedHome!)).rejects.toMatchObject({ code: "ENOENT" });

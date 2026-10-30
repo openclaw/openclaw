@@ -282,6 +282,7 @@ type EnglishCatalog = TranslationMap & {
       | "withMoreParticipants"
       | "snoozeWakes"
       | "snoozeTomorrowTime"
+      | "snoozeTomorrow"
       | "user"
       | "assistant"
       | "opensAsDashboard"
@@ -415,6 +416,7 @@ const startupEnglish = {
     expandedTable: "Expanded table",
     closeTable: "Close expanded table",
     resizeSplitView: "Resize split view",
+    resizeMessageWidth: "Resize message width",
     delete: "Delete",
     remove: "Remove",
     dismiss: "Dismiss",
@@ -722,6 +724,7 @@ const startupEnglish = {
     withMoreParticipants: "+{count} more",
     snoozeWakes: "Wakes {time}",
     snoozeTomorrowTime: "tomorrow {time}",
+    snoozeTomorrow: "Tomorrow",
     user: "User",
     assistant: "Assistant",
     opensAsDashboard: "Opens as dashboard",
@@ -1684,6 +1687,7 @@ const startupEnglish = {
       dismissError: "Dismiss error",
       exitFocusMode: "Exit focus mode",
       scrollToLatest: "Scroll to latest",
+      skipToComposer: "Skip to message composer",
     },
     markdown: {
       truncated: "… truncated ({total} chars, showing first {shown}).",

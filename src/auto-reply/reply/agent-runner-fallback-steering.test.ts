@@ -2,7 +2,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { normalizeProviderModelRef } from "../../agents/embedded-agent-runner/model.registry-resolution.js";
+import { steerActiveSessionWithOptionalDeliveryWait } from "../../agents/embedded-agent-runner/run/attempt-queue-message.js";
 import { FailoverError } from "../../agents/failover-error.js";
+import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
+import {
+  bindReplyInputChannel,
+  createAgentQuestionAnswerAuthority,
+  prepareReplyToolAuthorityCallerRead,
+  withAgentQuestionAnswerAuthority,
+} from "../../agents/harness/host-private-capabilities.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback } from "../../agents/model-fallback-runner.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
@@ -12,6 +20,7 @@ import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metada
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import * as registryState from "../../sessions/session-controller.state.js";
 import { createCommandTurnContext } from "../command-turn-context.js";
+import { bindRequesterProfile, transferRequesterProfile } from "../requester-profile.js";
 import { bindReplyFallbackSteeringRoute } from "./agent-runner-fallback-authority.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
@@ -62,6 +71,153 @@ function operator(run: FollowupRun, profileId: string, assertCurrent = () => {})
 }
 
 describe("ordinary steering into automatic model fallback", () => {
+  it.each(["linked text", "linked image", "linked operator image", "same surface"] as const)(
+    "keeps question authority separate from ordinary steering: %s",
+    async (scenario) => {
+      const linked = scenario !== "same surface";
+      const key = `agent:main:steering-question-${scenario.replaceAll(" ", "-")}`;
+      const run = createQueueTestRun({ prompt: "Continue", messageId: "owner-answer" });
+      Object.assign(run.run, {
+        agentId: "main",
+        sessionKey: key,
+        conversationId: "owner-chat",
+        senderIsOwner: true,
+        traceAuthorized: true,
+        gitContributorProfileId: "alice",
+      });
+      run.run.config = { messages: { queue: { allowCollaborativeSteering: false } } };
+      const taskSuggestionDeliveryMode = scenario === "linked text" ? "gateway" : undefined;
+      run.run.taskSuggestionDeliveryMode = taskSuggestionDeliveryMode;
+      run.operatorAuthority = operator(run, "alice");
+      const ownerContext = {
+        Provider: "telegram",
+        SessionKey: key,
+        ChatId: "owner-chat",
+        SenderId: run.run.senderId,
+      };
+      bindRequesterProfile(ownerContext, {
+        id: "alice",
+        displayName: null,
+        isCurrent: () => true,
+      });
+      transferRequesterProfile(ownerContext, run);
+      bindReplyInputChannel(run.run, ownerContext.Provider);
+      const operation = createReplyOperation({
+        sessionKey: key,
+        sessionId: run.run.sessionId,
+        resetTriggered: false,
+      });
+      await operation.bindToolAuthoritySnapshotAsync(prepareReplyRunToolAuthority(run, undefined));
+      const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
+      const assertActive = () => operation.abortSignal.throwIfAborted();
+      const authority = createAgentQuestionAnswerAuthority({
+        sessionKey: key,
+        fingerprint,
+        project: (caller) => operation.projectToolAuthorityFingerprint(caller),
+        prepareCaller: (caller) =>
+          prepareReplyToolAuthorityCallerRead(
+            operation.projectToolAuthorityFingerprintAsync,
+            caller,
+            fingerprint,
+            run.run,
+            assertActive,
+          ),
+        assertActive,
+      });
+      const answer = vi.fn(async () => ({ status: "answered" }));
+      const question = withAgentQuestionAnswerAuthority(authority, () =>
+        registerPendingAgentQuestion({
+          questionId: `${key}-question`,
+          sessionKey: key,
+          questions: [{ id: "answer", header: "Answer", question: "Continue?", options: [] }],
+          gatewayCall: { version: 2, call: answer },
+          answer: Promise.resolve({ status: "pending" }),
+        }),
+      );
+      question.attachRegistration(Promise.resolve());
+      const nativeSteer = vi.fn(async () => {});
+      operation.attachBackend({
+        kind: "embedded",
+        taskSuggestionDeliveryMode,
+        terminalReplyExpectation: "required",
+        supportsTranscriptCommitWait: true,
+        supportsQueueMessageImages: true,
+        cancel() {},
+        messageInjectionV2: {
+          version: 2,
+          isAvailable: () => true,
+          queueMessage: (text, options, assertCurrent, kind) =>
+            steerActiveSessionWithOptionalDeliveryWait(
+              { steer: nativeSteer, subscribe: () => () => {} },
+              text,
+              // This fixed session commits synchronously; transcript waiting has separate coverage.
+              { ...options, waitForTranscriptCommit: undefined, onQueueSettled: undefined },
+              key,
+              () => {
+                assertCurrent();
+                return true;
+              },
+              { kind, assertCurrent },
+            ),
+        },
+      });
+      operation.setPhase("running");
+      try {
+        const incoming: FollowupRun = { ...run, run: { ...run.run } };
+        const context = linked
+          ? {
+              ...ownerContext,
+              Provider: "whatsapp",
+              ChatId: "linked-chat",
+              SenderId: "linked-alice",
+            }
+          : ownerContext;
+        if (linked) {
+          incoming.operatorAuthority =
+            scenario === "linked operator image" ? run.operatorAuthority : undefined;
+          incoming.run.messageProvider = "whatsapp";
+          incoming.run.conversationId = context.ChatId;
+          incoming.run.senderId = context.SenderId;
+          incoming.run.senderIsOwner = false;
+          incoming.run.traceAuthorized = false;
+          incoming.toolsAllow = ["read"];
+          // Crossing surfaces retains the incumbent tools in either direction.
+          incoming.run.taskSuggestionDeliveryMode =
+            scenario === "linked operator image" ? "gateway" : undefined;
+          bindRequesterProfile(context, { id: "alice", displayName: null, isCurrent: () => true });
+        }
+        if (scenario.endsWith("image")) {
+          incoming.images = [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }];
+        }
+        await steer(incoming, key, {
+          steeringIntent: { kind: "continue-existing" },
+          sessionCtx: context,
+        });
+        expect(question.isCancellationRequested()).toBe(false);
+        expect(nativeSteer).toHaveBeenCalledTimes(linked ? 1 : 0);
+        expect(operation.toolAuthorityFingerprint).toBe(fingerprint);
+        expect(answer).toHaveBeenCalledTimes(linked ? 0 : 1);
+        if (linked) {
+          await steer({ ...run, messageId: "later-owner-answer", run: { ...run.run } }, key, {
+            sessionCtx: ownerContext,
+          });
+          expect(answer).toHaveBeenCalledOnce();
+          expect(nativeSteer).toHaveBeenCalledOnce();
+        }
+        expect(answer).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method: "question.resolve",
+            params: expect.objectContaining({ answers: { answers: { answer: ["Continue"] } } }),
+          }),
+        );
+      } finally {
+        question.dispose();
+        clearSessionQueues([key]);
+        operation.complete();
+      }
+    },
+  );
+
   it.each([
     { preparation: "fingerprint-1", revoked: false, aborted: false, replaceBackend: false },
     { preparation: "fingerprint-2", revoked: false, aborted: false, replaceBackend: false },

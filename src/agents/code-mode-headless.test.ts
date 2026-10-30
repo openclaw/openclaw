@@ -315,36 +315,61 @@ describe("headless Code Mode", () => {
     expect(result.error).toContain("module access is disabled");
   });
 
-  it("injects deeply frozen trigger state and emits replacement state through json", async () => {
-    const result = await complete(
-      [],
-      `
+  it.each(["node", "quickjs"] as const)(
+    "%s injects detached, normalized, deeply frozen trigger state",
+    async (executor) => {
+      const state = {
+        "": 7,
+        count: 4,
+        nested: { stable: true, list: [null, { keep: 3 }] },
+        nonfinite: Number.NaN,
+      };
+      const ctx = createHeadlessCodeModeHarness([], { codeMode: { executor } });
+      for (let iteration = 0; iteration < 2; iteration++) {
+        const result = expectCompleted(
+          await runCodeModeScriptHeadless({
+            ctx,
+            code: `
           json({
             fire: true,
             frozen: Object.isFrozen(trigger) &&
               Object.isFrozen(trigger.state) &&
-              Object.isFrozen(trigger.state.nested),
+              Object.isFrozen(trigger.state.nested) &&
+              Object.isFrozen(trigger.state.nested.list) &&
+              Object.isFrozen(trigger.state.nested.list[1]),
             emptyKey: trigger.state[""],
+            values: [trigger.state.nonfinite, trigger.state.nested.list[0], trigger.state.nested.list[1].keep],
             state: { count: trigger.state.count + 1 },
           });
+          try { trigger.state.nested.list[1].keep = 99; } catch {}
           return "done";
         `,
-      {
-        extraNamespaces: [
-          triggerNamespace([
-            ["state", { kind: "value", value: { "": 7, count: 4, nested: { stable: true } } }],
-          ]),
-        ],
-      },
-    );
+            extraNamespaces: [triggerNamespace([["state", { kind: "value", value: state }]])],
+          }),
+        );
 
-    expect(result.output).toEqual([
-      {
-        type: "json",
-        value: { fire: true, frozen: true, emptyKey: 7, state: { count: 5 } },
-      },
-    ]);
-  });
+        expect(result.output).toEqual([
+          {
+            type: "json",
+            value: {
+              fire: true,
+              frozen: true,
+              emptyKey: 7,
+              values: [null, null, 3],
+              state: { count: 5 },
+            },
+          },
+        ]);
+        expect(state).toEqual({
+          "": 7,
+          count: 4,
+          nested: { stable: true, list: [null, { keep: 3 }] },
+          nonfinite: Number.NaN,
+        });
+        expect(Object.isFrozen(state.nested.list[1])).toBe(false);
+      }
+    },
+  );
 
   it("keeps an injected namespace while calling a colliding tool by its advertised global", async () => {
     const tool = fakeTool("trigger", async () => jsonResult({ owner: "tool" }));

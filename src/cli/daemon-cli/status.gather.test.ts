@@ -1359,6 +1359,15 @@ describe("gatherDaemonStatus", () => {
     },
   });
 
+  it("reads installed service config without borrowing the caller's state selectors", async () => {
+    await withStatusConfig("{}", async (callerConfigPath) => {
+      const status = await gatherStatus({ probe: false, deep: true });
+      expect(status.config?.cli.path).toBe(callerConfigPath);
+      expect(status.config?.daemon?.path).toBe("/tmp/openclaw-cli/openclaw.json");
+      expect(status.config?.mismatch).toBe(true);
+    });
+  });
+
   it("uses full plugin-aware config validation for deep status", async () => {
     await withStatusConfig(
       JSON.stringify({
@@ -1388,8 +1397,9 @@ describe("gatherDaemonStatus", () => {
         const output = capturePrintedDaemonStatus(status, { json: false }).errors;
         expect(output).toContain("Config warnings:");
         expect(output).toContain("without channelConfigs metadata");
-        expect(status.config?.daemon).toBe(status.config?.cli);
+        expect(status.config?.daemon?.warnings).toEqual(cliConfigWarnings);
       },
+      true,
     );
   });
 

@@ -676,7 +676,10 @@ SecretRef values separately during recovery.
 User backups apply the owning stores' sanitization rules. They are not the
 exact unsanitized captures used for updater recovery. SQLite and PostgreSQL Git
 exports apply the same `--exclude-secrets` policy, including credential tables,
-machine-state keys, and generated model-catalog credentials. Keep Logbook images, cold
+machine-state keys, generated model-catalog credentials, and identified bundled
+plugin credential namespaces. Nonsecret plugin state and blobs remain in redacted
+exports; see [Git backup redaction](/cli/backup#versioned-git-backups)
+for the credential scopes and restore requirements. Keep Logbook images, cold
 transcript blobs, workspaces, config includes, and local state with the database
 backup. Neither a server dump alone nor a copied anchor covers the installation.
 

@@ -161,11 +161,10 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   // Personal pins and rail shortcuts do not mutate shared session groups.
   const rowDraggable = createMemo(() => pinnable() || groupWriteAccess().allowed);
   const marqueeLabelTemplate = () => {
-    const teamValue = team();
     const labelValue = label();
     return renderHoverMarquee(
       <>
-        {teamValue ? undefined : indicators.originIndicators}
+        {indicators.originIndicators}
         {labelValue}
       </>,
       "sidebar-recent-session__name",
@@ -304,9 +303,9 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           class={[
             "sidebar-child-session-toggle",
             {
-              "sidebar-child-session-toggle--running": !team() && session().runningChildCount > 0,
+              "sidebar-child-session-toggle--running": session().runningChildCount > 0,
               "sidebar-child-session-toggle--failed":
-                !team() && !(session().runningChildCount > 0) && session().failedChildCount > 0,
+                !(session().runningChildCount > 0) && session().failedChildCount > 0,
             },
           ]}
           type="button"
@@ -323,7 +322,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
             },
           )}
           aria-description={
-            !team() && !childrenExpanded() && session().runningChildCount > 0
+            !childrenExpanded() && session().runningChildCount > 0
               ? t("sessionsView.activeRun")
               : undefined
           }
@@ -332,11 +331,9 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           <span class="sidebar-child-session-toggle__icon" aria-hidden="true">
             <Icon name={childrenExpanded() ? "chevronDown" : "chevronRight"} />
           </span>
-          {team() ? undefined : (
-            <span class="sidebar-child-session-toggle__count">
-              {session().childSessionKeys.length}
-            </span>
-          )}
+          <span class="sidebar-child-session-toggle__count">
+            {session().childSessionKeys.length}
+          </span>
         </button>
       </Show>
       <span class="sidebar-recent-session__aside session-row-aside">

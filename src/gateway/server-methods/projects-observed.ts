@@ -9,6 +9,7 @@ import { managedWorktrees } from "../../agents/worktrees/service.js";
 import type { loadCombinedSessionStoreForGatewayCoreAsync } from "../../config/sessions/combined-store-gateway-read.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
 import type { startProjectsListDiagnostics } from "./projects-list-diagnostics.js";
+import { ProjectListingChangedError } from "./projects-session-store.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 type ProjectCandidate = {
@@ -262,7 +263,7 @@ export async function listObservedProjects(
     assertCurrent() {
       const currentFilter = createSessionListEntryFilter({ client, cfg });
       if (currentFilter && (canSeeAll || [...usedSessions].some((key) => !isVisible(key)))) {
-        throw new Error("Project access changed while preparing the listing. Retry the request.");
+        throw new ProjectListingChangedError();
       }
     },
   };

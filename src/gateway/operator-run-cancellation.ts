@@ -21,6 +21,7 @@ import {
   retainChatAbortSessionSnapshot,
   type ChatAbortSessionSnapshot,
 } from "./server-methods/chat-aborted-partial.js";
+import { resolveAuthenticatedPersonalGatewayProfileId } from "./server-methods/gateway-personal-caller.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 import { formatForLog } from "./ws-log.js";
@@ -58,6 +59,17 @@ export async function retainGatewayOperatorRun(
   const signal = captured?.authority.signal;
   let partialSession: ReturnType<typeof retainChatAbortSessionSnapshot> | undefined;
   try {
+    if (
+      !params.systemTurn &&
+      captured &&
+      params.entry &&
+      isRpcSourceRegistered(params.entry) &&
+      resolveAuthenticatedPersonalGatewayProfileId(params.client) === captured.authority.profileId
+    ) {
+      // Retain human initiation across live queue handoffs. System-turn authority
+      // can come from the current session owner and must not mint this fact.
+      params.entry.adapter.initiatingPersonalOperator = captured.authority;
+    }
     partialSession =
       signal && params.entry
         ? retainChatAbortSessionSnapshot(

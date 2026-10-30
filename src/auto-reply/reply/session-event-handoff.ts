@@ -130,6 +130,7 @@ function enqueueSessionEventAttempt(
   let operation: ReplyOperation | undefined;
   let inputRecorder: UserTurnTranscriptRecorder | undefined;
   let delivered = false;
+  let conversationResultCommitted: true | undefined;
   let deliveryAttempted = false;
   let deliveryAmbiguous = false;
   let deliveryError: string | undefined;
@@ -359,6 +360,7 @@ function enqueueSessionEventAttempt(
           resolveAgentRunErrorLifecycleFields(failure, operation?.abortSignal ?? signal)
             .stopReason === "restart",
         delivered,
+        conversationResultCommitted,
         deliveryAttempted,
         deliveryAmbiguous,
         deliveryError,
@@ -395,7 +397,11 @@ function enqueueSessionEventAttempt(
     if (kind === "final" && payload.text) {
       summary ??= truncateUtf16Safe(payload.text, 2000);
     }
-    if (options.deliver === false || target?.deliver === false) {
+    if (
+      options.deliver === false ||
+      target?.deliver === false ||
+      (options.suppressErrorDelivery && payload.isError === true)
+    ) {
       return;
     }
     if (kind === "final" && sourceDeliveryOutcome?.satisfiesSourceDelivery) {
@@ -593,6 +599,7 @@ function enqueueSessionEventAttempt(
               nextCheckMs = terminal.nextCheckMs;
               sourceDeliveryOutcome = terminal.sourceDeliveryOutcome;
               automationResult = terminal.automationResult;
+              conversationResultCommitted = terminal.conversationResultCommitted;
               delivered ||= sourceDeliveryOutcome?.satisfiesSourceDelivery === true;
             },
           },

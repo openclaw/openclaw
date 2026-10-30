@@ -23,6 +23,7 @@ import { loadGatewayTlsServerRuntime } from "../../../../src/infra/tls/gateway.j
 import { flushLogger, resetLogger } from "../../../../src/logging/logger.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../../../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../../src/state/openclaw-state-db.paths.js";
+import { captureEnv } from "../../../../src/test-utils/env.js";
 import { acquireTestPortBlock } from "../../../../src/test-utils/port-claims.js";
 import { getFreePort } from "../../../../src/test-utils/ports.js";
 import { createDeferred, withinTest } from "../../../helpers/promise.js";
@@ -78,21 +79,6 @@ export type GatewayTlsPinningProof = {
   coldProbeRejectedUnknownPin: boolean;
   missedRenewalRejectedUnknownPin: boolean;
 };
-
-function captureEnvironment() {
-  const snapshot = new Map<string, string | undefined>(
-    ENV_KEYS.map((key) => [key, process.env[key]]),
-  );
-  return () => {
-    for (const [key, value] of snapshot) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  };
-}
 
 async function writeDiscoveryProbePlugin(
   pluginDir: string,
@@ -313,7 +299,7 @@ async function proveCleartextMismatch(port: number, tlsFingerprint: string): Pro
 export async function runGatewayTlsPinningProof(
   signal?: AbortSignal,
 ): Promise<GatewayTlsPinningProof> {
-  const restoreEnvironment = captureEnvironment();
+  const environment = captureEnv([...ENV_KEYS]);
   const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-tls-pinning-"));
   const stateDir = path.join(runtimeRoot, "state");
   const databasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
@@ -697,7 +683,7 @@ export async function runGatewayTlsPinningProof(
       process.off(advertisementReadyEvent, advertisementReady.resolve);
       clearConfigCache();
       clearRuntimeConfigSnapshot();
-      restoreEnvironment();
+      environment.restore();
     },
   );
 }

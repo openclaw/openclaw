@@ -10,11 +10,8 @@ export const DEEPSEEK_MODEL_CATALOG: ModelDefinitionConfig[] = buildManifestMode
   catalog: DEEPSEEK_MANIFEST_CATALOG,
 }).models.map((model) => Object.assign(model, { api: "openai-completions" }));
 
-const DEEPSEEK_V4_MODEL_IDS = new Set(
-  DEEPSEEK_MODEL_CATALOG.map((model) => model.id).filter(
-    (id) => id === "deepseek-flash" || id.startsWith("deepseek-v4-"),
-  ),
-);
+// Every bundled DeepSeek row is a V4 model; its thinking profile comes from the row.
+const DEEPSEEK_V4_MODEL_IDS = new Set(DEEPSEEK_MODEL_CATALOG.map((model) => model.id));
 
 export function isDeepSeekV4ModelId(modelId: string): boolean {
   return DEEPSEEK_V4_MODEL_IDS.has(modelId.toLowerCase());

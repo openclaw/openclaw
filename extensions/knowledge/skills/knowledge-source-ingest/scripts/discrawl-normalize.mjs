@@ -155,7 +155,7 @@ async function run(argv) {
     process.stderr.write(
       JSON.stringify({
         provider: "discord",
-        source_key: "discord:" + channel.guild_id + ":" + channel.id,
+        source_key: `discord:${String(channel.guild_id)}:${String(channel.id)}`,
         guild_id: channel.guild_id,
         channel_id: channel.id,
         channel_name: channel.name,

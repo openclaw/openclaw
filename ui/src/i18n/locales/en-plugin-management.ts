@@ -136,21 +136,6 @@ const enPluginManagement = {
     },
   },
   pluginsPage: {
-    installTrust: {
-      title: "Plugin code",
-      description:
-        "Plugins can run code inside the Gateway. If a plugin includes native web UI, that code also runs in the OpenClaw web app with the signed-in user’s Gateway permissions. Only install plugins you trust.",
-    },
-    bundleTrust: {
-      title: "Bundle contents",
-      description:
-        "Bundles can add content and configure tools, hooks, or external services. Only install bundles you trust.",
-    },
-    nativeUi: {
-      title: "Includes native web UI",
-      description:
-        "This plugin runs code in the OpenClaw web app. It can read and modify the app’s interface and use the Gateway permissions of the signed-in user. Only enable plugins you trust.",
-    },
     compatibilityDeprecatedDated:
       "Uses OpenClaw APIs that retire on {date}. It keeps working until then; check for a plugin update.",
     compatibilityDeprecatedUndated:

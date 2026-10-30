@@ -11,11 +11,10 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { Session } from "node:inspector/promises";
-import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 
 const { values } = parseArgs({
   options: {
@@ -28,23 +27,10 @@ const iterations = Number(values.iterations);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
 assert(global.gc, "Run with --expose-gc");
 const ownerUrl = new URL("../../src/plugins/plugin-cache-files.ts", import.meta.url).href;
-let replaced = false;
-if (values.owner) {
-  const replacement = pathToFileURL(path.resolve(values.owner)).href;
-  registerHooks({
-    load(url, context, nextLoad) {
-      if (url !== ownerUrl) {
-        return nextLoad(url, context);
-      }
-      replaced = true;
-      const result = nextLoad(replacement, context);
-      return { format: result.format, source: result.source, shortCircuit: true };
-    },
-  });
-}
+const wasOwnerReplaced = registerPerfOwnerReplacement(ownerUrl, values.owner);
 const { readPluginCacheFile } = await import("../../src/plugins/plugin-cache-files.js");
 const { createPluginCache, withPluginCache } = await import("../../src/plugins/plugin-cache.js");
-assert(!values.owner || replaced, "Baseline owner was not loaded");
+assert(!values.owner || wasOwnerReplaced(), "Baseline owner was not loaded");
 fs.mkdirSync(".local", { recursive: true });
 const fixture = fs.mkdtempSync(path.resolve(".local/plugin-metadata-read-"));
 const inspector = new Session();

@@ -59,7 +59,13 @@ const isolatedGitEnv = (env: NodeJS.ProcessEnv = {}) => ({
 });
 
 export async function fixture(
-  options: { fork?: boolean; empty?: boolean; conflict?: boolean; priorPublication?: boolean } = {},
+  options: {
+    fork?: boolean;
+    empty?: boolean;
+    conflict?: boolean;
+    priorPublication?: boolean;
+    linked?: boolean;
+  } = {},
 ) {
   const original = { ...mocks.findWorktree("session", "unused"), id: randomUUID() };
   mocks.findWorktree.mockImplementation((_kind: string, ownerId: string) => ({
@@ -70,15 +76,18 @@ export async function fixture(
   const local = f.local!;
   const scope = { agentId: "main", sessionKey: f.session.sessionKey };
   const readSession = () => loadSessionEntryReadOnly(scope)!;
+  let priorPublication: Awaited<ReturnType<typeof f.coordinator.requestForSessionV2>> | undefined;
   if (options.priorPublication) {
-    const previous = await f.coordinator.requestForSessionV2(f.request("earlier-pr", f.guest));
-    expect(previous.status).toBe("published");
+    priorPublication = await f.coordinator.requestForSessionV2(f.request("earlier-pr", f.guest));
+    expect(priorPublication.status).toBe("published");
     f.externalWrites.length = 0;
   }
-  await syncCanonicalGitHubIdentity({
-    identity: { accountId: 101, login: "contributor" },
-    authenticationAlias: { kind: "email", email: "publication-guest@example.test" },
-  });
+  if (options.linked !== false) {
+    await syncCanonicalGitHubIdentity({
+      identity: { accountId: 101, login: "contributor" },
+      authenticationAlias: { kind: "email", email: "publication-guest@example.test" },
+    });
+  }
   const upstream = path.join(path.dirname(local.cwd), "upstream");
   const upstreamGit = (...args: string[]) => local.git("-C", upstream, ...args);
   const commitUpstream = async (message: string, files: Record<string, string>) => {
@@ -295,6 +304,7 @@ export async function fixture(
   };
   return {
     ...f,
+    priorPublication,
     cwd,
     git,
     guestGit,

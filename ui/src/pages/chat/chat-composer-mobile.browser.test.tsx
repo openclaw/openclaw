@@ -110,6 +110,42 @@ it.each(["menu", "padding"] as const)("keeps the mobile draft through %s focus",
     .toHaveAttribute("data-composer-editing", "false");
 });
 
+it("keeps attachment chips at the editing inset in the one-line mobile composer", async () => {
+  await page.viewport(390, 844);
+  const { container } = renderComposerFixture({
+    mobileComposer: true,
+    draft: "Messages take longer than usual to send",
+    attachments: [
+      { id: "diagnostics", fileName: "openclaw-diagnostics.txt", mimeType: "text/plain" },
+    ],
+  });
+  document.body.append(container);
+  container.style.cssText = "position:fixed;bottom:24px;left:16px;width:358px";
+  const shell = container.querySelector<HTMLElement>(".agent-chat__composer-shell")!;
+  const inset = () => {
+    const surface = container.querySelector(".agent-chat__input")!.getBoundingClientRect();
+    const chip = container.querySelector(".chat-attachment-thumb")!.getBoundingClientRect();
+    const remove = container.querySelector(".chat-attachment-remove")!.getBoundingClientRect();
+    return {
+      left: chip.left - surface.left,
+      top: chip.top - surface.top,
+      remove: remove.top - surface.top,
+    };
+  };
+  await expect.poll(() => container.querySelector(".chat-attachment-remove")).toBeTruthy();
+  await expect
+    .element(page.elementLocator(shell))
+    .toHaveAttribute("data-composer-editing", "false");
+  const resting = inset();
+  container.querySelector("textarea")!.focus();
+  await expect.element(page.elementLocator(shell)).toHaveAttribute("data-composer-editing", "true");
+  const editing = inset();
+  // The one-line row's padding must not stack on the rail's own editor inset.
+  expect(resting.left).toBeCloseTo(editing.left, 1);
+  expect(resting.top).toBeCloseTo(editing.top, 1);
+  expect(resting.remove).toBeGreaterThanOrEqual(0);
+});
+
 it.each([
   ["rail", "iPhone", "enter"],
   ["rail", "iPhone", "modifier-enter"],

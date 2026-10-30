@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { ARTIFACT_DOWNLOAD_PATH } from "../../packages/gateway-protocol/src/artifact-download.js";
+import type { SessionsFilesGetParams } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type {
   ArtifactDownloadResponse,
   ArtifactDownloadResponseRequest,
@@ -9,6 +10,9 @@ import type { GatewayClient } from "./server-methods/types.js";
 
 const DOWNLOAD_TTL_MS = 5 * 60_000;
 const MAX_DOWNLOADS_PER_CONNECTION = 128;
+export const SESSION_FILE_PREVIEW_RESOURCE_PATH = "/__openclaw__/file-preview/";
+
+export type SessionFilePreviewResource = { body: Uint8Array; mimeType: string };
 
 type DownloadSource =
   | {
@@ -19,7 +23,13 @@ type DownloadSource =
         request: ArtifactDownloadResponseRequest,
       ) => Promise<ArtifactDownloadResponse | undefined>;
     }
-  | { kind: "managed"; path: string };
+  | { kind: "managed"; path: string }
+  | {
+      kind: "preview";
+      binding: string;
+      documentPath: string;
+      read: (path: string) => Promise<SessionFilePreviewResource | undefined>;
+    };
 
 type Download = {
   expiresAt: number;
@@ -63,7 +73,7 @@ export function pruneExpiredArtifactDownloads(
     }
     for (const [ticket, grant] of grants) {
       if (
-        (grant.source.kind === "bytes" && !canCreateArtifactDownload(client)) ||
+        (grant.source.kind !== "managed" && !canCreateArtifactDownload(client)) ||
         grant.expiresAt <= now
       ) {
         removeDownload(grants, ticket);
@@ -106,7 +116,7 @@ function createDownloadGrant(params: DownloadAuthority & { source: DownloadSourc
       "abort",
       () => {
         for (const [ticket, grant] of owned) {
-          if (grant.source.kind === "bytes") {
+          if (grant.source.kind !== "managed") {
             removeDownload(owned, ticket);
           }
         }
@@ -168,6 +178,59 @@ export function createManagedArtifactDownload(params: DownloadAuthority & { path
   };
 }
 
+export function sessionFilePreviewBinding(source: SessionsFilesGetParams): string {
+  return JSON.stringify([
+    source.sessionKey,
+    source.agentId ?? null,
+    source.path,
+    source.messageEntryId ?? null,
+  ]);
+}
+
+/** Preview locators share the existing reader lifetime, never a filesystem namespace. */
+export function createSessionFilePreviewGrant(
+  params: DownloadAuthority & {
+    binding: string;
+    documentPath: string;
+    read: Extract<DownloadSource, { kind: "preview" }>["read"];
+  },
+) {
+  const grant = createDownloadGrant({
+    ...params,
+    source: {
+      kind: "preview",
+      binding: params.binding,
+      documentPath: params.documentPath,
+      read: params.read,
+    },
+  });
+  return {
+    previewId: grant.locator,
+    sandboxPath: `${SESSION_FILE_PREVIEW_RESOURCE_PATH}${grant.locator}/${params.documentPath}`,
+  };
+}
+
+export function releaseSessionFilePreviewGrant(
+  client: GatewayClient | null,
+  previewId: string,
+  binding: string,
+): boolean {
+  if (!client?.connId) {
+    return false;
+  }
+  const [connection, ticket, extra] = previewId.split("/");
+  if (connection !== encodeURIComponent(client.connId) || !ticket || extra !== undefined) {
+    return false;
+  }
+  const grants = downloads.get(client);
+  const grant = grants?.get(ticket);
+  if (!grants || grant?.source.kind !== "preview" || grant.source.binding !== binding) {
+    return false;
+  }
+  removeDownload(grants, ticket);
+  return true;
+}
+
 export function resolveArtifactDownloadGrant(clients: ReadonlySet<GatewayClient>, locator: string) {
   const [connection, ticket, extra] = locator.split("/");
   if (!ticket || extra !== undefined) {
@@ -193,7 +256,7 @@ export function assertArtifactDownloadGrantCurrent(
 ) {
   const grants = downloads.get(client);
   if (
-    (grant.source.kind === "bytes" &&
+    (grant.source.kind !== "managed" &&
       (!clients.has(client) || !canCreateArtifactDownload(client))) ||
     grant.expiresAt <= Date.now() ||
     grants?.get(ticket) !== grant
@@ -218,7 +281,7 @@ export function retainArtifactDownloadStream(
   return {
     assertCurrent: () => {
       if (
-        grant.source.kind === "bytes" &&
+        grant.source.kind !== "managed" &&
         (!clients.has(client) || !canCreateArtifactDownload(client))
       ) {
         throw new Error("Artifact download connection is no longer available");

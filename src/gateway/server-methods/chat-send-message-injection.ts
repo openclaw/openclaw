@@ -285,6 +285,7 @@ export function createChatSendMessageInjectionStarter(params: {
           inboundAudio: hasInboundAudio(ctx),
           steeringMode: "all",
           isInboundUserMessage: true,
+          allowPendingUserInputAnswer: preparedJoin?.allowPendingUserInputAnswer,
           allowCollaborativeSteering:
             cfg.messages?.queue?.allowCollaborativeSteering === true &&
             (!ctx.InputProvenance || ctx.InputProvenance.kind === "external_user"),
@@ -302,7 +303,11 @@ export function createChatSendMessageInjectionStarter(params: {
           ...(!isProgressCardRefreshInputProvenance(ctx.InputProvenance) && debounceMs !== undefined
             ? { debounceMs }
             : {}),
-          taskSuggestionDeliveryMode: supportsTaskSuggestions ? "gateway" : undefined,
+          // A prepared continuation keeps the incumbent's negotiated tool
+          // surface, so this connection's capability must not retarget it.
+          ...(preparedJoin
+            ? {}
+            : { taskSuggestionDeliveryMode: supportsTaskSuggestions ? "gateway" : undefined }),
           userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
         },
       });

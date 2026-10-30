@@ -1,7 +1,7 @@
 import { deepStrictEqual } from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveGatewayStartupFailureExitCode } from "../cli/gateway-cli/startup-maintenance.js";
@@ -12,6 +12,7 @@ import {
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { activateGatewayAgentDatabaseStartup } from "../gateway/server-agent-database-startup.js";
+import { createContext } from "../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { prepareGatewayStartupSessions } from "../gateway/server-startup-session-migration.js";
 import {
   readSqliteDatabaseCleanClose,
@@ -48,7 +49,9 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// The startup FTS-attempt latch outlives each test and keys on dev:ino alone on Linux.
+// Keep every agent file until the suite ends so a freed inode cannot alias a latched one.
+const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const repairMessage = "Rebuilt canonical agent SQLite indexes";
 
 afterEach(async () => {
@@ -147,8 +150,11 @@ function activateStartup(
   vi.spyOn(admission, "activate").mockImplementation((activation) =>
     activate({ ...activation, publishAgent: async () => {} }),
   );
+  const context = createContext([], () => config);
+  context.agentDatabaseStartup = admission.observation;
   activateGatewayAgentDatabaseStartup({
     admission,
+    context,
     preparationReady: Promise.resolve(),
     waitForPostReadyWork: async () => {},
     getConfig: () => config,

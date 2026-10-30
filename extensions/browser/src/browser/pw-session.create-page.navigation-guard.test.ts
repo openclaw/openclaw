@@ -37,29 +37,13 @@ const strictPolicy = { dangerouslyAllowPrivateNetwork: false } as const;
 const blockedTargetMessage =
   "Browser target is unavailable after SSRF policy blocked its navigation.";
 
-type MockRequest = {
-  isNavigationRequest: () => boolean;
-  frame: () => object;
-  resourceType: () => string;
-  url: () => string;
-};
-type MockRouteHandler = (route: MockRoute, request: MockRequest) => Promise<void>;
-
 function installBrowserMocks() {
-  let routeHandler: MockRouteHandler | null = null;
   const pageGoto = vi.fn<
     (...args: unknown[]) => Promise<null | { request: () => Record<string, unknown> }>
   >(async () => null);
   const pageUrl = vi.fn(() => "about:blank");
-  const pageRoute = vi.fn(async (_pattern: string, handler: typeof routeHandler) => {
-    routeHandler = handler;
-  });
-  const pageUnroute = vi.fn(async (_pattern: string, handler: MockRouteHandler) => {
-    if (routeHandler === handler) {
-      routeHandler = null;
-    }
-  });
   const openPages: import("playwright-core").Page[] = [];
+  const pageEvents = new EventEmitter();
   const pageClose = vi.fn(async () => {
     const index = openPages.indexOf(page);
     if (index >= 0) {
@@ -68,9 +52,47 @@ function installBrowserMocks() {
   });
   const mainFrame = {};
   const browserEvents = new EventEmitter();
-  const sessionSend = vi.fn(async (method: string) =>
-    method === "Target.getTargetInfo" ? { targetInfo: { targetId: "TARGET_1" } } : {},
-  );
+  const pauses = new Map<string, { route: MockRoute; done: PromiseWithResolvers<void> }>();
+  let targetLookupError: Error | undefined;
+  const sessionSend = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+    if (method === "Target.getTargetInfo") {
+      if (targetLookupError) {
+        const error = targetLookupError;
+        targetLookupError = undefined;
+        throw error;
+      }
+      return { targetInfo: { targetId: "TARGET_1" } };
+    }
+    if (method === "Page.getFrameTree") {
+      return { frameTree: { frame: { id: "main" } } };
+    }
+    const requestId = typeof params?.requestId === "string" ? params.requestId : "";
+    const paused = pauses.get(requestId);
+    if (paused) {
+      if (method === "Fetch.continueRequest") {
+        await paused.route.fallback();
+      } else if (method === "Fetch.fulfillRequest") {
+        await paused.route.fulfill({
+          status: Number(params?.responseCode),
+          body: typeof params?.body === "string" ? params.body : "",
+        });
+      } else if (method === "Fetch.failRequest") {
+        if (params?.errorReason === "Aborted") {
+          await paused.route.fulfill({ status: 204, body: "" });
+        } else {
+          await paused.route.abort();
+        }
+      }
+      paused.done.resolve();
+    }
+    return {};
+  });
+  const sessionDetach = vi.fn(async () => {});
+  const session = Object.assign(new EventEmitter(), {
+    send: sessionSend,
+    detach: sessionDetach,
+  });
+  const newCDPSession = vi.fn(async () => session);
   const context = {
     browser: () => browser,
     pages: () => openPages,
@@ -79,17 +101,17 @@ function installBrowserMocks() {
       openPages.push(page);
       return page;
     }),
-    newCDPSession: vi.fn(async () => ({ send: sessionSend, detach: vi.fn(async () => {}) })),
+    newCDPSession,
   } as unknown as import("playwright-core").BrowserContext;
   const page = {
-    on: vi.fn(),
+    on: pageEvents.on.bind(pageEvents),
+    off: pageEvents.off.bind(pageEvents),
+    once: pageEvents.once.bind(pageEvents),
     isClosed: vi.fn(() => false),
     context: () => context,
     goto: pageGoto,
     title: vi.fn(async () => ""),
     url: pageUrl,
-    route: pageRoute,
-    unroute: pageUnroute,
     close: pageClose,
     mainFrame: () => mainFrame,
   } as unknown as import("playwright-core").Page;
@@ -104,13 +126,17 @@ function installBrowserMocks() {
   return {
     pageGoto,
     page,
-    pageRoute,
-    pageUnroute,
     pageUrl,
     pageClose,
     sessionSend,
+    sessionDetach,
+    newCDPSession,
+    session,
+    pauses,
+    failTargetLookup: () => {
+      targetLookupError = new Error("Target lookup failed");
+    },
     disconnect: () => browserEvents.emit("disconnected"),
-    getRouteHandler: () => routeHandler,
     mainFrame,
     pushOpenPage: () => openPages.push(page),
   };
@@ -145,27 +171,33 @@ async function dispatch(
   opts: {
     url?: string;
     frame?: object;
-    frameError?: Error;
     isNavigationRequest?: boolean;
     resourceType?: string;
     route?: Partial<MockRoute>;
   } = {},
 ) {
-  const handler = f.getRouteHandler();
-  if (!handler) {
-    throw new Error("missing route handler");
+  const route = createMockRoute(opts.route);
+  if (opts.isNavigationRequest === false && opts.resourceType !== "document") {
+    return route;
   }
-  await handler(createMockRoute(opts.route), {
-    isNavigationRequest: () => opts.isNavigationRequest ?? true,
-    frame: () => {
-      if (opts.frameError) {
-        throw opts.frameError;
-      }
-      return opts.frame ?? f.mainFrame;
-    },
-    resourceType: () => opts.resourceType ?? "document",
-    url: () => opts.url ?? publicUrl,
+  const requestId = `document-${f.pauses.size + 1}`;
+  const done = Promise.withResolvers<void>();
+  f.pauses.set(requestId, { route, done });
+  f.session.emit("Network.requestWillBeSent", {
+    requestId,
+    type: "Document",
+    frameId: opts.frame ? "child" : "main",
   });
+  f.session.emit("Fetch.requestPaused", {
+    requestId,
+    networkId: requestId,
+    frameId: opts.frame ? "child" : "main",
+    resourceType: "Document",
+    request: { url: opts.url ?? publicUrl },
+  });
+  await done.promise;
+  f.session.emit("Network.loadingFinished", { requestId });
+  return route;
 }
 function blockedRedirect(opts: Parameters<typeof dispatch>[0] = {}) {
   f.pageGoto.mockImplementationOnce(async () => {
@@ -186,25 +218,21 @@ async function quarantineExistingPage(targetId: string, lookupTargetId?: string)
     await dispatch({ url: privateUrl });
     throw new Error("Navigation aborted");
   });
-  f.sessionSend.mockRejectedValueOnce(new Error("Target lookup failed"));
+  f.failTargetLookup();
   await denied(navigate({ page, targetId }));
   return page;
 }
 function failRouteSetup(error: Error) {
-  const install = f.pageRoute.getMockImplementation();
-  f.pageRoute.mockImplementationOnce(async (...args) => {
-    await install?.(...args);
-    throw error;
-  });
+  vi.spyOn(f.page.context(), "newCDPSession").mockRejectedValueOnce(error);
 }
 function expectRouteRemoved() {
-  expect(f.pageUnroute).toHaveBeenCalledWith("**", f.pageRoute.mock.calls[0]?.[1]);
-  expect(f.getRouteHandler()).toBeNull();
+  expect(f.sessionDetach).toHaveBeenCalledOnce();
+  expect(f.session.listenerCount("Fetch.requestPaused")).toBe(0);
 }
 function cleanupFailure(closed: boolean) {
   Object.assign(f.page, { isClosed: () => closed });
-  const error = new Error("navigation route cleanup failed");
-  f.pageUnroute.mockRejectedValueOnce(error);
+  const error = new Error("navigation CDP cleanup failed");
+  f.sessionDetach.mockRejectedValueOnce(error);
   return error;
 }
 function observeDenials() {
@@ -268,14 +296,6 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
     expect(f.pageGoto).not.toHaveBeenCalled();
   });
-  it("fails closed as a top-level navigation when request frame resolution throws", async () => {
-    f.pageGoto.mockImplementationOnce(async () => {
-      await dispatch({ frameError: new Error("frame detached"), url: privateUrl });
-      throw new Error("Navigation aborted");
-    });
-    await denied(create());
-    expect(f.pageClose).toHaveBeenCalledTimes(1);
-  });
   it("aborts private subframe document hops without quarantining the page", async () => {
     const route = createMockRoute();
     f.pageGoto.mockImplementationOnce(async () => {
@@ -285,21 +305,6 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     });
     expect((await create()).targetId).toBe("TARGET_1");
     expect(route.abort).toHaveBeenCalledTimes(1);
-    expect(f.pageClose).not.toHaveBeenCalled();
-  });
-  it("ignores already-handled route races during guarded navigation", async () => {
-    const route = createMockRoute({
-      continue: vi.fn(async () => {
-        throw new Error("Route is already handled");
-      }),
-    });
-    f.pageGoto.mockImplementationOnce(async () => {
-      await dispatch({ url: "https://example.com", route });
-      return null;
-    });
-    expect((await create({ url: "https://example.com" })).targetId).toBe("TARGET_1");
-    expect(route.continue).toHaveBeenCalledTimes(1);
-    expect(f.pageGoto).toHaveBeenCalledTimes(1);
     expect(f.pageClose).not.toHaveBeenCalled();
   });
   it("opens a slow page within the requested navigation budget", async () => {
@@ -490,12 +495,11 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
   });
 });
 
-describe("pw-session guarded browser navigation route cleanup", () => {
-  it("rolls back its exact navigation route when Playwright setup rejects", async () => {
-    const error = new Error("navigation route setup failed");
+describe("pw-session guarded browser navigation interception cleanup", () => {
+  it("does not navigate when CDP interception setup rejects", async () => {
+    const error = new Error("navigation interception setup failed");
     failRouteSetup(error);
     await expect(navigate()).rejects.toBe(error);
-    expectRouteRemoved();
     expect(f.pageGoto).not.toHaveBeenCalled();
   });
   it("awaits remote ownership validation and rejects revocation before goto", async () => {
@@ -515,17 +519,17 @@ describe("pw-session guarded browser navigation route cleanup", () => {
     pending.resolve();
     await rejected;
     expect(f.pageGoto).not.toHaveBeenCalled();
-    expect(f.pageUnroute).toHaveBeenCalled();
+    expectRouteRemoved();
   });
-  it("surfaces navigation route cleanup failure while the page remains open", async () => {
+  it("surfaces navigation interception cleanup failure while the page remains open", async () => {
     const error = cleanupFailure(false);
     await expect(navigate()).rejects.toBe(error);
   });
-  it("ignores navigation route cleanup failure after the page closes", async () => {
+  it("ignores navigation interception cleanup failure after the page closes", async () => {
     cleanupFailure(true);
     await expect(navigate()).resolves.toBeNull();
   });
-  it("preserves blocked-page quarantine when navigation route cleanup fails", async () => {
+  it("preserves blocked-page quarantine when navigation interception cleanup fails", async () => {
     blockedRedirect();
     cleanupFailure(false);
     await denied(navigate());
@@ -534,10 +538,9 @@ describe("pw-session guarded browser navigation route cleanup", () => {
 });
 
 describe("pw-session selected-page interaction request guard", () => {
-  it("preserves policy-free callers without installing a route", async () => {
+  it("preserves policy-free callers without installing interception", async () => {
     await expect(guard(async () => "ok", { ssrfPolicy: undefined })).resolves.toBe("ok");
-    expect(f.pageRoute).not.toHaveBeenCalled();
-    expect(f.pageUnroute).not.toHaveBeenCalled();
+    expect(f.newCDPSession).not.toHaveBeenCalled();
   });
   it("fails closed before request handling when strict policy uses an explicit browser proxy", async () => {
     const route = createMockRoute();
@@ -553,47 +556,33 @@ describe("pw-session selected-page interaction request guard", () => {
     expect(route.fallback).not.toHaveBeenCalled();
     expect(route.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
   });
-  it("reports an unsafe preflight before route cleanup settles", async () => {
-    const install = f.pageRoute.getMockImplementation();
-    f.pageRoute.mockImplementationOnce(async (...args) => {
-      await install?.(...args);
+  it("reports an unsafe preflight detected during interception setup", async () => {
+    const implementation = f.newCDPSession.getMockImplementation();
+    f.newCDPSession.mockImplementationOnce(async () => {
+      const result = await implementation!();
       f.pageUrl.mockReturnValue(privateUrl);
-    });
-    const pending = createDeferred<void>();
-    const unroute = f.pageUnroute.getMockImplementation();
-    f.pageUnroute.mockImplementationOnce(async (...args) => {
-      await pending.promise;
-      await unroute?.(...args);
+      return result;
     });
     const { events, onPolicyDenied } = observeDenials();
     const action = vi.fn(async () => "unsafe");
-    const guarded = guard(action, { onPolicyDenied });
-    await vi.waitFor(() => expect(events).toEqual(["detected", "handled:false"]));
+    await denied(guard(action, { onPolicyDenied }));
+    expect(events).toEqual(["detected", "handled:false"]);
     expect(action).not.toHaveBeenCalled();
-    pending.resolve();
-    await denied(guarded);
     expectRouteRemoved();
   });
-  it("falls through allowed documents and subresources, then removes only its handler", async () => {
+  it("intercepts documents without routing subresources", async () => {
     const documentRoute = createMockRoute();
-    const imageRoute = createMockRoute();
     await expect(
       guard(async () => {
         await dispatch({ route: documentRoute });
-        await dispatch({
-          url: "http://127.0.0.1/ignored-subresource.png",
-          isNavigationRequest: false,
-          resourceType: "image",
-          route: imageRoute,
-        });
         return "ok";
       }),
     ).resolves.toBe("ok");
     expect(documentRoute.fallback).toHaveBeenCalledTimes(1);
-    expect(imageRoute.fallback).toHaveBeenCalledTimes(1);
     expect(documentRoute.continue).not.toHaveBeenCalled();
-    expect(imageRoute.continue).not.toHaveBeenCalled();
-    expect(f.pageRoute).toHaveBeenCalledWith("**", f.pageRoute.mock.calls[0]?.[1]);
+    expect(f.sessionSend).toHaveBeenCalledWith("Fetch.enable", {
+      patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Request" }],
+    });
     expectRouteRemoved();
   });
   it("does not claim preservation when postflight also finds a policy violation", async () => {
@@ -646,7 +635,7 @@ describe("pw-session selected-page interaction request guard", () => {
       .mockImplementationOnce(async () => await pending.promise);
     const route = createMockRoute();
     let settled = false;
-    let dispatched: Promise<void> | undefined;
+    let dispatched: Promise<MockRoute> | undefined;
     let observedPolicyCheck: Promise<void> | undefined;
     try {
       const guarded = guard(
@@ -665,7 +654,7 @@ describe("pw-session selected-page interaction request guard", () => {
       });
       await vi.waitFor(() => expect(validation).toHaveBeenCalledTimes(1));
       expect(observedPolicyCheck).toBeInstanceOf(Promise);
-      expect(f.pageUnroute).toHaveBeenCalledTimes(1);
+      expect(f.sessionDetach).not.toHaveBeenCalled();
       expect(settled).toBe(false);
       pending.resolve();
       await expect(guarded).resolves.toBe("ok");
@@ -719,7 +708,7 @@ describe("pw-session selected-page interaction request guard", () => {
     failRouteSetup(error);
     const action = vi.fn(async () => "unreachable");
     await expect(guard(action)).rejects.toBe(error);
-    expectRouteRemoved();
+    expect(f.session.listenerCount("Fetch.requestPaused")).toBe(0);
     expect(action).not.toHaveBeenCalled();
   });
   it("surfaces cleanup failure while the page remains open", async () => {

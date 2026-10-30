@@ -11,6 +11,8 @@ export function armShutdownHardExitWatchdog(params: {
   delayMs: number;
   onError: (error: unknown) => void;
 }): ShutdownHardExitWatchdog | null {
+  const deadlineNs =
+    process.hrtime.bigint() + BigInt(Math.max(0, Math.floor(params.delayMs))) * 1_000_000n;
   const reportError = (error: unknown) => {
     try {
       params.onError(error);
@@ -23,7 +25,7 @@ export function armShutdownHardExitWatchdog(params: {
     const url = resolveRuntimeProcessEntrypointUrl("shutdownHardExit");
     worker = createCpuTrackedWorker(url, {
       execArgv: resolveRuntimeWorkerThreadExecArgv(url),
-      workerData: { delayMs: Math.max(0, Math.floor(params.delayMs)) },
+      workerData: { deadlineNs },
     });
   } catch (error) {
     reportError(error);

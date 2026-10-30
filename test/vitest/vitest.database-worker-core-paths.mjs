@@ -1,5 +1,9 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/gateway/server-methods.workshop-contract.test.ts",
+  "src/cli/skills-cli.workshop-contract.test.ts",
+  "src/auto-reply/reply/commands.workshop-contract.test.ts",
+  "src/agents/openclaw-tools.workshop-contract.test.ts",
   "src/agents/harness/context-media-runtime.test.ts",
   "src/agents/subagents/registry/subagent-controller-inputs.test.ts",
   "src/commands/doctor/shared/model-replacement.test.ts",
@@ -803,6 +807,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/update-cli/update-config-provenance.integration.test.ts",
   "src/cli/update-cli/update-load-path-finalization.integration.test.ts",
   "src/cli/update-cli/update-repair-command.test.ts",
+  "src/cli/update-cli/update-repair-package-activation.test.ts",
   "src/cli/update-cli/update-repair-history.test.ts",
   "src/cli/update-cli/update-repair-handoff.test.ts",
   "src/cli/update-cli/update-repair-cancellation.test.ts",

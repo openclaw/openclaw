@@ -166,10 +166,13 @@ export function isHostLocalMarkdownFileHref(href: string): boolean {
   return HOST_LOCAL_FILE_HREF_RE.test(href.trim());
 }
 
-/** Only a file reader supplies the document context needed to consume a relative href. */
-export function parseMarkdownDocumentFileLinkTarget(href: string) {
-  // Split URL delimiters before decoding: an encoded # belongs to the filename.
-  const path = href.split("#", 1)[0] ?? "";
+/** Selection cues may drop a query; source-bound reads still reject it. */
+export function parseMarkdownDocumentFileLinkTarget(
+  href: string,
+  purpose: "read" | "select" = "read",
+) {
+  // Split URL delimiters before decoding: encoded # and ? belong to the filename.
+  const path = href.split(purpose === "select" ? /[?#]/ : "#", 1)[0] ?? "";
   if (!path || path.includes("?")) {
     return null;
   }

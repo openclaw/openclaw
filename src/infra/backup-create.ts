@@ -13,7 +13,6 @@ import {
 } from "../commands/backup-resource-inventory.js";
 import {
   buildBackupArchiveBasename,
-  buildBackupArchivePath,
   buildBackupArchiveRoot,
   canonicalizePathForContainment,
   type BackupAsset,
@@ -30,6 +29,7 @@ import { resolveRuntimeServiceVersion } from "../version.js";
 import {
   recordArchiveSymbolicLink,
   type BackupSymbolicLink,
+  buildBackupArchivePath,
 } from "./backup-archive-path-policy.js";
 import {
   cleanupBackupArchivePublication,

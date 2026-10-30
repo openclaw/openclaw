@@ -85,7 +85,7 @@ child.on("exit", (code, signal) => {
       env: { HOME: root, OPENCLAW_STATE_DIR: path.join(root, "state") },
     });
     const exited = once(child, "exit");
-    const client = CodexAppServerClient.fromTransportForTests(child);
+    const client = CodexAppServerClient.fromTransport(child);
     const warning = vi.spyOn(embeddedAgentLog, "warn");
     try {
       await client.request("test/ready", {}, { timeoutMs: 5_000 });

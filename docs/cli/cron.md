@@ -28,6 +28,11 @@ authentication, calls to the configured local loopback Gateway do not open the
 shared state database for device authentication. Remote and explicit URL targets
 retain their device authentication and pairing requirements.
 
+Ctrl-C or SIGTERM cancels a pending `list` or `show` read without printing a late
+result or failure document. The CLI exits with status 130 or 143, respectively.
+An `add` or `edit` mutation already sent to the Gateway still waits for its
+receipt during cleanup and reports any failure; interrupting does not undo it.
+
 ## Create jobs quickly
 
 `openclaw automations create` is an alias for `openclaw automations add`. For new jobs, put the schedule first and the prompt second:
