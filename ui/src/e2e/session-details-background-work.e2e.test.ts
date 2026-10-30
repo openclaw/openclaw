@@ -469,11 +469,17 @@ suite.define(() => {
                 name: "View all processes",
                 exact: true,
               });
+              const paint = () =>
+                viewAll.evaluate((element) => {
+                  const style = getComputedStyle(element);
+                  return { background: style.backgroundColor, color: style.color };
+                });
+              await page.mouse.move(0, 0);
+              const rest = await paint();
               await viewAll.hover();
-              // The shared Details button hover paints a background; it must not be square.
-              expect(
-                await viewAll.evaluate((element) => getComputedStyle(element).borderRadius),
-              ).not.toBe("0px");
+              // "View all" is a text link: hover brightens it without the shared button background.
+              await expect.poll(async () => (await paint()).color).not.toBe(rest.color);
+              expect((await paint()).background).toBe("rgba(0, 0, 0, 0)");
               expect(await first.locator(".chat-details-processes__stop").count()).toBe(0);
               await page.mouse.move(0, 0);
               await subagents.locator(":scope > summary").scrollIntoViewIfNeeded();

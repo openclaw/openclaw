@@ -167,14 +167,18 @@
 
 .chat-details-processes__view-all {
   border: 0;
-  border-radius: calc(10px * var(--openclaw-corner-radius-scale));
-  corner-shape: superellipse(1.5);
   background: none;
   color: var(--muted);
   font: inherit;
   font-variant-numeric: tabular-nums;
   padding: var(--details-row-padding-block, 4px) var(--details-row-padding, 4px);
   cursor: var(--cursor-action);
+}
+
+/* Text link: outranks the shared Details button hover background. */
+.chat-details .chat-details-processes__view-all:is(:hover, :focus-visible) {
+  background: none;
+  color: var(--text);
 }
 
 .chat-details-processes__envelope {
