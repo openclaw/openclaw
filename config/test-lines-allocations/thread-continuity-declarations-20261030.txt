@@ -1,0 +1,3 @@
+# Passive declarations, durable presentation, native pending delivery, and Claude compatibility boundary proofs.
+# Net growth against merged PR19 excludes the separately recorded 88 CLI event lines.
+102

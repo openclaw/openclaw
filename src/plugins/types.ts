@@ -72,6 +72,7 @@ export type {
   OpenClawPluginActiveModelContext,
   OpenClawPluginHookOptions,
   OpenClawPluginToolContext,
+  OpenClawPluginToolDeclaration,
   OpenClawPluginToolFactory,
   OpenClawPluginToolOptions,
 } from "./tool-types.js";

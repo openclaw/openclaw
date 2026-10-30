@@ -37,6 +37,7 @@ import {
   type PluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
+import { applyPluginToolDeclarations } from "./tool-declarations.js";
 import {
   createPluginToolFactoryContext,
   type PluginToolOwnerContinuation,
@@ -607,12 +608,9 @@ function* resolvePluginToolsFromRegistry(
         factoryContext.assertInvocationCurrent?.();
       }
       const factoryResult = factories.resolve(entry, factoryContext, declaredNames);
-      if (factoryResult.failed) {
-        continue;
-      }
-      const { resolved } = factoryResult;
+      const resolved = applyPluginToolDeclarations(entry, factoryResult, reportError);
       if (!resolved) {
-        if (declaredNames.length > 0) {
+        if (declaredNames.length > 0 && !factoryResult.failed) {
           context.logger.debug?.(
             `plugin tool factory returned null (${entry.pluginId}): [${declaredNames.join(", ")}]`,
           );

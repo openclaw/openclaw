@@ -78,6 +78,80 @@ const declarations = (readNames: () => string[] | undefined) =>
     },
   });
 
+it("admits passive declaration data without constructing an executor", () => {
+  const { api, registry } = toolRegistry({ tools: ["probe"] });
+  const { name, label, description, parameters } = probe(() => {});
+  const declaration = { name, label, description, parameters };
+  const create = vi.fn(() => null);
+  api.registerTool({ contextVersion: 2, declarations: [declaration], create });
+  expect(registry.tools[0]?.names).toEqual(["probe"]);
+  declaration.description = "changed by plugin after registration";
+  Object.defineProperty(declaration.parameters, "changed", { value: true });
+  expect(registry.tools[0]?.declarations?.[0]).toEqual({
+    name,
+    label,
+    description,
+    parameters: { type: "object", properties: {} },
+  });
+  expect(Object.isFrozen(registry.tools[0]?.declarations?.[0]?.parameters)).toBe(true);
+  expect(create).not.toHaveBeenCalled();
+});
+
+it.each([
+  "accessor",
+  "nested accessor",
+  "proxy",
+  "cycle",
+  "duplicate",
+  "undeclared",
+  "mismatch",
+  "callback",
+] as const)(
+  "rejects %s passive declarations at registration without reading executable metadata",
+  (failure) => {
+    const { api, registry } = toolRegistry({ tools: ["probe", "other"] });
+    const read = vi.fn(() => {
+      throw new Error("must not execute metadata");
+    });
+    const { name, label, description, parameters } = probe(() => {});
+    const declaration = { name, label, description, parameters };
+    const descriptor: OpenClawPluginToolFactory<2> = {
+      contextVersion: 2,
+      declarations: [declaration],
+      create: vi.fn(() => null),
+    };
+    if (failure === "accessor") {
+      Object.defineProperty(descriptor, "declarations", { get: read });
+    }
+    if (failure === "nested accessor") {
+      Object.defineProperty(declaration.parameters, "properties", { get: read });
+    }
+    if (failure === "proxy") {
+      Object.defineProperty(declaration, "parameters", { value: new Proxy({}, { ownKeys: read }) });
+    }
+    if (failure === "cycle") {
+      Object.defineProperty(declaration.parameters, "cycle", { value: declaration.parameters });
+    }
+    if (failure === "duplicate") {
+      Object.defineProperty(descriptor, "declarations", {
+        value: [declaration, { ...declaration, name: "PROBE" }],
+      });
+    }
+    if (failure === "undeclared") {
+      declaration.name = "outside_manifest";
+    }
+    if (failure === "callback") {
+      Object.defineProperty(declaration, "execute", { value: read, enumerable: true });
+    }
+    api.registerTool(descriptor, failure === "mismatch" ? { name: "other" } : undefined);
+    expect(registry.tools).toEqual([]);
+    expect(registry.diagnostics).toHaveLength(1);
+    expect(registry.diagnostics[0]?.level).toBe("error");
+    expect(read).not.toHaveBeenCalled();
+    expect(descriptor.create).not.toHaveBeenCalled();
+  },
+);
+
 const continuation = (isCurrent: () => boolean) => ({
   isCurrent,
   assertCurrent: () => assert(isCurrent(), "owner closed"),

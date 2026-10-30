@@ -153,10 +153,28 @@ export type OpenClawPluginToolContext<Version extends 1 | 2 = 1> = Version exten
     }
   : OpenClawPluginToolContextBase;
 
+/** Passive registration facts; must be safe for the configured discovery audience. */
+export type OpenClawPluginToolDeclaration = Readonly<
+  Pick<
+    AnyAgentTool,
+    | "name"
+    | "label"
+    | "description"
+    | "parameters"
+    | "outputSchema"
+    | "displaySummary"
+    | "catalogMode"
+    | "requiredClientCaps"
+    | "async"
+  >
+>;
+
 /** A version 2 descriptor explicitly opts into owner-authorized continuations. */
 export type OpenClawPluginToolFactory<Version extends 1 | 2 = 1> = Version extends 2
   ? {
       contextVersion: 2;
+      /** Immutable data, never current-turn grants. Missing executors refuse invocation. */
+      readonly declarations?: readonly OpenClawPluginToolDeclaration[];
       create: (ctx: OpenClawPluginToolContext<2>) => ReturnType<OpenClawPluginToolFactory>;
     }
   : (ctx: OpenClawPluginToolContext) => AnyAgentTool | AnyAgentTool[] | null | undefined;
