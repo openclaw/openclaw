@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatMemoryIndexRebuildGuidance,
   resolveMemoryIndexIdentityDiagnostic,
   resolveMemorySearchStaleness as staleness,
   type MemoryProviderStatus,
@@ -22,6 +23,17 @@ const diagnose = (indexIdentity: Record<string, unknown>) =>
   resolveMemoryIndexIdentityDiagnostic(withIdentity(indexIdentity));
 
 describe("memory search staleness", () => {
+  it("routes remote workspace index maintenance through the authenticated Gateway", () => {
+    expect(
+      formatMemoryIndexRebuildGuidance(
+        { provider: "none", custom: { workspaceHost: "remote" } },
+        "main",
+      ),
+    ).toBe(
+      `openclaw gateway call memory.index --params '{"agentId":"main"}' --timeout 180000. Rebuilding uses keyword indexing only and does not call an embedding provider.`,
+    );
+  });
+
   it("keeps routine pending index work silent", () => {
     const status: MemoryProviderStatus = {
       backend: "builtin",

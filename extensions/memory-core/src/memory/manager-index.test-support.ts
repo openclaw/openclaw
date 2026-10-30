@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { withEngineStoreAdmission } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import type {
   EmbeddingInput,
   EmbeddingProviderCallOptions,
@@ -12,7 +13,10 @@ import {
   type MemoryExtraPath,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  openOpenClawStateDatabase,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { clearEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -471,6 +475,9 @@ export function createManagerIndexFixture(deps: {
       layout: "state-only",
       applyEnv: false,
     });
+    // Finish boot migration before the async worker captures its opening authority.
+    const { env } = workerState;
+    withEngineStoreAdmission(() => openOpenClawStateDatabase({ env }));
     // A file-owned store keeps shared SQLite workers available across complete case cleanup.
     await createPluginStateKeyedStoreForTests<boolean>("memory-core", {
       namespace: "index-fixture-worker",

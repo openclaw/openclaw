@@ -1,6 +1,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { MemorySearchDeadlineControl } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { withMemoryMaintenanceSignal } from "./maintenance-authority.js";
 
 export function createPausedDeadline(params: {
   kind: "corpus" | "embedding";
@@ -70,9 +71,11 @@ export async function runEmbeddingOperationWithTimeout<T>(params: {
   run: (signal: AbortSignal) => Promise<T>;
 }): Promise<T> {
   const controller = new AbortController();
-  const signal = params.signal
-    ? AbortSignal.any([params.signal, controller.signal])
+  const callerSignal = withMemoryMaintenanceSignal(params.signal);
+  const signal = callerSignal
+    ? AbortSignal.any([callerSignal, controller.signal])
     : controller.signal;
+  signal.throwIfAborted();
   if (!Number.isFinite(params.timeoutMs) || params.timeoutMs <= 0) {
     return await params.run(signal);
   }
@@ -93,7 +96,7 @@ export async function runEmbeddingOperationWithTimeout<T>(params: {
   try {
     const operation = params.run(signal);
     const result = await Promise.race([operation, timeout.promise]);
-    params.signal?.throwIfAborted();
+    callerSignal?.throwIfAborted();
     // An overdue watchdog can run after provider success following an event-loop stall.
     if (deadline.isExpired()) {
       controller.abort(timeoutError);

@@ -87,6 +87,7 @@ let targets = explicitTargets
       "extensions/memory-core/src/memory/manager-source-index-kernel.postgres.test.ts",
       "extensions/memory-core/src/memory/manager-duplicate-chunks.postgres.test.ts",
       "extensions/memory-core/src/memory/manager-publication.postgres.test.ts",
+      "extensions/memory-core/src/memory/manager-postgres-cleanup.postgres.test.ts",
       "extensions/memory-core/src/memory/manager-search.postgres.test.ts",
       "extensions/memory-core/src/tools.postgres.test.ts",
       "extensions/memory-core/src/standing-intents.postgres.test.ts",

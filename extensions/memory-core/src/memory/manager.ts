@@ -652,6 +652,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         lastProvider: this.batchFailure.lastProvider,
       },
       custom: {
+        workspaceHost: this.memoryFiles ? "remote" : "local",
         watcher: this.memoryWatcherHealth,
         llamaCppRuntime: getLocalEmbeddingRuntimeFacts(this.provider),
         searchMode: providerInfo.searchMode,

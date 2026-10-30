@@ -22,6 +22,7 @@ import { registerMemoryCoreCli } from "./cli-metadata.js";
 import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
+import { registerMemoryIndexGatewayMethod } from "./src/index-gateway.js";
 import {
   buildMemoryPromptSection,
   buildProjectMemoryWriteInstruction,
@@ -312,6 +313,7 @@ export default definePluginEntry({
       },
     });
     registerSessionBackfillGatewayMethods(api);
+    registerMemoryIndexGatewayMethod(api);
     api.registerMemoryCapability({
       recallToolNames: ["memory_search", "memory_get"],
       deterministicRecallToolName: "memory_search",

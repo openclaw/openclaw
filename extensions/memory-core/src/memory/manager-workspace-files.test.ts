@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { registerAgentWorkspaceAccess } from "openclaw/plugin-sdk/agent-workspace-runtime";
+import { withEngineStoreAdmission } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   buildFileEntry,
   listMemoryFiles,
@@ -11,7 +13,11 @@ import {
   type MemoryWorkspaceFiles,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { readAgentMemoryFile } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { openOpenClawStateDatabase } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerMemoryIndexGatewayMethod } from "../index-gateway.js";
+import { indexMemoryOnGateway } from "../index-gateway.runtime.js";
 import {
   getMemoryWorkspaceMaintenance,
   listWorkspaceMemoryFiles,
@@ -26,6 +32,11 @@ const managers = await import("./index.js");
 
 describe("Gateway index over Harness workspace files", () => {
   const fixture = createManagerIndexFixture(managers);
+  beforeEach(() => {
+    // Gateway maintenance runs after shared-state boot, unlike status-only inspection.
+    const env = { OPENCLAW_STATE_DIR: fixture.paths.stateDir };
+    withEngineStoreAdmission(() => openOpenClawStateDatabase({ env }));
+  });
   const createConfig = (overrides: Parameters<typeof fixture.createConfig>[0] = {}) =>
     fixture.createConfig({
       provider: "none",
@@ -126,6 +137,122 @@ describe("Gateway index over Harness workspace files", () => {
     };
   }
 
+  it("rebuilds via Gateway maintenance using remote bytes and ignores a local decoy", async () => {
+    const { harness } = await registerHarness();
+    await fs.writeFile(path.join(harness, "memory/notes.md"), "alpha Harness canonical notes.");
+    await fs.writeFile(path.join(fixture.paths.memory, "notes.md"), "beta Gateway decoy.");
+    const cfg = createConfig();
+    const { MemoryIndexManager } = await import("./manager.js");
+    const syncStatus = vi.spyOn(MemoryIndexManager.prototype, "status").mockImplementation(() => {
+      throw new Error("Gateway maintenance must not read SQLite synchronously");
+    });
+    try {
+      const status = await indexMemoryOnGateway({
+        cfg,
+        agentId: "main",
+        force: true,
+        assertCurrent() {},
+      });
+      expect(status.files).toBe(1);
+      expect(status.chunks).toBeGreaterThan(0);
+      expect(status.custom?.workspaceHost).toBe("remote");
+    } finally {
+      syncStatus.mockRestore();
+    }
+    const manager = await fixture.getFreshManager(cfg, "status");
+    expect(await manager.search("canonical", { minScore: 0 })).toHaveLength(1);
+    expect(await manager.search("decoy", { minScore: 0 })).toEqual([]);
+  });
+
+  it.each(["none", "openai", "batch-test"])(
+    "does not embed or publish after maintenance authority is revoked (%s)",
+    async (provider) => {
+      const { harness, files } = await registerHarness();
+      const filename = path.join(harness, "memory/notes.md");
+      await fs.writeFile(filename, "alpha original canonical notes.");
+      const cfg = createConfig({
+        provider,
+        batchEnabled: provider === "batch-test",
+        cacheEnabled: false,
+      });
+      await indexMemoryOnGateway({ cfg, agentId: "main", force: true, assertCurrent() {} });
+      const before = {
+        inline: fixture.provider.embedBatchCalls,
+        batch: fixture.provider.providerRuntimeBatchCalls.length,
+      };
+      if (provider === "openai") {
+        expect(before.inline).toBeGreaterThan(0);
+      }
+      if (provider === "batch-test") {
+        expect(before.batch).toBeGreaterThan(0);
+      }
+      await fs.writeFile(filename, "beta revoked replacement.");
+      let current = true;
+      const read = files.readForIndexing.bind(files);
+      vi.spyOn(files, "readForIndexing").mockImplementation(async (file) => {
+        const result = await read(file);
+        current = false;
+        return result;
+      });
+      await expect(
+        indexMemoryOnGateway({
+          cfg,
+          agentId: "main",
+          force: true,
+          assertCurrent() {
+            if (!current) {
+              throw new Error("operator revoked");
+            }
+          },
+        }),
+      ).rejects.toThrow("operator revoked");
+      expect(fixture.provider.embedBatchCalls).toBe(before.inline);
+      expect(fixture.provider.providerRuntimeBatchCalls).toHaveLength(before.batch);
+      const manager = await fixture.getFreshManager(cfg, "status");
+      expect(await manager.search("original", { minScore: 0 })).toHaveLength(1);
+      expect(await manager.search("replacement", { minScore: 0 })).toEqual([]);
+    },
+  );
+
+  it("validates admin maintenance requests before acquiring a manager", async () => {
+    let registered:
+      | { handler: (args: GatewayRequestHandlerOptions) => Promise<void>; scope?: string }
+      | undefined;
+    const cfg = createConfig();
+    const api = {
+      runtime: { config: { current: () => cfg } },
+      registerGatewayMethod(
+        name: string,
+        handler: (args: GatewayRequestHandlerOptions) => Promise<void>,
+        options: { scope?: string },
+      ) {
+        expect(name).toBe("memory.index");
+        registered = { handler, scope: options.scope };
+      },
+    } as unknown as OpenClawPluginApi;
+    registerMemoryIndexGatewayMethod(api);
+    expect(registered?.scope).toBe("operator.admin");
+    for (const params of [
+      {},
+      { agentId: "unknown" },
+      { agentId: "main", force: "true" },
+      { agentId: "main", path: "/tmp" },
+    ]) {
+      const respond = vi.fn();
+      await registered!.handler({ params, respond } as unknown as GatewayRequestHandlerOptions);
+      expect(respond.mock.calls[0]?.[2]).toMatchObject({ code: "INVALID_REQUEST" });
+    }
+    const respond = vi.fn();
+    await registered!.handler({
+      params: { agentId: "main" },
+      respond,
+      client: null,
+    } as unknown as GatewayRequestHandlerOptions);
+    expect(respond.mock.calls[0]?.[2]).toMatchObject({
+      code: "UNAVAILABLE",
+      message: "Memory maintenance operator authority is no longer current.",
+    });
+  });
   it("still rejects maintenance absent from an opted-in Memory host", async () => {
     await registerHarness();
     expect(() => getMemoryWorkspaceMaintenance(fixture.paths.workspace)).toThrow(

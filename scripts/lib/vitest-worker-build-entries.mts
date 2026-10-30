@@ -3,6 +3,7 @@ import { discordAudioTestEntrypoints } from "../../extensions/discord/src/voice/
 import { logbookSqliteBackendEntrypoint } from "../../extensions/logbook/src/sqlite-backend-entrypoint.test-support.ts";
 import { memoryForgetFaultEntrypoint } from "../../extensions/memory-core/src/memory-forget-fault-entrypoint.test-support.ts";
 import { memoryForgetPlanningObserverEntrypoint } from "../../extensions/memory-core/src/memory-forget-planning-observer-entrypoint.test-support.ts";
+import { memoryPostgresCleanupEntrypoint } from "../../extensions/memory-core/src/memory/manager-postgres-cleanup-entrypoint.test-support.ts";
 import { memoryAdmissionRestartEntrypoint } from "../../extensions/memory-core/src/memory/manager-publication-admission-entrypoint.test-support.ts";
 import { memoryPublicationCrashEntrypoint } from "../../extensions/memory-core/src/memory/manager-publication-crash-entrypoint.test-support.ts";
 import { memoryPublicationFaultEntrypoint } from "../../extensions/memory-core/src/memory/manager-publication-fault-entrypoint.test-support.ts";
@@ -325,6 +326,7 @@ export const vitestWorkerBuildEntries = {
     memoryPublicationFaultEntrypoint,
     memoryPublicationCrashEntrypoint,
     memoryAdmissionRestartEntrypoint,
+    memoryPostgresCleanupEntrypoint,
     memoryForgetFaultEntrypoint,
     memoryForgetPlanningObserverEntrypoint,
     sqliteReadOnlyCompileCacheParentEntrypoint,

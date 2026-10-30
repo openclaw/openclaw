@@ -14,6 +14,7 @@ import {
   readSqliteDatabaseScopedWriteTokenForPath,
   type StoreWriterQueue,
 } from "openclaw/plugin-sdk/sqlite-runtime";
+import { captureMemoryMaintenanceAuthority } from "./maintenance-authority.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import {
   runMemoryDatabaseAdmission,
@@ -498,9 +499,14 @@ export class MemoryIndexDatabase {
     operation: (scope: PublicationScope) => Promise<T>,
     assertCurrent: () => void,
   ): Promise<T> {
+    const maintenanceAuthority = captureMemoryMaintenanceAuthority();
+    const assertPublicationCurrent = () => {
+      maintenanceAuthority?.();
+      assertCurrent();
+    };
     return this.withPublicationWorker(
-      (store) => store.run(operation, assertCurrent),
-      assertCurrent,
+      (store) => store.run(operation, assertPublicationCurrent),
+      assertPublicationCurrent,
     );
   }
 
@@ -508,9 +514,17 @@ export class MemoryIndexDatabase {
     command: { type: Key; input: MemoryPublicationOperations[Key]["input"] },
     assertCurrent: () => void,
   ): Promise<MemoryPublicationOperations[Key]["output"]> {
+    // Exact owner-bound TEMP cleanup must outlive the request that created its stage.
+    // Database ownership and caller authority are still checked below and by the worker.
+    const maintenanceAuthority =
+      command.type === "database.stage.discard" ? undefined : captureMemoryMaintenanceAuthority();
+    const assertPublicationCurrent = () => {
+      maintenanceAuthority?.();
+      assertCurrent();
+    };
     return this.withPublicationWorker(
-      (store) => store.execute(command, assertCurrent),
-      assertCurrent,
+      (store) => store.execute(command, assertPublicationCurrent),
+      assertPublicationCurrent,
     );
   }
 

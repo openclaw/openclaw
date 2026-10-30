@@ -14,6 +14,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { EmbeddingProvider } from "./embeddings.js";
+import { assertMemoryMaintenanceAuthority } from "./maintenance-authority.js";
 
 export function embedMemoryQuery(
   provider: EmbeddingProvider,
@@ -21,6 +22,7 @@ export function embedMemoryQuery(
   settings: Pick<ResolvedMemorySearchConfig, "queryInstruction" | "inputFormat">,
   options: EmbeddingProviderCallOptions,
 ): Promise<number[]> {
+  assertMemoryMaintenanceAuthority();
   const instruction = settings.queryInstruction || settings.inputFormat?.query;
   return provider.embed(
     instruction !== undefined
@@ -40,6 +42,7 @@ export function embedMemoryDocuments(
   inputFormat: ResolvedMemorySearchConfig["inputFormat"],
   options: EmbeddingProviderCallOptions,
 ): Promise<number[][]> {
+  assertMemoryMaintenanceAuthority();
   return provider.embedBatch(
     inputs.map((input) =>
       formatEmbeddingModelInput(input, provider.model, "document", inputFormat),
@@ -64,9 +67,11 @@ export async function runMemoryEmbeddingBatchTimeoutRetry(params: {
 }): Promise<MemoryBatchRetryResult> {
   let attempts: 1 | 2 = 1;
   while (true) {
+    assertMemoryMaintenanceAuthority();
     try {
       return { kind: "success", value: await params.run() };
     } catch (error) {
+      assertMemoryMaintenanceAuthority();
       if (attempts === 2 || !/timed out|timeout/i.test(formatErrorMessage(error))) {
         return { kind: "failure", error, attempts };
       }
@@ -257,34 +262,43 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
 }): Promise<T> {
   const profile = MEMORY_EMBEDDING_RETRY_PROFILES[params.profile];
   let remainingWaitMs = profile.maxTotalWaitMs;
-  return await retryAsync(params.run, {
-    attempts: profile.rateLimit.attempts,
-    minDelayMs: profile.transient.baseDelayMs,
-    maxDelayMs: profile.rateLimit.maxDelayMs,
-    retryAfterMaxDelayMs: profile.rateLimit.maxDelayMs,
-    jitter: 0.2,
-    // Caller cancellation wins even when its timeout resembles a retryable
-    // provider error; otherwise abandoned searches start another request.
-    shouldRetry: (err, attempt) => {
-      if (params.signal?.aborted) {
-        return false;
-      }
-      const retryBudget = resolveMemoryEmbeddingRetryBudget(profile, err);
-      return retryBudget !== undefined && attempt < retryBudget.attempts;
+  return await retryAsync(
+    async () => {
+      assertMemoryMaintenanceAuthority();
+      return await params.run();
     },
-    delayMs: ({ attempt, err }) => {
-      const retryBudget = resolveMemoryEmbeddingRetryBudget(profile, err);
-      return retryBudget
-        ? Math.min(retryBudget.maxDelayMs, retryBudget.baseDelayMs * 2 ** (attempt - 1))
-        : 0;
+    {
+      attempts: profile.rateLimit.attempts,
+      minDelayMs: profile.transient.baseDelayMs,
+      maxDelayMs: profile.rateLimit.maxDelayMs,
+      retryAfterMaxDelayMs: profile.rateLimit.maxDelayMs,
+      jitter: 0.2,
+      // Caller cancellation wins even when its timeout resembles a retryable
+      // provider error; otherwise abandoned searches start another request.
+      shouldRetry: (err, attempt) => {
+        assertMemoryMaintenanceAuthority();
+        if (params.signal?.aborted) {
+          return false;
+        }
+        const retryBudget = resolveMemoryEmbeddingRetryBudget(profile, err);
+        return retryBudget !== undefined && attempt < retryBudget.attempts;
+      },
+      delayMs: ({ attempt, err }) => {
+        const retryBudget = resolveMemoryEmbeddingRetryBudget(profile, err);
+        return retryBudget
+          ? Math.min(retryBudget.maxDelayMs, retryBudget.baseDelayMs * 2 ** (attempt - 1))
+          : 0;
+      },
+      retryAfterMs: (err) => resolveMemoryEmbeddingRetryBudget(profile, err)?.retryAfterMs,
+      sleep: async (delayMs) => {
+        assertMemoryMaintenanceAuthority();
+        const boundedDelayMs = Math.min(delayMs, remainingWaitMs);
+        remainingWaitMs -= boundedDelayMs;
+        await params.waitForRetry(boundedDelayMs);
+        assertMemoryMaintenanceAuthority();
+      },
     },
-    retryAfterMs: (err) => resolveMemoryEmbeddingRetryBudget(profile, err)?.retryAfterMs,
-    sleep: async (delayMs) => {
-      const boundedDelayMs = Math.min(delayMs, remainingWaitMs);
-      remainingWaitMs -= boundedDelayMs;
-      await params.waitForRetry(boundedDelayMs);
-    },
-  });
+  );
 }
 
 export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(params: {

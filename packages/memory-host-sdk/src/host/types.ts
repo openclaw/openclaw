@@ -334,10 +334,13 @@ export function resolveMemoryIndexIdentityDiagnostic(
 }
 
 export function formatMemoryIndexRebuildGuidance(
-  status: Partial<Pick<MemoryProviderStatus, "provider" | "requestedProvider">>,
+  status: Partial<Pick<MemoryProviderStatus, "provider" | "requestedProvider" | "custom">>,
   agentId?: string,
 ): string {
-  const command = `openclaw memory status --index${agentId?.trim() ? ` --agent ${agentId.trim()}` : ""}`;
+  const command =
+    status.custom?.workspaceHost === "remote" && agentId?.trim()
+      ? `openclaw gateway call memory.index --params '${JSON.stringify({ agentId: agentId.trim() }).replaceAll("'", "'\\''")}' --timeout 180000`
+      : `openclaw memory status --index${agentId?.trim() ? ` --agent ${agentId.trim()}` : ""}`;
   const configuredProvider = status.requestedProvider?.trim() || status.provider?.trim();
   const disclosure =
     configuredProvider === "none"

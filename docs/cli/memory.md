@@ -682,6 +682,26 @@ probe also resolve that plugin's manifest-declared credentials before opening
 the provider. If a credential cannot be resolved, they report the provider as
 unavailable instead of authenticating with the unresolved reference.
 
+## Remote workspace index maintenance
+
+When a Gateway owns the memory index and Harness hosts workspace files, rebuild
+through the running Gateway so its registered remote file access remains in use:
+
+```sh
+openclaw gateway call memory.index --params '{"agentId":"main"}' --timeout 180000
+```
+
+This method requires `operator.admin`. It uses the current agent memory settings
+and may call the configured embedding provider. Use it explicitly after changing
+provider, model, or index configuration. It returns the resulting index status.
+An optional `"force":true` requests a full rebuild. Disconnection, revoked caller
+authority, or a configuration change prevents further index publication.
+
+The standalone `openclaw memory status --index` command only discovers files
+available to that CLI process; it must not replace Gateway maintenance for a
+remote workspace. Workspace bytes remain on Harness and the derived index stays
+on Gateway.
+
 ## Related
 
 - [CLI reference](/cli)

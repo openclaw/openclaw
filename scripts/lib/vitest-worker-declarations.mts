@@ -32,6 +32,8 @@ export const runtimeProcessDeclarationEntries = {
     "extensions/codex/session-history-worker-entrypoint.ts",
 };
 export const vitestWorkerDeclarationEntries = {
+  "extensions/memory-core/manager-postgres-cleanup-entrypoint.test-support":
+    "extensions/memory-core/src/memory/manager-postgres-cleanup-entrypoint.test-support.ts",
   "infra/postgres-sync/locks-runtime.test-support":
     "src/infra/postgres-sync/locks-runtime.test-support.ts",
   "worker/native-worker-entrypoints.test-support":

@@ -1,8 +1,31 @@
 import { createMemorySearchDeadlineControl } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createPausedDeadline } from "./paused-deadline.js";
+import { withMemoryMaintenanceAuthority } from "./maintenance-authority.js";
+import { createPausedDeadline, runEmbeddingOperationWithTimeout } from "./paused-deadline.js";
 
 describe("createPausedDeadline", () => {
+  it("forwards maintenance cancellation to an in-flight embedding operation", async () => {
+    const connection = new AbortController();
+    const revoked = new Error("operator disconnected");
+    await expect(
+      withMemoryMaintenanceAuthority(
+        () => {},
+        () =>
+          runEmbeddingOperationWithTimeout({
+            timeoutMs: 1000,
+            message: "unexpected embedding timeout",
+            run: async (signal) => {
+              connection.abort(revoked);
+              await Promise.resolve();
+              signal.throwIfAborted();
+              return "must not succeed after disconnect";
+            },
+          }),
+        connection.signal,
+      ),
+    ).rejects.toBe(revoked);
+  });
+
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();

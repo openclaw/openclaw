@@ -1,9 +1,11 @@
 // Memory Core tests cover manager embedding policy plugin behavior.
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it, vi } from "vitest";
+import { withMemoryMaintenanceAuthority } from "./maintenance-authority.js";
 import {
   buildMemoryEmbeddingBatches,
   runMemoryEmbeddingBatchRetryWithSplit,
+  runMemoryEmbeddingBatchTimeoutRetry,
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
 
@@ -68,6 +70,48 @@ function chunk(text: string) {
 }
 
 describe("memory embedding policy", () => {
+  it("does not issue another request after maintenance authority is revoked during backoff", async () => {
+    let current = true;
+    const run = vi.fn(async () => {
+      throw new Error("embeddings failed: 429 rate limit");
+    });
+    await expect(
+      withMemoryMaintenanceAuthority(
+        () => {
+          if (!current) throw new Error("operator revoked");
+        },
+        () =>
+          runMemoryEmbeddingRetryLoop({
+            profile: "index",
+            run,
+            waitForRetry: async () => {
+              current = false;
+            },
+          }),
+      ),
+    ).rejects.toThrow("operator revoked");
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a provider batch after maintenance authority is revoked", async () => {
+    let current = true;
+    const run = vi.fn(async () => {
+      current = false;
+      throw new Error("batch timed out");
+    });
+    const onRetry = vi.fn();
+    await expect(
+      withMemoryMaintenanceAuthority(
+        () => {
+          if (!current) throw new Error("operator revoked");
+        },
+        () => runMemoryEmbeddingBatchTimeoutRetry({ run, onRetry }),
+      ),
+    ).rejects.toThrow("operator revoked");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
   it("splits large files across multiple embedding batches", () => {
     const line = "a".repeat(4200);
     const batches = buildMemoryEmbeddingBatches([chunk(line), chunk(line)], 8000);
