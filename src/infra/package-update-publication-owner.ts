@@ -133,9 +133,9 @@ export function createPublicationOwner(
       }
     }
   };
-  const assertCurrent = () => {
+  const assertCurrent = (assertJournalCurrent = journal.assertCurrent) => {
     assertion();
-    journal.assertCurrent(record);
+    assertJournalCurrent(record);
     let currentAnchor: string | null;
     try {
       currentAnchor = privatePackageActivationIdentity(custodyPath("anchor"), "anchor");
@@ -566,8 +566,11 @@ export function createPublicationOwner(
       // Intent survives partial recursive removal; resumption still requires
       // this exact private root, never a newly created directory with equal bytes.
       transition("retiring", { kind: "remove", name, identity: id, selected });
+      // Reuse the connection only for this removal; every mutation still reads
+      // the current intent, and failures close it before settlement can archive it.
+      using reader = journal.createAssertionReader();
       await removePackagePath(target, () => {
-        assertCurrent();
+        assertCurrent(reader.assertCurrent);
         // The removal owner also checks authority after its final unlink. That
         // intended absence is safe; a replacement directory never is.
         const current = entryIdentity(target, true);

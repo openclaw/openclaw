@@ -31,6 +31,7 @@ import {
   type PackageActivationRecord,
 } from "./package-update-activation-schema.js";
 import {
+  createExistingSqliteRollbackReader,
   withExistingSqliteRollbackDatabase,
   type ExistingSqliteTransaction,
 } from "./sqlite-existing-database.js";
@@ -116,6 +117,12 @@ function openJournal(anchor: string, settlementOnly: boolean) {
       throw new Error("Package publication journal identity changed");
     }
   };
+  const readOptions = {
+    busyTimeoutMs: 0,
+    assertIdentity: assertFiles,
+    validate: (db: DatabaseSync) =>
+      executeSqliteQuerySync(db, queries(db).selectFrom("package_activation").selectAll().limit(0)),
+  };
   const withDatabase = <T>(
     write: boolean,
     operation: (db: DatabaseSync, transact: ExistingSqliteTransaction) => T,
@@ -125,17 +132,7 @@ function openJournal(anchor: string, settlementOnly: boolean) {
     }
     return withExistingSqliteRollbackDatabase(
       journalPath,
-      {
-        write,
-        busyTimeoutMs: 0,
-        assertIdentity: assertFiles,
-        validate: (db) => {
-          executeSqliteQuerySync(
-            db,
-            queries(db).selectFrom("package_activation").selectAll().limit(0),
-          );
-        },
-      },
+      { ...readOptions, write },
       (db, transact) => {
         if (write) {
           // Persist rollback-journal deletion before the next filesystem effect.
@@ -569,8 +566,18 @@ function openJournal(anchor: string, settlementOnly: boolean) {
         read: (db) => decode(readRow(db)),
       });
     },
-    assertCurrent(expected: PackageActivationRecord) {
+    assertCurrent(this: void, expected: PackageActivationRecord) {
       assertRecord(expected, read());
+    },
+    createAssertionReader() {
+      const reader = createExistingSqliteRollbackReader(journalPath, readOptions);
+      return {
+        assertCurrent: (expected: PackageActivationRecord) =>
+          reader((db) => assertRecord(expected, decode(readRow(db)))),
+        [Symbol.dispose]() {
+          reader[Symbol.dispose]();
+        },
+      };
     },
     transition(
       expected: PackageActivationRecord,

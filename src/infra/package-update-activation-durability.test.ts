@@ -580,6 +580,40 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
   beforeEach(async () => {
     f = await preparedJournal();
   });
+  it.each(["committed intent", "replaced journal", "scope end"] as const)(
+    "closes a warmed assertion reader after %s without retaining stale authority",
+    async (boundary) => {
+      const handles: DatabaseSync[] = [];
+      vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((location, options) => {
+        const db = openDatabase(location, options);
+        if (db.location() === f.journalPath) {
+          handles.push(db);
+        }
+        return db;
+      });
+      {
+        using reader = f.journal.createAssertionReader();
+        reader.assertCurrent(f.record);
+        const held = handles.find((db) => db.isOpen);
+        expect(held).toBeDefined();
+        if (boundary === "committed intent") {
+          // The idle reader must release its snapshot so the real writer can
+          // commit, then see the new revision instead of its previous read.
+          const current = await f.transition(f.record, "publishing", { kind: "displace" });
+          reader.assertCurrent(current);
+          expect(() => reader.assertCurrent(f.record)).toThrow("no longer current");
+          expect(held!.isOpen).toBe(false);
+        } else if (boundary === "replaced journal") {
+          const replacement = `${f.journalPath}.replacement`;
+          fs.copyFileSync(f.journalPath, replacement);
+          fs.renameSync(replacement, f.journalPath);
+          expect(() => reader.assertCurrent(f.record)).toThrow("identity changed");
+          expect(held!.isOpen).toBe(false);
+        }
+      }
+      expect(handles.every((db) => !db.isOpen)).toBe(true);
+    },
+  );
   it("keeps unsafe journal link details local and reports the code without changing recovery evidence", async () => {
     const file = f.journalPath;
     fs.linkSync(file, path.join(root, "retained-journal.sqlite"));
