@@ -20,7 +20,8 @@
   gap: 7px;
   min-width: 0;
   padding: 10px 4px 7px;
-  border-radius: var(--radius-md);
+  border-radius: 10px;
+  corner-shape: superellipse(1.5);
   color: var(--text);
   text-decoration: none;
 }
@@ -57,6 +58,10 @@
   box-shadow:
     inset 0 1px 0 color-mix(in srgb, white 55%, transparent),
     0 1px 2px color-mix(in srgb, black 10%, transparent);
+}
+
+.sidebar-pinned-agent__avatar .identity-avatar__text {
+  line-height: 48px;
 }
 
 .sidebar-pinned-agent__avatar .session-glyph__ring {
