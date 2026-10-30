@@ -34,6 +34,7 @@ import {
 } from "./sqlite-database-admission-record.js";
 import {
   integrityVerificationKey,
+  quickIntegrityVerificationKey,
   SqliteDatabaseCleanCloseSeals,
 } from "./sqlite-database-admission-seal.js";
 import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-receipts.js";
@@ -115,7 +116,8 @@ export function prepareSqliteDatabaseCleanClose(database: DatabaseSync) {
   return seals.prepare(
     database,
     admission(database),
-    getSqliteDatabaseAdmission(database, integrityVerificationKey),
+    getSqliteDatabaseAdmission(database, integrityVerificationKey) ??
+      getSqliteDatabaseAdmission(database, quickIntegrityVerificationKey),
   );
 }
 
