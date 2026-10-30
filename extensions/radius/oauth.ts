@@ -7,6 +7,8 @@ import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import {
+  createOAuthRefreshError,
+  createOAuthRefreshResponseError,
   type OAuthCredentials,
   throwIfOAuthLoginAborted,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
@@ -61,6 +63,9 @@ async function postOAuthForm(
       requestHeaders: {},
     });
     if (!response.ok || payload.error !== undefined) {
+      if (fields.grant_type === "refresh_token") {
+        throw createOAuthRefreshResponseError("Radius OAuth refresh", response.status, payload);
+      }
       throw new RadiusOAuthError(payload.error, response.status);
     }
     return payload;
@@ -78,7 +83,7 @@ function parseToken(payload: Record<string, unknown>, previousRefresh?: string):
           // Refresh early without making short-lived tokens immediately stale.
           bufferMs: Math.min(60_000, Math.floor(lifetimeMs / 2)),
         });
-  const refresh = payload.refresh_token ?? previousRefresh;
+  const refresh = payload.refresh_token === undefined ? previousRefresh : payload.refresh_token;
   if (
     typeof payload.access_token !== "string" ||
     !payload.access_token.trim() ||
@@ -89,48 +94,11 @@ function parseToken(payload: Record<string, unknown>, previousRefresh?: string):
   ) {
     throw new Error("Radius OAuth returned invalid credentials. Retry sign-in.");
   }
-  return { access: payload.access_token, refresh, expires };
-}
-
-function parseDevice(payload: Record<string, unknown>) {
-  const lifetimeMs = positiveSecondsToSafeMilliseconds(payload.expires_in);
-  const expiresAt =
-    lifetimeMs === undefined ? undefined : resolveExpiresAtMsFromDurationMs(lifetimeMs);
-  const intervalSeconds =
-    payload.interval === undefined
-      ? 5
-      : asFiniteNumberInRange(payload.interval, {
-          min: Number.MIN_VALUE,
-          max: MAX_TIMER_TIMEOUT_MS / 1000,
-        });
-  const intervalMs = intervalSeconds === undefined ? undefined : Math.ceil(intervalSeconds * 1000);
-  if (
-    typeof payload.device_code !== "string" ||
-    !payload.device_code.trim() ||
-    typeof payload.user_code !== "string" ||
-    !payload.user_code.trim() ||
-    typeof payload.verification_uri !== "string" ||
-    expiresAt === undefined ||
-    intervalMs === undefined ||
-    intervalMs > MAX_TIMER_TIMEOUT_MS
-  ) {
-    throw new Error("Radius OAuth returned an invalid device authorization response.");
-  }
-  let url: URL;
-  try {
-    url = new URL(payload.verification_uri);
-  } catch {
-    throw new Error("Radius OAuth returned an invalid verification URL.");
-  }
-  if (url.origin !== "https://radius.earendil.com" || url.username || url.password) {
-    throw new Error("Radius OAuth returned an invalid verification URL.");
-  }
   return {
-    deviceCode: payload.device_code,
-    userCode: payload.user_code,
-    verificationUri: url.href,
-    expiresAt,
-    intervalMs,
+    access: payload.access_token,
+    refresh,
+    expires,
+    ...(typeof payload.scope === "string" ? { scope: payload.scope } : {}),
   };
 }
 
@@ -147,25 +115,52 @@ export async function loginRadiusOAuth(ctx: ProviderAuthContext): Promise<OAuthC
     assertCurrent,
   );
   assertCurrent();
-  const device = parseDevice(payload);
+  const lifetimeMs = positiveSecondsToSafeMilliseconds(payload.expires_in);
+  const expiresAt =
+    lifetimeMs === undefined ? undefined : resolveExpiresAtMsFromDurationMs(lifetimeMs);
+  const intervalSeconds =
+    payload.interval === undefined
+      ? 5
+      : asFiniteNumberInRange(payload.interval, {
+          min: Number.MIN_VALUE,
+          max: MAX_TIMER_TIMEOUT_MS / 1000,
+        });
+  const pollMs = intervalSeconds === undefined ? undefined : Math.ceil(intervalSeconds * 1000);
+  if (
+    typeof payload.device_code !== "string" ||
+    !payload.device_code.trim() ||
+    typeof payload.user_code !== "string" ||
+    !payload.user_code.trim() ||
+    typeof payload.verification_uri !== "string" ||
+    expiresAt === undefined ||
+    pollMs === undefined ||
+    pollMs > MAX_TIMER_TIMEOUT_MS
+  ) {
+    throw new Error("Radius OAuth returned an invalid device authorization response.");
+  }
+  const url = URL.parse(payload.verification_uri);
+  if (!url || url.origin !== "https://radius.earendil.com" || url.username || url.password) {
+    throw new Error("Radius OAuth returned an invalid verification URL.");
+  }
+  const { device_code: deviceCode, user_code: userCode } = payload;
   if (ctx.prompter.deviceCode) {
-    await ctx.openUrl(device.verificationUri);
+    await ctx.openUrl(url.href);
     await ctx.prompter.deviceCode({
       title: "Radius sign-in",
-      code: device.userCode,
-      expiresInMinutes: Math.ceil((device.expiresAt - Date.now()) / 60_000),
+      code: userCode,
+      expiresInMinutes: Math.ceil((expiresAt - Date.now()) / 60_000),
       message: "Enter this one-time code to sign in to Radius.",
     });
   } else {
     await ctx.prompter.note(
-      `Open ${device.verificationUri} and enter code ${device.userCode} to sign in to Radius.`,
+      `Open ${url.href} and enter code ${userCode} to sign in to Radius.`,
       "Radius sign-in",
     );
   }
   assertCurrent();
   if (!ctx.isRemote && !ctx.prompter.deviceCode) {
     try {
-      await ctx.openUrl(device.verificationUri);
+      await ctx.openUrl(url.href);
     } catch {
       // The displayed URL remains usable when this host cannot launch a browser.
     }
@@ -174,11 +169,11 @@ export async function loginRadiusOAuth(ctx: ProviderAuthContext): Promise<OAuthC
   const progress = ctx.prompter.progress("Waiting for Radius approval…");
   let completed = false;
   try {
-    let intervalMs = device.intervalMs;
-    while (Date.now() < device.expiresAt) {
-      await sleep(Math.min(intervalMs, device.expiresAt - Date.now()), ctx.signal);
+    let intervalMs = pollMs;
+    while (Date.now() < expiresAt) {
+      await sleep(Math.min(intervalMs, expiresAt - Date.now()), ctx.signal);
       assertCurrent();
-      if (Date.now() >= device.expiresAt) {
+      if (Date.now() >= expiresAt) {
         break;
       }
       try {
@@ -186,7 +181,7 @@ export async function loginRadiusOAuth(ctx: ProviderAuthContext): Promise<OAuthC
           "token",
           {
             grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-            device_code: device.deviceCode,
+            device_code: deviceCode,
           },
           ctx.signal,
           assertCurrent,
@@ -233,5 +228,13 @@ export async function refreshRadiusOAuthCredential(
     grant_type: "refresh_token",
     refresh_token: credential.refresh,
   });
-  return { ...credential, ...parseToken(payload, credential.refresh) };
+  try {
+    return { ...credential, ...parseToken(payload, credential.refresh) };
+  } catch (cause) {
+    throw createOAuthRefreshError(
+      "Radius OAuth refresh returned invalid credentials. Sign in again.",
+      { version: 1, phase: "after-token-response", outcome: "unknown" },
+      { cause },
+    );
+  }
 }

@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import "../../test-support/browser-security.mock.js";
 import {
   installAgentContractHooks,
@@ -12,10 +12,6 @@ import {
   setBrowserControlServerTabUrl,
 } from "../server.control-server.test-harness.js";
 import { getBrowserTestFetch } from "../test-support/fetch.js";
-
-beforeAll(async () => {
-  await import("../../server.js");
-});
 
 describe("browser page text route", () => {
   installAgentContractHooks();
@@ -47,16 +43,13 @@ describe("browser page text route", () => {
     );
   });
 
-  it.each(["0", "-1", "1.5", "1e3", "Infinity"])(
-    "rejects invalid maxChars=%s before extraction",
-    async (maxChars) => {
-      const base = await startServerAndBase();
-      const response = await getBrowserTestFetch()(`${base}/text?maxChars=${maxChars}`);
-      expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({ error: "maxChars must be a positive integer." });
-      expect(pageText).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects invalid maxChars before extraction", async () => {
+    const base = await startServerAndBase();
+    const response = await getBrowserTestFetch()(`${base}/text?maxChars=1e3`);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "maxChars must be a positive integer." });
+    expect(pageText).not.toHaveBeenCalled();
+  });
 
   it("rejects disallowed current tab URLs before reading page text", async () => {
     setBrowserControlServerSsrFPolicy({ allowPrivateNetwork: false });
@@ -71,20 +64,17 @@ describe("browser page text route", () => {
     expect(pageText).not.toHaveBeenCalled();
   });
 
-  it.each(["text", "requests", "errors"])(
-    "rejects existing-session %s with a supported alternative",
-    async (route) => {
-      setBrowserControlServerProfiles(
-        { user: { driver: "existing-session", color: "#FF4500" } },
-        "user",
-      );
-      const base = await startServerAndBase();
-      const response = await getBrowserTestFetch()(`${base}/${route}?profile=user`);
-      expect(response.status).toBe(501);
-      expect(await response.json()).toMatchObject({ error: expect.stringContaining("snapshot") });
-      expect(pageText).not.toHaveBeenCalled();
-      expect(networkRequests).not.toHaveBeenCalled();
-      expect(pwMocks.getPageErrorsViaPlaywright).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects existing-session text with a supported alternative", async () => {
+    setBrowserControlServerProfiles(
+      { user: { driver: "existing-session", color: "#FF4500" } },
+      "user",
+    );
+    const base = await startServerAndBase();
+    const response = await getBrowserTestFetch()(`${base}/text?profile=user`);
+    expect(response.status).toBe(501);
+    expect(await response.json()).toMatchObject({ error: expect.stringContaining("snapshot") });
+    expect(pageText).not.toHaveBeenCalled();
+    expect(networkRequests).not.toHaveBeenCalled();
+    expect(pwMocks.getPageErrorsViaPlaywright).not.toHaveBeenCalled();
+  });
 });

@@ -1,4 +1,8 @@
-import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
+import {
+  MAX_DATE_TIMESTAMP_MS,
+  parseStrictFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
+import { toNumber } from "../format.ts";
 
 const CRON_POSITIVE_DECIMAL_RE = /^(?:\d+(?:\.\d*)?|\.\d+)$/u;
 
@@ -41,4 +45,18 @@ export function parseCronDurationMs(
   return milliseconds > 0n && milliseconds <= BigInt(MAX_DATE_TIMESTAMP_MS)
     ? Number(milliseconds)
     : undefined;
+}
+
+export function parseFailureAlertCooldownMs(value: string): number | undefined {
+  const raw = value.trim();
+  const seconds = toNumber(raw, Number.NaN);
+  if (!raw || !Number.isFinite(seconds) || seconds < 0) {
+    return undefined;
+  }
+  // Keep decimal precision; normalize other accepted Number spellings before the same scale.
+  const decimal =
+    seconds === 0 || parseStrictFiniteNumber(raw) === undefined ? String(seconds) : raw;
+  const [coefficient, exponent = "0"] = decimal.split(/[eE]/u);
+  const ms = Number(`${coefficient}e${Number(exponent) + 3}`);
+  return Number.isFinite(ms) && ms >= 0 ? Math.floor(ms) : undefined;
 }

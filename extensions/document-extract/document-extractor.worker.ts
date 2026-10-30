@@ -2,7 +2,8 @@ import type {
   DocumentExtractionRequest,
   DocumentExtractionResult,
 } from "openclaw/plugin-sdk/document-extractor";
-import { serveWorkerTasks } from "openclaw/plugin-sdk/process-runtime";
+import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
+import { serveWorkerTasks } from "openclaw/plugin-sdk/worker-task-server";
 import { extractPdfContent } from "./document-extractor.runtime.js";
 
 export type DocumentExtractorWorkerRequest = Omit<
@@ -22,8 +23,7 @@ serveWorkerTasks<DocumentExtractorWorkerReply>(async (input, _progress, control)
     const result = await extractPdfContent(
       {
         ...request,
-        onImageExtractionError: (error) =>
-          imageErrors.push(error instanceof Error ? error : new Error(String(error))),
+        onImageExtractionError: (error) => imageErrors.push(toStringifiedError(error)),
       },
       control,
     );
@@ -31,7 +31,7 @@ serveWorkerTasks<DocumentExtractorWorkerReply>(async (input, _progress, control)
   } catch (error) {
     return {
       status: "failed",
-      error: error instanceof Error ? error : new Error(String(error)),
+      error: toStringifiedError(error),
       imageErrors,
     };
   }

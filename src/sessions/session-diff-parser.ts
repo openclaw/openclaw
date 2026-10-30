@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { SessionDiffFile } from "../../packages/gateway-protocol/src/index.js";
+import { unquoteGitPath } from "../infra/git-path-quote.js";
 
 type FileStatus = SessionDiffFile["status"];
 type NameStatusEntry = { path: string; oldPath?: string; status: FileStatus };
@@ -38,11 +39,6 @@ function parseNameStatusTokens(tokens: readonly string[]): NameStatusEntry[] {
   return entries;
 }
 
-/** Parses `git diff --numstat -z -M`; rename entries put paths in follow-up tokens. */
-export function parseNumstatZ(text: string): Map<string, NumstatEntry> {
-  return parseNumstatTokens(text.split("\0"), 0);
-}
-
 function parseNumstatTokens(tokens: readonly string[], start: number): Map<string, NumstatEntry> {
   const byPath = new Map<string, NumstatEntry>();
   for (let i = start; i < tokens.length; i += 1) {
@@ -76,10 +72,7 @@ function parseNumstatTokens(tokens: readonly string[], start: number): Map<strin
 }
 
 /** Git emits all raw records before the numstat records in `--raw --numstat -z`. */
-export function parseDiffInventoryZ(text: string): {
-  entries: NameStatusEntry[];
-  numstat: Map<string, NumstatEntry>;
-} {
+export function parseDiffInventoryZ(text: string) {
   const tokens = text.split("\0");
   const nameStatus: string[] = [];
   let index = 0;
@@ -99,28 +92,13 @@ export function parseDiffInventoryZ(text: string): {
   };
 }
 
-const GIT_PATH_ESCAPES: Record<string, string> = {
-  a: "\u0007",
-  b: "\b",
-  f: "\f",
-  n: "\n",
-  r: "\r",
-  t: "\t",
-  v: "\v",
-};
-
 function decodeGitPath(value: string): string {
   if (!value.startsWith('"')) {
     return value;
   }
-  // Git's octal escapes encode bytes, including individual UTF-8 bytes.
-  const bytes = Buffer.from(value.slice(1, -1)).toString("latin1");
-  const decoded = bytes.replace(/\\([0-3][0-7]{2}|[abfnrtv"\\])/g, (_, escape: string) =>
-    escape.length === 3
-      ? String.fromCharCode(Number.parseInt(escape, 8))
-      : (GIT_PATH_ESCAPES[escape] ?? escape),
-  );
-  return Buffer.from(decoded, "latin1").toString("utf8");
+  const bytes = Buffer.from(value);
+  const decoded = unquoteGitPath(bytes);
+  return decoded?.end === bytes.length ? decoded.bytes.toString("utf8") : value;
 }
 
 function chunkPath(chunk: string): string | null {

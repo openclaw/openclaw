@@ -1,32 +1,45 @@
 /**
  * Gateway request context construction tests.
  */
+
+import { writeFileSync } from "node:fs";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import {
+  assertAgentDatabaseAdmitted,
+  recordAgentDatabaseAdmissions,
+} from "../state/agent-database-admission.js";
+import {
+  getAgentDatabaseStartupAdmission,
+  withAgentDatabaseStartupAdmission,
+} from "../state/agent-database-startup.js";
+import * as deletionJournal from "../state/agent-deletion-journal.read.js";
 import * as userProfileCatalog from "../state/user-profile-list.js";
-import { ensureProfileForEmail, linkEmail } from "../state/user-profiles.js";
+import { linkEmail } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureGatewayDeviceRevocation } from "./device-revocation.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
-import {
-  createChatRunState,
-  createSessionEventSubscriberRegistry,
-  createSessionMessageSubscriberRegistry,
-} from "./server-chat-state.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
+import { handleGatewayRequest } from "./server-methods.js";
+import type { GatewayRequestContext, GatewayRequestHandler } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import {
   makeContextParams,
   makeCronState,
   makeGatewayClient,
-  type RequestRuntime,
 } from "./server-request-context.test-support.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
+import { createSubscriptionTestParams } from "./server-runtime-subscriptions.params.test-support.js";
+import { gatewayProfile, dispatchProfile } from "./server/client-fixtures.test-support.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -45,11 +58,105 @@ function makeDeviceClient(connId: string, deviceId: string, role = "primary") {
 }
 
 describe("createGatewayRequestContext", () => {
+  it("keeps startup observation bound to copied contexts after transport context loss", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      vi.useFakeTimers();
+      const pathname = state.statePath("pending-agent.sqlite");
+      writeFileSync(pathname, "synthetic identity; native preparation is separate proof");
+      const journal = vi
+        .spyOn(deletionJournal, "readAgentDeletionJournalStatusInWorker")
+        .mockResolvedValue("absent");
+      const preparation = createDeferredCore();
+      try {
+        await withAgentDatabaseStartupAdmission(async (admission) => {
+          recordAgentDatabaseAdmissions(
+            admission.defer({
+              env: state.env,
+              inspections: [
+                {
+                  target: { agentId: "main", path: pathname },
+                  result: Promise.resolve({ incompatible: [], indeterminate: [] }),
+                },
+              ],
+              reason: "synthetic transport startup inspection",
+            }),
+            { env: state.env, source: "startup" },
+          );
+          const owner = admission.adopt();
+          admission.activate({
+            isCurrent: () => true,
+            preparationReady: preparation.promise,
+            openAgent: async () => {},
+            migrateAgent: async () => {},
+            publishAgent: async () => {},
+          });
+          const config = { agents: { entries: { main: {} } } };
+          const context = createGatewayRequestContext(makeContextParams());
+          context.getRuntimeConfig = () => config;
+          const respond = vi.fn();
+          const handler = vi.fn<GatewayRequestHandler>(({ respond: reply }) => {
+            assertAgentDatabaseAdmitted("main", { env: state.env });
+            reply(true, { sessions: [] });
+          });
+          let request: Promise<void> | undefined;
+          try {
+            request = runInDetachedAsyncContext(() => {
+              expect(getAgentDatabaseStartupAdmission()).toBeUndefined();
+              expect(() => assertAgentDatabaseAdmitted("main", { env: state.env })).toThrow(
+                "synthetic transport startup inspection",
+              );
+              return handleGatewayRequest({
+                req: {
+                  type: "req",
+                  id: "detached-startup-read",
+                  method: "sessions.list",
+                  params: { agentId: "main" },
+                },
+                context: { ...context },
+                client: makeGatewayClient({
+                  connId: "detached-reader",
+                  clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+                  scopes: ["operator.admin"],
+                }),
+                respond,
+                isWebchatConnect: () => false,
+                extraHandlers: { "sessions.list": handler },
+              });
+            });
+            await vi.advanceTimersByTimeAsync(0);
+            expect(handler).not.toHaveBeenCalled();
+            expect(respond).not.toHaveBeenCalled();
+            expect(() => assertAgentDatabaseAdmitted("main", { env: state.env })).toThrow(
+              "synthetic transport startup inspection",
+            );
+            preparation.resolve();
+            await request;
+            expect(handler).toHaveBeenCalledOnce();
+            expect(respond).toHaveBeenCalledExactlyOnceWith(true, { sessions: [] });
+          } finally {
+            const requestSettled = request?.catch(() => {});
+            preparation.resolve();
+            await owner.stop();
+            await requestSettled;
+            recordAgentDatabaseAdmissions([], { env: state.env, source: "startup" });
+          }
+        });
+      } finally {
+        journal.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it("prepares every recipient before the real merge's first notification and contains resolution failure", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const source = ensureProfileForEmail("event-source@example.test");
       const target = ensureProfileForEmail("event-target@example.test");
       const third = ensureProfileForEmail("event-third@example.test");
+      using _ = {
+        [Symbol.dispose]: (await userProfileCatalog.prepareUserProfileCatalog()).release,
+      };
       const frames: Array<{ connId: string; event: string; recipientProfileId?: string }> = [];
       const clients = new GatewayClientRegistry();
       for (const [index, profile] of [source, target, third].entries()) {
@@ -61,25 +168,25 @@ describe("createGatewayRequestContext", () => {
           }),
           usesSharedGatewayAuth: false,
           presenceKey: `event-${index}`,
-          authenticatedUserProfile: {
-            profileId: profile.id,
-            displayName: null,
-            avatarRevision: "1",
-            hasAvatar: false,
-            updatedAt: profile.updatedAt,
-          },
+          authenticatedUserProfile: dispatchProfile(profile.id, { updatedAt: profile.updatedAt }),
           socket: {
             readyState: 1,
             bufferedAmount: 0,
             close: vi.fn(),
-            send: (wire: string, done?: () => void) => {
-              frames.push({ connId: `event-${index}`, ...JSON.parse(wire) });
-              done?.();
+            send: (
+              wire: string | Buffer,
+              options?: { binary: false } | (() => void),
+              done?: () => void,
+            ) => {
+              frames.push({ connId: `event-${index}`, ...JSON.parse(String(wire)) });
+              (typeof options === "function" ? options : done)?.();
             },
           } as unknown as GatewayWsClient["socket"],
         });
       }
       const peers = [...clients];
+      const profiles = await userProfileCatalog.prepareUserProfileCatalog();
+      onTestFinished(profiles.release);
       const broadcaster = createGatewayBroadcaster({
         clients,
         preparePresenceProjection: (presence) => () => presence,
@@ -89,27 +196,15 @@ describe("createGatewayRequestContext", () => {
       for (const peer of peers) {
         prepareGatewayRecipientProfile(peer);
       }
-      const subscribers = createSessionEventSubscriberRegistry();
-      for (const peer of peers) {
-        subscribers.subscribe(peer.connId);
-      }
-      const chatRunState = createChatRunState();
-      const subscriptions = startGatewayEventSubscriptions({
+      const subscriptionParams = {
+        ...createSubscriptionTestParams(params.log),
         ...broadcaster,
-        signal: new AbortController().signal,
-        log: params.log,
-        nodeHasSessionSubscribers: () => false,
-        nodeSendToSession: vi.fn(),
-        agentRunSeq: new Map(),
-        chatRunState,
-        toolEventRecipients: chatRunState.toolEventRecipients,
-        sessionEventSubscribers: subscribers,
-        sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-        chatAbortControllers: new Map(),
-        restartRecoveryCandidates: new Map(),
-        terminalSessions: { closeTaskSessions: vi.fn() },
         refreshConnectedUserProfiles: () => context.refreshConnectedUserProfile?.(),
-      });
+      };
+      for (const peer of peers) {
+        subscriptionParams.sessionEventSubscribers.subscribe(peer.connId);
+      }
+      const subscriptions = startGatewayEventSubscriptions(subscriptionParams);
       try {
         linkEmail("event-source@example.test", target.id);
         for (const [index, profileId] of [target.id, target.id, third.id].entries()) {
@@ -124,7 +219,7 @@ describe("createGatewayRequestContext", () => {
         expect(frames.some((frame) => frame.event === "sessions.changed")).toBe(true);
         const authenticated = peers.map((peer) => peer.authenticatedUserProfile);
         const resolve = vi
-          .spyOn(userProfileCatalog, "readUserProfileIdentity")
+          .spyOn(userProfileCatalog, "readResidentUserProfileIdentity")
           .mockImplementationOnce(() => {
             throw new Error("fixture storage unavailable");
           });
@@ -142,10 +237,9 @@ describe("createGatewayRequestContext", () => {
         }
       } finally {
         subscriptions.lifecycleUnsub();
-        subscriptions.heartbeatUnsub();
+        heartbeatNotifications.onEvent = () => {};
         subscriptions.transcriptUnsub();
         await subscriptions.agentUnsub();
-        await subscriptions.taskUnsub();
       }
     });
   });
@@ -212,21 +306,13 @@ describe("createGatewayRequestContext", () => {
   });
 
   it("reads cron state live from runtime state", () => {
-    const cronA = { start: vi.fn(), stop: vi.fn() } as never;
-    const cronB = { start: vi.fn(), stop: vi.fn() } as never;
-    const runtimeState: RequestRuntime["runtimeState"] = {
-      cronState: makeCronState({ cron: cronA, storePath: "/tmp/cron-a" }),
-      configReloader: { isConfigReloadSettled: () => true },
-    };
-
-    const context = createGatewayRequestContext(makeContextParams({ runtimeState }));
-
-    expect(context.cron).toBe(cronA);
-    expect(context.cronStorePath).toBe("/tmp/cron-a");
-
-    runtimeState.cronState = makeCronState({ cron: cronB, storePath: "/tmp/cron-b" });
-
-    expect(context.cron).toBe(cronB);
+    const params = makeContextParams();
+    const context = createGatewayRequestContext(params);
+    expect(context.cron).toBe(params.runtime.runtimeState.cronState.cron);
+    expect(context.cronStorePath).toBe("/tmp/cron");
+    const replacement = makeCronState({ storePath: "/tmp/cron-b" });
+    params.runtime.runtimeState.cronState = replacement;
+    expect(context.cron).toBe(replacement.cron);
     expect(context.cronStorePath).toBe("/tmp/cron-b");
   });
 
@@ -443,53 +529,58 @@ describe("createGatewayRequestContext", () => {
     expect(disconnectDeviceTransports).toHaveBeenCalledWith("device-1", undefined);
   });
 
-  it("disconnects only clients authenticated as the reassigned durable profile", () => {
-    const target = {
-      ...makeGatewayClient({
-        connId: "profile-target",
-        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+  it.each(["live", "disconnected"])(
+    "disconnects only authority for the reassigned durable profile (%s transport)",
+    (transport) => {
+      const target = {
+        ...makeGatewayClient({
+          connId: "profile-target",
+          clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+          scopes: ["operator.admin"],
+        }),
+        authenticatedUserProfile: gatewayProfile("profile-ada", "Ada"),
+      };
+      const unrelated = {
+        ...makeGatewayClient({
+          connId: "profile-unrelated",
+          clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        }),
+        authenticatedUserProfile: gatewayProfile("profile-grace", "Grace"),
+      };
+      const unidentified = makeGatewayClient({
+        connId: "shared-secret",
+        clientId: GATEWAY_CLIENT_IDS.CLI,
         scopes: ["operator.admin"],
-      }),
-      authenticatedUserProfile: {
-        profileId: "profile-ada",
-        displayName: "Ada",
-        hasAvatar: false,
-        updatedAt: 1,
-      },
-    };
-    const unrelated = {
-      ...makeGatewayClient({
-        connId: "profile-unrelated",
-        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
-      }),
-      authenticatedUserProfile: {
-        profileId: "profile-grace",
-        displayName: "Grace",
-        hasAvatar: false,
-        updatedAt: 1,
-      },
-    };
-    const unidentified = makeGatewayClient({
-      connId: "shared-secret",
-      clientId: GATEWAY_CLIENT_IDS.CLI,
-      scopes: ["operator.admin"],
-    });
-    const clients = new Set([target, unrelated, unidentified]) as never;
-    const context = createGatewayRequestContext(makeContextParams({ clients }));
-    target.socket.close.mockImplementation(() => {
+      });
+      const clients = new GatewayClientRegistry([target, unrelated, unidentified] as never);
+      const releases = Array.from(clients, (peer) => clients.retainRequest(peer));
+      onTestFinished(() => {
+        releases.forEach((release) => release());
+        expect([...clients.authorityClients]).toEqual([...clients]);
+      });
+      if (transport === "disconnected") {
+        clients.clear();
+      }
+      const context = createGatewayRequestContext(makeContextParams({ clients }));
+      target.socket.close.mockImplementation(() => {
+        expect((target as { invalidated?: boolean }).invalidated).toBe(true);
+      });
+
+      if (transport === "disconnected") {
+        expect(context.getClientConnIds?.()).toEqual(new Set());
+        expect(context.hasExecApprovalClients?.()).toBe(false);
+      }
+      context.disconnectClientsForUserProfile?.("profile-ada");
+
       expect((target as { invalidated?: boolean }).invalidated).toBe(true);
-    });
-
-    context.disconnectClientsForUserProfile?.("profile-ada");
-
-    expect((target as { invalidated?: boolean }).invalidated).toBe(true);
-    expect((target as { invalidatedReason?: string }).invalidatedReason).toBe(
-      "operator-role-changed",
-    );
-    expect(target.socket.close).toHaveBeenCalledWith(4001, "operator role changed");
-    expect(unrelated.socket.close).not.toHaveBeenCalled();
-    expect(unidentified.socket.close).not.toHaveBeenCalled();
-  });
+      expect((target as { invalidatedReason?: string }).invalidatedReason).toBe(
+        "operator-role-changed",
+      );
+      expect(target.socket.close).toHaveBeenCalledWith(4001, "operator role changed");
+      expect(unrelated.socket.close).not.toHaveBeenCalled();
+      expect(unidentified.socket.close).not.toHaveBeenCalled();
+    },
+  );
 
   it("invalidateClientsForDevice filters by role when provided", () => {
     const primary = makeDeviceClient("conn-primary", "device-1");

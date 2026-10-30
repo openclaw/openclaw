@@ -19,21 +19,11 @@ import type { TeamReportsHealth } from "./scheduler.js";
 import type { ReportPerson } from "./store-contract.js";
 import type { TeamReportsStore } from "./store.js";
 import type { Period, Person } from "./types.js";
-import type { WorkSessions } from "./work-sessions.js";
-
-type TeamReportsHttpOptions = {
-  basePath: string;
-  displayTimezone: string;
-  sessionRouting: () => Pick<PageContext, "controlUiBasePath" | "mainKey">;
-  workSessions: (offset: number, limit: number) => Promise<WorkSessions>;
-  /** The plugin's shipped `assets` directory; the dist bundle flattens `src/`, so callers resolve it from the plugin root. */
-  assetsDir: string;
-  getStore: () => TeamReportsStore | undefined;
-  status: () => Promise<unknown>;
-  health: () => Promise<TeamReportsHealth>;
-  orgs: () => string[];
-  people: () => Person[];
-};
+import {
+  createPersonWorkSessions,
+  listMemberWorkSessions,
+  type listWorkSessions,
+} from "./work-sessions.js";
 
 const assets = new Map<string, Buffer>();
 
@@ -121,7 +111,19 @@ function visiblePeople(configured: Person[], recentReports: ReportPerson[]): Per
   );
 }
 
-export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
+export function createTeamReportsHttpHandler(options: {
+  basePath: string;
+  displayTimezone: string;
+  sessionRouting: () => Pick<PageContext, "controlUiBasePath" | "mainKey">;
+  workSessions: typeof listWorkSessions;
+  /** The plugin's shipped `assets` directory; the dist bundle flattens `src/`, so callers resolve it from the plugin root. */
+  assetsDir: string;
+  getStore: () => TeamReportsStore | undefined | Promise<TeamReportsStore | undefined>;
+  status: () => Promise<unknown>;
+  health: () => Promise<TeamReportsHealth>;
+  orgs: () => string[];
+  people: () => Person[];
+}) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const nonce = randomBytes(16).toString("base64url");
     const send = async (
@@ -175,7 +177,7 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
         },
       );
     }
-    const store = options.getStore();
+    const store = await options.getStore();
     if (!store) {
       return send(
         503,
@@ -224,17 +226,29 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
       absoluteUrl,
     };
     const html = (body: string) => send(200, "text/html", body);
+    const personWorkSessions = createPersonWorkSessions(options.workSessions);
     if (first === "sessions" && route.segments.length === 1) {
       const rawOffset = new URL(req.url ?? "", absoluteUrl).searchParams.get("offset") ?? "0";
       const offset = Number(rawOffset);
       if (!/^\d+$/.test(rawOffset) || !Number.isSafeInteger(offset)) {
         return send(400, "text/plain", "Invalid session page offset.\n");
       }
+      const login = new URL(req.url ?? "", absoluteUrl).searchParams.get("person") || undefined;
+      let person: Person | undefined;
+      if (login) {
+        const latest = await store.latestPeople();
+        person = visiblePeople(options.people(), latest?.members ?? []).find((candidate) =>
+          candidate.github.some((alias) => alias.toLowerCase() === login.toLowerCase()),
+        ) ?? { github: [login] };
+      }
       return html(
         renderWorkSessionsPage(
           ctx,
-          await options.workSessions(offset, WORK_SESSIONS_PAGE_SIZE),
+          person
+            ? await personWorkSessions(person, offset, WORK_SESSIONS_PAGE_SIZE)
+            : await options.workSessions(offset, WORK_SESSIONS_PAGE_SIZE),
           offset,
+          person?.github[0],
         ),
       );
     }
@@ -269,7 +283,8 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
       if (!person && days.length === 0) {
         return notFound();
       }
-      return html(renderPersonPage(ctx, person ?? { github: [key] }, days));
+      const member = person ?? { github: [key] };
+      return html(renderPersonPage(ctx, member, days, await personWorkSessions(member)));
     }
     if (
       (first === "day" || first === "week" || first === "month") &&
@@ -298,6 +313,20 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
       if (format === "data.json") {
         return json(stored.report);
       }
+      const configured = options.people();
+      const members = stored.report.members.map((member) => {
+        const person = personFromReport(member);
+        const aliases = new Set(person.github.map((login) => login.toLowerCase()));
+        // Reports retain old aliases; use current configured aliases as additional verified lookup keys.
+        const matches = configured.filter((entry) =>
+          entry.github.some((login) => aliases.has(login.toLowerCase())),
+        );
+        return {
+          ...person,
+          github: [...person.github, ...matches.flatMap((entry) => entry.github)],
+        };
+      });
+      const workSessions = await listMemberWorkSessions(members, personWorkSessions);
       return html(
         renderReportPage(
           ctx,
@@ -306,6 +335,7 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
           (await store.listPeriods({ period: first, limit: 400 })).filter(
             (entry) => entry.key <= key,
           ),
+          workSessions,
         ),
       );
     }

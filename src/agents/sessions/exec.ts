@@ -1,35 +1,39 @@
-/**
- * Shared command execution utilities for extensions and custom tools.
- */
-
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isErrno } from "../../infra/errno.js";
 import { createWindowsOutputDecoder } from "../../infra/windows-encoding.js";
-import { releaseChildProcessOutputAfterExit } from "../../process/child-process.js";
-import { waitForCommandSpawn } from "../../process/exec-spawn.js";
-import { createCommandTerminationController } from "../../process/exec-termination.js";
-import { spawnCommand } from "../../process/exec.js";
+import { createChildProcessOutputRelease } from "../../process/child-process.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../../process/exec-result.js";
+import {
+  reserveCommandProcessCustody,
+  resolveCommandEnv,
+  resolveCommandProcessSignal,
+  retainCommandProcessCleanup,
+} from "../../process/exec-spawn.js";
+import { createChildAdapter } from "../../process/supervisor/adapters/child.js";
+import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../../process/supervisor/cancellation-policy.js";
+import type {
+  SpawnProcessAdapter,
+  ProcessExtinctionResult,
+} from "../../process/supervisor/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
+import { scheduleAbsoluteDeadline } from "../../utils/absolute-deadline.js";
 
 const DEFAULT_OUTPUT_LIMIT_CHARS = 16 * 1024 * 1024;
-const FORCE_KILL_GRACE_MS = 5000;
 
-/**
- * Options for executing shell commands.
- */
 export interface ExecOptions {
   /** AbortSignal to cancel the command */
   signal?: AbortSignal;
   /** Timeout in milliseconds */
   timeout?: number;
-  /** Working directory */
   cwd?: string;
   /** Optional maximum retained stdout/stderr characters per stream. */
   maxOutputChars?: number;
 }
 
-/**
- * Result of executing a shell command.
- */
 export interface ExecResult {
   stdout: string;
   stderr: string;
@@ -59,226 +63,239 @@ function clampMaxOutputChars(value: number | undefined): number {
 
 function appendCapturedOutput(
   current: OutputCapture,
-  chunk: Buffer | string,
+  chunk: string,
   maxOutputChars: number,
   truncateTail: boolean,
 ): OutputCapture {
-  const text = String(chunk);
-  const combined = `${current.text}${text}`;
+  const combined = `${current.text}${chunk}`;
   const overflowChars = Math.max(0, combined.length - maxOutputChars);
-  if (overflowChars === 0) {
-    return {
-      text: combined,
-      truncatedChars: current.truncatedChars,
-    };
-  }
-  const nextText = truncateTail
-    ? sliceUtf16Safe(combined, overflowChars)
-    : sliceUtf16Safe(combined, 0, maxOutputChars);
+  const nextText =
+    overflowChars === 0
+      ? combined
+      : truncateTail
+        ? sliceUtf16Safe(combined, overflowChars)
+        : sliceUtf16Safe(combined, 0, maxOutputChars);
   return {
     text: nextText,
     truncatedChars: current.truncatedChars + combined.length - nextText.length,
   };
 }
 
-/**
- * Execute a shell command and return stdout/stderr/code.
- * Supports timeout and abort signal.
- */
 export async function execCommand(
   command: string,
   args: string[],
   cwd: string,
   options?: ExecOptions,
 ): Promise<ExecResult> {
+  const argv = [command, ...args];
+  const custody = reserveCommandProcessCustody(argv);
+  const inheritedSignal = resolveCommandProcessSignal();
+  const signal = resolveCommandProcessSignal(options?.signal);
   const cancelController = new AbortController();
   const startupCanceled = createDeferredCore<ExecResult>();
+  const cleanupDone = createDeferredCore();
+  retainCommandProcessCleanup(cleanupDone.promise);
+  void cleanupDone.promise.catch(() => {});
+  let adapter: SpawnProcessAdapter<NodeJS.Signals | null> | undefined;
+  let startupCleanup: Promise<ProcessExtinctionResult> | undefined;
+  let completedResult: ExecResult | undefined;
   let waitingForSpawn = true;
   let acceptingOutput = true;
   let killed = false;
+  let commandFailed = false;
   let terminationStarted = false;
-  let timeoutId: NodeJS.Timeout | undefined;
-  let terminationController: ReturnType<typeof createCommandTerminationController> | undefined;
-  const killProcess = () => {
-    killed = true;
-    if (terminationController) {
-      if (!terminationStarted) {
-        terminationStarted = true;
-        if (!terminationController.terminate()) {
-          cancelController.abort();
-        }
+  let cancelForceKill: (() => void) | undefined;
+  const stopAdapter = () => {
+    if (adapter && !terminationStarted) {
+      terminationStarted = true;
+      adapter.kill("SIGTERM");
+      if (process.platform === "win32") {
+        // The ordinary Windows child fallback has no native graceful-stop escalation.
+        cancelForceKill = scheduleAbsoluteDeadline(
+          performance.now() + GRACEFUL_CANCEL_TIMEOUT_MS,
+          () => adapter?.kill("SIGKILL"),
+          () => performance.now(),
+        );
       }
-    } else {
-      cancelController.abort();
     }
+  };
+  let releaseOutput: (() => void) | undefined;
+  const killProcess = () => {
+    if (killed) {
+      return;
+    }
+    killed = true;
+    cancelController.abort();
+    stopAdapter();
     if (waitingForSpawn) {
       startupCanceled.resolve({ stdout: "", stderr: "", code: 1, killed: true });
     }
   };
-  try {
-    const proc = spawnCommand([command, ...args], {
-      buffer: false,
-      cancelSignal: cancelController.signal,
-      cwd,
-      detached: process.platform !== "win32",
-      forceKillAfterDelay: FORCE_KILL_GRACE_MS,
-      reject: false,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    options?.signal?.addEventListener("abort", killProcess, { once: true });
-    if (options?.timeout && options.timeout > 0) {
-      timeoutId = setTimeout(killProcess, options.timeout);
-    }
-    // Retain process cleanup after a canceled startup has returned to its caller.
-    const completion = (async () => {
-      if (proc.pid === undefined) {
-        await waitForCommandSpawn(proc);
-      }
-      waitingForSpawn = false;
-      return new Promise<ExecResult>((resolve) => {
-        const releaseOutput = releaseChildProcessOutputAfterExit(proc.nodeChildProcess);
-        let childExited = false;
-        proc.nodeChildProcess.once("exit", () => {
-          childExited = true;
-        });
-        let commandSettled = false;
-        const termination = createCommandTerminationController({
-          child: proc.nodeChildProcess,
-          cancelController,
-          processTree: { mode: "graceful" },
-          killGraceMs: FORCE_KILL_GRACE_MS,
-          isChildExited: () => childExited,
-          isCommandSettled: () => commandSettled,
-        });
-        terminationController = termination;
-
-        let stdout: OutputCapture = { text: "", truncatedChars: 0 };
-        let stderr: OutputCapture = { text: "", truncatedChars: 0 };
-        const stdoutDecoder = createWindowsOutputDecoder({ preserveUtf8Bom: true });
-        const stderrDecoder = createWindowsOutputDecoder({ preserveUtf8Bom: true });
-        let settled = false;
-        const maxOutputChars = clampMaxOutputChars(options?.maxOutputChars);
-        const truncateOutput = options?.maxOutputChars !== undefined;
-        let outputLimitExceeded: "stdout" | "stderr" | undefined;
-        const markOutputLimitExceeded = (stream: "stdout" | "stderr") => {
-          if (!truncateOutput && !outputLimitExceeded) {
-            outputLimitExceeded = stream;
+  inheritedSignal?.addEventListener("abort", killProcess, { once: true });
+  options?.signal?.addEventListener("abort", killProcess, { once: true });
+  const cancelDeadline =
+    options?.timeout && options.timeout > 0
+      ? scheduleAbsoluteDeadline(performance.now() + options.timeout, killProcess, () =>
+          performance.now(),
+        )
+      : undefined;
+  const completion = (async () => {
+    try {
+      const startup = await createChildAdapter({
+        argv,
+        cwd,
+        env: resolveCommandEnv({ argv }),
+        exactEnv: true,
+        ownProcessTree: true,
+        stdinMode: "pipe-closed",
+        abortSignal: cancelController.signal,
+        assertCurrent: () => signal?.throwIfAborted(),
+        onSpawnCleanup: (cleanup) => {
+          startupCleanup = cleanup;
+        },
+      });
+      adapter = startup.adapter;
+      const captures: Record<"stdout" | "stderr", OutputCapture> = {
+        stdout: { text: "", truncatedChars: 0 },
+        stderr: { text: "", truncatedChars: 0 },
+      };
+      const decoders = {
+        stdout: createWindowsOutputDecoder({ preserveUtf8Bom: true }),
+        stderr: createWindowsOutputDecoder({ preserveUtf8Bom: true }),
+      };
+      const released = createDeferredCore<{ code: number | null; signal: NodeJS.Signals | null }>();
+      let rootExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+      const outputRelease = createChildProcessOutputRelease(() => released.resolve(rootExit!));
+      releaseOutput = outputRelease.dispose;
+      adapter.onExit?.((code, exitSignal) => {
+        rootExit = { code, signal: exitSignal };
+        outputRelease.onExit();
+      });
+      const maxOutputChars = clampMaxOutputChars(options?.maxOutputChars);
+      const truncateOutput = options?.maxOutputChars !== undefined;
+      let outputLimitExceeded: "stdout" | "stderr" | undefined;
+      const captureOutput = (stream: "stdout" | "stderr", chunk: string) => {
+        outputRelease.onData();
+        const before = captures[stream].truncatedChars;
+        captures[stream] = appendCapturedOutput(
+          captures[stream],
+          chunk,
+          maxOutputChars,
+          truncateOutput,
+        );
+        if (!truncateOutput && captures[stream].truncatedChars > before && !outputLimitExceeded) {
+          outputLimitExceeded = stream;
+          if (!waitingForSpawn) {
             killProcess();
           }
-        };
-        const finish = async (code: number) => {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          commandSettled = true;
-          if (timeoutId) {
-            clearTimeout(timeoutId);
-          }
-          if (options?.signal) {
-            options.signal.removeEventListener("abort", killProcess);
-          }
-          await termination.settle();
-          const stdoutBeforeFlush = stdout.truncatedChars;
-          stdout = appendCapturedOutput(
-            stdout,
-            stdoutDecoder.flush(),
-            maxOutputChars,
-            truncateOutput,
-          );
-          if (
-            !truncateOutput &&
-            stdout.truncatedChars > stdoutBeforeFlush &&
-            !outputLimitExceeded
-          ) {
-            outputLimitExceeded = "stdout";
-          }
-          const stderrBeforeFlush = stderr.truncatedChars;
-          stderr = appendCapturedOutput(
-            stderr,
-            stderrDecoder.flush(),
-            maxOutputChars,
-            truncateOutput,
-          );
-          if (
-            !truncateOutput &&
-            stderr.truncatedChars > stderrBeforeFlush &&
-            !outputLimitExceeded
-          ) {
-            outputLimitExceeded = "stderr";
-          }
-          if (outputLimitExceeded) {
-            stderr = appendCapturedOutput(
-              stderr,
-              `${stderr.text ? "\n" : ""}exec ${outputLimitExceeded} exceeded output limit ${maxOutputChars} chars`,
-              maxOutputChars,
-              true,
-            );
-          }
-          resolve({
-            stdout: stdout.text,
-            stderr: stderr.text,
-            stdoutTruncatedChars: stdout.truncatedChars || undefined,
-            stderrTruncatedChars: stderr.truncatedChars || undefined,
-            outputLimitExceeded,
-            code: outputLimitExceeded ? 1 : code,
-            killed,
-          });
-        };
-
-        // Output pipes may fail independently; process termination remains authoritative.
-        const ignoreOutputStreamError = () => {};
-        proc.stdout?.on("error", ignoreOutputStreamError);
-        proc.stderr?.on("error", ignoreOutputStreamError);
-
-        proc.stdout?.on("data", (data) => {
-          if (!acceptingOutput) {
-            return;
-          }
-          const before = stdout.truncatedChars;
-          stdout = appendCapturedOutput(
-            stdout,
-            decodeCapturedOutput(stdoutDecoder, data),
-            maxOutputChars,
-            truncateOutput,
-          );
-          if (stdout.truncatedChars > before) {
-            markOutputLimitExceeded("stdout");
-          }
-        });
-
-        proc.stderr?.on("data", (data) => {
-          if (!acceptingOutput) {
-            return;
-          }
-          const before = stderr.truncatedChars;
-          stderr = appendCapturedOutput(
-            stderr,
-            decodeCapturedOutput(stderrDecoder, data),
-            maxOutputChars,
-            truncateOutput,
-          );
-          if (stderr.truncatedChars > before) {
-            markOutputLimitExceeded("stderr");
-          }
-        });
-
-        if (killed) {
-          killProcess();
         }
-        void proc
-          .then((result) => finish(result.exitCode ?? (result.failed ? 1 : 0)))
-          .catch(() => finish(1))
-          .finally(releaseOutput);
-      });
-    })();
-    if (options?.signal?.aborted) {
-      killProcess();
+      };
+      for (const stream of ["stdout", "stderr"] as const) {
+        const subscribe = stream === "stdout" ? adapter.onStdout : adapter.onStderr;
+        subscribe(
+          (chunk) => {
+            if (acceptingOutput && !adapter!.supportsRawOutput) {
+              captureOutput(stream, chunk);
+            }
+          },
+          (chunk) => {
+            if (acceptingOutput) {
+              captureOutput(stream, decodeCapturedOutput(decoders[stream], chunk));
+            }
+          },
+        );
+      }
+      const pid = adapter.memoryRootPid ?? adapter.pid;
+      if (pid !== undefined) {
+        custody?.spawned({ pid, startedAt: getProcessInstanceStartTime(pid) });
+      }
+      await startup.ready;
+      waitingForSpawn = false;
+      if (outputLimitExceeded) {
+        killProcess();
+      }
+      if (killed) {
+        stopAdapter();
+      }
+      let exit: { code: number | null; signal: NodeJS.Signals | null };
+      try {
+        exit = await Promise.race([adapter.wait(), released.promise]);
+      } finally {
+        outputRelease.dispose();
+      }
+      for (const stream of ["stdout", "stderr"] as const) {
+        captureOutput(stream, decoders[stream].flush());
+      }
+      if (outputLimitExceeded) {
+        captures.stderr = appendCapturedOutput(
+          captures.stderr,
+          `${captures.stderr.text ? "\n" : ""}exec ${outputLimitExceeded} exceeded output limit ${maxOutputChars} chars`,
+          maxOutputChars,
+          true,
+        );
+      }
+      completedResult = {
+        stdout: captures.stdout.text,
+        stderr: captures.stderr.text,
+        stdoutTruncatedChars: captures.stdout.truncatedChars || undefined,
+        stderrTruncatedChars: captures.stderr.truncatedChars || undefined,
+        outputLimitExceeded,
+        code: outputLimitExceeded ? 1 : (exit.code ?? 1),
+        killed,
+      };
+      return completedResult;
+    } catch (error) {
+      commandFailed = true;
+      stopAdapter();
+      if (
+        waitingForSpawn &&
+        isErrno(error) &&
+        /^(?:spawn|posix_spawn)(?: |$)/u.test(error.syscall ?? "")
+      ) {
+        return { stdout: "", stderr: "", code: 1, killed };
+      }
+      throw error;
+    } finally {
+      releaseOutput?.();
+      cancelDeadline?.();
+      options?.signal?.removeEventListener("abort", killProcess);
+      const settle = async () => {
+        try {
+          const cleanup = await (adapter?.waitForExtinction?.() ?? startupCleanup);
+          if (cleanup && cleanup.status === "uncertain") {
+            throw new CommandProcessCleanupError({ cause: completedResult ?? cleanup });
+          }
+          custody?.settled();
+          cleanupDone.resolve();
+        } catch (error) {
+          const failure = hasCommandProcessCleanupError(error)
+            ? error
+            : new CommandProcessCleanupError({ cause: completedResult ?? error });
+          cleanupDone.reject(failure);
+          throw failure;
+        } finally {
+          cancelForceKill?.();
+          inheritedSignal?.removeEventListener("abort", killProcess);
+          adapter?.dispose();
+        }
+      };
+      const cleanup = settle();
+      // A successful root may leave background work; custody follows its retained anchor.
+      if (killed || commandFailed) {
+        await cleanup;
+      } else {
+        void cleanup.catch((error: unknown) =>
+          process.emitWarning(`Session exec cleanup failed: ${String(error)}`),
+        );
+      }
     }
+  })();
+  if (signal?.aborted) {
+    killProcess();
+  }
+  try {
     return await Promise.race([completion, startupCanceled.promise]);
   } finally {
     acceptingOutput = false;
-    clearTimeout(timeoutId);
-    options?.signal?.removeEventListener("abort", killProcess);
   }
 }

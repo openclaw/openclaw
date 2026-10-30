@@ -1,12 +1,15 @@
 import fs from "node:fs/promises";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 import {
   formatCliProcessFailure,
   runCliProcessChild,
 } from "../cli/cli-process-child.test-helpers.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { mcpImportRuntimeEntrypoints } from "./mcp-import-runtime.test-support.js";
+
+const uiResourceUrl = resolveRuntimeWorkerUrl(mcpImportRuntimeEntrypoints.uiResource);
 
 it("projects MCP App metadata without loading session runtime management", async () => {
   await withOpenClawTestState({ label: "mcp-app-import", applyEnv: false }, async (state) => {
@@ -28,7 +31,7 @@ registerHooks({
     return nextResolve(specifier, context);
   },
 });
-const { buildMcpAppCanvasPayload, readMcpAppChannelView } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/agents/mcp-ui-resource.ts")).href)});
+const { buildMcpAppCanvasPayload, readMcpAppChannelView } = await import(${JSON.stringify(uiResourceUrl.href)});
 const preview = buildMcpAppCanvasPayload({
   viewId: "mcp-app-fixture", title: "Fixture", serverName: "fixture", toolName: "show", uiResourceUri: "ui://fixture/app",
 });
@@ -37,11 +40,10 @@ assert.deepEqual(readMcpAppChannelView({ details: { mcpAppPreview: preview } }),
 console.log("mcp-app-import-boundary-ok");
 `,
     );
+    const nodeExecutable = resolveTestNodeExecPath();
     const result = await runCliProcessChild({
-      // Removal: use the Bun executable after oven-sh/bun#35690 supports the
-      // synchronous module hooks this import-boundary probe installs.
-      nodeExecutable: process.versions.bun ? "node" : undefined,
-      nodeArgs: ["--import", "tsx", entry],
+      nodeExecutable,
+      nodeArgs: [...resolveRuntimeWorkerArgv(uiResourceUrl, nodeExecutable).slice(0, -1), entry],
       env: {
         PATH: process.env.PATH,
         SystemRoot: process.env.SystemRoot,

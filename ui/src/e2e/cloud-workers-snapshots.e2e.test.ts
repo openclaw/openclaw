@@ -1,302 +1,301 @@
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { snapshotListFixture } from "../pages/cloud-workers/cloud-worker-snapshots.test-support.ts";
+import type { SnapshotImage } from "../pages/cloud-workers/cloud-worker-environment-model.ts";
+import {
+  buildEnvironmentFixture,
+  snapshotListFixture,
+} from "../pages/cloud-workers/cloud-worker-snapshots.test-support.ts";
 import { installMockGateway, waitForConfirmModal } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-
 const suite = createControlUiE2eSuite({
-  name: "Control UI cloud worker snapshots mocked Gateway E2E",
+  name: "Control UI cloud environments mocked Gateway E2E",
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
-
-function buildEnvironmentFixture(state = "provisioning", error?: string) {
-  return {
-    id: "build-app",
-    type: "worker",
-    status: "starting",
-    preparation: { purpose: "build", key: "build-key" },
-    worker: {
-      profileId: "linux-build",
-      providerId: "crabbox",
-      leaseId: "lease-app",
-      state,
-      ageMs: 60_000,
-      attachedSessionIds: [],
-      tunnelStatus: "stopped",
-      ...(error ? { error } : {}),
-    },
-  };
+function snapshot() {
+  const result = snapshotListFixture();
+  result.images = [
+    { ...result.images[0]!, held: false, retirement: undefined, projectRoot: "/projects/app" },
+  ];
+  return result;
 }
-
-suite.define(() => {
-  it("builds a snapshot for the selected profile and local repository", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
+const methods = [
+  ...["list", "pin", "delete", "rollback", "recover"].map((method) => `crabbox.images.${method}`),
+  ...["list", "prepare", "destroy"].map((method) => `environments.${method}`),
+];
+const button = (root: Page | Locator, name: string) =>
+  root.getByRole("button", { name, exact: true });
+const menuItem = (page: Page, name: string) => page.getByRole("menuitem", { name, exact: true });
+const sheet = (page: Page) => page.locator(".cloud-environments__sheet");
+type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
+const coreMethods = ["config.get", "config.patch", "plugins.uiDescriptors", "environments.list"];
+const savedConfig = (config: Record<string, unknown>, valid = true) => ({
+  valid,
+  hash: "saved",
+  appliedConfigHash: "saved",
+  sourceConfig: config,
+  resolved: config,
+  config,
+});
+function withSnapshots(
+  responses: Record<string, unknown>,
+  run: (page: Page, gateway: Gateway) => Promise<void>,
+  featureMethods = methods,
+) {
+  return suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
     const gateway = await installMockGateway(page, {
-      featureMethods: [
-        "crabbox.images.list",
-        "environments.list",
-        "environments.prepare",
-        "environments.destroy",
-        "projects.list",
-        "worktrees.list",
-      ],
+      featureMethods,
       methodResponses: {
-        "crabbox.images.list": snapshotListFixture(),
+        "crabbox.images.list": snapshot(),
         "environments.list": { environments: [], profiles: [] },
+        ...responses,
+      },
+    });
+    await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
+    await run(page, gateway);
+  });
+}
+async function recoverCapture(
+  page: Page,
+  gateway: Gateway,
+  surface: Locator,
+  selector: string,
+  next: ReturnType<typeof snapshot>,
+  after = 0,
+) {
+  await surface.getByText("Paused: uncertain", { exact: true }).waitFor();
+  await button(surface, "Recover").click();
+  const dialog = await waitForConfirmModal(page);
+  const recover = button(dialog, "Recover");
+  expect(await recover.isDisabled()).toBe(true);
+  await dialog.getByRole("checkbox").check();
+  await gateway.setMethodResponse("crabbox.images.list", next);
+  await recover.click();
+  expect((await gateway.waitForRequest("crabbox.images.recover", { after })).params).toEqual({
+    selector,
+    acknowledgeProviderCleanup: true,
+  });
+  await expect.poll(() => surface.getByText("Paused: uncertain", { exact: true }).count()).toBe(0);
+}
+suite.define(() => {
+  it("refreshes snapshots and saved machines after lazy plugin activation without reconnecting", async () => {
+    await withSnapshots(
+      {
+        "config.get": savedConfig({}, false),
+        "plugins.uiDescriptors": {
+          ok: true,
+          generation: 1,
+          descriptors: [],
+          methods: [...coreMethods, ...methods],
+          controlUiTabs: [],
+          controlUiWidgetKinds: [],
+          controlUiLinkReaders: [],
+          pluginSurfaceUrls: {},
+        },
+      },
+      async (page, gateway) => {
+        await gateway.waitForRequest("config.get");
+        await page
+          .getByText("The first cloud session for a repository prepares it and saves a snapshot.", {
+            exact: false,
+          })
+          .waitFor();
+        await page.locator(".cloud-environments__advanced > summary").click();
+        const emptyMachines = page.getByText("No cloud worker profiles are configured.", {
+          exact: true,
+        });
+        await emptyMachines.waitFor();
+        expect(await gateway.getRequests("crabbox.images.list")).toHaveLength(0);
+        const cloud = {
+          provider: "crabbox",
+          install: "bundle",
+          settings: { provider: "aws", class: "standard" },
+        };
+        const config = { cloudWorkers: { profiles: { cloud } } };
+        await gateway.setMethodResponse("config.get", savedConfig(config));
+        await gateway.emitGatewayEvent("plugins.changed", { generation: 1 });
+        await page
+          .locator(".cloud-environments__row")
+          .getByText("github.com/acme/app", { exact: true })
+          .waitFor();
+        await button(page, "Edit: cloud").waitFor();
+        expect(await gateway.getRequests("connect")).toHaveLength(1);
+        expect((await gateway.getRequests("crabbox.images.list")).length).toBeGreaterThan(0);
+      },
+      coreMethods,
+    );
+  });
+  it("rebuilds the selected repository and cancels its build after confirmation", async () => {
+    await withSnapshots(
+      {
         "environments.prepare": {
           environmentId: "build-app",
           preparationKey: "build-key",
           reused: false,
         },
-        "projects.list": {
-          projects: [
-            {
-              id: "app",
-              displayName: "App",
-              repoRoot: "/projects/app",
-              source: "registered",
-            },
-          ],
-        },
-        "worktrees.list": { worktrees: [] },
-      },
-    });
-    try {
-      await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
-      await page.getByRole("button", { name: "Snapshots", exact: true }).click();
-      await page.getByRole("button", { name: "Build snapshot", exact: true }).click();
-      const dialog = page.locator('openclaw-modal-dialog[label="Build snapshot"]');
-      const submit = dialog.getByRole("button", { name: "Build snapshot", exact: true });
-      await dialog
-        .getByRole("combobox", { name: "Profile", exact: true })
-        .selectOption("linux-build");
-      await dialog
-        .getByRole("combobox", { name: "Repository", exact: true })
-        .selectOption("/projects/app");
-      expect(await gateway.getRequests("environments.prepare")).toHaveLength(0);
-      await gateway.setMethodResponse("environments.list", {
-        environments: [buildEnvironmentFixture()],
-        profiles: [],
-      });
-      await submit.click();
-      expect((await gateway.waitForRequest("environments.prepare")).params).toEqual({
-        profileId: "linux-build",
-        projectPath: "/projects/app",
-      });
-      await page.getByText("Build started", { exact: true }).waitFor();
-      await expect.poll(() => dialog.count()).toBe(0);
-      await page.getByRole("button", { name: "Cancel", exact: true }).waitFor();
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("cancels a build only after confirmation and removes the reconciled build row", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["crabbox.images.list", "environments.list", "environments.destroy"],
-      methodResponses: {
-        "crabbox.images.list": snapshotListFixture(),
-        "environments.list": { environments: [buildEnvironmentFixture()], profiles: [] },
         "environments.destroy": { ok: true },
       },
-    });
-    try {
-      await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
-      await page.getByRole("button", { name: "Snapshots", exact: true }).click();
-      const cancel = page.getByRole("button", { name: "Cancel", exact: true });
-      await cancel.click();
-      const dialog = await waitForConfirmModal(page);
-      expect(await dialog.getAttribute("label")).toBe("Cancel build");
-      expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);
-      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
-      await expect.poll(() => dialog.count()).toBe(0);
-      expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);
-      await cancel.click();
-      const confirmation = await waitForConfirmModal(page);
-      await gateway.setMethodResponse("environments.list", { environments: [], profiles: [] });
-      await confirmation.getByRole("button", { name: "Cancel build", exact: true }).click();
-      expect((await gateway.waitForRequest("environments.destroy")).params).toEqual({
-        environmentId: "build-app",
-      });
-      await expect.poll(() => cancel.count()).toBe(0);
-      await page.getByText("github.com/acme/app", { exact: true }).waitFor();
-    } finally {
-      await context.close();
-    }
+      async (page, gateway) => {
+        await button(page, "Rebuild").waitFor();
+        await gateway.setMethodResponse("environments.list", {
+          environments: [buildEnvironmentFixture()],
+          profiles: [],
+        });
+        await button(page, "Rebuild").click();
+        expect((await gateway.waitForRequest("environments.prepare")).params).toEqual({
+          profileId: "linux-build",
+          projectPath: "/projects/app",
+        });
+        const cancel = button(page, "Cancel: build-app");
+        await cancel.click();
+        const dialog = await waitForConfirmModal(page);
+        expect(await dialog.getAttribute("label")).toBe("Cancel build");
+        expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);
+        await gateway.setMethodResponse("environments.list", { environments: [], profiles: [] });
+        await button(dialog, "Cancel build").click();
+        expect((await gateway.waitForRequest("environments.destroy")).params).toEqual({
+          environmentId: "build-app",
+        });
+        await expect.poll(() => cancel.count()).toBe(0);
+      },
+    );
   });
-
-  it("dismisses a failed build after confirmation and keeps the recorded row hidden", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const failed = buildEnvironmentFixture("failed", "Gateway is only bound to loopback");
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["crabbox.images.list", "environments.list", "environments.destroy"],
-      methodResponses: {
-        "crabbox.images.list": snapshotListFixture(),
-        // The Gateway keeps the terminal record; dismissal must not depend on it disappearing.
-        "environments.list": { environments: [failed], profiles: [] },
+  it("keeps failed builds in their repository sheet and dismisses only confirmed failures", async () => {
+    await withSnapshots(
+      {
+        "environments.list": {
+          environments: [buildEnvironmentFixture("failed", "Synthetic setup failure")],
+          profiles: [],
+        },
         "environments.destroy": { ok: true },
       },
-    });
-    try {
-      await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
-      await page.getByRole("button", { name: "Snapshots", exact: true }).click();
-      await page.getByText("Gateway is only bound to loopback", { exact: true }).waitFor();
-      const dismiss = page.getByRole("button", { name: "Dismiss", exact: true });
-      await dismiss.click();
-      const dialog = await waitForConfirmModal(page);
-      expect(await dialog.getAttribute("label")).toBe("Dismiss failed build");
-      await dialog.getByText("build-app", { exact: true }).waitFor();
-      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
-      await expect.poll(() => dialog.count()).toBe(0);
-      expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);
-      await dismiss.click();
-      const confirmation = await waitForConfirmModal(page);
-      await confirmation.getByRole("button", { name: "Dismiss", exact: true }).click();
-      expect((await gateway.waitForRequest("environments.destroy")).params).toEqual({
-        environmentId: "build-app",
-      });
-      await page.getByText("Failed build dismissed", { exact: true }).waitFor();
-      await expect.poll(() => dismiss.count()).toBe(0);
-      await expect
-        .poll(() => page.getByText("Gateway is only bound to loopback", { exact: true }).count())
-        .toBe(0);
-      const listed = (await gateway.getRequests("environments.list")).length;
-      await page.getByRole("button", { name: "Refresh", exact: true }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("environments.list")).length)
-        .toBeGreaterThan(listed);
-      expect(await dismiss.count()).toBe(0);
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("requires provider cleanup acknowledgement before recovery and refreshes the snapshots", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const initial = snapshotListFixture();
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["crabbox.images.list", "crabbox.images.recover", "environments.list"],
-      methodResponses: {
-        "crabbox.images.list": initial,
-        "environments.list": { environments: [] },
-        "crabbox.images.recover": {
-          images: [],
-          legacyLeases: [],
-          recoveredCapture: "capture-uncertain",
-          nextSteps: "Restart the Gateway.",
-        },
+      async (page, gateway) => {
+        await sheet(page).getByText("Synthetic setup failure", { exact: true }).waitFor();
+        expect(await page.locator(".cloud-environments__row").textContent()).toBe(
+          "github.com/acme/appNeeds attention",
+        );
+        const dismiss = button(page, "Dismiss: build-app");
+        await dismiss.click();
+        const dialog = await waitForConfirmModal(page);
+        await button(dialog, "Cancel").click();
+        expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);
+        await dismiss.click();
+        await button(await waitForConfirmModal(page), "Dismiss").click();
+        await gateway.waitForRequest("environments.destroy");
+        await expect
+          .poll(() => page.getByText("Synthetic setup failure", { exact: true }).count())
+          .toBe(0);
       },
-    });
-    try {
-      await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
-      await page.getByRole("button", { name: "Snapshots", exact: true }).click();
-      await page.getByText("github.com/acme/app", { exact: true }).waitFor();
-      await page.getByText("Paused: uncertain", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "Recover", exact: true }).click();
-      const dialog = await waitForConfirmModal(page);
-      const confirm = dialog.getByRole("button", { name: "Recover", exact: true });
-      const acknowledgement = dialog.getByRole("checkbox", {
-        name: "I stopped the owning capture and worker and reconciled provider artifacts",
-      });
-      expect(await confirm.isDisabled()).toBe(true);
-      expect(await gateway.getRequests("crabbox.images.recover")).toHaveLength(0);
-      await acknowledgement.check();
-      expect(await confirm.isEnabled()).toBe(true);
-      await acknowledgement.uncheck();
-      expect(await confirm.isDisabled()).toBe(true);
-      await acknowledgement.check();
-      const recovered = {
-        ...initial,
-        images: initial.images.filter((image) => image.capture?.selector !== "capture-uncertain"),
-      };
-      await gateway.setMethodResponse("crabbox.images.list", recovered);
-      await confirm.click();
-      expect((await gateway.waitForRequest("crabbox.images.recover")).params).toEqual({
-        selector: "capture-uncertain",
-        acknowledgeProviderCleanup: true,
-      });
-      await expect.poll(() => gateway.getRequests("crabbox.images.list")).toHaveLength(2);
-      await expect.poll(() => page.getByText("Paused: uncertain", { exact: true }).count()).toBe(0);
-      await page
-        .getByText(
-          "Capture reservation cleared. Restart the Gateway after reconciliation; the next eligible worker can capture again.",
-          { exact: true },
-        )
-        .waitFor();
-      await page.getByRole("button", { name: "Refresh", exact: true }).click();
-      await expect.poll(() => gateway.getRequests("crabbox.images.list")).toHaveLength(3);
-    } finally {
-      await context.close();
-    }
+    );
   });
-
-  it("pins a snapshot, unpins it, and confirms provider deletion with exact checkpoint payloads", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const initial = snapshotListFixture();
-    const image = initial.images.find((entry) => entry.checkpointId === "image-app");
-    if (!image) {
-      throw new Error("Expected project image fixture");
-    }
-    const unpinned = { ...image, held: false, retirement: undefined };
-    const pinned = { ...unpinned, pinned: { atMs: 1234 } };
-    const listed = { ...initial, images: [unpinned] };
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["crabbox.images.list", "crabbox.images.pin", "crabbox.images.delete"],
-      methodResponses: {
-        "environments.list": { environments: [] },
-        "crabbox.images.list": listed,
-        "crabbox.images.pin": pinned,
+  it("recovers repository and project-less uncertain captures only after cleanup acknowledgement", async () => {
+    const result = snapshot();
+    result.images[0]!.capture = { selector: "capture-app", phase: "uncertain", stale: false };
+    const machineCapture: SnapshotImage = {
+      profileKey: "profile-key-machine",
+      profileId: "machine-build",
+      state: "no-image",
+      allocationCount: 0,
+      held: false,
+      capture: { selector: "capture-machine", phase: "uncertain", stale: false },
+    };
+    result.images.push(machineCapture);
+    await withSnapshots(
+      {
+        "crabbox.images.list": result,
+        "crabbox.images.recover": { ok: true },
+      },
+      async (page, gateway) => {
+        const repositorySheet = sheet(page);
+        await repositorySheet.getByText("Paused: uncertain", { exact: true }).waitFor();
+        expect(await page.locator(".cloud-environments__row").count()).toBe(1);
+        const repositoryRecovered = snapshot();
+        repositoryRecovered.images.push(machineCapture);
+        await recoverCapture(page, gateway, repositorySheet, "capture-app", repositoryRecovered);
+        const advanced = page.locator(".cloud-environments__advanced");
+        await advanced.locator("summary").click();
+        await recoverCapture(page, gateway, advanced, "capture-machine", snapshot(), 1);
+        expect(await page.locator(".cloud-environments__row").count()).toBe(1);
+      },
+    );
+  });
+  it("pins, unpins, rolls back and deletes the second profile snapshot without changing the first", async () => {
+    const result = snapshot();
+    const firstImage = result.images[0]!;
+    const secondImage = {
+      ...firstImage,
+      profileKey: "profile-key-arm",
+      profileId: "arm-build",
+      checkpointId: "image-arm",
+      baseCommit: "abcdef0123456789",
+      previous: { checkpointId: "image-arm-previous", createdAtMs: 1234 },
+    };
+    result.images.push(secondImage);
+    await withSnapshots(
+      {
+        "crabbox.images.list": result,
+        "crabbox.images.pin": {},
+        "crabbox.images.rollback": {},
         "crabbox.images.delete": { status: "deleted" },
       },
-    });
-    try {
-      await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
-      await page.getByRole("button", { name: "Snapshots", exact: true }).click();
-      const row = page.locator(".settings-row").filter({ hasText: "github.com/acme/app" });
-      await row.waitFor();
-      await gateway.setMethodResponse("crabbox.images.list", { ...listed, images: [pinned] });
-      await row.getByRole("button", { name: "Pin", exact: true }).click();
-      expect((await gateway.waitForRequest("crabbox.images.pin")).params).toEqual({
-        checkpointId: "image-app",
-        pinned: true,
-      });
-      await row.getByText("Pinned", { exact: true }).waitFor();
-      expect(await row.getByRole("button", { name: "Delete", exact: true }).isDisabled()).toBe(
-        true,
-      );
-      expect(
-        await row.getByRole("button", { name: "Delete", exact: true }).getAttribute("title"),
-      ).toBe("Unpin this snapshot before deleting it.");
-      await gateway.setMethodResponse("crabbox.images.list", listed);
-      await gateway.setMethodResponse("crabbox.images.pin", unpinned);
-      await row.getByRole("button", { name: "Unpin", exact: true }).click();
-      await expect.poll(() => gateway.getRequests("crabbox.images.pin")).toHaveLength(2);
-      expect((await gateway.getRequests("crabbox.images.pin"))[1]?.params).toEqual({
-        checkpointId: "image-app",
-        pinned: false,
-      });
-      await expect
-        .poll(() => row.getByRole("button", { name: "Delete", exact: true }).isEnabled())
-        .toBe(true);
-      await row.getByRole("button", { name: "Delete", exact: true }).click();
-      const dialog = await waitForConfirmModal(page);
-      expect(await gateway.getRequests("crabbox.images.delete")).toHaveLength(0);
-      await dialog.getByText("image-app", { exact: true }).waitFor();
-      await gateway.setMethodResponse("crabbox.images.list", { ...listed, images: [] });
-      await dialog.getByRole("button", { name: "Delete", exact: true }).click();
-      expect((await gateway.waitForRequest("crabbox.images.delete")).params).toEqual({
-        checkpointId: "image-app",
-      });
-      await expect.poll(() => row.count()).toBe(0);
-      await expect.poll(() => gateway.getRequests("crabbox.images.list")).toHaveLength(4);
-    } finally {
-      await context.close();
-    }
+      async (page, gateway) => {
+        const secondSnapshot = page.locator(
+          '.cloud-environments__snapshot[aria-label="arm-build"]',
+        );
+        const menu = async (label: string) => {
+          await button(secondSnapshot, "Environment actions").click();
+          await page.getByRole("menuitem", { name: label, exact: true }).click();
+        };
+
+        await sheet(page).getByText("01234567", { exact: true }).waitFor();
+        await secondSnapshot.getByText("abcdef01", { exact: true }).waitFor();
+        expect(await page.locator(".cloud-environments__row").count()).toBe(1);
+        const changedImage = (changes: Partial<SnapshotImage>) => ({
+          ...result,
+          images: [firstImage, { ...secondImage, ...changes }],
+        });
+        const pinned = changedImage({ pinned: { atMs: 1000 } });
+        await gateway.setMethodResponse("crabbox.images.list", pinned);
+        await menu("Pin");
+        expect((await gateway.waitForRequest("crabbox.images.pin")).params).toEqual({
+          checkpointId: "image-arm",
+          pinned: true,
+        });
+        await button(secondSnapshot, "Environment actions").click();
+        await menuItem(page, "Unpin").waitFor();
+        expect(await menuItem(page, "Delete").getAttribute("aria-disabled")).toBe("true");
+        await gateway.setMethodResponse("crabbox.images.list", result);
+        await menuItem(page, "Unpin").click();
+        await expect
+          .poll(async () => (await gateway.getRequests("crabbox.images.pin")).length)
+          .toBe(2);
+        expect((await gateway.getRequests("crabbox.images.pin"))[1]?.params).toEqual({
+          checkpointId: "image-arm",
+          pinned: false,
+        });
+        const restored = changedImage({
+          checkpointId: "image-arm-previous",
+          previous: { checkpointId: "image-arm", createdAtMs: 1234 },
+        });
+        await menu("Roll back");
+        const rollback = await waitForConfirmModal(page);
+        await gateway.setMethodResponse("crabbox.images.list", restored);
+        await button(rollback, "Roll back").click();
+        expect((await gateway.waitForRequest("crabbox.images.rollback")).params).toEqual({
+          checkpointId: "image-arm-previous",
+        });
+        await menu("Delete");
+        const deletion = await waitForConfirmModal(page);
+        await deletion.getByText("image-arm-previous", { exact: true }).waitFor();
+        await gateway.setMethodResponse("crabbox.images.list", { ...result, images: [firstImage] });
+        await button(deletion, "Delete").click();
+        expect((await gateway.waitForRequest("crabbox.images.delete")).params).toEqual({
+          checkpointId: "image-arm-previous",
+        });
+        await expect.poll(() => secondSnapshot.count()).toBe(0);
+        await sheet(page).getByText("01234567", { exact: true }).waitFor();
+        expect(await page.locator(".cloud-environments__row").count()).toBe(1);
+      },
+    );
   });
 });

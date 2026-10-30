@@ -1,7 +1,7 @@
-/**
- * Public SDK type surface for model provider and model definition config.
- */
+import type { ModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import type { ModelInferenceCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ModelApi } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /** Private selected-request facts; omission means the host cannot establish applicability. */
 export type ProviderFastModePolicyContext = {
@@ -20,7 +20,6 @@ export type ProviderFastModePolicyContext = {
 };
 
 export type {
-  BedrockDiscoveryConfig,
   ModelApi,
   ModelCompatConfig,
   ModelDefinitionConfig,
@@ -34,6 +33,23 @@ export type ProviderModelRouteSource = {
 
 /** A concrete provider route. Order expresses provider default, never credential precedence. */
 export type ProviderModelRouteAuthRequirement = "api-key" | "subscription";
+/** Secret-free credential facts used by the provider to select and constrain its route. */
+export type ProviderModelAuthPolicyContext = {
+  provider: string;
+  mode?: string;
+  authFlow?: string;
+  /** Requested non-chat operation (for example, image-generation or embedding). */
+  capability?: string;
+  api?: string;
+  baseUrl?: string;
+};
+
+export type ProviderModelAuthPolicy = {
+  /** Null means this credential has no inference authorization. */
+  authRequirement: ProviderModelRouteAuthRequirement | null;
+  compatible: boolean;
+  incompatibilityReason?: string;
+};
 export type ProviderRouteOverridePresence = "none" | "present";
 export type ProviderModelRouteRuntimePolicy = {
   /** Agent runtime ids that can reproduce this route without losing transport behavior. */
@@ -44,6 +60,8 @@ export type ProviderModelRouteCandidate = {
   api: ModelApi;
   baseUrl: string;
   authRequirement: ProviderModelRouteAuthRequirement;
+  /** Capabilities of this exact physical route, not inherited chat or billing facts. */
+  inference?: ModelInferenceCapabilities;
   /** Secret-free summary of request behavior the selected runtime must reproduce. */
   requestTransportOverrides: ProviderRouteOverridePresence;
   /** Provider-owned native-runtime compatibility for this concrete route. */
@@ -73,6 +91,8 @@ export type ProviderModelRouteResolution =
 export type ProviderResolveModelRoutesContext = {
   provider: string;
   modelId?: string;
+  /** Requested non-chat operation; resolve its route before credential selection. */
+  capability?: string;
   /** Effective secret-free request behavior for this provider/model pair. */
   requestTransportOverrides?: ProviderRouteOverridePresence;
   configuredModel?: ProviderModelRouteSource;
@@ -89,10 +109,7 @@ export type ProviderResolveModelRoutesContext = {
   observedRoutes?: readonly ProviderModelRouteSource[];
 };
 
-export type ProviderNormalizeModelCatalogIdContext = {
-  provider: string;
-  modelId: string;
-};
+export type ProviderNormalizeModelCatalogIdContext = ModelCatalogRef;
 
 /** Compares reported response identity without rewriting authored route identity. */
 export type ProviderResponseModelEquivalenceContext = {
@@ -107,4 +124,15 @@ export type ProviderToolSearchPolicyContext = {
   modelId: string;
   api: string;
   baseUrl?: string;
+};
+
+/** Provider-owned hosted search eligibility for one resolved inference route. */
+export type ProviderNativeWebSearchPolicyContext = {
+  config?: OpenClawConfig;
+  provider: string;
+  modelId?: string;
+  api?: string;
+  baseUrl?: string;
+  /** Secret-free selected-route facts; omission cannot establish eligibility. */
+  modelParams?: Record<string, unknown>;
 };

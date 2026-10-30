@@ -8,6 +8,7 @@ import {
   restoreTrailingNewlines,
 } from "./text-styles-ranges.js";
 import { type TokenRegistry, ZALOUSER_STYLE_MAP } from "./text-styles-shared.js";
+import { createMarkdownSource } from "./text-styles-source-spans.js";
 import {
   parseSharedIR,
   protectInlineSyntaxOutsideCode,
@@ -24,17 +25,18 @@ export function parseZalouserTextStyles(input: string): { text: string; styles: 
     tokens: new Map(),
   };
   const sourceIR = parseSharedIR(source);
-  const protectedSource = protectInlineSyntaxOutsideCode(source, sourceIR, registry);
+  const sourceContext = createMarkdownSource(source, sourceIR);
+  const protectedSource = protectInlineSyntaxOutsideCode(sourceContext, registry);
   const ir = protectedSource === source ? sourceIR : parseSharedIR(protectedSource);
-  stripUnsupportedHeadingStyles(ir, sourceIR, source);
+  stripUnsupportedHeadingStyles(ir, sourceContext);
   const attributed = renderMarkdownWithAttributedRanges(ir, { styleMap: ZALOUSER_STYLE_MAP });
   const projected = projectLocalTokens(attributed, registry);
-  const edits = collectBlockEdits(ir, sourceIR, projected.offsets, projected.text, source);
+  const edits = collectBlockEdits(ir, projected.offsets, projected.text, sourceContext);
   const structuralStyles = collectStructuralStyles(ir, projected.offsets, projected.text);
   const compiled = applyTextEdits(projected.text, projected.styles, structuralStyles, edits);
-  const withLeadingLines = restoreLeadingBlankLines(compiled, source);
+  const withLeadingLines = restoreLeadingBlankLines(compiled, sourceContext);
   return {
-    text: restoreTrailingNewlines(withLeadingLines.text, source, sourceIR),
+    text: restoreTrailingNewlines(withLeadingLines.text, sourceContext),
     styles: withLeadingLines.styles,
   };
 }

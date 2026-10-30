@@ -4,23 +4,55 @@ import type {
   PluginCatalogItem,
   PluginDiscoveryDetailResult,
   PluginListResult,
+  PluginInstallRequest,
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
+import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
+import type { PluginRowMessage } from "./plugin-row-message.tsx";
+import type { PluginToolPreview } from "./tool-preview.tsx";
 
 registerPluginManagementEnglish();
 
+export type PluginMutationAction = "install" | "enable" | "disable" | "uninstall";
+
 export type PluginsPageDetail = {
-  tools?: Array<{ name: string; description?: string }>;
+  catalog?: PluginDiscoveryDetailResult;
+  catalogLoading?: boolean;
+  tools?: PluginToolPreview[];
   pluginId: string;
   inspection: PluginsInspectResult | null;
-  error: string | null;
 };
 
 export type PluginsPageCatalogDetail = {
   id: string;
   result: PluginDiscoveryDetailResult | null;
-  error: string | null;
 };
+
+export function createPluginsPageState(): {
+  result: PluginListResult | null;
+  error: string | null;
+  busy: Record<string, PluginMutationAction>;
+  messages: Record<string, PluginRowMessage>;
+  detail: PluginsPageDetail | null;
+  iconUrls: Record<string, string>;
+  catalogIconUrls: Record<string, string>;
+  pageNotice: PluginRowMessage | null;
+  catalogDetail: PluginsPageCatalogDetail | null;
+  installedDetailTab: InstalledPluginDetailTab;
+} {
+  return {
+    result: null,
+    error: null,
+    busy: {},
+    messages: {},
+    detail: null,
+    iconUrls: {},
+    catalogIconUrls: {},
+    pageNotice: null,
+    catalogDetail: null,
+    installedDetailTab: "readme",
+  };
+}
 
 export function mergePluginCatalogItem(
   current: PluginListResult | null,
@@ -51,4 +83,17 @@ export function pluginMutationBlockedReason(params: {
     return t("pluginsPage.adminRequired");
   }
   return params.mutationAllowed === false ? t("pluginsPage.changesDisabled") : null;
+}
+
+export function installRequestForDiscoveryDetail(
+  result: PluginDiscoveryDetailResult,
+): PluginInstallRequest | null {
+  if (result.plugin.local.installed || result.plugin.local.action !== "install") {
+    return null;
+  }
+  if (result.plugin.local.install) {
+    return result.plugin.local.install;
+  }
+  const packageName = result.detail.packageName?.trim();
+  return packageName ? { source: "clawhub", packageName } : null;
 }

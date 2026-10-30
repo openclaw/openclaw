@@ -31,7 +31,7 @@ describe("deepinfra media understanding provider", () => {
       id: "deepinfra",
       capabilities: ["image", "audio"],
       defaultModels: {
-        image: "moonshotai/Kimi-K2.5",
+        image: "moonshotai/Kimi-K2.6",
         audio: "openai/whisper-large-v3-turbo",
       },
       autoPriority: {

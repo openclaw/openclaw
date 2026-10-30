@@ -3,32 +3,39 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type MessagingToolSend,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessToolResultTelemetry } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import type { RemoteWorkspaceFileReader } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   generatedImageAssetFromBase64,
   parseImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
 import { sanitizeInlineImageDataUrl } from "openclaw/plugin-sdk/inline-image-data-url-runtime";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
 import {
   normalizeMediaReferenceForComparison,
   saveMediaBuffer,
 } from "openclaw/plugin-sdk/media-store";
 import { isRecord, readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CodexConfirmedMediaDelivery } from "./dynamic-tools.js";
-import { readItemString } from "./event-projector-values.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
-import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 
 const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
 const TOOL_OUTPUT_IMAGE_MEDIA_SUBDIR = "tool-output-images";
 const MAX_TOOL_OUTPUT_IMAGES = 8;
 
-type CodexProjectedImageSource = "native" | "raw" | "tool-output";
 type PreparedToolOutputImage = {
   itemId: string;
   outputIds: readonly string[];
   base64: string;
   mimeType: string;
+};
+
+type GeneratedImageResult = {
+  itemId: string;
+  result: string;
+  mimeType?: string;
+  revisedPrompt?: string;
+  source: "native" | "raw" | "tool-output";
 };
 
 export class CodexGeneratedMediaProjection {
@@ -52,7 +59,7 @@ export class CodexGeneratedMediaProjection {
     private readonly config: EmbeddedRunAttemptParams["config"],
     private readonly remote?: {
       remoteWorkspaceRoot?: string;
-      readFile?: CodexRemoteWorkspaceFileReader;
+      readFile?: RemoteWorkspaceFileReader;
       requestTimeoutMs?: number;
       signal?: AbortSignal;
     },
@@ -78,7 +85,7 @@ export class CodexGeneratedMediaProjection {
     if (item.type !== "imageView") {
       return;
     }
-    const sourcePath = readItemString(item, "path")?.trim();
+    const sourcePath = readString(item, "path")?.trim();
     if (!sourcePath) {
       return;
     }
@@ -104,16 +111,16 @@ export class CodexGeneratedMediaProjection {
     // artifact cannot be transferred into this gateway's media store.
     this.generatedItemIds.add(item.id);
     this.itemIds.add(item.id);
-    const savedPath = readItemString(item, "savedPath")?.trim();
+    const savedPath = readString(item, "savedPath")?.trim();
     if (savedPath) {
       this.mediaByItemId.set(item.id, { ...this.mediaByItemId.get(item.id), savedPath });
     }
-    const result = readItemString(item, "result");
+    const result = readString(item, "result");
     if (result) {
       await this.recordImage({
         itemId: item.id,
         result,
-        revisedPrompt: readItemString(item, "revisedPrompt"),
+        revisedPrompt: readString(item, "revisedPrompt"),
         source: "native",
       });
       return;
@@ -127,13 +134,13 @@ export class CodexGeneratedMediaProjection {
           return;
         }
         try {
-          const response = await this.remote.readFile({
+          const bytes = await this.remote.readFile({
             path: savedPath,
             maxBytes: resolveGeneratedMediaMaxBytes(this.config, "image"),
             signal: this.remote.signal,
             timeoutMs: this.remote.requestTimeoutMs,
           });
-          if (!response || typeof response.dataBase64 !== "string" || !response.dataBase64) {
+          if (!bytes.length) {
             embeddedAgentLog.warn("codex remote image file returned no inline bytes", {
               itemId: item.id,
             });
@@ -141,8 +148,8 @@ export class CodexGeneratedMediaProjection {
           }
           await this.recordImage({
             itemId: item.id,
-            result: response.dataBase64,
-            revisedPrompt: readItemString(item, "revisedPrompt"),
+            result: bytes.toString("base64"),
+            revisedPrompt: readString(item, "revisedPrompt"),
             source: "native",
           });
         } catch (error) {
@@ -153,7 +160,10 @@ export class CodexGeneratedMediaProjection {
         }
         return;
       }
-      this.recordUrl({ itemId: item.id, mediaUrl: savedPath });
+      const existing = this.mediaByItemId.get(item.id);
+      if (!existing?.mediaUrl) {
+        this.mediaByItemId.set(item.id, { ...existing, mediaUrl: savedPath });
+      }
     }
   }
 
@@ -164,7 +174,9 @@ export class CodexGeneratedMediaProjection {
       if (outputIds.some((id) => this.hostDynamicToolCallIds.has(id))) {
         return;
       }
-      await this.recordRawToolOutputImages(item, outputIds);
+      await this.materializePreparedToolOutputImages(
+        this.prepareRawToolOutputImages(item, outputIds),
+      );
       return;
     }
     if (type === "function_call_output") {
@@ -215,15 +227,6 @@ export class CodexGeneratedMediaProjection {
     });
   }
 
-  private async recordRawToolOutputImages(
-    item: JsonObject,
-    outputIds: readonly string[],
-  ): Promise<void> {
-    await this.materializePreparedToolOutputImages(
-      this.prepareRawToolOutputImages(item, outputIds),
-    );
-  }
-
   private prepareRawToolOutputImages(
     item: JsonObject,
     outputIds: readonly string[],
@@ -267,7 +270,7 @@ export class CodexGeneratedMediaProjection {
         continue;
       }
       const estimatedDecodedBytes = estimateBase64DecodedBytes(imageUrl.slice(commaIndex + 1));
-      if (estimatedDecodedBytes !== undefined && estimatedDecodedBytes > maxBytes) {
+      if (estimatedDecodedBytes > maxBytes) {
         embeddedAgentLog.warn("codex app-server tool output image exceeds media limit", {
           itemId,
           estimatedDecodedBytes,
@@ -281,9 +284,6 @@ export class CodexGeneratedMediaProjection {
         continue;
       }
       const decodedBytes = estimateBase64DecodedBytes(parsed.base64);
-      if (decodedBytes === undefined) {
-        continue;
-      }
       if (!this.byteBudgetedToolOutputImageIds.has(itemId)) {
         if (this.toolOutputImageBytes + decodedBytes > maxBytes) {
           embeddedAgentLog.warn(
@@ -335,13 +335,7 @@ export class CodexGeneratedMediaProjection {
     }
   }
 
-  private async recordImage(params: {
-    itemId: string;
-    result: string;
-    mimeType?: string;
-    revisedPrompt?: string;
-    source: CodexProjectedImageSource;
-  }): Promise<void> {
+  private async recordImage(params: GeneratedImageResult): Promise<void> {
     this.itemIds.add(params.itemId);
     if (this.gatewayMaterializedItemIds.has(params.itemId)) {
       return;
@@ -362,22 +356,14 @@ export class CodexGeneratedMediaProjection {
     try {
       await materialization;
     } finally {
-      if (this.pendingMaterializationsByItemId.get(params.itemId) === materialization) {
-        this.pendingMaterializationsByItemId.delete(params.itemId);
-      }
+      this.pendingMaterializationsByItemId.delete(params.itemId);
     }
   }
 
-  private async materializeImage(params: {
-    itemId: string;
-    result: string;
-    mimeType?: string;
-    revisedPrompt?: string;
-    source: CodexProjectedImageSource;
-  }): Promise<void> {
+  private async materializeImage(params: GeneratedImageResult): Promise<void> {
     const maxBytes = resolveGeneratedMediaMaxBytes(this.config, "image");
     const estimatedDecodedBytes = estimateBase64DecodedBytes(params.result);
-    if (estimatedDecodedBytes !== undefined && estimatedDecodedBytes > maxBytes) {
+    if (estimatedDecodedBytes > maxBytes) {
       embeddedAgentLog.warn(
         params.source === "tool-output"
           ? "codex app-server tool output image exceeds media limit"
@@ -413,12 +399,11 @@ export class CodexGeneratedMediaProjection {
         asset.fileName,
       );
       this.gatewayMaterializedItemIds.add(params.itemId);
-      this.recordUrl({
-        itemId: params.itemId,
+      // Both Codex event shapes can carry a DevBox-local savedPath; channel
+      // delivery must always use the copy materialized on this gateway.
+      this.mediaByItemId.set(params.itemId, {
+        ...this.mediaByItemId.get(params.itemId),
         mediaUrl: saved.path,
-        // Both Codex event shapes can carry a DevBox-local savedPath; channel
-        // delivery must always use the copy materialized on this gateway.
-        replaceExisting: true,
       });
     } catch (error) {
       embeddedAgentLog.warn(
@@ -437,7 +422,9 @@ export class CodexGeneratedMediaProjection {
     toolMediaUrls?: string[];
     messagingToolSentMediaUrls: string[];
     messagingToolSentTargets: MessagingToolSend[];
-    confirmedMediaDeliveries?: readonly CodexConfirmedMediaDelivery[];
+    confirmedMediaDeliveries?: Readonly<
+      AgentHarnessToolResultTelemetry["confirmedMediaDeliveries"]
+    >;
   }) {
     const generatedUrls = new Set<string>();
     const generatedUrlBySource = new Map<string, string>();
@@ -488,45 +475,10 @@ export class CodexGeneratedMediaProjection {
       }),
     };
   }
-
-  private recordUrl(params: { itemId: string; mediaUrl: string; replaceExisting?: boolean }): void {
-    const existing = this.mediaByItemId.get(params.itemId);
-    if (existing?.mediaUrl && params.replaceExisting !== true) {
-      this.itemIds.add(params.itemId);
-      return;
-    }
-    this.mediaByItemId.set(params.itemId, { ...existing, mediaUrl: params.mediaUrl });
-    this.itemIds.add(params.itemId);
-  }
-}
-
-function estimateBase64DecodedBytes(base64: string): number | undefined {
-  let nonWhitespaceLength = 0;
-  let previousCode = -1;
-  let lastCode = -1;
-  for (let i = 0; i < base64.length; i += 1) {
-    const code = base64.charCodeAt(i);
-    if (isBase64WhitespaceCode(code)) {
-      continue;
-    }
-    nonWhitespaceLength += 1;
-    previousCode = lastCode;
-    lastCode = code;
-  }
-  if (nonWhitespaceLength === 0) {
-    return undefined;
-  }
-  const equalsCode = "=".charCodeAt(0);
-  const padding = lastCode === equalsCode ? (previousCode === equalsCode ? 2 : 1) : 0;
-  return Math.max(0, Math.floor((nonWhitespaceLength * 3) / 4) - padding);
 }
 
 function readRawToolOutputIds(item: JsonObject): string[] {
   return [readString(item, "id"), readString(item, "call_id")].filter(
     (value, index, values): value is string => Boolean(value) && values.indexOf(value) === index,
   );
-}
-
-function isBase64WhitespaceCode(code: number): boolean {
-  return code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d;
 }

@@ -1,232 +1,213 @@
-// Embedded run entry tests cover runtime skill entries serialized into agent runs.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { beforeEach, expect, it, vi } from "vitest";
+import { prepareRuntimeSkillEntries } from "../../agents/embedded-agent-runner/skills-prompt.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../../config/config.js";
+import type { SkillConfig } from "../../config/types.skills.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import * as librarySelectionModule from "../library/selection.js";
 import * as skillsLoaderModule from "../loading/workspace-skill-loader.js";
-import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
-import type { SkillEntry, SkillSnapshot } from "../types.js";
-import { resolveEmbeddedRunSkillEntries } from "./embedded-run-entries.js";
+import { createFixtureSkillEntry as entry } from "../test-support/test-helpers.js";
+import {
+  WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
+  type SkillEntry,
+  type SkillSnapshot,
+} from "../types.js";
+import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
+import { recordSkillRootsExecutionFileHost } from "./skill-snapshot-provenance.js";
 
-describe("resolveEmbeddedRunSkillEntries", () => {
-  const prepareWorkspaceSkillsSpy = vi.spyOn(skillsLoaderModule, "prepareWorkspaceSkills");
+const workspace = vi.spyOn(skillsLoaderModule, "prepareWorkspaceSkills");
+const library = vi.spyOn(librarySelectionModule, "prepareSkillLibrarySelection");
+const names = (entries: SkillEntry[]) => entries.map(({ skill }) => skill.name);
+const config = { plugins: { enabled: false } };
+const skillConfig = (apiKey: SkillConfig["apiKey"]): OpenClawConfig => ({
+  skills: { entries: { diffs: { apiKey } } },
+});
+const rootsFor = (name: string) => ({
+  agentWorkspaceDir: path.resolve(`/synthetic/${name}/agent`),
+  executionWorkspaceDir: path.resolve(`/synthetic/${name}/execution`),
+});
+const workspaceEntries = [entry("workspace")];
+const libraryEntries = [entry("library")];
+const workspaceRoot = "/synthetic/workspace";
+const snapshot: SkillSnapshot = {
+  prompt: "cached prompt",
+  skills: [],
+  resolvedSkills: [],
+  librarySelections: [
+    { skillId: "library", revision: "0".repeat(64), name: "library", ownerProfileId: null },
+  ],
+  skillFilter: ["workspace"],
+};
+const defaults = { skillsAnchorWorkspace: workspaceRoot, config, skillsSnapshot: snapshot };
+const resolve = (options: Partial<Parameters<typeof prepareRuntimeSkillEntries>[0]> = {}) =>
+  prepareRuntimeSkillEntries({ ...defaults, ...options });
 
-  beforeEach(() => {
-    clearRuntimeConfigSnapshot();
-    prepareWorkspaceSkillsSpy.mockReset();
-    prepareWorkspaceSkillsSpy.mockResolvedValue([]);
+beforeEach(() => {
+  clearRuntimeConfigSnapshot();
+  workspace.mockReset().mockResolvedValue(workspaceEntries);
+  library.mockReset().mockResolvedValue(libraryEntries);
+});
+
+function pause(stage: "workspace" | "library") {
+  const gate = createDeferredCore<SkillEntry[]>();
+  const entered = createDeferredCore();
+  const mock = stage === "workspace" ? workspace : library;
+  mock.mockImplementationOnce(() => {
+    entered.resolve();
+    return gate.promise;
   });
+  return { gate, entered };
+}
 
-  it("loads skill entries with config when no resolved snapshot skills exist", async () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          diffs: { enabled: true },
-        },
-      },
+it.each(["canonical", "materialized", "legacy"] as const)(
+  "loads %s roots with agent and eligibility context",
+  async (mode) => {
+    const workspaceDir = path.resolve("/synthetic/materialized");
+    const roots = rootsFor("canonical");
+    const { agentWorkspaceDir, executionWorkspaceDir } = roots;
+    const workspaceOnly = mode === "materialized";
+    const skillsSnapshot: SkillSnapshot = {
+      prompt: "Hydrate selected skills",
+      skills: [],
+      promptFormatVersion: mode === "legacy" ? 6 : WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
+      skillRoots:
+        mode === "legacy" ? rootsFor("stale") : recordSkillRootsExecutionFileHost(roots, "gateway"),
     };
-
-    const result = await resolveEmbeddedRunSkillEntries({
-      workspaceDir: "/tmp/workspace",
-      config,
-      skillsSnapshot: {
-        prompt: "skills prompt",
-        skills: [],
-      },
-    });
-
-    expect(result.shouldLoadSkillEntries).toBe(true);
-    expect(prepareWorkspaceSkillsSpy).toHaveBeenCalledTimes(1);
-    expect(prepareWorkspaceSkillsSpy).toHaveBeenCalledWith("/tmp/workspace", { config }, undefined);
-  });
-
-  it("threads agentId through live skill loading", async () => {
-    await resolveEmbeddedRunSkillEntries({
-      workspaceDir: "/tmp/workspace",
-      config: {},
-      agentId: "writer",
-      skillsSnapshot: {
-        prompt: "skills prompt",
-        skills: [],
-      },
-    });
-
-    expect(prepareWorkspaceSkillsSpy).toHaveBeenCalledWith(
-      "/tmp/workspace",
-      {
-        config: {},
-        agentId: "writer",
-      },
-      undefined,
-    );
-  });
-
-  it("can constrain live loading to materialized workspace skills", async () => {
-    const eligibility = {
-      remote: {
-        platforms: ["linux"],
-        hasBin: () => false,
-        hasAnyBin: () => true,
-        note: "sandbox",
-      },
-    };
-
-    await resolveEmbeddedRunSkillEntries({
-      workspaceDir: "/tmp/workspace/.openclaw/sandbox-skills",
-      config: {},
-      eligibility,
-      skillsSnapshot: {
-        prompt: "skills prompt",
-        skills: [],
-      },
-      workspaceOnly: true,
-    });
-
-    expect(prepareWorkspaceSkillsSpy).toHaveBeenCalledWith(
-      "/tmp/workspace/.openclaw/sandbox-skills",
-      {
-        config: {},
-        eligibility,
-        workspaceOnly: true,
-      },
-      undefined,
-    );
-  });
-
-  it("prefers the active runtime snapshot when caller config still contains SecretRefs", async () => {
-    const sourceConfig: OpenClawConfig = {
-      skills: {
-        entries: {
-          diffs: {
-            apiKey: {
-              source: "file",
-              provider: "default",
-              id: "/skills/entries/diffs/apiKey",
+    const serialized = JSON.stringify(skillsSnapshot);
+    const hydrated: SkillSnapshot = JSON.parse(serialized);
+    const eligibility = { nodeSkills: { canExec: true } };
+    const context = { config: {}, agentId: "writer" };
+    await resolve({
+      skillsAnchorWorkspace: workspaceDir,
+      ...(workspaceOnly
+        ? {
+            sandbox: {
+              enabled: true,
+              skillsWorkspaceDir: workspaceDir,
+              skillsEligibility: eligibility,
             },
-          },
-        },
-      },
-    };
-    const runtimeConfig: OpenClawConfig = {
-      skills: {
-        entries: {
-          diffs: {
-            apiKey: "resolved-key",
-          },
-        },
-      },
-    };
-    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-
-    await resolveEmbeddedRunSkillEntries({
-      workspaceDir: "/tmp/workspace",
-      config: sourceConfig,
-      skillsSnapshot: {
-        prompt: "skills prompt",
-        skills: [],
-      },
+          }
+        : {}),
+      ...context,
+      ...(mode === "legacy"
+        ? ({ executionWorkspaceDir, executionWorkspaceFileHost: "gateway" } as const)
+        : {}),
+      skillsSnapshot: hydrated,
     });
-
-    expect(prepareWorkspaceSkillsSpy).toHaveBeenCalledWith(
-      "/tmp/workspace",
+    expect(workspace).toHaveBeenCalledWith(
+      mode === "canonical" ? agentWorkspaceDir : workspaceDir,
       {
-        config: runtimeConfig,
+        ...context,
+        executionWorkspaceDir: workspaceOnly ? undefined : executionWorkspaceDir,
+        executionWorkspaceFileHost: workspaceOnly ? undefined : "gateway",
+        ...(workspaceOnly ? { workspaceOnly: true, eligibility } : {}),
       },
       undefined,
     );
-  });
+  },
+);
 
-  it("prefers caller config when the active runtime snapshot still contains raw skill SecretRefs", async () => {
-    const sourceConfig: OpenClawConfig = {
-      skills: {
-        entries: {
-          diffs: {
-            apiKey: {
-              source: "file",
-              provider: "default",
-              id: "/skills/entries/diffs/apiKey",
-            },
-          },
-        },
-      },
-    };
-    const runtimeConfig: OpenClawConfig = structuredClone(sourceConfig);
-    const callerConfig: OpenClawConfig = {
-      skills: {
-        entries: {
-          diffs: {
-            apiKey: "resolved-key",
-          },
-        },
-      },
-    };
+it.each([false, true])(
+  "prefers resolved skill secrets when runtime contains raw refs: %s",
+  async (rawRuntime) => {
+    const sourceConfig = skillConfig({
+      source: "file",
+      provider: "default",
+      id: "/skills/entries/diffs/apiKey",
+    });
+    const resolvedConfig = skillConfig("resolved-key");
+    const runtimeConfig = rawRuntime ? structuredClone(sourceConfig) : resolvedConfig;
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-
-    await resolveEmbeddedRunSkillEntries({
-      workspaceDir: "/tmp/workspace",
-      config: callerConfig,
-      skillsSnapshot: {
-        prompt: "skills prompt",
-        skills: [],
-      },
+    await resolve({
+      config: rawRuntime ? resolvedConfig : sourceConfig,
+      skillsSnapshot: { prompt: "skills prompt", skills: [] },
     });
-
-    expect(prepareWorkspaceSkillsSpy).toHaveBeenCalledWith(
-      "/tmp/workspace",
-      {
-        config: callerConfig,
-      },
-      undefined,
-    );
-  });
-
-  it("skips skill entry loading when resolved snapshot skills are present", async () => {
-    const snapshot: SkillSnapshot = {
-      prompt: "skills prompt",
-      skills: [{ name: "diffs" }],
-      resolvedSkills: [],
-    };
-
-    const result = await resolveEmbeddedRunSkillEntries({
-      workspaceDir: "/tmp/workspace",
-      config: {},
-      skillsSnapshot: snapshot,
+    expect(workspace).toHaveBeenCalledWith(workspaceRoot, { config: resolvedConfig }, undefined);
+  },
+);
+it("preserves the first complete publication across concurrent lazy reads", async () => {
+  const base = "/synthetic/embedded-concurrent";
+  const roots = {
+    agentWorkspaceDir: `${base}/agent/../agent`,
+    executionWorkspaceDir: `${base}/execution/../execution`,
+  };
+  const bumpSources = () =>
+    bumpSkillsSnapshotVersion({
+      workspaceDir: path.resolve(roots.agentWorkspaceDir),
     });
-
-    expect(result.shouldLoadSkillEntries).toBe(false);
-    expect(result.skillEntries).toEqual([]);
-    expect(prepareWorkspaceSkillsSpy).not.toHaveBeenCalled();
+  const currentEntries = [entry("workspace-current")];
+  workspace.mockResolvedValueOnce([entry("workspace-stale")]).mockResolvedValue(currentEntries);
+  const { gate, entered } = pause("library");
+  const result = await resolve({
+    skillsAnchorWorkspace: "/synthetic/fallback-workspace",
+    agentId: "fixture",
+    skillsSnapshot: {
+      ...snapshot,
+      promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
+      skillRoots: roots,
+    },
   });
+  expect(workspace).not.toHaveBeenCalled();
+  expect(library).not.toHaveBeenCalled();
+  const first = result.loadSkillEntries();
+  await entered.promise;
+  bumpSources();
+  const winner = await result.loadSkillEntries();
+  workspace.mockResolvedValue([entry("workspace-after-publication")]);
+  bumpSources();
+  gate.resolve(libraryEntries);
+  const entries = await first;
+  expect(names(entries)).toEqual(["workspace-current", "library"]);
+  expect(entries).toBe(winner);
+  workspace.mockResolvedValue([entry("workspace-after-publication")]);
+  bumpSources();
+  expect(await result.loadSkillEntries()).toBe(entries);
+  expect(names(entries)).toEqual(["workspace-current", "library"]);
+  expect(names(currentEntries)).toEqual(["workspace-current"]);
+});
 
-  it("exposes a cached lazy loader without eagerly loading a modern snapshot", async () => {
-    const loadedEntries: SkillEntry[] = [
-      {
-        skill: createCanonicalFixtureSkill({
-          name: "healthy",
-          description: "healthy",
-          filePath: "/tmp/workspace/skills/healthy/SKILL.md",
-          baseDir: "/tmp/workspace/skills/healthy",
-          source: "test",
-        }),
-        frontmatter: {},
-      },
-    ];
-    prepareWorkspaceSkillsSpy.mockResolvedValue(loadedEntries);
-    const result = await resolveEmbeddedRunSkillEntries({
-      workspaceDir: "/tmp/workspace",
-      config: {},
-      skillsSnapshot: {
-        prompt: "skills prompt",
-        skills: [{ name: "healthy", skillKey: "healthy" }],
-        resolvedSkills: [],
-      },
-    });
+it.each([
+  ["workspace", "rejection"],
+  ["library", "rejection"],
+  ["workspace", "obsolete owner"],
+  ["library", "obsolete owner"],
+] as const)(
+  "retries complete loading after %s stage %s without publishing failed entries",
+  async (stage, mode) => {
+    const paused = mode === "obsolete owner" ? pause(stage) : undefined;
+    const failure = new Error(`Synthetic ${stage} ${mode}`);
+    if (!paused) {
+      (stage === "workspace" ? workspace : library).mockRejectedValueOnce(failure);
+    }
+    const assertCurrent = vi.fn();
+    const result = await resolve({ assertCurrent });
+    const rejected = expect(result.loadSkillEntries()).rejects.toBe(failure);
+    if (paused) {
+      await paused.entered.promise;
+      assertCurrent.mockImplementation(() => {
+        throw failure;
+      });
+      paused.gate.resolve(stage === "workspace" ? workspaceEntries : libraryEntries);
+    }
+    await rejected;
+    assertCurrent.mockReset();
+    expect(names(await result.loadSkillEntries())).toEqual(["workspace", "library"]);
+    expect(workspaceEntries).toHaveLength(1);
+  },
+);
 
-    expect(prepareWorkspaceSkillsSpy).not.toHaveBeenCalled();
-    expect(await result.loadSkillEntries()).toBe(loadedEntries);
-    expect(await result.loadSkillEntries()).toBe(loadedEntries);
-    expect(prepareWorkspaceSkillsSpy).toHaveBeenCalledOnce();
+it("excludes pinned libraries from workspace-only loads and retains workspace array identity", async () => {
+  const result = await resolve({
+    sandbox: { enabled: true, skillUsagePaths: [] },
   });
+  expect(result).toMatchObject({ shouldLoadSkillEntries: false, skillEntries: [] });
+  expect(workspace).not.toHaveBeenCalled();
+  expect(await result.loadSkillEntries()).toBe(workspaceEntries);
+  expect(await result.loadSkillEntries()).toBe(workspaceEntries);
+  expect(library).not.toHaveBeenCalled();
+  expect(workspace).toHaveBeenCalledOnce();
 });

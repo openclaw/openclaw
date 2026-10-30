@@ -1,0 +1,121 @@
+import assert from "node:assert/strict";
+import { expect, it, vi } from "vitest";
+import * as host from "./extension-install-fixture.test-support.js";
+import { useExtensionInstallFixture } from "./extension-install.test-support.js";
+import {
+  WINDOWS_OFFICIAL_ORIGIN,
+  type WindowsManagementRequest,
+} from "./extension-windows-contract.js";
+import { windowsFixture } from "./extension-windows.test-support.js";
+const localFixture = useExtensionInstallFixture();
+function setup() {
+  const f = windowsFixture();
+  const manage = vi.fn(async (_exe: string, request: WindowsManagementRequest) => {
+    assert(request.context, "Explicit native context required");
+    f.prepare(request.context, request.expectedOrigins);
+    return request.action === "uninstall"
+      ? { ...f.response, registration: "missing" as const, mode: null, installation: null }
+      : f.response;
+  });
+  const deps = {
+    platform: "win32" as const,
+    windowsNative: { platform: f.ops, context: f.context, executable: f.executable, manage },
+  };
+  const validate = () =>
+    host.validateWindowsNativeContext(
+      { ...f.installation, expectedOrigins: [WINDOWS_OFFICIAL_ORIGIN] },
+      deps,
+    );
+  return { ...f, manage, deps, validate };
+}
+it("delegates real controller install once, explicitly native, and never exposes private management paths", async () => {
+  const f = setup();
+  const local = await localFixture("linux");
+  const result = await host.installChromeExtensionBootstrap({
+    bundledDir: local.bundledDir,
+    pluginRoot: local.pluginRoot,
+    deps: { ...local.deps, ...f.deps },
+    nativeHostExecutable: f.executable,
+  });
+  expect(f.manage).toHaveBeenCalledTimes(1);
+  expect(f.manage.mock.calls[0]?.[1]).toMatchObject({
+    action: "install",
+    mode: "native-windows-cli",
+    context: f.context,
+    store: "preserve",
+  });
+  expect(result.registrations.map((r) => r.state)).toEqual(["owned", "owned", "owned"]);
+  expect(JSON.stringify(result)).not.toContain(f.identity.localAppData);
+});
+it("retains a partial Store refusal as owned registration, never all-or-nothing success", async () => {
+  const f = setup();
+  f.manage.mockResolvedValue({ ...f.response, ok: false, code: "browser_control_disabled" });
+  const result = await host.installWindowsNativeHost({
+    pluginRoot: "C:\\OpenClaw",
+    extensionIds: [],
+    deps: f.deps,
+    requestStoreInstall: true,
+  });
+  expect(result.registrations.every((r) => r.state === "owned")).toBe(true);
+  expect(result.storeInstallRequests[0]?.state).toBe("missing");
+  expect(result.issues).toEqual(["Windows management reported browser_control_disabled"]);
+});
+it("keeps unreadable observation null instead of inventing missing/invalid", async () => {
+  const f = setup();
+  f.manage.mockRejectedValue(new Error("private diagnostic"));
+  const result = await host.inspectWindowsNativeHosts({ deps: f.deps });
+  expect(result.registrations.every((r) => r.state === null)).toBe(true);
+  expect(result.storeInstallRequests[0]?.state).toBeNull();
+  expect(JSON.stringify(result)).not.toContain("private diagnostic");
+});
+it("delegates uninstall/remove only to the same explicit context", async () => {
+  const f = setup();
+  const result = await host.uninstallWindowsNativeHosts({ deps: f.deps, removeStore: true });
+  expect(result.refused).toEqual([]);
+  expect(f.manage.mock.calls[0]?.[1]).toMatchObject({
+    action: "uninstall",
+    store: "remove",
+    context: f.context,
+  });
+});
+it("validates the fixed root, profile and runtime without any management/config/key operation", async () => {
+  const f = setup();
+  f.context.browserProfile = "work";
+  f.prepare();
+  expect(await f.validate()).toBe("work");
+  expect(f.manage).not.toHaveBeenCalled();
+  expect(f.ops.readFile).not.toHaveBeenCalledWith(f.context.configPath, expect.anything());
+});
+it.each<[string, (f: ReturnType<typeof setup>) => unknown]>([
+  ["companion", (f) => f.prepare(f.context, [WINDOWS_OFFICIAL_ORIGIN], true)],
+  ["hash", (f) => f.files.set(f.installation.bindingPath, Buffer.from("{}"))],
+  [
+    "foreign-sid",
+    (f) => f.ops.identity.mockResolvedValue({ ...f.identity, sid: "S-1-5-21-111-222-333-1002" }),
+  ],
+  ["extra-file", (f) => f.ops.listFiles.mockResolvedValue(["foreign"])],
+  [
+    "runtime-acl",
+    (f) =>
+      f.ops.assertPath.mockImplementation(async (target) =>
+        assert.notEqual(target, f.context.nodePath),
+      ),
+  ],
+  [
+    "context",
+    (f) => {
+      f.deps.windowsNative.context = { ...f.context, configPath: "C:\\other.json" };
+    },
+  ],
+  [
+    "state-root",
+    (f) => {
+      f.installation.manifestPath = `${f.context.stateDir}\\browser\\native-messaging\\windows\\${f.installation.generation}\\ai.openclaw.browser_bootstrap.json`;
+    },
+  ],
+])("rejects %s before credential work", async (_kind, corrupt) => {
+  const f = setup();
+  corrupt(f);
+  await expect(f.validate()).rejects.toThrow();
+  expect(f.manage).not.toHaveBeenCalled();
+});

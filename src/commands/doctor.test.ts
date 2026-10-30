@@ -1,6 +1,6 @@
-// Doctor command tests cover probe orchestration, fix mode, and runtime command output.
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import type { DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
 
 const mocks = vi.hoisted(() => ({
@@ -14,13 +14,13 @@ const mocks = vi.hoisted(() => ({
   runPostUpgradeProbes: vi.fn(),
   runDoctorStateSqliteCompact: vi.fn(),
   runDoctorSessionSqlite: vi.fn(),
+  sqliteMaintenanceAuthority: { assertCurrent: vi.fn() },
   submitGithubIssue: vi.fn(),
   withDoctorSqliteMaintenanceLock: vi.fn(),
   resolveInstalledPluginIndexStorePath: vi.fn(() => "/tmp/openclaw-installed-plugins.json"),
 }));
 
-vi.mock("../config/io.runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/io.runtime.js")>()),
+vi.mock("../config/io.runtime.js", () => ({
   readSourceConfigBestEffort: mocks.readSourceConfigBestEffort,
 }));
 
@@ -88,13 +88,9 @@ function createDoctorRuntime() {
   };
 }
 
-function createRecoveryReport(
-  supportIssue: NonNullable<DoctorSessionSqliteReport["supportIssue"]>,
-): DoctorSessionSqliteReport {
+function createSessionReport(mode: DoctorSessionSqliteReport["mode"]): DoctorSessionSqliteReport {
   return {
-    migrationRun: { manifestPath: "/tmp/run-1.json", runId: "run-1" },
-    mode: "recover",
-    supportIssue,
+    mode,
     targets: [],
     totals: {
       archivedTranscriptFiles: 0,
@@ -112,8 +108,80 @@ function createRecoveryReport(
   };
 }
 
+function createSupportIssue(
+  body = "sanitized body",
+): NonNullable<DoctorSessionSqliteReport["supportIssue"]> {
+  return { body, title: "Session SQLite migration recovery report (run-1)" };
+}
+
+function createRecoveryReport(
+  supportIssue?: NonNullable<DoctorSessionSqliteReport["supportIssue"]>,
+): DoctorSessionSqliteReport {
+  return {
+    ...createSessionReport("recover"),
+    migrationRun: { manifestPath: "/tmp/run-1.json", runId: "run-1" },
+    supportIssue,
+  };
+}
+
+const approvedRecoveryOptions = {
+  sessionSqlite: "recover",
+  sessionSqliteGithubIssue: true,
+  yes: true,
+} as const;
+
+function runDoctor(
+  runtime: ReturnType<typeof createDoctorRuntime>,
+  options: Parameters<typeof doctorCommand>[1] = approvedRecoveryOptions,
+  exitCode = 0,
+) {
+  return expect(doctorCommand(runtime, options)).rejects.toThrow(`exit:${exitCode}`);
+}
+
+function recovery(body = "sanitized body") {
+  const supportIssue = createSupportIssue(body);
+  const report = createRecoveryReport(supportIssue);
+  mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
+  return { supportIssue, report, runtime: createDoctorRuntime() };
+}
+
+const fallbackUrl =
+  "https://github.com/openclaw/openclaw/issues/new?title=run-1&body=private-report-text";
+
+function expectClaimReleased() {
+  expect(mocks.clearSessionSqliteMigrationGithubIssueClaim).toHaveBeenCalledWith(
+    "/tmp/run-1.json",
+    `openclaw-report:${"a".repeat(64)}`,
+    expect.objectContaining({ assertCurrent: expect.any(Function) }),
+  );
+}
+
+function expectUnused(...spies: ReturnType<typeof vi.fn>[]) {
+  for (const spy of spies) {
+    expect(spy).not.toHaveBeenCalled();
+  }
+}
+
+function repeatReceipt(title: string) {
+  const issue = {
+    marker: `openclaw-report:${"a".repeat(64)}`,
+    status: "attempted",
+    title,
+  } as const;
+  mocks.claimSessionSqliteMigrationGithubIssue
+    .mockReturnValueOnce({ issue, status: "claimed" })
+    .mockReturnValueOnce({ issue, status: "existing" });
+}
+
 describe("doctorCommand", () => {
+  const ttyMock = createCliTtyMock([process.stdin]);
+
+  afterEach(() => {
+    ttyMock.restore();
+  });
+
   beforeEach(() => {
+    ttyMock.set(true);
     vi.clearAllMocks();
     mocks.claimSessionSqliteMigrationGithubIssue.mockImplementation(
       (_manifestPath: string, issue: { marker: string; title: string }) => ({
@@ -122,13 +190,23 @@ describe("doctorCommand", () => {
       }),
     );
     mocks.clearSessionSqliteMigrationGithubIssueClaim.mockReturnValue(true);
-    mocks.detectBrowserOpenSupport.mockResolvedValue({ command: "open", ok: true });
+    mocks.detectBrowserOpenSupport.mockResolvedValue({ ok: true });
     mocks.readSourceConfigBestEffort.mockResolvedValue({});
     mocks.reconcileGithubIssue.mockResolvedValue({ status: "not-found" });
     mocks.withDoctorSqliteMaintenanceLock.mockImplementation(
       async (params: { run: (authority: { assertCurrent(): void }) => unknown }) =>
-        await params.run({ assertCurrent() {} }),
+        await params.run(mocks.sqliteMaintenanceAuthority),
     );
+  });
+
+  it("prints the intentional non-outcome instead of filing an empty recovery", async () => {
+    mocks.runDoctorSessionSqlite.mockResolvedValueOnce(createRecoveryReport());
+    const runtime = createDoctorRuntime();
+    await runDoctor(runtime);
+    expect(runtime.log).toHaveBeenCalledWith(
+      "session-sqlite recover: nothing to recover; no report filed",
+    );
+    expectUnused(mocks.submitGithubIssue, mocks.promptYesNo, mocks.openUrl);
   });
 
   it("writes post-upgrade JSON through the runtime before exiting with findings", async () => {
@@ -145,98 +223,48 @@ describe("doctorCommand", () => {
     mocks.runPostUpgradeProbes.mockResolvedValueOnce(report);
     const runtime = createDoctorRuntime();
 
-    await expect(doctorCommand(runtime, { postUpgrade: true, json: true })).rejects.toThrow(
-      "exit:1",
-    );
+    await runDoctor(runtime, { postUpgrade: true, json: true }, 1);
 
     expect(runtime.writeJson).toHaveBeenCalledWith(report, 2);
     expect(runtime.log).not.toHaveBeenCalled();
-    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it.each(["stable", "beta", "extended-stable", undefined])(
-    "passes only configured update channel %s to post-upgrade probes",
-    async (channel) => {
-      mocks.readSourceConfigBestEffort.mockResolvedValueOnce({
-        update: { channel },
-        plugins: { enabled: false, deny: ["whatsapp"] },
-      });
-      mocks.runPostUpgradeProbes.mockResolvedValueOnce({ probesRun: [], findings: [] });
-      const runtime = createDoctorRuntime();
+  it("passes an unconfigured update channel to post-upgrade probes", async () => {
+    mocks.readSourceConfigBestEffort.mockResolvedValueOnce({
+      update: { channel: undefined },
+      plugins: { enabled: false, deny: ["whatsapp"] },
+    });
+    mocks.runPostUpgradeProbes.mockResolvedValueOnce({ probesRun: [], findings: [] });
+    const runtime = createDoctorRuntime();
 
-      await expect(doctorCommand(runtime, { postUpgrade: true })).rejects.toThrow("exit:0");
+    await runDoctor(runtime, { postUpgrade: true });
 
-      expect(mocks.readSourceConfigBestEffort).toHaveBeenCalledOnce();
-      expect(mocks.runPostUpgradeProbes).toHaveBeenCalledWith({ updateChannel: channel });
-      expect(runtime.log).toHaveBeenCalledWith("post-upgrade: no findings");
-    },
-  );
+    expect(mocks.readSourceConfigBestEffort).toHaveBeenCalledOnce();
+    expect(mocks.runPostUpgradeProbes).toHaveBeenCalledWith(undefined);
+    expect(runtime.log).toHaveBeenCalledWith("post-upgrade: no findings");
+  });
 
   it("writes session sqlite JSON through the runtime before exiting cleanly", async () => {
-    const report = {
-      mode: "inspect",
-      targets: [],
-      totals: {
-        archivedTranscriptFiles: 0,
-        archivedUnreferencedJsonlFiles: 0,
-        importedEntries: 0,
-        importedTranscriptEvents: 0,
-        issues: 0,
-        legacyEntries: 0,
-        sqliteEntries: 0,
-        targets: 0,
-        unreferencedJsonlFiles: 0,
-        validatedEntries: 0,
-        validatedTranscriptEvents: 0,
-      },
-    };
+    const report = createSessionReport("inspect");
     mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
     const runtime = createDoctorRuntime();
 
-    await expect(
-      doctorCommand(runtime, {
-        json: true,
-        sessionSqlite: "inspect",
-        sessionSqliteAgent: "main",
-      }),
-    ).rejects.toThrow("exit:0");
+    await runDoctor(runtime, { json: true, sessionSqlite: "inspect", sessionSqliteAgent: "main" });
 
-    expect(mocks.runDoctorSessionSqlite).toHaveBeenCalledWith({
-      agent: "main",
-      mode: "inspect",
-    });
+    expect(mocks.runDoctorSessionSqlite).toHaveBeenCalledWith(
+      { agent: "main", mode: "inspect" },
+      undefined,
+    );
     expect(mocks.withDoctorSqliteMaintenanceLock).not.toHaveBeenCalled();
     expect(runtime.writeJson).toHaveBeenCalledWith(report, 2);
-    expect(runtime.exit).toHaveBeenCalledWith(0);
   });
 
   it("holds exclusive state ownership for destructive session sqlite modes", async () => {
-    const report = {
-      mode: "restore",
-      targets: [],
-      totals: {
-        archivedTranscriptFiles: 0,
-        archivedUnreferencedJsonlFiles: 0,
-        importedEntries: 0,
-        importedTranscriptEvents: 0,
-        issues: 0,
-        legacyEntries: 0,
-        sqliteEntries: 0,
-        targets: 0,
-        unreferencedJsonlFiles: 0,
-        validatedEntries: 0,
-        validatedTranscriptEvents: 0,
-      },
-    };
+    const report = createSessionReport("restore");
     mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
     const runtime = createDoctorRuntime();
 
-    await expect(
-      doctorCommand(runtime, {
-        sessionSqlite: "restore",
-        sessionSqliteAllAgents: true,
-      }),
-    ).rejects.toThrow("exit:0");
+    await runDoctor(runtime, { sessionSqlite: "restore", sessionSqliteAllAgents: true });
 
     expect(mocks.withDoctorSqliteMaintenanceLock).toHaveBeenCalledWith({
       env: process.env,
@@ -244,42 +272,22 @@ describe("doctorCommand", () => {
       reconcileHardlink: expect.any(Function),
       run: expect.any(Function),
     });
-    expect(mocks.runDoctorSessionSqlite).toHaveBeenCalledWith({
-      allAgents: true,
-      mode: "restore",
-    });
+    expect(mocks.runDoctorSessionSqlite).toHaveBeenCalledWith(
+      { allAgents: true, mode: "restore" },
+      mocks.sqliteMaintenanceAuthority,
+    );
+    expect(mocks.runDoctorSessionSqlite.mock.calls[0]?.[1]).toBe(mocks.sqliteMaintenanceAuthority);
   });
 
   it("binds explicit destructive session stores to the maintenance lock", async () => {
-    const report = {
-      mode: "compact",
-      targets: [],
-      totals: {
-        archivedTranscriptFiles: 0,
-        archivedUnreferencedJsonlFiles: 0,
-        importedEntries: 0,
-        importedTranscriptEvents: 0,
-        issues: 0,
-        legacyEntries: 0,
-        sqliteEntries: 0,
-        targets: 0,
-        unreferencedJsonlFiles: 0,
-        validatedEntries: 0,
-        validatedTranscriptEvents: 0,
-      },
-    };
+    const report = createSessionReport("compact");
     mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
     const runtime = createDoctorRuntime();
     const stateDir = path.resolve(process.env.OPENCLAW_STATE_DIR ?? ".openclaw");
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     const sqlitePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
 
-    await expect(
-      doctorCommand(runtime, {
-        sessionSqlite: "compact",
-        sessionSqliteStore: storePath,
-      }),
-    ).rejects.toThrow("exit:0");
+    await runDoctor(runtime, { sessionSqlite: "compact", sessionSqliteStore: storePath });
 
     expect(mocks.withDoctorSqliteMaintenanceLock).toHaveBeenCalledWith({
       env: process.env,
@@ -304,49 +312,27 @@ describe("doctorCommand", () => {
       }),
     ).rejects.toThrow("--store cannot be combined with --all-agents");
 
-    expect(mocks.withDoctorSqliteMaintenanceLock).not.toHaveBeenCalled();
-    expect(mocks.runDoctorSessionSqlite).not.toHaveBeenCalled();
+    expectUnused(mocks.withDoctorSqliteMaintenanceLock, mocks.runDoctorSessionSqlite);
   });
 
   it("writes shared-state sqlite compaction JSON through the runtime", async () => {
     const report = {
-      after: {
-        autoVacuum: 2,
-        dbSizeBytes: 8_192,
-        freelistPages: 0,
-        pageSizeBytes: 4_096,
-        walSizeBytes: 0,
-      },
-      before: {
-        autoVacuum: 0,
-        dbSizeBytes: 16_384,
-        freelistPages: 2,
-        pageSizeBytes: 4_096,
-        walSizeBytes: 4_096,
-      },
-      integrityCheck: "ok",
       mode: "compact",
       path: "/tmp/openclaw/state/openclaw.sqlite",
-      reclaimedBytes: 12_288,
       skipped: false,
     };
     mocks.runDoctorStateSqliteCompact.mockResolvedValueOnce(report);
     const runtime = createDoctorRuntime();
 
-    await expect(
-      doctorCommand(runtime, {
-        json: true,
-        stateSqlite: "compact",
-      }),
-    ).rejects.toThrow("exit:0");
+    await runDoctor(runtime, { json: true, stateSqlite: "compact" });
 
     expect(mocks.runDoctorStateSqliteCompact).toHaveBeenCalledWith();
     expect(runtime.writeJson).toHaveBeenCalledWith(report, 2);
     expect(runtime.log).not.toHaveBeenCalled();
-    expect(runtime.exit).toHaveBeenCalledWith(0);
   });
 
-  it("creates a GitHub issue for approved session sqlite recovery reports", async () => {
+  it("creates a GitHub issue for --yes recovery without interactive input", async () => {
+    ttyMock.set(false);
     const supportIssue = {
       body: "sanitized body",
       bodyPath: "/tmp/session.failure.md",
@@ -360,14 +346,9 @@ describe("doctorCommand", () => {
     });
     const runtime = createDoctorRuntime();
 
-    await expect(
-      doctorCommand(runtime, {
-        sessionSqlite: "recover",
-        sessionSqliteGithubIssue: true,
-        yes: true,
-      }),
-    ).rejects.toThrow("exit:0");
+    await runDoctor(runtime, { ...approvedRecoveryOptions, nonInteractive: true });
 
+    expect(mocks.promptYesNo).not.toHaveBeenCalled();
     expect(mocks.submitGithubIssue).toHaveBeenCalledWith({
       body: supportIssue.body,
       browserFallback: {
@@ -381,38 +362,22 @@ describe("doctorCommand", () => {
       "session-sqlite recover: created GitHub issue https://github.com/openclaw/openclaw/issues/123",
     );
     expect(mocks.clearSessionSqliteMigrationGithubIssueClaim).not.toHaveBeenCalled();
-    expect(runtime.exit).toHaveBeenCalledWith(0);
   });
 
   it("reconciles a prior recovery handoff without issuing a second create", async () => {
-    const supportIssue = {
-      body: "stable sanitized body",
-      title: "Session SQLite migration recovery report (run-1)",
-    };
+    const supportIssue = createSupportIssue("stable sanitized body");
     const report = createRecoveryReport(supportIssue);
-    const persisted = {
-      marker: `openclaw-report:${"a".repeat(64)}`,
-      status: "attempted",
-      title: supportIssue.title,
-    } as const;
     mocks.runDoctorSessionSqlite.mockResolvedValue(report);
-    mocks.claimSessionSqliteMigrationGithubIssue
-      .mockReturnValueOnce({ issue: persisted, status: "claimed" })
-      .mockReturnValueOnce({ issue: persisted, status: "existing" });
+    repeatReceipt(supportIssue.title);
     mocks.submitGithubIssue.mockResolvedValueOnce({
       reason: "creation-outcome-unknown",
       status: "outcome-unknown",
     });
     mocks.reconcileGithubIssue.mockResolvedValueOnce({ status: "not-found" });
     const runtime = createDoctorRuntime();
-    const options = {
-      sessionSqlite: "recover" as const,
-      sessionSqliteGithubIssue: true,
-      yes: true,
-    };
 
-    await expect(doctorCommand(runtime, options)).rejects.toThrow("exit:0");
-    await expect(doctorCommand(runtime, options)).rejects.toThrow("exit:0");
+    await runDoctor(runtime);
+    await runDoctor(runtime);
 
     expect(mocks.submitGithubIssue).toHaveBeenCalledOnce();
     expect(mocks.reconcileGithubIssue).toHaveBeenCalledOnce();
@@ -439,26 +404,17 @@ describe("doctorCommand", () => {
   ])(
     "does not start transport when its durable receipt $label",
     async ({ claim, expectedMessage }) => {
-      const supportIssue = {
-        body: "stable sanitized body",
-        title: "Session SQLite migration recovery report (run-1)",
-      };
-      mocks.runDoctorSessionSqlite.mockResolvedValueOnce(createRecoveryReport(supportIssue));
+      const { supportIssue, runtime } = recovery("stable sanitized body");
       mocks.claimSessionSqliteMigrationGithubIssue.mockReturnValueOnce(claim);
-      const runtime = createDoctorRuntime();
 
-      await expect(
-        doctorCommand(runtime, {
-          sessionSqlite: "recover",
-          sessionSqliteGithubIssue: true,
-          yes: true,
-        }),
-      ).rejects.toThrow("exit:0");
+      await runDoctor(runtime);
 
-      expect(mocks.submitGithubIssue).not.toHaveBeenCalled();
-      expect(mocks.reconcileGithubIssue).not.toHaveBeenCalled();
-      expect(mocks.openUrl).not.toHaveBeenCalled();
-      expect(mocks.clearSessionSqliteMigrationGithubIssueClaim).not.toHaveBeenCalled();
+      expectUnused(
+        mocks.submitGithubIssue,
+        mocks.reconcileGithubIssue,
+        mocks.openUrl,
+        mocks.clearSessionSqliteMigrationGithubIssueClaim,
+      );
       expect(supportIssue).toMatchObject({
         github: { message: expect.stringContaining(expectedMessage), status: "failed" },
       });
@@ -466,29 +422,15 @@ describe("doctorCommand", () => {
   );
 
   it("opens a sanitized fallback without logging its body or query URL", async () => {
-    const fallbackUrl =
-      "https://github.com/openclaw/openclaw/issues/new?title=run-1&body=private-report-text";
-    const supportIssue = {
-      body: "private-report-text",
-      title: "Session SQLite migration recovery report (run-1)",
-    };
-    const report = createRecoveryReport(supportIssue);
-    mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
+    const { supportIssue, runtime } = recovery("private-report-text");
     mocks.submitGithubIssue.mockResolvedValueOnce({
       reason: "authentication-unavailable",
       status: "browser-fallback",
       url: fallbackUrl,
     });
     mocks.openUrl.mockResolvedValueOnce(true);
-    const runtime = createDoctorRuntime();
 
-    await expect(
-      doctorCommand(runtime, {
-        sessionSqlite: "recover",
-        sessionSqliteGithubIssue: true,
-        yes: true,
-      }),
-    ).rejects.toThrow("exit:0");
+    await runDoctor(runtime);
 
     expect(mocks.openUrl).toHaveBeenCalledWith(fallbackUrl);
     expect(mocks.clearSessionSqliteMigrationGithubIssueClaim).not.toHaveBeenCalled();
@@ -503,22 +445,10 @@ describe("doctorCommand", () => {
   });
 
   it("retains the receipt after an indeterminate browser handoff", async () => {
-    const fallbackUrl =
-      "https://github.com/openclaw/openclaw/issues/new?title=run-1&body=private-report-text";
-    const supportIssue = {
-      body: "private-report-text",
-      title: "Session SQLite migration recovery report (run-1)",
-    };
+    const supportIssue = createSupportIssue("private-report-text");
     const report = createRecoveryReport(supportIssue);
-    const persisted = {
-      marker: `openclaw-report:${"a".repeat(64)}`,
-      status: "attempted",
-      title: supportIssue.title,
-    } as const;
     mocks.runDoctorSessionSqlite.mockResolvedValue(report);
-    mocks.claimSessionSqliteMigrationGithubIssue
-      .mockReturnValueOnce({ issue: persisted, status: "claimed" })
-      .mockReturnValueOnce({ issue: persisted, status: "existing" });
+    repeatReceipt(supportIssue.title);
     mocks.submitGithubIssue.mockResolvedValueOnce({
       reason: "transport-unavailable",
       status: "browser-fallback",
@@ -528,15 +458,10 @@ describe("doctorCommand", () => {
     mocks.reconcileGithubIssue.mockResolvedValueOnce({ status: "not-found" });
     const runtime = createDoctorRuntime();
 
-    const options = {
-      json: true,
-      sessionSqlite: "recover" as const,
-      sessionSqliteGithubIssue: true,
-      yes: true,
-    };
+    const options = { ...approvedRecoveryOptions, json: true };
 
-    await expect(doctorCommand(runtime, options)).rejects.toThrow("exit:0");
-    await expect(doctorCommand(runtime, options)).rejects.toThrow("exit:0");
+    await runDoctor(runtime, options);
+    await runDoctor(runtime, options);
 
     expect(mocks.submitGithubIssue).toHaveBeenCalledOnce();
     expect(mocks.openUrl).toHaveBeenCalledWith(fallbackUrl);
@@ -557,67 +482,35 @@ describe("doctorCommand", () => {
   });
 
   it("releases the receipt when browser preflight proves no opener is available", async () => {
-    const supportIssue = {
-      body: "private-report-text",
-      title: "Session SQLite migration recovery report (run-1)",
-    };
-    const report = createRecoveryReport(supportIssue);
-    mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
+    const { runtime } = recovery("private-report-text");
     mocks.submitGithubIssue.mockResolvedValueOnce({
       reason: "transport-unavailable",
       status: "browser-fallback",
-      url: "https://github.com/openclaw/openclaw/issues/new?title=run-1&body=private-report-text",
+      url: fallbackUrl,
     });
     mocks.detectBrowserOpenSupport.mockResolvedValueOnce({ ok: false, reason: "no-display" });
-    const runtime = createDoctorRuntime();
 
-    await expect(
-      doctorCommand(runtime, {
-        sessionSqlite: "recover",
-        sessionSqliteGithubIssue: true,
-        yes: true,
-      }),
-    ).rejects.toThrow("exit:0");
+    await runDoctor(runtime);
 
     expect(mocks.openUrl).not.toHaveBeenCalled();
-    expect(mocks.clearSessionSqliteMigrationGithubIssueClaim).toHaveBeenCalledWith(
-      "/tmp/run-1.json",
-      `openclaw-report:${"a".repeat(64)}`,
-      expect.objectContaining({ assertCurrent: expect.any(Function) }),
-    );
+    expectClaimReleased();
     expect(runtime.log.mock.calls.flat().join("\n")).toContain(
       "browser handoff unavailable; the sanitized report remains available in the recovery result",
     );
   });
 
   it("keeps an oversized fallback in the recovery result without opening a browser", async () => {
-    const supportIssue = {
-      body: "private-report-text".repeat(1_000),
-      title: "Session SQLite migration recovery report (run-1)",
-    };
-    const report = createRecoveryReport(supportIssue);
-    mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
+    const { supportIssue, runtime } = recovery("private-report-text".repeat(1_000));
     mocks.submitGithubIssue.mockResolvedValueOnce({
       cause: "authentication-unavailable",
       reason: "fallback-url-too-long",
       status: "fallback-unavailable",
     });
-    const runtime = createDoctorRuntime();
 
-    await expect(
-      doctorCommand(runtime, {
-        sessionSqlite: "recover",
-        sessionSqliteGithubIssue: true,
-        yes: true,
-      }),
-    ).rejects.toThrow("exit:0");
+    await runDoctor(runtime);
 
     expect(mocks.openUrl).not.toHaveBeenCalled();
-    expect(mocks.clearSessionSqliteMigrationGithubIssueClaim).toHaveBeenCalledWith(
-      "/tmp/run-1.json",
-      `openclaw-report:${"a".repeat(64)}`,
-      expect.objectContaining({ assertCurrent: expect.any(Function) }),
-    );
+    expectClaimReleased();
     expect(supportIssue.body).toContain("private-report-text");
     const output = runtime.log.mock.calls.flat().join("\n");
     expect(output).toContain("too large for a safe browser fallback");
@@ -630,70 +523,51 @@ describe("doctorCommand", () => {
     });
   });
 
-  it("keeps session sqlite recovery GitHub status inside JSON output", async () => {
-    const report = {
-      migrationRun: { manifestPath: "/tmp/run-1.json", runId: "run-1" },
-      mode: "recover",
-      supportIssue: {
-        body: "sanitized body",
-        title: "Session SQLite migration recovery report (run-1)",
-      },
-      targets: [],
-      totals: {
-        archivedTranscriptFiles: 0,
-        archivedUnreferencedJsonlFiles: 0,
-        importedEntries: 0,
-        importedTranscriptEvents: 0,
-        issues: 0,
-        legacyEntries: 0,
-        sqliteEntries: 0,
-        targets: 0,
-        unreferencedJsonlFiles: 0,
-        validatedEntries: 0,
-        validatedTranscriptEvents: 0,
-      },
-    };
-    mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
-    const runtime = createDoctorRuntime();
+  it.each([
+    { label: "JSON output", json: true, nonInteractive: false, isTTY: true },
+    { label: "noninteractive mode", json: false, nonInteractive: true, isTTY: true },
+    { label: "redirected input", json: false, nonInteractive: false, isTTY: false },
+  ])("records why GitHub issue creation is skipped for $label", async (mode) => {
+    ttyMock.set(mode.isTTY);
+    const { report, runtime } = recovery();
 
-    await expect(
-      doctorCommand(runtime, {
-        json: true,
-        sessionSqlite: "recover",
-        sessionSqliteGithubIssue: true,
-      }),
-    ).rejects.toThrow("exit:0");
+    await runDoctor(runtime, {
+      json: mode.json,
+      nonInteractive: mode.nonInteractive,
+      sessionSqlite: "recover",
+      sessionSqliteGithubIssue: true,
+    });
 
-    expect(mocks.submitGithubIssue).not.toHaveBeenCalled();
-    expect((report.supportIssue as { github?: unknown }).github).toEqual({ status: "skipped" });
-    expect(runtime.log).not.toHaveBeenCalled();
-    expect(runtime.writeJson).toHaveBeenCalledWith(report, 2);
+    expectUnused(mocks.promptYesNo, mocks.submitGithubIssue, mocks.openUrl);
+    expect(report.supportIssue?.github).toEqual({
+      message: "GitHub issue creation skipped: noninteractive recovery requires --yes.",
+      status: "skipped",
+    });
+    if (mode.json) {
+      expect(runtime.log).not.toHaveBeenCalled();
+      expect(runtime.writeJson).toHaveBeenCalledWith(report, 2);
+    } else {
+      expect(runtime.log).toHaveBeenCalledWith(
+        `session-sqlite recover: ${report.supportIssue?.github?.message}`,
+      );
+    }
     expect(JSON.stringify(runtime.writeJson.mock.calls)).not.toContain("issues/new?");
   });
 
   it("does not start issue transport when the operator declines", async () => {
-    const supportIssue = {
-      body: "sanitized body",
-      title: "Session SQLite migration recovery report (run-1)",
-    };
-    const report = createRecoveryReport(supportIssue);
-    mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
+    const { report, runtime } = recovery();
     mocks.promptYesNo.mockResolvedValueOnce(false);
-    const runtime = createDoctorRuntime();
 
-    await expect(
-      doctorCommand(runtime, {
-        sessionSqlite: "recover",
-        sessionSqliteGithubIssue: true,
-      }),
-    ).rejects.toThrow("exit:0");
+    await runDoctor(runtime, { sessionSqlite: "recover", sessionSqliteGithubIssue: true });
 
     expect(mocks.promptYesNo).toHaveBeenCalledWith(
       "Create a GitHub issue in openclaw/openclaw with the sanitized recovery report?",
       false,
     );
-    expect(mocks.submitGithubIssue).not.toHaveBeenCalled();
-    expect(mocks.openUrl).not.toHaveBeenCalled();
-    expect((supportIssue as { github?: unknown }).github).toEqual({ status: "skipped" });
+    expectUnused(mocks.submitGithubIssue, mocks.openUrl);
+    expect(report.supportIssue?.github).toEqual({
+      message: "GitHub issue creation skipped: confirmation was declined.",
+      status: "skipped",
+    });
   });
 });

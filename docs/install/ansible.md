@@ -41,7 +41,7 @@ curl -fsSL https://raw.githubusercontent.com/openclaw/openclaw-ansible/main/inst
 1. Tailscale (mesh VPN for secure remote access)
 2. UFW firewall (SSH + Tailscale ports only)
 3. Docker CE + Compose V2 (default agent sandbox backend)
-4. Node.js and pnpm (OpenClaw requires Node 24.16+ or 26.1+; Node 26 is recommended)
+4. Node.js and pnpm (OpenClaw accepts Node 24.16.0+ on 24.x or 26.1.0+; 24.22.1+/26.12.1+ is strongly recommended for security)
 5. OpenClaw, installed host-based, not containerized
 6. A systemd service with security hardening
 
@@ -107,7 +107,7 @@ Four-layer defense model:
 3. Docker isolation: `DOCKER-USER` iptables chain prevents external port exposure
 4. Systemd hardening: `NoNewPrivileges`, `PrivateTmp`, unprivileged user
 
-Verify your external attack surface:
+Check which ports are publicly reachable:
 
 ```bash
 nmap -p- YOUR_SERVER_IP
@@ -161,7 +161,7 @@ cd openclaw-ansible
 ./run-playbook.sh
 ```
 
-This is idempotent and safe to run multiple times.
+You can run this multiple times without duplicating its effects.
 
 ## Troubleshooting
 

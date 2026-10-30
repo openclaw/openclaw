@@ -1,8 +1,6 @@
-// Synology Chat plugin owns raw webhook durable admission and draining.
 import { createStandardRawEventIngressMonitor } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createChannelIngressError,
-  type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -34,7 +32,7 @@ export const SynologyIngressPermanentError = createChannelIngressError<
 >("SynologyIngressPermanentError", { withReason: true });
 export type SynologyIngressPermanentError = InstanceType<typeof SynologyIngressPermanentError>;
 
-function firstNonEmptyString(value: unknown): string | undefined {
+export function firstNonEmptyString(value: unknown): string | undefined {
   if (Array.isArray(value)) {
     for (const item of value) {
       const normalized = firstNonEmptyString(item);
@@ -120,13 +118,10 @@ function resolveSynologyIngressNonRetryableFailure(error: unknown) {
 
 export function createSynologyIngressMonitor(options: {
   accountId: string;
-  queue?: ChannelIngressQueue<SynologyIngressPayload>;
   dispatch: SynologyIngressDispatch;
   runtime: {
     error?: (message: string) => void;
   };
-  pollIntervalMs?: number;
-  adoptionStallTimeoutMs?: number;
   abortSignal?: AbortSignal;
 }) {
   const serializeForIngress = (rawEvent: SynologyWebhookRawEvent): string => {
@@ -139,13 +134,11 @@ export function createSynologyIngressMonitor(options: {
   };
 
   return createStandardRawEventIngressMonitor({
-    queue:
-      options.queue ??
-      (() =>
-        getSynologyRuntime().state.openChannelIngressQueue<SynologyIngressPayload>({
-          accountId: options.accountId,
-        })),
-    inspect: (rawEvent) => inspectSynologyIngressEvent(rawEvent),
+    queue: () =>
+      getSynologyRuntime().state.openChannelIngressQueue<SynologyIngressPayload>({
+        accountId: options.accountId,
+      }),
+    inspect: inspectSynologyIngressEvent,
     payload: {
       serialize: serializeForIngress,
       deserialize: (rawEvent, { claim }) => deserializeSynologyIngressEvent(rawEvent, claim.id),
@@ -157,14 +150,10 @@ export function createSynologyIngressMonitor(options: {
             : `Synology Chat ingress row ${claim.id} has invalid message identity.`,
         ),
     },
-    deliver: (rawEvent, lifecycle) => options.dispatch(rawEvent, lifecycle),
-    pollIntervalMs: options.pollIntervalMs,
+    deliver: options.dispatch,
     // Synology has no published retry horizon; keep the conservative 30-day / 20k cap.
     drain: {
       resolveNonRetryableFailure: resolveSynologyIngressNonRetryableFailure,
-      ...(options.adoptionStallTimeoutMs === undefined
-        ? {}
-        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
       onLog: (message) => options.runtime.error?.(`synology-chat: ${message}`),
     },
     ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),

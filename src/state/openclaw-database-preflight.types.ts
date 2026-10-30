@@ -1,6 +1,16 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SqliteSchemaIssue } from "../infra/sqlite-schema-contract.js";
+import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import type { AgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
+import type { OpenClawSchemaVersions } from "./openclaw-schema-versions.js";
+import type { OpenClawStateSchemaReadAdmission } from "./openclaw-state-db-contract.js";
 import type { OpenClawExternalStateOwnership } from "./openclaw-state-ownership.js";
+
+export type AgentDatabasePreflightStats = {
+  schemaProcessCount: number;
+  schemaInspectionCount: number;
+  schemaSnapshotCount: number;
+};
 
 export type IncompatibleOpenClawDatabase = {
   kind: "agent" | "state";
@@ -33,6 +43,8 @@ export type OpenClawDatabaseSchemaPreflight = {
   indeterminate: IndeterminateOpenClawDatabase[];
   agentRefusals?: AgentDatabaseAdmissionRefusal[];
   pendingMigrations?: Omit<IncompatibleOpenClawDatabase, "writerAppVersion">[];
+  /** Current owned schemas that need no repair; full integrity may still be pending. */
+  readReadyAgentPaths?: string[];
   deferredSchemaPublications?: DeferredStateSchemaPublication[];
 };
 
@@ -63,3 +75,47 @@ export type OpenClawDatabaseSchemaPreflightOperation =
   | "doctor"
   | "gateway-restart"
   | "gateway-startup";
+
+export type OpenClawDatabasePreflightOptions = {
+  env: NodeJS.ProcessEnv;
+  onAgentDatabaseDiscovery?: (prepared: PreparedAgentDatabaseMigrationDiscovery) => void;
+  onAgentInspection?: (stats: AgentDatabasePreflightStats) => void;
+  /** Reuse the registry targets captured by this admission for subsequent startup discovery. */
+  onRegisteredAgentDatabases?: (targets: readonly { agentId: string; path: string }[]) => void;
+  scope?: "state";
+  signal?: AbortSignal;
+  /** False permits isolated online readers and SQLite read marks; true preserves source bytes. */
+  preserveSourceArtifacts?: boolean;
+  /** Omit for current-runtime checks; updates pass their complete target pair. */
+  supportedVersions?: OpenClawSchemaVersions;
+  verifyCurrentSchemaShape?: boolean;
+  requireStartupMigrationReadiness?: boolean;
+  /** Consume this startup owner's compatibility headers once, never readiness proof. */
+  reuseStartupSchemaPreparation?: boolean;
+  configuredAgentDatabaseTargets?:
+    | readonly { agentId: string; path: string }[]
+    | ((
+        registeredDatabases: readonly { agentId: string; path: string }[],
+      ) => readonly { agentId: string; path: string }[]);
+  configuredAgentDatabaseCandidatePaths?: readonly string[];
+  /** Final verification includes required held stores without granting migration authority. */
+  inspectHeldAgentDatabaseTargets?: readonly { agentId: string; path: string }[];
+  agentAdmissionConfig?: OpenClawConfig;
+  openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
+};
+
+export type OpenClawDatabaseReadinessOptions = {
+  env: NodeJS.ProcessEnv;
+  onAgentInspection?: (stats: AgentDatabasePreflightStats) => void;
+  onRegisteredAgentDatabases?: OpenClawDatabasePreflightOptions["onRegisteredAgentDatabases"];
+} & (
+  | {
+      operation: "doctor";
+      configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
+      config?: OpenClawConfig;
+      onDeferredSchemaPublication?: (publication: DeferredStateSchemaPublication) => void;
+      onVerified?: (schemas: OpenClawDatabaseSchemaPreflight) => void;
+    }
+  | { operation: "gateway-restart"; config?: OpenClawConfig }
+  | { operation: "gateway-startup"; config: OpenClawConfig }
+);

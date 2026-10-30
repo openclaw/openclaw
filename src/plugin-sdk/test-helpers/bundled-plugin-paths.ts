@@ -20,11 +20,6 @@ function joinRoot(baseDir: string, relativePath: string): string {
   return `${baseDir.replace(/\/$/, "")}/${relativePath}`;
 }
 
-/** Return a repo-relative source directory prefix inside a bundled plugin. */
-export function bundledPluginDirPrefix(pluginId: string, relativeDir: string): string {
-  return `${bundledPluginRoot(pluginId)}/${relativeDir.replace(/\/$/, "")}/`;
-}
-
 /** Return an absolute or caller-rooted bundled plugin source root. */
 export function bundledPluginRootAt(baseDir: string, pluginId: string): string {
   return joinRoot(baseDir, bundledPluginRoot(pluginId));
@@ -52,15 +47,6 @@ export function bundledDistPluginFile(pluginId: string, relativePath: string): s
 /** Return an absolute or caller-rooted bundled plugin dist root. */
 export function bundledDistPluginRootAt(baseDir: string, pluginId: string): string {
   return joinRoot(baseDir, bundledDistPluginRoot(pluginId));
-}
-
-/** Return an absolute or caller-rooted bundled plugin dist file path. */
-export function bundledDistPluginFileAt(
-  baseDir: string,
-  pluginId: string,
-  relativePath: string,
-): string {
-  return joinRoot(baseDir, bundledDistPluginFile(pluginId, relativePath));
 }
 
 /** Compatibility alias for installed bundled plugin roots under a package root. */

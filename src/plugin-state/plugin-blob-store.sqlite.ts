@@ -1,7 +1,7 @@
 // SQLite persistence for plugin-owned byte blobs and JSON metadata.
-import type { DatabaseSync } from "node:sqlite";
+
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
-import type { Insertable, Selectable } from "kysely";
+import type { InferResult, Insertable } from "kysely";
 import { hasErrnoCode } from "../infra/errno.js";
 import {
   executeSqliteQuerySync,
@@ -9,22 +9,19 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   coerceRequiredSqliteNumber as sqliteNumber,
   normalizeSqliteNumber,
 } from "../infra/sqlite-number.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { hasOpenClawStateTablesBeyondStartupCheckpoint } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type {
   PluginBlobEntry,
   PluginBlobEntryInfo,
   PluginBlobOverflowPolicy,
+  PluginBlobRegistrationReceipt,
   PluginBlobStoreErrorCode,
   PluginBlobStoreOperation,
 } from "./plugin-blob-store.types.js";
@@ -36,21 +33,9 @@ export const MAX_PLUGIN_BLOB_ENTRIES_PER_PLUGIN = 50_000;
 
 type PluginBlobTable = OpenClawStateKyselyDatabase["plugin_blob_entries"];
 type PluginBlobDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_blob_entries">;
-type PluginBlobRow = Selectable<PluginBlobTable>;
+type PluginBlobStoredInfo = InferResult<ReturnType<typeof blobInfoQuery>>[number];
 
-type PluginBlobStoredInfo = Pick<
-  PluginBlobRow,
-  "entry_key" | "metadata_json" | "created_at" | "expires_at"
-> & { size_bytes: number | bigint };
-
-type BlobUsage = {
-  namespaceCount: number;
-  namespaceBytes: number;
-  pluginCount: number;
-  pluginBytes: number;
-};
-
-type BlobWriteParams = {
+export type BlobWriteParams = {
   pluginId: string;
   namespace: string;
   key: string;
@@ -63,90 +48,72 @@ type BlobWriteParams = {
   env?: NodeJS.ProcessEnv;
 };
 
-function createError(params: {
-  code: PluginBlobStoreErrorCode;
-  operation: PluginBlobStoreOperation;
-  message: string;
-  env?: NodeJS.ProcessEnv;
-  cause?: unknown;
-}): PluginBlobStoreError {
+function createError(
+  params: ConstructorParameters<typeof PluginBlobStoreError>[1] & {
+    message: string;
+    env?: NodeJS.ProcessEnv;
+  },
+): PluginBlobStoreError {
   return new PluginBlobStoreError(params.message, {
     code: params.code,
     operation: params.operation,
-    path: resolveOpenClawStateSqlitePath(params.env ?? process.env),
+    path: params.path ?? resolveOpenClawStateSqlitePath(params.env ?? process.env),
     cause: params.cause,
   });
 }
 
-function wrapError(
+export function wrapPluginBlobError(
   error: unknown,
   operation: PluginBlobStoreOperation,
   fallbackCode: PluginBlobStoreErrorCode,
   message: string,
   env?: NodeJS.ProcessEnv,
+  databasePath = resolveOpenClawStateSqlitePath(env ?? process.env),
 ): PluginBlobStoreError {
   return error instanceof PluginBlobStoreError
     ? error
-    : createError({ code: fallbackCode, operation, message, env, cause: error });
+    : createError({
+        code: fallbackCode,
+        operation,
+        message,
+        env,
+        path: databasePath,
+        cause: error,
+      });
 }
 
-function openDatabase(operation: PluginBlobStoreOperation, env?: NodeJS.ProcessEnv) {
-  try {
-    const database = openOpenClawStateDatabase(env ? { env } : {});
-    return database;
-  } catch (error) {
-    throw wrapError(
-      error,
-      operation,
-      "PLUGIN_BLOB_OPEN_FAILED",
-      "Failed to open plugin blob store.",
-      env,
-    );
-  }
-}
-
-function readDatabase<T>(
+function readBlobInDatabase<T>(
   operation: "lookup" | "entries",
-  read: (db: DatabaseSync) => T,
+  db: EngineConnection,
+  read: () => T,
   env?: NodeJS.ProcessEnv,
+  pathname?: string,
 ): T | undefined {
-  let readStarted = false;
   try {
-    return withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) => {
-        readStarted = true;
-        try {
-          return read(db);
-        } catch (error) {
-          if (
-            error instanceof Error &&
-            hasErrnoCode(error, "ERR_SQLITE_ERROR") &&
-            error.message === "no such table: plugin_blob_entries" &&
-            !hasOpenClawStateTablesBeyondStartupCheckpoint(db)
-          ) {
-            return undefined;
-          }
-          throw error;
-        }
-      },
-      env ? { env } : {},
-    );
+    return read();
   } catch (error) {
-    throw wrapError(
+    if (
+      error instanceof Error &&
+      hasErrnoCode(error, "ERR_SQLITE_ERROR") &&
+      error.message === "no such table: plugin_blob_entries" &&
+      !hasOpenClawStateTablesBeyondStartupCheckpoint(db)
+    ) {
+      return undefined;
+    }
+    throw wrapPluginBlobError(
       error,
       operation,
-      readStarted ? "PLUGIN_BLOB_READ_FAILED" : "PLUGIN_BLOB_OPEN_FAILED",
-      readStarted
-        ? operation === "lookup"
-          ? "Failed to read plugin blob entry."
-          : "Failed to list plugin blob entries."
-        : "Failed to open plugin blob store.",
+      "PLUGIN_BLOB_READ_FAILED",
+      operation === "lookup"
+        ? "Failed to read plugin blob entry."
+        : "Failed to list plugin blob entries.",
       env,
+      pathname,
     );
   }
 }
 
-function kysely(db: DatabaseSync) {
+function kysely(db: EngineConnection) {
   return getNodeSqliteKysely<PluginBlobDatabase>(db);
 }
 
@@ -154,6 +121,7 @@ function decodeBlobInfo<TMetadata>(
   row: PluginBlobStoredInfo,
   operation: PluginBlobStoreOperation,
   env?: NodeJS.ProcessEnv,
+  pathname?: string,
 ): PluginBlobEntryInfo<TMetadata> {
   let metadata: TMetadata;
   try {
@@ -165,6 +133,7 @@ function decodeBlobInfo<TMetadata>(
       operation,
       message: "Plugin blob entry contains corrupt metadata JSON.",
       env,
+      path: pathname,
       cause: error,
     });
   }
@@ -178,78 +147,17 @@ function decodeBlobInfo<TMetadata>(
   };
 }
 
-function selectLiveBlob(
-  db: DatabaseSync,
-  params: { pluginId: string; namespace: string; key: string; now: number },
-) {
-  return executeSqliteQueryTakeFirstSync(
-    db,
-    kysely(db)
-      .selectFrom("plugin_blob_entries")
-      .select(["entry_key", "metadata_json", "blob", "created_at", "expires_at"])
-      .select((eb) => eb.fn<number | bigint>("length", ["blob"]).as("size_bytes"))
-      .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace)
-      .where("entry_key", "=", params.key)
-      .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)])),
-  );
-}
-
-function blobKeyExists(
-  db: DatabaseSync,
-  params: { pluginId: string; namespace: string; key: string },
-): boolean {
-  return (
-    executeSqliteQueryTakeFirstSync(
-      db,
-      kysely(db)
-        .selectFrom("plugin_blob_entries")
-        .select("entry_key")
-        .where("plugin_id", "=", params.pluginId)
-        .where("namespace", "=", params.namespace)
-        .where("entry_key", "=", params.key),
-    ) !== undefined
-  );
-}
-
-function selectLiveInfo(
-  db: DatabaseSync,
-  params: { pluginId: string; namespace: string; now: number },
-): PluginBlobStoredInfo[] {
-  return executeSqliteQuerySync(
-    db,
-    kysely(db)
-      .selectFrom("plugin_blob_entries")
-      .select(["entry_key", "metadata_json", "created_at", "expires_at"])
-      .select((eb) => eb.fn<number | bigint>("length", ["blob"]).as("size_bytes"))
-      .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace)
-      .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)]))
-      .orderBy("created_at", "asc")
-      .orderBy("entry_key", "asc"),
-  ).rows;
-}
-
-function selectExpiredKeyInfo(
-  db: DatabaseSync,
-  params: { pluginId: string; namespace: string; key: string; now: number },
-): PluginBlobStoredInfo | undefined {
-  return executeSqliteQueryTakeFirstSync(
-    db,
-    kysely(db)
-      .selectFrom("plugin_blob_entries")
-      .select(["entry_key", "metadata_json", "created_at", "expires_at"])
-      .select((eb) => eb.fn<number | bigint>("length", ["blob"]).as("size_bytes"))
-      .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace)
-      .where("entry_key", "=", params.key)
-      .where("expires_at", "is not", null)
-      .where("expires_at", "<=", params.now),
-  );
+function blobInfoQuery(db: EngineConnection, params: { pluginId: string; namespace: string }) {
+  return kysely(db)
+    .selectFrom("plugin_blob_entries")
+    .select(["entry_key", "metadata_json", "created_at", "expires_at"])
+    .select((eb) => eb.fn<number | bigint>("length", ["blob"]).as("size_bytes"))
+    .where("plugin_id", "=", params.pluginId)
+    .where("namespace", "=", params.namespace);
 }
 
 function selectEvictionCandidates(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { pluginId: string; namespace: string; key: string; now: number },
 ) {
   return iterateSqliteQuerySync(
@@ -268,14 +176,32 @@ function selectEvictionCandidates(
 }
 
 function readStoredUsage(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { pluginId: string; namespace: string },
-): BlobUsage {
+  key?: string,
+) {
   // Expired rows retain cleanup metadata, so physical accounting includes them.
+  const database = kysely(db);
+  const query =
+    key === undefined
+      ? database.selectFrom("plugin_blob_entries").select((eb) => eb.lit(false).as("occupied"))
+      : database
+          .with("existing_blob", (qb) =>
+            qb
+              .selectFrom("plugin_blob_entries")
+              .select("entry_key")
+              .where("plugin_id", "=", params.pluginId)
+              .where("namespace", "=", params.namespace)
+              .where("entry_key", "=", key),
+          )
+          .selectFrom("plugin_blob_entries")
+          .select((eb) =>
+            eb.exists(eb.selectFrom("existing_blob").select("entry_key")).as("occupied"),
+          )
+          .where((eb) => eb.not(eb.exists(eb.selectFrom("existing_blob").select("entry_key"))));
   const row = executeSqliteQueryTakeFirstSync(
     db,
-    kysely(db)
-      .selectFrom("plugin_blob_entries")
+    query
       .select((eb) => [
         eb.fn.countAll<number | bigint>().as("plugin_count"),
         eb.fn
@@ -291,6 +217,7 @@ function readStoredUsage(
       .where("plugin_id", "=", params.pluginId),
   );
   return {
+    occupied: row?.occupied,
     namespaceCount: sqliteNumber(row?.namespace_count ?? 0),
     namespaceBytes: sqliteNumber(row?.namespace_bytes ?? 0),
     pluginCount: sqliteNumber(row?.plugin_count ?? 0),
@@ -299,7 +226,7 @@ function readStoredUsage(
 }
 
 function readStoredKeySize(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { pluginId: string; namespace: string; key: string },
 ): number | undefined {
   const row = executeSqliteQueryTakeFirstSync(
@@ -315,7 +242,7 @@ function readStoredKeySize(
 }
 
 function deleteKey(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { pluginId: string; namespace: string; key: string },
 ): number {
   const result = executeSqliteQuerySync(
@@ -330,7 +257,7 @@ function deleteKey(
 }
 
 function deleteKeys(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { pluginId: string; namespace: string; keys: readonly string[] },
 ): void {
   // Stay below conservative SQLite bind-variable limits while avoiding one
@@ -349,22 +276,6 @@ function deleteKeys(
   }
 }
 
-function deleteExpiredNamespace(
-  db: DatabaseSync,
-  params: { pluginId: string; namespace: string; now: number },
-): number {
-  const result = executeSqliteQuerySync(
-    db,
-    kysely(db)
-      .deleteFrom("plugin_blob_entries")
-      .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace)
-      .where("expires_at", "is not", null)
-      .where("expires_at", "<=", params.now),
-  );
-  return Number(result.numAffectedRows ?? 0);
-}
-
 function limitError(message: string, env?: NodeJS.ProcessEnv): PluginBlobStoreError {
   return createError({
     code: "PLUGIN_BLOB_LIMIT_EXCEEDED",
@@ -375,11 +286,12 @@ function limitError(message: string, env?: NodeJS.ProcessEnv): PluginBlobStoreEr
 }
 
 function assertProjectedLimits(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   write: BlobWriteParams;
   existingBytes?: number;
+  usage?: ReturnType<typeof readStoredUsage>;
 }): void {
-  const usage = readStoredUsage(params.db, params.write);
+  const usage = params.usage ?? readStoredUsage(params.db, params.write);
   const previousBytes = params.existingBytes ?? 0;
   const rowDelta = params.existingBytes === undefined ? 1 : 0;
   if (usage.namespaceCount + rowDelta > params.write.maxEntries) {
@@ -403,11 +315,12 @@ function assertProjectedLimits(params: {
 }
 
 function deleteOldestUntilWithinLimits(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   write: BlobWriteParams;
   now: number;
+  usage?: ReturnType<typeof readStoredUsage>;
 }): void {
-  const usage = readStoredUsage(params.db, params.write);
+  const usage = params.usage ?? readStoredUsage(params.db, params.write);
   const withinLimits = () =>
     usage.namespaceCount <= params.write.maxEntries &&
     usage.namespaceBytes <= params.write.maxBytesPerNamespace &&
@@ -458,7 +371,11 @@ function deleteOldestUntilWithinLimits(params: {
   });
 }
 
-function upsertBlob(db: DatabaseSync, params: BlobWriteParams, now: number): void {
+function upsertBlob(
+  db: EngineConnection,
+  params: BlobWriteParams,
+  now: number,
+): PluginBlobRegistrationReceipt {
   const expiresAt = (() => {
     if (params.ttlMs === undefined) {
       return null;
@@ -497,210 +414,169 @@ function upsertBlob(db: DatabaseSync, params: BlobWriteParams, now: number): voi
         }),
       ),
   );
+  return { createdAt: now, ...(expiresAt !== null ? { expiresAt } : {}) };
 }
 
-function writeBlob(params: BlobWriteParams, ifAbsent: boolean): boolean {
-  try {
-    openDatabase("register", params.env);
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const now = Date.now();
-        if (ifAbsent && blobKeyExists(db, params)) {
-          // Expired rows remain owner-managed until explicitly claimed. Treat
-          // them as occupied so stable-key reuse cannot discard cleanup metadata.
-          return false;
-        }
-        if (params.overflowPolicy === "reject-new") {
-          const existingBytes = ifAbsent ? undefined : readStoredKeySize(db, params);
-          assertProjectedLimits({ db, write: params, existingBytes });
-        }
-        upsertBlob(db, params, now);
-        if (params.overflowPolicy === "evict-oldest") {
-          deleteOldestUntilWithinLimits({ db, write: params, now });
-        }
-        return true;
-      },
-      params.env ? { env: params.env } : {},
-    );
-  } catch (error) {
-    throw wrapError(
-      error,
-      "register",
-      "PLUGIN_BLOB_WRITE_FAILED",
-      "Failed to register plugin blob entry.",
-      params.env,
-    );
+function writeBlob(
+  db: EngineConnection,
+  params: BlobWriteParams,
+  ifAbsent: boolean,
+): PluginBlobRegistrationReceipt | undefined {
+  const now = Date.now();
+  const usage = ifAbsent ? readStoredUsage(db, params, params.key) : undefined;
+  if (usage?.occupied) {
+    // Expired rows retain the metadata their owner needs for external cleanup.
+    return undefined;
   }
+  if (params.overflowPolicy === "reject-new") {
+    const existingBytes = ifAbsent ? undefined : readStoredKeySize(db, params);
+    assertProjectedLimits({ db, write: params, existingBytes, usage });
+  }
+  const receipt = upsertBlob(db, params, now);
+  if (params.overflowPolicy === "evict-oldest") {
+    if (usage) {
+      usage.namespaceCount++;
+      usage.pluginCount++;
+      usage.namespaceBytes += params.bytes.byteLength;
+      usage.pluginBytes += params.bytes.byteLength;
+    }
+    deleteOldestUntilWithinLimits({ db, write: params, now, usage });
+  }
+  return receipt;
 }
 
-export function pluginBlobRegister(params: BlobWriteParams): void {
-  writeBlob(params, false);
+export function pluginBlobRegisterInDatabase(db: EngineConnection, params: BlobWriteParams): void {
+  writeBlob(db, params, false);
 }
 
-export function pluginBlobRegisterIfAbsent(params: BlobWriteParams): boolean {
-  return writeBlob(params, true);
+export function pluginBlobRegisterIfAbsentInDatabase(
+  db: EngineConnection,
+  params: BlobWriteParams,
+): PluginBlobRegistrationReceipt | undefined {
+  return writeBlob(db, params, true);
 }
 
-export function pluginBlobLookup<TMetadata>(params: {
+type BlobReadKey = {
   pluginId: string;
   namespace: string;
   key: string;
   env?: NodeJS.ProcessEnv;
-}): PluginBlobEntry<TMetadata> | undefined {
-  return readDatabase(
+  path?: string;
+};
+type BlobReadNamespace = Omit<BlobReadKey, "key">;
+
+export function pluginBlobLookupInDatabase<TMetadata>(
+  db: EngineConnection,
+  params: BlobReadKey,
+): PluginBlobEntry<TMetadata> | undefined {
+  return readBlobInDatabase(
     "lookup",
-    (db) => {
-      const row = selectLiveBlob(db, { ...params, now: Date.now() });
+    db,
+    () => {
+      const now = Date.now();
+      const row = executeSqliteQueryTakeFirstSync(
+        db,
+        blobInfoQuery(db, params)
+          .select("blob")
+          .where("entry_key", "=", params.key)
+          .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", now)])),
+      );
       return row
-        ? {
-            ...decodeBlobInfo<TMetadata>(row, "lookup", params.env),
-            bytes: row.blob,
-          }
+        ? { ...decodeBlobInfo<TMetadata>(row, "lookup", params.env, params.path), bytes: row.blob }
         : undefined;
     },
     params.env,
+    params.path,
   );
 }
 
-export function pluginBlobEntries<TMetadata>(params: {
-  pluginId: string;
-  namespace: string;
-  env?: NodeJS.ProcessEnv;
-}): PluginBlobEntryInfo<TMetadata>[] {
+export function pluginBlobEntriesInDatabase<TMetadata>(
+  db: EngineConnection,
+  params: BlobReadNamespace,
+): PluginBlobEntryInfo<TMetadata>[] {
   return (
-    readDatabase(
+    readBlobInDatabase(
       "entries",
-      (db) =>
-        selectLiveInfo(db, { ...params, now: Date.now() }).map((row) =>
-          decodeBlobInfo<TMetadata>(row, "entries", params.env),
-        ),
+      db,
+      () => {
+        const now = Date.now();
+        return executeSqliteQuerySync(
+          db,
+          blobInfoQuery(db, params)
+            .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", now)]))
+            .orderBy("created_at", "asc")
+            .orderBy("entry_key", "asc"),
+        ).rows.map((row) => decodeBlobInfo<TMetadata>(row, "entries", params.env, params.path));
+      },
       params.env,
+      params.path,
     ) ?? []
   );
 }
 
-export function pluginBlobDelete(params: {
-  pluginId: string;
-  namespace: string;
-  key: string;
-  env?: NodeJS.ProcessEnv;
-}): boolean {
-  try {
-    openDatabase("delete", params.env);
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => deleteKey(db, params) > 0,
-      params.env ? { env: params.env } : {},
-    );
-  } catch (error) {
-    throw wrapError(
-      error,
-      "delete",
-      "PLUGIN_BLOB_WRITE_FAILED",
-      "Failed to delete plugin blob entry.",
-      params.env,
-    );
-  }
+export function pluginBlobDeleteInDatabase(
+  db: EngineConnection,
+  params: { pluginId: string; namespace: string; key: string },
+): boolean {
+  return deleteKey(db, params) > 0;
 }
 
-export function pluginBlobDeleteExpiredKey<TMetadata>(params: {
-  pluginId: string;
-  namespace: string;
-  key: string;
-  env?: NodeJS.ProcessEnv;
-}): PluginBlobEntryInfo<TMetadata> | undefined {
-  try {
-    openDatabase("sweep", params.env);
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const row = selectExpiredKeyInfo(db, { ...params, now: Date.now() });
-        if (!row) {
-          return undefined;
-        }
-        // Decode before deletion so corrupt metadata cannot orphan external artifacts.
-        const entry = decodeBlobInfo<TMetadata>(row, "sweep", params.env);
-        deleteKey(db, params);
-        return entry;
-      },
-      params.env ? { env: params.env } : {},
-    );
-  } catch (error) {
-    throw wrapError(
-      error,
-      "sweep",
-      "PLUGIN_BLOB_WRITE_FAILED",
-      "Failed to delete expired plugin blob.",
-      params.env,
-    );
+export function pluginBlobDeleteExpiredKeyInDatabase<TMetadata>(
+  db: EngineConnection,
+  params: { pluginId: string; namespace: string; key: string; env?: NodeJS.ProcessEnv },
+): PluginBlobEntryInfo<TMetadata> | undefined {
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    blobInfoQuery(db, params)
+      .where("entry_key", "=", params.key)
+      .where("expires_at", "is not", null)
+      .where("expires_at", "<=", Date.now()),
+  );
+  if (!row) {
+    return undefined;
   }
+  // Decode before deletion so corrupt metadata cannot orphan external artifacts.
+  const entry = decodeBlobInfo<TMetadata>(row, "sweep", params.env);
+  deleteKey(db, params);
+  return entry;
 }
 
-export function pluginBlobDeleteExpired<TMetadata>(params: {
-  pluginId: string;
-  namespace: string;
-  env?: NodeJS.ProcessEnv;
-}): PluginBlobEntryInfo<TMetadata>[] {
-  try {
-    openDatabase("sweep", params.env);
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const now = Date.now();
-        const rows = executeSqliteQuerySync(
-          db,
-          kysely(db)
-            .selectFrom("plugin_blob_entries")
-            .select(["entry_key", "metadata_json", "created_at", "expires_at"])
-            .select((eb) => eb.fn<number | bigint>("length", ["blob"]).as("size_bytes"))
-            .where("plugin_id", "=", params.pluginId)
-            .where("namespace", "=", params.namespace)
-            .where("expires_at", "is not", null)
-            .where("expires_at", "<=", now)
-            .orderBy("created_at", "asc")
-            .orderBy("entry_key", "asc"),
-        ).rows;
-        // Return all cleanup metadata only after every row decodes and the claim commits.
-        const entries = rows.map((row) => decodeBlobInfo<TMetadata>(row, "sweep", params.env));
-        deleteExpiredNamespace(db, { ...params, now });
-        return entries;
-      },
-      params.env ? { env: params.env } : {},
-    );
-  } catch (error) {
-    throw wrapError(
-      error,
-      "sweep",
-      "PLUGIN_BLOB_WRITE_FAILED",
-      "Failed to delete expired plugin blobs.",
-      params.env,
-    );
-  }
+export function pluginBlobDeleteExpiredInDatabase<TMetadata>(
+  db: EngineConnection,
+  params: { pluginId: string; namespace: string; env?: NodeJS.ProcessEnv },
+): PluginBlobEntryInfo<TMetadata>[] {
+  const now = Date.now();
+  const rows = executeSqliteQuerySync(
+    db,
+    blobInfoQuery(db, params)
+      .where("expires_at", "is not", null)
+      .where("expires_at", "<=", now)
+      .orderBy("created_at", "asc")
+      .orderBy("entry_key", "asc"),
+  ).rows;
+  // Decode every row before committing the cleanup claim.
+  const entries = rows.map((row) => decodeBlobInfo<TMetadata>(row, "sweep", params.env));
+  executeSqliteQuerySync(
+    db,
+    kysely(db)
+      .deleteFrom("plugin_blob_entries")
+      .where("plugin_id", "=", params.pluginId)
+      .where("namespace", "=", params.namespace)
+      .where("expires_at", "is not", null)
+      .where("expires_at", "<=", now),
+  );
+  return entries;
 }
 
-export function pluginBlobClear(params: {
-  pluginId: string;
-  namespace: string;
-  env?: NodeJS.ProcessEnv;
-}): void {
-  try {
-    openDatabase("clear", params.env);
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        executeSqliteQuerySync(
-          db,
-          kysely(db)
-            .deleteFrom("plugin_blob_entries")
-            .where("plugin_id", "=", params.pluginId)
-            .where("namespace", "=", params.namespace),
-        );
-      },
-      params.env ? { env: params.env } : {},
-    );
-  } catch (error) {
-    throw wrapError(
-      error,
-      "clear",
-      "PLUGIN_BLOB_WRITE_FAILED",
-      "Failed to clear plugin blob entries.",
-      params.env,
-    );
-  }
+export function pluginBlobClearInDatabase(
+  db: EngineConnection,
+  params: { pluginId: string; namespace: string },
+): void {
+  executeSqliteQuerySync(
+    db,
+    kysely(db)
+      .deleteFrom("plugin_blob_entries")
+      .where("plugin_id", "=", params.pluginId)
+      .where("namespace", "=", params.namespace),
+  );
 }

@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { once } from "node:events";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
@@ -18,6 +20,110 @@ vi.mock("node:fs", async (importOriginal) => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+it.skipIf(process.platform === "win32")(
+  "rejects a raced FIFO before waiting for a writer or emitting its header",
+  async () => {
+    const source = path.join(tempDirs.make("backup-fifo-swap-"), "payload.txt");
+    await fs.writeFile(source, "original payload");
+    const nativeOpen = fs.open;
+    let writerNeeded = false;
+    let writerTimer: ReturnType<typeof setTimeout> | undefined;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      if (args[0] === source) {
+        await fs.rename(source, `${source}.original`);
+        execFileSync("mkfifo", [source]);
+        // Release the old blocking reader so RED can fail without leaking a worker.
+        writerTimer = setTimeout(() => {
+          writerNeeded = true;
+          const writer = fsSync.openSync(
+            source,
+            fsSync.constants.O_WRONLY | fsSync.constants.O_NONBLOCK,
+          );
+          fsSync.closeSync(writer);
+        }, 500);
+      }
+      return await nativeOpen(...args);
+    });
+    const chunks: Buffer[] = [];
+    try {
+      await expect(collectArchive(source, chunks)).rejects.toThrow(
+        "Backup source changed while opening",
+      );
+      expect(writerNeeded).toBe(false);
+      expect(chunks).toEqual([]);
+    } finally {
+      clearTimeout(writerTimer);
+    }
+  },
+);
+
+async function collectArchive(
+  source: string,
+  chunks: Buffer[],
+  callbacks: Partial<Pick<Parameters<typeof walkBackupTar>[0], "onEntry" | "onVanished">> = {},
+) {
+  for await (const chunk of walkBackupTar({
+    tar,
+    paths: [source],
+    skip: () => false,
+    filter: () => true,
+    onEntry: (_source, header) => {
+      header.path = "payload";
+    },
+    onVanished: () => {
+      throw new Error("unexpected missing entry");
+    },
+    onProgress: () => {},
+    ...callbacks,
+  })) {
+    chunks.push(chunk);
+  }
+}
+
+async function writeSource(root: string, body: string) {
+  await fs.mkdir(root, { recursive: true });
+  const file = path.join(root, "keep.txt");
+  await fs.writeFile(file, body);
+  return file;
+}
+
+it("archives a source whose exact file ID exceeds Number precision", async () => {
+  const source = path.join(tempDirs.make("backup-exact-identity-"), "payload.txt");
+  const payload = "exact file identity";
+  await fs.writeFile(source, payload);
+  const ino = (1n << 63n) + 1n;
+  function setInode<T extends { ino: number | bigint }>(stat: T): T {
+    Object.defineProperty(stat, "ino", { value: typeof stat.ino === "bigint" ? ino : Number(ino) });
+    return stat;
+  }
+  const lstat = fs.lstat;
+  vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+    const observed = await lstat(...args);
+    return args[0] === source ? setInode(observed) : observed;
+  });
+  const open = fs.open;
+  vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    if (args[0] === source) {
+      const stat = handle.stat.bind(handle);
+      vi.spyOn(handle, "stat").mockImplementation(async (options) => setInode(await stat(options)));
+    }
+    return handle;
+  });
+  const chunks: Buffer[] = [];
+  await collectArchive(source, chunks);
+  const entries: Array<Promise<{ path: string; body: string }>> = [];
+  const parser = new tar.Parser({
+    onReadEntry(entry) {
+      entries.push(entry.concat().then((body) => ({ path: entry.path, body: body.toString() })));
+    },
+  });
+  const done = once(parser, "end");
+  parser.end(Buffer.concat(chunks));
+  await done;
+  expect(await Promise.all(entries)).toEqual([{ path: "payload", body: payload }]);
+});
+
 it.each([
   { encoding: "header", target: String.raw`C:\external\workspace` },
   { encoding: "PAX", target: "C:\\external\\" + "workspace".repeat(15) },
@@ -27,12 +133,9 @@ it.each([
   const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   const manifestLinks: BackupSymbolicLink[] = [];
   const chunks: Buffer[] = [];
+  const state = { sourcePath: "C:\\state", archivePath: "backup/payload/state" };
   try {
-    for await (const chunk of walkBackupTar({
-      tar,
-      paths: [source],
-      skip: () => false,
-      filter: () => true,
+    await collectArchive(source, chunks, {
       onEntry: (_source, header) => {
         header.path = "backup/payload/state/link";
         const { external, ...link } = recordArchiveSymbolicLink({
@@ -40,21 +143,15 @@ it.each([
           entryPath: header.path,
           linkpath: header.linkpath,
           platform: process.platform,
-          state: { sourcePath: "C:\\state", archivePath: "backup/payload/state" },
-          assets: [{ sourcePath: "C:\\state", archivePath: "backup/payload/state" }],
+          state,
+          assets: [state],
           hasExternalLinkReport: true,
         });
         if (external) {
           manifestLinks.push(link);
         }
       },
-      onVanished: () => {
-        throw new Error("unexpected missing entry");
-      },
-      onProgress: () => {},
-    })) {
-      chunks.push(chunk);
-    }
+    });
   } finally {
     platform.mockRestore();
   }
@@ -96,10 +193,8 @@ it
     const root = path.join(temp, "source");
     const directory = path.join(root, "changing");
     const outside = path.join(temp, "outside");
-    await fs.mkdir(directory, { recursive: true });
-    await fs.mkdir(outside);
-    await fs.writeFile(path.join(directory, "keep.txt"), "selected bytes");
-    await fs.writeFile(path.join(outside, "keep.txt"), "out-of-scope bytes");
+    const selected = await writeSource(directory, "selected bytes");
+    const external = await writeSource(outside, "out-of-scope bytes");
     let swapped = false;
     const swap = async () => {
       if (swapped) {
@@ -120,10 +215,10 @@ it
     } else {
       const open = fs.open;
       vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-        if (args[0] === path.join(directory, "keep.txt")) {
+        if (args[0] === selected) {
           if (operation === "leaf-open-without-nofollow" || operation === "unlinked-leaf-open") {
             const replacement = path.join(temp, "replacement-link");
-            await fs.symlink(path.join(outside, "keep.txt"), replacement);
+            await fs.symlink(external, replacement);
             await fs.rename(replacement, args[0]);
             swapped = true;
             // Windows lacks O_NOFOLLOW; keep a real handle with that open behavior.
@@ -139,24 +234,7 @@ it
       });
     }
     const chunks: Buffer[] = [];
-    const archive = async () => {
-      for await (const chunk of walkBackupTar({
-        tar,
-        paths: [root],
-        skip: () => false,
-        filter: () => true,
-        onEntry: (_source, header) => {
-          header.path = "payload";
-        },
-        onVanished: () => {
-          throw new Error("unexpected missing entry");
-        },
-        onProgress: () => {},
-      })) {
-        chunks.push(chunk);
-      }
-    };
-    await expect(archive()).rejects.toThrow(
+    await expect(collectArchive(root, chunks)).rejects.toThrow(
       /Backup (directory changed|source became a symbolic link|source identity changed)/u,
     );
     expect(swapped).toBe(true);
@@ -167,9 +245,7 @@ it
 it("refuses a required root removed during a descendant open", async () => {
   const temp = tempDirs.make("backup-root-removal-");
   const root = path.join(temp, "source");
-  await fs.mkdir(root);
-  const file = path.join(root, "keep.txt");
-  await fs.writeFile(file, "selected bytes");
+  const file = await writeSource(root, "selected bytes");
   const open = fs.open;
   vi.spyOn(fs, "open").mockImplementation(async (...args) => {
     if (args[0] === file) {
@@ -178,23 +254,11 @@ it("refuses a required root removed during a descendant open", async () => {
     return await open(...args);
   });
   const onVanished = vi.fn();
-  let emittedBytes = 0;
-  const archive = async () => {
-    for await (const chunk of walkBackupTar({
-      tar,
-      paths: [root],
-      skip: () => false,
-      filter: () => true,
-      onEntry: (_source, header) => {
-        header.path = "payload";
-      },
-      onVanished,
-      onProgress: () => {},
-    })) {
-      emittedBytes += chunk.length;
-    }
-  };
-  await expect(archive()).rejects.toMatchObject({ code: "ENOENT", path: root });
+  const chunks: Buffer[] = [];
+  await expect(collectArchive(root, chunks, { onVanished })).rejects.toMatchObject({
+    code: "ENOENT",
+    path: root,
+  });
   expect(onVanished).toHaveBeenCalledWith(file);
-  expect(emittedBytes).toBeGreaterThan(0);
+  expect(Buffer.concat(chunks).length).toBeGreaterThan(0);
 });

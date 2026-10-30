@@ -5,4 +5,9 @@ export {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
+  sqliteStringSet,
 } from "../../../../src/infra/kysely-sync.js";
+export {
+  isPostgresSqlConnection,
+  type EngineConnection,
+} from "../../../../src/infra/sql-connection.js";

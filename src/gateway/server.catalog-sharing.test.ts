@@ -1,9 +1,8 @@
-// Real Gateway proof: execute only on a machine with isolated SQLite coordination.
 import { expect, it } from "vitest";
 import type { WebSocket } from "ws";
-import type { SessionCatalogHost } from "../../packages/gateway-protocol/src/index.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import * as catalogs from "./server-methods/session-catalog.fixtures.test-support.js";
 import { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   connectOk,
@@ -14,59 +13,47 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
-type CatalogResponse = {
-  type: "res";
-  id: string;
-  ok: boolean;
-  payload?: { catalogs: Array<{ id: string; hosts: unknown[] }> };
-};
-
 it("shares a held catalog RPC after 128 distinct catalog results settle", async ({ signal }) => {
   const token = "catalog-sharing-proof-token";
-  const started = createDeferredCore();
-  const release = createDeferredCore();
-  const host: SessionCatalogHost = {
-    hostId: "gateway:local",
-    label: "Catalog sharing proof",
-    kind: "gateway",
-    connected: true,
-    sessions: [],
-  };
+  const heldCatalogId = "catalog-sharing-proof";
+  const completedCatalogId = "catalog-completed-proof";
+  const [started, release] = [createDeferred(), createDeferred()];
+  const host = catalogs.catalogHost();
+  const progressId = "follower-progress";
   const publishHeldHosts: Array<() => void> = [];
-  const providerRuns: Promise<SessionCatalogHost[]>[] = [];
-  const requests: Promise<CatalogResponse>[] = [];
+  const providerRuns: Promise<(typeof host)[]>[] = [];
+  const requests: Array<ReturnType<typeof onceMessage>> = [];
+  const expectCatalog = (response: unknown, id: string, hosts: (typeof host)[] = []) =>
+    expect(response).toMatchObject({ ok: true, payload: { catalogs: [{ id, hosts }] } });
   let heldCalls = 0;
   const registry = createEmptyPluginRegistry();
-  registry.sessionCatalogs.push({
-    pluginId: "catalog-sharing-proof",
-    source: "test",
-    provider: {
-      id: "catalog-sharing-proof",
-      label: "Catalog sharing proof",
-      audience: "gateway-operators",
-      supportsProcessHomeIsolation: true,
-      list: ({ search, onHost }) => {
-        const operation = (async () => {
-          if (search === "held") {
-            heldCalls += 1;
-            publishHeldHosts.push(() => onHost?.(host));
-            started.resolve();
-            await release.promise;
-            return [host];
-          }
-          if (search === "after-follower") {
-            for (const publish of publishHeldHosts) {
-              publish();
+  for (const catalogId of [heldCatalogId, completedCatalogId]) {
+    registry.sessionCatalogs.push({
+      pluginId: "catalog-sharing-proof",
+      source: "test",
+      provider: catalogs.catalogProvider(catalogId, {
+        audience: "gateway-operators",
+        supportsProcessHomeIsolation: true,
+        list: ({ search, onHost }) => {
+          const operation = (async () => {
+            if (search === "held") {
+              heldCalls += 1;
+              publishHeldHosts.push(() => onHost?.(host));
+              started.resolve();
+              await release.promise;
+              return [host];
             }
-          }
-          return [];
-        })();
-        providerRuns.push(operation);
-        return operation;
-      },
-      read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
-    },
-  });
+            if (search === "after-follower") {
+              publishHeldHosts.forEach((publish) => publish());
+            }
+            return [];
+          })();
+          providerRuns.push(operation);
+          return operation;
+        },
+      }),
+    });
+  }
   setTestPluginRegistry(registry);
   const unblock = () => release.resolve();
   signal.addEventListener("abort", unblock, { once: true });
@@ -81,61 +68,38 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
     ws = await gateway.openWs();
     await connectOk(ws, { token, scopes: ["operator.admin"] });
     const socket = ws;
-    const request = (search: string, progressId?: string) => {
+    const request = (catalogId: string, search: string, progress?: string) => {
       const id = `catalog-${requests.length}`;
-      const response = onceMessage<CatalogResponse>(
-        socket,
-        (frame) => frame.type === "res" && frame.id === id,
-      );
+      const response = onceMessage(socket, (frame) => frame.type === "res" && frame.id === id);
       requests.push(response);
-      socket.send(
-        JSON.stringify({
-          type: "req",
-          id,
-          method: "sessions.catalog.list",
-          params: { catalogId: "catalog-sharing-proof", search, progressId },
-        }),
-      );
+      const params = { catalogId, search, progressId: progress };
+      socket.send(JSON.stringify({ type: "req", id, method: "sessions.catalog.list", params }));
       return response;
     };
-    const leader = request("held", "leader-progress");
-    await Promise.race([
-      started.promise,
-      leader.then(() => {
-        throw new Error("held catalog returned before provider admission");
-      }),
-    ]);
+    const leader = request(heldCatalogId, "held", "leader-progress");
+    await awaitGateBeforeSettlement(started.promise, leader, "provider admission");
     for (let index = 0; index < 128; index += 1) {
-      expect(await request(`completed-${index}`)).toMatchObject({
-        ok: true,
-        payload: { catalogs: [{ id: "catalog-sharing-proof", hosts: [] }] },
-      });
+      expectCatalog(await request(completedCatalogId, `completed-${index}`), completedCatalogId);
     }
     followerHost = onceMessage(
       socket,
       (frame) =>
         frame.type === "event" &&
         frame.event === "sessions.catalog.host" &&
-        frame.payload?.progressId === "follower-progress",
+        frame.payload?.progressId === progressId,
     );
-    const follower = request("held", "follower-progress");
-    const [barrier, progress] = await Promise.all([request("after-follower"), followerHost]);
-    expect(barrier).toMatchObject({
-      ok: true,
-      payload: { catalogs: [{ id: "catalog-sharing-proof", hosts: [] }] },
-    });
+    const follower = request(heldCatalogId, "held", progressId);
+    const [barrier, progress] = await Promise.all([
+      request(completedCatalogId, "after-follower"),
+      followerHost,
+    ]);
+    expectCatalog(barrier, completedCatalogId);
     expect(progress).toMatchObject({
-      payload: {
-        progressId: "follower-progress",
-        catalog: { id: "catalog-sharing-proof", hosts: [host] },
-      },
+      payload: { progressId, catalog: { id: heldCatalogId, hosts: [host] } },
     });
     unblock();
     for (const response of await Promise.all([leader, follower])) {
-      expect(response).toMatchObject({
-        ok: true,
-        payload: { catalogs: [{ id: "catalog-sharing-proof", hosts: [host] }] },
-      });
+      expectCatalog(response, heldCatalogId, [host]);
     }
     expect(heldCalls).toBe(1);
   } finally {

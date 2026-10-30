@@ -1,10 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { lstatIfExists } from "../../infra/path-existence.js";
 import {
   estimateCheckoutObjectBytes,
   estimateCheckoutTransitionBytes,
   measureDirectoryTreeBytes,
 } from "./capacity.runtime.js";
+import {
+  classifyWorktreeEvictions,
+  prepareWorktreeEvictionRepositories,
+  purgeWorktreeCheckout,
+  readWorktreeSourceDependencies,
+} from "./eviction.runtime.js";
+import { readWorktreeCleanupFingerprint } from "./gc-fingerprint.runtime.js";
 import { gitPathspecBatches, splitNullBuffer } from "./git-path-inventory.js";
 import type {
   GitWorktreeOperation,
@@ -15,14 +23,13 @@ import { requireGitBuffer, worktreePathExists } from "./git.js";
 import {
   hasSafeParentDirectories,
   hasUnsnapshotableProvisionedFiles,
-  lstatIfExists,
   normalizeProvisionedRelativePath,
   resolveGitPath,
 } from "./provisioned-file-inspection.js";
-import { inspectNestedRepository, snapshotWorktree } from "./snapshot-inventory.js";
 
 async function inspectProvisioning(
   sourceRoot: string,
+  estimateBytes = true,
 ): Promise<GitWorktreeOperations["worktree.provisioning-inspection"]["output"]> {
   const includePath = path.join(sourceRoot, ".worktreeinclude");
   if (!(await worktreePathExists(includePath))) {
@@ -57,12 +64,12 @@ async function inspectProvisioning(
     paths.push(...splitNullBuffer(candidates).map((entry) => entry.toString("utf8")));
   }
   let estimatedBytes = 0;
-  for (const relativePath of paths) {
+  for (const relativePath of estimateBytes ? paths : []) {
     const normalized = normalizeProvisionedRelativePath(relativePath);
     if (!normalized || !(await hasSafeParentDirectories(sourceRoot, normalized))) {
       continue;
     }
-    const stat = await lstatIfExists(resolveGitPath(sourceRoot, normalized));
+    const stat = await lstatIfExists(resolveGitPath(sourceRoot, normalized), "ENOENT");
     if (stat?.isFile()) {
       estimatedBytes += Math.max(4096, stat.size);
     }
@@ -73,6 +80,7 @@ async function inspectProvisioning(
 async function inspectCleanup(
   input: GitWorktreeOperations["worktree.cleanup-inspection"]["input"],
 ): Promise<GitWorktreeOperations["worktree.cleanup-inspection"]["output"]> {
+  const { inspectNestedRepository } = await import("./snapshot-inventory.js");
   if (input.kind === "nested-repository") {
     return {
       retainedReason: (await inspectNestedRepository(input.checkoutPath))
@@ -116,10 +124,26 @@ export async function executeGitWorktreeOperation(
   operation: GitWorktreeOperation,
 ): Promise<GitWorktreeOperationResult> {
   switch (operation.type) {
-    case "worktree.snapshot":
+    case "worktree.eviction-source":
+      return readWorktreeSourceDependencies(operation.input);
+    case "worktree.eviction-repositories":
+      return await prepareWorktreeEvictionRepositories(operation.input.repoRoots);
+    case "worktree.eviction-classify":
+      return await classifyWorktreeEvictions(operation.input.records);
+    case "worktree.eviction-purge":
+      return await purgeWorktreeCheckout(operation.input.record, operation.input.live);
+    case "worktree.cleanup-fingerprint":
+      return await readWorktreeCleanupFingerprint(operation.input.checkoutPath);
+    case "worktree.snapshot-verify-exact": {
+      const { verifyExactStateSnapshot } = await import("./snapshot-inventory.js");
+      return await verifyExactStateSnapshot(operation.input);
+    }
+    case "worktree.snapshot": {
+      const { snapshotWorktree } = await import("./snapshot-inventory.js");
       return await snapshotWorktree(operation.input);
+    }
     case "worktree.provisioning-inspection":
-      return await inspectProvisioning(operation.input.sourceRoot);
+      return await inspectProvisioning(operation.input.sourceRoot, operation.input.estimateBytes);
     case "worktree.cleanup-inspection":
       return await inspectCleanup(operation.input);
     case "worktree.git-size":
@@ -127,6 +151,7 @@ export async function executeGitWorktreeOperation(
         operation.input.repoRoot,
         operation.input.ref,
         operation.input.replacementRefBase,
+        operation.input.preparationKey,
       );
     case "worktree.checkout-transition-size":
       return await estimateCheckoutTransitionBytes(
@@ -136,7 +161,7 @@ export async function executeGitWorktreeOperation(
         operation.input.replacementRefBase,
       );
     case "worktree.directory-size":
-      return await measureDirectoryTreeBytes(operation.input.root, operation.input.excludeGit);
+      return await measureDirectoryTreeBytes(operation.input.root);
     default:
       throw new Error("Unknown managed-worktree Git operation");
   }

@@ -2,13 +2,16 @@ import type { DaemonRuntimePinSnapshot } from "../../daemon/runtime-pin-types.js
 const pinSnapshotMock = vi.hoisted(() =>
   vi.fn<() => DaemonRuntimePinSnapshot>(() => ({ revision: "empty", stored: false })),
 );
+const pinMigrationMock = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../../daemon/runtime-pin-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/runtime-pin-state.js")>()),
+  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, run: () => T) => {
+    await pinMigrationMock();
+    return run();
+  },
   readDaemonRuntimePinForInstall: pinSnapshotMock,
 }));
-// Daemon install tests cover service install command behavior and plan handling.
-import { afterEach, beforeEach, expect, vi } from "vitest";
-import type { SecretInput } from "../../config/types.secrets.js";
+import { afterEach, beforeEach, vi } from "vitest";
 import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import type { ResolvedGatewayAuth } from "../../gateway/auth.js";
@@ -16,11 +19,9 @@ import { captureFullEnv } from "../../test-utils/env.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import { createInstallPlanFixture, nodeProbeOutput } from "./install.test-helpers.js";
 import type { createDaemonInstallActionContext } from "./shared.js";
-
 type DaemonActionResponse = Parameters<
   ReturnType<typeof createDaemonInstallActionContext>["emit"]
 >[0];
-
 const resolveNodeStartupTlsEnvironmentMock = vi.hoisted(() => vi.fn());
 const runExecMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
@@ -33,57 +34,43 @@ const randomTokenMock = vi.hoisted(() => vi.fn(() => "generated-token"));
 const buildGatewayInstallPlanMock = vi.hoisted(() => vi.fn<typeof createInstallPlanFixture>());
 const isGatewayDaemonRuntimeMock = vi.hoisted(() => vi.fn(() => true));
 const installDaemonServiceAndEmitMock = vi.hoisted(() => vi.fn(async (_params?: unknown) => {}));
-
+const ensureConfigReadyMock = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("../program/config-guard.js", () => ({ ensureConfigReady: ensureConfigReadyMock }));
 const actionState = vi.hoisted(() => ({
   warnings: [] as string[],
   emitted: [] as DaemonActionResponse[],
   failed: [] as Array<{ message: string; hints?: string[] }>,
 }));
-
 const service = vi.hoisted(() => ({
-  label: "Gateway",
   loadedText: "loaded",
-  notLoadedText: "not loaded",
   isLoaded: vi.fn(async () => false),
-  stage: vi.fn(async () => {}),
   install: vi.fn(async () => {}),
-  uninstall: vi.fn(async () => {}),
-  restart: vi.fn(async () => {}),
-  stop: vi.fn(async () => {}),
   readDefinitionMutationCapability: vi.fn(async () => ({ kind: "writable" as const })),
   readCommand: vi.fn<() => Promise<GatewayServiceCommandConfig | null>>(async () => null),
-  readRuntime: vi.fn(async () => ({ status: "stopped" as const })),
 }));
-
 vi.mock("../../bootstrap/node-startup-env.js", () => ({
   resolveNodeStartupTlsEnvironment: resolveNodeStartupTlsEnvironmentMock,
 }));
-
 vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runExec: runExecMock,
 }));
-
 vi.mock("../../config/io.js", () => ({
   readConfigFileSnapshotForWrite: vi.fn(async () => ({
     snapshot: await readConfigFileSnapshotMock(),
     writeOptions: { expectedConfigPath: "/tmp/openclaw.json" },
   })),
 }));
-
 vi.mock("../../config/mutate.js", () => ({
   replaceConfigFile: replaceConfigFileMock,
 }));
-
 vi.mock("../../config/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/paths.js")>()),
   resolveGatewayPort: resolveGatewayPortMock,
 }));
-
 vi.mock("../../gateway/auth.js", () => ({
   resolveGatewayAuth: resolveGatewayAuthMock,
 }));
-
 vi.mock("../../gateway/net.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../gateway/net.js")>();
   return {
@@ -91,34 +78,39 @@ vi.mock("../../gateway/net.js", async (importOriginal) => {
     resolveGatewayBindHost: resolveGatewayBindHostMock,
   };
 });
-
 vi.mock("../../secrets/resolve.js", () => ({
   resolveSecretRefValues: resolveSecretRefValuesMock,
 }));
-
 vi.mock("../../commands/random-token.js", () => ({
   randomToken: randomTokenMock,
 }));
-
 vi.mock("../../commands/daemon-install-helpers.js", () => ({
   buildGatewayInstallPlan: buildGatewayInstallPlanMock,
 }));
-
 vi.mock("../../daemon/program-args.js", () => ({
   OPENCLAW_WRAPPER_ENV_KEY: "OPENCLAW_WRAPPER",
   resolveOpenClawWrapperPath: async (value: string | undefined) => value?.trim() || undefined,
 }));
-
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),
   createDaemonInstallActionContext: (jsonFlag: unknown) => {
     const json = Boolean(jsonFlag);
+    // Plan decisions only; the integration suite exercises actual CLI output.
+    const emit = (payload: DaemonActionResponse) => {
+      actionState.emitted.push(payload);
+    };
     return {
       json,
       stdout: process.stdout,
       warnings: actionState.warnings,
-      emit: (payload: DaemonActionResponse) => {
-        actionState.emitted.push(payload);
+      emit,
+      emitMessage: emit,
+      warn: (message: string) => {
+        if (json) {
+          actionState.warnings.push(message);
+        } else {
+          defaultRuntime.log(message);
+        }
       },
       fail: (message: string, hints?: string[]) => {
         actionState.failed.push({ message, hints });
@@ -130,111 +122,41 @@ vi.mock("../../commands/daemon-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../commands/daemon-runtime.js")>()),
   isGatewayDaemonRuntime: isGatewayDaemonRuntimeMock,
 }));
-
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => service,
 }));
-
 vi.mock("./response.js", () => ({
   buildDaemonServiceSnapshot: vi.fn(),
   installDaemonServiceAndEmit: installDaemonServiceAndEmitMock,
 }));
-
 const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 vi.mock("../../runtime.js", () => ({
   defaultRuntime,
 }));
-
-function expectFirstInstallPlanCallOmitsToken() {
-  expect("token" in readFirstInstallPlanArg()).toBe(false);
-}
-
-function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected fields object");
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(expectedValue);
-  }
-}
-
-function readFirstInstallPlanArg(): Record<string, unknown> {
+export function readFirstInstallPlanArg(): Record<string, unknown> {
   const [firstArg] = buildGatewayInstallPlanMock.mock.calls[0] ?? [];
   if (!firstArg) {
     throw new Error("Expected gateway install plan arg");
   }
   return firstArg as Record<string, unknown>;
 }
-
-function readFirstConfigWriteParams(): {
-  sourceConfig?: { gateway?: { mode?: string; auth?: { token?: string } } };
-} {
-  const [params] = replaceConfigFileMock.mock.calls[0] ?? [];
-  if (!params || typeof params !== "object") {
-    throw new Error("expected first config write params");
-  }
-  return params as { sourceConfig?: { gateway?: { mode?: string; auth?: { token?: string } } } };
-}
-
-function readFirstNodeStartupTlsEnvironmentArg(): Record<string, unknown> {
-  const [params] = resolveNodeStartupTlsEnvironmentMock.mock.calls[0] ?? [];
-  if (!params || typeof params !== "object") {
-    throw new Error("expected node startup TLS environment params");
-  }
-  return params as Record<string, unknown>;
-}
-
-function expectLastEmittedResult(result: string): void {
-  expectFields(actionState.emitted.at(-1), { result });
-}
-
-function mockResolvedGatewayTokenSecretRef(
-  token: SecretInput = { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
-) {
-  const config = { gateway: { mode: "local" as const, auth: { mode: "token" as const, token } } };
-  readConfigFileSnapshotMock.mockResolvedValue({
-    exists: true,
-    valid: true,
-    config,
-    sourceConfig: config,
-  });
-  resolveSecretRefValuesMock.mockResolvedValue(
-    new Map([["env:default:OPENCLAW_GATEWAY_TOKEN", "resolved-from-secretref"]]),
-  );
-}
-
-const { runDaemonInstall } = await import("./install.js");
+export const { runDaemonInstall } = await import("./install.js");
 const envSnapshot = captureFullEnv();
-
 export function setupInstallTests() {
   beforeEach(() => {
     pinSnapshotMock.mockReset().mockReturnValue({ revision: "empty", stored: false });
-    runExecMock.mockReset();
-    runExecMock.mockResolvedValue(nodeProbeOutput("26.8.1"));
-    resolveNodeStartupTlsEnvironmentMock.mockReset();
-    readConfigFileSnapshotMock.mockReset();
+    pinMigrationMock.mockReset().mockResolvedValue(undefined);
+    runExecMock.mockReset().mockResolvedValue(nodeProbeOutput("26.12.1"));
     resolveGatewayPortMock.mockClear();
     mockSystemAccountHome();
     replaceConfigFileMock.mockReset();
-    resolveGatewayAuthMock.mockReset();
-    resolveGatewayBindHostMock.mockReset();
-    resolveSecretRefValuesMock.mockReset();
-    randomTokenMock.mockReset();
-    buildGatewayInstallPlanMock.mockReset();
-    isGatewayDaemonRuntimeMock.mockReset();
-    installDaemonServiceAndEmitMock.mockReset();
-    service.isLoaded.mockReset();
-    service.stage.mockReset();
-    service.install.mockReset();
-    service.readDefinitionMutationCapability.mockReset();
-    service.readCommand.mockReset();
+    ensureConfigReadyMock.mockReset();
     resetRuntimeCapture();
-    actionState.warnings.length = 0;
-    actionState.emitted.length = 0;
-    actionState.failed.length = 0;
+    for (const messages of Object.values(actionState)) {
+      messages.length = 0;
+    }
 
-    readConfigFileSnapshotMock.mockResolvedValue({
+    readConfigFileSnapshotMock.mockReset().mockResolvedValue({
       exists: false,
       valid: true,
       config: {},
@@ -242,24 +164,23 @@ export function setupInstallTests() {
     });
     resolveGatewayPortMock.mockReturnValue(18789);
     delete process.env.OPENCLAW_NIX_MODE;
-    resolveGatewayAuthMock.mockReturnValue({
+    resolveGatewayAuthMock.mockReset().mockReturnValue({
       mode: "token",
       token: undefined,
       password: undefined,
       allowTailscale: false,
     });
-    resolveGatewayBindHostMock.mockResolvedValue("127.0.0.1");
-    resolveSecretRefValuesMock.mockResolvedValue(new Map());
-    randomTokenMock.mockReturnValue("generated-token");
-    buildGatewayInstallPlanMock.mockImplementation(createInstallPlanFixture);
-    isGatewayDaemonRuntimeMock.mockReturnValue(true);
-    installDaemonServiceAndEmitMock.mockResolvedValue(undefined);
-    service.isLoaded.mockResolvedValue(false);
-    service.stage.mockResolvedValue(undefined);
-    service.install.mockResolvedValue(undefined);
-    service.readDefinitionMutationCapability.mockResolvedValue({ kind: "writable" });
-    service.readCommand.mockResolvedValue(null);
-    resolveNodeStartupTlsEnvironmentMock.mockReturnValue({
+    resolveGatewayBindHostMock.mockReset().mockResolvedValue("127.0.0.1");
+    resolveSecretRefValuesMock.mockReset().mockResolvedValue(new Map());
+    randomTokenMock.mockReset().mockReturnValue("generated-token");
+    buildGatewayInstallPlanMock.mockReset().mockImplementation(createInstallPlanFixture);
+    isGatewayDaemonRuntimeMock.mockReset().mockReturnValue(true);
+    installDaemonServiceAndEmitMock.mockReset().mockResolvedValue(undefined);
+    service.isLoaded.mockReset().mockResolvedValue(false);
+    service.install.mockReset().mockResolvedValue(undefined);
+    service.readDefinitionMutationCapability.mockReset().mockResolvedValue({ kind: "writable" });
+    service.readCommand.mockReset().mockResolvedValue(null);
+    resolveNodeStartupTlsEnvironmentMock.mockReset().mockReturnValue({
       NODE_EXTRA_CA_CERTS: undefined,
       NODE_USE_SYSTEM_CA: undefined,
     });
@@ -271,29 +192,19 @@ export function setupInstallTests() {
     envSnapshot.restore();
   });
 }
-
 export {
   actionState,
   buildGatewayInstallPlanMock,
-  expectFields,
-  expectFirstInstallPlanCallOmitsToken,
-  expectLastEmittedResult,
+  ensureConfigReadyMock,
   installDaemonServiceAndEmitMock,
   isGatewayDaemonRuntimeMock,
-  mockResolvedGatewayTokenSecretRef,
-  randomTokenMock,
+  pinSnapshotMock,
+  pinMigrationMock,
   readConfigFileSnapshotMock,
-  readFirstConfigWriteParams,
-  readFirstInstallPlanArg,
-  readFirstNodeStartupTlsEnvironmentArg,
   replaceConfigFileMock,
   resolveGatewayAuthMock,
   resolveGatewayBindHostMock,
   resolveNodeStartupTlsEnvironmentMock,
-  resolveSecretRefValuesMock,
-  runDaemonInstall,
   runExecMock,
   service,
 };
-
-export { pinSnapshotMock };

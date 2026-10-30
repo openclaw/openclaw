@@ -1,16 +1,21 @@
+import { runOutsideRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
+import { createPendingPromiseTracker } from "../shared/pending-promises.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
+import { capturePreparedModelRuntimeLifetime } from "./prepared-model-runtime.lifecycle.js";
+import type { PreparedModelRuntimeStartup } from "./prepared-model-runtime.startup.js";
+import type { PreparedModelRuntimeRefreshOptions } from "./prepared-model-runtime.types.js";
+
 /** Publication scheduling may finish before acquisition; shutdown joins both. */
 export class PreparedModelRuntimePublicationQueue {
   #tail: Promise<void> = Promise.resolve();
-  readonly #pending = new Set<Promise<void>>();
+  readonly #pending = new Set<Promise<unknown>>();
+  #latestRefresh: { completion: Promise<void>; isCurrent: () => boolean } | undefined;
+
+  readonly track = createPendingPromiseTracker(this.#pending);
 
   enqueue(task: () => Promise<void>, release?: Promise<void>): Promise<void> {
     const previous = this.#tail;
-    const publication = previous.then(task);
-    this.#pending.add(publication);
-    const settled = () => {
-      this.#pending.delete(publication);
-    };
-    void publication.then(settled, settled);
+    const publication = this.track(previous.then(() => runOutsideRemoteModelCatalogSnapshot(task)));
     this.#tail = (
       release ? previous.then(() => Promise.race([publication, release])) : publication
     ).then(
@@ -20,7 +25,56 @@ export class PreparedModelRuntimePublicationQueue {
     return publication;
   }
 
+  admit(completion: Promise<void>, isCurrent: () => boolean) {
+    const refresh = { completion, isCurrent };
+    this.#latestRefresh = refresh;
+    return refresh;
+  }
+
+  complete(
+    publication: Promise<void>,
+    isCurrent: () => boolean,
+    options: Pick<PreparedModelRuntimeRefreshOptions, "joinSupersedingPublication">,
+    startup?: PreparedModelRuntimeStartup,
+  ): Promise<void> {
+    const assertLifetime = capturePreparedModelRuntimeLifetime();
+    const refresh = this.admit(publication, isCurrent);
+    // Join outside the queue so successors can run; startup bounds only this observer.
+    const completion = options.joinSupersedingPublication
+      ? (async () => {
+          let current = refresh;
+          for (;;) {
+            assertLifetime();
+            try {
+              await current.completion;
+            } catch (error) {
+              if (
+                !(error instanceof PreparedModelRuntimePublicationSupersededError) ||
+                !this.#latestRefresh ||
+                this.#latestRefresh === current
+              ) {
+                throw error;
+              }
+            }
+            assertLifetime();
+            if (this.#latestRefresh && this.#latestRefresh !== current) {
+              current = this.#latestRefresh;
+              continue;
+            }
+            if (!current.isCurrent()) {
+              throw new PreparedModelRuntimePublicationSupersededError(
+                "prepared model runtime publication was superseded without a current replacement refresh",
+              );
+            }
+            return;
+          }
+        })()
+      : publication;
+    return startup ? startup.wait(completion) : completion;
+  }
+
   async settle(): Promise<void> {
+    this.#latestRefresh = undefined;
     await Promise.allSettled(this.#pending);
   }
 }

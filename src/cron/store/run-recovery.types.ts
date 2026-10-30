@@ -1,22 +1,27 @@
-import type { serializeCronLoadError } from "./load-error.js";
-import type { CronRunReceiptRecoveryCandidate } from "./run-receipt-store.js";
+import type { CronConfig } from "../../config/types.cron.js";
+import type { CronNotificationIntent } from "../service/notification-intents.js";
+import type { CronJob } from "../types.js";
 
-export type CronRunRecoveryProposal = {
-  jobId: string;
-  queuedAtMs?: number;
-  runningAtMs?: number;
-  runningReceiptId?: string;
-  receipt?: CronRunReceiptRecoveryCandidate;
+export type CronRunRecoveryInput = {
+  storeKey: string;
+  nowMs: number;
+  cronConfig?: CronConfig;
+  failureRepairTimeoutMs?: number;
 };
 
-export type CronRunRecoveryWorkerOperations = {
-  "cron.proposeRunRecovery": {
-    input: {
-      storeKey: string;
-      proposal: Pick<CronRunRecoveryProposal, "jobId" | "queuedAtMs" | "runningAtMs">;
-    };
-    output:
-      | { ok: true; proposal: CronRunRecoveryProposal }
-      | { ok: false; error: ReturnType<typeof serializeCronLoadError> };
-  };
+export type CronRunRecoveryOutcome = {
+  jobs: CronJob[];
+  removedJobIds: string[];
+  interruptedRuns: InterruptedStartupRun[];
+  notifications: CronNotificationIntent[];
+  skipJobIds: string[];
+  logs: Array<{ level: "debug" | "info" | "warn" | "error"; fields: unknown; message?: string }>;
+};
+
+export type InterruptedStartupRun = {
+  jobId: string;
+  runId?: string;
+  runAtMs: number;
+  durationMs: number;
+  replacementAtMs?: number;
 };

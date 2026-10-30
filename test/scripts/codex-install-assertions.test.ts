@@ -55,6 +55,10 @@ function writeJson(filePath: string, value: unknown) {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+function patchJson(filePath: string, fields: Record<string, unknown>) {
+  writeJson(filePath, { ...JSON.parse(readFileSync(filePath, "utf8")), ...fields });
+}
+
 function writeAuthProfileStoreSqlite(stateDir: string) {
   const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
   mkdirSync(path.dirname(databasePath), { recursive: true });
@@ -92,132 +96,74 @@ function writeAuthProfileStoreSqlite(stateDir: string) {
   }
 }
 
-function runCodexOnDemandAssertions(root: string) {
-  return spawnSync(process.execPath, [CODEX_ON_DEMAND_ASSERTIONS_SCRIPT], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      HOME: path.join(root, "home"),
-      NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
-      OPENCLAW_CONFIG_PATH: path.join(root, "state", "openclaw.json"),
-      OPENCLAW_STATE_DIR: path.join(root, "state"),
-    },
-  });
-}
-
-function runCodexNpmPluginLiveAssertions(params: {
+type LiveAssertionOptions = {
   root: string;
-  marker: string;
-  sessionId: string;
-  modelRef: string;
-  bindingStoreContract?: "legacy-sidecar" | "plugin-kv";
-  sessionStoreContract?: "legacy-json" | "sqlite";
-}) {
-  return spawnSync(
-    process.execPath,
-    [
-      CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT,
-      "assert-agent-turn",
-      params.marker,
-      params.sessionId,
-      params.modelRef,
-    ],
-    {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        HOME: path.join(params.root, "home"),
-        NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
-        OPENCLAW_STATE_DIR: path.join(params.root, "state"),
-        OPENCLAW_CODEX_NPM_PLUGIN_BINDING_STORE_CONTRACT:
-          params.bindingStoreContract ?? "plugin-kv",
-        OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT: params.sessionStoreContract ?? "sqlite",
-      },
-    },
-  );
-}
-
-function runCodexNpmPluginLiveFollowthroughAssertions(params: {
-  root: string;
-  progressMarker: string;
-  completeMarker: string;
-  sessionId: string;
-  modelRef: string;
-  artifactPath: string;
-  inputPaths: string[];
   bindingStoreContract?: "legacy-sidecar" | "plugin-kv";
   sessionStoreContract?: "legacy-json" | "sqlite";
   assertionEnv?: Record<string, string>;
-}) {
-  return spawnSync(
-    process.execPath,
-    [
-      CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT,
-      "assert-followthrough",
-      params.progressMarker,
-      params.completeMarker,
-      params.sessionId,
-      params.modelRef,
-      params.artifactPath,
-      ...params.inputPaths,
-    ],
-    {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        HOME: path.join(params.root, "home"),
-        NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
-        OPENCLAW_STATE_DIR: path.join(params.root, "state"),
-        OPENCLAW_CODEX_NPM_PLUGIN_BINDING_STORE_CONTRACT:
-          params.bindingStoreContract ?? "plugin-kv",
-        OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT: params.sessionStoreContract ?? "sqlite",
-        ...params.assertionEnv,
-      },
-    },
-  );
-}
+};
 
-function runCodexNpmPluginLiveConfigure(root: string) {
-  return spawnSync(process.execPath, [CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT, "configure"], {
+function runAssertions(root: string, args: string[], env: NodeJS.ProcessEnv = {}) {
+  return spawnSync(process.execPath, args, {
     encoding: "utf8",
     env: {
       ...process.env,
       HOME: path.join(root, "home"),
       NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
-      OPENCLAW_CONFIG_PATH: path.join(root, "state", "openclaw.json"),
       OPENCLAW_STATE_DIR: path.join(root, "state"),
+      ...env,
     },
   });
 }
 
-function runCodexNpmPluginLivePluginAssertions(root: string) {
-  return spawnSync(
-    process.execPath,
-    [CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT, "assert-plugin", "npm:@openclaw/codex"],
-    {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        HOME: path.join(root, "home"),
-        NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
-        OPENCLAW_CONFIG_PATH: path.join(root, "state", "openclaw.json"),
-        OPENCLAW_STATE_DIR: path.join(root, "state"),
-      },
-    },
+function runCodexInstallAssertions(root: string, command?: string, ...args: string[]) {
+  return runAssertions(
+    root,
+    command
+      ? [CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT, command, ...args]
+      : [CODEX_ON_DEMAND_ASSERTIONS_SCRIPT],
+    { OPENCLAW_CONFIG_PATH: path.join(root, "state", "openclaw.json") },
   );
 }
 
-function runCodexNpmPluginLiveDependencyAssertions(root: string) {
-  return spawnSync(process.execPath, [CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT, "assert-npm-deps"], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      HOME: path.join(root, "home"),
-      NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
-      OPENCLAW_CONFIG_PATH: path.join(root, "state", "openclaw.json"),
-      OPENCLAW_STATE_DIR: path.join(root, "state"),
-    },
+function runLiveAssertions(params: LiveAssertionOptions, args: string[]) {
+  return runAssertions(params.root, [CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT, ...args], {
+    OPENCLAW_CODEX_NPM_PLUGIN_BINDING_STORE_CONTRACT: params.bindingStoreContract ?? "plugin-kv",
+    OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT: params.sessionStoreContract ?? "sqlite",
+    ...params.assertionEnv,
   });
+}
+
+function runCodexNpmPluginLiveAssertions(
+  params: LiveAssertionOptions & { marker: string; sessionId: string; modelRef: string },
+) {
+  return runLiveAssertions(params, [
+    "assert-agent-turn",
+    params.marker,
+    params.sessionId,
+    params.modelRef,
+  ]);
+}
+
+function runCodexNpmPluginLiveFollowthroughAssertions(
+  params: LiveAssertionOptions & {
+    progressMarker: string;
+    completeMarker: string;
+    sessionId: string;
+    modelRef: string;
+    artifactPath: string;
+    inputPaths: string[];
+  },
+) {
+  return runLiveAssertions(params, [
+    "assert-followthrough",
+    params.progressMarker,
+    params.completeMarker,
+    params.sessionId,
+    params.modelRef,
+    params.artifactPath,
+    ...params.inputPaths,
+  ]);
 }
 
 function writeCodexBindingStateSqlite(params: {
@@ -638,6 +584,7 @@ function createCodexInstallFixture(root: string) {
   });
   writeAuthProfileStoreSqlite(stateDir);
   return {
+    installPath,
     pluginPackageJson,
     openAiCodexPackageJson,
     platformPackageJson,
@@ -692,7 +639,7 @@ describe("Codex install helpers", () => {
   it("configures the canonical OpenAI model for the Codex runtime by default", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-npm-configure-");
 
-    const result = runCodexNpmPluginLiveConfigure(root);
+    const result = runCodexInstallAssertions(root, "configure");
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toBe("");
@@ -717,17 +664,7 @@ describe("Codex install helpers", () => {
 
   it("accepts the canonical harness-only Codex plugin registration", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-harness-registration-");
-    createCodexInstallFixture(root);
-    const installPath = path.join(
-      root,
-      "state",
-      "npm",
-      "projects",
-      "codex",
-      "node_modules",
-      "@openclaw",
-      "codex",
-    );
+    const { installPath } = createCodexInstallFixture(root);
     writePluginInstallIndexForE2E(
       {
         installRecords: {
@@ -757,7 +694,7 @@ describe("Codex install helpers", () => {
       diagnostics: [],
     });
 
-    const result = runCodexNpmPluginLivePluginAssertions(root);
+    const result = runCodexInstallAssertions(root, "assert-plugin", "npm:@openclaw/codex");
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toBe("");
@@ -814,7 +751,7 @@ describe("Codex install helpers", () => {
       agentDatabase.close();
     }
 
-    const result = runCodexOnDemandAssertions(root);
+    const result = runCodexInstallAssertions(root);
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toBe("");
@@ -834,7 +771,7 @@ describe("Codex install helpers", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-npm-deps-");
     createCodexInstallFixture(root);
 
-    const result = runCodexNpmPluginLiveDependencyAssertions(root);
+    const result = runCodexInstallAssertions(root, "assert-npm-deps");
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain(`[codex-release] packageVersion=${CODEX_VERSION}`);
@@ -845,55 +782,31 @@ describe("Codex install helpers", () => {
   });
 
   it.each([
-    ["on-demand", runCodexOnDemandAssertions],
-    ["npm-live", runCodexNpmPluginLiveDependencyAssertions],
-  ] as const)("rejects %s plugin pins that differ from the candidate", (_lane, runAssertions) => {
+    [CODEX_VERSION, "0.153.0"],
+    [undefined, undefined],
+    ["^0.152.1", "^0.152.1"],
+  ])("rejects candidate pin %s paired with plugin pin %s", (candidatePin, pluginPin) => {
     const root = makeTempDir(tempDirs, "openclaw-codex-candidate-pin-");
     const fixture = createCodexInstallFixture(root);
-    const pluginPackage = JSON.parse(readFileSync(fixture.pluginPackageJson, "utf8"));
-    pluginPackage.dependencies["@openai/codex"] = "0.153.0";
-    writeJson(fixture.pluginPackageJson, pluginPackage);
-
-    const result = runAssertions(root);
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(
-      `@openclaw/codex must depend on @openai/codex ${CODEX_VERSION}; found 0.153.0`,
-    );
-  });
-
-  it.each([undefined, "^0.152.1", "latest"])("rejects a non-exact candidate pin %s", (pin) => {
-    const root = makeTempDir(tempDirs, "openclaw-codex-candidate-invalid-pin-");
-    const fixture = createCodexInstallFixture(root);
     writeJson("/tmp/openclaw-candidate-codex-package.json", {
-      dependencies: { "@openai/codex": pin },
+      dependencies: { "@openai/codex": candidatePin },
     });
-    const pluginPackage = JSON.parse(readFileSync(fixture.pluginPackageJson, "utf8"));
-    pluginPackage.dependencies["@openai/codex"] = pin;
-    writeJson(fixture.pluginPackageJson, pluginPackage);
+    patchJson(fixture.pluginPackageJson, { dependencies: { "@openai/codex": pluginPin } });
 
-    const result = runCodexOnDemandAssertions(root);
+    const result = runCodexInstallAssertions(root);
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(
-      `@openclaw/codex must depend on @openai/codex ${String(pin)}; found ${String(pin)}`,
+      `@openclaw/codex must depend on @openai/codex ${String(candidatePin)}; found ${String(pluginPin)}`,
     );
   });
 
   it("rejects an installed @openai/codex package outside the exact release version", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-on-demand-package-version-");
     const fixture = createCodexInstallFixture(root);
-    writeJson(fixture.openAiCodexPackageJson, {
-      name: "@openai/codex",
-      version: "0.148.0",
-      bin: { codex: "bin/codex.js" },
-      optionalDependencies: {
-        [fixture.target.alias]:
-          `npm:@openai/codex@${CODEX_VERSION}-${process.platform}-${process.arch}`,
-      },
-    });
+    patchJson(fixture.openAiCodexPackageJson, { version: "0.148.0" });
 
-    const result = runCodexOnDemandAssertions(root);
+    const result = runCodexInstallAssertions(root);
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(
@@ -908,7 +821,7 @@ describe("Codex install helpers", () => {
       mode: 0o755,
     });
 
-    const result = runCodexOnDemandAssertions(root);
+    const result = runCodexInstallAssertions(root);
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(
@@ -921,7 +834,7 @@ describe("Codex install helpers", () => {
     const fixture = createCodexInstallFixture(root);
     rmSync(path.dirname(fixture.platformPackageJson), { force: true, recursive: true });
 
-    const result = runCodexOnDemandAssertions(root);
+    const result = runCodexInstallAssertions(root);
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(`missing current Codex platform alias ${fixture.target.alias}`);
@@ -930,14 +843,11 @@ describe("Codex install helpers", () => {
   it("rejects the wrong current-platform Codex alias version", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-on-demand-platform-version-");
     const fixture = createCodexInstallFixture(root);
-    writeJson(fixture.platformPackageJson, {
-      name: "@openai/codex",
+    patchJson(fixture.platformPackageJson, {
       version: `0.148.0-${process.platform}-${process.arch}`,
-      os: [fixture.target.os],
-      cpu: [fixture.target.cpu],
     });
 
-    const result = runCodexOnDemandAssertions(root);
+    const result = runCodexInstallAssertions(root);
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(
@@ -945,41 +855,27 @@ describe("Codex install helpers", () => {
     );
   });
 
-  it("rejects current-platform Codex alias OS and CPU metadata drift", () => {
-    const root = makeTempDir(tempDirs, "openclaw-codex-on-demand-platform-manifest-");
-    const fixture = createCodexInstallFixture(root);
-    writeJson(fixture.platformPackageJson, {
-      name: "@openai/codex",
-      version: `${CODEX_VERSION}-${process.platform}-${process.arch}`,
-      os: ["unsupported-os"],
-      cpu: [fixture.target.cpu],
-    });
+  it.each(["os", "cpu"] as const)(
+    "rejects current-platform Codex alias %s metadata drift",
+    (field) => {
+      const root = makeTempDir(tempDirs, "openclaw-codex-on-demand-platform-manifest-");
+      const fixture = createCodexInstallFixture(root);
+      patchJson(fixture.platformPackageJson, { [field]: [`unsupported-${field}`] });
 
-    const osResult = runCodexOnDemandAssertions(root);
-    expect(osResult.status).not.toBe(0);
-    expect(osResult.stderr).toContain(
-      `installed ${fixture.target.alias} os mismatch: expected [${fixture.target.os}]`,
-    );
-
-    writeJson(fixture.platformPackageJson, {
-      name: "@openai/codex",
-      version: `${CODEX_VERSION}-${process.platform}-${process.arch}`,
-      os: [fixture.target.os],
-      cpu: ["unsupported-cpu"],
-    });
-    const cpuResult = runCodexOnDemandAssertions(root);
-    expect(cpuResult.status).not.toBe(0);
-    expect(cpuResult.stderr).toContain(
-      `installed ${fixture.target.alias} cpu mismatch: expected [${fixture.target.cpu}]`,
-    );
-  });
+      const result = runCodexInstallAssertions(root);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        `installed ${fixture.target.alias} ${field} mismatch: expected [${fixture.target[field]}]`,
+      );
+    },
+  );
 
   it("rejects on-demand fixtures without the canonical SQLite install record", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-on-demand-no-index-");
     createCodexInstallFixture(root);
     rmSync(path.join(root, "state", "state", "openclaw.sqlite"), { force: true });
 
-    const result = runCodexOnDemandAssertions(root);
+    const result = runCodexInstallAssertions(root);
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("missing codex install record");
@@ -994,18 +890,18 @@ describe("Codex install helpers", () => {
       "utf8",
     );
 
-    const result = runCodexOnDemandAssertions(root);
+    const result = runCodexInstallAssertions(root);
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/SyntaxError:.*JSON/u);
   });
 
-  it("accepts SQLite-backed session and Codex binding state in the npm live assertion", () => {
+  it.each([
+    ["SQLite-backed session and binding state", createCodexNpmPluginLiveFixture],
+    ["frozen-target JSON session and sidecar binding", createLegacyCodexNpmPluginLiveFixture],
+  ] as const)("accepts %s in the npm live assertion", (_label, createFixture) => {
     const root = makeTempDir(tempDirs, "openclaw-codex-npm-live-");
-    const fixture = createCodexNpmPluginLiveFixture(root);
-
-    const result = runCodexNpmPluginLiveAssertions(fixture);
-
+    const result = runCodexNpmPluginLiveAssertions(createFixture(root));
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
   });
@@ -1023,31 +919,70 @@ describe("Codex install helpers", () => {
     },
   );
 
-  it("rejects an extra failed-mutation warning even after both replies and a valid artifact", () => {
-    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-warning-");
-    const fixture = createCodexNpmPluginLiveFollowthroughFixture({
-      root,
-      replyTexts: [
-        "OPENCLAW-CODEX-NPM-PLUGIN-LIVE-OK-FOLLOWTHROUGH-PROGRESS",
-        "OPENCLAW-CODEX-NPM-PLUGIN-LIVE-OK-FOLLOWTHROUGH-COMPLETE",
-        "⚠️ 🛠️ Bash failed: `run python inline script (heredoc)` (agent)",
-      ],
-    });
-
+  it.each<{
+    name: string;
+    options: Omit<Parameters<typeof createCodexNpmPluginLiveFollowthroughFixture>[0], "root">;
+    error?: string;
+  }>([
+    {
+      name: "rejects an extra failed-mutation warning even after both replies and a valid artifact",
+      options: {
+        replyTexts: [
+          "OPENCLAW-CODEX-NPM-PLUGIN-LIVE-OK-FOLLOWTHROUGH-PROGRESS",
+          "OPENCLAW-CODEX-NPM-PLUGIN-LIVE-OK-FOLLOWTHROUGH-COMPLETE",
+          "⚠️ 🛠️ Bash failed: `run python inline script (heredoc)` (agent)",
+        ],
+      },
+      error: "expected exact progress and completion replies",
+    },
+    {
+      name: "accepts settled failed work before a later successful artifact write",
+      options: { readFails: true },
+    },
+    {
+      name: "rejects a Codex live turn that stops after its progress message",
+      options: { replyTexts: ["OPENCLAW-CODEX-NPM-PLUGIN-LIVE-OK-FOLLOWTHROUGH-PROGRESS"] },
+      error: "expected exact progress and completion replies",
+    },
+    {
+      name: "rejects a Codex live turn whose follow-through artifact is incomplete",
+      options: { artifactText: "hidden-1\n" },
+      error: "unexpected Codex follow-through artifact",
+    },
+    {
+      name: "rejects workspace work outside the progress and completion messages",
+      options: { workPlacement: "before-progress" },
+      error: "expected progress to be the first completed tool call in its turn",
+    },
+    {
+      name: "rejects workspace work issued before progress delivery completes",
+      options: { workPlacement: "before-progress-result" },
+      error: "expected progress to be the first completed tool call in its turn",
+    },
+    {
+      name: "rejects completion sent before the artifact write succeeds",
+      options: { workPlacement: "write-result-after-completion" },
+      error: "expected all workspace work to settle before completion",
+    },
+    {
+      name: "accepts a terminal completion message without the optional final marker",
+      options: { messageFinals: [undefined, undefined] },
+    },
+    {
+      name: "accepts explicit progress and completion final controls",
+      options: { messageFinals: [false, true] },
+    },
+  ])("$name", ({ options, error }) => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-");
+    const fixture = createCodexNpmPluginLiveFollowthroughFixture({ root, ...options });
     const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("expected exact progress and completion replies");
-  });
-
-  it("accepts settled failed work before a later successful artifact write", () => {
-    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-recovered-work-");
-    const fixture = createCodexNpmPluginLiveFollowthroughFixture({ root, readFails: true });
-
-    const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
+    if (error) {
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(error);
+    } else {
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+    }
   });
 
   it.each(
@@ -1089,66 +1024,6 @@ describe("Codex install helpers", () => {
     },
   );
 
-  it("rejects a Codex live turn that stops after its progress message", () => {
-    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-progress-only-");
-    const fixture = createCodexNpmPluginLiveFollowthroughFixture({
-      root,
-      replyTexts: ["OPENCLAW-CODEX-NPM-PLUGIN-LIVE-OK-FOLLOWTHROUGH-PROGRESS"],
-    });
-
-    const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("expected exact progress and completion replies");
-  });
-
-  it("rejects a Codex live turn whose follow-through artifact is incomplete", () => {
-    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-incomplete-");
-    const fixture = createCodexNpmPluginLiveFollowthroughFixture({
-      root,
-      artifactText: "hidden-1\n",
-    });
-
-    const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("unexpected Codex follow-through artifact");
-  });
-
-  it("rejects workspace work outside the progress and completion messages", () => {
-    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-work-order-");
-    const fixture = createCodexNpmPluginLiveFollowthroughFixture({
-      root,
-      workPlacement: "before-progress",
-    });
-
-    const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(
-      "expected progress to be the first completed tool call in its turn",
-    );
-  });
-
-  it.each(["sqlite", "legacy-json"] as const)(
-    "rejects workspace work issued before progress delivery completes with the %s session contract",
-    (sessionStoreContract) => {
-      const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-batched-work-");
-      const fixture = createCodexNpmPluginLiveFollowthroughFixture({
-        root,
-        sessionStoreContract,
-        workPlacement: "before-progress-result",
-      });
-
-      const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
-
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain(
-        "expected progress to be the first completed tool call in its turn",
-      );
-    },
-  );
-
   it("rejects a malformed legacy follow-through transcript", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-legacy-malformed-");
     const fixture = createCodexNpmPluginLiveFollowthroughFixture({
@@ -1162,45 +1037,6 @@ describe("Codex install helpers", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("invalid OpenClaw legacy transcript event");
-  });
-
-  it("rejects completion sent before the artifact write succeeds", () => {
-    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-pending-write-");
-    const fixture = createCodexNpmPluginLiveFollowthroughFixture({
-      root,
-      workPlacement: "write-result-after-completion",
-    });
-
-    const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("expected all workspace work to settle before completion");
-  });
-
-  it("accepts a terminal completion message without the optional final marker", () => {
-    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-legacy-completion-");
-    const fixture = createCodexNpmPluginLiveFollowthroughFixture({
-      root,
-      messageFinals: [undefined, undefined],
-    });
-
-    const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-  });
-
-  it("accepts explicit progress and completion final controls", () => {
-    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-explicit-finals-");
-    const fixture = createCodexNpmPluginLiveFollowthroughFixture({
-      root,
-      messageFinals: [false, true],
-    });
-
-    const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
   });
 
   it.each([
@@ -1219,16 +1055,6 @@ describe("Codex install helpers", () => {
     expect(result.stderr).toContain(
       "expected ordered message sends with an optional final completion marker",
     );
-  });
-
-  it("accepts the explicit frozen-target JSON session and sidecar binding contract", () => {
-    const root = makeTempDir(tempDirs, "openclaw-codex-npm-live-legacy-");
-    const fixture = createLegacyCodexNpmPluginLiveFixture(root);
-
-    const result = runCodexNpmPluginLiveAssertions(fixture);
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
   });
 
   it("keeps current targets fail-closed when the SQLite session database is missing", () => {
@@ -1264,7 +1090,7 @@ describe("Codex install helpers", () => {
       recursive: true,
     });
 
-    const result = runCodexOnDemandAssertions(root);
+    const result = runCodexInstallAssertions(root);
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("missing @openai/codex dependency under managed npm root");
@@ -1272,23 +1098,10 @@ describe("Codex install helpers", () => {
 
   it("rejects on-demand fixtures missing the managed Codex executable", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-on-demand-missing-bin-");
-    createCodexInstallFixture(root);
-    rmSync(
-      path.join(
-        root,
-        "state",
-        "npm",
-        "projects",
-        "codex",
-        "node_modules",
-        "@openai",
-        "codex",
-        "bin",
-      ),
-      { force: true, recursive: true },
-    );
+    const { codexBin } = createCodexInstallFixture(root);
+    rmSync(path.dirname(codexBin), { force: true, recursive: true });
 
-    const result = runCodexOnDemandAssertions(root);
+    const result = runCodexInstallAssertions(root);
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("missing managed Codex binary:");
@@ -1296,26 +1109,14 @@ describe("Codex install helpers", () => {
 
   it("rejects a present managed Codex wrapper when its native executable is unavailable", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-on-demand-broken-native-");
-    createCodexInstallFixture(root);
-    const codexBin = path.join(
-      root,
-      "state",
-      "npm",
-      "projects",
-      "codex",
-      "node_modules",
-      "@openai",
-      "codex",
-      "bin",
-      "codex.js",
-    );
+    const { codexBin } = createCodexInstallFixture(root);
     writeFileSync(
       codexBin,
       '#!/usr/bin/env node\nconsole.error("Missing optional dependency @openai/codex-linux-x64");\nprocess.exit(1);\n',
       { mode: 0o755 },
     );
 
-    const result = runCodexOnDemandAssertions(root);
+    const result = runCodexInstallAssertions(root);
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("managed Codex --version failed (exit status 1)");

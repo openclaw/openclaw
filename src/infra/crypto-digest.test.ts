@@ -3,7 +3,6 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
-  sha256Base64,
   sha256Base64Url,
   sha256Base64UrlPrefix,
   sha256File,
@@ -21,13 +20,11 @@ describe("crypto digest helpers", () => {
     expect(sha256Hex(input)).toBe(
       "75781ac975ff76899629e996d8e96aa5e89db77315473d8b3281cb8aa700b2e6",
     );
-    expect(sha256Base64(input)).toBe("dXgayXX/domWKemW2Olqpeidt3MVRz2LMoHLiqcAsuY=");
     expect(sha256Base64Url(input)).toBe("dXgayXX_domWKemW2Olqpeidt3MVRz2LMoHLiqcAsuY");
   });
 
   it("hashes arbitrary bytes without text decoding", () => {
     expect(sha256Hex(HOSTILE_BYTES)).toBe(HOSTILE_BYTES_SHA256);
-    expect(sha256Base64(HOSTILE_BYTES)).toBe("vYi9pIAlu894cS0f+JtVscyhDDqbNsJ1rzUPUrWYeQI=");
   });
 
   it("returns an exact hexadecimal prefix", () => {

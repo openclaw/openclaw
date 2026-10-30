@@ -19,6 +19,29 @@ vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: channelPluginMocks.getChannelPlugin,
 }));
 
+function expectCapabilities(
+  channelId: string,
+  expected: readonly [
+    dmAllowFromMode: string,
+    groupModel: string,
+    groupAllowFromFallbackToAllowFrom: boolean,
+    warnOnEmptyGroupSenderAllowlist: boolean,
+  ],
+) {
+  const [
+    dmAllowFromMode,
+    groupModel,
+    groupAllowFromFallbackToAllowFrom,
+    warnOnEmptyGroupSenderAllowlist,
+  ] = expected;
+  expect(getDoctorChannelCapabilities(channelId)).toEqual({
+    dmAllowFromMode,
+    groupModel,
+    groupAllowFromFallbackToAllowFrom,
+    warnOnEmptyGroupSenderAllowlist,
+  });
+}
+
 describe("doctor channel capabilities", () => {
   beforeEach(() => {
     channelPluginMocks.getBundledChannelPlugin.mockReset().mockReturnValue(undefined);
@@ -26,12 +49,7 @@ describe("doctor channel capabilities", () => {
   });
 
   it("returns canonical top-level route semantics from googlechat plugin metadata", () => {
-    expect(getDoctorChannelCapabilities("googlechat")).toEqual({
-      dmAllowFromMode: "topOnly",
-      groupModel: "route",
-      groupAllowFromFallbackToAllowFrom: false,
-      warnOnEmptyGroupSenderAllowlist: false,
-    });
+    expectCapabilities("googlechat", ["topOnly", "route", false, false]);
   });
 
   it("retains root and account Google Chat DM-policy safety warnings", () => {
@@ -79,91 +97,79 @@ describe("doctor channel capabilities", () => {
   });
 
   it("returns Slack route semantics without loading its channel plugin", () => {
-    expect(getDoctorChannelCapabilities("slack")).toEqual({
-      dmAllowFromMode: "topOnly",
-      groupModel: "route",
-      groupAllowFromFallbackToAllowFrom: false,
-      warnOnEmptyGroupSenderAllowlist: false,
-    });
+    expectCapabilities("slack", ["topOnly", "route", false, false]);
   });
 
   it("returns Discord route semantics without loading its channel plugin", () => {
-    expect(getDoctorChannelCapabilities("discord")).toEqual({
-      dmAllowFromMode: "topOnly",
-      groupModel: "route",
-      groupAllowFromFallbackToAllowFrom: false,
-      warnOnEmptyGroupSenderAllowlist: false,
-    });
+    expectCapabilities("discord", ["topOnly", "route", false, false]);
     expect(channelPluginMocks.getChannelPlugin).not.toHaveBeenCalled();
     expect(channelPluginMocks.getBundledChannelPlugin).not.toHaveBeenCalled();
   });
 
+  it.each(["telegram"])(
+    "returns %s sender semantics without loading its channel plugin",
+    (channelId) => {
+      expectCapabilities(channelId, ["topOnly", "sender", true, true]);
+      expect(channelPluginMocks.getChannelPlugin).not.toHaveBeenCalled();
+      expect(channelPluginMocks.getBundledChannelPlugin).not.toHaveBeenCalled();
+    },
+  );
+
   it("returns sender-scoped group semantics for line without a DM allowlist fallback", () => {
-    expect(getDoctorChannelCapabilities("line")).toEqual({
-      dmAllowFromMode: "topOnly",
-      groupModel: "sender",
-      groupAllowFromFallbackToAllowFrom: false,
-      warnOnEmptyGroupSenderAllowlist: true,
-    });
+    expectCapabilities("line", ["topOnly", "sender", false, true]);
   });
 
   it("returns capability overrides from matrix plugin metadata", () => {
-    expect(getDoctorChannelCapabilities("matrix")).toEqual({
-      dmAllowFromMode: "nestedOnly",
-      groupModel: "sender",
-      groupAllowFromFallbackToAllowFrom: false,
-      warnOnEmptyGroupSenderAllowlist: true,
-    });
+    expectCapabilities("matrix", ["nestedOnly", "sender", false, true]);
   });
 
   it("returns hybrid group semantics for zalouser", () => {
-    expect(getDoctorChannelCapabilities("zalouser")).toEqual({
-      dmAllowFromMode: "topOnly",
-      groupModel: "hybrid",
-      groupAllowFromFallbackToAllowFrom: false,
-      warnOnEmptyGroupSenderAllowlist: false,
-    });
+    expectCapabilities("zalouser", ["topOnly", "hybrid", false, false]);
   });
 
   it("preserves empty sender allowlist warnings for msteams hybrid routing", () => {
-    expect(getDoctorChannelCapabilities("msteams")).toEqual({
-      dmAllowFromMode: "topOnly",
-      groupModel: "hybrid",
-      groupAllowFromFallbackToAllowFrom: true,
-      warnOnEmptyGroupSenderAllowlist: true,
-    });
+    expectCapabilities("msteams", ["topOnly", "hybrid", true, true]);
   });
 
   it("falls back conservatively for unknown external channels", () => {
-    expect(getDoctorChannelCapabilities("external-demo")).toEqual({
-      dmAllowFromMode: "topOnly",
-      groupModel: "sender",
-      groupAllowFromFallbackToAllowFrom: true,
-      warnOnEmptyGroupSenderAllowlist: true,
-    });
+    expectCapabilities("external-demo", ["topOnly", "sender", true, true]);
   });
 
-  it("falls back conservatively when channel plugin resolution throws", () => {
+  it("falls back conservatively when channel plugin resolution throws", async () => {
     channelPluginMocks.getChannelPlugin.mockImplementation(() => {
       throw new Error("missing generated bundled module");
     });
 
-    expect(resolveDoctorChannelAccountIds("telegram", {}, [])).toBeUndefined();
+    expect(await resolveDoctorChannelAccountIds("telegram", {}, [])).toBeUndefined();
   });
 
-  it("resolves configured and runtime account ids through plugin semantics", () => {
-    channelPluginMocks.getChannelPlugin.mockReturnValue({
-      config: {
-        listAccountIds: () => ["default", "Work"],
-        resolveAccount: (_cfg: unknown, accountId?: string | null) => ({
-          accountId: accountId === "Work" ? "work" : accountId,
-        }),
-      },
-    } as never);
+  it.each([false, true])(
+    "resolves account ids through plugin semantics (async: %s)",
+    async (asyncResolution) => {
+      const resolveAccount = (_cfg: unknown, accountId?: string | null) => ({
+        accountId: accountId === "Work" ? "work" : accountId,
+      });
+      channelPluginMocks.getChannelPlugin.mockReturnValue({
+        config: {
+          listAccountIds: () => ["default", "Work"],
+          resolveAccount: asyncResolution
+            ? () => {
+                throw new Error("legacy account resolution");
+              }
+            : resolveAccount,
+          ...(asyncResolution
+            ? {
+                resolveAccountAsync: async (cfg: unknown, accountId?: string | null) =>
+                  resolveAccount(cfg, accountId),
+              }
+            : {}),
+        },
+      } as never);
 
-    expect(resolveDoctorChannelAccountIds("signal", {}, ["Work"])).toEqual({
-      configured: ["work"],
-      runtime: ["default", "work"],
-    });
-  });
+      expect(await resolveDoctorChannelAccountIds("signal", {}, ["Work"])).toEqual({
+        configured: ["work"],
+        runtime: ["default", "work"],
+      });
+    },
+  );
 });

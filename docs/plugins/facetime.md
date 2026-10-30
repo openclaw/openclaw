@@ -27,7 +27,7 @@ developer-tools access, or macOS privacy permissions automatically.
 ## Requirements
 
 - An Apple Silicon Mac running macOS 14.4 or later.
-- OpenClaw 2026.9.4 or later.
+- The current OpenClaw host release, matching the bundled plugin.
 - FaceTime signed in to your Apple Account on the Gateway Mac.
 - Full Xcode installed at `/Applications/Xcode.app`.
 - The FaceTime plugin and matching signed native companion.
@@ -36,6 +36,10 @@ developer-tools access, or macOS privacy permissions automatically.
 
 Everyone on a call must consent to having their audio processed by the voice
 provider.
+
+Keep calls one-to-one. The configured handle authorizes the call; the integration
+does not authenticate each speaker or check the membership of a group call. Do
+not add other participants to a call with agent tool access.
 
 ## Install the plugin and native companion
 
@@ -86,6 +90,10 @@ and add `facetime` to your existing `plugins.allow` list if you use one.
 The example selects OpenAI for realtime speech. Voice credentials are separate
 from your text agent's login. Configure credentials supported by the selected
 realtime provider; a text-agent subscription alone may not provide voice access.
+
+Provider authentication uses the agent selected by `realtime.sessionKey`. For
+OpenAI, that agent's API-key auth profile can supply voice credentials when no
+plugin-specific API key is configured.
 
 For an environment-backed OpenAI API key, merge this additional configuration:
 
@@ -158,8 +166,8 @@ openclaw gateway restart
 openclaw gateway call facetime.setup --json
 ```
 
-Setup reports required actions and can start the native helper, open the call
-apps, and attach the helper. It does not dial a call.
+Setup reports required actions and can start the native helper, open FaceTime,
+and attach the helper. It does not dial a call.
 
 ### Enable developer-tools access
 
@@ -171,7 +179,7 @@ sudo /usr/sbin/DevToolsSecurity -enable
 
 ### Allow debugger attachment
 
-The native helper needs to attach to FaceTime and Phone. If setup reports that
+The native helper needs to attach to FaceTime. If setup reports that
 SIP debugging restrictions block attachment:
 
 1. Shut down the Mac.
@@ -219,7 +227,7 @@ built driver. If installation fails, follow the reported error or the
 
 ### Select the call audio devices
 
-In FaceTime, and in Phone when it handles FaceTime Audio, select:
+In FaceTime, select:
 
 - **Microphone:** `OpenClaw-Mic`.
 - **Output:** physical speakers or headphones.
@@ -282,6 +290,11 @@ Wait until status shows no active or pending call before starting another.
 A hangup acknowledgement means the request was sent, not that the call has
 already ended.
 
+A pending outbound dial reserves the call slot, so incoming calls are not
+automatically answered until it finishes or its cancellation is confirmed. If a
+helper disconnects or reports an uncertain dial outcome, the pending state stays
+visible while OpenClaw reconciles the call.
+
 ## Update the integration
 
 After updating the plugin and native companion, check `facetime.driverStatus`.
@@ -305,15 +318,15 @@ openclaw plugins disable facetime
 ```
 
 Follow [FaceTime recovery and removal](/plugins/facetime-recovery) to restart the
-Apple call apps, check that the audio devices are removed, and restore SIP.
+FaceTime, check that the audio devices are removed, and restore SIP.
 
 ## Limits
 
 - One managed call at a time.
 - FaceTime calls only. Cellular, Wi-Fi Calling/PSTN, emergency, and unrecognized
   call types are rejected, even when the number matches an owner handle.
-- Start with FaceTime Audio. Video and Phone-hosted FaceTime Audio remain
-  experimental and may behave differently across macOS versions.
+- Start with FaceTime Audio in FaceTime.app. Video remains experimental and may
+  behave differently across macOS versions.
 - Requests that use the agent's tools can take longer than ordinary voice replies.
 - There is no FaceTime-specific realtime model fallback; provider behavior and
   defaults come from the selected realtime provider.

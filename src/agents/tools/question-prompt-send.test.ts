@@ -13,7 +13,7 @@ vi.mock("../../channels/message/runtime.js", () => ({
     result.status === "sent" || result.status === "partial_failed",
 }));
 
-import { createChannelQuestionPromptDelivery } from "./question-prompt-send.js";
+import { createChannelQuestionPromptDelivery } from "./channel-question-prompt-delivery.js";
 
 const cfg = {} as OpenClawConfig;
 const receipt = {

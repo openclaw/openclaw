@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import {
   ApplicationCommandOptionType,
   ChannelType,
@@ -5,32 +6,58 @@ import {
   InteractionResponseType,
   InteractionType,
 } from "discord-api-types/v10";
+import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
+import { withRegisteredChannelIngress } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
+import * as commandStatus from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as runtimeConfig from "openclaw/plugin-sdk/runtime-config-snapshot";
 import * as sessionStore from "openclaw/plugin-sdk/session-store-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { discordPlugin } from "../channel.js";
 import {
   attachRestMock,
   createInternalInteractionPayload,
   createInternalComponentInteractionPayload,
   createInternalTestClient,
 } from "../internal/test-builders.test-support.js";
+import { getDiscordRuntime, setDiscordRuntime } from "../runtime.js";
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { createDiscordLivePolicyReader } from "./live-policy.js";
 import { clearDiscordChannelInfoCacheForTest } from "./message-channel-info.test-support.js";
 import * as pickerPreferences from "./model-picker-preferences.js";
 import * as pickerState from "./model-picker.state.js";
 import { createModelsProviderData } from "./model-picker.test-utils.js";
+import { nativeCommandContext } from "./native-command.dispatch.test-support.js";
 import {
   createDiscordModelPickerFallbackButton,
   createDiscordNativeCommand,
 } from "./native-command.js";
-import { nativeCommandRuntime } from "./native-command.runtime.js";
-import { createNoopThreadBindingManager } from "./thread-bindings.js";
+
+// Keep transcript persistence outside this interaction boundary fixture.
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof SessionTranscriptRuntime>()),
+  recordDeliveredCommandExchange: vi.fn(async () => ({ ok: true })),
+}));
 
 const GUILD = "100000000000000001";
 const CHANNEL = "100000000000000002";
 const THREAD = "100000000000000003";
 const USER = "100000000000000004";
+
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const root of tempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(root);
+    }
+    cleanup();
+  }),
+);
 
 function createConfig(): OpenClawConfig {
   return {
@@ -45,9 +72,14 @@ function createConfig(): OpenClawConfig {
   };
 }
 
-function createHarness() {
-  const cfg = createConfig();
+function createHarness(
+  cfg = createConfig(),
+  dispatchReplyFromConfig?: Parameters<
+    typeof createDiscordNativeCommand
+  >[0]["dispatchReplyFromConfig"],
+) {
   let currentConfig = cfg;
+  vi.spyOn(runtimeConfig, "getRuntimeConfigSnapshot").mockImplementation(() => currentConfig);
   const readPolicy = createDiscordLivePolicyReader({
     cfg,
     accountId: "default",
@@ -56,15 +88,22 @@ function createHarness() {
     resolvedAllowlist: { guildEntries: cfg.channels?.discord?.guilds, allowFrom: [] },
   });
   const commandContext = {
-    cfg,
-    discordConfig: cfg.channels?.discord ?? {},
+    ...nativeCommandContext(cfg),
     readPolicy,
-    accountId: "default",
-    sessionPrefix: "discord:slash",
     postApplySettleMs: 0,
-    threadBindings: createNoopThreadBindingManager("default"),
+    dispatchReplyFromConfig,
   };
   const client = createInternalTestClient([
+    createDiscordNativeCommand({
+      ...commandContext,
+      ephemeralDefault: true,
+      command: { name: "help", description: "Help", acceptsArgs: false },
+    }),
+    createDiscordNativeCommand({
+      ...commandContext,
+      ephemeralDefault: true,
+      command: { name: "new", description: "New session", acceptsArgs: false },
+    }),
     createDiscordNativeCommand({
       ...commandContext,
       ephemeralDefault: true,
@@ -102,18 +141,18 @@ function createHarness() {
   });
   const patch = vi.fn(async () => undefined);
   attachRestMock(client, { post, get, patch });
-  const session = vi.spyOn(sessionStore, "getSessionEntry").mockReturnValue(undefined);
+  const session = vi.spyOn(sessionStore, "getSessionEntryAsync").mockResolvedValue(undefined);
   vi.spyOn(pickerState, "loadDiscordModelPickerData").mockResolvedValue(
     createModelsProviderData({ "test-provider": ["test-model"] }),
   );
   vi.spyOn(pickerPreferences, "readDiscordModelPickerRecentModels").mockResolvedValue([]);
   const dispatch = vi
-    .spyOn(nativeCommandRuntime, "dispatchChannelInboundTurn")
+    .spyOn(channelInbound, "dispatchChannelInboundTurn")
     .mockImplementation(async () => {
       throw new Error("Unexpected agent turn");
     });
   const status = vi
-    .spyOn(nativeCommandRuntime, "resolveDirectStatusReplyForSession")
+    .spyOn(commandStatus, "resolveDirectStatusReplyForSession")
     .mockImplementation(async ({ sessionKey }) => ({ text: `Status for ${sessionKey}` }));
   return {
     client,
@@ -123,6 +162,9 @@ function createHarness() {
     dispatch,
     session,
     patch,
+    replaceConfig: (next: OpenClawConfig) => {
+      currentConfig = next;
+    },
     replacePolicy: () => {
       currentConfig = {
         ...cfg,
@@ -132,8 +174,50 @@ function createHarness() {
   };
 }
 
-function payload(channelId: string, hydrated = false, userId = USER) {
-  return createInternalInteractionPayload({
+function expectFollowUp(harness: ReturnType<typeof createHarness>, content: string) {
+  expect(harness.post).toHaveBeenCalledWith(
+    "/webhooks/app1/test-token",
+    { body: { content, flags: 64 } },
+    undefined,
+  );
+}
+
+function expectAutocomplete(
+  harness: ReturnType<typeof createHarness>,
+  choices: { name: string; value: string }[] = [],
+) {
+  expect(harness.post).toHaveBeenCalledExactlyOnceWith(
+    "/interactions/interaction1/test-token/callback",
+    {
+      body: {
+        type: InteractionResponseType.ApplicationCommandAutocompleteResult,
+        data: { choices },
+      },
+    },
+  );
+  if (choices.length === 0) {
+    expect(harness.session).not.toHaveBeenCalled();
+  }
+}
+
+function denyThreadParent(harness: ReturnType<typeof createHarness>) {
+  harness.get.mockResolvedValue({
+    id: THREAD,
+    type: ChannelType.PublicThread,
+    parent_id: "denied",
+    name: "topic",
+  });
+}
+
+// REST is controlled; construction, access policy, routing and serialization are real.
+type Surface = "status" | "autocomplete" | "picker";
+function interactionFor(
+  surface: Surface,
+  channelId: string,
+  userId = USER,
+  action: "back" | "reset" = "back",
+) {
+  const raw = createInternalInteractionPayload({
     id: "interaction1",
     token: "test-token",
     guild_id: GUILD,
@@ -147,14 +231,26 @@ function payload(channelId: string, hydrated = false, userId = USER) {
       permissions: "0",
       flags: GuildMemberFlags.CompletedOnboarding,
     },
-    ...(hydrated ? { channel: { id: channelId, type: ChannelType.GuildText } } : {}),
     data: { id: "command1", name: "status", type: 1 },
   });
-}
-
-function autocompletePayload(channelId: string, hydrated = false, userId = USER) {
+  if (surface === "status") {
+    return raw;
+  }
+  if (surface === "picker") {
+    return createInternalComponentInteractionPayload({
+      ...raw,
+      data: {
+        custom_id: pickerState.buildDiscordModelPickerCustomId({
+          command: "model",
+          action,
+          view: "providers",
+          userId,
+        }),
+      },
+    });
+  }
   return createInternalInteractionPayload({
-    ...payload(channelId, hydrated, userId),
+    ...raw,
     type: InteractionType.ApplicationCommandAutocomplete,
     data: {
       id: "command2",
@@ -167,147 +263,194 @@ function autocompletePayload(channelId: string, hydrated = false, userId = USER)
   });
 }
 
-function pickerPayload(channelId: string, action: "back" | "reset" = "back", userId = USER) {
-  return createInternalComponentInteractionPayload({
-    ...payload(channelId, false, userId),
-    data: {
-      custom_id: pickerState.buildDiscordModelPickerCustomId({
-        command: "model",
-        action,
-        view: "providers",
-        userId,
-      }),
-    },
-  });
-}
+let harness: ReturnType<typeof createHarness>;
+beforeEach(() => {
+  clearDiscordChannelInfoCacheForTest();
+  harness = createHarness();
+});
+afterEach(() => vi.restoreAllMocks());
 
-function expectVisibleStatus(harness: ReturnType<typeof createHarness>, channelId: string) {
-  const sessionKey = `agent:main:discord:channel:${channelId}`;
-  expect(harness.status, JSON.stringify(harness.post.mock.calls)).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ sessionKey, channel: "discord", senderId: USER, isGroup: true }),
-  );
-  expect(harness.post).toHaveBeenCalledWith(
-    "/webhooks/app1/test-token",
-    {
-      body: { content: `Status for ${sessionKey}`, flags: 64 },
-    },
-    undefined,
-  );
-}
-
-// Isolated boundary proof: REST is controlled; interaction construction, dispatch,
-// access policy, conversation routing and response serialization are production code.
-describe("Client.handleInteraction native command channel identity", () => {
-  beforeEach(() => clearDiscordChannelInfoCacheForTest());
-  afterEach(() => vi.restoreAllMocks());
-
-  it("delivers status for a hydrated allowed channel", async () => {
-    const harness = createHarness();
-    await harness.client.handleInteraction(payload(CHANNEL, true));
-    expectVisibleStatus(harness, CHANNEL);
-  });
-
-  it.each([CHANNEL, THREAD])(
-    "delivers status for raw channel %s without hydration",
-    async (channelId) => {
-      const harness = createHarness();
-      await harness.client.handleInteraction(payload(channelId));
-      expectVisibleStatus(harness, channelId);
-    },
-  );
-
-  it.each([true, false])(
-    "rejects a sender outside commands.allowFrom (hydrated=%s)",
-    async (hydrated) => {
-      const harness = createHarness();
-      await harness.client.handleInteraction(payload(CHANNEL, hydrated, "100000000000000099"));
-      expect(harness.status).not.toHaveBeenCalled();
-      expect(harness.post).toHaveBeenCalledWith(
-        "/webhooks/app1/test-token",
-        {
-          body: { content: "You are not authorized to use this command.", flags: 64 },
+it.for(["allowed", "denied", "revoked-command", "revoked-channel"] as const)(
+  "handles an archived native command source (%s)",
+  async (access) => {
+    const storePath = join(tempDirs.make("openclaw-discord-archived-"), "sessions.json");
+    const cfg: OpenClawConfig = {
+      ...createConfig(),
+      commands: { allowFrom: { discord: [USER] } },
+      session: { store: storePath },
+    };
+    const denyCommands = (config: OpenClawConfig): OpenClawConfig => ({
+      ...config,
+      commands: { allowFrom: { discord: ["100000000000000005"] } },
+    });
+    const initialConfig = access === "denied" ? denyCommands(cfg) : cfg;
+    const source = { storePath, sessionKey: `agent:main:discord:slash:${USER}` };
+    const target = { storePath, sessionKey: `agent:main:discord:channel:${CHANNEL}` };
+    const sessionId = "archived-command-session";
+    await sessionStore.upsertSessionEntry({ ...source, entry: { sessionId, updatedAt: 1 } });
+    await appendSessionTranscriptMessageByIdentity({
+      ...source,
+      sessionId,
+      message: { role: "user", content: "Synthetic archived history", timestamp: 1 },
+    });
+    const archive = {
+      archivedAt: 2,
+      archivedBy: { type: "human" as const, id: "test-operator" },
+      archiveReason: "manual" as const,
+    };
+    await sessionStore.patchSessionEntry({ ...source, update: () => archive });
+    await sessionStore.upsertSessionEntry({
+      ...target,
+      entry: { sessionId: "active-channel-session", updatedAt: Date.now() },
+    });
+    const originalTarget = sessionStore.getSessionEntry(target);
+    expect(sessionStore.getSessionEntry(source)).toMatchObject({ sessionId, archivedAt: 2 });
+    const transcript = sessionStore.loadTranscriptEventsSync({ ...source, sessionId });
+    expect(JSON.stringify(transcript)).toContain("Synthetic archived history");
+    const restoreEntered = createDeferred<void>();
+    const releaseRestore = createDeferred<void>();
+    const revoking = access.startsWith("revoked-");
+    const commandName = access === "allowed" ? "help" : "new";
+    harness = createHarness(initialConfig, (params) =>
+      getDiscordRuntime().channel.reply.dispatchReplyFromConfig({
+        ...params,
+        sessionWorkerPlacementContext: {
+          workerSessionPlacementService: {
+            getMany: () => new Map(),
+            getManyAsync: async () => {
+              if (revoking) {
+                restoreEntered.resolve();
+                await releaseRestore.promise;
+              }
+              return new Map();
+            },
+          },
         },
+      }),
+    );
+    harness.dispatch.mockRestore();
+    harness.session.mockRestore();
+    await withRegisteredChannelIngress(
+      { plugin: discordPlugin, config: initialConfig, setRuntime: setDiscordRuntime },
+      async () => {
+        const pending = harness.client.handleInteraction(
+          createInternalInteractionPayload({
+            ...interactionFor("status", CHANNEL),
+            id: `archive-${access}`,
+            type: InteractionType.ApplicationCommand,
+            data: { id: "archive-command", name: commandName, type: 1 },
+          }),
+        );
+        const completion = revoking
+          ? expect(pending).rejects.toThrow("Discord command authority changed")
+          : pending;
+        if (revoking) {
+          try {
+            await Promise.race([
+              restoreEntered.promise,
+              pending.then(() => {
+                throw new Error("Command finished without entering archive restoration");
+              }),
+            ]);
+            expect(sessionStore.getSessionEntry(source)?.archivedAt).toBe(2);
+            if (access === "revoked-command") {
+              harness.replaceConfig(denyCommands(cfg));
+            } else {
+              harness.replacePolicy();
+            }
+          } finally {
+            releaseRestore.resolve();
+          }
+        }
+        await completion;
+      },
+    );
+    const after = sessionStore.getSessionEntry(source);
+    expect(after?.sessionId).toBe(sessionId);
+    if (access === "allowed") {
+      expectFollowUp(harness, expect.stringContaining("Help"));
+      expect([after?.archivedAt, after?.archivedBy, after?.archiveReason]).toEqual([
+        undefined,
+        undefined,
+        undefined,
+      ]);
+    } else {
+      if (access === "denied") {
+        expectFollowUp(harness, expect.stringContaining("not authorized"));
+      }
+      expect(after).toMatchObject(archive);
+      expect(harness.post).not.toHaveBeenCalledWith(
+        "/webhooks/app1/test-token",
+        { body: { content: expect.stringContaining("Help"), flags: 64 } },
         undefined,
       );
-    },
+      expect(sessionStore.getSessionEntry(target)).toEqual(originalTarget);
+    }
+    expect(sessionStore.loadTranscriptEventsSync({ ...source, sessionId })).toEqual(transcript);
+  },
+);
+
+it.each<Surface>(["status", "autocomplete", "picker"])(
+  "routes raw thread %s without hydration",
+  async (surface) => {
+    await harness.client.handleInteraction(interactionFor(surface, THREAD));
+    const sessionKey = `agent:main:discord:channel:${THREAD}`;
+    if (surface === "status") {
+      expectFollowUp(harness, `Status for ${sessionKey}`);
+    } else {
+      expect(harness.session).toHaveBeenCalledWith(expect.objectContaining({ sessionKey }));
+      if (surface === "autocomplete") {
+        expectAutocomplete(harness, [{ name: "test-model", value: "test-model" }]);
+      } else {
+        expect(JSON.stringify(harness.patch.mock.calls)).toContain("test-provider");
+      }
+    }
+  },
+);
+
+it("rejects status for a thread whose parent is outside the allowlist", async () => {
+  denyThreadParent(harness);
+  await harness.client.handleInteraction(interactionFor("status", THREAD));
+  expect(harness.status).not.toHaveBeenCalled();
+  expectFollowUp(harness, "This channel is not allowed.");
+});
+
+it.each<[Surface, "sender" | "parent" | "identity"]>([
+  ["autocomplete", "sender"],
+  ["autocomplete", "parent"],
+  ["picker", "sender"],
+  ["picker", "parent"],
+  ["picker", "identity"],
+])("denies raw %s with denied %s", async (surface, denial) => {
+  const interaction = interactionFor(
+    surface,
+    denial === "parent" ? THREAD : CHANNEL,
+    denial === "sender" ? "100000000000000099" : USER,
+    "reset",
   );
-
-  it("rejects a thread whose parent is outside the allowlist", async () => {
-    const harness = createHarness();
-    harness.get.mockResolvedValue({
-      id: THREAD,
-      type: ChannelType.PublicThread,
-      parent_id: "denied",
-      name: "topic",
-    });
-    await harness.client.handleInteraction(payload(THREAD));
-    expect(harness.status).not.toHaveBeenCalled();
-    expect(harness.post).toHaveBeenCalledWith(
-      "/webhooks/app1/test-token",
-      {
-        body: { content: "This channel is not allowed.", flags: 64 },
-      },
-      undefined,
-    );
-  });
-
-  it("rejects missing channel identity under an allowlist", async () => {
-    const harness = createHarness();
-    const interaction = payload(CHANNEL);
+  if (denial === "parent") {
+    denyThreadParent(harness);
+  }
+  if (denial === "identity") {
     Reflect.deleteProperty(interaction, "channel_id");
-    await harness.client.handleInteraction(interaction);
-    expect(harness.status).not.toHaveBeenCalled();
-    expect(harness.post).toHaveBeenCalledWith(
-      "/webhooks/app1/test-token",
-      {
-        body: { content: "This channel is not allowed.", flags: 64 },
-      },
-      undefined,
+  }
+  await harness.client.handleInteraction(interaction);
+  if (surface === "autocomplete") {
+    expectAutocomplete(harness);
+  } else {
+    expect(harness.dispatch).not.toHaveBeenCalled();
+    expect(JSON.stringify(harness.post.mock.calls)).toContain(
+      "Failed to apply test-provider/test-model",
     );
-  });
+    expect(JSON.stringify(harness.post.mock.calls)).toContain(
+      denial === "sender" ? "not authorized" : "not allowed",
+    );
+  }
+});
 
-  it.each([CHANNEL, THREAD])(
-    "autocompletes for raw channel %s through the registered option",
-    async (channelId) => {
-      const harness = createHarness();
-      await harness.client.handleInteraction(autocompletePayload(channelId));
-      expect(harness.post).toHaveBeenCalledWith("/interactions/interaction1/test-token/callback", {
-        body: {
-          type: InteractionResponseType.ApplicationCommandAutocompleteResult,
-          data: { choices: [{ name: "test-model", value: "test-model" }] },
-        },
-      });
-      expect(harness.session).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionKey: `agent:main:discord:channel:${channelId}`,
-        }),
-      );
-    },
-  );
-
-  it.each([CHANNEL, THREAD])(
-    "opens the registered picker for the raw channel %s session",
-    async (channelId) => {
-      const harness = createHarness();
-      await harness.client.handleInteraction(pickerPayload(channelId));
-      expect(harness.session).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionKey: `agent:main:discord:channel:${channelId}`,
-        }),
-      );
-      expect(harness.patch).toHaveBeenCalledWith(
-        "/webhooks/app1/test-token/messages/%40original",
-        expect.objectContaining({
-          body: expect.objectContaining({ components: expect.any(Array) }),
-        }),
-        expect.anything(),
-      );
-      expect(JSON.stringify(harness.patch.mock.calls)).toContain("test-provider");
-    },
-  );
-
-  it("rejects a policy replaced while the channel fetch is pending", async () => {
-    const harness = createHarness();
+it.each<Surface>(["status", "autocomplete", "picker"])(
+  "denies raw %s when policy changes during the channel fetch",
+  async (surface) => {
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
     harness.get.mockImplementationOnce(async () => {
@@ -315,135 +458,30 @@ describe("Client.handleInteraction native command channel identity", () => {
       await release.promise;
       return { id: CHANNEL, type: ChannelType.GuildText, name: "allowed" };
     });
-    const pending = harness.client.handleInteraction(payload(CHANNEL, true));
-    await entered.promise;
-    harness.replacePolicy();
-    release.resolve();
-    await pending;
-    expect(harness.status).not.toHaveBeenCalled();
-    expect(harness.post).toHaveBeenCalledWith(
-      "/webhooks/app1/test-token",
-      {
-        body: { content: "Access policy changed. Try this interaction again.", flags: 64 },
-      },
-      undefined,
+    const pending = harness.client.handleInteraction(
+      interactionFor(surface, CHANNEL, USER, "reset"),
     );
-  });
-
-  it.each(["sender", "parent", "identity"] as const)(
-    "denies raw autocomplete with denied %s",
-    async (denial) => {
-      const harness = createHarness();
-      const interaction = autocompletePayload(
-        denial === "parent" ? THREAD : CHANNEL,
-        false,
-        denial === "sender" ? "100000000000000099" : USER,
-      );
-      if (denial === "parent") {
-        harness.get.mockResolvedValue({
-          id: THREAD,
-          type: ChannelType.PublicThread,
-          parent_id: "denied",
-          name: "topic",
-        });
-      }
-      if (denial === "identity") {
-        Reflect.deleteProperty(interaction, "channel_id");
-      }
-      await harness.client.handleInteraction(interaction);
-      expect(harness.post).toHaveBeenCalledExactlyOnceWith(
-        "/interactions/interaction1/test-token/callback",
-        {
-          body: {
-            type: InteractionResponseType.ApplicationCommandAutocompleteResult,
-            data: { choices: [] },
-          },
-        },
-      );
-      expect(harness.session).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["sender", "parent", "identity"] as const)(
-    "denies raw picker selection with denied %s",
-    async (denial) => {
-      const harness = createHarness();
-      const interaction = pickerPayload(
-        denial === "parent" ? THREAD : CHANNEL,
-        "reset",
-        denial === "sender" ? "100000000000000099" : USER,
-      );
-      if (denial === "parent") {
-        harness.get.mockResolvedValue({
-          id: THREAD,
-          type: ChannelType.PublicThread,
-          parent_id: "denied",
-          name: "topic",
-        });
-      }
-      if (denial === "identity") {
-        Reflect.deleteProperty(interaction, "channel_id");
-      }
-      await harness.client.handleInteraction(interaction);
-      expect(harness.dispatch).not.toHaveBeenCalled();
+    try {
+      expect(
+        await Promise.race([entered.promise.then(() => true), pending.then(() => false)]),
+      ).toBe(true);
+      harness.replacePolicy();
+    } finally {
+      release.resolve();
+      await pending;
+    }
+    expect(harness.status).not.toHaveBeenCalled();
+    expect(harness.dispatch).not.toHaveBeenCalled();
+    if (surface === "autocomplete") {
+      expectAutocomplete(harness);
+    } else if (surface === "status") {
+      expectFollowUp(harness, "Access policy changed. Try this interaction again.");
+    } else {
       expect(JSON.stringify(harness.post.mock.calls)).toContain(
         "Failed to apply test-provider/test-model",
       );
-      expect(JSON.stringify(harness.post.mock.calls)).toContain(
-        denial === "sender" ? "not authorized" : "not allowed",
-      );
-    },
-  );
+    }
+  },
+);
 
-  it.each(["status", "autocomplete", "picker"] as const)(
-    "denies raw %s when policy changes during the channel fetch",
-    async (surface) => {
-      const harness = createHarness();
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
-      harness.get.mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
-        return { id: CHANNEL, type: ChannelType.GuildText, name: "allowed" };
-      });
-      const interaction =
-        surface === "status"
-          ? payload(CHANNEL)
-          : surface === "autocomplete"
-            ? autocompletePayload(CHANNEL)
-            : pickerPayload(CHANNEL, "reset");
-      const pending = harness.client.handleInteraction(interaction);
-      try {
-        const fetched = await Promise.race([
-          entered.promise.then(() => true),
-          pending.then(() => false),
-        ]);
-        expect(fetched).toBe(true);
-        harness.replacePolicy();
-      } finally {
-        release.resolve();
-        await pending;
-      }
-      expect(harness.status).not.toHaveBeenCalled();
-      expect(harness.dispatch).not.toHaveBeenCalled();
-      if (surface === "autocomplete") {
-        expect(harness.session).not.toHaveBeenCalled();
-        expect(harness.post).toHaveBeenCalledExactlyOnceWith(
-          "/interactions/interaction1/test-token/callback",
-          {
-            body: {
-              type: InteractionResponseType.ApplicationCommandAutocompleteResult,
-              data: { choices: [] },
-            },
-          },
-        );
-      } else {
-        expect(JSON.stringify(harness.post.mock.calls)).toContain(
-          surface === "status"
-            ? "Access policy changed"
-            : "Failed to apply test-provider/test-model",
-        );
-      }
-    },
-  );
-});
+installDiscordIngressTestRuntime();

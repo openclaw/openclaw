@@ -4,12 +4,13 @@ import { en } from "./en.ts";
 // Inbox diagnostics follow their lazy presenters; the loader label stays eager.
 const enSidebarAttention = {
   connection: {
-    outboxDescription:
-      "Outgoing messages saved in this browser: queued, failed, or awaiting confirmation. Failed messages need review or retry. Some may already have arrived. Open their conversations for details.",
     scopeUpgrade: {
       limited: "This browser has limited access.",
       guidance:
         "This browser has limited access. Manage it with openclaw devices on the Gateway or from Devices on an admin browser.",
+      roleGuidance:
+        "Your role limits access. Device approval cannot grant administrator access. If you need more access, ask a Gateway administrator to change your role, then reconnect.",
+      roleState: "Access follows your role",
       status: "Limited access",
       inboxState: "Administrator access required",
       showDetails: "Show limited access details",
@@ -18,7 +19,7 @@ const enSidebarAttention = {
       requesting: "Requesting administrator access…",
       requestingAction: "Requesting…",
       pending:
-        "Approve this browser by running openclaw devices on the Gateway or from Devices on an admin browser. Retry reattaches to the request; Cancel stops waiting.",
+        "Approve this browser by running {command} on the Gateway or from Devices on an admin browser. Retry reattaches to the request; Cancel stops waiting.",
       retry: "Retry",
       cancel: "Cancel",
       rejected: "The administrator access request was rejected.",
@@ -35,9 +36,7 @@ const enSidebarAttention = {
     failed: "Failed",
     overdue: "Overdue",
     dismissItem: "Dismiss {item}",
-    dismissShown: "Dismiss all shown",
-    dismissHelp:
-      "Dismiss clears notifications in this tab. It does not approve requests or stop work.",
+    dismissShown: "Dismiss shown",
     emptyTitle: "Nothing waiting",
     emptyBody: "New requests and alerts land here.",
     issues: "Inbox",
@@ -64,6 +63,17 @@ const enSidebarAttention = {
       unavailable: "Sign in and connect to the Gateway to see your mentions.",
       refresh: "Refresh mentions",
       error: "Mentions could not be updated. Refresh or try dismissing again.",
+    },
+    outbox: {
+      conversation: "Conversation",
+      failed: "Your message wasn’t sent",
+      held: "Your message needs review",
+      commandFailed: "Your command failed",
+      review: "Review in chat",
+      reviewShort: "Review",
+      reviewHint: "Open the conversation to review it before trying again.",
+      offline: "Offline",
+      offlineHint: "Offline: reconnect before retrying.",
     },
     modelAuthExpired: "Model auth expired: {providers}",
     authExpired: "Auth expired",

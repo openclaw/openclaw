@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { DraftRestoredFolderValidation } from "./folder-validation.ts";
 
@@ -15,17 +16,10 @@ function fixture(error: GatewayRequestError) {
   };
   const validation = new DraftRestoredFolderValidation(
     () => ({
-      gateway: {
+      gateway: createApplicationGatewaySnapshot({
         client,
         phase: "connected",
-        offlineStable: false,
-        hello: null,
-        canvasPluginSurfaceUrl: null,
-        assistantAgentId: null,
-        sessionKey: "",
-        lastError: null,
-        lastErrorCode: null,
-      },
+      }),
       folder: "/saved/project",
       selectedByUser: false,
       isAdmin: true,

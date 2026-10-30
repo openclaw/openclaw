@@ -183,4 +183,9 @@ openclaw policy watch --agent ops --json
 
 Use `--once` in CI or scripts that need a single drift evaluation. Without
 `--once`, it polls every two seconds by default; use `--interval-ms` to change
-the interval.
+the interval. Intervals larger than 2,147,000,000 ms are capped at that value to
+avoid timer overflow.
+
+`SIGINT` and `SIGTERM` cancel the polling wait promptly. If an evaluation is
+already running, watch waits for it to settle without printing another report,
+then exits with status `130` or `143`, respectively.

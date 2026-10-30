@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { fileURLToPath } from "node:url";
 import { format } from "node:util";
 import type { RunnerTask } from "vitest";
 import {
@@ -11,6 +12,10 @@ import {
   type Vitest,
 } from "vitest/node";
 import { redactCredentialText, redactDiagnostic } from "./credential-redaction.ts";
+
+const captureReporterPath = fileURLToPath(
+  new URL("../../scripts/lib/vitest-report-capture.mts", import.meta.url),
+);
 
 type ReporterReference = Reporter | [string, Record<string, unknown>];
 type ReportedEntity = TestCase | TestModule | TestSuite;
@@ -228,9 +233,11 @@ export default class RedactingReporter implements Reporter {
           const Constructor = ReportersMap[name];
           reporter = new Constructor(options);
         } else {
-          const module = await ctx.vite.ssrLoadModule(
-            name === "html" ? "@vitest/ui/reporter" : name,
-          );
+          // Keep the registered capture reporter lazy and visible to export analysis.
+          const module =
+            name === captureReporterPath
+              ? await import("../../scripts/lib/vitest-report-capture.mts")
+              : await ctx.vite.ssrLoadModule(name === "html" ? "@vitest/ui/reporter" : name);
           const Constructor: unknown = module.default;
           if (typeof Constructor !== "function") {
             throw new TypeError(`Custom reporter ${name} must export a default constructor`);

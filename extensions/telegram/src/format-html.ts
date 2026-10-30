@@ -1,5 +1,5 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-utility-runtime";
+import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";
 
 export function escapeTelegramHtml(text: string): string {
   if (!/[&<>]/.test(text)) {
@@ -15,45 +15,57 @@ export function escapeTelegramHtmlAttr(text: string): string {
 const TELEGRAM_HTML_ENTITY_PATTERN = /&(#(?:[xX][0-9A-Fa-f]+|\d+)|[A-Za-z0-9]+);/g;
 const TELEGRAM_HTML_ENTITY_AT = new RegExp(TELEGRAM_HTML_ENTITY_PATTERN.source, "y");
 
-// Structural tags that force a line boundary when projecting HTML to plain text
-// (assistant transcript protection). Block-counting helpers for rich HTML are gone.
-const TELEGRAM_LINE_BREAK_STRUCTURAL_TAGS = new Set([
+const TELEGRAM_NAMED_HTML_ENTITIES = new Map([
+  ["amp", "&"],
+  ["lt", "<"],
+  ["gt", ">"],
+  ["quot", '"'],
+  ["apos", "'"],
+]);
+
+// Rich islands also form transcript line boundaries; named anchors are handled separately.
+export const TELEGRAM_HTML_BLOCK_ISLAND_TAGS: readonly string[] = [
   "aside",
   "audio",
   "blockquote",
+  "details",
+  "figure",
+  "footer",
+  "hr",
+  "img",
+  "ol",
+  "p",
+  "pre",
+  "table",
+  "tg-collage",
+  "tg-map",
+  "tg-math-block",
+  "tg-slideshow",
+  "ul",
+  "video",
+];
+
+// Structural tags force line boundaries when projecting HTML to plain text (transcript protection).
+const TELEGRAM_LINE_BREAK_STRUCTURAL_TAGS = new Set([
+  ...TELEGRAM_HTML_BLOCK_ISLAND_TAGS,
   "caption",
   "col",
   "colgroup",
-  "details",
   "figcaption",
-  "figure",
-  "footer",
   "h1",
   "h2",
   "h3",
   "h4",
   "h5",
   "h6",
-  "hr",
-  "img",
   "li",
-  "ol",
-  "p",
-  "pre",
   "summary",
-  "table",
   "tbody",
   "td",
   "tfoot",
   "th",
   "thead",
-  "tg-collage",
-  "tg-map",
-  "tg-math-block",
-  "tg-slideshow",
   "tr",
-  "ul",
-  "video",
 ]);
 
 export function isTelegramRichLineBreakStructuralTag(rawTag: string, tagName: string): boolean {
@@ -63,42 +75,19 @@ export function isTelegramRichLineBreakStructuralTag(rawTag: string, tagName: st
   );
 }
 
-function isValidTelegramHtmlEntityCodePoint(codePoint: number): boolean {
-  return (
-    Number.isInteger(codePoint) &&
-    codePoint >= 0 &&
-    codePoint <= 0x10ffff &&
-    !(codePoint >= 0xd800 && codePoint <= 0xdfff)
-  );
-}
-
 function decodeTelegramHtmlEntity(entity: string, fallback: string): string {
-  if (entity.startsWith("#x") || entity.startsWith("#X")) {
-    const codePoint = Number.parseInt(entity.slice(2), 16);
-    return isValidTelegramHtmlEntityCodePoint(codePoint)
-      ? String.fromCodePoint(codePoint)
-      : fallback;
-  }
   if (entity.startsWith("#")) {
-    const codePoint = Number.parseInt(entity.slice(1), 10);
-    return isValidTelegramHtmlEntityCodePoint(codePoint)
-      ? String.fromCodePoint(codePoint)
-      : fallback;
+    const hex = entity[1] === "x" || entity[1] === "X";
+    const radix = hex ? 16 : 10;
+    const codePoint = Number.parseInt(entity.slice(hex ? 2 : 1), radix);
+    const valid =
+      Number.isInteger(codePoint) &&
+      codePoint >= 0 &&
+      codePoint <= 0x10ffff &&
+      !(codePoint >= 0xd800 && codePoint <= 0xdfff);
+    return valid ? String.fromCodePoint(codePoint) : fallback;
   }
-  switch (entity) {
-    case "amp":
-      return "&";
-    case "lt":
-      return "<";
-    case "gt":
-      return ">";
-    case "quot":
-      return '"';
-    case "apos":
-      return "'";
-    default:
-      return fallback;
-  }
+  return TELEGRAM_NAMED_HTML_ENTITIES.get(entity) ?? fallback;
 }
 
 export function decodeTelegramHtmlEntities(text: string): string {

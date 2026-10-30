@@ -11,6 +11,7 @@ import type {
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   PROVIDER_CONTEXT_HANDOFF,
+  PROVIDER_MODEL_INPUT,
   resolveProviderContext,
   type ProviderContextHandoff,
   type ProviderStreamOptions,
@@ -42,6 +43,9 @@ describe("provider call types", () => {
     >();
     expectTypeOf<ProviderStreamOptions[typeof PROVIDER_CONTEXT_HANDOFF]>().toEqualTypeOf<
       ProviderContextHandoff | undefined
+    >();
+    expectTypeOf<ProviderStreamOptions[typeof PROVIDER_MODEL_INPUT]>().toEqualTypeOf<
+      ProviderModel["input"] | undefined
     >();
     expectTypeOf<Parameters<ProviderContextHandoff>>().toEqualTypeOf<[]>();
 

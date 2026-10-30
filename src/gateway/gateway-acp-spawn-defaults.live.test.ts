@@ -3,7 +3,6 @@
  */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
@@ -23,6 +22,7 @@ import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { sleep } from "../utils.js";
+import { waitForGatewayPort } from "./gateway-port.test-support.js";
 import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
 import { startGatewayServer } from "./server.js";
 
@@ -153,35 +153,6 @@ async function prepareCodexHomeForLiveSpawnDefaultsTest(tempRoot: string): Promi
   process.env.CODEX_HOME = codexHome;
 }
 
-async function waitForGatewayPort(params: {
-  host: string;
-  port: number;
-  timeoutMs?: number;
-}): Promise<void> {
-  const timeoutMs = params.timeoutMs ?? CONNECT_TIMEOUT_MS;
-  const startedAt = Date.now();
-
-  while (Date.now() - startedAt < timeoutMs) {
-    const connected = await new Promise<boolean>((resolve) => {
-      const socket = net.createConnection({ host: params.host, port: params.port });
-      const finish = (ok: boolean) => {
-        socket.removeAllListeners();
-        socket.destroy();
-        resolve(ok);
-      };
-      socket.once("connect", () => finish(true));
-      socket.once("error", () => finish(false));
-      socket.setTimeout(1_000, () => finish(false));
-    });
-    if (connected) {
-      return;
-    }
-    await sleep(250);
-  }
-
-  throw new Error(`timed out waiting for gateway port ${params.host}:${String(params.port)}`);
-}
-
 async function getFreeGatewayPort(): Promise<number> {
   const { getFreePortBlockWithPermissionFallback } = await import("../test-utils/ports.js");
   return await getFreePortBlockWithPermissionFallback({
@@ -194,11 +165,10 @@ async function waitForAcpBackendReady(timeoutMs = CONNECT_TIMEOUT_MS): Promise<v
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const backend = getAcpRuntimeBackend("acpx");
-    const runtime = backend?.runtime as { probeAvailability?: () => Promise<void> } | undefined;
     if (backend && (!backend.healthy || backend.healthy())) {
       return;
     }
-    await runtime?.probeAvailability?.().catch(() => {});
+    await backend?.runtime.doctor?.().catch(() => {});
     if (backend && (!backend.healthy || backend.healthy())) {
       return;
     }
@@ -388,17 +358,16 @@ function createConfig(params: {
 
   return {
     agents: {
-      list: params.includePrimaryOnlyAcpAgent
-        ? [
-            {
-              id: "codex-acp-primary-only",
+      entries: params.includePrimaryOnlyAcpAgent
+        ? {
+            "codex-acp-primary-only": {
               runtime: {
                 type: "acp",
                 acp: { agent: params.acpAgentId },
               },
               model: "anthropic/claude-sonnet-4-6",
             },
-          ]
+          }
         : undefined,
       defaults: {
         model: {

@@ -24,8 +24,8 @@ and enabled. Affirmative reasoning support and native reasoning-effort metadata
 do not count as request overrides. Headers, request parameters, timeouts, and
 payload compatibility switches still do: Codex declares an OpenClaw fallback
 that preserves the exact request, including for explicit runtime selections.
-Other unsupported routes/authentication and missing explicit harnesses fail
-closed. The `openai/gpt-*` prefix and `agentRuntime.id: "codex"` alone are not
+Other unsupported routes/authentication and missing explicit harnesses
+stop execution with an error. The `openai/gpt-*` prefix and `agentRuntime.id: "codex"` alone are not
 execution proof; inspect the actual harness in the completed result. See
 [Runtime selection](/concepts/agent-runtimes#runtime-selection).
 
@@ -36,7 +36,7 @@ OpenClaw host:
 
 ```bash
 (
-  pattern='openai/gpt-5\.[45]|openai[-]codex|agentRuntime(\.id)?|harnessRuntime|Runtime: OpenAI Codex|legacy OpenAI Codex prefix|resolveSelectedOpenAIRuntimeProvider|candidateProvider[": ]+openai|status[": ]+401|Incorrect API key|No API key|api-key path|API-key path|OAuth'
+  pattern='openai/gpt-5\.[45]|openai[-]codex|agentRuntime(\.id)?|harnessRuntime|Runtime: OpenAI Codex|legacy OpenAI Codex prefix|candidateProvider[": ]+openai|status[": ]+401|Incorrect API key|No API key|api-key path|API-key path|OAuth'
 
   if ls /tmp/openclaw/openclaw-*.log >/dev/null 2>&1; then
     grep -E -i -n "$pattern" /tmp/openclaw/openclaw-*.log 2>/dev/null || true
@@ -75,6 +75,38 @@ is enabled, that `plugins.allow` includes it when an allowlist is
 configured, and that any custom `appServer.command`, `url`, `authToken`, or
 headers are valid.
 
+**An app-server message cannot be parsed:** OpenClaw recovers raw newlines inside
+otherwise valid JSON strings. Invalid escapes or unescaped control characters
+produce a redacted warning, then decoding resumes with the next message on both
+Node and Bun. These invalid fragments do not consume the following valid message.
+
+**The resident catalog reports a spawn failure:** a missing executable
+(`ENOENT`), missing execute permission (`EACCES`), or incompatible CPU
+(`EBADARCH`, sometimes shown as macOS errno `-86`) stops that catalog's
+automatic retries and records one advisory. This includes native launch errors
+whose diagnostics arrive after the managed launcher exits during registration
+or initialization, on both Node and Bun. Repair the installation, then
+restart the Gateway to retry. Unrelated configuration reloads do not retry the
+failed executable. Disabling the
+plugin through config reload retires its catalog refresh loop.
+
+Managed passive catalogs use the plugin's installed Codex package and do not fall back
+to macOS desktop app bundles. OpenClaw runs
+its launcher with the Gateway's interpreter so Codex selects the platform
+package matching that interpreter's architecture without a `node` PATH lookup.
+At debug or trace log level, `Codex app-server spawn` records the executable,
+launcher, and resolved native binary paths without arguments or credentials.
+Use `file <path>` on macOS to inspect the failing executable's architecture.
+Check the managed native binary with
+`openclaw doctor --lint --only codex/managed-app-server --json`, including when
+Codex is enabled only for its session catalog.
+
+Directories named `openclaw-model-catalog-*` contain OpenClaw plugin source
+captures, not native Codex sessions. Current captures are bounded by worker
+generations and retired with their workers. Doctor reports older captures
+outside managed custody with an offline cleanup command; it does not delete
+those legacy directories automatically.
+
 **The Codex app-server uses too much memory:** distinguish the two processes
 first. OpenClaw runs the local Codex app-server as a separate Rust child.
 `NODE_OPTIONS=--max-old-space-size=...` changes only the Gateway's Node.js V8
@@ -82,6 +114,13 @@ heap; it does not cap or enlarge Codex. Managed Gateway installs already choose
 an adaptive V8 heap, and raising it can leave less host memory for Codex. Use
 [Gateway memory troubleshooting](/gateway/troubleshooting#gateway-exits-during-high-memory-use)
 for Gateway pressure, and inspect host or container memory for the Codex child.
+
+Large catalog replies use a decoder worker in the Gateway. After a complete
+reply, OpenClaw releases that worker after one minute without further worker
+decoding. The native app-server connection and its warm conversation threads stay
+connected. A later large reply starts a new decoder, so its first response can
+take longer; small replies do not require a worker. Incomplete replies retain
+their decoder until recovery completes or the connection closes.
 
 **"Cannot inspect Codex processes":** this error comes from local process
 inspection before model inference. For a deadline error, retry after host
@@ -134,8 +173,10 @@ limit includes the root thread and cannot be combined with `agents.max_threads`.
 For more Codex headroom, increase the host, container, or cgroup memory
 allocation. An OS hard limit can terminate Codex rather than backpressure it.
 
-**Model discovery is slow:** lower
-`plugins.entries.codex.config.discovery.timeoutMs` or disable discovery.
+**Model discovery is slow:** check the app-server's connectivity to its model
+catalog endpoint. The default `plugins.entries.codex.config.discovery.timeoutMs`
+is 10 seconds so Codex can finish its native refresh or fallback. A shorter
+override can interrupt that fallback and make native models unavailable.
 See [Codex harness reference](/plugins/codex-harness-reference#model-discovery).
 
 **Codex plugin state has reached its row limit:** run `openclaw doctor` to
@@ -176,3 +217,91 @@ provider refs stay on their normal provider path in `auto` mode.
 `/codex computer-use status` from a fresh session. If a tool reports
 `Native hook relay unavailable`, use the native hook relay recovery above.
 See [Codex Computer Use](/plugins/codex-computer-use#troubleshooting).
+
+### Image-heavy conversations exceed the request-size limit
+
+`request_too_large` with `Request exceeds the maximum size accepted by the Codex
+inference relay (33554432 bytes)` means the request exceeded the relay's **32 MiB
+body limit**. This includes the decompressed body, so a smaller compressed upload
+can still fail. It is not a disk-space limit or a universal OpenAI model limit.
+
+Inline images can consume many bytes while using comparatively few model tokens.
+Native Codex compaction uses token pressure, so image-heavy history can hit this
+transport limit first. Remote compaction also sends history to the model and can
+fail for the same reason. A completed compaction does not guarantee that the next
+request's retained images fit the relay limit.
+
+Retrying unchanged history, restarting the Gateway, or deleting downloaded image
+files does not shrink inline image data already in the native conversation. The
+OpenClaw `maxActiveTranscriptBytes` setting limits the size of the stored native
+transcript, which is checked when the thread is bound at startup; it is not a
+budget for a single inference request body. See
+[compaction ownership](/plugins/codex-harness-runtime/compaction#compaction-and-transcript-mirror).
+
+Before more image-heavy work, keep originals as files and use smaller previews or
+focused crops when the task permits. Save text findings and job checkpoints as you
+go. These practices reduce growth but do not enforce a native request-byte budget.
+
+If the conversation is already blocked, preserve the saved work and prepare a
+text handoff from existing checkpoints. Try native `/compact` only if it is
+available for the selected route. If compaction is unavailable or fails with the
+same size error, an operator can start a fresh conversation with `/new` and supply
+the handoff without replaying the old inline images. Before resetting, check
+active/background work and let it finish or deliberately stop it; a reset can
+cancel work. Reconcile completed tool actions and deliveries before resuming.
+This is recovery, not a permanent prevention fix.
+
+## Worker-hosted app-server
+
+The opt-in `plugins.entries.codex.config.appServer.workerHostedCloud` setting
+runs the pinned Codex app-server on an enrolled worker instead of running the
+model process on the Gateway. It requires a current Full remote-exec placement
+and the exact versioned `codex.app-server.stdio.v1.<version>` node command.
+Allow that exact command through the existing Gateway node command policy.
+There is no local fallback when the worker cannot start.
+
+Provision a worker-only private bundle under the Gateway's configured state directory:
+
+- `worker-provisioning/codex/config.toml`: the native configuration.
+- One Node `.mjs` auth helper in that same directory, referenced by its absolute
+  path exactly once in the selected provider's auth arguments.
+
+Use directory mode `0700` and file mode `0600` on POSIX. Symlinks, nonregular
+files, malformed configuration, missing helpers and inputs larger than 16 KiB
+are rejected before pairing credentials are issued. Windows uses its existing
+private worker setup; POSIX mode-bit qualification does not attest Windows ACLs.
+The selected provider must use Responses with `command = "node"` and that helper
+as its sole argument, without competing provider credentials.
+
+The provisioning owner derives the command's 64-hex identity from the configuration
+and helper bytes; relocating the helper into the lease preserves that identity.
+There is no separately supplied version or environment selector. These are trusted
+operator-authored executable deployment inputs, separate from the Gateway's
+`CODEX_HOME`, local auth profiles and session data. Missing bundle means opt-out;
+an incomplete bundle fails closed. Publish both files while the Gateway is stopped,
+then restart and reprovision affected workers when changing them. Existing lease
+replay rejects changed bytes or identity; runtime verifies the enrolled content.
+Enrollment delivers the bundle privately into the lease's `codex-runtime`
+directory only when the prepared node runtime includes the Codex plugin. Other
+worker runtimes neither load nor receive the private bundle, and image preparation
+does not capture it.
+
+Only dedicated ephemeral, non-container nodes retain their platform-managed
+identity transport and CA settings. Ordinary paired nodes and container workers
+do not inherit these credentials. Gateway auth profiles and local GitHub identity
+environments are not forwarded. Selected Gateway auth profiles and native
+supervision bindings cannot be reused for worker-hosted inference. Clear the
+profile selection or detach supervision before choosing worker-owned auth.
+The selected Platform or subscription route still constrains the worker account;
+a mismatched account is rejected without logging the worker into a Gateway account.
+When a managed identity requires the host-owned tool surface, those tools continue
+to own command execution; this setting does not grant native commands access to
+that identity.
+
+Native hook policies still require the existing remote hook callback deployment
+(`appServer.nativeHookRelay`). A worker connection is not a Gateway-local process.
+Private workspace resources gate file/process effects, not the initial tool
+declaration. Cancellation closes the invocation and joins its worker cleanup.
+Native thread state lives under the existing workspace HOME owner and can resume
+while that workspace remains available. This mode does not provide retained-disk
+recovery, worker-loss history recovery, or a replacement workspace guarantee.

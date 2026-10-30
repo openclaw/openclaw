@@ -3,30 +3,34 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  GatewaySessionRow,
-  SessionCompactionCheckpoint,
-  SessionsListResult,
-} from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
-import {
-  answerConfirmDialog,
-  createModalDialogTestFixture,
-  getRenderedModalDialog,
-  waitForConfirmDialogActions,
-} from "../../test-helpers/modal-dialog.ts";
+import type { SessionDeleteTarget } from "../../lib/sessions/session-capability.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { selectMenuValue } from "../../test-helpers/session-menu.ts";
+import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   createContext,
   createGateway,
+  createLiveSessionContext,
+  createManagedSessions,
   createRenderedPage,
   createSessions,
-  type TestSessionsPage,
+  liveSessions,
+  openRowMenu,
+  selectRows,
+  sessionRow,
+  withNotifyingAgentSelection,
 } from "./sessions-page.test-support.ts";
 
-vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
+vi.mock("../../components/confirm-dialog.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../components/confirm-dialog.ts")>()),
+  showConfirmDialog: vi.fn(),
+}));
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -34,452 +38,359 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-type AgentSelectionListeners = {
-  state: { selectedId: string | null; scopeId: string | null };
-  setScope: (scopeId: string | null) => void;
-  subscribe: (listener: () => void) => () => void;
-};
-
-function withNotifyingAgentSelection(
-  base: ApplicationContext,
-  initialScopeId: string | null,
-): {
-  context: ApplicationContext;
-  selection: AgentSelectionListeners;
-  changeScope: (next: string | null) => void;
-} {
-  const listeners = new Set<() => void>();
-  const state = { selectedId: base.agentSelection.state.selectedId, scopeId: initialScopeId };
-  const selection: AgentSelectionListeners = {
-    state,
-    setScope: (scopeId) => {
-      if (state.scopeId === scopeId) {
-        return;
-      }
-      state.scopeId = scopeId;
-      for (const listener of listeners) {
-        listener();
-      }
-    },
-    subscribe: (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  };
-  const context = {
-    ...base,
-    agentSelection: {
-      ...base.agentSelection,
-      state,
-      subscribe: selection.subscribe,
-      setScope: selection.setScope,
-    },
-  } as ApplicationContext;
-  return {
-    context,
-    selection,
-    changeScope: selection.setScope,
-  };
-}
-
-async function setupArchivedPageWithSelection(
-  scopeId: string | null,
+async function setupArchivedPage(
   sessions: SessionCapability,
   expandedSessionKey: string | null = null,
-): Promise<{
-  page: TestSessionsPage;
-  context: ApplicationContext;
-  changeScope: (next: string | null) => void;
-}> {
+) {
   const { gateway } = createGateway({} as GatewayBrowserClient);
-  const baseContext = createContext(gateway, sessions);
-  const { context, changeScope } = withNotifyingAgentSelection(baseContext, scopeId);
+  const { context, changeScope } = withNotifyingAgentSelection(
+    createContext(gateway, sessions),
+    "writer",
+  );
   const page = await createRenderedPage(
     context,
-    {
-      count: 1,
-      sessions: [{ key: "agent:writer:old-1", archived: true }],
-    } as SessionsListResult,
+    sessionsResult([archivedRow("agent:writer:old-1")], 1),
     "archived",
     expandedSessionKey,
   );
   return { page, context, changeScope };
 }
 
+const writerKeys = ["agent:writer:old-1", "agent:writer:old-2"];
+const archivedRow = (key: string): GatewaySessionRow => ({ key, kind: "direct", archived: true });
+const deleted = (keys: string[] = []) => ({ deleted: keys, errors: [], preservedWorktrees: [] });
+const archivedWriterRows = () => ({
+  ...sessionsResult(writerKeys.map(archivedRow), 1),
+  totalCount: writerKeys.length,
+});
+
 describe("sessions page agent-scope retirement", () => {
-  it.each([false, true])("settles real delete-all confirmation (retire: %s)", async (retire) => {
-    const actual = await vi.importActual<typeof import("../../components/confirm-dialog.ts")>(
-      "../../components/confirm-dialog.ts",
-    );
-    vi.mocked(showConfirmDialog).mockImplementation(actual.showConfirmDialog);
-    const fixture = createModalDialogTestFixture();
-    const list = vi.fn<SessionCapability["list"]>(async (options) =>
-      sessionsResult(
-        [
-          {
-            key: `agent:${options?.agentId ?? "main"}:archived`,
-            kind: "direct",
-            archived: true,
-          },
-        ],
-        1,
-      ),
-    );
-    const deleteMany = vi.fn<SessionCapability["deleteMany"]>().mockResolvedValue({
-      deleted: [],
-      errors: [],
-      preservedWorktrees: [],
-    });
-    try {
-      const { page, changeScope } = await setupArchivedPageWithSelection(
-        "writer",
-        createSessions({ list, deleteMany }),
-      );
-      let operation = fixture.track(page.deleteAllArchived());
-      let actions = await waitForConfirmDialogActions();
-      const { dialog } = await getRenderedModalDialog(document.body);
-      expect(dialog.open).toBe(true);
-
-      changeScope(retire ? "main" : "writer");
-      if (retire) {
-        await vi.waitFor(() =>
-          expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull(),
-        );
-        await operation;
-        expect(deleteMany).not.toHaveBeenCalled();
-        await page.updateComplete;
-        await vi.waitFor(() => expect(page.loading).toBe(false));
-        operation = fixture.track(page.deleteAllArchived());
-        actions = await waitForConfirmDialogActions();
-        const replacement = await getRenderedModalDialog(document.body);
-        expect(replacement.dialog.open).toBe(true);
-      } else {
-        expect(actions.isConnected).toBe(true);
-        expect(deleteMany).not.toHaveBeenCalled();
-      }
-
-      answerConfirmDialog(actions, "confirm");
-      await operation;
-      expect(deleteMany).toHaveBeenCalledExactlyOnceWith([
-        {
-          key: `agent:${retire ? "main" : "writer"}:archived`,
-          agentId: undefined,
-          archivedOnly: true,
-          deleteTranscript: true,
+  it.each([true, false])("ignores retired placement outcomes (fails=%s)", async (fails) => {
+    const row = sessionRow("global", {
+      key: "global",
+      agentId: "writer",
+      placement: {
+        ...createActiveSessionPlacement({ environmentId: "worker:writer", activeOwnerEpoch: 7 }),
+        state: "draining",
+        generation: 2,
+      },
+      placementMove: {
+        target: { kind: "gateway" },
+        updatedAtMs: 2,
+        error: "Sync failed",
+        retry: {
+          expected: { generation: 1, environmentId: "worker:writer", ownerEpoch: 7 },
+          target: { kind: "gateway" },
         },
-      ]);
-      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-    } finally {
-      await fixture.cleanup();
+      },
+    });
+    const pending = createDeferred<unknown>();
+    const request = vi.fn(async (method: string) =>
+      method === "sessions.move" ? pending.promise : { profiles: [] },
+    );
+    const client = createTestGatewayClient(request);
+    const clientRequest = vi.spyOn(client, "request");
+    const connection = createGateway(client);
+    connection.emit({
+      hello: gatewayHelloForMethods(["sessions.move"], ["operator.read", "operator.write"]),
+    });
+    const reconcileMutation = vi
+      .fn<SessionCapability["reconcileMutation"]>()
+      .mockResolvedValue({ status: "refreshed" });
+    const sessions = createSessions({ reconcileMutation });
+    const { context, changeScope } = withNotifyingAgentSelection(
+      createContext(connection.gateway, sessions),
+      "writer",
+    );
+    const page = await createRenderedPage(context, sessionsResult([row], 1));
+    await vi.waitFor(() => expect(page.loading).toBe(false));
+    await selectMenuValue(await openRowMenu(page, row), "move-session");
+    await vi.waitFor(() =>
+      expect(clientRequest).toHaveBeenCalledWith("sessions.move", {
+        key: "global",
+        agentId: "writer",
+        ...row.placementMove!.retry,
+      }),
+    );
+    const moveIndex = clientRequest.mock.calls.findIndex(([method]) => method === "sessions.move");
+    const result = clientRequest.mock.results[moveIndex]!.value;
+    changeScope("main");
+    changeScope("writer");
+    await page.updateComplete;
+    await vi.waitFor(() => expect(page.loading).toBe(false));
+    page.error = "New foreground error.";
+    const failure = new Error("Old placement failed.");
+    if (fails) {
+      pending.reject(failure);
+    } else {
+      pending.resolve({ ok: true });
     }
+    await Promise.resolve(result).catch(() => undefined);
+    await page.updateComplete;
+    expect(reconcileMutation).not.toHaveBeenCalled();
+    expect(page.textContent).toContain("New foreground error.");
+    expect(page.textContent).not.toContain("Old placement failed.");
   });
 
-  it.each([false, true])(
-    "retires pending enumeration after a scope change (return: %s)",
-    async (returnToOriginal) => {
-      const writerKeys = ["agent:writer:old-1", "agent:writer:old-2"];
+  it.each(["enumeration", "confirmation"])(
+    "retires pending %s after switching away and back",
+    async (phase) => {
       const listResponse = createDeferred<SessionsListResult>();
-      const list = vi.fn(() => listResponse.promise) as unknown as SessionCapability["list"];
-      const deleteMany = vi.fn(async () => ({
-        deleted: writerKeys,
-        errors: [],
-        preservedWorktrees: [],
-      }));
-      const sessions = createSessions({
-        list,
-        deleteMany,
-      });
-      const { page, changeScope } = await setupArchivedPageWithSelection("writer", sessions);
-      vi.mocked(showConfirmDialog).mockResolvedValue(true);
-
-      const operation = page.deleteAllArchived();
-      await vi.waitFor(() => expect(list).toHaveBeenCalledOnce());
-      // The captured scope held `writer`; the operator now switches the page to
-      // `main` while the first enumeration page is still in flight.
-      changeScope("main");
-      if (returnToOriginal) {
-        changeScope("writer");
-      }
-      listResponse.resolve({
-        count: writerKeys.length,
-        totalCount: writerKeys.length,
-        sessions: writerKeys.map((key) => ({
-          key,
-          kind: "direct",
-          updatedAt: 1,
-          archived: true,
-        })),
-      } as SessionsListResult);
-      await operation;
-
-      expect(showConfirmDialog).not.toHaveBeenCalled();
-      expect(deleteMany).not.toHaveBeenCalled();
-      expect(page.error).toBeNull();
-    },
-  );
-
-  it.each([false, true])(
-    "retires pending confirmation after a scope change (return: %s)",
-    async (returnToOriginal) => {
-      const writerKeys = ["agent:writer:old-1", "agent:writer:old-2"];
-      const list = vi.fn(async () => ({
-        count: writerKeys.length,
-        totalCount: writerKeys.length,
-        sessions: writerKeys.map((key) => ({ key, archived: true })),
-        hasMore: false,
-        nextOffset: null,
-      })) as unknown as SessionCapability["list"];
-      const deleteMany = vi.fn(async () => ({
-        deleted: writerKeys,
-        errors: [],
-        preservedWorktrees: [],
-      }));
-      const sessions = createSessions({
-        list,
-        deleteMany,
-      });
-      const { page, changeScope } = await setupArchivedPageWithSelection("writer", sessions);
       const confirmation = createDeferred<boolean>();
+      const list = vi.fn<SessionCapability["list"]>().mockReturnValue(listResponse.promise);
+      const deleteMany = vi.fn(async () => deleted(writerKeys));
+      const sessions = createSessions({ list, deleteMany });
+      const { page, changeScope } = await setupArchivedPage(sessions);
       vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
-
-      const operation = page.deleteAllArchived();
-      await vi.waitFor(() => expect(showConfirmDialog).toHaveBeenCalledOnce());
-      // Operator switches to `main` while the destructive confirmation sits open.
-      changeScope("main");
-      if (returnToOriginal) {
-        changeScope("writer");
+      if (phase === "confirmation") {
+        listResponse.resolve({ ...archivedWriterRows(), hasMore: false, nextOffset: null });
       }
-      await page.updateComplete;
-      await vi.waitFor(() => expect(page.loading).toBe(false));
+      const operation = page.deleteAllArchived();
+      await vi.waitFor(() =>
+        expect(phase === "enumeration" ? list : showConfirmDialog).toHaveBeenCalledOnce(),
+      );
+      const signal = vi.mocked(showConfirmDialog).mock.calls[0]?.[0].signal;
+      if (phase === "confirmation") {
+        expect(signal?.aborted).toBe(false);
+      }
+      changeScope("main");
+      changeScope("writer");
+      if (phase === "confirmation") {
+        expect(signal?.aborted).toBe(true);
+        await page.updateComplete;
+        await vi.waitFor(() => expect(page.loading).toBe(false));
+      }
+      listResponse.resolve(archivedWriterRows());
       confirmation.resolve(true);
       await operation;
-
+      if (phase === "enumeration") {
+        expect(showConfirmDialog).not.toHaveBeenCalled();
+      }
       expect(deleteMany).not.toHaveBeenCalled();
       expect(page.error).toBeNull();
     },
   );
 
-  it.each([false, true])(
-    "admits a new delete without letting old completion release it (deep link: %s)",
-    async (deepLink) => {
-      const oldDelete = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
-      const newDelete = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
-      const deleteMany = vi
-        .fn<SessionCapability["deleteMany"]>()
-        .mockReturnValueOnce(oldDelete.promise)
-        .mockReturnValueOnce(newDelete.promise)
-        .mockResolvedValue({ deleted: [], errors: [], preservedWorktrees: [] });
-      const sessions = createSessions({ deleteMany });
-      const key = "agent:writer:old-1";
-      const { page, changeScope } = await setupArchivedPageWithSelection(
-        "writer",
-        sessions,
-        deepLink ? key : null,
-      );
-      vi.mocked(showConfirmDialog).mockResolvedValue(true);
-      const oldRequest = page.deleteSessionFromMenu({ key, kind: "direct", archived: true });
-      let newRequest: Promise<void> | undefined;
-      try {
-        await vi.waitFor(() => expect(deleteMany).toHaveBeenCalledTimes(1));
-        expect(page.sessionMutationPending).toBe(true);
-        changeScope("main");
-        await page.updateComplete;
-        await vi.waitFor(() => expect(page.loading).toBe(false));
-
-        const newRow: GatewaySessionRow = {
-          key: deepLink ? key : "agent:main:new",
-          kind: "direct",
-          archived: true,
-        };
-        newRequest = page.deleteSessionFromMenu(newRow);
-        await vi.waitFor(() => expect(deleteMany).toHaveBeenCalledTimes(2));
-        expect(deleteMany.mock.calls[1]?.[0]).toEqual([
-          { key: newRow.key, agentId: undefined, archivedOnly: true },
-        ]);
-        expect(page.sessionMutationPending).toBe(true);
-
-        oldDelete.resolve({
-          deleted: [],
-          errors: [{ target: { key }, error: new Error("retired delete error") }],
-          preservedWorktrees: [],
-        });
-        await oldRequest;
-        expect(page.error).toBeNull();
-        expect(page.sessionMutationPending).toBe(true);
-        await page.deleteSessionFromMenu(newRow);
-        expect(deleteMany).toHaveBeenCalledTimes(2);
-
-        newDelete.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
-        await newRequest;
-        expect(page.sessionMutationPending).toBe(false);
-        await page.deleteSessionFromMenu(newRow);
-        expect(deleteMany).toHaveBeenCalledTimes(3);
-      } finally {
-        oldDelete.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
-        newDelete.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
-        await Promise.all([oldRequest, newRequest]);
-      }
-    },
-  );
-
-  it.each(["branchCheckpoint", "restoreCheckpoint"] as const)(
-    "retires %s authority across A-B-A without clearing newer work",
-    async (method) => {
-      const oldBranch =
-        createDeferred<Awaited<ReturnType<SessionCapability["branchCheckpoint"]>>>();
-      const oldRestore = createDeferred<never>();
-      const newMutation = createDeferred<never>();
-      const branchResult: Awaited<ReturnType<SessionCapability["branchCheckpoint"]>> = {
-        ok: true,
-        sourceKey: "agent:writer:old-1",
-        key: "agent:writer:stale-branch",
-        sessionId: "branched-session",
-        checkpoint: {
-          checkpointId: "checkpoint",
-          sessionKey: "agent:writer:old-1",
-          sessionId: "original-session",
-          createdAt: 1,
-          reason: "manual",
-          preCompaction: { sessionId: "original-session" },
-          postCompaction: { sessionId: "original-session" },
-        },
-        entry: { sessionId: "branched-session", updatedAt: 1 },
-      };
-      const mutate =
-        method === "branchCheckpoint"
-          ? vi
-              .fn<SessionCapability["branchCheckpoint"]>()
-              .mockReturnValueOnce(oldBranch.promise)
-              .mockReturnValueOnce(newMutation.promise)
-          : vi
-              .fn<SessionCapability["restoreCheckpoint"]>()
-              .mockReturnValueOnce(oldRestore.promise)
-              .mockReturnValueOnce(newMutation.promise);
-      const sessions = createSessions({ [method]: mutate });
-      const { page, context, changeScope } = await setupArchivedPageWithSelection(
-        "writer",
-        sessions,
-      );
-      vi.mocked(showConfirmDialog).mockResolvedValue(true);
-      const oldRequest = page[method]("agent:writer:old-1", "checkpoint");
-      let newRequest: Promise<void> | undefined;
-      try {
-        await vi.waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
-        expect(page.checkpointBusyKey).toBe("checkpoint");
-        changeScope("main");
-        expect(page.checkpointBusyKey).toBeNull();
-        changeScope("writer");
-
-        newRequest = page[method]("agent:writer:old-1", "checkpoint");
-        await vi.waitFor(() => expect(mutate).toHaveBeenCalledTimes(2));
-        if (method === "branchCheckpoint") {
-          oldBranch.resolve(branchResult);
-        } else {
-          oldRestore.reject(new Error("retired checkpoint error"));
-        }
-        await oldRequest;
-        expect(page.error).toBeNull();
-        expect(context.navigate).not.toHaveBeenCalled();
-        expect(page.checkpointBusyKey).toBe("checkpoint");
-
-        newMutation.reject(new Error("current checkpoint error"));
-        await newRequest;
-        expect(page.error).toContain("current checkpoint error");
-        expect(page.checkpointBusyKey).toBeNull();
-      } finally {
-        if (method === "branchCheckpoint") {
-          oldBranch.resolve(branchResult);
-        } else {
-          oldRestore.reject(new Error("cleanup old checkpoint"));
-        }
-        if (newRequest) {
-          newMutation.reject(new Error("cleanup new checkpoint"));
-        }
-        await Promise.all([oldRequest, newRequest]);
-      }
-    },
-  );
-
-  it("preserves pending deletion when the selected scope does not change", async () => {
-    const deletion = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
+  it("retries a failed deep-link delete without letting retired completion release new work", async () => {
+    const oldDelete = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
+    const newDelete = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
     const deleteMany = vi
       .fn<SessionCapability["deleteMany"]>()
-      .mockReturnValueOnce(deletion.promise)
-      .mockResolvedValue({ deleted: [], errors: [], preservedWorktrees: [] });
-    const { page, changeScope } = await setupArchivedPageWithSelection(
-      "writer",
-      createSessions({ deleteMany }),
-    );
-    vi.mocked(showConfirmDialog).mockResolvedValue(true);
-    const row: GatewaySessionRow = { key: "agent:writer:old-1", kind: "direct", archived: true };
-    const request = page.deleteSessionFromMenu(row);
-    try {
-      await vi.waitFor(() => expect(deleteMany).toHaveBeenCalledTimes(1));
-      changeScope("writer");
-      await page.deleteSessionFromMenu(row);
-      expect(deleteMany).toHaveBeenCalledTimes(1);
-      expect(page.sessionMutationPending).toBe(true);
-      deletion.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
-      await request;
-      expect(page.sessionMutationPending).toBe(false);
-      await page.deleteSessionFromMenu(row);
-      expect(deleteMany).toHaveBeenCalledTimes(2);
-    } finally {
-      deletion.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
-      await request;
-    }
-  });
-
-  it("keeps a deep-link query and its session-bound checkpoint load across scope changes", async () => {
-    const checkpoints = createDeferred<SessionCompactionCheckpoint[]>();
-    const listCheckpoints = vi.fn<SessionCapability["listCheckpoints"]>(() => checkpoints.promise);
-    const sessions = createSessions({ listCheckpoints });
+      .mockRejectedValueOnce(new Error("Deletion unavailable. Try again."))
+      .mockReturnValueOnce(oldDelete.promise)
+      .mockReturnValueOnce(newDelete.promise)
+      .mockResolvedValue(deleted());
+    const sessions = createSessions({ deleteMany });
     const key = "agent:writer:old-1";
-    const { page, changeScope } = await setupArchivedPageWithSelection("writer", sessions, key);
-    const request = page.loadCheckpoint(key);
+    const { page, changeScope } = await setupArchivedPage(sessions, key);
+    const query = vi.mocked(sessions.subscribeList).mock.calls.at(-1)?.[0];
+    expect(query).toMatchObject({ search: key, agentId: "writer" });
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
+    await page.deleteSessionFromMenu(archivedRow(key));
+    await waitForFast(() => expect(page.textContent).toContain("Deletion unavailable. Try again."));
+    const oldRequest = page.deleteSessionFromMenu(archivedRow(key));
+    let newRequest: ReturnType<typeof page.deleteSessionFromMenu> | undefined;
     try {
-      await vi.waitFor(() => expect(page.checkpointLoadingKey).toBe(key));
-      const query = vi.mocked(sessions.subscribeList).mock.calls.at(-1)?.[0];
-      expect(query).toMatchObject({ search: key, agentId: "writer" });
-      const calls = listCheckpoints.mock.calls.length;
+      await vi.waitFor(() => expect(deleteMany).toHaveBeenCalledTimes(2));
+      expect(page.error).toBeNull();
       changeScope("main");
       await page.updateComplete;
-      expect(page.checkpointLoadingKey).toBe(key);
+      await vi.waitFor(() => expect(page.loading).toBe(false));
       expect(vi.mocked(sessions.subscribeList).mock.calls.at(-1)?.[0]).toEqual(query);
-      expect(listCheckpoints).toHaveBeenCalledTimes(calls);
-      checkpoints.resolve([]);
-      await request;
-      expect(page.checkpointItemsByKey[key]).toEqual([]);
-      expect(page.checkpointLoadingKey).toBeNull();
+
+      newRequest = page.deleteSessionFromMenu(archivedRow(key));
+      await vi.waitFor(() => expect(deleteMany).toHaveBeenCalledTimes(3));
+      expect(deleteMany.mock.calls[2]?.[0]).toEqual([
+        { key, agentId: undefined, archivedOnly: true },
+      ]);
+
+      oldDelete.resolve({
+        ...deleted(),
+        errors: [{ target: { key }, error: new Error("retired delete error") }],
+      });
+      await oldRequest;
+      expect(page.error).toBeNull();
+      changeScope("main");
+      await page.deleteSessionFromMenu(archivedRow(key));
+      expect(deleteMany).toHaveBeenCalledTimes(3);
+
+      newDelete.resolve(deleted());
+      await newRequest;
+      await page.deleteSessionFromMenu(archivedRow(key));
+      expect(deleteMany).toHaveBeenCalledTimes(4);
     } finally {
-      checkpoints.resolve([]);
-      await request;
+      oldDelete.resolve(deleted());
+      newDelete.resolve(deleted());
+      await Promise.all([oldRequest, newRequest]);
+    }
+  });
+});
+
+describe("session selection across roster refresh", () => {
+  it.each(["replaced", "replacement without IDs during confirmation", "removed"] as const)(
+    "deletes only still-selected session identities after a row is %s",
+    async (change) => {
+      const missingIds = change === "replacement without IDs during confirmation";
+      const confirmation = createDeferred<boolean>();
+      const rows = Array.from({ length: 27 }, (_, index) =>
+        sessionRow(`selection-${index}`, {
+          sessionId: index === 0 && missingIds ? undefined : `selected-generation-${index}`,
+          updatedAt: 100 - index,
+        }),
+      );
+      const [original, stable] = [rows[0]!, rows[1]!];
+      let serverRows = rows;
+      let revision = 0;
+      const deletedTargets: SessionDeleteTarget[] = [];
+      const { context, sessions } = liveSessions<SessionDeleteTarget>({
+        "sessions.subscribe": () => ({ subscribed: true }),
+        "sessions.list": () =>
+          sessionsResult(
+            serverRows.filter((row) => !row.archived),
+            ++revision,
+          ),
+        "sessions.delete": (target) => {
+          if (!target) {
+            throw new Error("Missing delete target");
+          }
+          deletedTargets.push(target);
+          serverRows = serverRows.filter((row) => row.key !== target.key);
+          return { deleted: true };
+        },
+      });
+      const subscribe = vi.spyOn(sessions, "subscribeList");
+      const page = await createRenderedPage(context, sessionsResult(rows, revision));
+      try {
+        selectRows(page, original, stable);
+        page.onPageChange(1);
+        await page.updateComplete;
+        expect(page.selectedSessions.size).toBe(2);
+        expect(page.querySelector(".data-table-bulk-bar")?.textContent).toContain("2 selected");
+
+        vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
+        let deletion: ReturnType<typeof page.deleteSelected> | undefined;
+        if (missingIds) {
+          deletion = page.deleteSelected();
+          expect(showConfirmDialog).toHaveBeenCalledOnce();
+        }
+        if (change === "removed") {
+          serverRows = rows.slice(1);
+        } else {
+          serverRows = [
+            {
+              ...original,
+              label: "Replacement session",
+              sessionId: missingIds ? undefined : "replacement-generation",
+            },
+            ...rows.slice(1),
+          ];
+        }
+        await sessions.refreshList({ ...subscribe.mock.calls[0]![0], force: true });
+        await page.updateComplete;
+        if (!missingIds) {
+          deletion = page.deleteSelected();
+        }
+        confirmation.resolve(true);
+        await deletion;
+        expect(deletedTargets).toMatchObject([
+          { key: stable.key, expectedSessionId: stable.sessionId },
+        ]);
+      } finally {
+        page.remove();
+        sessions.dispose();
+      }
+    },
+  );
+});
+
+describe("sessions page lifecycle", () => {
+  it("presents owner-started refreshes without replacing controls or rows", async () => {
+    const target = sessionRow("retained", { sessionId: "retained-generation" });
+    const initial = sessionsResult([target], 1);
+    const managed = createManagedSessions();
+    const context = createContext(createGateway().gateway, managed.sessions);
+    const page = await createRenderedPage(context, initial);
+    const searchInput = () =>
+      page.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
+    const [query] = managed.subscribeList.mock.calls[0]!;
+    const input = searchInput();
+    const row = page.querySelector("tbody tr");
+    selectRows(page, target);
+    await page.updateComplete;
+    const refresh = () => page.querySelector<HTMLButtonElement>(".sessions-toolbar__refresh")!;
+    const publish = (loading: boolean, error: string | null = null) =>
+      managed.publish(query, { result: initial, agentId: "main", loading, error });
+
+    const failure = "Synthetic background refresh failure";
+    for (const [loading, error] of [
+      [true, null],
+      [false, failure],
+      [true, null],
+      [false, null],
+    ] as const) {
+      publish(loading, error);
+      await vi.waitFor(() => {
+        expect(refresh().disabled).toBe(false);
+        expect(searchInput()).toBe(input);
+        expect(page.querySelector("tbody tr")).toBe(row);
+        expect(page.selectedSessions.has(target.key)).toBe(true);
+        if (error) {
+          expect(page.textContent).toContain(error);
+        } else if (!loading) {
+          expect(page.querySelector(".sessions-error")).toBeNull();
+        }
+      });
     }
   });
 
-  it("preserves the same-scope all-agent deleteAllArchived path", async () => {
-    const writerKeys = ["agent:writer:old-1", "agent:writer:old-2"];
-    const list = vi.fn(async () => ({
-      count: writerKeys.length,
-      totalCount: writerKeys.length,
-      sessions: writerKeys.map((key) => ({ key, archived: true })),
-      hasMore: false,
-      nextOffset: null,
-    })) as unknown as SessionCapability["list"];
-    const deleteMany = vi.fn(async () => ({
-      deleted: writerKeys,
-      errors: [],
-      preservedWorktrees: [],
-    }));
-    const sessions = createSessions({
-      list,
-      deleteMany,
-    });
-    const { page } = await setupArchivedPageWithSelection(null, sessions);
-    vi.mocked(showConfirmDialog).mockResolvedValue(true);
-
-    await page.deleteAllArchived();
-
-    expect(deleteMany).toHaveBeenCalledOnce();
+  it("shows command progress while the session owner holds its follow-up roster read", async () => {
+    const target = sessionRow("held-command", { label: "Before edit" });
+    const refreshed = createDeferred<ReturnType<typeof sessionsResult>>();
+    const readStarted = createDeferred();
+    let edited = false;
+    const { context, sessions } = createLiveSessionContext(
+      createTestGatewayClient((method) => {
+        switch (method) {
+          case "sessions.list":
+            if (edited) {
+              readStarted.resolve();
+              return refreshed.promise;
+            }
+            return sessionsResult([target], 1);
+          case "sessions.describe":
+            return { session: target };
+          case "sessions.patch":
+            edited = true;
+            return { ok: true, path: "", key: target.key, entry: { sessionId: target.sessionId } };
+          default:
+            throw new Error(`Unexpected request: ${method}`);
+        }
+      }),
+    );
+    const page = await createRenderedPage(context, sessionsResult([target], 1), "all");
+    const next = sessionsResult([{ ...target, label: "After edit" }], 2);
+    try {
+      page.querySelector<HTMLButtonElement>(".session-details-toggle")!.click();
+      await waitForFast(() =>
+        expect(
+          page.querySelector<HTMLInputElement>(".session-overrides-grid input")?.disabled,
+        ).toBe(false),
+      );
+      const label = page.querySelector<HTMLInputElement>(".session-overrides-grid input")!;
+      label.value = "After edit";
+      label.dispatchEvent(new Event("change", { bubbles: true }));
+      await readStarted.promise;
+      await waitForFast(() => expect(page.textContent).toContain("Working…"));
+      refreshed.resolve(next);
+      await waitForFast(() => expect(page.textContent).not.toContain("Working…"));
+      expect(page.querySelector<HTMLButtonElement>(".sessions-toolbar__refresh")?.disabled).toBe(
+        false,
+      );
+      expect(page.textContent).toContain("After edit");
+    } finally {
+      refreshed.resolve(next);
+      page.remove();
+      sessions.dispose();
+    }
   });
 });

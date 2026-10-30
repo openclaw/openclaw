@@ -138,6 +138,16 @@ gh search issues --repo openclaw/openclaw --match title,body,comments -- "<terms
 gh search prs --repo openclaw/openclaw --match title,body,comments -- "<terms>"
 ```
 
+## Cyber Classifier Interruptions
+
+For permitted defensive work interrupted by a cyber classifier, use an approved,
+available Daybreak Blue route only for that bounded task, then restore the
+previous model. Preserve the approved identity, scope, permissions, sandbox, and
+review gates. Never switch models to bypass access denials, disallowed requests,
+or refused tool actions; if that route also refuses, stop and report. Follow
+[OpenAI's guidance](https://learn.chatgpt.com/docs/cyber-safety) for approved
+model access.
+
 ## Decision Notes
 
 - “fixed on main, unreleased” is usually not a close.

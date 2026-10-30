@@ -14,9 +14,22 @@ const DEFAULT_LOCAL_TSGO_BUILD_INFO_FILE = ".artifacts/tsgo-cache/root.tsbuildin
 const DEFAULT_FAST_LOCAL_CHECK_MIN_MEMORY_BYTES = 48 * GIB;
 const DEFAULT_FAST_LOCAL_CHECK_MIN_CPUS = 12;
 const CI_PARALLEL_MIN_CPUS = 8;
+const DECLARATION_PATH_CACHE_LIMIT = 16_384;
+// Native compilers ship their platform binary behind the package's own getExePath.
+// tsgo retains declaration emit and Go profiling; tsrs is the default type checker.
+export const NATIVE_COMPILER_PACKAGES = new Map([
+  ["tsgo", "typescript"],
+  ["tsrs", "tsrs"],
+]);
+// tsrs publishes no Windows or Intel macOS binary yet; those hosts keep type checking with tsgo.
+const TSRS_PLATFORMS = new Set(["darwin-arm64", "linux-arm64", "linux-x64"]);
 export const CI_PARALLEL_MIN_MEMORY_BYTES = 24 * GIB;
 
 const EXCLUSIVE_CI_TEST_CONFIGS = new Set([
+  "vitest.config.ts",
+  "test/vitest/vitest.config.ts",
+  "test/vitest/vitest.full-agentic.config.ts",
+  "test/vitest/vitest.gateway.config.ts",
   "test/vitest/vitest.gateway-core.config.ts",
   "test/vitest/vitest.gateway-database-workers.config.ts",
   "test/vitest/vitest.gateway-methods.config.ts",
@@ -33,6 +46,9 @@ type Env = NodeJS.ProcessEnv;
 type Resources = {
   logicalCpuCount: number;
   totalMemoryBytes: number;
+  memoryCapacityBytes?: number | null;
+  memoryLimitBytes?: number | null;
+  platform?: NodeJS.Platform;
 };
 
 type LocalCheckMode = "auto" | "full" | "throttled";
@@ -56,10 +72,23 @@ function isCiLikeEnv(env: Env = process.env) {
   return env.CI === "true" || env.GITHUB_ACTIONS === "true";
 }
 
+export function resolveCheckMemoryCapacityBytes(
+  resources: Pick<Resources, "totalMemoryBytes" | "memoryCapacityBytes">,
+) {
+  // Omitted capacity is a physical-only caller; null means discovery was unresolved.
+  // A known ancestor ceiling, or unknown ownership, must not select a roomy workload.
+  return Math.min(
+    resources.totalMemoryBytes,
+    resources.memoryCapacityBytes === undefined
+      ? resources.totalMemoryBytes
+      : (resources.memoryCapacityBytes ?? 0),
+  );
+}
+
 // Small CI runners share one constraint check for shard concurrency and Go memory policy.
 export function isConstrainedCiCheckHost(hostResources: Resources) {
   return !(
-    hostResources.totalMemoryBytes >= CI_PARALLEL_MIN_MEMORY_BYTES &&
+    resolveCheckMemoryCapacityBytes(hostResources) >= CI_PARALLEL_MIN_MEMORY_BYTES &&
     hostResources.logicalCpuCount >= CI_PARALLEL_MIN_CPUS
   );
 }
@@ -76,6 +105,104 @@ export function resolveLocalCheckEnv(env: Env = process.env) {
   };
 }
 
+const withinRoot = (root: string, file: string) => {
+  const relative = path.relative(root, file);
+  return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+};
+
+export function createDeclarationInputBoundary(cwd: string) {
+  const declared = path.resolve(cwd);
+  const prefixes = [declared];
+  if (fs.lstatSync(declared).isSymbolicLink()) {
+    prefixes.push(path.resolve(path.dirname(declared), fs.readlinkSync(declared)));
+  }
+  prefixes.push(fs.realpathSync(declared));
+  const root = fs.realpathSync.native(declared);
+  const resolvedPaths = new Map<string, string>();
+  const containedPaths = new Map<string, boolean>();
+  // Cache lexical membership; assert still resolves the current filesystem path each time.
+  const contains = (absolute: string) => {
+    const cached = containedPaths.get(absolute);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const contained = withinRoot(root, absolute);
+    if (containedPaths.size < DECLARATION_PATH_CACHE_LIMIT) {
+      containedPaths.set(absolute, contained);
+    }
+    return contained;
+  };
+  // Runtimes differ on whether realpath preserves a case-only symlink target.
+  // Translate only declared checkout spellings; never canonicalize outside candidates into scope.
+  const resolve = (file: string) => {
+    // Drive-relative paths can depend on the current directory on Windows.
+    const cacheable = path.isAbsolute(file);
+    const cached = cacheable ? resolvedPaths.get(file) : undefined;
+    if (cached !== undefined) {
+      return cached;
+    }
+    const absolute = path.resolve(declared, file);
+    const prefix = prefixes.find((candidate) => withinRoot(candidate, absolute));
+    const resolved = prefix ? path.resolve(root, path.relative(prefix, absolute)) : absolute;
+    // Watch builds can retain this boundary; cache lexical results, never filesystem checks.
+    if (cacheable && resolvedPaths.size < DECLARATION_PATH_CACHE_LIMIT) {
+      resolvedPaths.set(file, resolved);
+    }
+    return resolved;
+  };
+  return {
+    root,
+    resolve,
+    assert(file: string) {
+      const absolute = resolve(file);
+      // Generated declaration IDs do not exist yet, but their source directory does.
+      let existing = absolute;
+      while (!fs.existsSync(existing) && path.dirname(existing) !== existing) {
+        existing = path.dirname(existing);
+      }
+      const real = fs.realpathSync.native(existing);
+      if (!contains(absolute) || !contains(real)) {
+        const diagnosis = `Keep declaration dependencies and compiler files physically inside ${root}; shared installs and external symlinks are unsupported. Inspect the reported path and dependency links; this error alone does not establish a missing or undeclared dependency.`;
+        throw new Error(`Declaration input escapes checkout: ${absolute} -> ${real}. ${diagnosis}`);
+      }
+      return absolute;
+    },
+  };
+}
+
+/**
+ * Select tsrs by default, retaining tsgo for unsupported platforms and Go profiling.
+ * OPENCLAW_TYPECHECKER=tsgo forces the tsgo fallback (full release validation
+ * uses it to re-check the release with tsgo).
+ */
+export function resolveTypeCheckTool(
+  platform = process.platform,
+  arch = process.arch,
+  env: NodeJS.ProcessEnv = process.env,
+  args: readonly string[] = [],
+) {
+  const requested = env.OPENCLAW_TYPECHECKER?.trim() || undefined;
+  const supportsTsrs = TSRS_PLATFORMS.has(`${platform}-${arch}`);
+  const goProfiling = hasFlag(args, "--pprofDir");
+  if (requested !== undefined && requested !== "tsrs" && requested !== "tsgo") {
+    throw new Error(`OPENCLAW_TYPECHECKER must be tsrs or tsgo; got ${JSON.stringify(requested)}.`);
+  }
+  if (requested === "tsgo" || (requested === undefined && (!supportsTsrs || goProfiling))) {
+    return "tsgo";
+  }
+  if (!supportsTsrs) {
+    throw new Error(
+      `tsrs has no binary for ${platform}-${arch}; unset OPENCLAW_TYPECHECKER to use tsgo.`,
+    );
+  }
+  if (goProfiling) {
+    throw new Error(
+      "tsrs does not support --pprofDir; set OPENCLAW_TYPECHECKER=tsgo or unset it for Go profiling.",
+    );
+  }
+  return "tsrs";
+}
+
 /** Resolve a repo tool from this worktree or the primary checkout's installed toolchain. */
 export function resolveRepoToolBinPath(
   toolName: string,
@@ -85,17 +212,14 @@ export function resolveRepoToolBinPath(
     resolveCommonDir = resolveGitCommonDir,
   }: RepoToolOptions = {},
 ) {
-  if (toolName === "tsgo") {
-    // TypeScript 6 owns the in-process compiler API; CLI checks use the stable
-    // native compiler explicitly, independent of either package's tsc bin link.
+  const nativePackage = NATIVE_COMPILER_PACKAGES.get(toolName);
+  if (nativePackage) {
+    // Resolve this checkout's native compiler independently of the ambient bin links.
     const require = createRequire(import.meta.url);
-    const {
-      createDeclarationInputBoundary,
-    }: typeof import("./tsdown-declaration-boundary.mts") = require("./tsdown-declaration-boundary.mts");
     const inputs = createDeclarationInputBoundary(cwd);
     const fromCheckout = createRequire(path.join(inputs.root, "package.json"));
     const nativeRoot = path.dirname(
-      inputs.assert(fromCheckout.resolve("typescript-native/package.json")),
+      inputs.assert(fromCheckout.resolve(`${nativePackage}/package.json`)),
     );
     const getExePath: { default: () => string } = require(
       inputs.assert(path.join(nativeRoot, "lib/getExePath.js")),
@@ -151,7 +275,7 @@ export function ensureRepoNodeModulesLink(
   return localNodeModules;
 }
 
-function hasFlag(args: string[], name: string) {
+function hasFlag(args: readonly string[], name: string) {
   return args.some((arg) => arg === name || arg.startsWith(`${name}=`));
 }
 
@@ -234,7 +358,41 @@ export function applyLocalOxlintPolicy(args: string[], env: Env, hostResources: 
     insertBeforeSeparator(nextArgs, "--format", "stylish");
   }
 
-  if (
+  const options = nextArgs.slice(0, nextArgs.includes("--") ? nextArgs.indexOf("--") : undefined);
+  const option = (name: string) => {
+    const index = options.findIndex((arg) => arg === name || arg.startsWith(`${name}=`));
+    return index < 0 ? undefined : (options[index]!.split("=")[1] ?? options[index + 1]);
+  };
+  const threads = option("--threads");
+  const extensionShard = option("--tsconfig") === "extensions/tsconfig.json";
+  const balancedCiShard =
+    isCiLikeEnv(nextEnv) &&
+    !isLocalCheckEnabled(nextEnv) &&
+    isConstrainedCiCheckHost(hostResources) &&
+    nextEnv.OPENCLAW_OXLINT_BATCH_CONCURRENCY === "1" &&
+    nextEnv.OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS === JSON.stringify(args) &&
+    hostResources.platform === "linux" &&
+    hostResources.logicalCpuCount >= 4 &&
+    hostResources.memoryCapacityBytes != null &&
+    resolveCheckMemoryCapacityBytes(hostResources) >= 15 * GIB &&
+    (hostResources.memoryLimitBytes ?? 0) >= (extensionShard ? 10 : 14) * GIB &&
+    ["config/tsconfig/oxlint.core.json", "extensions/tsconfig.json"].includes(
+      option("--tsconfig") ?? "",
+    ) &&
+    ((!hasFlag(nextArgs, "--threads") && threads === undefined) ||
+      threads === "1" ||
+      threads === "2");
+  if (balancedCiShard) {
+    // The batch owner admits only bounded targets and one checker child.
+    // A 3-GiB Go target repeatedly collects a larger live graph; keep one child
+    // and give its compiler four CPUs instead of duplicating it in parallel.
+    if (!hasFlag(nextArgs, "--threads")) {
+      insertBeforeSeparator(nextArgs, "--threads=2");
+    }
+    nextEnv.GOMAXPROCS ||= "4";
+    nextEnv.GOGC ||= "100";
+    nextEnv.GOMEMLIMIT ||= "8GiB";
+  } else if (
     shouldThrottleLocalChecks(nextEnv, hostResources) ||
     (isCiLikeEnv(nextEnv) && isConstrainedCiCheckHost(hostResources))
   ) {
@@ -267,7 +425,8 @@ function shouldThrottleLocalChecks(
 
   const resolvedHostResources = resolveHostResources(hostResources);
   return (
-    resolvedHostResources.totalMemoryBytes < DEFAULT_FAST_LOCAL_CHECK_MIN_MEMORY_BYTES ||
+    resolveCheckMemoryCapacityBytes(resolvedHostResources) <
+      DEFAULT_FAST_LOCAL_CHECK_MIN_MEMORY_BYTES ||
     resolvedHostResources.logicalCpuCount < DEFAULT_FAST_LOCAL_CHECK_MIN_CPUS
   );
 }

@@ -2,9 +2,9 @@
 import type { ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { isPidAlive } from "openclaw/plugin-sdk/process-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const childProcessMocks = vi.hoisted(() => ({
@@ -41,6 +41,7 @@ async function createCliRoot(): Promise<{
     "const { writeFileSync } = require('node:fs');",
     "process.on('SIGTERM', () => {});",
     `writeFileSync(${JSON.stringify(grandchildReadyPath)}, 'ready');`,
+    "process.send('ready');",
     "setInterval(() => {}, 1000);",
   ].join(" ");
   await mkdir(path.join(root, "dist"));
@@ -49,8 +50,9 @@ async function createCliRoot(): Promise<{
     [
       "import { spawn } from 'node:child_process';",
       "import { writeFileSync } from 'node:fs';",
-      `const grandchild = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildScript)}], { stdio: 'ignore' });`,
+      `const grandchild = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildScript)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });`,
       `writeFileSync(${JSON.stringify(grandchildPidPath)}, String(grandchild.pid));`,
+      "grandchild.once('message', () => process.stdout.write('grandchild ready\\n'));",
       "process.stdout.write('ready\\n');",
       "process.on('SIGTERM', () => process.exit(0));",
       "setInterval(() => {}, 1000);",
@@ -65,60 +67,25 @@ function latestChild(): ChildProcess {
   return child as ChildProcess;
 }
 
-async function waitForChildClose(child: ChildProcess | undefined): Promise<void> {
-  if (!child || child.exitCode !== null || child.signalCode !== null) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    child.once("close", () => resolve());
-  });
-}
-
-async function waitForPidFile(pathToCheck: string, timeoutMs: number): Promise<number> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const value = (await readFile(pathToCheck, "utf8")).trim();
-      const pid = Number(value);
-      if (/^[1-9]\d*$/u.test(value) && Number.isSafeInteger(pid)) {
-        return pid;
-      }
-    } catch {}
-    await sleep(5);
-  }
-  throw new Error(`Timed out waiting for a PID in ${pathToCheck}`);
-}
-
-async function waitForFile(pathToCheck: string, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      await readFile(pathToCheck);
-      return;
-    } catch {}
-    await sleep(5);
-  }
-  throw new Error(`Timed out waiting for ${pathToCheck}`);
-}
-
 describe("Matrix QA CLI runtime stream errors", () => {
   beforeEach(() => {
     childProcessMocks.children.length = 0;
     childProcessMocks.spawn.mockClear();
   });
 
-  it.each([
+  it.for([
     ["stdout", false],
     ["stderr", false],
     ["stdout", true],
   ] as const)(
     "rejects after cleaning up when %s emits a stream error (after exit: %s)",
-    async (streamName, afterExit) => {
+    async ([streamName, afterExit], { signal }) => {
       const { grandchildPidPath, grandchildReadyPath, root } = await createCliRoot();
       let child: ChildProcess | undefined;
       let grandchildPid: number | undefined;
       let session: ReturnType<typeof startMatrixQaOpenClawCli> | undefined;
       let childClosed = false;
+      let closed: Promise<void> | undefined;
       try {
         session = startMatrixQaOpenClawCli({
           args: ["matrix", "verify", "self"],
@@ -127,16 +94,32 @@ describe("Matrix QA CLI runtime stream errors", () => {
           timeoutMs: 5_000,
         });
         child = latestChild();
-        child.once("close", () => {
-          childClosed = true;
+        closed = new Promise<void>((resolve) => {
+          child?.once("close", () => {
+            childClosed = true;
+            resolve();
+          });
         });
-        await session.waitForOutput(
-          (output) => output.stdout.includes("ready"),
-          "ready marker",
-          2_000,
+        const ready = Promise.withResolvers<void>();
+        let stdout = "";
+        child.stdout?.on("data", (chunk: Buffer) => {
+          stdout += chunk.toString();
+          if (stdout.includes("grandchild ready\n")) {
+            ready.resolve();
+          }
+        });
+        await withinTest(
+          awaitGateBeforeSettlement(
+            ready.promise,
+            session.wait(),
+            `Timed out waiting for ${grandchildReadyPath}`,
+          ),
+          signal,
         );
-        grandchildPid = await waitForPidFile(grandchildPidPath, 2_000);
-        await waitForFile(grandchildReadyPath, 2_000);
+        // The parent writes the PID before forwarding its child's installed-handler receipt.
+        grandchildPid = Number(await readFile(grandchildPidPath, "utf8"));
+        expect(Number.isSafeInteger(grandchildPid) && grandchildPid > 0).toBe(true);
+        expect(await readFile(grandchildReadyPath, "utf8")).toBe("ready");
 
         const streamError = new Error(`${streamName} pipe failed`);
         if (afterExit) {
@@ -146,14 +129,14 @@ describe("Matrix QA CLI runtime stream errors", () => {
           child[streamName]?.emit("error", streamError);
         }
 
-        await expect(session.wait()).rejects.toThrow(
+        await expect(withinTest(session.wait(), signal)).rejects.toThrow(
           `${streamName} stream error: ${streamName} pipe failed`,
         );
         expect(childClosed).toBe(true);
         expect(isPidAlive(grandchildPid)).toBe(false);
       } finally {
         session?.kill();
-        await waitForChildClose(child);
+        await closed;
         if (grandchildPid && isPidAlive(grandchildPid)) {
           process.kill(grandchildPid, "SIGKILL");
         }

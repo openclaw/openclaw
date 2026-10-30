@@ -1,911 +1,401 @@
-import { spawnSync, type ChildProcess } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import {
+  readSqliteDatabaseCleanClose,
+  revokeSqliteDatabaseAdmissionsForPath,
+  readSqliteDatabaseIntegrityVerification,
+} from "../infra/sqlite-database-admission.js";
 import { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
-import { readMainDatabasePosixLocks } from "../infra/sqlite-posix-locks.test-support.js";
+import { assertSqliteDatabaseHeader } from "../infra/sqlite-integrity.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
-import { createDeferredCore } from "../shared/deferred.js";
-import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-resources.js";
-import * as agentDatabase from "./openclaw-agent-db.js";
+import { createPermitPool } from "../shared/permit-pool.js";
+import { assertAgentDatabaseAdmitted } from "./agent-database-admission.js";
+import {
+  captureAgentDatabaseStartupIntegrity,
+  prepareAgentDatabaseStartupVerification as prepareStartupVerification,
+} from "./agent-database-startup-integrity.js";
+import { verifyAgentDatabaseStartupIntegrity } from "./agent-database-startup-verification.js";
+import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
+import { recordOpenClawAgentDatabaseOpenFailure } from "./openclaw-agent-db-lifecycle.js";
 import {
   clearOpenClawAgentDatabaseOpenFailure,
-  closeOpenClawAgentDatabaseByPath,
-  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
-  recordOpenClawAgentDatabaseOpenFailure,
 } from "./openclaw-agent-db.js";
-import { databaseVerifyHostRuntimeEntrypoint } from "./openclaw-database-verify-runtime.test-support.js";
+import { prepareOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
+import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
 import {
-  applyOpenClawDatabaseVerificationResults,
-  runDatabaseVerifyWorker,
-} from "./openclaw-database-verify.impl.js";
-import {
-  type OpenClawDatabaseVerifyResult,
-  type OpenClawDatabaseVerifyTarget,
-  verifyOpenClawDatabases,
-} from "./openclaw-database-verify.worker.js";
-import {
-  clearOpenClawAgentIntegrityVerification,
   clearOpenClawDatabaseQuarantine,
-  readOpenClawAgentIntegrityVerification,
-  readOpenClawDatabaseQuarantine,
+  readOpenClawDatabaseQuarantineFailure,
   recordOpenClawDatabaseQuarantine,
 } from "./openclaw-quarantine-store.js";
 import {
+  readPersistedQuarantineRow,
+  seedOpenClawDatabaseQuarantine,
+} from "./openclaw-quarantine-store.test-support.js";
+import { recordOpenClawStateDatabaseOpenFailure } from "./openclaw-state-db-cache.js";
+import {
   closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
-  recordOpenClawStateDatabaseOpenFailure,
   repairOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
-import { createUnsafeIndexDrift } from "./sqlite-index-drift.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(() => {
-    try {
-      closeOpenClawAgentDatabasesForTest();
-    } finally {
-      try {
-        closeOpenClawStateDatabaseForTest();
-      } finally {
-        cleanup();
-      }
-    }
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    clearRuntimeConfigSnapshot();
+    vi.unstubAllEnvs();
+    using teardown = new DisposableStack();
+    teardown.defer(cleanup);
+    teardown.defer(closeOpenClawStateDatabaseForTest);
+    teardown.defer(closeOpenClawAgentDatabasesForTest);
   });
 });
 
-async function captureDatabaseVerifyWorkerSendFailure(failure: unknown): Promise<Error> {
-  return await runDatabaseVerifyWorker([], {
-    onWorker: (worker) => {
-      if (!worker) {
-        return;
-      }
-      worker.send = ((...args: unknown[]) => {
-        const callback = args.at(-1);
-        if (typeof callback === "function") {
-          callback(failure);
-        }
-        return true;
-      }) as ChildProcess["send"];
-    },
-  }).then(
-    () => {
-      throw new Error("expected database verification worker failure");
-    },
-    (rejection: unknown) => rejection as Error,
-  );
-}
-
-describe("database verification error coercion", () => {
-  it("preserves structured send failures across the database-worker boundary", async () => {
-    const failure = { code: "SQLITE_IOERR", database: "state" };
-
-    const error = await captureDatabaseVerifyWorkerSendFailure(failure);
-
-    expect(error).toMatchObject({ message: "[object Object]", code: "SQLITE_IOERR" });
-    expect(error.cause).toBe(failure);
-  });
-});
-
-function repairUnsafeIndexDrift(databasePath: string): void {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
-  try {
-    database.enableDefensive?.(false);
-    database.exec("PRAGMA writable_schema = ON;");
-    database
-      .prepare(
-        "UPDATE sqlite_schema SET sql = 'CREATE INDEX unsafe_index_records_value ON unsafe_index_records(indexed_value)' WHERE name = 'unsafe_index_records_value'",
-      )
-      .run();
-    const schemaVersion = readSqliteNumberPragma(database, "schema_version");
-    database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
-  } finally {
-    database.close();
-  }
-}
-
-async function copyHealthyDatabase(sourcePath: string, targetPath: string): Promise<void> {
-  const sqlite = requireNodeSqlite();
-  const source = new sqlite.DatabaseSync(sourcePath, { readOnly: true });
-  try {
-    await sqlite.backup(source, targetPath);
-  } finally {
-    source.close();
-  }
-}
-
-function quarantineStorePath(stateDir: string): string {
-  return path.join(stateDir, "state", "openclaw-quarantine.sqlite");
-}
-
-function terminalVerificationResult(pathname: string): OpenClawDatabaseVerifyResult {
+function fixture() {
+  const stateDir = tempDirs.make("openclaw-database-verify-");
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  const databasePath = path.join(stateDir, "agent.sqlite");
   return {
-    path: pathname,
-    ok: false,
-    error: "prepared terminal integrity failure",
-    terminal: true,
+    env,
+    databasePath,
+    storePath: path.join(stateDir, "state", "openclaw-quarantine.sqlite"),
+    agent: () => openOpenClawAgentDatabase({ agentId: "worker-1", env }),
+    state: () => openOpenClawStateDatabase({ env }),
+    read: () => readOpenClawDatabaseQuarantineFailure("agent", databasePath, { env }),
+    row: (pathname = databasePath) => readPersistedQuarantineRow(pathname, { env }),
+    clear: (pathname = databasePath) => clearOpenClawDatabaseQuarantine(pathname, { env }),
+    seed: (pathname = databasePath, reason = "corrupt index", kind: "agent" | "state" = "agent") =>
+      seedOpenClawDatabaseQuarantine({ env, kind, path: pathname, reason }),
   };
 }
 
-function preparedVerificationResults(
-  targets: readonly OpenClawDatabaseVerifyTarget[],
-): OpenClawDatabaseVerifyResult[] {
-  return targets.map((target) => terminalVerificationResult(target.path));
+function integrityError(message = "corrupt index") {
+  return Object.assign(new Error(message), { name: "SqliteIntegrityError" });
 }
 
-describe("OpenClaw database integrity verifier", () => {
-  it.each(["absent", "installed"])(
-    "verifies the %s additive transcript eligibility projection",
-    async (shape) => {
-      const stateDir = tempDirs.make("openclaw-database-verify-eligibility-");
-      const agent = openOpenClawAgentDatabase({
-        agentId: "worker-1",
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      });
-      if (shape === "absent") {
-        agent.db.exec(
-          "DROP INDEX idx_agent_transcript_context_pending; ALTER TABLE session_transcript_active_events DROP COLUMN context_eligible;",
-        );
-      }
-      const targets: OpenClawDatabaseVerifyTarget[] = [
-        { kind: "agent", label: "transcript eligibility", path: agent.path },
-      ];
-      await expect(runDatabaseVerifyWorker(targets)).resolves.toEqual([
-        { path: agent.path, ok: true },
-      ]);
-      expect(
-        agent.db
-          .prepare(
-            "SELECT name FROM pragma_table_info('session_transcript_active_events') WHERE name = 'context_eligible'",
-          )
-          .get(),
-      ).toEqual(shape === "absent" ? undefined : { name: "context_eligible" });
-    },
+const corrupt = expect.stringContaining("corrupt index");
+const damage = expect.objectContaining({ name: "SqliteIntegrityError", message: corrupt });
+const timestamp = expect.any(Number);
+
+function execDatabase(pathname: string, sql: string) {
+  using database = openDatabase(pathname);
+  database.exec(sql);
+}
+
+function openDatabase(pathname: string, readOnly = false) {
+  return new (requireNodeSqlite().DatabaseSync)(pathname, { readOnly });
+}
+
+let f: ReturnType<typeof fixture>;
+beforeEach(() => {
+  f = fixture();
+});
+it("revalidates a latched integrity failure after external repair", () => {
+  const agentPath = f.agent().path;
+  closeOpenClawAgentDatabasesForTest();
+  recordOpenClawAgentDatabaseOpenFailure(agentPath, integrityError("corrupt generation"));
+  execDatabase(agentPath, "CREATE TABLE generation_change (id INTEGER PRIMARY KEY) STRICT;");
+
+  expect(f.agent().db.isOpen).toBe(true);
+});
+
+it("retains a recorded corruption verdict across writes until verified Doctor recovery", () => {
+  const database = f.agent();
+  expect(
+    readOpenClawDatabaseQuarantineFailure("agent", database.path, { env: f.env }),
+  ).toBeUndefined();
+  recordOpenClawDatabaseQuarantine(database.path, "corrupt index", {
+    env: f.env,
+    assertCurrent() {},
+  });
+  database.db.exec("CREATE TABLE later_write (id INTEGER PRIMARY KEY) STRICT");
+  expect(
+    readOpenClawDatabaseQuarantineFailure("agent", database.path, { env: f.env }),
+  ).toMatchObject(damage);
+  closeOpenClawAgentDatabasesForTest();
+  expect(f.agent).toThrow(damage);
+  expect(clearOpenClawAgentDatabaseOpenFailure(database.path, { env: f.env })).toBe(true);
+  expect(f.agent().db.isOpen).toBe(true);
+});
+
+it("rejects an impossible freelist header without a full database scan", () => {
+  const database = openDatabase(f.databasePath);
+  database.exec("CREATE TABLE probe(id INTEGER PRIMARY KEY)");
+  assertSqliteDatabaseHeader(database, f.databasePath);
+  database.close();
+  const bytes = fs.readFileSync(f.databasePath);
+  bytes.writeUInt32BE(0xffff_ffff, 36);
+  fs.writeFileSync(f.databasePath, bytes);
+  using damaged = openDatabase(f.databasePath, true);
+  expect(() => assertSqliteDatabaseHeader(damaged, f.databasePath)).toThrow(
+    /header is inconsistent|malformed/iu,
   );
+});
 
-  it.skipIf(process.platform === "win32").each([undefined, "quick"] as const)(
-    "preserves live WAL ownership during an open database check (%s)",
-    async (check) => {
-      const stateDir = tempDirs.make("openclaw-database-verify-live-locks-");
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      const agent = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-      agent.db
-        .prepare(
-          "INSERT INTO auth_profile_state (state_key, state_json, updated_at) VALUES (?, ?, ?)",
-        )
-        .run("verifier-lock-owner", JSON.stringify({ preserved: true }), 1);
-      const walBefore = fs.statSync(`${agent.path}-wal`);
-      const shmBefore = fs.statSync(`${agent.path}-shm`);
-      const baseLocksBefore =
-        process.platform === "linux" ? readMainDatabasePosixLocks(agent.path) : [];
-      if (process.platform === "linux") {
-        expect(baseLocksBefore).toEqual([
-          { length: 510, pid: process.pid, start: 1073741826, type: "read" },
-        ]);
-      }
-      const targets: OpenClawDatabaseVerifyTarget[] = [
-        { kind: "agent", label: "OpenClaw agent database worker-1", path: agent.path, check },
-      ];
+it("binds provisional startup admission to its original lifetime and physical file", () => {
+  const { path: file, agentId } = f.agent();
+  const input = { agentId, paths: [file], env: f.env, signal: new AbortController().signal };
+  const activation = { isCurrent: () => true, verifyIntegrity: async () => {} };
+  const owner = prepareStartupVerification(input, activation, createPermitPool(1))!;
+  const policy = captureAgentDatabaseStartupIntegrity(file, agentId)!;
+  expect(captureAgentDatabaseStartupIntegrity(file, "other")).toBeUndefined();
+  owner.revoke();
+  expect(Atomics.load(new Int32Array(policy.valid), 0)).toBe(0);
+  using cleanup = new DisposableStack();
+  cleanup.defer(prepareStartupVerification(input, activation, createPermitPool(1))!.revoke);
+  owner.revoke();
+  expect(captureAgentDatabaseStartupIntegrity(file, agentId)).toBeDefined();
+  closeOpenClawAgentDatabasesForTest();
+  fs.renameSync(file, `${file}.old`);
+  using replacement = openDatabase(file);
+  replacement.exec("CREATE TABLE replacement(id INTEGER PRIMARY KEY)");
+  expect(() => captureAgentDatabaseStartupIntegrity(file, agentId)).toThrow(/identity changed/iu);
+});
 
-      await expect(runDatabaseVerifyWorker(targets)).resolves.toEqual([
-        expect.objectContaining({ path: agent.path, ok: true }),
-      ]);
-      if (process.platform === "linux") {
-        // SQLite 3.51 can preserve visible WAL files after a lock is lost, so
-        // assert the kernel lock itself rather than relying on that symptom.
-        expect(readMainDatabasePosixLocks(agent.path)).toEqual(baseLocksBefore);
-      }
-      const reader = spawnSync(
-        process.execPath,
-        [
-          "--input-type=module",
-          "-e",
-          `
-            import { DatabaseSync } from "node:sqlite";
-            const database = new DatabaseSync(process.env.OPENCLAW_VERIFY_TEST_PATH);
-            database.prepare("PRAGMA schema_version;").get();
-            database.close();
-          `,
-        ],
-        {
-          env: { ...process.env, OPENCLAW_VERIFY_TEST_PATH: agent.path },
-          encoding: "utf8",
-        },
-      );
+it("reports an uncleared quarantine row instead of claiming repair success", () => {
+  const agentPath = f.agent().path;
+  f.state();
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  f.seed(agentPath);
+  recordOpenClawAgentDatabaseOpenFailure(agentPath, integrityError());
+  closeOpenClawStateDatabaseForTest();
 
-      expect(reader.stderr).toBe("");
-      expect(reader.status).toBe(0);
-      expect(fs.statSync(`${agent.path}-wal`).ino).toBe(walBefore.ino);
-      expect(fs.statSync(`${agent.path}-shm`).ino).toBe(shmBefore.ino);
-      expect(() =>
-        agent.db
-          .prepare("UPDATE auth_profile_state SET updated_at = ? WHERE state_key = ?")
-          .run(2, "verifier-lock-owner"),
-      ).not.toThrow();
-    },
-  );
+  const before = f.row(agentPath);
+  expect(before).toMatchObject({ kind: "agent", reason: "corrupt index" });
+  {
+    using quarantine = openDatabase(f.storePath);
+    // chmod cannot refuse writes from root; fail the real SQLite writes instead.
+    quarantine.exec(`
+        CREATE TRIGGER refuse_quarantine_clear BEFORE DELETE ON quarantined_databases
+        BEGIN SELECT RAISE(ABORT, 'quarantine store is read-only'); END;
+      `);
+    expect(clearOpenClawAgentDatabaseOpenFailure(agentPath, { env: f.env })).toBe(false);
+    expect(f.row(agentPath)).toEqual(before);
+    expect(f.clear(agentPath)).toBe(false);
+    expect(f.row(agentPath)).toEqual(before);
+    expect(f.agent).toThrow(damage);
+    quarantine.exec("DROP TRIGGER refuse_quarantine_clear;");
+  }
+  expect(clearOpenClawAgentDatabaseOpenFailure(agentPath, { env: f.env })).toBe(true);
+  expect(f.row(agentPath)).toBeUndefined();
+  expect(f.agent().db.isOpen).toBe(true);
+});
 
-  it("detects corruption off-thread, quarantines it, and latches later opens", async () => {
-    const stateDir = tempDirs.make("openclaw-database-verify-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
-    createUnsafeIndexDrift(agentPath);
-    const targets: OpenClawDatabaseVerifyTarget[] = [
-      { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath },
-    ];
+it("retains the quarantine history marker without storing integrity receipts", () => {
+  const state = f.state();
+  expect(f.row(state.path)).toBeUndefined();
+  expect(fs.existsSync(f.storePath)).toBe(false);
 
-    const results = await runDatabaseVerifyWorker(targets);
-    expect(results).toEqual([
-      {
-        path: agentPath,
-        ok: false,
-        error: expect.stringMatching(/missing from index unsafe_index_records_value/iu),
-        terminal: true,
-      },
-    ]);
-
-    await applyOpenClawDatabaseVerificationResults({
-      env,
-      results,
-      targets,
-    });
-    const quarantine = readOpenClawDatabaseQuarantine(agentPath, { env });
-    expect(quarantine).toEqual({
-      kind: "agent",
-      quarantinedAt: expect.any(Number),
-      reason: expect.stringMatching(/missing from index unsafe_index_records_value/iu),
-    });
-
-    expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
-      expect.objectContaining({ name: "SqliteIntegrityError" }),
-    );
-
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
-      expect.objectContaining({
-        name: "SqliteIntegrityError",
-        message: expect.stringContaining(quarantine?.reason ?? ""),
-      }),
-    );
-    clearOpenClawAgentDatabaseOpenFailure(agentPath, { env });
-    expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
-      expect.objectContaining({ name: "SqliteIntegrityError" }),
-    );
+  const agent = f.agent();
+  expect(readSqliteDatabaseIntegrityVerification(agent.path)).toMatchObject({
+    verifiedAt: expect.any(Number),
   });
+  expect(f.row(agent.path)).toBeUndefined();
+  using quarantine = openDatabase(f.storePath, true);
+  expect(quarantine.prepare("SELECT * FROM agent_integrity_verifications").all()).toEqual([]);
+});
 
-  it("relays a late cached Worker open to the parent verifier after native opening settles", async () => {
-    const result = await runNodeScript(
-      resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(databaseVerifyHostRuntimeEntrypoint)),
-      process.env,
-      30_000,
-      { requireProcessTreeExit: true },
-    );
-    expect(result.error, result.stderr).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-  }, 35_000);
+it("clears historical quarantine rows with rollback journaling", () => {
+  expect(f.clear()).toBe(true);
+  f.seed();
+  expect(f.row()).toEqual({ kind: "agent", quarantinedAt: timestamp, reason: "corrupt index" });
 
-  it.each(["present", "cleared"] as const)(
-    "leaves full-check proof unchanged when its receipt is %s",
-    async (receipt) => {
-      const stateDir = tempDirs.make("openclaw-database-quick-receipt-");
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      const agent = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-      const before = readOpenClawAgentIntegrityVerification(agent.path, env);
-      expect(before).toBeDefined();
-      const targets: OpenClawDatabaseVerifyTarget[] = [
-        { kind: "agent", label: "synthetic agent", path: agent.path, check: "quick" },
-      ];
-      const results = await runDatabaseVerifyWorker(targets);
-      expect(results).toMatchObject([{ path: agent.path, ok: true }]);
-      if (receipt === "cleared") {
-        clearOpenClawAgentIntegrityVerification(agent.path, env);
-      }
-      const verifiedAt = (before?.verified_at ?? 0) + 100;
-      const now = vi.spyOn(Date, "now").mockReturnValue(verifiedAt);
-      try {
-        await applyOpenClawDatabaseVerificationResults({ env, results, targets });
-      } finally {
-        now.mockRestore();
-      }
-      expect(readOpenClawAgentIntegrityVerification(agent.path, env)).toEqual(
-        receipt === "cleared" ? undefined : before,
-      );
-    },
-  );
+  {
+    using raw = openDatabase(f.storePath, true);
+    expect({
+      ...raw.prepare("PRAGMA journal_mode").get(),
+      synchronous: readSqliteNumberPragma(raw, "synchronous"),
+      version: readSqliteNumberPragma(raw, "user_version"),
+    }).toEqual({ journal_mode: "delete", synchronous: 2, version: 2 });
+  }
+  if (process.platform !== "win32") {
+    expect(fs.statSync(path.dirname(f.storePath)).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(f.storePath).mode & 0o777).toBe(0o600);
+  }
+  expect(f.clear()).toBe(true);
+  expect(f.clear()).toBe(true);
+  expect(f.row()).toBeUndefined();
+});
 
-  it("quarantines a background quick-check foreign-key failure and rejects the next open", async () => {
-    const stateDir = tempDirs.make("openclaw-database-quick-verify-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const agent = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    agent.db.exec(`
-      CREATE TABLE quick_parent (id INTEGER PRIMARY KEY);
-      CREATE TABLE quick_child (parent_id INTEGER REFERENCES quick_parent(id));
-      PRAGMA foreign_keys = OFF;
-      INSERT INTO quick_child VALUES (123);
-      PRAGMA foreign_keys = ON;
-    `);
-    const targets: OpenClawDatabaseVerifyTarget[] = [
-      { kind: "agent", label: "synthetic agent", path: agent.path, check: "quick" },
-    ];
+it("expires a persisted quarantine when the verified database generation changes", () => {
+  const { env, databasePath } = f;
+  execDatabase(databasePath, "CREATE TABLE records (id INTEGER PRIMARY KEY) STRICT;");
+  const generation = readStableSqliteFileGeneration(databasePath);
 
-    const results = await runDatabaseVerifyWorker(targets);
-    expect(results).toEqual([
-      {
-        path: agent.path,
-        ok: false,
-        error: expect.stringContaining("foreign_key_check failed"),
-        terminal: true,
-      },
-    ]);
-    await applyOpenClawDatabaseVerificationResults({ env, results, targets });
-    expect(readOpenClawDatabaseQuarantine(agent.path, { env })?.reason).toContain(
-      "foreign_key_check failed",
-    );
-    expect(readOpenClawAgentIntegrityVerification(agent.path, env)).toBeUndefined();
-    expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
-      expect.objectContaining({ name: "SqliteIntegrityError" }),
-    );
-    if (process.platform !== "win32") {
-      const alias = `${agent.path}.alias`;
-      fs.symlinkSync(agent.path, alias);
-      expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env, path: alias })).toThrow(
-        expect.objectContaining({ name: "SqliteIntegrityError" }),
-      );
-    }
+  seedOpenClawDatabaseQuarantine({
+    env,
+    generation,
+    kind: "agent",
+    path: databasePath,
+    reason: "corrupt generation",
   });
+  const quarantineBefore = f.row();
+  expect(quarantineBefore?.reason).toBe("corrupt generation");
+  expect(f.read()).toMatchObject({ name: "SqliteIntegrityError" });
 
-  it("does not quarantine a healthy database that replaced the verified file", async () => {
-    const stateDir = tempDirs.make("openclaw-database-verify-replacement-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+  execDatabase(databasePath, "INSERT INTO records DEFAULT VALUES;");
+  expect(f.read()).toBeUndefined();
+  expect(f.row()).toEqual(quarantineBefore);
+});
 
-    const healthyReplacementPath = `${agentPath}.healthy`;
-    const corruptArchivePath = `${agentPath}.corrupt`;
-    fs.copyFileSync(agentPath, healthyReplacementPath);
-    createUnsafeIndexDrift(agentPath);
-    const targets: OpenClawDatabaseVerifyTarget[] = [
-      { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath },
-    ];
-    const results = preparedVerificationResults(targets);
-
-    fs.renameSync(agentPath, corruptArchivePath);
-    fs.renameSync(healthyReplacementPath, agentPath);
-    await applyOpenClawDatabaseVerificationResults({ env, results, targets });
-
-    expect(readOpenClawDatabaseQuarantine(agentPath, { env })).toBeUndefined();
-    expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
-  });
-
-  it.skipIf(process.platform === "win32")(
-    "does not quarantine a healthy replacement while the corrupt agent inode is cached",
-    async () => {
-      const stateDir = tempDirs.make("openclaw-database-verify-live-agent-replace-");
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      const agent = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-      const healthyReplacementPath = `${agent.path}.healthy`;
-      const corruptArchivePath = `${agent.path}.corrupt`;
-      await copyHealthyDatabase(agent.path, healthyReplacementPath);
-      createUnsafeIndexDrift(agent.path);
-      const targets: OpenClawDatabaseVerifyTarget[] = [
-        { kind: "agent", label: "OpenClaw agent database worker-1", path: agent.path },
-      ];
-      const results = preparedVerificationResults(targets);
-
-      fs.renameSync(agent.path, corruptArchivePath);
-      fs.renameSync(healthyReplacementPath, agent.path);
-      await applyOpenClawDatabaseVerificationResults({ env, results, targets });
-
-      expect(agent.db.isOpen).toBe(false);
-      expect(readOpenClawDatabaseQuarantine(agent.path, { env })).toBeUndefined();
-      expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "does not quarantine a healthy replacement while the corrupt state inode is cached",
-    async () => {
-      const stateDir = tempDirs.make("openclaw-database-verify-live-state-replace-");
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      const state = openOpenClawStateDatabase({ env });
-      const healthyReplacementPath = `${state.path}.healthy`;
-      const corruptArchivePath = `${state.path}.corrupt`;
-      await copyHealthyDatabase(state.path, healthyReplacementPath);
-      createUnsafeIndexDrift(state.path);
-      const targets: OpenClawDatabaseVerifyTarget[] = [
-        { kind: "state", label: "OpenClaw state database", path: state.path },
-      ];
-      const results = preparedVerificationResults(targets);
-
-      fs.renameSync(state.path, corruptArchivePath);
-      fs.renameSync(healthyReplacementPath, state.path);
-      await applyOpenClawDatabaseVerificationResults({ env, results, targets });
-
-      expect(state.db.isOpen).toBe(false);
-      expect(readOpenClawDatabaseQuarantine(state.path, { env })).toBeUndefined();
-      expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
-    },
-  );
-
-  it("drains actors admitted during confirmation before persisting quarantine", async () => {
-    const stateDir = tempDirs.make("openclaw-database-verify-closed-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    createUnsafeIndexDrift(agentPath);
-    const targets: OpenClawDatabaseVerifyTarget[] = [
-      { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath },
-    ];
-    const results = preparedVerificationResults(targets);
-
-    const enteredClose = createDeferredCore();
-    const releaseClose = createDeferredCore();
-    const confirm = agentDatabase.confirmOpenClawAgentDatabaseIntegrity;
-    const spy = vi
-      .spyOn(agentDatabase, "confirmOpenClawAgentDatabaseIntegrity")
-      .mockImplementationOnce(async (pathname) => {
-        const confirmation = await confirm(pathname);
-        registerOpenClawAgentDatabaseAsyncResource({
-          agentId: "worker-1",
-          path: pathname,
-          revoke() {},
-          close: async () => {
-            enteredClose.resolve();
-            await releaseClose.promise;
-          },
-        });
-        return confirmation;
-      });
-    const verification = applyOpenClawDatabaseVerificationResults({ env, results, targets });
-    try {
-      expect(
-        await Promise.race([
-          enteredClose.promise.then(() => "closing"),
-          verification.then(() => "completed"),
-        ]),
-      ).toBe("closing");
-      expect(readOpenClawDatabaseQuarantine(agentPath, { env })).toBeUndefined();
-    } finally {
-      releaseClose.resolve();
-      await verification;
-      spy.mockRestore();
-      await closeOpenClawAgentDatabaseByPathAsync(agentPath);
-    }
-
-    expect(readOpenClawDatabaseQuarantine(agentPath, { env })?.reason).toMatch(
-      /missing from index unsafe_index_records_value/iu,
-    );
-    expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
-      expect.objectContaining({ name: "SqliteIntegrityError" }),
-    );
-  });
-
-  it("does not quarantine a repaired database after same-inode mutation", async () => {
-    const stateDir = tempDirs.make("openclaw-database-verify-repair-race-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    createUnsafeIndexDrift(agentPath);
-    const targets: OpenClawDatabaseVerifyTarget[] = [
-      { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath },
-    ];
-    const results = preparedVerificationResults(targets);
-
-    repairUnsafeIndexDrift(agentPath);
-    await expect(verifyOpenClawDatabases(targets)).resolves.toEqual([
-      expect.objectContaining({ ok: true }),
-    ]);
-    await applyOpenClawDatabaseVerificationResults({ env, results, targets });
-
-    expect(readOpenClawDatabaseQuarantine(agentPath, { env })).toBeUndefined();
-    expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
-  });
-
-  it("rejects stale terminal results after draining healthy owners", async () => {
-    const stateDir = tempDirs.make("openclaw-database-verify-live-stale-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const state = openOpenClawStateDatabase({ env });
-    const agent = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    const targets: OpenClawDatabaseVerifyTarget[] = [
-      { kind: "state", label: "OpenClaw state database", path: state.path },
-      { kind: "agent", label: "OpenClaw agent database worker-1", path: agent.path },
-    ];
-
-    await applyOpenClawDatabaseVerificationResults({
-      env,
-      results: targets.map((target) => ({
-        path: target.path,
-        ok: false,
-        error: "stale terminal result",
-        terminal: true,
-      })),
-      targets,
-    });
-
-    expect(readOpenClawDatabaseQuarantine(state.path, { env })).toBeUndefined();
-    expect(readOpenClawDatabaseQuarantine(agent.path, { env })).toBeUndefined();
-    expect(state.db.isOpen).toBe(false);
-    expect(agent.db.isOpen).toBe(false);
-    expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
-    expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
-  });
-
-  it("revalidates agent schema ownership after confirmation drains a pathname", async () => {
-    const stateDir = tempDirs.make("openclaw-database-verify-agent-revalidate-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const agent = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    const replacementPath = `${agent.path}.replacement`;
-    const { DatabaseSync } = requireNodeSqlite();
-    const replacement = new DatabaseSync(replacementPath);
-    replacement.close();
-    expect(closeOpenClawAgentDatabaseByPath(agent.path)).toBe(true);
-    fs.rmSync(agent.path);
-    fs.renameSync(replacementPath, agent.path);
-    const targets: OpenClawDatabaseVerifyTarget[] = [
-      { kind: "agent", label: "OpenClaw agent database worker-1", path: agent.path },
-    ];
-
-    await applyOpenClawDatabaseVerificationResults({
-      env,
-      results: [{ path: agent.path, ok: false, error: "stale terminal result", terminal: true }],
-      targets,
-    });
-
-    const reopened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    expect(
-      reopened.db
-        .prepare("SELECT role, agent_id FROM schema_meta WHERE meta_key = 'primary'")
-        .get(),
-    ).toEqual({ role: "agent", agent_id: "worker-1" });
-  });
-
-  it("expires a generation-bound process latch after the database changes", () => {
-    const stateDir = tempDirs.make("openclaw-database-verify-latch-generation-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
-    closeOpenClawAgentDatabasesForTest();
-    const generation = readStableSqliteFileGeneration(agentPath);
-    const error = new Error("verified corrupt generation");
-    error.name = "SqliteIntegrityError";
-
-    expect(recordOpenClawAgentDatabaseOpenFailure(agentPath, error, generation)).toBe(true);
-    const { DatabaseSync } = requireNodeSqlite();
-    const changed = new DatabaseSync(agentPath);
-    try {
-      changed.exec("CREATE TABLE generation_change (id INTEGER PRIMARY KEY) STRICT;");
-    } finally {
-      changed.close();
-    }
-
-    expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
-  });
-
-  it("reports an uncleared quarantine row instead of claiming repair success", () => {
-    const stateDir = tempDirs.make("openclaw-database-verify-clear-failure-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
-    openOpenClawStateDatabase({ env });
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    expect(
-      recordOpenClawDatabaseQuarantine({
-        env,
-        kind: "agent",
-        path: agentPath,
-        reason: "corrupt index",
-      }),
-    ).toBe(true);
-    const error = new Error("corrupt index");
-    error.name = "SqliteIntegrityError";
-    recordOpenClawAgentDatabaseOpenFailure(agentPath, error);
-    closeOpenClawStateDatabaseForTest();
-
-    const storePath = quarantineStorePath(stateDir);
-    // A read-only quarantine store cannot drop the row; the clear must say so
-    // instead of letting doctor report success while the next open still refuses.
-    fs.chmodSync(storePath, 0o444);
-    try {
-      expect(clearOpenClawAgentDatabaseOpenFailure(agentPath, { env })).toBe(false);
-      expect(
-        recordOpenClawDatabaseQuarantine({
-          env,
-          kind: "agent",
-          path: agentPath,
-          reason: "new reason",
-        }),
-      ).toBe(false);
-    } finally {
-      fs.chmodSync(storePath, 0o600);
-    }
-    expect(clearOpenClawAgentDatabaseOpenFailure(agentPath, { env })).toBe(true);
-    expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
-  });
-
-  it("keeps state opens and quarantine reads noncreating while agent opens record verification", () => {
-    const stateDir = tempDirs.make("openclaw-database-verify-clean-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const state = openOpenClawStateDatabase({ env });
-    expect(readOpenClawDatabaseQuarantine(state.path, { env })).toBeUndefined();
-    expect(fs.existsSync(quarantineStorePath(stateDir))).toBe(false);
-
-    const agent = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    expect(readOpenClawAgentIntegrityVerification(agent.path, env)).toMatchObject({
-      path: agent.path,
-      clean_close: 0,
-    });
-    expect(readOpenClawDatabaseQuarantine(agent.path, { env })).toBeUndefined();
-    const raw = new (requireNodeSqlite().DatabaseSync)(quarantineStorePath(stateDir), {
-      readOnly: true,
-    });
-    try {
-      expect(raw.prepare("SELECT COUNT(*) AS count FROM quarantined_databases").get()).toEqual({
-        count: 0,
-      });
-    } finally {
-      raw.close();
-    }
-  });
-
-  it("records and clears dedicated quarantine rows with rollback journaling", () => {
-    const stateDir = tempDirs.make("openclaw-database-verify-store-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = path.join(stateDir, "agent.sqlite");
-    const storePath = quarantineStorePath(stateDir);
-
-    expect(clearOpenClawDatabaseQuarantine(databasePath, { env })).toBe(true);
-    expect(
-      recordOpenClawDatabaseQuarantine({
-        env,
-        kind: "agent",
-        path: databasePath,
-        reason: "corrupt index",
-      }),
-    ).toBe(true);
-    expect(readOpenClawDatabaseQuarantine(databasePath, { env })).toEqual({
-      kind: "agent",
-      quarantinedAt: expect.any(Number),
-      reason: "corrupt index",
-    });
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const raw = new DatabaseSync(storePath, { readOnly: true });
-    try {
-      expect(raw.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "delete" });
-      expect(readSqliteNumberPragma(raw, "synchronous")).toBe(2);
-      expect(readSqliteNumberPragma(raw, "user_version")).toBe(2);
-    } finally {
-      raw.close();
-    }
-    if (process.platform !== "win32") {
-      expect(fs.statSync(path.dirname(storePath)).mode & 0o777).toBe(0o700);
-      expect(fs.statSync(storePath).mode & 0o777).toBe(0o600);
-    }
-    expect(clearOpenClawDatabaseQuarantine(databasePath, { env })).toBe(true);
-    expect(clearOpenClawDatabaseQuarantine(databasePath, { env })).toBe(true);
-    expect(readOpenClawDatabaseQuarantine(databasePath, { env })).toBeUndefined();
-  });
-
-  it("expires a persisted quarantine when the verified database generation changes", () => {
-    const stateDir = tempDirs.make("openclaw-database-verify-store-generation-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = path.join(stateDir, "agent.sqlite");
-    const { DatabaseSync } = requireNodeSqlite();
-    const database = new DatabaseSync(databasePath);
-    try {
-      database.exec("CREATE TABLE records (id INTEGER PRIMARY KEY) STRICT;");
-    } finally {
-      database.close();
-    }
-    const generation = readStableSqliteFileGeneration(databasePath);
-
-    expect(
-      recordOpenClawDatabaseQuarantine({
-        env,
-        generation,
-        kind: "agent",
-        path: databasePath,
-        reason: "corrupt generation",
-      }),
-    ).toBe(true);
-    expect(readOpenClawDatabaseQuarantine(databasePath, { env })?.reason).toBe(
-      "corrupt generation",
-    );
-
-    const changed = new DatabaseSync(databasePath);
-    try {
-      changed.exec("INSERT INTO records DEFAULT VALUES;");
-    } finally {
-      changed.close();
-    }
-    expect(readOpenClawDatabaseQuarantine(databasePath, { env })).toBeUndefined();
-  });
-
-  it("reads schema-v1 quarantine rows and migrates them on the next write", () => {
-    const stateDir = tempDirs.make("openclaw-database-verify-store-v1-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = path.join(stateDir, "agent.sqlite");
-    const storePath = quarantineStorePath(stateDir);
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    const { DatabaseSync } = requireNodeSqlite();
-    const legacy = new DatabaseSync(storePath);
-    try {
-      legacy.exec(`
+it("reads schema-v1 quarantine rows and migrates them when clearing another path", () => {
+  const { databasePath, storePath } = f;
+  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  {
+    using legacy = openDatabase(storePath);
+    legacy.exec(`
         CREATE TABLE quarantined_databases (
-          path TEXT NOT NULL PRIMARY KEY,
-          kind TEXT NOT NULL,
-          reason TEXT NOT NULL,
-          quarantined_at INTEGER NOT NULL,
-          writer_app_version TEXT
+          path TEXT NOT NULL PRIMARY KEY, kind TEXT NOT NULL, reason TEXT NOT NULL,
+          quarantined_at INTEGER NOT NULL, writer_app_version TEXT
         ) STRICT;
         PRAGMA user_version = 1;
       `);
-      legacy
-        .prepare(
-          "INSERT INTO quarantined_databases (path, kind, reason, quarantined_at) VALUES (?, ?, ?, ?)",
-        )
-        .run(path.resolve(databasePath), "agent", "legacy quarantine", 1);
-    } finally {
-      legacy.close();
-    }
+    legacy
+      .prepare(
+        "INSERT INTO quarantined_databases VALUES (?, 'agent', 'legacy quarantine', 1, NULL)",
+      )
+      .run(path.resolve(databasePath));
+  }
 
-    expect(readOpenClawDatabaseQuarantine(databasePath, { env })).toEqual({
-      kind: "agent",
-      quarantinedAt: 1,
-      reason: "legacy quarantine",
-    });
-    expect(
-      recordOpenClawDatabaseQuarantine({
-        env,
-        kind: "agent",
-        path: databasePath,
-        reason: "migrated quarantine",
-      }),
-    ).toBe(true);
+  expect(f.row()).toEqual({ kind: "agent", quarantinedAt: 1, reason: "legacy quarantine" });
+  expect(f.read()).toMatchObject({ name: "SqliteIntegrityError" });
+  expect(f.clear(`${databasePath}.other`)).toBe(true);
 
-    const migrated = new DatabaseSync(storePath, { readOnly: true });
-    try {
-      expect(readSqliteNumberPragma(migrated, "user_version")).toBe(2);
-      expect(
-        migrated
-          .prepare("SELECT reason, verified_generation FROM quarantined_databases WHERE path = ?")
-          .get(path.resolve(databasePath)),
-      ).toEqual({ reason: "migrated quarantine", verified_generation: null });
-    } finally {
-      migrated.close();
-    }
-  });
+  using migrated = openDatabase(storePath, true);
+  expect(readSqliteNumberPragma(migrated, "user_version")).toBe(2);
+  expect(
+    migrated
+      .prepare("SELECT reason, verified_generation FROM quarantined_databases WHERE path = ?")
+      .get(path.resolve(databasePath)),
+  ).toEqual({ reason: "legacy quarantine", verified_generation: null });
+});
 
-  it("recovers an interrupted empty quarantine-store initialization", () => {
-    const stateDir = tempDirs.make("openclaw-database-verify-empty-store-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = path.join(stateDir, "agent.sqlite");
-    const storePath = quarantineStorePath(stateDir);
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    fs.writeFileSync(storePath, "", { mode: 0o600 });
+it("recovers an interrupted empty quarantine-store initialization", () => {
+  fs.mkdirSync(path.dirname(f.storePath), { recursive: true });
+  fs.writeFileSync(f.storePath, "", { mode: 0o600 });
 
-    expect(readOpenClawDatabaseQuarantine(databasePath, { env })).toBeUndefined();
-    expect(
-      recordOpenClawDatabaseQuarantine({
-        env,
-        kind: "agent",
-        path: databasePath,
-        reason: "corrupt index",
-      }),
-    ).toBe(true);
-    expect(readOpenClawDatabaseQuarantine(databasePath, { env })?.reason).toBe("corrupt index");
-  });
+  expect(f.read()).toBeUndefined();
+  expect(f.clear()).toBe(true);
+  f.seed();
+  expect(f.row()?.reason).toBe("corrupt index");
+});
 
-  it.skipIf(process.platform === "win32")(
-    "recovers a hot rollback journal before reading quarantine",
-    () => {
-      const stateDir = tempDirs.make("openclaw-database-verify-hot-journal-");
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      const databasePath = path.join(stateDir, "agent.sqlite");
-      const storePath = quarantineStorePath(stateDir);
-      expect(
-        recordOpenClawDatabaseQuarantine({
-          env,
-          kind: "agent",
-          path: databasePath,
-          reason: "committed reason",
-        }),
-      ).toBe(true);
+it.skipIf(process.platform === "win32")(
+  "recovers a hot rollback journal before reading quarantine",
+  () => {
+    f.seed(f.databasePath, "committed reason");
 
-      const crashed = spawnSync(
-        process.execPath,
-        [
-          "--no-warnings",
-          "--input-type=module",
-          "-e",
-          `
+    const quarantineBefore = f.row();
+    expect(quarantineBefore?.reason).toBe("committed reason");
+    const crashed = spawnSync(
+      process.execPath,
+      [
+        "--no-warnings",
+        "--input-type=module",
+        "-e",
+        `
             import { DatabaseSync } from "node:sqlite";
             const database = new DatabaseSync(process.env.OPENCLAW_QUARANTINE_TEST_PATH);
             database.exec("PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; BEGIN IMMEDIATE;");
             database.prepare("UPDATE quarantined_databases SET reason = 'uncommitted reason'").run();
             process.kill(process.pid, "SIGKILL");
           `,
-        ],
-        { env: { ...process.env, OPENCLAW_QUARANTINE_TEST_PATH: storePath } },
-      );
-      expect(crashed.signal).toBe("SIGKILL");
-      expect(fs.existsSync(`${storePath}-journal`)).toBe(true);
-
-      expect(readOpenClawDatabaseQuarantine(databasePath, { env })?.reason).toBe(
-        "committed reason",
-      );
-    },
-  );
-
-  it("does not latch transient verifier errors", async () => {
-    const stateDir = tempDirs.make("openclaw-database-verify-transient-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    const targets: OpenClawDatabaseVerifyTarget[] = [
-      { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath },
-    ];
-
-    await applyOpenClawDatabaseVerificationResults({
-      env,
-      results: [{ path: agentPath, ok: false, error: "Error: database is busy", terminal: false }],
-      targets,
-    });
-
-    expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
-  });
-
-  it("persists state failure quarantine across restart until doctor repair", () => {
-    const stateDir = tempDirs.make("openclaw-database-verify-state-failure-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const statePath = openOpenClawStateDatabase({ env }).path;
-    closeOpenClawStateDatabaseForTest();
-
-    expect(
-      recordOpenClawDatabaseQuarantine({
-        env,
-        kind: "state",
-        path: statePath,
-        reason: "corrupt index",
-      }),
-    ).toBe(true);
-    const error = new Error("corrupt index");
-    error.name = "SqliteIntegrityError";
-    recordOpenClawStateDatabaseOpenFailure(statePath, error);
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const raw = new DatabaseSync(quarantineStorePath(stateDir), { readOnly: true });
-    try {
-      expect(
-        raw.prepare("SELECT kind, reason FROM quarantined_databases WHERE path = ?").get(statePath),
-      ).toEqual({ kind: "state", reason: "corrupt index" });
-    } finally {
-      raw.close();
-    }
-    expect(() => openOpenClawStateDatabase({ env })).toThrow(
-      expect.objectContaining({
-        name: "SqliteIntegrityError",
-        message: expect.stringContaining("corrupt index"),
-      }),
+      ],
+      { env: { ...process.env, OPENCLAW_QUARANTINE_TEST_PATH: f.storePath } },
     );
-    closeOpenClawStateDatabaseForTest();
-    expect(() => openOpenClawStateDatabase({ env })).toThrow(
-      expect.objectContaining({
-        name: "SqliteIntegrityError",
-        message: expect.stringContaining("corrupt index"),
-      }),
-    );
-    expect(repairOpenClawStateDatabaseSchema({ env }).warnings).toEqual([]);
-    expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
-  });
+    expect(crashed.signal).toBe("SIGKILL");
+    expect(fs.existsSync(`${f.storePath}-journal`)).toBe(true);
+
+    expect(f.read()).toMatchObject({ name: "SqliteIntegrityError" });
+    expect(f.row()).toEqual(quarantineBefore);
+  },
+);
+
+it("persists state failure quarantine across restart until doctor repair", () => {
+  const statePath = f.state().path;
+  closeOpenClawStateDatabaseForTest();
+
+  f.seed(statePath, "corrupt index", "state");
+  recordOpenClawStateDatabaseOpenFailure(statePath, integrityError());
+
+  expect(f.row(statePath)).toMatchObject({ kind: "state", reason: "corrupt index" });
+  expect(f.state).toThrow(damage);
+  closeOpenClawStateDatabaseForTest();
+  expect(f.state).toThrow(damage);
+  expect(repairOpenClawStateDatabaseSchema({ env: f.env }).warnings).toEqual([]);
+  expect(f.state().db.isOpen).toBe(true);
 });
+
+it.each([false, true])(
+  "admits unsealed startup before full verification, corruption=%s",
+  async (damaged) => {
+    const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("startup-proportionate-")) };
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+    const config = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(config);
+    const scope = { agentId: "main", env, sessionKey: "agent:main:retained" };
+    await replaceSessionEntry(scope, { sessionId: "retained", updatedAt: 1 });
+    const pathname = openOpenClawAgentDatabase(scope).path;
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    revokeSqliteDatabaseAdmissionsForPath(pathname);
+    if (damaged) {
+      using db = openDatabase(pathname);
+      db.exec(
+        "PRAGMA foreign_keys=OFF; CREATE TABLE integrity_parent(id INTEGER PRIMARY KEY); CREATE TABLE integrity_child(parent_id REFERENCES integrity_parent(id)); INSERT INTO integrity_child VALUES (42)",
+      );
+    }
+    await withAgentDatabaseStartupAdmission(async (admission) => {
+      await assertOpenClawDatabasesReady({ env, config, operation: "gateway-startup" });
+      const owner = admission.adopt();
+      const verification = Promise.withResolvers<void>();
+      try {
+        admission.activate({
+          isCurrent: () => true,
+          preparationReady: Promise.resolve(),
+          openAgent: ({ assertCurrent, signal }) =>
+            prepareOpenClawAgentDatabaseExecution(scope, assertCurrent, signal),
+          migrateAgent: async () => {},
+          publishAgent: async () => {},
+          verifyIntegrity: async (input) => {
+            await verification.promise;
+            await verifyAgentDatabaseStartupIntegrity(input);
+          },
+        });
+        await admission.waitForAgentPreparation("main", { env, forWrite: true });
+        expect(() => assertAgentDatabaseAdmitted("main", { env })).not.toThrow();
+        expect(readSqliteDatabaseIntegrityVerification(pathname)).toBeUndefined();
+        await replaceSessionEntry(scope, { sessionId: "retained", updatedAt: 2 });
+        verification.resolve();
+        await admission.pendingPreparation;
+        if (damaged) {
+          expect(() => assertAgentDatabaseAdmitted("main", { env })).toThrow(/foreign_key_check/);
+          expect(
+            readOpenClawDatabaseQuarantineFailure("agent", pathname, { env, fresh: true }),
+          ).toMatchObject({ name: "SqliteIntegrityError" });
+        } else {
+          expect(readSqliteDatabaseIntegrityVerification(pathname)?.verifiedAt).toBeGreaterThan(0);
+          await closeOpenClawAgentDatabasesAsync();
+          expect(readSqliteDatabaseCleanClose(pathname)).toBe(true);
+        }
+      } finally {
+        verification.resolve();
+        await owner.stop();
+      }
+    });
+  },
+);

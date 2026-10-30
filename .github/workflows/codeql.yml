@@ -57,50 +57,87 @@ permissions:
   security-events: write
 
 jobs:
+  scope:
+    if: ${{ ((github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'security')) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.scope.outputs.matrix }}
+    steps:
+      - name: Checkout event merge
+        id: checkout
+        continue-on-error: true
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Select security languages
+        id: scope
+        env:
+          CODEQL_CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const categories = [
+              "core-auth-secrets",
+              "channel-runtime-boundary",
+              "network-ssrf-boundary",
+              "mcp-process-tool-boundary",
+              "process-exec-boundary",
+              "plugin-trust-boundary",
+              "actions",
+            ];
+            let actions = true;
+            let javascript = true;
+            if (context.eventName === "pull_request") {
+              try {
+                if (process.env.CODEQL_CHECKOUT_OUTCOME !== "success") {
+                  throw new Error("event checkout unavailable");
+                }
+                const result = await exec.getExecOutput("git", [
+                  "diff", "--no-renames", "--name-only", "-z", "HEAD^1", "HEAD",
+                ], { ignoreReturnCode: true, silent: true });
+                const files = result.stdout.split("\0").filter(Boolean);
+                if (result.exitCode !== 0 || files.length === 0) {
+                  throw new Error("changed paths unavailable");
+                }
+                const policy = files.some((file) =>
+                  file === ".github/workflows/codeql.yml" || file.startsWith(".github/codeql/"));
+                const workflow = (file) =>
+                  file.startsWith(".github/workflows/") || file.startsWith(".github/actions/");
+                actions = policy || files.some(workflow);
+                // Any other path conservatively retains every JavaScript category.
+                javascript = policy || files.some((file) => !workflow(file));
+              } catch {
+                core.warning("CodeQL path selection unavailable; retaining every category.");
+              }
+            }
+            const include = categories
+              .filter((category) => category === "actions" ? actions : javascript)
+              .map((category) => ({
+                language: category === "actions" ? "actions" : "javascript-typescript",
+                category,
+                runs_on: "ubuntu-24.04",
+                timeout_minutes: category === "actions" ? 10 : 25,
+                config_file: `./.github/codeql/codeql-${category}-critical-security.yml`,
+              }));
+            core.setOutput("matrix", JSON.stringify({ include }));
+
   security-high:
+    needs: scope
     name: Security High (${{ matrix.category }})
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'security') }}
+    if: ${{ ((github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'security')) }}
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - language: javascript-typescript
-            category: core-auth-secrets
-            runs_on: ubuntu-24.04
-            timeout_minutes: 25
-            config_file: ./.github/codeql/codeql-core-auth-secrets-critical-security.yml
-          - language: javascript-typescript
-            category: channel-runtime-boundary
-            runs_on: ubuntu-24.04
-            timeout_minutes: 25
-            config_file: ./.github/codeql/codeql-channel-runtime-boundary-critical-security.yml
-          - language: javascript-typescript
-            category: network-ssrf-boundary
-            runs_on: ubuntu-24.04
-            timeout_minutes: 25
-            config_file: ./.github/codeql/codeql-network-ssrf-boundary-critical-security.yml
-          - language: javascript-typescript
-            category: mcp-process-tool-boundary
-            runs_on: ubuntu-24.04
-            timeout_minutes: 25
-            config_file: ./.github/codeql/codeql-mcp-process-tool-boundary-critical-security.yml
-          - language: javascript-typescript
-            category: process-exec-boundary
-            runs_on: ubuntu-24.04
-            timeout_minutes: 25
-            config_file: ./.github/codeql/codeql-process-exec-boundary-critical-security.yml
-          - language: javascript-typescript
-            category: plugin-trust-boundary
-            runs_on: ubuntu-24.04
-            timeout_minutes: 25
-            config_file: ./.github/codeql/codeql-plugin-trust-boundary-critical-security.yml
-          - language: actions
-            category: actions
-            runs_on: ubuntu-24.04
-            timeout_minutes: 10
-            config_file: ./.github/codeql/codeql-actions-critical-security.yml
+      matrix: ${{ fromJSON(needs.scope.outputs.matrix) }}
     steps:
       - name: Checkout
         if: ${{ matrix.category != 'actions' }}
@@ -119,12 +156,12 @@ jobs:
             .github/codeql
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           languages: ${{ matrix.language }}
           config-file: ${{ matrix.config_file }}
 
       - name: Analyze
-        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           category: "/codeql-security-high/${{ matrix.category }}"

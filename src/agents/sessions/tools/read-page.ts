@@ -134,8 +134,22 @@ export function createBoundedReadTextPage(params: {
   // Convert the fitted prefix back to a byte allowance for the existing line/cursor owner.
   // The cursor advances only over text that survives both model limits and its real footer.
   const contentBudgetBytes = Buffer.byteLength(prefix, "utf8");
-  const truncation = truncateHead(params.content, { maxBytes: contentBudgetBytes });
-  if (!truncation.truncated) {
+  const truncation = truncateHead(params.content, contentBudgetBytes);
+  // A non-EOF selection omits its last separator. Its final blank line can
+  // therefore look like a terminator to the complete-text truncator.
+  if (
+    !truncation.truncated &&
+    params.endLine < params.totalLines &&
+    params.endLine - params.startLine >= DEFAULT_MAX_LINES &&
+    params.content.endsWith("\n")
+  ) {
+    truncation.content = truncation.content.slice(0, -1);
+    truncation.truncated = true;
+    truncation.truncatedBy = "lines";
+    truncation.outputLines = DEFAULT_MAX_LINES;
+  }
+  const truncatedBy = truncation.truncatedBy;
+  if (!truncation.truncated || truncatedBy === null) {
     return completeSelectedPage(truncation.content);
   }
 
@@ -168,6 +182,8 @@ export function createBoundedReadTextPage(params: {
       content,
       truncation: {
         ...truncationDetails,
+        truncated: true,
+        truncatedBy,
         outputBytes: Buffer.byteLength(content, "utf8"),
         firstLineExceedsLimit: false,
         lastLinePartial: continuation.kind === "cursor",

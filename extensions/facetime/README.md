@@ -20,11 +20,16 @@ openclaw gateway restart
 - `src/call-lifecycle.ts` owns the closed carrier/model state machine,
   generation fencing, serialized native commands, and the complete alias index.
 - `src/pending-dial-store.ts` persists the one exact approved pending dial in
-  plugin-owned SQLite state.
+  plugin-owned SQLite state. Current hosts execute these operations in the
+  shared-state worker, preserving write order and conditional dial-ID cleanup.
+  Runtime startup, helper dispatch, and shutdown await the required publications.
+  Pending outbound calls reserve admission while persistence waits, preserving the
+  same incoming-call policy before and after durable publication.
+  The plugin releases with its host and requires the host's V2 state API.
 - `src/helper-rpc.ts` owns bounded loopback IPC with mutual authentication,
   connection-epoch message MACs, replay sequencing, and typed native
   postcondition projection.
-- `src/helper-supervisor.ts` owns generation-bound LLDB injection and joins
+- `src/helper-supervisor.ts` owns serialized LLDB injection and joins
   in-flight work on stop.
 - `src/audio-pump.ts` owns bounded native capture, SoX playback, and child
   teardown.
@@ -70,7 +75,7 @@ tools, or modify TCC during automated validation.
 The privileged driver script pins BlackHole v0.7.1 and its SHA-256, builds the
 renamed `OpenClawBridge.driver` in a root-only temporary directory, and accepts
 no caller-built artifact, digest, or compiler path. Before compilation it
-requires the canonical Xcode bundle and its selected build tools to be
+requires the Xcode bundle at its actual filesystem path and its selected build tools to be
 Apple-signed, root-owned, and not group/world writable, then performs a
 transactional swap. Generated BlackHole/driver artifacts are GPL-3.0 and are
 excluded from the package. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -5,11 +5,20 @@ import {
   type TalkEvent,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { vi } from "vitest";
-import { createVoiceCaptureState } from "./capture-state.js";
+import { DiscordAudioTransport } from "./audio-transport.js";
+import { getDiscordAudioTestWorker } from "./audio-worker.test-support.js";
+import * as sdkRuntime from "./sdk-runtime.js";
+
+vi.mock("./audio-worker-thread.js", async () => {
+  const { InProcessDiscordAudioWorker } = await import("./audio-worker.test-support.js");
+  return {
+    createDiscordAudioWorkerThread: (
+      options: import("./audio-worker-protocol.js").DiscordAudioWorkerOptions,
+    ) => new InProcessDiscordAudioWorker(undefined, { workerData: options }),
+  };
+});
 import { DiscordRealtimePlayback } from "./realtime-playback.js";
 import { DiscordRealtimePlayer } from "./realtime-player.js";
-import { createVoiceReceiveRecoveryState } from "./receive-recovery.js";
-import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 import type { VoiceSessionEntry } from "./session.js";
 import { DiscordVoiceConversationQueue } from "./voice-conversation-input.js";
 
@@ -17,21 +26,38 @@ export function createRealtimePlaybackFixture(
   onTalkEvent?: (event: TalkEvent) => void,
   options: { outputAudioMode?: "response" | "continuous"; bargeIn?: boolean } = {},
 ) {
-  const voiceSdk = loadDiscordVoiceSdk();
-  const player = voiceSdk.createAudioPlayer({
-    behaviors: { noSubscriber: voiceSdk.NoSubscriberBehavior.Play, maxMissedFrames: 100 },
-  });
+  const voiceSdk = sdkRuntime.loadDiscordVoiceSdk();
+  const noop = () => {};
+  const connectionOptions = {
+    guildId: "guild",
+    channelId: "voice",
+    group: "playback-integration",
+    selfDeaf: true,
+    selfMute: false,
+  };
+  const adapterCreator = () => ({ sendPayload: () => true, destroy: noop });
   // A signalling-only connection supplies the session shape without opening Discord sockets.
-  const connection = new voiceSdk.VoiceConnection(
+  const connection = new voiceSdk.VoiceConnection(connectionOptions, { adapterCreator });
+  const sdkOverride = vi.spyOn(sdkRuntime, "loadDiscordVoiceSdk").mockReturnValue({
+    ...voiceSdk,
+    createAudioPlayer: () =>
+      voiceSdk.createAudioPlayer({
+        behaviors: { noSubscriber: voiceSdk.NoSubscriberBehavior.Play, maxMissedFrames: 100 },
+      }),
+    joinVoiceChannel: () => connection,
+  });
+  const audio = new DiscordAudioTransport(
     {
-      guildId: "guild",
-      channelId: "voice",
-      group: "playback-integration",
-      selfDeaf: true,
-      selfMute: false,
+      ...connectionOptions,
+      connectTimeoutMs: 30_000,
+      reconnectGraceMs: 15_000,
+      captureSilenceGraceMs: 2_000,
+      realtime: true,
     },
-    { adapterCreator: () => ({ sendPayload: () => true, destroy: () => {} }) },
+    adapterCreator,
   );
+  const player = getDiscordAudioTestWorker(audio)["player"];
+  sdkOverride.mockRestore();
   const entry: VoiceSessionEntry = {
     generation: 1,
     captureOnly: false,
@@ -39,7 +65,6 @@ export function createRealtimePlaybackFixture(
     sessionLifecycle: { status: "active" },
     guildId: "guild",
     channelId: "voice",
-    sessionChannelId: "voice",
     voiceSessionKey: "agent:main:discord:voice",
     route: {
       agentId: "main",
@@ -50,19 +75,22 @@ export function createRealtimePlaybackFixture(
       lastRoutePolicy: "session",
       matchedBy: "default",
     },
-    connection,
-    player,
+    audio,
     playbackQueue: Promise.resolve(),
     processingQueue: Promise.resolve(),
     conversations: new DiscordVoiceConversationQueue(),
     audioInputBudget: { enabled: false },
     ttsStreamFallbackWarned: false,
-    capture: createVoiceCaptureState(),
-    realtimeLifecycle: { status: "inactive", generation: 0 },
-    receiveRecovery: createVoiceReceiveRecoveryState(),
+    capture: new Map(),
+    realtimeLifecycle: { status: "inactive" },
+    receiveRecovery: {
+      decryptFailureCount: 0,
+      lastDecryptFailureAt: 0,
+      decryptRecoveryInFlight: false,
+    },
     stop: vi.fn(),
   };
-  const roomPlayer = new DiscordRealtimePlayer(player);
+  const roomPlayer = new DiscordRealtimePlayer(audio);
   const lanes: Array<{ playback: DiscordRealtimePlayback<unknown>; close: () => void }> = [];
   const createLane = (interruption: "decline" | "clear" | "unsupported" = "decline") => {
     let closed = false;
@@ -86,10 +114,12 @@ export function createRealtimePlaybackFixture(
       },
     });
     const cancel = vi.spyOn(harness, "handleBargeIn");
-    const onTerminalError = vi.fn();
-    const stopTerminally = vi.fn();
-    const sendUserMessage = vi.fn();
-    const acknowledgeMark = vi.fn();
+    const mocks = {
+      onTerminalError: vi.fn(),
+      stopTerminally: vi.fn(),
+      sendUserMessage: vi.fn(),
+      acknowledgeMark: vi.fn(),
+    };
     const playback = new DiscordRealtimePlayback({
       bridge: () => bridge,
       bridgeReady: () => true,
@@ -97,13 +127,12 @@ export function createRealtimePlaybackFixture(
       entry,
       player: roomPlayer,
       harness,
-      markProviderGenerationObserved: () => {},
-      mode: "agent-proxy",
-      onTerminalError,
+      markProviderGenerationObserved: noop,
+      onTerminalError: mocks.onTerminalError,
       providerId: () => "openai",
       realtimeConfig: () =>
         options.bargeIn === undefined ? undefined : { bargeIn: options.bargeIn },
-      stopTerminally,
+      stopTerminally: mocks.stopTerminally,
       stopped: () => closed,
       wakeNameRequired: () => false,
     });
@@ -117,12 +146,12 @@ export function createRealtimePlaybackFixture(
           return {
             outputAudioMode: options.outputAudioMode,
             connect: async () => {},
-            close: () => {},
-            sendAudio: () => {},
-            sendUserMessage,
-            setMediaTimestamp: () => {},
-            acknowledgeMark,
-            submitToolResult: () => {},
+            close: noop,
+            sendAudio: noop,
+            sendUserMessage: mocks.sendUserMessage,
+            setMediaTimestamp: noop,
+            acknowledgeMark: mocks.acknowledgeMark,
+            submitToolResult: noop,
             isConnected: () => true,
             ...(interruption === "unsupported"
               ? {}
@@ -132,7 +161,7 @@ export function createRealtimePlaybackFixture(
       },
       providerConfig: {},
       audioSink: {
-        sendAudio: (audio, metadata) => playback.sendOutputAudio(audio, metadata),
+        sendAudio: (pcm, metadata) => playback.sendOutputAudio(pcm, metadata),
         sendMark: (markName, acknowledge) =>
           acknowledge ? playback.sendOutputMark(acknowledge) : bridge?.acknowledgeMark(markName),
         getPlaybackState: () => playback.getPlaybackState(),
@@ -150,13 +179,10 @@ export function createRealtimePlaybackFixture(
       harness,
       callbacks,
       cancel,
-      onTerminalError,
-      stopTerminally,
-      sendUserMessage,
-      acknowledgeMark,
-      close() {
+      ...mocks,
+      close(this: void, preserveUnplayedSpeech = false) {
         closed = true;
-        playback.close();
+        playback.close(preserveUnplayedSpeech);
         harness.close();
         // The synthetic provider closes synchronously, including reentrant player callbacks.
         void bridge?.close();
@@ -167,6 +193,7 @@ export function createRealtimePlaybackFixture(
     return lane;
   };
   const firstLane = createLane();
+  const stopPlayer = player.stop.bind(player);
   const stop = vi.spyOn(player, "stop");
   const onPlayerError = vi.fn();
   player.on("error", onPlayerError);
@@ -175,16 +202,16 @@ export function createRealtimePlaybackFixture(
     voiceSdk,
     player,
     ...firstLane,
+    closeSpeaker: firstLane.close,
     createLane,
     roomPlayer,
+    stopPlayer,
     stop,
     onPlayerError,
     close() {
       roomPlayer.close();
-      for (const lane of lanes) {
-        lane.close();
-      }
-      connection.destroy();
+      lanes.forEach((lane) => lane.close());
+      void audio.stop();
       player.off("error", onPlayerError);
       stop.mockRestore();
     },

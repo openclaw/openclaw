@@ -2,48 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  createMockJsonlReplayCellRunner,
-  renderJsonlReplayMarkdownReport,
-  runJsonlReplay,
-} from "./jsonl-replay.js";
-import type { RuntimeId, RuntimeParityCell, RuntimeParityToolCall } from "./runtime-parity.js";
+import { renderJsonlReplayMarkdownReport, runJsonlReplay } from "./jsonl-replay.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
-type JsonlReplayCellRunner = NonNullable<
-  NonNullable<Parameters<typeof runJsonlReplay>[1]>["runCell"]
->;
-
 const tempDirs = createTempDirHarness();
-
-function makeCell(
-  runtime: RuntimeId,
-  overrides: Partial<RuntimeParityCell> = {},
-): RuntimeParityCell {
-  return {
-    runtime,
-    transcriptBytes: `{"message":{"role":"assistant","content":"${runtime} reply"}}\n`,
-    toolCalls: [],
-    finalText: "same reply",
-    usage: {
-      inputTokens: 10,
-      outputTokens: 5,
-      totalTokens: 15,
-    },
-    wallClockMs: 12,
-    bootStateLines: [],
-    ...overrides,
-  };
-}
-
-function makeToolCall(overrides: Partial<RuntimeParityToolCall> = {}): RuntimeParityToolCall {
-  return {
-    tool: "read",
-    argsHash: "args-a",
-    resultHash: "result-a",
-    ...overrides,
-  };
-}
 
 afterEach(async () => {
   await tempDirs.cleanup();
@@ -60,111 +22,43 @@ describe("jsonl replay", () => {
         `{"message":{"role":"user","content":"   "}}`,
         `{not-json`,
         `{"message":{"role":"assistant","content":"Ready."}}`,
-        `{"message":{"role":"user","content":[{"type":"text","text":"Plan the release"},{"type":"tool_result","content":"ignored"}]}}`,
+        `{"message":{"role":"user","content":["  Plan  ",null,0,{"type":"text","text":"the release","content":"ignored fallback"},{"type":"tool_result","text":"ignored text","content":"ignored"}]}}`,
         `{"role":"user","content":[{"type":"input_text","text":"Check the follow-up"}]}`,
       ].join("\n"),
       "utf8",
     );
-    let turns: readonly Parameters<JsonlReplayCellRunner>[0]["turn"][] = [];
-    const runCell: JsonlReplayCellRunner = async (params) => {
-      turns = params.turns;
-      return createMockJsonlReplayCellRunner()(params);
-    };
-
-    await runJsonlReplay(
-      {
-        directory: transcriptDir,
-        runtimePair: ["openclaw", "codex"],
-        providerMode: "mock-openai",
-      },
-      { runCell },
-    );
-
-    expect(turns).toEqual([
-      expect.objectContaining({
-        turn: 1,
-        lineNumber: 6,
-        userText: "Plan the release",
-      }),
-      expect.objectContaining({
-        turn: 2,
-        lineNumber: 7,
-        userText: "Check the follow-up",
-      }),
-    ]);
-    expect(turns[0]?.transcriptPrefix).toContain(`"role":"system"`);
-    expect(turns[0]?.transcriptPrefix).not.toContain("{not-json");
-  });
-
-  it("reports the earliest divergent turn using runtime parity drift classes", async () => {
-    const transcriptDir = await tempDirs.makeTempDir("jsonl-replay-");
-    await fs.writeFile(
-      path.join(transcriptDir, "three-turns.jsonl"),
-      [
-        `{"message":{"role":"user","content":"Turn one"}}`,
-        `{"message":{"role":"assistant","content":"Ready"}}`,
-        `{"message":{"role":"user","content":"Turn two"}}`,
-        `{"message":{"role":"assistant","content":"Using a tool"}}`,
-        `{"message":{"role":"user","content":"Turn three"}}`,
-      ].join("\n"),
-      "utf8",
-    );
-
-    const runCell: JsonlReplayCellRunner = async ({ runtime, turn }) => {
-      if (turn.turn === 2) {
-        return {
-          status: "pass",
-          cell: makeCell(runtime, {
-            toolCalls: [makeToolCall(runtime === "openclaw" ? {} : { argsHash: "args-codex" })],
-          }),
-        };
-      }
-      if (turn.turn === 3) {
-        return {
-          status: "pass",
-          cell: makeCell(runtime, {
-            finalText: runtime === "openclaw" ? "openclaw wording" : "codex wording",
-          }),
-        };
-      }
-      return {
-        status: "pass",
-        cell: makeCell(runtime),
-      };
-    };
-
-    const result = await runJsonlReplay(
-      {
-        directory: transcriptDir,
-        runtimePair: ["openclaw", "codex"],
-        providerMode: "mock-openai",
-      },
-      { runCell },
-    );
-
+    const result = await runJsonlReplay(transcriptDir);
     expect(result.transcripts).toHaveLength(1);
-    expect(result.transcripts[0]).toEqual(
-      expect.objectContaining({
-        userTurnCount: 3,
-        drift: ["none", "tool-call-shape", "text-only"],
-        firstDriftAtTurn: 2,
-      }),
-    );
-    expect(result.transcripts[0]?.cells.openclaw).toHaveLength(3);
-    expect(result.transcripts[0]?.cells.codex).toHaveLength(3);
+    expect(result.transcripts[0]?.userTurnCount).toBe(2);
+    expect(result.transcripts[0]?.cells.openclaw[0]).toMatchObject({
+      runtime: "openclaw",
+      status: "pass",
+      toolCalls: [],
+      finalText: "Replayed curated turn 1.",
+      usage: { outputTokens: 8 },
+      wallClockMs: 1,
+      bootStateLines: [],
+    });
+    const prefixes = result.transcripts[0]?.cells.openclaw.map((cell) => cell.transcriptBytes);
+    const firstPrefix =
+      [
+        `{"message":{"role":"system","content":"System setup"}}`,
+        `{"message":{"role":"tool","content":"tool-only prelude"}}`,
+        `{"message":{"role":"user","content":"   "}}`,
+        `{"message":{"role":"assistant","content":"Ready."}}`,
+        `{"message":{"role":"user","content":["  Plan  ",null,0,{"type":"text","text":"the release","content":"ignored fallback"},{"type":"tool_result","text":"ignored text","content":"ignored"}]}}`,
+      ].join("\n") + "\n";
+    expect(prefixes).toEqual([
+      firstPrefix,
+      firstPrefix +
+        `{"role":"user","content":[{"type":"input_text","text":"Check the follow-up"}]}\n`,
+    ]);
   });
 
   it("runs the curated replay fixture set in mock-openai mode", async () => {
     const fixtureDir = path.resolve("qa/scenarios/jsonl-replay");
 
-    const result = await runJsonlReplay(
-      {
-        directory: fixtureDir,
-        runtimePair: ["openclaw", "codex"],
-        providerMode: "mock-openai",
-      },
-      { runCell: createMockJsonlReplayCellRunner() },
-    );
+    const result = await runJsonlReplay(fixtureDir);
 
     expect(result.transcripts).toHaveLength(7);
     expect(result.transcripts.map((entry) => entry.userTurnCount)).toEqual([2, 2, 3, 2, 2, 2, 2]);
@@ -177,5 +71,24 @@ describe("jsonl replay", () => {
         transcripts: result.transcripts,
       }),
     ).toContain("| plan-mode-boundaries.jsonl | 3 |  | none, none, none |");
+  });
+
+  it("renders divergence recorded in an existing report", () => {
+    const report = renderJsonlReplayMarkdownReport({
+      generatedAt: "2026-05-10T00:00:00.000Z",
+      providerMode: "mock-openai",
+      runtimePair: ["openclaw", "codex"],
+      transcripts: [
+        {
+          transcriptPath: "historical.jsonl",
+          userTurnCount: 2,
+          cells: { openclaw: [], codex: [] },
+          drift: ["none", "tool-call-shape"],
+          firstDriftAtTurn: 2,
+        },
+      ],
+    });
+    expect(report).toContain("- Drifted transcripts: 1");
+    expect(report).toContain("| historical.jsonl | 2 | 2 | none, tool-call-shape |");
   });
 });

@@ -3,14 +3,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
-import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
-import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, expect, it, vi } from "vitest";
 import plugin from "../index.js";
-import { logbookSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { LogbookStore } from "./store.js";
-
-const workerModuleUrl = resolveRuntimeWorkerUrl(logbookSqliteBackendEntrypoint);
+import { cardDraft, workerModuleUrl } from "./test-fixtures.test-support.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -21,9 +19,10 @@ it("serves timeline and status through their bounded store operations", async ()
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-07-03T12:00:00"));
   const stateDir = realpathSync(mkdtempSync(path.join(tmpdir(), "logbook-card-reads-")));
-  const services: OpenClawPluginService[] = [];
+  const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
   const methods = new Map<string, Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]>();
   const context = {
+    scheduler: createTestPluginServiceScheduler(),
     stateDir,
     config: {},
     logger: { info() {}, warn() {}, error() {}, debug() {} },
@@ -31,16 +30,15 @@ it("serves timeline and status through their bounded store operations", async ()
   const store = await LogbookStore.open(path.join(stateDir, "logbook"), workerModuleUrl);
   const day = "2026-07-03";
   const startMs = new Date(`${day}T09:00:00`).getTime();
-  const drafts = Array.from({ length: 8 }, (_, index) => ({
-    day,
-    startMs: startMs + index * 60_000,
-    endMs: startMs + (index + 1) * 60_000,
-    title: `Card ${index} 🦞`,
-    summary: "Summary",
-    detail: "Detailed activity",
-    category: "coding",
-    distractions: [{ startMs: startMs + 1, endMs: startMs + 11, title: "Break" }],
-  }));
+  const drafts = Array.from({ length: 8 }, (_, index) =>
+    cardDraft({
+      startMs: startMs + index * 60_000,
+      endMs: startMs + (index + 1) * 60_000,
+      title: `Card ${index} 🦞`,
+      detail: "Detailed activity",
+      distractions: [{ startMs: startMs + 1, endMs: startMs + 11, title: "Break" }],
+    }),
+  );
   await store.replaceCardsInWindow(day, 0, Number.MAX_SAFE_INTEGER, drafts);
   const cards = await store.cardsForDay(day);
   await store.close();
@@ -52,7 +50,8 @@ it("serves timeline and status through their bounded store operations", async ()
     runtime: {},
     session: { controls: { registerControlUiDescriptor() {} } },
     registerNodeInvokePolicy() {},
-    registerService: (service: OpenClawPluginService) => services.push(service),
+    registerService: (service: Parameters<OpenClawPluginApi["registerService"]>[0]) =>
+      services.push(service),
     registerGatewayMethod: (
       method: string,
       handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1],
@@ -86,7 +85,9 @@ it("serves timeline and status through their bounded store operations", async ()
     expect(cardCount).toHaveBeenCalledExactlyOnceWith(day);
     expect(cardPayloads).not.toHaveBeenCalled();
   } finally {
+    context.scheduler.beginClose();
     await service.stop?.(context);
+    await context.scheduler.stop();
     rmSync(stateDir, { recursive: true, force: true });
   }
 });

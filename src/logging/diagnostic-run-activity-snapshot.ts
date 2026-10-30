@@ -1,13 +1,4 @@
 import type { DiagnosticSessionActiveWorkKind } from "../infra/diagnostic-events.js";
-import {
-  type DiagnosticArgumentChurnActivity,
-  resolveArgumentChurnProgress,
-} from "./diagnostic-argument-churn-activity.js";
-import { resolveCurrentDiagnosticRunId } from "./diagnostic-embedded-run-index.js";
-import {
-  type DiagnosticRepeatedRequestActivity,
-  resolveRepeatedRequestNoProgressAgeMs,
-} from "./diagnostic-repeated-request-activity.js";
 
 export type DiagnosticSessionActivitySnapshot = {
   activeWorkKind?: DiagnosticSessionActiveWorkKind;
@@ -19,80 +10,13 @@ export type DiagnosticSessionActivitySnapshot = {
   lastProgressAgeMs?: number;
   lastProgressReason?: string;
   repeatedRequestNoProgressAgeMs?: number;
+  /** Quiet allowance owned by the current core request generation. */
   activeModelCallRequestTimeoutMs?: number;
   /** Absolute quiet deadline validated against the exact executing backend owner. */
   activeBackendLivenessDeadlineAtMs?: number;
   /** Absolute provider retry deadline validated against the live logical run. */
   activeRetryWaitDeadlineAtMs?: number;
 };
-
-type SnapshotTool = {
-  toolName: string;
-  toolCallId?: string;
-  startedAt: number;
-  deadlineAtMs?: number;
-};
-type SnapshotActivity = DiagnosticArgumentChurnActivity &
-  DiagnosticRepeatedRequestActivity & {
-    activeEmbeddedRuns: ReadonlyMap<string, { runId: string; sequence: number }>;
-    activeModelCalls: ReadonlyMap<string, unknown>;
-    activeCoreModelCalls: ReadonlyMap<object, ReadonlyMap<string, { requestTimeoutMs?: number }>>;
-    activeTools: ReadonlyMap<string, SnapshotTool>;
-    lastProgressAt: number;
-    lastProgressReason?: string;
-  };
-
-export function buildDiagnosticSessionActivitySnapshot(
-  activity: SnapshotActivity,
-  now: number,
-): DiagnosticSessionActivitySnapshot {
-  let activeCoreModelCallCount = 0;
-  let activeModelCallRequestTimeoutMs: number | undefined;
-  for (const calls of activity.activeCoreModelCalls.values()) {
-    activeCoreModelCallCount += calls.size;
-    for (const call of calls.values()) {
-      if (
-        call.requestTimeoutMs !== undefined &&
-        (activeModelCallRequestTimeoutMs === undefined ||
-          call.requestTimeoutMs > activeModelCallRequestTimeoutMs)
-      ) {
-        activeModelCallRequestTimeoutMs = call.requestTimeoutMs;
-      }
-    }
-  }
-  const activeWorkKind: DiagnosticSessionActiveWorkKind | undefined =
-    activity.activeTools.size > 0
-      ? "tool_call"
-      : activity.activeModelCalls.size > 0 || activeCoreModelCallCount > 0
-        ? "model_call"
-        : activity.activeEmbeddedRuns.size > 0
-          ? "embedded_run"
-          : undefined;
-  let activeTool: SnapshotTool | undefined;
-  for (const tool of activity.activeTools.values()) {
-    if (!activeTool || tool.startedAt < activeTool.startedAt) {
-      activeTool = tool;
-    }
-  }
-  const currentOwnerRunId = resolveCurrentDiagnosticRunId(activity.activeEmbeddedRuns.values());
-  const churnProgress = resolveArgumentChurnProgress(activity, currentOwnerRunId, now);
-  return {
-    activeWorkKind,
-    ...(activity.activeEmbeddedRuns.size > 0 ? { hasActiveEmbeddedRun: true } : {}),
-    activeToolName: activeTool?.toolName,
-    activeToolCallId: activeTool?.toolCallId,
-    activeToolAgeMs: activeTool ? Math.max(0, now - activeTool.startedAt) : undefined,
-    activeToolDeadlineAtMs: activeTool?.deadlineAtMs,
-    lastProgressAgeMs: Math.max(0, now - churnProgress.lastProgressAt),
-    lastProgressReason: churnProgress.lastProgressReason,
-    repeatedRequestNoProgressAgeMs: resolveRepeatedRequestNoProgressAgeMs(
-      activity,
-      currentOwnerRunId,
-      now,
-    ),
-    activeModelCallRequestTimeoutMs,
-  };
-}
 
 // Quiet-but-alive tools are normal agent behavior; the CLI byte watchdog kills
 // truly silent children within its own deadline. This floor bounds every

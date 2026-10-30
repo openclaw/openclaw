@@ -1,22 +1,15 @@
 /**
- * Curated automation ideas for the Automations page.
- *
  * Pure UI data: each idea prefills the inline create form. Nothing here talks
  * to the gateway or adds config surface.
  */
 
 import { t } from "../../i18n/index.ts";
+import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import type { CronFormState } from "../../lib/cron/types.ts";
 
-type CronSuggestion = {
-  id: string;
-  emoji: string;
-  nameKey: string;
-  taglineKey: string;
-  promptKey: string;
-  scheduleKey: string;
-  schedule: Partial<CronFormState>;
-};
+registerCronEnglish();
+
+type CronSuggestion = ReturnType<typeof suggestion>;
 
 // Schedule shapes ported from the retired quick-create presets.
 const WEEKDAY_MORNINGS: Partial<CronFormState> = {
@@ -36,7 +29,7 @@ function suggestion(
   emoji: string,
   scheduleKey: string,
   schedule: Partial<CronFormState>,
-): CronSuggestion {
+) {
   return {
     id,
     emoji,

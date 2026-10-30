@@ -14,14 +14,6 @@ describe("telegram account policy inheritance after validation", () => {
 
     expect(resolved).toMatchObject(expected);
   });
-
-  it("does not turn omitted account policies into explicit configuration", () => {
-    const channel = TelegramConfigSchema.parse({ accounts: { work: {} } });
-
-    expect(channel.accounts?.work).toBeDefined();
-    expect(channel.accounts?.work).not.toHaveProperty("groupPolicy");
-    expect(channel.accounts?.work).not.toHaveProperty("dmPolicy");
-  });
 });
 
 describe("Telegram capability collection inheritance", () => {

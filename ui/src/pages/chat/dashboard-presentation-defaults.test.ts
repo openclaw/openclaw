@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionsPatchResult } from "../../api/types.ts";
@@ -7,10 +8,9 @@ import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { showToast } from "../../lib/toast.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { ensureBoardViewElement } from "./board-session-surface.ts";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
-import { sidebarRegionCallbacks } from "./chat-pane-sidebar-layout.ts";
 import {
   createDashboardHarness,
   expectPresentation,
@@ -28,24 +28,31 @@ import {
   promoteSidebarPanel,
   setSidebarDock,
   setSidebarExpanded,
-  setSidebarOpen,
   toggleSidebarPanelExpanded,
   sidebarMainPanel,
   sidebarActivePanel,
 } from "./sidebar-layout.ts";
 
 vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn() }));
-// Board widgets own their rendering tests; these tests keep the real pane, page
-// state, settings, session capability, and header/menu composition.
-vi.mock("../../components/board/board-view.ts", () => {
+// mock-isolation: Board widgets have their own tests; isolate their rendering from pane settings and menus.
+vi.mock("../../components/board/board-view.tsx", () => {
   if (!customElements.get("openclaw-board-view")) {
     customElements.define("openclaw-board-view", class extends HTMLElement {});
   }
   return {};
 });
 
-const defaultAction = '[value="quick:layout:dashboard-default"]';
+const defaultAction = '[data-value="dashboard-default"]';
 const defaultStatus = '[data-menu-status="dashboard-default"]';
+
+function pendingSave(h: ReturnType<typeof createDashboardHarness>) {
+  const reply = createDeferred<SessionsPatchResult>();
+  onTestFinished(() => {
+    reply.resolve({ ok: true, key, path: "(multiple)", entry: { sessionId: "dashboard-session" } });
+  });
+  h.setPatchReply(reply.promise);
+  return reply;
+}
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
@@ -61,18 +68,47 @@ afterEach(() => {
 });
 
 describe("dashboard default activation and personal layout persistence", () => {
-  it("relocates only the visible fullscreen widget when a replacement task menu exists", async () => {
-    await ensureBoardViewElement();
+  it.each(["split", "expanded-side"] as const)(
+    "keeps a live %s dashboard when focus adopts its face after the shared default changes",
+    (presentation) => {
+      const split = openSlot(ensureSidebarConversation({ columns: [] }), "dashboard");
+      const h = createDashboardHarness({
+        savedLayout: {
+          ...(presentation === "split" ? split : toggleSidebarPanelExpanded(split, "dashboard")),
+          dashboardPresentationOverride: null,
+        },
+      });
+      h.pane.routeFace = "chat";
+      const layout = structuredClone(h.state.sidebarLayout);
+      h.publishRow(session({ boardPresentation: presentation === "split" ? "expanded" : "split" }));
+
+      h.pane.routeFace = h.pane.captureNavigationFace();
+      h.sync();
+
+      expect(h.pane.routeFace).toBe("dashboard");
+      expect(h.state.sidebarLayout).toEqual(layout);
+      expect(sidebarMainPanel(h.state.sidebarLayout)?.slot).toBe("conversation");
+      expect(sidebarActivePanel(h.state.sidebarLayout)?.slot).toBe("dashboard");
+    },
+  );
+
+  it("relocates a visible full-width singleton in split and fullscreen views when a task menu exists", async () => {
+    await import("../../components/board/board-view.tsx");
     const { pane } = createDashboardHarness();
     const board = { ...pane.resolveBoardView(), activeTabId: "research" };
+    const resolveBoard = vi.spyOn(pane, "resolveBoardView").mockReturnValue(board);
     const expanded = openDashboardPresentation({ columns: [] }, "expanded");
-    expect(pane.fullscreenBoardWidgetMenu(expanded, board)?.widget.name).toBe("source-map");
+    expect(pane.pageBoardWidgetMenu(expanded)?.widget.name).toBe("source-map");
     expect(
-      pane.fullscreenBoardWidgetMenu(openDashboardPresentation(expanded, "split"), board),
-    ).toBeUndefined();
-    expect(
-      pane.fullscreenBoardWidgetMenu(expanded, { ...board, activeTabId: "main" }),
-    ).toBeUndefined();
+      pane.pageBoardWidgetMenu(openDashboardPresentation(expanded, "split"))?.widget.name,
+    ).toBe("source-map");
+    const split = openDashboardPresentation(expanded, "split");
+    const side = promoteSidebarPanel(ensureSidebarConversation(split), "conversation");
+    expect(pane.pageBoardWidgetMenu(side)?.widget.name).toBe("source-map");
+    expect(pane.pageBoardWidgetMenu(openSlot(side, "workspace"))).toBeUndefined();
+    expect(pane.pageBoardWidgetMenu(closeSlot(side, "dashboard"))).toBeUndefined();
+    resolveBoard.mockReturnValue({ ...board, activeTabId: "main" });
+    expect(pane.pageBoardWidgetMenu(expanded)).toBeUndefined();
     const narrow = {
       ...board,
       snapshot: {
@@ -82,46 +118,78 @@ describe("dashboard default activation and personal layout persistence", () => {
         ),
       },
     };
-    expect(pane.fullscreenBoardWidgetMenu(expanded, narrow)).toBeUndefined();
+    resolveBoard.mockReturnValue(narrow);
+    expect(pane.pageBoardWidgetMenu(expanded)).toBeUndefined();
+    resolveBoard.mockReturnValue(board);
     pane.visuallyPresented = false;
-    expect(pane.fullscreenBoardWidgetMenu(expanded, board)).toBeUndefined();
+    expect(pane.pageBoardWidgetMenu(expanded)).toBeUndefined();
     pane.visuallyPresented = true;
     pane.state.sessionsResult = null;
-    expect(pane.fullscreenBoardWidgetMenu(expanded, board)).toBeUndefined();
+    expect(pane.pageBoardWidgetMenu(expanded)).toBeUndefined();
   });
 
-  it.each(["shared", "personal"] as const)(
-    "opens the %s expanded preference through the registered keyboard handler",
-    (kind) => {
-      const h = createDashboardHarness({
-        row: session({ boardPresentation: kind === "shared" ? "expanded" : "split" }),
-        savedLayout:
-          kind === "personal"
-            ? {
-                ...openDashboardPresentation({ columns: [] }, "expanded"),
-                dashboardPresentationOverride: "expanded",
-              }
-            : undefined,
-      });
-      h.pane.routeFace = "chat";
-      h.pane.active = true;
-      h.state.updateSidebarLayout(closeSlot(h.state.sidebarLayout, "dashboard"));
-      const event = new KeyboardEvent("keydown", {
-        key: "G",
-        code: "KeyG",
-        metaKey: true,
-        shiftKey: true,
-        altKey: true,
-        cancelable: true,
-      });
-      h.pane.handleDocumentKeydown(event);
-      expect(event.defaultPrevented).toBe(true);
-      expectPresentation(h.state.sidebarLayout, true);
-      expect(h.saved()?.dashboardPresentationOverride).toBe(
-        kind === "personal" ? "expanded" : null,
-      );
-    },
-  );
+  it("admits relocated widget actions only through the current mounted board", async () => {
+    await import("../../components/board/board-view.tsx");
+    const { pane, state } = createDashboardHarness();
+    state.sidebarLayout = openDashboardPresentation({ columns: [] }, "expanded");
+    const board = { ...pane.resolveBoardView(), activeTabId: "research" };
+    const resolveBoard = vi.spyOn(pane, "resolveBoardView").mockReturnValue(board);
+    const menu = expectDefined(pane.pageBoardWidgetMenu(state.sidebarLayout), "page menu");
+    const selectItem = vi.fn();
+    const view = Object.assign(document.createElement("openclaw-board-view"), {
+      snapshot: board.snapshot,
+      session: { sessionKey: key, agentId: "main" },
+      selectPageWidgetMenuItem: selectItem,
+    });
+    Reflect.set(pane, "boardView", view);
+    menu.onSelect("remove");
+    expect(selectItem).not.toHaveBeenCalled();
+    document.body.append(view);
+    menu.onSelect("remove");
+    expect(selectItem).toHaveBeenCalledExactlyOnceWith(
+      menu.widget.name,
+      menu.widget.revision,
+      "remove",
+    );
+    resolveBoard.mockReturnValue({ ...board, provider: { ...board.provider } });
+    menu.onSelect("remove");
+    resolveBoard.mockReturnValue({
+      ...board,
+      snapshot: {
+        ...board.snapshot,
+        widgets: board.snapshot.widgets.map((widget) => ({ ...widget })),
+      },
+    });
+    menu.onSelect("remove");
+    resolveBoard.mockReturnValue(board);
+    view.session = { ...view.session, sessionKey: "agent:main:replacement" };
+    menu.onSelect("remove");
+    expect(selectItem).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the personal expanded preference through the registered keyboard handler", () => {
+    const h = createDashboardHarness({
+      savedLayout: {
+        ...openDashboardPresentation({ columns: [] }, "expanded"),
+        dashboardPresentationOverride: "expanded",
+      },
+    });
+    h.pane.routeFace = "chat";
+    h.pane.active = true;
+    h.state.updateSidebarLayout(closeSlot(h.state.sidebarLayout, "dashboard"));
+    const event = new KeyboardEvent("keydown", {
+      key: "G",
+      code: "KeyG",
+      metaKey: true,
+      shiftKey: true,
+      altKey: true,
+      cancelable: true,
+    });
+    h.pane.handleDocumentKeydown(event);
+    expect(event.defaultPrevented).toBe(true);
+    expectPresentation(h.state.sidebarLayout, true);
+    expect(h.saved()?.dashboardPresentationOverride).toBe("expanded");
+  });
 
   it("does not overwrite a newer cross-tab choice when opening Files", () => {
     const h = createDashboardHarness({
@@ -149,19 +217,23 @@ describe("dashboard default activation and personal layout persistence", () => {
     { initial: "expanded", next: null, shared: "split" },
     { initial: "expanded", next: "split", shared: "expanded" },
     { initial: "split", next: "expanded", shared: "split" },
+    { initial: "split", next: undefined, shared: "expanded" },
   ] as const)(
-    "uses the latest cross-tab override $next when opening Dashboard",
+    "opens Dashboard with override $next and shared default $shared",
     ({ initial, next, shared }) => {
+      const initialLayout = openDashboardPresentation({ columns: [] }, initial);
       const savedLayout = {
-        ...openDashboardPresentation({ columns: [] }, initial),
-        dashboardPresentationOverride: initial,
+        ...(next === undefined ? openSlot(initialLayout, "terminal") : initialLayout),
+        ...(next === undefined ? {} : { dashboardPresentationOverride: initial }),
       };
       const h = createDashboardHarness({
         savedLayout,
         row: session({ boardPresentation: shared }),
       });
       h.sync();
-      h.state.updateSidebarLayout(openSlot(h.state.sidebarLayout, "terminal"));
+      if (next !== undefined) {
+        h.state.updateSidebarLayout(openSlot(h.state.sidebarLayout, "terminal"));
+      }
       const rails = createChatPaneRails({
         state: h.state,
         sidebarLayout: h.state.sidebarLayout,
@@ -171,53 +243,23 @@ describe("dashboard default activation and personal layout persistence", () => {
         setObserverVisibility: vi.fn(),
         updateSidebarLayout: h.state.updateSidebarLayout,
       });
-      patchSettings({
-        sidebarSessionLayouts: { [key]: { ...savedLayout, dashboardPresentationOverride: next } },
-      });
+      if (next !== undefined) {
+        patchSettings({
+          sidebarSessionLayouts: { [key]: { ...savedLayout, dashboardPresentationOverride: next } },
+        });
+      }
       rails.openPanelSlot("dashboard");
-      expectPresentation(h.state.sidebarLayout, (next ?? shared) === "expanded");
+      expectPresentation(
+        h.state.sidebarLayout,
+        next !== undefined && (next ?? shared) === "expanded",
+      );
       expect(h.saved()?.dashboardPresentationOverride).toBe(next);
+      if (next === undefined) {
+        h.revisit();
+        expectPresentation(h.state.sidebarLayout, false);
+      }
     },
   );
-
-  it("keeps ordinary Chat and active Dashboard renders storage-free", () => {
-    const h = createDashboardHarness();
-    const getItem = vi.spyOn(localStorage, "getItem");
-    h.pane.routeFace = "chat";
-    getItem.mockClear();
-    h.sync();
-    h.sync();
-    expect(getItem).not.toHaveBeenCalled();
-    h.pane.routeFace = "dashboard";
-    h.sync();
-    getItem.mockClear();
-    h.sync();
-    h.sync();
-    expect(getItem).not.toHaveBeenCalled();
-  });
-
-  it("activates a legacy Dashboard tab without adopting a differing shared mode", () => {
-    const legacy = openSlot(openDashboardPresentation({ columns: [] }, "split"), "terminal");
-    const h = createDashboardHarness({
-      savedLayout: legacy,
-      row: session({ boardPresentation: "expanded" }),
-    });
-    h.sync();
-    const rails = createChatPaneRails({
-      state: h.state,
-      sidebarLayout: h.state.sidebarLayout,
-      presentationId: "legacy-dashboard",
-      presented: true,
-      gatewaySnapshot: h.pane.context.gateway.snapshot,
-      setObserverVisibility: vi.fn(),
-      updateSidebarLayout: h.state.updateSidebarLayout,
-    });
-    rails.openPanelSlot("dashboard");
-    expectPresentation(h.state.sidebarLayout, false);
-    expect(h.saved()?.dashboardPresentationOverride).toBeUndefined();
-    h.revisit();
-    expectPresentation(h.state.sidebarLayout, false);
-  });
 
   it.each(["split", "expanded"] as const)(
     "keeps a transient %s request through Chat-to-Dashboard activation, but not a revisit",
@@ -239,30 +281,26 @@ describe("dashboard default activation and personal layout persistence", () => {
       expect(
         loadSettings().sidebarSessionLayouts?.[key]?.dashboardPresentationOverride,
       ).toBeUndefined();
+      expect(h.saved()).toBeUndefined();
+      h.resize();
+      expect(h.saved()?.dashboardPresentationOverride).toBeNull();
       h.pane.routeFace = "chat";
       h.sync();
       h.pane.routeFace = "dashboard";
       h.sync();
       expectPresentation(h.state.sidebarLayout, shared === "expanded");
+      h.revisit();
+      expectPresentation(h.state.sidebarLayout, shared === "expanded");
     },
   );
-
-  it("opens a dashboard route in split only once and preserves a later panel choice", () => {
-    const h = createDashboardHarness();
-    h.state.updateSidebarLayout(openSlot(h.state.sidebarLayout, "terminal"));
-    h.sync();
-    expectPresentation(h.state.sidebarLayout, false);
-    h.state.updateSidebarLayout(openSlot(h.state.sidebarLayout, "terminal"));
-    h.sync();
-    expect(isSidebarSlotVisible(h.state.sidebarLayout, "terminal")).toBe(true);
-    expect(isSidebarSlotVisible(h.state.sidebarLayout, "dashboard")).toBe(false);
-  });
 
   it("waits for the selected authoritative row, then inherits without creating an override", () => {
     const h = createDashboardHarness({ metadataPending: true });
     h.sync();
     expect(isSidebarSlotVisible(h.state.sidebarLayout, "dashboard")).toBe(false);
     expect(h.saved()).toBeUndefined();
+    h.pane.routeFace = h.pane.captureNavigationFace();
+    expect(h.pane.routeFace).toBe("dashboard");
     h.state.sessionsResult = sessionsResult([session({ key: "agent:main:other" })], 10);
     h.sync();
     expect(isSidebarSlotVisible(h.state.sidebarLayout, "dashboard")).toBe(false);
@@ -283,53 +321,16 @@ describe("dashboard default activation and personal layout persistence", () => {
     expect(h.state.sidebarLayout.columns[0]?.width).toBe(620);
   });
 
-  it("keeps a personal choice when the shared default is still unknown", () => {
-    const h = createDashboardHarness({ metadataPending: true, expandedLink: true });
-    h.sync();
-    h.state.updateSidebarLayout(openDashboardPresentation(h.state.sidebarLayout, "split"), {
-      dashboardPresentation: "personal",
-    });
-    expect(h.saved()?.dashboardPresentationOverride).toBe("split");
-    h.publishRow(session({ boardPresentation: "expanded" }));
-    h.pane.dashboardExpanded = false;
-    h.revisit();
-    expectPresentation(h.state.sidebarLayout, false);
-  });
-
-  it("does not apply a changed shared default when the reconnect epoch advances", () => {
-    const h = createDashboardHarness();
-    h.sync();
-    h.publishRow(session({ boardPresentation: "expanded", updatedAt: 20 }));
-    h.pane.connectionGeneration += 1;
-    h.sync();
-    expectPresentation(h.state.sidebarLayout, false);
-    h.revisit();
-    expectPresentation(h.state.sidebarLayout, true);
-  });
-
-  it("waits for metadata when a saved width carries explicit inheritance", () => {
-    const savedLayout = {
-      ...openDashboardPresentation({ columns: [] }, "split"),
-      dashboardPresentationOverride: null,
-    };
-    const h = createDashboardHarness({ savedLayout, metadataPending: true });
-    h.sync();
-    expectPresentation(h.state.sidebarLayout, false);
-    h.publishRow(session({ boardPresentation: "expanded" }));
-    h.sync();
-    expectPresentation(h.state.sidebarLayout, true);
-    expect(h.saved()?.dashboardPresentationOverride).toBeNull();
-  });
-
   it("updates the session cache without rearranging its active viewer", async () => {
     const h = createDashboardHarness();
     await h.sessions.refresh({ agentId: "main", force: true });
-    const stop = h.sessions.subscribe((next) => {
-      h.state.sessionsResult = next.result;
-    });
-    onTestFinished(stop);
+    onTestFinished(
+      h.sessions.subscribe((next) => {
+        h.state.sessionsResult = next.result;
+      }),
+    );
     h.sync();
-    h.sessions.reconcileChanged({
+    h.emitGatewayEvent("sessions.changed", {
       ...session({ boardPresentation: "expanded", updatedAt: 20 }),
       sessionKey: key,
       reason: "patch",
@@ -337,51 +338,29 @@ describe("dashboard default activation and personal layout persistence", () => {
     expect(h.state.sessionsResult?.sessions[0]?.boardPresentation).toBe("expanded");
     h.sync();
     expectPresentation(h.state.sidebarLayout, false);
-    expect((await h.header()).querySelector(defaultAction)).not.toBeNull();
+    const menu = await h.header();
+    await vi.dynamicImportSettled();
+    await waitForSolid(() => expect(menu.querySelector(defaultAction)).not.toBeNull());
     h.revisit();
     expectPresentation(h.state.sidebarLayout, true);
-    expect((await h.header()).querySelector(defaultAction)).toBeNull();
-    expect((await h.header()).querySelector(defaultStatus)?.textContent).toContain(
-      t("chat.sidePanel.currentViewIsDefault"),
-    );
+    const revisitedMenu = await h.header();
+    await waitForSolid(() => {
+      expect(revisitedMenu.querySelector(defaultAction)).toBeNull();
+      expect(revisitedMenu.querySelector(defaultStatus)?.textContent).toContain(
+        t("chat.sidePanel.currentViewIsDefault"),
+      );
+    });
     expect(h.saved()).toBeUndefined();
   });
 
-  it("treats an absent optional default as split, not as unloaded metadata", () => {
-    const h = createDashboardHarness({ row: session({ boardPresentation: undefined }) });
-    h.sync();
-    expectPresentation(h.state.sidebarLayout, false);
-    expect(h.saved()).toBeUndefined();
-    h.publishRow(session({ boardPresentation: "expanded", updatedAt: 20 }));
-    h.sync();
-    expectPresentation(h.state.sidebarLayout, false);
-    h.revisit();
-    expectPresentation(h.state.sidebarLayout, true);
-  });
-
-  it("does not convert a focused deep link or a later width save into a personal choice", () => {
-    const h = createDashboardHarness({ metadataPending: true, expandedLink: true });
-    h.sync();
-    expectPresentation(h.state.sidebarLayout, true);
-    expect(h.saved()).toBeUndefined();
-    h.resize();
-    expect(h.saved()?.dashboardPresentationOverride).toBeNull();
-    h.publishRow(session());
-    h.sync();
-    expectPresentation(h.state.sidebarLayout, true);
-    h.pane.dashboardExpanded = false;
-    h.revisit();
-    expectPresentation(h.state.sidebarLayout, false);
-    expect(h.saved()?.dashboardPresentationOverride).toBeNull();
-  });
-
-  it("preserves personal precedence through a focused link and clears it when matching shared", async () => {
+  it("preserves a personal split preference through a focused link and resize", async () => {
     const h = createDashboardHarness({ row: session({ boardPresentation: "expanded" }) });
     h.sync();
-    await h.header();
-    const focus = h.mount.querySelector<HTMLButtonElement>(".chat-panel-focus");
-    expect(focus).not.toBeNull();
-    focus!.click();
+    const menu = await h.header();
+    expect(menu.querySelector('[data-value="dashboard-expand"]')?.textContent).toContain(
+      "Restore split",
+    );
+    await select(menu, "dashboard-expand");
     expectPresentation(h.state.sidebarLayout, false);
     expect(h.saved()?.dashboardPresentationOverride).toBe("split");
 
@@ -391,16 +370,6 @@ describe("dashboard default activation and personal layout persistence", () => {
     h.resize();
     expect(h.saved()?.dashboardPresentationOverride).toBe("split");
     h.pane.dashboardExpanded = false;
-    h.revisit();
-    expectPresentation(h.state.sidebarLayout, false);
-
-    h.state.updateSidebarLayout(openDashboardPresentation(h.state.sidebarLayout, "expanded"), {
-      dashboardPresentation: "personal",
-    });
-    expect(h.saved()?.dashboardPresentationOverride).toBeNull();
-    h.publishRow(session({ boardPresentation: "split", updatedAt: 30 }));
-    h.sync();
-    expectPresentation(h.state.sidebarLayout, true);
     h.revisit();
     expectPresentation(h.state.sidebarLayout, false);
   });
@@ -413,15 +382,8 @@ describe("dashboard default activation and personal layout persistence", () => {
         (panel) => panel.slot === "dashboard",
       );
       expect(dashboard).toBeDefined();
-      sidebarRegionCallbacks({
-        state: h.state,
-        layout: h.state.sidebarLayout,
-        closePanelSlot: vi.fn(),
-        openPanelSlot: vi.fn(),
-        forgetDiscussionUrl: vi.fn(),
-        resizePanel: vi.fn(),
-        setPanelOpen: vi.fn(),
-      }).togglePanelExpanded(dashboard!.id);
+      const layout = expectDefined(h.pane.render().layout, "Dashboard pane layout");
+      layout.region.callbacks.togglePanelExpanded(dashboard!.id);
     };
     focusPanel();
     expectPresentation(h.state.sidebarLayout, true);
@@ -431,97 +393,33 @@ describe("dashboard default activation and personal layout persistence", () => {
     expect(h.saved()?.dashboardPresentationOverride).toBeNull();
   });
 
-  it("restores inherited versus personal presentation after page recreation", () => {
-    const h = createDashboardHarness({ row: session({ boardPresentation: "expanded" }) });
-    h.sync();
-    h.resize();
-    const inherited = h.saved();
-    expect(inherited?.dashboardPresentationOverride).toBeNull();
-    const reopened = createDashboardHarness({ savedLayout: inherited, row: session() });
-    reopened.sync();
-    expectPresentation(reopened.state.sidebarLayout, false);
-    expect(reopened.state.sidebarLayout.columns[0]?.width).toBe(620);
-    reopened.state.updateSidebarLayout(
-      openDashboardPresentation(reopened.state.sidebarLayout, "expanded"),
-      { dashboardPresentation: "personal" },
-    );
-    const reopenedAgain = createDashboardHarness({
-      savedLayout: reopened.saved(),
-      row: session(),
+  it.each([
+    { name: "side tab with personal override", override: "split" as const, focused: false },
+    { name: "focused Chat inheriting shared default", override: null, focused: true },
+  ])("restores a $name across revisits and recreation", ({ override, focused }) => {
+    const split = openDashboardPresentation({ columns: [] }, "split");
+    const side = openSlot(ensureSidebarConversation(split), "companion");
+    const savedLayout = normalizeSidebarLayout({
+      ...(focused ? setSidebarExpanded(side, true) : setSidebarDock(side, "left")),
+      dashboardPresentationOverride: override,
     });
-    reopenedAgain.sync();
-    expectPresentation(reopenedAgain.state.sidebarLayout, true);
-    expect(reopenedAgain.saved()?.dashboardPresentationOverride).toBe("expanded");
+    const row = session({ boardPresentation: override === null ? "split" : "expanded" });
+    const h = createDashboardHarness({ savedLayout, row });
+    h.sync();
+    if (focused) {
+      expect(h.state.sidebarLayout).toEqual(savedLayout);
+    } else {
+      expect(sidebarMainPanel(h.state.sidebarLayout)?.slot).toBe("conversation");
+      expect(sidebarActivePanel(h.state.sidebarLayout)?.slot).toBe("companion");
+    }
+    h.revisit();
+    expect(h.state.sidebarLayout).toEqual(savedLayout);
+    expect(h.saved()).toEqual(savedLayout);
+    const reopened = createDashboardHarness({ savedLayout: h.saved(), row });
+    reopened.sync();
+    expect(reopened.state.sidebarLayout).toEqual(savedLayout);
+    expect(reopened.saved()).toEqual(savedLayout);
   });
-
-  it.each(
-    ([undefined, "conversation", "dashboard"] as const).flatMap((mainPanelId) =>
-      (["companion", "workspace"] as const).flatMap((sidePanel) =>
-        ([null, "split"] as const).map((dashboardPresentationOverride) => ({
-          mainPanelId,
-          sidePanel,
-          dashboardPresentationOverride,
-        })),
-      ),
-    ),
-  )(
-    "restores $sidePanel with main $mainPanelId and override $dashboardPresentationOverride",
-    ({ mainPanelId, sidePanel, dashboardPresentationOverride }) => {
-      const split = openDashboardPresentation({ columns: [] }, "split");
-      const savedLayout = normalizeSidebarLayout({
-        ...setSidebarDock(
-          openSlot(
-            mainPanelId
-              ? promoteSidebarPanel(ensureSidebarConversation(split), mainPanelId)
-              : split,
-            sidePanel,
-          ),
-          "left",
-        ),
-        dashboardPresentationOverride,
-      });
-      const row = session({
-        boardPresentation: dashboardPresentationOverride === null ? "split" : "expanded",
-      });
-      const h = createDashboardHarness({ savedLayout, row });
-      h.sync();
-      expect(sidebarMainPanel(h.state.sidebarLayout)?.slot).toBe(mainPanelId);
-      expect(sidebarActivePanel(h.state.sidebarLayout)?.slot).toBe(sidePanel);
-      h.revisit();
-      expect(h.state.sidebarLayout).toEqual(savedLayout);
-      expect(h.saved()).toEqual(savedLayout);
-
-      const reopened = createDashboardHarness({ savedLayout: h.saved(), row });
-      reopened.sync();
-      expect(reopened.state.sidebarLayout).toEqual(savedLayout);
-      expect(reopened.saved()).toEqual(savedLayout);
-    },
-  );
-
-  it.each(["closed side", "focused Chat", "focused Side chat"] as const)(
-    "restores a retained Dashboard without disturbing %s",
-    (view) => {
-      const split = openSlot(openDashboardPresentation({ columns: [] }, "split"), "companion");
-      const savedLayout = normalizeSidebarLayout({
-        ...(view === "closed side"
-          ? setSidebarOpen(split, false)
-          : view === "focused Chat"
-            ? setSidebarExpanded(ensureSidebarConversation(split), true)
-            : toggleSidebarPanelExpanded(split, "companion")),
-        dashboardPresentationOverride: null,
-      });
-      const h = createDashboardHarness({ savedLayout });
-      h.sync();
-      expect(h.state.sidebarLayout).toEqual(savedLayout);
-      expect(isSidebarSlotVisible(h.state.sidebarLayout, "dashboard")).toBe(false);
-      h.revisit();
-      expect(h.state.sidebarLayout).toEqual(savedLayout);
-      const reopened = createDashboardHarness({ savedLayout: h.saved() });
-      reopened.sync();
-      expect(reopened.state.sidebarLayout).toEqual(savedLayout);
-      expect(reopened.saved()).toEqual(savedLayout);
-    },
-  );
 
   it.each(["shared default", "expanded link", "tool command"] as const)(
     "reveals Dashboard over an inactive retained tab for an explicit %s",
@@ -548,16 +446,23 @@ describe("dashboard default activation and personal layout persistence", () => {
     },
   );
 
-  it("opens a marked personal layout without waiting for shared metadata", () => {
-    const savedLayout = {
-      ...openDashboardPresentation({ columns: [] }, "split"),
-      dashboardPresentationOverride: "expanded" as const,
-    };
-    const h = createDashboardHarness({ savedLayout, metadataPending: true });
-    h.sync();
-    expectPresentation(h.state.sidebarLayout, true);
-    expect(h.saved()?.dashboardPresentationOverride).toBe("expanded");
-  });
+  it.each([null, "split", "expanded"] as const)(
+    "resolves saved override %s while metadata loads",
+    (override) => {
+      const savedLayout = {
+        ...openDashboardPresentation({ columns: [] }, "split"),
+        dashboardPresentationOverride: override,
+      };
+      const h = createDashboardHarness({ savedLayout, metadataPending: true });
+      h.sync();
+      expectPresentation(h.state.sidebarLayout, override === "expanded");
+      expect(h.saved()?.dashboardPresentationOverride).toBe(override);
+      h.publishRow(session({ boardPresentation: "expanded" }));
+      h.sync();
+      expectPresentation(h.state.sidebarLayout, override !== "split");
+      expect(h.saved()?.dashboardPresentationOverride).toBe(override);
+    },
+  );
 
   it.each([true, false])(
     "preserves an unmarked legacy layout verbatim, including open=%s, across revisits",
@@ -586,89 +491,31 @@ describe("dashboard default activation and personal layout persistence", () => {
       expect(sidebarMainPanel(h.state.sidebarLayout)?.slot).toBe("terminal");
     },
   );
-
-  it("keeps transient tool presentation out of personal defaults even after resizing", () => {
-    const h = createDashboardHarness();
-    h.sync();
-    h.pane.handleBoardCommand({
-      sessionKey: key,
-      command: { kind: "set_chat_dock", dock: "hidden" },
-    });
-    expectPresentation(h.state.sidebarLayout, true);
-    expect(h.saved()).toBeUndefined();
-    h.resize();
-    expect(h.saved()?.dashboardPresentationOverride).toBeNull();
-    h.revisit();
-    expectPresentation(h.state.sidebarLayout, false);
-  });
 });
 
-describe("dashboard shared default in the real header Layout menu", () => {
-  it.each(["split", "expanded", "narrow"] as const)(
-    "offers the differing %s view to a writer without requiring admin scope",
-    async (view) => {
-      const expanded = view === "expanded";
-      const h = createDashboardHarness({
-        row: session({ boardPresentation: expanded ? "split" : "expanded" }),
-      });
-      h.state.updateSidebarLayout(
-        openDashboardPresentation(h.state.sidebarLayout, expanded ? "expanded" : "split"),
-        { persist: false },
-      );
-      h.pane.narrow = view === "narrow";
-      h.pane.paneWidth = h.pane.narrow ? 400 : 1400;
-      const menu = await h.header();
-      expect(menu.querySelector(defaultAction)?.textContent).toContain(
-        t("chat.sidePanel.useViewAsDefault"),
-      );
-      expect(menu.querySelector(defaultAction)?.hasAttribute("disabled")).toBe(false);
-      expect(menu.textContent).toContain(t("chat.sidePanel.defaultViewDescription"));
-      expect(menu.querySelector(defaultStatus)).toBeNull();
-      expectPresentation(h.state.sidebarLayout, expanded);
-    },
-  );
-
-  it.each([
-    "split",
-    "expanded",
-    "builtin split",
-    "narrow",
-    "read only",
-    "restricted viewer",
-  ] as const)(
-    "identifies the matching shared default for %s without offering a write",
-    async (view) => {
-      const expanded = view === "expanded";
-      const h = createDashboardHarness({
-        scopes: view === "read only" ? ["operator.read"] : undefined,
-        row: session({
-          boardPresentation: view === "builtin split" ? undefined : expanded ? "expanded" : "split",
-          ...(view === "restricted viewer"
-            ? { visibility: "read-only", sharingRole: "viewer" }
-            : {}),
-        }),
-      });
-      h.sync();
-      h.pane.narrow = view === "narrow";
-      h.pane.paneWidth = h.pane.narrow ? 400 : 1400;
-      const menu = await h.header();
-      const status = menu.querySelector(defaultStatus);
-      expect(status?.getAttribute("role")).toBe("note");
-      expect(status?.textContent).toContain(t("chat.sidePanel.currentViewIsDefault"));
-      expect(status?.textContent).toContain(t("chat.sidePanel.defaultViewDescription"));
-      expect(menu.querySelector(defaultAction)).toBeNull();
-      select(menu, "quick:layout:dashboard-default");
-      expect(h.request.mock.calls.some(([method]) => method === "sessions.patch")).toBe(false);
-      expectPresentation(h.state.sidebarLayout, expanded);
-    },
-  );
+describe("dashboard shared default in the native Dashboard menu", () => {
+  it("identifies the builtin split default without offering a write", async () => {
+    const h = createDashboardHarness({
+      row: session({
+        boardPresentation: undefined,
+      }),
+    });
+    h.sync();
+    const menu = await h.header();
+    const status = menu.querySelector(defaultStatus);
+    expect(status?.getAttribute("role")).toBe("note");
+    expect(status?.textContent).toContain(t("chat.sidePanel.currentViewIsDefault"));
+    expect(status?.textContent).toContain(t("chat.sidePanel.defaultViewDescription"));
+    expect(menu.querySelector(defaultAction)).toBeNull();
+    await select(menu, "dashboard-default-status");
+    expect(h.request.mock.calls.some(([method]) => method === "sessions.patch")).toBe(false);
+    expectPresentation(h.state.sidebarLayout, false);
+  });
 
   it.each([
     "read only",
     "restricted viewer",
     "not shown",
-    "inactive side tab",
-    "fullscreen other panel",
     "disconnected",
     "missing session id",
   ] as const)("does not offer a shared default for %s", async (reason) => {
@@ -686,19 +533,6 @@ describe("dashboard shared default in the real header Layout menu", () => {
     if (reason === "not shown") {
       h.state.sidebarLayout = closeSlot(h.state.sidebarLayout, "dashboard");
     }
-    if (reason === "inactive side tab") {
-      h.state.sidebarLayout = openSlot(
-        openDashboardPresentation({ columns: [] }, "split"),
-        "companion",
-      );
-      h.publishRow(session({ boardPresentation: "expanded" }));
-    }
-    if (reason === "fullscreen other panel") {
-      h.state.sidebarLayout = {
-        ...promoteSidebarPanel(openSlot(h.state.sidebarLayout, "terminal"), "terminal"),
-        expanded: true,
-      };
-    }
     if (reason === "disconnected") {
       h.state.connected = false;
     }
@@ -707,8 +541,10 @@ describe("dashboard shared default in the real header Layout menu", () => {
     expect(menu.querySelector(defaultStatus)).toBeNull();
   });
 
-  it("saves through the session capability, disables duplicate clicks, and acknowledges without rearranging", async () => {
-    const h = createDashboardHarness();
+  it("saves the opening face when presentation already matches, without rearranging or duplicate writes", async () => {
+    const h = createDashboardHarness({
+      row: session({ boardFace: undefined, boardPresentation: "expanded" }),
+    });
     await h.sessions.refresh({ agentId: "main", force: true });
     const stop = h.sessions.subscribe((next) => {
       h.state.sessionsResult = next.result;
@@ -720,42 +556,41 @@ describe("dashboard shared default in the real header Layout menu", () => {
     });
     const layout = structuredClone(h.state.sidebarLayout);
     const persisted = structuredClone(h.saved());
-    const reply = createDeferred<SessionsPatchResult>();
-    onTestFinished(() => {
-      reply.resolve({
-        ok: true,
-        key,
-        path: "(multiple)",
-        entry: { sessionId: "dashboard-session" },
-      });
-    });
-    h.setPatchReply(reply.promise);
+    const reply = pendingSave(h);
     const save = vi.spyOn(h.pane, "saveDashboardDefault");
     const patch = vi.spyOn(h.sessions, "patch");
     let menu = await h.header();
-    select(menu, "quick:layout:dashboard-default");
+    await select(menu, "dashboard-default");
     const operation = save.mock.results[0]?.value;
     expect(operation).toBeDefined();
     menu = await h.header();
-    expect(menu.querySelector(defaultAction)?.hasAttribute("disabled")).toBe(true);
+    expect(menu.querySelector(defaultAction)?.getAttribute("aria-disabled")).toBe("true");
     expect(menu.querySelector(defaultAction)?.textContent).toContain(
       t("chat.sidePanel.savingDefault"),
     );
-    select(menu, "quick:layout:dashboard-default");
+    await select(menu, "dashboard-default");
     expect(patch).toHaveBeenCalledExactlyOnceWith(
       key,
-      { boardPresentation: "expanded" },
+      { boardFace: "dashboard", boardPresentation: "expanded" },
       { agentId: "main", expectedSessionId: "dashboard-session" },
     );
-    expect(h.sessions.state.result?.sessions[0]?.boardPresentation).toBe("split");
+    expect(h.sessions.state.result?.sessions[0]?.boardFace).toBeUndefined();
     reply.resolve({
       ok: true,
       key,
       path: "(multiple)",
-      entry: { sessionId: "dashboard-session", updatedAt: 20, boardPresentation: "expanded" },
+      entry: {
+        sessionId: "dashboard-session",
+        updatedAt: 20,
+        boardFace: "dashboard",
+        boardPresentation: "expanded",
+      },
     });
     await operation;
-    expect(h.sessions.state.result?.sessions[0]?.boardPresentation).toBe("expanded");
+    expect(h.sessions.state.result?.sessions[0]).toMatchObject({
+      boardFace: "dashboard",
+      boardPresentation: "expanded",
+    });
     expect(h.state.sidebarLayout).toEqual(layout);
     expect(h.saved()).toEqual(persisted);
     menu = await h.header();
@@ -763,11 +598,11 @@ describe("dashboard shared default in the real header Layout menu", () => {
     expect(menu.querySelector(defaultStatus)?.textContent).toContain(
       t("chat.sidePanel.currentViewIsDefault"),
     );
-    select(menu, "quick:layout:dashboard-default");
+    await select(menu, "dashboard-default-status");
     expect(patch).toHaveBeenCalledTimes(1);
     expect(showToast).toHaveBeenCalledWith({
       message: t("chat.sidePanel.defaultSaved"),
-      anchor: h.pane,
+      anchor: h.pane.element,
     });
   });
 
@@ -778,29 +613,24 @@ describe("dashboard shared default in the real header Layout menu", () => {
       dashboardPresentation: "personal",
     });
     const before = structuredClone(h.saved());
-    const reply = createDeferred<SessionsPatchResult>();
-    onTestFinished(() => {
-      reply.resolve({
-        ok: true,
-        key,
-        path: "(multiple)",
-        entry: { sessionId: "dashboard-session" },
-      });
-    });
-    h.setPatchReply(reply.promise);
+    const reply = pendingSave(h);
     const save = vi.spyOn(h.pane, "saveDashboardDefault");
-    select(await h.header(), "quick:layout:dashboard-default");
+    await select(await h.header(), "dashboard-default");
     const operation = save.mock.results[0]?.value;
     expect(operation).toBeDefined();
-    expect((await h.header()).querySelector(defaultAction)?.hasAttribute("disabled")).toBe(true);
+    expect((await h.header()).querySelector(defaultAction)?.getAttribute("aria-disabled")).toBe(
+      "true",
+    );
     reply.reject(new Error("Dashboard default denied"));
     await operation;
     expect(h.state.chatError).toContain("Dashboard default denied");
     expect(showToast).toHaveBeenCalledWith({
       message: t("chat.sidePanel.defaultSaveError", { error: "Dashboard default denied" }),
-      anchor: h.pane,
+      anchor: h.pane.element,
     });
-    expect((await h.header()).querySelector(defaultAction)?.hasAttribute("disabled")).toBe(false);
+    const retry = (await h.header()).querySelector<HTMLButtonElement>(defaultAction);
+    expect(retry).not.toBeNull();
+    expect(retry!.disabled).toBe(false);
     expect(h.saved()).toEqual(before);
     expect(h.state.sessionsResult?.sessions[0]?.boardPresentation).toBe("split");
   });
@@ -820,16 +650,7 @@ describe("dashboard shared default in the real header Layout menu", () => {
       h.state.updateSidebarLayout(openDashboardPresentation(h.state.sidebarLayout, "expanded"), {
         persist: false,
       });
-      const reply = createDeferred<SessionsPatchResult>();
-      onTestFinished(() => {
-        reply.resolve({
-          ok: true,
-          key,
-          path: "(multiple)",
-          entry: { sessionId: "dashboard-session" },
-        });
-      });
-      h.setPatchReply(reply.promise);
+      const reply = pendingSave(h);
       const operation = h.pane.saveDashboardDefault(session(), "main");
       expect(h.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(
         1,
@@ -878,7 +699,7 @@ describe("dashboard shared default in the real header Layout menu", () => {
       } else {
         h.publishRow({ ...original, sessionId: "replacement-session", updatedAt: 30 });
       }
-      select(menu, "quick:layout:dashboard-default");
+      await select(menu, "dashboard-default");
       expect(h.request.mock.calls.some(([method]) => method === "sessions.patch")).toBe(false);
     },
   );

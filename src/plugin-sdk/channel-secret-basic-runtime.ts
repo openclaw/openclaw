@@ -4,6 +4,7 @@ export {
   collectConditionalChannelFieldAssignments,
   collectNestedChannelFieldAssignments,
   collectSimpleChannelFieldAssignments,
+  createChannelSecretContract,
   createChannelSecretTargetRegistryEntries,
   createSimpleChannelSecretContract,
   getChannelRecord,

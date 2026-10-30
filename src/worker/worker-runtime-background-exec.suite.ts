@@ -1,15 +1,37 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdirSync, realpathSync } from "node:fs";
+import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it } from "vitest";
-import type { WorkerTranscriptCommitParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { expect, it, vi } from "vitest";
+import type {
+  WorkerLiveEventParams,
+  WorkerTranscriptCommitParams,
+  WorkerTranscriptMessage,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerInferenceStartParams } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
-import { listRunningSessions, waitForExecScope } from "../agents/bash-process-registry.js";
-import type { NodeWorkerLaunchReceipt } from "../node-host/node-worker-launch-store.js";
+import {
+  deleteSession,
+  listRunningSessions,
+  markBackgrounded,
+  waitForExecScope,
+} from "../agents/bash-process-registry.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { NodeWorkerJournalWorker } from "../node-host/node-worker-journal-worker.js";
+import {
+  NodeWorkerLaunchStore,
+  type NodeWorkerLaunchReceipt,
+} from "../node-host/node-worker-launch-store.js";
 import {
   inspectNodeWorkerProcessIdentity,
   requireNodeWorkerProcessIdentity,
@@ -17,11 +39,22 @@ import {
 } from "../node-host/node-worker-process-identity.js";
 import { createNodeWorkerSupervisor } from "../node-host/node-worker-supervisor.js";
 import { NodeWorkerTurnStore } from "../node-host/node-worker-turn-store.js";
+import { createCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import type { NodeWorkerLaunchInput } from "./node-supervisor-protocol.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
-import { parseWorkerProcessResult, type WorkerProcessResult } from "./worker-process-protocol.js";
+import { parseWorkerProcessMessage, type WorkerProcessResult } from "./worker-process-protocol.js";
+import { workerBackgroundExecEntrypoints } from "./worker-runtime-background-exec-entrypoints.test-support.js";
+
+const workerProcessUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.worker);
+const supervisorUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.supervisor);
+const moduleLoaderUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.moduleLoader);
+const thinkingUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.thinking);
+const sdkEntrypoints = [
+  workerBackgroundExecEntrypoints.providerModelMetadata,
+  workerBackgroundExecEntrypoints.stringCoerceRuntime,
+] as const;
 
 type WorkerCrashFixture = {
   setup: (options: {
@@ -50,10 +83,10 @@ export function registerWorkerBackgroundExecLifecycleTests({
 }: WorkerCrashFixture) {
   it
     .runIf(process.platform === "linux" || process.platform === "darwin")
-    .each(["worker", "anchor", "node-host", "environment-stop"] as const)(
+    .for(["worker", "anchor", "node-host", "environment-stop"] as const)(
     "stops registered background execs after %s",
     { timeout: 120_000 },
-    async (crashed) => {
+    async (crashed, { signal }) => {
       const { gateway, launch, workspaceDir } = await setup({
         inferencePlans: ["background-tool", "text"],
         backgroundCommand: `exec '${process.execPath.replaceAll("'", "'\\''")}' heartbeat.cjs`,
@@ -67,6 +100,24 @@ export function registerWorkerBackgroundExecLifecycleTests({
           'setInterval(() => fs.appendFileSync("heartbeat.txt", "tick\\n"), 25);',
         ].join("\n"),
       );
+      const sdkHost = createCompiledSdkHost(
+        sdkEntrypoints,
+        (prefix) => {
+          const directory = path.join(workspaceDir, prefix);
+          mkdirSync(directory);
+          return directory;
+        },
+        { mode: "link" },
+      );
+      if (sdkHost) {
+        expect(realpathSync(path.join(sdkHost, "dist"))).toBe(
+          realpathSync(path.dirname(path.dirname(fileURLToPath(workerProcessUrl)))),
+        );
+      }
+      const sdkWitness = path.join(workspaceDir, "native-sdk.json");
+      const expectedSdkModules = sdkEntrypoints.map((entry) =>
+        realpathSync(fileURLToPath(resolveRuntimeWorkerUrl(entry))),
+      );
       const root = path.join(workspaceDir, "node-host");
       const bundle = path.join(root, "worker-lifetime", "bundles", BUNDLE_HASH);
       const home = path.join(workspaceDir, "home");
@@ -76,9 +127,57 @@ export function registerWorkerBackgroundExecLifecycleTests({
         path.join(bundle, "worker.mjs"),
         [
           'import { writeFileSync } from "node:fs";',
+          'import { createRequire } from "node:module";',
           "globalThis.WORKER_DEPLOY_BUILD = true;",
-          `await import(${JSON.stringify(new URL("../../scripts/tsx.mjs", import.meta.url).href)});`,
-          `const { runWorkerProcess } = await import(${JSON.stringify(new URL("./worker-process.ts", import.meta.url).href)});`,
+          ...(sdkHost
+            ? [
+                `process.env.OPENCLAW_DEV_SOURCE_ROOT = ${JSON.stringify(sdkHost)};`,
+                // A built checkout also carries dist/extensions; the witness proves the
+                // source policy transform against the selected host's SDK graph.
+                `process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = ${JSON.stringify(path.resolve("extensions"))};`,
+              ]
+            : []),
+          ...(workerProcessUrl.pathname.endsWith(".ts")
+            ? [
+                `await import(${JSON.stringify(new URL("../../scripts/tsx.mjs", import.meta.url).href)});`,
+              ]
+            : []),
+          `const { runWorkerProcess } = await import(${JSON.stringify(workerProcessUrl.href)});`,
+          `const { getPluginModuleLoaderStats } = await import(${JSON.stringify(moduleLoaderUrl.href)});`,
+          `const { resolveThinkingDefaultForModel } = await import(${JSON.stringify(thinkingUrl.href)});`,
+          "const nativeRequire = createRequire(import.meta.url);",
+          `const sdkTargets = new Set(${JSON.stringify(expectedSdkModules)});`,
+          "const readSdkWitness = () => ({",
+          "  policyTargets: getPluginModuleLoaderStats().topSourceTransformTargets.map(({ target }) => target),",
+          "  sdkModules: Object.keys(nativeRequire.cache).filter((file) => sdkTargets.has(file)),",
+          "});",
+          "const write = process.stdout.write.bind(process.stdout);",
+          "process.stdout.write = (chunk, ...args) => {",
+          "  let frame;",
+          "  try { frame = JSON.parse(chunk.toString()); } catch {}",
+          '  if (frame?.type === "result") {',
+          "    const preparedTurn = readSdkWitness();",
+          // Prepared worker turns do not need local policy discovery. Exercise the
+          // native SDK graph separately through an explicit policy request.
+          `    resolveThinkingDefaultForModel(${JSON.stringify({
+            provider: launch.assignment.modelRef.provider,
+            model: launch.assignment.modelRef.model,
+            catalog: [
+              {
+                provider: launch.assignment.modelRef.provider,
+                id: launch.assignment.modelRef.model,
+                api: "openai-responses",
+                reasoning: false,
+              },
+            ],
+          })});`,
+          `    writeFileSync(${JSON.stringify(sdkWitness)}, JSON.stringify({`,
+          "      preparedTurn,",
+          "      ...readSdkWitness(),",
+          "    }));",
+          "  }",
+          "  return write(chunk, ...args);",
+          "};",
           `writeFileSync(${JSON.stringify(path.join(workspaceDir, "runtime.pid"))}, String(process.pid));`,
           ...(crashed === "anchor"
             ? [
@@ -99,10 +198,24 @@ export function registerWorkerBackgroundExecLifecycleTests({
         placementGeneration: 1,
       } satisfies NodeWorkerLaunchInput;
       let capacity = { total: 1, available: 0 };
+      // After anchor loss, ps stalls past its census timeout. Lifetime cleanup must
+      // reach the exec relays without waiting for a process census.
+      const censusBin = path.join(workspaceDir, "census-bin");
+      const censusStalled = path.join(workspaceDir, "census-stalled");
+      await mkdir(censusBin);
+      await writeFile(
+        path.join(censusBin, "ps"),
+        [
+          "#!/bin/sh",
+          `if [ -e '${censusStalled}' ]; then trap '' TERM; sleep 12; fi`,
+          'exec /bin/ps "$@"',
+        ].join("\n"),
+      );
+      await chmod(path.join(censusBin, "ps"), 0o755);
       const supervisorOptions = {
         bundleRoot: root,
         env: {
-          PATH: process.env.PATH,
+          PATH: `${censusBin}${path.delimiter}${process.env.PATH ?? ""}`,
           HOME: home,
           OPENCLAW_STATE_DIR: path.join(workspaceDir, "node-state"),
         },
@@ -114,10 +227,14 @@ export function registerWorkerBackgroundExecLifecycleTests({
           capacity = next;
         },
       });
+      const launches = new NodeWorkerLaunchStore(
+        new NodeWorkerJournalWorker({ env: supervisorOptions.env }),
+      );
       let command: NodeWorkerProcessIdentity | undefined;
       let runtime: NodeWorkerProcessIdentity | undefined;
       let runtimeStopped = false;
       let pendingCleanupObserved = false;
+      let nativeAnchorLoss = false;
       let nodeHost: ChildProcess | undefined;
       let caseFailure: { error: unknown } | undefined;
       try {
@@ -129,8 +246,12 @@ export function registerWorkerBackgroundExecLifecycleTests({
           await writeFile(
             entry,
             [
-              `await import(${JSON.stringify(new URL("../../scripts/tsx.mjs", import.meta.url).href)});`,
-              `const { createNodeWorkerSupervisor } = await import(${JSON.stringify(new URL("../node-host/node-worker-supervisor.ts", import.meta.url).href)});`,
+              ...(supervisorUrl.pathname.endsWith(".ts")
+                ? [
+                    `await import(${JSON.stringify(new URL("../../scripts/tsx.mjs", import.meta.url).href)});`,
+                  ]
+                : []),
+              `const { createNodeWorkerSupervisor } = await import(${JSON.stringify(supervisorUrl.href)});`,
               `const supervisor = createNodeWorkerSupervisor({ ...${JSON.stringify(supervisorOptions)}, onCapacityChanged: (capacity) => process.send?.({ type: "capacity", capacity }) });`,
               'process.once("SIGTERM", () => { void supervisor.close().then(() => process.exit(0)); });',
               `const receipt = await supervisor.launch(${JSON.stringify(input)}, ${JSON.stringify(connectionEndpoint)});`,
@@ -156,10 +277,13 @@ export function registerWorkerBackgroundExecLifecycleTests({
               admitted.resolve(message.receipt as NodeWorkerLaunchReceipt);
             }
           });
-          running = await withTestTimeout(
-            admitted.promise,
-            WORKER_INFERENCE_START_TIMEOUT_MS,
-            "node supervisor did not admit the registered-exec fixture",
+          running = await withinTest(
+            awaitGateBeforeSettlement(
+              admitted.promise,
+              once(nodeHost, "close"),
+              "node supervisor did not admit the registered-exec fixture",
+            ),
+            signal,
           );
         }
         expect(running.state).toBe("running");
@@ -178,7 +302,9 @@ export function registerWorkerBackgroundExecLifecycleTests({
             const turn =
               crashed !== "node-host"
                 ? await supervisor.status(input.launchId)
-                : new NodeWorkerTurnStore({ env: supervisorOptions.env }).get(input.launchId);
+                : await new NodeWorkerTurnStore(
+                    new NodeWorkerJournalWorker({ env: supervisorOptions.env }),
+                  ).get(input.launchId);
             expect(turn?.state).toBe("completed");
           },
           { timeout: WORKER_INFERENCE_START_TIMEOUT_MS },
@@ -189,6 +315,13 @@ export function registerWorkerBackgroundExecLifecycleTests({
             .filter((message) => message.role === "toolResult" && message.toolName === "exec"),
         ).toHaveLength(1);
         expect(capacity).toEqual({ total: 1, available: 0 });
+        expect(JSON.parse(await readFile(sdkWitness, "utf8"))).toMatchObject({
+          preparedTurn: { policyTargets: [], sdkModules: [] },
+          policyTargets: expect.arrayContaining([
+            path.resolve("extensions/openai/provider-policy-api.ts"),
+          ]),
+          sdkModules: expect.arrayContaining(expectedSdkModules),
+        });
         expect(inspectNodeWorkerProcessIdentity(command!)).toBe("live");
 
         if (crashed === "environment-stop") {
@@ -205,10 +338,13 @@ export function registerWorkerBackgroundExecLifecycleTests({
           await supervisor.initialize();
         } else {
           if (crashed === "anchor") {
+            await writeFile(censusStalled, "");
             process.kill(runtime!.pid, "SIGSTOP");
             runtimeStopped = true;
           }
           process.kill(crashed === "anchor" ? worker.pid : runtime!.pid, "SIGKILL");
+          nativeAnchorLoss =
+            crashed === "anchor" && running.workerCleanupMode === "linux-subreaper";
         }
         await waitForFast(
           async () => {
@@ -227,9 +363,14 @@ export function registerWorkerBackgroundExecLifecycleTests({
               }
             }
             expect({ available: capacity.available, pendingCleanupObserved }).toEqual({
-              available: 1,
+              available: nativeAnchorLoss ? 0 : 1,
               pendingCleanupObserved: crashed === "anchor",
             });
+            if (nativeAnchorLoss) {
+              // Known PID death is not the lost wait owner's descendant-extinction certificate.
+              expect(inspectNodeWorkerProcessIdentity(runtime!)).toBe("dead");
+              expect(inspectNodeWorkerProcessIdentity(command!)).toBe("dead");
+            }
           },
           { timeout: 10_000 },
         );
@@ -238,6 +379,14 @@ export function registerWorkerBackgroundExecLifecycleTests({
           runtime: inspectNodeWorkerProcessIdentity(runtime!),
           command: inspectNodeWorkerProcessIdentity(command!),
         }).toEqual({ worker: "dead", runtime: "dead", command: "dead" });
+        if (nativeAnchorLoss) {
+          await expect(launches.get(input.launchId)).resolves.toMatchObject({
+            state: "running",
+            workerCleanupMode: "linux-subreaper",
+            workerDescendantsReaped: false,
+          });
+          await expect(launches.nonterminalCount()).resolves.toBe(1);
+        }
       } catch (error) {
         caseFailure = { error };
       } finally {
@@ -259,19 +408,27 @@ export function registerWorkerBackgroundExecLifecycleTests({
               expect(inspectNodeWorkerProcessIdentity(command!)).toBe("dead"),
             );
           }
+          const stopEnvironment = () =>
+            supervisor.stopEnvironment({
+              gatewayNamespace: input.gatewayNamespace,
+              environmentId: plan.admission.environmentId,
+              sessionId: plan.admission.sessionId,
+              ownerEpoch: plan.admission.ownerEpoch,
+            });
           try {
-            await waitForFast(
-              async () =>
-                await supervisor.stopEnvironment({
-                  gatewayNamespace: input.gatewayNamespace,
-                  environmentId: plan.admission.environmentId,
-                  sessionId: plan.admission.sessionId,
-                  ownerEpoch: plan.admission.ownerEpoch,
-                }),
-              { timeout: 10_000 },
-            );
+            if (nativeAnchorLoss) {
+              await expect(stopEnvironment()).rejects.toThrow("cleanup remains unconfirmed");
+            } else {
+              await waitForFast(stopEnvironment, { timeout: 10_000 });
+            }
           } finally {
-            await supervisor.close();
+            if (nativeAnchorLoss) {
+              await expect(supervisor.close()).rejects.toThrow("cleanup remains unconfirmed");
+              expect(capacity.available).toBe(0);
+              await expect(launches.nonterminalCount()).resolves.toBe(1);
+            } else {
+              await supervisor.close();
+            }
           }
         } catch (cleanupError) {
           caseFailure = {
@@ -297,8 +454,8 @@ export function registerWorkerBackgroundExecLifecycleTests({
     const output = new PassThrough();
     const result = createDeferred<WorkerProcessResult>();
     output.on("data", (chunk: Buffer) => {
-      const parsed = parseWorkerProcessResult(JSON.parse(chunk.toString("utf8")));
-      if (parsed) {
+      const parsed = parseWorkerProcessMessage(JSON.parse(chunk.toString("utf8")));
+      if (parsed?.type === "result") {
         result.resolve(parsed);
       }
     });
@@ -330,4 +487,252 @@ export function registerWorkerBackgroundExecLifecycleTests({
       }
     }
   });
+}
+
+type WorkerManagedExecGateway = {
+  messages: WorkerTranscriptMessage[];
+  inferenceRequests: WorkerInferenceStartParams[];
+  liveEventRequests: WorkerLiveEventParams[];
+  connectionCount: number;
+};
+
+type WorkerManagedExecFixture<Gateway extends WorkerManagedExecGateway> = {
+  setup: (options: {
+    inferencePlans: Array<"background-tool" | "text" | "hold" | "process-poll" | "process-kill">;
+    backgroundCommand?: string;
+    backgroundYieldMs?: number;
+  }) => Promise<{ gateway: Gateway; launch: WorkerLaunchDescriptor; workspaceDir: string }>;
+  managedCommand: () => {
+    send(this: void, launch: WorkerLaunchDescriptor): string;
+    cancel(this: void, turnId: string): void;
+    waitResults(this: void, count: number): Promise<void>;
+    results: WorkerProcessResult[];
+    settled: () => void;
+    scopeKey: string;
+    close(this: void): Promise<void>;
+  };
+  nextTurn: (
+    launch: WorkerLaunchDescriptor,
+    gateway: Gateway,
+    index: number,
+  ) => WorkerLaunchDescriptor;
+  workerSessions: typeof listRunningSessions;
+  waitForFast: WorkerCrashFixture["waitForFast"];
+};
+
+export function registerWorkerManagedExecLifecycleTests<Gateway extends WorkerManagedExecGateway>({
+  setup,
+  managedCommand,
+  nextTurn,
+  workerSessions,
+  waitForFast,
+}: WorkerManagedExecFixture<Gateway>) {
+  it.each(["running", "completed", "cancelled", "ordinary-yield"] as const)(
+    "owns completed-turn commands across the next managed turn (%s)",
+    async (scenario) => {
+      const processState = scenario === "ordinary-yield" ? "running" : scenario;
+      const { gateway, launch, workspaceDir } = await setup({
+        inferencePlans: [
+          "background-tool",
+          "text",
+          ...(processState === "cancelled" ? ["hold" as const] : []),
+          "process-poll",
+          ...(processState === "completed" ? [] : ["process-kill" as const]),
+          "text",
+        ],
+        ...(processState === "completed"
+          ? { backgroundCommand: `${JSON.stringify(process.execPath)} finish-on-release.cjs` }
+          : {}),
+        ...(scenario === "ordinary-yield" ? { backgroundYieldMs: 10 } : {}),
+      });
+      const releaseBackground = createDeferred();
+      let completionServer: Server | undefined;
+      if (processState === "completed") {
+        completionServer = createServer((_request, response) => {
+          void releaseBackground.promise.then(() => response.end("background-finished"));
+        });
+        const listening = once(completionServer, "listening");
+        completionServer.listen(0, "127.0.0.1");
+        await listening;
+        const address = completionServer.address();
+        if (!address || typeof address === "string") {
+          throw new Error("background completion server did not allocate a TCP port");
+        }
+        // An explicit response also releases a child that starts after the turn finishes.
+        // Filesystem watch notifications can be lost while this shared machine is busy.
+        await writeFile(
+          path.join(workspaceDir, "finish-on-release.cjs"),
+          `require('node:http').get('http://127.0.0.1:${address.port}', response => response.pipe(process.stdout));`,
+        );
+      }
+      const { send, cancel, waitResults, results, settled, scopeKey, close } = managedCommand();
+
+      try {
+        send(launch);
+        await waitResults(1);
+        expect(results[0]).toMatchObject({
+          turnId: launch.assignment.turnId,
+          result: { status: "completed" },
+          retainWorker: true,
+        });
+        const running = workerSessions();
+        expect(running).toHaveLength(1);
+        const sessionId = running[0]!.id;
+        const messages = gateway.messages;
+        expect(messages.at(-1)).toMatchObject({
+          role: "assistant",
+          content: [{ type: "text", text: expect.stringContaining("still running") }],
+        });
+        expect(JSON.stringify(messages.at(-1))).toContain(sessionId);
+        expect(gateway.inferenceRequests).toHaveLength(2);
+        expect(
+          gateway.liveEventRequests.findLast(({ event }) => event.kind === "assistant"),
+        ).toMatchObject({ event: { payload: { text: expect.stringContaining("still running") } } });
+        expect(settled).not.toHaveBeenCalled();
+        if (processState === "completed") {
+          releaseBackground.resolve();
+          await waitForExecScope(scopeKey);
+          await waitForFast(() => expect(workerSessions()).toHaveLength(0));
+          expect(settled).not.toHaveBeenCalled();
+        }
+
+        const nextTurnId = send(nextTurn(launch, gateway, 2));
+        if (processState === "cancelled") {
+          await waitForFast(() => expect(gateway.inferenceRequests).toHaveLength(3), {
+            timeout: 30_000,
+          });
+          cancel(nextTurnId);
+        }
+        await waitResults(2);
+        expect(gateway.connectionCount).toBe(2);
+        if (processState === "cancelled") {
+          expect(results[1]).toMatchObject({
+            result: { status: "failed", reason: "turn-failed" },
+            retainWorker: false,
+          });
+          await close();
+          expect(workerSessions()).toHaveLength(0);
+          return;
+        }
+        const processResults = gateway.messages.filter(
+          (message) => message.role === "toolResult" && message.toolName === "process",
+        );
+        if (processState !== "completed") {
+          expect(processResults).toMatchObject([
+            { details: { status: "running", sessionId } },
+            { details: { status: "completed" } },
+          ]);
+        } else {
+          expect(processResults).toMatchObject([
+            {
+              content: [{ type: "text", text: expect.stringContaining("background-finished") }],
+              details: { status: "completed", exitCode: 0 },
+            },
+          ]);
+          expect(results[1]?.retainWorker).toBe(false);
+        }
+      } finally {
+        releaseBackground.resolve();
+        try {
+          await close();
+        } finally {
+          if (completionServer) {
+            await new Promise<void>((resolve, reject) => {
+              completionServer.close((error) => (error ? reject(error) : resolve()));
+            });
+          }
+        }
+      }
+      expect(workerSessions()).toHaveLength(0);
+    },
+  );
+}
+
+export function registerWorkerExecEnvironmentFinalizationTests({
+  runExecProcess,
+  createWorkerRuntimeEnvironment,
+}: {
+  runExecProcess: typeof import("../agents/bash-tools.exec-runtime.js").runExecProcess;
+  createWorkerRuntimeEnvironment: typeof import("./worker.runtime.js").createWorkerRuntimeEnvironment;
+}) {
+  it.each(["foreground", "hidden-background"] as const)(
+    "keeps environment state until %s exec finalization and task settlement finish",
+    async (visibility) => {
+      const sessionId = `worker-finalizer-${visibility}`;
+      const scopeKey = `worker:${sessionId}`;
+      const environment = await createWorkerRuntimeEnvironment(sessionId);
+      const finalizing = createDeferred();
+      const releaseFinalizer = createDeferred();
+      const settling = createDeferred();
+      const releaseSettlement = createDeferred();
+      const settledStateDirs: Array<string | undefined> = [];
+      const closeSettled = vi.fn();
+      let run: Awaited<ReturnType<typeof runExecProcess>> | undefined;
+      try {
+        run = await runExecProcess({
+          command: "worker-finalizer-fixture",
+          workdir: environment.stateDir,
+          env: {},
+          sandbox: {
+            containerName: "worker-finalizer-fixture",
+            workspaceDir: environment.stateDir,
+            containerWorkdir: environment.stateDir,
+            buildExecSpec: async () => ({
+              argv: [process.execPath, "-e", "process.stdout.write('worker-finalizer-output')"],
+              env: {},
+              stdinMode: "pipe-closed",
+            }),
+            finalizeExec: async () => {
+              finalizing.resolve();
+              await releaseFinalizer.promise;
+            },
+          },
+          usePty: false,
+          warnings: [],
+          maxOutput: 1000,
+          pendingMaxOutput: 1000,
+          notifyOnExit: false,
+          scopeKey,
+          timeoutSec: null,
+          onSettledBeforeNotify: async () => {
+            settling.resolve();
+            await releaseSettlement.promise;
+            settledStateDirs.push(process.env.OPENCLAW_STATE_DIR);
+          },
+        });
+        if (visibility === "hidden-background") {
+          markBackgrounded(run.session);
+          deleteSession(run.session.id);
+        }
+        await finalizing.promise;
+        const closing = environment.close();
+        void closing.then(closeSettled, closeSettled);
+        await Promise.resolve();
+
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(environment.stateDir);
+        await expect(stat(environment.stateDir)).resolves.toBeDefined();
+        releaseFinalizer.resolve();
+        await settling.promise;
+        expect(run.session.finalizing).toBe(true);
+        expect(run.session.exited).toBe(false);
+        expect(closeSettled).not.toHaveBeenCalled();
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(environment.stateDir);
+        expect(process.env.OPENCLAW_CONFIG_PATH).toBe(
+          path.join(environment.stateDir, "openclaw.json"),
+        );
+        await expect(stat(environment.stateDir)).resolves.toBeDefined();
+        releaseSettlement.resolve();
+        await run.promise;
+        await closing;
+        expect(closeSettled).toHaveBeenCalledOnce();
+        expect(settledStateDirs).toEqual([environment.stateDir]);
+        await expect(stat(environment.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        releaseFinalizer.resolve();
+        releaseSettlement.resolve();
+        await run?.promise;
+        await environment.close();
+      }
+    },
+  );
 }

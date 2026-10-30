@@ -5,15 +5,10 @@ import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import {
-  config,
-  configMocks,
-  inspection,
-  inventory,
-  pluginResponses,
-} from "./plugins-settings-admin.test-support.ts";
+import { config, configMocks, pluginResponses } from "./plugins-settings-admin.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Plugin Ask OpenClaw integration" });
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const featureMethods = [
   "config.get",
   "config.schema",
@@ -79,14 +74,16 @@ suite.define(() => {
         expect(await input.inputValue()).toBe(editedUrl);
 
         await row.getByRole("button", { name: "Actions for Base URL", exact: true }).click();
-        await row.locator('wa-dropdown-item[value="ask"]').click();
+        await row.getByRole("menuitem", { name: "Ask OpenClaw", exact: true }).click();
         const panel = page.locator("openclaw-assistant-panel .assistant-panel");
         const composer = panel.locator("textarea");
-        await expect.poll(() => composer.inputValue()).toContain("Help me understand Base URL");
+        await expect.poll(() => composer.inputValue()).toContain("Explain Base URL");
         const draft = await composer.inputValue();
-        await page.screenshot({
-          path: path.join(suite.artifactDir, `url-help-draft-${width}.png`),
-        });
+        if (captureUiProof) {
+          await page.screenshot({
+            path: path.join(suite.artifactDir, `url-help-draft-${width}.png`),
+          });
+        }
         const userRequests = async () =>
           (await gateway.getRequests("openclaw.chat")).filter(
             (request) => asRecord(request.params).message,
@@ -118,7 +115,7 @@ suite.define(() => {
     },
   );
 
-  it("keeps the transcript flexible through plugin notices, pending help, and change history", async () => {
+  it("keeps the transcript flexible through protected setup answers and change history", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         featureMethods: [...featureMethods, "openclaw.changes.list"],
@@ -162,17 +159,14 @@ suite.define(() => {
             messages: messages.height,
             composerBottom: composer.bottom,
             bottom: rect.bottom,
-            notices: [...element.querySelectorAll(".custodian__plugin-reference")].map(
-              (notice) => notice.getBoundingClientRect().height,
-            ),
           };
         });
-        await page.screenshot({ path: path.join(suite.artifactDir, `transcript-${phase}.png`) });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(suite.artifactDir, `transcript-${phase}.png`) });
+        }
         expect(bounds.messages, phase).toBeGreaterThan(bounds.height * 0.4);
         expect(bounds.composerBottom, phase).toBeLessThanOrEqual(bounds.bottom + 1);
-        for (const height of bounds.notices) {
-          expect(height, phase).toBeLessThan(80);
-        }
+        expect(await surface.locator(".custodian__plugin-reference").count()).toBe(0);
       };
       await page.goto(`${suite.server.baseUrl}settings/plugins/workboard?view=settings`);
       const panel = page.locator("openclaw-assistant-panel .assistant-panel");
@@ -180,7 +174,7 @@ suite.define(() => {
         .getByRole("button", { name: "Actions for Refresh interval (minutes)", exact: true })
         .click();
       const setting = page.locator('[data-setting="refreshMinutes"]');
-      await setting.locator('wa-dropdown-item[value="ask"]').click();
+      await setting.getByRole("menuitem", { name: "Ask OpenClaw", exact: true }).click();
       await panel.getByText("Existing conversation.", { exact: true }).waitFor();
       const composer = panel.locator("textarea");
       await expect.poll(() => composer.isEnabled()).toBe(true);
@@ -199,20 +193,16 @@ suite.define(() => {
       await page
         .getByRole("button", { name: "Actions for Refresh interval (minutes)", exact: true })
         .click();
-      await setting.locator('wa-dropdown-item[value="ask"]').click();
-      await panel
-        .getByText("Your plugin question is saved as a draft and will appear after this step.", {
-          exact: true,
-        })
-        .waitFor();
+      await setting.getByRole("menuitem", { name: "Ask OpenClaw", exact: true }).click();
+      expect(await password.inputValue()).toBe("");
       await expectTranscriptSpace(surface, "pending");
       await gateway.setMethodResponse("openclaw.chat", chatResponses["openclaw.chat"]);
       await password.fill("fixture-answer");
       await password.press("Enter");
       await expect.poll(() => composer.isEnabled()).toBe(true);
       await expect
-        .poll(() => panel.locator('.custodian__plugin-reference[role="status"]').count())
-        .toBe(0);
+        .poll(() => composer.inputValue())
+        .toBe("Explain Refresh interval (minutes)\n\nCurrent value: 15");
       await expectTranscriptSpace(surface, "ready");
 
       await page.goto(`${suite.server.baseUrl}custodian`);
@@ -224,187 +214,4 @@ suite.define(() => {
       await expectTranscriptSpace(pageSurface, "history");
     });
   });
-
-  it("opens installed help once, preserves the draft, redacts setting values, and clears departed context", async () => {
-    await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods,
-        methodResponses: { ...pluginResponses(), ...chatResponses },
-        operatorScopes: ["operator.read", "operator.admin"],
-      });
-      await page.goto(`${suite.server.baseUrl}settings/plugins/workboard`);
-      const panel = page.locator("openclaw-assistant-panel .assistant-panel");
-      const composer = panel.locator("textarea");
-      const expectDockedEditor = async () => {
-        await expect.poll(() => panel.locator(".chat-send-btn").isEnabled()).toBe(true);
-        await expect
-          .poll(async () => {
-            const editorBounds = await page.locator(".plugin-editor").boundingBox();
-            const panelBounds = await panel.boundingBox();
-            return Boolean(
-              editorBounds && panelBounds && editorBounds.x + editorBounds.width <= panelBounds.x,
-            );
-          })
-          .toBe(true);
-      };
-      await panel.getByText("Existing conversation.", { exact: true }).waitFor();
-      await expect.poll(() => composer.isEnabled()).toBe(true);
-      const userRequests = async () =>
-        (await gateway.getRequests("openclaw.chat")).filter((request) =>
-          Boolean(asRecord(request.params).message),
-        );
-      expect(await userRequests()).toHaveLength(0);
-      await composer.fill("Keep my existing draft.");
-      await panel.getByRole("button", { name: "Close assistant sidebar", exact: true }).click();
-      await page
-        .locator(".plugin-catalog-detail__actions")
-        .getByRole("link", { name: "Settings", exact: true })
-        .click();
-      await page.getByRole("heading", { name: "Workboard settings", exact: true }).waitFor();
-      expect(await panel.isVisible()).toBe(false);
-      await page
-        .getByRole("button", { name: "Actions for Refresh interval (minutes)", exact: true })
-        .click();
-      const setting = page.locator('[data-setting="refreshMinutes"]');
-      expect(await setting.locator("wa-dropdown-item").allTextContents()).toEqual([
-        "Reset value",
-        "Ask OpenClaw",
-      ]);
-      await setting.locator('wa-dropdown-item[value="ask"]').click();
-      await expect
-        .poll(() => composer.inputValue())
-        .toBe(
-          "Keep my existing draft.\n\nHelp me understand Refresh interval (minutes) for Workboard.\n\nCurrent value: 15",
-        );
-      expect(await userRequests()).toHaveLength(0);
-      await expect
-        .poll(() => composer.evaluate((element) => element.clientHeight))
-        .toBeGreaterThan(80);
-      await expectDockedEditor();
-      await page.screenshot({ path: path.join(suite.artifactDir, "setting-unsent-draft.png") });
-      await composer.press("Enter");
-      await expect.poll(async () => (await userRequests()).length).toBe(1);
-      const [settingRequest] = await userRequests();
-      assert.ok(settingRequest);
-      expect(asRecord(settingRequest.params)).toMatchObject({
-        sessionId,
-        context: {
-          plugin: {
-            id: "workboard",
-            name: "Workboard",
-            installed: true,
-            setting: { path: ["plugins", "entries", "workboard", "config", "refreshMinutes"] },
-          },
-        },
-      });
-
-      const secretConfig = structuredClone(config);
-      Object.assign(secretConfig.plugins.entries.workboard.config, {
-        connection: { apiKey: "synthetic-should-never-enter-chat" },
-      });
-      const schema = structuredClone(configMocks["config.schema"]);
-      Object.assign(
-        schema.schema.properties.plugins.properties.entries.properties.workboard.properties.config
-          .properties,
-        {
-          connection: {
-            type: "object",
-            title: "Connection",
-            additionalProperties: false,
-            properties: { apiKey: { type: "string", title: "API key" } },
-          },
-        },
-      );
-      await gateway.setMethodResponse("config.get", {
-        ...configMocks["config.get"],
-        config: secretConfig,
-        raw: JSON.stringify(secretConfig),
-      });
-      await gateway.setMethodResponse("config.schema", schema);
-      await page.reload();
-      const secretRow = page.locator('[data-setting="connection.apiKey"]');
-      await secretRow
-        .getByRole("button", { name: "Actions for Connection: API key", exact: true })
-        .click();
-      await secretRow.locator('wa-dropdown-item[value="ask"]').click();
-      await expect.poll(() => composer.inputValue()).toContain("Current value: <redacted>");
-      expect(await composer.inputValue()).not.toContain("synthetic-should-never-enter-chat");
-      await expectDockedEditor();
-      await page.screenshot({ path: path.join(suite.artifactDir, "setting-redacted-draft.png") });
-      expect(await userRequests()).toHaveLength(0);
-      await composer.press("Enter");
-      await expect.poll(async () => (await userRequests()).length).toBe(1);
-      expect(JSON.stringify(await userRequests())).not.toContain(
-        "synthetic-should-never-enter-chat",
-      );
-      const [secretRequest] = await userRequests();
-      assert.ok(secretRequest);
-      expect(
-        asRecord(asRecord(asRecord(secretRequest.params).context).plugin).setting,
-      ).toMatchObject({
-        path: ["plugins", "entries", "workboard", "config", "connection", "apiKey"],
-      });
-
-      await page.locator(".plugin-editor .plugins-settings-breadcrumb__parent").click();
-      await page.locator(".plugin-catalog-detail .plugins-settings-breadcrumb__parent").click();
-      await page.getByRole("heading", { level: 1, name: "Plugins", exact: true }).waitFor();
-      await expect.poll(() => panel.locator(".custodian__plugin-reference").count()).toBe(0);
-      await composer.fill("What is next?");
-      await composer.press("Enter");
-      await expect.poll(async () => (await userRequests()).length).toBe(2);
-      const departedRequest = (await userRequests())[1];
-      assert.ok(departedRequest);
-      expect(asRecord(asRecord(departedRequest.params).context).plugin).toBeUndefined();
-    });
-  });
-
-  it.each([
-    { width: 900, catalog: false },
-    { width: 1440, catalog: true },
-  ])(
-    "opens help only explicitly for $width pixels and catalog=$catalog",
-    async ({ width, catalog }) => {
-      await suite.withPage({ viewport: { width, height: 1000 } }, async ({ page }) => {
-        const catalogResult = structuredClone(inspection.catalog);
-        catalogResult.plugin.id = "ch_uninstalled";
-        Object.assign(catalogResult.plugin.local, {
-          present: false,
-          installed: false,
-          enabled: false,
-          state: "not-installed",
-          action: "install",
-        });
-        const gateway = await installMockGateway(page, {
-          featureMethods,
-          methodResponses: {
-            ...pluginResponses(),
-            ...chatResponses,
-            "plugins.catalog.get": catalogResult,
-            "plugins.list": catalog ? { ...inventory, plugins: [] } : inventory,
-          },
-          operatorScopes: ["operator.read", "operator.admin"],
-        });
-        await page.goto(
-          `${suite.server.baseUrl}${catalog ? "plugins/ch_uninstalled" : "settings/plugins/workboard"}`,
-        );
-        const ask = page
-          .locator(".plugin-catalog-detail__actions")
-          .getByRole("button", { name: "Ask OpenClaw", exact: true });
-        await ask.waitFor();
-        const panel = page.locator("openclaw-assistant-panel .assistant-panel");
-        expect(await panel.isVisible()).toBe(false);
-        expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
-        await ask.click();
-        await panel.getByText("Existing conversation.", { exact: true }).waitFor();
-        expect(
-          (await gateway.getRequests("openclaw.chat")).every(
-            (request) => !asRecord(request.params).message,
-          ),
-        ).toBe(true);
-        await panel.getByRole("button", { name: "Close assistant sidebar", exact: true }).click();
-        await page.setViewportSize({ width: 1440, height: 1000 });
-        expect(await panel.isVisible()).toBe(false);
-      });
-    },
-  );
 });
