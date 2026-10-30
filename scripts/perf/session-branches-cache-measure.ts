@@ -16,12 +16,13 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
 import { readFileSync } from "node:fs";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
@@ -87,9 +88,6 @@ const scopes = Array.from({ length: 32 }, (_, index) => ({
 }));
 const expected: string[] = [];
 const inspector = new Session();
-function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
-}
 try {
   for (const scope of scopes) {
     const result = await listSessionBranches(scope);
@@ -132,7 +130,7 @@ try {
   const wallMs = performance.now() - start;
   const memoryAfter = process.memoryUsage();
   const allocatedBytes = values.allocations
-    ? sampledBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+    ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
     : undefined;
   samples.sort((a, b) => a - b);
   console.log(

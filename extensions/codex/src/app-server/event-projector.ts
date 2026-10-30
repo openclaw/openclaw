@@ -104,6 +104,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       turnId: this.turnId,
       upstreamUserText: this.options.upstreamUserText,
       completedItemIds: this.completedItemIds,
+      reasoningMessages: this.reasoningProjection.collectMessages(true),
       assistantProjection: this.assistantProjection,
       toolMessages: this.toolTranscriptProjection.transcriptMessages,
     });
@@ -434,6 +435,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       this.activeCompactionItemIds.add(itemId);
       this.usageProjection.beginCompaction();
     }
+    await this.reasoningProjection.recordItemStarted(item);
     await this.assistantProjection.recordItemStarted(item, itemId);
     if (
       this.projectionClosed ||

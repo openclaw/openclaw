@@ -317,9 +317,8 @@ async function fingerprintIncompleteRecoveryGeneration(directory: string): Promi
   return sha256Hex(JSON.stringify(inventory));
 }
 /** This records repair of current state, never reverse publication or permission to delete B/C/T. */
-async function readBinding(ref: UpdateRecoveryBackupRef) {
+async function readBinding(ref: UpdateRecoveryBackupRef, run: UpdateRunRecord | undefined) {
   return withRecoveryMetadata(ref, async ({ manifest, outcome, pin }) => {
-    const run = await getUpdateRunAsync(manifest.runId);
     const capture = run?.origin.updateRecoveryCapture;
     if (
       outcome ||
@@ -400,14 +399,14 @@ async function readBinding(ref: UpdateRecoveryBackupRef) {
 /** Missing receipt keeps admission closed. Malformed or contradictory receipts fail closed. */
 export async function hasUpdateRecoveryForwardResolution(
   ref: UpdateRecoveryBackupRef,
+  run: UpdateRunRecord | undefined,
 ): Promise<boolean> {
-  return withRecoveryMetadata(ref, async ({ manifest, outcome }) => {
-    const run = await getUpdateRunAsync(manifest.runId);
+  return withRecoveryMetadata(ref, async ({ outcome }) => {
     const receipt = run?.origin.updateRecoveryCapture?.forwardResolution;
     if (!receipt) {
       return false;
     }
-    if (outcome || !isDeepStrictEqual(receipt.binding, await readBinding(ref))) {
+    if (outcome || !isDeepStrictEqual(receipt.binding, await readBinding(ref, run))) {
       throw new Error("Forward recovery receipt is stale or contradicts its failed capture.");
     }
     return true;
@@ -534,11 +533,14 @@ type UpdateRecoveryBackupRead =
       ref: UpdateRecoveryBackupRef;
       manifest: UpdateRecoveryBackupManifest;
       outcome: Outcome;
+      run: UpdateRunRecord | undefined;
     }
   | { kind: "incomplete"; directory: string }
   | { kind: "unreadable"; directory: string; error: string };
 
-export async function readUpdateRecoveryBackups(): Promise<UpdateRecoveryBackupRead[]> {
+export async function readUpdateRecoveryBackups(
+  readRun = getUpdateRunAsync,
+): Promise<UpdateRecoveryBackupRead[]> {
   const result: UpdateRecoveryBackupRead[] = [];
   const scopes = captureScopes(process.env);
   for (const stateDir of scopes.keys()) {
@@ -582,7 +584,8 @@ export async function readUpdateRecoveryBackups(): Promise<UpdateRecoveryBackupR
         const ref = { directory, manifestPath, manifestSha256: sha256Hex(raw) };
         assertManifestLocation(ref, manifest);
         assertManifestSelectedScope(manifest, scopes);
-        const capture = (await getUpdateRunAsync(manifest.runId))?.origin.updateRecoveryCapture;
+        const run = await readRun(manifest.runId);
+        const capture = run?.origin.updateRecoveryCapture;
         if (capture && capture.manifestSha256 !== ref.manifestSha256) {
           throw new Error(
             `Update capture identity changed: ${manifestPath}. Inspect with openclaw update status --json; npx openclaw@latest doctor --fix.`,
@@ -603,7 +606,8 @@ export async function readUpdateRecoveryBackups(): Promise<UpdateRecoveryBackupR
         } else {
           outcome = { status: capture?.status ?? "pending", error: capture?.error };
         }
-        result.push({ kind: "sealed", ref, manifest, outcome });
+        // One ledger observation owns this projection; known absence is not a reason to reread.
+        result.push({ kind: "sealed", ref, manifest, outcome, run });
       } catch (error) {
         // A damaged marked capture remains evidence; it cannot hide verified neighbors.
         result.push({ kind: "unreadable", directory, error: formatErrorMessage(error) });

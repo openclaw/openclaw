@@ -46,10 +46,18 @@ Do not write a separate permission store or infer consent from successful login.
   [live model discovery](/plugins/sdk-provider-plugins/model-catalogs#live-model-discovery).
   `src/plugins/contracts/provider-live-listing.contract.test.ts` enforces this
   for bundled hosted providers.
-- **Thinking from catalog data.** Declare efforts in manifest `compat`. Add
-  `resolveThinkingProfile` only to restrict or relabel the ladder, and derive it
-  with `resolveEffortThinkingProfile` instead of a hard-coded level list. See
-  [runtime hooks](/plugins/sdk-provider-plugins/runtime-hooks).
+- **Thinking from catalog data.** Put the profile on the manifest row:
+  `compat.defaultThinkingLevel` makes the row own it, and `thinkingLevelMap`,
+  `compat.supportedReasoningEfforts`, `compat.adaptiveThinking`,
+  `compat.thinkingRequired` and `compat.thinkingLevelLabels` shape the ladder. Do
+  not add a `resolveThinkingProfile` hook for a model its row can describe. Add
+  the row to `src/plugins/contracts/catalog-thinking-profiles.contract.test.ts`.
+- **Live listing needs both halves.** The entry sets `catalog.liveModelDiscovery`
+  and the manifest declares `modelCatalog.discovery: { "<provider>": "refreshable" }`.
+  Without the manifest half, the Gateway never refreshes the provider and only
+  catalog rows appear.
+- **Row IDs match the listing.** Use the ID the vendor's model list returns.
+  `modelIdNormalization` aliases only fold what users type.
 - **Connection-only setup.** Onboarding saves the endpoint and credential through
   `createProviderConnectionPresetAppliers`. Outside `models.mode: "replace"`, which
   keeps its documented exception, it never copies catalog rows into config. See
