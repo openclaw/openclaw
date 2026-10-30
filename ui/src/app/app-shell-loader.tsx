@@ -5,6 +5,7 @@ import type { OpenClawShellProps } from "./app-host.tsx";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
+  scheduleStaleChunkReload,
 } from "./stale-chunk-reload.ts";
 
 const LazyShell = lazy(() => import("./app-host.tsx"), { export: "OpenClawShell" });
@@ -27,15 +28,22 @@ export function ShellLoader(props: ShellLoaderProps): SolidJSX.Element {
   );
 }
 
-function ShellLoadError(props: { error: unknown; reset: () => void }): SolidJSX.Element {
+export function ShellLoadError(props: { error: unknown; reset: () => void }): SolidJSX.Element {
   let active = true;
-  onSettled(() => () => {
-    active = false;
+  const stale = () => isStaleChunkImportError(props.error);
+  onSettled(() => {
+    // A recognized shell-download failure joins the shared guarded recovery instead of
+    // waiting for a manual Reload; a refused attempt still lands on this surface.
+    if (stale()) {
+      void scheduleStaleChunkReload();
+    }
+    return () => {
+      active = false;
+    };
   });
   const retry = async () => {
-    const stale = isStaleChunkImportError(props.error);
     const reloading =
-      stale && (await retryStaleChunkReloadWhenReachable({ canReload: () => active }));
+      stale() && (await retryStaleChunkReloadWhenReachable({ canReload: () => active }));
     if (active && !reloading) {
       props.reset();
     }
@@ -44,7 +52,7 @@ function ShellLoadError(props: { error: unknown; reset: () => void }): SolidJSX.
     <openclaw-route-fragment style={{ display: "contents" }}>
       <LazyViewError
         error={props.error}
-        stale={isStaleChunkImportError(props.error)}
+        stale={stale()}
         onRetry={() => {
           void retry();
         }}

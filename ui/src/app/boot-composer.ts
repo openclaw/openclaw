@@ -1,4 +1,5 @@
 import { listen } from "../lib/reactive/listener.ts";
+import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
 
 /**
  * A chat link's static boot frame ships a real composer, so typing starts before
@@ -21,6 +22,7 @@ const BOOT_COMPOSER_ID = "openclaw-boot-composer";
 
 let element: HTMLTextAreaElement | null = null;
 let stopHistory: (() => void) | undefined;
+let stopReloadGuard: (() => void) | undefined;
 
 /** Takes the static element before the first app commit replaces the boot frame. */
 export function adoptBootComposer(applicationRoute: boolean): void {
@@ -35,6 +37,13 @@ export function adoptBootComposer(applicationRoute: boolean): void {
   element = candidate;
   // History navigation leaves the linked session; its unsent text must not follow.
   stopHistory = listen(globalThis, "popstate", retireBootComposer);
+  // Unsent text lives only in this textarea until the route's composer takes it, so an
+  // automatic document reload would discard it before any pane can adopt it.
+  stopReloadGuard?.();
+  stopReloadGuard = registerControlUiReloadGuard(
+    () => element === null || element.value.trim() === "",
+    () => element?.focus({ preventScroll: true }),
+  );
 }
 
 /** The live element for a chat loading frame, or null once taken or retired. */
@@ -73,6 +82,8 @@ export function takeBootComposer(): BootComposerDraft | null {
 export function retireBootComposer(): void {
   stopHistory?.();
   stopHistory = undefined;
+  stopReloadGuard?.();
+  stopReloadGuard = undefined;
   element?.remove();
   element = null;
 }

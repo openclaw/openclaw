@@ -8,6 +8,7 @@ import {
   settleBootComposer,
   takeBootComposer,
 } from "./boot-composer.ts";
+import { canReloadControlUiDocument } from "./document-reload-guard.ts";
 
 function bootDocument(chat = true) {
   document.documentElement.toggleAttribute("data-openclaw-boot-chat", chat);
@@ -54,6 +55,18 @@ describe("boot composer", () => {
     settleBootComposer();
     expect(document.activeElement).not.toBe(textarea);
     expect(takeBootComposer()).toMatchObject({ text: "", submit: false, focused: false });
+  });
+
+  it("holds an automatic reload while unsent boot text exists", () => {
+    const textarea = bootDocument();
+    adoptBootComposer(true);
+    expect(canReloadControlUiDocument()).toBe(true);
+
+    textarea.value = "Keep this draft";
+    expect(canReloadControlUiDocument()).toBe(false);
+
+    takeBootComposer();
+    expect(canReloadControlUiDocument()).toBe(true);
   });
 
   it("discards early input when history leaves the linked session", () => {
