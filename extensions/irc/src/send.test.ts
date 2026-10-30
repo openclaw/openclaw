@@ -388,7 +388,9 @@ describe("IRC outbound and probing", () => {
     "returns probe latency across a %dms clock step, forwards timeout and quits",
     async (step) => {
       vi.useFakeTimers({ toFake: ["Date", "performance"] });
-      onTestFinished(() => vi.useRealTimers());
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
       mocks.connectIrcClient.mockImplementationOnce(async () => {
         vi.advanceTimersByTime(45);
         vi.setSystemTime(Date.now() + step);

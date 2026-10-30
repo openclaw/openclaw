@@ -22,7 +22,7 @@ function storePendingUploadForTest(
 }
 
 describe("pending-uploads", () => {
-  beforeEach(() => vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] }));
+  beforeEach(() => vi.useFakeTimers());
 
   afterEach(() => {
     for (const id of createdUploadIds) {
