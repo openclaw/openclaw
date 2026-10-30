@@ -321,7 +321,17 @@ export function createCodexAppServerAgentHarness(
     supports: (ctx) => {
       const unsupported = (reason: string) => ({ supported: false as const, reason });
       const provider = ctx.provider.trim().toLowerCase();
-      if (!providerIds.has(provider)) {
+      const preparedAuth = ctx.modelProvider?.preparedAuth;
+      const customNativeCommandRoute =
+        options.providerIds === undefined &&
+        ctx.requestedRuntime === normalizedHarnessRuntimeId &&
+        ctx.modelProvider?.nativeCommandAuth?.runtimeId === normalizedHarnessRuntimeId &&
+        ctx.modelProvider.requestTransportOverrides === "none" &&
+        (preparedAuth === undefined ||
+          (preparedAuth.source === "harness" &&
+            (preparedAuth.mode === undefined || preparedAuth.mode === "native-command") &&
+            preparedAuth.requirement === undefined));
+      if (!providerIds.has(provider) && !customNativeCommandRoute) {
         return unsupported(`provider is not one of: ${[...providerIds].toSorted().join(", ")}`);
       }
       if (ctx.modelProvider?.requestTransportOverrides === "present") {
@@ -331,7 +341,6 @@ export function createCodexAppServerAgentHarness(
           fallbackRuntime: "openclaw",
         };
       }
-      const preparedAuth = ctx.modelProvider?.preparedAuth;
       const runtimePolicy = ctx.modelProvider?.runtimePolicy;
       // Codex owns discovery and auth for new first-party models. Only trust that
       // native account when no authored transport or host credential is involved.
@@ -353,7 +362,12 @@ export function createCodexAppServerAgentHarness(
         if (!compatible) {
           return unsupported("Codex cannot reproduce the prepared provider route");
         }
-      } else if (ctx.modelProvider && provider !== "codex" && !nativeAccountOwnsUnobservedModel) {
+      } else if (
+        ctx.modelProvider &&
+        provider !== "codex" &&
+        !nativeAccountOwnsUnobservedModel &&
+        !customNativeCommandRoute
+      ) {
         return unsupported("provider route compatibility with Codex is not declared");
       }
       if (preparedAuth?.requirement === "subscription") {
@@ -490,6 +504,15 @@ export function createCodexAppServerAgentHarness(
       return escalated;
     },
     runIsolatedCompletionV2: async (params) => {
+      const { resolveMergedModelProviderConfig } =
+        await import("openclaw/plugin-sdk/provider-catalog-shared");
+      if (
+        resolveMergedModelProviderConfig(params.config, params.provider)?.auth === "native-command"
+      ) {
+        throw new Error(
+          "Native command auth currently requires an ordinary Codex session, not isolated completion.",
+        );
+      }
       if (
         resolveIsolatedCompletionRuntime({ authorizationOwner: params.authorization.owner }) ===
         "openclaw"
@@ -506,6 +529,15 @@ export function createCodexAppServerAgentHarness(
       });
     },
     runIsolatedCompletion: async (params) => {
+      const { resolveMergedModelProviderConfig } =
+        await import("openclaw/plugin-sdk/provider-catalog-shared");
+      if (
+        resolveMergedModelProviderConfig(params.config, params.provider)?.auth === "native-command"
+      ) {
+        throw new Error(
+          "Native command auth currently requires an ordinary Codex session, not isolated completion.",
+        );
+      }
       const { runHostPreparedIsolatedCompletion } = await loadSimpleCompletionRuntime();
       // Keep the deprecated V1 contract on its exact host-prepared transport.
       // V2 owns native Codex auth and zero-tool attestation above.

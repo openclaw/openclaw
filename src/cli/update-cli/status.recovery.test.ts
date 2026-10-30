@@ -5,10 +5,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import * as marker from "../../infra/update-capture-privacy-marker.js";
+// Prepare the lazy production graph during collection, not inside the first test timeout.
+import { inspectUpdateRecoveryBackups } from "../../infra/update-recovery-backup-status.js";
 import { createUpdateRunRecordFixture } from "../../infra/update-run-record.test-support.js";
 import { updateStatusCommand as updateStatus } from "./status.js";
-// Prepare the lazy production graph during collection, not inside the first test timeout.
-import "../../infra/update-recovery-backup-status.js";
 
 const mocks = vi.hoisted(() => ({
   readRun: vi.fn<typeof import("../../infra/update-run-reader.js").getUpdateRunAsync>(),
@@ -171,6 +171,26 @@ async function run(c: Capture) {
     }),
   );
 }
+
+it.each([
+  ["absent", "ambiguous"],
+  ["failed", "unresolved"],
+  ["unavailable", "unreadable"],
+] as const)("reuses one injected %s ledger observation", async (state, status) => {
+  const c = await capture();
+  const row = state === "failed" ? await run(c) : undefined;
+  const readRun = vi.fn(async () => {
+    if (state === "unavailable") {
+      throw new Error("selected state engine unavailable");
+    }
+    return row;
+  });
+  const [set] = await inspectUpdateRecoveryBackups(readRun);
+  expect(set).toMatchObject({ status });
+  expect(readRun).toHaveBeenCalledExactlyOnceWith(c.manifest.runId);
+  expect(mocks.readRun).not.toHaveBeenCalled();
+  expect(await text(c.manifestPath)).toBe(c.raw);
+});
 
 it("reports standalone Doctor captures as manual evidence", async () => {
   const c = await capture(`doctor-${firstId}`);
@@ -480,6 +500,7 @@ it("validates forward resolution against retained generations without writing", 
   };
   mocks.readRun.mockResolvedValue(row);
   expect((await inspect()).recoverySets[0]).toMatchObject({ status: "forward-resolved" });
+  expect(mocks.readRun).toHaveBeenCalledExactlyOnceWith(c.manifest.runId);
   expect(new Set(await fs.readdir(c.directory))).toEqual(new Set([markerFile, "manifest.json"]));
   const candidate = {
     ...c.manifest,

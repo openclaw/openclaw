@@ -877,6 +877,7 @@ src/gateway/model-account-connect-errors.ts
 src/gateway/operator-scopes.ts
 src/gateway/security-path.ts
 src/gateway/server-methods/workspace-fs.ts
+src/gateway/worker-environments/environment-recipe.ts
 src/gateway/worker-environments/local-workspace-fingerprints.ts
 src/gateway/worker-environments/placement-authority-owner.ts
 src/gateway/worker-environments/placement-inventory-changed-error.ts
@@ -891,6 +892,7 @@ src/gateway/worker-environments/placement-workspace-journal.types.ts
 src/gateway/worker-environments/placement-workspace-result-owner.ts
 src/gateway/worker-environments/placement-workspace-result-store.ts
 src/gateway/worker-environments/placement-workspace-result.ts
+src/gateway/worker-environments/preparation-identity.schema.ts
 src/gateway/worker-environments/session-attachment.ts
 src/gateway/worker-environments/state.ts
 src/gateway/worker-environments/store-commit-authority.ts
@@ -2034,6 +2036,8 @@ src/state/openclaw-state-db-existing-write.ts
 src/state/openclaw-state-db-failure.ts
 src/state/openclaw-state-db-fast-path.ts
 src/state/openclaw-state-db-handle.ts
+src/state/openclaw-state-db-historical-imports.ts
+src/state/openclaw-state-db-image-snapshot-migration.ts
 src/state/openclaw-state-db-index-ordering-migrations.ts
 src/state/openclaw-state-db-initialization.ts
 src/state/openclaw-state-db-integrity-admission.ts

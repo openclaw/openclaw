@@ -20,6 +20,11 @@ export const artifactPreservingReads = resolveGlobalSingleton(
     >(),
 );
 
+/**
+ * `agentDatabases` makes every agent-database read a private whole-file copy. It is for
+ * offline inspection (Doctor, update checks). Gateway requests read live databases through
+ * their owner; a copy of a multi-GB agent database blocks writers for minutes.
+ */
 export function withArtifactPreservingStateReads<T>(
   operation: () => T,
   options?: { agentDatabases?: true },

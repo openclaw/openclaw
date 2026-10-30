@@ -34,6 +34,8 @@ export type ResolveEffectiveToolInventoryParams = {
   accountId?: string | null;
   modelProvider?: string;
   modelId?: string;
+  /** Selected next-turn runtime, distinct from the last run's harness. */
+  agentRuntime?: string;
   modelApi?: string | null;
   runtimeModel?: ProviderRuntimeModel;
   currentChannelId?: string;
@@ -44,6 +46,8 @@ export type ResolveEffectiveToolInventoryParams = {
   groupSpace?: string | null;
   replyToMode?: ReplyToMode;
   webSearchEnabled?: boolean;
+  /** Brokered GitHub tool listing; invocation still checks current authority. */
+  githubPublicationAvailable?: boolean;
   modelHasVision?: boolean;
   requireExplicitMessageTarget?: boolean;
   disableMessageTool?: boolean;

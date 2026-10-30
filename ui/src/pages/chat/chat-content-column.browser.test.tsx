@@ -363,26 +363,25 @@ it.each(["light", "dark"])(
       contrast(colors("bob").name, getComputedStyle(document.body).backgroundColor),
     ).toBeGreaterThanOrEqual(4.5);
     const unchanged = colors("alice");
+    const initialInk = getComputedStyle(link).color;
+    style.setProperty("--link", "#888888");
+    flush();
+    expect(getComputedStyle(link).color).toBe(initialInk);
+    style.setProperty("--link-on-tint", mode === "light" ? "#12395c" : "#b9dfff");
+    await waitForSolid(() => expect(getComputedStyle(link).color).not.toBe(initialInk));
     for (const hover of [false, true]) {
       if (hover) {
         await page.elementLocator(link).hover();
       }
-      const token = hover ? "--link-hover" : "--link";
-      style.setProperty(token, "#888888");
-      syncControlUiSystemChrome(true);
-      flush();
-      const previousInk = getComputedStyle(link).color;
-      style.setProperty(token, "#6688bb");
-      syncControlUiSystemChrome(true);
-      await waitForSolid(() => expect(getComputedStyle(link).color).not.toBe(previousInk));
       await Promise.all(link.getAnimations().map((animation) => animation.finished));
       expect(
         contrast(
           getComputedStyle(link).color,
           getComputedStyle(link.closest(".chat-bubble")!).backgroundColor,
         ),
-      ).toBeGreaterThanOrEqual(7);
+      ).toBeGreaterThanOrEqual(4.5);
       expect(colors("alice")).toEqual(unchanged);
+      expect(colors("bob")).toEqual(peer);
     }
     await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
   },

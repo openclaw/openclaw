@@ -89,4 +89,6 @@ export {
   isSessionGitHubOptionsParams,
   isSessionGitHubStatusParams,
   isSessionGitHubConfirmParams,
+  isSessionsFilesPreviewParams,
+  isSessionsFilesPreviewReleaseParams,
 } from "./predicates.js";

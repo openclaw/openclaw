@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { McpToolCatalog } from "../../agents/agent-bundle-mcp-types.js";
 import * as conversationToolPolicyPipeline from "../../agents/conversation-tool-policy-pipeline.js";
 import * as toolSchemaRuntime from "../../agents/embedded-agent-runner/tool-schema-runtime.js";
@@ -18,6 +19,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
+import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
@@ -26,6 +28,7 @@ import {
 } from "../worker-environments/placement-suite.test-support.js";
 import type { SessionWorkerPlacementContext } from "../worker-environments/session-placement-lifecycle.js";
 import { fixedStoreOwnershipConfig } from "./sessions-fixed-store.test-support.js";
+import { makeCoreInventory, makeMcpTool } from "./tools-effective.fixtures.test-support.js";
 import { toolsEffectiveHandlers, testing } from "./tools-effective.js";
 
 type InventoryModule = typeof import("../../agents/tools-effective-inventory.js");
@@ -84,6 +87,9 @@ const runtimeMocks = vi.hoisted(() => ({
   })),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace-main"),
   resolveEffectiveToolInventory: vi.fn<InventoryModule["resolveEffectiveToolInventory"]>(),
+  readAcpSessionMetaForEntryAsync: vi.fn<
+    typeof import("../../acp/runtime/session-meta-readonly.js").readAcpSessionMetaForEntryAsync
+  >(async () => undefined),
   resolveReplyToMode: vi.fn<
     typeof import("../../auto-reply/reply/reply-threading.js").resolveReplyToMode
   >(() => "first"),
@@ -107,6 +113,10 @@ const runtimeMocks = vi.hoisted(() => ({
   })),
 }));
 
+vi.mock("../../acp/runtime/session-meta-readonly.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../acp/runtime/session-meta-readonly.js")>()),
+  readAcpSessionMetaForEntryAsync: runtimeMocks.readAcpSessionMetaForEntryAsync,
+}));
 vi.mock("../../agents/agent-bundle-mcp-tools.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/agent-bundle-mcp-tools.js")>()),
   buildBundleMcpToolsFromCatalog: runtimeMocks.buildBundleMcpToolsFromCatalog,
@@ -177,7 +187,7 @@ type RespondCall = [boolean, unknown?, { code: number; message: string }?];
 async function invokeTools(
   params: Record<string, unknown> = { sessionKey: "main:abc" },
   cfg: Record<string, unknown> = {},
-  placementContext: SessionWorkerPlacementContext = {},
+  placementContext: SessionWorkerPlacementContext & { localEmbedded?: boolean } = {},
 ) {
   const respond = vi.fn();
   await expectDefined(
@@ -211,60 +221,6 @@ function firstRespondCall(respond: ReturnType<typeof vi.fn>): RespondCall | unde
 
 function payloadOf(respond: ReturnType<typeof vi.fn>) {
   return firstRespondCall(respond)?.[1] as ToolsEffectivePayload;
-}
-
-function makeMcpTool(
-  params: Record<string, unknown> = { type: "object", properties: {} },
-  identity = {
-    name: "reproProbe__probe_tool",
-    label: "Probe Tool",
-    toolName: "probe_tool",
-    serverName: "reproProbe",
-    deniedBySession: false,
-  },
-) {
-  const tool = {
-    name: identity.name,
-    label: identity.label,
-    description: "Probe from MCP",
-    parameters: params,
-    execute: vi.fn(),
-  };
-  setPluginToolMeta(tool, {
-    pluginId: "bundle-mcp",
-    optional: false,
-    mcp: {
-      serverName: identity.serverName,
-      safeServerName: identity.serverName,
-      toolName: identity.toolName,
-      operation: "tool",
-      ...(identity.deniedBySession ? { deniedBySession: true } : {}),
-    },
-  });
-  return tool;
-}
-
-const coreTool = {
-  id: "exec",
-  label: "Exec",
-  description: "Run shell commands",
-  rawDescription: "Run shell commands",
-  source: "core" as const,
-};
-
-function makeCoreInventory(tool: Partial<typeof coreTool> = {}): ToolsEffectivePayload {
-  return {
-    agentId: "main",
-    profile: "coding",
-    groups: [
-      {
-        id: "core",
-        label: "Built-in tools",
-        source: "core",
-        tools: [{ ...coreTool, ...tool }],
-      },
-    ],
-  };
 }
 
 const makeMcpCatalog = () => ({ version: 1, generatedAt: 1, servers: {}, tools: [] });
@@ -427,6 +383,201 @@ describe("tools.effective handler", () => {
       expect(toolIds?.includes("web_search")).toBe(webSearch !== false);
     }
   });
+
+  it("previews managed GitHub tools through the real inventory without credential discovery", async () => {
+    const { resolveEffectiveToolInventory } = await vi.importActual<InventoryModule>(
+      "../../agents/tools-effective-inventory.js",
+    );
+    runtimeMocks.resolveEffectiveToolInventory.mockImplementation(resolveEffectiveToolInventory);
+    // Keep the session and cache clock fixed while its selected runtime changes.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    onTestFinished(() => clock.mockRestore());
+    for (const scenario of [
+      { runtime: "openclaw", historical: "external", expected: true },
+      { runtime: "external", historical: "openclaw", expected: false },
+      { runtime: "codex", expected: true },
+      { runtime: "copilot", expected: true },
+      { runtime: "openclaw", localEmbedded: true, expected: false },
+      { runtime: "openclaw", acp: true, expected: false },
+      { runtime: "openclaw", expected: true },
+      { runtime: "openclaw", requiredSandbox: true, expected: true },
+      { runtime: "openclaw", denied: true, expected: false },
+    ]) {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: { "openai/gpt-4.1": { agentRuntime: { id: scenario.runtime } } },
+          },
+        },
+        tools: {
+          deny: [
+            "gateway",
+            "nodes",
+            ...(scenario.denied ? ["github_publish", "github_identity_status"] : []),
+          ],
+        },
+      };
+      mockSession(
+        {
+          agentHarnessId: scenario.historical,
+          sandbox: scenario.requiredSandbox ? "required" : undefined,
+        },
+        { cfg },
+      );
+      runtimeMocks.readAcpSessionMetaForEntryAsync.mockResolvedValue(
+        scenario.acp
+          ? {
+              backend: "acpx",
+              agent: "main",
+              runtimeSessionName: "main:abc",
+              mode: "persistent",
+              state: "idle",
+              lastActivityAt: 1,
+            }
+          : undefined,
+      );
+      const respond = await invokeTools({ sessionKey: "main:abc" }, cfg, {
+        localEmbedded: scenario.localEmbedded,
+      });
+      expectResponsesOk(respond);
+      const tools = payloadOf(respond).groups.flatMap((group) => group.tools);
+      expect(tools.some((tool) => tool.id === "gateway" || tool.id === "nodes")).toBe(false);
+      const githubTools = tools.filter((tool) => tool.id.startsWith("github_"));
+      expect(githubTools.map((tool) => tool.id)).toEqual(
+        scenario.expected
+          ? scenario.requiredSandbox
+            ? ["github_publish"]
+            : ["github_identity_status", "github_publish"]
+          : [],
+      );
+      if (scenario.expected) {
+        const description = expectDefined(
+          githubTools.find((tool) => tool.id === "github_publish"),
+          "GitHub publication preview",
+        ).rawDescription;
+        for (const action of [
+          "readiness",
+          "inspect_pr",
+          "prepare_pr",
+          "refresh_base",
+          "upload_evidence",
+          "merge",
+        ]) {
+          expect(description).toContain(action);
+        }
+        expect(description).toContain("prepared runtime");
+        expect(description).toContain("previewing them grants no execution authority");
+      }
+    }
+  });
+
+  it("keeps cached GitHub previews separate when the selected runtime changes", async () => {
+    const { resolveEffectiveToolInventory } = await vi.importActual<InventoryModule>(
+      "../../agents/tools-effective-inventory.js",
+    );
+    runtimeMocks.resolveEffectiveToolInventory.mockImplementation(resolveEffectiveToolInventory);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    onTestFinished(() => clock.mockRestore());
+    const cfg: OpenClawConfig = {
+      plugins: {
+        entries: { codex: { config: { codexDynamicToolsExclude: [" GitHub_Publish "] } } },
+      },
+    };
+    for (const runtime of ["openclaw", "codex", "openclaw"]) {
+      mockSession({ agentRuntimeOverride: runtime }, { cfg });
+      const respond = await invokeTools({ sessionKey: "main:abc" }, cfg);
+      expectResponsesOk(respond);
+      const githubIds = payloadOf(respond)
+        .groups.flatMap((group) => group.tools)
+        .filter((tool) => tool.id === "github_identity_status" || tool.id === "github_publish")
+        .map((tool) => tool.id);
+      expect(githubIds).toEqual(
+        runtime === "codex"
+          ? ["github_identity_status"]
+          : ["github_identity_status", "github_publish"],
+      );
+    }
+    expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes partial GitHub previews when the Codex owner gains preview metadata", async () => {
+    const { resolveEffectiveToolInventory } = await vi.importActual<InventoryModule>(
+      "../../agents/tools-effective-inventory.js",
+    );
+    runtimeMocks.resolveEffectiveToolInventory.mockImplementation(resolveEffectiveToolInventory);
+    const temp = createTempDirTracker();
+    onTestFinished(temp.cleanup);
+    const registrySnapshot = captureActivePluginRegistrySnapshot();
+    onTestFinished(() => restoreActivePluginRegistrySnapshot(registrySnapshot));
+    const registry = createEmptyPluginRegistry();
+    const rootDir = temp.make("codex-without-preview-");
+    registry.plugins.push(
+      createPluginRecord({
+        id: "codex",
+        origin: "global",
+        version: "2026.9.7",
+        rootDir,
+        source: `${rootDir}/index.js`,
+      }),
+    );
+    setActivePluginRegistry(registry);
+    runtimeMocks.getActivePluginRegistryVersion.mockReturnValue(1);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    onTestFinished(() => clock.mockRestore());
+    const cfg: OpenClawConfig = {};
+    mockSession({ agentRuntimeOverride: "codex" }, { cfg });
+    const partial = await invokeTools({ sessionKey: "main:abc" }, cfg);
+    expectResponsesOk(partial);
+    const tools = payloadOf(partial).groups.flatMap((group) => group.tools);
+    expect(tools.some((tool) => tool.id === "read")).toBe(true);
+    expect(tools.some((tool) => tool.id === "github_publish")).toBe(false);
+    expect(tools.some((tool) => tool.id === "github_identity_status")).toBe(false);
+    expect(payloadOf(partial).notices).toContainEqual(
+      expect.objectContaining({ id: "codex-github-preview-unavailable" }),
+    );
+
+    restoreActivePluginRegistrySnapshot(registrySnapshot);
+    runtimeMocks.getActivePluginRegistryVersion.mockReturnValue(2);
+    const upgraded = await invokeTools({ sessionKey: "main:abc" }, cfg);
+    expectResponsesOk(upgraded);
+    expect(
+      payloadOf(upgraded).groups.flatMap((group) => group.tools.map((tool) => tool.id)),
+    ).toEqual(expect.arrayContaining(["github_identity_status", "github_publish"]));
+    expect(payloadOf(upgraded).notices ?? []).not.toContainEqual(
+      expect.objectContaining({ id: "codex-github-preview-unavailable" }),
+    );
+  });
+
+  it.each(["prepare_pr", "inspect_pr"])(
+    "limits the GitHub preview to permitted %s actions",
+    async (action) => {
+      const { resolveEffectiveToolInventory } = await vi.importActual<InventoryModule>(
+        "../../agents/tools-effective-inventory.js",
+      );
+      runtimeMocks.resolveEffectiveToolInventory.mockImplementation(resolveEffectiveToolInventory);
+      const cfg: OpenClawConfig = {
+        tools: {
+          gatewayPolicy: {
+            allow: ["github_publish"],
+            actions: { github_publish: [action, "not_an_action"] },
+          },
+        },
+      };
+      mockSession({}, { cfg });
+      const respond = await invokeTools({ sessionKey: "main:abc" }, cfg);
+      expectResponsesOk(respond);
+      const tool = payloadOf(respond)
+        .groups.flatMap((group) => group.tools)
+        .find((candidate) => candidate.id === "github_publish");
+      expect(tool).toBeDefined();
+      expect(tool?.rawDescription).toContain(action);
+      expect(tool?.rawDescription).not.toContain("merge");
+      expect(tool?.rawDescription).not.toContain("not_an_action");
+      expect(tool?.rawDescription).not.toContain(
+        action === "prepare_pr" ? "inspect_pr" : "prepare_pr",
+      );
+    },
+  );
 
   it("coalesces identical base inventory cache misses while inventory resolution is pending", async () => {
     const buildSteps = vi.spyOn(

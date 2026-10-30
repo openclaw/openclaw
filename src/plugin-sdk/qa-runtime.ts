@@ -339,9 +339,10 @@ export function createQaDockerRuntime(params: {
         break;
       }
       let response: QaDockerFetchResponse | undefined;
+      const requestUsesOverallDeadline = remainingMs <= DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS;
       const requestTimeoutMs = Math.max(
         1,
-        Math.min(DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS, remainingMs),
+        Math.min(DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS, Math.floor(remainingMs)),
       );
       const requestSignal = AbortSignal.timeout(requestTimeoutMs);
       try {
@@ -354,7 +355,7 @@ export function createQaDockerRuntime(params: {
         lastError = new Error(`Health check returned non-OK for ${url}`);
       } catch (error) {
         lastError = error;
-        if (requestSignal.aborted && requestTimeoutMs === remainingMs) {
+        if (requestSignal.aborted && requestUsesOverallDeadline) {
           break;
         }
       } finally {

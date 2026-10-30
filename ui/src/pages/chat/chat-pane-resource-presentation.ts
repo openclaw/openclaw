@@ -16,7 +16,17 @@ import {
 
 export function createChatPaneResourceProps() {
   const widgetLayout = createChatWidgetLayout();
+  let artifactDownload:
+    | { state: ChatPageHost; resolve: NonNullable<ChatProps["resolveArtifactDownload"]> }
+    | undefined;
   return (state: ChatPageHost, context: ApplicationContext) => {
+    // Equivalent pane frames keep the same download owner for pending file transfers.
+    if (artifactDownload?.state !== state) {
+      artifactDownload = {
+        state,
+        resolve: (params, signal) => resolveArtifactDownloadSource(state, params, signal),
+      };
+    }
     const mediaReadAllowed = state.connected && !state.isRouteSessionPending?.();
     const target = {
       sessionKey: state.sessionKey,
@@ -44,8 +54,7 @@ export function createChatPaneResourceProps() {
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
       fetchLinkFavicon: mediaReadAllowed ? resolveChatLinkFaviconFetcher(state) : undefined,
       assistantAttachmentAuthToken: mediaReadAllowed ? resolveControlUiAuthToken(state) : null,
-      resolveArtifactDownload: (params, signal) =>
-        resolveArtifactDownloadSource(state, params, signal),
+      resolveArtifactDownload: artifactDownload.resolve,
       basePath: state.basePath,
       sessionPublicOrigin: markdownSessionPublicOrigin(context),
       resourceBasePath: state.resourceBasePath,

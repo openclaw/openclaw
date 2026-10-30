@@ -46,6 +46,7 @@ import {
   openDoctorStateSchemaReadAdmission,
 } from "./openclaw-state-db-doctor-schema.js";
 import { assertCurrentStateRuntimeSchema } from "./openclaw-state-db-fast-path.js";
+import { migrateHistoricalStateImports } from "./openclaw-state-db-historical-imports.js";
 import {
   assertMigratedStateTableIntegrity,
   assertOpenClawStateDatabaseOwner,
@@ -349,6 +350,7 @@ function repairOpenedStateSchema(
         if (!sourceIntegrityVerified) {
           assertSqliteIntegrity(db, pathname, integrity);
         }
+        applied.push(...migrateHistoricalStateImports(db, previousVersion, "doctor"));
         if (previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
           openClawStateMigrationAssertions.get(previousVersion)?.(db, { pathname });
           const boundedChanges = migrateBoundedStateSchema(db, previousVersion, {
