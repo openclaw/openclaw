@@ -141,6 +141,12 @@ writer broker for mutations. Keep multi-statement snapshot reads together; use
 the writer's ordered operation when a read must follow its accepted writes.
 Do not open a second main-thread connection or add a synchronous fallback.
 
+Existing shared-state reads await source existence and dispatch-time file identity
+checks. A missing source still avoids allocating a reader, and a replaced source
+still refuses dispatch. The task retains its admission turn through the identity
+check and rechecks live authority after that wait; no successful check is cached
+across requests.
+
 Local workspace reconciliation releases the shared state reader after capturing
 its database snapshot. The existing workspace computation pool scans files and
 prepares manifest results from that compressed snapshot; the Gateway forwards it
