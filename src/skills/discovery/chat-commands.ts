@@ -56,6 +56,16 @@ function resolveWorkspaceSkillCommandOptions(
     nodeSkills,
     remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkills.canExec }),
   };
+  // Workspace consumers (native slash, channel /commands, loaders) hand over the
+  // session entry but no explicit execution workspace, so resolve the session's
+  // roots here rather than only inside the agent-wide resolver.
+  const sessionScope =
+    params.executionWorkspaceDir === undefined && params.sessionEntry
+      ? resolveSessionSkillExecutionWorkspace(
+          params.sessionEntry.worktree?.canonicalWorkspaceDir,
+          params.sessionEntry.spawnedCwd,
+        )
+      : undefined;
   return {
     config: params.cfg,
     agentId: params.agentId,
@@ -64,8 +74,9 @@ function resolveWorkspaceSkillCommandOptions(
     eligibility,
     pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     librarySelections: params.sessionEntry?.skillLibrarySelections,
-    executionWorkspaceDir: params.executionWorkspaceDir,
-    executionWorkspaceFileHost: params.executionWorkspaceFileHost,
+    executionWorkspaceDir: params.executionWorkspaceDir ?? sessionScope?.executionWorkspaceDir,
+    executionWorkspaceFileHost:
+      params.executionWorkspaceFileHost ?? sessionScope?.executionWorkspaceFileHost,
   };
 }
 

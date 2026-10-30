@@ -15,6 +15,7 @@ import {
   listSkillCommandsForWorkspace,
   listSkillCommandsForAgents,
   prepareSkillCommandsForAgents,
+  prepareSkillCommandsForWorkspace,
 } from "./chat-commands.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
@@ -273,6 +274,31 @@ describe("skill command discovery through workspace loading", () => {
           }),
         ),
       ).toEqual(["agent-fixture", "project-agents-fixture", "project-fixture"]);
+    });
+  });
+
+  it("resolves session project roots for workspace command consumers", async () => {
+    const root = tempDirs.make("openclaw-workspace-session-roots-");
+    const workspaceDir = path.join(root, "agent-workspace");
+    const project = path.join(root, "project");
+    await putSkill(path.join(workspaceDir, "skills"), "agent-fixture");
+    await putSkill(path.join(project, "skills"), "project-fixture");
+    const cfg = configFor(
+      { main: { workspace: workspaceDir, skills: ["agent-fixture", "project-fixture"] } },
+      { allowBundled: [] },
+    );
+    await withBundledDir(root, async () => {
+      // Workspace consumers pass the session entry but no explicit execution workspace.
+      expect(
+        skillNames(
+          await prepareSkillCommandsForWorkspace({
+            cfg,
+            agentId: "main",
+            workspaceDir,
+            sessionEntry: { spawnedCwd: project },
+          } as never),
+        ),
+      ).toEqual(["agent-fixture", "project-fixture"]);
     });
   });
 
