@@ -39,12 +39,12 @@ tauri = { version = "2.12.5", features = [
   "unstable",
 ] }
 tauri-plugin-autostart = "2.7.0"
-tauri-plugin-deep-link = "2.6.2"
+tauri-plugin-deep-link = "2.6.1"
 tauri-plugin-dialog = "2.8.3"
 tauri-plugin-global-shortcut = "2.4.1"
 tauri-plugin-opener = "2.7.2"
 tauri-plugin-process = "2.4.0"
-tauri-plugin-single-instance = { version = "2.5.4", features = ["deep-link"] }
+tauri-plugin-single-instance = { version = "2.5.3", features = ["deep-link"] }
 # Defer Windows cleanup until the installer launches successfully.
 # Return to crates.io once an eligible release includes this fix.
 # Preserve 2.10.1's network features instead of enabling OS proxy discovery.
