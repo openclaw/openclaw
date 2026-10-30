@@ -1143,6 +1143,8 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/review-artifacts.mjs!",
   // worktree.sh invokes this journal-state validator by path before native replay.
   "scripts/pr-lib/review-transition-state.mjs!",
+  // worktree.sh invokes explicit, supervised checkout-file salvage by path.
+  "scripts/pr-lib/review-transition-recovery.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
   // worktree.sh launches the locked cold-worktree adapter by path.
   "scripts/pr-lib/worktree-provision.mts!",

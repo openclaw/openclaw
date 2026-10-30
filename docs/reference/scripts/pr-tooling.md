@@ -190,6 +190,46 @@ Only verified native merge completion retires the exact workflow binding.
 Failures and pending completion preserve it. Repeating completion reconciles
 the merge outcome without repeating publication, comments, or cleanup.
 
+### Salvage an unknown file in an interrupted review checkout
+
+Automatic replay refuses working files that match neither journal endpoint,
+including empty files. Do not infer that an empty file belongs to a failed
+restore. After explicitly selecting and preserving its unknown bytes, an operator
+can repair one regular file through the existing checkout owner:
+
+```bash
+scripts/pr review-transition-recover <PR> <plan.json> \
+  --plan-sha256 <SHA256> --confirmed-operator-recovery
+```
+
+The sealed version-1 plan contains numeric `pr`, the original `binding` OID,
+`head` commit, `headRef` (empty for detached HEAD), `journalSha256`, raw
+`indexSha256`, a repository-relative `path`, its current `workingEntry`
+(Git mode, one space, and the unfiltered blob OID), and a nonempty `reason`.
+Inspect these values from the retained checkout; the hash binds exact plan bytes.
+The path must be a regular file in both endpoints of a detached review journal.
+Preparation/correction journals, symlinks, directories, and arbitrary replacement
+content are not supported. Quiesce other writers to this checkout before repair;
+the PR mutex excludes other native operations, not manual editor writes.
+
+This landing-class command qualifies current official-main wrapper code under the
+original PR lock, without replacing the retained workflow binding. Land and
+independently review any required tooling change before using it. Developer
+wrapper opt-in and an unlanded implementation cannot authorize recovery.
+
+Before replacement, the owner preserves the exact plan, unknown file bytes,
+journal/index preimages, and tooling provenance in the private named backup
+`.local/review-transition-recovery.<plan-SHA256>/`. It atomically restores only
+the selected working file to its journaled source blob. HEAD, the index, journal,
+workflow binding, and all other paths stay unchanged. The result says the file is
+repaired and the transition remains pending; use ordinary bound
+`review-checkout-pr` afterward. Other unknown state still refuses normal replay.
+
+After an interrupted or lost response, inspect the selected path and backup.
+Repeating the exact sealed operation verifies that backup before recognizing an
+already repaired source entry; it never blindly overwrites a newer edit or
+removes the backup. Keep it until the original PR operation completes.
+
 ### Continue a correction with repaired workflow code
 
 An unfinished correction can need a landed tooling repair before its retained
