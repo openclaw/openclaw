@@ -86,7 +86,7 @@ import type { UpdateInitializationAdmission } from "./update-command-initializat
 import { resolveMutableUpdateInstallKind } from "./update-command-install-kind.js";
 import {
   admitMutableUpdateSignalRun,
-  retireMutableUpdateSignalRun,
+  retireMutableUpdateSignalLedgerRecording,
 } from "./update-command-mutable-signals.js";
 import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import { admitUpdatePreviewSignalRun } from "./update-command-preview-signals.js";
@@ -331,7 +331,7 @@ export function createUpdateRunProgress(
       // Candidate Doctor can advance SQLite beyond this process's reader. Hold
       // activation receipts until the supported runtime owns ledger writes.
       deferred = true;
-      retireMutableUpdateSignalRun(run);
+      retireMutableUpdateSignalLedgerRecording(run);
     },
     async flushLedgerWrites() {
       if (flushFailure) {

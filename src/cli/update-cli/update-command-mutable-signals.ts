@@ -27,6 +27,7 @@ type MutableAdmission = {
   phase: UpdateRunRecord["phase"];
   terminal?: Promise<void>;
   recovering?: true;
+  ledgerRecordingRetired?: true;
   interruption?: { signal: "SIGINT" | "SIGTERM" | "SIGHUP"; phase: string; error: Error };
   forward: Set<() => void>;
 };
@@ -182,7 +183,14 @@ export function admitMutableUpdateSignalRun(run: Run, record: UpdateRunRecord): 
   });
 }
 
-export function retireMutableUpdateSignalRun(run: Run): void {
+export function retireMutableUpdateSignalLedgerRecording(run: Run): void {
+  const admission = admissions.get(run);
+  if (admission) {
+    admission.ledgerRecordingRetired = true;
+  }
+}
+
+function retireMutableUpdateSignalRun(run: Run): void {
   admissions.delete(run);
 }
 
@@ -210,6 +218,10 @@ export async function withMutableUpdateSignals<T>(
       executorFence.assertCurrent();
     };
     return () => {
+      // Candidate migrations can retire this reader without ending signal ownership.
+      if (admission.ledgerRecordingRetired) {
+        return;
+      }
       assertCurrent();
       if (admission.unconfirmedWrite) {
         throw admission.unconfirmedWrite.error;
