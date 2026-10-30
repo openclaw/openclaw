@@ -23,6 +23,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import plugin from "./index.js";
+import { CodexGeneratedMediaToolBinding } from "./src/app-server/generated-media-tool.js";
 import {
   CODEX_MANAGED_THREAD_NAMESPACE,
   CODEX_MANAGED_THREAD_MAX_ENTRIES,
@@ -129,6 +130,28 @@ function pluginEntry(config: unknown, enabled?: boolean) {
 }
 
 describe("codex plugin", () => {
+  it("exposes generated-media control only through the active Codex tool binding", async () => {
+    const { registerTool } = registerPlugin();
+    const registration = registeredCodexTools(registerTool, "generated_media");
+    expect(registration.create()).toEqual([]);
+    expect(registration.create({ toolBindings: { codexGeneratedMedia: {} } })).toEqual([]);
+    const binding = new CodexGeneratedMediaToolBinding();
+    const [tool] = registration.create({ toolBindings: { codexGeneratedMedia: binding } });
+    expect(tool).toBeDefined();
+    await expect(tool!.execute("list", { action: "list" })).rejects.toThrow(
+      "outside the active Codex turn",
+    );
+    const [revoked] = registration.create({
+      toolBindings: { codexGeneratedMedia: binding },
+      assertInvocationCurrent() {
+        throw new Error("Turn authority expired");
+      },
+    });
+    await expect(revoked!.execute("list", { action: "list" })).rejects.toThrow(
+      "Turn authority expired",
+    );
+  });
+
   it("persists managed exclusions through the registered harness and catalog without parent SQLite", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-managed-worker-"));
     const env = { OPENCLAW_STATE_DIR: stateDir };

@@ -239,6 +239,7 @@ export function activateCodexAttemptTurn(
     },
   );
   const activeProjector = projectorRef.current;
+  attemptTools.generatedMediaToolBinding.current = activeProjector.generatedMediaProjection;
   let activationFailed = false;
   const abortListener = () => {
     state.abortCleanup = interruptTurn(activeTurnId).then(async (confirmed) => {

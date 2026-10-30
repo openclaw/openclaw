@@ -4,6 +4,7 @@ import {
   installCodexToolResultMiddleware,
   resetOpenClawOwnedToolHooks,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import type { AnyAgentTool } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RemoteWorkspaceFileReader } from "openclaw/plugin-sdk/file-access-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -28,6 +29,11 @@ import {
   requireRecord,
   forCurrentTurn,
 } from "./event-projector.test-harness.js";
+import {
+  CodexGeneratedMediaToolBinding,
+  createCodexGeneratedMediaTool,
+} from "./generated-media-tool.js";
+import type { JsonObject } from "./protocol.js";
 
 registerCodexEventProjectorTestLifecycle();
 
@@ -80,10 +86,12 @@ async function expectImage(events: Events) {
 function createMessageBridge(
   send: (args: Record<string, unknown>) => Promise<AgentToolResult<unknown>>,
   hookContext?: Parameters<typeof createCodexDynamicToolBridge>[0]["hookContext"],
+  tools: AnyAgentTool[] = [],
 ) {
   const execute = vi.fn(send);
   const bridge = createCodexDynamicToolBridge({
     tools: [
+      ...tools,
       {
         name: "message",
         label: "Message",
@@ -173,6 +181,117 @@ afterEach(async () => {
 });
 
 describe("CodexAppServerEventProjector media projection", () => {
+  it.each(["unsent", "source-reply", "failed", "other-destination"])(
+    "discards only an explicitly rejected candidate with a %s keeper",
+    async (delivery) => {
+      const { projector, events } = await createProjection();
+      await events.completed(nativeImage("rejected", tinyPngBase64));
+      await events.completed(nativeImage("keeper", SECOND_PNG_BASE64));
+      const binding = new CodexGeneratedMediaToolBinding();
+      binding.current = projector.generatedMediaProjection;
+      const tool = createCodexGeneratedMediaTool({
+        toolBindings: { codexGeneratedMedia: binding },
+        assertInvocationCurrent() {},
+      });
+      if (!tool) {
+        throw new Error("Expected the Codex generated-media tool");
+      }
+      const { bridge } = createMessageBridge(
+        async (args) => {
+          if (delivery === "failed") {
+            throw new Error("Synthetic send failure");
+          }
+          return messageResult({
+            ...(delivery === "source-reply" ? internalReply(args.mediaUrl) : {}),
+            messageDelivery: {
+              ...receipt(),
+              ...(delivery === "source-reply" ? { sourceReplyDelivered: true } : {}),
+            },
+          });
+        },
+        undefined,
+        [tool],
+      );
+      const invoke = (args: JsonObject) =>
+        bridge.handleToolCall({
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "candidate-selection",
+          namespace: null,
+          tool: "generated_media",
+          arguments: args,
+        });
+      const listed = await invoke({ action: "list" });
+      expect(listed.success).toBe(true);
+      const [listing] = listed.contentItems;
+      if (listing?.type !== "inputText" || typeof listing.text !== "string") {
+        throw new Error("Expected generated-media listing");
+      }
+      const inventory = requireRecord(JSON.parse(listing.text), "generated-media listing");
+      if (!Array.isArray(inventory.images)) {
+        throw new Error("Expected generated images");
+      }
+      const images = inventory.images.map((image) => requireRecord(image, "generated image"));
+      expect(images.map((image) => image.itemId)).toEqual(["rejected", "keeper"]);
+      const rejected = requireRecord(images[0], "rejected candidate");
+      const keeper = requireRecord(images[1], "keeper candidate");
+      if (
+        typeof rejected.itemId !== "string" ||
+        typeof rejected.mediaUrl !== "string" ||
+        typeof keeper.mediaUrl !== "string"
+      ) {
+        throw new Error("Expected materialized candidate paths");
+      }
+      const discarded = await invoke({ action: "discard", itemIds: [rejected.itemId] });
+      expect(discarded.success).toBe(true);
+      if (delivery !== "unsent") {
+        await sendMedia(
+          bridge,
+          keeper.mediaUrl,
+          delivery === "other-destination" ? "elsewhere" : undefined,
+        );
+      }
+      await events.complete();
+      const result = events.result(bridge.telemetry);
+      const remaining = await readImages(result.toolMediaUrls);
+      expect(remaining.map((image) => image.base64)).toEqual(
+        delivery === "source-reply" ? [] : [SECOND_PNG_BASE64],
+      );
+      expect(result.replayMetadata).toStrictEqual({
+        hadPotentialSideEffects: true,
+        replaySafe: false,
+      });
+      await expect(fs.readFile(rejected.mediaUrl)).resolves.toEqual(
+        Buffer.from(tinyPngBase64, "base64"),
+      );
+      if (delivery === "other-destination") {
+        expect(result.messagingToolSentTargets).toEqual([
+          expect.objectContaining({
+            to: "elsewhere",
+            mediaUrls: expect.arrayContaining([keeper.mediaUrl]),
+          }),
+        ]);
+      }
+    },
+  );
+
+  it("rejects unknown discard IDs atomically and preserves discard across duplicate image events", async () => {
+    const { projector, events } = await createProjection();
+    await events.completed(codexImage("first"));
+    const media = projector.generatedMediaProjection;
+    expect(() => media.discard(["first", "future"])).toThrow("Unknown generated image item IDs");
+    expect(media.list()).toEqual([expect.objectContaining({ itemId: "first", discarded: false })]);
+    media.discard(["first"]);
+    media.discard(["first"]);
+    await events.raw(rawImage("first"));
+    await events.completed(codexImage("first"));
+    await events.completed(nativeImage("future", SECOND_PNG_BASE64));
+    await events.complete();
+    expect((await readImages(events.result().toolMediaUrls)).map((image) => image.base64)).toEqual([
+      SECOND_PNG_BASE64,
+    ]);
+  });
+
   it("fences direct tool-result callbacks after blocked media when projection closes", async () => {
     const media = createDeferred<Buffer>();
     const readRemoteWorkspaceFile = vi.fn<RemoteWorkspaceFileReader>(() => media.promise);

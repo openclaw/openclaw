@@ -182,9 +182,23 @@ remove an image's original message, its image input is omitted too; the saved
 transcript and attachment remain unchanged.
 
 Sending another attachment does not suppress generated images from the final
-reply. OpenClaw omits a generated image only when it can match confirmed delivery
-of that image to the reply destination. A partial delivery with uncertain
+reply. OpenClaw omits a generated image when it can match confirmed delivery
+of that image to the reply destination, or the agent explicitly discards it. A partial delivery with uncertain
 attachment outcomes can leave a duplicate image rather than lose an unsent one.
+
+The Codex plugin's `generated_media` tool lists the active turn's generated
+images with `action: "list"`. Before finishing an image-iteration task, the agent
+can call `action: "discard"` with the unwanted `itemIds` from that list. Discard
+only removes those candidates from automatic final delivery: files, generation
+side-effect tracking, and confirmed sends remain unchanged. Unknown IDs reject
+the entire discard request. Other candidates still deliver normally, including
+intentional batches and images whose sends failed.
+
+This tool uses the normal plugin tool policy and discovery path, including Code
+Mode. Its schema does not depend on the current images. Existing native-owned
+tool catalogs are preserved; a thread whose saved catalog does not include
+`generated_media` needs a fresh thread to use it. Discard is scoped to the active
+turn, not a deletion or a change to future turns.
 
 ## Turn liveness and timeouts
 

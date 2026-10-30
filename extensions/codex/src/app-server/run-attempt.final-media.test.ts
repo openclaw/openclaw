@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -11,12 +12,17 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getDefaultLocalRoots } from "openclaw/plugin-sdk/web-media";
 import { expect, it, vi } from "vitest";
 import type { CodexCommandExecParams } from "./command-exec-protocol.js";
+import { createCodexGeneratedMediaTool } from "./generated-media-tool.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
+import { isJsonObject, type JsonObject } from "./protocol.js";
 import { itemNotification } from "./protocol.test-helpers.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
+  createCodexRuntimePlanFixture,
   createParams,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
+  setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
   tempDir,
   threadStartResult,
@@ -198,3 +204,86 @@ it.each(["partial", "async", "denied", "cancel"] as const)(
     expect(delivered.buffer.toString()).toBe(remoteContents);
   },
 );
+
+it("discards an image candidate through the turn's dynamic tool before final delivery", async () => {
+  const params = createParams(
+    path.join(tempDir, "discard-media.jsonl"),
+    path.join(tempDir, "workspace"),
+  );
+  setCodexTestModelSupportsTools(params, true);
+  params.runtimePlan = createCodexRuntimePlanFixture();
+  let retainedTool: ReturnType<typeof createCodexGeneratedMediaTool>;
+  setCodexTestToolFactory(params, (options) => {
+    retainedTool = createCodexGeneratedMediaTool({
+      toolBindings: options?.toolBindings,
+      assertInvocationCurrent: () => params.hostCapabilities.assertActive(),
+    });
+    return retainedTool ? [retainedTool] : [];
+  });
+  const harness = createStartedThreadHarness();
+  const run = runCodexAppServerAttempt(params);
+  await harness.waitForMethod("turn/start");
+  const callTool = (callId: string, args: JsonObject) =>
+    harness.handleServerRequest({
+      id: callId,
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId,
+        namespace: null,
+        tool: "generated_media",
+        arguments: args,
+      },
+    });
+  for (const [id, bytes] of [
+    ["ig_a", "draft candidate"],
+    ["ig_b", "chosen candidate"],
+  ] as const) {
+    await harness.notify(
+      itemNotification("item/completed", {
+        type: "imageGeneration",
+        id,
+        status: "completed",
+        result: Buffer.from(bytes).toString("base64"),
+        savedPath: `/tmp/codex-home/generated_images/session-1/${id}.png`,
+      }),
+    );
+  }
+  const listed = await callTool("list-call", {
+    action: "list",
+  });
+  assert(isJsonObject(listed) && Array.isArray(listed.contentItems));
+  expect(listed.success).toBe(true);
+  const content = listed.contentItems[0];
+  assert(isJsonObject(content) && typeof content.text === "string");
+  const inventory: unknown = JSON.parse(content.text);
+  assert(isJsonObject(inventory) && Array.isArray(inventory.images));
+  expect(inventory.images).toMatchObject([
+    { itemId: "ig_a", discarded: false },
+    { itemId: "ig_b", discarded: false },
+  ]);
+  const draft = inventory.images[0];
+  assert(
+    isJsonObject(draft) && typeof draft.itemId === "string" && typeof draft.mediaUrl === "string",
+  );
+  expect(
+    await callTool("discard-call", {
+      action: "discard",
+      itemIds: [draft.itemId],
+    }),
+  ).toMatchObject({ success: true });
+  await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+  const result = await run;
+  expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
+  expect(result.toolMediaUrls).toHaveLength(1);
+  await expect(fs.readFile(result.toolMediaUrls?.[0] ?? "")).resolves.toEqual(
+    Buffer.from("chosen candidate"),
+  );
+  await expect(fs.readFile(draft.mediaUrl)).resolves.toEqual(Buffer.from("draft candidate"));
+  expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+  assert(retainedTool);
+  await expect(retainedTool.execute("stale-call", { action: "list" })).rejects.toThrow(
+    "Generated media is unavailable outside the active Codex turn.",
+  );
+});

@@ -29,6 +29,7 @@ export class CodexGeneratedMediaProjection {
   private readonly mediaByItemId = new Map<string, { mediaUrl?: string; savedPath?: string }>();
   private readonly gatewayMaterializedItemIds = new Set<string>();
   private readonly pendingMaterializationsByItemId = new Map<string, Promise<void>>();
+  private readonly discardedItemIds = new Set<string>();
 
   constructor(
     private readonly config: EmbeddedRunAttemptParams["config"],
@@ -42,6 +43,28 @@ export class CodexGeneratedMediaProjection {
 
   hasGeneratedMedia(): boolean {
     return this.itemIds.size > 0;
+  }
+
+  list() {
+    return [...this.itemIds].map((itemId) => {
+      const media = this.mediaByItemId.get(itemId);
+      return {
+        itemId,
+        mediaUrl: media?.mediaUrl,
+        savedPath: media?.savedPath,
+        discarded: this.discardedItemIds.has(itemId),
+      };
+    });
+  }
+
+  discard(itemIds: string[]): void {
+    const unknown = itemIds.filter((id) => !this.itemIds.has(id));
+    if (unknown.length) {
+      throw new Error(`Unknown generated image item IDs for this turn: ${unknown.join(", ")}`);
+    }
+    for (const id of itemIds) {
+      this.discardedItemIds.add(id);
+    }
   }
 
   async recordNative(item: CodexThreadItem | undefined): Promise<void> {
@@ -209,11 +232,14 @@ export class CodexGeneratedMediaProjection {
   }) {
     const generatedUrls = new Set<string>();
     const generatedUrlBySource = new Map<string, string>();
-    for (const { mediaUrl, savedPath } of this.mediaByItemId.values()) {
+    for (const [itemId, { mediaUrl, savedPath }] of this.mediaByItemId) {
       if (!mediaUrl) {
         continue;
       }
-      generatedUrls.add(mediaUrl);
+      // Discard changes automatic delivery only, never artifacts or delivery receipts.
+      if (!this.discardedItemIds.has(itemId)) {
+        generatedUrls.add(mediaUrl);
+      }
       generatedUrlBySource.set(normalizeMediaReferenceForComparison(mediaUrl), mediaUrl);
       if (savedPath) {
         generatedUrlBySource.set(normalizeMediaReferenceForComparison(savedPath), mediaUrl);

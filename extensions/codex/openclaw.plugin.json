@@ -62,6 +62,7 @@
     "mediaUnderstandingProviders": ["codex"],
     "migrationProviders": ["codex"],
     "tools": [
+      "generated_media",
       "codex_threads",
       "codex_plugins",
       "codex_endpoint_probe",

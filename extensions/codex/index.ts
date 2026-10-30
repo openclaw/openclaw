@@ -21,6 +21,7 @@ import { createCodexAppServerConfig } from "./src/app-server/config-options.js";
 import { readCodexPluginConfig } from "./src/app-server/config-parsing.js";
 import { createCodexAppServerConnectionHealthService } from "./src/app-server/connection-health.js";
 import { createCodexDesktopGenerationService } from "./src/app-server/desktop-generation.js";
+import { createCodexGeneratedMediaTool } from "./src/app-server/generated-media-tool.js";
 import { setManagedCodexPluginRoot } from "./src/app-server/managed-binary.js";
 import {
   CODEX_MANAGED_THREAD_MAX_ENTRIES,
@@ -288,6 +289,10 @@ export default definePluginEntry({
     });
     api.registerMediaUnderstandingProvider(
       buildCodexMediaUnderstandingProvider({ pluginConfig: registrationConfig }),
+    );
+    api.registerTool(
+      { contextVersion: 2, create: createCodexGeneratedMediaTool },
+      { name: "generated_media", workspaceAccess: false },
     );
     api.registerWebSearchProvider(
       createCodexWebSearchProvider({ resolvePluginConfig: resolveCurrentPluginConfig }),

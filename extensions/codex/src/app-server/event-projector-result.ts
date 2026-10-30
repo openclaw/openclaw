@@ -86,7 +86,7 @@ export abstract class CodexTurnProjection {
   protected readonly completedItemIds = new Set<string>();
   protected readonly activeCompactionItemIds = new Set<string>();
   protected readonly diagnostics: CodexProjectionDiagnostics;
-  protected readonly generatedMediaProjection: CodexGeneratedMediaProjection;
+  readonly generatedMediaProjection: CodexGeneratedMediaProjection;
   protected readonly eventProjection: CodexEventProjection;
   protected readonly nativeToolLifecycleProjector: CodexNativeToolLifecycleProjector;
   protected readonly toolProgressProjection: CodexToolProgressProjection;

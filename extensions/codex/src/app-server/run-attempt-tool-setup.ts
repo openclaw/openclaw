@@ -27,6 +27,7 @@ import {
   createCodexDynamicToolBridge,
   projectCodexExecutableDynamicTools,
 } from "./dynamic-tools.js";
+import { CodexGeneratedMediaToolBinding } from "./generated-media-tool.js";
 import { buildCodexHookRequester } from "./hook-requester.js";
 import type { NativePendingChild } from "./native-subagent-monitor-types.js";
 import {
@@ -134,8 +135,13 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       }
     : undefined;
   const compactionPlanState = new CodexCompactionPlanState();
+  const generatedMediaToolBinding = new CodexGeneratedMediaToolBinding();
   const dynamicToolParams = {
     ...runtimeParams,
+    toolBindings: {
+      ...runtimeParams.toolBindings,
+      codexGeneratedMedia: generatedMediaToolBinding,
+    },
     onAgentEvent: (event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0]) => {
       compactionPlanState.record(event);
       return runtimeParams.onAgentEvent?.(event);
@@ -290,6 +296,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   let toolDisposal: Promise<void> | undefined;
   const disposeTools = (reason: string): Promise<void> =>
     (toolDisposal ??= (async () => {
+      generatedMediaToolBinding.current = undefined;
       await runCodexCleanupStep(params, "codex-dynamic-tool-cleanup", async () => {
         const settled = await Promise.allSettled(
           runCleanups.splice(0).map(async (cleanup) => await cleanup(reason)),
@@ -648,6 +655,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       captureCronCreatorToolAllowlist,
       scheduledAppAuthoritySourceRef,
       dynamicToolParams,
+      generatedMediaToolBinding,
       compactionPlanState,
       computerContextEpoch,
       toolBridge,
