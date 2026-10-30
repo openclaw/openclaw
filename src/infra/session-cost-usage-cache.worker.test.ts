@@ -196,9 +196,7 @@ function holdRefreshWrites(
         writeRollup: async (rows) => {
           gate.writes++;
           if (options.commitBeforeWait) {
-            if (!(await lock.writeRollup(rows))) {
-              throw new Error("The prepared rollup was not committed");
-            }
+            expect(await lock.writeRollup(rows)).toBe(true);
             gate.events.push("write-committed");
           }
           gate.entered.resolve();
@@ -249,51 +247,43 @@ it("bounds prune writer batches and recovers partial cleanup after restart witho
     await refresh(agentId, [sessionFile]);
     expect(readSessionCostUsageRollupRows(agentId)).toHaveLength(staleKeys.length + 1);
 
-    const batches: Array<{ keys: string[]; bytes: number }> = [];
+    let batches = 0;
+    let oversized = false;
     const committedKeys: string[] = [];
     const failure = new Error("Prune batch interrupted");
     const prepareLock = usageCacheSqlite.prepareSessionCostUsageRefreshLock;
-    const observer = vi
+    using _ = vi
       .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")
       .mockImplementation((...args) => {
         const lock = prepareLock(...args);
         return {
           ...lock,
           pruneRows: async (rows, signal) => {
-            const keys = rows.map((row) => row.key);
             const bytes = rows.reduce(
               (sum, row) => sum + Buffer.byteLength(row.valueJson) + 2 * row.key.length,
               0,
             );
-            batches.push({ keys, bytes });
-            if (batches.length === 2) {
+            expect(rows.length).toBeLessThanOrEqual(1_024);
+            expect(bytes <= 1024 * 1024 || rows.length === 1).toBe(true);
+            oversized ||= bytes > 1024 * 1024;
+            if (++batches === 2) {
               throw failure;
             }
             await lock.pruneRows(rows, signal);
-            committedKeys.push(...keys);
+            committedKeys.push(...rows.map((row) => row.key));
           },
         };
       });
-    try {
-      const outcome = await refresh(agentId).catch((error: unknown) => error);
-      expect(Math.max(...batches.map((batch) => batch.keys.length))).toBeLessThanOrEqual(1_024);
-      expect(outcome).toBe(failure);
-      expect(committedKeys.length).toBeGreaterThan(0);
-      expect(readSessionCostUsageRollupRows(agentId)).toHaveLength(
-        staleKeys.length + 1 - committedKeys.length,
-      );
-      await closeOpenClawAgentDatabasesAsync();
-      await closeStateDatabaseForTest();
-      await refresh(agentId);
-    } finally {
-      observer.mockRestore();
-    }
+    await expect(refresh(agentId)).rejects.toBe(failure);
+    expect(committedKeys.length).toBeGreaterThan(0);
+    expect(readSessionCostUsageRollupRows(agentId)).toHaveLength(
+      staleKeys.length + 1 - committedKeys.length,
+    );
+    await closeOpenClawAgentDatabasesAsync();
+    await closeStateDatabaseForTest();
+    await refresh(agentId);
     expect(committedKeys.toSorted()).toEqual(staleKeys.toSorted());
-    expect(batches.some((batch) => batch.bytes > 1024 * 1024)).toBe(true);
-    for (const batch of batches) {
-      expect(batch.keys.length).toBeLessThanOrEqual(1_024);
-      expect(batch.bytes <= 1024 * 1024 || batch.keys.length === 1).toBe(true);
-    }
+    expect(oversized).toBe(true);
     expect(readSessionCostUsageRollupRows(agentId).map((row) => row.key)).toEqual([sessionFile]);
 
     await fs.appendFile(sessionFile, usageLine("third"));
@@ -380,7 +370,7 @@ it("refreshes and loads usage without executing cache SQL on the caller", async 
     const otherFile = state.path("other-usage.jsonl");
     await fs.writeFile(sessionFile, usageLine(undefined, false));
     await fs.writeFile(otherFile, usageLine("other-1") + usageLine("other-2"));
-    openOpenClawAgentDatabase({ agentId });
+    const database = openOpenClawAgentDatabase({ agentId });
     const hostSql = observeHostDataSql();
     try {
       expect(await refresh(agentId, [sessionFile, otherFile])).toBe("refreshed");
@@ -390,7 +380,6 @@ it("refreshes and loads usage without executing cache SQL on the caller", async 
     }
     expect(await usageCacheSqlite.isSessionCostUsageRefreshRunning(agentId)).toBe(false);
     const { prepared, request } = await sessionReport(agentId, sessionFile);
-    const database = openOpenClawAgentDatabase({ agentId });
     const statement = database.db.prepare("SELECT value_json FROM cache_entries");
     const reads = observeHostDataSql();
     const cacheReads = () =>
@@ -399,16 +388,13 @@ it("refreshes and loads usage without executing cache SQL on the caller", async 
       statement.all();
       expect(cacheReads()).toHaveLength(1);
       reads.queries.length = 0;
-      const refreshStatus = vi
-        .spyOn(usageCacheSqlite, "isSessionCostUsageRefreshRunning")
-        .mockRejectedValue(new Error("Refresh status is unavailable"));
-      try {
+      {
+        using _ = vi
+          .spyOn(usageCacheSqlite, "isSessionCostUsageRefreshRunning")
+          .mockRejectedValue(new Error("Refresh status is unavailable"));
         for (let round = 0; round < 2; round++) {
-          const result = await readSession(agentId, sessionFile);
-          expectFresh(result, 10);
+          expectFresh(await readSession(agentId, sessionFile), 10);
         }
-      } finally {
-        refreshStatus.mockRestore();
       }
       const selection = [{ sessionId: "selected", sessionFile }];
       const reading = runUsageCostWorker(prepared, { ...request, sessions: selection });
@@ -517,7 +503,7 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
     const releaseWrite = createDeferred();
     let heldWrite = false;
     let refreshFinished = false;
-    const observer = observeHostRequests(async (value, next) => {
+    using _ = observeHostRequests(async (value, next) => {
       if (
         !heldWrite &&
         isRecord(value) &&
@@ -584,7 +570,6 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
     } finally {
       releaseWrite.resolve();
       await Promise.allSettled([refreshing, ...reads]);
-      observer.mockRestore();
     }
     expect(await refreshing).toBe("refreshed");
     expect(published).toHaveBeenCalledExactlyOnceWith({
@@ -644,13 +629,11 @@ it("propagates an original host pricing error through exact report replay", asyn
     const exactRequest = { ...request, startMs: timestamp, endMs: timestamp + 1 };
     const original = new Error("Host pricing is unavailable");
     const pricing = await import("./session-cost-usage-pricing-context.js");
-    const resolver = vi.spyOn(pricing, "createUsageCostResolver").mockReturnValue(() => {
-      throw original;
-    });
-    try {
+    {
+      using _ = vi.spyOn(pricing, "createUsageCostResolver").mockReturnValue(() => {
+        throw original;
+      });
       await expect(runUsageCostWorker(prepared, exactRequest)).rejects.toBe(original);
-    } finally {
-      resolver.mockRestore();
     }
     await expect(runUsageCostWorker(prepared, exactRequest)).resolves.toMatchObject({
       kind: "sessions",
@@ -671,24 +654,22 @@ it("records failed rollups and clears health after retry", async () => {
     const published = vi.fn();
     sessionCostUsageNotifications.onUpdated = published;
     const prepareLock = usageCacheSqlite.prepareSessionCostUsageRefreshLock;
-    const observer = vi
-      .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")
-      .mockImplementation((...args) => ({
-        ...prepareLock(...args),
-        writeRollup: async (rows) => {
-          failedFiles = rows.map((row) => row.rollupId);
-          throw new Error("private transcript content");
-        },
-      }));
-    try {
+    {
+      using _ = vi
+        .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")
+        .mockImplementation((...args) => ({
+          ...prepareLock(...args),
+          writeRollup: async (rows) => {
+            failedFiles = rows.map((row) => row.rollupId);
+            throw new Error("private transcript content");
+          },
+        }));
       await expect(refreshFailed()).rejects.toThrow("private transcript content");
       expect(published).toHaveBeenCalledExactlyOnceWith({
         agentId,
         usageUpdatedAt: expect.any(Number),
         usageRefreshFailed: true,
       });
-    } finally {
-      observer.mockRestore();
     }
     const failures = await openUsageCostRefreshFailures(state.env).entries();
     expect(failures.map(({ value }) => value)).toMatchObject(
@@ -779,8 +760,7 @@ it("retains a late host write failure after cancellation and releases the lock o
       held.observer.mockRestore();
     }
     expect(await usageCacheSqlite.isSessionCostUsageRefreshRunning(agentId)).toBe(false);
-    const persisted = await readSession(agentId, sessionFile);
-    expectFresh(persisted, 20);
+    expectFresh(await readSession(agentId, sessionFile), 20);
   });
 }, 40_000);
 
@@ -875,7 +855,6 @@ it("settles canceled refresh cleanup without waiting for its admitted successor"
     }
     expect(await refreshB).toBe("refreshed");
     expect(successor.writes).toBe(1);
-    const result = await readSession(agentB, fileB);
-    expectFresh(result, 20);
+    expectFresh(await readSession(agentB, fileB), 20);
   });
 }, 40_000);
