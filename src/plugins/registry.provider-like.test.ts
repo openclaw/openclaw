@@ -1,6 +1,16 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { createCronScheduledToolProjection } from "../agents/exec-tool-target-pinning.js";
+import { normalizeAgentRuntimeTools } from "../agents/runtime-plan/tools.js";
+import type { AnyAgentTool } from "../agents/tools/common.js";
+import { captureFinalEffectiveCronCreatorToolAllowlist } from "../agents/tools/cron-tool-creator-cap.js";
+import type {
+  CronCreatorToolAllowlistEntry,
+  CronToolsAllowCaptureRef,
+} from "../agents/tools/cron-tool.types.js";
 import { registryContainsRuntimePluginIds } from "./active-runtime-registry.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createOwnershipRecord } from "./registry-ownership.test-support.js";
 import { createTestPluginRegistry as createTestRegistry } from "./registry-runtime.test-helpers.js";
 import type {
@@ -264,4 +274,108 @@ describe("catalog reservation lifecycle", () => {
       ),
     );
   });
+});
+
+describe("provider schema cleanup scheduled authority", () => {
+  it.each([false, true])(
+    "preserves scheduled shell authority through a registered schema normalizer (clone: %s)",
+    async (clone) => {
+      const builder = createTestRegistry();
+      const { record, api } = createCatalogOwner(builder, "schema-owner");
+      const instance = expectDefined(getPluginInstance(record), "schema owner instance");
+      let hostActive = true;
+      let replaceExecute = false;
+      const aliases = (["exec", "process"] as const).map((kind) => {
+        const source: AnyAgentTool = {
+          name: kind,
+          label: kind,
+          description: `Synthetic ${kind}`,
+          parameters: Type.Object({}),
+          execute: vi.fn(async () => ({ content: [], details: {} })),
+        };
+        return createCronScheduledToolProjection(
+          source,
+          () => {
+            if (!hostActive) {
+              throw new Error("synthetic host retired");
+            }
+          },
+          kind,
+          kind === "exec"
+            ? {
+                kind,
+                name: "gateway_exec",
+                description: "Synthetic Gateway exec",
+                followupText: "Synthetic follow-up",
+                ask: "always",
+              }
+            : { kind, name: "gateway_process", description: "Synthetic Gateway process" },
+        );
+      });
+      try {
+        api.registerProvider({
+          id: "schema-provider",
+          label: "Schema provider",
+          auth: [],
+          normalizeToolSchemas: ({ tools }) => {
+            expect(instance.hasActiveCall).toBe(true);
+            if (replaceExecute) {
+              return tools.map((tool) => ({
+                ...tool,
+                execute: vi.fn(async () => ({ content: [], details: {} })),
+              }));
+            }
+            return clone
+              ? tools.map((tool) => ({ ...tool, description: "Normalized schema" }))
+              : tools;
+          },
+        });
+        const provider = expectDefined(
+          builder.registry.providers[0],
+          "registered provider",
+        ).provider;
+        const normalize = () =>
+          normalizeAgentRuntimeTools({
+            provider: "schema-provider",
+            tools: aliases,
+            runtimeHandle: { provider: "schema-provider", plugin: provider },
+            allowProviderRuntimePluginLoad: false,
+          });
+        const normalized = normalize();
+        const capture = (tools: AnyAgentTool[]) => {
+          const cap: CronCreatorToolAllowlistEntry[] = [];
+          const ref: CronToolsAllowCaptureRef = {};
+          captureFinalEffectiveCronCreatorToolAllowlist(cap, ref, tools);
+          return cap;
+        };
+        expect(capture(normalized)).toEqual([
+          {
+            name: "exec",
+            aliasName: "gateway_exec",
+            execOrigin: "openclaw",
+            execTarget: { host: "gateway", ask: "always" },
+          },
+          { name: "process", aliasName: "gateway_process" },
+        ]);
+        const process = expectDefined(normalized[1], "normalized process");
+        const originalExecute = process.execute;
+        process.execute = vi.fn(async () => ({ content: [], details: {} }));
+        expect(() => capture(normalized)).toThrow("changed after host creation");
+        process.execute = originalExecute;
+        replaceExecute = true;
+        expect(capture(normalize())).toEqual([
+          { name: "gateway_exec" },
+          { name: "gateway_process" },
+        ]);
+        hostActive = false;
+        expect(() => capture(normalized)).toThrow("synthetic host retired");
+        hostActive = true;
+        await instance.dispose();
+        expect(normalize).toThrow("reloaded or disabled");
+        expect(() => capture(normalized)).toThrow("reloaded or disabled");
+      } finally {
+        await instance.dispose();
+      }
+    },
+  );
 });
