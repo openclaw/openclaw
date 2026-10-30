@@ -399,11 +399,11 @@ jobs:
             apps/linux/src-tauri/target/release/bundle/deb/*.deb
             apps/linux/src-tauri/target/release/bundle/appimage/*.AppImage
 
-      - name: Remove regenerated Linux payloads before caching
+      - name: Remove uploaded Linux bundles before caching
         working-directory: apps/linux/src-tauri
-        # Staging and the fixture recreate these; preserve Cargo's copied release resources.
+        # Bundles are outputs; keep staged manifests and resources that Cargo watches.
         run: >-
-          node -e "const fs = require('node:fs'); for (const path of ['target/desktop-runtime', 'target/debug/desktop-runtime', 'target/release/bundle']) fs.rmSync(path, { recursive: true, force: true });"
+          node -e "require('node:fs').rmSync('target/release/bundle', { recursive: true, force: true });"
 
   test-macos:
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'workflow_dispatch' || !inputs.windows_only) }}
