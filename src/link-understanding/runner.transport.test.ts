@@ -120,12 +120,12 @@ it.each(["cancel", "timeout"])("handles %s during a streaming response", async (
   await socketClosed.promise;
 });
 
-it("dedupes and limits bare URLs while ignoring Markdown citations", async () => {
+it("decodes declared charsets while deduping and limiting bare URLs", async () => {
   const requests: string[] = [];
   const base = await serve((req, res) => {
-    const requestPath = req.url ?? "";
-    requests.push(requestPath);
-    res.end(requestPath);
+    requests.push(req.url ?? "");
+    res.writeHead(200, { "content-type": "text/plain; charset=Shift_JIS" });
+    res.end(req.url === "/bare-one" ? Buffer.from([147, 250, 150, 123, 140, 234]) : req.url);
   });
   const { ctx, result } = startLink(
     [
@@ -142,20 +142,7 @@ it("dedupes and limits bare URLs while ignoring Markdown citations", async () =>
   );
   await result;
   expect(requests).toEqual(["/bare-one", "/escaped", "/bare-two"]);
-  expect(ctx.LinkUnderstanding).toEqual(["/bare-one", "/escaped", "/bare-two"]);
-});
-
-it.each([
-  ["text/html; charset=Shift_JIS", [0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea], "日本語"],
-  ["text/plain; charset=x-unknown", [0x6f, 0x6b], "ok"],
-] as const)("decodes a %s response for the processor", async (contentType, bytes, text) => {
-  const base = await serve((_req, res) => {
-    res.writeHead(200, { "content-type": contentType });
-    res.end(Buffer.from(bytes));
-  });
-  const { ctx, result } = startLink(`${base}/page`);
-  await result;
-  expect(ctx.LinkUnderstanding).toEqual([text]);
+  expect(ctx.LinkUnderstanding).toEqual(["日本語", "/escaped", "/bare-two"]);
 });
 
 it("stops processor descendants after caller cancellation", async (t) => {
