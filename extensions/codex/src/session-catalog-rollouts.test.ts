@@ -165,12 +165,20 @@ describe("resident catalog rollout currency", () => {
   });
 
   it("scans new day folders without content reads and prefers plain rollout siblings", async () => {
+    const { watch, watchers } = watchWithControlledEvents("linux");
+    const notifyRename = (file: string) => {
+      const index = watch.mock.calls.findLastIndex(
+        ([directory]) => directory === path.dirname(file),
+      );
+      watchers[index]!.emit("change", "rename", path.basename(file));
+    };
     const f = await fixture();
     const noReads = expectNoReads("readFile", "open");
     const tracked = [f.file];
     const { files: first } = await f.scan(tracked);
     const compressedSibling = `${f.file}.zst`;
     await fs.writeFile(compressedSibling, zstdCompressSync(meta()));
+    notifyRename(compressedSibling);
     const newDay = path.join(f.root, "2026", "09", "17");
     await fs.mkdir(newDay);
     const added = path.join(newDay, "rollout-new.jsonl.zst");
@@ -185,10 +193,14 @@ describe("resident catalog rollout currency", () => {
 
     const renamed = path.join(newDay, "rollout-renamed.jsonl.zst");
     await fs.rename(added, renamed);
+    notifyRename(added);
+    notifyRename(renamed);
     await fs.unlink(f.file);
+    notifyRename(f.file);
     const final = await f.scan([f.file, added.slice(0, -4), renamed.slice(0, -4)]);
     expect(new Set(final.files.keys())).toEqual(new Set([compressedSibling, renamed]));
     expect(final.present).toEqual(new Set([f.file, renamed.slice(0, -4)]));
+    noReads();
   });
 
   it("closes the Darwin watcher arm gap before cache reuse at fractional time", async () => {
