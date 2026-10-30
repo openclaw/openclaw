@@ -25,6 +25,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { createIntersectionObserver } from "../../lib/reactive/observers.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { sharedPluginsProjection } from "../../lib/reactive/shared-application-projections.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
@@ -189,6 +190,28 @@ function BoardWidgetCellContent(
   );
   const fixedReport = () =>
     props.widget?.heightMode === "fixed" && contribution()?.kind === "session:report";
+  const [reportEntered, setReportEntered] = createSignal(false);
+  const needsGrantNotice = () =>
+    props.widget?.grantState === "pending" || props.widget?.grantState === "rejected";
+  // Keep an admitted body for the cell lifetime, including kind and tab changes.
+  const bodyAdmitted = createMemo(
+    (previous = false) =>
+      previous ||
+      (Boolean(props.widget) &&
+        (!fixedReport() || needsResources() || needsGrantNotice() || reportEntered())),
+  );
+  // Fixed reports already reserve their full height. Build nearby bodies once,
+  // then let the existing core-widget latch retain them across tab switches.
+  // Observe the card because the display:contents host has no intersection box.
+  createIntersectionObserver(
+    () => (fixedReport() && !reportEntered() && widgetRoot() ? [widgetRoot()!] : []),
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        setReportEntered(true);
+      }
+    },
+    { rootMargin: "300px" },
+  );
 
   function runAction(run: () => Promise<void>, failureMessage?: string) {
     if (actionInFlight || props.busy) {
@@ -244,8 +267,7 @@ function BoardWidgetCellContent(
   }
   const presentationReady = () =>
     !props.widget?.viewTicket ||
-    props.widget.grantState === "pending" ||
-    props.widget.grantState === "rejected" ||
+    needsGrantNotice() ||
     bodyErrored() ||
     (resources()?.frame.presentationReady ?? false);
   cells.set(host, {
@@ -409,7 +431,7 @@ function BoardWidgetCellContent(
               contribution={core}
               widget={props.widget}
               session={props.session}
-              active={active()}
+              active={active() && (!fixedReport() || reportEntered())}
             />
           )}
         </Match>
@@ -481,9 +503,7 @@ function BoardWidgetCellContent(
           />
         )}
       </Match>
-      <Match
-        when={props.widget?.grantState === "pending" || props.widget?.grantState === "rejected"}
-      >
+      <Match when={needsGrantNotice()}>
         <AccessNotice />
       </Match>
       <Match when={props.widget?.contentKind === "plugin" && !props.widget.frameUrl}>
@@ -492,20 +512,15 @@ function BoardWidgetCellContent(
     </Switch>
   );
 
-  const BodyBoundary = () => (
-    <>
-      {createErrorBoundary(
-        () => (
-          <Body />
-        ),
-        (error) => {
-          const caught = error();
-          setBodyError((current) => current ?? { error: caught });
-          return null;
-        },
-      )}
-    </>
-  );
+  const bodyBoundary = () =>
+    createErrorBoundary(
+      () => <Body />,
+      (error) => {
+        const caught = error();
+        setBodyError((current) => current ?? { error: caught });
+        return null;
+      },
+    );
 
   const presentation = () =>
     props.widget?.contentKind === "html" || props.widget?.frameUrl
@@ -515,8 +530,7 @@ function BoardWidgetCellContent(
   const scrollable = () =>
     bodyErrored() ||
     actionFailed() ||
-    props.widget?.grantState === "pending" ||
-    props.widget?.grantState === "rejected" ||
+    needsGrantNotice() ||
     props.widget?.contentKind === "mcp-app" ||
     (props.widget?.contentKind === "plugin" && !props.widget.frameUrl);
   const style = (): SolidJSX.CSSProperties => {
@@ -618,7 +632,7 @@ function BoardWidgetCellContent(
                     : t("board.widget.kindHtml")}
               </span>
               <BoardGrantedCapabilities widget={props.widget!} />
-              <Show when={canMutate()}>
+              <Show when={canMutate() && (!fixedReport() || reportEntered())}>
                 <BoardWidgetMenu
                   widget={props.widget!}
                   tabs={props.tabs ?? []}
@@ -642,8 +656,10 @@ function BoardWidgetCellContent(
             },
           ]}
         >
-          <Show when={bodyError()} fallback={<BodyBoundary />}>
-            {(failure) => <BoardWidgetError error={failure().error} />}
+          <Show when={bodyAdmitted()}>
+            <Show when={bodyError()} fallback={<>{bodyBoundary()}</>}>
+              {(failure) => <BoardWidgetError error={failure().error} />}
+            </Show>
           </Show>
           <Show when={actionFailed() && props.widget!.grantState !== "pending"}>
             <div class="board-widget__error-overlay">
@@ -701,9 +717,7 @@ export const BoardWidgetCell = defineSolidBridge<BoardWidgetCellProps, BoardWidg
     methods: {
       focusWidget: (host) => cells.get(host)?.focusWidget(),
       selectMenuItem: (host, value) => cells.get(host)?.selectMenuItem(value),
-      teardown: async (host) => {
-        await cells.get(host)?.teardown();
-      },
+      teardown: async (host) => cells.get(host)?.teardown(),
       restartAfterTeardown: (host) => cells.get(host)?.restartAfterTeardown(),
     },
   },

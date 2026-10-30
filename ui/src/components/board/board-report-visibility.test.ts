@@ -2,108 +2,107 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createBoardWidget } from "../../lib/board/widget.test-support.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { gatewayContext, mount, settleCells, snapshot } from "./board-view.test-support.ts";
-import { cleanupCells } from "./board-widget-cell.test-support.ts";
-import "./board-view.tsx";
+import { gatewayContext } from "./board-view.test-support.ts";
+import { cleanupCells, mountCell } from "./board-widget-cell.test-support.ts";
+import "./board-widget-cell.solid.tsx";
 
 afterEach(() => {
   cleanupCells();
   vi.unstubAllGlobals();
 });
 
-it("windows fixed reports while retaining focus, updates, geometry and admitted identities", async () => {
-  const observers: ((target: Element) => void)[] = [];
-  const unobserve = vi.fn();
+it("defers fixed reports until nearby, then retains their body and current content across tabs", async () => {
+  const observers: { targets: Set<Element>; deliver: (target: Element) => void }[] = [];
   vi.stubGlobal(
-    "ResizeObserver",
-    class implements ResizeObserver {
-      constructor(callback: ResizeObserverCallback) {
-        observers.push((target) => {
-          const entry = {
-            target,
-            contentRect: new DOMRectReadOnly(),
-            borderBoxSize: [],
-            contentBoxSize: [],
-            devicePixelContentBoxSize: [],
-          };
-          callback([entry], this);
+    "IntersectionObserver",
+    class {
+      targets = new Set<Element>();
+      constructor(callback: IntersectionObserverCallback) {
+        observers.push({
+          targets: this.targets,
+          deliver: (target) => {
+            // SAFETY: The observer fixture only needs target/isIntersecting.
+            callback(
+              [{ target, isIntersecting: true } as IntersectionObserverEntry],
+              this as unknown as IntersectionObserver,
+            );
+          },
         });
       }
-      observe() {}
-      unobserve = unobserve;
-      disconnect() {}
+      observe(target: Element) {
+        this.targets.add(target);
+      }
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+      }
     },
   );
-  const widgets = Array.from({ length: 6 }, (_, index) =>
-    createBoardWidget({
-      name: `report-${index}`,
-      tabId: index === 4 ? "ops" : "main",
-      position: index,
-      sizeW: 12,
-      contentKind: "plugin",
-      pluginKind: "session:report",
-      heightMode: "fixed",
-      props: { blocks: [{ type: "text", text: `Report ${index}` }] },
-    }),
-  );
+  const widget = createBoardWidget({
+    contentKind: "plugin",
+    pluginKind: "session:report",
+    heightMode: "fixed",
+    props: { blocks: [{ type: "text", text: "Initial report" }] },
+  });
   const context = gatewayContext(null);
   context.gateway.snapshot.hello = {
     ...gatewayHelloForMethods([]),
     controlUiWidgetKinds: [{ pluginId: "session", kind: "session:report", label: "Report" }],
   };
-  const initial = snapshot({ widgets });
-  const view = await mount({ snapshot: initial, context });
-  view.snapshot = undefined;
-  await settleCells(view);
-  view.snapshot = initial;
-  await settleCells(view);
-  const grid = view.querySelector<HTMLElement>(".board-grid")!;
-  const card = (index: number) =>
-    view.querySelector<HTMLElement>(`[data-widget-name="report-${index}"]`);
-  const first = card(0)!;
-  expect(view.querySelectorAll("openclaw-board-widget-cell")).toHaveLength(1);
-  expect(card(2)).toBeNull();
-  expect(grid.querySelector<HTMLElement>(".board-grid__extent")!.style.gridRow).toBe("20 / span 1");
-  first.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-  await waitForSolid(() => expect(document.activeElement).toBe(card(1)));
-  expect(view.querySelectorAll("openclaw-board-widget-cell")).toHaveLength(2);
-  Object.defineProperty(view, "clientHeight", { value: 100 });
-  vi.spyOn(grid, "getBoundingClientRect").mockImplementation(
-    () => new DOMRect(0, -view.scrollTop, 800, 1348),
-  );
-  view.scrollTop = 816;
-  for (const callback of observers) {
-    callback(grid);
-  }
-  await settleCells(view);
-  expect(card(2)!.style.gridRow).toBe("9 / span 4");
-  const cell = card(2)!.parentElement!;
-  await waitForSolid(() => expect(cell.textContent).toContain("Report 2"));
+  const cell = mountCell(widget, { context });
+  await cell.updateComplete;
+  await vi.dynamicImportSettled();
+  const target = cell.querySelector(".board-widget")!;
+  expect(target.getAttribute("style")).toContain("grid-row: 1 / span 4");
+  expect(cell.querySelector("openclaw-report-widget")).toBeNull();
+  expect(cell.querySelector(".board-widget__menu-trigger")).toBeNull();
+  expect(cell.querySelector(".board-widget__chrome")).not.toBeNull();
+  expect(cell.querySelector(".board-widget__resize-handle")).not.toBeNull();
+  const observer = observers.find(({ targets }) => targets.has(target));
+  observer!.deliver(target);
+  await cell.updateComplete;
+  await vi.dynamicImportSettled();
+  await waitForSolid(() => expect(cell.textContent).toContain("Initial report"));
   expect(cell.querySelector(".board-widget__menu-trigger")).not.toBeNull();
   const report = cell.querySelector("openclaw-report-widget");
-  view.activeTabId = "ops";
-  view.snapshot = snapshot({
+  expect(observer!.targets.has(target)).toBe(false);
+  cell.active = false;
+  cell.hidden = true;
+  cell.widget = {
+    ...widget,
     revision: 2,
-    widgets: widgets.toSpliced(2, 1, {
-      ...widgets[2],
-      revision: 2,
-      props: { blocks: [{ type: "text", text: "Updated while hidden" }] },
-    }),
-  });
+    props: { blocks: [{ type: "text", text: "Updated while hidden" }] },
+  };
   await waitForSolid(() => expect(report?.textContent).toContain("Updated while hidden"));
-  view.activeTabId = "main";
-  view.scrollTop = 0;
-  view.dispatchEvent(new Event("scroll"));
-  await settleCells(view);
-  expect(card(2)!.parentElement).toBe(cell);
+  cell.active = true;
+  cell.hidden = false;
+  await cell.updateComplete;
   expect(cell.querySelector("openclaw-report-widget")).toBe(report);
-  expect(card(0)).toBe(first);
-  // An unseen report changing to auto height must mount even outside the viewport.
-  view.snapshot = snapshot({
-    revision: 3,
-    widgets: widgets.toSpliced(5, 1, { ...widgets[5], heightMode: "auto" }),
-  });
-  await waitForSolid(() => expect(card(5)).not.toBeNull());
+  const auto = mountCell({ ...widget, name: "auto-report", heightMode: "auto" }, { context });
+  await waitForSolid(() => expect(auto.textContent).toContain("Initial report"));
+  expect(observers.some(({ targets }) => targets.has(auto.querySelector(".board-widget")!))).toBe(
+    false,
+  );
+  const autoReport = auto.querySelector("openclaw-report-widget");
+  auto.active = false;
+  auto.hidden = true;
+  auto.widget = { ...auto.widget!, heightMode: "fixed", revision: 2, props: cell.widget!.props };
+  await waitForSolid(() => expect(autoReport?.textContent).toContain("Updated while hidden"));
+  expect(auto.querySelector("openclaw-report-widget")).toBe(autoReport);
+  const pending = mountCell(
+    { ...widget, name: "pending-report", grantState: "pending" },
+    { context },
+  );
+  await waitForSolid(() =>
+    expect(pending.querySelector('[data-test-id="board-pending"]')).not.toBeNull(),
+  );
+  expect(pending.querySelector("openclaw-report-widget")).toBeNull();
+  pending.widget = { ...pending.widget!, grantState: "rejected" };
+  await waitForSolid(() =>
+    expect(pending.querySelector('[data-test-id="board-rejected"]')).not.toBeNull(),
+  );
   cleanupCells();
-  await waitForSolid(() => expect(unobserve).toHaveBeenCalledWith(grid));
+  await waitForSolid(() => expect(observers.every(({ targets }) => targets.size === 0)).toBe(true));
 });

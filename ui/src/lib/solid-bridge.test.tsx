@@ -6,6 +6,7 @@ import {
   createRoot,
   createSignal,
   flush,
+  merge,
   onCleanup,
 } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -312,6 +313,32 @@ it("uses a single Solid-owned host and preserves reactive props, children, event
   expect(disconnected).toHaveBeenCalledExactlyOnceWith(host);
   await Promise.resolve();
   expect(disposed).toHaveBeenCalledTimes(1);
+});
+
+it("keeps declared property precedence and missing values through dynamic spread changes", () => {
+  const [values, setValues] = createSignal<Partial<Props>>({ label: "spread", count: 3 });
+  let host: Host | undefined;
+  const view = render(() => {
+    const props = merge({ class: "spread-host", "prop:label": "native" }, () => values());
+    return (
+      <Bridge
+        {...props}
+        ref={(element) => {
+          host = element;
+        }}
+      />
+    );
+  });
+  expect(view.getByText("spread:3:false")).toBeTruthy();
+  expect(host!.className).toBe("spread-host");
+  host!.count = 8;
+  setValues({ label: "next" });
+  flush();
+  expect(view.getByText("next:8:false")).toBeTruthy();
+  setValues({ label: undefined, count: undefined });
+  flush();
+  expect(view.getByText("initial:0:false")).toBeTruthy();
+  expect(mounted).toHaveBeenCalledTimes(1);
 });
 
 it("accepts property publication while a Solid owner adopts a mounted bridge", async () => {

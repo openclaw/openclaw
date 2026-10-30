@@ -175,12 +175,8 @@ function ReportBlockView(props: { block: ReportBlock }) {
 function ReportWidgetContent(props: ReportWidgetProps) {
   const content = createMemo(
     () => {
-      const widget = props.widget;
-      if (!widget) {
-        return { report: undefined, error: undefined };
-      }
       try {
-        return { report: parseBoardReport(widget.props) };
+        return { report: parseBoardReport(props.widget?.props) };
       } catch (error) {
         return { error };
       }
@@ -194,10 +190,7 @@ function ReportWidgetContent(props: ReportWidgetProps) {
     },
   );
   return (
-    <Show
-      when={content().report}
-      fallback={props.widget && <BoardWidgetError error={content().error} />}
-    >
+    <Show when={content().report} fallback={<BoardWidgetError error={content().error} />}>
       {(report) => (
         <article
           class="board-report"

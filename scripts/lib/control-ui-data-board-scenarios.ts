@@ -264,22 +264,9 @@ async function waitForBoard(page: Page, tab = 0, expectedWidgets = widgetsPerTab
     )
     .waitFor();
   await page.waitForFunction(
-    ({ selector, count }) => {
-      const extent = document.querySelector<HTMLElement>(`${selector} .board-grid__extent`);
-      if (extent) {
-        const grid = extent.parentElement!;
-        // Windowed cards reserve all four fixed rows per logical report.
-        return (
-          Number.parseInt(extent.style.gridRow, 10) === count * 4 &&
-          Math.abs(grid.getBoundingClientRect().height - (count * 4 * 68 - 12)) < 1
-        );
-      }
-      return (
-        [...document.querySelectorAll(`${selector} [data-widget-name]`)].filter(
-          (widget) => !widget.closest("[hidden]"),
-        ).length === count
-      );
-    },
+    ({ selector, count }) =>
+      document.querySelectorAll(`${selector} openclaw-board-widget-cell:not([hidden])`).length ===
+      count,
     { selector: boardHost, count: expectedWidgets },
   );
   await settle(page);
@@ -289,7 +276,6 @@ async function boardReportCounts(page: Page) {
   return page.locator(boardHost).evaluate((host) => ({
     mountedReports: host.querySelectorAll("openclaw-report-widget").length,
     widgetCells: host.querySelectorAll("openclaw-board-widget-cell").length,
-    deferredCards: host.querySelectorAll(".board-widget--deferred").length,
     scrollHeight: host.scrollHeight,
   }));
 }
@@ -852,7 +838,7 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     id: "data-board-tab-switch",
     dataPage: "board",
     route: controlUiSessionPath(sessionKey),
-    expected: "Switching tabs retains visited reports and presents the next 250 logical cards.",
+    expected: "Switching tabs retains the previous 250 widget instances and presents the next 250.",
     fixtureOverrides: () => createDataBoardFixture(),
     rowSelector: "openclaw-board-widget-cell",
     prepare: prepareBoard,
@@ -921,24 +907,17 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     id: "data-board-report-focus",
     explicitOnly: true,
     dataPage: "board",
-    diagnostic:
-      "Keyboard admission of offscreen cards and top-layer menu correctness; not a timing comparison.",
+    diagnostic: "Offscreen card focus and top-layer menu correctness; not a timing comparison.",
     route: controlUiSessionPath(sessionKey),
-    expected: "Arrow navigation reveals an offscreen report and an unclipped, dismissible menu.",
+    expected:
+      "Focusing an offscreen report reveals its content and an unclipped, dismissible menu.",
     fixtureOverrides: () => createDataBoardFixture(),
     prepare: prepareBoard,
     run: async (page) => {
-      await page.locator(`${boardHost} .board-widget[data-widget-name="data-widget-0"]`).focus();
-      for (let index = 1; index <= 5; index++) {
-        await page.keyboard.press("ArrowDown");
-        await page.waitForFunction(
-          (name) => document.activeElement?.getAttribute("data-widget-name") === name,
-          `data-widget-${index}`,
-        );
-      }
       const card = page.locator(`${boardHost} openclaw-board-widget-cell`).filter({
-        has: page.locator('[data-widget-name="data-widget-5"]'),
+        has: page.locator('[data-widget-name="data-widget-249"]'),
       });
+      await card.locator(".board-widget").focus();
       await card.locator("openclaw-report-widget svg").waitFor();
       const trigger = card.locator(".board-widget__menu-trigger");
       await trigger.click();

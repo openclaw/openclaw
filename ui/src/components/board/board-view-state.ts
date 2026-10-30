@@ -471,8 +471,9 @@ export function createBoardViewState(
       return undefined;
     }
     // Reorder against the current preview so a moved card cannot undo its drop.
-    const targetName = pointer?.closest<HTMLElement>(".board-widget[data-widget-name]")?.dataset
-      .widgetName;
+    const targetName = pointer?.closest<HTMLElementTagNameMap["openclaw-board-widget-cell"]>(
+      "openclaw-board-widget-cell",
+    )?.widget?.name;
     return {
       hoverTabId: "",
       items: previewDrag(items, active.name, {

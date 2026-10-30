@@ -305,22 +305,21 @@ export function defineSolidBridge<Props extends object, Methods extends object =
       // The renderer owns property binding timing, including the first mount.
       spread(
         host,
-        () => {
-          const bindings: Record<string, unknown> = {};
-          for (const key of Object.keys(props)) {
-            if (key !== "children" && !declarations.has(key)) {
-              bindings[key] = Reflect.get(props, key);
+        [
+          props,
+          () => {
+            const bindings: Record<string, unknown> = {};
+            for (const [key, property] of properties) {
+              const value = Reflect.has(props, key)
+                ? Reflect.get(props, key)
+                : Reflect.get(host, key);
+              bindings[`prop:${key}`] = value === undefined ? property.default : value;
             }
-          }
-          for (const [key, property] of properties) {
-            const value = Reflect.has(props, key)
-              ? Reflect.get(props, key)
-              : Reflect.get(host, key);
-            bindings[`prop:${key}`] = value === undefined ? property.default : value;
-          }
-          return bindings;
-        },
+            return bindings;
+          },
+        ],
         true,
+        (key) => declarations.has(key),
       );
       host.#mount(() => props.children);
       onCleanup(() => host.#disposeRoot());
