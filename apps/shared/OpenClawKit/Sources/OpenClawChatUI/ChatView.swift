@@ -296,28 +296,60 @@ public struct OpenClawChatView: View {
 extension OpenClawChatView {
     private var content: some View {
         let transcript = self.transcriptPresentation
-        return VStack(spacing: 0) {
-            self.messageList(transcript: transcript)
-                #if os(macOS)
-                    .modifier(ChatTranscriptSearch(
-                        rows: transcript.rows,
-                        sessionKey: self.viewModel.sessionKey,
-                        isEnabled: self.isDesktopLayout && self.showsComposer,
-                        focusRequest: self.windowCommands?.findRequest ?? 0,
-                        selectedMessageID: self.$searchMessageID,
-                        isPresented: self.$isSearchPresented,
-                        onSelect: self.revealSearchMessage))
-                    .onChange(of: self.windowCommands?.composerFocusRequest) { _, _ in
-                        self.composerFocusRequest += 1
-                    }
-                    .onChange(of: self.searchMessageID) { previousID, _ in
-                        self.scrollCommand.cancel(targetID: previousID)
-                    }
-                    .onChange(of: self.isSearchPresented) { wasPresented, isPresented in
-                        if wasPresented, !isPresented { self.composerFocusRequest += 1 }
-                    }
-                #endif
-                    .padding(.horizontal, self.isTabletLayout ? 0 : Layout.outerPaddingHorizontal)
+        return self.conversationLayout(transcript: transcript)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { self.contentWidth = $0 }
+            .environment(\.openClawAssistantUsesReadingColumn, self.isTabletLayout)
+    }
+
+    @ViewBuilder
+    private func conversationLayout(transcript: TranscriptPresentation) -> some View {
+        let messages = self.messageList(transcript: transcript)
+            #if os(macOS)
+                .modifier(ChatTranscriptSearch(
+                    rows: transcript.rows,
+                    sessionKey: self.viewModel.sessionKey,
+                    isEnabled: self.isDesktopLayout && self.showsComposer,
+                    focusRequest: self.windowCommands?.findRequest ?? 0,
+                    selectedMessageID: self.$searchMessageID,
+                    isPresented: self.$isSearchPresented,
+                    onSelect: self.revealSearchMessage))
+                .onChange(of: self.windowCommands?.composerFocusRequest) { _, _ in
+                    self.composerFocusRequest += 1
+                }
+                .onChange(of: self.searchMessageID) { previousID, _ in
+                    self.scrollCommand.cancel(targetID: previousID)
+                }
+                .onChange(of: self.isSearchPresented) { wasPresented, isPresented in
+                    if wasPresented, !isPresented { self.composerFocusRequest += 1 }
+                }
+            #endif
+                .padding(
+                .horizontal,
+                self.isTabletLayout || self.usesFullScreenConversationLayout ? 0 : Layout.outerPaddingHorizontal)
+        #if os(iOS)
+        if #available(iOS 26.0, *), self.usesFullScreenConversationLayout {
+            messages.safeAreaBar(edge: .bottom, spacing: 0) {
+                self.bottomChrome
+            }
+        } else {
+            VStack(spacing: 0) {
+                messages
+                self.bottomChrome
+            }
+            .padding(.top, Layout.outerPaddingVertical)
+        }
+        #else
+        VStack(spacing: 0) {
+            messages
+            self.bottomChrome
+        }
+        .padding(.top, Layout.outerPaddingVertical)
+        #endif
+    }
+
+    private var bottomChrome: some View {
+        VStack(spacing: 0) {
             if !self.usesInlineProgressCard {
                 self.progressCard
                     .frame(maxWidth: self.readingColumnWidth)
@@ -341,10 +373,6 @@ extension OpenClawChatView {
                     .padding(.bottom, self.isTabletLayout || self.isDesktopLayout ? 12 : Layout.outerPaddingVertical)
             }
         }
-        .padding(.top, Layout.outerPaddingVertical)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { self.contentWidth = $0 }
-        .environment(\.openClawAssistantUsesReadingColumn, self.isTabletLayout)
     }
 
     @ViewBuilder
@@ -468,10 +496,7 @@ extension OpenClawChatView {
                 }
                 .padding(.top, self.isDesktopLayout ? 24 : Layout.messageListPaddingTop)
                 .frame(maxWidth: self.readingColumnWidth)
-                .padding(
-                    .horizontal,
-                    self.isTabletLayout ? self.tabletHorizontalMargin :
-                        (self.isDesktopLayout ? 16 : Layout.messageListPaddingHorizontal))
+                .padding(.horizontal, self.messageListHorizontalMargin)
                 .frame(maxWidth: .infinity)
             }
             .accessibilityIdentifier("chat-transcript")
@@ -1470,24 +1495,6 @@ private struct ChatAssistantIntroCard: View {
     }
 }
 
-private struct ChatLoadingBubble: View {
-    var body: some View {
-        HStack(spacing: 8) {
-            ProgressView()
-                .controlSize(.small)
-            Text("Loading chat")
-                .font(OpenClawChatTypography.captionSemiBold)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.vertical, 9)
-        .padding(.horizontal, 12)
-        .background(
-            Capsule()
-                .fill(OpenClawChatTheme.subtleCard))
-        .padding(.leading, 10)
-    }
-}
-
 private struct ChatNoticeCard: View {
     let systemImage: String
     let title: String
@@ -1569,6 +1576,22 @@ private struct ChatNoticeBanner: View {
 }
 
 extension OpenClawChatView {
+    private var usesFullScreenConversationLayout: Bool {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            return self.style == .standard && self.composerChrome == .clean && self.showsComposer
+        }
+        #endif
+        return false
+    }
+
+    private var messageListHorizontalMargin: CGFloat {
+        if self.isTabletLayout { return self.tabletHorizontalMargin }
+        if self.isDesktopLayout { return 16 }
+        return Layout.messageListPaddingHorizontal +
+            (self.usesFullScreenConversationLayout ? Layout.outerPaddingHorizontal : 0)
+    }
+
     private var isTabletLayout: Bool {
         #if os(iOS)
         UIDevice.current.userInterfaceIdiom == .pad
@@ -1596,26 +1619,5 @@ extension OpenClawChatView {
         #else
         .infinity
         #endif
-    }
-}
-
-/// Keep frequently changing run telemetry outside the transcript's observation scope.
-private struct ChatRunStatusContent<Content: View>: View {
-    @ViewBuilder var content: () -> Content
-
-    var body: some View {
-        self.content()
-    }
-}
-
-/// Owns the observation of the paced words; its parent only observes live-content shape.
-private struct ChatLiveAssistantText<Content: View>: View {
-    let viewModel: OpenClawChatViewModel
-    @ViewBuilder var content: (String) -> Content
-
-    var body: some View {
-        if let text = self.viewModel.liveAssistantDisplayText {
-            self.content(text)
-        }
     }
 }
