@@ -172,37 +172,36 @@ export function SessionsCard(props: {
             </Show>
           </div>
         )}
-        {props.usage.display.sessionsTab === "all" && props.overview ? (
-          <div class="data-table-pagination">
-            <div class="data-table-pagination__controls">
-              <button
-                class="btn btn--sm"
-                disabled={props.loading || props.overview.offset === 0}
-                onClick={() =>
-                  props.usage.callbacks.display.onPageChange(
-                    Math.max(0, props.overview!.offset - props.overview!.limit),
-                  )
-                }
-              >
-                {t("common.previous")}
-              </button>
-              <button
-                class="btn btn--sm"
-                disabled={
-                  props.loading ||
-                  props.overview.offset + props.overview.limit >= props.overview.total
-                }
-                onClick={() =>
-                  props.usage.callbacks.display.onPageChange(
-                    props.overview!.offset + props.overview!.limit,
-                  )
-                }
-              >
-                {t("common.next")}
-              </button>
+        <Show when={props.usage.display.sessionsTab === "all" ? props.overview : undefined}>
+          {(overview) => (
+            <div class="data-table-pagination">
+              <div class="data-table-pagination__controls">
+                <button
+                  class="btn btn--sm"
+                  disabled={props.loading || overview().offset === 0}
+                  onClick={() =>
+                    props.usage.callbacks.display.onPageChange(
+                      Math.max(0, overview().offset - overview().limit),
+                    )
+                  }
+                >
+                  {t("common.previous")}
+                </button>
+                <button
+                  class="btn btn--sm"
+                  disabled={
+                    props.loading || overview().offset + overview().limit >= overview().total
+                  }
+                  onClick={() =>
+                    props.usage.callbacks.display.onPageChange(overview().offset + overview().limit)
+                  }
+                >
+                  {t("common.next")}
+                </button>
+              </div>
             </div>
-          </div>
-        ) : undefined}
+          )}
+        </Show>
         {selectedRows().length > 1 ? (
           <div class="sessions-selected-group">
             <div class="sessions-card-count">

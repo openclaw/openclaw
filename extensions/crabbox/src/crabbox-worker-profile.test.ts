@@ -114,3 +114,12 @@ it("refuses retired setupEnv before provisioning", () => {
     resolveCrabboxProvisionProfile({ ...PROFILE, setupEnv: ["TOKEN"] }, undefined),
   ).toThrow("run openclaw doctor --fix");
 });
+
+it.each([
+  { provider: "aws", azureSandboxDiskId: "disk" },
+  { provider: "azure-sandbox", azureSandboxDiskId: " " },
+  { provider: "azure-sandbox", azureSandboxDiskId: 123 },
+  { provider: "azure-sandbox", azureSandboxDiskId: "d".repeat(257) },
+])("rejects invalid Sandbox disk selection %j", (settings) => {
+  expect(() => parseCrabboxProfile({ ...PROFILE, ...settings })).toThrow("disk ID requires");
+});

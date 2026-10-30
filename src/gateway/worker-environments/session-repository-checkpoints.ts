@@ -583,6 +583,7 @@ export async function stageSessionRepositoryCheckpoint(
 }
 
 export async function forkSessionRepositoryWorkspace(params: {
+  branchPrefix?: string;
   sourceWorkspaceId: string;
   agentId: string;
   sessionKey: string;
