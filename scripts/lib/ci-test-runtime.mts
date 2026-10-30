@@ -13,7 +13,7 @@ import {
   getUnitFastTimerTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
 import { buildVitestRunPlans } from "../test-projects.test-support.mts";
-import { listNodeTestConfigFiles } from "./ci-node-test-inventory.mts";
+import { listNodeTestConfigFiles, listWholeConfigFiles } from "./ci-node-test-inventory.mts";
 import nativeBunQualification from "./ci-test-native-bun-qualification.json" with { type: "json" };
 import { vitestOptionConsumesNextArg } from "./vitest-cli-mode.mts";
 
@@ -104,6 +104,7 @@ const nodeRequiredFiles = new Set([
   // Consumed async-loader retention is specific to V8's suspended frames.
   "src/agents/harness/lifecycle-hook-helpers.test.ts",
   // JavaScriptCore's conservative stack scanning cannot prove forced WeakRef collection.
+  "packages/ai/src/transports/openai-responses-websocket.test.ts",
   "src/agents/agent-tools.execution-validation.test.ts",
   "src/config/sessions/session-accessor.pending-input-retention.test.ts",
   "src/gateway/session-list-history-retention.test.ts",
@@ -117,6 +118,13 @@ const nodeRequiredFiles = new Set([
   "ui/src/pages/chat/session-message-cache-retention.test.ts",
   "ui/src/pages/chat/session-snapshot-store.test.ts",
   "ui/src/pages/usage/usage-page-retention.test.ts",
+]);
+// Real Code Mode workers exercise both host runtimes independently of their
+// Node/QuickJS guest choice. Keep Bun coverage while qualifying Node workers.
+const bothHostFiles = new Set([
+  "src/agents/code-mode.bridge.lifecycle.test.ts",
+  "src/agents/code-mode-engine-parity.test.ts",
+  "src/agents/code-mode.failure-phase.test.ts",
 ]);
 const knownConfigs = new Set([
   "ui/vitest.config.ts",
@@ -313,7 +321,18 @@ function resolveAllRuntimeSelections(
             fullSuiteVitestShards.find((shard) => shard.config === config)?.projects ?? [config],
         )
       : [];
-  const inventories = ownerConfigs.map((config) => listNodeTestConfigFiles(config));
+  const inventories = ownerConfigs.map((config) => {
+    const inventory = listNodeTestConfigFiles(config);
+    if (inventory) {
+      return inventory;
+    }
+    // Focused targets can use an aggregate config while their single-project CI
+    // owner already supplies the complete file inventory.
+    const owner = fullSuiteVitestShards.find(
+      ({ projects }) => projects?.length === 1 && projects[0] === config,
+    );
+    return owner ? listWholeConfigFiles(owner.name) : undefined;
+  });
   const unresolvedConfigs = ownerConfigs.filter((_, index) => !inventories[index]);
   const matches = (file: string, include: readonly string[]) =>
     include.some((pattern) => {
@@ -322,9 +341,12 @@ function resolveAllRuntimeSelections(
         .split("/")
         .some((_, index, parts) => matchesVitestGlob(parts.slice(index).join("/"), relative));
     });
-  const files = exactTargets ? targets! : [...nodeRequiredFiles];
-  const exceptions = files.filter((file) => {
-    if (!nodeRequiredFiles.has(file) || (postIncludes && !matches(file, postIncludes))) {
+  const files = exactTargets ? targets! : [...nodeRequiredFiles, ...bothHostFiles];
+  const nodeFiles = files.filter((file) => {
+    if (
+      (!nodeRequiredFiles.has(file) && !bothHostFiles.has(file)) ||
+      (postIncludes && !matches(file, postIncludes))
+    ) {
       return false;
     }
     if (includes && !matches(file, includes)) {
@@ -357,6 +379,7 @@ function resolveAllRuntimeSelections(
         buildVitestRunPlans([file], cwd).some((plan) => unresolvedConfigs.includes(plan.config)))
     );
   });
+  const exceptions = nodeFiles.filter((file) => nodeRequiredFiles.has(file));
   if (
     (exactTargets && exceptions.length === files.length) ||
     (includes?.length && includes.every((file) => nodeRequiredFiles.has(relativePath(file))))
@@ -435,13 +458,13 @@ function resolveAllRuntimeSelections(
   return [
     ...(policy === "dual-all"
       ? [node]
-      : exceptions.length
+      : nodeFiles.length
         ? [
             {
               runtime: "node" as const,
               ...(selection.targets?.length
-                ? { targets: exceptions }
-                : { vitestArgs: exceptions.map((file) => path.resolve(cwd, file)) }),
+                ? { targets: nodeFiles }
+                : { vitestArgs: nodeFiles.map((file) => path.resolve(cwd, file)) }),
             },
           ]
         : []),

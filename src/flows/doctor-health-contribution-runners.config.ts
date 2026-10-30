@@ -692,23 +692,3 @@ function isDirectoryPath(path: string): boolean {
     return false;
   }
 }
-
-export async function runFinalConfigValidationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { readConfigFileSnapshot } = await import("../config/config.js");
-  const { readDeferredPluginMigrationsAsync } =
-    await import("../infra/deferred-plugin-migrations.js");
-  const deferredPluginMigrations = await readDeferredPluginMigrationsAsync({
-    env: ctx.env ?? process.env,
-  });
-  const finalSnapshot = await readConfigFileSnapshot({
-    skipPluginValidation: isUpdateDoctorRun(ctx.env ?? process.env),
-    preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
-    deferredPluginMigrations,
-  });
-  if (finalSnapshot.exists && !finalSnapshot.valid) {
-    ctx.runtime.error("Invalid config:");
-    for (const issue of finalSnapshot.issues) {
-      ctx.runtime.error(`- ${issue.path || "<root>"}: ${issue.message}`);
-    }
-  }
-}

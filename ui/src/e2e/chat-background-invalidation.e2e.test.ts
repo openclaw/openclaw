@@ -19,7 +19,11 @@ const baseTime = 1_900_000_000_000;
 type MeasuredPane = HTMLElement & {
   state: Pick<
     ChatPageHost,
-    "sessionKey" | "chatMessages" | "chatAvatarStatus" | "modelAuthStatusResult"
+    | "sessionKey"
+    | "chatMessages"
+    | "chatAvatarStatus"
+    | "modelAuthStatusResult"
+    | "chatBranchesSessionKey"
   >;
   presence: { readonly snapshot: PresencePayload | undefined };
   render: () => unknown;
@@ -106,7 +110,7 @@ suite.define(() => {
       let selected = createControlUiSessionRow(selectedKey, "Foreground conversation", baseTime);
       let foreign = createControlUiSessionRow(foreignKey, "Background conversation", baseTime);
       const gateway = await installMockGateway(page, {
-        deferredMethods: ["agent.identity.get", "models.authStatus"],
+        deferredMethods: ["agent.identity.get", "models.authStatus", "sessions.branches.list"],
         sessionKey: selectedKey,
         sessions: [selected, foreign],
         historyMessages: [
@@ -144,6 +148,23 @@ suite.define(() => {
       await pauseVirtualClock(page);
       // Advance delayed swarm scheduling and queued render frames before measuring events.
       await page.clock.runFor(1_000);
+      await gateway.waitForRequest("sessions.branches.list");
+      expect(
+        await page.evaluate(
+          () =>
+            document.querySelector<MeasuredPane>("openclaw-chat-pane.chat-pane-cache__pane--active")
+              ?.state.chatBranchesSessionKey,
+        ),
+      ).toBeNull();
+      await gateway.resolveDeferred("sessions.branches.list");
+      // Branch discovery starts after transcript paint and publishes pane state.
+      // Join its accepted result before attributing renders to foreign events.
+      await page.waitForFunction(
+        (key) =>
+          document.querySelector<MeasuredPane>("openclaw-chat-pane.chat-pane-cache__pane--active")
+            ?.state.chatBranchesSessionKey === key,
+        selectedKey,
+      );
       // Observe evaluation, not preloaded bytes or an earlier network-idle event.
       await expect.poll(() => evaluatedModules.size).toBe(idleModules.length);
       // The shared interaction chunk initializes its catalog in the import continuation.

@@ -274,7 +274,8 @@ with the complete scenario mix. Check recorded tool events before claiming that
 any requested behavior was actually exercised.
 
 After the final injection, the controller polls every input's public history until
-accepted inputs settle and their sessions are inactive, or ten minutes pass.
+accepted inputs settle (apart from deliberate crash loss) and their sessions are
+inactive, or ten minutes pass.
 The overall campaign deadline remains a hard bound and may shorten this wait;
 `settlement` records the effective deadline and observed finish. Still-unresolved
 accepted inputs become `timed-out`, never implicitly successful or silently active
@@ -285,6 +286,12 @@ a final assistant message. Quoted markers, commentary, and promises do not count
 Subagent prompts ask for independent, self-contained checks without specifying
 tool arguments or requesting checkouts; successful child launches still require
 recorded evidence.
+
+Graceful restarts resume running root sessions through ordinary inputs. Deliberate
+SIGKILL writes no resume markers: unanswered inputs sent before that crash in its
+active sessions are recorded as accepted crash loss. New post-restart inputs must
+still settle. The dry provider inspects its exact effect marker before appending
+again, following the resume instruction without adding runtime effect replay.
 
 Use `--candidate /path/to/reviewed-checkout` to replay this tooling against another
 revision. Prepare that checkout's build first; `dist/entry.js` is required, matching

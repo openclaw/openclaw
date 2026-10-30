@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 // NodeSession is plugin-SDK-reachable; importing these types from the
 // gateway-protocol index would retain the whole ProtocolSchemas registry in
 // the public plugin-sdk dts (check-plugin-sdk-exports guards this).
@@ -65,7 +64,6 @@ import {
   type NodeInvokeProgressParams,
   type NodeInvokeResultParams,
   type PendingInvoke,
-  type PendingSystemRunEvent,
 } from "./node-registry.invoke-stream.js";
 import {
   updateNodePresenceActivity,
@@ -74,10 +72,7 @@ import {
   selectActiveNodesByProfile,
   type NodePresenceActivityUpdate,
 } from "./node-registry.presence.js";
-import {
-  authorizedSystemRunEventExpiresAt,
-  authorizedSystemRunEventKey,
-} from "./node-registry.system-run.js";
+import { NodeSystemRunEvents } from "./node-registry.system-run.js";
 import { isNodeWorkerHostClientId } from "./node-runner-inventory-runtime.js";
 import type {
   NodeConnectivityResult,
@@ -116,13 +111,6 @@ const NODE_SESSION_POLICIES = new WeakMap<object, NodeSessionPolicy>();
 export function readNodeSessionWithheldCommands(node: object): readonly string[] {
   return NODE_SESSION_POLICIES.get(node)?.withheldCommands ?? [];
 }
-
-/** Authorized system.run event window bound to one node connection. */
-type AuthorizedSystemRunEvent = PendingSystemRunEvent & {
-  nodeId: string;
-  connId: string;
-  expiresAtMs: number | null;
-};
 
 const FAILED_EVENT_LOG_INTERVAL_MS = 30_000;
 const log = createSubsystemLogger("gateway/nodes");
@@ -199,7 +187,7 @@ export class NodeRegistry {
     },
     onFailedResult: (pending) => {
       if (pending.systemRunEvent) {
-        this.forgetAuthorizedSystemRunEvent({
+        this.systemRunEvents.forget({
           nodeId: pending.nodeId,
           connId: pending.connId,
           ...pending.systemRunEvent,
@@ -219,7 +207,9 @@ export class NodeRegistry {
       });
     },
   });
-  private authorizedSystemRunEvents = new Map<string, AuthorizedSystemRunEvent>();
+  private systemRunEvents = new NodeSystemRunEvents(this.pendingInvokes, (nodeId) =>
+    this.nodesById.get(nodeId),
+  );
   private pairingGenerationEventChains = new Map<string, Promise<void>>();
   private committedConfig: OpenClawConfig | undefined;
   private hostStatsCheckpoints: NodeHostStatsCheckpoints;
@@ -256,7 +246,7 @@ export class NodeRegistry {
           ? this.sendEventToSession(current, event, payload)
           : false;
       },
-      rememberAuthorizedSystemRunEvent: (event) => this.rememberAuthorizedSystemRunEvent(event),
+      rememberAuthorizedSystemRunEvent: (event) => this.systemRunEvents.remember(event),
       publishActiveNodeContext: () => this.publishActiveNodeContext(),
       closeHostStats: () => this.hostStatsCheckpoints.close(),
     });
@@ -1081,146 +1071,18 @@ export class NodeRegistry {
     sessionKey: string;
     terminal: boolean;
   }): boolean {
-    return this.authorizeSystemRunEventWithState(params) !== null;
+    const authorized = this.authorizeSystemRunEventWithState(params);
+    authorized?.release?.();
+    return authorized !== null;
   }
 
-  authorizeSystemRunEventWithState(params: {
-    nodeId: string;
-    connId?: string;
-    runId?: string;
-    sessionKey: string;
-    terminal: boolean;
-  }):
-    | (Pick<PendingSystemRunEvent, "invocationDeliveryContext"> & {
-        holdNotice?: (notify: () => void) => void;
-      })
-    | null {
-    if (!params.connId || !params.sessionKey) {
-      return null;
-    }
-    const connId = params.connId;
-    this.pruneAuthorizedSystemRunEvents();
-    let match = params.runId
-      ? this.matchAuthorizedSystemRunEvent({
-          nodeId: params.nodeId,
-          connId,
-          runId: params.runId,
-          sessionKey: params.sessionKey,
-        })
-      : null;
-    if (match === null && this.allowsLegacyMacRunIdFallback({ nodeId: params.nodeId, connId })) {
-      match = this.matchAuthorizedSystemRunEvent({
-        nodeId: params.nodeId,
-        connId,
-        sessionKey: params.sessionKey,
-      });
-    }
-    if (match === null) {
-      return null;
-    }
-    const event = this.authorizedSystemRunEvents.get(match);
-    const source = event?.invocationDeliveryContext;
-    let waiting: PendingInvoke | undefined;
-    if (params.terminal) {
-      this.authorizedSystemRunEvents.delete(match);
-      // The node reports completion before its result; a still-waiting caller receives that output.
-      waiting = [...this.pendingInvokes.values()].find(
-        (pending) =>
-          pending.nodeId === params.nodeId &&
-          pending.connId === connId &&
-          pending.systemRunEvent?.runId === event?.runId,
-      );
-    }
-    return {
-      ...(source ? { invocationDeliveryContext: { ...source } } : {}),
-      ...(waiting
-        ? {
-            holdNotice: (notify: () => void) => {
-              const resolve = waiting.resolve;
-              waiting.resolve = (value) => {
-                resolve(value);
-                if (!value.ok) {
-                  notify();
-                }
-              };
-            },
-          }
-        : {}),
-    };
-  }
-
-  private rememberAuthorizedSystemRunEvent(
-    event: Omit<AuthorizedSystemRunEvent, "expiresAtMs">,
-  ): void {
-    this.pruneAuthorizedSystemRunEvents();
-    const authorized: AuthorizedSystemRunEvent = {
-      ...event,
-      expiresAtMs: authorizedSystemRunEventExpiresAt(event.timeoutMs),
-    };
-    this.authorizedSystemRunEvents.set(authorizedSystemRunEventKey(authorized), authorized);
-  }
-
-  private forgetAuthorizedSystemRunEvent(
-    event: Omit<AuthorizedSystemRunEvent, "expiresAtMs">,
-  ): void {
-    this.authorizedSystemRunEvents.delete(authorizedSystemRunEventKey(event));
+  authorizeSystemRunEventWithState(params: Parameters<NodeSystemRunEvents["authorize"]>[0]) {
+    return this.systemRunEvents.authorize(params);
   }
 
   private disconnectSessionInvokes(connId: string): void {
     this.invokeStreams.handleDisconnect(connId);
-    for (const [key, event] of this.authorizedSystemRunEvents) {
-      if (event.connId === connId) {
-        this.authorizedSystemRunEvents.delete(key);
-      }
-    }
-  }
-
-  private matchAuthorizedSystemRunEvent(params: {
-    nodeId: string;
-    connId: string;
-    runId?: string;
-    sessionKey: string;
-  }): string | null {
-    let match: string | null = null;
-    for (const [key, event] of this.authorizedSystemRunEvents) {
-      if (
-        event.nodeId !== params.nodeId ||
-        event.connId !== params.connId ||
-        (params.runId !== undefined && event.runId !== params.runId) ||
-        (event.sessionKey && event.sessionKey !== params.sessionKey)
-      ) {
-        continue;
-      }
-      if (params.runId !== undefined) {
-        return key;
-      }
-      // Legacy macOS events may omit the run ID, but only one pending run may match.
-      if (match !== null) {
-        return null;
-      }
-      match = key;
-    }
-    return match;
-  }
-
-  private allowsLegacyMacRunIdFallback(params: { nodeId: string; connId: string }): boolean {
-    const node = this.nodesById.get(params.nodeId);
-    return (
-      node?.connId === params.connId &&
-      node.clientId === "openclaw-macos" &&
-      node.platform === "darwin"
-    );
-  }
-
-  private pruneAuthorizedSystemRunEvents(now = Date.now()): void {
-    for (const [key, event] of this.authorizedSystemRunEvents) {
-      if (
-        event.expiresAtMs !== null &&
-        !isFutureDateTimestampMs(event.expiresAtMs, { nowMs: now })
-      ) {
-        this.authorizedSystemRunEvents.delete(key);
-      }
-    }
+    this.systemRunEvents.disconnect(connId);
   }
 
   handleInvokeResult(params: NodeInvokeResultParams): boolean {

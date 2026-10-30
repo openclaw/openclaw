@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
-import type { ConfigSnapshotReadMeasure } from "../config/io.read.types.js";
 import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
+import type { DoctorProgressMeasure } from "../infra/doctor-progress.js";
 import type { ExistingAgentDatabaseTarget } from "../infra/session-sqlite-migration-readers.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
@@ -19,7 +19,7 @@ export async function prepareDoctorMigrationBackups(params: {
   verifiedSnapshots: readonly BackupSqliteSnapshotFact[];
   automaticRepair: boolean;
   runtime: Pick<RuntimeEnv, "log">;
-  measure: ConfigSnapshotReadMeasure;
+  measure: DoctorProgressMeasure;
 }) {
   const { schemas, env, check, verifiedSnapshots, automaticRepair, runtime, measure } = params;
   const { prepareDoctorDatabaseMigrations } = await import("./doctor-schema-migrations.js");
@@ -80,7 +80,7 @@ export async function prepareDoctorMigrationBackups(params: {
  * every migration it returns, so those stores are current and need no conservative
  * full backup; refused, unreadable, or unmigrated stores still do.
  */
-export function hasUnpreparedSchemas(
+function hasUnpreparedSchemas(
   schemas: Pick<DoctorDatabasePreflight, "pendingMigrations" | "agentRefusals" | "indeterminate">,
   committedVersionMigrations: readonly { path: string }[] | undefined,
 ): boolean {

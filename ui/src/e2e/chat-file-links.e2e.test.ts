@@ -36,22 +36,211 @@ function fileInfo<T extends object>(name: string, fields: T) {
   return { kind: "read", missing: false, name, path: name, workspacePath: name, ...fields };
 }
 
+function textPreview(path: string, content: string, fields: object = {}) {
+  return previewResponse(nodePath.posix.basename(path), {
+    path,
+    workspacePath: path,
+    content,
+    contentEncoding: "utf8",
+    previewKind: "text",
+    ...fields,
+  });
+}
+
 suite.define(() => {
+  it("opens a later managed-file reference through its original artifact", async () => {
+    await withPage(async (page) => {
+      const id = "artifact_managed_media_12345678-1234-4234-8234-123456789abc";
+      const href =
+        "/api/chat/media/outgoing/agent%3Amain%3Amain/12345678-1234-4234-8234-123456789abc/full";
+      const original = '{"title":"Canal survey","temperatureCelsius":12}\n';
+      const artifact = {
+        id,
+        type: "file",
+        title: "canal-survey.json",
+        mimeType: "application/json",
+        sizeBytes: Buffer.byteLength(original),
+        sessionKey,
+        download: { mode: "url" },
+      };
+      const gateway = await installMockGateway(page, {
+        // The original row need not be in the rendered history window.
+        historyMessages: [chatMessage("assistant", `[Original survey](${href})`)],
+        methodResponses: {
+          "artifacts.list": {
+            artifacts: [
+              { ...artifact, id: "artifact_managed_media_87654321-4321-4321-8321-cba987654321" },
+              artifact,
+            ],
+          },
+          "artifacts.download": {
+            artifact,
+            url: `${href}?mediaTicket=fixture-grant`,
+            expiresAt: "2099-01-01T00:00:00.000Z",
+          },
+        },
+      });
+      await page.route("**/api/chat/media/outgoing/**", (route) =>
+        route.fulfill({ status: 200, contentType: "application/json", body: original }),
+      );
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+      await composer.fill("Keep this unsent note.");
+      const chatUrl = page.url();
+      const link = page.getByRole("link", { name: "Original survey", exact: true });
+      await link.click();
+      const fileView = page.locator(".sidebar-file-view:visible");
+      await polledText(fileView).toContain("Canal survey");
+      expect(page.url()).toBe(chatUrl);
+      expect(await composer.inputValue()).toBe("Keep this unsent note.");
+      expect(await gateway.getRequests("sessions.files.get")).toHaveLength(0);
+      expect((await gateway.getRequests("artifacts.download"))[0]?.params).toMatchObject({
+        sessionKey,
+        artifactId: id,
+      });
+      await exactButton(page, "Close tab: canal-survey.json").click();
+      await link.focus();
+      await link.press("Enter");
+      await polledText(fileView).toContain("Canal survey");
+      expect(page.context().pages()).toHaveLength(1);
+    });
+  });
+
+  it.each([
+    { kind: "managed", name: "log.md", root: "/workspace" },
+    { kind: "extensionless", name: "README", root: "/workspace" },
+    { kind: "repository", name: "log.md", root: undefined },
+  ])("follows document-relative evidence links in $kind Files", async ({ name, root }) => {
+    await withPage(async (page) => {
+      const report = "reports/reviewer-report.md";
+      const evidence = `reports/evidence/${name}`;
+      const requestPath = (path: string) => (root ? `${root}/${path}` : path);
+      const targetPath = (path: string) => (root ? `${root}/${path}` : `./${path}`);
+      const summaryRequest = root ? `${root}/reports/../summary.md` : "./summary.md";
+      const source = `# Review report\n\n[Browser evidence](evidence/${name}#browser-components)\n\n[Summary](../summary.md)\n`;
+      const gateway = await installMockGateway(page, {
+        workspace: "/workspace/nested-cwd",
+        historyMessages: [chatMessage("assistant", `[Report](${requestPath(report)})`)],
+        methodResponses: {
+          "sessions.files.get": {
+            cases: [
+              {
+                path: report,
+                request: requestPath(report),
+                name: "reviewer-report.md",
+                content: source,
+              },
+              {
+                path: evidence,
+                request: targetPath(evidence),
+                name,
+                content: "# Evidence\n\n## browser-components\n\nThe intended result is 42.\n",
+              },
+              {
+                path: "summary.md",
+                request: summaryRequest,
+                name: "summary.md",
+                content: "# Workspace summary\n\nThe parent-directory link works.\n",
+              },
+            ].map(({ path, request, name: fileName, content }) => ({
+              match: { path: request },
+              response: {
+                ...textPreview(path, content, {
+                  mimeType: fileName === "README" ? "text/plain" : "text/markdown",
+                }),
+                root,
+                source: {
+                  workspaceId: "report-workspace",
+                  root: root ?? null,
+                  fileRoot: root ? "/workspace/nested-cwd" : null,
+                },
+              },
+            })),
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.locator(`.chat-thread a[data-file-path="${requestPath(report)}"]`).click();
+      const fileView = page.locator(".sidebar-file-view:visible");
+      const reader = fileView.locator(".sidebar-file-view__markdown");
+      const reportTab = page
+        .locator(".side-panel__header .tabstrip-tab")
+        .filter({ hasText: "reviewer-report.md" });
+      await polledText(reader).toContain("Review report");
+      const chatUrl = page.url();
+      await reader.getByText("Browser evidence", { exact: true }).click();
+      await polledText(fileView).toContain("The intended result is 42.");
+      expect(page.url()).toBe(chatUrl);
+      await reportTab.click();
+      await polledText(reader).toContain("Review report");
+      await reader.getByText("Summary", { exact: true }).click();
+      await polledText(reader).toContain("The parent-directory link works.");
+      expect(page.url()).toBe(chatUrl);
+      expect((await gateway.getRequests("sessions.files.get")).map((r) => r.params)).toEqual([
+        fileRequest(requestPath(report)),
+        fileRequest(targetPath(evidence)),
+        fileRequest(summaryRequest),
+      ]);
+      await reportTab.click();
+      await polledText(reader).toContain("Review report");
+    });
+  });
+
+  it("restores the Files catalog selection after a refused document link", async () => {
+    await withPage(async (page) => {
+      const gateway = await installMockGateway(page, {
+        workspace: "/workspace",
+        agentModel: "proof/model",
+        historyMessages: [chatMessage("assistant", "[Report](/workspace/report.md)")],
+        methodResponses: {
+          "sessions.files.get": textPreview("report.md", "# Report\n\n[Evidence](evidence.md)"),
+          "sessions.files.list": {
+            sessionKey,
+            root: "/workspace",
+            files: [],
+            browser: {
+              path: "",
+              entries: ["report.md", "evidence.md"].map((path) => ({
+                path,
+                name: path,
+                kind: "file",
+              })),
+            },
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.locator('.chat-thread a[data-file-path="/workspace/report.md"]').click();
+      const reader = page.locator(".sidebar-file-view:visible .sidebar-file-view__markdown");
+      await polledText(reader).toContain("Report");
+      const chatUrl = page.url();
+      await exactButton(page, "Toggle file tree").click();
+      const catalog = page.getByRole("complementary", { name: "Session workspace", exact: true });
+      const report = catalog.getByRole("button", { name: "report.md", exact: true });
+      const evidence = catalog.getByRole("button", { name: "evidence.md", exact: true });
+      await polledAttribute(report, "aria-current").toBe("true");
+      const match = { path: "/workspace/evidence.md" };
+      const after = await gateway.deferNext("sessions.files.get", match);
+      await reader.getByText("Evidence", { exact: true }).click();
+      await gateway.waitForRequest("sessions.files.get", { after, match });
+      await polledAttribute(report, "aria-current").not.toBe("true");
+      await gateway.rejectDeferred("sessions.files.get", { message: "Access denied" }, { match });
+      await polledText(page.locator("openclaw-toast-host")).toContain("Access denied");
+      await page.evaluate(
+        "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+      );
+      expect(await report.getAttribute("aria-current")).toBe("true");
+      expect(await evidence.getAttribute("aria-current")).not.toBe("true");
+      expect(await reader.textContent()).toContain("Report");
+      expect(page.url()).toBe(chatUrl);
+    });
+  });
+
   it.each(["close", "list"] as const)(
     "shows a file tab before completion and honors the %s intent",
     async (intent) => {
       await withPage(async (page) => {
-        const file = {
-          root: "/workspace",
-          sessionKey,
-          file: fileInfo("slow.ts", {
-            previewKind: "text",
-            contentEncoding: "utf8",
-            content: "export const loaded = true;\n",
-            path: "src/slow.ts",
-            workspacePath: "src/slow.ts",
-          }),
-        };
+        const file = textPreview("src/slow.ts", "export const loaded = true;\n");
         const gateway = await installMockGateway(page, {
           deferredMethods: [
             "sessions.files.get",
@@ -157,17 +346,10 @@ suite.define(() => {
           "sessions.files.get": {
             cases: files.map((file) => ({
               match: { path: file.requestPath },
-              response: {
-                root: "/workspace",
-                sessionKey,
-                file: fileInfo(file.name, {
-                  content: `// 1\n// 2\n// 3\n// 4\n// 5\n// 6\n${file.marker}\n`,
-                  contentEncoding: "utf8",
-                  path: file.workspacePath,
-                  previewKind: "text",
-                  workspacePath: file.workspacePath,
-                }),
-              },
+              response: textPreview(
+                file.workspacePath,
+                `// 1\n// 2\n// 3\n// 4\n// 5\n// 6\n${file.marker}\n`,
+              ),
             })),
           },
         },
@@ -257,19 +439,11 @@ suite.define(() => {
       const fileResponse = (content: string, hash: string) => ({
         cases: ["README.md", "/workspace/packages/app/README.md"].map((requestPath) => ({
           match: { path: requestPath },
-          response: {
-            root: "/workspace",
-            sessionKey,
-            file: fileInfo("README.md", {
-              previewKind: "text",
-              contentEncoding: "utf8",
-              content,
-              hash,
-              kind: "modified",
-              workspacePath: "packages/app/README.md",
-              path: requestPath.replace(/^\/workspace\//, ""),
-            }),
-          },
+          response: textPreview(requestPath.replace(/^\/workspace\//, ""), content, {
+            hash,
+            kind: "modified",
+            workspacePath: "packages/app/README.md",
+          }),
         })),
       });
       const gateway = await installMockGateway(page, {
@@ -405,12 +579,9 @@ suite.define(() => {
     expect(png.byteLength).toBeLessThan(256 * 1024);
     const pngBase64 = png.toString("base64");
     const responses = {
-      "/workspace/notes.txt": previewResponse("notes.txt", {
-        content: "Exact-head workspace preview proof.\n",
-        contentEncoding: "utf8",
+      "/workspace/notes.txt": textPreview("notes.txt", "Exact-head workspace preview proof.\n", {
         hash: "a".repeat(64),
         mimeType: "text/plain",
-        previewKind: "text",
         size: 36,
       }),
       "/workspace/openclaw.png": previewResponse("openclaw.png", {

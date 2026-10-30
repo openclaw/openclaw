@@ -1,17 +1,26 @@
+import { createHash } from "node:crypto";
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { setTimeout as realSetTimeout } from "node:timers";
 import { afterEach, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { findVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { fixtureReceiptClientSource } from "../../test/helpers/fixture-receipts.js";
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import * as commands from "../process/exec.js";
 import * as diskSpace from "./disk-space.js";
 import { hasErrnoCode } from "./errno.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
+import { removeTempDirectory } from "./sqlite-readonly-location-cleanup.js";
+import { isSqliteSnapshotStagingName } from "./sqlite-snapshot-retirement.js";
+import { SQLITE_STAGING_TOKEN_FILES } from "./sqlite-staging-token.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 import { measureUpdateStateFiles } from "./update-candidate-io.js";
 import {
@@ -33,6 +42,7 @@ import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.
 import { UpdateDatabaseBackupSchema } from "./update-database-backup.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
+import { UPDATE_STATE_INSPECTION_PROGRESS_PREFIX } from "./update-state-inspection-protocol.js";
 
 let cleanupFixture: (() => Promise<void>) | undefined;
 const tempDirs = useAutoCleanupTempDirTracker((cleanupDirs) =>
@@ -154,6 +164,351 @@ it("keeps one-shot state worker stdout parseable with SQLite debug logging enabl
     /\[state\/sqlite\] SQLite read-only snapshot for .*budget \d+ seconds/,
   );
 });
+
+it.skipIf(process.platform === "win32").for(["complete", "cancel"] as const)(
+  "settles automatic backup with two retained images after %s",
+  { timeout: 30_000 },
+  async (outcome, { signal, onTestFinished }) => {
+    // Retention must survive the enclosing Vitest process owner's namespace cleanup.
+    const releaseFixture = findVitestResourceOwner()?.claim();
+    // openclaw-temp-dir: allow native cleanup uncertainty must retain worker inputs.
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "backup-retained-")));
+    const controller = new AbortController();
+    const stateDir = path.join(root, "source");
+    const shared = path.join(stateDir, "state", "openclaw.sqlite");
+    const second = path.join(root, "second.sqlite");
+    const sources = [shared, second];
+    const stagingRoot = path.join(root, "staging");
+    const workerCacheRoot = path.join(root, "worker-cache");
+    const backupRoot = path.join(root, "backup");
+    const directory = backupRoot + ".databases";
+    const marker = path.join(root, "held.json");
+    const release = path.join(root, "release");
+    const sentinel = path.join(directory, "operator.txt");
+    let pid: number | undefined;
+    let operation:
+      | Promise<
+          { value: Awaited<ReturnType<typeof runUpdateStateInspectionWorker>> } | { error: unknown }
+        >
+      | undefined;
+    let retirementFailure: Error | undefined;
+    const unexpectedEntry = (scope: string, entry: Dirent) =>
+      new Error(
+        `Unexpected ${scope} entry ${JSON.stringify({
+          name: entry.name.slice(0, 128),
+          type: entry.isDirectory()
+            ? "directory"
+            : entry.isFile()
+              ? "file"
+              : entry.isSymbolicLink()
+                ? "symlink"
+                : "other",
+        })}; fixture retained`,
+      );
+    const assertWorkerCacheEmpty = async () => {
+      const cacheStat = await fs.lstat(workerCacheRoot).catch((error: unknown) => {
+        if (hasErrnoCode(error, "ENOENT")) {
+          return undefined;
+        }
+        throw error;
+      });
+      if (!cacheStat) {
+        return;
+      }
+      if (!cacheStat.isDirectory()) {
+        throw new Error("Worker cache root is not a real directory; fixture retained");
+      }
+      for (const entry of await fs.readdir(workerCacheRoot, { withFileTypes: true })) {
+        if (entry.name !== "openclaw" || !entry.isDirectory()) {
+          throw unexpectedEntry("worker cache", entry);
+        }
+        // The canonical cache root may remain, but no snapshot work may survive the joined worker.
+        const remaining = await fs.readdir(path.join(workerCacheRoot, entry.name), {
+          withFileTypes: true,
+        });
+        if (remaining.length) {
+          throw unexpectedEntry("SQLite cache", remaining[0]!);
+        }
+      }
+    };
+    const retireSnapshot = (location: string) => {
+      try {
+        let cause: unknown;
+        if (
+          !removeTempDirectory(location, (error) => {
+            cause = error;
+          })
+        ) {
+          throw new Error("Snapshot retirement refused", { cause });
+        }
+      } catch (error) {
+        // Native refusal keeps its recovery inputs; later test cleanup must not retry or unlink them.
+        retirementFailure = new Error("Snapshot retirement unverified; fixture retained", {
+          cause: error,
+        });
+        throw retirementFailure;
+      }
+    };
+    const cleanup = registerCleanup(async () => {
+      controller.abort();
+      const settled = await operation;
+      if (
+        (settled && "error" in settled && hasCommandProcessCleanupError(settled.error)) ||
+        (pid !== undefined && isProcessAlive(pid))
+      ) {
+        throw new Error("Backup worker cleanup unverified; fixture retained", {
+          cause: settled && "error" in settled ? settled.error : undefined,
+        });
+      }
+      if (retirementFailure) {
+        throw retirementFailure;
+      }
+      const remaining = await fs
+        .readdir(stagingRoot, { withFileTypes: true })
+        .catch((error: unknown) => {
+          if (hasErrnoCode(error, "ENOENT")) {
+            return [];
+          }
+          throw error;
+        });
+      for (const entry of remaining) {
+        if (!entry.isDirectory() || !isSqliteSnapshotStagingName(entry.name)) {
+          throw unexpectedEntry("staging", entry);
+        }
+        retireSnapshot(path.join(stagingRoot, entry.name));
+      }
+      await assertWorkerCacheEmpty();
+      await fs.rm(root, { recursive: true });
+      releaseFixture?.();
+    }, onTestFinished);
+    let bodyFailure: { error: unknown } | undefined;
+    try {
+      for (const location of [path.dirname(shared), stagingRoot, workerCacheRoot, directory]) {
+        await fs.mkdir(location, { recursive: true });
+      }
+      expect((await fs.stat(stagingRoot)).dev).toBe((await fs.stat(directory)).dev);
+      expect((await fs.stat(workerCacheRoot)).dev).toBe((await fs.stat(directory)).dev);
+      await fs.writeFile(sentinel, "preserved");
+      for (const [index, file] of sources.entries()) {
+        using db = openNodeSqliteDatabase(file);
+        db.exec("PRAGMA user_version=7; CREATE TABLE payload(witness TEXT, bytes BLOB);");
+        db.prepare("INSERT INTO payload VALUES (?, randomblob(?))").run(
+          String(index),
+          (index + 1) * 2 * 1024 * 1024,
+        );
+      }
+      const original = await Promise.all(sources.map((file) => fs.readFile(file)));
+      const sizes = await Promise.all(sources.map(async (file) => (await fs.stat(file)).size));
+      const sourceEnv = {
+        HOME: root,
+        OPENCLAW_HOME: root,
+        OPENCLAW_STATE_DIR: stateDir,
+        // Match the held-worker preload policy so Bun's compiler cache is not SQLite scratch.
+        BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
+      };
+      const worker = {
+        nodeRunner: process.execPath,
+        sourceEnv,
+        // Worker cache ownership is separate from the explicit retained-image input below.
+        stagingRoot: workerCacheRoot,
+        signal: AbortSignal.any([signal, controller.signal]),
+        databases: await Promise.all(
+          sources.map(async (file) => ({
+            path: file,
+            sizeBytes: (await fs.stat(file, { bigint: true })).size,
+          })),
+        ),
+      };
+      // Maintenance preserves source artifacts; a stopped service does not select stopped capture.
+      const input = {
+        stateDir,
+        config: {},
+        stagingRoot,
+        backupRoot,
+        additionalPaths: [second],
+        preserveSourceArtifacts: true,
+      };
+      operation = captureStateOperation(
+        runUpdateStateInspectionWorker({
+          ...worker,
+          input: { ...input, mode: "discover" },
+        }),
+      );
+      const discovered = await withinTest(operation, signal);
+      if ("error" in discovered) {
+        throw discovered.error;
+      }
+      const inspectionPlan = parseUpdateStateInspectionWorker(
+        discovered.value,
+        UpdateStateSchemaInspectionPlanSchema,
+      );
+      const preload = path.join(root, "hold.cjs");
+      await fs.writeFile(
+        preload,
+        `
+const fs = require("node:fs");
+const originalWrite = fs.writeSync;
+let entered = false;
+fs.writeSync = function(...args) {
+  if (!entered && args[0] === 2 && typeof args[1] === "string" &&
+      args[1].startsWith(${JSON.stringify(UPDATE_STATE_INSPECTION_PROGRESS_PREFIX)})) {
+    const progress = JSON.parse(args[1].slice(${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX.length}));
+    if (progress.phase === "pre-migration database backup") {
+      entered = true;
+      fs.writeFileSync(${JSON.stringify(marker + ".tmp")}, JSON.stringify({ pid: process.pid }));
+      fs.renameSync(${JSON.stringify(marker + ".tmp")}, ${JSON.stringify(marker)});
+      const result = Reflect.apply(originalWrite, this, args);
+      // The test signal and registered cleanup own the held worker's lifetime.
+      const wait = new Int32Array(new SharedArrayBuffer(4));
+      while (!fs.existsSync(${JSON.stringify(release)})) {
+        Atomics.wait(wait, 0, 0, 10);
+      }
+      return result;
+    }
+  }
+  return Reflect.apply(originalWrite, this, args);
+};
+require("node:module").syncBuiltinESMExports();
+`,
+      );
+      const entered = createDeferred();
+      let progressObserved = false;
+      operation = captureStateOperation(
+        runUpdateStateInspectionWorker({
+          ...worker,
+          sourceEnv: { ...sourceEnv, ...sqliteWorkerPreloadEnv(preload) },
+          input: { ...input, mode: "database-backup", inspectionPlan },
+          onProgress: (progress) => {
+            if (progress.phase === "pre-migration database backup") {
+              progressObserved = true;
+              entered.resolve();
+            }
+          },
+        }),
+      );
+      await withinTest(fixtureEventBeforeSettlement(marker, entered.promise, operation), signal);
+      expect(progressObserved).toBe(true);
+      const receipt = JSON.parse(await fs.readFile(marker, "utf8")) as { pid: number };
+      expect(Number.isSafeInteger(receipt.pid)).toBe(true);
+      pid = receipt.pid;
+      expect(isProcessAlive(pid)).toBe(true);
+      expect(await fs.readdir(directory)).toEqual(["operator.txt"]);
+
+      const retained = (await fs.readdir(stagingRoot, { withFileTypes: true }))
+        .filter((entry) => entry.isDirectory() && isSqliteSnapshotStagingName(entry.name))
+        .map((entry) => path.join(stagingRoot, entry.name));
+      expect(retained).toHaveLength(2);
+      const identities = new Set<string>();
+      let payloadBytes = 0;
+      let allocatedBlockBytes = 0;
+      let controlBytes = 0;
+      const payloads: Buffer[] = [];
+      const payloadPaths: string[] = [];
+      for (const location of retained) {
+        const files = await fs.readdir(location, { withFileTypes: true });
+        expect(files.some((file) => file.name === "owner.sqlite")).toBe(true);
+        let payloadCount = 0;
+        for (const file of files) {
+          expect(file.isFile()).toBe(true);
+          const filename = path.join(location, file.name);
+          const stat = await fs.lstat(filename);
+          const identity = stat.dev + ":" + stat.ino;
+          expect(identities.has(identity)).toBe(false);
+          identities.add(identity);
+          allocatedBlockBytes += stat.blocks * 512;
+          if (SQLITE_STAGING_TOKEN_FILES.some((name) => name === file.name)) {
+            controlBytes += stat.size;
+          } else {
+            payloadCount++;
+            payloadBytes += stat.size;
+            payloads.push(await fs.readFile(filename));
+            payloadPaths.push(filename);
+          }
+        }
+        expect(payloadCount).toBe(1);
+        expect(removeTempDirectory(location, () => {})).toBe(false);
+      }
+      for (const [index, file] of payloadPaths.entries()) {
+        expect((await fs.readFile(file)).equals(payloads[index]!)).toBe(true);
+      }
+      const hashes = (values: Buffer[]) =>
+        values.map((bytes) => createHash("sha256").update(bytes).digest("hex")).toSorted();
+      expect(hashes(payloads)).toEqual(hashes(original));
+      expect(payloadBytes).toBe(sizes.reduce((sum, size) => sum + size, 0));
+      expect(controlBytes).toBeLessThanOrEqual(2 * 64 * 1024);
+      const admittedBytes = 2 * payloadBytes + 3 * Math.max(...sizes) + 64 * 1024 * 1024;
+      expect(payloadBytes + controlBytes).toBeLessThanOrEqual(admittedBytes);
+      expect(allocatedBlockBytes).toBeGreaterThan(0);
+      expect(allocatedBlockBytes).toBeLessThanOrEqual(admittedBytes);
+      console.log(
+        JSON.stringify({
+          event: "retained-inventory-checkpoint",
+          outcome,
+          families: retained.length,
+          payloadBytes,
+          controlBytes,
+          allocatedBlockBytes,
+          accounting: "inode-deduplicated blocks; not exclusive CoW bytes or capture peak",
+          admittedBytes,
+        }),
+      );
+
+      if (outcome === "cancel") {
+        const cancellation = new Error("cancel automatic backup with retained inventory");
+        expect(isProcessAlive(pid)).toBe(true);
+        controller.abort(cancellation);
+        expect(await operation).toEqual({ error: cancellation });
+        expect(isProcessAlive(pid)).toBe(false);
+        // Forced termination can retain scratch; only the existing token owner may retire it.
+        for (const location of retained) {
+          retireSnapshot(location);
+        }
+        expect(await fs.readdir(directory)).toEqual(["operator.txt"]);
+      } else {
+        await fs.writeFile(release, "continue");
+        const result = await operation;
+        if ("error" in result) {
+          throw result.error;
+        }
+        const backup = parseUpdateStateInspectionWorker(result.value, UpdateDatabaseBackupSchema);
+        expect(backup.warnings).toEqual([]);
+        expect(backup.databases).toHaveLength(2);
+        for (const [index, file] of sources.entries()) {
+          const entry = backup.databases.find((value) => value.path === file);
+          expect(entry).toBeDefined();
+          expect((await fs.readFile(entry!.snapshotPath)).equals(original[index]!)).toBe(true);
+          expect(backup.sourceGenerations[file]).toEqual(expect.any(String));
+        }
+      }
+      expect(await fs.readdir(stagingRoot)).toEqual([]);
+      await assertWorkerCacheEmpty();
+      expect(await fs.readFile(sentinel, "utf8")).toBe("preserved");
+      for (const [index, file] of sources.entries()) {
+        expect((await fs.readFile(file)).equals(original[index]!)).toBe(true);
+        for (const suffix of ["-wal", "-shm", "-journal"]) {
+          await expect(fs.stat(file + suffix)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      }
+    } catch (error) {
+      bodyFailure = { error };
+    }
+    try {
+      await cleanup();
+    } catch (cleanupError) {
+      if (bodyFailure) {
+        throw createSqliteLifecycleAggregateError(
+          [bodyFailure.error, cleanupError],
+          "Retained backup fixture failed and cleanup was not verified",
+          bodyFailure.error,
+        );
+      }
+      throw cleanupError;
+    }
+    if (bodyFailure) {
+      throw bodyFailure.error;
+    }
+  },
+);
 
 it.for([undefined, 600_000])(
   "honors the %s ms allowance during metadata inventory",

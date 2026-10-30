@@ -358,14 +358,19 @@ it("invalidates admitted auth facts after a separate process replaces their file
   const captured = captureAuthProfileFileIdentity(databasePath);
   const before = captured.identity;
   expect(authProfileSourceExists(legacyPath)).toBe(false);
-  const changed = nextChange(directory);
+  const changed = Promise.withResolvers<void>();
+  listen(directory, (change) => {
+    if (change.identityChanged) {
+      changed.resolve();
+    }
+  });
   await promisify(execFile)(process.execPath, [
     "-e",
     'const fs = require("node:fs"); const [db, legacy] = process.argv.slice(1); fs.writeFileSync(db + ".replacement", "replacement synthetic database"); fs.renameSync(db + ".replacement", db); fs.writeFileSync(legacy, "{}");',
     databasePath,
     legacyPath,
   ]);
-  await observe(changed);
+  await observe(changed.promise);
   expect(() => captured.assertCurrent()).toThrow("database file identity changed");
   const stat = vi.spyOn(fs, "statSync");
   const exists = vi.spyOn(fs, "existsSync");

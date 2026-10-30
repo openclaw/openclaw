@@ -391,10 +391,18 @@ export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecover
       pendingIndexes.push(index);
       return;
     }
+    const hasVisibleAssistant = hasVisibleAssistantDisplayContent(message);
     if (
-      (!unseenPending && pendingIndexes.length === 0) ||
-      !hasVisibleAssistantDisplayContent(message)
+      message.role === "assistant" &&
+      (message.stopReason === "stop" || message.stopReason === "length") &&
+      !hasVisibleAssistant &&
+      !unseenPending &&
+      pendingIndexes.length === 0
     ) {
+      messages.pop();
+      return;
+    }
+    if ((!unseenPending && pendingIndexes.length === 0) || !hasVisibleAssistant) {
       return;
     }
     // An incremental reader carries only a pending bit. It must reload raw

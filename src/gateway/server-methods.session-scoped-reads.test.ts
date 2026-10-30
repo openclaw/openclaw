@@ -142,6 +142,78 @@ function prepareRead(method: (typeof methods)[number], beforeReturn: () => Promi
 }
 
 describe("narrow session read owners", () => {
+  it("admits CSP previews for session-only readers and revokes resources when sharing ends", async () => {
+    await withScopedReader("preview-reader", async ({ state, reader, context }) => {
+      reader.connId = "narrow-preview";
+      const controller = new AbortController();
+      reader.connectionSignal = controller.signal;
+      using _ = { [Symbol.dispose]: () => controller.abort() };
+      const owner = roleClient("view", "preview-owner");
+      const policy =
+        "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
+      const html = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${policy}"><script defer src="app.js"></script></head><body>Preview</body></html>`;
+      const code = "window.previewReady = true;";
+      await fs.writeFile(path.join(state.workspaceDir, "index.html"), html);
+      await fs.writeFile(path.join(state.workspaceDir, "app.js"), code);
+      const entry = {
+        sessionId: "preview-session",
+        updatedAt: 1,
+        visibility: "shared" as const,
+        spawnedCwd: state.workspaceDir,
+        permissionMode: "read-only" as const,
+        createdActor: createdActor(owner),
+      };
+      await seed(entry);
+      const respond = vi.fn();
+      const dispatch = (document = html) =>
+        handleGatewayRequest({
+          req: gatewayRequest("preview", "sessions.files.preview", {
+            sessionKey: key,
+            path: "index.html",
+            html: document,
+          }),
+          client: reader,
+          context,
+          respond,
+          isWebchatConnect: () => false,
+          extraHandlers: sessionsFilesHandlers,
+        });
+      await dispatch();
+      expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0])).toBe(true);
+      const preview = respond.mock.calls[0]?.[1] as {
+        status: string;
+        sandboxPath: string;
+        html: string;
+      };
+      expect(preview.status).toBe("ready");
+      expect(preview.html).toBe(html);
+      const resource = new URL("app.js", "http://preview.invalid" + preview.sandboxPath).pathname;
+      const fetched = await fetchSessionFileDownload(reader, resource);
+      expect(fetched.response.statusCode).toBe(200);
+      expect(Buffer.from(fetched.body as Uint8Array).toString()).toBe(code);
+      for (const css of ["body{color:black}", "/*a".repeat(21_846).slice(0, 65_536)]) {
+        await fs.writeFile(path.join(state.workspaceDir, "style.css"), css);
+        respond.mockClear();
+        await dispatch(
+          html.replace(
+            '<script defer src="app.js"></script>',
+            '<link rel="stylesheet" href="style.css">',
+          ),
+        );
+        expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0])).toBe(true);
+        expect(respond.mock.calls[0]?.[1]?.status).toBe(
+          css.startsWith("/*") ? "unsupported" : "ready",
+        );
+      }
+      await seed({ ...entry, visibility: "draft", updatedAt: 2 });
+      expect((await fetchSessionFileDownload(reader, resource)).response.statusCode).toBe(404);
+      respond.mockClear();
+      await dispatch();
+      expect(respond.mock.calls[0]?.[0]).toBe(false);
+      expect(respond.mock.calls[0]?.[1]).toBeUndefined();
+    });
+  });
+
   it("authorizes original-byte downloads for session-only VIEW readers and revokes HTTP grants with sharing", async () => {
     await withScopedReader("download-reader", async ({ state, reader, context }) => {
       reader.connId = "narrow-download";

@@ -559,7 +559,9 @@ suite.define(() => {
       messages,
       totalMessages,
       hasMore: nextOffset !== undefined,
-      ...(nextOffset === undefined ? {} : { nextOffset }),
+      ...(nextOffset === undefined
+        ? {}
+        : { nextOffset, olderCursor: `older-native-${nextOffset}` }),
       sessionId: "native-scrollback",
       thinkingLevel: null,
     });
@@ -569,8 +571,8 @@ suite.define(() => {
         "chat.startup": historyPage(recent, 1100, 100),
         "chat.history": {
           cases: [
-            { match: { offset: 100 }, response: historyPage(older) },
-            { match: { offset: 1100 }, response: historyPage([], 1140) },
+            { match: { cursor: "older-native-100" }, response: historyPage(older) },
+            { match: { cursor: "older-native-1100" }, response: historyPage([], 1140) },
           ],
         },
       },
@@ -635,13 +637,19 @@ suite.define(() => {
         .toBe(1100);
       await expectHistoryBoundaryState(page, false);
     });
-    // Stage offset 1100 without entering the loading state.
+    // Stage the next older cursor without entering the loading state.
     await expect
       .poll(() => gateway.getRequests("chat.history").then((requests) => requests.length))
       .toBe(failedRequestCount + 2);
     const requestsAfterPrefetch = await gateway.getRequests("chat.history");
-    expect(requestsAfterPrefetch.at(-2)?.params).toMatchObject({ limit: 1000, offset: 100 });
-    expect(requestsAfterPrefetch.at(-1)?.params).toMatchObject({ limit: 1000, offset: 1100 });
+    expect(requestsAfterPrefetch.at(-2)?.params).toMatchObject({
+      limit: 1000,
+      cursor: "older-native-100",
+    });
+    expect(requestsAfterPrefetch.at(-1)?.params).toMatchObject({
+      limit: 1000,
+      cursor: "older-native-1100",
+    });
     await page.evaluate(
       () =>
         new Promise<void>((resolve) => {

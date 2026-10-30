@@ -16,6 +16,7 @@ import {
   isHostLocalMarkdownFileHref,
   MARKDOWN_FILE_LINK_SCAN_RE,
   parseMarkdownFileLinkTarget,
+  parseMarkdownDocumentFileLinkTarget,
   splitMarkdownFileLineSuffix,
 } from "./markdown-file-links.ts";
 import { installMarkdownGitHubRefs } from "./markdown-github-refs.ts";
@@ -342,7 +343,7 @@ export function createMarkdownParser(): MarkdownItParser {
 
   markdownParser.core.ruler.after("linkify-cjk-trim", "file-links", (state) => {
     const env = state.env as Partial<MarkdownRenderEnv> | undefined;
-    if (env?.fileLinks !== true) {
+    if (env?.fileLinks !== true && !env?.documentFileLinks) {
       return;
     }
     const decorations: MarkdownFileLinkDecoration[] = [];
@@ -384,15 +385,28 @@ export function createMarkdownParser(): MarkdownItParser {
             } catch {
               // Keep the raw href when malformed percent escapes cannot be decoded.
             }
-            if (!decodedHref.includes("://")) {
+            // Query values may contain URLs; selection parsing owns the destination's scheme check.
+            if (env.documentFileLinks === "select" || !decodedHref.includes("://")) {
+              const documentTarget = env.documentFileLinks
+                ? parseMarkdownDocumentFileLinkTarget(
+                    href,
+                    env.documentFileLinks === "select" ? "select" : "read",
+                  )
+                : null;
               const target =
-                parseMarkdownFileLinkTarget(decodedHref, { authored: true }) ??
-                (isHostLocalMarkdownFileHref(decodedHref)
-                  ? splitMarkdownFileLineSuffix(decodedHref.trim())
+                documentTarget ??
+                (env.fileLinks
+                  ? (parseMarkdownFileLinkTarget(decodedHref, { authored: true }) ??
+                    (isHostLocalMarkdownFileHref(decodedHref)
+                      ? splitMarkdownFileLineSuffix(decodedHref.trim())
+                      : null))
                   : null);
               if (target) {
                 token.attrs = token.attrs?.filter(([name]) => name !== "href") ?? null;
                 decorateFileLink(token, target);
+                if (documentTarget) {
+                  token.attrSet("data-file-document-relative", "true");
+                }
                 // Keep authored labels; expose their reference only when different.
                 const reference = decodedHref.trim();
                 if (linkLabelText(children, index) !== reference) {
@@ -408,7 +422,7 @@ export function createMarkdownParser(): MarkdownItParser {
           linkDepth = Math.max(0, linkDepth - 1);
           continue;
         }
-        if (linkDepth > 0) {
+        if (linkDepth > 0 || !env.fileLinks) {
           continue;
         }
         if (token.type === "code_inline") {

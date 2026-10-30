@@ -57,7 +57,13 @@ import {
   syncGitHubIdentity,
 } from "../../state/user-profile-writes.worker.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
-import { createHostIngressFixture } from "./host-ingress.test-support.js";
+import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
+import {
+  createHostIngressFixture,
+  ingressInput,
+  ingressMessage,
+  withTestChannelRegistry,
+} from "./host-ingress.test-support.js";
 import { withAdminIngress } from "./operator-authority.test-support.js";
 
 function authorize(cfg: Parameters<typeof resolveCommandAuthorization>[0]["cfg"], ctx: MsgContext) {
@@ -456,6 +462,72 @@ it("keeps configured owners independent of role and identity links", () =>
     expect(authorize(cfg, contexts[1]!).senderIsOwner).toBe(true);
     expect(assertions[1]).not.toThrow();
   }));
+
+it.each([
+  { channel: "whatsapp", senderId: "+15550000001", kind: "phone" },
+  { channel: "signal", senderId: "+15550000001", kind: "stable-id" },
+  { channel: "imessage", senderId: "owner@example.test", kind: "stable-id" },
+  { channel: "matrix", senderId: "@owner:example.test", kind: "stable-id" },
+  { channel: "feishu", senderId: "ou_owner", kind: "plugin:feishu-id" },
+] as const)(
+  "binds configured $channel ownership without attesting a personal identity",
+  ({ channel, senderId, kind }) =>
+    withTestChannelRegistry(createChannelTestPluginBase({ id: channel }), () =>
+      withOperator(async ({ cfg, admin, activatePolicy }) => {
+        const identity = { channelId: channel, accountId: "default", senderId };
+        cfg.commands!.ownerAllowFrom = [`${channel}:${senderId}`];
+        await activatePolicy({});
+        linkUserChannelIdentity(admin.profile.id, identity);
+        const host = createHostIngressFixture(channel, cfg);
+        using _ = { [Symbol.dispose]: host.retire };
+        const context = async (
+          sender: string = senderId,
+          overrides: Parameters<typeof ingressInput>[1] = {},
+          exposedSender = sender,
+        ) => {
+          const message = ingressMessage(channel, "agent:main:main", sender);
+          const ingress = await host.ingress.resolveStable(
+            ingressInput(message, { identity: { kind }, ...overrides }),
+          );
+          return host.buildContext({
+            ...message,
+            sender: { id: exposedSender },
+            channelIngress: ingress,
+          });
+        };
+        const admitted = await context();
+        const assertOwner = expectDefined(
+          captureCommandOwnerAssertion(admitted),
+          "explicit configured owner authority",
+        );
+        expect(assertOwner).not.toThrow();
+        expect(admitted.SenderId).toBe(senderId);
+        expectNoRequester(admitted);
+        for (const unrelated of [
+          await context("+15550000002"),
+          await context(senderId, {
+            subject: { stableId: senderId, authentication: { stableId: "unverified" } },
+          }),
+          await context(senderId, { dmPolicy: "disabled" }),
+          await context(senderId, {}, "+15550000002"),
+          structuredClone(admitted),
+        ]) {
+          expect(captureCommandOwnerAssertion(unrelated)).toBeUndefined();
+        }
+        cfg.commands!.ownerAllowFrom = [];
+        expect(assertOwner).toThrow(CommandOwnerRevokedError);
+        expect(captureCommandOwnerAssertion(await context())).toBeUndefined();
+        await activatePolicy({});
+        cfg.commands!.ownerAllowFrom = [`${channel}:${senderId}`];
+        await activatePolicy({});
+        expect(assertOwner).toThrow(CommandOwnerRevokedError);
+        const fresh = expectDefined(captureCommandOwnerAssertion(await context()), "fresh owner");
+        expect(fresh).not.toThrow();
+        host.retire();
+        expect(fresh).toThrow(CommandOwnerRevokedError);
+      }),
+    ),
+);
 
 it("carries native Slack requester authority and keeps relay replays asserted", () =>
   withOperator(async ({ cfg, state, admin }) => {

@@ -269,7 +269,8 @@ export function ChatComposerContextPanel(
                     : "chat.composer.contextUsage.contextWindow",
                 )}
               </span>
-              <strong class="context-usage__context-value">
+              {/* Translation replaces the text anchors used by live token updates. */}
+              <strong class="context-usage__context-value" translate="no">
                 {context().detail} · {context().approximate ? "~" : ""}
                 {context().pct}%
               </strong>

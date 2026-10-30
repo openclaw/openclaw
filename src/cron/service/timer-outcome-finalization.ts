@@ -163,7 +163,7 @@ export async function finalizeCompletedCronRunOutcomes(
       try {
         const request = finalized.find((outcome) => outcome.request);
         const nowMs = state.deps.nowMs();
-        if (request || state.store?.jobs.some((job) => needsCronTimerMaintenance(job, nowMs))) {
+        if (state.store?.jobs.some((job) => needsCronTimerMaintenance(job, nowMs))) {
           await locked(state, () =>
             recomputeUnownedCronSchedules(state, {
               nowMs,

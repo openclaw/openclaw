@@ -78,10 +78,13 @@ function createSlackDirectoryLister<T>(options: {
     if (!client) {
       return [];
     }
-    const query = normalizeLowercaseStringOrEmpty(params.query);
+    // Canonical forms compare equal here; directory entries keep their original spelling.
+    const query = normalizeLowercaseStringOrEmpty(params.query).normalize("NFC");
     const rows = (await options.fetchRows(client))
       .filter((row) => {
-        const candidates = options.searchValues(row).map(normalizeOptionalLowercaseString);
+        const candidates = options
+          .searchValues(row)
+          .map((value) => normalizeOptionalLowercaseString(value)?.normalize("NFC"));
         return !query || candidates.some((candidate) => candidate?.includes(query));
       })
       .map(options.toEntry)

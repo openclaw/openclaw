@@ -230,7 +230,7 @@ function expectReadPath(path: string) {
 
 describe("searchMessagesMSTeams", () => {
   it("filters chat messages locally and normalizes HTML content", async () => {
-    const content = "<p>Meeting <b>notes</b> from Monday</p>";
+    const content = "<p>Cafe\u0301 <b>notes</b> from Monday</p>";
     const from = { user: { id: "u1", displayName: "Alice" } };
     const createdAt = "2026-03-25T10:00:00Z";
     mockState.fetchGraphJson.mockResolvedValue({
@@ -245,7 +245,7 @@ describe("searchMessagesMSTeams", () => {
       ],
     });
 
-    const result = await graph.searchMessagesMSTeams({ ...target, query: "meeting notes" });
+    const result = await graph.searchMessagesMSTeams({ ...target, query: "CAFÉ notes" });
 
     expect(result).toEqual({
       messages: [

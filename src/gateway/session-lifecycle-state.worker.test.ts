@@ -18,92 +18,54 @@ vi.mock("./session-utils-store-worker.js", () => ({
   loadGatewaySessionEntryReadOnlyInWorker: async () => routing.load(),
 }));
 
-it.each(["resumed goal", "another recovery owner"] as const)(
-  "commits lifecycle in one request while preserving a queued in-process %s update",
-  (change) =>
-    withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const recovering = change === "another recovery owner";
-      setRuntimeConfigSnapshot({});
-      const f = createSessionCompoundWorkerFixture();
-      const delivery = getSessionEntryPatchDelivery();
-      const generation = getAgentEventLifecycleGeneration();
-      const runId = "terminal-run";
-      const initial: SessionEntry = {
-        ...f.read()!,
-        lifecycleRunId: runId,
+it("commits lifecycle in one request while preserving a queued goal update", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    const f = createSessionCompoundWorkerFixture();
+    const delivery = getSessionEntryPatchDelivery();
+    const generation = getAgentEventLifecycleGeneration();
+    const runId = "terminal-run";
+    const initial: SessionEntry = {
+      ...f.read()!,
+      lifecycleRunId: runId,
+      startedAt: 1_000,
+      updatedAt: 1_000,
+    };
+    replaceSessionEntrySync(f.scope, initial);
+    routing.load.mockReturnValue({ ...f.scope, ...f.target, entry: initial });
+    const goal = {
+      ...buildCreatedSessionGoal(initial, { objective: "Finish the work" }, 1_000),
+      updatedAt: 3_000,
+      tokensUsed: 12,
+    };
+    const queued: SessionEntry = { ...initial, goal, label: "concurrent metadata" };
+    delivery.beforeCommit = () => {
+      delivery.beforeCommit = undefined;
+      replaceSessionEntrySync(f.scope, queued);
+    };
+    const event = {
+      ts: 2_000,
+      sessionId: initial.sessionId,
+      runId,
+      data: {
+        phase: "error",
         startedAt: 1_000,
-        updatedAt: 1_000,
-      };
-      replaceSessionEntrySync(f.scope, initial);
-      routing.load.mockReturnValue({ ...f.scope, ...f.target, entry: initial });
-      const goal = {
-        ...buildCreatedSessionGoal(initial, { objective: "Finish the work" }, 1_000),
-        updatedAt: 3_000,
-        tokensUsed: 12,
-      };
-      const queued: SessionEntry = { ...initial, goal, label: "concurrent metadata" };
-      if (recovering) {
-        queued.status = "failed";
-        queued.restartRecoveryRuns = [
-          { runId, lifecycleGeneration: generation },
-          { runId: "new-owner", lifecycleGeneration: generation },
-        ];
-        queued.mainRestartRecovery = {
-          cycleId: "recovery-cycle",
-          revision: 2,
-          chargedAttempts: 1,
-          foregroundClaims: {
-            lifecycleGeneration: generation,
-            tokens: ["terminal-claim", "new-claim"],
-            runIdsByClaimId: { "terminal-claim": runId, "new-claim": "new-owner" },
-          },
-        };
-      }
-      delivery.beforeCommit = () => {
-        delivery.beforeCommit = undefined;
-        replaceSessionEntrySync(f.scope, queued);
-      };
-      const event = {
-        ts: 2_000,
-        sessionId: initial.sessionId,
-        runId,
-        data: {
-          phase: recovering ? "end" : "error",
-          startedAt: 1_000,
-          endedAt: 2_000,
-          ...(!recovering ? { error: "Provider disconnected" } : {}),
-        },
-      };
-      Object.defineProperty(event, "lifecycleGeneration", { value: generation });
-      await persistGatewaySessionLifecycleEvent({ sessionKey: f.scope.sessionKey, event });
-      expect(
-        delivery.commands.filter((command) => command.startsWith("session.entry.patch.")),
-      ).toEqual(["session.entry.patch.commit"]);
-      expect(f.read()).toMatchObject({ goal, label: "concurrent metadata" });
-      if (recovering) {
-        expect(f.read()).toMatchObject({
-          status: "failed",
-          restartRecoveryRuns: [{ runId: "new-owner", lifecycleGeneration: generation }],
-          mainRestartRecovery: {
-            revision: 3,
-            foregroundClaims: {
-              tokens: ["new-claim"],
-              runIdsByClaimId: { "new-claim": "new-owner" },
-            },
-          },
-        });
-        expect(f.events()).not.toContainEqual(
-          expect.objectContaining({ customType: "run-failed-before-reply" }),
-        );
-      } else {
-        expect(f.read()).toMatchObject({ status: "failed", lastRunId: runId });
-        expect(f.events()).toContainEqual(
-          expect.objectContaining({
-            type: "custom_message",
-            customType: "run-failed-before-reply",
-            details: { runId, error: "Provider disconnected" },
-          }),
-        );
-      }
-    }),
-);
+        endedAt: 2_000,
+        error: "Provider disconnected",
+      },
+    };
+    Object.defineProperty(event, "lifecycleGeneration", { value: generation });
+    await persistGatewaySessionLifecycleEvent({ sessionKey: f.scope.sessionKey, event });
+    expect(
+      delivery.commands.filter((command) => command.startsWith("session.entry.patch.")),
+    ).toEqual(["session.entry.patch.commit"]);
+    expect(f.read()).toMatchObject({ goal, label: "concurrent metadata" });
+    expect(f.read()).toMatchObject({ status: "failed", lastRunId: runId });
+    expect(f.events()).toContainEqual(
+      expect.objectContaining({
+        type: "custom_message",
+        customType: "run-failed-before-reply",
+        details: { runId, error: "Provider disconnected" },
+      }),
+    );
+  }));

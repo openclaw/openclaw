@@ -65,7 +65,6 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
   ["sessions.goal.clear", { fields: ["sessionKey"], required: true }],
   ["sessions.providerReview.continue", { fields: ["sessionKey"], required: true, runStart: true }],
   ["sessions.pluginPatch", { fields: ["key"], required: true }],
-  ["sessions.recover", { fields: ["key"], required: true }],
   ["sessions.reset", { fields: ["key"], required: true }],
   ["sessions.rewind", { fields: ["sessionKey"], required: true }],
   ["sessions.send", { fields: ["key"], required: true, runStart: true, mayCreate: true }],
@@ -119,13 +118,17 @@ const DIRECT_SESSION_READ_METHODS = new Set([
   "sessions.files.get",
   "sessions.files.download",
   "sessions.files.assets",
+  "sessions.files.preview",
+  "sessions.files.preview.release",
   "sessions.files.list",
   "sessions.files.reveal",
   "sessions.github.options",
+  "sessions.github.readiness",
   "sessions.github.status",
   "sessions.messages.unsubscribe",
   "sessions.setInvolvement",
   "talk.voice.get",
+  "tools.effective",
 ]);
 
 const INDIRECT_SESSION_READ_METHODS = new Set([

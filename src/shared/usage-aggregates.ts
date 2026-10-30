@@ -170,9 +170,6 @@ export function createUsageAggregateAccumulator() {
       };
       existing.tokens += day.tokens;
       existing.cost += day.cost;
-      if (day.usageReport?.state === "unavailable") {
-        existing.usageReport = day.usageReport;
-      }
       existing.count += day.count;
       dailyModels.set(key, existing);
     }
@@ -260,9 +257,6 @@ export function createUsageAggregateAccumulator() {
       const existing = getDay(day.date);
       existing.tokens += day.tokens;
       existing.cost += day.cost;
-      if (day.usageReport?.state === "unavailable") {
-        existing.usageReport = day.usageReport;
-      }
       mergeGroupedTotals(costDays, day.date, day);
       mergeGroupedTotals(creator.daily, day.date, day);
     }

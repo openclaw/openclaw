@@ -87,6 +87,12 @@ configuration changes, Gateway-wide tool invocation, or publication outside
 the own-session shared-account path described above.
 
 Session readers can browse visible conversations and receive their updates.
+They can inspect a visible session's effective tool names with `tools.effective`.
+The session-only response includes core summaries and preserves policy-filtered
+GitHub action descriptions. It omits other runtime descriptions, configuration
+diagnostics, and MCP connection notices.
+Session visibility and requester authority are checked before returning the preview;
+general Gateway read access still receives the full diagnostic response.
 The Control UI can copy visible history as Markdown. Session writers can rename,
 pin, archive, or restore their own existing conversations. Other people's visible
 sessions remain read-only under these grants, including shared sessions.

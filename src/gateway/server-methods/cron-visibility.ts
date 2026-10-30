@@ -19,7 +19,9 @@ function resolveCronEntryFilter(client: GatewayClient | null, cfg: OpenClawConfi
     return undefined;
   }
   const sharing = prepareProjectedSessionSharing({ client, cfg, isMember: () => false });
-  return sharing.sessionCap === "none" ? sharing.entryFilter : undefined;
+  return sharing.sessionCap === "none" || sharing.sessionCap === "invited"
+    ? sharing.entryFilter
+    : undefined;
 }
 
 /** The Gateway projection owns sharing facts and consumes committed write receipts. */
@@ -28,11 +30,13 @@ export function createCronSessionVisibility(
   context: Pick<GatewayRequestContext, "getRuntimeConfig" | "sessionRowProjectionOwner">,
 ) {
   return {
-    prepare(): Promise<void> | undefined {
+    async prepare(): Promise<void> {
       if (!resolveCronEntryFilter(client, context.getRuntimeConfig())) {
         return undefined;
       }
-      return requireSessionRowProjection(context).prepareSelection({ metadataOnly: true });
+      const projection = requireSessionRowProjection(context);
+      await projection.prepareSelection({ metadataOnly: true });
+      await projection.prepareMembership();
     },
     resolve(): CronSessionVisibility | undefined {
       if (!resolveCronEntryFilter(client, context.getRuntimeConfig())) {
@@ -66,7 +70,13 @@ export function createCronSessionVisibility(
           }
         }
         const target = projection.sharingTarget(query);
-        return Boolean(target && filter(target.canonicalKey, target.entry));
+        const sharing = prepareProjectedSessionSharing({
+          client,
+          cfg,
+          isMember: (candidate, id) =>
+            projection.hasMembership(candidate.storePath, candidate.storeKey, id),
+        });
+        return Boolean(target && sharing.canReadTarget(target));
       };
     },
   };

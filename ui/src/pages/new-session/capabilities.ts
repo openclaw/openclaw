@@ -3,12 +3,12 @@ import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { currentDisplayRuntimeConfig } from "../../lib/config/config-state-model.ts";
-import { summarizeMcpServers } from "../../lib/config/mcp-servers.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { countSessionToolOverrides } from "../../lib/sessions/tool-overrides.ts";
 import type { ChatComposerCapabilityMenuSource } from "../chat/components/chat-composer-plus-menu.types.ts";
 import {
   ComposerSkillCatalog,
+  composerMcpServers,
   composerWebSearchBaseEnabled,
 } from "../chat/composer-capability-catalog.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -83,7 +83,10 @@ export class NewSessionCapabilities {
             basePath: context.basePath,
             skills: this.skillCatalog.rows(agentId, this.toolOverridesValue),
             skillsRead: this.skillCatalog.read(agentId),
-            mcpServers: summarizeMcpServers(runtimeConfig) ?? [],
+            ...composerMcpServers(runtimeConfig, {
+              auth: context.gateway.snapshot.hello?.auth ?? null,
+              loading: config.configLoading,
+            }),
             toolsEffectiveResult: null,
             toolsEffectiveLoading: false,
             toolsEffectiveError: false,

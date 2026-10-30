@@ -8,6 +8,7 @@ import { authorizationClient } from "./server-methods.authorization.test-support
 import { handleGatewayRequest } from "./server-methods.js";
 import { agentHandlers } from "./server-methods/agent.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
+import * as chatDispatch from "./server-methods/chat-send-agent-dispatch.js";
 import { handleDirectExternalChatSend } from "./server-methods/chat-send-external-entry.js";
 import { sessionCreateHandlers } from "./server-methods/sessions-create.js";
 import { sessionMessagingHandlers } from "./server-methods/sessions-messaging.js";
@@ -104,6 +105,7 @@ it.each(["chat.send", "sessions.send", "sessions.steer", "sessions.create"] as c
   "replays accepted %s uploads after disable without admitting fresh bytes",
   async (method) => {
     await using f = await prepare();
+    using dispatch = vi.spyOn(chatDispatch, "startChatDispatch");
     const params = {
       agentId: "main",
       ...(method === "chat.send"
@@ -117,6 +119,8 @@ it.each(["chat.send", "sessions.send", "sessions.steer", "sessions.create"] as c
     const accepted = await send();
     expect(accepted.mock.calls.at(-1)?.[0]).toBe(true);
     await f.drain();
+    expect(dispatch).toHaveBeenCalledOnce();
+    await dispatch.mock.results[0]!.value;
     const baseline = await send();
     const receipt = baseline.mock.calls.at(-1)!;
     expect(receipt[0]).toBe(true);

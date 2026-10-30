@@ -213,6 +213,11 @@ It is designed to be shared. It keeps operational details useful for debugging â
 
 Shows the Gateway service (launchd/systemd/schtasks) plus an optional connectivity/auth check.
 
+Installed-service config, runtime intent, and log diagnostics use the service's
+own state selectors. An inspecting CLI's `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`,
+`OPENCLAW_PROFILE`, and `OPENCLAW_CONFIG_PATH` do not fill in selectors omitted
+from the service definition.
+
 ```bash
 openclaw gateway status
 openclaw gateway status --json

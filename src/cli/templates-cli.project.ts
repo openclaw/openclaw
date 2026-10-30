@@ -1,4 +1,5 @@
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -68,8 +69,10 @@ export async function runTemplatesCreateCommand(
       });
       return;
     }
-    runtime.log(`Created Template project: ${result.root}`);
-    runtime.log(`Package: ${result.packageJson.name}@${result.packageJson.version}`);
+    runtime.log(`Created Template project: ${sanitizeTerminalText(result.root)}`);
+    runtime.log(
+      `Package: ${sanitizeTerminalText(result.packageJson.name)}@${sanitizeTerminalText(result.packageJson.version)}`,
+    );
   } catch (error) {
     reportProjectError(
       error,
@@ -111,10 +114,12 @@ export async function runTemplatesValidateCommand(
     });
     return;
   }
-  runtime.log(`Valid Template project: ${result.root}`);
-  runtime.log(`Package: ${result.packageJson.name}@${result.packageJson.version}`);
+  runtime.log(`Valid Template project: ${sanitizeTerminalText(result.root)}`);
+  runtime.log(
+    `Package: ${sanitizeTerminalText(result.packageJson.name)}@${sanitizeTerminalText(result.packageJson.version)}`,
+  );
   for (const path of result.excludedPaths) {
-    runtime.log(`Excluded: ${path}`);
+    runtime.log(`Excluded: ${sanitizeTerminalText(path)}`);
   }
 }
 
@@ -128,9 +133,11 @@ export async function runTemplatesBuildCommand(
       writeRuntimeJson(runtime, { ...result, stability: TEMPLATE_OUTPUT_STABILITY, ok: true });
       return;
     }
-    runtime.log(`Built Template: ${result.template.name}@${result.template.version}`);
-    runtime.log(`Artifact: ${result.artifact}`);
-    runtime.log(`Integrity: ${result.integrity}`);
+    runtime.log(
+      `Built Template: ${sanitizeTerminalText(result.template.name)}@${sanitizeTerminalText(result.template.version)}`,
+    );
+    runtime.log(`Artifact: ${sanitizeTerminalText(result.artifact)}`);
+    runtime.log(`Integrity: ${sanitizeTerminalText(result.integrity)}`);
     runtime.log(`Excluded project paths: ${result.excludedPaths.length}`);
   } catch (error) {
     reportProjectError(
@@ -219,10 +226,12 @@ export async function runTemplatesDevCommand(
       plan,
     });
   } else {
-    runtime.log(`Template dev preview: ${build.template.name}@${build.template.version}`);
-    runtime.log(`Artifact integrity: ${build.integrity}`);
-    runtime.log(`Agent: ${plan.agent.finalId}`);
-    runtime.log(`Workspace: ${plan.agent.workspace}`);
+    runtime.log(
+      `Template dev preview: ${sanitizeTerminalText(build.template.name)}@${sanitizeTerminalText(build.template.version)}`,
+    );
+    runtime.log(`Artifact integrity: ${sanitizeTerminalText(build.integrity)}`);
+    runtime.log(`Agent: ${sanitizeTerminalText(plan.agent.finalId)}`);
+    runtime.log(`Workspace: ${sanitizeTerminalText(plan.agent.workspace)}`);
     logTemplateAgentConfiguration(plan);
     runtime.log(`Actions: ${plan.summary.totalActions}`);
     runtime.log(`Capability escalations: ${plan.capabilityChanges.length}`);

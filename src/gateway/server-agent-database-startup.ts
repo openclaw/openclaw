@@ -17,6 +17,7 @@ import {
   type getAgentDatabaseStartupAdmission,
 } from "../state/agent-database-startup.js";
 import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 
 function assertAgentDatabaseConfiguration(
   cfg: OpenClawConfig,
@@ -33,6 +34,7 @@ function assertAgentDatabaseConfiguration(
 /** Finish only the deferred agent's preparation before its admission owner recovers it. */
 export function activateGatewayAgentDatabaseStartup(params: {
   admission: ReturnType<typeof getAgentDatabaseStartupAdmission>;
+  context: GatewayRequestContext;
   preparationReady: Promise<void>;
   waitForPostReadyWork: () => Promise<void>;
   getConfig: () => OpenClawConfig;
@@ -112,7 +114,17 @@ export function activateGatewayAgentDatabaseStartup(params: {
           log: params.log,
         });
         assertMigrationCurrent();
+        const { prepareAgentRestartRecovery } = await import("./session-restart-resume.js");
+        const recoverInputs = await prepareAgentRestartRecovery({
+          context: params.context,
+          agentId,
+          env,
+          signal,
+          assertCurrent: assertMigrationCurrent,
+          log: params.log,
+        });
         return {
+          recoverInputs,
           maintain: () =>
             runWithSpawnBroker(broker, async () => {
               await params.waitForPostReadyWork();

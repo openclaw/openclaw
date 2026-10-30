@@ -2,7 +2,6 @@
 // policy after plugin preparation is absent.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveAgentRestartRecoveryContext } from "../../gateway/agent-turn/agent-restart-recovery-context.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { mockFirstRecordArg } from "../../test-utils/mock-call-assertions.js";
@@ -50,7 +49,7 @@ describe("runMessageAction core send routing", () => {
   it.each([
     { name: "agent opt-in", global: false, agent: true, allowed: true },
     { name: "agent restriction", global: true, agent: false, allowed: false },
-  ])("preserves $name for targetless recovery", async (policy) => {
+  ])("preserves $name when WebChat sends to a channel", async (policy) => {
     const sendText = registerSlackTextPlugin();
     const cfg: OpenClawConfig = {
       ...slackConfig,
@@ -68,24 +67,6 @@ describe("runMessageAction core send routing", () => {
         },
       },
     };
-    const recovery = resolveAgentRestartRecoveryContext({
-      isRestartRecoveryResumeRun: true,
-      canUseInternalRuntimeHandoff: true,
-      expectedExistingSessionId: "session-1",
-      resolvedSessionId: "session-1",
-      resolvedSessionKey: "agent:main:dashboard:recovery",
-      runId: "recovery-run",
-      sessionEntry: {
-        sessionId: "session-1",
-        updatedAt: 1,
-        restartRecoveryDeliveryRunId: "recovery-run",
-        restartRecoveryDeliverySourceRunId: "source-run",
-        restartRecoverySourceIngress: "control-ui",
-      },
-    });
-    expect(recovery?.messageChannel).toBe("webchat");
-    expect(recovery?.channel).toBeUndefined();
-
     const send = runMessageAction({
       cfg,
       agentId: "main",
@@ -93,10 +74,10 @@ describe("runMessageAction core send routing", () => {
       params: {
         channel: "slack",
         target: "channel:C123",
-        message: "synthetic recovery policy probe",
+        message: "synthetic channel policy probe",
         bestEffort: true,
       },
-      toolContext: { currentChannelProvider: recovery?.messageChannel },
+      toolContext: { currentChannelProvider: "webchat" },
       dryRun: false,
     });
     if (!policy.allowed) {
@@ -115,7 +96,7 @@ describe("runMessageAction core send routing", () => {
     expect(sendText).toHaveBeenCalledOnce();
     expect(mockFirstRecordArg(sendText, "send text")).toMatchObject({
       to: "channel:C123",
-      text: "synthetic recovery policy probe",
+      text: "synthetic channel policy probe",
     });
   });
 

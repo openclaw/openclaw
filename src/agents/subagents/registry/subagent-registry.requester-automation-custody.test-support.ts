@@ -203,7 +203,6 @@ export function registerRequesterAutomationCustodyTests({
                 },
                 hasRestoredCronContinuation: false,
                 isOneShotModelRun: false,
-                isRestartRecoveryResumeRun: false,
               }),
             ).toBeUndefined();
             return { delivered: true, path: "direct" };

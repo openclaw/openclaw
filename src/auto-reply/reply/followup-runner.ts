@@ -38,7 +38,6 @@ import {
   type FollowupRunnerParams,
 } from "./reply-agent-turn-preparation.js";
 import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission-lifecycle.js";
-import { resolveReplyAdmissionRunId } from "./source-turn-id.js";
 import {
   isReplyOperationStalledBeforeOutput,
   resolveStalledTurnNoticeText,
@@ -186,9 +185,6 @@ export function createFollowupRunner(
       const admission = await prepareReplyAgentTurn({
         queued,
         defaults,
-        recoveryAdmissionRunId: resolveReplyAdmissionRunId({
-          MessageSid: resolveFollowupCurrentMessageId(queued),
-        }),
         onOperationOwned: (owned) => {
           operation = owned;
         },
@@ -226,23 +222,25 @@ export function createFollowupRunner(
             turn.session.current(),
           );
       }
-      const initialGoalId = turn.session.current()?.goal?.id;
+      const initialSessionEntry = turn.session.current();
+      const initialGoalId = initialSessionEntry?.goal?.id;
       const runWithGoalReturn = createGoalContinuationReturn(
         turn.session.kind === "session" &&
           turn.session.storePath &&
-          initialGoalId &&
-          (turn.session.current()?.agentHarnessId === undefined ||
-            turn.session.current()?.agentHarnessId === "openclaw")
+          initialSessionEntry &&
+          (initialSessionEntry.agentHarnessId === undefined ||
+            initialSessionEntry.agentHarnessId === "openclaw")
           ? {
               base: turn.queued,
-              initialGoalId,
-              expectedSession: turn.session.current()!,
+              initialGoalId:
+                initialSessionEntry.goal?.status === "active" ? initialGoalId : undefined,
+              expectedSession: initialSessionEntry,
               sessionKey: turn.session.key,
               storePath: turn.session.storePath,
               queueKey: turn.queued.run.sessionKey ?? turn.session.key,
               settings: resolveQueueSettings({
                 cfg: turn.config,
-                sessionEntry: turn.session.current(),
+                sessionEntry: initialSessionEntry,
                 channel: turn.queued.originatingChannel,
               }),
               operation: turn.operation,
@@ -316,10 +314,6 @@ export function createFollowupRunner(
             entry: turn.session.current(),
             writer: execution.execution.outcome.sessionWriter,
             operation: turn.operation,
-            prepareRestartClaimCleanup:
-              execution.execution.outcome.kind === "settled"
-                ? turn.restartRecovery?.prepareCompletionCleanup
-                : undefined,
             activitySummaryCompletion,
             publish: (entry) => turn.session.publish(entry),
           },
@@ -498,13 +492,6 @@ export function createFollowupRunner(
           claim.retryBeforeExecution = false;
         }
         completeFollowupRunLifecycle(queued);
-      }
-      try {
-        await admittedTurn?.restartRecovery?.clear();
-      } catch (error) {
-        defaultRuntime.error?.(
-          `followup queue: recovery settlement failed: ${formatErrorMessage(error)}`,
-        );
       }
       if (admittedTurn?.runId) {
         clearAgentRunContext(admittedTurn.runId);

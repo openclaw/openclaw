@@ -538,12 +538,23 @@ prepare_squash_merge_body() {
 
   local body_file
   body_file=$(mktemp .local/merge-body.XXXXXX) || return 1
-  printf '%s\n' "$preview" | jq -c \
-    --arg source "$source_trailers" --argjson authors "$authors" --arg captured "$captured" \
-    --argjson queue "$queue_enabled" --arg transport "$MERGE_TRANSPORT" --argjson messages "$messages" '
-    {preview:.data.repository.pullRequest.viewerMergeBodyText,prAuthor:.data.repository.pullRequest.author,source:$source,authors:$authors,captured:$captured,queue:$queue,sourceCredit:($transport == "rest"),
-     squashDefault:(if $transport == "rest" then {title:.data.repository.squashMergeCommitTitle,message:.data.repository.squashMergeCommitMessage,commits:$messages} else null end)}
-  ' | node "${BASH_SOURCE[0]%/*}/merge-body.mjs" compose > "$body_file" || return 1
+  # Contributor-sized content stays on stdin, never in an exec argument.
+  if ! {
+    printf '%s\n' "$preview"
+    printf '%s' "$source_trailers" | jq -Rs .
+    printf '%s\n' "$authors"
+    printf '%s' "$captured" | jq -Rs .
+    printf '%s\n' "$messages"
+  } | jq -cse --argjson queue "$queue_enabled" --arg transport "$MERGE_TRANSPORT" '
+    if length != 5 then error("merge body compose envelope requires 5 JSON texts") else
+      .[0].data.repository as $r |
+      {preview:$r.pullRequest.viewerMergeBodyText,prAuthor:$r.pullRequest.author,source:.[1],authors:.[2],captured:.[3],queue:$queue,sourceCredit:($transport == "rest"),
+       squashDefault:(if $transport == "rest" then {title:$r.squashMergeCommitTitle,message:$r.squashMergeCommitMessage,commits:.[4]} else null end)}
+    end
+  ' | node "${BASH_SOURCE[0]%/*}/merge-body.mjs" compose > "$body_file"; then
+    rm -f "$body_file"
+    return 1
+  fi
   # Queue admission cannot accept an override, but its preview still needs validation.
   if [ "$queue_enabled" = true ]; then
     rm -f "$body_file" || return 1
@@ -657,6 +668,12 @@ merge_run() {
   local MERGE_OUTCOME_REF MERGE_OUTCOME_OID MERGE_OUTCOME_RECORD MERGE_REPO
   local MERGE_REPO_URL MERGE_REPO_HOST MERGE_REPO_NAME MERGE_OBSERVATION MERGE_ENTRY_OBSERVATION MERGE_TRANSPORT=rest
   merge_outcome_init "$pr" || return 1
+  if [ -n "${PR_WORKFLOW_ADMISSION_PROVENANCE:-}" ]; then
+    [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ] && [ -z "$recovery_oid$MERGE_OUTCOME_OID" ] || {
+      merge_outcome_stop "current workflow first admission requires confirmed admin evidence and no retained outcome"
+      return 1
+    }
+  fi
   if [ -n "${PR_WORKFLOW_RECOVERY_PROVENANCE:-}" ]; then
     [ "$recovery_oid" = "${PR_WORKFLOW_RECOVERY_OUTCOME:-}" ] &&
       [ "$replacement_head" = "${PR_WORKFLOW_RECOVERY_HEAD:-}" ] &&
@@ -1306,6 +1323,17 @@ merge_run() {
   fi
   if [ -n "$refusal" ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson refusal "$refusal" '.recovery.preDispatchRefusal=$refusal') || return 1
+  fi
+  if [ -n "${PR_WORKFLOW_ADMISSION_PROVENANCE:-}" ]; then
+    # Recheck the original binding and absence under the lock before the first
+    # intent CAS. This provenance never changes ordinary workflow selection.
+    local admission
+    admission=$(pr_batch_wrapper_git workflow-admission-provenance "$canonical_repo_root" "$pr" \
+      "" "" "$PR_WORKFLOW_TRUST_ANCHOR" "$PR_WORKFLOW_SOURCE_REVISION") || return 1
+    [ "$admission" = "$PR_WORKFLOW_ADMISSION_PROVENANCE" ] || {
+      merge_outcome_stop "workflow binding changed before first admission"; return 1;
+    }
+    intent=$(printf '%s\n' "$intent" | jq -c --argjson provenance "$admission" '.workflowAdmission=$provenance') || return 1
   fi
   if [ -n "${PR_WORKFLOW_RECOVERY_PROVENANCE:-}" ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson provenance "$PR_WORKFLOW_RECOVERY_PROVENANCE" \

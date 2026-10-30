@@ -7,6 +7,8 @@ prepare_diagnostics_capture() {
       "$ARTIFACT_DIR/update.json" "$ARTIFACT_DIR/repair.json" "$ARTIFACT_DIR/recovery-update.json" \
       "$ARTIFACT_DIR"/update-noop.{json,err} \
       "$ARTIFACT_DIR/candidate-cohort.json" \
+      "$ARTIFACT_DIR"/deferred-schema-private.json{,.after} \
+      "$ARTIFACT_DIR"/deferred-schema-doctor-private.{json,err} "$ARTIFACT_DIR/deferred-schema-doctor.json" \
       "$ARTIFACT_DIR"/native-assignment-{eligibility,baseline,first-hop,proof,ready,phase}.json \
       "$ARTIFACT_DIR"/native-assignment-inventory-{after-first-hop,before-recovery,after-recovery,live-final}.json \
       "$ARTIFACT_DIR/native-assignment-messages.jsonl" "$ARTIFACT_DIR/native-assignment-server.log" \

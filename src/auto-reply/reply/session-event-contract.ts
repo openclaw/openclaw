@@ -89,7 +89,9 @@ export type SessionEventOptions = {
     | "plugin"
     // A yielded tool's result resuming its own conversation; hidden from chat display.
     | "tool_handoff"
-    | "cron";
+    | "cron"
+    // The scheduler's repair request for a failing job; hidden from chat display.
+    | "cron_failure_repair";
   contextKey?: string;
   /** Stable identity for durable host producers across restart handoffs. */
   sourceTurnId?: string;
@@ -109,10 +111,10 @@ export type SessionEventOptions = {
   scheduledAutomation?: ScheduledSessionAutomation;
   /** Failed promotion retains an existing passive occurrence until ordinary adoption begins. */
   preserveOccurrenceOnRejection?: true;
-  /** Internal: policy-change re-admission depth, bounded to stop publication storms. */
-  readmissionAttempt?: number;
   /** An explicitly silent source records its result without transport delivery. */
   deliver?: boolean;
+  /** Host-owned: runtime error payloads stay in the transcript, out of chat delivery. */
+  suppressErrorDelivery?: true;
   /** Host producer remains live through admission, execution and delivery. */
   assertCurrent?: () => void;
 };

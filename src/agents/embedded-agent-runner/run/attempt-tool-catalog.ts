@@ -12,7 +12,10 @@ import {
 } from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../../code-mode.js";
-import { logAgentRuntimeToolDiagnostics } from "../../runtime-plan/tools.js";
+import {
+  logAgentRuntimeToolDiagnostics,
+  normalizeAgentRuntimeTools,
+} from "../../runtime-plan/tools.js";
 import { createToolPolicyMatcher, isToolAllowedByPolicyName } from "../../tool-policy-match.js";
 import {
   createToolExecutionMatcher,
@@ -93,7 +96,6 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
       hookContext: catalogToolHookContext,
       prepared: {
         abortSignal,
-        forceRestartSafeTools: attempt.forceRestartSafeTools,
         toolExecutionAllow: attempt.toolExecutionAllow,
         executeTool: input.executeCodeModeTool,
         codeModeSkills,
@@ -109,7 +111,21 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
       sessionKey: attempt.sessionKey,
       sessionId: attempt.sessionId,
     });
-    effectiveTools = compacted.tools.map((tool) =>
+    // Catalog controls (Code Mode exec/wait, tool search) are built after the bundle
+    // provider pass; give them the same schema normalization before diagnostics and dispatch.
+    const providerTools = normalizeAgentRuntimeTools({
+      runtimePlan: attempt.runtimePlan,
+      tools: compacted.tools,
+      provider: attempt.provider,
+      config: attempt.config,
+      workspaceDir: input.setup.effectiveWorkspace,
+      env: process.env,
+      modelId: attempt.modelId,
+      modelApi: attempt.model.api,
+      model: attempt.model,
+      runtimeHandle: input.setup.getProviderRuntimeHandle(),
+    });
+    effectiveTools = providerTools.map((tool) =>
       wrapEmbeddedAttemptToolWithActivity(
         wrapToolWithAbortSignal(tool, abortSignal),
         attempt.runId,
@@ -257,9 +273,6 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
       hasCallableTools,
     };
     const emptyExplicitToolAllowlistError = (() => {
-      if (attempt.forceRestartSafeTools) {
-        return null;
-      }
       const toolsIntentionallyDisabled =
         attempt.disableTools === true ||
         preparedToolBase.effectiveToolsAllow?.length === 0 ||

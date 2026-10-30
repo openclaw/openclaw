@@ -37,10 +37,7 @@ import {
   type SessionControllerWatchdogAttempt,
   type SessionWatchdogWait,
 } from "../../../sessions/session-controller.watchdog.js";
-import {
-  getAdmittedRunDelegatedAuthority,
-  isPreparedRunRestartRecovery,
-} from "../../admitted-run-context.js";
+import { getAdmittedRunDelegatedAuthority } from "../../admitted-run-context.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import { beginForegroundSessionMaintenance } from "../../session-maintenance/coordinator.js";
 import { withSessionPlacementTurnAdmission } from "../../session-placement-admission.js";
@@ -385,42 +382,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       }
       // Queue waits can outlive durable harness and placement bindings.
       // Recheck and claim only after lifecycle admission, before context or hooks execute.
-      const preparedAdmission = params.preparedRunAdmission;
-      const restartRecovery = preparedAdmission
-        ? isPreparedRunRestartRecovery(preparedAdmission, params.runId)
-        : undefined;
-      const claimWriter = () => claimAgentSessionWriter(params);
-      const writerClaim = restartRecovery
-        ? await (async () => {
-            const target = params.sessionTarget;
-            if (!target?.agentId || !target.sessionKey || !target.storePath) {
-              throw new Error("Restart recovery presentation has no owned transcript target");
-            }
-            const { withRestartRecoveryPresentation } =
-              await import("../../main-session-recovery/main-session-recovery-presentation.js");
-            return withRestartRecoveryPresentation({
-              target: {
-                ...target,
-                agentId: target.agentId,
-                sessionKey: target.sessionKey,
-                sessionId: params.sessionId,
-                storePath: target.storePath,
-              },
-              runId: params.runId,
-              claimWriter,
-              assertCurrent: () => {
-                throwIfAborted();
-                assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-                if (
-                  !preparedAdmission ||
-                  !isPreparedRunRestartRecovery(preparedAdmission, params.runId)
-                ) {
-                  throw new Error("Restart recovery presentation lost its prepared source");
-                }
-              },
-            });
-          })()
-        : await claimWriter();
+      const writerClaim = await claimAgentSessionWriter(params);
       if (writerClaim) {
         params = {
           ...params,

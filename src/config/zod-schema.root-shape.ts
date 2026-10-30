@@ -388,6 +388,8 @@ export const OpenClawSchemaShape = {
   cron: z
     .strictObject({
       enabled: z.boolean().optional(),
+      /** Add to new nonempty agent-tool selections before creator policy and approval. */
+      defaultTools: z.array(z.string().trim().min(1)).optional(),
       /** Skip missed recurring slots at startup; one-shot catch-up is unchanged. Default: false. */
       skipMissedJobs: z.boolean().optional(),
       triggers: z

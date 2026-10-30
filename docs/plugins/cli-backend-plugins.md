@@ -335,6 +335,25 @@ turn end, after which the stream must finish normally and the session remain
 reusable. OpenClaw calls it after observing the completed `sessions_yield` tool
 result, suppresses subsequent reply text, and drops the registration when the run closes.
 
+A transport may optionally register `ctx.registerTurnStatus({ capture })` for a
+read-only assessment before the session watchdog recovers a silent model attempt.
+`capture()` returns an exact native input/generation-bound `{ isCurrent, assess }`
+or `undefined` when unavailable. `assess({ signal })` returns only content-free
+`closed` process/transport facts or `unknown` (`process_present`,
+`status_unsupported`, `busy`, or `transient_error`). Keep `isCurrent()` independent
+of the assessment signal and false after input replacement, completion, or authority
+revocation. Neither callback may submit a prompt, restart the backend, change hooks,
+or enter the ordinary prompt queue. Older plugins and hosts can omit the registration.
+
+The host permits one assessment per current target and silence episode, bounded
+by 10 seconds and the remaining hard execution budget. New semantic progress,
+Stop, and completion invalidate it. An unavailable or obsolete native capture under
+unchanged host ownership consumes that opportunity as unknown, without retrying
+the assessment or delaying ordinary recovery. A timeout, failure, or live process proves
+neither model progress nor death; the existing recovery policy still decides what
+to do. The native Claude adapter reports local transport facts only, not a fresh
+model-health response. This does not change the separate CLI no-output watchdog.
+
 For a bundled or official plugin's bidirectional process, use the shared
 [`createOwnedStdioProcess` owner](/plugins/sdk-overview/infrastructure#owned-stdio-processes)
 with the prepared command, arguments, `argv0`, and `exactEnv: true`. On POSIX,

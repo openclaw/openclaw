@@ -19,10 +19,12 @@ import {
   prepareSessionStoreTargetInventory,
 } from "../config/sessions/session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
+import { prepareSessionStoreCandidatesInWorker } from "../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
+  type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
@@ -32,6 +34,7 @@ import {
   sessionChanges,
   type SessionRowChange,
 } from "../sessions/session-row-changes.js";
+import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import type { AgentDatabaseRegistryChange } from "../state/openclaw-agent-db-contract.js";
 import { isOpenClawAgentDatabaseRegistryChange } from "../state/openclaw-agent-db-registry-listing.js";
 import {
@@ -78,7 +81,10 @@ export async function prepareSessionMutationFacts(
   if (memory) {
     return memory;
   }
+  // Artifact-preserving reads qualify paths off the Gateway thread.
+  const inspection = isArtifactPreservingStateRead();
   const initialStoreKeys = [params.sessionKey.trim(), canonicalKey];
+  const readScope = params.sessionAccessOnly ? "session-access" : "sharing";
   const releases: Array<() => void> = [];
   let active = true;
   let beforeDiscovery = params.storageReady !== undefined;
@@ -95,8 +101,12 @@ export async function prepareSessionMutationFacts(
   const acquiringPaths = new Set<string>();
   const acquiringReads = new Map<string, ReturnType<typeof retainPreparedSessionSharingFacts>>();
   const initializedReads = new Set<string>();
-  const acquireSource = (sourcePath: string, sessionKeys: readonly string[]) => {
-    const identity = readDatabasePathIdentitySync(sourcePath);
+  const acquireSource = (
+    sourcePath: string,
+    sessionKeys: readonly string[],
+    prepared?: DatabasePathIdentity,
+  ) => {
+    const identity = prepared ?? readDatabasePathIdentitySync(sourcePath);
     if (identity.birthtime === undefined) {
       return undefined;
     }
@@ -109,6 +119,7 @@ export async function prepareSessionMutationFacts(
           databaseIdentity: identity.key,
           sessionKey,
           followLifecycle: params.followLifecycle,
+          followTranscript: params.followTranscript,
           acquiring: true,
         });
         acquiringReads.set(key, retained);
@@ -250,10 +261,13 @@ export async function prepareSessionMutationFacts(
         change.agentId === agentId &&
         change.previous.sessionKeys.some((key) => initialStoreKeys.includes(key)) &&
         !(
-          params.followLifecycle &&
-          change.kind === "reset" &&
+          ((params.followTranscript &&
+            change.kind === "replace" &&
+            readPreparedSessionSharingChange(change) !== undefined) ||
+            (params.followLifecycle &&
+              change.kind === "reset" &&
+              change.previous.sessionId === change.current.sessionId)) &&
           change.previous.sessionId !== undefined &&
-          change.previous.sessionId === change.current.sessionId &&
           change.current.sessionKeys.some((key) => initialStoreKeys.includes(key))
         )
       ) {
@@ -263,14 +277,27 @@ export async function prepareSessionMutationFacts(
   );
   try {
     const parsedAgent = parseAgentSessionKey(params.sessionKey)?.agentId;
-    const discoveryInventory = prepareSessionStoreTargetInventory(params.cfg, [
-      agentId,
-      ...(parsedAgent ? [parsedAgent] : []),
-    ]);
-    const candidateIdentities = discoveryInventory.candidates.map((candidate) => ({
-      candidate,
-      identity: readDatabasePathIdentitySync(candidate.path),
-    }));
+    const agentIds = [agentId, ...(parsedAgent ? [parsedAgent] : [])];
+    const discoveryInventory = inspection
+      ? {
+          ...(
+            await prepareSessionStoreCandidatesInWorker({
+              config: params.cfg,
+              agentIds,
+              env: { ...process.env },
+            })
+          ).inventory!,
+          ...(isArtifactPreservingStateRead("agent")
+            ? { preserveSourceArtifacts: true as const }
+            : {}),
+        }
+      : prepareSessionStoreTargetInventory(params.cfg, agentIds);
+    const candidateIdentities = discoveryInventory.candidates
+      .filter((candidate) => !inspection || !candidate.scope)
+      .map((candidate) => ({
+        candidate,
+        identity: candidate.identity ?? readDatabasePathIdentitySync(candidate.path),
+      }));
     const missingCandidates = candidateIdentities.filter(
       ({ identity }) => identity.birthtime === undefined,
     );
@@ -279,7 +306,7 @@ export async function prepareSessionMutationFacts(
     for (const { candidate, identity } of candidateIdentities) {
       if (identity.birthtime !== undefined) {
         retainCandidate(candidate);
-        acquireSource(candidate.path, initialStoreKeys);
+        acquireSource(candidate.path, initialStoreKeys, identity);
       }
     }
     const preparations = params.storageReady ? [params.storageReady] : [];
@@ -297,19 +324,40 @@ export async function prepareSessionMutationFacts(
       waitingForStorage = false;
       beforeDiscovery = false;
       for (const { candidate, identity } of candidateIdentities) {
-        if (identity.birthtime !== undefined) {
+        if (!inspection && identity.birthtime !== undefined) {
           assertExistingDatabaseIdentity(candidate.physicalPath, identity.key, identity.birthtime);
         }
       }
+      const refreshed =
+        inspection && missingCandidates.length > 0
+          ? (
+              await prepareSessionStoreCandidatesInWorker({
+                config: params.cfg,
+                agentIds,
+                env: { ...process.env },
+              })
+            ).candidates
+          : undefined;
       for (const captured of missingCandidates) {
-        captured.identity = readDatabasePathIdentitySync(captured.candidate.path);
+        const candidate = refreshed?.find(
+          (item) => !item.scope && item.path === captured.candidate.path,
+        );
+        if (inspection) {
+          if (!candidate?.identity || candidate.physicalPath !== captured.candidate.physicalPath) {
+            throw new Error("Session source changed during storage preparation");
+          }
+          captured.identity = candidate.identity;
+          captured.candidate.identity = candidate.identity;
+        } else {
+          captured.identity = readDatabasePathIdentitySync(captured.candidate.path);
+        }
       }
     }
     assertActive();
     // Writer admission may create an absent store; retain its admitted source afterward.
-    for (const { candidate } of missingCandidates) {
+    for (const { candidate, identity } of missingCandidates) {
       retainCandidate(candidate);
-      acquireSource(candidate.path, initialStoreKeys);
+      acquireSource(candidate.path, initialStoreKeys, identity);
     }
     let readFacts = () => facts!;
     const { candidates: discoveryCandidates, ...inventory } = discoveryInventory;
@@ -351,7 +399,7 @@ export async function prepareSessionMutationFacts(
       }
       const target = await prepareGatewaySessionStoreTargetReadOnly(
         {
-          cfg: inventory.config,
+          cfg: params.cfg,
           key: params.sessionKey,
           agentId,
           preserveQualifiedAddress: params.preserveQualifiedAddress,
@@ -368,9 +416,9 @@ export async function prepareSessionMutationFacts(
                 sessionKeys: read.options.exactKeys!,
                 env: inventory.env,
               },
-              (source) => {
+              (source, identity) => {
                 assertActive();
-                if (acquireSource(source.path, read.options.exactKeys!)) {
+                if (acquireSource(source.path, read.options.exactKeys!, identity)) {
                   acquiringPaths.add(path.resolve(read.storePath));
                 }
               },
@@ -382,32 +430,38 @@ export async function prepareSessionMutationFacts(
             read.result = store;
             if (loaded.sharing) {
               const source = loaded.databaseIdentity;
+              const snapshotSource = loaded.snapshotSource;
+              const birthtime = snapshotSource?.databaseBirthtime ?? source?.birthtime;
+              const identity = snapshotSource?.databaseIdentity ?? source?.identity;
               if (
                 !source ||
                 !source.incarnation ||
-                source.filename !== loaded.sharing.source.path ||
-                `file:${source.identity}` !== loaded.sharing.databaseIdentity ||
-                source.birthtime === undefined
+                identity === undefined ||
+                (snapshotSource?.path ?? source.filename) !== loaded.sharing.source.path ||
+                `file:${identity}` !== loaded.sharing.databaseIdentity ||
+                birthtime === undefined
               ) {
                 throw new SessionMutationFactsUnavailableError();
               }
-              assertExistingDatabaseIdentity(
-                loaded.sharing.source.path,
-                loaded.sharing.databaseIdentity,
-                source.birthtime,
-              );
+              if (!inspection) {
+                assertExistingDatabaseIdentity(
+                  loaded.sharing.source.path,
+                  loaded.sharing.databaseIdentity,
+                  birthtime,
+                );
+              }
               preparedSources.push({
                 ...loaded.sharing.source,
                 identity: loaded.sharing.databaseIdentity,
-                birthtime: source.birthtime,
+                birthtime,
               });
               read.readSource = loaded.sharing.source;
               members.set(read.storePath, {
                 facts: loaded.sharing,
                 source: {
                   ...loaded.sharing.source,
-                  databaseIdentity: source.identity,
-                  databaseBirthtime: source.birthtime,
+                  databaseIdentity: identity,
+                  databaseBirthtime: birthtime,
                 },
               });
               for (const sessionKey of read.options.exactKeys!) {
@@ -436,7 +490,7 @@ export async function prepareSessionMutationFacts(
                   await pending;
                   assertActive();
                 }
-                const current = retained.readCurrent();
+                const current = retained.readCurrent(readScope);
                 if (!current) {
                   throw new SessionMutationFactsUnavailableError();
                 }
@@ -493,7 +547,7 @@ export async function prepareSessionMutationFacts(
         readSource,
       };
       const retained = sharing && retainedReads.get(`${sharing.databaseIdentity}\0${canonicalKey}`);
-      expectedPlaceholder = retained?.readCurrent()?.placeholder;
+      expectedPlaceholder = retained?.readCurrent(readScope)?.placeholder;
       adoptCreatedEntry = (entry) => {
         retained?.adoptCreatedEntry(entry);
         facts = {
@@ -510,7 +564,7 @@ export async function prepareSessionMutationFacts(
         };
       };
       readFacts = () => {
-        const current = retained?.readCurrent();
+        const current = retained?.readCurrent(readScope);
         if (facts!.target && current?.entry) {
           return {
             ...facts!,
@@ -554,7 +608,7 @@ export async function prepareSessionMutationFacts(
         throw new SessionMutationFactsUnavailableError();
       }
       readFacts = () => {
-        const current = retained.readCurrent();
+        const current = retained.readCurrent(readScope);
         if (!current?.entry) {
           throw new SessionMutationFactsUnavailableError();
         }

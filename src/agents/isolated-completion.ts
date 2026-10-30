@@ -72,9 +72,9 @@ import {
   canRunPreparedAgentRuntimeAuthAttempt,
   prepareAgentRuntimeAuth,
   preparedAgentRuntimeProfileAttemptHasCandidate,
-  type PreparedAgentRuntimeAuthAttempt,
 } from "./runtime-plan/prepare-auth.js";
 import { scopeAuthProfileStoreToPreparedPlan } from "./runtime-plan/resolve-auth.js";
+import type { PreparedAgentRuntimeAuthAttempt } from "./runtime-plan/types.js";
 import { prepareSimpleCompletionModel } from "./simple-completion-runtime.js";
 export type { IsolatedCompletionResult } from "./isolated-completion-output.js";
 

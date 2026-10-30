@@ -1,6 +1,6 @@
 import { dynamic } from "@solidjs/web";
 import type { Component } from "solid-js";
-import { createMemo, lazy, merge, Show } from "solid-js";
+import { createMemo, createUniqueId, lazy, merge, Show } from "solid-js";
 import type { ControlUiSurfaceProps } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { createSkillFileHovercard } from "../../components/skill-file-hovercard.tsx";
@@ -15,12 +15,11 @@ import { ApplicationProvider, useOptionalApplication } from "../../lib/reactive/
 import { connectedElementRef, elementRef } from "../../lib/reactive/element-ref.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { projectPresentation } from "../../lib/reactive/presentation.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
 import { orderSessionPullRequests } from "../../lib/session-pull-request-presentation.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
-import { listDismissablePendingInputIds, loadChatPendingInputs } from "./chat-pending-inputs.ts";
+import { loadChatPendingInputs } from "./chat-pending-inputs.ts";
 import { hasTerminalRunStatus, isChatRunWorking } from "./chat-run-working.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
 import { listSubagents, projectProgressCardRuntime } from "./chat-subagent-wait.ts";
@@ -30,6 +29,7 @@ import {
   renderChatTopbarNotices as ChatTopbarNotices,
 } from "./chat-view-notices.tsx";
 import type { ChatActivityPillsProps } from "./components/chat-activity-pills-types.ts";
+import { publicationOutsidePills } from "./components/chat-activity-pills-visibility.ts";
 import { ChatCommentController } from "./components/chat-comment-controller.ts";
 import {
   ComposerQuestionDock,
@@ -140,36 +140,12 @@ function ChatFooterContent(
     activities?: ChatActivityPillsProps;
   },
 ) {
-  const search = createMemo(() =>
-    projectOwner(
-      getTranscriptState(input.props.paneId).search,
-      (owner) => owner.snapshot,
-      Object.is,
-    ),
-  );
-  const dismissableInputIds = createMemo(() => {
-    const view = input.frame.pendingInputs;
-    return input.frame.dismissPendingInputs && view
-      ? listDismissablePendingInputIds(view, input.frame.threadProps.messages, search().read())
-      : [];
-  });
+  const pendingInputs = () => input.frame.pendingInputs;
   return (
     <>
-      <Show when={input.frame.pendingInputs?.error || dismissableInputIds().length}>
+      <Show when={pendingInputs()?.error}>
         <div class="chat-pending-inputs" role="status">
-          <Show when={input.frame.pendingInputs?.error}>
-            <span>{input.frame.pendingInputs?.error}</span>
-          </Show>
-          <Show when={dismissableInputIds().length}>
-            <button
-              class="btn btn--sm"
-              type="button"
-              aria-label={t("chat.pendingInputs.dismissAllLabel")}
-              onClick={() => input.frame.dismissPendingInputs?.(dismissableInputIds())}
-            >
-              {t("chat.pendingInputs.dismissAll")}
-            </button>
-          </Show>
+          <span>{pendingInputs()?.error}</span>
         </div>
       </Show>
       <Show
@@ -215,7 +191,7 @@ function ChatFooterContent(
           onDismiss={(pullRequest) => input.props.onDismissPullRequest?.(pullRequest)}
           onDismissBranch={input.props.onDismissPullRequestsBranch}
           onOpenSessionDiff={input.props.onOpenSessionDiff}
-          publication={input.activities?.publication ? undefined : input.props.githubPublication}
+          publication={publicationOutsidePills(input.activities, input.props.githubPublication)}
         />
       </Show>
       <Show when={input.props.sessionSuggestions?.length}>
@@ -465,6 +441,9 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
   const { bind: bindScrollToLatestButton, read: getScrollToLatestElement } =
     connectedElementRef<HTMLButtonElement>();
   const replacementComposer = connectedElementRef<HTMLElement>();
+  const composerTargetId = createUniqueId();
+  const { bind: bindComposerFooter, read: getComposerFooter } =
+    connectedElementRef<HTMLDivElement>();
   const application = useOptionalApplication();
   const gateway = application && projectGateway(application.gateway);
   const skillFileHovercard = createSkillFileHovercard({
@@ -494,7 +473,9 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
       (replacement) => {
         const replacementElement = replacement && replacementComposer.read();
         const target =
-          replacementElement || getChatComposerState(input.props.paneId).composerTextarea;
+          replacementElement ||
+          getChatComposerState(input.props.paneId).composerTextarea ||
+          getComposerFooter();
         target?.focus({ preventScroll: true });
       },
       // This view mounts only while its pane's question source exists.
@@ -624,6 +605,18 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                       forwardChatWheelToTranscript(event, input.props.transcript.scrollElement)
                     }
                   >
+                    <Show when={!input.props.suggestionComposer}>
+                      <a
+                        class="shell-skip-link chat-composer-skip-link"
+                        href={`#${composerTargetId}`}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          frame().threadProps.onFocusComposer?.();
+                        }}
+                      >
+                        {t("chat.actions.skipToComposer")}
+                      </a>
+                    </Show>
                     <Show when={frame().historyFailed && !frame().transcriptEmpty}>
                       {historyFailure(true)}
                     </Show>
@@ -686,7 +679,12 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                         </Show>
                       </div>
                     </Show>
-                    <div class="chat-footer" ref={[elementRef(input.props.onFooterElementRef)]}>
+                    <div
+                      id={composerTargetId}
+                      class="chat-footer"
+                      tabindex={-1}
+                      ref={[bindComposerFooter, elementRef(input.props.onFooterElementRef)]}
+                    >
                       <ChatSurface
                         binding={{
                           "prop:surface": "composer",

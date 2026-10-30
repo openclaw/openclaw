@@ -2,7 +2,9 @@ import type { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import { Readable } from "node:stream";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createFixtureLifetime } from "openclaw/plugin-sdk/test-env";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SmsDeliveryRecorder } from "./delivery-observations.js";
 import { createSmsWebhookHandler, type SmsWebhookHandlerParams } from "./webhook.js";
 import {
@@ -86,9 +88,28 @@ function expectDurable(res: ReturnType<typeof createResponse>) {
   expect(res.setHeaderMock).toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
 }
 
+const heldCommits: Array<{ retire: () => void; drain: () => Promise<void> }> = [];
+
 const proxy = (address: string) => ({ headers: { "x-forwarded-for": address } });
 
 describe("createSmsWebhookHandler", () => {
+  afterEach(async () => {
+    const commits = heldCommits.splice(0);
+    for (const commit of commits) {
+      commit.retire();
+    }
+    const results = await Promise.allSettled(commits.map((commit) => commit.drain()));
+    enqueueSmsIngress.mockReset();
+    assertSmsCredentialOwnerAvailable.mockReset();
+    vi.useRealTimers();
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length) {
+      throw new AggregateError(failures, "SMS durable commit fixture cleanup failed");
+    }
+  });
+
   beforeEach(() => {
     assertSmsCredentialOwnerAvailable.mockReset();
     enqueueSmsIngress.mockReset().mockResolvedValue({ kind: "accepted", duplicate: false });
@@ -151,38 +172,67 @@ describe("createSmsWebhookHandler", () => {
 
   it.each(["delivery", "ingress"] as const)(
     "waits for the durable %s commit before HTTP 200",
-    async (kind) => {
+    (kind) => {
       const commit = createDeferred<void>();
-      const recorder = createSmsTestDeliveryRecorder();
-      const delivery = createSmsTestDeliveryRecorder(
-        vi.fn<SmsDeliveryRecorder["record"]>(async (params) => {
-          await commit.promise;
-          return recorder.record(params);
-        }),
-      );
-      if (kind === "ingress") {
-        enqueueSmsIngress.mockImplementationOnce(async () => {
-          await commit.promise;
-          return { kind: "accepted", duplicate: false };
-        });
-      }
-      const f = fixture({ delivery });
-      const form = kind === "delivery" ? f.statusForm() : createSmsTestForm();
-      const res = createResponse();
-      const pending = f.handler(createSmsTestRequest(signForm(form, f.account)), res);
-      await vi.waitFor(() =>
-        expect(kind === "delivery" ? delivery.record : enqueueSmsIngress).toHaveBeenCalledOnce(),
-      );
-      expect(res.endMock).not.toHaveBeenCalled();
-      expect(res.setHeaderMock).not.toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
-      commit.resolve();
-      await pending;
-      expectDurable(res);
-      expect(res.endMock).toHaveBeenCalledOnce();
-      if (kind === "delivery") {
-        expect(delivery.record).toHaveBeenCalledWith({ account: f.account, form });
-        expect(enqueueSmsIngress).not.toHaveBeenCalled();
-      }
+      const lifetime = createFixtureLifetime();
+      const retirement = new AbortController();
+      // The handler and its commit callback must settle before the next mock reset,
+      // even when Vitest times out without unwinding the suspended scenario.
+      heldCommits.push({
+        retire: () => {
+          retirement.abort(new Error("SMS commit fixture retired"));
+          commit.resolve();
+        },
+        drain: () => lifetime.cleanup(),
+      });
+      return lifetime.run(async () => {
+        const recorder = createSmsTestDeliveryRecorder();
+        const delivery = createSmsTestDeliveryRecorder(
+          vi.fn<SmsDeliveryRecorder["record"]>((params) =>
+            lifetime.run(async () => {
+              await commit.promise;
+              return recorder.record(params);
+            }),
+          ),
+        );
+        if (kind === "ingress") {
+          enqueueSmsIngress.mockImplementationOnce(() =>
+            lifetime.run(async () => {
+              await commit.promise;
+              return { kind: "accepted", duplicate: false };
+            }),
+          );
+        }
+        const f = fixture({ delivery });
+        const form = kind === "delivery" ? f.statusForm() : createSmsTestForm();
+        const res = createResponse();
+        const pending = lifetime.track(
+          f.handler(createSmsTestRequest(signForm(form, f.account)), res),
+        );
+        await withinTest(
+          lifetime.track(
+            vi.waitFor(() =>
+              expect(
+                kind === "delivery" ? delivery.record : enqueueSmsIngress,
+              ).toHaveBeenCalledOnce(),
+            ),
+          ),
+          retirement.signal,
+        );
+        expect(res.endMock).not.toHaveBeenCalled();
+        expect(res.setHeaderMock).not.toHaveBeenCalledWith(
+          "x-openclaw-delivery-accepted",
+          "durable",
+        );
+        commit.resolve();
+        await withinTest(pending, retirement.signal);
+        expectDurable(res);
+        expect(res.endMock).toHaveBeenCalledOnce();
+        if (kind === "delivery") {
+          expect(delivery.record).toHaveBeenCalledWith({ account: f.account, form });
+          expect(enqueueSmsIngress).not.toHaveBeenCalled();
+        }
+      });
     },
   );
 

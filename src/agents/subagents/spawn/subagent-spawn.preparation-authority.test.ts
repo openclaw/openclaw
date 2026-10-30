@@ -30,7 +30,7 @@ import {
   createGatewayMethodRegistry,
 } from "../../../gateway/methods/registry.js";
 import { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
-import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import type { GatewayLifecycleRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { handleChatAbortRequest } from "../../../gateway/server-methods/chat-abort-handler.js";
 import { invokeChatAbortHandler } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
 import { sessionDeleteHandlers } from "../../../gateway/server-methods/sessions-delete.js";
@@ -127,7 +127,7 @@ function spawnDispatch(
 
 function createPreparationGateway(context: BoundParent["context"], deleted: string[]) {
   const gatewayContext = context as unknown as GatewayRequestContext;
-  const recovery = gatewayContext.recoveryRuntime;
+  const recovery = gatewayContext.lifecycleRuntime;
   if (!recovery) {
     throw new Error("Preparation fixture requires its Gateway recovery owner");
   }
@@ -147,12 +147,12 @@ function createPreparationGateway(context: BoundParent["context"], deleted: stri
     getMethodRegistry: () => registry,
     isDispatchAvailable: () => !execution.isClosing,
   });
-  const dispatchSessionMethod: GatewayRecoveryRuntime["dispatchSessionMethod"] = async <T>(
-    method: Parameters<GatewayRecoveryRuntime["dispatchSessionMethod"]>[0],
+  const dispatchSessionMethod: GatewayLifecycleRuntime["dispatchSessionMethod"] = async <T>(
+    method: Parameters<GatewayLifecycleRuntime["dispatchSessionMethod"]>[0],
     params: unknown,
-    options?: Parameters<GatewayRecoveryRuntime["dispatchSessionMethod"]>[2],
+    options?: Parameters<GatewayLifecycleRuntime["dispatchSessionMethod"]>[2],
   ) => {
-    const result = await runtime.recovery.dispatchSessionMethod<T>(method, params, options);
+    const result = await runtime.lifecycle.dispatchSessionMethod<T>(method, params, options);
     if (method === "sessions.delete") {
       deleted.push((params as { key: string }).key);
     } else if (method === "chat.abort") {

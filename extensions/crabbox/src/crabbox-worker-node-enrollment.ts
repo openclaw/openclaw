@@ -10,6 +10,7 @@ import { CRABBOX_SETUP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 const CLOUD_SETUP_CODE_ENV = "CRABBOX_WORKER_SETUP_CODE";
 const CLOUD_BOOTSTRAP_TOKEN_ENV = "CRABBOX_WORKER_BOOTSTRAP_TOKEN";
+const CLOUD_WORKER_CODEX_ENV = "CRABBOX_WORKER_CODEX_CONFIG";
 // Tolerate brief network pauses while resuming stalls well before the command deadline.
 const CLOUD_BOOTSTRAP_DOWNLOAD_IDLE_TIMEOUT_MS = 2 * 60_000;
 
@@ -93,8 +94,10 @@ const desktopEnvironment = ${JSON.stringify(desktopEnvironment)};
 const desktopSetup = ${JSON.stringify(params.desktopSetup)};
 const credentials = process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
 const setupCode = process.env.${CLOUD_SETUP_CODE_ENV};
+const workerCodexBase64 = process.env.${CLOUD_WORKER_CODEX_ENV};
 delete process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
 delete process.env.${CLOUD_SETUP_CODE_ENV};
+delete process.env.${CLOUD_WORKER_CODEX_ENV};
 if (process.platform !== "win32") process.umask(0o077);
 let phase;
 let phaseStarted = performance.now();
@@ -114,6 +117,40 @@ setPhase("preparation");
   catch { throw new Error("Cloud worker bootstrap credential format is invalid"); }
   const home = fs.realpathSync(os.homedir());
   const stateDir = ${createCrabboxWorkerStateDirScript(leaseId)};
+  const stageWorkerCodex = () => {
+    if (!workerCodexBase64) return;
+    let settings;
+    try { settings = JSON.parse(Buffer.from(workerCodexBase64, "base64").toString("utf8")); }
+    catch { throw new Error("Cloud worker Codex settings are invalid"); }
+    const { configToml, helperScript, helperPath, configVersion } = settings;
+    if (![configToml, helperScript, helperPath, configVersion].every((value) => typeof value === "string" && value.length > 0) || !/^[a-f0-9]{64}$/.test(configVersion)) throw new Error("Cloud worker Codex settings are incomplete");
+    if ([configToml, helperScript].some((value) => Buffer.byteLength(value, "utf8") > 16 * 1024)) throw new Error("Cloud worker Codex settings exceed their size limit");
+    const helperName = path.basename(helperPath);
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\\.mjs$/.test(helperName) || configToml.split(helperPath).length !== 2) throw new Error("Cloud worker Codex helper path is missing or ambiguous");
+    const directory = path.join(stateDir, "codex-runtime");
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    if (!fs.lstatSync(directory).isDirectory() || fs.realpathSync(directory) !== directory) throw new Error("Cloud worker Codex settings directory is unsafe");
+    if (process.platform !== "win32") fs.chmodSync(directory, 0o700);
+    const config = configToml.replace(helperPath, path.join(directory, helperName));
+    const versionFile = path.join(directory, "version");
+    // A replay must not change the configuration behind an already advertised command identity.
+    if (fs.existsSync(versionFile) && (
+      fs.readFileSync(versionFile, "utf8") !== configVersion ||
+      fs.readFileSync(path.join(directory, "config.toml"), "utf8") !== config ||
+      fs.readFileSync(path.join(directory, helperName), "utf8") !== helperScript
+    )) throw new Error("Cloud worker Codex version changed on an existing lease; reprovision the worker");
+    const writePrivate = (name, content) => {
+      const destination = path.join(directory, name);
+      const temporary = destination + "." + crypto.randomUUID();
+      try {
+        fs.writeFileSync(temporary, content, { mode: 0o600, flag: "wx" });
+        fs.renameSync(temporary, destination);
+      } finally { fs.rmSync(temporary, { force: true }); }
+    };
+    writePrivate(helperName, helperScript);
+    writePrivate("config.toml", config);
+    writePrivate("version", configVersion);
+  };
   const runtimeRoot = path.join(home, ".openclaw-worker", "node-runtimes");
   const runtimeDir = path.join(runtimeRoot, bootstrap.sha256);
   const cli = path.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
@@ -195,6 +232,8 @@ setPhase("preparation");
     }
   }
   ${createCrabboxNodeProcessRuntime(desktopTarget, leaseId)}
+  // Lease-private settings are never part of runtime-only preparation or its captured image.
+  if (mode) stageWorkerCodex();
   if (desktopTarget === "macos") finishDesktopSetup();
   if (reuseNodeProcess()) {
     if (desktopTarget !== "macos") finishDesktopSetup();
@@ -545,6 +584,13 @@ setPhase("preparation");
         "bootstrap",
       ),
     forwardedEnv: {
+      ...(enrollment?.workerCodex
+        ? {
+            [CLOUD_WORKER_CODEX_ENV]: Buffer.from(JSON.stringify(enrollment.workerCodex)).toString(
+              "base64",
+            ),
+          }
+        : {}),
       [CLOUD_BOOTSTRAP_TOKEN_ENV]: JSON.stringify({
         nodeBootstrap: token,
         workerBundle: params.workerBundle?.token,

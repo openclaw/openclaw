@@ -180,9 +180,11 @@ describe("openclaw-router-outlet", () => {
 
     const loadingState = outlet.querySelector('[role="status"]');
     expect(loadingState?.getAttribute("aria-label")).toBe("Loading…");
-    expect(loadingState?.querySelector(".loading-skeleton")?.getAttribute("aria-hidden")).toBe(
-      "true",
-    );
+    const skeletons = [...(loadingState?.querySelectorAll(".skeleton") ?? [])];
+    expect(skeletons.length).toBeGreaterThan(0);
+    for (const skeleton of skeletons) {
+      expect(skeleton.closest("[aria-hidden='true']")).not.toBeNull();
+    }
     expect(loadingState?.getAttribute("aria-busy")).toBeNull();
     expect(loadingState?.textContent?.trim()).toBe("Loading…");
     expect(outlet.textContent).not.toContain("Loading panel");

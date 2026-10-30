@@ -11,7 +11,7 @@ import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { isDerivedWorkspacePath, buildCacheInputPaths } from "./workspace-path-exclusions.js";
 
 type ManifestNode = WorkerWorkspaceManifestEntry | { path: string; type: "directory" };
-export const OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX = "Cloud workspace result is too large: ";
+const OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX = "Cloud workspace result is too large: ";
 export const OVERSIZED_WORKSPACE_TOTAL_ERROR_PREFIX =
   "Cloud workspace staged result exceeds its byte limit";
 const RECOVERY_CANDIDATES_PREFIX = "Largest new files: ";
