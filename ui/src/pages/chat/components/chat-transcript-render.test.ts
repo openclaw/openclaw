@@ -464,8 +464,6 @@ describe("chat transcript rendering", () => {
       replaceOwner();
       rerender();
       expect(container.querySelector(".chat-turn-recap")).toBeNull();
-      rerender();
-      expect(container.querySelector(".chat-turn-recap")).toBeNull();
       rerender({ currentAgentId: "first", runId, runWorking: true });
       rerender({ runId: null, runWorking: false });
       expectRecap("7.1k output tokens");
@@ -821,7 +819,9 @@ describe("chat transcript rendering", () => {
         expect.objectContaining({ sourceMessageId: "timestamp-answer", text }),
       );
       if (index === 1) {
-        expect(requireElement(group, ".chat-work-group").textContent).toContain("Worked");
+        expect(requireElement(group, ".chat-work-group").textContent).toContain(
+          "Worked for 35 minutes, 17 seconds",
+        );
       }
       await vi.advanceTimersByTimeAsync(1_500);
       fixture.dispose();

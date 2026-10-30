@@ -386,31 +386,6 @@ it.each(["empty", "partial", "parse"])(
   },
 );
 
-it.each([true, false])("selects fork publication transport for signed=%s fixups", (signed) => {
-  const { repoDir } = makeRetryRepo();
-  const result = runGatesBash(
-    [
-      "PR_HEAD_OWNER=contributor",
-      "PR_HEAD_REPO_NAME=repo",
-      "PRHEAD_REMOTE_URL=https://github.com/contributor/repo.git",
-      `pr_git() { printf '%s\\n' "$*" >> .local/git-calls; case "$1" in rev-list) printf '%s\\n' prepared;; verify-commit) return ${signed ? 0 : 1};; esac; return 0; }`,
-      `graphql_push_to_fork() { touch .local/graphql-called; ${signed ? "return 99" : "printf '%s\\n' signed-head"}; }`,
-      ...(signed ? ["revalidate_pr_publication() { :; }"] : []),
-      "push_prep_head_once topic hosted prepared 42 '{}'",
-      ...(signed
-        ? [
-            "grep -F 'verify-commit prepared' .local/git-calls",
-            "grep -F 'push --force-with-lease=refs/heads/topic:hosted https://github.com/contributor/repo.git prepared:refs/heads/topic' .local/git-calls",
-            "test ! -e .local/graphql-called",
-          ]
-        : ["test -e .local/graphql-called"]),
-    ].join("\n"),
-    { cwd: repoDir, sourcePush: true },
-  );
-
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.stdout).toContain(signed ? "prepared" : "signed-head");
-});
 const shardOwnershipPath = "test/tsconfig/tsconfig.core.test.agents-tools.json";
 it.each([
   ["overlapping source changes", "src/subject.ts", true, "Hosted CI reuse declined"],

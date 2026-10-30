@@ -23,7 +23,7 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
-  hasSupportedGitHubPublicationTarget,
+  qualifyGitHubPublicationSource,
   prepareGitHubPublicationSession,
   prepareGitHubPublicationWorkspaceOwner,
 } from "./github-publication-availability.js";
@@ -376,8 +376,12 @@ it.each(["session", "identity", "discovery"])(
         },
       );
       expect(
-        await hasSupportedGitHubPublicationTarget(session, () => {}, prepared.readCurrent),
-      ).toBe(true);
+        await qualifyGitHubPublicationSource(session, () => {}, prepared.readCurrent),
+      ).toMatchObject({
+        ok: true,
+        custody: { kind: "qualified", source: "worktree" },
+        target: { kind: "supported" },
+      });
     } else {
       expect(await prepareGitHubPublicationAvailability(session)).toBe(true);
     }

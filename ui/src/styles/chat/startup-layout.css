@@ -227,7 +227,10 @@ div.chat-thread:where(.chat-thread--annotations) {
   --chat-avatar-column: 36px;
   --chat-avatar-gap: 10px;
   --chat-avatar-gutter: calc(var(--chat-avatar-column) + var(--chat-avatar-gap));
-  --chat-message-column-max: var(--chat-message-max-width, min(900px, 68%));
+  /* A configured message width only narrows participant bubbles: a saved chat width
+     sets it to 100% so agent content fills the wider column, while bubbles keep
+     their default proportion of that column. */
+  --chat-message-column-max: min(var(--chat-message-max-width, 100%), 900px, 68%);
   --chat-run-block-gap: 8px;
   --chat-group-inset-start: 4px;
   --chat-group-inset-end: 16px;

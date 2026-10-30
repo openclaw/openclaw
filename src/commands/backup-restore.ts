@@ -4,6 +4,7 @@ import { isPathInside } from "@openclaw/fs-safe/path";
 import * as tar from "tar";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { readConfigFileSnapshot, resolveStateDir } from "../config/config.js";
+import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
 import { prepareRestoredClientCredentials } from "../infra/client-credential-restore.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -11,7 +12,6 @@ import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import {
   BACKUP_MAX_DECOMPRESSION_RATIO,
-  buildBackupArchivePath,
   canonicalizePathForContainment,
   resolveBackupAgentRoots,
   resolveBackupArchivePath,

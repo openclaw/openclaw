@@ -20,7 +20,7 @@ describe("tmp-openclaw-dir browser-safe import", () => {
           loader: "js",
         }));
         pluginBuild.onLoad({ filter: /^node:os$/, namespace: "node-browser-shim" }, () => ({
-          contents: 'export const tmpdir = () => "/tmp";',
+          contents: 'export const tmpdir = () => "/tmp"; export default { tmpdir };',
           loader: "js",
         }));
         pluginBuild.onLoad({ filter: /^node:path$/, namespace: "node-browser-shim" }, () => ({

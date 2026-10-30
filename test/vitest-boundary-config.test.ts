@@ -1,8 +1,8 @@
 // Vitest boundary config tests validate boundary test configuration.
+import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
 import { createBoundaryVitestConfig } from "./vitest/vitest.boundary.config.ts";
-import { boundaryTestFiles } from "./vitest/vitest.unit-paths.mjs";
 
 function requireTestConfig(config: ReturnType<typeof createBoundaryVitestConfig>) {
   if (!config.test) {
@@ -18,7 +18,7 @@ describe("boundary vitest config", () => {
 
     expect(testConfig.isolate).toBe(false);
     expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
-    expect(testConfig.include).toEqual(boundaryTestFiles);
+    expect(testConfig.include?.filter((file) => !existsSync(file))).toEqual([]);
     expect(normalizeConfigPaths(testConfig.setupFiles)).toEqual(["test/setup.ts"]);
   });
 

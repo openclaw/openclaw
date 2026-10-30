@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const callGatewayFromCli = vi.fn();
@@ -8,7 +9,8 @@ const { runtimeLogs, runtimeErrors, defaultRuntime, resetRuntimeCapture } =
   createCliRuntimeCapture();
 
 // mock-isolation: Exercise command registration without opening a live Gateway connection.
-vi.mock("./gateway-rpc.js", () => ({
+vi.mock("./gateway-rpc.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gateway-rpc.js")>()),
   addGatewayClientOptions: (command: Command) => command,
   callGatewayFromCli,
 }));
@@ -74,14 +76,17 @@ describe("system-cli", () => {
       { mode: "next-heartbeat", text: "ping", sessionKey: "agent:main:telegram:dm:42" },
       "ok",
     ],
-    [["presence"], "system-presence", undefined, '{\n  "ok": true\n}'],
-  ] as const)("routes system %j to gateway", async (args, method, params, output) => {
-    await runCli(["system", ...args]);
+    [["presence"], "system-presence", undefined, undefined],
+  ] as const)("settles interrupted system %j", async (args, method, params, output) => {
+    const scope = new AsyncWorkScope();
+    const pending = scope.run(() => runCli(["system", ...args]));
+    scope.beginClose();
+    await pending;
     expect(callGatewayFromCli.mock.calls[0]?.slice(0, 3)).toEqual([
       method,
       expect.any(Object),
       params,
     ]);
-    expect(runtimeLogs).toEqual([output]);
+    expect(runtimeLogs).toEqual(output ? [output] : []);
   });
 });

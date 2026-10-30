@@ -251,7 +251,9 @@ export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined
   return hasRoutedThread ? undefined : normalizeOptionalString(run.messageId);
 }
 
-function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["currentInboundContext"] {
+export function collectCurrentInboundContext(
+  items: FollowupRun[],
+): FollowupRun["currentInboundContext"] {
   const contexts = items.flatMap((item, index) =>
     item.currentInboundContext ? [{ context: item.currentInboundContext, index }] : [],
   );
@@ -448,6 +450,7 @@ export function createOverflowSummaryRetrySource(source: InternalFollowupRun): I
     ...(source.currentInboundEventKind === "room_event"
       ? { currentInboundEventKind: "room_event" }
       : {}),
+    currentInboundContext: source.currentInboundContext,
     run: source.run,
   };
 }

@@ -103,3 +103,54 @@ it("shares the output budget with abort diagnostics", async () => {
   codeMode.expectCodeModeSharedBudget(result, 1024);
   expect(codeMode.testing.activeRuns.size).toBe(0);
 });
+
+it.each([false, true])(
+  "fails reply decoding OOM after checkpoint=%s without later effects",
+  async (checkpoint) => {
+    const started = createDeferred();
+    const large = codeMode.pluginToolWithExecute("fixture_large", "Large reply", async () => {
+      started.resolve();
+      return { content: [], details: Array.from({ length: 500_000 }, () => ({})) };
+    });
+    const small = codeMode.jsonTool("fixture_small", [{ value: 7 }]);
+    const after = codeMode.jsonTool("fixture_after", true);
+    const h = codeMode.createCatalogCodeModeHarness([large, small, after], {
+      codeMode: {
+        executor: "quickjs",
+        memoryLimitBytes: 16 * 1024 * 1024,
+        maxSnapshotBytes: 32 * 1024 * 1024,
+      },
+    });
+    expect(await h.complete("return (await fixture_small({}))[0].value;")).toMatchObject({
+      status: "completed",
+      value: 7,
+    });
+    const first = await h.run(
+      `const pending = fixture_large({});
+       ${checkpoint ? "await yield_control();" : ""}
+       const value = await pending;
+       await fixture_after({});
+       return { array: Array.isArray(value), length: value.length };`,
+      "decode-oom",
+      { awaitResults: !checkpoint },
+    );
+    let result = first;
+    if (checkpoint) {
+      expect(first.status).toBe("waiting");
+      await started.promise;
+      codeMode.expectToolCalls(1, large);
+      result = await codeMode.waitUntilCompleted({ details: first, waitTool: h.tools[1]! });
+    }
+    expect(result, JSON.stringify(result)).toMatchObject({
+      status: "failed",
+      code: "internal_error",
+      failurePhase: "host",
+      bridgeDispatchStarted: true,
+      error: expect.stringContaining("out of memory"),
+    });
+    codeMode.expectToolCalls(1, large, small);
+    codeMode.expectToolCalls(0, after);
+    expect(await h.complete("return 42;")).toMatchObject({ status: "completed", value: 42 });
+    expect(codeMode.testing.activeRuns.size).toBe(0);
+  },
+);

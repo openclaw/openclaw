@@ -11,10 +11,12 @@ import { inspectGatewayHeapLimit } from "../../daemon/gateway-heap.js";
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
 import { formatServiceLabel } from "../../daemon/runtime-format.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
+import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import {
   inspectGatewayServiceInstallationDrift,
   summarizeGatewayServiceLayout,
 } from "../../daemon/service-layout.js";
+import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { gatewaySecretInputPathCanWin } from "../../gateway/credentials-secret-inputs.js";
 import { trimToUndefined } from "../../gateway/credentials.js";
 import { resolveGatewayRequiredListenHosts } from "../../gateway/net.js";
@@ -51,13 +53,10 @@ import { readDaemonServiceStatus } from "./status.service.js";
 import type { GatewayRpcOpts } from "./types.js";
 
 async function loadDaemonConfigContext(
-  serviceEnv?: Record<string, string>,
+  command: GatewayServiceCommandConfig | null,
   opts: { deep?: boolean } = {},
 ) {
-  const mergedDaemonEnv = {
-    ...process.env,
-    ...(serviceEnv ?? undefined),
-  } satisfies Record<string, string | undefined>;
+  const mergedDaemonEnv = mergeGatewayServiceEnv(process.env, command);
 
   const cliConfigPath = resolveConfigPath(process.env, resolveStateDir(process.env));
   const daemonConfigPath = resolveConfigPath(mergedDaemonEnv, resolveStateDir(mergedDaemonEnv));
@@ -67,8 +66,7 @@ async function loadDaemonConfigContext(
     configPath: cliConfigPath,
     deep: opts.deep,
   });
-  const sharesDaemonConfigContext =
-    sameConfigPath && (cliConfigRead.mode === "fast" || !serviceEnv);
+  const sharesDaemonConfigContext = sameConfigPath && (cliConfigRead.mode === "fast" || !command);
   const daemonConfigRead = sharesDaemonConfigContext
     ? cliConfigRead
     : await readDaemonStatusConfig({
@@ -193,7 +191,7 @@ async function gatherDaemonStatusImpl(
       await import("../../state/openclaw-database-preflight.js");
     // Diagnose a refused database before config and lifecycle readers try to open it.
     const schemas = await preflightOpenClawDatabaseSchemas({
-      env: { ...process.env, ...targetServiceCommand?.environment },
+      env: mergeGatewayServiceEnv(process.env, targetServiceCommand),
       scope: "state",
     });
     if (schemas.incompatible.length > 0) {
@@ -227,7 +225,9 @@ async function gatherDaemonStatusImpl(
     cliConfigSummary,
     daemonConfigSummary,
     configMismatch,
-  } = await loadDaemonConfigContext(targetServiceCommand?.environment, { deep: opts.deep });
+  } = await loadDaemonConfigContext(targetServiceCommand, {
+    deep: opts.deep,
+  });
   const { gateway, daemonPort, cliPort, probeUrl, probeUrlOverride } =
     await resolveGatewayStatusSummary({
       cliCfg,

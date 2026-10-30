@@ -7,10 +7,8 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deliverQueuedSessionDelivery } from "../gateway/server-restart-sentinel.js";
-import {
-  enqueueSessionDelivery,
-  loadPendingSessionDelivery,
-} from "../infra/session-delivery-queue-storage.js";
+import { loadPendingSessionDelivery } from "../infra/session-delivery-queue-storage.js";
+import { enqueueUnclaimedSessionDeliveryFixture as enqueueSessionDelivery } from "../infra/session-delivery-queue.test-helpers.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";

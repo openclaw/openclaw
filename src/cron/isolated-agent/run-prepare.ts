@@ -21,7 +21,7 @@ import {
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
-import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
+import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronRuntimeSessionEntry } from "../inference-binding.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
@@ -149,7 +149,8 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
     { agentId: requiredAgentId },
     tryResolveAmbientOwnerAgentId(requestedRuntimeCfg),
   );
-  await waitForAgentDatabaseWriteAdmission(initialAgentId, {
+  await waitForAgentInputAdmission(initialAgentId, {
+    cfg: requestedRuntimeCfg,
     signal: input.abortSignal ?? input.signal,
   });
   await using runtimeResources = new AsyncDisposableStack();

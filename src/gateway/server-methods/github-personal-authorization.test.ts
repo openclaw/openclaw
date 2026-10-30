@@ -133,8 +133,18 @@ function sessionRead(agentId = "main", patch: Partial<SessionEntry> = {}) {
   };
 }
 
-function prepare(request = createRequest(), agentId?: string, signal?: AbortSignal) {
-  return prepareGitHubPublicationOptionsRead(request, { sessionKey: "main", agentId }, signal);
+function prepare(
+  request = createRequest(),
+  agentId?: string,
+  signal?: AbortSignal,
+  purpose: "options" | "shared-observation" = "options",
+) {
+  return prepareGitHubPublicationOptionsRead(
+    request,
+    { sessionKey: "main", agentId },
+    signal,
+    purpose,
+  );
 }
 
 function publish(loaded: SessionRead, patch: Partial<SessionEntry>) {
@@ -210,36 +220,39 @@ it("prepares the new session store after an in-place config publication", async 
   expect(mocks.loadSession).toHaveBeenCalledTimes(2);
 });
 
-it("rejects invited publication metadata when sharing selects a replacement store", async () => {
-  const config = getRuntimeConfigSnapshot()!;
-  const request = createRequest();
-  request.context.getRuntimeConfig = () => getRuntimeConfigSnapshot()!;
-  mocks.sessionCap = "invited";
-  const { snapshot, pending, entered } = holdSessionRead();
-  const replacement = {
-    ...sessionRead("main", { sessionId: "replacement-session" }),
-    storePath: "/test/reloaded/sessions.json",
-  };
-  const release = vi.fn();
-  mocks.prepareSharing.mockResolvedValue({
-    storageTarget: replacement,
-    readCurrent: () => ({
-      target: { ...replacement, storeKey: replacement.canonicalKey },
-      membership: new Set(["profile-cache-test"]),
-      sourcePath: replacement.storePath,
-      sourceAgentId: replacement.agentId,
-    }),
-    release,
-  });
-  const first = prepare(request);
-  const rejected = expect(first).rejects.toThrow("session lifecycle changed");
-  await entered.promise;
-  config.session = { store: replacement.storePath };
-  setRuntimeConfigSnapshot(config);
-  pending.resolve(snapshot);
-  await rejected;
-  expect(release).toHaveBeenCalledOnce();
-});
+it.each(["options", "shared-observation"] as const)(
+  "rejects invited %s metadata when sharing selects a replacement store",
+  async (purpose) => {
+    const config = getRuntimeConfigSnapshot()!;
+    const request = createRequest();
+    request.context.getRuntimeConfig = () => getRuntimeConfigSnapshot()!;
+    mocks.sessionCap = "invited";
+    const { snapshot, pending, entered } = holdSessionRead();
+    const replacement = {
+      ...sessionRead("main", { sessionId: "replacement-session" }),
+      storePath: "/test/reloaded/sessions.json",
+    };
+    const release = vi.fn();
+    mocks.prepareSharing.mockResolvedValue({
+      storageTarget: replacement,
+      readCurrent: () => ({
+        target: { ...replacement, storeKey: replacement.canonicalKey },
+        membership: new Set(["profile-cache-test"]),
+        sourcePath: replacement.storePath,
+        sourceAgentId: replacement.agentId,
+      }),
+      release,
+    });
+    const first = prepare(request, undefined, undefined, purpose);
+    const rejected = expect(first).rejects.toThrow("session lifecycle changed");
+    await entered.promise;
+    config.session = { store: replacement.storePath };
+    setRuntimeConfigSnapshot(config);
+    pending.resolve(snapshot);
+    await rejected;
+    expect(release).toHaveBeenCalledOnce();
+  },
+);
 
 it("keeps origin-free personal reads and publication bound to the live ingress grant", async () => {
   const request = createRequest();

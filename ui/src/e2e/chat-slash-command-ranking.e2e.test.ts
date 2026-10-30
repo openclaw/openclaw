@@ -108,6 +108,7 @@ suite.define(() => {
           messages: rows,
           hasMore,
           nextOffset,
+          ...(hasMore ? { olderCursor: `older-export-${nextOffset}` } : {}),
           totalMessages: messages.length,
           sessionId: "export-pagination",
           deltaCursor: "stable-export-cursor",

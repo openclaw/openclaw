@@ -3,6 +3,7 @@
 // --discovery-skills scales each of four workspaces; --discovery-plugins adds shared contributions.
 // --worker identity-avatar-file measures a 64 KiB local avatar: startup, retained heap and warm reads.
 // --worker memory-search measures the read worker's import floor; use memory-search-status-measure.ts for actual queries.
+// --worker memory-index measures guarded stats loading with two missing-store reads, not SQL throughput.
 // --built loads dist workers; source-mode heap includes the TypeScript loader and is not packaged RSS.
 // --build-dir selects a preserved runtime build for --built comparisons.
 // --git-operation provisioning measures the common inspection with no .worktreeinclude file.
@@ -228,6 +229,7 @@ const entries = {
   "code-mode-node": "src/agents/code-mode-node.worker.ts",
   discovery: "src/skills/runtime/discovery.worker.ts",
   "memory-search": "extensions/memory-core/src/memory/manager-search.worker.ts",
+  "memory-index": "extensions/memory-core/src/memory/manager-index.worker.ts",
 };
 const report = {
   samples,
@@ -286,8 +288,8 @@ for (const [name, relative] of Object.entries(entries)) {
         : {}),
       entry: new URL(
         values.built
-          ? name === "memory-search"
-            ? "dist/extensions/memory-core/memory-search.worker.js"
+          ? name === "memory-search" || name === "memory-index"
+            ? `dist/extensions/memory-core/${name}.worker.js`
             : relative.replace(/^src\//, "dist/").replace(/\.ts$/, ".js")
           : relative,
         values["build-dir"]
@@ -410,40 +412,51 @@ for (const [name, relative] of Object.entries(entries)) {
       assert.equal(resolveHandle?.kind, "function");
     }
     const request = () =>
-      name === "memory-search"
-        ? { kind: "prewarm" }
-        : name === "identity-avatar-file"
-          ? { workspaceDir: state, source: "avatar.png", readBody: true }
-          : name === "git-operation"
-            ? values["git-operation"] === "provisioning"
-              ? { type: "worktree.provisioning-inspection", input: { sourceRoot: repository } }
-              : { type: "repository.branches", input: { repoRoot: repository } }
-            : name === "plugin-generation-preparation"
-              ? {
-                  operation: "call",
-                  handle: resolveHandle.id,
-                  args: [{ kind: "value", value: entry }],
-                  asynchronous: false,
-                }
-              : name === "discovery"
-                ? { kind: "scan", path: process.env.PATH, requests }
-                : {
-                    kind: "exec",
-                    source:
-                      "const values = Array.from({length: 128}, (_, i) => i); return values.reduce((a, b) => a + b, 0);",
-                    initialization: initBuffer,
-                    progress: new SharedArrayBuffer(64 + 16384),
-                    inlineHost: false,
-                    config: {
-                      timeoutMs: 30000,
-                      memoryLimitBytes: 64 * 1024 * 1024,
-                      maxOutputBytes: 16384,
-                      maxSnapshotBytes: 65536,
-                      maxPendingToolCalls: 128,
-                    },
-                  };
+      name === "memory-index"
+        ? {
+            kind: "transcript-stats",
+            scopes: [
+              { agentId: "main", sessionId: "missing-1" },
+              { agentId: "main", sessionId: "missing-2" },
+            ],
+            env: { OPENCLAW_STATE_DIR: path.join(state, "state") },
+          }
+        : name === "memory-search"
+          ? { kind: "prewarm" }
+          : name === "identity-avatar-file"
+            ? { workspaceDir: state, source: "avatar.png", readBody: true }
+            : name === "git-operation"
+              ? values["git-operation"] === "provisioning"
+                ? { type: "worktree.provisioning-inspection", input: { sourceRoot: repository } }
+                : { type: "repository.branches", input: { repoRoot: repository } }
+              : name === "plugin-generation-preparation"
+                ? {
+                    operation: "call",
+                    handle: resolveHandle.id,
+                    args: [{ kind: "value", value: entry }],
+                    asynchronous: false,
+                  }
+                : name === "discovery"
+                  ? { kind: "scan", path: process.env.PATH, requests }
+                  : {
+                      kind: "exec",
+                      source:
+                        "const values = Array.from({length: 128}, (_, i) => i); return values.reduce((a, b) => a + b, 0);",
+                      initialization: initBuffer,
+                      progress: new SharedArrayBuffer(64 + 16384),
+                      inlineHost: false,
+                      config: {
+                        timeoutMs: 30000,
+                        memoryLimitBytes: 64 * 1024 * 1024,
+                        maxOutputBytes: 16384,
+                        maxSnapshotBytes: 65536,
+                        maxPendingToolCalls: 128,
+                      },
+                    };
     const verify = (reply) => {
-      if (name === "memory-search") {
+      if (name === "memory-index") {
+        assert.deepEqual(reply, { kind: "transcript-stats", stats: [null, null] });
+      } else if (name === "memory-search") {
         assert.deepEqual(reply, { kind: "prewarm" });
       } else if (name === "identity-avatar-file") {
         assert(reply.ok);

@@ -104,6 +104,7 @@ export function bindHarnessMedia(params: {
         ...request,
         ...contextMedia,
         assertCurrent,
+        signal: attemptSignal,
       });
       assertCurrent();
       return result;

@@ -11,7 +11,7 @@ import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import type { WorkerGitHubLaunchBinding } from "../worker/launch-descriptor.js";
-import type { PublicationSessionIdentity } from "./github-publication-availability.js";
+import type { PublicationSessionIdentity } from "./github-publication-session.types.js";
 import type { SelectionRow } from "./session-row-projection-record.js";
 import { prepareGitHubPublicationFact } from "./worker-environments/worker-github-binding.js";
 

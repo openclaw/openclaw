@@ -89,4 +89,15 @@ export function registerAgentThinkingTests({
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
       expect(readPreparedModelCatalog).not.toHaveBeenCalled();
     }));
+
+  it("names the selected model's row levels for an invalid --thinking value", () =>
+    withTempHome(async (home) => {
+      mockConfig(home, path.join(home, "sessions.json"), {
+        model: { primary: "deepseek/deepseek-v4-pro" },
+        models: { "deepseek/deepseek-v4-pro": {} },
+      });
+      await expect(
+        agentCommand({ message: "ping", to: "+1222", thinking: "bogus" }, runtime),
+      ).rejects.toThrow(/xhigh, max/);
+    }));
 }

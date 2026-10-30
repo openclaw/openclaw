@@ -6,10 +6,12 @@ import { BrowserTabCardHost } from "../pages/chat/components/browser-tab-card.ts
 import { renderComposerMenuOption as ComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
+import { Menu, type MenuProps } from "./solid/menu.tsx";
 import "../test-helpers/load-styles.ts";
 import "./agent-select-registration.ts";
 import "./menu-surface.ts";
-import { Menu, type MenuProps } from "./solid/menu.tsx";
+import sessionMenuStyles from "../styles/session-menu.css?inline";
+import overlayStyles from "./solid/overlay.css?inline";
 import "./resizable-divider.ts";
 
 // Nav's stacking context is below the resizer. Plain overlays need a top-layer
@@ -335,6 +337,130 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       host = document.body.appendChild(document.createElement("div"));
     });
 
+    it.each(["session-first", "overlay-first"])(
+      "keeps canonical and plain row states independent with %s styles",
+      async (order) => {
+        const { page, userEvent } = await import("vitest/browser");
+        const style = document.head.appendChild(document.createElement("style"));
+        onTestFinished(() => style.remove());
+        style.textContent =
+          order === "session-first"
+            ? `${sessionMenuStyles}\n${overlayStyles}`
+            : `${overlayStyles}\n${sessionMenuStyles}`;
+        const park = host.appendChild(document.createElement("button"));
+        park.textContent = "Outside the menu";
+        park.style.cssText = "position: fixed; right: 16px; bottom: 16px";
+        const transparent = "rgba(0, 0, 0, 0)";
+        const color = (token: string) =>
+          token === "transparent" ? transparent : colorSwatch(`var(${token})`);
+
+        // Exercise the state owner with real CSS and browser input. The component
+        // scenarios below separately prove Menu and BrowserTabCard composition.
+        const states = [
+          {
+            name: "neutral",
+            menu: ["transparent", "--surface-hover", "1"],
+            plain: ["transparent", "--bg-hover", "1"],
+          },
+          {
+            name: "expanded",
+            menu: ["--surface-selected", "--surface-selected-hover", "1"],
+            plain: ["--bg-hover", "--bg-hover", "1"],
+          },
+          {
+            name: "checked",
+            menu: ["--surface-selected", "--surface-selected-hover", "1"],
+            plain: ["transparent", "--bg-hover", "1"],
+          },
+          {
+            name: "danger",
+            menu: ["transparent", "--danger-subtle", "1"],
+            plain: ["transparent", "--bg-hover", "1"],
+          },
+          {
+            name: "danger-expanded",
+            menu: ["--danger-subtle", "--danger-subtle", "1"],
+            plain: ["--bg-hover", "--bg-hover", "1"],
+          },
+          {
+            name: "disabled",
+            menu: ["transparent", "transparent", "0.5"],
+            plain: ["transparent", "transparent", "0.42"],
+          },
+          {
+            name: "aria-disabled",
+            menu: ["transparent", "transparent", "0.5"],
+            plain: ["transparent", "transparent", "0.42"],
+          },
+          {
+            name: "disabled-expanded",
+            menu: ["transparent", "transparent", "0.5"],
+            plain: ["--bg-hover", "--bg-hover", "0.42"],
+          },
+          {
+            name: "aria-disabled-expanded",
+            menu: ["transparent", "transparent", "0.5"],
+            plain: ["--bg-hover", "--bg-hover", "0.42"],
+          },
+        ] as const;
+        for (const className of [
+          "oc-menu-item session-menu__item",
+          "oc-menu-item sidebar-session-sort-menu__item",
+          "session-menu__item",
+        ]) {
+          const canonical = className.includes("oc-menu-item");
+          for (const { name: state, menu, plain } of states) {
+            await page.elementLocator(park).hover();
+            park.focus();
+            const item = host.appendChild(document.createElement("button"));
+            item.className = className;
+            item.textContent = `${canonical ? "Menu" : "Plain row"}: ${state}`;
+            const disabled = state.includes("disabled");
+            const expanded = state.includes("expanded");
+            const danger = state.includes("danger");
+            item.disabled = disabled && !state.startsWith("aria-");
+            for (const [attribute, enabled] of [
+              ["aria-expanded", expanded],
+              ["aria-checked", state === "checked"],
+              ["aria-disabled", state.startsWith("aria-")],
+            ] as const) {
+              if (enabled) {
+                item.setAttribute(attribute, "true");
+              }
+            }
+            if (danger) {
+              item.dataset.variant = "danger";
+              item.classList.add("session-menu__item--destructive");
+              expect(getComputedStyle(item).color).toBe(color("--danger"));
+            }
+            const [resting, interactive, opacity] = canonical ? menu : plain;
+            const label = `${className}: ${state}`;
+            expect(getComputedStyle(item).backgroundColor, `${label} resting`).toBe(color(resting));
+            expect(getComputedStyle(item).opacity, `${label} opacity`).toBe(opacity);
+            await page.elementLocator(item).hover();
+            await expect
+              .poll(() => getComputedStyle(item).backgroundColor, {
+                message: `${label} hover`,
+              })
+              .toBe(color(interactive));
+            if (!item.disabled) {
+              await page.elementLocator(park).hover();
+              await userEvent.keyboard("{Tab}");
+              item.focus();
+              expect(item.matches(":focus-visible"), `${label} keyboard focus`).toBe(true);
+              // Plain rows retain their existing focus contract, including aria-disabled rows.
+              await expect
+                .poll(() => getComputedStyle(item).backgroundColor, {
+                  message: `${label} focus`,
+                })
+                .toBe(color(canonical ? interactive : "--bg-hover"));
+            }
+            item.remove();
+          }
+        }
+      },
+    );
+
     it("matches session menu geometry and theme inside browser cards", async () => {
       const view = mountSolid(() => (
         <BrowserTabCardHost
@@ -379,7 +505,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
           getComputedStyle(referenceItem).getPropertyValue(property),
         );
       }
-      await hoverBackground(item, highlight);
+      await hoverBackground(item, colorSwatch("var(--surface-hover)"));
       entry.forEach((animation) => animation.finish());
       await expect.poll(() => menu.dataset.phase).toBe("open");
     });

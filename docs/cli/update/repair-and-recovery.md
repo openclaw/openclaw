@@ -667,8 +667,16 @@ is unknown; Doctor stops repeating the repair instruction after acknowledgement.
 Explicit recovery does not wait 30 minutes when every recorded updater process
 is provably dead (its PID is gone or its process-start identity has changed).
 Identityless rows and runs with an unrecorded adopter still require more than
-30 minutes of inactivity; a recorded live or uninspectable driver blocks
-abandonment recovery.
+30 minutes of inactivity. Standalone repair can also retire recorded drivers
+from historical hostnames when it acquires both exclusive update executor and
+SQLite state ownership. Local custody cannot establish abandonment for a shared
+PostgreSQL ledger; check its recorded hosts or supervisors. SQLite repair evaluates
+each run independently, retains its failed history,
+and warns with the run ID, recorded hostname, and age. Age or hostname alone
+never authorizes abandonment. A live driver or ownership held elsewhere still
+blocks package recovery: wait for that update or stop it through its owning host
+or supervisor, then retry `openclaw update repair`. Proven abandonment progress
+is preserved even when another run remains unresolved.
 JSON output identifies reconciled run IDs in
 `reconciledRuns`, with `status: "ok"`, `mode: "repair"`, and `restart: false`.
 
@@ -1111,6 +1119,10 @@ owner custody, or symlink/hardlink checks. Paths outside known recovery location
 are refused. Unmanifested copies are never added to automatic retirement. A
 filename alone does not authorize deletion; the exact path and normal consent
 are both required.
+
+Cleanup compares file contents again before removal. An in-place edit is retained
+even when the file's size and modification time match the confirmed selection;
+preview cleanup again before retrying.
 
 While applying cleanup, stderr reports each original being verified or retired
 and each capture being removed, with its path, logical bytes, and position in the

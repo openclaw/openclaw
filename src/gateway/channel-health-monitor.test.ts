@@ -71,18 +71,12 @@ function disconnectedAccount(
   };
 }
 
-function createSlackSnapshotManager(
+function createAccountManager(
+  channelId: ChannelId,
   account: Partial<ChannelAccountSnapshot>,
   overrides?: Partial<ChannelManager>,
 ): ChannelManager {
-  return createSnapshotManager(
-    {
-      slack: {
-        default: account,
-      },
-    },
-    overrides,
-  );
+  return createSnapshotManager({ [channelId]: { default: account } }, overrides);
 }
 
 function createBusyDisconnectedManager(lastRunActivityAt: number): ChannelManager {
@@ -186,7 +180,7 @@ describe("channel-health-monitor", () => {
   });
 
   it("does not start a replacement when channel teardown fails", async () => {
-    const manager = createSlackSnapshotManager(disconnectedAccount(Date.now() - 300_000), {
+    const manager = createAccountManager("slack", disconnectedAccount(Date.now() - 300_000), {
       stopChannel: vi.fn(async () => {
         throw new Error("stop failed");
       }),
@@ -202,7 +196,7 @@ describe("channel-health-monitor", () => {
 
   it("leaves a recent transport retry to its owner and takes over after reconnect grace", async () => {
     const account = runningConnectedSlackAccount({ lastStartAt: Date.now() - 300_000 });
-    const manager = createSlackSnapshotManager(account);
+    const manager = createAccountManager("slack", account);
     const monitor = startDefaultMonitor(manager);
     try {
       await clock.advanceBy(33_000);
@@ -238,17 +232,10 @@ describe("channel-health-monitor", () => {
       suppressed = !allowRecovery;
       return allowRecovery ? undefined : Date.now() + 300_000;
     });
-    const manager = createSnapshotManager(
-      {
-        discord: {
-          default: managedStoppedAccount("safe mode"),
-        },
-      },
-      {
-        getAutostartSuppression: vi.fn(() => (suppressed ? suppression : null)),
-        recoverAutostartSuppression,
-      },
-    );
+    const manager = createAccountManager("discord", managedStoppedAccount("safe mode"), {
+      getAutostartSuppression: vi.fn(() => (suppressed ? suppression : null)),
+      recoverAutostartSuppression,
+    });
     const monitor = await startAndRunCheck(manager);
 
     expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
@@ -266,12 +253,9 @@ describe("channel-health-monitor", () => {
   });
 
   it("does not restart an ambient-suppressed dev channel", async () => {
-    const manager = createSnapshotManager(
-      {
-        discord: {
-          default: managedStoppedAccount("ambient credentials suppressed"),
-        },
-      },
+    const manager = createAccountManager(
+      "discord",
+      managedStoppedAccount("ambient credentials suppressed"),
       {
         isAmbientAutostartSuppressed: vi.fn((channelId) => channelId === "discord"),
       },
@@ -281,22 +265,18 @@ describe("channel-health-monitor", () => {
   });
 
   it("does not restart an unlinked channel with terminalDisconnect set across checks", async () => {
-    const manager = createSnapshotManager({
-      whatsapp: {
-        default: {
-          running: false,
-          enabled: true,
-          configured: true,
-          linked: false,
-          terminalDisconnect: true,
-        },
-      },
+    const manager = createAccountManager("whatsapp", {
+      running: false,
+      enabled: true,
+      configured: true,
+      linked: false,
+      terminalDisconnect: true,
     });
     await expectNoRestart(manager);
   });
 
   it("does not restart a channel with blocked lifecycle", async () => {
-    const manager = createSlackSnapshotManager({
+    const manager = createAccountManager("slack", {
       running: true,
       connected: true,
       enabled: true,
@@ -313,27 +293,20 @@ describe("channel-health-monitor", () => {
     // A restart is the only way to re-prove ingress, so recovery from a transient
     // queue-open failure must stay automatic. Without the ingress dimension this
     // account evaluated as healthy and was never touched at all.
-    const manager = createSnapshotManager({
-      slack: {
-        default: {
-          running: true,
-          connected: true,
-          enabled: true,
-          configured: true,
-          ingressUnavailable: true,
-        },
-      },
+    const manager = createAccountManager("slack", {
+      running: true,
+      connected: true,
+      enabled: true,
+      configured: true,
+      ingressUnavailable: true,
     });
     await expectRestartedChannel(manager, "slack");
   });
 
   it("skips manually stopped channels", async () => {
-    const manager = createSnapshotManager(
-      {
-        discord: {
-          default: { running: false, enabled: true, configured: true },
-        },
-      },
+    const manager = createAccountManager(
+      "discord",
+      { running: false, enabled: true, configured: true },
       { isManuallyStopped: vi.fn(() => true) },
     );
     await expectNoRestart(manager);
@@ -373,17 +346,10 @@ describe("channel-health-monitor", () => {
 
   it("throttles an account stuck in pending restart at the production cadence", async () => {
     const account: Partial<ChannelAccountSnapshot> = disconnectedAccount(Date.now() - 300_000);
-    const manager = createSnapshotManager(
-      {
-        discord: {
-          default: account,
-        },
-      },
-      {
-        // Every start attempt leaves the account stuck in pending restart.
-        startChannel: vi.fn(async () => markRestartPending(account)),
-      },
-    );
+    const manager = createAccountManager("discord", account, {
+      // Every start attempt leaves the account stuck in pending restart.
+      startChannel: vi.fn(async () => markRestartPending(account)),
+    });
     const monitor = await startAndRunCheck(manager);
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
     await advanceHealthCheck();
@@ -400,16 +366,9 @@ describe("channel-health-monitor", () => {
 
   it("does not bypass cooldown when reconnect attempts change", async () => {
     const account: Partial<ChannelAccountSnapshot> = disconnectedAccount(Date.now() - 300_000);
-    const manager = createSnapshotManager(
-      {
-        discord: {
-          default: account,
-        },
-      },
-      {
-        startChannel: vi.fn(async () => markRestartPending(account)),
-      },
-    );
+    const manager = createAccountManager("discord", account, {
+      startChannel: vi.fn(async () => markRestartPending(account)),
+    });
     const monitor = await startAndRunCheck(manager);
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
     await advanceHealthCheck();
@@ -429,16 +388,13 @@ describe("channel-health-monitor", () => {
 
   it("defers to the channel supervisor while its own auto-restart is scheduled", async () => {
     let autoRestartScheduled = true;
-    const manager = createSnapshotManager(
+    const manager = createAccountManager(
+      "whatsapp",
       {
-        whatsapp: {
-          default: {
-            ...managedStoppedAccount("Another process owns this WhatsApp connection."),
-            linked: true,
-            restartPending: true,
-            reconnectAttempts: 5,
-          },
-        },
+        ...managedStoppedAccount("Another process owns this WhatsApp connection."),
+        linked: true,
+        restartPending: true,
+        reconnectAttempts: 5,
       },
       { isAutoRestartScheduled: vi.fn(() => autoRestartScheduled) },
     );
@@ -462,18 +418,11 @@ describe("channel-health-monitor", () => {
   });
 
   it("counts failed restart attempts toward the production cooldown", async () => {
-    const manager = createSnapshotManager(
-      {
-        discord: {
-          default: managedStoppedAccount("keeps crashing"),
-        },
-      },
-      {
-        startChannel: vi.fn(async () => {
-          throw new Error("startup failed");
-        }),
-      },
-    );
+    const manager = createAccountManager("discord", managedStoppedAccount("keeps crashing"), {
+      startChannel: vi.fn(async () => {
+        throw new Error("startup failed");
+      }),
+    });
     const monitor = await startAndRunCheck(manager);
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
     await advanceHealthCheck();
@@ -485,7 +434,7 @@ describe("channel-health-monitor", () => {
   });
 
   it("retries after the production cooldown when scheduler wakes arrive slightly late", async () => {
-    const manager = createSlackSnapshotManager(managedStoppedAccount("stopped"));
+    const manager = createAccountManager("slack", managedStoppedAccount("stopped"));
     const monitor = await startAndRunCheck(manager);
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
     for (let starts = 2; starts <= 6; starts += 1) {
@@ -499,19 +448,12 @@ describe("channel-health-monitor", () => {
 
   it("runs checks single-flight when restart work is still in progress", async () => {
     const { promise: startGate, resolve: releaseStart } = createDeferred();
-    const manager = createSnapshotManager(
-      {
-        telegram: {
-          default: managedStoppedAccount("stopped"),
-        },
-      },
-      {
-        startChannel: vi.fn(async () => {
-          await startGate;
-          return new Map();
-        }),
-      },
-    );
+    const manager = createAccountManager("telegram", managedStoppedAccount("stopped"), {
+      startChannel: vi.fn(async () => {
+        await startGate;
+        return new Map();
+      }),
+    });
     const monitor = startDefaultMonitor(manager);
     const check = clock.advanceBy(STARTUP_GRACE_MS + 1);
     try {
@@ -595,7 +537,7 @@ describe("channel-health-monitor", () => {
   it("bounds replacement handoff and abandons a late restart", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const { promise: stopGate, resolve: releaseStop } = createDeferred();
-    const manager = createSlackSnapshotManager(disconnectedAccount(Date.now() - 300_000), {
+    const manager = createAccountManager("slack", disconnectedAccount(Date.now() - 300_000), {
       stopChannel: vi.fn(async () => {
         await stopGate;
       }),
@@ -626,7 +568,8 @@ describe("channel-health-monitor", () => {
 
     it("skips channels with recent transport activity", async () => {
       const now = Date.now();
-      const manager = createSlackSnapshotManager(
+      const manager = createAccountManager(
+        "slack",
         runningConnectedSlackAccount({
           lastStartAt: now - STALE_THRESHOLD - 60_000,
           lastTransportActivityAt: now - 5_000,
@@ -637,7 +580,8 @@ describe("channel-health-monitor", () => {
 
     it("restarts channels past the production stale transport threshold", async () => {
       const now = Date.now();
-      const manager = createSlackSnapshotManager(
+      const manager = createAccountManager(
+        "slack",
         runningConnectedSlackAccount({
           lastStartAt: now - STALE_THRESHOLD - 60_000,
           lastTransportActivityAt: now - STALE_THRESHOLD - 30_000,

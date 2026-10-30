@@ -1,7 +1,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-client/src/protocol-request.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { pinRuntimePaths } from "../../config/paths.js";
+import { GatewayTransportError } from "../../gateway/transport-error.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -24,9 +26,12 @@ function registerPlugin(
 }
 
 const callGatewayMock = vi.fn();
-vi.mock("../../gateway/call.js", () => ({
+// mock-isolation: Captures Gateway RPCs; the real transport-error guard classifies timeouts.
+vi.mock("../../gateway/call.js", async () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
   callGatewayLeastPrivilege: (...args: unknown[]) => callGatewayMock(...args),
+  isGatewayTransportError: (await import("../../gateway/transport-error.js"))
+    .isGatewayTransportError,
   randomIdempotencyKey: () => "idem-1",
 }));
 
@@ -253,6 +258,84 @@ describe("sendPoll channel normalization", () => {
       expect(result.result).toMatchObject({ messageId: "owned-1" });
       expect(callGatewayMock).not.toHaveBeenCalled();
       expect(resolveAgentRuntimeIdentityToken).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reattaches a send whose Gateway request timed out after dispatch", async () => {
+    setDemoPollRegistry({ deliveryMode: "gateway" });
+    const gateway: OutboundMessageGatewayOptionsInput = {
+      request: async () => {
+        throw new Error("unexpected unconfigured Gateway request");
+      },
+    };
+    const request = vi
+      .spyOn(gateway, "request")
+      // The upload outlives the caller's timer, but the Gateway keeps sending.
+      .mockRejectedValueOnce(
+        new GatewayProtocolRequestTimeoutError({
+          method: "send",
+          timeoutMs: 30_000,
+          requestSent: true,
+        }),
+      )
+      .mockResolvedValueOnce({ messageId: "late-media" });
+
+    const result = await sendMessage({
+      cfg: {},
+      to: "conversation:demo-target",
+      channel: "workspace-chat",
+      content: "photo",
+      idempotencyKey: "slow-upload",
+      gateway,
+    });
+
+    expect(result.result).toMatchObject({ messageId: "late-media" });
+    expect(request).toHaveBeenCalledTimes(2);
+    for (const attempt of [1, 2]) {
+      expect(request).toHaveBeenNthCalledWith(
+        attempt,
+        expect.objectContaining({
+          method: "send",
+          params: expect.objectContaining({ idempotencyKey: "slow-upload" }),
+        }),
+      );
+    }
+  });
+
+  it.each([true, false])(
+    "reattaches a transport-timed-out send only when it was dispatched (%s)",
+    async (requestDispatched) => {
+      setDemoPollRegistry({ deliveryMode: "gateway" });
+      const timeout = new GatewayTransportError({
+        kind: "timeout",
+        message: "gateway timeout after 30000ms",
+        connectionDetails: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+          message: "",
+        },
+        requestDispatched,
+      });
+      callGatewayMock.mockRejectedValueOnce(timeout);
+      if (requestDispatched) {
+        callGatewayMock.mockResolvedValueOnce({ messageId: "late" });
+      }
+
+      const sending = sendMessage({
+        cfg: {},
+        to: "conversation:demo-target",
+        channel: "workspace-chat",
+        content: "photo",
+        idempotencyKey: "slow-upload",
+      });
+
+      // A send that never reached the Gateway cannot be joined; retrying would deliver anew.
+      if (requestDispatched) {
+        await expect(sending).resolves.toMatchObject({ result: { messageId: "late" } });
+      } else {
+        await expect(sending).rejects.toBe(timeout);
+      }
+      expect(callGatewayMock).toHaveBeenCalledTimes(requestDispatched ? 2 : 1);
     },
   );
 

@@ -866,7 +866,13 @@ Backends without an exact translation still refuse to run.
 
 If no MCP servers are enabled, OpenClaw still injects a strict config when a backend opts into bundle MCP, so background runs stay isolated.
 
-Session-scoped bundled MCP runtimes are cached for reuse within a session, then reaped after 10 minutes of idle time. One-shot embedded runs such as auth checks, slug generation, and active-memory recall request cleanup at run end. Stdio children and Streamable HTTP or SSE streams therefore do not outlive the run.
+Session-scoped bundled MCP runtimes stay alive between turns. Idle TTL eviction is
+opt-in: `mcp.sessionIdleTtlMs` unset or `0` keeps the session lifetime unless
+capacity eviction or explicit cleanup retires the runtime. A positive value enables
+idle TTL eviction. Detached one-shot runs without a surviving runtime session
+retire their MCP runtimes at run end; a retained transcript alone does not extend
+that lifetime. See [MCP configuration](/gateway/config-extensions#mcp) for cleanup
+triggers, capacity limits, and idle-sweep behavior.
 
 A fresh CLI session must wait for its predecessor's cleanup. If cleanup fails or
 exceeds its deadline, OpenClaw refuses replacement, including from a later run.
