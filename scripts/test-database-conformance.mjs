@@ -85,6 +85,7 @@ let targets = explicitTargets
       "src/state/openclaw-agent-db.postgres.test.ts",
       "src/state/openclaw-agent-doctor-media.postgres.test.ts",
       "src/state/openclaw-agent-db-engine.postgres.test.ts",
+      "src/talk/client-voice-session-entry.postgres.test.ts",
       "extensions/memory-core/src/memory/manager-embedding-cache.postgres.test.ts",
       "extensions/memory-core/src/memory/manager-embedding-cache-rebuild.postgres.test.ts",
       "extensions/memory-core/src/memory/manager-source-index-kernel.postgres.test.ts",
