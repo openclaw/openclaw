@@ -31,6 +31,8 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  // Performance drivers and their preloads are invoked directly from documented commands.
+  "scripts/perf/**/*.{js,mjs,cjs,ts,mts,cts}!",
   // Spawned directly by native-allocation-profile.test.ts.
   "test/scripts/fixtures/native-profile-census.mjs!",
   // Their source headers document standalone benchmark and measurement commands.
@@ -74,8 +76,6 @@ const repositoryScriptEntries = [
   "scripts/perf/session-membership-retention-measure.ts!",
   "scripts/perf/session-message-custody-payload-measure.mjs!",
   "scripts/perf/session-patch-response-measure.ts!",
-  "scripts/perf/session-resource-loader-fixture.mjs!",
-  "scripts/perf/session-resource-loader-measure.mjs!",
   "scripts/perf/sessions-files-title-measure.ts!",
   "scripts/perf/sessions-usage-measure.ts!",
   "scripts/perf/tool-loop-outcome-measure.ts!",
