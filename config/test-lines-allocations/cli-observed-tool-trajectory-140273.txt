@@ -1,0 +1,2 @@
+153
+# CLI tool persistence, shared capture fixtures, absent terminal results, disabled capture, and ambiguous loopback outcomes.

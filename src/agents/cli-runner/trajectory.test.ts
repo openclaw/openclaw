@@ -47,6 +47,7 @@ async function fixture(
     disableTrajectory?: boolean;
     recover?: boolean;
     abortKind?: "manual" | "timeout";
+    toolResult?: "success" | "error" | "missing";
   } = {},
 ) {
   if (options.disabled) {
@@ -134,6 +135,42 @@ async function fixture(
         }
         throw new Error(stderr || `Fixture exited with code ${code}`);
       }
+      if (options.toolResult) {
+        const start = {
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "read-call",
+                name: "Read",
+                input: { file_path: "fixture.txt" },
+              },
+            ],
+          },
+        };
+        yield start;
+        yield start;
+        if (options.toolResult !== "missing") {
+          const result = {
+            type: "user",
+            message: {
+              role: "user",
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: "read-call",
+                  is_error: options.toolResult === "error",
+                  content: options.toolResult === "error" ? "File not found" : "fixture contents",
+                },
+              ],
+            },
+          };
+          yield result;
+          yield result;
+        }
+      }
       yield {
         type: "assistant",
         message: {
@@ -196,6 +233,34 @@ it("captures transformed prompt context at the CLI dispatch boundary", async () 
   });
 });
 
+it.each(["success", "error", "missing"] as const)(
+  "persists observed CLI tool activity once with a %s result",
+  async (toolResult) => {
+    const { context, events } = await fixture({ toolResult });
+    await runCliAgent(context.params);
+    const tools = (await events()).filter((event) => event.type.startsWith("tool."));
+    expect(tools.map((event) => ({ type: event.type, data: event.data }))).toEqual([
+      {
+        type: "tool.call",
+        data: { toolCallId: "read-call", name: "read", args: { file_path: "fixture.txt" } },
+      },
+      ...(toolResult === "missing"
+        ? []
+        : [
+            {
+              type: "tool.result",
+              data: {
+                toolCallId: "read-call",
+                name: "read",
+                success: toolResult === "success",
+                result: toolResult === "error" ? "File not found" : "fixture contents",
+              },
+            },
+          ]),
+    ]);
+  },
+);
+
 it("still executes and cleans up when trajectory metadata capture fails", async () => {
   const { context, events } = await fixture();
   vi.spyOn(trajectoryMetadata, "buildTrajectoryRunMetadata").mockImplementationOnce(() => {
@@ -257,7 +322,7 @@ it.each([
 it.each([{ disabled: true }, { disableTrajectory: true }])(
   "leaves trajectory disabled for %j while still executing the CLI",
   async (options) => {
-    const { context, events } = await fixture(options);
+    const { context, events } = await fixture({ ...options, toolResult: "success" });
     await expect(runCliAgent(context.params)).resolves.toMatchObject({
       payloads: [{ text: "fixture reply" }],
     });
