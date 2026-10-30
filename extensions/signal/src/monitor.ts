@@ -77,6 +77,9 @@ import { normalizeSignalTransportHost } from "./transport-url.js";
 export type MonitorSignalOpts = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
+  /** Fires once gateway shutdown has started; passed to the daemon lifecycle
+   *  so an unexpected signal-cli exit during drain cannot trigger a respawn. */
+  shutdownSignal?: AbortSignal;
   account?: string;
   accountId?: string;
   config?: OpenClawConfig;
@@ -451,7 +454,10 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     Math.max(1_000, opts.startupTimeoutMs ?? managedTransport?.startupTimeoutMs ?? 30_000),
   );
   const readReceiptsViaDaemon = autoStart && sendReadReceipts;
-  const daemonLifecycle = createSignalDaemonLifecycle({ abortSignal: opts.abortSignal });
+  const daemonLifecycle = createSignalDaemonLifecycle({
+    abortSignal: opts.abortSignal,
+    shutdownSignal: opts.shutdownSignal,
+  });
   const monitorTaskRunner = createSignalMonitorTaskRunner(runtime);
   let daemonHandle: SignalDaemonHandle | null = null;
   let ingressMonitor: SignalIngressMonitor | undefined;

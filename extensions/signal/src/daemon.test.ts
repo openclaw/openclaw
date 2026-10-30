@@ -215,6 +215,9 @@ describe("spawnSignalDaemon", () => {
     expect(resolved).toBe(false);
 
     child.emit("exit", 0, null);
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("close", 0, null);
     await stopPromise;
     expect(resolved).toBe(true);
   });
@@ -234,6 +237,9 @@ describe("spawnSignalDaemon", () => {
     expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
 
     child.emit("exit", null, "SIGKILL");
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("close", null, "SIGKILL");
     await stopPromise;
   });
 
@@ -251,6 +257,9 @@ describe("spawnSignalDaemon", () => {
     expect(child.kill).toHaveBeenCalledTimes(1);
 
     child.emit("exit", 0, null);
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("close", 0, null);
     await Promise.all([firstStop, secondStop]);
   });
 
@@ -270,7 +279,68 @@ describe("spawnSignalDaemon", () => {
     expect(resolved).toBe(false);
 
     child.emit("exit", 0, null);
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("close", 0, null);
     await stopPromise;
     expect(resolved).toBe(true);
+  });
+
+  it("waits for process exit and stdio EOF before resolving stop", async () => {
+    const handle = spawnSignalDaemon({
+      cliPath: "signal-cli",
+      httpHost: "127.0.0.1",
+      httpPort: 8080,
+    });
+
+    let resolved = false;
+    const stopPromise = handle.stop().then(() => {
+      resolved = true;
+    });
+    await Promise.resolve();
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(resolved).toBe(false);
+
+    // Even after the old 1.5s SIGKILL fallback timer, stop() must not resolve
+    // until both the process exit and stdio EOF have been observed.
+    child.emit("exit", 0, null);
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    child.stdout.end();
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    child.stderr.end();
+    child.emit("close", 0, null);
+    await stopPromise;
+    expect(resolved).toBe(true);
+  });
+
+  it("uses a configurable SIGTERM-to-SIGKILL grace period", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const handle = spawnSignalDaemon({
+      cliPath: "signal-cli",
+      httpHost: "127.0.0.1",
+      httpPort: 8080,
+      stopTimeoutMs: 10_000,
+    });
+
+    const stopPromise = handle.stop();
+    await Promise.resolve();
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(child.kill).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(child.kill).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(8_500);
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+
+    child.emit("exit", null, "SIGKILL");
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("close", null, "SIGKILL");
+    await stopPromise;
   });
 });
