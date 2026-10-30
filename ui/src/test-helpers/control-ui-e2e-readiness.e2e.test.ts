@@ -228,8 +228,13 @@ suite.define(() => {
         if (!offline) {
           await navigateToControlUiSession(page, key);
         }
-        await page.waitForFunction(() => window.openclawControlUi?.snapshot().ready === true);
-        const snapshot = await page.evaluate(() => window.openclawControlUi?.snapshot());
+        // Keep the generation that passed the wait; another owner update can invalidate it.
+        const snapshotHandle = await page.waitForFunction(() => {
+          const snapshot = window.openclawControlUi?.snapshot();
+          return snapshot?.ready ? snapshot : null;
+        });
+        const snapshot = await snapshotHandle.jsonValue();
+        await snapshotHandle.dispose();
         expect(snapshot).toMatchObject({
           booted: true,
           gatewayPhase: offline ? "reconnecting" : "connected",
