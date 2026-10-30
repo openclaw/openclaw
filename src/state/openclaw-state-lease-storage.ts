@@ -8,6 +8,7 @@ import { prepareSqliteDatabaseScopedWriteRevisionForPath } from "../infra/sqlite
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import type { SqliteTransactionOptions } from "../infra/sqlite-transaction.js";
+import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { isStatePostgres } from "./openclaw-state-db-engine.js";
 import { runExistingOpenClawStateWriteTransaction } from "./openclaw-state-db-existing-write.js";
 import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
@@ -33,10 +34,16 @@ import {
   renewOpenClawStateLeaseInTransaction,
   stateLeaseWriteScope,
 } from "./openclaw-state-lease-store.js";
-import type { OpenClawStateLeaseNativeSource } from "./openclaw-state-lease-worker-storage.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-maintenance-context.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
+
+export type OpenClawStateLeaseNativeSource = {
+  context: OpenClawStateWorkerContext;
+  identity: DatabasePathIdentity;
+  database?: EngineConnection;
+};
 
 export type OpenClawStateLeaseDatabase = {
   scope: "shared";

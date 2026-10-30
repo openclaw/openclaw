@@ -1,6 +1,4 @@
-import type { EngineConnection } from "../infra/sql-connection.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
-import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import {
   createSqliteWorkerWriteAdmission,
   type SqliteWorkerStore,
@@ -13,6 +11,7 @@ import { startOpenClawStateLeaseTimer } from "./openclaw-state-lease-heartbeat.j
 import {
   resolveLeaseDatabasePath,
   type OpenClawStateLeaseDatabase,
+  type OpenClawStateLeaseNativeSource,
 } from "./openclaw-state-lease-storage.js";
 import type {
   createOpenClawStateLeaseWorkerOwner,
@@ -24,12 +23,6 @@ import type {
 } from "./openclaw-state-lease.types.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
-
-export type OpenClawStateLeaseNativeSource = {
-  context: OpenClawStateWorkerContext;
-  identity: DatabasePathIdentity;
-  database?: EngineConnection;
-};
 
 export async function acquireLease(
   database: OpenClawStateLeaseDatabase,
