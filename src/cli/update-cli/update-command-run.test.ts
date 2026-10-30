@@ -189,7 +189,7 @@ it.each([false, true])(
     });
     const recorded = recordUpdateRunPhase(previous.runId, "activating");
 
-    const next = await admitUpdateCommandRun({ opts: { dryRun }, root });
+    const next = await admitUpdateCommandRun({ env: process.env, opts: { dryRun }, root });
 
     expect(getUpdateRun(previous.runId)).toEqual(
       dryRun
@@ -227,9 +227,9 @@ it("refuses interrupted update admission without touching SQLite when reusing it
   const { root, run, record, snapshot } = pendingRecovery();
   vi.stubEnv(UPDATE_RUN_ID_ENV, run.runId);
   const before = snapshot();
-  await expect(admitUpdateCommandRun({ opts: { dryRun: false }, root })).rejects.toBeInstanceOf(
-    UpdateRecoveryRequiredError,
-  );
+  await expect(
+    admitUpdateCommandRun({ env: process.env, opts: { dryRun: false }, root }),
+  ).rejects.toBeInstanceOf(UpdateRecoveryRequiredError);
   expect(snapshot()).toEqual(before);
   expect(loadUpdateRecovery(run.runId, { env: run.env })).toEqual(record);
 });
@@ -251,7 +251,7 @@ it.each(["displaced", "replacement", "both", "unreadable"] as const)(
       fs.writeFileSync(path.join(family, "displaced"), "incomplete database");
     }
     const before = snapshot();
-    await expect(admitUpdateCommandRun({ opts: {}, root })).rejects.toThrow(
+    await expect(admitUpdateCommandRun({ env: process.env, opts: {}, root })).rejects.toThrow(
       "Interrupted shared-database publication is read-only while full-state recovery is deferred",
     );
     expect(fs.existsSync(file)).toBe(false);
@@ -364,7 +364,7 @@ it.skipIf(process.platform === "win32").each([
       const opts = { dryRun: true };
       const mode = ${JSON.stringify(mode)};
       if (mode === 'inherited') process.env.OPENCLAW_UPDATE_RUN_ID = createUpdateRun({trigger:'cli'}).runId;
-      const run = mode === 'no-run' ? undefined : await admitUpdateCommandRun({ opts, root: ${JSON.stringify(root)}, installKind: "package" });
+      const run = mode === 'no-run' ? undefined : await admitUpdateCommandRun({ env: process.env, opts, root: ${JSON.stringify(root)}, installKind: "package" });
       const preview = () => withUpdatePreviewSignals({ ...opts, run }, async () => {
         const commandSignal = resolveCommandProcessSignal();
         const sibling = run ? createUpdateRun({ trigger: 'cli' }) : undefined;
@@ -538,7 +538,7 @@ it("removes preview signal ownership on exceptional unwind", async () => {
   const root = dirs.make("update-preview-cleanup-");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   vi.stubEnv(UPDATE_RUN_ID_ENV, undefined);
-  const run = await admitUpdateCommandRun({ opts: { dryRun: true }, root });
+  const run = await admitUpdateCommandRun({ env: process.env, opts: { dryRun: true }, root });
   const before = [process.listeners("SIGINT"), process.listeners("SIGTERM")];
   const operation = withUpdatePreviewSignals({ dryRun: true, run }, async () => {
     throw new Error("preview error");

@@ -250,3 +250,58 @@ the handoff without replaying the old inline images. Before resetting, check
 active/background work and let it finish or deliberately stop it; a reset can
 cancel work. Reconcile completed tool actions and deliveries before resuming.
 This is recovery, not a permanent prevention fix.
+
+## Worker-hosted app-server
+
+The opt-in `plugins.entries.codex.config.appServer.workerHostedCloud` setting
+runs the pinned Codex app-server on an enrolled worker instead of running the
+model process on the Gateway. It requires a current Full remote-exec placement
+and the exact versioned `codex.app-server.stdio.v1.<version>` node command.
+Allow that exact command through the existing Gateway node command policy.
+There is no local fallback when the worker cannot start.
+
+Provision a worker-only private bundle under the Gateway's configured state directory:
+
+- `worker-provisioning/codex/config.toml`: the native configuration.
+- One Node `.mjs` auth helper in that same directory, referenced by its absolute
+  path exactly once in the selected provider's auth arguments.
+
+Use directory mode `0700` and file mode `0600` on POSIX. Symlinks, nonregular
+files, malformed configuration, missing helpers and inputs larger than 16 KiB
+are rejected before pairing credentials are issued. Windows uses its existing
+private worker setup; POSIX mode-bit qualification does not attest Windows ACLs.
+The selected provider must use Responses with `command = "node"` and that helper
+as its sole argument, without competing provider credentials.
+
+The provisioning owner derives the command's 64-hex identity from the configuration
+and helper bytes; relocating the helper into the lease preserves that identity.
+There is no separately supplied version or environment selector. These are trusted
+operator-authored executable deployment inputs, separate from the Gateway's
+`CODEX_HOME`, local auth profiles and session data. Missing bundle means opt-out;
+an incomplete bundle fails closed. Publish both files while the Gateway is stopped,
+then restart and reprovision affected workers when changing them. Existing lease
+replay rejects changed bytes or identity; runtime verifies the enrolled content.
+Enrollment delivers the bundle privately into the lease's `codex-runtime`
+directory only when the prepared node runtime includes the Codex plugin. Other
+worker runtimes neither load nor receive the private bundle, and image preparation
+does not capture it.
+
+Only dedicated ephemeral, non-container nodes retain their platform-managed
+identity transport and CA settings. Ordinary paired nodes and container workers
+do not inherit these credentials. Gateway auth profiles and local GitHub identity
+environments are not forwarded. Selected Gateway auth profiles and native
+supervision bindings cannot be reused for worker-hosted inference. Clear the
+profile selection or detach supervision before choosing worker-owned auth.
+The selected Platform or subscription route still constrains the worker account;
+a mismatched account is rejected without logging the worker into a Gateway account.
+When a managed identity requires the host-owned tool surface, those tools continue
+to own command execution; this setting does not grant native commands access to
+that identity.
+
+Native hook policies still require the existing remote hook callback deployment
+(`appServer.nativeHookRelay`). A worker connection is not a Gateway-local process.
+Private workspace resources gate file/process effects, not the initial tool
+declaration. Cancellation closes the invocation and joins its worker cleanup.
+Native thread state lives under the existing workspace HOME owner and can resume
+while that workspace remains available. This mode does not provide retained-disk
+recovery, worker-loss history recovery, or a replacement workspace guarantee.

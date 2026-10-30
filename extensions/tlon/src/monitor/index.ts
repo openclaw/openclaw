@@ -50,6 +50,7 @@ import { prepareTlonGroupAdmission } from "./mentions.js";
 import {
   applyTlonSettingsOverrides,
   buildTlonSettingsMigrations,
+  createTlonSettingsInstaller,
   mergeUniqueStrings,
   shouldMigrateTlonSetting,
 } from "./settings-helpers.js";
@@ -168,6 +169,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
   });
 
   const settingsState = applyTlonSettingsOverrides({ account, currentSettings: {} });
+  const installSettings = createTlonSettingsInstaller(settingsState, account, (message) =>
+    runtime.log?.(message),
+  );
 
   // Track recent threads we've participated in so replies can omit a mention.
   const participatedThreads = createParticipatedThreadTracker();
@@ -205,14 +209,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       }
     }
   }
-  Object.assign(
-    settingsState,
-    applyTlonSettingsOverrides({
-      account,
-      currentSettings: settingsState.currentSettings,
-      log: (message) => runtime.log?.(message),
-    }),
-  );
+  installSettings(settingsState.currentSettings);
 
   // Run channel discovery AFTER settings are loaded (so settings store value is used)
   if (settingsState.effectiveAutoDiscoverChannels) {
@@ -464,7 +461,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
             notice: `[tlon ${unavailableMediaCount > 1 ? `${unavailableMediaCount} attachments` : "attachment"} unavailable]`,
           })
         : commandBody;
-    const tlonConversationId = isGroup ? (channelNest ?? senderShip) : senderShip;
     const ctxPayload = core.channel.inbound.buildContext({
       channel: "tlon",
       accountId: route.accountId,
@@ -479,7 +475,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       },
       conversation: {
         kind: isGroup ? "group" : "direct",
-        id: tlonConversationId,
+        id: isGroup ? (channelNest ?? senderShip) : senderShip,
         label: fromLabel,
       },
       route: {
@@ -506,6 +502,8 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
         CommandAuthorized: commandAuthorized,
         CommandSource: "text" as const,
         ...(attachments.length > 0 && { Attachments: attachments }),
+        // Tlon groups support one reply level: durable delivery selects the root or channel.
+        ...(isGroup && { ReplyThreading: { implicitCurrentMessage: "deny" as const } }),
         ...(parentId && { ThreadId: parentId }),
       },
     });
@@ -591,9 +589,8 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
           }
         },
         onError: (err, info) => {
-          const dispatchDuration = Date.now() - dispatchStartTime;
           runtime.error?.(
-            `[tlon] ${info.kind} reply failed after ${dispatchDuration}ms: ${String(err)}`,
+            `[tlon] ${info.kind} reply failed after ${Date.now() - dispatchStartTime}ms: ${String(err)}`,
           );
         },
       },
@@ -610,6 +607,8 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
   };
 
   const watchedChannels = new Set<string>(groupChannels);
+  const canExpandCitedNest = (nest: string) =>
+    settingsState.effectiveAutoDiscoverChannels || settingsState.explicitChannels.includes(nest);
 
   const addWatchedChannels = (channels: readonly string[], logPrefix?: string): number => {
     const previousCount = watchedChannels.size;
@@ -714,7 +713,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
         return;
       }
 
-      const contentBody = content.content;
       const sentAt = asFiniteNumber(content?.sent) ?? Date.now();
 
       channelHistory.cacheMessage(nest, {
@@ -755,7 +753,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
             originalMessage: {
               messageId,
               messageText: rawText,
-              messageContent: contentBody,
+              messageContent: content.content,
               timestamp: sentAt,
               parentId: parentId ?? undefined,
               isThreadReply,
@@ -770,13 +768,14 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
         return;
       }
 
-      const messageText = (await resolveTlonCitations(contentBody, api, runtime)) + rawText;
+      const messageText =
+        (await resolveTlonCitations(content.content, canExpandCitedNest, api, runtime)) + rawText;
 
       await processMessage({
         messageId,
         senderShip,
         messageText,
-        messageContent: contentBody,
+        messageContent: content.content,
         isGroup: true,
         channelNest: nest,
         timestamp: sentAt,
@@ -902,14 +901,13 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
         return;
       }
 
-      const messageText = rawText;
       const ownerDm = !isClubMessage && isOwner(senderShip);
-      if (ownerDm && (await handleApprovalResponse(messageText))) {
+      if (ownerDm && (await handleApprovalResponse(rawText))) {
         runtime.log?.("[tlon] Processed approval response from owner");
         return;
       }
 
-      if (ownerDm && (await handleAdminCommand(messageText))) {
+      if (ownerDm && (await handleAdminCommand(rawText))) {
         runtime.log?.("[tlon] Processed admin command from owner");
         return;
       }
@@ -927,7 +925,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
           const approval = createPendingApproval({
             type: "dm",
             requestingShip: senderShip,
-            messagePreview: messageText,
+            messagePreview: rawText,
             ...(isClubMessage ? { clubId } : { verifiedDirect: true }),
             // Never store a club message claiming the owner for replay, even as a non-owner.
             ...(isClubMessage && isOwner(senderShip)
@@ -935,7 +933,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
               : {
                   originalMessage: {
                     messageId,
-                    messageText,
+                    messageText: rawText,
                     messageContent: essay.content,
                     timestamp: asFiniteNumber(essay?.sent) ?? Date.now(),
                   },
@@ -948,13 +946,14 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
         return;
       }
 
-      const resolvedMessageText =
-        (await resolveTlonCitations(essay.content, api, runtime)) + rawText;
+      const can = (nest: string) =>
+          (!isClubMessage && isOwner(senderShip)) || canExpandCitedNest(nest),
+        agentText = (await resolveTlonCitations(essay.content, can, api, runtime)) + rawText;
       if (ownerDm) {
         runtime.log?.(`[tlon] Processing DM from owner ${senderShip}`);
       }
       await processMessage({
-        messageText: resolvedMessageText,
+        messageText: agentText,
         messageId,
         senderShip,
         clubId,
@@ -1049,14 +1048,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
 
         // Install the snapshot and effective overrides together; deleted overrides
         // fall back to file config while empty arrays remain authoritative.
-        Object.assign(
-          settingsState,
-          applyTlonSettingsOverrides({
-            account,
-            currentSettings: newSettings,
-            log: (message) => runtime.log?.(message),
-          }),
-        );
+        installSettings(newSettings);
       });
     } catch (err) {
       // Settings subscription is optional - don't fail if it doesn't work
@@ -1087,7 +1079,8 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
             if (!settingsState.effectiveAutoAcceptGroupInvites) {
               return;
             }
-            const currentChannels = settingsState.currentSettings.groupChannels ?? [];
+            const settingsSnapshot = settingsState.currentSettings;
+            const currentChannels = settingsSnapshot.groupChannels ?? [];
             const unpersistedChannels = discoveredChannels.filter(
               (channel) => !currentChannels.includes(channel),
             );
@@ -1096,11 +1089,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
             }
             const updatedChannels = mergeUniqueStrings(currentChannels, unpersistedChannels);
             await putTlonSetting(api, "groupChannels", updatedChannels);
-            // The subscription snapshot lags its poke, so keep back-to-back facts cumulative.
-            settingsState.currentSettings = {
-              ...settingsState.currentSettings,
-              groupChannels: updatedChannels,
-            };
+            if (settingsState.currentSettings === settingsSnapshot) {
+              installSettings({ ...settingsSnapshot, groupChannels: updatedChannels }, true);
+            }
             runtime.log?.(`[tlon] Persisted ${unpersistedChannels.join(", ")} to settings store`);
           } catch (error: unknown) {
             runtime.error?.(`[tlon] Error handling groups-ui event: ${formatErrorMessage(error)}`);

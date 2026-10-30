@@ -362,7 +362,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
   });
 
   it.each(["local", "repository"] as const)(
-    "edits the existing %s PR after a later source publication fails",
+    "edits, inspects and readies the existing %s PR after a later source publication fails",
     async (backend) => {
       const f = await fixture(backend);
       const workflow = "name: Later work\non: push\njobs: {}\n";
@@ -383,7 +383,13 @@ describe("session PR actions through the agent tool and registered Gateway metho
       expect(
         await f.action("guest", "edit", { title: "Clarify the existing PR", expectedTitle }),
       ).toMatchObject({ title: "Clarify the existing PR", publication: f.publication });
-      expect(f.writes).toEqual([{ action: "edit", input: { title: "Clarify the existing PR" } }]);
+      expect((await f.invoke("admin", { action: "inspect" })).details).toMatchObject({
+        state: "draft",
+        publication: f.publication,
+      });
+      expect(await f.action("guest", "ready")).toMatchObject({ state: "open" });
+      expect(f.writes[0]).toEqual({ action: "edit", input: { title: "Clarify the existing PR" } });
+      expect(f.writes.map((write) => write.action)).toEqual(["edit", "ready"]);
     },
   );
 

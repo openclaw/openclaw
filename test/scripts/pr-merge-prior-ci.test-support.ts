@@ -60,6 +60,16 @@ export function createPriorCiFixtureState(head: string) {
     artifactBuild: false,
     artifactFault: "",
     missingCheck: "",
+    currentGateChecks: [] as Array<{
+      id: number;
+      suiteId?: number;
+      event: string;
+      conclusion: string | null;
+      status?: string;
+      publisherId?: number;
+      name?: string;
+      startedAt?: string;
+    }>,
     reviewDecision: "APPROVED" as string | null | undefined,
     reviewCount: 1,
     requireCodeOwners: false,

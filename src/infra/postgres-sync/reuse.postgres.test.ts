@@ -268,4 +268,41 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
       },
     ]);
   });
+
+  it("parses each parameterized SQL text once per connection and survives DDL elsewhere", async () => {
+    const own = `${schema}_named`;
+    const other = `${schema}_named_other`;
+    await admin.query(
+      `CREATE SCHEMA "${own}"; CREATE TABLE "${own}".t (id integer); INSERT INTO "${own}".t VALUES (1);` +
+        `CREATE SCHEMA "${other}"; CREATE TABLE "${other}".t (id integer); INSERT INTO "${other}".t VALUES (2)`,
+    );
+    const db = open(connection!, own);
+    const select = (sql: string) => run(() => db.prepare(sql).all(0));
+    const prepared = () => get(db, "SELECT count(*)::int AS n FROM pg_prepared_statements")!.n;
+    for (let i = 0; i < 3; i++) {
+      expect(select("SELECT id FROM t WHERE id > ?")).toEqual([{ id: 1 }]);
+    }
+    expect(prepared()).toBe(1);
+    // The server re-analyzes a prepared statement under a different search_path.
+    const elsewhere = transaction(db, () => {
+      db.exec(`SET LOCAL search_path TO "${other}"`);
+      return db.prepare("SELECT id FROM t WHERE id > ?").all(0);
+    });
+    expect(elsewhere).toEqual([{ id: 2 }]);
+
+    // DDL on another connection changes a cached result type: autocommit retries once,
+    // a transaction fails once and the next statement prepares again.
+    expect(select("SELECT * FROM t WHERE id > ?")).toEqual([{ id: 1 }]);
+    await admin.query(`ALTER TABLE "${own}".t ADD COLUMN note text`);
+    expect(select("SELECT * FROM t WHERE id > ?")).toEqual([{ id: 1, note: null }]);
+    await admin.query(`ALTER TABLE "${own}".t DROP COLUMN note`);
+    const all = () => transaction(db, () => db.prepare("SELECT * FROM t WHERE id > ?").all(0));
+    expect(all).toThrow(expect.objectContaining({ code: "0A000" }));
+    expect(all()).toEqual([{ id: 1 }]);
+    expect(prepared()).toBe(2);
+    // DDL on this connection drops its statements before a transaction can reuse one.
+    run(() => db.exec("ALTER TABLE t ADD COLUMN own int"));
+    expect(prepared()).toBe(0);
+    expect(all()).toEqual([{ id: 1, own: null }]);
+  });
 });

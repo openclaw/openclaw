@@ -257,6 +257,7 @@ export async function runExec(
 
 export type BufferedCommandOptions = {
   timeoutMs?: number;
+  noOutputTimeoutMs?: number;
   cwd?: string;
   input?: string | Uint8Array;
   baseEnv?: NodeJS.ProcessEnv;
@@ -277,7 +278,7 @@ export type BufferedCommandResult = {
   code: number | null;
   signal: NodeJS.Signals | null;
   killed: boolean;
-  termination: "exit" | "timeout" | "signal" | "output-limit" | "error";
+  termination: "exit" | "timeout" | "no-output-timeout" | "signal" | "output-limit" | "error";
   outputLimitStream?: CommandOutputStream;
   errorStream?: CommandOutputStream;
   error?: Error;
@@ -346,6 +347,7 @@ export async function runCommandBuffered(
       outputCapture: "discard",
       signal: options.signal,
       timeoutMs: options.timeoutMs,
+      noOutputTimeoutMs: options.noOutputTimeoutMs,
       tolerateOutputError: {
         stdout: options.discardOutput?.stdout || options.tolerateOutputError?.stdout,
         stderr: options.discardOutput?.stderr || options.tolerateOutputError?.stderr,
@@ -354,9 +356,7 @@ export async function runCommandBuffered(
     });
     const termination: BufferedCommandResult["termination"] = result.outputLimitExceeded
       ? "output-limit"
-      : result.termination === "no-output-timeout"
-        ? "timeout"
-        : result.termination;
+      : result.termination;
     return {
       stdout: capturedOutput("stdout"),
       stderr: capturedOutput("stderr"),

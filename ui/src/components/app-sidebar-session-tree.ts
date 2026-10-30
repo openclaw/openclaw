@@ -24,7 +24,6 @@ function summarizeChildren(
   const childAttention: SidebarSessionAttention[] = [];
   let unreadChildCount = 0;
   let runningChildCount = 0;
-  let failedChildCount = 0;
   let queuedChildCount = 0;
   let workspaceConflictCount = 0;
   const unreadHiddenRuns: SidebarRecentSession[] = [];
@@ -39,17 +38,10 @@ function summarizeChildren(
           child.subagentSummary?.attention ?? SIDEBAR_SESSION_NO_ATTENTION,
         ])
       : child.attention;
-    childAttention.push(
-      attention.kind === "error" && attention.childLabel === undefined
-        ? { ...attention, childLabel: child.label }
-        : attention,
-    );
+    childAttention.push(attention);
     unreadChildCount += Number(child.unread) + (descendants?.unreadChildCount ?? 0);
     const visuallyActive = child.isRunVisuallyActive ?? child.hasActiveRun;
     runningChildCount += (visuallyActive ? 1 : 0) + (descendants?.runningChildCount ?? 0);
-    failedChildCount +=
-      Number(child.status === "failed" || child.status === "timeout") +
-      (descendants?.failedChildCount ?? 0);
     queuedChildCount +=
       Number(visuallyActive && child.status === "queued") + (descendants?.queuedChildCount ?? 0);
     workspaceConflictCount += onlySubagents
@@ -63,10 +55,12 @@ function summarizeChildren(
     }
   }
   return {
-    attention: summarizeSidebarSessionAttention([...childAttention, ...unloadedAttention]),
+    // Terminal failures belong to the child transcript, not the parent's current state.
+    attention: summarizeSidebarSessionAttention(
+      [...childAttention, ...unloadedAttention].filter((attention) => attention.kind !== "error"),
+    ),
     unreadChildCount,
     runningChildCount,
-    failedChildCount,
     queuedChildCount,
     workspaceConflictCount,
     // Hidden runs have no row to open, so their parent acknowledges them.

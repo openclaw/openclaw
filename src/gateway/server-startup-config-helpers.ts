@@ -25,6 +25,7 @@ import {
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   GATEWAY_AUTH_SURFACE_PATHS,
@@ -113,17 +114,22 @@ export async function loadGatewayStartupConfigSnapshot(params: {
 
   const autoEnable = params.minimalTestGateway
     ? { config: configSnapshot.config, changes: [] as string[] }
-    : await measure("config.snapshot.auto-enable", () =>
-        applyPluginAutoEnable({
-          config: configSnapshot.sourceConfig,
-          env: process.env,
-          ambientEnvTriggers: params.ambientEnvTriggers,
-          ...(pluginMetadataSnapshot?.manifestRegistry
-            ? { manifestRegistry: pluginMetadataSnapshot.manifestRegistry }
-            : {}),
-          discovery: pluginMetadataSnapshot?.discovery,
-        }),
-      );
+    : await measure("config.snapshot.auto-enable", () => {
+        const applyAutoEnable = () =>
+          applyPluginAutoEnable({
+            config: configSnapshot.sourceConfig,
+            env: process.env,
+            ambientEnvTriggers: params.ambientEnvTriggers,
+            ...(pluginMetadataSnapshot?.manifestRegistry
+              ? { manifestRegistry: pluginMetadataSnapshot.manifestRegistry }
+              : {}),
+            discovery: pluginMetadataSnapshot?.discovery,
+          });
+        // Setup capture needs managed-install facts in this view after read-only preflight.
+        return pluginMetadataSnapshot
+          ? withPluginMetadataSnapshotScope(pluginMetadataSnapshot, applyAutoEnable)
+          : applyAutoEnable();
+      });
   if (autoEnable.changes.length === 0) {
     return {
       snapshot: configSnapshot,

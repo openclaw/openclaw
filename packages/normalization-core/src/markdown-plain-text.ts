@@ -11,8 +11,9 @@ export function flattenMarkdownToPlainText(text: string): string {
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/```/g, " ")
     .replace(/`([^`]*)`/g, "$1");
+  // Quote markers may nest with horizontal whitespace, but must not consume another line.
   let flattened = stripInlineLinks(withoutCode).replace(
-    /^\s{0,3}(?:#{1,6}|>|[-+*]|\d+[.)])\s+/gm,
+    /^[\t ]{0,3}(?:(?:>[\t ]*)+|(?:#{1,6}|[-+*]|\d+[.)])\s+)/gm,
     "",
   );
   for (const marker of ["*", "_", "~"] as const) {

@@ -284,17 +284,11 @@ export async function prepareGatewayClose(
       prepareGatewayRunShutdown({
         ...params,
         warnings,
+        exitAfterClose,
       }),
     );
-    // Track settlement immediately: ordinary-stop hooks may still be running
-    // when an admission releases or its cancellation callback fails.
-    const settlement = cleanupWork.track(() =>
-      measureGatewayCloseStep("restart.close.session-admissions", () => admissions.released),
-    );
-    void settlement.catch((error: unknown) => {
-      shutdownLog.warn(`session admission settlement failed: ${formatErrorMessage(error)}`);
-      recordShutdownWarning(warnings, "session-admissions");
-    });
+    // Start the join immediately, alongside the remaining shutdown hooks.
+    void shutdownStep("session-admissions", () => admissions.released);
     return admissions.failure;
   };
 

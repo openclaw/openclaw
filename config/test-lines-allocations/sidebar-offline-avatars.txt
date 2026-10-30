@@ -1,0 +1,2 @@
+# Reconnect browser regression: retain solo/shared avatar presentation through client replacement.
+41

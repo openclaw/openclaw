@@ -390,7 +390,7 @@ async function conversationCount(host: ScribeReader, agentId: string, archived: 
  * Readiness of one plugin from plugins.inspect. A plugin the Gateway does not know is rejected
  * as an invalid request; any other failure is left unknown (undefined).
  */
-export async function pluginReadiness(
+async function pluginReadiness(
   host: ScribeReader,
   pluginId: string,
 ): Promise<PluginReadiness | undefined> {

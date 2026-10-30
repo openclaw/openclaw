@@ -47,6 +47,7 @@ export {
   runToolProgressPreviewOptOutScenario,
   runToolProgressPreviewScenario,
 } from "./scenario-runtime-tool-progress.js";
+export { runToolProgressMediaCaptionScenario } from "./scenario-runtime-tool-progress-media.js";
 export async function runBlockStreamingScenario(context: MatrixQaScenarioContext) {
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_BLOCK_ROOM_KEY);
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);

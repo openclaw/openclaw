@@ -360,6 +360,21 @@ async function emitHeldInterimResult(turn: ClaudeCliTurn) {
 
 async function acceptMessage(session: ClaudeCliSession, message: Record<string, unknown>) {
   if (message.type === "system" && message.subtype === "init") {
+    const openClawServer = Array.isArray(message.mcp_servers)
+      ? message.mcp_servers.find(
+          (server): server is Record<string, unknown> =>
+            isRecord(server) && server.name === "openclaw",
+        )
+      : undefined;
+    if (openClawServer && openClawServer.status !== "connected") {
+      closeSession(
+        session,
+        new Error(
+          `Claude Code started without the OpenClaw MCP server (status ${String(openClawServer.status)}). The CLI process was retired; retry the request to start a fresh process.`,
+        ),
+      );
+      return;
+    }
     session.hasInputLifecycle =
       Array.isArray(message.capabilities) && message.capabilities.includes("msg_lifecycle_v1");
   }

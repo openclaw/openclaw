@@ -550,8 +550,8 @@ retain whole-installation behavior for homogeneous eligible families; mixed
 selections require `--family`.
 
 Mixed installations support matched backup/restore and compatible updates.
-Whole-installation backups containing any PostgreSQL store require offline
-custody. [Archive restore](#restore-all-postgresql-stores) imports captured
+Whole-installation archives containing PostgreSQL stores can be created while the
+Gateway runs; restore requires offline custody. [Archive restore](#restore-all-postgresql-stores) imports captured
 PostgreSQL stores into fresh namespaces and publishes matching local anchors.
 Updates require candidate proof of family-override support as well as support
 for each selected or retained PostgreSQL family.
@@ -660,11 +660,16 @@ the original data; never edit metadata or discard an anchor to force admission.
 
 ### Capture both server data and local state
 
-Stop the Gateway and embedded writers before capturing PostgreSQL. Then run:
+Run this while the Gateway is up or stopped:
 
 ```bash
 openclaw backup create --output ~/Backups/openclaw --verify
 ```
+
+With the Gateway running, each PostgreSQL store is exported from its own
+`REPEATABLE READ READ ONLY` snapshot while the Gateway keeps serving; stores are
+not captured at one shared instant. Sequence allocation facts are read inside
+that snapshot, so a restored store never reissues a captured row ID.
 
 The archive combines local files and SQLite images with each actual PostgreSQL
 store's matched **format-2 envelope**: original anchor, portable SQLite export image, and manifest
@@ -676,7 +681,10 @@ SecretRef values separately during recovery.
 User backups apply the owning stores' sanitization rules. They are not the
 exact unsanitized captures used for updater recovery. SQLite and PostgreSQL Git
 exports apply the same `--exclude-secrets` policy, including credential tables,
-machine-state keys, and generated model-catalog credentials. Keep Logbook images, cold
+machine-state keys, generated model-catalog credentials, and identified bundled
+plugin credential namespaces. Nonsecret plugin state and blobs remain in redacted
+exports; see [Git backup redaction](/cli/backup#versioned-git-backups)
+for the credential scopes and restore requirements. Keep Logbook images, cold
 transcript blobs, workspaces, config includes, and local state with the database
 backup. Neither a server dump alone nor a copied anchor covers the installation.
 

@@ -18,6 +18,7 @@ export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
   lastRunId: undefined,
   lifecycleRunId: undefined,
   resumeAfterRestart: undefined,
+  mainRestartRecovery: undefined,
   pendingProjectGitUrl: undefined,
   pendingWorktree: undefined,
   priorWorkspace: undefined,
@@ -34,6 +35,7 @@ const PRIVATE_SESSION_ENTRY_KEYS = [
   "lastRunId",
   "lifecycleRunId",
   "resumeAfterRestart",
+  "mainRestartRecovery",
   "pendingProjectGitUrl",
   "pendingWorktree",
   "priorWorkspace",
@@ -60,7 +62,6 @@ function stripPrivateSessionEntryFields(
   // Existing databases may retain retired execution-recovery snapshots. Never expose them.
   for (const key of Object.keys(projected)) {
     if (
-      key === "mainRestartRecovery" ||
       key === "pendingExecNotifications" ||
       key === "subagentRecovery" ||
       key.startsWith("restartRecovery")

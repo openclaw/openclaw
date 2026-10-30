@@ -1500,6 +1500,21 @@ fs.readFileSync = (file, ...args) => {
       "already-current",
       1,
     ],
+    [
+      "failed recovery cleanup",
+      {
+        steps: [
+          {
+            name: "package-install",
+            exitCode: 0,
+            command: "npm install http://candidate.invalid/openclaw.tgz",
+          },
+          { name: "recovery-artifact-cleanup", exitCode: 1 },
+        ],
+      },
+      "already-current",
+      1,
+    ],
     ["skipped first upgrade", {}, "applied", 1],
   ])("validates explicit installer outcome: %s", (_label, overrides, outcome, expectedExit) => {
     const payload = {
@@ -1512,6 +1527,21 @@ fs.readFileSync = (file, ...args) => {
     };
     const result = runUpdateJson(payload, { UPDATE_EXPECT_OUTCOME: outcome });
     expect(result.status, result.stderr).toBe(expectedExit);
+  });
+
+  it("accepts one automatic recovery cleanup after an already-current update", () => {
+    const payload = {
+      status: "skipped",
+      reason: "already-current",
+      before: { version: "2026.9.3", buildId: "candidate-build" },
+      after: { version: "2026.9.3", buildId: "candidate-build" },
+      steps: [
+        { name: "package-install", exitCode: 0, command: `npm install ${UPDATE_URL}` },
+        { name: "recovery-artifact-cleanup", exitCode: 0 },
+      ],
+    };
+
+    expect(runUpdateJson(payload, { UPDATE_EXPECT_OUTCOME: "already-current" }).status).toBe(0);
   });
 
   it("accepts legacy same-version apply only with the frozen-target compatibility flag", () => {

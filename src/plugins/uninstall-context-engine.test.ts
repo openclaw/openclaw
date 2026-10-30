@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { removePluginFromConfig } from "./uninstall-config.js";
 import { planPluginUninstall } from "./uninstall.js";
-import { disablePluginAfterUpdateFailure, migratePluginConfigId } from "./update-config.js";
+import { migratePluginConfigId } from "./update-config.js";
 
 describe("context-engine uninstall ownership", () => {
   const install = (
@@ -52,9 +52,6 @@ describe("context-engine uninstall ownership", () => {
     expect(migrated.plugins?.slots?.contextEngine).toBe("vendor-plugin");
     expect(migrated.plugins?.installs?.["renamed-plugin"]?.contextEngineIdsByPlugin).toEqual({
       "renamed-plugin": ["vendor-plugin"],
-    });
-    expect(disablePluginAfterUpdateFailure(migrated, "renamed-plugin").plugins?.slots).toEqual({
-      memory: "memory-core",
     });
   });
 

@@ -7,6 +7,7 @@ import type {
   CronListPageResult,
 } from "../../cron/service/list-page-types.js";
 import type { CronDeliveryPreview, CronJob } from "../../cron/types.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 import { createCronAmbiguousNameError } from "./shared.js";
@@ -37,6 +38,7 @@ export async function listCronJobsFromGateway(
   filters: Pick<CronListPageOptions, "includeDisabled" | "agentId" | "query">,
   options: { allowLegacyUnversionedPagination?: boolean } = {},
 ): Promise<GatewayCronJobInventory> {
+  const signal = getAsyncWorkSignal();
   let allowLegacyUnversionedPagination = options.allowLegacyUnversionedPagination === true;
   for (let restart = 0; restart <= CRON_LIST_MAX_SNAPSHOT_RESTARTS; restart += 1) {
     let offset = 0;
@@ -49,11 +51,17 @@ export async function listCronJobsFromGateway(
     const deliveryPreviews: Record<string, CronDeliveryPreview> = {};
 
     for (let pageNumber = 0; pageNumber < CRON_LIST_MAX_PAGES; pageNumber += 1) {
-      const page = (await callGatewayFromCli("cron.list", opts, {
-        ...filters,
-        limit: CRON_LIST_PAGE_SIZE,
-        offset,
-      })) as GatewayCronListPage | null;
+      signal?.throwIfAborted();
+      const page = (await callGatewayFromCli(
+        "cron.list",
+        opts,
+        {
+          ...filters,
+          limit: CRON_LIST_PAGE_SIZE,
+          offset,
+        },
+        { signal },
+      )) as GatewayCronListPage | null;
 
       const hasCanonicalMetadata =
         page !== null &&
@@ -118,7 +126,7 @@ export async function listCronJobsFromGateway(
         // a fresh nonempty ID avoids colliding with actual scheduled jobs.
         const probeJobId = probeJob?.id ?? randomUUID();
         try {
-          await callGatewayFromCli("cron.get", opts, { id: probeJobId });
+          await callGatewayFromCli("cron.get", opts, { id: probeJobId }, { signal });
         } catch (error) {
           if (isUnknownCronGetMethodError(error)) {
             // Only an explicitly unsupported cron.get identifies a shipped v4
@@ -195,9 +203,11 @@ export async function findCronJobByIdOrName(
   idOrName: string,
   options: { includeDeliveryPreview?: boolean } = {},
 ): Promise<{ job?: CronJob; deliveryPreview?: CronDeliveryPreview }> {
+  const signal = getAsyncWorkSignal();
   let allowLegacyUnversionedPagination = false;
   try {
-    const directJob = (await callGatewayFromCli("cron.get", opts, { id: idOrName })) as
+    signal?.throwIfAborted();
+    const directJob = (await callGatewayFromCli("cron.get", opts, { id: idOrName }, { signal })) as
       | CronJob
       | undefined;
     if (directJob?.id === idOrName) {

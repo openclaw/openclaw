@@ -34,6 +34,12 @@ export function createMergeOutcomeFixtureHarness() {
   let fixtureTemplate: ReturnType<typeof createFixtureTemplate> | undefined;
   const scripts = join(process.cwd(), "scripts");
   const wrapper = readFileSync(join(scripts, "pr"), "utf8");
+  // Generated entrypoints need the wrapper's interpreter guard before sourcing helpers.
+  const shellPreambleEnd = wrapper.indexOf("\nset -euo pipefail\n");
+  if (shellPreambleEnd < 0) {
+    throw new Error("PR fixture requires the wrapper's strict-mode preamble boundary");
+  }
+  const shellPreamble = wrapper.slice(0, shellPreambleEnd);
   const workflowGitOwner = wrapper.slice(
     wrapper.indexOf("pr_batch_wrapper_git() {"),
     wrapper.indexOf("\nEOF_WRAPPER_GIT\n}") + "\nEOF_WRAPPER_GIT\n}".length,
@@ -50,6 +56,9 @@ export function createMergeOutcomeFixtureHarness() {
   const unknownProjection = { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
   const gitEnv = {
     PATH: process.env.PATH,
+    // Keep native Git guard policy while isolating Git's global/system configuration.
+    HOME: process.env.HOME,
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_ALLOW_PROTOCOL: "file",
@@ -420,7 +429,8 @@ const restCheckRuns=()=>{
   const check={id:1,head_sha:s.pr.headRefOid,name:s.restContexts[0],status:"completed",conclusion:s.gates==="pass"?"success":"failure",
     started_at:"2026-09-20T00:00:00Z",check_suite:{id:10},app:{id:s.restCheckApp,slug:s.restCheckApp===15368?"github-actions":"custom-ci"}};
   if(s.restUnseenSuite==="partial-pending") return [check,{...check,id:2,name:"detect-changes",check_suite:{id:2}}];
-  if(!s.restDuplicate) return [...s.restContexts.filter(name=>name!==s.priorCi.missingCheck).map((name,index)=>({...check,id:index+1,name,check_suite:{id:s.priorCi.artifactBuild&&name==="openclaw/ci-gate"?30:10+index},
+  if(!s.restDuplicate) {
+    const checks=[...s.restContexts.filter(name=>name!==s.priorCi.missingCheck).map((name,index)=>({...check,id:index+1,name,check_suite:{id:s.priorCi.artifactBuild&&name==="openclaw/ci-gate"?30:10+index},
     ...(s.priorCi.enabled?{status:name===s.requiredCheckName&&s.gates==="pending"?"in_progress":"completed",
       conclusion:name===s.restFailedContext?"failure":name!==s.requiredCheckName?"success":s.gates==="pending"?null:s.gates==="pass"?"success":"failure"}:
       {conclusion:name===s.restFailedContext?"failure":check.conclusion})})),
@@ -428,6 +438,14 @@ const restCheckRuns=()=>{
         const latest={...check,app:{id:s.priorCi.nativeResultApp,slug:s.priorCi.nativeResultApp===15368?"github-actions":"custom-ci"},id:200+index,name:value.name,check_suite:{id:20+index},status:value.state==="pending"?"in_progress":"completed",conclusion:value.state==="pending"?null:value.state,started_at:"2026-09-20T00:01:00Z"};
         return value.previousFailure?[{...latest,id:300+index,check_suite:{id:25+index},conclusion:"failure",started_at:"2026-09-20T00:00:00Z"},latest]:[latest];
       })];
+    return s.priorCi.currentGateChecks.length ? [
+      ...checks.filter(value=>value.name!==s.requiredCheckName),
+      ...s.priorCi.currentGateChecks.map(value=>({...check,id:value.id,name:value.name??s.requiredCheckName,
+        status:value.status??"completed",conclusion:value.conclusion,check_suite:{id:value.suiteId},
+        started_at:value.startedAt??check.started_at,
+        app:{id:value.publisherId??s.restCheckApp,slug:(value.publisherId??s.restCheckApp)===15368?"github-actions":"custom-ci"}}))
+    ]:checks;
+  }
   return [{...check,conclusion:"failure"},{...check,id:2,check_suite:{id:20},
     started_at:s.restDuplicate==="missing-time"?null:s.restDuplicate==="same-time"?check.started_at:"2026-09-20T00:01:00Z"}];
 };
@@ -687,7 +705,7 @@ else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/actio
   const checks=restCheckRuns();
   if(s.restUnseenSuite==="new-gate") checks.push(...restCheckSuites().filter(suite=>suite.id>=30).flatMap(suiteChecks));
   const runs=checks.map((check,index)=>({id:100+index,head_sha:s.pr.headRefOid,check_suite_id:check.check_suite.id,
-    workflow_id:index===1&&s.restDuplicate==="other-workflow"?43:42,event:index===1&&s.restDuplicate==="other-event"?"push":"pull_request"}));
+    workflow_id:index===1&&s.restDuplicate==="other-workflow"?43:42,event:s.priorCi.currentGateChecks.find(value=>value.id===check.id)?.event??(index===1&&s.restDuplicate==="other-event"?"push":"pull_request")}));
   if(s.restDuplicate==="missing-mapping") runs.pop();
   if(s.restDuplicate==="ambiguous-mapping") runs.push({...runs[1],id:103,workflow_id:44});
   out([{total_count:runs.length,workflow_runs:runs}]);
@@ -872,7 +890,7 @@ save();
     const ghPreload = template.program("gh-preload.cjs", ghPrograms.preload);
     const shell = template.program(
       "invoke.sh",
-      `#!/usr/bin/env bash
+      `${shellPreamble}
 set -euo pipefail
 script_parent_dir="$FIXTURE_SCRIPTS"
 ${workflowGitOwner}
@@ -994,7 +1012,17 @@ if [ "$FIXTURE_WORKFLOW_BINDING" = true ]; then
     script_parent_dir="$original_scripts"
   fi
 fi
-if [ "\${9:-}" = verify ]; then
+if [ -n "\${FIXTURE_DISPATCH_BODY:-}" ]; then
+  MERGE_REPO=$(jq -c .repo "$FIXTURE_STATE")
+  MERGE_REPO_HOST=github.com
+  MERGE_OUTCOME_REF=refs/openclaw/pr-merge-outcomes/123
+  MERGE_OUTCOME_OID=$(git rev-parse "$MERGE_OUTCOME_REF")
+  MERGE_OUTCOME_RECORD=$(git show "$MERGE_OUTCOME_OID:outcome.json")
+  observation=$(merge_read observe 123)
+  MERGE_OBSERVATION=$(merge_outcome_normalize "$observation" 123)
+  body=$(snapshot_merge_body "$FIXTURE_DISPATCH_BODY")
+  merge_outcome_dispatch_async 123 "$(jq -r .pr.headRefOid "$FIXTURE_STATE")" "$body"
+elif [ "\${9:-}" = verify ]; then
   merge_verify 123 '{"replacementHead":"","autoMergeRequested":false,"qualifiedRefusal":false,"observation":null}'
 elif [ -n "\${5:-}" ]; then
   merge_complete 123 "$5"
@@ -1032,6 +1060,7 @@ fi
       FIXTURE_NODE: nodeExecutable,
       FIXTURE_BASE: base,
       FIXTURE_WORKFLOW_BINDING: "false",
+      FIXTURE_DISPATCH_BODY: "",
       OPENCLAW_PR_MERGE_METHOD: "squash",
       OPENCLAW_PR_STRICT_DRIFT: "",
       // Only partial-clone cases consume trace evidence to reject implicit hydration.
@@ -1185,6 +1214,22 @@ fi
       state,
       save,
       run,
+      dispatchAsync: (bodyPath: string) => {
+        env.FIXTURE_DISPATCH_BODY = bodyPath;
+        try {
+          return run();
+        } finally {
+          env.FIXTURE_DISPATCH_BODY = "";
+        }
+      },
+      rest: (args: string[], input = "") => {
+        const result = spawnSync(
+          nodeExecutable,
+          [...nodeArgs, join(scripts, "pr-lib/merge-rest.mjs"), ...args],
+          { cwd: repo, env, input, encoding: "utf8" },
+        );
+        return { ...result, output: result.stdout + result.stderr };
+      },
       bindWorkflow: () => {
         env.FIXTURE_WORKFLOW_BINDING = "true";
       },

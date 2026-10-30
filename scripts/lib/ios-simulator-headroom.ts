@@ -11,8 +11,8 @@ function cpuTimes() {
   );
 }
 
-// bootstatus finishes before first-launch services settle. Reserve room for the
-// Gateway and XCTest without extending either one's request or test deadlines.
+// bootstatus and shutdown finish before host work settles. Reserve room for the
+// next workload without extending its request, boot, or test deadlines.
 export async function waitForIOSSimulatorHeadroom(signal: AbortSignal) {
   const started = performance.now();
   const deadline = started + 300_000;
@@ -51,4 +51,15 @@ export async function waitForIOSSimulatorHeadroom(signal: AbortSignal) {
     samples,
     idlePercent,
   };
+}
+
+if (import.meta.main) {
+  const result = await waitForIOSSimulatorHeadroom(new AbortController().signal);
+  console.log(JSON.stringify(result));
+  if (result.status !== "ready") {
+    console.error(
+      "Host CPU headroom unavailable; screenshot simulator boot was not started. Let competing host work finish or stop it, then rerun the screenshot lane.",
+    );
+    process.exitCode = 1;
+  }
 }

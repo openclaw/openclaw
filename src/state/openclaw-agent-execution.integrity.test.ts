@@ -74,6 +74,7 @@ import {
   getPendingOpenClawAgentDatabasePreparation,
   prepareOpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution.js";
+import { registerRestartRecoveryAdmissionTests } from "./openclaw-agent-restart-recovery.test-support.js";
 import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "./openclaw-state-db-readonly.js";
 import {
@@ -960,3 +961,5 @@ it("settles peer native leases when close revokes a shared worker's opening exec
     ]);
   }
 });
+
+registerRestartRecoveryAdmissionTests({ makeEnv, holdIntegrity });

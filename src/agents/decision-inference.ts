@@ -6,12 +6,9 @@ import { requiredWorkerHelperError } from "../config/required-worker-profile.js"
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DecisionProviderContextV2 } from "../decisions/provider-context.js";
 import type { PreparedDecisionBilling } from "../decisions/provider-host.js";
-import type {
-  DecisionBatchV2,
-  DecisionEvaluateOptionsV2,
-  DecisionProviderV2,
-  ProviderDecisionOutcomeV2,
-} from "../decisions/types-v2.js";
+import type { DecisionProviderV2 } from "../decisions/provider-types.js";
+import type { DecisionEvaluateOptionsV2 } from "../decisions/runtime-types.js";
+import type { DecisionBatchV2, ProviderDecisionOutcomeV2 } from "../decisions/types-v2.js";
 import { validateDecisionResultV2 } from "../decisions/validation-v2.js";
 import {
   assertProviderAuthAuthority,

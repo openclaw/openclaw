@@ -56,8 +56,15 @@ function ingressFor(boundary: string | undefined): ScheduledAdmissionFacts["ingr
   return boundary === "gateway.hooks.agent" ? "webhook" : "channel-join";
 }
 
-/** A requester's owner status at admission, plus its live recheck for owner-only effects. */
-type RequesterOwnerCheck = Readonly<{ owner: boolean; assertCurrent?: () => void }>;
+/**
+ * A requester's owner status at admission, plus its live recheck for owner-only effects.
+ * `isOwner` evaluates the same rule against a config the caller reads at the effect.
+ */
+type RequesterOwnerCheck = Readonly<{
+  owner: boolean;
+  assertCurrent?: () => void;
+  isOwner?: (current: OpenClawConfig) => boolean;
+}>;
 
 const NOT_OWNER: RequesterOwnerCheck = { owner: false };
 
@@ -68,6 +75,7 @@ function ownerCheck(cfg: OpenClawConfig, isOwner: (current: OpenClawConfig) => b
   }
   return {
     owner: true,
+    isOwner,
     assertCurrent: () => {
       if (!isOwner(selectLiveRuntimeConfig(cfg))) {
         throw new Error("The requester that authorized this automation is no longer an owner.");
@@ -76,8 +84,11 @@ function ownerCheck(cfg: OpenClawConfig, isOwner: (current: OpenClawConfig) => b
   };
 }
 
-/** Owner check for requesters the occurrence can verify; operator sources are checked per run. */
-async function checkRequesterOwner(
+/**
+ * Owner check for requesters the occurrence can verify; operator sources are checked per run.
+ * Scheduler turns about a job (its repair or notices) take the same check.
+ */
+export async function checkRequesterOwner(
   cfg: OpenClawConfig,
   requester: Exclude<ScheduledRequesterRef, { kind: "operator-source" }>,
 ): Promise<RequesterOwnerCheck> {

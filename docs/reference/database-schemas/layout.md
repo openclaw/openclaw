@@ -174,6 +174,16 @@ stored without secret masking and before rule-based timestamp and sender
 normalization. Both the first dispatch and replay use that recorded text, then
 apply the same normalization.
 
+If sandbox provisioning prevents an accepted media input from reaching its first
+provider request, the built-in runtime retains that input's already-prepared text
+through the same recorder before releasing its admission. A later continuation
+can therefore use the attachment context even though the original run failed.
+If a write hook changed the input text, retention uses the approved replacement
+instead of restoring the earlier prepared text. The comparison belongs to the
+original recorder admission and is not persisted.
+Successful attempts still capture after prompt hooks and finalization; an existing
+projection is never replaced by the failed attempt's earlier text.
+
 The existing transcript writer binds capture to the exact active user message
 and rechecks live authority before committing. Capture is immutable: repeats
 can only confirm identical text. Later media cannot change a sent projection

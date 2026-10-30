@@ -59,7 +59,7 @@ function rowLayout(locator: Locator) {
 
 function expectUnreadLayout(layout: Awaited<ReturnType<typeof rowLayout>>, nameLeft: number) {
   const { unread, lead, name } = layout;
-  expect(unread).toMatchObject({ width: 7, height: 7 });
+  expect(unread).toMatchObject({ width: 8, height: 8 });
   for (const [start, end] of [
     ["left", "right"],
     ["top", "bottom"],
@@ -493,7 +493,7 @@ suite.define(() => {
 
     await plainRow.waitFor();
     for (const size of badgeSizes) {
-      expect(size).toEqual({ height: 12, width: 12 });
+      expect(size).toEqual({ height: 14, width: 14 });
     }
   });
 

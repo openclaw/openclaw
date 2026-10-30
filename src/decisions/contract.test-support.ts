@@ -3,8 +3,8 @@ import { runPluginRegisterSyncInRegistry } from "../plugins/loader-module-runtim
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import type { DecisionProviderV2 } from "./types-v2.js";
-import type { DecisionProviderV1, UnavailableReason } from "./types.js";
+import type { DecisionProviderV2, DecisionProviderV1 } from "./provider-types.js";
+import type { UnavailableReason } from "./types.js";
 
 export const unavailable = <Reason extends UnavailableReason>(
   reason: Reason,

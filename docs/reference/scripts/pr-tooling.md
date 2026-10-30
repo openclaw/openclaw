@@ -222,7 +222,11 @@ An interruption before the binding transaction preserves the old binding; one
 after it can leave the new binding even without a successful return. Inspect
 the exact retained binding and evidence before continuing; do not blindly repeat
 the transition or restore an archived gate stamp. Both states require fresh
-ordinary `prepare-gates` before correction publication or merge. This command
+ordinary `prepare-gates` before qualified correction publication or merge.
+For an explicitly authorized pending-proof correction, `--for-proof` instead
+validates the typed [proof-publication review](/reference/scripts/pr-preparation#publish-a-candidate-for-required-proof).
+It admits only exact-commit proof publication while NEEDS WORK and unresolved
+findings continue to block ordinary qualification and merge. This command
 does not change the candidate, publish it, waive CI/security/review requirements,
 or authorize a merge.
 

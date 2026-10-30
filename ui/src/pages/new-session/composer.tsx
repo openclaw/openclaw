@@ -60,6 +60,10 @@ import type { SkillMenuHost } from "../chat/components/chat-composer-skill-menu-
 import { SkillMenu } from "../chat/components/chat-composer-skill-menu.tsx";
 import type { SlashMenuHost } from "../chat/components/chat-composer-slash-menu-state.ts";
 import { SlashMenu } from "../chat/components/chat-composer-slash-menu.tsx";
+import {
+  ComposerWidthEdge,
+  prepareComposerWidthEdge,
+} from "../chat/components/chat-composer-width-ref.tsx";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import {
@@ -102,6 +106,8 @@ export type NewSessionComposerOptions = {
   nativeTerminal?: boolean;
   onUnsupportedAttachment?: () => void;
   submitting: boolean;
+  chatMessageMaxWidth?: string | null;
+  onComposerWidthChange?: (value: string | undefined) => void;
   voiceControl?: JSX.Element;
   messageLocked?: boolean;
   visibility?: NewSessionVisibility;
@@ -426,6 +432,8 @@ export function NewSessionComposer(props: {
     <div
       ref={footerControl}
       class="agent-chat__composer-shell new-session-page__composer"
+      onPointerEnter={() => void prepareComposerWidthEdge()}
+      onKeyDown={() => void prepareComposerWidthEdge()}
       onDrop={(event) => {
         if (options().nativeTerminal && event.dataTransfer?.files.length) {
           event.preventDefault();
@@ -693,6 +701,7 @@ export function NewSessionComposer(props: {
           </div>
         </div>
       </div>
+      <ComposerWidthEdge options={options} />
     </div>
   );
 }

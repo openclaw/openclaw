@@ -229,7 +229,6 @@ export function buildSidebarSessionNavigationState(input: {
           expandedParticipants: row.expandedParticipants,
           participantCount: row.participantCount,
           archivedBy: row.archivedBy,
-          // Parent attention attributes subagent failures with the worker's own label.
           label: resolveSessionDisplayName(row.key, row),
           userLabel: row.label,
           renameValue: resolveSessionRenameValue(row),
@@ -319,7 +318,6 @@ export function buildSidebarSessionNavigationState(input: {
           loadingChildren,
           containsActiveDescendant: false,
           runningChildCount: 0,
-          failedChildCount: 0,
         };
       },
     );

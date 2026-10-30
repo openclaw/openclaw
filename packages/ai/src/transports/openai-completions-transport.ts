@@ -20,6 +20,7 @@ import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { buildCopilotDynamicHeaders } from "../providers/github-copilot-headers.js";
 import { finalizeOpenAICompletionsToolCalls } from "../providers/openai-completions-tool-calls.js";
 import { createOpenAIProviderClient } from "../providers/openai-provider-client.js";
+import { mapOpenAIStopReason } from "../providers/openai-stop-reason.js";
 import { toOpenAIResponsesToolChoice } from "../providers/openai-tool-projection.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
@@ -532,7 +533,7 @@ export function streamOpenAICompletionsRequest(
                   bufferedBytes += chunkBytes;
                   const chunkFinishReason = chunk?.choices?.[0]?.finish_reason;
                   if (chunkFinishReason) {
-                    finishReason = chunkFinishReason;
+                    finishReason = mapOpenAIStopReason(chunkFinishReason).stopReason;
                   }
                   options?.signal?.throwIfAborted();
                 }

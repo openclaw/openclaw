@@ -48,6 +48,8 @@ export async function runOfflineDatabaseBackup<T>(
         mapIncludePath?: (absolutePath: string) => string;
         env?: NodeJS.ProcessEnv;
       },
+  /** Archive capture reads a running owner's stores through per-store snapshots. */
+  options?: { online?: true },
 ): Promise<T> {
   const existing = offlineBackup.getStore();
   if (existing) {
@@ -62,14 +64,27 @@ export async function runOfflineDatabaseBackup<T>(
     );
   }
   const { createConfigIO } = await import("../config/config.js");
+  const captured = prepared && "config" in prepared ? prepared : undefined;
+  const runScoped = (
+    config: OpenClawConfig,
+    selection: DatabaseEngineSelection,
+    assertCurrent: () => void,
+  ) => {
+    const scope = { config, assertCurrent };
+    return withDatabaseEngineSelection(selection, () => offlineBackup.run(scope, () => run(scope)));
+  };
   return runWithLocalStateOwner({
     method: "backup.create",
     params: {},
     target: sourcePath,
-    onForeignOwner: "refuse",
+    // Captures only read the live stores: each PostgreSQL store exports from one
+    // repeatable-read snapshot, like the live SQLite snapshots of the same archive.
+    onForeignOwner:
+      captured && options?.online
+        ? async ({ assertCurrent }) => runScoped(captured.config, captured.selection, assertCurrent)
+        : "refuse",
     runLocal: async ({ assertCurrent }) => {
       assertCurrent();
-      const captured = prepared && "config" in prepared ? prepared : undefined;
       let config = captured?.config;
       if (!config) {
         const capturedPaths = prepared && "configPath" in prepared ? prepared : undefined;
@@ -96,10 +111,7 @@ export async function runOfflineDatabaseBackup<T>(
       }
       const selection = captured?.selection ?? (await resolveDatabaseEngineSelection(config));
       assertCurrent();
-      const scope = { config, assertCurrent };
-      return withDatabaseEngineSelection(selection, () =>
-        offlineBackup.run(scope, () => run(scope)),
-      );
+      return runScoped(config, selection, assertCurrent);
     },
   });
 }

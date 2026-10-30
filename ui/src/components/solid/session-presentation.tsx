@@ -74,7 +74,7 @@ function SessionAttentionIcon(props: { attention: SidebarSessionAttention; size:
             }
           }}
         >
-          {sessionIcon(icon(), props.size, 1.8)}
+          {sessionIcon(icon(), props.size, 1.75)}
         </span>
         <Show when={parts().preview}>
           <span slot="content" class="sidebar-session-attention-tooltip">
@@ -89,7 +89,7 @@ function SessionAttentionIcon(props: { attention: SidebarSessionAttention; size:
     </Show>
   );
 }
-const PAIR_TRACE_PATH = "M0,-9.798A11,11 0 1 1 0,9.798A11,11 0 1 1 0,-9.798Z";
+const PAIR_TRACE_PATH = "M0 -9.165A10 10 0 1 1 0 9.165A10 10 0 1 1 0 -9.165Z";
 export function SessionGlyph(props: {
   content: JSX.Element;
   running: boolean;
@@ -209,11 +209,12 @@ export function SessionRowBadges(props: SessionRowBadgesParams) {
           element.setAttribute(`data-${key}`, String(value));
         }
       }
-      element.append(sessionIcon(badge.icon, 12, 1.6));
-      if (badge.count) {
+      element.append(sessionIcon(badge.icon, 14, 1.6));
+      const countText = badge.countLabel ?? (badge.count ? String(badge.count) : undefined);
+      if (countText) {
         const count = document.createElement("span");
         count.setAttribute("aria-hidden", "true");
-        count.textContent = String(badge.count);
+        count.textContent = countText;
         element.append(count);
       }
       group.append(element);
@@ -294,7 +295,7 @@ function SessionIdleState(props: { session: SidebarRecentSession }) {
             aria-label={current().label}
             title={current().label}
           >
-            {sessionIcon(current().icon, 12, 1.8)}
+            {sessionIcon(current().icon, 14, 1.75)}
           </span>
         )}
       </Show>
@@ -326,8 +327,7 @@ export function summarizeTeamSessionSlots(
     active += Number(visuallyActive) + (children?.runningChildCount ?? 0);
     queued += Number(visuallyActive && row.status === "queued") + (children?.queuedChildCount ?? 0);
     unread += Number(row.unread) + (children?.unreadChildCount ?? 0);
-    failed ||=
-      row.status === "failed" || row.status === "timeout" || (children?.failedChildCount ?? 0) > 0;
+    failed ||= row.status === "failed" || row.status === "timeout";
   }
   return { attention, active, queued, unread, failed };
 }
@@ -449,7 +449,7 @@ function SessionIcon(props: { icon: string }) {
             <i
               class="session-css-icon"
               aria-hidden="true"
-              style={{ "mask-image": sessionIconMask(name()) }}
+              style={{ "mask-image": sessionIconMask(name(), 1.75) }}
             />
           )}
         </Match>

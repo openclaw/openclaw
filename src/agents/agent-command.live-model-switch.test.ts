@@ -1785,6 +1785,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     // Freeze preflight elapsed time to keep the forwarding assertions exact.
     const now = Date.now();
     vi.spyOn(Date, "now").mockReturnValue(now);
+    vi.spyOn(performance, "now").mockReturnValue(0);
     setupSuccessfulAttempt();
 
     await runBasicAgentCommand({

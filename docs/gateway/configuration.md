@@ -9,7 +9,7 @@ title: "Configuration"
 
 OpenClaw reads an optional <Tooltip tip="JSON5 supports comments and trailing commas">**JSON5**</Tooltip> config from `~/.openclaw/openclaw.json`. If the file is missing, OpenClaw uses safe defaults.
 
-The active config path must be a regular file. OpenClaw-owned writes replace it atomically (rename onto the path), so a symlinked `openclaw.json` gets its target replaced rather than written through - avoid symlinked config layouts. If you keep config outside the default state directory, point `OPENCLAW_CONFIG_PATH` directly at the real file.
+The active config path must be a regular file. The configured state directory may be a symlink: OpenClaw resolves its directory for atomic writes while retaining the configured path, and rejects a directory alias that changes during a write. The `openclaw.json` file itself must not be a symlink. If you keep config outside the default state directory, point `OPENCLAW_CONFIG_PATH` directly at the real file.
 
 Common reasons to add a config:
 

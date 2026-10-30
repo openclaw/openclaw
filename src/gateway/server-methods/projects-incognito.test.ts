@@ -16,7 +16,6 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   clonedProject,
   expectCheckoutInUse,
-  expectProjectAccessChanged,
   projectConfig,
 } from "./projects-shard.test-support.js";
 import {
@@ -152,10 +151,10 @@ test.each(["unchanged", "unrelated visibility", "contributing visibility"])(
         ["operator.write"],
         profile.id,
       );
-      if (change === "contributing visibility") {
-        expectProjectAccessChanged(result);
-        return;
-      }
+      // A contributing change restarts the read against current memory facts.
+      expect(listRegistryRecords).toHaveBeenCalledTimes(
+        change === "contributing visibility" ? 2 : 1,
+      );
       expect(result).toMatchObject({
         ok: true,
         payload: { recents: [{ kind: "folder", folder, displayName: "private-project" }] },
