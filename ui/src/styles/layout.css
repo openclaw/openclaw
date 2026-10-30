@@ -1013,6 +1013,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   height: 22px;
   padding: 0;
   color: color-mix(in srgb, var(--muted) 85%, var(--sidebar-bg, var(--bg)));
+  corner-shape: superellipse(1.5);
   opacity: 0.55;
 }
 
@@ -1033,7 +1034,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .sidebar-session-toolbar__button.sidebar-session-sort--filtered {
-  color: var(--text);
   opacity: 1;
 }
 
@@ -1394,6 +1394,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .sidebar-session-sort {
   position: relative;
+  gap: 4px;
   margin-left: auto;
   font-size: 12px;
 }
@@ -1679,7 +1680,8 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   min-height: 28px;
   padding: 0 13px 0 calc(var(--sidebar-session-row-inset) + var(--sidebar-inset));
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: 10px;
+  corner-shape: superellipse(1.5);
   background: transparent;
   color: color-mix(in srgb, var(--text) 82%, var(--muted));
   font: inherit;
@@ -1729,6 +1731,10 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   margin-left: calc(var(--sidebar-lead) + 5px);
 }
 
+.sidebar-session-catalog-project__sessions[hidden] {
+  display: none;
+}
+
 .sidebar-session-catalog-project > .sidebar-session-pagination--catalog {
   padding-left: calc(var(--sidebar-text-offset) + var(--sidebar-lead));
 }
@@ -1766,6 +1772,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 /* A section's empty hint reads as part of its heading, on the title column. */
 .sidebar-recent-sessions__group > .sidebar-session-empty-hint {
+  margin: 0;
   padding: 2px 10px 14px calc(var(--sidebar-text-offset) + 2px);
   font-size: calc(12.5px * var(--control-ui-text-scale));
   line-height: 18px;

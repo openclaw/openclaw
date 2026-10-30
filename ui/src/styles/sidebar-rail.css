@@ -683,13 +683,20 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   min-width: 0 !important;
 }
 
+.sidebar-session-owner-filter > div,
+.sidebar-session-owner-filter .picker-select__trigger {
+  flex: none;
+}
+
 .sidebar-session-owner-filter .picker-select__trigger {
   justify-content: flex-start;
   gap: 5px;
   width: auto;
   min-height: 30px;
-  padding: 4px 6px;
+  padding: 4px 6px 4px 5px;
   border: 0;
+  border-radius: 6px;
+  corner-shape: superellipse(1.5);
   background: transparent;
   font-weight: 600;
 }
