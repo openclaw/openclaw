@@ -18,6 +18,7 @@ import { compareSemverStrings, resolveNpmChannelTag } from "../../infra/update-c
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
+import type { ManagedHandoffRepair } from "../../infra/update-managed-service-handoff-lease-types.js";
 import { prepareManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { resolveLegacyGatewayManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-legacy-store.js";
 import { ManagedHandoffCustodyRetainedError } from "../../infra/update-managed-service-handoff-reclamation.js";
@@ -141,40 +142,23 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     throw new Error(admission.message);
   }
   const validChannel = opts.channel === undefined || normalizeUpdateChannel(opts.channel) !== null;
-  if (validChannel) {
-    const settlement = await settlePendingPackageActivation(
-      resolveUpdateInstallRoot(discoveredRoot),
-      (settled) => {
-        defaultRuntime.error(
-          `Warning: previous package update operation ${settled.operationId} closed as ${settled.reason}. ${
-            settled.retained
-              ? `Recovery evidence retained at ${settled.retained}.`
-              : "The original package and launchers remain unchanged."
-          }${settled.detail ? ` ${settled.detail}` : ""}`,
-        );
-        if (settled.detail) {
-          // The operation UUID identifies this repair receipt, not the original failed run.
-          // Replaying it after interrupted reporting preserves the original update outcome.
-          createUpdateRun(
-            {
-              runId: settled.operationId,
-              trigger: "cli",
-              settlement: {
-                reason: settled.reason,
-                detail: `${settled.detail} Operation ${settled.operationId}; evidence retained at ${settled.retained}.`,
-              },
-            },
-            options,
-          );
-        }
-      },
-    );
-    if (settlement?.warning) {
-      defaultRuntime.error(`Warning: ${settlement.warning}`);
-    }
-  }
+  // Cancelled custody fences every executor acquisition, including the package
+  // settlement below. When settlement refuses for that reason, this repair
+  // settles the custody through the existing repair owner; the untouched
+  // package journal stays protected and its own settlement completes on the
+  // next repair run, once no open repair claim fences the installation.
+  const handoffRepairAdmitted =
+    hasCliProcessScope() &&
+    !inheritedRunId &&
+    !env.OPENCLAW_UPDATE_RUN_HANDOFF &&
+    !env[POST_CORE_UPDATE_ENV] &&
+    validChannel;
   let retained: RetainedUpdateCustodyReport | undefined;
-  const prepareHandoffRepair = async () => {
+  let handoffRepair: ManagedHandoffRepair | null | undefined;
+  const prepareHandoffRepair = async (): Promise<ManagedHandoffRepair | null> => {
+    if (handoffRepair !== undefined) {
+      return handoffRepair;
+    }
     // Admission keys custody by the canonical installation, not a lexical slot.
     const root = resolveUpdateInstallRoot(await resolveUpdateRoot());
     try {
@@ -182,15 +166,17 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
         await prepareManagedHandoffLeaseStore()
       ).prepareRepair(root, env, timeoutMs);
       const legacy = resolveLegacyGatewayManagedUpdateLeaseDatabasePath();
-      if (repair || !legacy || !fs.existsSync(legacy)) {
-        return repair;
+      if (!repair && legacy && fs.existsSync(legacy)) {
+        // An earlier macOS Gateway's handoff stays in its own store until repaired.
+        const store = await prepareManagedHandoffLeaseStore({
+          databasePath: legacy,
+          serviceManagerEnv: resolveServiceManagerEnv(),
+        });
+        handoffRepair = (await store.prepareRepair(root, env, timeoutMs)) ?? null;
+        return handoffRepair;
       }
-      // An earlier macOS Gateway's handoff stays in its own store until repaired.
-      const store = await prepareManagedHandoffLeaseStore({
-        databasePath: legacy,
-        serviceManagerEnv: resolveServiceManagerEnv(),
-      });
-      return await store.prepareRepair(root, env, timeoutMs);
+      handoffRepair = repair ?? null;
+      return handoffRepair;
     } catch (error) {
       if (!(error instanceof ManagedHandoffCustodyRetainedError)) {
         throw error;
@@ -198,17 +184,53 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
       // Retained custody blocks the next update, not this repair's own maintenance.
       retained = reportRetainedUpdateCustody(error.custody, env);
       defaultRuntime.error(`Warning: ${error.message}`);
-      return null;
+      handoffRepair = null;
+      return handoffRepair;
     }
   };
-  using handoff =
-    hasCliProcessScope() &&
-    !inheritedRunId &&
-    !env.OPENCLAW_UPDATE_RUN_HANDOFF &&
-    !env[POST_CORE_UPDATE_ENV] &&
-    validChannel
-      ? await prepareHandoffRepair()
-      : null;
+  if (validChannel) {
+    let settlement: Awaited<ReturnType<typeof settlePendingPackageActivation>> | undefined;
+    try {
+      settlement = await settlePendingPackageActivation(
+        resolveUpdateInstallRoot(discoveredRoot),
+        (settled) => {
+          defaultRuntime.error(
+            `Warning: previous package update operation ${settled.operationId} closed as ${settled.reason}. ${
+              settled.retained
+                ? `Recovery evidence retained at ${settled.retained}.`
+                : "The original package and launchers remain unchanged."
+            }${settled.detail ? ` ${settled.detail}` : ""}`,
+          );
+          if (settled.detail) {
+            // The operation UUID identifies this repair receipt, not the original failed run.
+            // Replaying it after interrupted reporting preserves the original update outcome.
+            createUpdateRun(
+              {
+                runId: settled.operationId,
+                trigger: "cli",
+                settlement: {
+                  reason: settled.reason,
+                  detail: `${settled.detail} Operation ${settled.operationId}; evidence retained at ${settled.retained}.`,
+                },
+              },
+              options,
+            );
+          }
+        },
+      );
+    } catch (error) {
+      if (!handoffRepairAdmitted || !(await prepareHandoffRepair())) {
+        throw error;
+      }
+      defaultRuntime.error(
+        `Warning: retained cancelled update custody prevented package settlement; the custody is settled and the package journal settlement will complete on the next ${formatCliCommand("openclaw update repair", env)} run.`,
+      );
+    }
+    if (settlement?.warning) {
+      defaultRuntime.error(`Warning: ${settlement.warning}`);
+    }
+  }
+  using handoff = handoffRepairAdmitted ? await prepareHandoffRepair() : null;
   // Capture Doctor-visible history before finalization admits its own newer run.
   // Terminal age limits the shortcut below, not successful repair acknowledgment.
   const recentRuns = listUpdateRuns({ limit: 100 }, options);
