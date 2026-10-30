@@ -132,6 +132,7 @@ export type MenuProps = {
     [name: `data-${string}`]: string | number | boolean | undefined;
   };
   placement?: OverlayPlacement;
+  positionAnchor?: () => HTMLElement | undefined;
   dir?: "ltr" | "rtl";
   open?: boolean;
   disabled?: boolean;
@@ -342,7 +343,7 @@ export function Menu(props: BranchProps): JSX.Element {
   const anchor = createAnchoredOverlay(
     overlay,
     () => trigger,
-    () => ({ placement: placement() }),
+    () => ({ placement: placement(), positionAnchor: props.positionAnchor?.() }),
     { sameRoot: true, parent: initialIdentity.parent, lazy: Boolean(initialLazy) },
   );
   const keydown = (event: KeyboardEvent) => {

@@ -15,14 +15,16 @@ import {
   resolveToolOverrideState,
   resolveWebSearchToolOverrideState,
 } from "../../../lib/sessions/tool-overrides.ts";
-import { uploadsEnabled } from "../../../lib/uploads.ts";
 import { resolveComposerSkills } from "../composer-capability-catalog.ts";
 import type {
   ChatComposerMenuSkill,
   ChatComposerPlusMenuView,
 } from "../composer-capability-types.ts";
 import "./chat-camera-capture.tsx";
-import { useNativeAttachmentSourceMenu } from "./chat-attachment-picker-policy.ts";
+import {
+  composerAttachmentMenuItems,
+  handleComposerAttachmentSelection,
+} from "./chat-composer-attachment-menu.tsx";
 import {
   handleComposerLibrarySelection,
   composerLibraryMenuItems,
@@ -118,47 +120,17 @@ function skillRows(
 
 function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
   const entries: MenuEntry[] = [];
-  const canUpload = uploadsEnabled(menu.attachments.uploadConfig);
-  if (canUpload) {
-    const sources: MenuEntry[] = [];
-    const mediaOption = menu.attachments.imagesOnly
-      ? (["photo", "image", t("chat.composer.attachPhoto")] as const)
-      : (["media", "image", t("chat.composer.attachMedia")] as const);
-    const nativeSourceMenu = useNativeAttachmentSourceMenu();
-    for (const [id, icon, label] of nativeSourceMenu
-      ? ([["file", "paperclip", t("chat.composer.attach")]] as const)
-      : ([
-          ["camera", "camera", t("chat.composer.cameraInput")],
-          mediaOption,
-          // Image-only composers keep the single picker's file input, filtered to images.
-          ...(menu.attachments.imagesOnly
-            ? []
-            : ([["file", "paperclip", t("chat.composer.attachFileOption")]] as const)),
-        ] as const)) {
-      sources.push({
-        id,
-        label,
-        class: nativeSourceMenu
-          ? "agent-chat__attach-menu-option agent-chat__capability-menu-item"
-          : "agent-chat__attach-menu-option",
-        icon: <Icon name={icon} />,
-      });
-    }
-    entries.push({
-      kind: "group",
-      id: "attachment-sources",
-      class: sources.length === 1 ? undefined : "agent-chat__attachment-sources",
-      items: sources,
-    });
-  }
+  const attachments = composerAttachmentMenuItems(menu);
+  const finish = () => [
+    ...entries,
+    ...(entries.length && attachments.length ? [menuDivider("attachment-divider")] : []),
+    ...attachments,
+  ];
   if (menu.showCapabilities || menu.rootToggles?.length) {
-    if (canUpload) {
-      entries.push(menuDivider("attachment-divider"));
-    }
     entries.push(...(menu.rootToggles ?? []).map(renderCapabilityToggleRow));
   }
   if (!menu.showCapabilities) {
-    return entries;
+    return finish();
   }
   for (const view of ["skills", "connectors"] as const) {
     entries.push({
@@ -217,7 +189,7 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
       closeOnSelect: false,
     });
   }
-  return entries;
+  return finish();
 }
 
 function handleMenuSelection(
@@ -232,11 +204,7 @@ function handleMenuSelection(
   const props = ownerProps.menu;
   const overlay = menu.overlay;
   const { surface } = overlay;
-  if (
-    uploadsEnabled(props.attachments.uploadConfig) &&
-    (value === "camera" || value === "photo" || value === "file" || value === "media")
-  ) {
-    props.inputHandle.open(value);
+  if (handleComposerAttachmentSelection(value, event, menu, props)) {
     return;
   }
   const rootToggle = props.rootToggles?.find((toggle) => toggle.value === value);

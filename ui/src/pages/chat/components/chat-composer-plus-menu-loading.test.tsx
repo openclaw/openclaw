@@ -134,8 +134,8 @@ it.each(["keyboard", "last", "pointer", "external", "closed", "reopened"] as con
       await waitForSolid(() =>
         expect(document.activeElement).toBe(
           mode === "last"
-            ? view.item("Updated toggle")
-            : view.getByRole("menuitem", { name: "Camera", hidden: true }),
+            ? view.getByRole("menuitem", { name: "File", hidden: true })
+            : view.item("Updated toggle"),
         ),
       );
       view.item("Updated toggle").click();

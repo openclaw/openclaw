@@ -1,7 +1,7 @@
 import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal, flush, Show } from "solid-js";
-import { afterEach, describe, expect, it } from "vitest";
-import { userEvent } from "vitest/browser";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
+import { page, userEvent } from "vitest/browser";
 import {
   item,
   mountMenu,
@@ -25,6 +25,42 @@ import { Popover, type PopoverHandle } from "./popover.tsx";
 afterEach(cleanup);
 
 describe("Solid menu navigation", () => {
+  it.each([1280, 600])(
+    "anchors above the writing surface at width %s while retaining invoker focus ownership",
+    async (width) => {
+      const original = [window.innerWidth, window.innerHeight] as const;
+      await page.viewport(width, 800);
+      onTestFinished(() => page.viewport(...original));
+      const writingSurface = document.body.appendChild(document.createElement("div"));
+      writingSurface.style.cssText = `position:fixed;left:24px;top:${window.innerHeight - 140}px;width:240px;height:90px`;
+      onTestFinished(() => writingSurface.remove());
+      const view = mountMenu({
+        lazy: true,
+        placement: "top-start",
+        positionAnchor: () => writingSurface,
+        items: [{ id: "attach", label: "Attach" }],
+      });
+      const invoker = trigger();
+      invoker.focus();
+      await userEvent.keyboard("{ArrowDown}");
+      await phase(surface(), "open");
+      await expect
+        .poll(() =>
+          Math.round(
+            writingSurface.getBoundingClientRect().top - surface().getBoundingClientRect().bottom,
+          ),
+        )
+        .toBe(6);
+      expect(view.handle.overlay.trigger).toBe(invoker);
+      expect(document.activeElement).toBe(item("Attach"));
+      await userEvent.keyboard("{Escape}");
+      await phase(surface(), "hidden");
+      expect(document.activeElement).toBe(invoker);
+      view.unmount();
+      expect(writingSurface.style.getPropertyValue("anchor-name")).toBe("");
+    },
+  );
+
   it.each([true, "while-open"] as const)("owns lazy content across reopen (%s)", async (lazy) => {
     let itemReads = 0;
     let childrenReads = 0;
