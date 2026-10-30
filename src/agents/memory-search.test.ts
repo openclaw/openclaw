@@ -322,7 +322,7 @@ describe("memory search config", () => {
     );
     expect(resolved?.extraPaths).toEqual([
       "/shared/notes",
-      "docs",
+      " docs ",
       { path: "../team-notes", pattern: "runbooks/**/*.md" },
       { path: "../team-notes", pattern: "decisions/**/*.md" },
     ]);

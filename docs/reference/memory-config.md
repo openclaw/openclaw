@@ -637,6 +637,12 @@ conservative traversal. The builtin engine skips symlinks. When a configured roo
 symlink, `openclaw memory status` names the skipped root in text and JSON output and recommends
 configuring its resolved absolute directory instead.
 
+Configured paths are used literally: leading and trailing whitespace is part of the filesystem
+identity, so `"notes"` and `" notes "` are two distinct indexing roots. Blank or whitespace-only
+entries are still dropped. Earlier releases trimmed each entry before resolving it, so an existing
+padded entry such as `" docs "` used to select the `docs` directory; it now selects the literal
+`" docs "` directory. Correct any padded entries that relied on the old trimming behavior.
+
 Set `evergreen: true` only for stable reference sources whose relevance should not fall as their
 filesystem modification time ages. The option disables temporal decay for matching `extraPaths`
 files while leaving semantic/keyword relevance, trust, provenance, and automatic-injection

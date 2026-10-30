@@ -174,6 +174,7 @@ describe("memory host SDK package internals", () => {
         "",
       ]),
     ).toEqual([
+      path.resolve(workspaceDir, " notes "),
       path.resolve(workspaceDir, "notes"),
       absPath,
       path.join(os.homedir(), "shared-notes"),
@@ -187,6 +188,7 @@ describe("memory host SDK package internals", () => {
         { path: "reference", evergreen: true },
       ]),
     ).toEqual([
+      { path: path.resolve(workspaceDir, " notes "), pattern: "runbooks/**/*.md" },
       { path: path.resolve(workspaceDir, "notes"), pattern: "runbooks/**/*.md" },
       { path: path.resolve(workspaceDir, "notes"), pattern: "archive/**/*.md" },
       { path: path.resolve(workspaceDir, "reference"), evergreen: true },
