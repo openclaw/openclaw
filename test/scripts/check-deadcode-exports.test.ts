@@ -79,6 +79,26 @@ describe("check-deadcode-exports", () => {
     }
   });
 
+  it("models preloaded lineage writer calls without retaining removed consumers", () => {
+    const file = path.resolve("src/process/supervisor/service-child-group-anchor.ts");
+    const source = fs.readFileSync(file, "utf8");
+    const compile = createDynamicConsumerCompiler();
+    const symbols = ["recordNodeWorkerDescendantsReaped", "recordNodeWorkerLineageSettled"];
+    for (const symbol of symbols) {
+      expect(compile()).toContain(`${symbol} as `);
+      const removed = replaceFixture(source, `lineageCompletion.${symbol}(`, "unusedWriter(");
+      expect(compile(new Map([[file, removed]]))).not.toContain(`${symbol} as `);
+    }
+    const withoutLoad = replaceFixture(
+      source,
+      'await import("../../node-host/node-worker-lineage-completion.js").catch(() => undefined)',
+      "undefined",
+    );
+    expect(compile(new Map([[file, withoutLoad]]))).not.toContain(
+      'from "../src/node-host/node-worker-lineage-completion.js";',
+    );
+  });
+
   it("makes tests in every workspace roots of the full-tree export audit", () => {
     expectEntries(knipConfig.workspaces["."].entry, [
       "config/knip.config.ts!",
@@ -86,6 +106,9 @@ describe("check-deadcode-exports", () => {
       "config/knip.scripts-exports.config.ts!",
       "scripts/generate-runtime-script-assets.mjs!",
       "scripts/generate-static-validators.mts!",
+      "scripts/perf/agent-exec-cgroup-proof.ts!",
+      "scripts/perf/backup-verify-fixture.mjs!",
+      "scripts/perf/backup-verify-measure.mjs!",
       "scripts/perf/cron-delivery-gateway-entry.ts!",
       "scripts/perf/doctor-retirement-measure.mts!",
       "scripts/perf/github-readiness-state-bench.ts!",
@@ -416,8 +439,8 @@ const unrelatedArgs = [
 
   it("models exact generated and module-hook named consumers", () => {
     expect(knipConfig.workspaces["."].project).toContain("config/knip-dynamic-consumers.mjs!");
-    const compile = knipConfig.compilers.mjs;
-    const compiled = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    const compile = createDynamicConsumerCompiler();
+    const compiled = compile();
     for (const imported of [
       'import { runtimeProcessDeployManifest as __dynamic0_0, runtimeProcessHelperManifest as __dynamic0_1, runtimeProcessWorkerDependencies as __dynamic0_2 } from "../src/infra/runtime-process-manifest.ts";',
       'import { gatewayBenchTaskOperation as __dynamic1_0 } from "../scripts/lib/gateway-bench-worker-messages.ts";',
@@ -433,61 +456,37 @@ const unrelatedArgs = [
       /import \{ recordTrajectoryFlush as __dynamic\d+_0 \} from "\.\.\/scripts\/perf\/trajectory-flush-preload\.mts";/u,
     );
 
-    const readFileSync = fs.readFileSync.bind(fs);
     const doctorConsumerPath = path.resolve("src/commands/config-preflight-snapshot.ts");
+    const doctorSource = fs.readFileSync(doctorConsumerPath, "utf8");
     const directDoctorConsumer = `const addIssues = (
   await import("./doctor/shared/legacy-config-issues.js")
 ).addDoctorLegacyIssues;`;
-    const readFile = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
-      const source = readFileSync(file, options);
-      return path.resolve(String(file)) === doctorConsumerPath ? directDoctorConsumer : source;
-    });
-    expect(compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs")).toContain(
+    expect(compile(new Map([[doctorConsumerPath, directDoctorConsumer]]))).toContain(
       'import { addDoctorLegacyIssues as __dynamic3_0 } from "../src/commands/doctor/shared/legacy-config-issues.js";',
     );
-
-    readFile.mockImplementation((file, options) => {
-      const source = readFileSync(file, options);
-      if (path.resolve(String(file)) === path.resolve("tsdown.config.ts")) {
-        return String(source).replace(
-          `import {
+    const removed = new Map(
+      Object.entries({
+        "tsdown.config.ts": `import {
   runtimeProcessDeployManifest,
   runtimeProcessHelperManifest,
   runtimeProcessWorkerDependencies,
 } from "./src/infra/runtime-process-manifest.ts";`,
-          "",
-        );
-      }
-      if (
-        path.resolve(String(file)) === path.resolve("scripts/lib/gateway-bench-worker-messages.ts")
-      ) {
-        return String(source).replace(
+        "scripts/lib/gateway-bench-worker-messages.ts":
           "import { gatewayBenchTaskOperation as benchmarkTaskOperation } from ${JSON.stringify(import.meta.url)};",
-          "",
-        );
-      }
-      if (
-        path.resolve(String(file)) === path.resolve("extensions/team-reports/src/sources/http.ts")
-      ) {
-        return String(source).replace(
+        "extensions/team-reports/src/sources/http.ts":
           'import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";',
-          "",
-        );
-      }
-      if (
-        path.resolve(String(file)) === path.resolve("scripts/perf/trajectory-flush-preload.mts")
-      ) {
-        return String(source).replace(
+        "scripts/perf/trajectory-flush-preload.mts":
           "import { recordTrajectoryFlush as __recordTrajectoryFlush } from ${JSON.stringify(import.meta.url)};",
-          "",
-        );
-      }
-      if (path.resolve(String(file)) === doctorConsumerPath) {
-        return String(source).replaceAll(").addDoctorLegacyIssues", ").consumeLegacyIssues");
-      }
-      return source;
-    });
-    const withoutConsumers = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+      }).map(([file, consumer]) => [
+        path.resolve(file),
+        fs.readFileSync(file, "utf8").replaceAll(consumer, ""),
+      ]),
+    );
+    removed.set(
+      doctorConsumerPath,
+      doctorSource.replaceAll(").addDoctorLegacyIssues", ").consumeLegacyIssues"),
+    );
+    const withoutConsumers = compile(removed);
     expect(withoutConsumers).not.toContain("runtimeProcessDeployManifest");
     expect(withoutConsumers).not.toContain("runtimeProcessHelperManifest");
     expect(withoutConsumers).not.toContain("runtimeProcessWorkerDependencies");

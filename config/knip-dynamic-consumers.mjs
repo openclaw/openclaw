@@ -207,6 +207,25 @@ function computedCheckoutNamespaceMemberEdges(source) {
   return edges;
 }
 
+function preloadedNamespaceMemberEdges(source, consumerFile) {
+  const edges = new Map();
+  for (const match of source.matchAll(
+    /^[ \t]*([A-Za-z_$][\w$]*)\s*=\s*[^;]*?\?\s*await\s+import\(\s*["']([^"'\r\n]+)["']\s*\)\.catch\(\(\)\s*=>\s*undefined\)\s*:\s*undefined\s*;/gmu,
+  )) {
+    const [, namespace, specifier] = match;
+    const escapedNamespace = namespace.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    const memberCall = new RegExp(
+      `^[ \\t]*(?:[A-Za-z_$][\\w$]*\\s*=\\s*)?${escapedNamespace}\\s*\\.\\s*([A-Za-z_$][\\w$]*)\\s*\\(`,
+      "gmu",
+    );
+    const names = new Set([...source.matchAll(memberCall)].map((member) => member[1]));
+    if (names.size > 0) {
+      edges.set(path.resolve(path.dirname(consumerFile), specifier), names);
+    }
+  }
+  return edges;
+}
+
 function emittedNamedImportEdges(source) {
   const transforms = new Map(
     [
@@ -558,6 +577,15 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
 
   for (const [targetFile, names] of prToolingNamedImportEdges(
     fs.readFileSync("scripts/pr", "utf8"),
+  )) {
+    addNamedImport([...names], targetFile);
+  }
+
+  // The anchor preloads its optional host-only writer before cleanup can signal the loader.
+  const anchorPath = "src/process/supervisor/service-child-group-anchor.ts";
+  for (const [targetFile, names] of preloadedNamespaceMemberEdges(
+    fs.readFileSync(anchorPath, "utf8"),
+    anchorPath,
   )) {
     addNamedImport([...names], targetFile);
   }
