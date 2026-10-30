@@ -7,6 +7,21 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const scriptPath = "scripts/build-and-run-mac.sh";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+let modernBashPaths: string[] | undefined;
+
+function modernBashShells() {
+  // Host tool versions stay fixed for this suite; every guard execution stays independent.
+  return (modernBashPaths ??= ["/opt/homebrew/bin/bash", "/usr/local/bin/bash"]
+    .filter(existsSync)
+    .filter((shell) => {
+      const version = spawnSync(shell, ["-c", "printf '%s' \"$BASH_VERSION\""], {
+        encoding: "utf8",
+      });
+      const [major = 0, minor = 0] = version.stdout.split(".").map(Number);
+      return major > 5 || (major === 5 && minor >= 3);
+    }));
+}
+
 function runStopExistingLocalApp(params: { fakeLsof?: string; fakePgrep: string }) {
   const root = tempDirs.make("openclaw-build-run-mac-test-");
   const binDir = join(root, "bin");
@@ -414,16 +429,7 @@ describe("macOS Bash selection", () => {
       const root = tempDirs.make("openclaw-bash-guard-");
       const script = path.join(root, "script with [glob] spaces.sh");
       writeFileSync(script, `#!/usr/bin/env bash\n${guard}printf '%s\n' "$BASH" "$@"\n`);
-      for (const shell of ["/bin/bash", "/opt/homebrew/bin/bash", "/usr/local/bin/bash"].filter(
-        existsSync,
-      )) {
-        const version = spawnSync(shell, ["-c", "printf '%s' \"$BASH_VERSION\""], {
-          encoding: "utf8",
-        });
-        const [major = 0, minor = 0] = version.stdout.split(".").map(Number);
-        if (shell !== "/bin/bash" && !(major > 5 || (major === 5 && minor >= 3))) {
-          continue;
-        }
+      for (const shell of ["/bin/bash", ...modernBashShells()].filter(existsSync)) {
         const result = spawnSync(shell, [script, "argument with spaces", "", "*[literal]"], {
           encoding: "utf8",
           timeout: 5000,
@@ -444,14 +450,7 @@ describe("macOS Bash selection", () => {
       expect(prelude).toContain('exec /bin/bash "$0" "$@"');
       const probe = `${prelude}printf '%s\n' "$BASH" "$@"\n`;
       writeFileSync(script, probe);
-      for (const shell of ["/opt/homebrew/bin/bash", "/usr/local/bin/bash"].filter(existsSync)) {
-        const version = spawnSync(shell, ["-c", "printf '%s' \"$BASH_VERSION\""], {
-          encoding: "utf8",
-        });
-        const [major = 0, minor = 0] = version.stdout.split(".").map(Number);
-        if (!(major > 5 || (major === 5 && minor >= 3))) {
-          continue;
-        }
+      for (const shell of modernBashShells()) {
         const direct = spawnSync(shell, [script, "kept argument"], {
           encoding: "utf8",
           timeout: 5000,
