@@ -571,8 +571,7 @@ const startupEnglish = {
     staleTitle: "This view could not load",
     staleSubtitle:
       "Some interface files could not be downloaded. Check your connection, then reload.",
-    bootDraftRecovery:
-      "Text entered while loading is kept below. Copy it somewhere safe, then clear it before reloading.",
+    bootDraftRecovery: "Copy the draft below before clearing it and reloading.",
     reloading: "Reloading…",
     retry: "Retry",
     stylesFailed: "Styles failed to load, so the page may look broken.",

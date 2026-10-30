@@ -125,7 +125,7 @@ suite.define(() => {
               origin.y + Number.parseFloat(style.paddingTop),
             ].map(Math.round);
           });
-        const before = await geometry(".loading-skeleton__composer");
+        const before = await geometry(".loading-skeleton__composer:has(#openclaw-boot-composer)");
         // Record every animation frame through the handoff: each one must show one
         // composer, at one size, holding the whole draft.
         await page.evaluate(() => {

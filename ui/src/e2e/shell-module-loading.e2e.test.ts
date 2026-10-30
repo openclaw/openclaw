@@ -1,4 +1,4 @@
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
@@ -28,6 +28,17 @@ function trackDocuments(page: Page) {
     }
   });
   return () => count;
+}
+
+function visibleHitTarget(element: Locator) {
+  return element.evaluate((node) => {
+    const box = node.getBoundingClientRect();
+    return (
+      box.top >= 0 &&
+      box.bottom <= innerHeight &&
+      node.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2))
+    );
+  });
 }
 
 suite.define(() => {
@@ -122,8 +133,40 @@ suite.define(() => {
         expect(await boot.isVisible()).toBe(true);
         expect(await boot.inputValue()).toBe(draft);
         expect(await boot.getAttribute("data-submit-queued")).toBe("");
-        expect(await error.textContent()).toContain("Copy it somewhere safe");
-        await error.getByRole("button", { name: "Reload", exact: true }).click();
+        expect(await error.textContent()).toContain("Copy the draft below");
+        const dragCalls = await page.evaluateHandle(() => {
+          const calls: unknown[] = [];
+          Object.assign(window, {
+            webkit: {
+              messageHandlers: {
+                openclawWindowDrag: {
+                  postMessage: (message: unknown) => {
+                    calls.push(message);
+                  },
+                },
+              },
+            },
+          });
+          return calls;
+        });
+        await page.locator(".loading-skeleton__header").click();
+        expect(await dragCalls.evaluate((calls) => calls.splice(0))).toEqual([
+          { type: "window-drag" },
+        ]);
+        await error.locator("summary").click();
+        await error.locator(".lazy-view-error__subtitle").click();
+        expect(await dragCalls.jsonValue()).toEqual([]);
+        await dragCalls.dispose();
+        await page.setViewportSize({ width: 400, height: 360 });
+        await expect.poll(() => visibleHitTarget(boot)).toBe(true);
+        await boot.click();
+        await expect.poll(() => visibleHitTarget(boot)).toBe(true);
+        const recovery = error.getByRole("button", { name: "Reload", exact: true });
+        await page.locator(".loading-skeleton__messages--interactive").hover();
+        await page.mouse.wheel(0, 500);
+        await expect.poll(() => visibleHitTarget(recovery)).toBe(true);
+        expect(await visibleHitTarget(boot)).toBe(true);
+        await recovery.click();
         await error.waitFor();
         expect(documents()).toBe(1);
         expect(await boot.inputValue()).toBe(draft);

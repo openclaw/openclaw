@@ -74,9 +74,8 @@ function ShellLoadError(props: { error: unknown; reset: () => void }): SolidJSX.
           status={t(
             isStaleChunkImportError(props.error) ? "lazyView.staleTitle" : "lazyView.errorTitle",
           )}
-        >
-          {failure()}
-        </ConnectingSplash>
+          renderContent={failure}
+        />
       ) : (
         failure()
       )}

@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { children, onSettled, Repeat, Show } from "solid-js";
+import { onSettled, Repeat, Show } from "solid-js";
 import { bootComposerElement, settleBootComposer } from "../../app/boot-composer.ts";
 import { beginNativeWindowDrag } from "../../app/native-window-drag.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -17,7 +17,11 @@ function BootComposer() {
 }
 
 export function LoadingSkeleton(
-  props: { messagesOnly?: boolean; composer?: boolean; children?: SolidJSX.Element } = {},
+  props: {
+    messagesOnly?: boolean;
+    composer?: boolean;
+    renderContent?: () => SolidJSX.Element;
+  } = {},
 ) {
   return (
     <div class="loading-skeleton">
@@ -27,20 +31,35 @@ export function LoadingSkeleton(
           <div class="skeleton skeleton-line loading-skeleton__title" />
         </div>
       </Show>
-      {props.children ?? (
-        <div class="loading-skeleton__messages" aria-hidden="true">
-          <div class="loading-skeleton__message loading-skeleton__message--user">
-            <div class="skeleton skeleton-line" />
-            <div class="skeleton skeleton-line skeleton-line--medium" />
-          </div>
-          <div class="loading-skeleton__message">
-            <div class="skeleton loading-skeleton__avatar" />
-            <div class="skeleton skeleton-line" />
-            <div class="skeleton skeleton-line skeleton-line--long" />
-            <div class="skeleton skeleton-line skeleton-line--medium" />
-          </div>
-        </div>
-      )}
+      <div
+        class={[
+          "loading-skeleton__messages",
+          { "loading-skeleton__messages--interactive": Boolean(props.renderContent) },
+        ]}
+        aria-hidden={props.renderContent ? undefined : "true"}
+        onMouseDown={(event) => {
+          if (props.renderContent) {
+            event.stopPropagation();
+          }
+        }}
+      >
+        {props.renderContent ? (
+          props.renderContent()
+        ) : (
+          <>
+            <div class="loading-skeleton__message loading-skeleton__message--user">
+              <div class="skeleton skeleton-line" />
+              <div class="skeleton skeleton-line skeleton-line--medium" />
+            </div>
+            <div class="loading-skeleton__message">
+              <div class="skeleton loading-skeleton__avatar" />
+              <div class="skeleton skeleton-line" />
+              <div class="skeleton skeleton-line--long" />
+              <div class="skeleton skeleton-line--medium" />
+            </div>
+          </>
+        )}
+      </div>
       <Show when={!props.messagesOnly}>
         <Show
           when={props.composer}
@@ -53,8 +72,10 @@ export function LoadingSkeleton(
   );
 }
 
-export function ConnectingSplash(props: { status?: string; children?: SolidJSX.Element }) {
-  const content = children(() => props.children);
+export function ConnectingSplash(props: {
+  status?: string;
+  renderContent?: () => SolidJSX.Element;
+}) {
   const basePath = document.documentElement.dataset.openclawControlUiBasePath ?? "";
   const pathname = location.pathname.slice(basePath.length) || "/";
   // The document's inline boot frame uses this same data-free route selection.
@@ -85,8 +106,8 @@ export function ConnectingSplash(props: { status?: string; children?: SolidJSX.E
           <Repeat count={6}>{() => <div class="skeleton skeleton-line" />}</Repeat>
         </aside>
         <div class="connect-splash__main">
-          <LoadingSkeleton composer={route === "chat"}>{content()}</LoadingSkeleton>
-          <Show when={!content()}>
+          <LoadingSkeleton composer={route === "chat"} renderContent={props.renderContent} />
+          <Show when={!props.renderContent}>
             <span
               class="connect-splash__status"
               aria-hidden="true"

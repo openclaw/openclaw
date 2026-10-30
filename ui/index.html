@@ -339,6 +339,7 @@
         position: relative;
         container-type: inline-size;
         min-width: 0;
+        min-height: 0;
         height: 100%;
         background: var(--bg-content, var(--boot-content-bg));
       }
@@ -563,7 +564,10 @@
 
       @media (max-width: 900px) {
         :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
-          .loading-skeleton:has(#openclaw-boot-composer:focus) {
+          .loading-skeleton:has(
+            #openclaw-boot-composer:focus,
+            .loading-skeleton__messages--interactive
+          ) {
           padding-bottom: 6px;
         }
       }
@@ -584,7 +588,10 @@
           border-radius: 20px;
         }
 
-        #openclaw-boot-composer:focus {
+        /* Recovery controls must not move between pointer down and click when
+           the editor loses focus. Keep its editing space while recovery is shown. */
+        #openclaw-boot-composer:focus,
+        .loading-skeleton:has(.loading-skeleton__messages--interactive) #openclaw-boot-composer {
           min-height: 90px;
           max-height: 192px;
           padding: 12px 14px 54px;
