@@ -127,8 +127,9 @@ package/build/manifest identity, CLI version, and retained worker archive digest
 it does not hash every installed runtime file or grant live execution authority.
 
 After a successful bundle install or verification command, pass its stdout and expected
-identity to `readCrabboxRuntimeInstallation`. It accepts exactly one result line
-of at most 16 KiB and rejects mismatched artifacts.
+identity to `readCrabboxRuntimeInstallation`. It accepts exactly one
+`openclaw.runtime-installed:` result line of at most 16 KiB and rejects mismatched
+artifacts. This stdout protocol marker is not an environment variable.
 `parseCrabboxRuntimeInstallation` validates an already decoded result against
 that identity. The receipt records `installed` or `existing-verified`; it is
 evidence of the completed check, not permission to skip future verification.

@@ -25,7 +25,7 @@ const receipt = {
   disposition: "installed",
   ...expected,
 };
-const line = (value: unknown) => `OPENCLAW_RUNTIME_INSTALLED:${JSON.stringify(value)}`;
+const line = (value: unknown) => `openclaw.runtime-installed:${JSON.stringify(value)}`;
 
 describe("native runtime installation receipts", () => {
   it.each(["installed", "existing-verified"])(
@@ -41,7 +41,7 @@ describe("native runtime installation receipts", () => {
   it.each([
     ["missing", "setup output"],
     ["duplicate", `${line(receipt)}\n${line(receipt)}`],
-    ["unbounded", `OPENCLAW_RUNTIME_INSTALLED:${" ".repeat(16384)}`],
+    ["unbounded", `openclaw.runtime-installed:${" ".repeat(16384)}`],
     ["unbounded UTF-8", line({ ...receipt, extra: "🦞".repeat(4096) })],
     ["unverified", line({ ...receipt, installationVerified: false })],
     [

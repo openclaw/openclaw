@@ -49,12 +49,12 @@ export function readCrabboxRuntimeInstallation(
   output: string,
   expected: CrabboxRuntimeInstallationIdentity,
 ): CrabboxRuntimeInstallation {
-  const lines = output.split("\n").filter((line) => line.startsWith("OPENCLAW_RUNTIME_INSTALLED:"));
+  const lines = output.split("\n").filter((line) => line.startsWith("openclaw.runtime-installed:"));
   if (lines.length !== 1 || Buffer.byteLength(lines[0]!, "utf8") > 16384) {
     throw new Error("Native installer must return one bounded runtime installation result");
   }
   return parseCrabboxRuntimeInstallation(
-    JSON.parse(lines[0]!.slice("OPENCLAW_RUNTIME_INSTALLED:".length)),
+    JSON.parse(lines[0]!.slice("openclaw.runtime-installed:".length)),
     expected,
   );
 }
@@ -123,7 +123,7 @@ export const CRABBOX_RUNTIME_VERIFICATION_SOURCE = `
 
   // Project only verification/publication already completed by the installer.
   const reportRuntimeInstallation = (disposition) => {
-    const line = "OPENCLAW_RUNTIME_INSTALLED:" + JSON.stringify({
+    const line = "openclaw.runtime-installed:" + JSON.stringify({
     schema: "openclaw.runtime-installation.v1", installationVerified: true, disposition,
     nodeBootstrap: {
       sha256: bootstrap.sha256, bytes: bootstrap.bytes,

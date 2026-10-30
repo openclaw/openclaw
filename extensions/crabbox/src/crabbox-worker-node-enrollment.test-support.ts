@@ -181,7 +181,7 @@ export async function expectSetupPhases(
   const lines = completed.output
     .trim()
     .split("\n")
-    .filter((line) => !installation || !line.startsWith("OPENCLAW_RUNTIME_INSTALLED:"));
+    .filter((line) => !installation || !line.startsWith("openclaw.runtime-installed:"));
   // Successful bootstrap emits only the bounded diagnostics consumed by the Gateway.
   for (const line of lines) {
     expect(line).toMatch(
