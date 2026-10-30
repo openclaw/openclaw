@@ -170,8 +170,8 @@ export async function prepareWorkspaceBuildGroup(
   await using _ = options.registryResources ? undefined : registryResources;
   registryResources.retainGeneration(reusablePluginGeneration);
   // Borrowing spans the caller's construction; registry acquisition is selected independently.
-  const pluginPreparation = createPluginGenerationMetrics();
-  const preparingRegistries = withPluginGenerationMetrics(pluginPreparation, () =>
+  const preparationMetrics = createPluginGenerationMetrics();
+  const preparingRegistries = withPluginGenerationMetrics(preparationMetrics, () =>
     prepareWorkspacePluginRegistries(
       input,
       pluginMetadataSnapshot,
@@ -194,6 +194,8 @@ export async function prepareWorkspaceBuildGroup(
       ? Object.freeze({ registry: primaryRegistry, resources })
       : undefined;
   const runtimePluginMs = performance.now() - runtimePluginStartedAt;
+  // Descendant tasks can retain the scope after this measured phase has finished.
+  const pluginPreparation = { ...preparationMetrics };
   prepareOwnedPluginLoadContext(
     input,
     env,

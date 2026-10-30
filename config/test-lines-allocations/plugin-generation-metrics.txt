@@ -1,2 +1,2 @@
-108
-# Exact capture/receipt byte accounting in host and worker preparation, and preparation-scope lifetime.
+242
+# Capture/receipt and retained-copy accounting, late lazy capture, and completed runtime-phase metric isolation.

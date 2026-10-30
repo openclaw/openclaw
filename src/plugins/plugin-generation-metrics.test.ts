@@ -8,6 +8,7 @@ import {
   createPluginGenerationMetrics,
   withPluginGenerationMetrics,
 } from "./plugin-generation-metrics.js";
+import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
 import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 
@@ -105,4 +106,52 @@ it("keeps completed preparation metrics unchanged by later lazy capture", async 
   } finally {
     await artifact.disposeAsync();
   }
+});
+
+it("accounts for retained custody copies separately from original bytes", async () => {
+  const directory = fs.realpathSync(temp.make("plugin-preparation-metrics-custody-"));
+  const root = path.join(directory, "plugin");
+  fs.mkdirSync(root);
+  const files: Array<[string, string]> = [
+    ["package.json", '{"name":"fixture"}'],
+    ["index.cjs", "exports.value = 42;"],
+  ];
+  for (const [filename, content] of files) {
+    fs.writeFileSync(path.join(root, filename), content);
+  }
+  const bytes = files.reduce((total, [, content]) => total + Buffer.byteLength(content), 0);
+  await withPluginSourceCaptureStorage({ stateDir: directory, placement: "temporary" }, () =>
+    withPluginGenerationSourceCustody(async () => {
+      const firstMetrics = createPluginGenerationMetrics();
+      const first = withPluginGenerationMetrics(firstMetrics, () =>
+        capturePluginGenerationArtifact(root, undefined, (run) => run()),
+      );
+      try {
+        const metrics = createPluginGenerationMetrics();
+        const second = withPluginGenerationMetrics(metrics, () =>
+          capturePluginGenerationArtifact(root, undefined, (run) => run()),
+        );
+        try {
+          expect(firstMetrics).toMatchObject({ originalBytes: bytes, copiedBytes: bytes * 3 });
+          expect(metrics).toMatchObject({
+            captures: 1,
+            captureReuse: 1,
+            originalBytes: 0,
+            copiedBytes: bytes,
+            receiptPasses: 1,
+            receiptFileReads: 2,
+            receiptReadBytes: bytes,
+          });
+          const entry = path.join(root, "index.cjs");
+          expect(second.resolve(entry)).not.toBe(first.resolve(entry));
+          expect(fs.readFileSync(second.resolve(entry), "utf8")).toBe(files[1]![1]);
+          expect(second.sourceDigest).toBe(first.sourceDigest);
+        } finally {
+          await second.disposeAsync();
+        }
+      } finally {
+        await first.disposeAsync();
+      }
+    }),
+  );
 });
