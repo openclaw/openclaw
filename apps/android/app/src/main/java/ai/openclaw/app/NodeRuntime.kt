@@ -4274,9 +4274,11 @@ class NodeRuntime internal constructor(
         operatorStatusText = "Connecting…"
         operatorConnectionProblem = null
       }
-      connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint)) {
-        beginConnectAttempt(endpoint)
-      }
+      beginConnect(
+        endpoint = endpoint,
+        auth = resolveGatewayConnectAuth(endpoint),
+        intent = intent,
+      )
     }
   }
 
