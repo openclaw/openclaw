@@ -200,6 +200,10 @@ const diagnostics: Diagnostic[] = [
         "error: RPC failed; curl 92 HTTP/2 stream 5 was not closed cleanly\nfatal: early EOF",
         "EOF; RPC failed; early EOF",
       ],
+      [
+        "private-user@private-host.example: Permission denied (publickey,private-host).\nCONFLICT (/home/private-user/secret): openclaw-staging",
+        "Permission denied",
+      ],
     ] as const
   ).map(([stderr, cause]) => ({
     name: `git clone cause ${cause}`,
