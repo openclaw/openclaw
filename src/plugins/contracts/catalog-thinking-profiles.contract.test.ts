@@ -117,3 +117,49 @@ it("sends a row without a default thinking level to its provider hook", () => {
     defaultLevel: undefined,
   });
 });
+
+// Plugins that still resolve thinking in code. Each serves routes or runtimes its rows cannot
+// describe yet (rowless aggregator or cloud routes, unlisted releases, runtime-dependent ladders).
+// A new provider states its profile on its manifest rows instead; remove an entry when its hook goes.
+const PLUGINS_WITH_THINKING_HOOKS = new Set([
+  "amazon-bedrock",
+  "anthropic",
+  "anthropic-vertex",
+  "baseten",
+  "clawrouter",
+  "fireworks",
+  "github-copilot",
+  "google",
+  "kimi-coding",
+  "meta",
+  "microsoft-foundry",
+  "minimax",
+  "moonshot",
+  "ollama",
+  "openai",
+  "opencode",
+  "opencode-go",
+  "openrouter",
+  "qwen",
+  "vercel-ai-gateway",
+  "vllm",
+  "xai",
+  "xiaomi",
+  "zai",
+]);
+
+it("adds no provider thinking hook where catalog rows can own the profile", () => {
+  const files = listGitTrackedFiles({ repoRoot, pathspecs: "extensions" }) ?? [];
+  const withHooks = new Set(
+    files
+      .filter((file) => /^extensions\/[^/]+\/.+\.ts$/.test(file) && !/\.test\.ts$|test-/.test(file))
+      .filter((file) =>
+        fs.readFileSync(path.join(repoRoot, file), "utf8").includes("resolveThinkingProfile"),
+      )
+      .map((file) => file.split("/")[1]),
+  );
+  expect(
+    [...withHooks].toSorted(),
+    "Put the thinking profile on manifest rows (compat.defaultThinkingLevel / compat.thinkingLevels; src/plugins/AGENTS.md). A hook needs a reason rows cannot express; then update this list.",
+  ).toEqual([...PLUGINS_WITH_THINKING_HOOKS].toSorted());
+});
