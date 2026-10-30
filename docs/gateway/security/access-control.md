@@ -30,7 +30,7 @@ Prefer pairing + allowlists for DMs. For groups, decide by membership, not by ch
 
 ### Allowlists (two layers)
 
-- **DM allowlist** (`allowFrom` / `channels.discord.allowFrom` / `channels.slack.allowFrom`; legacy: `channels.discord.dm.allowFrom`, `channels.slack.dm.allowFrom`): who can DM the bot. When `dmPolicy="pairing"`, approvals write to `~/.openclaw/credentials/<channel>-allowFrom.json` (default account) or `<channel>-<accountId>-allowFrom.json` (non-default accounts), merged with config allowlists.
+- **DM allowlist** (`allowFrom` / `channels.discord.allowFrom` / `channels.slack.allowFrom`; legacy: `channels.discord.dm.allowFrom`, `channels.slack.dm.allowFrom`): who can DM the bot. For channels using OpenClaw's pairing API, `dmPolicy="pairing"` approvals write to `channel_pairing_allow_entries` in `~/.openclaw/state/openclaw.sqlite`, scoped by channel and account and combined with config allowlists. Legacy credentials JSON files are migration sources, not a live allowlist; see [Pairing state](/channels/pairing#where-the-state-lives).
 - **Group allowlist** (channel-specific): which groups/channels/guilds the bot accepts at all.
   - `channels.whatsapp.groups`, `channels.telegram.groups`, `channels.imessage.groups`: per-group defaults like `requireMention`; when set, also acts as a group allowlist (include `"*"` to keep allow-all behavior). Customize mention triggers with `agents.entries.*.groupChat.mentionPatterns` (for example `["@openclaw", "@mybot"]`) so `requireMention` gates on your own bot names.
   - `groupPolicy="allowlist"` + `groupAllowFrom`: restrict who can trigger the bot inside a group session (WhatsApp/Telegram/Signal/iMessage/Microsoft Teams).
