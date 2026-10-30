@@ -38,6 +38,7 @@ const repositoryScriptEntries = [
   "scripts/bench-duplicate-paragraphs.mts!",
   "scripts/perf/anthropic-request-construction.ts!",
   "scripts/perf/auth-file-watch-events-measure.ts!",
+  "scripts/perf/board-read-admission-measure.ts!",
   "scripts/perf/catalog-worker-churn-measure.mjs!",
   "scripts/perf/code-mode-control-schema-measure.ts!",
   "scripts/perf/code-mode-result-load-measure.ts!",
