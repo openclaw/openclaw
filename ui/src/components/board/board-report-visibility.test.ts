@@ -57,8 +57,8 @@ it("defers fixed reports until nearby, then retains their body and current conte
   expect(target.getAttribute("style")).toContain("grid-row: 1 / span 4");
   expect(cell.querySelector("openclaw-report-widget")).toBeNull();
   expect(cell.querySelector(".board-widget__menu-trigger")).toBeNull();
-  expect(cell.querySelector(".board-widget__chrome")).toBeNull();
-  expect(cell.querySelector(".board-widget__resize-handle")).toBeNull();
+  expect(cell.querySelector(".board-widget__chrome")).not.toBeNull();
+  expect(cell.querySelector(".board-widget__resize-handle")).not.toBeNull();
   const observer = observers.find(({ targets }) => targets.has(target));
   observer!.deliver(target);
   await cell.updateComplete;

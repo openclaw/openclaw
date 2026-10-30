@@ -607,7 +607,7 @@ function BoardWidgetCellContent(
         onFocus={() => props.callbacks!.focusChanged(props.widget!.name)}
         onKeyDown={keyDown}
       >
-        <Show when={!props.pageChrome && reportReady()}>
+        <Show when={!props.pageChrome}>
           <div class="board-widget__chrome">
             <header class="board-widget__bar">
               <Show when={canMutate()}>
@@ -631,7 +631,7 @@ function BoardWidgetCellContent(
                     : t("board.widget.kindHtml")}
               </span>
               <BoardGrantedCapabilities widget={props.widget!} />
-              <Show when={canMutate()}>
+              <Show when={canMutate() && reportReady()}>
                 <BoardWidgetMenu
                   widget={props.widget!}
                   tabs={props.tabs ?? []}
@@ -670,7 +670,7 @@ function BoardWidgetCellContent(
             </div>
           </Show>
         </div>
-        <Show when={canMutate() && !props.pageChrome && reportReady()}>
+        <Show when={canMutate() && !props.pageChrome}>
           <span
             class="board-widget__resize-handle"
             aria-hidden="true"
@@ -678,7 +678,7 @@ function BoardWidgetCellContent(
             onPointerDown={(event) => props.callbacks!.resizePointerDown(props.widget!, event)}
           />
         </Show>
-        <Show when={props.widget!.grantState === "granted" && !props.pageChrome && reportReady()}>
+        <Show when={props.widget!.grantState === "granted" && !props.pageChrome}>
           <span class="board-widget__grant-dot" aria-hidden="true" />
         </Show>
       </section>
