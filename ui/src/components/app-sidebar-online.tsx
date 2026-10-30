@@ -46,6 +46,7 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
         <Picker
           id="sidebar-people-presence"
           class="sidebar-session-owner-filter"
+          triggerIcon="chevronsUpDown"
           label={t("presence.usersTitle")}
           value={host.people.presenceFilter}
           sheet={isMobileNavLayout()}

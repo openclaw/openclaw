@@ -6,6 +6,7 @@ import { resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import type { ThinkingCatalogEntry } from "../../auto-reply/thinking.shared.js";
 import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
 import type { ProviderThinkingRegistry } from "../provider-thinking.types.js";
+import { resolveProviderContractProvidersForPluginIds } from "./registry.js";
 
 // Rows that set compat.defaultThinkingLevel own their thinking profile; no provider hook runs.
 // Each expectation is the profile the deleted provider hook returned for that row.
@@ -27,6 +28,12 @@ const EXPECTED: Record<string, { levels: string[]; defaultLevel: string }> = {
   "moonshot/kimi-k3": { levels: ["max"], defaultLevel: "max" },
   "moonshot/kimi-k3.1-pro": { levels: ["max"], defaultLevel: "max" },
   "moonshot/kimi-k3.1-pro-highspeed": { levels: ["max"], defaultLevel: "max" },
+  "xai/grok-4.7": { levels: ["low", "medium", "high", "xhigh"], defaultLevel: "high" },
+  "xai/grok-4.6": { levels: ["low", "medium", "high", "xhigh"], defaultLevel: "high" },
+  "xai/grok-4.5": { levels: ["low", "medium", "high"], defaultLevel: "high" },
+  "xai/grok-build-0.1": { levels: ["off"], defaultLevel: "off" },
+  "xai/grok-4.3": { levels: ["off", "minimal", "low", "medium", "high"], defaultLevel: "low" },
+  "xai/grok-4.20-0309-reasoning": { levels: ["off"], defaultLevel: "off" },
 };
 
 function kimiK3(off: boolean) {
@@ -111,3 +118,70 @@ it("sends a row without a default thinking level to its provider hook", () => {
     defaultLevel: undefined,
   });
 });
+
+// Plugins that still resolve thinking in code. Each serves routes or runtimes its rows cannot
+// describe yet (rowless aggregator or cloud routes, unlisted releases, runtime-dependent ladders).
+// A new provider states its profile on its manifest rows instead; remove an entry when its hook goes.
+const PLUGINS_WITH_THINKING_HOOKS = new Set([
+  "amazon-bedrock",
+  "anthropic",
+  "anthropic-vertex",
+  "baseten",
+  "clawrouter",
+  "fireworks",
+  "github-copilot",
+  "google",
+  "kimi-coding",
+  "meta",
+  "microsoft-foundry",
+  "minimax",
+  "moonshot",
+  "ollama",
+  "openai",
+  "opencode",
+  "opencode-go",
+  "openrouter",
+  "qwen",
+  "vercel-ai-gateway",
+  "vllm",
+  "xai",
+  "xiaomi",
+  "zai",
+]);
+
+// A hook is registered on the provider, or exported from the plugin's policy artifact, which the
+// thinking resolver loads before plugin runtime.
+async function listPluginsWithThinkingHooks(): Promise<string[]> {
+  const files = listGitTrackedFiles({ repoRoot, pathspecs: "extensions" }) ?? [];
+  const withHooks: string[] = [];
+  for (const file of files.filter((f) => /^extensions\/[^/]+\/openclaw\.plugin\.json$/.test(f))) {
+    const manifest = JSON.parse(fs.readFileSync(path.join(repoRoot, file), "utf8")) as {
+      id: string;
+      providers?: unknown[];
+    };
+    if ((manifest.providers?.length ?? 0) === 0) {
+      continue;
+    }
+    const pluginDir = path.dirname(file);
+    const policyPath = path.join(repoRoot, pluginDir, "provider-policy-api.ts");
+    const policy = fs.existsSync(policyPath)
+      ? ((await import(policyPath)) as { resolveThinkingProfile?: unknown })
+      : undefined;
+    if (
+      typeof policy?.resolveThinkingProfile === "function" ||
+      resolveProviderContractProvidersForPluginIds([manifest.id]).some(
+        (provider) => provider.resolveThinkingProfile,
+      )
+    ) {
+      withHooks.push(path.basename(pluginDir));
+    }
+  }
+  return withHooks.toSorted((a, b) => a.localeCompare(b));
+}
+
+it("adds no provider thinking hook where catalog rows can own the profile", async () => {
+  expect(
+    await listPluginsWithThinkingHooks(),
+    "Put the thinking profile on manifest rows (compat.defaultThinkingLevel / compat.thinkingLevels; src/plugins/AGENTS.md). A hook needs a reason rows cannot express; then update this list.",
+  ).toEqual([...PLUGINS_WITH_THINKING_HOOKS].toSorted((a, b) => a.localeCompare(b)));
+}, 120_000);

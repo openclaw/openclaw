@@ -282,6 +282,7 @@ type EnglishCatalog = TranslationMap & {
       | "withMoreParticipants"
       | "snoozeWakes"
       | "snoozeTomorrowTime"
+      | "snoozeTomorrow"
       | "user"
       | "assistant"
       | "opensAsDashboard"
@@ -723,6 +724,7 @@ const startupEnglish = {
     withMoreParticipants: "+{count} more",
     snoozeWakes: "Wakes {time}",
     snoozeTomorrowTime: "tomorrow {time}",
+    snoozeTomorrow: "Tomorrow",
     user: "User",
     assistant: "Assistant",
     opensAsDashboard: "Opens as dashboard",

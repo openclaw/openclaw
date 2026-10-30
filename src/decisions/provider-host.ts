@@ -395,19 +395,23 @@ export class DecisionProviderHost {
         // Await physical settlement. A callback that ignores abort keeps its native lease
         // and is fenced by normal failed-drain recovery, never detached as "disposed".
         let outcome;
+        const provider = this.provider;
         const v1Batch =
           version === 1
             ? (submitted as DecisionBatch) // SAFETY: The V1 entry point supplies a V1 batch for version 1.
-            : decisionBatchV2ToV1(
-                submitted as DecisionBatchV2, // SAFETY: The V2 entry point supplies a V2 batch for version 2.
-              );
+            : provider.contractVersion === 1
+              ? decisionBatchV2ToV1(
+                  submitted as DecisionBatchV2, // SAFETY: The V2 entry point supplies a V2 batch for version 2.
+                )
+              : undefined;
         const v2Batch =
           version === 2
             ? (submitted as DecisionBatchV2) // SAFETY: The V2 entry point supplies a V2 batch for version 2.
-            : decisionBatchV1ToV2(
-                submitted as DecisionBatch, // SAFETY: The V1 entry point supplies a V1 batch for version 1.
-              );
-        const provider = this.provider;
+            : provider.contractVersion === 2
+              ? decisionBatchV1ToV2(
+                  submitted as DecisionBatch, // SAFETY: The V1 entry point supplies a V1 batch for version 1.
+                )
+              : undefined;
         if (
           (provider.contractVersion === 1 &&
             (!v1Batch || (options.reasoning !== undefined && options.reasoning !== "auto"))) ||
@@ -415,9 +419,11 @@ export class DecisionProviderHost {
         ) {
           return this.unavailable("unsupported-input");
         }
-        // Keep offered questions separate from provider-mutated input for both contracts.
-        const offeredV1 = v1Batch ? structuredClone(v1Batch) : undefined;
-        const offeredV2 = v2Batch ? structuredClone(v2Batch) : undefined;
+        // V1 validation and cross-version conversion need the executor's original questions.
+        // Same-version V2 validation retains its snapshot in executePreparedDecision.
+        const offeredV1 =
+          provider.contractVersion === 1 && v1Batch ? structuredClone(v1Batch) : undefined;
+        const offeredV2 = version === 1 && v2Batch ? structuredClone(v2Batch) : undefined;
         const admissible = () => {
           observedInterruption ??= interrupted();
           return observedInterruption === undefined;

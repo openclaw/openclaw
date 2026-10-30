@@ -150,3 +150,28 @@ it("keeps Moonshot K3 max-only for a configured map written for the earlier hook
   });
   expect(profile.levels.map(({ id }) => id).filter((id) => id !== "ultra")).toEqual(["max"]);
 });
+
+it("lets a configured effort list replace the profile a bundled Grok row owns", () => {
+  const cfg: OpenClawConfig = {
+    models: {
+      providers: {
+        xai: {
+          baseUrl: "https://api.x.ai/v1",
+          models: [
+            { ...savedRow("grok-4.3"), compat: { supportedReasoningEfforts: ["none", "high"] } },
+          ],
+        },
+      },
+    },
+  };
+  const params = { provider: "xai", model: "grok-4.3" };
+  const profile = resolveThinkingProfile({
+    ...params,
+    catalog: buildThinkingCatalog({ cfg, ...params }),
+  });
+  expect(profile.levels.map(({ id }) => id).filter((id) => id !== "ultra")).toEqual([
+    "off",
+    "high",
+  ]);
+  expect(profile.defaultLevel).toBe("high");
+});

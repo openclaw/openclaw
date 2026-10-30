@@ -33,6 +33,8 @@ export type SessionEventOutcome = {
   status: "completed" | "failed" | "cancelled";
   executionStarted: boolean;
   delivered: boolean;
+  /** The settled answer was committed by the existing conversation-result writer. */
+  conversationResultCommitted?: true;
   summary?: string;
   nextCheckMs?: number;
   sourceDeliveryOutcome?: SourceDeliveryOutcome;

@@ -34,7 +34,6 @@ export function renderSidebarSessionIndicators(
     sidebarSessionBadgeFacts(
       host().sessionPullRequests,
       readSession(),
-      team(),
       readSession().pullRequest ?? readDisplay?.()?.pullRequest,
     ),
   );
@@ -135,7 +134,9 @@ export function renderSidebarSessionIndicators(
   const hasTrail = createMemo(
     () =>
       snoozed() ||
+      // A finished child's duration is history; the row keeps only live elapsed time.
       (readSession().isChild &&
+        readSession().hasActiveRun &&
         (readSession().runtimeMs != null || readSession().startedAt != null)),
   );
   const metaId = createMemo(() =>
@@ -148,8 +149,13 @@ export function renderSidebarSessionIndicators(
     <span class="sidebar-session-indicator">
       {leadingIndicator}
       {readSession().visibility === "draft" ? (
-        <span class="session-row-draft-indicator" title={t("chat.sessionSharing.draft")}>
-          👻
+        <span
+          class="session-row-draft-indicator"
+          role="img"
+          aria-label={t("chat.sessionSharing.draft")}
+          title={t("chat.sessionSharing.draft")}
+        >
+          {sessionIcon("circleDashed", 14, 2)}
         </span>
       ) : undefined}
     </span>
@@ -181,11 +187,22 @@ export function renderSidebarSessionIndicators(
   const trail = createMemo(() => {
     const currentSession = readSession();
     return hasTrail() ? (
-      <span class="session-row-trail" id={metaId()}>
+      <span
+        class={["session-row-trail", { "session-row-trail--snooze": snoozed() }]}
+        id={metaId()}
+        title={
+          snoozed()
+            ? t("sessionsView.snoozeWakes", {
+                time: formatSessionSnoozeWakeTime(readSession().snoozedUntil!),
+              })
+            : undefined
+        }
+      >
         {snoozed() ? (
-          t("sessionsView.snoozeWakes", {
-            time: formatSessionSnoozeWakeTime(readSession().snoozedUntil!),
-          })
+          <>
+            {sessionIcon("moon", 13, 2)}
+            {formatSessionSnoozeWakeTime(readSession().snoozedUntil!, new Date(), true)}
+          </>
         ) : currentSession.runtimeMs != null ? (
           currentSession.hasActiveRun ? (
             <ElapsedTime startMs={currentSession.runtimeSampledAt! - currentSession.runtimeMs} />
@@ -217,6 +234,7 @@ export function renderSidebarSessionIndicators(
             prop:sessionKey={readSession().key}
             prop:excludeIdentities={renderedIdentities() ?? EMPTY_VIEWER_IDENTITIES}
             prop:maxVisible={3}
+            prop:overflowInSlots={true}
             variant="session"
           />
           {team() ? originIndicators : undefined}

@@ -414,6 +414,14 @@ function renderCatalogHostGroup(
                     : null;
               });
               const collapsed = createMemo(() => collapsedSectionId() !== null);
+              const activity = createMemo(() =>
+                catalogSessionActivity(
+                  group().sessions,
+                  readLiveRowsByKey(),
+                  (row) =>
+                    params.host.sessionDataContext?.sessions.isRunVisuallyActive(row) ?? false,
+                ),
+              );
               return (
                 <div class="sidebar-session-catalog-project" role="listitem">
                   <button
@@ -428,6 +436,13 @@ function renderCatalogHostGroup(
                       {collapsed() ? <Icon name="chevronRight" /> : <Icon name="chevronDown" />}
                     </span>
                     <span class="sidebar-session-catalog-project__label">{group().label}</span>
+                    <Show when={collapsed() && activity().running}>
+                      <span
+                        class="session-run-spinner"
+                        role="img"
+                        aria-label={t("sessionsView.activeRun")}
+                      />
+                    </Show>
                     <span class="sidebar-session-catalog-project__count" aria-hidden="true">
                       {group().sessions.length}
                     </span>
@@ -541,22 +556,19 @@ function renderCatalogGroup(
         sectionId={sectionId()}
         sectionHeaders={params.host.sessionOrganizer.sectionHeaders}
         status={
-          hasError() || (collapsed() && rows().length > 0)
+          hasError()
             ? {
-                label: hasError() ? `${readCatalog().label}: ${errorHelp()}` : readCatalog().label,
+                label: `${readCatalog().label}: ${errorHelp()}`,
                 expanded: !collapsed(),
-                title: hasError() ? errorHelp() : undefined,
+                title: errorHelp(),
                 onToggle: () => params.host.toggleSection(sectionId()),
                 content: (
                   <span
-                    class={[
-                      "sidebar-session-group-count",
-                      { "sidebar-session-group-count--error": hasError() },
-                    ]}
-                    data-session-catalog-error={hasError() ? readCatalog().id : undefined}
+                    class="sidebar-session-group-count sidebar-session-group-count--error"
+                    data-session-catalog-error={readCatalog().id}
                     aria-hidden="true"
                   >
-                    {hasError() ? <Icon name="alertTriangle" /> : rows().length}
+                    <Icon name="alertTriangle" />
                   </span>
                 ),
               }

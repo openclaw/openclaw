@@ -82,6 +82,12 @@ While automatic reconnection is running, the indicator shows **Reconnecting…**
 with the sidebar's standard spinner and without a Retry button. **Retry** remains available when automatic recovery stops.
 A required page refresh keeps its separate refresh action.
 
+During an update, a protected conversation link waits for its selected agent's
+read readiness before serving the refreshed app. Access is checked again after
+that wait. If preparation outlasts the browser request or the connection fails,
+the existing reload or login action remains available; the wait does not grant
+access to an unavailable conversation.
+
 A saved chat can restore its archived or read-only composer and parent breadcrumb
 while reconnecting. These saved display facts never authorize actions; live session
 state replaces them when the connection returns.
