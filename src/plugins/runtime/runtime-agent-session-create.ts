@@ -267,7 +267,11 @@ export async function createRuntimeSessionEntry(
           let recovered = false;
           let created: { key: string; agentId: string; entry: SessionEntry };
           if (matchingEntry) {
-            const expectedSpawnedCwd = params.spawnedCwd?.trim() || undefined;
+            // Match the literal value, plus the trimmed form rows persisted before
+            // the gateway kept spawnedCwd literal, so crash recovery still finalizes
+            // those initializing entries.
+            const expectedSpawnedCwd = params.spawnedCwd?.trim() ? params.spawnedCwd : undefined;
+            const expectedLegacySpawnedCwd = expectedSpawnedCwd?.trim();
             const expectedSessionRoot = params.sessionRoot?.trim() || undefined;
             const expectedExecNode = params.execNode?.trim() || undefined;
             const expectedExecCwd = params.execCwd?.trim() || undefined;
@@ -294,7 +298,8 @@ export async function createRuntimeSessionEntry(
               (!acpInitial ||
                 (isDeepStrictEqual(matchingEntry.acpSessionBinding, persistedAcpBinding) &&
                   (matchingAcpMeta === undefined || acpMetaMatches(matchingAcpMeta)))) &&
-              matchingEntry.spawnedCwd === expectedSpawnedCwd &&
+              (matchingEntry.spawnedCwd === expectedSpawnedCwd ||
+                matchingEntry.spawnedCwd === expectedLegacySpawnedCwd) &&
               matchingEntry.sessionRoot === expectedSessionRoot &&
               matchingEntry.permissionMode === params.permissionMode &&
               matchingEntry.execNode === expectedExecNode &&

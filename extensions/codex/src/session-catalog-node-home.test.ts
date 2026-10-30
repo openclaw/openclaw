@@ -1,5 +1,7 @@
 import { sessionCatalogAdoptedSessionKey } from "openclaw/plugin-sdk/session-catalog";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { asOptionalRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expect, it, vi } from "vitest";
 import { CODEX_CLI_SESSION_SOURCE_CAPABILITY } from "./node-cli-sessions.js";
 import {
@@ -141,14 +143,25 @@ function createHomeFixture(options: HomeWire = {}, entries: EntrySummary[] = [])
   };
 }
 
-it("preserves literal whitespace in the adopted node session cwd", async () => {
-  const fixture = createHomeFixture({ sessionCwd: " /tmp/oc-proof " });
-  await fixture.adopt(homeA);
+it.each([
+  ["literal trailing space survives", "/tmp/job "],
+  ["trimmed sibling stays trimmed", "/tmp/job"],
+])("persists the adopted cwd in the transcript header (%s)", async (_name, sessionCwd) => {
+  const fixture = createHomeFixture({ sessionCwd });
+  const adopted = await fixture.adopt(homeA);
 
-  // The transcript header cwd feeds the session manager's filesystem identity;
-  // the session-entry spawnedCwd is normalized by the core session owner and is
-  // intentionally out of scope for this owner.
-  expect(importHistory).toHaveBeenCalledWith(expect.objectContaining({ cwd: " /tmp/oc-proof " }));
+  // Read the header back from the real session store. Creation initializes it
+  // before afterCreate runs, so a value trimmed anywhere on this path would
+  // persist the wrong directory identity for the session manager.
+  const events = await readSessionTranscriptEvents({
+    sessionKey: adopted.sessionKey,
+    sessionId: fixture.entry(adopted.sessionKey).sessionId,
+    storePath: resolveStorePath(undefined, { agentId: "main" }),
+  });
+  const header = events
+    .map((event) => asOptionalRecord(event))
+    .find((event) => event?.type === "session");
+  expect(header?.cwd).toBe(sessionCwd);
 });
 
 it("rejects stale locators and keeps copied ids in separate chats with their own history", async () => {

@@ -106,6 +106,7 @@ import {
   validateSessionCreateIncognitoTarget,
 } from "./session-create-target.js";
 import { resolveSessionCreateVisibility } from "./session-create-visibility.js";
+import { resolveSpawnedCwd } from "./session-cwd-identity.js";
 import {
   prepareGatewaySessionLifecycleTargets,
   projectPreparedSessionWorkspace,
@@ -603,9 +604,7 @@ async function createGatewaySessionInScope(
     }
     preparedLifecycle = preparationResult?.value;
     const pendingWorktree = preparedLifecycle?.pendingWorktree ?? params.pendingWorktree;
-    const spawnedCwd = normalizeOptionalString(
-      preparedLifecycle?.spawnedCwd ?? params.spawnedCwd ?? inheritedWorkspace?.spawnedCwd,
-    );
+    const spawnedCwd = resolveSpawnedCwd(preparedLifecycle, params, inheritedWorkspace);
     const sessionRoot = normalizeOptionalString(
       preparedLifecycle?.sessionRoot ??
         params.sessionRoot ??

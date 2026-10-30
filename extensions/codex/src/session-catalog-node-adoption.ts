@@ -294,7 +294,9 @@ export async function createOrReuseNodeAdoptedSession(params: {
       agentId: params.agentId,
       recoverMatchingInitialEntry: true,
       displayName: params.record.name ?? undefined,
-      ...(params.record.cwd?.trim() ? { spawnedCwd: params.record.cwd.trim() } : {}),
+      // Only a blank cwd counts as absent; the literal value is the directory
+      // identity and must survive into the persisted transcript header.
+      ...(params.record.cwd?.trim() ? { spawnedCwd: params.record.cwd } : {}),
       initialEntry: {
         agentHarnessId: "codex",
         modelSelectionLocked: true,
