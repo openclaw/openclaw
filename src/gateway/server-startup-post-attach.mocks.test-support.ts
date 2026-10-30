@@ -13,11 +13,6 @@ const postAttachMocks = vi.hoisted(() => {
     start: vi.fn(),
     stop: vi.fn(async () => {}),
   };
-  const createRecoveryProgress = (settled = Promise.resolve(), initial = settled) => ({
-    initial,
-    pending: new Map<string, Promise<void>>(),
-    settled,
-  });
   return {
     startPluginServices: vi.fn<typeof import("../plugins/services.js").startPluginServices>(
       async (params) => {
@@ -36,12 +31,8 @@ const postAttachMocks = vi.hoisted(() => {
     updateCheck,
     createGatewayUpdateCheck: vi.fn(() => updateCheck),
     logGatewayStartup: vi.fn(),
-    activateSubagentRegistry: vi.fn(() => createRecoveryProgress()),
-    recoverExecExitNotifications: vi.fn(() => createRecoveryProgress()),
-    recoverSessionSendDeliveries: vi.fn(() => createRecoveryProgress()),
-    createRecoveryProgress,
-    markStartupOrphanedMainSessionsForRecovery: vi.fn(async () => ({ marked: 0, skipped: 0 })),
-    scheduleRestartAbortedMainSessionRecovery: vi.fn(),
+    activateSubagentRegistry: vi.fn(async () => {}),
+    resumeMarkedSessions: vi.fn(async () => {}),
     getAcpRuntimeBackend: vi.fn<(id?: string) => unknown>(() => null),
     reconcilePendingSessionIdentities: vi.fn(async () => ({ checked: 0, resolved: 0, failed: 0 })),
     isCliProvider: vi.fn(() => false),
@@ -68,31 +59,14 @@ vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
   activateSubagentRegistry: postAttachMocks.activateSubagentRegistry,
 }));
 
-// mock-isolation: Keep persisted exec-exit scans outside startup ordering; the owner has dedicated tests.
-vi.mock("../agents/bash-tools.exec-notify.js", () => ({
-  recoverExecExitNotifications: postAttachMocks.recoverExecExitNotifications,
-}));
-
-// mock-isolation: Keep persisted delivery scans outside this startup fixture's partial Gateway context.
-vi.mock("./session-send-recovery.js", () => ({
-  recoverSessionSendDeliveries: postAttachMocks.recoverSessionSendDeliveries,
-}));
-
 // mock-isolation: This worker-free ordering fixture has no pending agent deletions.
 vi.mock("./server-agent-deletion-recovery.js", () => ({
   resumeAgentDeletions: vi.fn(async () => {}),
 }));
 
-// mock-isolation: Observe recovery scheduling without replaying saved inputs or starting sweep timers.
-vi.mock("../agents/main-session-recovery/main-session-restart-recovery.js", () => ({
-  scheduleRestartAbortedMainSessionRecovery:
-    postAttachMocks.scheduleRestartAbortedMainSessionRecovery,
-}));
-
-// mock-isolation: Control the orphan-marking barrier without mutating persisted session journals.
-vi.mock("../agents/main-session-recovery/main-session-restart-recovery-marking.js", () => ({
-  markStartupOrphanedMainSessionsForRecovery:
-    postAttachMocks.markStartupOrphanedMainSessionsForRecovery,
+// mock-isolation: Acceptance E2E owns persisted marker admission; startup fixtures use partial contexts.
+vi.mock("./session-restart-resume.js", () => ({
+  resumeMarkedSessions: postAttachMocks.resumeMarkedSessions,
 }));
 
 vi.mock("../config/paths.js", async () => {

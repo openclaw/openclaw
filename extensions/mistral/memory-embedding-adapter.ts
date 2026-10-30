@@ -1,7 +1,6 @@
 import {
   createRemoteEmbeddingProvider,
   embeddingProviderOwnsDestination,
-  isMissingEmbeddingApiKeyError,
   normalizeEmbeddingModelWithPrefixes,
   resolveRemoteEmbeddingClient,
   sanitizeEmbeddingCacheHeaders,
@@ -19,8 +18,6 @@ export const mistralMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapt
   transport: "remote",
   authProviderId: "mistral",
   autoSelectPriority: 50,
-  allowExplicitWhenConfiguredAuto: true,
-  shouldContinueAutoSelection: isMissingEmbeddingApiKeyError,
   create: async (options) => {
     const preparedOptions: MemoryEmbeddingProviderCreateOptions = {
       ...options,

@@ -1,14 +1,17 @@
 import fs from "node:fs";
 import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
+import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import { resolveDoctorRepairMode } from "../commands/doctor-repair-mode.js";
 import { resolveIsNixMode, resolveStateDir } from "../config/paths.js";
+import { formatDoctorProgressPhase, type DoctorProgressMeasure } from "../infra/doctor-progress.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
-import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
+import { resolveCommandProcessSignal, withCommandProcessScope } from "../process/exec-spawn.js";
 import { createNonExitingRuntime, defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
@@ -42,6 +45,15 @@ export async function withDoctorProgress<T>(
   }
 }
 
+export function createDoctorProgressMeasure(options: DoctorOptions): DoctorProgressMeasure {
+  return (name, run) =>
+    withDoctorProgress(
+      formatDoctorProgressPhase(name),
+      () => measureGatewayBootstrapStep(name, run),
+      options.json !== true,
+    );
+}
+
 export function exitDoctorHealthFlow(runtime: RuntimeEnv, code: number): void {
   if (runtime === defaultRuntime) {
     exitCliAfterOutput(runtime, code);
@@ -55,6 +67,26 @@ function stateDirectoryExistsAtDoctorStart(): boolean {
   } catch {
     return false;
   }
+}
+
+// These reads precede maintenance custody; timing out must never abandon a repair.
+function readDoctorStartup<T>(
+  phase: string,
+  read: (signal?: AbortSignal) => Promise<T>,
+): Promise<T> {
+  return withCommandProcessScope(async () => {
+    const signal = resolveCommandProcessSignal();
+    return raceWithTimeout(
+      () => read(signal),
+      60_000,
+      () => {
+        throw new Error(
+          `Doctor startup timed out after 60000ms (${phase}). Retry with OPENCLAW_DEBUG=1 openclaw doctor --lint; if it still stalls, capture a Node diagnostic report before retrying repairs.`,
+        );
+      },
+      { signal },
+    );
+  }, getAsyncWorkSignal());
 }
 
 export async function prepareDoctorHealthFlow(
@@ -71,11 +103,14 @@ export async function prepareDoctorHealthFlow(
   // Preserve the entry fact so doctor can report that automatic initialization.
   const stateDirExistedAtStart = stateDirectoryExistsAtDoctorStart();
   showIntro("OpenClaw doctor");
-  const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
-  const root = await resolveOpenClawPackageRoot({
-    moduleUrl: import.meta.url,
-    argv1: process.argv[1],
-    cwd: process.cwd(),
+  const root = await readDoctorStartup("package root", async (signal) => {
+    const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
+    return resolveOpenClawPackageRoot({
+      moduleUrl: import.meta.url,
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+      signal,
+    });
   });
   if (
     resolveIsNixMode() &&
@@ -90,14 +125,15 @@ export async function prepareDoctorHealthFlow(
   if (!resolveDoctorRepairMode(options).updateInProgress) {
     // Source-only config reads avoid database admission and plugin validation: show
     // configured startup dependencies before offline maintenance and repair prompts.
-    const [{ readSourceConfigBestEffort }, { inspectDoctorTailscalePrerequisite }] =
-      await Promise.all([
-        import("../config/io.runtime.js"),
-        import("../commands/doctor-tailscale.js"),
-      ]);
-    const prerequisite = await inspectDoctorTailscalePrerequisite(
-      await readSourceConfigBestEffort(),
-    );
+    const config = await readDoctorStartup("source config", async () => {
+      const { readSourceConfigBestEffort } = await import("../config/io.runtime.js");
+      return readSourceConfigBestEffort();
+    });
+    const prerequisite = await readDoctorStartup("Tailscale prerequisite", async () => {
+      const { inspectDoctorTailscalePrerequisite } =
+        await import("../commands/doctor-tailscale.js");
+      return inspectDoctorTailscalePrerequisite(config);
+    });
     if (prerequisite) {
       const { note } = await import("../../packages/terminal-core/src/note.js");
       note(prerequisite, "Gateway startup prerequisite");
@@ -158,11 +194,16 @@ export async function prepareDoctorInteractiveMaintenance(params: {
   };
 }
 
-export function showDoctorConfigWriteRefusal(
+export function showDoctorRepairRefusal(
   ctx: DoctorHealthFlowContext,
 ): UpdatePostInstallDoctorResult | undefined {
   if (!ctx.configWriteRefusal) {
-    return undefined;
+    if (ctx.postInstallDoctorResult?.status !== "error") {
+      return undefined;
+    }
+    showDoctorHealthSummary(ctx);
+    showDoctorOutro("Doctor blocked; required repairs remain incomplete.");
+    return ctx.postInstallDoctorResult;
   }
   showDoctorHealthSummary(ctx);
   showDoctorOutro(
@@ -257,8 +298,8 @@ export async function prepareDoctorRuntimeChecks(
   prompter: DoctorPrompter,
   options: DoctorOptions,
 ) {
-  const measure = <T>(label: string, run: () => T | Promise<T>) =>
-    withDoctorProgress(label, run, options.json !== true);
+  const measure: DoctorProgressMeasure = (label, run) =>
+    withDoctorProgress(formatDoctorProgressPhase(label), run, options.json !== true);
   const { repairDoctorAgentDeletionJournal } =
     await import("../commands/doctor-agent-deletion-journal.js");
   const deletionJournal = await measure("Agent deletion journal", () =>

@@ -6,7 +6,8 @@ import { formatAssistantErrorText, formatUserFacingAssistantErrorText } from "./
 
 const { toolPolicyAuditInfo } = vi.hoisted(() => ({ toolPolicyAuditInfo: vi.fn() }));
 
-vi.mock("../../logging/subsystem.js", () => ({
+vi.mock("../../logging/subsystem.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../logging/subsystem.js")>()),
   createSubsystemLogger: () => ({
     debug: vi.fn(),
     error: vi.fn(),
@@ -21,8 +22,12 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
   });
 
   const repeatedToolError =
-    "OpenClaw stopped this turn after 3 consecutive identical tool failures. Check the tool arguments or switch to a model with native tool calling before retrying.";
+    "OpenClaw stopped this turn after 3 consecutive identical tool failures. Check the tool inputs or service, then use a changed request.";
+  const namedToolError =
+    "OpenClaw stopped this turn: the same probe call failed 3 times (tool error). Check the tool inputs or service, then use a changed request.";
   it.each([
+    [namedToolError, "openclaw_repeated_tool_error", namedToolError],
+    [namedToolError + "\n", "openclaw_repeated_tool_error", repeatedToolError],
     ["private tool diagnostics", "openclaw_repeated_tool_error", repeatedToolError],
     ["HTTP 503 temporary failure", "openclaw_repeated_tool_error", repeatedToolError],
     [

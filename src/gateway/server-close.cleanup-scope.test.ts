@@ -2,6 +2,7 @@ import "./server-worker-free.test-support.js";
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createOwnedInstance } from "../plugins/plugin-instance.test-support.js";
 import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycle.js";
@@ -17,6 +18,7 @@ import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { completeGatewayClose, prepareGatewayClose } from "./server-close.js";
 import { createGatewayCloseTestDepsFactory } from "./server-close.test-support.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
@@ -58,9 +60,59 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
 });
+
+it.each(["rejected", "timed out"])(
+  "closes its listener and resources after restart marker persistence %s",
+  async (outcome) => {
+    const { listener, releaseListener, claim } = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () => createServer(),
+    });
+    const entered = createDeferredCore();
+    const failure = new Error("marker store refused");
+    const params = createGatewayCloseTestDeps({
+      httpServer: listener,
+      channelIds: ["telegram"],
+      persistRunningSessionsForRestart: async (signal) => {
+        entered.resolve();
+        if (outcome === "rejected") {
+          throw failure;
+        }
+        await new Promise<void>((_, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(new Error("marker write cancelled", { cause: signal.reason })),
+            { once: true },
+          );
+        });
+      },
+    });
+    vi.useFakeTimers();
+    const closing = closeGateway(params).catch((error: unknown) => error);
+    try {
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await closing).toEqual(
+        outcome === "rejected"
+          ? failure
+          : new Error("Shutdown session persistence did not settle within 1000ms"),
+      );
+      expect(listener.listening).toBe(false);
+      expect(params.stopChannel).toHaveBeenCalledWith("telegram");
+      expect(sharedStateLifecycle.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      if (listener.listening) {
+        await releaseListener();
+      }
+      await claim.release();
+    }
+  },
+);
 
 it("finalizes capture after media drains even when stopping media cleanup fails", async () => {
   const mediaCleanup = await import("./server-media-cleanup-lifecycle.js");

@@ -355,6 +355,10 @@ end
 
 def with_screenshot_simulator(template = nil, watch_name: nil, diagnostics: nil)
   require_idle_screenshot_simulators!
+  # A deleted simulator can leave the host busy with first-launch work.
+  screenshot_phase(diagnostics, "headroom", device: watch_name || template.fetch("name")) do
+    sh("node", File.join(repo_root, "scripts", "lib", "ios-simulator-headroom.ts"))
+  end
   udid = screenshot_phase(diagnostics, "create", device: watch_name || template.fetch("name")) do
     if watch_name
       template, identifier = create_watch_screenshot_simulator(watch_name)
@@ -2428,7 +2432,11 @@ platform :ios do
       attempts: capture_attempts,
       output_path: capture_attempts_path
     )
-    FileUtils.rm_rf(derived_data_path)
+    # Retain package downloads while every compilation starts from clean products.
+    Dir.glob(File.join(derived_data_path, "*"), File::FNM_DOTMATCH).each do |entry|
+      next if [".", "..", "SourcePackages"].include?(File.basename(entry))
+      FileUtils.rm_rf(entry)
+    end
     devices = snapshot_devices
     project = File.join(ios_root, "OpenClaw.xcodeproj")
     simulator_devices = available_simulator_devices

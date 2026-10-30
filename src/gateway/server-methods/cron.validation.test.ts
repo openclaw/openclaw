@@ -1565,24 +1565,6 @@ describe("cron method validation", () => {
     });
   });
 
-  it("keeps trusted scheduled authority operator-only", async () => {
-    const trustedJob = createCronJob({
-      owner: { agentId: "ops", sessionKey: "agent:ops:main", accountId: "default" },
-      scheduledToolPolicy: { version: 1, mode: "trusted" },
-    });
-    const context = createCronContext(trustedJob);
-
-    const agentList = await invokeCron(
-      "cron.list",
-      { compact: true },
-      { context, client: callerClient("ops") },
-    );
-    expectCronReply(agentList.respond, expect.objectContaining({ total: 0, jobs: [] }));
-
-    const operatorGet = await invokeCron("cron.get", { id: trustedJob.id }, { context });
-    expectCronSuccess(operatorGet.respond);
-  });
-
   it("scopes operator declaration convergence by normalized owner account", async () => {
     const owner = {
       agentId: "ops",
@@ -2373,45 +2355,6 @@ describe("cron method validation", () => {
   });
 
   registerCronRunWaitTests({ handlers: cronHandlers, getRuntimeConfig });
-
-  it("waits for a command job named for an administrator's own session", async () => {
-    // Command jobs run as processes, so a target naming the caller's session never
-    // queues them behind the caller's turn.
-    const client = callerClient("main");
-    const identity = client.internal!.agentRuntimeIdentity!;
-    const authority = claimAgentRunDelegatedAuthority(identity.operationalRunInstance);
-    identity.delegatedAuthority = { kind: "local", ...authority };
-    const scope = createCronCreatorAuthorityRunScope(
-      identity.operationalRunInstance.runId,
-      { kind: "local" },
-      { source: "control-ui-admin" },
-    );
-    const context = createCronContext(
-      createCronJob({
-        id: "cron-1",
-        agentId: "main",
-        sessionTarget: "session:main",
-        payload: { kind: "command", argv: ["echo", "report"] },
-        delivery: { mode: "none" },
-      }),
-    );
-    try {
-      await runWithCronCreatorAuthorityCapability(scope, () =>
-        withGatewayToolCallerIdentity({ ...identity, approvalAuthority: authority }, async () => {
-          identity.cronManagementGrant = bindCronManagementGrant(scope.runId)!.mint("cron.run");
-          return await invokeCron(
-            "cron.run",
-            { id: "cron-1", waitTimeoutMs: 60_000 },
-            { client, context },
-          );
-        }),
-      );
-      expect(context.cron.waitForManualRun).toHaveBeenCalledOnce();
-    } finally {
-      revokeCronCreatorAuthorityRunScope(scope);
-      releaseAgentRunDelegatedAuthority(authority);
-    }
-  });
 
   it.each([
     { caller: "allowed", releasesOutcome: true },

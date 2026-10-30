@@ -317,6 +317,8 @@ const genericCredentialCallers = new Map<string, readonly string[]>([
       key("src/state/config-machine-state.worker.ts", "machineState.write"),
       // localOnboardingStateKey always uses the onboarding.local. namespace.
       key("src/state/local-onboarding-state.worker.ts", "localOnboarding.complete"),
+      // installationCountStateKey is fixed to telemetry.installationCount.<endpoint hash>.
+      key("src/infra/telemetry-store.worker.ts", "telemetry.claimInstallationCount"),
     ],
   ],
   [

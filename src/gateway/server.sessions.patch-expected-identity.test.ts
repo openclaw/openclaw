@@ -1,6 +1,5 @@
 // Compare-and-swap session patches must reject reset replacements atomically.
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { createDeferred as createPluginDeferred } from "../../test/helpers/promise.js";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -11,8 +10,6 @@ import { applySessionEntryCanonicalReplacements } from "../config/sessions/sessi
 import type { SessionEntry } from "../config/sessions/types.js";
 import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore as createDeferred } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -57,11 +54,6 @@ function expectNoPublication(context: ReturnType<typeof observingContext>) {
   expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
   expect(context.broadcastToConnIds).not.toHaveBeenCalled();
 }
-
-afterEach(async () => {
-  await disposeSessionReadContexts();
-  closeOpenClawStateDatabaseForTest();
-});
 
 test.each([undefined, "session-a"])(
   "sessions.patch rejects missing archive targets (expected identity: %s)",
@@ -280,25 +272,21 @@ test.each([
 
 test("sessions.patch keeps explicit unread markers strictly advancing", async () => {
   const { read, patch } = await seedSession("agent:main:conditional-unread-revision");
-  const now = vi.spyOn(Date, "now").mockReturnValue(100);
+  using _ = vi.spyOn(Date, "now").mockReturnValue(100);
 
-  try {
-    await patch({ unread: true });
-    const firstMarker = read()?.markedUnreadAt;
-    await patch({ unread: true });
-    const secondMarker = read()?.markedUnreadAt;
+  await patch({ unread: true });
+  const firstMarker = read()?.markedUnreadAt;
+  await patch({ unread: true });
+  const secondMarker = read()?.markedUnreadAt;
 
-    expect(firstMarker).toBe(100);
-    expect(secondMarker).toBe(101);
-    const staleRead = await patch({
-      unread: false,
-      expectedMarkedUnreadAt: firstMarker,
-    });
-    expect(staleRead).toMatchObject({ ok: true });
-    expect(read()?.markedUnreadAt).toBe(secondMarker);
-  } finally {
-    now.mockRestore();
-  }
+  expect(firstMarker).toBe(100);
+  expect(secondMarker).toBe(101);
+  const staleRead = await patch({
+    unread: false,
+    expectedMarkedUnreadAt: firstMarker,
+  });
+  expect(staleRead).toMatchObject({ ok: true });
+  expect(read()?.markedUnreadAt).toBe(secondMarker);
 });
 
 test("sessions.patchMany preserves a manual unread marker set after the acknowledgement snapshot", async () => {
@@ -474,8 +462,8 @@ describe("plugin session ownership", () => {
 
   test("sessions.patch rechecks plugin ownership after waiting for lifecycle admission", async () => {
     await seed();
-    const releaseMutation = createPluginDeferred();
-    const { promise: mutationStarted, resolve: markMutationStarted } = createPluginDeferred();
+    const releaseMutation = createDeferred();
+    const { promise: mutationStarted, resolve: markMutationStarted } = createDeferred();
     const mutation = runSessionMutation({
       scope: storePath,
       identities: [sessionKey, sessionId],
@@ -492,8 +480,7 @@ describe("plugin session ownership", () => {
 
     const [patched] = await Promise.all([pendingPatch, mutation]);
 
-    expect(patched.ok).toBe(false);
-    expect(patched.error?.message).toContain("did not create it");
+    expectDenied(patched, "patch", sessionKey);
     expect(readEntry()).toMatchObject({ pluginOwnerId: "other-plugin" });
     expect(readEntry()?.label).toBeUndefined();
   });

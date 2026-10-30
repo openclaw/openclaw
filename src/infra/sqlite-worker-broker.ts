@@ -168,7 +168,7 @@ export class SqliteWorkerBroker {
         },
         snapshot.signal,
         reusable ? () => this.openAdmitted<Operations>(snapshot, client, reusable) : undefined,
-        snapshot.sharedState,
+        snapshot.carrierClass,
       )
       .catch((error: unknown) => {
         this.clients.delete(client);

@@ -19,6 +19,10 @@ import {
   WORKSPACE_CAS_COLUMNS,
   WORKSPACE_CAS_TABLES,
 } from "../../state/openclaw-state-db-schema-v35-workspace-cas.js";
+import {
+  withLegacyTemplateStateSchema,
+  legacyTemplateStateIdentifier,
+} from "../../state/openclaw-state-db-schema-v36-template-names.js";
 import { listOpenClawStateFeatureSchemas } from "../../state/openclaw-state-feature-schema.js";
 import { RETAINED_STATE_TABLES } from "../../state/openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
@@ -37,7 +41,23 @@ import {
   type PortDescriptor,
   type PortTable,
 } from "./port-descriptor.js";
+import type { PostgresCatalogFact } from "./postgres-catalog.js";
 import { withLegacyPostgresIndexOrdering } from "./postgres-index-ordering.js";
+
+function legacyTemplateCatalogValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    return legacyTemplateStateIdentifier(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(legacyTemplateCatalogValue);
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, legacyTemplateCatalogValue(item)]),
+    );
+  }
+  return value;
+}
 
 export async function loadStatePortDescriptor(
   sourceVersion = OPENCLAW_STATE_SCHEMA_VERSION,
@@ -53,8 +73,8 @@ export async function loadStatePortDescriptor(
     // v29 removes credential tables; v30 fences policies; v31 adds per-path workspace baselines.
     if (
       backup ||
-      OPENCLAW_STATE_SCHEMA_VERSION !== 35 ||
-      ![24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34].includes(sourceVersion)
+      OPENCLAW_STATE_SCHEMA_VERSION !== 36 ||
+      ![24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing shared-state PostgreSQL backup descriptor for version ${sourceVersion}`,
@@ -64,12 +84,13 @@ export async function loadStatePortDescriptor(
   const source = sourceVersion < 29 ? statePostgresRuntime.clientCredentialSource : undefined;
   // The generated catalog owns these tagged facts; project only the copy fields.
   const isColumn = (
-    fact: (typeof statePostgresRuntime.expectedCatalog)[number],
+    fact: PostgresCatalogFact,
   ): fact is typeof fact & { value: PortTable["columns"][number] } => fact.kind === "column";
   const historical = sourceVersion < 28;
   const legacyWorkspace = sourceVersion < 31;
   const legacyCas = sourceVersion < 35;
-  const catalog = [
+  const legacyTemplates = sourceVersion < 36;
+  const currentCatalog: PostgresCatalogFact[] = [
     ...statePostgresRuntime.expectedCatalog,
     ...(source?.expectedCatalog ?? []),
   ].filter(
@@ -93,19 +114,27 @@ export async function loadStatePortDescriptor(
           "github_repository_publication_requests",
         ].includes(fact.table)),
   );
+  const catalog = legacyTemplates
+    ? currentCatalog.map((fact) => ({
+        ...fact,
+        table: legacyTemplateStateIdentifier(fact.table),
+        value: legacyTemplateCatalogValue(fact.value),
+      }))
+    : currentCatalog;
   const columns = catalog.filter(isColumn);
   const keys = catalog.filter(
     (fact): fact is typeof fact & { value: string[] } => fact.kind === "primaryKey",
   );
   const sourceSql = (sql: string, schemaSql = sql) => {
-    const cas = legacyCas ? withLegacyLocalWorkspaceCas(sql) : sql;
+    const template = legacyTemplates ? withLegacyTemplateStateSchema(sql) : sql;
+    const cas = legacyCas ? withLegacyLocalWorkspaceCas(template) : template;
     const workspace = legacyWorkspace ? withLegacyLocalWorkspaceManifests(cas) : cas;
     const publication = historical ? withLegacyPublicationDraft(workspace) : workspace;
     return sourceVersion < 33
       ? withLegacyPostgresIndexOrdering(
           publication,
           sourceVersion < 32 ? "sqlite" : "schema-nullability",
-          schemaSql,
+          legacyTemplates ? withLegacyTemplateStateSchema(schemaSql) : schemaSql,
         )
       : publication;
   };
@@ -114,11 +143,15 @@ export async function loadStatePortDescriptor(
     postgres: string,
     sqlite: string,
   ) => {
-    const tables = entry.tables.filter(
-      (table) =>
-        (!legacyWorkspace || table.name !== "local_workspace_manifest_nodes") &&
-        (!legacyCas || !WORKSPACE_CAS_TABLES.some((name) => name === table.name)),
-    );
+    const tables = entry.tables
+      .map((table) =>
+        legacyTemplates ? { ...table, name: legacyTemplateStateIdentifier(table.name) } : table,
+      )
+      .filter(
+        (table) =>
+          (!legacyWorkspace || table.name !== "local_workspace_manifest_nodes") &&
+          (!legacyCas || !WORKSPACE_CAS_TABLES.some((name) => name === table.name)),
+      );
     const names = new Set(tables.map((table) => table.name));
     return {
       sqlite: sourceSql(sqlite),

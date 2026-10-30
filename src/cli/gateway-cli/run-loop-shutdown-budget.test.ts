@@ -1,10 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectCallCount } from "./run-loop-cleanup.test-support.js";
-import {
-  resolveGatewayShutdownBudget,
-  resolveGatewayShutdownDrainBudget,
-} from "./run-loop-shutdown-budget.js";
+import { resolveGatewayShutdownBudget } from "./run-loop-shutdown-budget.js";
 
 const { readFile, execUser, execSystem, execLaunchctl } = vi.hoisted(() => ({
   readFile: vi.fn(),
@@ -28,17 +25,6 @@ const resolveBudget = (
   supervisor: string | null = "external",
   refresh?: Parameters<typeof resolveGatewayShutdownBudget>[2],
 ) => resolveGatewayShutdownBudget(supervisor, { info, warn }, refresh);
-const resolveDrain = (
-  overrides: Partial<Parameters<typeof resolveGatewayShutdownDrainBudget>[0]>,
-) =>
-  resolveGatewayShutdownDrainBudget({
-    budget: { timeoutMs: 85_000, reserveMs: 10_000, nativeStopBudget: true },
-    action: "restart",
-    forceRestart: false,
-    restartWithoutSupervisor: false,
-    acceptedAtMs: performance.now(),
-    ...overrides,
-  });
 
 beforeEach(() => {
   info.mockClear();
@@ -61,33 +47,6 @@ afterEach(() => {
 });
 
 describe("Gateway stop deadline independent of restart ownership", () => {
-  it.each([false, true])(
-    "retains the native deadline when skipping a validated drain (handoff=%s)",
-    (handoff) => {
-      const drain = resolveDrain({
-        action: "external-restart",
-        forceRestart: true,
-        interruptAfterDrain: handoff ? true : undefined,
-        requestedRestartDrainTimeoutMs: 45_000,
-      });
-      if (handoff) {
-        expect(drain.drainTimeoutMs).toBe(0);
-        expect(drain.closeDrainTimeoutMs()).toBe(0);
-      } else {
-        expect(drain.drainTimeoutMs).toBeGreaterThan(44_000);
-        expect(drain.closeDrainTimeoutMs()).toBeGreaterThan(44_000);
-      }
-      expect(drain.forceExitMs).toBe(85_000);
-    },
-  );
-  it.each([15_000, 85_000])("bounds stop grace within the %i ms cleanup deadline", (timeoutMs) => {
-    const drain = resolveDrain({
-      budget: { timeoutMs, reserveMs: 10_000, nativeStopBudget: true },
-      action: "stop",
-    });
-    expect(drain.drainTimeoutMs).toBe(Math.min(20_000, timeoutMs - 10_000));
-    expect(drain.forceExitMs).toBe(timeoutMs);
-  });
   it("clamps an external system unit running as a service user", async () => {
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
     process.env.INVOCATION_ID = "own";
@@ -183,20 +142,17 @@ describe("Gateway stop deadline follows the launchd stop that is actually runnin
     { supervisor: "external", seconds: 0 },
     { supervisor: "external", seconds: 47 },
   ])(
-    "caps restart drain only at a finite deadline ($supervisor/$seconds)",
+    "recognizes a finite native shutdown deadline ($supervisor/$seconds)",
     async ({ supervisor, seconds }) => {
       execLaunchctl.mockResolvedValue(seconds === undefined ? unavailable : printed(seconds));
       const budget = await resolveBudget(supervisor, stoppingNow);
       expect(budget.nativeStopBudget).toBe(seconds === 47);
-      const drain = resolveDrain({ budget, requestedRestartDrainTimeoutMs: 600_000 });
       if (seconds === 47) {
-        expect(drain.drainTimeoutMs).toBe(32_000);
+        expect(budget.timeoutMs).toBe(42_000);
       } else {
         expect(budget.timeoutMs).toBe(325_000);
-        expect(drain.drainTimeoutMs).toBeGreaterThan(590_000);
       }
       if (seconds === undefined) {
-        expect(drain.restartTimeoutMs()).toBe(325_000);
         expect(warn).toHaveBeenCalledExactlyOnceWith(
           expect.stringContaining("Unable to inspect the launchd job"),
         );

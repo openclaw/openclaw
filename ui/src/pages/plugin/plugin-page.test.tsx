@@ -112,7 +112,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("offers Labs after a custom plugin is blocked, without mistaking a failure for disablement", async () => {
+it("explains the configured native UI opt-out without mistaking a failure for disablement", async () => {
   const pluginId = "custom-review";
   let loading = true;
   const listeners = new Set<() => void>();
@@ -139,7 +139,8 @@ it("offers Labs after a custom plugin is blocked, without mistaking a failure fo
   listeners.forEach((listener) => listener());
   await settle();
   expect(page.textContent).toContain("Custom plugin UI is off");
-  expect(page.textContent).toContain("Open Labs");
+  expect(page.querySelector('a[href$="/settings/labs"]')).toBeNull();
+  expect(page.textContent).toContain("Disabled by the Gateway configuration");
   plugins.errors = [{ pluginId, message: "Custom plugin UI is off" }];
   listeners.forEach((listener) => listener());
   await settle();

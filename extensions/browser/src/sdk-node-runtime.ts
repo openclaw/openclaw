@@ -33,7 +33,7 @@ export async function withTimeout<T>(
   const error = new Error(`${label ?? "request"} timed out`);
   const timeout = createDeferred<never>();
   let remaining = resolved;
-  let startedAt = Date.now();
+  let startedAt = performance.now();
   let paused = 0;
   let finished = false;
   const expire = () => {
@@ -42,7 +42,7 @@ export async function withTimeout<T>(
     controller.abort(error);
   };
   const arm = () => {
-    startedAt = Date.now();
+    startedAt = performance.now();
     const timer = setTimeout(expire, remaining);
     timer.unref?.();
     return timer;
@@ -59,7 +59,7 @@ export async function withTimeout<T>(
           const resumeParent = parentBudget?.pause();
           if (paused++ === 0) {
             clearTimeout(timer);
-            remaining = Math.max(1, remaining - (Date.now() - startedAt));
+            remaining = Math.max(1, remaining - (performance.now() - startedAt));
           }
           return () => {
             if (--paused === 0 && !finished) {

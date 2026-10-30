@@ -11,7 +11,11 @@ import "../../../plugins/control-ui-view.solid.tsx";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
+import { groupMessages } from "../chat-thread-grouping.ts";
+import { collapseCompletedTurnWork } from "../chat-turn-presentation.ts";
 import { buildLocalUserMessage } from "../user-message-content.ts";
+import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { dismissConfirmedActionPopovers } from "./chat-message-confirmation-view.tsx";
 import { prepareGroupMessage } from "./chat-message-group-frame.ts";
@@ -157,6 +161,75 @@ it.each([
     answered ? ["answer"] : [],
   );
 });
+
+it.each([false, true])(
+  "keeps a mixed terminal answer visible with its actions (bubble=%s)",
+  (bubbleMode) => {
+    const answer = {
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "read-a", name: "read", arguments: {} },
+        { type: "toolCall", id: "read-b", name: "read", arguments: {} },
+        { type: "text", text: "Both files are correct." },
+      ],
+      timestamp: 2000,
+      __openclaw: { id: "mixed-answer", runId: "mixed-run" },
+    };
+    const messages = [
+      {
+        role: "user",
+        content: "Check the files",
+        timestamp: 1000,
+        __openclaw: { id: "prompt", runId: "mixed-run" },
+      },
+      answer,
+    ];
+    const grouped = groupMessages(
+      messages.map((message, index) => ({ kind: "message", key: String(index), message })),
+    );
+    const frame = coalesceAgentRunFrames(
+      collapseCompletedTurnWork(grouped, {
+        sessionKey: "agent:main:dashboard:mixed",
+        runWorking: false,
+        bubbleMode,
+      }),
+      { messages },
+    ).find((item) => item.kind === "agent-run-frame");
+    if (!frame) {
+      throw new Error("Missing answer frame");
+    }
+    const onReply = vi.fn();
+    const view = mountSolid(() => (
+      <AgentRunFrame
+        frame={frame}
+        options={{
+          streamOptions: { bubbleMode },
+          renderGroupOptions: () => ({
+            bubbleMode,
+            showReasoning: false,
+            onReply,
+            onReact: vi.fn(),
+          }),
+          isWorkExpanded: () => false,
+          onToggleWork: () => {},
+        }}
+      />
+    ));
+    flush();
+    expect(view.container.textContent).toContain("Both files are correct.");
+    const reply = view.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Reply to message"]',
+    );
+    expect(reply).not.toBeNull();
+    reply!.click();
+    expect(onReply.mock.calls[0]?.[0]).toMatchObject({
+      sourceMessageId: "mixed-answer",
+      text: "Both files are correct.",
+    });
+    expect(view.container.querySelector('button[aria-label="Copy as markdown"]')).not.toBeNull();
+    expect(view.container.querySelector(".chat-reaction-action")).not.toBeNull();
+  },
+);
 
 it("does not give provider speech unframed answer actions", () => {
   const speech = {

@@ -18,7 +18,7 @@ type PortListenerKind = ReturnType<
 export const inspectPortUsage =
   vi.fn<(port: number, options?: { probeHosts?: readonly string[] }) => Promise<PortUsage>>();
 export const monotonicClock = { nowMs: 0 };
-export const sleep = vi.fn(async (ms: number) => {
+export const sleep = vi.fn(async (ms: number, _signal?: AbortSignal) => {
   monotonicClock.nowMs += ms;
 });
 export const classifyPortListener = vi.fn<(_listener: unknown) => PortListenerKind>(
@@ -181,7 +181,7 @@ vi.mock("../../utils.js", async () => {
   const actual = await vi.importActual<typeof import("../../utils.js")>("../../utils.js");
   return {
     ...actual,
-    sleep: (ms: number) => sleep(ms),
+    sleep: (ms: number, signal?: AbortSignal) => sleep(ms, signal),
   };
 });
 

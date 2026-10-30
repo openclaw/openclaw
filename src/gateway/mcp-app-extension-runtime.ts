@@ -10,7 +10,11 @@ import {
   requiresMcpCodexToolApproval,
   resolveProjectedMcpCodexToolApprovalMode,
 } from "../agents/mcp-codex-tool-approval.js";
-import { isMcpToolAllowed, normalizeMcpToolFilter } from "../agents/mcp-tool-filter.js";
+import {
+  createMcpToolFilter,
+  mcpCatalogToolFilterScope,
+  normalizeMcpToolFilter,
+} from "../agents/mcp-tool-filter.js";
 import type { McpAppPrepareToolCall } from "../agents/mcp-ui-resource.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
@@ -272,7 +276,10 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
         (!rawServer &&
           !(runtime.assertOwnerCurrent && catalog.servers[tool.serverName]?.pluginId)) ||
         (rawServer &&
-          !isMcpToolAllowed(normalizeMcpToolFilter(rawServer.toolFilter), tool.toolName))
+          !createMcpToolFilter(
+            normalizeMcpToolFilter(rawServer.toolFilter),
+            mcpCatalogToolFilterScope(catalog, tool.serverName),
+          )(tool.toolName))
       ) {
         throw new Error("MCP App tool is denied by server policy");
       }

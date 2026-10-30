@@ -1,15 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { selectResetKeptEntries } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import type { SessionTranscriptBoundedActiveContext } from "./session-accessor.sqlite-contract.js";
-import {
-  DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
-  DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
-  MAX_VISIBLE_MESSAGE_MAX_BYTES,
-  MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
-  normalizeVisibleMessageLimit,
-} from "./session-accessor.sqlite-visible-cursor.js";
 import type { SessionActorHotState } from "./session-actor-state.types.js";
-import { selectBoundedContextRows } from "./session-bounded-context-selection.js";
+import {
+  normalizeBoundedContextLimits,
+  selectBoundedContextRows,
+} from "./session-bounded-context-selection.js";
 import { collectCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix-values.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import type {
@@ -33,23 +29,7 @@ export function readSessionActorBoundedHistory(
   limits: SessionTranscriptContextSelection,
 ): Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }> {
   const version = { ...state.hot.transcript.version };
-  const boundedLimits =
-    "compaction" in limits
-      ? undefined
-      : {
-          maxBytes: normalizeVisibleMessageLimit(
-            limits.maxBytes,
-            DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
-            MAX_VISIBLE_MESSAGE_MAX_BYTES,
-            "maxBytes",
-          ),
-          maxEvents: normalizeVisibleMessageLimit(
-            limits.maxEvents,
-            DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
-            MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
-            "maxEvents",
-          ),
-        };
+  const boundedLimits = normalizeBoundedContextLimits(limits);
   const navigation = scanSessionTranscriptTree(state.events.map((row) => row.event));
   const active = selectSessionTranscriptTreePathNodes(navigation, navigation.leafId)
     .filter((node) => shouldProjectActiveEvent(node.entry))

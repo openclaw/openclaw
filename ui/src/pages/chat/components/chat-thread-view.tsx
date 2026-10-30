@@ -65,6 +65,16 @@ function navigateCronRunLink(event: Event, props: ChatThreadProps): boolean {
   return true;
 }
 
+function openManagedArtifactLink(event: Event, props: ChatThreadProps): boolean {
+  const anchor = anchorFromNavigationEvent(event);
+  // Attachment-card Download keeps its already-authorized native link action.
+  if (!anchor || anchor.hasAttribute("download") || !props.onOpenManagedArtifact?.(anchor.href)) {
+    return false;
+  }
+  event.preventDefault();
+  return true;
+}
+
 export function ChatThread(input: {
   props: ChatThreadProps;
   transcript: ChatTranscript;
@@ -227,6 +237,7 @@ export function ChatThread(input: {
             "chat-thread--direct": current().projection.isDirectThread,
             "chat-thread--route-loading": mobile() && routeLoading(),
             "chat-thread--comment-pins": commentPins(),
+            "chat-thread--annotations": input.props.commentAttachments !== undefined,
           },
         ]}
         role="log"
@@ -238,6 +249,18 @@ export function ChatThread(input: {
         onFocusOut={(event) => current().session.handleFocusOut(event)}
         onScroll={(event) => input.props.onChatScroll?.(event)}
         onKeyDown={(event) => {
+          if (
+            !event.defaultPrevented &&
+            !event.isComposing &&
+            !event.altKey &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            !event.shiftKey &&
+            (event.key === "Enter" || event.key === " ") &&
+            openManagedArtifactLink(event, input.props)
+          ) {
+            return;
+          }
           if (
             !event.defaultPrevented &&
             !event.isComposing &&
@@ -263,6 +286,9 @@ export function ChatThread(input: {
         onClick={(event) => {
           handleMarkdownCodeBlockClick(event);
           handleMarkdownTableInteraction(event);
+          if (shouldHandleNavigationClick(event) && openManagedArtifactLink(event, input.props)) {
+            return;
+          }
           if (shouldHandleNavigationClick(event) && navigateCronRunLink(event, input.props)) {
             return;
           }

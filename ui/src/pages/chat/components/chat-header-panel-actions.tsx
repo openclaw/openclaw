@@ -20,6 +20,7 @@ import {
   type MenuHandle,
 } from "../../../components/solid/menu.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { warmWhenIdle } from "../../../lib/idle-warmup.ts";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
@@ -49,6 +50,7 @@ const DashboardContent = lazy(() => import("./chat-header-panel-menu-content.tsx
 const LayoutContent = lazy(() => import("./chat-header-panel-menu-content.tsx"), {
   export: "ChatPaneLayoutMenuContent",
 });
+warmWhenIdle(DashboardContent.preload, LayoutContent.preload);
 
 export type HeaderPanelAction = HeaderMenuQuickAction & { shortcut?: KeyboardShortcutCombo };
 

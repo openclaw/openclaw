@@ -84,10 +84,6 @@ export function clearPendingFinalDelivery(entry: SessionEntry, updatedAt: number
   return {
     ...entry,
     pendingFinalDelivery: undefined,
-    restartRecoveryForceSafeTools: undefined,
-    restartRecoveryDeliveryMediaUrls: undefined,
-    restartRecoveryDisableMessageTool: undefined,
-    restartRecoverySuppressTextDelivery: undefined,
     updatedAt,
   };
 }

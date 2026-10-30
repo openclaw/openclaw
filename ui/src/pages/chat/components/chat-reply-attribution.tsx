@@ -1,5 +1,6 @@
 import { Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { clampText } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import type { ReplyLine } from "./chat-reply-attribution.ts";
@@ -11,6 +12,7 @@ export function ReplyLineView(props: {
   actions: {
     onOpenReply?: (id: string) => void;
     replyNavigationId?: string | null;
+    mediaReadAllowed?: boolean;
   };
   inline?: boolean;
   elements?: ReplyConnectorElements;
@@ -22,7 +24,11 @@ export function ReplyLineView(props: {
   const person = () => (
     <>
       <Show when={named()}>
-        <ChatAuthorAvatar sender={props.line.sender} agentAvatar={props.line.agentAvatar} />
+        <ChatAuthorAvatar
+          sender={props.line.sender}
+          agentAvatar={props.line.agentAvatar}
+          mediaReadAllowed={props.actions.mediaReadAllowed}
+        />
       </Show>
       <span class="chat-reply-attribution__name" title={name()}>
         {name()}
@@ -83,6 +89,11 @@ export function ReplyLineView(props: {
               {person()}
             </button>
           </Show>{" "}
+          <Show when={named() && props.line.text}>
+            <span class="chat-reply-attribution__excerpt" title={props.line.text}>
+              {clampText(props.line.text ?? "", 60)}
+            </span>
+          </Show>
           <Show when={!named()}>
             <span class="chat-reply-attribution__unavailable">
               {t("chat.messages.replyOriginalUnavailable")}

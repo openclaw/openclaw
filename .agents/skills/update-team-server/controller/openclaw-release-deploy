@@ -970,16 +970,15 @@ check_suspension() {
 arm_suspension_handoff() {
 	local params response
 	((suspension_cleanup_only == 0)) || { fail 'suspension offer is cleanup-only, not continued authority'; return 1; }
-	((interrupt_after_drain && drain_budget_elapsed)) && [[ "$suspension_state" == DRAINING ]] || return 0
+	assert_protected_identity && assert_policy || return 1
 	params="$(proof suspension-handoff-params "$held_suspension" "$suspension_pid" "$suspension_instance")" || return 1
-	# An uncertain RPC may already have armed natively; never renew after sending it.
+	# An uncertain RPC may already have committed shutdown; never renew after sending it.
 	suspension_handoff_started=1
 	response="$(run_gateway "$suspension_release" gateway call gateway.suspend.handoff \
 		--params "$params" --json --timeout 30000)" || return 1
 	proof_json suspension-handoff "$response" "$held_suspension" "$suspension_expiry" >/dev/null || return 1
-	# Arming does not renew the lease. A refused or uncertain arm is resumed by the existing exit owner.
-	assert_protected_identity && assert_policy && check_suspension || return 1
-	printf 'HANDOFF_ARMED lease=%s expiresAtMs=%s pid=%s\n' "$held_suspension" "$suspension_expiry" "$suspension_pid"
+	# The host now owns one-way shutdown; its retired lease cannot reopen admission.
+	printf 'HANDOFF_COMMITTED lease=%s expiresAtMs=%s pid=%s\n' "$held_suspension" "$suspension_expiry" "$suspension_pid"
 }
 
 resume_suspension() {
@@ -2780,10 +2779,10 @@ process.stdout.write(JSON.stringify({source:JSON.parse(e.SOURCE),process:{pid:Nu
 			assert_protected_identity
 			assert_policy
 			check_suspension
-			arm_suspension_handoff
 			proof host-handoff source-revoke "$serving_root" >/dev/null
 			check_suspension
 			[[ "$(realpath "$proc_root/$operator_expected_pid/cwd")" == "$previous_release" ]] || fail 'handoff source cwd changed before stop'
+			arm_suspension_handoff
 			bounded 180 "$systemctl_bin" stop openclaw-gateway.service
 			held_suspension=""; predecessor_stopped=1
 			predecessor_is_stopped "$operator_expected_pid"

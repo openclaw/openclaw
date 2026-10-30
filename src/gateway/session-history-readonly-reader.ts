@@ -30,7 +30,7 @@ import {
 import { hasSessionTranscriptEntryReceipt } from "../config/sessions/session-transcript-projection-facts-scope.js";
 import {
   readRecentTranscriptConversationText,
-  type ReadRecentSessionConversationTextOptions,
+  type ReadRecentSessionConversationTurnOptions,
 } from "../config/sessions/transcript-recent-text.js";
 import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.metadata.js";
 import { withScopedOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-scope.js";
@@ -183,7 +183,7 @@ export function createReadonlySessionHistoryReader(
       readSnapshot((projection) =>
         readSessionTranscriptBoundedMessageTailPageFromProjection(projection, options),
       ),
-    readRecentConversationText: (options: ReadRecentSessionConversationTextOptions) =>
+    readRecentConversationText: (options: ReadRecentSessionConversationTurnOptions) =>
       readSnapshot((projection) =>
         readRecentTranscriptConversationText(
           (page) => readSessionTranscriptBoundedMessageTailPageFromProjection(projection, page),

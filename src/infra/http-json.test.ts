@@ -18,12 +18,22 @@ const contentType = (writer: Writer) =>
     : "application/json; charset=utf-8";
 
 let listener: Awaited<ReturnType<typeof reserveTestPortListener>>;
+let serializationFailure: unknown;
 
 beforeAll(async () => {
   listener = await reserveTestPortListener({
     offsets: [0],
     createListener: () =>
       createServer((req, res) => {
+        if (req.url === "/committed-serialization-failure") {
+          try {
+            json.writeJsonWithoutCharset(res, 202, { value: 1n });
+          } catch (error) {
+            serializationFailure = error;
+          }
+          res.end();
+          return;
+        }
         const writer = writers[req.url?.slice(1) as Writer];
         res.setHeader("Cache-Control", "private, no-cache");
         res.setHeader("X-Content-Type-Options", "nosniff");
@@ -66,6 +76,19 @@ it.each<Writer>(["plain", "private", "framed", "bare", "committed"])(
   },
 );
 
+it("preserves committed wire headers when serialization fails", async () => {
+  serializationFailure = undefined;
+  const res = await fetch(
+    `http://127.0.0.1:${listener.claim.port}/committed-serialization-failure`,
+    { headers: { Connection: "close" } },
+  );
+  const body = await res.text();
+  expect(serializationFailure).toBeInstanceOf(TypeError);
+  expect(res.status).toBe(202);
+  expect(res.headers.get("content-type")).toBe("application/json");
+  expect(body).toBe("");
+});
+
 it.each<Writer>(["plain", "private", "framed", "bare", "committed"])(
   "preserves %s header preparation when serialization fails",
   (writer) => {
@@ -73,9 +96,11 @@ it.each<Writer>(["plain", "private", "framed", "bare", "committed"])(
     expect(() => writers[writer](res, 202, { value: 1n })).toThrow(TypeError);
     expect(res.headersSent).toBe(writer === "committed");
     expect(res.statusCode).toBe(writer === "framed" ? 200 : 202);
-    expect(res.getHeader("Content-Type")).toBe(
-      writer === "framed" ? undefined : contentType(writer),
-    );
+    if (!res.headersSent) {
+      expect(res.getHeader("Content-Type")).toBe(
+        writer === "framed" ? undefined : contentType(writer),
+      );
+    }
     expect(res.getHeader("Cache-Control")).toBe(writer === "private" ? "no-store" : undefined);
     res.destroy();
   },

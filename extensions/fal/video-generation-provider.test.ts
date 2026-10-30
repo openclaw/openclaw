@@ -228,14 +228,14 @@ describe("fal video generation provider", () => {
 
   it("caps oversized fal queue operation deadlines", async () => {
     mockFalProviderRuntime();
-    const nowSpy = vi.spyOn(Date, "now");
-    nowSpy
-      .mockReturnValueOnce(0)
-      .mockReturnValueOnce(0)
-      .mockReturnValueOnce(MAX_TIMER_TIMEOUT_MS + 1);
+    let monotonicMs = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => monotonicMs);
     fetchGuardMock
       .mockResolvedValueOnce(releasedJson(queueSubmission))
-      .mockResolvedValueOnce(releasedJson({ status: "IN_PROGRESS" }));
+      .mockImplementationOnce(async () => {
+        monotonicMs = MAX_TIMER_TIMEOUT_MS + 1;
+        return releasedJson({ status: "IN_PROGRESS" });
+      });
 
     await expectRejected(
       { timeoutMs: Number.MAX_SAFE_INTEGER },

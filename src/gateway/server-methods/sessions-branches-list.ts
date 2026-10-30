@@ -21,7 +21,7 @@ export async function listSessionBranchesForGateway(
   const { params, respond, context } = options;
   const sessionKey = params.sessionKey.trim();
   const cfg = context.getRuntimeConfig();
-  const requestedAgent = resolveRequestedGlobalAgentId(cfg, sessionKey, params.agentId);
+  const requestedAgent = resolveRequestedGlobalAgentId(cfg, sessionKey, params.agentId, "read");
   if (!requestedAgent.ok) {
     respond(false, undefined, requestedAgent.error);
     return;

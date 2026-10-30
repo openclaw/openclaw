@@ -1130,17 +1130,10 @@
   color: inherit;
 }
 
-.chat-work-group__total,
-.chat-work-group__outcomes {
+.chat-work-group__total {
   flex: none;
   white-space: nowrap;
   color: var(--muted);
-}
-
-.chat-work-group__outcomes {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
 }
 
 .chat-group--activity .chat-activity-group__label {

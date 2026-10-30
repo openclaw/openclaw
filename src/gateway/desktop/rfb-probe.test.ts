@@ -1,6 +1,5 @@
 import type net from "node:net";
 import type { Duplex } from "node:stream";
-import { buffer as collect } from "node:stream/consumers";
 import { finished } from "node:stream/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -253,9 +252,13 @@ describe("retained RFB connection", () => {
     // Even after the peer closes, its terminal response survives until the paused reader drains.
     await peerClosed.promise;
     expect(stream).toMatchObject({ destroyed: false, writableEnded: true });
-    const output = collect(stream);
+    const output: Buffer[] = [];
+    stream.on("data", (chunk: Buffer) => {
+      output.push(chunk);
+    });
+    stream.resume();
     await expect(settled).resolves.toBeUndefined();
-    expect(await output).toEqual(response);
+    expect(Buffer.concat(output)).toEqual(response);
     expect(callbacks).toEqual([null, null]);
     await vi.waitFor(() => expect(receivedBytes).toBe(first.length + last.length));
     expect(Buffer.concat(received)).toEqual(Buffer.concat([first, last]));
@@ -273,9 +276,13 @@ describe("retained RFB connection", () => {
       const stream = await connect(port);
       await finSent.promise;
       const settled = finished(stream);
-      const received = collect(stream);
+      const received: Buffer[] = [];
+      stream.on("data", (chunk: Buffer) => {
+        received.push(chunk);
+      });
+      stream.resume();
       await settled;
-      expect(await received).toEqual(wire);
+      expect(Buffer.concat(received)).toEqual(wire);
       expect(stream.writableFinished).toBe(true);
     },
   );

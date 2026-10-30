@@ -1,4 +1,4 @@
-import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { sanitizeTerminalText, terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
@@ -43,7 +43,7 @@ function formatGlobalPluginDiagnostics(diagnostics: readonly PluginDiagnostic[])
       ({ level, message }) =>
         `${formatConsoleDiagnosticLine({
           level,
-          message: terminalText`${shortenHomeInString(`${level.toUpperCase()}: ${message}`)}`,
+          message: sanitizeTerminalText(shortenHomeInString(`${level.toUpperCase()}: ${message}`)),
         })}\n`,
     )
     .join("");

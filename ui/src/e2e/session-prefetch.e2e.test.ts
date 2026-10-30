@@ -90,6 +90,7 @@ suite.define(() => {
         ...reportHistory,
         messages: warmMessages,
         hasMore: warmMessages.length < reportMessages.length,
+        ...(warmMessages.length < reportMessages.length ? { olderCursor: "older-report" } : {}),
         nextOffset: warmMessages.length,
       });
       const emptyReport = { messages: [], sessionId: report.sessionId };
@@ -125,7 +126,9 @@ suite.define(() => {
         .toBe(false);
       await expectTranscriptLayoutCommitted(thread);
       await expect.poll(async () => (await first.boundingBox())?.y).toBe(anchorBefore?.y);
-      expect(await requests("chat.history", { ...reportTarget, offset: 20 })).toHaveLength(0);
+      expect(
+        await requests("chat.history", { ...reportTarget, cursor: "older-report" }),
+      ).toHaveLength(0);
     });
   });
 });

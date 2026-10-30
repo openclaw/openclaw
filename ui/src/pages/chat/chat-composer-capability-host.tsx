@@ -20,7 +20,6 @@ import {
   MCP_SERVER_NAME_PATTERN,
   parseMcpTarget,
   patchMcpServers,
-  summarizeMcpServers,
 } from "../../lib/config/mcp-servers.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -39,6 +38,7 @@ import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import {
   ComposerSkillCatalog,
+  composerMcpServers,
   composerWebSearchBaseEnabled,
 } from "./composer-capability-catalog.ts";
 import type { ChatComposerCapabilityMenuProps } from "./composer-capability-types.ts";
@@ -507,7 +507,10 @@ export class ChatComposerCapabilityHost {
       basePath: state.basePath,
       skills: this.skillCatalog.rows(agentId, session?.toolOverrides),
       skillsRead: this.skillCatalog.read(agentId),
-      mcpServers: summarizeMcpServers(runtimeConfig) ?? [],
+      ...composerMcpServers(runtimeConfig, {
+        auth: context.gateway.snapshot.hello?.auth ?? null,
+        loading: context.runtimeConfig.state.configLoading,
+      }),
       toolsEffectiveResult,
       toolsEffectiveLoading,
       toolsEffectiveError,

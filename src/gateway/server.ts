@@ -4,12 +4,21 @@
  * Keeping `server-start` behind dynamic import lets light-weight callers import
  * server types and helpers without paying the full startup dependency graph.
  */
+import { performance } from "node:perf_hooks";
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { installDatabaseProcessRole } from "../infra/database-engine/admission-scope.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { supportsSpawnBrokerCommandTransport } from "../process/spawn-broker/pipe.js";
+import { getProcessCleanupBudget } from "../process/supervisor/cleanup-budget.js";
+import { settlesWithin } from "../shared/settle-within.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { formatGatewayPendingCloseSteps, measureGatewayCloseStep } from "./restart-trace.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
-import { GatewayStartupCleanupError, rethrowGatewayStartupError } from "./server-shutdown.js";
+import {
+  GatewayShutdownCleanupRetainedError,
+  GatewayStartupCleanupError,
+  rethrowGatewayStartupError,
+} from "./server-shutdown.js";
 
 export { truncateCloseReason } from "./server/close-reason.js";
 export type { GatewayServer, GatewayServerOptions } from "./server-public.js";
@@ -19,6 +28,44 @@ async function loadServerStart() {
     "gateway.server-start-import",
     () => import("./server-start.js"),
   );
+}
+
+async function closeWithRuntimeCleanup(
+  name: string,
+  close: (() => Promise<void>) | undefined,
+  run: () => Promise<void>,
+  options: Parameters<GatewayServer["close"]>[0],
+): Promise<void> {
+  let failure: { error: unknown } | undefined;
+  try {
+    await close?.();
+  } catch (error) {
+    failure = { error };
+  }
+  try {
+    const pending = measureGatewayCloseStep(`shutdown.${name}`, run);
+    const budget = getProcessCleanupBudget();
+    const graceMs = budget ? Math.max(0, budget.deadline - performance.now()) : 5_000;
+    if (!options?.exitAfterClose) {
+      await pending;
+    } else if (!(await settlesWithin(pending, graceMs))) {
+      const message = `${name} cleanup exceeded process shutdown deadline; resources remain; pending: ${formatGatewayPendingCloseSteps()}`;
+      budget?.warn(message);
+      throw new GatewayShutdownCleanupRetainedError([new Error(message)], message);
+    }
+  } catch (error) {
+    if (failure) {
+      throw new AggregateError(
+        [failure.error, error],
+        `${formatErrorMessage(failure.error)}; ${formatErrorMessage(error)}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  if (failure) {
+    throw failure.error;
+  }
 }
 
 /** Starts the gateway server after lazily loading the full server implementation. */
@@ -74,7 +121,10 @@ export async function startGatewayServer(
     if (signal?.aborted) {
       const reason = signal.reason;
       return await rethrowGatewayStartupError(reason, () =>
-        closeServer({ reason: String(reason) }),
+        closeServer({
+          reason: String(reason),
+          exitAfterClose: opts.exitAfterStartupFailure?.(reason),
+        }),
       );
     }
     return {
@@ -119,16 +169,21 @@ async function startGatewayServerWithRuntime(
       return {
         ...server,
         close: (closeOptions: Parameters<typeof server.close>[0]) =>
-          readOnlyWorkers.run(async () => {
-            try {
-              await server.close(closeOptions);
-            } finally {
-              await readOnlyWorkers.close();
-            }
-          }),
+          readOnlyWorkers.run(() =>
+            closeWithRuntimeCleanup(
+              "read-only-workers",
+              () => server.close(closeOptions),
+              () => readOnlyWorkers.close(),
+              closeOptions,
+            ),
+          ),
       };
     } catch (error) {
-      return await rethrowGatewayStartupError(error, () => readOnlyWorkers.close());
+      return await rethrowGatewayStartupError(error, () =>
+        closeWithRuntimeCleanup("read-only-workers", undefined, () => readOnlyWorkers.close(), {
+          exitAfterClose: opts.exitAfterStartupFailure?.(error),
+        }),
+      );
     }
   };
   // Gateway brokerage targets Linux's page-table copy cost.
@@ -154,14 +209,16 @@ async function startGatewayServerWithRuntime(
   }
   const closeBroker = async () => {
     // A failed required core join can stop before the admission sidecar runs.
-    await stopDatabaseAdmission?.();
+    await measureGatewayCloseStep("shutdown.database-admission", () => stopDatabaseAdmission?.());
     try {
       const { closeSqliteReadOnlyWorkersForBroker } =
         await import("../infra/sqlite-readonly-worker.js");
-      await closeSqliteReadOnlyWorkersForBroker(broker);
+      await measureGatewayCloseStep("shutdown.broker-read-only-workers", () =>
+        closeSqliteReadOnlyWorkersForBroker(broker),
+      );
     } finally {
       // Readers that did not close remain attached children for broker termination.
-      await broker.close();
+      await measureGatewayCloseStep("shutdown.spawn-broker", () => broker.close());
     }
   };
   try {
@@ -172,16 +229,21 @@ async function startGatewayServerWithRuntime(
     return {
       ...server,
       close: (closeOptions) =>
-        runWithSpawnBroker(broker, async () => {
-          try {
-            await server.close(closeOptions);
-          } finally {
-            // Process scopes and relay extinction joins finish before their transport closes.
-            await closeBroker();
-          }
-        }),
+        runWithSpawnBroker(broker, () =>
+          // The tail keeps joining in order even when its process owner must proceed to exit.
+          closeWithRuntimeCleanup(
+            "spawn-broker-runtime",
+            () => server.close(closeOptions),
+            closeBroker,
+            closeOptions,
+          ),
+        ),
     };
   } catch (error) {
-    return await rethrowGatewayStartupError(error, closeBroker);
+    return await rethrowGatewayStartupError(error, () =>
+      closeWithRuntimeCleanup("spawn-broker-runtime", undefined, closeBroker, {
+        exitAfterClose: opts.exitAfterStartupFailure?.(error),
+      }),
+    );
   }
 }

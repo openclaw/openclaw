@@ -70,6 +70,8 @@ it.each<[Record<string, unknown>, boolean, string, { now?: number; channelId?: s
     "disconnected",
   ],
   [reconnect({ at: 95_000 }), true, "reconnect-grace"],
+  [reconnect({ at: 50_000 }), true, "reconnect-grace", { now: 169_999 }],
+  [reconnect({ at: 50_000 }), false, "disconnected", { now: 170_000 }],
   [reconnect({ at: -20_001 }), false, "disconnected"],
   [reconnect("socket closed"), false, "disconnected"],
   [reconnect({ at: Number.NaN }), false, "disconnected"],

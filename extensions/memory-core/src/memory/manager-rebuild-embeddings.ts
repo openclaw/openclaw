@@ -1,5 +1,5 @@
 import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
-import { resolveEmbeddingInputFormatVersion } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { resolveEmbeddingInputFormatVersion } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
 import {
   decodeMemoryEmbedding,
   type MemorySource,

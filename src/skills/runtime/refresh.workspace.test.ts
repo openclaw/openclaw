@@ -13,9 +13,12 @@ import {
   registerAgentWorkspaceAccess,
   type AgentWorkspaceAccess,
 } from "../../agents/workspace-access.js";
+import { createGatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import {
+  getActiveGatewayRootWorkHolders,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
 import { readWorkspaceSkillSources } from "../loading/workspace-skill-source-reader.js";
@@ -245,6 +248,38 @@ it.each(["replacement", "watch disablement", "shutdown"] as const)(
     }
   },
 );
+
+it("does not defer a restart for an open remote subscription until drain retires it", async () => {
+  const options = { finishOnAbort: false };
+  const { access, subscriptions, remoteParams } = await remoteFixture(options);
+  const watch = access.watchSkills.getMockImplementation()!;
+  // In-process node.invoke dispatch admits the subscription's invocation as a Gateway root.
+  access.watchSkills.mockImplementation(async (...args) => {
+    const root = tryBeginGatewayRootWorkAdmission("ws:node.invoke")!;
+    try {
+      return await root.run(() => watch(...args));
+    } finally {
+      root.release();
+    }
+  });
+  try {
+    await remoteRefresh.ensureRemoteSkillsWatcher(remoteParams);
+    expect(access.watchSkills).toHaveBeenCalledTimes(1);
+    // An idle node subscription is not pending work: config restarts and suspension proceed.
+    expect(createGatewayActiveWorkSnapshot().counts.rootRequests).toBe(0);
+
+    // Drain retires the subscription, then waits for its invocation to close.
+    markGatewayRestartDraining("restart");
+    expect(subscriptions[0]!.signal.aborted).toBe(true);
+    expect(getActiveGatewayRootWorkHolders()).toEqual(["ws:node.invoke"]);
+    subscriptions[0]!.end();
+    await access.watchSkills.mock.results[0]!.value;
+    expect(getActiveGatewayRootWorkHolders()).toEqual([]);
+  } finally {
+    options.finishOnAbort = true;
+    subscriptions.forEach(({ end }) => end());
+  }
+});
 
 it("restores snapshot reuse only on verified availability, without adding a content revision", async () => {
   const { params, subscriptions, access, writes, gateway } = await remoteFixture();

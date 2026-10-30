@@ -295,7 +295,13 @@ describe("final delivery after plugin replacement", () => {
       );
       const expectCustody = (deliveryState: "prepared" | "delivered") =>
         expect(loadSessionEntry(locator)?.pendingFinalDelivery?.deliveries).toEqual([
-          { id: completion.deliveryId, state: deliveryState },
+          {
+            id: completion.deliveryId,
+            state: deliveryState,
+            ...(deliveryState === "delivered"
+              ? { receipt: { platformMessageId: "accepted-final", resultCount: 1 } }
+              : {}),
+          },
         ]);
       expectCustody("prepared");
       if (tool) {

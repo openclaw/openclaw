@@ -230,106 +230,6 @@ CREATE TABLE "channel_pairing_requests" (
   PRIMARY KEY ("channel_key", "account_id", "request_id")
 );
 
-CREATE TABLE "claw_cron_refs" (
-  "agent_id" text COLLATE "C" NOT NULL,
-  "manifest_id" text COLLATE "C" NOT NULL,
-  "schema_version" text COLLATE "C" NOT NULL,
-  "declaration_key" text COLLATE "C" NOT NULL,
-  "scheduler_job_id" text COLLATE "C",
-  "status" text COLLATE "C" NOT NULL,
-  "job_json" text COLLATE "C" NOT NULL,
-  "error" text COLLATE "C",
-  "created_at_ms" bigint NOT NULL,
-  "updated_at_ms" bigint NOT NULL,
-  PRIMARY KEY ("agent_id", "manifest_id"),
-  UNIQUE ("declaration_key"),
-  UNIQUE ("scheduler_job_id")
-);
-
-CREATE TABLE "claw_installs" (
-  "agent_id" text COLLATE "C" NOT NULL,
-  "schema_version" text COLLATE "C" NOT NULL,
-  "source_kind" text COLLATE "C" NOT NULL,
-  "claw_name" text COLLATE "C" NOT NULL,
-  "claw_version" text COLLATE "C" NOT NULL,
-  "package_root" text COLLATE "C" NOT NULL,
-  "manifest_path" text COLLATE "C" NOT NULL,
-  "integrity_kind" text COLLATE "C" NOT NULL,
-  "integrity" text COLLATE "C" NOT NULL,
-  "source_byte_length" bigint NOT NULL,
-  "manifest_schema_version" bigint NOT NULL,
-  "plan_integrity" text COLLATE "C" NOT NULL,
-  "workspace" text COLLATE "C" NOT NULL,
-  "agent_config_digest" text COLLATE "C" NOT NULL,
-  "agent_owned_paths_json" text COLLATE "C" NOT NULL,
-  "bootstrap_source_path" text COLLATE "C",
-  "bootstrap_content_digest" text COLLATE "C",
-  "status" text COLLATE "C" NOT NULL,
-  "added_at_ms" bigint NOT NULL,
-  "updated_at_ms" bigint NOT NULL,
-  PRIMARY KEY ("agent_id"),
-  CHECK (("status" IN ('pending', 'workspace_ready', 'config_committed', 'complete', 'partial'))),
-  UNIQUE ("workspace")
-);
-
-CREATE TABLE "claw_mcp_server_refs" (
-  "agent_id" text COLLATE "C" NOT NULL,
-  "name" text COLLATE "C" NOT NULL,
-  "schema_version" text COLLATE "C" NOT NULL,
-  "config_digest" text COLLATE "C" NOT NULL,
-  "relationship" text COLLATE "C" NOT NULL,
-  "origin" text COLLATE "C" NOT NULL,
-  "independent_owner" bigint NOT NULL DEFAULT 0,
-  "status" text COLLATE "C" NOT NULL,
-  "error" text COLLATE "C",
-  "created_at_ms" bigint NOT NULL,
-  "updated_at_ms" bigint NOT NULL,
-  PRIMARY KEY ("agent_id", "name"),
-  CHECK (("relationship" IN ('managed', 'referenced'))),
-  CHECK (("origin" IN ('claw-introduced', 'pre-existing'))),
-  CHECK (("independent_owner" IN (0, 1)))
-);
-
-CREATE TABLE "claw_package_refs" (
-  "agent_id" text COLLATE "C" NOT NULL,
-  "package_kind" text COLLATE "C" NOT NULL,
-  "package_source" text COLLATE "C" NOT NULL,
-  "package_ref" text COLLATE "C" NOT NULL,
-  "package_version" text COLLATE "C" NOT NULL,
-  "package_integrity" text COLLATE "C" NOT NULL,
-  "schema_version" text COLLATE "C" NOT NULL,
-  "claw_name" text COLLATE "C" NOT NULL,
-  "package_status" text COLLATE "C" NOT NULL,
-  "relationship" text COLLATE "C" NOT NULL,
-  "origin" text COLLATE "C" NOT NULL,
-  "independent_owner" bigint NOT NULL,
-  "extension_id" text COLLATE "C",
-  "extension_format" text COLLATE "C",
-  "extension_detected_format" text COLLATE "C",
-  "extension_mapped_json" text COLLATE "C",
-  "extension_unavailable_json" text COLLATE "C",
-  "extension_adapter_identity" text COLLATE "C",
-  "installed_at_ms" bigint NOT NULL,
-  "updated_at_ms" bigint NOT NULL,
-  PRIMARY KEY ("agent_id", "package_kind", "package_source", "package_ref", "package_version"),
-  CHECK (("relationship" IN ('managed', 'referenced'))),
-  CHECK (("origin" IN ('claw-introduced', 'pre-existing'))),
-  CHECK (("independent_owner" IN (0, 1)))
-);
-
-CREATE TABLE "claw_workspace_files" (
-  "agent_id" text COLLATE "C" NOT NULL,
-  "target_path" text COLLATE "C" NOT NULL,
-  "schema_version" text COLLATE "C" NOT NULL,
-  "workspace" text COLLATE "C" NOT NULL,
-  "source_path" text COLLATE "C" NOT NULL,
-  "content_digest" text COLLATE "C" NOT NULL,
-  "status" text COLLATE "C" NOT NULL,
-  "created_at_ms" bigint NOT NULL,
-  "updated_at_ms" bigint NOT NULL,
-  PRIMARY KEY ("agent_id", "target_path")
-);
-
 CREATE TABLE "clawhub_promotion_claims" (
   "slug" text COLLATE "C" NOT NULL,
   "provider" text COLLATE "C",
@@ -1047,6 +947,106 @@ CREATE TABLE "task_runs" (
   "terminal_outcome" text COLLATE "C",
   "detail_json" text COLLATE "C",
   PRIMARY KEY ("task_id")
+);
+
+CREATE TABLE "template_cron_refs" (
+  "agent_id" text COLLATE "C" NOT NULL,
+  "manifest_id" text COLLATE "C" NOT NULL,
+  "schema_version" text COLLATE "C" NOT NULL,
+  "declaration_key" text COLLATE "C" NOT NULL,
+  "scheduler_job_id" text COLLATE "C",
+  "status" text COLLATE "C" NOT NULL,
+  "job_json" text COLLATE "C" NOT NULL,
+  "error" text COLLATE "C",
+  "created_at_ms" bigint NOT NULL,
+  "updated_at_ms" bigint NOT NULL,
+  PRIMARY KEY ("agent_id", "manifest_id"),
+  UNIQUE ("declaration_key"),
+  UNIQUE ("scheduler_job_id")
+);
+
+CREATE TABLE "template_installs" (
+  "agent_id" text COLLATE "C" NOT NULL,
+  "schema_version" text COLLATE "C" NOT NULL,
+  "source_kind" text COLLATE "C" NOT NULL,
+  "template_name" text COLLATE "C" NOT NULL,
+  "template_version" text COLLATE "C" NOT NULL,
+  "package_root" text COLLATE "C" NOT NULL,
+  "manifest_path" text COLLATE "C" NOT NULL,
+  "integrity_kind" text COLLATE "C" NOT NULL,
+  "integrity" text COLLATE "C" NOT NULL,
+  "source_byte_length" bigint NOT NULL,
+  "manifest_schema_version" bigint NOT NULL,
+  "plan_integrity" text COLLATE "C" NOT NULL,
+  "workspace" text COLLATE "C" NOT NULL,
+  "agent_config_digest" text COLLATE "C" NOT NULL,
+  "agent_owned_paths_json" text COLLATE "C" NOT NULL,
+  "bootstrap_source_path" text COLLATE "C",
+  "bootstrap_content_digest" text COLLATE "C",
+  "status" text COLLATE "C" NOT NULL,
+  "added_at_ms" bigint NOT NULL,
+  "updated_at_ms" bigint NOT NULL,
+  PRIMARY KEY ("agent_id"),
+  CHECK (("status" IN ('pending', 'workspace_ready', 'config_committed', 'complete', 'partial'))),
+  UNIQUE ("workspace")
+);
+
+CREATE TABLE "template_mcp_server_refs" (
+  "agent_id" text COLLATE "C" NOT NULL,
+  "name" text COLLATE "C" NOT NULL,
+  "schema_version" text COLLATE "C" NOT NULL,
+  "config_digest" text COLLATE "C" NOT NULL,
+  "relationship" text COLLATE "C" NOT NULL,
+  "origin" text COLLATE "C" NOT NULL,
+  "independent_owner" bigint NOT NULL DEFAULT 0,
+  "status" text COLLATE "C" NOT NULL,
+  "error" text COLLATE "C",
+  "created_at_ms" bigint NOT NULL,
+  "updated_at_ms" bigint NOT NULL,
+  PRIMARY KEY ("agent_id", "name"),
+  CHECK (("relationship" IN ('managed', 'referenced'))),
+  CHECK (("origin" IN ('template-introduced', 'pre-existing'))),
+  CHECK (("independent_owner" IN (0, 1)))
+);
+
+CREATE TABLE "template_package_refs" (
+  "agent_id" text COLLATE "C" NOT NULL,
+  "package_kind" text COLLATE "C" NOT NULL,
+  "package_source" text COLLATE "C" NOT NULL,
+  "package_ref" text COLLATE "C" NOT NULL,
+  "package_version" text COLLATE "C" NOT NULL,
+  "package_integrity" text COLLATE "C" NOT NULL,
+  "schema_version" text COLLATE "C" NOT NULL,
+  "template_name" text COLLATE "C" NOT NULL,
+  "package_status" text COLLATE "C" NOT NULL,
+  "relationship" text COLLATE "C" NOT NULL,
+  "origin" text COLLATE "C" NOT NULL,
+  "independent_owner" bigint NOT NULL,
+  "extension_id" text COLLATE "C",
+  "extension_format" text COLLATE "C",
+  "extension_detected_format" text COLLATE "C",
+  "extension_mapped_json" text COLLATE "C",
+  "extension_unavailable_json" text COLLATE "C",
+  "extension_adapter_identity" text COLLATE "C",
+  "installed_at_ms" bigint NOT NULL,
+  "updated_at_ms" bigint NOT NULL,
+  PRIMARY KEY ("agent_id", "package_kind", "package_source", "package_ref", "package_version"),
+  CHECK (("relationship" IN ('managed', 'referenced'))),
+  CHECK (("origin" IN ('template-introduced', 'pre-existing'))),
+  CHECK (("independent_owner" IN (0, 1)))
+);
+
+CREATE TABLE "template_workspace_files" (
+  "agent_id" text COLLATE "C" NOT NULL,
+  "target_path" text COLLATE "C" NOT NULL,
+  "schema_version" text COLLATE "C" NOT NULL,
+  "workspace" text COLLATE "C" NOT NULL,
+  "source_path" text COLLATE "C" NOT NULL,
+  "content_digest" text COLLATE "C" NOT NULL,
+  "status" text COLLATE "C" NOT NULL,
+  "created_at_ms" bigint NOT NULL,
+  "updated_at_ms" bigint NOT NULL,
+  PRIMARY KEY ("agent_id", "target_path")
 );
 
 CREATE TABLE "web_push_subscriptions" (

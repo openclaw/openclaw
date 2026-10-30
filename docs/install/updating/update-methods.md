@@ -322,6 +322,69 @@ path. To repair a service still pointing at a versioned `Cellar` path, run
 `openclaw gateway install --force` from the upgraded CLI. Global npm packages
 under the Homebrew prefix continue to use npm.
 
+## System-package and image-based installs
+
+When your operating system owns the OpenClaw package, nothing OpenClaw-managed runs
+Doctor. `openclaw update` skips only installs it verifies as owned by pacman or
+FreeBSD pkg. It does not detect bootc or rpm-ostree images, so update those through
+the image and do not run `openclaw update` on them. After the system replaces the
+package, run `openclaw doctor --fix`. Before staging the new package or image,
+[create a verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup).
+
+An image-based system swaps the package and reboots, so the Gateway service starts
+with the new release already in place; there is no window to stop it and run Doctor
+first. If the release needs a state migration, the Gateway refuses to start and exits
+with status 78. The generated systemd unit sets `RestartPreventExitStatus=78`, so
+systemd does not retry: the unit stays `failed` and the Gateway stays down until you
+run Doctor. The service log names the cause, for example:
+
+```text
+OpenClaw agent database /home/user/.openclaw/agents/main/agent/openclaw-agent.sqlite uses schema version 24; stop active agents and run openclaw doctor --fix to upgrade it to schema version 38 before using it.
+```
+
+After each image upgrade, check the unit and recover if it failed:
+
+```bash
+# Is the unit failed? The log tail names the cause.
+systemctl --user status openclaw-gateway.service
+# Migrate state and restart the Gateway.
+openclaw doctor --fix --non-interactive
+```
+
+Doctor backs up the database beside it before migrating, then restarts the managed
+Gateway. For a system service, run `systemctl status` with `sudo` on its unit, and run
+Doctor as the service account with the service's profile and `OPENCLAW_STATE_DIR` or
+`OPENCLAW_CONFIG_PATH`. From another account Doctor refuses the mismatched selection or
+inspects unrelated state. If Doctor does not restart the unit, restart it with
+`sudo systemctl restart`.
+
+Rolling the image back (`bootc rollback`, `rpm-ostree rollback`) swaps the package but
+not migrated state. After a migration, restore a verified backup with its matching
+release; see [Downgrade](/install/updating/rollback-and-recovery#downgrade).
+
+A failed unit is silent on a host nobody watches. To be notified, add an
+operator-owned drop-in; `openclaw gateway install --force` never removes it:
+
+```ini
+# ~/.config/systemd/user/openclaw-gateway.service.d/10-on-failure.conf
+[Unit]
+OnFailure=openclaw-gateway-failed@%n.service
+```
+
+```ini
+# ~/.config/systemd/user/openclaw-gateway-failed@.service
+[Unit]
+Description=Notify that %i failed
+
+[Service]
+Type=oneshot
+ExecStart=/path/to/notify-script "%i failed"
+```
+
+Run `systemctl --user daemon-reload` after adding both files. systemd starts the
+notifier when the Gateway unit enters `failed`, including after exit 78. For a system
+service, use the matching `/etc/systemd/system` paths and drop `--user`.
+
 ## Alternative: manual npm, pnpm, or bun
 
 Prefer `openclaw update` for supervised installs: it can coordinate the package

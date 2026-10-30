@@ -71,6 +71,29 @@ const {
 const { repairMissingConfiguredPluginInstalls, repairMissingPluginInstallsForIds } =
   await import("./missing-configured-plugin-install.js");
 
+function mockBundledChannelWithMissingConfigMetadata() {
+  mocks.listChannelPluginCatalogEntries.mockReturnValue([
+    {
+      id: "bundleddemo",
+      pluginId: "bundleddemo",
+      origin: "bundled",
+      meta: { label: "Matrix" },
+      install: { npmSpec: "@openclaw/bundleddemo" },
+    },
+  ]);
+  mocks.loadPluginMetadataSnapshot.mockReturnValue({
+    plugins: [
+      {
+        id: "bundleddemo",
+        origin: "bundled",
+        packageName: "@openclaw/bundleddemo",
+        channels: ["bundleddemo"],
+      },
+    ],
+    diagnostics: [{ pluginId: "bundleddemo", message: "manifest without channelConfigs metadata" }],
+  });
+}
+
 async function useRealCapabilityConsent() {
   const actual = await vi.importActual<typeof import("../../../plugins/capability-consent.js")>(
     "../../../plugins/capability-consent.js",
@@ -998,28 +1021,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       },
     };
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-    mocks.listChannelPluginCatalogEntries.mockReturnValue([
-      {
-        id: "bundleddemo",
-        pluginId: "bundleddemo",
-        origin: "bundled",
-        meta: { label: "Matrix" },
-        install: { npmSpec: "@openclaw/bundleddemo" },
-      },
-    ]);
-    mocks.loadPluginMetadataSnapshot.mockReturnValue({
-      plugins: [
-        {
-          id: "bundleddemo",
-          origin: "bundled",
-          packageName: "@openclaw/bundleddemo",
-          channels: ["bundleddemo"],
-        },
-      ],
-      diagnostics: [
-        { pluginId: "bundleddemo", message: "manifest without channelConfigs metadata" },
-      ],
-    });
+    mockBundledChannelWithMissingConfigMetadata();
     mockCurrentBundledPlugin("bundleddemo", "@openclaw/bundleddemo", bundledRoot);
 
     const result = await repairMissingConfiguredPluginInstalls({
@@ -1112,28 +1114,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     async (_, record) => {
       const records = { bundleddemo: record };
       mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-      mocks.listChannelPluginCatalogEntries.mockReturnValue([
-        {
-          id: "bundleddemo",
-          pluginId: "bundleddemo",
-          origin: "bundled",
-          meta: { label: "Matrix" },
-          install: { npmSpec: "@openclaw/bundleddemo" },
-        },
-      ]);
-      mocks.loadPluginMetadataSnapshot.mockReturnValue({
-        plugins: [
-          {
-            id: "bundleddemo",
-            origin: "bundled",
-            packageName: "@openclaw/bundleddemo",
-            channels: ["bundleddemo"],
-          },
-        ],
-        diagnostics: [
-          { pluginId: "bundleddemo", message: "manifest without channelConfigs metadata" },
-        ],
-      });
+      mockBundledChannelWithMissingConfigMetadata();
       mockCurrentBundledPlugin("bundleddemo", "@openclaw/bundleddemo");
 
       const result = await repairMissingConfiguredPluginInstalls({

@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
@@ -128,11 +129,15 @@ suite.define(() => {
   });
 
   it("keeps collaborative owner stacks legible without shifting session rows", async () => {
+    const sessions = collaborativeSessionsList();
+    for (const session of sessions.sessions.slice(0, 2)) {
+      Object.assign(session, { hasActiveRun: true, status: "running" });
+    }
     const { page } = await openSession(
-      collaborativeSessionsList(),
+      sessions,
       {
         hasMultipleSessionSharingIdentities: true,
-        sessionKey: "agent:main:collaboration",
+        sessionKey: "agent:main:single-owner",
       },
       {
         avatars: [
@@ -206,6 +211,27 @@ suite.define(() => {
     );
     expect(collaborative?.height).toBeCloseTo(single?.height ?? 0, 5);
     expect(collaborative?.titleLeft).toBeCloseTo(single?.titleLeft ?? 0, 5);
+    for (const row of [collaborativeRow, overflowRow]) {
+      const [trace, title] = await Promise.all([
+        row.locator(".session-glyph__trace").evaluate(geometry),
+        row.locator(".sidebar-recent-session__text").evaluate(geometry),
+      ]);
+      expect(trace.width).toBe(32);
+      expect(trace.right).toBeLessThanOrEqual(title.left);
+    }
+    const frame = await takeControlUiScreenshotFrame(
+      page,
+      page.locator("body"),
+      [collaborativeRow],
+      {
+        animations: "disabled",
+        elements: [page.locator(".sidebar-shell")],
+      },
+    );
+    await writeFile(
+      path.join(suite.artifactDir, "shared-activity-sidebar.png"),
+      frame.elements[0]!.png,
+    );
   });
 
   it.each([
@@ -215,7 +241,7 @@ suite.define(() => {
     { width: 390, grouping: "None" },
     { width: 390, grouping: "Custom groups" },
     { width: 390, grouping: "Person" },
-  ])("keeps $grouping activity last at $width px", async ({ width, grouping }) => {
+  ])("aligns $grouping left status at $width px", async ({ width, grouping }) => {
     const patrick = sessionPerson("profile-patrick", "Patrick");
     const mira = sessionPerson("profile-mira", "Mira");
     const states: Array<[string, Record<string, unknown>]> = [
@@ -227,6 +253,8 @@ suite.define(() => {
       ],
       ["unread", { unread: true }],
       ["running", { hasActiveRun: true, status: "running", activeRunIds: ["run-1"] }],
+      ["artwork", { icon: "🔧" }],
+      ["draft", { visibility: "draft", sharingRole: "owner" }],
       ["parent", { hasActiveRun: true, status: "running", childSessions: ["agent:main:child"] }],
     ];
     const rows = states.map(([id, state], index) =>
@@ -302,33 +330,41 @@ suite.define(() => {
 
     const rowGeometry = (id: string) =>
       row(id).evaluate((element) => {
-        const box = (selector: string) => element.querySelector(selector)?.getBoundingClientRect();
+        // Compare row-owned padding, not the mobile drawer's viewport transform.
+        const origin = element.getBoundingClientRect().left;
+        const box = (selector: string) => {
+          const bounds = element.querySelector(selector)?.getBoundingClientRect();
+          return bounds
+            ? { left: bounds.left - origin, right: bounds.right - origin, width: bounds.width }
+            : undefined;
+        };
         const link = element.querySelector(".sidebar-recent-session__link")!;
         return {
-          link: link.getBoundingClientRect(),
+          link: box(".sidebar-recent-session__link")!,
           gap: Number.parseFloat(getComputedStyle(link).columnGap),
           top: element.getBoundingClientRect().top,
-          right: element.getBoundingClientRect().right,
           text: box(".sidebar-recent-session__text"),
           indicator: box(".sidebar-session-indicator:not(:empty)"),
-          actions: box(".session-row-actions"),
           toggle: box("[data-child-session-toggle]"),
         };
       });
-    const header = await page
-      .locator(".personal-session-groups__heading")
-      .evaluate((element) => element.getBoundingClientRect().bottom);
-    const [idle, legacyOwner, unread, running] = await Promise.all([
+    const [idle, legacyOwner, unread, running, artwork, draft] = await Promise.all([
       rowGeometry("idle"),
       rowGeometry("legacy-owner"),
       rowGeometry("unread"),
       rowGeometry("running"),
+      rowGeometry("artwork"),
+      rowGeometry("draft"),
     ]);
     expect(legacyOwner.text?.left).toBeCloseTo(idle.text?.left ?? 0, 5);
     if (grouping === "Person") {
-      expect(idle.top - header).toBeLessThanOrEqual(12);
+      // The selected owner's rows sit directly below the owner picker.
+      const ownerTitleBottom = await page
+        .locator("#sidebar-session-owner-title")
+        .evaluate((element) => element.getBoundingClientRect().bottom);
+      expect(idle.top - ownerTitleBottom).toBeLessThanOrEqual(12);
     }
-    if (width === 1200 && grouping !== "Person") {
+    if (width === 1200 || grouping === "Person") {
       const frame = await takeControlUiScreenshotFrame(
         page,
         page.locator("body"),
@@ -344,43 +380,33 @@ suite.define(() => {
         frame.elements[0]!.png,
       );
     }
-    expect(idle.indicator).toBeUndefined();
-    for (const status of [running, unread]) {
+    for (const status of [running, unread, artwork, draft]) {
       expect(status.text?.left).toBeCloseTo(idle.text?.left ?? 0, 5);
-      expect(status.indicator?.left).toBeGreaterThanOrEqual(status.text?.right ?? Infinity);
+      expect(status.indicator?.right).toBeLessThanOrEqual(status.text?.left ?? 0);
     }
 
-    // Hover actions must appear before the fixed trailing status, not push it left.
+    // Revealing actions must not move the leading state or the title column.
     await row("running").hover();
     await expectBrowser(row("running").locator(".session-row-actions button").first()).toHaveCSS(
       "opacity",
       "1",
     );
     const hovered = await rowGeometry("running");
-    expect(hovered.indicator?.left).toBeGreaterThanOrEqual(hovered.actions?.right ?? Infinity);
-    expect(hovered.right - (hovered.indicator?.right ?? 0)).toBeCloseTo(
-      running.right - (running.indicator?.right ?? 0),
-      5,
-    );
+    expect(hovered.indicator?.left).toBeCloseTo(running.indicator?.left ?? 0, 5);
+    expect(hovered.text?.left).toBeCloseTo(running.text?.left ?? 0, 5);
     await page.mouse.move(1100, 700);
     await row("running").locator("a").focus();
     const focused = await rowGeometry("running");
-    expect(focused.indicator?.left).toBeGreaterThanOrEqual(focused.actions?.right ?? Infinity);
-    expect(focused.right - (focused.indicator?.right ?? 0)).toBeCloseTo(
-      running.right - (running.indicator?.right ?? 0),
-      5,
-    );
+    expect(focused.indicator?.left).toBeCloseTo(running.indicator?.left ?? 0, 5);
+    expect(focused.text?.left).toBeCloseTo(running.text?.left ?? 0, 5);
     await page.locator("#sidebar-session-owner-title").focus();
     await page.mouse.move(width - 10, 700);
     await expectBrowser(page.locator(".session-progress-hovercard")).toBeHidden();
     await row("parent").hover();
     const parent = await rowGeometry("parent");
     expect(parent.toggle).toBeDefined();
-    expect(parent.indicator?.left).toBeGreaterThanOrEqual(parent.toggle?.right ?? Infinity);
-    expect(parent.right - (parent.indicator?.right ?? 0)).toBeCloseTo(
-      running.right - (running.indicator?.right ?? 0),
-      5,
-    );
+    expect(parent.indicator?.right).toBeLessThanOrEqual(parent.text?.left ?? 0);
+    expect(parent.text?.left).toBeCloseTo(idle.text?.left ?? 0, 5);
     const toggle = row("parent").locator("[data-child-session-toggle]");
     await toggle.click();
     await expectBrowser(group.locator('[data-session-key="agent:main:child"]')).toContainText(
@@ -390,22 +416,6 @@ suite.define(() => {
     await row("child").locator(".session-glyph__ring").waitFor();
     await row("child").hover({ position: { x: 2, y: 10 } });
     const child = await rowGeometry("child");
-    if (grouping === "None") {
-      const tree = group.locator('[data-session-tree="agent:main:parent"]');
-      const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [row("child")], {
-        animations: "disabled",
-        elements: [tree],
-      });
-      await writeFile(
-        path.join(suite.artifactDir, `child-title-${width}.png`),
-        frame.elements[0]!.png,
-      );
-      await writeFile(path.join(suite.artifactDir, `child-title-${width}-context.png`), frame.png);
-      await writeFile(
-        path.join(suite.artifactDir, `child-title-${width}-geometry.json`),
-        JSON.stringify(child, null, 2),
-      );
-    }
     // Child actions already take their width in flow. The title should fill
     // the link to within its normal inter-item gap, not lose an action reserve again.
     expect(child.text?.width).toBeGreaterThanOrEqual(
@@ -416,11 +426,7 @@ suite.define(() => {
     expect(focusedChild.text?.width).toBeGreaterThanOrEqual(
       focusedChild.link.right - focusedChild.text!.left - focusedChild.gap,
     );
-    expect(child.indicator?.left).toBeGreaterThanOrEqual(child.actions?.right ?? Infinity);
-    expect(child.right - (child.indicator?.right ?? 0)).toBeCloseTo(
-      running.right - (running.indicator?.right ?? 0),
-      5,
-    );
+    expect(child.indicator?.right).toBeLessThanOrEqual(child.text?.left ?? 0);
     await row("running").hover();
     if (width === 390) {
       await row("running").locator("[data-sidebar-session-menu]").click();
@@ -433,11 +439,7 @@ suite.define(() => {
     );
     await row("running").hover();
     const pinned = await rowGeometry("running");
-    expect(pinned.indicator?.left).toBeGreaterThanOrEqual(pinned.actions?.right ?? Infinity);
-    expect(pinned.right - (pinned.indicator?.right ?? 0)).toBeCloseTo(
-      running.right - (running.indicator?.right ?? 0),
-      5,
-    );
+    expect(pinned.indicator?.right).toBeLessThanOrEqual(pinned.text?.left ?? 0);
   });
 
   it("derives People controls and owner filtering from current session owners", async () => {
@@ -948,36 +950,83 @@ suite.define(() => {
     ).toHaveCount(0);
   });
 
-  it("clears a selected draft mode when sharing policy becomes unavailable", async () => {
-    const page = await newPage();
-    const gateway = await installMockGateway(page, {
-      allowedSessionVisibilities: ["shared", "draft"],
-      hasMultipleSessionSharingIdentities: true,
-      methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-bob"]) },
-    });
+  it.each([
+    { width: 1200, refused: false },
+    { width: 390, refused: false },
+    { width: 1200, refused: true },
+  ])(
+    "preserves a pending Draft after creation is disabled (width: $width, refused: $refused)",
+    async ({ width, refused }) => {
+      const page = await newPage(width);
+      const gateway = await installMockGateway(page, {
+        allowedSessionVisibilities: ["shared", "draft"],
+        hasMultipleSessionSharingIdentities: true,
+        featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
+        methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-bob"]) },
+      });
+      await page.goto(`${suite.server?.baseUrl ?? ""}new`);
+      const composer = page.locator(".new-session-page__composer");
+      const attachmentMenu = composer.getByRole("button", { name: "Add attachment" });
+      await attachmentMenu.click();
+      const draftToggle = composer.getByRole("menuitemcheckbox", { name: "Draft", exact: true });
+      await draftToggle.click();
+      await attachmentMenu.click();
+      await expectBrowser(attachmentMenu).toHaveAttribute("aria-expanded", "false");
+      const message = page.locator(".new-session-page__message");
+      await message.fill("Keep this private plan");
+      await composer.locator("input.agent-chat__file-input").setInputFiles({
+        name: "plan.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from("Picnic checklist"),
+      });
+      await expectBrowser(composer.locator(".chat-attachment-file__name")).toHaveText("plan.txt");
+      await gateway.setSessionSharingPolicy({
+        allowedSessionVisibilities: ["shared"],
+        hasMultipleSessionSharingIdentities: true,
+      });
+      if (refused) {
+        await gateway.deferNext("sessions.create");
+        await composer.getByRole("button", { name: "Start session", exact: true }).click();
+        expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
+          visibility: "draft",
+        });
+        await gateway.rejectDeferred("sessions.create", {
+          code: "INVALID_REQUEST",
+          message: "session visibility is disabled: draft",
+        });
+        await page.getByText("session visibility is disabled: draft", { exact: true }).waitFor();
+      }
+      await replaceGatewayClient(page);
 
-    await page.goto(`${suite.server?.baseUrl ?? ""}new`);
-    const draftToggle = page.getByRole("switch", { name: "Draft", exact: true });
-    await page.locator(".new-session-page__composer .agent-chat__composer-footer").hover();
-    await draftToggle.check();
-    await gateway.setSessionSharingPolicy({
-      allowedSessionVisibilities: ["shared"],
-      hasMultipleSessionSharingIdentities: false,
-    });
-    await replaceGatewayClient(page);
-    await expect
-      .poll(() => page.getByRole("button", { name: "Draft", exact: true }).count())
-      .toBe(0);
-
-    await gateway.setSessionSharingPolicy({
-      allowedSessionVisibilities: ["shared", "draft"],
-      hasMultipleSessionSharingIdentities: true,
-    });
-    await replaceGatewayClient(page);
-    await page.locator(".new-session-page__composer .agent-chat__composer-footer").hover();
-    await draftToggle.waitFor();
-    expect(await draftToggle.isChecked()).toBe(false);
-  });
+      const notice = page.locator(".agent-chat__composer-status-text").filter({
+        hasText: "Draft creation is disabled",
+      });
+      if (!refused) {
+        await expectBrowser(notice).toBeVisible();
+      }
+      await expectBrowser(page.locator(".new-session-page__visibility--draft")).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+      await expectBrowser(message).toHaveValue("Keep this private plan");
+      await expectBrowser(composer.locator(".chat-attachment-file__name")).toHaveText("plan.txt");
+      await message.press("Enter");
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(refused ? 1 : 0);
+      await attachmentMenu.click();
+      await expectBrowser(draftToggle).toHaveAttribute("aria-checked", "true");
+      await draftToggle.click();
+      await attachmentMenu.click();
+      await expectBrowser(attachmentMenu).toHaveAttribute("aria-expanded", "false");
+      await expectBrowser(notice).toHaveCount(0);
+      await composer.getByRole("button", { name: "Start session", exact: true }).click();
+      const create = await gateway.waitForRequest("sessions.create", { after: refused ? 1 : 0 });
+      expect(create.params).toMatchObject({
+        message: "Keep this private plan",
+        attachments: [expect.objectContaining({ fileName: "plan.txt" })],
+      });
+      expect(create.params).not.toHaveProperty("visibility");
+    },
+  );
 
   it("aligns the sharing and Details icons in the session toolbar", async () => {
     const { page } = await openSession(ownerSessions("shared"), {
