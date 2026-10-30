@@ -16,7 +16,7 @@ import { COMPUTER_USE_V2_ACTION_NAMES } from "../../plugins/computer-use-contrac
 import { sleep } from "../../utils/sleep.js";
 import type { PreparedPairedComputerUse } from "../computer-use-node-capabilities.js";
 import {
-  DEFAULT_IMAGE_MAX_DIMENSION_PX,
+  resolveImageMaxDimensionPx,
   resolveImageSanitizationLimits,
 } from "../image-sanitization.js";
 import { readNodePermissionError } from "../node-permission-error.js";
@@ -330,10 +330,7 @@ export function createComputerTool(options?: {
     availableComputerActions(actions, hasCleanupOwner);
   const configuredLimits = resolveImageSanitizationLimits(options?.config);
   // Replay sanitization must not resize the image underneath its coordinate frame.
-  const referenceWidth = Math.max(
-    1,
-    Math.min(COMPUTER_REF_WIDTH, configuredLimits.maxDimensionPx ?? DEFAULT_IMAGE_MAX_DIMENSION_PX),
-  );
+  const referenceWidth = Math.min(COMPUTER_REF_WIDTH, resolveImageMaxDimensionPx(configuredLimits));
   const targetScope = options?.transport
     ? "session"
     : options?.pairedNodeComputerUse?.gateway?.configured === false

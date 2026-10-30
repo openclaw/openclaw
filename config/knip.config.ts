@@ -612,6 +612,7 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-source-preparation.ts!",
   "scripts/perf/plugin-transform-preload.mjs!",
   "scripts/perf/prepared-gateway-startup-measure.mjs!",
+  "scripts/perf/read-image-preparation-measure.ts!",
   "scripts/perf/sandbox-paths-measure.ts!",
   "scripts/perf/sandbox-skills-sync-measure.ts!",
   "scripts/perf/sandbox-start-measure.ts!",

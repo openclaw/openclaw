@@ -1,3 +1,4 @@
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type { ImageContent } from "../../llm/types.js";
 import { convertImageToPng, createImageProcessor } from "../../media/image-ops.js";
 
@@ -30,7 +31,7 @@ async function normalizeImageForProvider(
 /** Normalize image formats for model input, then enforce inline size limits when enabled. */
 export async function processImage(
   image: ImageBytes,
-  options: { autoResizeImages: boolean },
+  options: { autoResizeImages: boolean; maxDimensionPx?: number },
 ): Promise<{ ok: true; image: ImageContent; hints: string[] } | { ok: false; message: string }> {
   const normalized = await normalizeImageForProvider(image);
   if (!normalized) {
@@ -46,7 +47,7 @@ export async function processImage(
   }
   let prepared = normalized.image;
   if (options.autoResizeImages) {
-    const resized = await resizeImage(prepared);
+    const resized = await resizeImage(prepared, options.maxDimensionPx);
     if (!resized) {
       return {
         ok: false,
@@ -65,14 +66,16 @@ export async function processImage(
   };
 }
 
-const MAX_IMAGE_WIDTH = 2000;
-const MAX_IMAGE_HEIGHT = 2000;
+const MAX_IMAGE_SIDE = 2000;
 // 4.5MB of base64 payload leaves headroom below Anthropic's 5MB limit.
 const MAX_IMAGE_BASE64_BYTES = 4.5 * 1024 * 1024;
 const JPEG_QUALITY = 80;
 
 /** Returns null when the image processor cannot meet the inline dimensions and payload limit. */
-async function resizeImage(img: ImageBytes): Promise<{ image: ImageBytes; hint?: string } | null> {
+async function resizeImage(
+  img: ImageBytes,
+  maxDimensionPx: number | undefined,
+): Promise<{ image: ImageBytes; hint?: string } | null> {
   const inputBuffer = img.data;
   const inputBase64Size = 4 * Math.ceil(inputBuffer.byteLength / 3);
   const processor = createImageProcessor();
@@ -87,9 +90,14 @@ async function resizeImage(img: ImageBytes): Promise<{ image: ImageBytes; hint?:
         ? { width: probe.height, height: probe.width }
         : { width: probe.width, height: probe.height };
 
+    // Callers that sanitize to a smaller side pass it, so the hint describes the delivered image.
+    const maxSide = resolveIntegerOption(maxDimensionPx, MAX_IMAGE_SIDE, {
+      min: 1,
+      max: MAX_IMAGE_SIDE,
+    });
     if (
-      originalWidth <= MAX_IMAGE_WIDTH &&
-      originalHeight <= MAX_IMAGE_HEIGHT &&
+      originalWidth <= maxSide &&
+      originalHeight <= maxSide &&
       inputBase64Size <= MAX_IMAGE_BASE64_BYTES
     ) {
       return { image: img };
@@ -98,10 +106,7 @@ async function resizeImage(img: ImageBytes): Promise<{ image: ImageBytes; hint?:
     const qualitySteps = [JPEG_QUALITY, 85, 70, 55, 40, 35];
     const output = await processor.encode(inputBuffer, {
       format: "auto",
-      limits: {
-        maxWidth: MAX_IMAGE_WIDTH,
-        maxHeight: MAX_IMAGE_HEIGHT,
-      },
+      limits: { maxWidth: maxSide, maxHeight: maxSide },
       maxBase64Bytes: MAX_IMAGE_BASE64_BYTES,
       opaque: { format: "jpeg", quality: JPEG_QUALITY },
       transparent: { format: "png" },

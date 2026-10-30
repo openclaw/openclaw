@@ -171,8 +171,10 @@ const defaultReadOperations: ReadOperations = {
 };
 
 export interface ReadToolOptions {
-  /** Whether to auto-resize images to 2000x2000 max. Default: true */
+  /** Whether to auto-resize images to maxImageDimensionPx (2000 px when unset). Default: true */
   autoResizeImages?: boolean;
+  /** Long side for delivered images, capped at 2000; pass the image sanitization limit applied later. */
+  maxImageDimensionPx?: number;
   /** Custom operations for file reading. Default: local filesystem */
   operations?: ReadOperations;
   /** Complete model-visible call budget; individual pages never exceed the session ceiling. */
@@ -510,21 +512,23 @@ export function createReadToolDefinition(
                   text: `Read did not return file contents because it detected a binary document [${attachment.mime ?? "unknown"}]. Use an available document parser or converter, or convert the file to text, Markdown, or CSV, then read the converted file.`,
                 },
               ];
+            } else if (mimeType && nonVisionImageNote) {
+              // The image is omitted, so resizing or re-encoding it would be wasted work.
+              content = [
+                { type: "text", text: `Read image file [${mimeType}]\n${nonVisionImageNote}` },
+              ];
             } else if (mimeType) {
               // Backends may reuse their Buffer while image preparation awaits processing.
               const imageBytes = Buffer.from(buffer);
               const processed = await processImage(
                 { data: imageBytes, mimeType },
-                { autoResizeImages },
+                { autoResizeImages, maxDimensionPx: options?.maxImageDimensionPx },
               );
               const notes = processed.ok
                 ? [`Read image file [${processed.image.mimeType}]`, ...processed.hints]
                 : [`Read image file [${mimeType}]`, processed.message];
-              if (nonVisionImageNote) {
-                notes.push(nonVisionImageNote);
-              }
               content = [{ type: "text", text: notes.join("\n") }];
-              if (processed.ok && !nonVisionImageNote) {
+              if (processed.ok) {
                 content.push(processed.image);
               }
             } else {

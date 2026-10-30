@@ -17,7 +17,7 @@ import {
 import { isTextContentBlock } from "./content-blocks.js";
 import {
   DEFAULT_IMAGE_MAX_BYTES,
-  DEFAULT_IMAGE_MAX_DIMENSION_PX,
+  resolveImageMaxDimensionPx,
   type ImageSanitizationLimits,
 } from "./image-sanitization.js";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -192,9 +192,7 @@ export async function sanitizeContentBlocksImages(
   label: string,
   opts: ToolImageSanitizationOptions = {},
 ): Promise<ToolContentBlock[]> {
-  const maxDimensionPx = resolveIntegerOption(opts.maxDimensionPx, DEFAULT_IMAGE_MAX_DIMENSION_PX, {
-    min: 1,
-  });
+  const maxDimensionPx = resolveImageMaxDimensionPx(opts);
   const maxBytes = resolveIntegerOption(opts.maxBytes, DEFAULT_IMAGE_MAX_BYTES, { min: 1 });
   const out: ToolContentBlock[] = [];
   const omit = (reason: string) => out.push({ type: "text", text: `[${label}] ${reason}` });

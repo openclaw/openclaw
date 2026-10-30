@@ -30,7 +30,7 @@ import type { ApplyPatchContainmentSource } from "./apply-patch-containment-hint
 import { createApplyPatchTool } from "./apply-patch.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
-import type { ImageSanitizationLimits } from "./image-sanitization.js";
+import { resolveImageMaxDimensionPx, type ImageSanitizationLimits } from "./image-sanitization.js";
 import { createLazyExecTool } from "./lazy-exec-tool.js";
 import { createLazyProcessTool } from "./lazy-process-tool.js";
 import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
@@ -135,6 +135,7 @@ function wrapWorkspaceSkillRead(
       );
       const remoteRead = createReadTool(options.codingRoot, {
         maxBytes: resolveAdaptiveReadMaxBytes(options),
+        maxImageDimensionPx: resolveImageMaxDimensionPx(options.imageSanitization),
         modelBudget: resolveToolResultBudget(options.modelContextWindowTokens),
         modelHasVision: options.modelHasVision,
         operations: {
@@ -325,6 +326,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
         })
       : createReadTool(options.codingRoot, {
           maxBytes: resolveAdaptiveReadMaxBytes(options),
+          maxImageDimensionPx: resolveImageMaxDimensionPx(options.imageSanitization),
           modelBudget: resolveToolResultBudget(options.modelContextWindowTokens),
           modelHasVision: options.modelHasVision,
         });
