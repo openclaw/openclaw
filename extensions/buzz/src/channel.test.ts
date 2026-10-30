@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buzzSetupPlugin } from "../setup-plugin-api.js";
 import { buzzPlugin } from "./channel.js";
+import { buildBuzzMessageTags } from "./message-event.js";
 
 describe("Buzz channel guidance", () => {
   it.each([
@@ -49,6 +50,75 @@ describe("Buzz channel guidance", () => {
       }) ?? original;
     expect(transport).toEqual(expected);
   });
+
+  it("inherits the room thread root for an implicit mid-thread message-tool reply", () => {
+    const threading = buzzPlugin.threading;
+    if (!threading?.buildToolContext || !threading.resolveAutoThreadId) {
+      throw new Error("expected Buzz threading adapter");
+    }
+    const roomId = "64f4debf-e7af-438c-8dcd-d6fbbe77405d";
+    const otherRoomId = "48f551a5-7598-4d6e-a40c-f2219e0aa397";
+    const rootId = "thread-root";
+    const messageId = "child-message";
+    const toolContext = threading.buildToolContext({
+      cfg: {},
+      accountId: "default",
+      context: {
+        Channel: "buzz",
+        To: `buzz:${roomId}`,
+        ChatType: "group",
+        CurrentMessageId: messageId,
+        MessageThreadId: rootId,
+        ReplyToMode: "all",
+      },
+    });
+
+    expect(toolContext).toMatchObject({
+      currentChannelId: `buzz:${roomId}`,
+      currentMessagingTarget: `buzz:${roomId}`,
+      currentMessageId: messageId,
+      currentThreadTs: rootId,
+      replyToMode: "all",
+    });
+    expect(
+      threading.resolveAutoThreadId({
+        cfg: {},
+        accountId: "default",
+        to: roomId.toUpperCase(),
+        toolContext,
+        replyToId: messageId,
+      }),
+    ).toBe(rootId);
+    expect(
+      threading.resolveAutoThreadId({
+        cfg: {},
+        accountId: "default",
+        to: `buzz:${otherRoomId}`,
+        toolContext,
+        replyToId: messageId,
+      }),
+    ).toBeUndefined();
+
+    const transport = threading.resolveReplyTransport?.({
+      cfg: {},
+      accountId: "default",
+      threadId: rootId,
+      replyToId: messageId,
+      replyToIsExplicit: false,
+    });
+    expect(transport).toEqual({ threadId: rootId, replyToId: rootId });
+    expect(
+      buildBuzzMessageTags({
+        channelId: roomId,
+        threadId: String(transport?.threadId),
+        replyToId: transport?.replyToId ?? undefined,
+      }),
+    ).toEqual([
+      ["h", roomId],
+      ["e", rootId, "", "reply"],
+    ]);
+  });
+
   it("advertises directory room targets and native mention syntax", () => {
     const hints = buzzPlugin.agentPrompt?.messageToolHints?.({} as never) ?? [];
 
