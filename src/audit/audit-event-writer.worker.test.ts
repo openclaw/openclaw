@@ -151,7 +151,7 @@ function loseFirstAuditBatchReply() {
 describe("audit writer shared worker", () => {
   it.each([[2], [10], [32], [10, "ABORT"], [10, "ROLLBACK"], [32, "message"]] as const)(
     "commits %i items with statement isolation (%s)",
-    async (size, failure) => {
+    async (size, failure?: "ABORT" | "ROLLBACK" | "message") => {
       const database = databaseFixture();
       const opened = openOpenClawStateDatabase(database);
       const message = failure === "message";
@@ -169,7 +169,7 @@ describe("audit writer shared worker", () => {
           sourceSequence: message && index === 1 ? 0 : index + 1,
         },
       }));
-      const context = { open: () => opened, stateOptions: () => database };
+      const context = { open: () => opened, stateOptions: () => ({ path: opened.path }) };
       const execute = () =>
         message
           ? executeOpenClawStateWorker(captureOpenClawStateWorkerContext(database), {
@@ -189,8 +189,8 @@ describe("audit writer shared worker", () => {
       if (message) {
         expect(observation.transactionCount).toBe(1);
       } else if (!failure) {
-        expect(sql.calls[1].mock.calls).toEqual([["BEGIN IMMEDIATE"], ["COMMIT"]]);
-        expect(sql.count() - sql.calls[0].mock.calls.length).toBe(size + 2);
+        expect(sql.calls.at(1)?.mock.calls).toEqual([["BEGIN IMMEDIATE"], ["COMMIT"]]);
+        expect(sql.calls.slice(1).reduce((n, c) => n + c.mock.calls.length, 0)).toBe(size + 2);
       }
       sql.restore();
       expect(await execute()).toEqual(expected);
