@@ -24,6 +24,45 @@ import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
 
 const PROVIDER_ID = "anthropic";
 
+/** Collect provider account scope separately from the agent's filesystem workspace. */
+export async function runAnthropicApiKeyAuth(
+  ctx: ProviderAuthContext,
+  runApiKeyAuth: ProviderAuthMethod["run"],
+): Promise<ProviderAuthResult> {
+  const result = await runApiKeyAuth(ctx);
+  const provider = ctx.config.models?.providers?.[PROVIDER_ID];
+  const hasWorkspace = [provider?.headers, provider?.request?.headers].some((headers) =>
+    Object.entries(headers ?? {}).some(
+      ([name, value]) =>
+        name.toLowerCase() === "anthropic-workspace-id" &&
+        (typeof value !== "string" || value.trim().length > 0),
+    ),
+  );
+  if (hasWorkspace) {
+    return result;
+  }
+  await ctx.prompter.note(
+    "API keys that are not scoped to a workspace require an Anthropic workspace ID from the Claude Console. This provider setting applies to all Anthropic API requests, not an agent's local workspace. Leave it blank for a workspace-scoped key.",
+    "Anthropic API workspace",
+  );
+  const workspaceId = (
+    await ctx.prompter.text({
+      message: "Anthropic workspace ID (optional for workspace-scoped keys)",
+      placeholder: "wrkspc_...",
+    })
+  ).trim();
+  return workspaceId
+    ? {
+        ...result,
+        configPatch: {
+          models: {
+            providers: { anthropic: { headers: { "anthropic-workspace-id": workspaceId } } },
+          },
+        },
+      }
+    : result;
+}
+
 type ProviderAuthMethodNonInteractiveValidationContext = Parameters<
   NonNullable<ProviderAuthMethod["validateNonInteractive"]>
 >[0];
