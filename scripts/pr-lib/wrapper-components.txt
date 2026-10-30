@@ -362,6 +362,7 @@ src/agents/worktrees/checkout-git-config.ts
 src/agents/worktrees/checkout-inputs.ts
 src/agents/worktrees/checkout-materialize.ts
 src/agents/worktrees/checkout-policy-key.ts
+src/agents/worktrees/checkout-pool.ts
 src/agents/worktrees/checkout.ts
 src/agents/worktrees/errors.ts
 src/agents/worktrees/eviction.runtime.ts
