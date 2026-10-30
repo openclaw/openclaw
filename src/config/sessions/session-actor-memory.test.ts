@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { prepareReplyToolAuthorityCallerRead } from "../../agents/harness/host-private-capabilities.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { prepareSessionResetCleanupGuard } from "../../auto-reply/reply/session-reset-cleanup.js";
@@ -81,9 +81,7 @@ describe("memory session actor", () => {
         value.receipt.transcript.after.rawSeq = 100;
       },
     });
-    if (result.kind !== "committed") {
-      throw new Error("Expected a committed receipt");
-    }
+    assert(result.kind === "committed", "Expected a committed receipt");
     const retained = actor.snapshot(authority);
     expect(result.receipt.postimage).toEqual(retained);
     expect(retained?.entry?.updatedAt).toBe(10);
@@ -91,15 +89,8 @@ describe("memory session actor", () => {
     result.receipt.postimage.entry!.updatedAt = 100;
     result.receipt.transcript.after.rawSeq = 100;
     expect(actor.snapshot(authority)).toEqual(retained);
-    expect(
-      await actor.patch(
-        {
-          ...activityCommand(99),
-          expected: old.version,
-        },
-        authority,
-      ),
-    ).toMatchObject({
+    const stale = await actor.patch({ ...activityCommand(99), expected: old.version }, authority);
+    expect(stale).toMatchObject({
       kind: "stale-version",
       postimage: { entry: { updatedAt: 10 } },
     });
