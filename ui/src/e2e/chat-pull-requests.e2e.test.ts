@@ -208,6 +208,10 @@ suite.define(() => {
     await pollCount(pullRequestPill).toBe(1);
     await pollCount(pills).toBe(1);
     await pollAttr(pullRequestPill, "data-tone").toBe("ok");
+    // Details continues the publication as the PR row, not a second entry.
+    const group = await openDetailsPullRequests(page);
+    await pollCount(group.locator('[data-details-destination="publication"]')).toBe(0);
+    await closeChatDetails(page);
 
     await emitPullRequests(gateway, watchedKey, {
       pullRequests: [{ ...listed, state: "merged" }],
@@ -225,6 +229,56 @@ suite.define(() => {
     });
     await pollCount(pullRequestPill).toBe(2);
     await pollCount(publication).toBe(0);
+
+    // New work after the merge starts the next PR's lifecycle beside the merged one.
+    await emitPullRequests(gateway, watchedKey, {
+      ...publicationState("openclaw/lifecycle"),
+      pullRequests: [{ ...listed, state: "merged" }],
+    });
+    await pollText(publication).toContain("Publish PR");
+    await pollCount(pullRequestPill).toBe(1);
+    await pollCount(pills).toBe(2);
+  });
+
+  it("hides a published PR's single mobile pill without reviving its receipt", async () => {
+    const published = {
+      requestId: "publication-hide",
+      publisher: sharedPublisher,
+      status: "published",
+      url: "https://github.com/openclaw/openclaw/pull/4500",
+      repository: "openclaw/openclaw",
+      branch: "openclaw/hide",
+      headCommit: "b".repeat(40),
+    };
+    const { page, gateway, watchedKey } = await openPublicationChat(
+      { "sessions.github.publish": published },
+      {},
+      { viewport: { width: 393, height: 852 } },
+    );
+    await closeChatDetails(page);
+    await gateway.waitForRequest("sessions.github.options");
+    const pills = page.locator(".activity-pill");
+    const publication = page.locator('.activity-pill[data-family="publication"]');
+    await emitPullRequests(gateway, watchedKey, publicationState("openclaw/hide"));
+    await publication.click();
+    await page.getByRole("button", { name: "Publish PR", exact: true }).click();
+    await closeChatDetails(page);
+    await pollText(publication).toContain("#4500");
+
+    await emitPullRequests(gateway, watchedKey, {
+      pullRequests: [pullRequest(4500, { branch: "openclaw/hide", state: "open" })],
+      rateLimited: false,
+      status: "ready",
+    });
+    const pullRequestPill = page.locator('.activity-pill[data-family="pull-request"]');
+    await pollCount(pills).toBe(1);
+    await pullRequestPill.click();
+    const page4500 = page.locator(
+      '.chat-mobile-details-page[data-details-page="pull-request"]:visible',
+    );
+    await page4500.locator(".chat-pr-mobile__hide").click();
+    await closeChatDetails(page);
+    await pollCount(pills).toBe(0);
   });
 
   it("shows detected PRs in Details with rate-limit staleness", async () => {
