@@ -61,12 +61,15 @@ export async function runToolProgressMediaCaptionScenario(context: MatrixQaScena
     timeoutMs: context.timeoutMs,
   });
   // The observer can record one event more than once; keep the first sighting.
-  const sutEvents = [
-    ...new Map(
-      context.observedEvents.filter(isSutEvent).map((event) => [event.eventId, event] as const),
-    ).values(),
-  ];
-  if (!sutEvents.some((event) => event.msgtype === "m.notice")) {
+  const seenEventIds = new Set<string>();
+  const sutEvents = context.observedEvents.filter((event) => {
+    if (!isSutEvent(event) || seenEventIds.has(event.eventId)) {
+      return false;
+    }
+    seenEventIds.add(event.eventId);
+    return true;
+  });
+  if (!sutEvents.some((event) => event.kind === "notice")) {
     throw new Error(
       `Matrix progress media scenario saw no progress draft before the reply; SUT events: ${describeSutEvents(sutEvents)}`,
     );
