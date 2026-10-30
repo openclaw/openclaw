@@ -9,6 +9,7 @@
  * those trees before traversal. No Gateway/model or production state is used.
  * Reports process/main-thread CPU, sampled allocations (including collected
  * objects), GC, event-loop delay, synchronous descriptor opens and host load.
+ * synchronousOpens counts Node openSync calls, not native-internal opens.
  * Small tail sample counts are descriptive; max loop delay includes host pauses.
  */
 import assert from "node:assert/strict";

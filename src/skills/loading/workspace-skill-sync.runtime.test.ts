@@ -144,7 +144,7 @@ function buildSnapshot(workspaceDir: string, opts?: Parameters<typeof buildSkill
 
 describe("syncWorkspaceSkills", () => {
   it.runIf(process.platform !== "win32")(
-    "does not synchronously open writable skill directories",
+    "avoids Node openSync calls for writable skill directories",
     async () => {
       const directory = await newDir("writable");
       await fs.mkdir(path.join(directory, "skill", "references"), { recursive: true });
