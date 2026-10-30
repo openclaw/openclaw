@@ -378,7 +378,10 @@ it.each([false, true])(
       ]);
       if (missing) {
         await write("Created later", home, ".agents/skills/guide");
-        const callback = opened[0]![2] as (event: string, filename: string) => void;
+        const callback = opened[0]!.at(-1);
+        if (typeof callback !== "function") {
+          throw new Error("Expected a directory watch callback");
+        }
         callback("rename", ".agents");
         await completePassiveScan();
         expect(await descriptions(input)).toEqual(["Created later"]);
