@@ -4,13 +4,15 @@ import { registerBoardDocumentEnglish } from "../../i18n/locales/en-board-docume
 import { BOARD_GRID_COLUMNS } from "../../lib/board/grid-constants.ts";
 import {
   BOARD_DOCUMENT_AUTO_MAX_ROWS,
+  BOARD_GRID_GAP,
+  BOARD_GRID_ROW_HEIGHT,
   boardWidgetGridItems,
   FINE_POINTER_QUERY,
   layout,
 } from "../../lib/board/grid.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import { createIntersectionObserver } from "../../lib/reactive/observers.ts";
+import { createResizeObserver } from "../../lib/reactive/observers.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import "../../styles/board.css";
@@ -32,11 +34,24 @@ export type { BoardViewProps } from "./board-view-state.ts";
 const views = new WeakMap<HTMLElement, ReturnType<typeof createBoardViewState>>();
 type CellEntry = {
   key: string;
+  mobileRow: number;
   present: boolean;
   retiring?: boolean;
   element?: SolidBridgeElement<BoardWidgetCellProps, BoardWidgetCellMethods>;
   options: BoardWidgetCellProps;
 };
+
+function canWindowReport(options: BoardWidgetCellProps) {
+  const widget = options.widget;
+  return (
+    widget?.contentKind === "plugin" &&
+    widget.pluginKind === "session:report" &&
+    widget.heightMode === "fixed" &&
+    !widget.frameUrl &&
+    !widget.viewTicket &&
+    !options.pageChrome
+  );
+}
 
 function BoardCellSlot(props: {
   entry: CellEntry;
@@ -46,86 +61,61 @@ function BoardCellSlot(props: {
     element: SolidBridgeElement<BoardWidgetCellProps, BoardWidgetCellMethods>,
   ) => void;
 }) {
-  let placeholder: HTMLElement | undefined;
-  let cell: SolidBridgeElement<BoardWidgetCellProps, BoardWidgetCellMethods> | undefined;
-  // Only fixed native reports have known geometry and no foreign runtime to start.
-  // Admission is permanent for this key: scrolling never retires a report or its focus.
-  const [admitted, setAdmitted] = createSignal((previous = false) => {
-    const options = props.entry.options;
-    const widget = options.widget;
-    return (
-      previous ||
-      widget?.contentKind !== "plugin" ||
-      widget.pluginKind !== "session:report" ||
-      widget.heightMode !== "fixed" ||
-      Boolean(widget.frameUrl) ||
-      Boolean(widget.viewTicket) ||
-      options.pageChrome ||
-      options.focusTabIndex === 0
-    );
-  });
-  createIntersectionObserver(
-    () => (!admitted() && placeholder ? [placeholder] : []),
-    (entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) {
-        setAdmitted(true);
-      }
-    },
-    { rootMargin: "300px" },
-  );
   const key = createMemo(() => props.entry.key);
   const cellRef = createMemo(() => {
     const register = props.registerCell;
     const initialKey = key();
     return (element: SolidBridgeElement<BoardWidgetCellProps, BoardWidgetCellMethods>) => {
-      cell = element;
       register(initialKey, element);
     };
   });
   return (
-    <Show
-      when={admitted()}
-      fallback={
-        <div
-          ref={(element) => {
-            placeholder = element;
-          }}
-          class="board-widget board-widget--deferred"
-          hidden={!props.visible}
-          inert={!props.visible}
-          style={{
-            "grid-column": `${props.entry.options.rect!.x + 1} / span ${props.entry.options.rect!.w}`,
-            "grid-row": `${props.entry.options.rect!.y + 1} / span ${props.entry.options.rect!.h}`,
-            "--board-widget-rows": props.entry.options.rect!.h,
-            "--board-widget-order": props.entry.options.positionInSet ?? 1,
-          }}
-          role="listitem"
-          aria-label={props.entry.options.widget!.title || props.entry.options.widget!.name}
-          aria-posinset={props.entry.options.positionInSet ?? 1}
-          aria-setsize={props.entry.options.setSize ?? 1}
-          tabindex={-1}
-          onFocus={() => {
-            setAdmitted(true);
-            onSettled(() => cell?.focusWidget());
-          }}
-          data-widget-name={props.entry.options.widget!.name}
-          data-test-id="board-widget"
-        />
-      }
-    >
-      <BoardWidgetCell
-        {...props.entry.options}
-        ref={cellRef()}
-        hidden={!props.visible}
-        inert={!props.visible}
-      />
-    </Show>
+    <BoardWidgetCell
+      {...props.entry.options}
+      ref={cellRef()}
+      hidden={!props.visible}
+      inert={!props.visible}
+      style={{ "--board-widget-mobile-row": props.entry.mobileRow }}
+    />
   );
 }
 
 function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
   const [layoutRevision, setLayoutRevision] = createSignal(0, { ownedWrite: true });
   const invalidateLayout = () => setLayoutRevision((value) => value + 1);
+  const [grid, setGrid] = createSignal<HTMLDivElement>();
+  let geometry = { offset: 0, width: 0, height: 0 };
+  const [viewport, setViewport] = createSignal<{ top: number; bottom: number; width: number }>();
+  const updateViewport = () => {
+    const top = host.scrollTop - geometry.offset;
+    const next = { top: top - 300, bottom: top + geometry.height + 300, width: geometry.width };
+    setViewport((previous) =>
+      previous?.top === next.top && previous.bottom === next.bottom && previous.width === next.width
+        ? previous
+        : next,
+    );
+  };
+  const measureViewport = () => {
+    const element = grid();
+    if (!element) {
+      return;
+    }
+    const bounds = element.getBoundingClientRect();
+    geometry = {
+      offset: bounds.top - host.getBoundingClientRect().top + host.scrollTop,
+      width: bounds.width,
+      height: host.clientHeight,
+    };
+    // Hidden surfaces have no usable viewport; their retained cells stay mounted.
+    if (!geometry.width || !geometry.height) {
+      return;
+    }
+    updateViewport();
+  };
+  createResizeObserver(() => {
+    const element = grid();
+    return element ? [element, host] : [];
+  }, measureViewport);
   // Grid coordinates change; map insertion order keeps iframe nodes in place.
   const entries = new Map<string, CellEntry>();
   const registerCell = (
@@ -165,6 +155,7 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
       (widget) => owner.visitedTabs.has(widget.tabId) || entries.has(cellKey(widget.name)),
     );
     const positions = new Map<string, number>();
+    const mobileRows = new Map<string, number>();
     const rects = tabs.flatMap((tab) => {
       const tabRects = layout(
         (tab.tabId === activeTabId && state.gesture.name ? state.previewItems : null) ??
@@ -176,7 +167,12 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
           ),
         props.fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined,
       );
-      tabRects.forEach((rect, index) => positions.set(rect.name, index));
+      let mobileRow = 1;
+      tabRects.forEach((rect, index) => {
+        positions.set(rect.name, index);
+        mobileRows.set(rect.name, mobileRow);
+        mobileRow += rect.h;
+      });
       return tabRects;
     });
     const activeNames = new Set(activeWidgets.map((widget) => widget.name));
@@ -201,6 +197,7 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
       entries.set(key, {
         ...entries.get(key),
         key,
+        mobileRow: mobileRows.get(rect.name)!,
         present: true,
         options: {
           widget: widgetsByName.get(rect.name),
@@ -257,6 +254,7 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
         void element.teardown().then(finish, finish);
       }
     }
+    const cells = [...entries.values()];
     return {
       tabs,
       activeTabId,
@@ -265,9 +263,35 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
       fullWidth,
       page,
       loading,
-      cells: [...entries.values()],
+      cells,
+      windowed: cells.some(
+        (entry) => activeNames.has(entry.options.widget!.name) && canWindowReport(entry.options),
+      ),
+      gridRows: Math.max(1, ...activeRects.map((rect) => rect.y + rect.h)),
+      mobileGridRows: Math.max(
+        1,
+        activeRects.reduce((rows, rect) => rows + rect.h, 0),
+      ),
       state,
     };
+  });
+  const visibleCells = createMemo(() => {
+    const current = view();
+    const range = viewport();
+    return current.cells.filter((entry) => {
+      const { widget, rect, focusTabIndex } = entry.options;
+      // The existing registry latches admission, including across tab switches.
+      if (entry.element || !canWindowReport(entry.options) || focusTabIndex === 0) {
+        return true;
+      }
+      if (!range || !current.activeNames.has(widget!.name)) {
+        return false;
+      }
+      const row = range.width <= 560 ? entry.mobileRow - 1 : rect!.y;
+      const top = row * (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP);
+      const bottom = top + rect!.h * (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP) - BOARD_GRID_GAP;
+      return bottom >= range.top && top <= range.bottom;
+    });
   });
   createEffect(
     () => view(),
@@ -277,6 +301,8 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
     },
   );
   onSettled(() => {
+    measureViewport();
+    const stopScroll = listen(host, "scroll", updateViewport, { passive: true });
     // Hybrid devices move the chrome in/out of flow when pointer capability changes.
     const pointer =
       typeof window.matchMedia === "function" ? window.matchMedia(FINE_POINTER_QUERY) : null;
@@ -285,6 +311,7 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
       disposed = true;
       views.delete(host);
       stop?.();
+      stopScroll();
     };
   });
 
@@ -319,13 +346,26 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
         />
         <Show when={Boolean(props.snapshot) || view().cells.length > 0}>
           <div
-            ref={owner.gridRef}
+            ref={(element) => {
+              setGrid(element);
+              owner.gridRef(element);
+            }}
             class="board-grid"
             role="list"
             aria-label={t("board.gridLabel")}
             hidden={view().empty}
           >
-            <For each={view().cells} keyed={(entry) => entry.key}>
+            <Show when={view().windowed}>
+              <div
+                class="board-grid__extent"
+                aria-hidden="true"
+                style={{
+                  "grid-row": `${view().gridRows} / span 1`,
+                  "--board-widget-mobile-row": view().mobileGridRows,
+                }}
+              />
+            </Show>
+            <For each={visibleCells()} keyed={(entry) => entry.key}>
               {(entry) => (
                 <BoardCellSlot
                   entry={entry()}

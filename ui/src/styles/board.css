@@ -160,8 +160,13 @@ openclaw-board-view {
   position: relative;
 }
 
+.board-grid__extent {
+  grid-column: 1 / -1;
+  pointer-events: none;
+  visibility: hidden;
+}
+
 .board-grid[hidden],
-.board-widget--deferred[hidden],
 openclaw-board-widget-cell[hidden] {
   display: none;
 }
@@ -170,8 +175,12 @@ openclaw-board-widget-cell[hidden] {
   /* Keep desktop sizes canonical; only placement changes on narrow boards.
      CSS order preserves the keyed frame nodes when persisted order changes. */
   .board-widget {
-    grid-area: auto / 1 / span var(--board-widget-rows) / -1 !important;
+    grid-area: var(--board-widget-mobile-row, auto) / 1 / span var(--board-widget-rows) / -1 !important;
     order: var(--board-widget-order);
+  }
+
+  .board-grid__extent {
+    grid-row: var(--board-widget-mobile-row) / span 1 !important;
   }
 }
 
