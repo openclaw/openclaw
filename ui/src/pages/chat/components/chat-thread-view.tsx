@@ -306,6 +306,12 @@ export function ChatThread(input: {
           stopSelectionGesture?.();
           stopSelectionGesture = handleTranscriptSelectionMouseDown(event);
         }}
+        onPointerDown={(event) => {
+          // Keep late floating controls from stealing the pressed content's context menu.
+          if (event.button === 2 && event.target instanceof Element) {
+            event.target.setPointerCapture(event.pointerId);
+          }
+        }}
         onContextMenu={(event) =>
           handleTranscriptContextMenu(
             event,

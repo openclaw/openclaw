@@ -75,6 +75,11 @@ still follow their own checks. Explicit package artifacts and installation
 rebinding can still require replacement even when version strings match.
 These admission checks require an updated installed updater.
 
+Already-current updates also preview supported legacy config repairs through
+Doctor, even without `--channel`. After admission, the normal config writer saves
+the repair with a backup before plugin maintenance. Unknown fields and repairs
+that cannot produce a valid config still refuse with Doctor guidance.
+
 For a global npm installation, OpenClaw prints a short manual alternative
 (`npm i -g openclaw@<target> --allow-scripts=openclaw`, then
 `openclaw doctor --fix`, then `openclaw gateway restart`); it does not run it
