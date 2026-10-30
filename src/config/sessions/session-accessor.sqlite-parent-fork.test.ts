@@ -1,4 +1,6 @@
+import assert from "node:assert/strict";
 import { expect, it } from "vitest";
+import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { buildSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
 import {
   buildForkedChildTranscriptEvents,
@@ -7,9 +9,13 @@ import {
   resolveParentForkSourceTranscript,
 } from "./session-accessor.sqlite-parent-fork.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
+import { selectManualCompactTranscriptLines } from "./session-manual-compact-selection.js";
 import { buildSessionResetBoundaryEvent } from "./session-reset-boundary-event.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
-import { timedMessageEvent } from "./transcript-message.test-support.js";
+import {
+  createExactAssistantMessage,
+  timedMessageEvent,
+} from "./transcript-message.test-support.js";
 
 function createHistory() {
   const events: Record<string, unknown>[] = [
@@ -73,6 +79,53 @@ function expectForkContext(events: Record<string, unknown>[], expectedTurns: str
   expect(events).toEqual(original);
   return source;
 }
+
+it("forks only placed background results and keeps their payload through a manual trim", () => {
+  const history = createHistory();
+  history.turn("completed");
+  const pending = timedMessageEvent("pending", "completed-assistant", "2026-10-07T00:00:01.000Z", {
+    ...createExactAssistantMessage({
+      text: "background ".repeat(100),
+      provider: "openclaw",
+      model: "automation-result",
+    }),
+    excludeFromContext: true,
+    openclawModelPlacement: "pending",
+  });
+  history.events.push(pending);
+  expectForkContext(history.events, ["completed"]);
+  const unplacedTokens = estimateParentForkPromptTokens(
+    resolveParentForkSourceTranscript(history.events),
+  )!;
+  history.events.push({
+    type: "custom",
+    id: "placement",
+    parentId: pending.id,
+    timestamp: pending.timestamp,
+    customType: BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE,
+    data: { afterEntryId: pending.id, resultEntryIds: [pending.id] },
+  });
+  const source = resolveParentForkSourceTranscript(history.events, "last-completed")!;
+  const child = buildForkedChildTranscriptEvents({
+    source,
+    targetSessionId: "child",
+    parentSessionFile: "parent",
+  });
+  const messages = buildSessionContext(child.filter(isIndexedSessionEntry)).messages;
+  expect(messages).toHaveLength(3);
+  const result = messages.at(-1);
+  assert(result?.role === "assistant");
+  expect(result.content).toEqual(pending.message.content);
+  expect(estimateParentForkPromptTokens(source)).toBeGreaterThan(unplacedTokens);
+
+  const trimmed = selectManualCompactTranscriptLines(
+    child.map((entry) => JSON.stringify(entry)),
+    2,
+  );
+  const entries = trimmed.lines.map((line) => JSON.parse(line)).filter(isIndexedSessionEntry);
+  expect(entries.map((entry) => entry.id)).toEqual([pending.id, "placement"]);
+  expect(buildSessionContext(entries).messages).toEqual([messages.at(-1)]);
+});
 
 it.each<[string, string[], string[]]>([
   [

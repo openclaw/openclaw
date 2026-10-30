@@ -20,6 +20,7 @@ packages/acp-core/src/structured-auth-redaction.ts
 packages/agent-core/package.json
 packages/agent-core/src/harness/env/kill-tree.ts
 packages/agent-core/src/harness/messages.ts
+packages/agent-core/src/harness/session/background-result-placement.ts
 packages/agent-core/src/harness/session/tool-result-pairing.ts
 packages/agent-core/src/harness/session/transcript-model.ts
 packages/agent-core/src/operator-messages.ts
@@ -2570,6 +2571,7 @@ src/config/sessions/session-actor-read-error.ts
 src/config/sessions/session-actor-reducers.ts
 src/config/sessions/session-actor-storage-acquisition.ts
 src/config/sessions/session-actor-storage-binding.ts
+src/config/sessions/session-background-result-dependencies.ts
 src/config/sessions/session-bounded-context-selection.ts
 src/config/sessions/session-cache-ttl-prefix-values.ts
 src/config/sessions/session-entry-lineage.ts

@@ -244,11 +244,15 @@ suite.define(() => {
       expect(docked.mode).toBe("dock");
       expect(Math.abs(docked.height - dock.height)).toBeLessThan(2);
 
-      await flick(page, 150);
-      await page.waitForTimeout(60);
-      const dismissing = await shellState(page);
-      expect(dismissing.hidden).toBe(true);
-      expect(dismissing.display).not.toBe("none");
+      await sampleSheetTransition(
+        page,
+        60,
+        () => flick(page, 150),
+        (dismissing) => {
+          expect(dismissing.hidden).toBe(true);
+          expect(dismissing.display).not.toBe("none");
+        },
+      );
       await settle(page);
       expect((await shellState(page)).display).toBe("none");
     });

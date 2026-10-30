@@ -413,7 +413,7 @@ export function resolveInboundConversationToolPolicy(params: {
 }
 
 /** Session sharing alone does not establish that two inputs belong to the same conversation. */
-export function isSameReplyToolAuthorityConversation(
+function isSameReplyToolAuthorityConversation(
   snapshot: ReplyToolAuthorityInput,
   caller: Pick<
     ReplyToolAuthorityOverlay,

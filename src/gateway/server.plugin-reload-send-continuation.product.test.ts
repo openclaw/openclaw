@@ -32,7 +32,9 @@ if (databasePath) {
     path.dirname(databasePath),
   );
   // Vitest is active here, but no Gateway/handoff consumer is imported before qualification.
+  process.stderr.write("RELOAD_PRODUCT_STAGE importing-scenarios\n");
   await import("./server.plugin-reload-send-continuation.product.test-support.js");
+  process.stderr.write("RELOAD_PRODUCT_STAGE scenarios-imported\n");
 } else {
   const lifetime = createFixtureLifetime();
   afterAll(() => lifetime.cleanup());
@@ -92,9 +94,11 @@ if (databasePath) {
             childPid = child.pid;
             child.stdout?.on("data", (chunk) => {
               output += String(chunk);
+              process.stdout.write(chunk);
             });
             child.stderr?.on("data", (chunk) => {
               output += String(chunk);
+              process.stderr.write(chunk);
             });
           },
         }),

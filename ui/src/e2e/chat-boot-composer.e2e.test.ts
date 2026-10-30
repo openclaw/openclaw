@@ -28,9 +28,19 @@ suite.define(() => {
       // Like the chat composer, it takes focus only from the operator; nothing covers it.
       expect(await boot.evaluate((el) => el === document.activeElement)).toBe(false);
       await boot.click();
-      const status = await page.locator(".connect-splash__status").boundingBox();
-      const frame = await page.locator(".loading-skeleton__composer").boundingBox();
-      expect(status!.y + status!.height).toBeLessThanOrEqual(frame!.y);
+      await expect
+        .poll(() =>
+          boot.evaluate((textarea) => {
+            const splash = textarea.closest(".connect-splash");
+            const status = splash?.querySelector(".connect-splash__status");
+            const frame = textarea.closest(".loading-skeleton__composer");
+            if (!status || !frame) {
+              return false;
+            }
+            return status.getBoundingClientRect().bottom <= frame.getBoundingClientRect().top;
+          }),
+        )
+        .toBe(true);
       await page.keyboard.type("Ship the boot ");
 
       // The Gateway admits the browser; the same element moves into the shell's route frame.

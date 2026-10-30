@@ -175,7 +175,8 @@ Keep the local state directory and configured agent directories. Each PostgreSQL
 store still has a small SQLite **anchor** at its usual database path. It records
 the store UUID and server namespace, not the server's application rows. An anchor
 and its matching PostgreSQL data are one recovery unit. Never delete an anchor to
-change engines.
+change engines. If an agent's namespace is lost, follow the
+[retained-store recovery procedure](#recover-a-retained-agent-store).
 
 The quarantine, managed-update, and package-activation safety journals remain
 local SQLite. Daemon runtime pins remain in `control/services.sqlite` so service
@@ -727,6 +728,42 @@ Git restore supports `--global`, `--agent <id>`, and `--store <id>` for recorded
 plugin or additional-root identities. Use the identity recorded under `stores/`
 in the Git repository. Each restore creates a fresh namespace and publishes its
 matching local anchor after verification.
+
+### Recover a retained agent store
+
+An agent's local PostgreSQL anchor and its initialized server namespace form one
+store. `agents add`, Gateway `agents.create`, and guided creation refuse a retained
+anchor whose namespace is missing, uninitialized, or belongs to another identity.
+They leave its anchor, requested workspace, and configuration unchanged instead
+of creating an empty replacement under the retained identity.
+
+1. Check that `database.postgres.connection` resolves to the intended server and
+   database. Restore connectivity or the correct connection if the store still
+   exists there.
+2. If the namespace was lost, stop the Gateway and embedded writers and restore a
+   matching backup:
+
+   ```bash
+   openclaw backup restore <archive> --target <fresh-recovery-directory>
+   ```
+
+   Restore uses fresh namespaces and publishes their matching anchors. Activate
+   the restored installation as a matched set; do not pair an old anchor with a
+   newly restored namespace. See [archive restore](#restore-all-postgresql-stores)
+   or [selected-store recovery from Git](#disaster-recovery-from-git).
+
+3. If the history is intentionally gone and a fresh agent is wanted, keep writers
+   stopped and move the exact anchor named in the error, together with any of its
+   `-wal`, `-shm`, or `-journal` sidecars, to a recovery directory outside the state
+   and agent directories. Then rerun the same `openclaw agents add` command. Move
+   only that store's files; preserve the old files until the new agent is verified.
+   This explicitly discards the old identity rather than restoring its history.
+
+New agent anchors are published only after PostgreSQL commits the schema and agent
+identity, so an interrupted first creation can be retried. Older versions could
+leave an anchor before that initialization completed. Such an anchor cannot be
+distinguished from lost retained history and uses the same conservative recovery
+procedure; there is no automatic discard or migration.
 
 ### Disaster recovery from Git
 

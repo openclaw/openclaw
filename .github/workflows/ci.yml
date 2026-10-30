@@ -4978,6 +4978,9 @@ jobs:
           }
           const result = spawnSync(process.execPath, [
             "--import", "./scripts/tsx.mjs", "scripts/test-projects.mts", ...targets, "--fileParallelism",
+            "--reporter=verbose",
+            "--reporter=github-actions",
+            "--reporter=./scripts/lib/vitest-resource-reporter.mts",
           ], { stdio: "inherit" });
           if (result.error) throw result.error;
           process.exit(result.status ?? 1);

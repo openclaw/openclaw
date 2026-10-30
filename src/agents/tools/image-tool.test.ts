@@ -331,25 +331,9 @@ function registerImageToolEnvReset(priorFetch: typeof global.fetch, keys: string
   });
 }
 
-function stubMinimaxOkFetch() {
+function stubMinimaxResponse(baseResp = { status_code: 0, status_msg: "" }) {
   minimaxUnderstandImageMock.mockReset();
   vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
-  minimaxUnderstandImageMock.mockResolvedValue("ok");
-  // Tests that fall back to the generic image runtime still hit a mocked
-  // global.fetch because media-understanding/image.ts is not behind the
-  // minimax-vlm module mock.
-  const fetch = vi.fn().mockImplementation(async () =>
-    Response.json({
-      content: "ok",
-      base_resp: { status_code: 0, status_msg: "" },
-    }),
-  );
-  global.fetch = withFetchPreconnect(fetch);
-  return minimaxUnderstandImageMock;
-}
-
-function stubMinimaxFetch(baseResp: { status_code: number; status_msg: string }, content = "ok") {
-  minimaxUnderstandImageMock.mockReset();
   if (baseResp.status_code !== 0) {
     minimaxUnderstandImageMock.mockRejectedValue(
       new Error(
@@ -359,15 +343,8 @@ function stubMinimaxFetch(baseResp: { status_code: number; status_msg: string },
       ),
     );
   } else {
-    minimaxUnderstandImageMock.mockResolvedValue(content);
+    minimaxUnderstandImageMock.mockResolvedValue("ok");
   }
-  const fetch = vi.fn().mockImplementation(async () =>
-    Response.json({
-      content,
-      base_resp: baseResp,
-    }),
-  );
-  global.fetch = withFetchPreconnect(fetch);
   return minimaxUnderstandImageMock;
 }
 
@@ -401,43 +378,6 @@ const minimaxProvider = {
     };
   },
 } satisfies MediaUnderstandingProvider;
-
-async function readMockResponseText(response: Response): Promise<string> {
-  const payload = (await response.json()) as { content?: string };
-  return payload.content ?? "";
-}
-
-async function describeGenericImageWithModel(
-  params: ImageDescriptionRequest,
-): Promise<{ text: string; model: string }> {
-  const response = await global.fetch("https://example.invalid/media-image", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      provider: params.provider,
-      model: params.model,
-      prompt: params.prompt,
-      mime: params.mime,
-    }),
-  });
-  return { text: await readMockResponseText(response), model: params.model };
-}
-
-async function describeGenericImagesWithModel(
-  params: ImagesDescriptionRequest,
-): Promise<{ text: string; model: string }> {
-  const response = await global.fetch("https://example.invalid/media-images", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      provider: params.provider,
-      model: params.model,
-      prompt: params.prompt,
-      imageCount: params.images.length,
-    }),
-  });
-  return { text: await readMockResponseText(response), model: params.model };
-}
 
 const codexMediaProvider = {
   id: "codex",
@@ -488,8 +428,9 @@ function installImageUnderstandingProviderDeps(
   testing.setProviderDepsForTest({
     buildProviderRegistry: (overrides, cfg, preparedProviders) =>
       buildProviderRegistry(overrides, cfg, preparedProviders ?? providers),
-    describeImageWithModel: options?.describeImageWithModel ?? describeGenericImageWithModel,
-    describeImagesWithModel: options?.describeImagesWithModel ?? describeGenericImagesWithModel,
+    describeImageWithModel: options?.describeImageWithModel ?? replyImageOk,
+    describeImagesWithModel:
+      options?.describeImagesWithModel ?? (async ({ model }) => ({ text: "ok", model })),
     resolveAutoMediaKeyProviders:
       options?.resolveAutoMediaKeyProviders ??
       (({ capability }) => (capability === "image" ? ["openai", "anthropic"] : [])),
@@ -753,8 +694,6 @@ describe("image tool implicit imageModel config", () => {
       const resolveDefaultMediaModelSpy = vi.fn(() => "gpt-5.4-mini");
       const resolveAutoMediaKeyProvidersSpy = vi.fn(() => ["openai"]);
       testing.setProviderDepsForTest({
-        describeImageWithModel: describeGenericImageWithModel,
-        describeImagesWithModel: describeGenericImagesWithModel,
         resolveDefaultMediaModel: resolveDefaultMediaModelSpy,
         resolveAutoMediaKeyProviders: resolveAutoMediaKeyProvidersSpy,
       });
@@ -1195,7 +1134,7 @@ describe("image tool implicit imageModel config", () => {
     "enforces local image roots (workspaceOnly: %s)",
     async (workspaceOnly) => {
       await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
-        const fetch = stubMinimaxOkFetch();
+        const fetch = stubMinimaxResponse();
         await withTempAgentDir(async (agentDir) => {
           const cfg = createMinimaxImageConfig();
           const tool = createRequiredImageTool({
@@ -1343,7 +1282,7 @@ describe("image tool implicit imageModel config", () => {
         Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
       );
       const bridge = createContainerWorkspaceSandboxFsBridge(sandboxRoot);
-      stubMinimaxOkFetch();
+      stubMinimaxResponse();
       const tool = createRequiredImageTool({
         config: createMinimaxImageConfig(),
         agentDir,
@@ -1367,7 +1306,7 @@ describe("image tool implicit imageModel config", () => {
       if (!bridge) {
         throw new Error("expected unsafe sandbox filesystem bridge");
       }
-      const fetch = stubMinimaxOkFetch();
+      const fetch = stubMinimaxResponse();
       const imageTool = createRequiredImageTool({
         config: createMinimaxImageConfig(),
         agentDir,
@@ -1395,7 +1334,7 @@ describe("image tool implicit imageModel config", () => {
         Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
       );
 
-      const fetch = stubMinimaxOkFetch();
+      const fetch = stubMinimaxResponse();
 
       const cfg: OpenClawConfig = {
         agents: {
@@ -1427,7 +1366,7 @@ describe("image tool implicit imageModel config", () => {
         Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
       );
 
-      const fetch = stubMinimaxOkFetch();
+      const fetch = stubMinimaxResponse();
       const sandbox = {
         root: sandboxRoot,
         bridge: createHostSandboxFsBridge(sandboxRoot),
@@ -1473,7 +1412,6 @@ describe("image tool data URL support", () => {
 });
 
 describe("image tool MiniMax VLM routing", () => {
-  const priorFetch = global.fetch;
   let state: OpenClawTestState;
 
   beforeEach(async () => {
@@ -1482,16 +1420,14 @@ describe("image tool MiniMax VLM routing", () => {
   });
 
   afterEach(async () => {
-    global.fetch = priorFetch;
     testing.setProviderDepsForTest();
     await state.cleanup();
   });
 
   async function createMinimaxVlmFixture(baseResp: { status_code: number; status_msg: string }) {
-    const fetchMock = stubMinimaxFetch(baseResp, baseResp.status_code === 0 ? "ok" : "");
+    const fetchMock = stubMinimaxResponse(baseResp);
 
     const agentDir = state.agentDir();
-    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
     const cfg = createMinimaxImageConfig();
     const tool = createRequiredImageTool({ config: cfg, agentDir });
     return { fetch: fetchMock, tool, cfg, agentDir };

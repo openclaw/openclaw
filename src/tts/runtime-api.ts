@@ -50,11 +50,7 @@ export {
   isTtsProviderConfiguredAsync,
   resolveTtsProviderOrder,
 } from "./tts-provider-resolution.js";
-export {
-  prepareTtsRequest,
-  resolveExplicitTtsOverrides,
-  resolveExplicitTtsOverridesAsync,
-} from "./tts-request.js";
+export { resolveExplicitTtsOverrides, resolveExplicitTtsOverridesAsync } from "./tts-request.js";
 export { streamSpeech, textToSpeechStream } from "./tts-streaming.js";
 export { synthesizeSpeech } from "./tts-synthesis.js";
 export { textToSpeechTelephony } from "./tts-telephony.js";

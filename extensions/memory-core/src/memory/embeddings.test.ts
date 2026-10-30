@@ -309,9 +309,7 @@ describe("createEmbeddingProvider", () => {
     registerTestMemoryAdapter({
       id: "openai-compatible",
       create: async (options) => {
-        observedHooks.push(
-          (options as typeof options & { acquireLocalService?: unknown }).acquireLocalService,
-        );
+        observedHooks.push(options.acquireLocalService);
         await Promise.resolve();
         return {
           provider: createConstantEmbeddingProvider("generic", "generic-model", 1),
