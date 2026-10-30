@@ -4,6 +4,7 @@ import { interruptCanonicalWorkspaceAcceptance, bindFixtureRuntime, fixture, moc
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { isNodeError } from "@openclaw/fs-safe/path";
 import { describe, expect, it, vi } from "vitest";
 import * as sandboxBackend from "../agents/sandbox/backend.js";
@@ -316,38 +317,64 @@ describe("existing PR preparation through the registered agent action", () => {
     },
   );
 
-  it("prepares cold PR history and current files without unrelated historical blobs", async () => {
-    const f = await fixture({ empty: true, fork: true });
-    const upstream = (...args: string[]) => f.local!.git("-C", f.upstream, ...args);
-    await upstream("config", "uploadpack.allowFilter", "true");
-    await f.advanceHead({ "pr.txt": "obsolete PR contents\n" });
-    const historicalBlob = await upstream("rev-parse", "HEAD:pr.txt");
-    const head = await f.advanceHead({ "pr.txt": "current PR contents\n" });
-    vi.stubEnv("GIT_NO_LAZY_FETCH", "1");
-    await expect(f.git("cat-file", "-e", head)).rejects.toThrow();
+  it.each([false, true])(
+    "prepares cold PR history and current files without historical blobs (empty=%s)",
+    async (empty) => {
+      const f = await fixture({ empty, fork: true });
+      const upstream = (...args: string[]) => f.local!.git("-C", f.upstream, ...args);
+      await upstream("config", "uploadpack.allowFilter", "true");
+      await f.advanceHead({ "pr.txt": "obsolete PR contents\n" });
+      const historicalBlob = await upstream("rev-parse", "HEAD:pr.txt");
+      const head = await f.advanceHead({ "pr.txt": "current PR contents\n" });
+      // Advance the base after the selected project's local snapshot.
+      await upstream("checkout", "main");
+      for (const contents of ["obsolete base contents\n", "current base contents\n"]) {
+        await fs.writeFile(path.join(f.upstream, "base-only.txt"), contents);
+        await upstream("add", "base-only.txt");
+        await upstream("commit", "-m", "Advance base");
+      }
+      const historicalBaseBlob = await upstream("rev-parse", "HEAD^:base-only.txt");
+      f.pr.base.sha = await upstream("rev-parse", "HEAD");
+      // Git stores filter defaults per URL; a fork must not share its base's URL.
+      const baseUrl = `${pathToFileURL(f.upstream).href}/.`;
+      const transport = mocks.runCommand.getMockImplementation()!;
+      mocks.runCommand.mockImplementation(
+        (argv: string[], options?: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string }) =>
+          transport(
+            argv.map((arg) => (arg === "https://github.com/openclaw/openclaw.git" ? baseUrl : arg)),
+            options,
+          ),
+      );
+      vi.stubEnv("GIT_NO_LAZY_FETCH", "1");
+      await expect(f.git("cat-file", "-e", head)).rejects.toThrow();
+      await expect(f.git("cat-file", "-e", f.pr.base.sha)).rejects.toThrow();
 
-    expect(await f.invoke()).toMatchObject({
-      status: "prepared",
-      headCommit: head,
-      review: { mode: "local", base: f.commonAncestor },
-    });
-    expect(await f.git("rev-parse", "--is-shallow-repository")).toBe("false");
-    expect(await f.git("rev-list", "--count", head)).toBe("4");
-    expect(await f.git("write-tree")).toBe(await upstream("rev-parse", `${head}^{tree}`));
-    expect(
-      await f.git("rev-list", "--objects", "--missing=print", "--max-count=1", head),
-    ).not.toContain("?");
-    await expect(f.git("cat-file", "-e", historicalBlob)).rejects.toThrow();
-    expect(await fs.readFile(path.join(f.projection, "pr.txt"), "utf8")).toBe(
-      "current PR contents\n",
-    );
+      expect(await f.invoke()).toMatchObject({
+        status: "prepared",
+        headCommit: head,
+        review: { mode: "local", base: f.commonAncestor },
+      });
+      expect(await f.git("rev-parse", "--is-shallow-repository")).toBe("false");
+      expect(await f.git("rev-list", "--count", head)).toBe("4");
+      expect(await f.git("write-tree")).toBe(await upstream("rev-parse", `${head}^{tree}`));
+      expect(
+        await f.git("rev-list", "--objects", "--missing=print", "--max-count=1", head),
+      ).not.toContain("?");
+      for (const blob of [historicalBlob, historicalBaseBlob]) {
+        await expect(f.git("cat-file", "-e", blob)).rejects.toThrow();
+      }
+      expect(await f.git("show", `${f.pr.base.sha}:base-only.txt`)).toBe("current base contents");
+      expect(await fs.readFile(path.join(f.projection, "pr.txt"), "utf8")).toBe(
+        "current PR contents\n",
+      );
 
-    const fetches = () => mocks.runCommand.mock.calls.filter(([argv]) => argv.includes("fetch"));
-    const beforeRepeat = fetches().length;
-    expect(await f.invoke()).toMatchObject({ status: "prepared", headCommit: head });
-    expect(fetches()).toHaveLength(beforeRepeat);
-    expect(f.writes).toEqual([]);
-  });
+      const fetches = () => mocks.runCommand.mock.calls.filter(([argv]) => argv.includes("fetch"));
+      const beforeRepeat = fetches().length;
+      expect(await f.invoke()).toMatchObject({ status: "prepared", headCommit: head });
+      expect(fetches()).toHaveLength(beforeRepeat);
+      expect(f.writes).toEqual([]);
+    },
+  );
 
   it.each([false, true])(
     "uses the actual empty source only when no earlier work needs preserving (earlier notes=%s)",

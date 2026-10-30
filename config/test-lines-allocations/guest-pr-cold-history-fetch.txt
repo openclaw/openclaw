@@ -1,2 +1,2 @@
-# Cold registered PR preparation must omit historical blobs while preserving current contents and ancestry.
-33
+# Cold PR preparation and publication preserve ancestry without downloading unused file contents.
+100
