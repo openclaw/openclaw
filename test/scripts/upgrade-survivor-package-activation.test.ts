@@ -16,13 +16,20 @@ const faultImport = pathToFileURL(
 ).href;
 const runNode = (args: string[], env: NodeJS.ProcessEnv = {}) =>
   runProcess(process.execPath, args, { ...process.env, ...env }, 10_000);
-function faultFixture(cut: "publication-complete" | "verification", preload: string[] = []) {
+function faultFixture(
+  cut: "publication-complete" | "verification" | "verification-rollback",
+  preload: string[] = [],
+) {
   const root = fs.realpathSync(dirs.make("package-activation-fault-"));
   const evidence = path.join(root, "cut.json");
   const journal = path.join(root, "operation.sqlite");
   const previousRoot = path.join(root, "previous");
   const spec = path.join(root, "fault.json");
-  writeJson(spec, { cut, evidence, ...(cut === "verification" ? { previousRoot } : { journal }) });
+  writeJson(spec, {
+    cut,
+    evidence,
+    ...(cut.startsWith("verification") ? { previousRoot } : { journal }),
+  });
   const run = (code: string, ...args: string[]) =>
     runNode([...preload, "--import", faultImport, "--input-type=module", "-e", code, ...args], {
       OPENCLAW_SURVIVOR_PACKAGE_FAULT: spec,
@@ -103,17 +110,29 @@ it.each(["run", "all"])("kills only after the selected real SQLite commit throug
     db.close();
   }
 });
-it("changes retained rollback bytes inside the Doctor child before reporting failure", () => {
-  const { evidence, previousRoot, run } = faultFixture("verification");
-  fs.mkdirSync(previousRoot);
-  const manifest = path.join(previousRoot, "package.json");
-  fs.writeFileSync(manifest, '{"version":"2026.9.8"}');
-  fs.writeFileSync(evidence, "{}");
-  const result = run("throw new Error('Doctor body must not run')", "doctor");
-  expect([result.error, result.status], result.stderr).toEqual([undefined, 1]);
-  expect(fs.readFileSync(manifest, "utf8")).toBe('{"version":"2026.9.8"}\n');
-  expect(readJson(`${evidence}.doctor`)).toMatchObject({ exitCode: 1 });
-});
+it.each([
+  ["verification", "doctor"],
+  ["verification-rollback", "doctor"],
+  ["verification", "--doctor"],
+  ["verification-rollback", "--doctor"],
+] as const)(
+  "fails the real Doctor child with the selected %s rollback policy through %s",
+  (cut, doctorArg) => {
+    const { evidence, previousRoot, run } = faultFixture(cut);
+    fs.mkdirSync(previousRoot);
+    const manifest = path.join(previousRoot, "package.json");
+    fs.writeFileSync(manifest, '{"version":"2026.9.8"}');
+    fs.writeFileSync(evidence, "{}");
+    const result = run("throw new Error('Doctor body must not run')", "--", doctorArg);
+    expect([result.error, result.status], result.stderr).toEqual([undefined, 1]);
+    const expected = '{"version":"2026.9.8"}' + (cut === "verification" ? "\n" : "");
+    expect(fs.readFileSync(manifest, "utf8")).toBe(expected);
+    expect(readJson(`${evidence}.doctor`)).toMatchObject({
+      exitCode: 1,
+      manifestDigest: createHash("sha256").update(expected).digest("hex"),
+    });
+  },
+);
 
 it("rejects repair receipts after non-manifest bytes change in either package tree", () => {
   const artifacts = fs.realpathSync(dirs.make("package-recovery-tree-"));

@@ -43,7 +43,8 @@ export function writeInstalledRecoveryEvidence(file, value) {
 }
 
 export function startInstalledRecoveryRun(artifacts, cut = "") {
-  const selectedCuts = selectInstalledRecoveryCuts(cut).map(([, value]) => value);
+  const selectedCuts =
+    cut === "older-runtime" ? [cut] : selectInstalledRecoveryCuts(cut).map(([, value]) => value);
   const summary = path.join(artifacts, "installed-recovery.json");
   // Invalidate an earlier PASS before install or helper preparation can fail.
   // Keep prior attempt files separate; only this current pointer is replaced.

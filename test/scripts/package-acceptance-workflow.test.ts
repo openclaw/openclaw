@@ -8778,6 +8778,21 @@ test "$package_manager" = "pnpm@12.1.0"
     expect((outputs.docker_lanes ?? "").split(/\s+/u)).toContain("update-first-hop-compat");
   });
 
+  it("selects only packaged older-runtime recovery in custom acceptance", () => {
+    const lane = "package-installed-recovery-older-runtime";
+    const { outputs, result } = runPackageAcceptanceProfile({
+      suiteProfile: "custom",
+      dockerLanes: lane,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(outputs).toMatchObject({
+      docker_lanes: lane,
+      include_openwebui: "false",
+      include_release_path_suites: "false",
+      telegram_enabled: "false",
+    });
+  });
+
   it("selects one normalized Telegram scenario without enabling broad acceptance lanes", () => {
     const { outputs, result } = runPackageAcceptanceProfile({
       suiteProfile: "telegram",
