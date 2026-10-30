@@ -1,0 +1,3 @@
+# Exact net test-line growth that left PR #188321 over the ceiling: gateway
+# update.status action plus its schema, description, and prompt-snapshot coverage.
+10
