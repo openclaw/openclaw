@@ -161,7 +161,7 @@ const inventory = Array.from({ length: 10_000 }, (_, index) => {
     entry: {
       sessionId: `session-${index}`,
       updatedAt: 1,
-      createdActor: { type: "human", id: "synthetic-viewer" },
+      createdActor: { type: "human", source: "profile", id: "synthetic-viewer" },
       spawnedCwd: workspace ?? path.join(scratch, "workspaces", `session-${index}`),
       skillsSnapshot: { prompt: "Synthetic retained instructions", skills: [] },
     } satisfies InternalSessionEntry,
