@@ -81,8 +81,11 @@ function ownerCheck(cfg: OpenClawConfig, isOwner: (current: OpenClawConfig) => b
   };
 }
 
-/** Owner check for requesters the occurrence can verify; operator sources are checked per run. */
-async function checkRequesterOwner(
+/**
+ * Owner check for requesters the occurrence can verify; operator sources are checked per run.
+ * Scheduler turns about a job (its repair or notices) take the same check.
+ */
+export async function checkRequesterOwner(
   cfg: OpenClawConfig,
   requester: Exclude<ScheduledRequesterRef, { kind: "operator-source" }>,
 ): Promise<RequesterOwnerCheck> {
