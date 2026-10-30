@@ -101,6 +101,7 @@ function sessionPatchFields(targets: readonly PreparedPatchTarget[]) {
       (target) =>
         !target.initialEntry?.sessionId ||
         isIncognitoSessionKey(target.canonicalKey) ||
+        target.initialTarget.storeKeys.some((key) => key !== target.canonicalKey) ||
         Object.keys(target.initialTarget.store).some((key) => key !== target.canonicalKey) ||
         Object.entries(target.fullPatch).some(
           ([key, value]) => value !== undefined && !FIELD_PATCH_KEYS.has(key),

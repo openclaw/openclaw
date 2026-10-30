@@ -137,11 +137,10 @@ test.for([
         );
       });
       await entered.promise;
-      const respond = vi.fn(() => {
-        if (noop) {
-          projected.resolve();
-        }
-      });
+      const respond = vi.fn();
+      if (noop) {
+        respond.mockImplementation(() => projected.resolve());
+      }
       const request = sessionMutationHandlers[
         count === 1 ? "sessions.patch" : "sessions.patchMany"
       ]!({
