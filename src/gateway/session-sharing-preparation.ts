@@ -81,7 +81,8 @@ export async function prepareSessionMutationFacts(
   if (memory) {
     return memory;
   }
-  const inspection = isArtifactPreservingStateRead("agent");
+  // Artifact-preserving reads qualify paths off the Gateway thread.
+  const inspection = isArtifactPreservingStateRead();
   const initialStoreKeys = [params.sessionKey.trim(), canonicalKey];
   const readScope = params.sessionAccessOnly ? "session-access" : "sharing";
   const releases: Array<() => void> = [];
@@ -278,13 +279,18 @@ export async function prepareSessionMutationFacts(
     const parsedAgent = parseAgentSessionKey(params.sessionKey)?.agentId;
     const agentIds = [agentId, ...(parsedAgent ? [parsedAgent] : [])];
     const discoveryInventory = inspection
-      ? (
-          await prepareSessionStoreCandidatesInWorker({
-            config: params.cfg,
-            agentIds,
-            env: { ...process.env },
-          })
-        ).inventory!
+      ? {
+          ...(
+            await prepareSessionStoreCandidatesInWorker({
+              config: params.cfg,
+              agentIds,
+              env: { ...process.env },
+            })
+          ).inventory!,
+          ...(isArtifactPreservingStateRead("agent")
+            ? { preserveSourceArtifacts: true as const }
+            : {}),
+        }
       : prepareSessionStoreTargetInventory(params.cfg, agentIds);
     const candidateIdentities = discoveryInventory.candidates
       .filter((candidate) => !inspection || !candidate.scope)

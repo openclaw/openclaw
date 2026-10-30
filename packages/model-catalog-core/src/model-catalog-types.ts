@@ -85,6 +85,14 @@ export type ModelCatalogCompatConfig = {
   supportedReasoningEfforts?: string[];
   reasoningEffortMap?: Record<string, string>;
   visibleReasoningDetailTypes?: string[];
+  /** Thinking level a new session starts at. Its presence makes the row own the thinking profile. */
+  defaultThinkingLevel?: string;
+  /** Offers the `adaptive` level, which lets the model choose its own effort. */
+  adaptiveThinking?: boolean;
+  /** Thinking stays on even when the row says `reasoning: false` (the route cannot turn it off). */
+  thinkingRequired?: boolean;
+  /** Display labels per level, e.g. `{ low: "on" }` for a binary thinking switch. */
+  thinkingLevelLabels?: Record<string, string>;
 };
 
 /** OpenRouter routing preferences copied into request metadata. */

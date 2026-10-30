@@ -1,4 +1,4 @@
-import { createComponent } from "solid-js";
+import { createComponent, createSignal } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SkillsLibraryListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
@@ -22,6 +22,8 @@ import {
   ChatComposerCapabilityDialogs,
 } from "./chat-composer-capability-host.tsx";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { makeCapabilities, makeMenu } from "./components/chat-composer-menu.test-support.ts";
+import { ChatComposerPlusMenu } from "./components/chat-composer-plus-menu.tsx";
 
 function createContext(configSnapshot: ConfigSnapshot | null): ApplicationContext {
   return {
@@ -52,7 +54,7 @@ function createState(): ChatPageHost {
 
 function capabilityHarness(
   request: ReturnType<typeof vi.fn>,
-  snapshot: ConfigSnapshot = { appliedConfigHash: "config-a", runtimeConfig: {} },
+  snapshot: ConfigSnapshot | null = { appliedConfigHash: "config-a", runtimeConfig: {} },
 ) {
   const host = new ChatComposerCapabilityHost();
   const context = createContext(snapshot);
@@ -227,6 +229,77 @@ function createAddServerHarness(
 }
 
 describe("ChatComposerCapabilityHost", () => {
+  it("keeps unavailable plugin settings distinct from an empty configuration in the open menu", async () => {
+    const { context, props } = capabilityHarness(vi.fn(), null);
+    const guest = sessionMutationGatewayHello([
+      "operator.sessions.read",
+      "operator.sessions.write",
+    ]);
+    context.gateway.snapshot.hello = guest;
+    const initialMenu = makeMenu({
+      open: true,
+      view: "connectors",
+      capabilityMenu: makeCapabilities(props()),
+    });
+    let refresh!: () => void;
+    const view = mountSolid(() => {
+      const [menu, setMenu] = createSignal(initialMenu);
+      refresh = () => {
+        const capabilityMenu = makeCapabilities(props());
+        setMenu((value) => ({ ...value, capabilityMenu }));
+      };
+      return createComponent(ChatComposerPlusMenu, {
+        get menu() {
+          return menu();
+        },
+      });
+    });
+    await import("./components/chat-composer-plus-menu-content.tsx");
+    const expectMessage = (message: string) =>
+      waitForSolid(() =>
+        expect(
+          view.container.querySelector(".agent-chat__capability-menu-state")?.textContent,
+        ).toBe(message),
+      );
+    const add = () => view.getByRole("menuitem", { name: "Add MCP server", hidden: true });
+    await expectMessage("Plugin settings aren’t available for this account.");
+    expect(add().hasAttribute("disabled")).toBe(true);
+
+    context.gateway.snapshot.hello = sessionMutationGatewayHello(["operator.read"]);
+    context.runtimeConfig.state.configLoading = true;
+    refresh();
+    await expectMessage("Loading…");
+
+    context.runtimeConfig.state.configLoading = false;
+    context.runtimeConfig.state.lastError = "Read failed";
+    refresh();
+    await expectMessage("Plugin settings are unavailable.");
+
+    context.runtimeConfig.state.configSnapshot = { runtimeConfig: {} };
+    refresh();
+    await expectMessage("No MCP servers configured.");
+    expect(add().hasAttribute("disabled")).toBe(true);
+
+    context.gateway.snapshot.hello = sessionMutationGatewayHello(["operator.admin"]);
+    refresh();
+    await expectMessage("No MCP servers yet. Add one to give the agent new tools.");
+    expect(add().hasAttribute("disabled")).toBe(false);
+
+    context.runtimeConfig.state.configSnapshot = { runtimeConfig: disabledServer };
+    refresh();
+    await waitForSolid(() =>
+      expect(
+        view.getByRole("switch", { name: "docs", hidden: true }).getAttribute("aria-checked"),
+      ).toBe("false"),
+    );
+
+    context.gateway.snapshot.hello = guest;
+    refresh();
+    await expectMessage("Plugin settings aren’t available for this account.");
+    expect(view.queryByRole("switch", { name: "docs", hidden: true })).toBeNull();
+    expect(add().hasAttribute("disabled")).toBe(true);
+  });
+
   it.each([
     [{ globalError: "duplicate" }, "session", "duplicate"],
     [{ throwGlobal: true }, "everywhere", "config failed"],

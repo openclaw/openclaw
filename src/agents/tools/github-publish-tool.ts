@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import { getAgentToolAssistantTurnId } from "../../../packages/agent-core/src/tool-execution-context.js";
@@ -99,6 +100,17 @@ ${prepareAvailable ? `- prepare_pr: when the user asks to continue their own exi
   return `${readiness}${inspection}${publication} For an explicit landing request from a person with full operator write access, use inspect, then ready and merge after review and required checks. For an explicit closure request, use close to close the PR without merging or deleting saved work. ready, merge and close require the inspected expectedHeadCommit and any publication requestId; merge also requires mergeMethod. For delegated work, explicitly select its publishingSessionKey from this conversation's children; never guess a PR. Actions return the observed GitHub state and never enable auto-merge. Inspect after an uncertain response before retrying. Inspect, merge, close and child selection require full operator write access. These actions also support a bound original PR: use its observed expectedHeadCommit without requestId when no publication receipt is returned. Actions do not change session sandboxing.`;
 }
 
+/** Describe the schema after policy filtering, without claiming prepared runtime capabilities. */
+export function describeGitHubPublishToolPreview(parameters: unknown): string {
+  const properties = isRecord(parameters) ? parameters.properties : undefined;
+  const action = isRecord(properties) ? properties.action : undefined;
+  if (!isRecord(action) || !Array.isArray(action.enum)) {
+    throw new Error("GitHub tool preview requires a declared action enum.");
+  }
+  const actions = action.enum.filter((value): value is string => typeof value === "string");
+  return `GitHub actions in this preview: ${actions.join(", ")}. Some actions depend on the prepared runtime; previewing them grants no execution authority.`;
+}
+
 // Tool construction runs every turn; one schema object per availability combination keeps
 // identity-keyed schema normalization and prepared-descriptor caches warm.
 const githubPublishParameterSchemas = new Map<string, AnyAgentTool["parameters"]>();
@@ -161,6 +173,8 @@ function resolveGitHubPublishParameters(params: {
 export function createGitHubPublishTool(
   options: {
     publicationAvailable?: boolean;
+    /** Inventory only: expose conditional action declarations without an execution path. */
+    preview?: true;
     sandbox?: SandboxContext | null;
     sessionId?: string;
     runId?: string;
@@ -170,11 +184,11 @@ export function createGitHubPublishTool(
 ): AnyAgentTool {
   const publicationAvailable = options.publicationAvailable !== false;
   const workspacePreparationAvailable = !options.sandbox;
-  const prepareAvailable = canPrepareGitHubPullRequest(options.sandbox);
+  const prepareAvailable = options.preview || canPrepareGitHubPullRequest(options.sandbox);
   // An unbound sandboxed conversation prepares by yielding and adopting a managed workspace.
   const adopting = prepareAvailable && options.sandbox?.workspaceSource !== "managed-worktree";
-  const refreshBaseAvailable = canRefreshGitHubPublicationBase(options.sandbox);
-  const evidenceAvailable = canUploadGitHubPublicationEvidence(options.sandbox);
+  const refreshBaseAvailable = options.preview || canRefreshGitHubPublicationBase(options.sandbox);
+  const evidenceAvailable = options.preview || canUploadGitHubPublicationEvidence(options.sandbox);
   const workspaceActions = publicationWorkspaceActions.filter(
     (action) =>
       (action !== "prepare_pr" || prepareAvailable) &&
@@ -195,12 +209,14 @@ export function createGitHubPublishTool(
     ...(adopting || (publicationAvailable && workspacePreparationAvailable)
       ? { async: false as const, catalogMode: "direct-only" as const }
       : {}),
-    description: describeGitHubPublishTool(
-      publicationAvailable,
-      prepareAvailable,
-      refreshBaseAvailable,
-      evidenceAvailable,
-    ),
+    description: options.preview
+      ? "Work with GitHub pull requests through the Gateway."
+      : describeGitHubPublishTool(
+          publicationAvailable,
+          prepareAvailable,
+          refreshBaseAvailable,
+          evidenceAvailable,
+        ),
     parameters: resolveGitHubPublishParameters({
       publicationAvailable,
       prepareAvailable,
@@ -210,6 +226,9 @@ export function createGitHubPublishTool(
       workspaceActions,
     }),
     execute: async (toolCallId, rawArgs, signal) => {
+      if (options.preview) {
+        throw new Error("GitHub tool previews cannot execute actions.");
+      }
       // SAFETY: the tool runtime validates rawArgs against the closed schema above.
       const input = rawArgs as Omit<SessionGitHubPublishParams, "idempotencyKey" | "sessionKey"> &
         Omit<GitHubPublicationAction, "action"> &

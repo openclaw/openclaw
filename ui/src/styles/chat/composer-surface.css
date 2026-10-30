@@ -1219,12 +1219,15 @@
   }
 }
 
-.chat-thread-inner {
+/* The scroll container exposes the reading inset to the composer width owner. */
+.chat-thread {
   --chat-thread-inline-inset: max(
     var(--chat-thread-annotation-inset, 0px),
     calc(var(--chat-thread-gutter) + var(--chat-thread-side-inset))
   );
+}
 
+.chat-thread-inner {
   /* Shared gutter plus the responsive side inset that used to be
      .chat-thread's horizontal padding (moved off the scroll container so
      overlay scrollbars sit flush at the pane edge). */
@@ -1251,12 +1254,14 @@
     min-width: 64px;
   }
 
-  .chat-thread-inner {
+  .chat-thread {
     --chat-thread-inline-inset: max(
       var(--chat-thread-annotation-inset, 0px),
       var(--chat-mobile-edge-inset)
     );
+  }
 
+  .chat-thread-inner {
     position: relative;
   }
 
@@ -1272,6 +1277,7 @@
   }
 
   .agent-chat__composer-shell {
+    --chat-composer-inline-inset: var(--chat-mobile-edge-inset);
     --chat-composer-bottom-gap: 6px;
 
     margin-block: var(--chat-composer-top-margin, 0px) var(--chat-composer-bottom-gap);

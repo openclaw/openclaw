@@ -2935,6 +2935,15 @@ rewrite, and branch preparation use the existing reserved target-discovery lane
 so error cleanup cannot drain independent readers while holding FIFO admission.
 That lane preserves its reentrant host-write contract. Ordinary manager opens and
 independent retargets keep their foreground history-reader concurrency.
+Bounded hydration and prepared model-context reads reserve the writer only to
+capture a mutation witness and to accept their result. They wait for the history
+worker outside that reservation, so a slow or failed read cannot block later
+transcript writes. Acceptance checks the physical source, current authority,
+committed-write receipt and native mutation witness before synchronous consumption.
+One intervening mutation retries the read once. Continued mutation performs one
+final read under writer custody, preserving progress during concurrent session
+starts without accepting stale data or repeating the consumer. A caller already
+holding the writer retains its existing custody.
 These scheduling changes require no schema, stored-data, configuration, or update
 migration.
 

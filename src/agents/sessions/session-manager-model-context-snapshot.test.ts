@@ -767,22 +767,25 @@ it("rejects a removed user admission before the bounded reader captures its witn
   }));
 
 it.each(["append", "rewrite"] as const)(
-  "rejects a native %s before consuming bounded admitted model context",
+  "retries a native %s before consuming bounded admitted model context",
   (mutation) =>
     withSessionState("admitted-context", async ({ scope }) => {
       const { source } = await seedUser(scope);
       await withSelectedTranscriptReader(scope, async () => {
         const options = { limits: contextLimits };
-        const spy = afterModelRead(() => {
+        const spy = afterModelRead(async () => {
           if (mutation === "rewrite") {
             expect(source.removeTrailingEntries((entry) => entry.type === "message")).toBe(1);
           }
-          source.appendMessage(userMessage("changed", 2));
+          await source.appendMessageAsync(userMessage("changed", 2));
         });
         await withRestoredMocks([spy], async () => {
-          await expect(SessionManager.openModelContextAsync(scope, options)).rejects.toThrow(
-            "Session entry changed during read",
+          expect(await readMessages(scope, options)).toMatchObject(
+            mutation === "rewrite"
+              ? [{ content: "changed" }]
+              : [{ content: "original" }, { content: "changed" }],
           );
+          expect(spy).toHaveBeenCalledTimes(2);
         });
         expect(await readMessages(scope, options)).toMatchObject(
           mutation === "rewrite"
@@ -832,7 +835,7 @@ it("allows a queued writer to finish during an unbounded admitted context read",
     });
   }));
 
-it("keeps one bounded context snapshot and observes a foreign rewrite on the next read", () =>
+it("retries a bounded context snapshot after a foreign rewrite before consuming it", () =>
   withSessionState("foreign-context", async ({ scope }) => {
     const { entryId: userId } = await seedUser(scope);
     const databaseOptions = { agentId: scope.agentId, path: scope.storePath };
@@ -870,7 +873,8 @@ it("keeps one bounded context snapshot and observes a foreign rewrite on the nex
         }
       });
       await withRestoredMocks([spy], async () => {
-        expect(await readMessages(scope, options)).toMatchObject([{ content: "original" }]);
+        expect(await readMessages(scope, options)).toMatchObject([{ content: "foreign rewrite" }]);
+        expect(spy).toHaveBeenCalledTimes(2);
       });
       expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();
       expect(await readMessages(scope, options)).toMatchObject([{ content: "foreign rewrite" }]);

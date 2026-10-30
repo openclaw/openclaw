@@ -4,6 +4,7 @@ import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
+import { bindSharedGatewayOwnerRunAuthority } from "../agents/harness/host-private-capabilities.js";
 import {
   captureOperatorModelPolicySnapshot,
   prepareOperatorModelPolicy,
@@ -24,7 +25,7 @@ import {
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import type { UserChannelAuthorizationReference } from "../state/user-profiles.types.js";
-import { isBrowserOperatorUiClient } from "../utils/message-channel.js";
+import { isBrowserOperatorUiClient, isWebchatClient } from "../utils/message-channel.js";
 import { createChannelOperatorRevocation } from "./channel-operator-revocation.js";
 import {
   onGatewayDeviceSourceRevoked,
@@ -609,6 +610,16 @@ export async function captureGatewayOperatorRunAuthority(input: {
           }
         }),
     });
+    if (
+      authenticatedOwner &&
+      client.usesSharedGatewayAuth === true &&
+      client.sharedGatewaySessionGeneration &&
+      (isBrowserOperatorUiClient(client.connect.client) || isWebchatClient(client.connect.client))
+    ) {
+      // The handshake owns the credential/generation checks, including device
+      // reconnects bound to that shared credential. The profile name grants nothing.
+      bindSharedGatewayOwnerRunAuthority(authority);
+    }
     return { authority, release };
   } catch (error) {
     release();

@@ -96,7 +96,7 @@ export function prepareSessionStoreTargetCandidates(request: SessionStoreTargetP
   return {
     kind: "session-target-prepare" as const,
     candidates,
-    inventory: inventory && { ...inventory, candidates, preserveSourceArtifacts: true as const },
+    inventory: inventory && { ...inventory, candidates },
   };
 }
 

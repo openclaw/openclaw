@@ -14,18 +14,21 @@ import {
 
 type RecoveryDatabase = Pick<DB, "update_runs" | "config_machine_state">;
 
-function readRecoveryRows(db: EngineConnection) {
+function readRecoveryRows(db: EngineConnection, runId?: string) {
   if (!tableExists(db, "config_machine_state")) {
     return [];
   }
+  const query = getNodeSqliteKysely<RecoveryDatabase>(db)
+    .selectFrom("config_machine_state")
+    .select(["state_key", "value_json"]);
   return executeSqliteQuerySync(
     db,
-    getNodeSqliteKysely<RecoveryDatabase>(db)
-      .selectFrom("config_machine_state")
-      .select(["state_key", "value_json"])
-      .where("state_key", ">=", UPDATE_RECOVERY_KEY_PREFIX)
-      .where("state_key", "<", UPDATE_RECOVERY_KEY_END)
-      .orderBy("state_key", "asc"),
+    runId === undefined
+      ? query
+          .where("state_key", ">=", UPDATE_RECOVERY_KEY_PREFIX)
+          .where("state_key", "<", UPDATE_RECOVERY_KEY_END)
+          .orderBy("state_key", "asc")
+      : query.where("state_key", "=", UPDATE_RECOVERY_KEY_PREFIX + runId),
   ).rows;
 }
 /** Execution reads only its named operation; unrelated history is not execution input. */
@@ -33,9 +36,7 @@ export function readRecovery(
   db: EngineConnection,
   runId: string,
 ): UpdateRecoveryRecord | undefined {
-  const row = readRecoveryRows(db).find(
-    (entry) => entry.state_key === UPDATE_RECOVERY_KEY_PREFIX + runId,
-  );
+  const row = readRecoveryRows(db, runId)[0];
   return row ? decodeUpdateRecovery(row.value_json, runId) : undefined;
 }
 

@@ -189,11 +189,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   text-align: left;
 }
 
-.new-session-page__scroll > .new-session-page__draft {
-  max-width: var(--chat-thread-max-width, 48rem);
-  margin-inline: auto;
-}
-
 .new-session-page__incognito-notice {
   display: flex;
   align-items: center;
@@ -347,7 +342,8 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   justify-content: flex-start;
   gap: 4px 2px;
   width: calc(100% - 36px);
-  max-width: 48rem;
+  /* Share the composer's left edge at any saved or dragged width. */
+  max-width: var(--chat-thread-max-width);
   margin: 0 auto;
   padding: 0;
   box-sizing: border-box;
@@ -1236,10 +1232,6 @@ span.new-session-page__select {
     min-height: auto;
     margin-block: auto;
     padding: 24px 0;
-  }
-
-  .new-session-page__scroll > .new-session-page__draft {
-    max-width: none;
   }
 
   /* Center the whole composition, not the introduction alone. Auto margins

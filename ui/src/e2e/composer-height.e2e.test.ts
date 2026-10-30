@@ -77,7 +77,6 @@ suite.define(() => {
         await expect.poll(async () => (await measure()).height).toBe(capped.height);
         expect(capped.resize).toBe("none");
         expect((await shell.boundingBox())!.width).toBeCloseTo(initialShell!.width, 0);
-        expect(await page.getByRole("separator", { name: "Resize message width" }).count()).toBe(0);
         const send = page.getByRole("button", { name: /^(Send|Start)/ }).last();
         await send.scrollIntoViewIfNeeded();
         await send.click({ trial: true });

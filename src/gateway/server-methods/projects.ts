@@ -39,7 +39,10 @@ import {
   resolveProjectRegistry,
 } from "../../projects/project-registry.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
-import { prepareCurrentUserProfileAliases } from "../../state/user-profile-reads.js";
+import {
+  prepareCurrentUserProfileAliases,
+  UserProfileDisclosureChangedError,
+} from "../../state/user-profile-reads.js";
 import { configuredDefaultRepository } from "../configured-default-repository.js";
 import {
   CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE,
@@ -256,8 +259,15 @@ export const projectsHandlers: GatewayRequestHandlers = {
           await list();
           return;
         } catch (error) {
-          if (!(error instanceof ProjectListingChangedError) || attempt >= PROJECTS_LIST_ATTEMPTS) {
+          // Profile merges fence recents the same way listing guards fence sessions.
+          const changed =
+            error instanceof ProjectListingChangedError ||
+            error instanceof UserProfileDisclosureChangedError;
+          if (!changed) {
             throw error;
+          }
+          if (attempt >= PROJECTS_LIST_ATTEMPTS) {
+            throw new ProjectListingChangedError();
           }
         }
       }

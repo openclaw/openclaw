@@ -326,6 +326,12 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       weight: 6,
     });
     expect(prereleasePlan.surfaces).toContain("external-install-boundary");
+    const bootstrapIndex = sweepScript.indexOf(
+      'run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins-bootstrap.json" plugins list --json',
+    );
+    const trustIndex = sweepScript.indexOf("record-fixture-plugin-trust");
+    expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
+    expect(trustIndex).toBeGreaterThan(bootstrapIndex);
     expect(sweepScript).toContain("run_plugins_clawhub_scenario");
     expect(clawhubScript).toContain('plugins install "$CLAWHUB_PLUGIN_SPEC"');
     expect(assertionsScript).toContain("assertClawHubExternalInstallContract");

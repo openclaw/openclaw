@@ -13,6 +13,7 @@ import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
+import { loadComposerWidthEdge } from "../chat/components/chat-composer-width-ref.tsx";
 import { createNewSessionComposerTextarea } from "./composer-textarea.ts";
 import {
   composerContext,
@@ -69,6 +70,22 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   replaceSlashCommands(buildFallbackSlashCommands());
+});
+
+// First in this file, before any composer key intent has loaded the edge owner.
+describe("new-session composer width edge", () => {
+  it("leaves the edge owner out of first render and loads it on composer key intent", async () => {
+    const { composer, container } = renderComposer({
+      chatMessageMaxWidth: "600px",
+      onComposerWidthChange: () => undefined,
+    });
+    document.body.append(container);
+    flush();
+    expect(composer.querySelector('[role="separator"]')).toBeNull();
+    composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    await waitForSolid(() => expect(composer.querySelector('[role="separator"]')).not.toBeNull());
+    container.remove();
+  });
 });
 
 describe("new-session placeholder animation", () => {
@@ -495,6 +512,7 @@ describe("new-session composer sizing lifecycle", () => {
   });
 
   it("keeps its sizing observers across controlled updates and remeasures programmatic drafts", async () => {
+    await loadComposerWidthEdge();
     const observers = new Set<TestResizeObserver>();
     class TestResizeObserver implements ResizeObserver {
       readonly targets = new Set<Element>();
@@ -517,7 +535,18 @@ describe("new-session composer sizing lifecycle", () => {
     vi.stubGlobal("ResizeObserver", TestResizeObserver);
     const composerTextarea = createNewSessionComposerTextarea();
     const onInput = vi.fn();
-    const first = renderComposer({ composerTextarea, onInput });
+    let savedWidth: string | undefined = "600px";
+    const first = renderComposer({
+      composerTextarea,
+      onInput,
+      get chatMessageMaxWidth() {
+        return savedWidth;
+      },
+      onComposerWidthChange: (value) => {
+        savedWidth = value;
+        first.rerender();
+      },
+    });
     document.body.append(first.container);
     const textarea = getComposerTextarea(first.composer);
     let scrollHeightReads = 0;
@@ -528,8 +557,15 @@ describe("new-session composer sizing lifecycle", () => {
         return 42;
       },
     });
-    // The shared layout attaches after Solid, then schedules the initial cap.
-    await waitForFast(() => expect(observedTargets().has(textarea)).toBe(true));
+    // JSX exists before geometry settles. Capture the baseline only after both
+    // owners have bound all their targets, not merely after the edge renders.
+    const expectedTargets = new Set([
+      textarea,
+      first.composer,
+      first.composer.querySelector<HTMLElement>(".agent-chat__input")!,
+      first.container,
+    ]);
+    await waitForFast(() => expect(observedTargets()).toEqual(expectedTargets));
     const readsAfterAttach = scrollHeightReads;
     const targetsAfterAttach = observedTargets();
     expect(targetsAfterAttach.has(textarea)).toBe(true);
