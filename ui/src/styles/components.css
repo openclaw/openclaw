@@ -2810,10 +2810,8 @@ td.data-table-key-col {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: color-mix(in srgb, var(--muted) 82%, var(--sidebar-bg, var(--bg)));
   font-size: calc(11px * var(--control-ui-text-scale));
   letter-spacing: 0;
-  font-variant-numeric: tabular-nums;
   white-space: nowrap;
   transition: opacity var(--duration-fast) ease;
   /* Display-only, and its opacity transition forms a stacking context that
@@ -2849,10 +2847,17 @@ td.data-table-key-col {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  color: color-mix(in srgb, var(--muted) 82%, var(--sidebar-bg, var(--bg)));
   font-size: 11px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
+}
+
+/* Trailing signals stay quieter than secondary text; only action or live state adds color. */
+.session-row-trail,
+.session-row-badge,
+.session-row-badges,
+.sidebar-child-session-toggle {
+  color: color-mix(in srgb, var(--muted) 82%, var(--sidebar-bg, var(--bg)));
 }
 
 .session-row-badge--attention,
@@ -3275,7 +3280,6 @@ td.data-table-key-col {
   .sidebar-session-group-count,
   .sidebar-agent-roster__unread,
   .sidebar-issues-button__count,
-  .session-owner-stack__count,
   .viewer-avatar--overflow,
   .sidebar-session-tree__show-more
 ) {
@@ -3287,17 +3291,6 @@ td.data-table-key-col {
 .sidebar-session-group-actions {
   border-radius: 7px;
   corner-shape: superellipse(1.5);
-}
-
-/* Trailing signals stay quieter than secondary text; only action or live state adds color. */
-.session-row-badges,
-.sidebar-child-session-toggle {
-  color: color-mix(in srgb, var(--muted) 82%, var(--sidebar-bg, var(--bg)));
-}
-
-.sidebar-child-session-toggle:hover,
-.sidebar-child-session-toggle:focus-visible {
-  color: var(--text);
 }
 
 .sidebar-recent-session .hover-marquee {

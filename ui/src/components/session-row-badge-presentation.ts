@@ -18,7 +18,7 @@ export function sidebarSessionBadgeFacts(
   row: SidebarRecentSession,
   initialPullRequest = row.pullRequest,
 ) {
-  const attention = row.ownAttention ?? row.attention;
+  const attention = row.attention;
   return (
     row.snapshot ?? {
       // An approval the leading icon already shows needs no second badge; a question

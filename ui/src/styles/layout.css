@@ -1297,12 +1297,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .sidebar-session__archive-glyph svg,
-.sidebar-session-tool > svg {
-  width: 13px;
-  height: 13px;
-  stroke-width: 2px;
-}
-
 .sidebar-session-catalog-provider-icon {
   width: 12px;
   height: 12px;
@@ -2646,10 +2640,7 @@ a:is(
 .sidebar-zone-entry .sidebar-recent-session {
   --session-row-bg: var(--session-row-tint, transparent);
 
-  position: relative;
-  min-height: var(--sidebar-session-row-min-height);
   padding: 0 11px;
-  color: var(--muted);
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -2712,6 +2703,10 @@ a:is(
   );
 }
 
+.sidebar-pages__entry:hover
+  .sidebar-recent-session--colored.sidebar-recent-session--active:not(
+    .sidebar-recent-session--selected
+  ),
 .sidebar-recent-session--colored.sidebar-recent-session--active:not(
     .sidebar-recent-session--selected
   ):hover {

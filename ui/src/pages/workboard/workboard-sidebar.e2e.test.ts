@@ -103,7 +103,7 @@ suite.define(() => {
           }),
         );
         const centerY = expect.closeTo(indicators[0]!.centerY, 1);
-        expect(indicators).toMatchObject([{ centerY }, { centerY }, { centerY }]);
+        expect(indicators).toMatchObject([{ centerY }, { centerY }]);
         const ordered = indicators.toSorted((left, right) => left.left - right.left);
         for (let index = 1; index < ordered.length; index++) {
           expect(ordered[index]!.left).toBeGreaterThanOrEqual(ordered[index - 1]!.right);
