@@ -26,7 +26,8 @@ vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
 }));
 
-vi.mock("../../plugins/tools.js", () => ({
+vi.mock("../../plugins/tools.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/tools.js")>()),
   acquireStandalonePluginToolRegistry: vi.fn(),
 }));
 
