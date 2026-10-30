@@ -341,8 +341,7 @@ describe("Control UI release-only inventories", () => {
     const desktop = "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts";
     const serial = [
       "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
-      "ui/src/e2e/chat-daybreak.real-gateway.e2e.test.ts",
-      "ui/src/e2e/quiet-automations.real-gateway.e2e.test.ts",
+      "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts",
       "ui/src/e2e/plugin-inline-view.real-gateway.e2e.test.ts",
     ];
     const parallel = [
@@ -355,8 +354,7 @@ describe("Control UI release-only inventories", () => {
       [desktop]: 80,
       [serial[0]!]: 60,
       [serial[1]!]: 50,
-      [serial[2]!]: 40,
-      [serial[3]!]: 10,
+      [serial[2]!]: 10,
     };
     for (const file of parallel) {
       fileSeconds[file] = 100;
@@ -468,6 +466,14 @@ describe("Control UI release-only inventories", () => {
       groups.e2e,
       uiE2eRealGatewayTestFiles.filter((file) => !releaseOnlyRealGateway.has(file)),
     );
+    expectRealGatewayCoverage(
+      createUiTestShardGroups({
+        includeReleaseOnlyTests: false,
+        includeReleaseOnlyE2eTests: true,
+        uiE2eFiles: [entry, staleBuild, teamScale],
+      }).e2e,
+      uiE2eRealGatewayTestFiles.filter((file) => !releaseOnlyRealGateway.has(file)),
+    );
   });
 
   it("retains directly edited release matrices alongside PR-exempt entries", () => {
@@ -497,6 +503,8 @@ describe("Control UI release-only inventories", () => {
     expectRealGatewayCoverage(
       createUiTestShardGroups({
         includeReleaseOnlyTests: false,
+        includeReleaseOnlyE2eTests: true,
+        uiE2eFiles: [entry, staleBuild, teamScale],
         changedPaths: [automationManagement, "ui/src/e2e", "ui/src/pages/usage/usage-page.tsx"],
       }).e2e,
       uiE2eRealGatewayTestFiles.filter(
@@ -512,6 +520,13 @@ describe("Control UI release-only inventories", () => {
       e2e: [{ configs: [configPath("ui-e2e")], shard_name: configPath("ui-e2e") }],
     });
     expectRealGatewayCoverage(groups.e2e, uiE2eRealGatewayTestFiles);
+    expectRealGatewayCoverage(
+      createUiTestShardGroups({
+        includeReleaseOnlyE2eTests: true,
+        uiE2eFiles: [entry],
+      }).e2e,
+      uiE2eRealGatewayTestFiles,
+    );
   });
 });
 
