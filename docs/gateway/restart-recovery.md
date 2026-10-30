@@ -89,6 +89,11 @@ short bounded time for in-flight persistence and gives other resource cleanup a
 bounded grace. A long model stream, tool call, or background process does not get
 a full run-completion drain before shutdown.
 
+After marker persistence and cancellation, process-owned shutdown gives session
+resources five seconds to settle. Leftovers retain their shared databases until
+process exit instead of extending the session-admission wait. Embedded hosts
+still join those resources before reusing the runtime.
+
 A plain stop (`SIGTERM` or `SIGINT`) arriving during an in-process restart makes
 the Gateway finish its bounded shutdown and exit instead of starting again.
 Managed update handoffs keep their own stop handling.
