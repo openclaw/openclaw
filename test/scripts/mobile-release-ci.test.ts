@@ -1715,15 +1715,14 @@ describe("mobile release CI tools", () => {
         timeoutMs: number;
       }) => {
         const pidFile = path.join(runnerTemp, `${name}.pid`);
+        // Publish both PIDs before the grandchild can trigger the output cap.
+        const childSource = `process.on("SIGTERM", () => {}); require("node:fs").writeFileSync(process.env.PID_FILE, \`\${process.ppid}\\n\${process.pid}\\n\`); ${grandchildSource}`;
         const parentSource = [
-          // A timeout during PID publication must not terminate the fixture before it writes.
           'process.on("SIGTERM", () => {});',
           'const { spawn } = require("node:child_process");',
-          'const fs = require("node:fs");',
-          `const child = spawn(process.execPath, ["-e", ${JSON.stringify(grandchildSource)}], {`,
+          `spawn(process.execPath, ["-e", ${JSON.stringify(childSource)}], {`,
           '  stdio: ["ignore", process.stdout, process.stderr],',
           "});",
-          "fs.writeFileSync(process.env.PID_FILE, `${process.pid}\\n${child.pid}\\n`);",
           "setInterval(() => {}, 1000);",
         ].join("\n");
         const runnerSource = `
@@ -1778,14 +1777,13 @@ process.stdout.write(JSON.stringify({ elapsedMs: Date.now() - startedAt, message
 
       await exerciseOwnedProcessTree({
         expectedError: "timed out after 1000ms",
-        grandchildSource: 'process.on("SIGTERM", () => {}); setTimeout(() => {}, 5000);',
+        grandchildSource: "setTimeout(() => {}, 5000);",
         name: "timeout-tree",
         timeoutMs: 1_000,
       });
       await exerciseOwnedProcessTree({
         expectedError: "exceeded the 4096-byte output limit",
-        grandchildSource:
-          'process.on("SIGTERM", () => {}); setInterval(() => process.stdout.write("x".repeat(2048)), 1);',
+        grandchildSource: 'setInterval(() => process.stdout.write("x".repeat(2048)), 1);',
         maxOutputBytes: 4096,
         name: "output-cap-tree",
         timeoutMs: 5_000,
