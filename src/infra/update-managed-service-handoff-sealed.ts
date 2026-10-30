@@ -8,8 +8,8 @@ export { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownersh
 export { resolveImmutableSqliteFileUri } from "./node-sqlite.js";
 export { procCgroupMembershipMatches } from "./update-managed-service-handoff-scope.js";
 export {
-  readRestartSentinelRowSync,
-  writeRestartSentinelRowIfRevisionSync,
+  inspectManagedHandoffSentinelRowSync,
+  recordManagedHandoffSentinelOutcomeRowSync,
 } from "./restart-sentinel-store.js";
 export { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
 export {
