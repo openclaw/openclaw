@@ -79,7 +79,6 @@ private fun ChatSystemRow(
         text = label,
         style =
           ClawTheme.type.caption.copy(
-            fontSize = 10.5.sp,
             lineHeight = 13.sp,
             fontWeight = FontWeight.SemiBold,
             letterSpacing = 0.6.sp,

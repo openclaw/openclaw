@@ -4,8 +4,9 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { installGuardClock } from "./github-guard-clock.mjs";
 
 const fixture = JSON.parse(readFileSync(process.env.OPENCLAW_GUARD_TEST_FIXTURE, "utf8"));
-if (fixture.clock) installGuardClock(fixture.logPath);
+const advanceClock = fixture.clock ? installGuardClock(fixture.logPath) : undefined;
 const publishedStatuses = new Map();
+const publishedComments = new Map();
 globalThis.fetch = async (url, options = {}) => {
   const parsed = new URL(url);
   const method = options.method ?? "GET";
@@ -38,12 +39,33 @@ globalThis.fetch = async (url, options = {}) => {
       ? route.before
       : route.after
     : route;
-  const value = responseRoute.responses
+  let value = responseRoute.responses
     ? responseRoute.responses.length > 1
       ? responseRoute.responses.shift()
       : responseRoute.responses[0]
     : responseRoute;
+  if (value?.advanceMs !== undefined) {
+    if (!advanceClock) throw new Error("Elapsed response fixtures require the isolated clock.");
+    advanceClock(value.advanceMs);
+    value = value.response;
+  }
+  if (value?.requestTimeout) {
+    const expire = () => advanceClock(30_000);
+    if (value.requestTimeout === "body") {
+      return new Response(new ReadableStream({ pull: expire }, { highWaterMark: 0 }));
+    }
+    expire();
+    return new Promise(() => {});
+  }
   if (value?.recordStatusBeforeError) recordStatus();
+  if (value?.recordCommentBeforeError) {
+    publishedComments.set(parsed.pathname, {
+      id: 321,
+      body: body.body,
+      user: { login: "github-actions[bot]", type: "Bot" },
+      updated_at: new Date(Date.now()).toISOString(),
+    });
+  }
   if (value?.transportError) {
     throw new TypeError("fetch failed", {
       cause: Object.assign(new Error("Fixture connection failure"), { code: value.transportError }),
@@ -56,6 +78,9 @@ globalThis.fetch = async (url, options = {}) => {
     });
   }
   recordStatus();
+  if (method === "GET" && publishedComments.has(parsed.pathname) && Array.isArray(value)) {
+    value = [...value, publishedComments.get(parsed.pathname)];
+  }
   const statusHistory = /^\/repos\/[^/]+\/[^/]+\/commits\/([a-f0-9]{40})\/statuses$/u.exec(
     parsed.pathname,
   );

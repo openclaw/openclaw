@@ -1,4 +1,3 @@
-// Telegram Mini App published URL resolution.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveTailnetHostWithRunner,
@@ -6,21 +5,16 @@ import {
   type TailscaleStatusCommandRunner,
 } from "openclaw/plugin-sdk/core";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import { normalizeControlUiBasePath } from "../control-ui-base-path.js";
 
 export const TELEGRAM_MINIAPP_PATH_PREFIX = "/__openclaw_tg_miniapp/";
 export const TELEGRAM_MINIAPP_URL_ERROR =
-  "Mini App needs an HTTPS gateway URL. Set `gateway.tailscale.mode: serve` or `funnel`, then retry.";
-
-type TelegramMiniAppUrls = {
-  pageUrl: string;
-  controlUiUrl: string;
-  gatewayUrl: string;
-};
+  "Mini App needs an HTTPS gateway URL. Set `gateway.tailscale.mode: serve` or `funnel`, then retry /controlui.";
 
 export async function resolveTelegramMiniAppUrls(params: {
   cfg: OpenClawConfig;
   runCommand?: TailscaleStatusCommandRunner;
-}): Promise<TelegramMiniAppUrls> {
+}) {
   const mode = params.cfg.gateway?.tailscale?.mode ?? "off";
   if (mode !== "serve" && mode !== "funnel") {
     throw new Error(TELEGRAM_MINIAPP_URL_ERROR);
@@ -37,7 +31,11 @@ export async function resolveTelegramMiniAppUrls(params: {
     throw new Error(TELEGRAM_MINIAPP_URL_ERROR);
   }
 
-  const controlUiPath = normalizeControlUiBasePath(params.cfg.gateway?.controlUi?.basePath);
+  const basePath = params.cfg.gateway?.controlUi?.basePath;
+  const controlUiPath = normalizeControlUiBasePath(
+    typeof basePath === "string" ? basePath.trim() : "",
+    "all",
+  );
   const controlUiUrl = `https://${publishedHost}${controlUiPath}`;
   return {
     pageUrl: `https://${publishedHost}${TELEGRAM_MINIAPP_PATH_PREFIX}`,
@@ -47,13 +45,4 @@ export async function resolveTelegramMiniAppUrls(params: {
     // host URL breaks gateway.controlUi.basePath installs.
     gatewayUrl: `wss://${publishedHost}${controlUiPath}`,
   };
-}
-
-function normalizeControlUiBasePath(value: unknown): string {
-  const raw = typeof value === "string" ? value.trim() : "";
-  if (!raw || raw === "/") {
-    return "";
-  }
-  const withLeading = raw.startsWith("/") ? raw : `/${raw}`;
-  return withLeading.replace(/\/+$/, "");
 }

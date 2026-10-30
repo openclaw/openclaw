@@ -3,7 +3,21 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import {
+  createLegacyWebhookListenerDoctorContract,
+  defineChannelAliasMigration,
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { resolveMSTeamsCredentials } from "./src/token-config.js";
+
+const webhookMigration = createLegacyWebhookListenerDoctorContract({
+  channelKey: "msteams",
+  defaultPort: 3978,
+  webhookKey: "webhook",
+  portKey: "port",
+  hostKey: null,
+  preserveAuthoredActivation: true,
+});
+export const { historicalWebhookListener } = webhookMigration;
 
 const streamingAliasMigration = defineChannelAliasMigration({
   channelId: "msteams",
@@ -12,13 +26,39 @@ const streamingAliasMigration = defineChannelAliasMigration({
   streaming: { defaultMode: "partial" },
 });
 
-export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] =
-  streamingAliasMigration.legacyConfigRules;
+export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
+  ...webhookMigration.legacyConfigRules,
+  ...streamingAliasMigration.legacyConfigRules,
+];
+
+export function normalizeHistoricalWebhookConfig({
+  cfg,
+}: {
+  cfg: OpenClawConfig;
+}): ChannelDoctorConfigMutation {
+  const webhook = webhookMigration.normalizeCompatibilityConfig({ cfg });
+  return {
+    ...webhook,
+    historicalWebhookAccountIds:
+      cfg.channels?.msteams === undefined && !resolveMSTeamsCredentials()
+        ? null
+        : cfg.channels?.msteams?.enabled === false
+          ? []
+          : [undefined],
+  };
+}
 
 export function normalizeCompatibilityConfig({
   cfg,
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
-  return streamingAliasMigration.normalizeChannelConfig({ cfg });
+  const webhook = normalizeHistoricalWebhookConfig({ cfg });
+  return {
+    ...streamingAliasMigration.normalizeChannelConfig({
+      cfg: webhook.config,
+      changes: webhook.changes,
+    }),
+    historicalWebhookAccountIds: webhook.historicalWebhookAccountIds,
+  };
 }

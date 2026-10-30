@@ -5,8 +5,8 @@ public enum OpenClawBonjour {
     public static let gatewayServiceType = "_openclaw-gw._tcp"
     public static let gatewayServiceDomain = "local."
     public static var wideAreaGatewayServiceDomain: String? {
-        let env = ProcessInfo.processInfo.environment
-        return resolveWideAreaDomain(env["OPENCLAW_WIDE_AREA_DOMAIN"])
+        let normalized = self.normalizeServiceDomain(ProcessInfo.processInfo.environment["OPENCLAW_WIDE_AREA_DOMAIN"])
+        return normalized == self.gatewayServiceDomain ? nil : normalized
     }
 
     public static var gatewayServiceDomains: [String] {
@@ -17,24 +17,10 @@ public enum OpenClawBonjour {
         return domains
     }
 
-    private static func resolveWideAreaDomain(_ raw: String?) -> String? {
-        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return nil }
-        let normalized = self.normalizeServiceDomain(trimmed)
-        return normalized == self.gatewayServiceDomain ? nil : normalized
-    }
-
     public static func normalizeServiceDomain(_ raw: String?) -> String {
-        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return self.gatewayServiceDomain
-        }
+        guard let trimmed = raw?.trimmedNonEmpty else { return self.gatewayServiceDomain }
 
         let lower = trimmed.lowercased()
-        if lower == "local" || lower == "local." {
-            return self.gatewayServiceDomain
-        }
-
         return lower.hasSuffix(".") ? lower : (lower + ".")
     }
 }

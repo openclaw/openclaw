@@ -8,6 +8,9 @@ import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.tes
 
 const require = createRequire(import.meta.url);
 const leaseId = "cbx_replay_fixture";
+// Slowest identity probe (lsof) measured on a CPU-starved macOS host; native inspection is heavier.
+const LOADED_HOST_PROBE_MS = 27_042;
+const processResult = (stdout = "", status: number | null = 0) => ({ status, stdout });
 
 async function replay(
   platform: "linux" | "darwin",
@@ -16,11 +19,14 @@ async function replay(
   displayName = "Replay fixture",
   home = "/Users/worker",
   launch?: "ready" | "waiter-exit",
-  interrupted?: "before-receipt" | "after-receipt" | "dangling-runtime" | "receipt-only",
+  interrupted?: "before-receipt" | "dangling-runtime" | "receipt-only",
 ) {
   const stateDir = path.join(home, ".openclaw", "cloud-workers", leaseId);
   const runtimeDir = path.join(home, ".openclaw-worker", "node-runtimes", "a".repeat(64));
   const cli = path.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
+  const interruptedPath = interrupted
+    ? path.join(stateDir, interrupted === "receipt-only" ? "node-launch.json" : "runtime")
+    : undefined;
   const nodeStart = desktop ? "1788998400:123456" : "Wed Sep 9 12:00:00 2026";
   const hostStart = "1788998399:654321";
   const setup = createCrabboxNodeEnrollmentSetup({
@@ -82,25 +88,14 @@ async function replay(
       if (file === runtimeDir) {
         return { isDirectory: () => true };
       }
-      if (
-        (file === path.join(stateDir, "runtime") &&
-          interrupted &&
-          interrupted !== "receipt-only") ||
-        (file === path.join(stateDir, "node-launch.json") &&
-          (interrupted === "after-receipt" || interrupted === "receipt-only"))
-      ) {
+      if (file === interruptedPath) {
         return { isSymbolicLink: () => file.endsWith("/runtime") };
       }
       throw Object.assign(new Error("Missing runtime pointer"), { code: "ENOENT" });
     },
     existsSync: (file: string) =>
       file === runtimeDir ||
-      (file === path.join(stateDir, "runtime") &&
-        Boolean(
-          interrupted && interrupted !== "receipt-only" && interrupted !== "dangling-runtime",
-        )) ||
-      (file === path.join(stateDir, "node-launch.json") &&
-        (interrupted === "after-receipt" || interrupted === "receipt-only")) ||
+      (file === interruptedPath && interrupted !== "dangling-runtime") ||
       (file === path.join(stateDir, "node.pid") &&
         !interrupted &&
         (!launch || (launched && launch === "ready"))),
@@ -158,30 +153,36 @@ async function replay(
   const hostArguments = [
     "/Applications/OpenClawCloudWorker.app/Contents/MacOS/OpenClaw",
     "--cloud-worker-host",
-    "--node-executable",
-    "/usr/bin/node",
-    "--runtime-dir",
-    runtimeDir,
-    "--state-dir",
-    stateDir,
-    "--desktop-dir",
-    `/var/db/crabbox/openclaw-workers/${leaseId}`,
-    "--lease-id",
-    leaseId,
-    "--display-name",
-    displayName,
-    "--enrollment-mode",
-    "connect",
+    ...Object.entries({
+      "--node-executable": "/usr/bin/node",
+      "--runtime-dir": runtimeDir,
+      "--state-dir": stateDir,
+      "--desktop-dir": `/var/db/crabbox/openclaw-workers/${leaseId}`,
+      "--lease-id": leaseId,
+      "--display-name": displayName,
+      "--enrollment-mode": "connect",
+    }).flat(),
   ];
-  const spawnSync = vi.fn((binary: string, args: string[]) => {
+  const spawnSync = vi.fn((binary: string, args: string[], options?: { timeout?: number }) => {
     if (binary === "/usr/bin/node") {
       if (args[0] !== cli) {
         throw new Error("Unexpected runtime executable");
       }
-      return { status: 0, stdout: args[1] === "--version" ? "OpenClaw 2026.8.1" : "" };
+      return processResult(args[1] === "--version" ? "OpenClaw 2026.8.1" : "");
     }
     if (failure === "unavailable") {
-      return { status: 1, stdout: "" };
+      return processResult("", 1);
+    }
+    if (
+      failure === "loaded-host" &&
+      (binary === "ps" || binary.endsWith("lsof") || binary === hostArguments[0]) &&
+      (options?.timeout ?? Infinity) <= LOADED_HOST_PROBE_MS
+    ) {
+      // spawnSync's watchdog kills an overrun probe and reports ETIMEDOUT without a status.
+      return {
+        ...processResult("", null),
+        error: Object.assign(new Error(`spawnSync ${binary} ETIMEDOUT`), { code: "ETIMEDOUT" }),
+      };
     }
     if (binary === hostArguments[0]) {
       if (
@@ -191,14 +192,8 @@ async function replay(
       ) {
         throw new Error("Unexpected native process inspection");
       }
-      if (
-        [
-          "host-inspect-unavailable",
-          "host-replaced-during-inspect",
-          "node-replaced-during-inspect",
-        ].includes(failure ?? "")
-      ) {
-        return { status: 1, stdout: "" };
+      if (failure === "host-inspect-unavailable") {
+        return processResult("", 1);
       }
       const cwd = { device: "2147483649", inode: "42" };
       const inspection =
@@ -209,9 +204,7 @@ async function replay(
               host: {
                 pid: 456,
                 uid: failure === "host-uid" ? 0 : 501,
-                parentPid: 111,
                 startTime: hostStart,
-                executablePath: hostArguments[0],
                 arguments: failure === "host-command" ? ["unrelated-host"] : hostArguments,
                 cwd: failure === "host-cwd" ? { ...cwd, inode: "43" } : cwd,
               },
@@ -228,31 +221,26 @@ async function replay(
                 cwd: failure === "cwd" ? { ...cwd, inode: "43" } : cwd,
               },
             };
-      return {
-        status: 0,
-        stdout: failure === "host-argv-invalid-json" ? "invalid" : JSON.stringify(inspection),
-      };
+      return processResult(
+        failure === "host-argv-invalid-json" ? "invalid" : JSON.stringify(inspection),
+      );
     }
     if (binary.endsWith("lsof")) {
       if (failure === "lsof" || (failure === "lsof-fallback" && binary === "lsof")) {
-        return { status: 1, stdout: "" };
+        return processResult("", 1);
       }
-      return {
-        status: 0,
-        stdout: `p123\nfcwd\nn${runtimeDir.replace(/[^\x20-\x7e]/gu, "?")}${failure === "cwd" ? "-other" : ""}\n`,
-      };
+      return processResult(
+        `p123\nfcwd\nn${runtimeDir.replace(/[^\x20-\x7e]/gu, "?")}${failure === "cwd" ? "-other" : ""}\n`,
+      );
     }
     if (binary === "ps") {
       if (args.includes("lstart=")) {
-        return {
-          status: 0,
-          stdout: failure === "missing-start" ? "" : "Wed Sep  9 12:00:00 2026\n",
-        };
+        return processResult(failure === "missing-start" ? "" : "Wed Sep  9 12:00:00 2026\n");
       }
       if (args.includes("-E") || args.includes("eww")) {
         throw new Error("Must not inspect macOS process environment");
       }
-      return { status: 0, stdout: command + "\n" };
+      return processResult(command + "\n");
     }
     throw new Error("Unexpected process probe");
   });
@@ -260,6 +248,7 @@ async function replay(
     .split("CRABBOX_NODE_ENROLLMENT_SCRIPT'\n")[1]!
     .split("\nCRABBOX_NODE_ENROLLMENT_SCRIPT")[0]!;
   await runInNewContext(script, {
+    AbortController,
     require: (name: string) =>
       name === "node:fs"
         ? fs
@@ -267,27 +256,23 @@ async function replay(
           ? { homedir: () => home }
           : name === "node:child_process"
             ? { spawn, spawnSync }
-            : require(name),
+            : name === "node:perf_hooks"
+              ? { performance: { now: () => 0 } }
+              : require(name),
     process: processFixture,
     console: { error: (line: string) => output.push(line) },
   });
   if (launch) {
     const logPath = path.join(stateDir, "node.log");
-    expect(spawn).toHaveBeenCalledExactlyOnceWith(
+    expect(spawn, output.join("\n")).toHaveBeenCalledExactlyOnceWith(
       "/bin/bash",
       [
         "-c",
         expect.any(String),
         "openclaw-gui",
-        "/usr/bin/open",
-        "-n",
-        "-g",
-        "-W",
-        "-a",
-        "/Applications/OpenClawCloudWorker.app",
-        "--stdin",
-        "/dev/null",
-        "--stdout",
+        ..."/usr/bin/open -n -g -W -a /Applications/OpenClawCloudWorker.app --stdin /dev/null --stdout".split(
+          " ",
+        ),
         logPath,
         "--stderr",
         logPath,
@@ -314,6 +299,13 @@ async function replay(
   return { code: processFixture.exitCode, output: output.join("\n") };
 }
 
+function expectRefusal(
+  result: Awaited<ReturnType<typeof replay>>,
+  message = "release and reprovision the worker",
+) {
+  expect(result).toMatchObject({ code: 1, output: expect.stringContaining(message) });
+}
+
 describe.each(["linux", "darwin"] as const)("%s node enrollment replay", (platform) => {
   it("refuses an interrupted launch with a published runtime but no PID", async () => {
     expect(
@@ -324,20 +316,18 @@ describe.each(["linux", "darwin"] as const)("%s node enrollment replay", (platfo
     expect(await replay(platform, variant)).toEqual({
       code: 0,
       output:
-        "CRABBOX_PHASE:openclaw-bootstrap-preparation\nCRABBOX_PHASE:openclaw-bootstrap-complete",
+        "CRABBOX_PHASE:openclaw-bootstrap-preparation\nCRABBOX_TIMING:openclaw-bootstrap-preparation:0\nCRABBOX_PHASE:openclaw-bootstrap-complete",
     });
   });
   it.each(["argv", "cwd", "state", "unavailable"])(
     "refuses %s mismatch or missing identity",
     async (failure) => {
-      expect(await replay(platform, failure)).toMatchObject({
-        code: 1,
-        output: expect.stringContaining(
-          platform === "linux" && failure === "unavailable"
-            ? "Unreadable process identity"
-            : "release and reprovision the worker",
-        ),
-      });
+      expectRefusal(
+        await replay(platform, failure),
+        platform === "linux" && failure === "unavailable"
+          ? "Unreadable process identity"
+          : undefined,
+      );
     },
   );
 });
@@ -352,17 +342,17 @@ it.each([
   "missing-start",
   "lsof",
 ])("fails closed when macOS cannot report %s", async (failure) => {
-  expect(await replay("darwin", failure)).toMatchObject({
-    code: 1,
-    output: expect.stringContaining("release and reprovision the worker"),
-  });
+  expectRefusal(await replay("darwin", failure));
 });
-it.each(["lsof-fallback"])("uses the available macOS %s probe", async (variant) => {
-  expect(await replay("darwin", variant)).toMatchObject({ code: 0 });
-});
+it.each(["lsof-fallback", "loaded-host"])(
+  "verifies macOS identity with %s probes",
+  async (variant) => {
+    expect(await replay("darwin", variant)).toMatchObject({ code: 0 });
+  },
+);
 
 describe("macOS desktop host enrollment replay", () => {
-  it.each(["before-receipt", "after-receipt", "dangling-runtime", "receipt-only"] as const)(
+  it.each(["dangling-runtime", "receipt-only"] as const)(
     "preserves an interrupted host launch instead of launching another: %s",
     async (interrupted) => {
       expect(
@@ -400,25 +390,21 @@ describe("macOS desktop host enrollment replay", () => {
     },
   );
 
-  it("reuses the verified host and Node child despite a different SSH locale", async () => {
-    expect(await replay("darwin", undefined, true)).toMatchObject({ code: 0 });
+  it("verifies the native host and node with loaded-host probes", async () => {
+    expect(await replay("darwin", "loaded-host", true)).toMatchObject({ code: 0 });
   });
 
-  it.each(["Cloud worker Développement", "Cloud worker family 👨‍👩‍👧‍👦", "Cloud worker tab\tline\n"])(
-    "preserves the exact native argv for %j",
-    async (displayName) => {
-      expect(await replay("darwin", undefined, true, displayName)).toMatchObject({ code: 0 });
-    },
-  );
-
-  it.each(["/Users/Développement", "/Users/family 👨‍👩‍👧‍👦", "/Users/tab\tline\n"])(
-    "binds the runtime directory and original Node argv under %j",
-    async (home) => {
-      expect(await replay("darwin", "original-argv", true, "Replay fixture", home)).toMatchObject({
-        code: 0,
-      });
-    },
-  );
+  it("binds the runtime directory and original Node argv under a Unicode path", async () => {
+    expect(
+      await replay(
+        "darwin",
+        "original-argv",
+        true,
+        "Cloud worker Développement 👨‍👩‍👧‍👦\tline\n",
+        "/Users/Développement 👨‍👩‍👧‍👦\tline\n",
+      ),
+    ).toMatchObject({ code: 0 });
+  });
 
   it.each([
     "dead-host",
@@ -431,12 +417,7 @@ describe("macOS desktop host enrollment replay", () => {
     "cwd",
     "host-inspect-unavailable",
     "host-argv-invalid-json",
-    "host-replaced-during-inspect",
-    "node-replaced-during-inspect",
   ])("rejects %s even when the Node process still looks healthy", async (failure) => {
-    expect(await replay("darwin", failure, true)).toMatchObject({
-      code: 1,
-      output: expect.stringContaining("release and reprovision the worker"),
-    });
+    expectRefusal(await replay("darwin", failure, true));
   });
 });

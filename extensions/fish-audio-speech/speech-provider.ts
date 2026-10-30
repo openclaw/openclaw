@@ -1,62 +1,149 @@
-// Fish Audio provider maps OpenClaw speech contracts to the hosted S2.1 API.
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
-  SpeechDirectiveTokenParseContext,
   SpeechProviderConfig,
-  SpeechProviderOverrides,
   SpeechProviderPlugin,
   SpeechSynthesisRequest,
   SpeechSynthesisTarget,
+  SpeechVoiceOption,
 } from "openclaw/plugin-sdk/speech";
 import {
-  parseSpeechDirectiveNumberOverride,
+  MAX_AUDIO_BYTES,
+  createSpeechDirectiveParser,
   resolveSpeechProviderApiKey,
 } from "openclaw/plugin-sdk/speech-provider";
 import {
   asBoolean,
   asFiniteNumberInRange,
   asOptionalRecord,
+  filterStringRecord,
   normalizeOptionalString as trimToUndefined,
+  normalizeTrimmedStringList,
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  FISH_AUDIO_STREAM_MAX_BYTES,
-  type FishAudioFormat,
-  type FishAudioLatency,
-  type FishAudioModel,
-  type FishAudioTtsRequest,
-  fishAudioTts,
-  fishAudioTtsStream,
-  listFishAudioVoices,
-  normalizeFishAudioBaseUrl,
-} from "./tts.js";
 
-const FISH_AUDIO_MODELS = ["s2.1-pro-free", "s2.1-pro", "s2-pro", "s1"] as const;
-const DEFAULT_MODEL: FishAudioModel = "s2.1-pro";
-const DEFAULT_LATENCY: FishAudioLatency = "balanced";
-const DEFAULT_TIMEOUT_MS = 240_000;
+const FISH_AUDIO_BASE_URL = "https://api.fish.audio";
+const FISH_AUDIO_VOICES_MAX_BYTES = 2 * 1024 * 1024;
+const FISH_AUDIO_VOICE_PAGE_SIZE = 100;
+const FISH_AUDIO_MAX_OWN_VOICE_PAGES = 20;
 
-type FishAudioProviderConfig = {
-  apiKey?: string;
+const FISH_AUDIO_MODELS = [
+  "drama-3",
+  "drama-3-preview",
+  "s2.1-pro-free",
+  "s2.1-pro",
+  "s2-pro",
+  "s1",
+] as const;
+type FishAudioModel = (typeof FISH_AUDIO_MODELS)[number];
+type FishAudioLatency = "low" | "balanced" | "normal";
+type FishAudioFormat = "mp3" | "opus" | "wav" | "pcm";
+
+type FishAudioTtsRequest = {
+  text: string;
+  apiKey: string;
   baseUrl: string;
   model: FishAudioModel;
   referenceId?: string;
-  latency: FishAudioLatency;
+  format: FishAudioFormat;
+  sampleRate?: number;
+  latency?: FishAudioLatency;
   speed?: number;
   temperature?: number;
   topP?: number;
   normalize?: boolean;
+  timeoutMs: number;
+  maxBytes: number;
 };
 
-type FishAudioOverrides = Partial<Omit<FishAudioProviderConfig, "apiKey" | "baseUrl">>;
+function normalizeFishAudioBaseUrl(value?: string): string {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed.replace(/\/+$/u, "") : FISH_AUDIO_BASE_URL;
+}
+
+async function requestFishAudioTts(params: FishAudioTtsRequest): Promise<{
+  response: Response;
+  release: () => Promise<void>;
+}> {
+  const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
+    await import("openclaw/plugin-sdk/ssrf-runtime");
+  return await fetchWithSsrFGuard({
+    url: `${params.baseUrl}/v1/tts`,
+    init: {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${params.apiKey}`,
+        "Content-Type": "application/json",
+        model: params.model,
+      },
+      body: JSON.stringify({
+        text: params.text,
+        format: params.format,
+        ...(params.referenceId ? { reference_id: params.referenceId } : {}),
+        ...(params.sampleRate == null ? {} : { sample_rate: params.sampleRate }),
+        ...(params.latency == null ? {} : { latency: params.latency }),
+        ...(params.speed == null ? {} : { prosody: { speed: params.speed } }),
+        ...(params.temperature == null ? {} : { temperature: params.temperature }),
+        ...(params.topP == null ? {} : { top_p: params.topP }),
+        ...(params.normalize == null ? {} : { normalize: params.normalize }),
+      }),
+    },
+    timeoutMs: params.timeoutMs,
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(params.baseUrl),
+    auditContext: "fish-audio.tts",
+  });
+}
+
+async function fishAudioTts(params: FishAudioTtsRequest): Promise<Buffer> {
+  const { assertOkOrThrowProviderError, readProviderBinaryResponse } =
+    await import("openclaw/plugin-sdk/provider-http");
+  const { response, release } = await requestFishAudioTts(params);
+  try {
+    await assertOkOrThrowProviderError(response, "Fish Audio TTS API error", {
+      requestHeaders: { Authorization: `Bearer ${params.apiKey}` },
+    });
+    return await readProviderBinaryResponse(response, "Fish Audio TTS API error", "audio", {
+      maxBytes: params.maxBytes,
+    });
+  } finally {
+    await release();
+  }
+}
+
+type FishAudioVoicePayload = {
+  total?: number;
+  items?: unknown[];
+};
+
+function parseVoiceItem(value: unknown): SpeechVoiceOption | undefined {
+  const item = asOptionalRecord(value);
+  const id = trimToUndefined(item?.["_id"]);
+  if (!id) {
+    return undefined;
+  }
+  const languages = normalizeTrimmedStringList(item?.languages);
+  const tags = normalizeTrimmedStringList(item?.tags);
+  return {
+    id,
+    name: trimToUndefined(item?.title),
+    description: trimToUndefined(item?.description),
+    category: trimToUndefined(item?.visibility),
+    locale: languages[0],
+    personalities: tags.length > 0 ? tags : undefined,
+  };
+}
+
+const DEFAULT_MODEL: FishAudioModel = "s2.1-pro";
+const DEFAULT_LATENCY: FishAudioLatency = "balanced";
+const DEFAULT_TIMEOUT_MS = 240_000;
 
 function normalizeModel(value: unknown): FishAudioModel {
   const model = trimToUndefined(value);
   if (!model) {
     return DEFAULT_MODEL;
   }
-  if (FISH_AUDIO_MODELS.some((candidate) => candidate === model)) {
-    return model as FishAudioModel;
+  const supported = FISH_AUDIO_MODELS.find((candidate) => candidate === model);
+  if (supported) {
+    return supported;
   }
   throw new Error(`invalid Fish Audio model "${model}"`);
 }
@@ -72,18 +159,13 @@ function normalizeLatency(value: unknown): FishAudioLatency {
   throw new Error(`invalid Fish Audio latency "${latency}"`);
 }
 
-function normalizeNumber(value: unknown, min: number, max: number): number | undefined {
-  return asFiniteNumberInRange(value, { min, max });
-}
-
 function resolveReferenceId(raw: Record<string, unknown> | undefined): string | undefined {
   return trimToUndefined(raw?.speakerVoiceId ?? raw?.voiceId ?? raw?.referenceId);
 }
 
-function normalizeProviderConfig(rawConfig: Record<string, unknown>): FishAudioProviderConfig {
+function normalizeProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
-  const raw =
-    asOptionalRecord(providers?.["fish-audio"]) ?? asOptionalRecord(rawConfig["fish-audio"]);
+  const raw = asOptionalRecord(providers?.["fish-audio"]);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
@@ -93,42 +175,17 @@ function normalizeProviderConfig(rawConfig: Record<string, unknown>): FishAudioP
     model: normalizeModel(raw?.model ?? raw?.modelId),
     referenceId: resolveReferenceId(raw),
     latency: normalizeLatency(raw?.latency),
-    speed: normalizeNumber(raw?.speed, 0.5, 2),
-    temperature: normalizeNumber(raw?.temperature, 0, 1),
-    topP: normalizeNumber(raw?.topP ?? raw?.top_p, 0, 1),
+    speed: asFiniteNumberInRange(raw?.speed, { min: 0.5, max: 2 }),
+    temperature: asFiniteNumberInRange(raw?.temperature, { min: 0, max: 1 }),
+    topP: asFiniteNumberInRange(raw?.topP ?? raw?.top_p, { min: 0, max: 1 }),
     normalize: asBoolean(raw?.normalize),
   };
 }
 
-function readProviderConfig(config: SpeechProviderConfig): FishAudioProviderConfig {
-  const defaults = normalizeProviderConfig({});
-  const raw = asOptionalRecord(config) ?? {};
-  return {
-    apiKey: trimToUndefined(raw.apiKey) ?? defaults.apiKey,
-    baseUrl: normalizeFishAudioBaseUrl(trimToUndefined(raw.baseUrl) ?? defaults.baseUrl),
-    model: normalizeModel(raw.model ?? raw.modelId ?? defaults.model),
-    referenceId: resolveReferenceId(raw) ?? defaults.referenceId,
-    latency: normalizeLatency(raw.latency ?? defaults.latency),
-    speed: normalizeNumber(raw.speed, 0.5, 2) ?? defaults.speed,
-    temperature: normalizeNumber(raw.temperature, 0, 1) ?? defaults.temperature,
-    topP: normalizeNumber(raw.topP ?? raw.top_p, 0, 1) ?? defaults.topP,
-    normalize: asBoolean(raw.normalize) ?? defaults.normalize,
-  };
-}
-
-function readOverrides(overrides: SpeechProviderOverrides | undefined): FishAudioOverrides {
-  const raw = asOptionalRecord(overrides) ?? {};
-  return {
-    model: trimToUndefined(raw.model ?? raw.modelId)
-      ? normalizeModel(raw.model ?? raw.modelId)
-      : undefined,
-    referenceId: resolveReferenceId(raw),
-    latency: trimToUndefined(raw.latency) ? normalizeLatency(raw.latency) : undefined,
-    speed: normalizeNumber(raw.speed, 0.5, 2),
-    temperature: normalizeNumber(raw.temperature, 0, 1),
-    topP: normalizeNumber(raw.topP ?? raw.top_p, 0, 1),
-    normalize: asBoolean(raw.normalize),
-  };
+function readProviderConfig(config: SpeechProviderConfig) {
+  return normalizeProviderConfig({
+    providers: { "fish-audio": { ...config, apiKey: trimToUndefined(config.apiKey) } },
+  });
 }
 
 function resolveApiKey(configValue?: string): string | undefined {
@@ -139,87 +196,75 @@ function resolveApiKey(configValue?: string): string | undefined {
   );
 }
 
-function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
-  switch (ctx.key) {
-    case "voice":
-    case "voiceid":
-    case "voice_id":
-    case "referenceid":
-    case "reference_id":
-    case "fish_voice":
-    case "fishaudio_voice":
-      return ctx.policy.allowVoice
-        ? { handled: true, overrides: { ...ctx.currentOverrides, referenceId: ctx.value } }
-        : { handled: true };
-    case "model":
-    case "modelid":
-    case "model_id":
-    case "fish_model":
-    case "fishaudio_model":
-      if (!ctx.policy.allowModelId) {
-        return { handled: true };
-      }
-      try {
-        return {
-          handled: true,
-          overrides: { ...ctx.currentOverrides, model: normalizeModel(ctx.value) },
-        };
-      } catch (error) {
-        return { handled: true, warnings: [String(error)] };
-      }
-    case "speed":
-    case "fish_speed":
-      return parseSpeechDirectiveNumberOverride({
-        ctx,
-        overrideKey: "speed",
-        range: { min: 0.5, max: 2 },
-        warning: (value) => `invalid Fish Audio speed "${value}"`,
-      });
-    case "temperature":
-    case "fish_temperature":
-      return parseSpeechDirectiveNumberOverride({
-        ctx,
-        overrideKey: "temperature",
-        range: { min: 0, max: 1 },
-        warning: (value) => `invalid Fish Audio temperature "${value}"`,
-      });
-    case "top_p":
-    case "topp":
-    case "fish_top_p":
-      return parseSpeechDirectiveNumberOverride({
-        ctx,
-        overrideKey: "topP",
-        range: { min: 0, max: 1 },
-        warning: (value) => `invalid Fish Audio top_p "${value}"`,
-      });
-    case "latency":
-    case "fish_latency":
-      if (!ctx.policy.allowVoiceSettings) {
-        return { handled: true };
-      }
-      try {
-        return {
-          handled: true,
-          overrides: { ...ctx.currentOverrides, latency: normalizeLatency(ctx.value) },
-        };
-      } catch (error) {
-        return { handled: true, warnings: [String(error)] };
-      }
-    case "normalize":
-    case "fish_normalize": {
-      if (!ctx.policy.allowNormalization) {
-        return { handled: true };
-      }
-      const normalize = parseBooleanValue(ctx.value);
-      if (normalize !== undefined) {
-        return { handled: true, overrides: { ...ctx.currentOverrides, normalize } };
-      }
-      return { handled: true, warnings: [`invalid Fish Audio normalize "${ctx.value}"`] };
-    }
-    default:
-      return { handled: false };
-  }
-}
+const parseDirectiveToken = createSpeechDirectiveParser(
+  {
+    referenceId: [
+      "allowVoice",
+      [
+        "voice",
+        "voiceid",
+        "voice_id",
+        "referenceid",
+        "reference_id",
+        "fish_voice",
+        "fishaudio_voice",
+      ],
+    ],
+    model: [
+      "allowModelId",
+      ["model", "modelid", "model_id", "fish_model", "fishaudio_model"],
+      { value: (ctx) => normalizeModel(ctx.value) },
+    ],
+    speed: [
+      "allowVoiceSettings",
+      ["speed", "fish_speed"],
+      {
+        number: {
+          range: { min: 0.5, max: 2 },
+          warning: (value) => `invalid Fish Audio speed "${value}"`,
+        },
+      },
+    ],
+    temperature: [
+      "allowVoiceSettings",
+      ["temperature", "fish_temperature"],
+      {
+        number: {
+          range: { min: 0, max: 1 },
+          warning: (value) => `invalid Fish Audio temperature "${value}"`,
+        },
+      },
+    ],
+    topP: [
+      "allowVoiceSettings",
+      ["top_p", "topp", "fish_top_p"],
+      {
+        number: {
+          range: { min: 0, max: 1 },
+          warning: (value) => `invalid Fish Audio top_p "${value}"`,
+        },
+      },
+    ],
+    latency: [
+      "allowVoiceSettings",
+      ["latency", "fish_latency"],
+      { value: (ctx) => normalizeLatency(ctx.value) },
+    ],
+    normalize: [
+      "allowNormalization",
+      ["normalize", "fish_normalize"],
+      {
+        parse: (ctx) => {
+          const normalize = parseBooleanValue(ctx.value);
+          return normalize !== undefined
+            ? { handled: true, overrides: { normalize } }
+            : { handled: true, warnings: [`invalid Fish Audio normalize "${ctx.value}"`] };
+        },
+      },
+    ],
+  },
+  { formatErrorMessage: String },
+);
 
 function resolveFormat(target: SpeechSynthesisTarget): {
   format: FishAudioFormat;
@@ -236,19 +281,29 @@ function resolveFormat(target: SpeechSynthesisTarget): {
   return { format: "mp3", sampleRate: 44_100, fileExtension: ".mp3", voiceCompatible: false };
 }
 
-function resolveSynthesisRequest(
-  req: Pick<
-    SpeechSynthesisRequest,
-    "cfg" | "providerConfig" | "providerOverrides" | "text" | "timeoutMs" | "target"
-  >,
-): Omit<FishAudioTtsRequest, "maxBytes"> & { fileExtension: string; voiceCompatible: boolean } {
+async function resolveSynthesisRequest(
+  req: SpeechSynthesisRequest,
+): Promise<FishAudioTtsRequest & { fileExtension: string; voiceCompatible: boolean }> {
   const config = readProviderConfig(req.providerConfig);
-  const overrides = readOverrides(req.providerOverrides);
+  const raw = req.providerOverrides ?? {};
+  const overrides = {
+    model: trimToUndefined(raw.model ?? raw.modelId)
+      ? normalizeModel(raw.model ?? raw.modelId)
+      : undefined,
+    referenceId: resolveReferenceId(raw),
+    latency: trimToUndefined(raw.latency) ? normalizeLatency(raw.latency) : undefined,
+    speed: asFiniteNumberInRange(raw.speed, { min: 0.5, max: 2 }),
+    temperature: asFiniteNumberInRange(raw.temperature, { min: 0, max: 1 }),
+    topP: asFiniteNumberInRange(raw.topP ?? raw.top_p, { min: 0, max: 1 }),
+    normalize: asBoolean(raw.normalize),
+  };
   const apiKey = resolveApiKey(config.apiKey);
   if (!apiKey) {
     throw new Error("Fish Audio API key missing");
   }
   const output = resolveFormat(req.target);
+  const { resolveGeneratedMediaMaxBytes } =
+    await import("openclaw/plugin-sdk/media-generation-runtime");
   return {
     text: req.text,
     apiKey,
@@ -261,11 +316,14 @@ function resolveSynthesisRequest(
     topP: overrides.topP ?? config.topP,
     normalize: overrides.normalize ?? config.normalize,
     timeoutMs: req.timeoutMs,
+    maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
     ...output,
   };
 }
 
 export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
+  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) =>
+    Boolean(resolveApiKey(readProviderConfig(providerConfig).apiKey));
   return {
     id: "fish-audio",
     label: "Fish Audio",
@@ -287,31 +345,33 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
                 path: "talk.providers.fish-audio.apiKey",
               }),
             }),
-        ...(trimToUndefined(talkProviderConfig.baseUrl) == null
+        ...filterStringRecord({
+          baseUrl: trimToUndefined(talkProviderConfig.baseUrl)
+            ? normalizeFishAudioBaseUrl(trimToUndefined(talkProviderConfig.baseUrl))
+            : undefined,
+          model: trimToUndefined(talkProviderConfig.modelId ?? talkProviderConfig.model)
+            ? normalizeModel(talkProviderConfig.modelId ?? talkProviderConfig.model)
+            : undefined,
+          referenceId: resolveReferenceId(talkProviderConfig),
+          latency: trimToUndefined(talkProviderConfig.latency)
+            ? normalizeLatency(talkProviderConfig.latency)
+            : undefined,
+        }),
+        ...(asFiniteNumberInRange(talkProviderConfig.speed, { min: 0.5, max: 2 }) == null
           ? {}
-          : { baseUrl: normalizeFishAudioBaseUrl(trimToUndefined(talkProviderConfig.baseUrl)) }),
-        ...(trimToUndefined(talkProviderConfig.modelId ?? talkProviderConfig.model) == null
-          ? {}
-          : { model: normalizeModel(talkProviderConfig.modelId ?? talkProviderConfig.model) }),
-        ...(resolveReferenceId(talkProviderConfig) == null
-          ? {}
-          : { referenceId: resolveReferenceId(talkProviderConfig) }),
-        ...(trimToUndefined(talkProviderConfig.latency) == null
-          ? {}
-          : { latency: normalizeLatency(talkProviderConfig.latency) }),
-        ...(normalizeNumber(talkProviderConfig.speed, 0.5, 2) == null
-          ? {}
-          : { speed: normalizeNumber(talkProviderConfig.speed, 0.5, 2) }),
+          : { speed: asFiniteNumberInRange(talkProviderConfig.speed, { min: 0.5, max: 2 }) }),
       };
     },
     resolveTalkOverrides: ({ params }) => ({
-      ...(trimToUndefined(params.modelId ?? params.model) == null
+      ...filterStringRecord({
+        model: trimToUndefined(params.modelId ?? params.model)
+          ? normalizeModel(params.modelId ?? params.model)
+          : undefined,
+        referenceId: resolveReferenceId(params),
+      }),
+      ...(asFiniteNumberInRange(params.speed, { min: 0.5, max: 2 }) == null
         ? {}
-        : { model: normalizeModel(params.modelId ?? params.model) }),
-      ...(resolveReferenceId(params) == null ? {} : { referenceId: resolveReferenceId(params) }),
-      ...(normalizeNumber(params.speed, 0.5, 2) == null
-        ? {}
-        : { speed: normalizeNumber(params.speed, 0.5, 2) }),
+        : { speed: asFiniteNumberInRange(params.speed, { min: 0.5, max: 2 }) }),
     }),
     listVoices: async (req) => {
       const config = readProviderConfig(req.providerConfig ?? {});
@@ -319,56 +379,132 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
       if (!apiKey) {
         throw new Error("Fish Audio API key missing");
       }
-      return await listFishAudioVoices({
-        apiKey,
-        baseUrl: normalizeFishAudioBaseUrl(trimToUndefined(req.baseUrl) ?? config.baseUrl),
-        timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      const baseUrl = normalizeFishAudioBaseUrl(trimToUndefined(req.baseUrl) ?? config.baseUrl);
+      const timeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      const requestVoicePage = async (self: boolean, pageNumber: number) => {
+        const url = new URL(`${baseUrl}/model`);
+        url.searchParams.set("type", "tts");
+        url.searchParams.set("page_size", String(FISH_AUDIO_VOICE_PAGE_SIZE));
+        url.searchParams.set("page_number", String(pageNumber));
+        if (self) {
+          url.searchParams.set("self", "true");
+        } else {
+          url.searchParams.set("sort_by", "score");
+        }
+        const { assertOkOrThrowProviderError, readProviderJsonResponse } =
+          await import("openclaw/plugin-sdk/provider-http");
+        const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
+          await import("openclaw/plugin-sdk/ssrf-runtime");
+        const requestHeaders = { Authorization: `Bearer ${apiKey}` };
+        const { response, release } = await fetchWithSsrFGuard({
+          url: url.toString(),
+          init: { headers: requestHeaders },
+          timeoutMs,
+          policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+          auditContext: "fish-audio.voices",
+        });
+        try {
+          await assertOkOrThrowProviderError(response, "Fish Audio voices API error", {
+            requestHeaders,
+          });
+          return await readProviderJsonResponse<FishAudioVoicePayload>(
+            response,
+            "Fish Audio voices",
+            {
+              maxBytes: FISH_AUDIO_VOICES_MAX_BYTES,
+              requestHeaders,
+            },
+          );
+        } finally {
+          await release();
+        }
+      };
+      const own: SpeechVoiceOption[] = [];
+      for (let pageNumber = 1; pageNumber <= FISH_AUDIO_MAX_OWN_VOICE_PAGES; pageNumber += 1) {
+        const payload = await requestVoicePage(true, pageNumber);
+        const items = Array.isArray(payload.items) ? payload.items : [];
+        own.push(...items.flatMap((item) => parseVoiceItem(item) ?? []));
+        if (
+          items.length < FISH_AUDIO_VOICE_PAGE_SIZE ||
+          own.length >= (payload.total ?? Number.MAX_SAFE_INTEGER)
+        ) {
+          break;
+        }
+      }
+
+      let publicVoices: SpeechVoiceOption[] = [];
+      try {
+        const payload = await requestVoicePage(false, 1);
+        publicVoices = (Array.isArray(payload.items) ? payload.items : []).flatMap(
+          (item) => parseVoiceItem(item) ?? [],
+        );
+      } catch {
+        // Own voices remain useful when the public catalog is temporarily unavailable.
+      }
+
+      const seen = new Set<string>();
+      return [...own, ...publicVoices].filter((voice) => {
+        if (seen.has(voice.id)) {
+          return false;
+        }
+        seen.add(voice.id);
+        return true;
       });
     },
-    isConfigured: ({ providerConfig }) =>
-      Boolean(resolveApiKey(readProviderConfig(providerConfig).apiKey)),
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
     synthesize: async (req) => {
-      const params = resolveSynthesisRequest(req);
-      const { resolveGeneratedMediaMaxBytes } =
-        await import("openclaw/plugin-sdk/media-generation-runtime");
+      const params = await resolveSynthesisRequest(req);
       return {
-        audioBuffer: await fishAudioTts({
-          ...params,
-          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
-        }),
+        audioBuffer: await fishAudioTts(params),
         outputFormat: params.format,
         fileExtension: params.fileExtension,
         voiceCompatible: params.voiceCompatible,
       };
     },
     streamSynthesize: async (req) => {
-      const params = resolveSynthesisRequest(req);
-      const { resolveGeneratedMediaMaxBytes } =
-        await import("openclaw/plugin-sdk/media-generation-runtime");
-      const stream = await fishAudioTtsStream({
+      const params = await resolveSynthesisRequest(req);
+      const streamParams = {
         ...params,
-        maxBytes: Math.min(
-          resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
-          FISH_AUDIO_STREAM_MAX_BYTES,
-        ),
-      });
-      return {
-        audioStream: stream.audioStream,
-        outputFormat: params.format,
-        fileExtension: params.fileExtension,
-        voiceCompatible: params.voiceCompatible,
-        release: stream.release,
+        maxBytes: Math.min(params.maxBytes, MAX_AUDIO_BYTES),
       };
+      const { createBoundedProviderBinaryStream } =
+        await import("openclaw/plugin-sdk/provider-binary-stream");
+      const { assertOkOrThrowProviderError, assertProviderBinaryResponseContent } =
+        await import("openclaw/plugin-sdk/provider-http");
+      const { response, release } = await requestFishAudioTts(streamParams);
+      try {
+        await assertOkOrThrowProviderError(response, "Fish Audio TTS API error", {
+          requestHeaders: { Authorization: `Bearer ${streamParams.apiKey}` },
+        });
+        assertProviderBinaryResponseContent(response, "Fish Audio TTS API error", "audio");
+        if (!response.body) {
+          throw new Error("Fish Audio TTS API response missing audio stream");
+        }
+        const bounded = createBoundedProviderBinaryStream(response.body, {
+          maxBytes: streamParams.maxBytes,
+          createOverflowError: ({ maxBytes }) =>
+            new Error(`Fish Audio TTS API error: audio response exceeds ${maxBytes} bytes`),
+          createReleaseError: () => new Error("Fish Audio TTS stream released"),
+          cleanup: release,
+        });
+        return {
+          audioStream: bounded.stream,
+          outputFormat: params.format,
+          fileExtension: params.fileExtension,
+          voiceCompatible: params.voiceCompatible,
+          release: bounded.release,
+        };
+      } catch (error) {
+        await release();
+        throw error;
+      }
     },
     synthesizeTelephony: async (req) => {
-      const params = resolveSynthesisRequest({ ...req, target: "telephony" });
-      const { resolveGeneratedMediaMaxBytes } =
-        await import("openclaw/plugin-sdk/media-generation-runtime");
+      const params = await resolveSynthesisRequest({ ...req, target: "telephony" });
       return {
-        audioBuffer: await fishAudioTts({
-          ...params,
-          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
-        }),
+        audioBuffer: await fishAudioTts(params),
         outputFormat: "pcm",
         sampleRate: 8_000,
       };

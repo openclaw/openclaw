@@ -1,41 +1,16 @@
-/**
- * Diagnostic helpers for Codex app-server model calls and plugin-thread config
- * eligibility.
- */
-import { createHash } from "node:crypto";
 import {
   emitTrustedDiagnosticEventWithPrivateData,
   type DiagnosticModelCallContent,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import type { CodexAppServerRuntimeOptions, resolveCodexPluginsPolicy } from "./config.js";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
+import type { CodexUsageProjection } from "./event-projector-usage.js";
 
 type TrustedDiagnosticEventInput = Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0];
+type ModelCallDiagnosticBase = Omit<
+  Extract<TrustedDiagnosticEventInput, { type: "model.call.started" }>,
+  "type"
+>;
 
-/** Reads a tool schema field in either app-server or OpenClaw naming. */
-function readCodexDiagnosticToolParameters(tool: {
-  inputSchema?: unknown;
-  parameters?: unknown;
-}): unknown {
-  return tool.inputSchema ?? tool.parameters;
-}
-
-/** Builds compact diagnostic tool definitions for trusted private telemetry. */
-function buildCodexDiagnosticToolDefinitions(
-  tools: readonly {
-    name: string;
-    description: string;
-    inputSchema?: unknown;
-    parameters?: unknown;
-  }[],
-) {
-  return tools.map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    parameters: readCodexDiagnosticToolParameters(tool),
-  }));
-}
-
-/** Returns the serialized UTF-8 byte length for a JSON-compatible value. */
 export function utf8JsonByteLength(value: unknown): number | undefined {
   try {
     return Buffer.byteLength(JSON.stringify(value), "utf8");
@@ -44,58 +19,13 @@ export function utf8JsonByteLength(value: unknown): number | undefined {
   }
 }
 
-/** Builds a short namespaced fingerprint for sensitive log values. */
 function fingerprintCodexLogValue(namespace: string, value: string): string {
-  const hash = createHash("sha256");
-  hash.update(namespace);
-  hash.update("\0");
-  hash.update(value);
-  return `sha256:${hash.digest("hex").slice(0, 16)}`;
-}
-
-/**
- * Builds redacted diagnostics explaining whether plugin thread config was
- * eligible for a Codex app-server attempt.
- */
-export function buildCodexPluginThreadConfigEligibilityLogData(params: {
-  sessionId: string;
-  sessionKey: string;
-  pluginThreadConfigRequired: boolean;
-  resolvedPluginPolicy: ReturnType<typeof resolveCodexPluginsPolicy> | undefined;
-  enabledPluginConfigKeys: string[] | undefined;
-  pluginAppCacheKey: string;
-  startupAuthProfileId: string | undefined;
-  appServer: CodexAppServerRuntimeOptions;
-}): Record<string, unknown> {
-  return {
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    enabled: params.pluginThreadConfigRequired,
-    policyConfigured: params.resolvedPluginPolicy?.configured === true,
-    policyEnabled: params.resolvedPluginPolicy?.enabled === true,
-    allowAllPlugins: params.resolvedPluginPolicy?.allowAllPlugins === true,
-    pluginConfigKeys: params.resolvedPluginPolicy?.pluginPolicies
-      .map((plugin) => plugin.configKey)
-      .toSorted(),
-    enabledPluginConfigKeys: params.enabledPluginConfigKeys,
-    appCacheKeyFingerprint: fingerprintCodexLogValue(
-      "openclaw:codex:plugin-app-cache-key:v1",
-      params.pluginAppCacheKey,
-    ),
-    authProfileId: params.startupAuthProfileId,
-    appServerTransport: params.appServer.start.transport,
-    appServerCommandSource: params.appServer.start.commandSource,
-  };
+  return `sha256:${sha256Hex(`${namespace}\0${value}`).slice(0, 16)}`;
 }
 
 type CodexModelCallFailureKind = "aborted" | "timeout";
 
-type CodexModelCallDiagnosticCapture = {
-  inputMessages?: boolean;
-  outputMessages?: boolean;
-  systemPrompt?: boolean;
-  toolDefinitions?: boolean;
-};
+type CodexModelCallDiagnosticCapture = Partial<Record<keyof DiagnosticModelCallContent, boolean>>;
 
 type CodexModelCallDiagnosticTool = {
   name: string;
@@ -104,105 +34,117 @@ type CodexModelCallDiagnosticTool = {
   parameters?: unknown;
 };
 
-/**
- * Creates lifecycle emitters for trusted model-call diagnostics with optional
- * private payload capture.
- */
 export function createCodexModelCallDiagnosticEmitter(params: {
-  baseFields: Record<string, unknown>;
+  baseFields: ModelCallDiagnosticBase;
   capture: CodexModelCallDiagnosticCapture;
   tools: readonly CodexModelCallDiagnosticTool[];
   buildInputMessages: () => unknown;
   buildSystemPrompt: () => string | undefined;
-  now?: () => number;
   onErrorDiagnostic?: (error: unknown) => void;
 }) {
-  const now = params.now ?? (() => Date.now());
   const toolDefinitions = params.capture.toolDefinitions
-    ? buildCodexDiagnosticToolDefinitions(params.tools)
+    ? params.tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.inputSchema ?? tool.parameters,
+      }))
     : undefined;
-  let startedAt = now();
+  let startedAt = Date.now();
   let started = false;
   let terminalEmitted = false;
   let requestPayloadBytes: number | undefined;
 
-  const privateData = (modelContent: DiagnosticModelCallContent | undefined) =>
-    modelContent && Object.keys(modelContent).length > 0 ? { modelContent } : undefined;
-  const buildContent = (): DiagnosticModelCallContent | undefined => {
-    const modelContent = {
+  const buildPrivateData = (
+    terminalOutput?: Pick<DiagnosticModelCallContent, "outputMessages">,
+  ) => {
+    const modelContent: DiagnosticModelCallContent = {
       ...(params.capture.inputMessages ? { inputMessages: params.buildInputMessages() } : {}),
       ...(params.capture.systemPrompt ? { systemPrompt: params.buildSystemPrompt() } : {}),
       ...(toolDefinitions ? { toolDefinitions } : {}),
+      ...(terminalOutput && params.capture.outputMessages ? terminalOutput : {}),
     };
-    return Object.keys(modelContent).length > 0 ? modelContent : undefined;
+    return Object.keys(modelContent).length > 0 ? { modelContent } : undefined;
   };
-  const requestPayloadBytesField = () =>
-    requestPayloadBytes !== undefined ? { requestPayloadBytes } : {};
+  const emitTerminal = (
+    type: "model.call.completed" | "model.call.error",
+    outputMessages: unknown,
+    fields: { errorCategory?: string; failureKind?: CodexModelCallFailureKind } = {},
+  ): boolean => {
+    if (!started || terminalEmitted) {
+      return false;
+    }
+    terminalEmitted = true;
+    const event = {
+      ...params.baseFields,
+      durationMs: Math.max(0, Date.now() - startedAt),
+      ...fields,
+      ...(requestPayloadBytes !== undefined ? { requestPayloadBytes } : {}),
+    };
+    emitTrustedDiagnosticEventWithPrivateData(
+      type === "model.call.error"
+        ? { ...event, type, errorCategory: fields.errorCategory ?? "error" }
+        : { ...event, type },
+      buildPrivateData({ outputMessages }),
+    );
+    return true;
+  };
 
   return {
     setRequestPayloadBytes(bytes: number | undefined): void {
       requestPayloadBytes = bytes;
     },
     emitStarted(): void {
-      startedAt = now();
+      startedAt = Date.now();
       started = true;
       emitTrustedDiagnosticEventWithPrivateData(
         {
           type: "model.call.started",
           ...params.baseFields,
-        } as TrustedDiagnosticEventInput,
-        privateData(buildContent()),
+        },
+        buildPrivateData(),
       );
     },
     emitCompleted(result: { assistantTexts?: unknown; lastAssistant?: unknown }): void {
-      if (!started || terminalEmitted) {
-        return;
-      }
-      terminalEmitted = true;
-      emitTrustedDiagnosticEventWithPrivateData(
-        {
-          type: "model.call.completed",
-          ...params.baseFields,
-          durationMs: Math.max(0, now() - startedAt),
-          ...requestPayloadBytesField(),
-        } as TrustedDiagnosticEventInput,
-        privateData({
-          ...buildContent(),
-          ...(params.capture.outputMessages
-            ? {
-                outputMessages: result.lastAssistant
-                  ? [result.lastAssistant]
-                  : result.assistantTexts,
-              }
-            : {}),
-        }),
+      emitTerminal(
+        "model.call.completed",
+        result.lastAssistant ? [result.lastAssistant] : result.assistantTexts,
       );
     },
-    emitError(error: unknown, fields: { failureKind?: CodexModelCallFailureKind } = {}): void {
+    emitResponseObserved(
+      this: void,
+      response: NonNullable<ReturnType<CodexUsageProjection["record"]>>,
+    ): void {
       if (!started || terminalEmitted) {
         return;
       }
-      terminalEmitted = true;
-      emitTrustedDiagnosticEventWithPrivateData(
-        {
-          type: "model.call.error",
-          ...params.baseFields,
-          durationMs: Math.max(0, now() - startedAt),
+      const { observationUnit: _unit, promptStats: _stats, ...baseFields } = params.baseFields;
+      const usage = response.usage;
+      emitTrustedDiagnosticEventWithPrivateData({
+        ...baseFields,
+        type: "model.response.observed",
+        timestampSource: "receipt",
+        usageSource: "native-normalized",
+        usageScope: "response",
+        upstreamRequestIdHash: fingerprintCodexLogValue(
+          "openclaw:codex:response-id:v1",
+          response.responseId,
+        ),
+        ...(usage ? { usage } : {}),
+      });
+    },
+    emitError(error: unknown, fields: { failureKind?: CodexModelCallFailureKind } = {}): void {
+      if (
+        emitTerminal("model.call.error", [], {
           errorCategory: fields.failureKind ?? "error",
           ...(fields.failureKind ? { failureKind: fields.failureKind } : {}),
-          ...requestPayloadBytesField(),
-        } as TrustedDiagnosticEventInput,
-        privateData({
-          ...buildContent(),
-          ...(params.capture.outputMessages ? { outputMessages: [] } : {}),
-        }),
-      );
-      params.onErrorDiagnostic?.(error);
+        })
+      ) {
+        params.onErrorDiagnostic?.(error);
+      }
     },
   };
 }
 
-/** Classifies model-call failures into timeout/abort buckets for diagnostics. */
 export function classifyCodexModelCallFailureKind(params: {
   error: unknown;
   timedOut: boolean;

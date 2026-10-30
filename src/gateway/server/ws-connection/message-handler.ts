@@ -1,11 +1,16 @@
-// WebSocket message handler validates frames, dispatches gateway RPCs, manages pairing, and reports responses.
+import { performance } from "node:perf_hooks";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import {
+  asOptionalObjectRecord,
+  readStringField,
+} from "@openclaw/normalization-core/record-coerce";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import {
   type ConnectParams,
+  type ResponseFrame,
   ErrorCodes,
   errorShape,
   formatValidationErrors,
@@ -26,6 +31,8 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { isGatewaySuspendControlAvailable } from "../../../infra/gateway-suspend-coordinator.js";
+import { runWithMainThreadTask } from "../../../infra/main-thread-stall.js";
 import { rawDataByteLength } from "../../../infra/ws.js";
 import { logRejectedLargePayload } from "../../../logging/diagnostic-payload.js";
 import {
@@ -36,8 +43,13 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { isWebchatClient } from "../../../utils/message-channel.js";
+import {
+  assertRemoteControlUiIngressCurrent,
+  getRemoteControlUiIngressContext,
+} from "../../ingress-attribution.js";
 import { isLocalishHost, isLoopbackAddress } from "../../net.js";
 import { resolveNodePairingClientIpSource } from "../../node-pairing-auto-approve.js";
+import { broadcastRejectedNodePairing } from "../../pairing-events.js";
 import {
   MAX_PREAUTH_PAYLOAD_BYTES,
   MAX_QUEUED_GATEWAY_PREAUTH_FRAMES,
@@ -54,29 +66,27 @@ import { publishConnectModelCatalog } from "./connect-model-catalog.js";
 import { attachAuthenticatedGatewayConnect } from "./connect-session.js";
 import { resolveHandshakeBrowserSecurityContext } from "./handshake-auth-helpers.js";
 import type {
+  GatewayConnectAttachTiming,
   GatewayConnectPhaseContext,
   GatewayWsMessageHandlerParams,
 } from "./message-handler-types.js";
+import { createGatewayRpcDiagnostics, GatewayRpcDiagnostics } from "./request-diagnostics.js";
 export type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 
 const GATEWAY_WORK_ADMISSION_RETRY_AFTER_MS = 1_000;
 const GATEWAY_WORK_ADMISSION_CLOSE_CODE = 1013;
 function claimsWorkerConnectionIdentity(value: unknown): boolean {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const connect = value as { role?: unknown; client?: unknown };
-  if (connect.role === "worker") {
+  const connect = asOptionalObjectRecord(value);
+  if (connect?.role === "worker") {
     return true;
   }
-  if (!connect.client || typeof connect.client !== "object") {
-    return false;
-  }
-  const client = connect.client as { id?: unknown; mode?: unknown };
-  return client.id === GATEWAY_CLIENT_IDS.WORKER || client.mode === GATEWAY_CLIENT_MODES.WORKER;
+  const client = asOptionalObjectRecord(connect?.client);
+  return client?.id === GATEWAY_CLIENT_IDS.WORKER || client?.mode === GATEWAY_CLIENT_MODES.WORKER;
 }
 
 export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerParams) {
+  const remoteIngress = getRemoteControlUiIngressContext(params.upgradeReq);
+  let waitingForPairing = false;
   const {
     socket,
     ingressAttribution,
@@ -101,15 +111,16 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     logWsControl,
   } = params;
 
-  const sendFrame = async (obj: unknown): Promise<void> =>
-    await new Promise<void>((resolve, reject) => {
-      socket.send(JSON.stringify(obj), (err) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        resolve();
-      });
+  const sendFrame = async (obj: unknown, uncompressed = false): Promise<number> =>
+    await new Promise<number>((resolve, reject) => {
+      const encoded = JSON.stringify(obj);
+      assertRemoteControlUiIngressCurrent(remoteIngress);
+      const sent = (err?: Error) => (err ? reject(err) : resolve(Buffer.byteLength(encoded)));
+      if (uncompressed && socket.sendUncompressed) {
+        socket.sendUncompressed(encoded, sent);
+      } else {
+        socket.send(encoded, sent);
+      }
     });
 
   const configSnapshot = getRuntimeConfig();
@@ -119,10 +130,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
   const peerLabel = endpoint ?? remoteAddr ?? "n/a";
 
   const hasProxyHeaders =
-    ingressAttribution.kind === "trusted-proxy" ||
-    ingressAttribution.kind === "tailscale-serve" ||
-    ingressAttribution.kind === "tailscale-funnel";
-  const remoteIsTrustedProxy =
     ingressAttribution.kind === "trusted-proxy" ||
     ingressAttribution.kind === "tailscale-serve" ||
     ingressAttribution.kind === "tailscale-funnel";
@@ -136,7 +143,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
   const reportedClientIpSource = resolveNodePairingClientIpSource({
     reportedClientIp,
     hasProxyHeaders,
-    remoteIsTrustedProxy,
+    remoteIsTrustedProxy: hasProxyHeaders,
     remoteIsLoopback: isLoopbackAddress(remoteAddr),
   });
 
@@ -204,7 +211,25 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       return;
     }
 
-    const text = rawDataToString(data);
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(rawDataToString(data));
+    } catch {
+      setHandshakeState("failed");
+      setCloseCause("parse-error", { error: "invalid JSON" });
+      logGateway.error("parse error: invalid JSON");
+      logWs("out", "parse-error", { connId, error: "invalid JSON" });
+      close(1007, "invalid JSON");
+      return;
+    }
+    const parsed = decoded;
+    let helloDelivered = false;
+    let diagnostics: GatewayRpcDiagnostics | undefined;
+    let dispatchOutcome: "returned" | "threw" = "returned";
+    let writeHandshakeResponse: ((response: ResponseFrame) => Promise<void>) | undefined;
+    let rejectionWrite: Promise<void> | undefined;
+    let connectPhase: string | undefined;
+    let connectFailureCause: string | undefined;
     // Connect phases share cleanup ownership; the outer catch must release
     // any claim installed before a later phase fails.
     const pendingNodePairingCleanup: { value?: NodePairingCleanupClaim } = {};
@@ -212,16 +237,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       const context = buildRequestContext();
       const resolvedAt = Date.now();
       for (const superseded of result.created ? (result.superseded ?? []) : []) {
-        context.broadcast(
-          "node.pair.resolved",
-          {
-            requestId: superseded.requestId,
-            nodeId: superseded.nodeId,
-            decision: "rejected",
-            ts: resolvedAt,
-          },
-          { dropIfSlow: true },
-        );
+        broadcastRejectedNodePairing(context.broadcast, superseded, resolvedAt);
       }
       if (result.created) {
         context.broadcast("node.pair.requested", result.request, {
@@ -243,40 +259,19 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         );
       }
     };
+    const client = getClient();
     try {
-      const parsed = JSON.parse(text);
-      const client = getClient();
-      if (
-        !client &&
-        parsed !== null &&
-        typeof parsed === "object" &&
-        "params" in parsed &&
-        claimsWorkerConnectionIdentity(parsed.params)
-      ) {
+      const frameRecord = asOptionalObjectRecord(parsed);
+      if (!client && claimsWorkerConnectionIdentity(frameRecord?.params)) {
         setHandshakeState("failed");
         setCloseCause("invalid-handshake", { handshakeError: "invalid worker handshake" });
         logWsControl.warn("worker admission rejected reason=invalid-handshake");
         close(1008, "invalid-handshake");
         return;
       }
-      const frameType =
-        parsed && typeof parsed === "object" && "type" in parsed
-          ? typeof (parsed as { type?: unknown }).type === "string"
-            ? String((parsed as { type?: unknown }).type)
-            : undefined
-          : undefined;
-      const frameMethod =
-        parsed && typeof parsed === "object" && "method" in parsed
-          ? typeof (parsed as { method?: unknown }).method === "string"
-            ? String((parsed as { method?: unknown }).method)
-            : undefined
-          : undefined;
-      const frameId =
-        parsed && typeof parsed === "object" && "id" in parsed
-          ? typeof (parsed as { id?: unknown }).id === "string"
-            ? String((parsed as { id?: unknown }).id)
-            : undefined
-          : undefined;
+      const frameType = readStringField(frameRecord, "type");
+      const frameMethod = readStringField(frameRecord, "method");
+      const frameId = readStringField(frameRecord, "id");
       if (frameType || frameMethod || frameId) {
         setLastFrameMeta({ type: frameType, method: frameMethod, id: frameId });
       }
@@ -303,10 +298,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             handshakeError,
           });
           if (isRequestFrame) {
-            const req = parsed;
             send({
               type: "res",
-              id: req.id,
+              id: parsed.id,
               ok: false,
               error: errorShape(ErrorCodes.INVALID_REQUEST, handshakeError),
             });
@@ -325,6 +319,51 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         }
 
         const frame = parsed;
+        diagnostics = createGatewayRpcDiagnostics(
+          "connect",
+          params.getMethodRegistry,
+          params.extraHandlers,
+        );
+        const startedAt = performance.now();
+        const phaseTimes: Partial<
+          Record<"auth_validated" | "session_attached" | "hello_payload_prepared", number>
+        > = {};
+        const attachTimes: Partial<Record<GatewayConnectAttachTiming, number>> = {};
+        logWs("in", "req", { connId, id: frame.id, method: "connect" });
+        const recordHandshakeResponse = (ok: boolean, bytes?: number, sendMs?: number) => {
+          diagnostics?.response(ok ? "ok" : "error", bytes);
+          logWs("out", "res", {
+            connId,
+            id: frame.id,
+            method: "connect",
+            ok,
+            bytes,
+            sendMs,
+            ...(!ok ? { failurePhase: connectPhase, failureCause: connectFailureCause } : {}),
+            ...attachTimes,
+            authMs: phaseTimes.auth_validated,
+            attachMs:
+              phaseTimes.session_attached === undefined
+                ? undefined
+                : phaseTimes.session_attached - (phaseTimes.auth_validated ?? 0),
+            helloMs:
+              phaseTimes.hello_payload_prepared === undefined
+                ? undefined
+                : phaseTimes.hello_payload_prepared - (phaseTimes.session_attached ?? 0),
+          });
+        };
+        writeHandshakeResponse = async (response) => {
+          const sendStartedAt = performance.now();
+          let bytes: number;
+          try {
+            // Hello carries device tokens; compressed length must not leak them.
+            bytes = await sendFrame(response, true);
+          } catch (error) {
+            diagnostics?.response("unavailable");
+            throw error;
+          }
+          recordHandshakeResponse(response.ok, bytes, performance.now() - sendStartedAt);
+        };
         const connectParams = frame.params as ConnectParams;
         const clientLabel = connectParams.client.displayName ?? connectParams.client.id;
         const clientMeta = {
@@ -339,6 +378,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           instanceId: connectParams.client.instanceId,
         };
         const markHandshakeFailure = (cause: string, meta?: Record<string, unknown>) => {
+          connectFailureCause = cause;
           setHandshakeState("failed");
           setCloseCause(cause, { ...meta, ...clientMeta });
         };
@@ -347,16 +387,33 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           message: string,
           options?: Parameters<typeof errorShape>[2],
         ) => {
-          send({
-            type: "res",
-            id: frame.id,
-            ok: false,
-            error: errorShape(code, message, options),
-          });
+          rejectionWrite = phaseContext
+            .sendFrame({
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: errorShape(code, message, options),
+            })
+            .catch(() => {});
         };
 
         const phaseContext = {
-          handler: params,
+          handler: {
+            ...params,
+            advanceHandshakePhase: (phase) => {
+              if (
+                phase === "auth_validated" ||
+                phase === "session_attached" ||
+                phase === "hello_payload_prepared"
+              ) {
+                phaseTimes[phase] = performance.now() - startedAt;
+              }
+              params.advanceHandshakePhase(phase);
+              if (phase === "session_attached") {
+                connectPhase = "hello";
+              }
+            },
+          },
           frame,
           connectParams,
           configSnapshot,
@@ -374,6 +431,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             origin: requestOrigin,
             isLocalClient,
             enforceOriginCheckForAnyClient,
+            remoteControlUiIngress: remoteIngress,
           }),
           browserRateLimitClientIp,
           authRateLimiter,
@@ -381,27 +439,60 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           clientMeta,
           markHandshakeFailure,
           sendHandshakeErrorResponse,
-          sendFrame,
-          onHelloDelivered: flushQueuedHandshakeFrames,
+          sendFrame: writeHandshakeResponse,
+          onHelloDelivered: () => {
+            helloDelivered = true;
+            flushQueuedHandshakeFrames();
+          },
+          recordAttachTiming: (phase, phaseStartedAt) => {
+            attachTimes[phase] = performance.now() - phaseStartedAt;
+          },
+          setConnectPhase: (phase) => {
+            connectPhase = phase;
+          },
+          onPairingWait: () => {
+            waitingForPairing = true;
+            params.clearHandshakeTimer();
+          },
           isWebchatConnect,
           runDetachedConnectWork,
           pendingNodePairingCleanup,
           broadcastNodePairingResult,
           releasePendingNodePairingCleanup,
         } satisfies GatewayConnectPhaseContext;
-        const authenticated = await authenticateGatewayConnect(phaseContext);
-        if (!authenticated) {
-          return;
-        }
-        const deviceAuthorized = await authorizeGatewayConnectDevice(phaseContext, authenticated);
-        if (!deviceAuthorized) {
-          return;
-        }
-        await attachAuthenticatedGatewayConnect(phaseContext, deviceAuthorized);
-        runDetachedConnectWork(
-          () => publishConnectModelCatalog(params, authenticatedRequestDispatcher),
-          (error) =>
-            logGateway.debug(`connection model catalog unavailable: ${formatForLog(error)}`),
+        await GatewayRpcDiagnostics.runHandler(
+          "connect",
+          async () => {
+            try {
+              connectPhase = "auth";
+              const authenticated = await authenticateGatewayConnect(phaseContext);
+              if (!authenticated) {
+                return;
+              }
+              const deviceStartedAt = performance.now();
+              connectPhase = "device";
+              const deviceAuthorized = await authorizeGatewayConnectDevice(
+                phaseContext,
+                authenticated,
+              );
+              phaseContext.recordAttachTiming("deviceAuthorizationMs", deviceStartedAt);
+              if (!deviceAuthorized) {
+                return;
+              }
+              connectPhase = "attach";
+              await attachAuthenticatedGatewayConnect(phaseContext, deviceAuthorized);
+              runDetachedConnectWork(
+                () => publishConnectModelCatalog(params, authenticatedRequestDispatcher),
+                (error) =>
+                  logGateway.debug(`connection model catalog unavailable: ${formatForLog(error)}`),
+              );
+            } finally {
+              if (rejectionWrite) {
+                await rejectionWrite;
+              }
+            }
+          },
+          diagnostics,
         );
         return;
       }
@@ -412,12 +503,30 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         admission,
       );
     } catch (err) {
+      dispatchOutcome = "threw";
+      connectFailureCause ??= "handler-error";
       await releasePendingNodePairingCleanup();
-      logGateway.error(`parse/handle error: ${String(err)}`);
-      logWs("out", "parse-error", { connId, error: formatForLog(err) });
-      if (!getClient()) {
-        close();
+      logGateway.error(`frame handler failed conn=${connId}: ${formatForLog(err)}`);
+      logWs("out", "handler-error", {
+        connId,
+        failurePhase: connectPhase,
+        error: formatForLog(err),
+      });
+      if (!helloDelivered && validateRequestFrame(parsed) && !isClosed()) {
+        const response: ResponseFrame = {
+          type: "res",
+          id: parsed.id,
+          ok: false,
+          error: errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+        };
+        if (writeHandshakeResponse) {
+          await writeHandshakeResponse(response).catch(() => {});
+        } else {
+          send(response);
+        }
       }
+    } finally {
+      diagnostics?.finish(dispatchOutcome);
     }
   };
 
@@ -443,58 +552,54 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     return { id: parsed.id, params: parsed.params };
   };
 
-  const isPreparedControlConnect = (data: GatewayConnectionFrame): boolean => {
-    const parsed = parsePreauthConnectFrame(data);
-    if (!parsed) {
-      return false;
-    }
-    const connectParams = parsed.params as { role?: unknown };
-    return connectParams.role !== "node" && !claimsWorkerConnectionIdentity(parsed.params);
-  };
-
-  const isStartupNodePreauth = (data: GatewayConnectionFrame): boolean => {
-    const parsed = parsePreauthConnectFrame(data);
-    return parsed ? isStartupNodeConnect(parsed.params) : false;
-  };
-
-  const rejectConnectForClosedAdmission = async (
-    data: GatewayConnectionFrame,
-  ): Promise<boolean> => {
-    const parsed = parsePreauthConnectFrame(data);
-    if (!parsed) {
-      return false;
-    }
-
+  const rejectConnectForClosedAdmission = async (id: string): Promise<void> => {
     const restartDraining = isGatewayRestartDraining();
     const reason = restartDraining
       ? GATEWAY_RESTART_UNAVAILABLE_REASON
       : GATEWAY_SUSPEND_UNAVAILABLE_REASON;
     const operation = restartDraining ? "restart" : "suspension";
     const phase = getGatewaySuspendAdmissionPhase();
-    setLastFrameMeta({ type: "req", method: "connect", id: parsed.id });
+    setLastFrameMeta({ type: "req", method: "connect", id });
     setHandshakeState("failed");
     setCloseCause(reason, {
       method: "connect",
       phase,
     });
-    await sendFrame({
-      type: "res",
-      id: parsed.id,
-      ok: false,
-      error: errorShape(ErrorCodes.UNAVAILABLE, `connect unavailable during gateway ${operation}`, {
-        retryable: true,
-        retryAfterMs: GATEWAY_WORK_ADMISSION_RETRY_AFTER_MS,
-        details: {
-          method: "connect",
-          reason,
-          phase,
-        },
-      }),
-    }).catch(() => {});
+    const diagnostics = createGatewayRpcDiagnostics(
+      "connect",
+      params.getMethodRegistry,
+      params.extraHandlers,
+    );
+    logWs("in", "req", { connId, id, method: "connect" });
+    try {
+      const bytes = await sendFrame({
+        type: "res",
+        id,
+        ok: false,
+        error: errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `connect unavailable during gateway ${operation}`,
+          {
+            retryable: true,
+            retryAfterMs: GATEWAY_WORK_ADMISSION_RETRY_AFTER_MS,
+            details: {
+              method: "connect",
+              reason,
+              phase,
+            },
+          },
+        ),
+      });
+      diagnostics?.response("error", bytes);
+      logWs("out", "res", { connId, id, method: "connect", ok: false, bytes });
+    } catch {
+      diagnostics?.response("unavailable");
+    } finally {
+      diagnostics?.finish("rejected");
+    }
     queueMicrotask(() =>
       close(GATEWAY_WORK_ADMISSION_CLOSE_CODE, `gateway ${operation} in progress`),
     );
-    return true;
   };
 
   const handleIncomingMessage = async (
@@ -507,11 +612,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
     const admission = tryBeginGatewayRootWorkAdmission("ws:connect");
     if (!admission) {
+      const connect = parsePreauthConnectFrame(data);
       if (
+        connect &&
         isGatewayRestartDraining() &&
         getGatewaySuspendAdmissionPhase() === "accepting" &&
         params.isStartupPending?.() === true &&
-        isStartupNodePreauth(data)
+        isStartupNodeConnect(connect.params)
       ) {
         const startupAdmission = tryBeginGatewayRestartStartupRootWorkAdmission();
         if (startupAdmission) {
@@ -524,18 +631,19 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         }
       }
       if (
-        !isGatewayRestartDraining() &&
-        (getGatewaySuspendAdmissionPhase() === "draining" ||
-          getGatewaySuspendAdmissionPhase() === "prepared") &&
-        isPreparedControlConnect(data)
+        connect &&
+        isGatewaySuspendControlAvailable() &&
+        connect.params.role !== "node" &&
+        !claimsWorkerConnectionIdentity(connect.params)
       ) {
         // Suspension fences work, not authenticated owner recovery. Operators
-        // can reconnect throughout the held lease; node and worker connects
+        // can reconnect through suspension and its drain; node and worker connects
         // would attach presence/registry state, so they stay refused.
         await handleMessage(data);
         return;
       }
-      if (await rejectConnectForClosedAdmission(data)) {
+      if (connect) {
+        await rejectConnectForClosedAdmission(connect.id);
         return;
       }
       // Malformed pre-auth frames still use the established validation and
@@ -561,7 +669,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     void params.connectionWork
       .track(() =>
         runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
-          handleIncomingMessage(data, admission),
+          runWithMainThreadTask("gateway:ws:frame", () => handleIncomingMessage(data, admission)),
         ),
       )
       .catch((error: unknown) => {
@@ -583,7 +691,17 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
   }
 
   const onMessage = (data: GatewayConnectionFrame): void => {
+    try {
+      assertRemoteControlUiIngressCurrent(remoteIngress);
+    } catch {
+      close(1008, "remote Control UI ingress closed");
+      return;
+    }
     if (isClosed()) {
+      return;
+    }
+    if (waitingForPairing) {
+      close(1008, "pairing approval pending; reconnect to request again");
       return;
     }
     if (queuedHandshakeFrames) {

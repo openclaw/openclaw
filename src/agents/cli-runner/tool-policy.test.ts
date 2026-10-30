@@ -14,7 +14,6 @@ describe("stripOpenClawMcpToolPrefix", () => {
 describe("resolveCliRuntimeToolsAllow", () => {
   it("keeps every concrete restriction, including server-managed defaults", () => {
     expect(resolveCliRuntimeToolsAllow(undefined)).toBeUndefined();
-    expect(resolveCliRuntimeToolsAllow(["memory_search"], true)).toEqual(["memory_search"]);
     expect(resolveCliRuntimeToolsAllow(["*"])).toBeUndefined();
     expect(resolveCliRuntimeToolsAllow(["memory_search"])).toEqual(["memory_search"]);
   });

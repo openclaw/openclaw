@@ -1,4 +1,3 @@
-// Account core contracts re-export config and account types used by plugin account flows.
 export type { OpenClawConfig } from "../config/config.js";
 
 export { createAccountActionGate } from "../channels/plugins/account-action-gate.js";

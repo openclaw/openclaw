@@ -1,6 +1,7 @@
 import { normalizeOptionalAccountId, normalizeAccountId } from "../../routing/account-id.js";
 import { normalizeChatType, type ChatType } from "../chat-type.js";
-import type { ChannelMessageActionContext, ChannelPlugin } from "./types.js";
+import type { ChannelMessageActionContext } from "./types.core.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./types.plugin.js";
 
 const HOST_TARGET_KIND_PREFIXES = [
   "user",
@@ -23,19 +24,6 @@ function isHostConversationTargetKind(value: string): value is HostConversationT
   return HOST_TARGET_KIND_PREFIXES.some((kind) => kind === value);
 }
 
-function stripHostProviderPrefix(params: {
-  value: string;
-  channel: string;
-  providerPrefixes?: readonly string[];
-}): string {
-  const prefixes = [params.channel, ...(params.providerPrefixes ?? [])]
-    .map((prefix) => prefix.trim().toLowerCase())
-    .filter((prefix) => Boolean(prefix) && !isHostConversationTargetKind(prefix));
-  const lowered = params.value.toLowerCase();
-  const prefix = prefixes.find((candidate) => lowered.startsWith(`${candidate}:`));
-  return prefix ? params.value.slice(prefix.length + 1).trim() : params.value;
-}
-
 export function normalizeHostConversationTarget(params: {
   value: unknown;
   channel: string;
@@ -51,11 +39,12 @@ export function normalizeHostConversationTarget(params: {
   if (!value) {
     return undefined;
   }
-  const withoutProvider = stripHostProviderPrefix({
-    value,
-    channel: params.channel,
-    providerPrefixes: params.providerPrefixes,
-  });
+  const prefixes = [params.channel, ...(params.providerPrefixes ?? [])]
+    .map((prefix) => prefix.trim().toLowerCase())
+    .filter((prefix) => Boolean(prefix) && !isHostConversationTargetKind(prefix));
+  const lowered = value.toLowerCase();
+  const prefix = prefixes.find((candidate) => lowered.startsWith(`${candidate}:`));
+  const withoutProvider = prefix ? value.slice(prefix.length + 1).trim() : value;
   if (!withoutProvider) {
     return undefined;
   }
@@ -93,16 +82,18 @@ function addHostConversationTarget(
 }
 
 function hasConflictingTargetKinds(targets: HostConversationTarget[]): boolean {
-  const kindsById = new Map<string, Set<HostConversationTargetKind>>();
+  const kindsById = new Map<string, HostConversationTargetKind>();
   for (const target of targets) {
     if (!target.kind) {
       continue;
     }
-    const kinds = kindsById.get(target.id) ?? new Set<HostConversationTargetKind>();
-    kinds.add(target.kind);
-    kindsById.set(target.id, kinds);
+    const kind = kindsById.get(target.id);
+    if (kind && kind !== target.kind) {
+      return true;
+    }
+    kindsById.set(target.id, target.kind);
   }
-  return Array.from(kindsById.values()).some((kinds) => kinds.size > 1);
+  return false;
 }
 
 function currentTargetsMatchRequested(params: {
@@ -191,6 +182,14 @@ export function resolveExactCurrentConversationMatch(params: {
   const normalizeTarget =
     params.pluginTrust === "bundled" ? params.plugin.messaging?.normalizeTarget : undefined;
   const providerPrefixes = params.plugin.messaging?.targetPrefixes;
+  const normalize = (value: unknown, impliedKind?: HostConversationTargetKind) =>
+    normalizeHostConversationTarget({
+      value,
+      channel: params.ctx.channel,
+      impliedKind,
+      normalizeTarget,
+      providerPrefixes,
+    });
   const aliasSpec =
     params.pluginTrust === "bundled"
       ? params.plugin.actions?.messageActionTargetAliases?.[params.ctx.action]
@@ -208,13 +207,7 @@ export function resolveExactCurrentConversationMatch(params: {
     if (deliveryTargetAliases.has(key)) {
       continue;
     }
-    const normalizedTarget = normalizeHostConversationTarget({
-      value: rawTarget,
-      channel: params.ctx.channel,
-      impliedKind,
-      normalizeTarget,
-      providerPrefixes,
-    });
+    const normalizedTarget = normalize(rawTarget, impliedKind);
     if (hasTargetInput(rawTarget) && !normalizedTarget) {
       return false;
     }
@@ -227,12 +220,7 @@ export function resolveExactCurrentConversationMatch(params: {
       hasTargetInput(params.ctx.params[alias]),
     );
     const resolvedAliasTarget = aliasSpec?.resolveDeliveryTarget?.({ args: params.ctx.params });
-    normalizedAliasTarget = normalizeHostConversationTarget({
-      value: resolvedAliasTarget,
-      channel: params.ctx.channel,
-      normalizeTarget,
-      providerPrefixes,
-    });
+    normalizedAliasTarget = normalize(resolvedAliasTarget);
     if (
       (hasDeliveryAliasInput && !resolvedAliasTarget) ||
       (resolvedAliasTarget !== undefined && !normalizedAliasTarget)
@@ -258,15 +246,7 @@ export function resolveExactCurrentConversationMatch(params: {
     params.ctx.toolContext?.currentChannelId,
     params.ctx.toolContext?.currentMessagingTarget,
   ]) {
-    addHostConversationTarget(
-      currentTargets,
-      normalizeHostConversationTarget({
-        value,
-        channel: params.ctx.channel,
-        normalizeTarget,
-        providerPrefixes,
-      }),
-    );
+    addHostConversationTarget(currentTargets, normalize(value));
   }
   const currentTargetList = Array.from(currentTargets.values());
   if (currentTargetList.length === 0 || hasConflictingTargetKinds(currentTargetList)) {

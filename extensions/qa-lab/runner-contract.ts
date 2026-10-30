@@ -7,6 +7,14 @@ import type {
 
 export type QaLabExecutionKind = NonNullable<QaScenarioExecution["kind"]>;
 
+export type QaRunnerModelOption = {
+  key: string;
+  name: string;
+  provider: string;
+  input: string;
+  preferred: boolean;
+};
+
 export type QaLabRunSelection = {
   profile: string;
   channel: string | null;

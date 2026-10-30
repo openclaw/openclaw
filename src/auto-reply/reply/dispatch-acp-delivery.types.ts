@@ -1,10 +1,16 @@
 import type { ChatType } from "../../channels/chat-type.js";
+import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
+import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
+import type { PluginHookReplyDispatchContext } from "../../plugins/hook-types.js";
 import type { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
-import type { FinalizedMsgContext } from "../templating.js";
+import type { PreparedTtsPreferences } from "../../tts/tts-preferences.js";
+import type { GetReplyOptions, SourceReplyDeliveryMode } from "../get-reply-options.types.js";
+import type { FinalizedMsgContext, FinalizedRuntimeMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { BlockReplySource } from "./block-reply-source.types.js";
+import type { InboundMessageAuditTerminalRecorder } from "./dispatch-from-config.types.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
@@ -49,14 +55,14 @@ export type AcpDispatchDeliveryState = {
   deliveredFinalTtsMedia: boolean;
   deliveredVisibleText: boolean;
   failedVisibleTextDelivery: boolean;
-  queuedUntrackedVisibleTextDeliveries: number;
-  settledUntrackedVisibleText: boolean;
+  untrackedVisibleText: "none" | "pending" | "settled";
   routedCounts: Record<ReplyDispatchKind, number>;
   suppressionReason?: NormalizeReplySkipReason;
   toolMessageByCallId: Map<string, ToolMessageHandle>;
 };
 
 export type AcpDispatchDeliveryParams = {
+  preparedTtsPreferences: PreparedTtsPreferences;
   cfg: OpenClawConfig;
   agentId?: string;
   ctx: FinalizedMsgContext;
@@ -77,4 +83,31 @@ export type AcpDispatchDeliveryParams = {
   onReplyStart?: () => Promise<void> | void;
   abortSignal?: AbortSignal;
   runId?: string;
+};
+
+export type AcpDispatchAttemptResult = {
+  queuedFinal: boolean;
+  counts: Record<ReplyDispatchKind, number>;
+};
+
+export type AcpDispatchAttemptParams = Omit<
+  AcpDispatchDeliveryParams,
+  "agentId" | "ctx" | "suppressBlockUserDelivery" | "preparedTtsPreferences"
+> & {
+  preparedTtsPreferences?: PreparedTtsPreferences;
+  ctx: FinalizedRuntimeMsgContext;
+  toolsAllow?: string[];
+  images?: Array<{ data: string; mimeType: string }>;
+  extractedFileImages?: ExtractedFileImage[];
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  shouldSendToolSummaries: () => Promise<boolean>;
+  shouldSendFullToolDetails: () => Promise<boolean>;
+  bypassForCommand: boolean;
+  onAgentRunStart?: GetReplyOptions["onAgentRunStart"];
+  onPreparedAgentRunStart?: GetReplyOptions["onPreparedAgentRunStart"];
+  turnAdoption?: PluginHookReplyDispatchContext["turnAdoption"];
+  userTurnTranscriptRecorder?: GetReplyOptions["userTurnTranscriptRecorder"];
+  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
+  recordProcessed: InboundMessageAuditTerminalRecorder["note"];
+  markIdle: (reason: string) => void;
 };

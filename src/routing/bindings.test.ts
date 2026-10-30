@@ -75,7 +75,7 @@ describe("route binding account helpers", () => {
         agents: {
           ownership,
           defaults: { systemAgent: { agentId: "research" } },
-          entries: { ops: { default: true }, research: {} },
+          entries: { ops: {}, research: {} },
         },
         bindings: [
           { agentId: "ops", match: { channel: "telegram", accountId: "legacy" } },
@@ -83,7 +83,7 @@ describe("route binding account helpers", () => {
         ],
       };
       expect(resolveDefaultAgentBoundAccountId(cfg, "telegram")).toBe(
-        ownership === "explicit" ? "designated" : "legacy",
+        ownership === "explicit" ? "designated" : null,
       );
     },
   );

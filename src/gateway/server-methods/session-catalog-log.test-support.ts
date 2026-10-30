@@ -4,6 +4,7 @@ import type { SubsystemLogger } from "../../logging/subsystem.js";
 const catalogLog = vi.hoisted(() => ({
   isEnabled: vi.fn<SubsystemLogger["isEnabled"]>(),
   warn: vi.fn<SubsystemLogger["warn"]>(),
+  debug: vi.fn<SubsystemLogger["debug"]>(),
 }));
 
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {

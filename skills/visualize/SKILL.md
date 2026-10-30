@@ -142,10 +142,14 @@ initialization and outside that host.
 
 ## Verify and deliver
 
-Fix reported inline-script syntax errors and call the tool again. Inspect the
-rendered result with available browser or device tools: verify libraries and
-fonts loaded, important controls work, and content fits the intended width and
-theme. For live dashboards, exercise the data read in the actual pinned frame.
+Fix reported inline-script syntax errors and call the tool again. Script errors
+thrown after an inline widget renders in the Control UI are reported back to this
+session. Agent browser tools normally run a separate profile without the viewer's
+Control UI session, so opening the chat there reaches sign-in, not the widget; do
+not use them to inspect inline widgets. When a browser or device tool can load the
+rendered surface itself, verify libraries and fonts loaded, important controls
+work, and content fits the intended width and theme. For live dashboards, exercise
+the data read in the actual pinned frame.
 Strict embed mode disables scripts. Report any concrete visual or platform
 verification gap; successful hosting alone proves neither rendering nor data access.
 

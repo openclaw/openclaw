@@ -1,4 +1,3 @@
-// Huggingface setup module handles plugin onboarding behavior.
 import {
   createModelCatalogPresetAppliers,
   createProviderConnectionPresetAppliers,
@@ -13,7 +12,7 @@ const huggingfacePreset = {
     providerId: "huggingface",
     api: "openai-completions",
     baseUrl: HUGGINGFACE_BASE_URL,
-    catalogModels: () => HUGGINGFACE_MODEL_CATALOG.map((model) => Object.assign({}, model)),
+    catalogModels: HUGGINGFACE_MODEL_CATALOG,
     aliases: [{ modelRef: HUGGINGFACE_DEFAULT_MODEL_REF, alias: "Hugging Face" }],
   }),
 } satisfies Parameters<typeof createProviderConnectionPresetAppliers<[]>>[0];

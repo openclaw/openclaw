@@ -1,4 +1,3 @@
-// Sms plugin module implements gateway behavior.
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -91,84 +90,6 @@ export function collectSmsStartupWarnings(account: ResolvedSmsAccount): string[]
   return warnings;
 }
 
-async function registerSmsWebhookRoute(params: {
-  cfg: SmsWebhookHandlerParams["cfg"];
-  account: ResolvedSmsAccount;
-  channelRuntime: Parameters<typeof createSmsIngressSpool>[0]["channelRuntime"];
-  abortSignal: AbortSignal;
-  log?: SmsIngressLog;
-}): Promise<{ lifecycle: Promise<void>; isActive: () => boolean }> {
-  const webhookPath = normalizeWebhookPath(params.account.webhookPath);
-  const currentRoute = activeRoutePaths.get(webhookPath);
-  if (currentRoute && currentRoute.accountId !== params.account.accountId) {
-    throw new Error(
-      `SMS webhook path ${webhookPath} is already registered by account ${currentRoute.accountId}; configure a distinct webhookPath for account ${params.account.accountId}.`,
-    );
-  }
-  const predecessorStop = currentRoute
-    ? stopSmsWebhookRoute(webhookPath, currentRoute)
-    : (pendingRouteStops.get(webhookPath) ?? Promise.resolve());
-  const ingress = createSmsIngressSpool({
-    cfg: params.cfg,
-    account: params.account,
-    channelRuntime: params.channelRuntime,
-    ...(params.log ? { log: params.log } : {}),
-  });
-  let unregisterRoute: () => void;
-  try {
-    const webhookHandler = createSmsWebhookHandler({ ...params, ingress });
-    unregisterRoute = registerPluginHttpRoute({
-      path: webhookPath,
-      auth: "plugin",
-      pluginId: CHANNEL_ID,
-      accountId: params.account.accountId,
-      throwOnFailure: true,
-      log: (msg) => params.log?.info?.(msg),
-      handler: async (req, res) => {
-        const { tryHandleHostedSmsMediaRequest } = await import("./media.js");
-        if (await tryHandleHostedSmsMediaRequest(req, res, params.account.accountId)) {
-          return true;
-        }
-        return await webhookHandler(req, res);
-      },
-    });
-  } catch (error) {
-    await Promise.allSettled([predecessorStop, ingress.stop()]);
-    throw error;
-  }
-  const route: SmsActiveRoute = {
-    accountId: params.account.accountId,
-    ingress,
-    unregisterRoute,
-    ready: Promise.resolve(),
-  };
-  activeRoutePaths.set(webhookPath, route);
-  route.ready = predecessorStop.then(() => {
-    // The replacement admits durably while paused, then pumps only after its predecessor stops.
-    if (activeRoutePaths.get(webhookPath) === route && !route.stopTask) {
-      ingress.start();
-    }
-  });
-  const unregister = () => stopSmsWebhookRoute(webhookPath, route);
-  const readinessAbort = new AbortController();
-  const lifecycle = waitUntilAbort(
-    AbortSignal.any([params.abortSignal, readinessAbort.signal]),
-    unregister,
-  );
-  try {
-    await route.ready;
-  } catch (error) {
-    // A failed replacement must release the abort waiter and observe its stop-task rejection.
-    readinessAbort.abort();
-    await Promise.allSettled([lifecycle]);
-    throw error;
-  }
-  return {
-    lifecycle,
-    isActive: () => activeRoutePaths.get(webhookPath) === route,
-  };
-}
-
 export async function startSmsGatewayAccount(params: {
   cfg: SmsWebhookHandlerParams["cfg"];
   account: ResolvedSmsAccount;
@@ -199,7 +120,81 @@ export async function startSmsGatewayAccount(params: {
   for (const warning of warnings) {
     params.log?.warn?.(warning);
   }
-  const registration = await registerSmsWebhookRoute(params);
+  async function registerSmsWebhookRoute(): Promise<{
+    lifecycle: Promise<void>;
+    isActive: () => boolean;
+  }> {
+    const webhookPath = normalizeWebhookPath(params.account.webhookPath);
+    const currentRoute = activeRoutePaths.get(webhookPath);
+    if (currentRoute && currentRoute.accountId !== params.account.accountId) {
+      throw new Error(
+        `SMS webhook path ${webhookPath} is already registered by account ${currentRoute.accountId}; configure a distinct webhookPath for account ${params.account.accountId}.`,
+      );
+    }
+    const predecessorStop = currentRoute
+      ? stopSmsWebhookRoute(webhookPath, currentRoute)
+      : (pendingRouteStops.get(webhookPath) ?? Promise.resolve());
+    const ingress = createSmsIngressSpool({
+      cfg: params.cfg,
+      account: params.account,
+      channelRuntime: params.channelRuntime,
+      ...(params.log ? { log: params.log } : {}),
+    });
+    let unregisterRoute: () => void;
+    try {
+      const webhookHandler = createSmsWebhookHandler({ ...params, ingress });
+      unregisterRoute = registerPluginHttpRoute({
+        path: webhookPath,
+        auth: "plugin",
+        pluginId: CHANNEL_ID,
+        accountId: params.account.accountId,
+        throwOnFailure: true,
+        log: (msg) => params.log?.info?.(msg),
+        handler: async (req, res) => {
+          const { tryHandleHostedSmsMediaRequest } = await import("./media.js");
+          if (await tryHandleHostedSmsMediaRequest(req, res, params.account.accountId)) {
+            return true;
+          }
+          return await webhookHandler(req, res);
+        },
+      });
+    } catch (error) {
+      await Promise.allSettled([predecessorStop, ingress.stop()]);
+      throw error;
+    }
+    const route: SmsActiveRoute = {
+      accountId: params.account.accountId,
+      ingress,
+      unregisterRoute,
+      ready: Promise.resolve(),
+    };
+    activeRoutePaths.set(webhookPath, route);
+    route.ready = predecessorStop.then(() => {
+      // The replacement admits durably while paused, then pumps only after its predecessor stops.
+      if (activeRoutePaths.get(webhookPath) === route && !route.stopTask) {
+        ingress.start();
+      }
+    });
+    const unregister = () => stopSmsWebhookRoute(webhookPath, route);
+    const readinessAbort = new AbortController();
+    const lifecycle = waitUntilAbort(
+      AbortSignal.any([params.abortSignal, readinessAbort.signal]),
+      unregister,
+    );
+    try {
+      await route.ready;
+    } catch (error) {
+      // A failed replacement must release the abort waiter and observe its stop-task rejection.
+      readinessAbort.abort();
+      await Promise.allSettled([lifecycle]);
+      throw error;
+    }
+    return {
+      lifecycle,
+      isActive: () => activeRoutePaths.get(webhookPath) === route,
+    };
+  }
+  const registration = await registerSmsWebhookRoute();
   if (registration.isActive()) {
     params.log?.info?.(
       `Registered SMS webhook route ${params.account.webhookPath} for account ${params.account.accountId}`,

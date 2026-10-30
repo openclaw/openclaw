@@ -1,6 +1,15 @@
 // Standalone build scripts load this before workspace packages are available.
 import path from "node:path";
 
+export const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [
+  ".ts",
+  ".mts",
+  ".js",
+  ".mjs",
+  ".cts",
+  ".cjs",
+] as const;
+
 /** True when a package entrypoint needs built JavaScript candidates. */
 export function isTypeScriptPackageEntry(entryPath: string): boolean {
   return [".ts", ".tsx", ".mts", ".cts"].includes(path.extname(entryPath).toLowerCase());

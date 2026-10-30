@@ -1,63 +1,76 @@
 import { expect, it, vi } from "vitest";
-import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme.ts";
-import { updatePickers } from "../../test-helpers/select-picker.ts";
+import {
+  BUILTIN_THEMES,
+  type ThemeCatalogEntry,
+} from "../../../../packages/gateway-protocol/src/theme.ts";
+import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
 import "../../styles.css";
-import { renderConfigView } from "./config-view.test-support.ts";
+import { renderAppearance } from "./config-view.test-support.tsx";
+
+const catalog = (...themes: ThemeCatalogEntry[]) => ({ error: null, themes });
+const theme = (
+  id: ThemeCatalogEntry["id"],
+  name: string,
+  overrides: Partial<ThemeCatalogEntry> = {},
+): ThemeCatalogEntry => ({
+  id,
+  name,
+  description: "Test theme",
+  source: "user",
+  modes: ["dark"],
+  ...overrides,
+});
+const themeButton = (container: HTMLElement, id: string) =>
+  container.querySelector<HTMLButtonElement>(`[data-theme-id="${id}"]`);
+
+it("hides the collection and visit controls without changing their saved preferences", () => {
+  const { container, props } = renderAppearance({
+    theme: "user/quiet",
+    themeCatalog: catalog(theme("user/quiet", "Quiet", { lobsterdex: false })),
+    lobsterPetVisits: true,
+    lobsterPetSounds: true,
+    lobsterdexHref: "/settings/lobsterdex",
+  });
+  expect(container.querySelector(".lobsterdex__gallery, .lobsterdex__open")).toBeNull();
+  expect(container.textContent).not.toContain("Lobster visits");
+  expect(container.textContent).not.toContain("Lobster sounds");
+  expect(props).toMatchObject({ lobsterPetVisits: true, lobsterPetSounds: true });
+  expect(props.onAppearanceChange).not.toHaveBeenCalled();
+});
 
 it("offers plugin and personal themes from the shared catalog with their descriptions", () => {
   const setTheme = vi.fn();
-  const { container } = renderConfigView({
-    activeSection: "__appearance__",
-    includeSections: ["__appearance__"],
+  const { container } = renderAppearance({
     setTheme,
-    themeCatalog: {
-      error: null,
-      themes: [
-        ...BUILTIN_THEMES,
-        {
-          id: "space-pack/xenovessel",
-          name: "Xenovessel",
-          description: "Alien indigo surfaces, lime controls, and monospace typography.",
-          source: "plugin",
-          pluginId: "space-pack",
-          modes: ["dark"],
-        },
-        {
-          id: "user/candlelight",
-          name: "Candlelight",
-          description: "Warm cream surfaces with amber accents and serif text.",
-          source: "user",
-          modes: ["light"],
-        },
-      ],
-    },
+    themeCatalog: catalog(
+      ...BUILTIN_THEMES,
+      theme("space-pack/xenovessel", "Xenovessel", {
+        description: "Alien theme",
+        source: "plugin",
+        pluginId: "space-pack",
+      }),
+      theme("user/candlelight", "Candlelight", {
+        modes: ["light"],
+      }),
+    ),
   });
-  const pluginTheme = container.querySelector<HTMLButtonElement>(
-    '[data-theme-id="space-pack/xenovessel"]',
-  );
-  expect(pluginTheme?.title).toBe(
-    "Alien indigo surfaces, lime controls, and monospace typography.",
-  );
+  const pluginTheme = themeButton(container, "space-pack/xenovessel");
+  expect(pluginTheme?.title).toBe("Alien theme");
   pluginTheme?.click();
-  expect(setTheme).toHaveBeenCalledWith("space-pack/xenovessel", { element: pluginTheme });
-  expect(container.querySelector('[data-theme-id="user/candlelight"]')?.textContent).toContain(
-    "Candlelight",
-  );
+  expect(setTheme).toHaveBeenCalledWith("space-pack/xenovessel");
+  expect(themeButton(container, "user/candlelight")?.textContent).toContain("Candlelight");
 });
 
 it.each(["profile", "device-local"] as const)(
   "shows Claw presentation while preserving an unavailable %s plugin selection",
   async (provenance) => {
     const missingTheme = "space-pack/xenovessel";
-    const { container, props } = renderConfigView({
-      activeSection: "__appearance__",
-      includeSections: ["__appearance__"],
+    const { container, props } = renderAppearance({
       theme: missingTheme,
       themeOverridden: true,
       themeProvenance: provenance,
       themeCatalog: {
-        error: null,
-        themes: [...BUILTIN_THEMES],
+        ...catalog(...BUILTIN_THEMES),
         ...(provenance === "profile" ? { unavailableId: missingTheme } : {}),
       },
     });
@@ -65,30 +78,26 @@ it.each(["profile", "device-local"] as const)(
     expect(container.textContent).toContain(
       `${missingTheme} is unavailable. Using Claw until the theme becomes available again.`,
     );
-    const claw = container.querySelector<HTMLButtonElement>('[data-theme-id="claw"]');
+    const claw = themeButton(container, "claw");
     expect(claw?.getAttribute("aria-pressed")).toBe("true");
     expect(container.querySelector('[data-accent-preset="default"]')?.classList).toContain(
       "settings-accent-theme--claw",
     );
     for (const slot of ["ui", "chat"]) {
-      const picker = container
-        .querySelector(`#settings-font-${slot}`)
-        ?.closest("openclaw-select-picker");
+      const picker = await openPicker(container.querySelector(`#settings-font-${slot}`)!);
       expect(picker?.querySelector('[role="option"][data-value="theme"]')?.textContent).toContain(
         "Claw · Instrument Sans",
       );
     }
     expect(props.theme).toBe(missingTheme);
     claw?.click();
-    expect(props.setTheme).toHaveBeenCalledWith("claw", { element: claw });
+    expect(props.setTheme).toHaveBeenCalledWith("claw");
   },
 );
 
 it("offers an explicit retry when the theme catalog cannot load", () => {
   const onRetryThemeCatalog = vi.fn();
-  const { container } = renderConfigView({
-    activeSection: "__appearance__",
-    includeSections: ["__appearance__"],
+  const { container } = renderAppearance({
     themeCatalog: { themes: [...BUILTIN_THEMES], error: "Theme palette temporarily unavailable" },
     onRetryThemeCatalog,
   });

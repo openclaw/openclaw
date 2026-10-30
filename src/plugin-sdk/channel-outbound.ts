@@ -1,4 +1,3 @@
-// Channel outbound contracts define plugin send results, media handling, and delivery metadata.
 import type {
   DurableMessageBatchSendResult,
   DurableMessageSendContext,
@@ -11,6 +10,7 @@ import {
 import { classifyGatewayStaleInstall } from "../gateway/stale-install.js";
 import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
 import { preserveReplyPayloadMediaSelectionCore } from "../infra/outbound/reply-media-entries.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { ReplyPayload } from "./reply-payload.js";
 
@@ -58,28 +58,48 @@ export {
   createTypingCallbacks,
   resolveChannelSourceReplyDeliveryMode as resolveChannelMessageSourceReplyDeliveryMode,
 } from "../channels/message/reply-pipeline.js";
+export type {
+  ChannelReplyPipeline,
+  CreateTypingCallbacksParams,
+  ReplyPrefixContext,
+  ReplyPrefixContextBundle,
+  ReplyPrefixOptions,
+  SourceReplyDeliveryMode,
+  TypingCallbacks,
+} from "../channels/message/reply-pipeline.js";
 // Bare interval/stop orchestration for channels that own their typing renewal
 // policy (e.g. per-message reply budgets) instead of the createTypingCallbacks lifecycle.
 export { createTypingKeepaliveLoop } from "../channels/typing-lifecycle.js";
 
 export {
+  clearFinalizableDraftMessage,
   createFinalizableDraftLifecycle,
+  createFinalizableDraftStreamControls,
   createFinalizableDraftStreamControlsForState,
   takeMessageIdAfterStop,
+  type FinalizableDraftStreamState,
 } from "../channels/draft-stream-controls.js";
 
-export { createDraftStreamLoop } from "../channels/draft-stream-loop.js";
+export { createDraftStreamLoop, type DraftStreamLoop } from "../channels/draft-stream-loop.js";
+export { createRunStateMachine } from "../channels/run-state-machine.js";
+export {
+  createArmableStallWatchdog,
+  type ArmableStallWatchdog,
+  type StallWatchdogTimeoutMeta,
+} from "../channels/transport/stall-watchdog.js";
 
 export { resolveChannelDraftStreamingChunking } from "../channels/draft-streaming-chunking.js";
 export type { ChannelDraftStreamingChunking } from "../channels/draft-streaming-chunking.js";
 export { createRuntimeOutboundDelegates } from "../channels/plugins/runtime-forwarders.js";
-export { createChannelRunQueue } from "./channel-lifecycle.core.js";
-
 export {
   createAccountStatusSink,
+  createChannelRunQueue,
   keepHttpServerTaskAlive,
   runPassiveAccountLifecycle,
   waitUntilAbort,
+  type ChannelRunQueue,
+  type ChannelRunQueueParams,
+  type ChannelRunQueueTaskContext,
 } from "./channel-lifecycle.core.js";
 export {
   createOutboundPayloadPlan,
@@ -196,6 +216,7 @@ export {
   deliverWithFinalizableLivePreviewAdapter,
 } from "../channels/message/live.js";
 export type { LivePreviewDeliveryResult, LivePreviewLifecycle } from "../channels/message/live.js";
+export { createChannelDeliveryAccumulator } from "../channels/turn/delivery-result.js";
 export {
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,
@@ -255,6 +276,21 @@ export const deliverStructuredInboundReplyWithMessageSendContext: ChannelDurable
     return await mod.deliverStructuredInboundReplyWithMessageSendContextCore(...args);
   };
 
+function omitDeprecatedMirror(
+  params: DurableMessageSendContextParams,
+): DurableMessageSendContextParams {
+  if (params.mirror === undefined) {
+    return params;
+  }
+  warnPluginSdkDeprecation({
+    family: "outbound-mirror",
+    method: "durable-send mirror",
+    replacement: "automatic destination transcript recording",
+  });
+  const { mirror: _mirror, ...delivery } = params;
+  return delivery;
+}
+
 /** Sends a durable message batch without eager-loading channel message runtime internals. */
 export async function sendDurableMessageBatch(
   /**
@@ -263,7 +299,7 @@ export async function sendDurableMessageBatch(
   params: DurableMessageSendContextParams,
 ): Promise<DurableMessageBatchSendResult> {
   const mod = await loadChannelMessageRuntimeModule();
-  return await mod.sendDurableMessageBatchCore(params);
+  return await mod.sendDurableMessageBatchCore(omitDeprecatedMirror(params));
 }
 
 /** Runs work inside a durable message send context loaded through the SDK lazy boundary. */
@@ -278,7 +314,7 @@ export async function withDurableMessageSendContext<T>(
   run: (ctx: DurableMessageSendContext) => Promise<T>,
 ): Promise<T> {
   const mod = await loadChannelMessageRuntimeModule();
-  return await mod.withDurableMessageSendContextCore(params, run);
+  return await mod.withDurableMessageSendContextCore(omitDeprecatedMirror(params), run);
 }
 
 export {

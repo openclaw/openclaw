@@ -1,11 +1,12 @@
 import fs from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import type { SqlConnection } from "../infra/sql-connection.js";
 import { SqliteSnapshotCleanupError } from "../infra/sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { readRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry-listing.js";
 import { openOpenClawStateReadConnection } from "../state/openclaw-state-db-read-connection.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
+import { BLOAT_MIN_FILE_BYTES } from "./doctor-db-bloat.constants.js";
 
 export type SqliteBloatStats = {
   fileBytes: number;
@@ -20,7 +21,9 @@ function readSqliteBloatStats(pathname: string): SqliteBloatStats | null {
   } catch {
     return null;
   }
-  if (fileBytes <= 0) {
+  // Both warnings require this captured main-file size, even when WAL adds pages.
+  // Smaller files cannot produce a finding, so avoid preparing their private copy.
+  if (fileBytes < BLOAT_MIN_FILE_BYTES) {
     return null;
   }
   let connection: ReturnType<typeof openOpenClawStateReadConnection> | undefined;
@@ -50,7 +53,7 @@ function readSqliteBloatStats(pathname: string): SqliteBloatStats | null {
   }
 }
 
-function readPragmaNumber(db: DatabaseSync, pragma: string): number | null {
+function readPragmaNumber(db: SqlConnection, pragma: string): number | null {
   const row = db.prepare(`PRAGMA ${pragma}`).get();
   return asFiniteNumber(row?.[pragma]) ?? null;
 }

@@ -29,7 +29,7 @@ function createSearchFixture(
   const tool = createSessionsSearchTool({
     agentSessionKey: "agent:main:requester",
     config: {
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
       tools: { sessions: { visibility: "all" } },
     },
     callGateway: async <T>(request: GatewayRequest): Promise<T> => {
@@ -59,70 +59,67 @@ describe("sessions_search candidate matching", () => {
     );
     const keys = ["agent:main:requester", ...aliases];
     const returned = aliases.slice(-25).map((key, index) => searchHit(`agent:main:${key}`, index));
-    const parse = vi.spyOn(sessionKeys, "parseAgentSessionKey");
-    try {
-      const { tool, requests } = createSearchFixture(keys, returned, () => parse.mockClear());
-      const result = await tool.execute("candidate-budget", { query: "text", limit: 25 });
-      expect(result.details).toEqual({
-        results: returned.map((row, index) =>
-          Object.assign({}, row, { sessionKey: aliases[174 + index] }),
-        ),
-      });
-      expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
-      expect(requests.filter((request) => request.method === "sessions.search")).toEqual([
-        {
-          method: "sessions.search",
-          params: { agentId: "main", query: "text", limit: 25, sessionKeys: keys },
-        },
-      ]);
-      expect(requests.filter((request) => request.method === "sessions.list")).toHaveLength(4);
-      const aliasKeys = new Set(aliases);
-      const aliasParses = parse.mock.calls.filter(
-        ([key]) => typeof key === "string" && aliasKeys.has(key),
-      );
-      expect(aliasParses.length).toBeLessThanOrEqual(1_000);
-    } finally {
-      parse.mockRestore();
-    }
-  });
+    using parse = vi.spyOn(sessionKeys, "parseAgentSessionKey");
 
-  it.each([
-    { keys: ["aaa", "agent:main:aaa"], hitKey: "agent:main:aaa", expected: "aaa" },
-    { keys: ["agent:main:zzz", "zzz"], hitKey: "agent:main:zzz", expected: "agent:main:zzz" },
-    { keys: [" aaa ", "aaa"], hitKey: "agent:main:aaa", expected: " aaa " },
-  ])("keeps the first matching candidate for $keys", async ({ keys, hitKey, expected }) => {
-    const { tool, requests } = createSearchFixture(keys, [searchHit(hitKey)]);
-    const result = await tool.execute("candidate-order", { query: "text" });
-    expect(result.details).toEqual({ results: [{ ...searchHit(hitKey), sessionKey: expected }] });
-    const request = requests.find((entry) => entry.method === "sessions.search");
-    if (!request) {
-      throw new Error("Missing sessions.search request");
-    }
-    const requested = (request.params as { sessionKeys: string[] }).sessionKeys.filter(
-      (key) => key !== "agent:main:requester",
+    const { tool, requests } = createSearchFixture(keys, returned, () => parse.mockClear());
+    const result = await tool.execute("candidate-budget", { query: "text", limit: 25 });
+    expect(result.details).toEqual({
+      results: returned.map((row, index) =>
+        Object.assign({}, row, { sessionKey: aliases[174 + index] }),
+      ),
+    });
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(requests.filter((request) => request.method === "sessions.search")).toEqual([
+      expect.objectContaining({
+        method: "sessions.search",
+        params: { agentId: "main", query: "text", limit: 25, sessionKeys: keys },
+      }),
+    ]);
+    expect(requests.filter((request) => request.method === "sessions.list")).toHaveLength(4);
+    const aliasKeys = new Set(aliases);
+    const aliasParses = parse.mock.calls.filter(
+      ([key]) => typeof key === "string" && aliasKeys.has(key),
     );
-    expect(requested).toEqual(keys);
+    expect(aliasParses.length).toBeLessThanOrEqual(1_000);
   });
 
   it.each([
-    { key: "agent:main:Mixed", accepted: "agent:main:Mixed", rejected: "agent:main:mixed" },
-    { key: " room ", accepted: "agent:main:room", rejected: "agent:work:room" },
-    { key: "Room", accepted: "Room", rejected: "agent:main:room" },
-    {
-      key: "matrix:channel:!AbC:example.org:thread:$Event",
-      accepted: "agent:main:matrix:channel:!AbC:example.org:thread:$Event",
-      rejected: "agent:main:matrix:channel:!abc:example.org:thread:$Event",
+    ...[
+      { keys: ["aaa", "agent:main:aaa"], accepted: "agent:main:aaa", expected: "aaa" },
+      { keys: ["agent:main:zzz", "zzz"], accepted: "agent:main:zzz", expected: "agent:main:zzz" },
+      { keys: [" aaa ", "aaa"], accepted: "agent:main:aaa", expected: " aaa " },
+    ].map(({ keys, accepted, expected }) => ({ keys, accepted, expected, rejected: undefined })),
+    ...[
+      { key: "agent:main:Mixed", accepted: "agent:main:Mixed", rejected: "agent:main:mixed" },
+      { key: " room ", accepted: "agent:main:room", rejected: "agent:work:room" },
+      { key: "Room", accepted: "Room", rejected: "agent:main:room" },
+      {
+        key: "matrix:channel:!AbC:example.org:thread:$Event",
+        accepted: "agent:main:matrix:channel:!AbC:example.org:thread:$Event",
+        rejected: "agent:main:matrix:channel:!abc:example.org:thread:$Event",
+      },
+    ].map(({ key, accepted, rejected }) => ({ accepted, rejected, keys: [key], expected: key })),
+  ])(
+    "selects the first authorized exact candidate for $keys",
+    async ({ keys, accepted, rejected, expected }) => {
+      const { tool, requests } = createSearchFixture(keys, [
+        ...(rejected ? [searchHit(rejected, 1)] : []),
+        searchHit(accepted),
+      ]);
+      const result = await tool.execute("candidate-order", { query: "text" });
+      expect(result.details).toEqual({
+        results: [{ ...searchHit(accepted), sessionKey: expected }],
+      });
+      const request = requests.find((entry) => entry.method === "sessions.search");
+      if (!request) {
+        throw new Error("Missing sessions.search request");
+      }
+      const requested = (request.params as { sessionKeys: string[] }).sessionKeys.filter(
+        (key) => key !== "agent:main:requester",
+      );
+      expect(requested).toEqual(keys);
     },
-    {
-      key: "signal:group:AbC",
-      accepted: "agent:main:signal:group:AbC",
-      rejected: "agent:main:signal:group:abc",
-    },
-  ])("preserves raw and opaque key identity for $key", async ({ key, accepted, rejected }) => {
-    const { tool } = createSearchFixture([key], [searchHit(rejected, 1), searchHit(accepted)]);
-    const result = await tool.execute("key-identity", { query: "text" });
-    expect(result.details).toEqual({ results: [{ ...searchHit(accepted), sessionKey: key }] });
-  });
+  );
 
   it("matches hits only within the chunk sent to that search request", async () => {
     const aliases = Array.from(

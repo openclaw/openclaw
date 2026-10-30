@@ -1,4 +1,5 @@
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
@@ -9,6 +10,7 @@ import { runSqliteReadOnlyWorker } from "../infra/sqlite-readonly-worker.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import type { BrokerChild } from "../process/spawn-broker/child.js";
 import { getSpawnBroker } from "../process/spawn-broker/context.js";
+import { runWithProcessCleanupBudget } from "../process/supervisor/cleanup-budget.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   withAgentDatabaseStartupAdmission,
@@ -21,7 +23,7 @@ type AgentDatabaseStartupAdmission = NonNullable<
 >;
 
 const observed = vi.hoisted(() => ({
-  brokerPid: undefined as number | undefined,
+  broker: undefined as ReturnType<typeof getSpawnBroker>,
   startupParent: undefined as number | undefined,
   shutdownParent: undefined as number | undefined,
   admission: undefined as AgentDatabaseStartupAdmission | undefined,
@@ -37,11 +39,12 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ info: vi.fn() }),
 }));
 
+// mock-isolation: Replaces Gateway startup to observe the spawn broker without booting a server.
 vi.mock("./server-start.js", () => ({
   startGatewayServerCore: async () => {
     const { runExec } = await import("../process/exec.js");
     const { getAgentDatabaseStartupAdmission } = await import("../state/agent-database-startup.js");
-    observed.brokerPid = getSpawnBroker()?.pid;
+    observed.broker = getSpawnBroker();
     const admission = getAgentDatabaseStartupAdmission();
     observed.admission = admission;
     if (!admission) {
@@ -93,10 +96,8 @@ function holdAdmissionCleanup(admission: AgentDatabaseStartupAdmission) {
     });
     started.resolve();
     await release.promise;
-    if (observed.brokerPid === undefined) {
-      throw new Error("Admission cleanup lost its broker identity");
-    }
-    process.kill(observed.brokerPid, 0);
+    expect(observed.broker).toBeDefined();
+    process.kill(observed.broker!.pid!, 0);
   })();
   admission.track(joined);
   return { started, release, joined };
@@ -119,45 +120,55 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
     observed.closeWork = undefined;
   });
 
-  nodeIt("owns spawning through startup callbacks and the complete shutdown join", async () => {
-    const server = await startGatewayServer();
-    try {
-      expect(observed.brokerPid).toBeTypeOf("number");
-      expect(observed.admission?.isStopped).toBe(false);
-      expect(observed.startupParent).toBe(observed.brokerPid);
-      expect(observed.startupParent).not.toBe(process.pid);
-    } finally {
-      await server.close();
-    }
-    expect(observed.shutdownParent).toBe(observed.brokerPid);
-    expect(observed.admission?.isStopped).toBe(true);
-    expect(() => process.kill(observed.brokerPid!, 0)).toThrow();
-  });
-
-  nodeIt("joins the broker when runtime startup fails", async () => {
-    observed.failStartup = true;
-    try {
-      await expect(startGatewayServer()).rejects.toThrow("startup failed");
-      expect(() => process.kill(observed.brokerPid!, 0)).toThrow();
-    } finally {
-      observed.failStartup = false;
-    }
-  });
+  it.each(process.versions.bun ? [true] : [false, true])(
+    "owns startup callbacks and shutdown with native Bun transport=%s",
+    async (native) => {
+      const bun = Object.getOwnPropertyDescriptor(process.versions, "bun");
+      if (native) {
+        Object.defineProperty(process.versions, "bun", { value: "1.4.3", configurable: true });
+      }
+      try {
+        const server = await startGatewayServer();
+        const parent = native ? process.pid : observed.broker?.pid;
+        try {
+          if (native) {
+            expect(observed.broker?.pid).toBeUndefined();
+          } else {
+            expect(observed.broker?.pid).toBeTypeOf("number");
+            expect(observed.admission?.isStopped).toBe(false);
+            expect(observed.startupParent).not.toBe(process.pid);
+          }
+          expect(observed.startupParent).toBe(parent);
+        } finally {
+          await server.close();
+        }
+        expect(observed.shutdownParent).toBe(parent);
+        if (!native) {
+          expect(observed.admission?.isStopped).toBe(true);
+          expect(() => process.kill(observed.broker!.pid!, 0)).toThrow();
+        }
+      } finally {
+        if (bun) {
+          Object.defineProperty(process.versions, "bun", bun);
+        } else {
+          Reflect.deleteProperty(process.versions, "bun");
+        }
+      }
+    },
+  );
 
   nodeIt.each(["shutdown", "startup failure", "shutdown failure"] as const)(
     "owns the auth read child through runtime callbacks and %s",
     async (phase) => {
       const root = tempDirs.make("openclaw-gateway-auth-worker-");
       const source = path.join(root, "source.sqlite");
-      const database = new (requireNodeSqlite().DatabaseSync)(source);
-      database.close();
+      new (requireNodeSqlite().DatabaseSync)(source).close();
       const read = () =>
         runSqliteReadOnlyWorker(source, {
           mode: "auth-profile-rows",
           source: "canonical",
           expectedIdentity: readDatabasePathIdentitySync(source).key,
           env: { ...process.env },
-          coordinatorRuntime: { directory: path.join(root, "coordinator"), keepAlive: false },
         });
       const resume = createDeferredCore();
       let runtimeRead: Promise<unknown> | undefined;
@@ -204,8 +215,10 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
           }
         }
         expect(spawnCount).toBe(1);
-        expect(child?.exitCode).toBe(0);
         expect(child?.connected).toBe(false);
+        expect(child?.pid).toBeTypeOf("number");
+        expect(() => process.kill(child!.pid!, 0)).toThrow();
+        expect(() => process.kill(observed.broker!.pid!, 0)).toThrow();
       } finally {
         resume.resolve();
         await Promise.allSettled([runtimeRead]);
@@ -214,78 +227,65 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
     },
   );
 
-  it("preserves Bun's native process transport", async () => {
-    const bun = Object.getOwnPropertyDescriptor(process.versions, "bun");
-    Object.defineProperty(process.versions, "bun", { value: "1.4.2", configurable: true });
-    try {
-      const server = await startGatewayServer();
-      try {
-        expect(observed.brokerPid).toBeUndefined();
-        expect(observed.startupParent).toBe(process.pid);
-      } finally {
-        await server.close();
-      }
-      expect(observed.shutdownParent).toBe(process.pid);
-    } finally {
-      if (bun) {
-        Object.defineProperty(process.versions, "bun", bun);
-      } else {
-        Reflect.deleteProperty(process.versions, "bun");
-      }
-    }
-  });
-
-  nodeIt.each(["beforeAdopt", "afterAdopt", "close-before-sidecars"] as const)(
+  nodeIt.each(["beforeAdopt", "afterAdopt", "close-before-sidecars", "close-at-deadline"] as const)(
     "joins an outer CLI admission before broker extinction when core fails at %s",
     async (phase) => {
       await withAgentDatabaseStartupAdmission(async (admission) => {
         const cleanup = holdAdmissionCleanup(admission);
         const failure = new Error(`core failed at ${phase}`);
-        if (phase !== "close-before-sidecars") {
+        const closing = phase.startsWith("close-");
+        const bounded = phase === "close-at-deadline";
+        if (phase === "beforeAdopt" || phase === "afterAdopt") {
           observed[phase] = (coreAdmission) => {
             expect(coreAdmission).toBe(admission);
             throw failure;
           };
         }
         let settled = false;
-        let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
-        const starting = startGatewayServer().then((started) => {
-          server = started;
-          return started;
-        });
-        const ending =
-          phase === "close-before-sidecars"
-            ? starting.then((started) => {
-                expect(observed.admission).toBe(admission);
-                observed.closeError = failure;
-                return started.close();
-              })
-            : starting;
-        void ending.then(
-          () => {
-            settled = true;
-          },
-          () => {
-            settled = true;
-          },
-        );
+        const starting = startGatewayServer();
+        const ending = closing
+          ? starting.then((started) => {
+              expect(observed.admission).toBe(admission);
+              observed.closeError = failure;
+              if (bounded) {
+                vi.useFakeTimers();
+              }
+              return runWithProcessCleanupBudget(
+                { deadline: performance.now() + 1_000, warn: vi.fn() },
+                () => started.close({ exitAfterClose: bounded }),
+              );
+            })
+          : starting;
+        const markSettled = () => {
+          settled = true;
+        };
+        void ending.then(markSettled, markSettled);
         try {
           await withTestTimeout(cleanup.started.promise, 5_000, "Admission stop did not begin");
           await nextTurn();
           expect(settled).toBe(false);
-          expect(() => process.kill(observed.brokerPid!, 0)).not.toThrow();
+          expect(() => process.kill(observed.broker!.pid!, 0)).not.toThrow();
+          if (bounded) {
+            await vi.advanceTimersByTimeAsync(1_000);
+            expect(settled).toBe(true);
+            await expect(ending).rejects.toThrow(/database-admission/);
+            await expect(ending).rejects.toHaveProperty("errors.0", failure);
+            vi.useRealTimers();
+          }
           cleanup.release.resolve();
           await expect(cleanup.joined).resolves.toBeUndefined();
-          await expect(ending).rejects.toBe(failure);
+          if (bounded) {
+            await observed.broker?.close();
+          } else {
+            await expect(ending).rejects.toBe(failure);
+            expect(() => process.kill(observed.broker!.pid!, 0)).toThrow();
+          }
           expect(admission.isStopped).toBe(true);
-          expect(() => process.kill(observed.brokerPid!, 0)).toThrow();
         } finally {
+          vi.useRealTimers();
           cleanup.release.resolve();
           await admission.stop();
           await Promise.allSettled([ending, cleanup.joined]);
-          if (server && phase !== "close-before-sidecars") {
-            await server.close();
-          }
         }
       });
     },

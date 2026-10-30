@@ -17,8 +17,6 @@ export function resolveDiscordPreflightChannelContext(params: {
   threadParentName?: string;
 }) {
   const threadName = params.threadChannel?.name;
-  const configChannelName = params.threadParentName ?? params.channelName;
-  const configChannelSlug = configChannelName ? normalizeDiscordSlug(configChannelName) : "";
   const displayChannelName = threadName ?? params.channelName;
   const displayChannelSlug = displayChannelName
     ? normalizeDiscordDisplaySlug(displayChannelName)
@@ -27,9 +25,6 @@ export function resolveDiscordPreflightChannelContext(params: {
     params.guildInfo?.slug || (params.guildName ? normalizeDiscordSlug(params.guildName) : "");
 
   const threadChannelSlug = params.channelName ? normalizeDiscordSlug(params.channelName) : "";
-  const threadParentSlug = params.threadParentName
-    ? normalizeDiscordSlug(params.threadParentName)
-    : "";
 
   const channelConfig = params.isGuildMessage
     ? resolveDiscordChannelConfigWithFallback({
@@ -39,20 +34,15 @@ export function resolveDiscordPreflightChannelContext(params: {
         channelSlug: threadChannelSlug,
         parentId: params.threadParentId,
         parentName: params.threadParentName,
-        parentSlug: threadParentSlug,
         scope: params.threadChannel ? "thread" : "channel",
       })
     : null;
 
   return {
     threadName,
-    configChannelName,
-    configChannelSlug,
     displayChannelName,
     displayChannelSlug,
     guildSlug,
-    threadChannelSlug,
-    threadParentSlug,
     channelConfig,
   };
 }

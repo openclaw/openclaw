@@ -1,1076 +1,584 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  projectAgentHistoryActivity,
+  projectAgentToolActivity,
+} from "../../../../src/infra/agent-activity-events.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import { isHiddenAssistantStreamText } from "../../lib/chat/message-visibility.ts";
-import { handleChatGatewayEvent } from "./chat-gateway.ts";
-import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import type { ChatHistoryResponse, ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   activeHistory,
   createState,
+  delayed,
+  emit,
+  event,
+  failedHistory,
+  message,
+  renderedText,
+  steerPrompts,
+  tail,
+  toolEvent,
   type TestState,
 } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { buildChatItems } from "./chat-thread-build.ts";
 import {
   admitChatSubmission,
-  getChatSessionProjection,
-  getChatModelObservedRunId,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
-  publishChatSessionProjection,
 } from "./history-merge.ts";
+import {
+  adoptStartedChatRun,
+  handleAbortChat,
+  reconcileChatRunLifecycle,
+} from "./run-lifecycle.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
-import { visibleCurrentAssistantStreamTail } from "./stream-reconciliation.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 import { buildInitialChatSubmission } from "./user-message-content.ts";
 
-async function loadHistoryWithBrowserTimers(state: TestState): Promise<void> {
-  const globalWithWindow = globalThis as typeof globalThis & {
-    window?: Window & typeof globalThis;
-  };
-  const previousWindow = globalWithWindow.window;
-  globalWithWindow.window = globalThis as unknown as Window & typeof globalThis;
+function assistant(
+  state: TestState,
+  runId: string,
+  text: string,
+  fields: Partial<Omit<Parameters<typeof emit>[2], "message">> = {},
+) {
+  emit(state, runId, { state: "delta", ...fields, message: message("assistant", text) });
+}
+
+function publish(
+  state: TestState,
+  runId: string,
+  payload: Parameters<typeof applySessionMessagePayload>[1],
+) {
+  applySessionMessagePayload(state, payload, true, { kind: "live", activeRunId: runId });
+}
+
+async function loadWithTools(state: TestState) {
+  vi.stubGlobal("window", globalThis);
   try {
     await loadChatHistory(state);
     await vi.waitFor(() => expect(state.chatToolMessages).toHaveLength(1));
   } finally {
-    if (previousWindow) {
-      globalWithWindow.window = previousWindow;
-    } else {
-      Reflect.deleteProperty(globalWithWindow, "window");
-    }
+    vi.unstubAllGlobals();
   }
 }
 
-function renderedText(state: TestState) {
-  return buildChatItems({
-    paneId: "steer-regression",
-    sessionKey: state.sessionKey,
-    runId: state.chatRunId,
-    messages: state.chatMessages,
-    toolMessages: state.chatToolMessages,
-    streamSegments: state.chatStreamSegments,
-    stream: state.chatStream,
-    streamStartedAt: state.chatStreamStartedAt,
-    showToolCalls: true,
-  }).flatMap((item) =>
-    item.kind === "group"
-      ? item.messages.map(({ message }) => extractText(message)?.trim())
-      : item.kind === "stream"
-        ? [item.text.trim()]
-        : [],
-  );
+function activeSnapshot(
+  runId = "active-run",
+  text = "",
+  messages: ChatHistoryResult["messages"] = [],
+) {
+  const result = activeHistory(runId);
+  result.inFlightRun!.text = text;
+  result.messages = messages;
+  return result;
 }
 
-function failedHistory(): ChatHistoryResult {
-  return {
-    messages: [
-      {
-        role: "user",
-        content: [{ type: "text", text: "Inspect the unavailable project" }],
-        timestamp: 1,
-        __openclaw: { id: "first-user", idempotencyKey: "run-first:user", seq: 1 },
-      },
-    ],
-    sessionInfo: {
-      key: "main",
-      kind: "direct",
-      updatedAt: 2,
-      status: "failed",
-      hasActiveRun: false,
-      lastRunId: "run-first",
-      lastRunError:
-        "ProjectCloneError: Git clone could not reach GitHub. Check the Gateway network connection and retry.",
-    },
-  };
-}
-
-describe("chat history in-flight assistant recovery", () => {
-  it("recovers the observed model from chat.history without a new model event or exact ID set", async () => {
-    const history = activeHistory("held-fallback");
-    history.sessionInfo = {
-      key: "main",
-      kind: "direct",
-      updatedAt: 1,
-      hasActiveRun: true,
-      activeModel: "fallback",
-      activeModelProvider: "example",
-    };
-    const state = createState(history);
-    await loadChatHistory(state);
-    expect(state.chatRunId).toBe("held-fallback");
-    expect(getChatModelObservedRunId(state, history.sessionInfo)).toBe("held-fallback");
+it.each([
+  ["waiting_for_model", "First result.", "slot"],
+  ["waiting_for_state", "", undefined],
+] as const)("restores %s without a retry or a new run", async (phase, text, waitReason) => {
+  const history = activeHistory("run-live");
+  history.inFlightRun!.text = text;
+  history.inFlightRun!.events = [
+    event(3, "run_status", { phase, ...(waitReason ? { reason: waitReason } : {}) }),
+  ];
+  const state = createState(history);
+  state.chatMessage = "Unsent draft";
+  const request = vi.spyOn(state.client!, "request");
+  await loadChatHistory(state);
+  expect(state.chatRunStartup).toEqual({
+    state: "status",
+    runId: "run-live",
+    phase,
+    ...(waitReason ? { waitReason } : {}),
+    seq: 3,
   });
+  expect(state).toMatchObject({ chatRunId: "run-live", chatMessage: "Unsent draft" });
+  expect(state.chatRunError).toBeFalsy();
+  expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+});
 
-  it("retires an interrupted run from authoritative history after missing its live terminal", async () => {
-    const active = activeHistory("run-interrupted");
-    const interrupted: ChatHistoryResult = {
+it("retires an interrupted run after missing its live terminal", async () => {
+  const history = activeHistory("run-interrupted");
+  const state = createState(history);
+  vi.spyOn(state.client!, "request")
+    .mockResolvedValueOnce(history)
+    .mockResolvedValueOnce({
       messages: [],
       sessionInfo: {
-        ...active.sessionInfo!,
+        ...history.sessionInfo!,
         hasActiveRun: false,
         activeRunIds: [],
         lastRunId: "run-interrupted",
         status: "killed",
       },
-      pendingInputs: {
-        items: [
-          {
-            id: "input-interrupted-before-turn",
-            runId: "queued-input",
-            acceptedAt: 1,
-            state: "interrupted",
-            message: { role: "user", content: "Open a PR to fix it" },
-          },
-        ],
-        total: 1,
-      },
-    };
-    const request = vi.fn().mockResolvedValueOnce(active).mockResolvedValueOnce(interrupted);
-    const state = createState(active);
-    state.client = { request } as unknown as GatewayBrowserClient;
-
-    await loadChatHistory(state);
-    expect(state.chatRunId).toBe("run-interrupted");
-
-    await loadChatHistory(state);
-
-    expect(state.chatRunId).toBeNull();
-    expect(state.chatStream).toBeNull();
-  });
-
-  it.each(["chat.startup", "chat.history"] as const)(
-    "recovers a failure missed before route subscription through %s",
-    async (method) => {
-      const history = failedHistory();
-      const state = createState(history);
-      state.client = {
-        request: vi.fn().mockResolvedValue(history),
-      } as unknown as GatewayBrowserClient;
-      if (method === "chat.startup") {
-        state.chatSubmissions = createChatSubmissions();
-        state.chatSubmissions.retain(
-          buildInitialChatSubmission(
-            state.sessionKey,
-            { text: "Inspect the unavailable project", createdAt: 1 },
-            state.client,
-            "run-first",
-          ),
-        );
-        admitChatSubmission(state, undefined);
-      }
-
-      await loadChatHistory(state, { startup: method === "chat.startup" });
-
-      expect(state.chatRunError?.summary).toContain(history.sessionInfo!.lastRunError);
-      expect(state.chatRunId).toBeNull();
-      expect(state.chatMessages).toEqual(history.messages);
-    },
-  );
-
-  it("clears a recovered failure when a retry is active and retains the live retry error", async () => {
-    const history = failedHistory();
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(history)
-      .mockResolvedValueOnce(activeHistory("run-retry"));
-    const state = createState(history);
-    state.client = { request } as unknown as GatewayBrowserClient;
-    await loadChatHistory(state);
-    expect(state.chatRunError?.summary).toContain(history.sessionInfo!.lastRunError);
-
-    await loadChatHistory(state);
-    expect(state.chatRunId).toBe("run-retry");
-    expect(state.chatRunError).toBeNull();
-
-    const fullError = "A more detailed live retry error. Check repository access and retry.";
-    handleChatGatewayEvent(state, {
-      runId: "run-retry",
-      sessionKey: "main",
-      state: "error",
-      errorMessage: fullError,
     });
-    request.mockResolvedValue({
-      ...history,
-      sessionInfo: {
-        ...history.sessionInfo,
-        lastRunId: "run-retry",
-        lastRunError: "A more detailed live retry error.",
-      },
-    });
-    await loadChatHistory(state);
-    expect(state.chatRunError?.summary).toContain(fullError);
-    expect(state.chatRunId).toBeNull();
-  });
+  await loadChatHistory(state);
+  expect(state.chatRunId).toBe("run-interrupted");
+  await loadChatHistory(state);
+  expect(state).toMatchObject({ chatRunId: null, chatStream: null });
+});
 
-  it.each(["running", "completed"])(
-    "does not replace a newer %s run with a delayed failed snapshot",
-    async (phase) => {
-      let resolveHistory!: (result: ChatHistoryResult) => void;
-      const request = vi.fn().mockReturnValue(
-        new Promise<ChatHistoryResult>((resolve) => {
-          resolveHistory = resolve;
-        }),
-      );
-      const state = createState(failedHistory());
-      state.client = { request } as unknown as GatewayBrowserClient;
-      const loading = loadChatHistory(state);
-      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-      handleChatGatewayEvent(state, {
-        runId: "run-newer",
-        sessionKey: "main",
-        state: "delta",
-        deltaText: "Working",
-      });
-      if (phase === "completed") {
-        handleChatGatewayEvent(state, {
-          runId: "run-newer",
-          sessionKey: "main",
-          state: "final",
-          message: { role: "assistant", content: "Done" },
-        });
-      }
-      resolveHistory(failedHistory());
-      await loading;
-      expect(state.chatRunError).toBeNull();
-      expect(state.chatRunId).toBe(phase === "running" ? "run-newer" : null);
-    },
-  );
-
-  it("restores tools, preamble time, and output usage from the in-flight run snapshot", async () => {
-    const history = activeHistory("run-live");
-    (history.inFlightRun as { events?: unknown[] }).events = [
-      {
-        runId: "run-live",
-        seq: 1,
-        stream: "item",
-        ts: 900,
-        sessionKey: "main",
-        data: {
-          kind: "preamble",
-          itemId: "preamble-restored",
-          progressText: "Checking the workspace",
-        },
-      },
-      {
-        runId: "run-live",
-        seq: 2,
-        stream: "tool",
-        ts: 1_000,
-        sessionKey: "main",
-        data: {
-          toolCallId: "call-restored",
-          name: "read",
-          phase: "start",
-          args: { path: "README.md" },
-        },
-      },
-      {
-        runId: "run-live",
-        seq: 3,
-        stream: "usage",
-        ts: 1_100,
-        sessionKey: "main",
-        data: { outputTokens: 695, context: { totalTokens: 1_500, contextWindow: 8_000 } },
-      },
-    ];
-    const state = createState(history);
-
-    await loadHistoryWithBrowserTimers(state);
-
-    expect(state.chatRunUsageById?.get("run-live")?.outputTokens).toBe(695);
-    expect(state.chatToolMessages[0]).toMatchObject({
-      runId: "run-live",
-      toolCallId: "call-restored",
-      content: [expect.objectContaining({ type: "toolcall", name: "read" })],
-    });
-    expect(state.chatStreamSegments).toContainEqual(
-      expect.objectContaining({
-        itemId: "preamble-restored",
-        runId: "run-live",
-        text: "Checking the workspace",
-        ts: 900,
-      }),
-    );
-  });
-
-  it("restores cleared activity for an already-owned run after reconnect", async () => {
-    const history = activeHistory("run-live");
-    (history.inFlightRun as { events?: unknown[] }).events = [
-      {
-        runId: "run-live",
-        seq: 2,
-        stream: "tool",
-        ts: 1_000,
-        sessionKey: "main",
-        data: {
-          toolCallId: "call-reconnected",
-          name: "read",
-          phase: "start",
-          args: { path: "README.md" },
-        },
-      },
-    ];
-    const state = createState(history);
-    state.chatRunId = "run-live";
-    state.chatStream = "The active response survived reconnect.";
-
-    await loadHistoryWithBrowserTimers(state);
-
-    expect(state.chatRunId).toBe("run-live");
-    expect(state.chatStream).toBe("The active response survived reconnect.");
-    expect(state.chatStreamSegments).toEqual([]);
-    const continued = "The active response survived reconnect. Still streaming.";
-    handleChatGatewayEvent(state, {
-      runId: "run-live",
-      sessionKey: state.sessionKey,
-      state: "delta",
-      message: { role: "assistant", content: continued },
-    });
-    expect(renderedText(state)).toContain(continued);
-    expect(renderedText(state)).not.toContain("The active response survived reconnect.");
-    expect(state.chatToolMessages[0]).toMatchObject({
-      runId: "run-live",
-      toolCallId: "call-reconnected",
-    });
-  });
-
-  it("restores an unpersisted assistant response from the active run snapshot", async () => {
-    const history = activeHistory("run-reconnected");
-    history.messages = [{ role: "user", content: "Continue working." }];
-    history.inFlightRun!.text = "The response survived the reconnect.";
-    const state = createState(history);
-
-    await loadChatHistory(state);
-
-    expect(state.chatRunId).toBe("run-reconnected");
-    expect(state.chatStream).toBe("The response survived the reconnect.");
-    expect(state.chatStreamStartedAt).toEqual(expect.any(Number));
-    expect(state.chatRunStartup).toEqual({ state: "activity", runId: "run-reconnected" });
-  });
-
-  it("restores the authoritative run start even before assistant text exists", async () => {
-    const history = activeHistory("run-reconnected");
-    history.inFlightRun!.startedAt = 123_456;
-    const state = createState(history);
-
-    await loadChatHistory(state);
-
-    expect(state.chatRunId).toBe("run-reconnected");
-    expect(state.chatStream).toBeNull();
-    expect(state.chatStreamStartedAt).toBe(123_456);
-  });
-
-  it("adopts an active snapshot while binding its durable session identity", async () => {
-    const history = activeHistory("run-reconnected");
-    history.sessionId = "current-session";
-    history.messages = [{ role: "user", content: "Continue working." }];
-    history.inFlightRun!.text = "The response survived navigation.";
-    const state = createState(history);
-    state.currentSessionId = "previous-session";
-
-    await loadChatHistory(state);
-
-    expect(state.currentSessionId).toBe("current-session");
-    expect(state.chatRunId).toBe("run-reconnected");
-    expect(state.chatStream).toBe("The response survived navigation.");
-  });
-
-  it("restores only the active response after its persisted assistant prefix", async () => {
-    const history = activeHistory("run-reconnected");
-    history.messages = [
-      { role: "user", content: "Continue working." },
-      { role: "assistant", content: "Saved opening." },
-    ];
-    history.inFlightRun!.text = "Saved opening. Still working after reconnect.";
-    const state = createState(history);
-
-    await loadChatHistory(state);
-
-    expect(state.chatRunId).toBe("run-reconnected");
-    expect(state.chatStream).toBe(history.inFlightRun!.text);
-    expect(visibleCurrentAssistantStreamTail(state, isHiddenAssistantStreamText)).toBe(
-      "Still working after reconnect.",
-    );
-    expect(state.chatMessages).toEqual(history.messages);
-  });
-
-  it.each(
-    ["idempotency", "Codex mirror"].flatMap((identity) =>
-      ["fresh adoption", "retained boundary"].flatMap((mode) =>
-        ["single row", "split rows", "split rows with commentary"].map((rows) => ({
-          identity,
-          mode,
-          rows,
-        })),
-      ),
+it("recovers a failure missed before the initial route subscription", async () => {
+  const history = failedHistory();
+  const state = createState(history);
+  vi.spyOn(state.client!, "request").mockResolvedValue(history);
+  state.chatSubmissions.retain(
+    buildInitialChatSubmission(
+      state.sessionKey,
+      { text: "Inspect the unavailable project", createdAt: 1 },
+      state.client!,
+      "run-first",
     ),
-  )(
-    "keeps the cumulative prefix after persisted history replacement: $identity, $mode, $rows",
-    async ({ identity, mode, rows }) => {
-      const history = activeHistory("active-run");
-      const assistantIdentity = (seq: number) =>
-        identity === "Codex mirror"
-          ? { runId: "active-run", mirrorIdentity: `turn-1:assistant:answer-${seq}`, seq }
-          : { idempotencyKey: "active-run", seq };
-      const prefix = rows === "single row" ? "Before steer." : "Before tool.Before steer.";
-      const original = {
-        role: "user",
-        content: "Original prompt",
-        timestamp: 1,
-        __openclaw: { idempotencyKey: "active-run:user", seq: 1 },
-      };
-      const steer = {
-        role: "user",
-        content: "Steer prompt",
-        timestamp: 5,
-        __openclaw: {
-          id: "steer",
-          idempotencyKey: "steer-run:user",
-          seq: 5,
-          steerTargetRunId: "active-run",
-        },
-      };
-      history.messages = [
-        original,
-        ...(rows === "single row"
-          ? []
-          : [
-              {
-                role: "assistant",
-                content: "Before tool.",
-                timestamp: 2,
-                __openclaw: assistantIdentity(2),
-              },
-            ]),
-        ...(rows === "split rows with commentary"
-          ? [
-              {
-                role: "assistant",
-                content: "Checking the result.",
-                timestamp: 3,
-                __openclaw: { idempotencyKey: "active-run", seq: 3 },
-                openclawStreamFallback: {
-                  itemId: "commentary-item",
-                  source: "segment",
-                  replacementText: "Checking the result.",
-                  runId: "active-run",
-                },
-              },
-            ]
-          : []),
-        {
-          role: "assistant",
-          content: "Before steer.",
-          timestamp: 4,
-          __openclaw: assistantIdentity(4),
-        },
-        steer,
-      ];
-      history.inFlightRun!.text = `${prefix} After steer.`;
-      const persistedText = history.messages.map((message) => extractText(message));
-      const state = createState(history);
-      if (mode === "retained boundary") {
-        state.chatRunId = "active-run";
-        state.chatMessages = [original, steer];
-        handleChatGatewayEvent(state, {
-          sessionKey: "main",
-          runId: "active-run",
-          state: "delta",
-          message: { role: "assistant", content: history.inFlightRun!.text },
-        });
-        state.chatStreamSegments = [
-          { text: prefix, ts: 2, runId: "active-run", boundaryRunId: "steer-run" },
-        ];
-      }
-      await loadChatHistory(state);
-      expect(renderedText(state)).toEqual([...persistedText, "After steer."]);
-      handleChatGatewayEvent(state, {
-        sessionKey: "main",
-        runId: "active-run",
-        state: "delta",
-        deltaText: " Continued.",
-        message: { role: "assistant", content: `${prefix} After steer. Continued.` },
-      });
-      expect(renderedText(state)).toEqual([...persistedText, "After steer. Continued."]);
-      expect(state.chatStream).toBe(`${prefix} After steer. Continued.`);
-      handleChatGatewayEvent(state, {
-        sessionKey: "main",
-        runId: "active-run",
-        state: "final",
-        message: {
-          role: "assistant",
-          content: `${prefix} After steer. Continued. Final suffix.`,
-        },
-      });
-      expect(renderedText(state)).toEqual([
-        ...persistedText,
-        "After steer. Continued. Final suffix.",
-      ]);
-    },
   );
+  admitChatSubmission(state, undefined);
+  await loadChatHistory(state, { startup: true });
+  expect(state.chatRunError?.summary).toContain(history.sessionInfo!.lastRunError);
+  expect(state.chatRunId).toBeNull();
+  expect(state.chatMessages).toEqual(history.messages);
+});
 
-  it.each([true, undefined])(
-    "rolls over a live steer with optional active-run publication (runActive=%s)",
-    async (runActive) => {
-      const history = activeHistory("active-run");
-      const original = {
-        role: "user",
-        content: "Original prompt",
-        timestamp: 1,
-        __openclaw: { idempotencyKey: "active-run:user", seq: 1 },
-      };
-      const steer = {
-        role: "user",
-        content: "Steer prompt",
-        timestamp: 3,
-        __openclaw: {
-          id: "steer",
-          idempotencyKey: "steer-run:user",
-          seq: 2,
-          steerTargetRunId: "active-run",
-        },
-      };
-      history.messages = [original, steer];
-      history.inFlightRun!.text = "Before steer.";
-      const state = createState(history);
-      state.chatMessages = [original];
-      handleChatGatewayEvent(state, {
-        sessionKey: "main",
-        runId: "active-run",
-        state: "delta",
-        message: { role: "assistant", content: "Before steer." },
-      });
-      if (runActive === true) {
-        await loadChatHistory(state);
-      }
-      applySessionMessagePayload(state, { message: steer }, runActive, {
-        kind: "live",
-        activeRunId: "active-run",
-      });
-      handleChatGatewayEvent(state, {
-        sessionKey: "main",
-        runId: "active-run",
-        state: "delta",
-        deltaText: " After steer.",
-        message: { role: "assistant", content: "Before steer. After steer." },
-      });
-      expect(renderedText(state)).toEqual([
-        "Original prompt",
-        "Before steer.",
-        "Steer prompt",
-        "After steer.",
-      ]);
-    },
-  );
+it("restores cleared activity alongside an owned run's current text", async () => {
+  const snapshot = activeSnapshot("run-live", "Restored.");
+  snapshot.inFlightRun!.events = [toolEvent("call-reconnected")];
+  const state = createState(snapshot);
+  state.chatRunId = "run-live";
+  state.chatStream = "Restored.";
+  await loadWithTools(state);
+  expect(state).toMatchObject({
+    chatRunId: "run-live",
+    chatStream: "Restored.",
+    chatStreamSegments: [],
+  });
+  const continued = "Restored. Still streaming.";
+  assistant(state, "run-live", continued);
+  expect(renderedText(state)).toContain(continued);
+  expect(renderedText(state)).not.toContain("Restored.");
+  expect(state.chatToolMessages[0]).toMatchObject({
+    runId: "run-live",
+    toolCallId: "call-reconnected",
+  });
+});
 
-  it("retains a persisted assistant replacement baseline for the next cumulative delta", () => {
-    const state = createState(activeHistory("active-run"));
-    state.chatMessages = [
-      {
-        role: "user",
-        content: "Original prompt",
-        __openclaw: { idempotencyKey: "active-run:user", seq: 1 },
-      },
-    ];
-    handleChatGatewayEvent(state, {
-      sessionKey: "main",
-      runId: "active-run",
-      state: "delta",
-      message: { role: "assistant", content: "Saved opening." },
-    });
-    applySessionMessagePayload(
+it("keeps live tool authority until history records its outcome, not just its call", async () => {
+  const runId = "run-live";
+  const toolCallId = "build";
+  const args = { title: "Run build and compatibility gates", code: "await build()" };
+  const call = {
+    role: "assistant",
+    __openclaw: { id: "build-call", runId, seq: 1 },
+    content: [{ type: "toolCall", id: toolCallId, name: "exec", arguments: args }],
+  };
+  const history = activeHistory(runId);
+  history.messages = [call];
+  const entries = [{ messageId: "build-call", message: call }];
+  history.activity = projectAgentHistoryActivity(entries);
+  const state = createState(history);
+  adoptStartedChatRun(state, runId, 1_000);
+  vi.stubGlobal("window", globalThis);
+  try {
+    handleAgentEvent(state, event(1, "tool", { phase: "start", toolCallId, name: "exec", args }));
+    handleAgentEvent(
       state,
-      {
-        runId: "active-run",
-        messageId: "saved",
-        messageSeq: 2,
-        message: {
-          role: "assistant",
-          content: "Saved opening.",
-          __openclaw: { id: "saved", idempotencyKey: "active-run", seq: 2 },
-        },
-      },
-      true,
-      { kind: "live", activeRunId: "active-run" },
+      event(
+        2,
+        "item",
+        projectAgentToolActivity({
+          toolCallId,
+          name: "exec",
+          args,
+          phase: "start",
+        }),
+      ),
     );
-    handleChatGatewayEvent(state, {
-      sessionKey: "main",
-      runId: "active-run",
-      state: "delta",
-      deltaText: " Continued.",
-      message: { role: "assistant", content: "Saved opening. Continued." },
-    });
-    expect(renderedText(state)).toEqual(["Original prompt", "Saved opening.", "Continued."]);
-  });
-
-  it("retains the persisted cumulative boundary through terminal reconciliation", async () => {
-    const history = activeHistory("run-reconnected");
-    history.messages = [
-      {
-        role: "user",
-        content: "Start working.",
-        __openclaw: { idempotencyKey: "run-reconnected:user", seq: 1 },
-      },
-      {
-        role: "assistant",
-        content: "Saved opening.",
-        __openclaw: { id: "saved-opening", idempotencyKey: "run-reconnected", seq: 2 },
-      },
-      {
-        role: "user",
-        content: "Also check the result.",
-        __openclaw: {
-          idempotencyKey: "run-steer:user",
-          seq: 3,
-          steerTargetRunId: "run-reconnected",
-        },
-      },
-      {
-        role: "user",
-        content: "Queued follow-up.",
-        __openclaw: { idempotencyKey: "queued-run:user", seq: 4 },
-      },
-    ];
-    history.inFlightRun!.text = "Saved opening. Trimmed live tail.";
-    const state = createState(history);
-
+    expect(state.toolStreamOrder).toHaveLength(1);
+    await vi.waitFor(() => expect(state.chatToolMessages).toHaveLength(1));
     await loadChatHistory(state);
-    expect(state.chatStream).toBe(history.inFlightRun!.text);
-    expect(visibleCurrentAssistantStreamTail(state, isHiddenAssistantStreamText)).toBe(
-      "Trimmed live tail.",
-    );
-    expect(renderedText(state)).toEqual([
-      "Start working.",
-      "Saved opening.",
-      "Also check the result.",
-      "Trimmed live tail.",
-      "Queued follow-up.",
+    expect(state.chatToolMessages).toMatchObject([
+      {
+        toolCallId,
+        activity: [{ status: "running" }],
+      },
     ]);
-    handleChatGatewayEvent(state, {
-      runId: "run-reconnected",
-      sessionKey: "main",
-      state: "final",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: "Saved opening. Trimmed live tail. Final unseen suffix.",
-          },
-        ],
-      },
-    });
-
-    expect(
-      state.chatMessages.map((message) => ({
-        role: (message as { role?: unknown }).role,
-        text: extractText(message),
-      })),
-    ).toEqual([
-      { role: "user", text: "Start working." },
-      { role: "assistant", text: "Saved opening." },
-      { role: "user", text: "Also check the result." },
-      { role: "assistant", text: "Trimmed live tail. Final unseen suffix." },
-      { role: "user", text: "Queued follow-up." },
-    ]);
-
-    reduceChatSessionProjection(
-      state,
-      {
-        type: "messagePersisted",
-        message: {
-          role: "user",
-          content: "Later authoritative user.",
-          __openclaw: {
-            id: "later-authoritative-user",
-            idempotencyKey: "later-run:user",
-            seq: 6,
-          },
-        },
-        envelope: { messageId: "later-authoritative-user", messageSeq: 6 },
-      },
-      { scope: readChatSessionProjectionScope(state), runActive: false },
-    );
-
-    const visible = state.chatMessages.map((message) => extractText(message));
-    expect(visible).toEqual([
-      "Start working.",
-      "Saved opening.",
-      "Also check the result.",
-      "Trimmed live tail. Final unseen suffix.",
-      "Queued follow-up.",
-      "Later authoritative user.",
-    ]);
-    expect(
-      visible.filter((text) => text === "Trimmed live tail. Final unseen suffix."),
-    ).toHaveLength(1);
-  });
-
-  it("does not trim a matching assistant prefix owned by an earlier run", async () => {
-    const history = activeHistory("run-reconnected");
-    history.messages = [
-      { role: "user", content: "An earlier request." },
-      {
-        role: "assistant",
-        content: "Saved opening.",
-        __openclaw: { idempotencyKey: "run-earlier" },
-      },
-      { role: "user", content: "Start the next request." },
-    ];
-    history.inFlightRun!.text = "Saved opening. Still working after reconnect.";
-    const state = createState(history);
-
-    await loadChatHistory(state);
-
-    expect(state.chatRunId).toBe("run-reconnected");
-    expect(state.chatStream).toBe("Saved opening. Still working after reconnect.");
-  });
-
-  it("does not let unidentified older replies truncate a run-owned assistant", async () => {
-    const history = activeHistory("run-reconnected");
-    history.messages = [
-      { role: "user", content: "An earlier request." },
-      { role: "assistant", content: "OK. Finished." },
-      { role: "user", content: "Start the next request." },
-      {
-        role: "assistant",
-        content: "OK.",
-        __openclaw: { idempotencyKey: "run-reconnected" },
-      },
-    ];
-    history.inFlightRun!.text = "OK. Finished. New details";
-    const state = createState(history);
-
-    await loadChatHistory(state);
-
-    expect(state.chatRunId).toBe("run-reconnected");
-    expect(state.chatStream).toBe(history.inFlightRun!.text);
-    expect(visibleCurrentAssistantStreamTail(state, isHiddenAssistantStreamText)).toBe(
-      "Finished. New details",
-    );
-  });
-
-  it("strips every persisted assistant segment from a tool-using turn", async () => {
-    const history = activeHistory("run-reconnected");
-    history.messages = [
-      { role: "user", content: "Continue working." },
-      { role: "assistant", content: "Saved " },
-      { role: "toolResult", content: "Tool output." },
-      { role: "assistant", content: "opening." },
-    ];
-    history.inFlightRun!.text = "Saved opening. Still working after reconnect.";
-    const state = createState(history);
-
-    await loadChatHistory(state);
-
-    expect(state.chatRunId).toBe("run-reconnected");
-    expect(state.chatStream).toBe(history.inFlightRun!.text);
-    expect(visibleCurrentAssistantStreamTail(state, isHiddenAssistantStreamText)).toBe(
-      "Still working after reconnect.",
-    );
-    expect(state.chatMessages).toEqual(history.messages);
-  });
-
-  it("does not duplicate an assistant response already persisted in history", async () => {
-    const history = activeHistory("run-reconnected");
-    history.messages = [
-      { role: "user", content: "Continue working." },
-      { role: "assistant", content: "Already saved." },
-    ];
-    history.inFlightRun!.text = "Already saved.";
-    const state = createState(history);
-
-    await loadChatHistory(state);
-
-    expect(state.chatRunId).toBe("run-reconnected");
-    expect(state.chatStream).toBe(history.inFlightRun!.text);
-    expect(visibleCurrentAssistantStreamTail(state, isHiddenAssistantStreamText)).toBeNull();
-    expect(state.chatMessages).toEqual(history.messages);
-  });
-
-  it("adopts an active run without treating an empty snapshot as activity", async () => {
-    const history = activeHistory("run-reconnected");
-    const state = createState(history);
-
-    await loadChatHistory(state);
-
-    expect(state.chatRunId).toBe("run-reconnected");
-    expect(state.chatStream).toBeNull();
-    expect(state.chatRunStartup).toBeFalsy();
-    handleChatGatewayEvent(state, {
-      runId: "run-reconnected",
-      sessionKey: "main",
-      seq: 1,
-      state: "status",
-      phase: "preparing_context",
-    });
-    expect(state.chatRunStartup).toEqual({
-      state: "status",
-      runId: "run-reconnected",
-      phase: "preparing_context",
-      seq: 1,
-    });
-  });
-
-  it.each([
-    { name: "a terminal run", sessionInfo: { hasActiveRun: false, activeRunIds: [] } },
-    {
-      name: "a different authoritative active run",
-      sessionInfo: { hasActiveRun: true, activeRunIds: ["run-newer"] },
-    },
-  ])("does not restore $name", async ({ sessionInfo }) => {
-    const history = activeHistory("run-reconnected");
-    history.sessionInfo = { ...history.sessionInfo!, ...sessionInfo };
-    const state = createState(history);
-
-    await loadChatHistory(state);
-
-    expect(state.chatRunId).toBeNull();
-    expect(state.chatStream).toBeNull();
-  });
-
-  it.each(["NO_REPLY", "HEARTBEAT_OK"])(
-    "does not expose a suppressed %s response while restoring run ownership",
-    async (hiddenResponse) => {
-      const history = activeHistory("run-reconnected");
-      history.inFlightRun!.text = hiddenResponse;
-      const state = createState(history);
-
-      await loadChatHistory(state);
-
-      expect(state.chatRunId).toBe("run-reconnected");
-      expect(state.chatStream).toBeNull();
-    },
-  );
-
-  it("does not let delayed history overwrite a newer live run", async () => {
-    const { promise: historyPromise, resolve: resolveHistory } =
-      createDeferred<ChatHistoryResult>();
-    const request = vi.fn().mockReturnValue(historyPromise);
-    const state = createState(activeHistory("run-reconnected"));
-    state.client = { request } as unknown as GatewayBrowserClient;
-
-    const loadPromise = loadChatHistory(state);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    state.chatRunId = "run-newer";
-    state.chatStream = "A newer live response.";
-    resolveHistory(activeHistory("run-reconnected"));
-    await loadPromise;
-
-    expect(state.chatRunId).toBe("run-newer");
-    expect(state.chatStream).toBe("A newer live response.");
-  });
-
-  it("adopts the snapshot when remount reconciliation replaces an unchanged run map", async () => {
-    const { promise: historyPromise, resolve: resolveHistory } =
-      createDeferred<ChatHistoryResult>();
-    const request = vi.fn().mockReturnValue(historyPromise);
-    const history = activeHistory("run-reconnected");
-    history.inFlightRun!.text = "The response survived navigation.";
-    const state = createState(history);
-    state.client = { request } as unknown as GatewayBrowserClient;
-
-    const loadPromise = loadChatHistory(state);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    const projection = getChatSessionProjection(state);
-    publishChatSessionProjection(state, { ...projection, runs: { ...projection.runs } });
-    resolveHistory(history);
-    await loadPromise;
-
-    expect(state.chatRunId).toBe("run-reconnected");
-    expect(state.chatStream).toBe("The response survived navigation.");
-  });
-
-  it.each([
-    {
-      name: "an incremental",
-      snapshotText: "Saved opening. Buffered before reconnect.",
-      deltaText: " And live.",
-      cumulativeText: "Saved opening. Buffered before reconnect. And live.",
-      expectedTail: " Buffered before reconnect. And live.",
-    },
-    {
-      name: "a repeated-token",
-      snapshotText: "Saved opening. repeat",
-      deltaText: "repeat",
-      cumulativeText: "Saved opening. repeatrepeat",
-      expectedTail: " repeatrepeat",
-    },
-  ])(
-    "merges $name same-run delta that arrives before history",
-    async ({ snapshotText, deltaText, cumulativeText, expectedTail }) => {
-      const { promise: historyPromise, resolve: resolveHistory } =
-        createDeferred<ChatHistoryResult>();
-      const request = vi.fn().mockReturnValue(historyPromise);
-      const history = activeHistory("run-reconnected");
-      history.messages = [
-        { role: "user", content: "Continue working." },
-        { role: "assistant", content: "Saved opening." },
-      ];
-      history.inFlightRun!.text = snapshotText;
-      const state = createState(history);
-      state.client = { request } as unknown as GatewayBrowserClient;
-
-      const loadPromise = loadChatHistory(state);
-      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-      handleChatGatewayEvent(state, {
-        runId: "run-reconnected",
-        sessionKey: "main",
-        state: "delta",
-        deltaText,
-        message: { role: "assistant", content: cumulativeText },
-      });
-      resolveHistory(history);
-      await loadPromise;
-
-      expect(state.chatRunId).toBe("run-reconnected");
-      expect(state.chatStream).toBe(cumulativeText);
-      expect(visibleCurrentAssistantStreamTail(state, isHiddenAssistantStreamText)).toBe(
-        expectedTail.trimStart(),
-      );
-      expect(state.chatMessages).toEqual(history.messages);
-    },
-  );
-
-  it("does not duplicate a live delta already covered by a newer history snapshot", async () => {
-    const { promise: historyPromise, resolve: resolveHistory } =
-      createDeferred<ChatHistoryResult>();
-    const request = vi.fn().mockReturnValue(historyPromise);
-    const history = activeHistory("run-reconnected");
-    history.messages = [
-      { role: "user", content: "Continue working." },
-      { role: "assistant", content: "Saved opening." },
-    ];
-    history.inFlightRun!.text = "Saved opening. Buffered before reconnect. And live.";
-    const state = createState(history);
-    state.client = { request } as unknown as GatewayBrowserClient;
-
-    const loadPromise = loadChatHistory(state);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    handleChatGatewayEvent(state, {
-      runId: "run-reconnected",
-      sessionKey: "main",
-      state: "delta",
-      deltaText: " Buffered before reconnect.",
-      message: {
-        role: "assistant",
-        content: "Saved opening. Buffered before reconnect.",
-      },
-    });
-    resolveHistory(history);
-    await loadPromise;
-
-    expect(state.chatRunId).toBe("run-reconnected");
-    expect(state.chatStream).toBe(history.inFlightRun!.text);
-    expect(visibleCurrentAssistantStreamTail(state, isHiddenAssistantStreamText)).toBe(
-      "Buffered before reconnect. And live.",
-    );
-  });
-
-  it.each([
-    {
-      name: "ordinary persisted history",
-      messages: [
-        { role: "user", content: "Continue working." },
-        { role: "assistant", content: "Saved opening. Buffered" },
-      ],
-    },
-    {
-      name: "run-owned history followed by a steer",
-      messages: [
-        { role: "user", content: "Continue working." },
-        {
-          role: "assistant",
-          content: "Saved opening. Buffered",
-          __openclaw: { idempotencyKey: "run-reconnected" },
-        },
-        {
-          role: "user",
-          content: "Also check the result.",
-          __openclaw: { idempotencyKey: "run-steer:user" },
-        },
-      ],
-    },
-    {
-      name: "multiple persisted assistant segments",
-      messages: [
-        { role: "user", content: "Continue working." },
-        { role: "assistant", content: "Saved" },
-        { role: "toolResult", content: "Tool output." },
-        { role: "assistant", content: "opening. Buffered" },
-      ],
-    },
-  ])("does not revive a live delta covered by $name", async ({ messages }) => {
-    const { promise: historyPromise, resolve: resolveHistory } =
-      createDeferred<ChatHistoryResult>();
-    const request = vi.fn().mockReturnValue(historyPromise);
-    const history = activeHistory("run-reconnected");
-    history.messages = messages;
-    history.inFlightRun!.text = "Saved opening. Buffered. New";
-    const state = createState(history);
-    state.client = { request } as unknown as GatewayBrowserClient;
-
-    const loadPromise = loadChatHistory(state);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    handleChatGatewayEvent(state, {
-      runId: "run-reconnected",
-      sessionKey: "main",
-      state: "delta",
-      deltaText: "Saved opening.",
-      message: { role: "assistant", content: "Saved opening." },
-    });
-    resolveHistory(history);
-    await loadPromise;
-
-    expect(state.chatRunId).toBe("run-reconnected");
-    expect(state.chatStream).toBe(history.inFlightRun!.text);
-    expect(visibleCurrentAssistantStreamTail(state, isHiddenAssistantStreamText)).toBe(". New");
-    expect(state.chatMessages).toEqual(history.messages);
-  });
-
-  it.each([
-    { name: "the snapshot run", completedRunId: "run-reconnected" },
-    { name: "a newer intervening run", completedRunId: "run-newer" },
-  ])("does not resurrect delayed history after $name completes", async ({ completedRunId }) => {
-    const { promise: historyPromise, resolve: resolveHistory } =
-      createDeferred<ChatHistoryResult>();
-    const request = vi.fn().mockReturnValue(historyPromise);
-    const history = activeHistory("run-reconnected");
-    history.sessionInfo = {
-      ...history.sessionInfo,
-      key: "main",
-      kind: "direct",
-      activeRunIds: undefined,
-      activeModel: "old-fallback",
-      activeModelProvider: "example",
+    const result = {
+      role: "toolResult",
+      toolCallId,
+      toolName: "exec",
+      isError: false,
+      __openclaw: { id: "build-result", runId, seq: 2 },
+      content: [{ type: "text", text: "Build passed" }],
     };
-    const state = createState(history);
+    history.messages = [call, result];
+    history.activity = projectAgentHistoryActivity([
+      ...entries,
+      { messageId: "build-result", message: result },
+    ]);
+    await loadChatHistory(state);
+    expect(state.chatToolMessages).toEqual([]);
+    expect(state.chatMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          activity: [expect.objectContaining({ status: "completed" })],
+        }),
+      ]),
+    );
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it("keeps an identical new reply after the Gateway retires its persisted predecessor", () => {
+  const state = createState(activeHistory("active-run"));
+  state.chatMessages = [
+    message("user", "Original prompt", { idempotencyKey: "active-run:user", seq: 1 }),
+  ];
+  assistant(state, "active-run", "Saved opening.");
+  assistant(state, "active-run", "", { replace: true, deltaText: "" });
+  publish(state, "active-run", {
+    runId: "active-run",
+    messageId: "saved",
+    messageSeq: 2,
+    message: message("assistant", "Saved opening.", {
+      id: "saved",
+      idempotencyKey: "active-run",
+      seq: 2,
+    }),
+  });
+  assistant(state, "active-run", "Saved opening.", { deltaText: "Saved opening." });
+  expect(renderedText(state)).toEqual(["Original prompt", "Saved opening.", "Saved opening."]);
+});
+
+it("keeps an identical unpersisted tail through active history reload", async () => {
+  const history = activeHistory("active-run");
+  const prompt = message("user", "Repeat", {
+    id: "prompt",
+    seq: 1,
+    idempotencyKey: "active-run:user",
+  });
+  const { steer } = steerPrompts(3, 0);
+  history.messages = [
+    prompt,
+    message("assistant", "Answer.", { id: "saved", seq: 2, runId: "active-run" }),
+    steer,
+    message("user", "Queued.", { idempotencyKey: "queued-run:user", seq: 4 }),
+  ];
+  history.inFlightRun!.text = "Answer.";
+  const state = createState(history);
+  state.chatMessages = [prompt];
+  state.chatRunId = "active-run";
+  assistant(state, "active-run", "Answer.");
+  publish(state, "active-run", {
+    clientRunId: "active-run",
+    messageId: "steer",
+    messageSeq: 3,
+    message: steer,
+  });
+  expect(renderedText(state)).toEqual(["Repeat", "Steer prompt", "Answer."]);
+  await loadChatHistory(state);
+  expect(state.chatRunId).toBe("active-run");
+  const afterSteer = (text: string) => ["Repeat", "Answer.", "Steer prompt", text, "Queued."];
+  expect(renderedText(state)).toEqual(afterSteer("Answer."));
+  assistant(state, "active-run", "Answer. Continued.", { deltaText: " Continued." });
+  expect(renderedText(state)).toEqual(afterSteer("Answer. Continued."));
+  emit(state, "active-run", {
+    state: "final",
+    message: {
+      ...message("assistant", "Answer. Answer. Continued. Final."),
+      openclawDisplayContent: [{ type: "text", text: "Answer. Continued. Final." }],
+    },
+  });
+  expect(renderedText(state)).toEqual(afterSteer("Answer. Continued. Final."));
+  expect(state.chatMessages.map(extractText)).toEqual(afterSteer("Answer. Continued. Final."));
+  reduceChatSessionProjection(
+    state,
+    {
+      type: "messagePersisted",
+      message: message("user", "Later", {
+        id: "later",
+        seq: 5,
+        idempotencyKey: "later:user",
+      }),
+      envelope: { messageId: "later", messageSeq: 5 },
+    },
+    { scope: readChatSessionProjectionScope(state), runActive: false },
+  );
+  expect(state.chatMessages.map(extractText)).toEqual([
+    ...afterSteer("Answer. Continued. Final."),
+    "Later",
+  ]);
+});
+
+it("preserves independent unkeyed preamble occurrences through steer then history", async () => {
+  const runId = "active-run";
+  const text = "Checking the workspace.";
+  const now = Date.now();
+  const prompt = message(
+    "user",
+    "Check the workspace",
+    {
+      id: "prompt",
+      seq: 1,
+      idempotencyKey: `${runId}:user`,
+    },
+    now - 3,
+  );
+  const history = activeHistory(runId);
+  history.messages = [prompt];
+  history.inFlightRun!.text = text;
+  history.inFlightRun!.startedAt = now + 2;
+  const state = createState(history);
+  state.chatRunId = runId;
+  state.chatMessages = [prompt];
+  for (const seq of [1, 2, 2]) {
+    handleAgentEvent(state, {
+      sessionKey: "main",
+      runId,
+      seq,
+      ts: now - 3 + seq,
+      stream: "item",
+      data: { kind: "preamble", phase: "end", progressText: text },
+    });
+  }
+  const expected = ["Check the workspace", text, text];
+  assistant(state, runId, "Before steer.");
+  const { steer } = steerPrompts(3, now + 1);
+  history.messages.push(
+    message("assistant", "Before steer.", { id: "before", seq: 2, runId }, now),
+    steer,
+  );
+  publish(state, runId, { clientRunId: runId, messageId: "steer", messageSeq: 3, message: steer });
+  expected.push("Before steer.");
+  await loadChatHistory(state);
+  expect(state.chatRunId).toBe(runId);
+  expect(renderedText(state)).toEqual([...expected, "Steer prompt", text]);
+});
+
+it.each([
+  ["missed replacement", "", "Saved.", "New.", true],
+  ["shorter replacement", "Same.\n\nSame.", "Same.\n\nSame.", "Same.", true],
+  ["ordered live baseline", "Buffered. And live.", undefined, "Buffered.", false],
+] as const)("preserves %s over pending history", async (kind, snapshot, initial, live, replace) => {
+  const runId = "active-run";
+  const prefix = kind === "shorter replacement" ? [] : ["Continue", "Saved."];
+  const persisted =
+    kind === "shorter replacement"
+      ? []
+      : kind === "ordered live baseline"
+        ? [message("user", "Continue"), message("assistant", "Saved.")]
+        : [
+            message("user", "Continue", { id: "prompt", seq: 1, runId }),
+            message("assistant", "Saved.", { id: "saved", seq: 2, runId }),
+          ];
+  const result = activeSnapshot(runId, snapshot, persisted);
+  const { state, response } = delayed(result);
+  if (kind === "missed replacement") {
+    state.chatMessages = persisted.slice(0, 1);
+    state.chatRunId = runId;
+  }
+  if (initial !== undefined) {
+    assistant(state, runId, initial, { seq: 1 });
+  }
+  const loading = loadChatHistory(state);
+  assistant(
+    state,
+    runId,
+    live,
+    replace ? { seq: 2, replace, deltaText: live } : { deltaText: ` ${live}` },
+  );
+  response.resolve(result);
+  await loading;
+  expect(state.chatRunId).toBe(runId);
+  expect(state.chatMessages).toEqual(persisted);
+  expect(tail(state)).toBe(live);
+  expect(renderedText(state)).toEqual([...prefix, live]);
+  assistant(state, runId, `${live} More.`, { seq: 3, deltaText: " More." });
+  expect(state.chatStream).toBe(`${live} More.`);
+  expect(tail(state)).toBe(`${live} More.`);
+  expect(renderedText(state)).toEqual([...prefix, `${live} More.`]);
+});
+
+it("does not resurrect delayed history after a newer intervening run completes", async () => {
+  const history = activeHistory("run-reconnected");
+  history.sessionInfo!.activeRunIds = undefined;
+  const { state, response } = delayed(history);
+  const loading = loadChatHistory(state);
+  emit(state, "run-newer", {
+    state: "delta",
+    deltaText: "A response completed while history was pending.",
+  });
+  assistant(state, "run-newer", "The intervening run completed.", { state: "final" });
+  expect(state.chatRunId).toBeNull();
+  response.resolve(history);
+  await loading;
+  expect(state).toMatchObject({ chatRunId: null, chatStream: null });
+});
+
+it("retains newer live startup progress through delayed history", async () => {
+  const history = activeHistory("run-live");
+  history.inFlightRun!.events = [event(2, "run_status", { phase: "naming_worktree" })];
+  const { state, response } = delayed(history);
+  state.chatRunId = "run-live";
+  const loading = loadChatHistory(state);
+  emit(state, "run-live", { seq: 3, state: "status", phase: "creating_worktree" });
+  response.resolve(history);
+  await loading;
+  expect(state.chatRunStartup).toMatchObject({
+    state: "status",
+    runId: "run-live",
+    phase: "creating_worktree",
+  });
+});
+
+describe("chat history run ownership recovery", () => {
+  it("retires a stale run from a fresh idle delta after another run completed", async () => {
+    const initial = activeHistory("run-missed-terminal");
+    initial.sessionInfo!.sessionId = "same-session";
+    initial.deltaCursor = "before-completion";
+    const sessionInfo = {
+      ...initial.sessionInfo!,
+      hasActiveRun: false,
+      activeRunIds: [],
+      lastRunId: "run-completed-later",
+      status: "done" as const,
+    };
+    const completed: ChatHistoryResponse = {
+      kind: "delta",
+      messages: [],
+      sessionInfo,
+      deltaCursor: "after-completion",
+    };
+    const request = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(completed);
+    const state = createState(initial);
     state.client = { request } as unknown as GatewayBrowserClient;
+    await loadChatHistory(state);
+    expect(state.chatRunId).toBe("run-missed-terminal");
+    state.chatMessage = "An unsent draft";
 
-    const loadPromise = loadChatHistory(state);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    handleChatGatewayEvent(state, {
-      runId: completedRunId,
-      sessionKey: "main",
-      state: "delta",
-      deltaText: "A response that completed while history was pending.",
+    await loadChatHistory(state);
+
+    expect(state).toMatchObject({
+      chatRunId: null,
+      chatStream: null,
+      chatStreamStartedAt: null,
+      chatRunStatus: null,
+      chatMessage: "An unsent draft",
     });
-    handleChatGatewayEvent(state, {
-      runId: completedRunId,
-      sessionKey: "main",
-      state: "final",
-      message: { role: "assistant", content: "The intervening run completed." },
+  });
+
+  it("recovers stale Stop ownership from a fresh delta without aborting the replacement run", async () => {
+    const initial = activeHistory("run-missed-terminal");
+    initial.sessionInfo!.sessionId = "same-session";
+    initial.inFlightRun!.text = "The old response.";
+    initial.deltaCursor = "before-replacement";
+    const replacement = activeHistory("run-current");
+    replacement.sessionInfo!.sessionId = "same-session";
+    replacement.sessionInfo!.lastRunId = "run-current";
+    replacement.inFlightRun!.text = "The current response.";
+    const recovered: ChatHistoryResponse = {
+      ...replacement,
+      kind: "delta",
+      messages: [],
+      sessionInfo: replacement.sessionInfo!,
+      deltaCursor: "after-replacement",
+    };
+    let response: ChatHistoryResponse = initial;
+    const request = vi.fn((method: string) => {
+      if (method === "chat.abort") {
+        return Promise.resolve({ aborted: false });
+      }
+      if (method === "chat.history") {
+        return Promise.resolve(response);
+      }
+      throw new Error(`Unexpected method: ${method}`);
     });
-    expect(state.chatRunId).toBeNull();
+    const abortCalls = () => request.mock.calls.filter(([method]) => method.endsWith(".abort"));
+    const state = Object.assign(createState(initial), {
+      refreshCurrentChat: async () => {
+        await loadChatHistory(state);
+      },
+    });
+    state.client = { request } as unknown as GatewayBrowserClient;
+    await loadChatHistory(state);
+    expect(state.chatRunId).toBe("run-missed-terminal");
+    response = recovered;
 
-    resolveHistory(history);
-    await loadPromise;
+    await handleAbortChat(state, { preserveDraft: true });
 
-    expect(state.chatRunId).toBeNull();
-    expect(state.chatStream).toBeNull();
-    expect(getChatModelObservedRunId(state, history.sessionInfo)).toBeUndefined();
+    expect(abortCalls()).toEqual([
+      ["chat.abort", { sessionKey: "main", runId: "run-missed-terminal" }],
+    ]);
+    expect(state.chatRunId).toBe("run-current");
+    expect(state.chatStream).toBe("The current response.");
+    assistant(state, "run-current", "The current response. Continued.");
+    expect(state.chatStream).toBe("The current response. Continued.");
+
+    await handleAbortChat(state, { preserveDraft: true });
+
+    expect(abortCalls()).toEqual([
+      ["chat.abort", { sessionKey: "main", runId: "run-missed-terminal" }],
+      ["chat.abort", { sessionKey: "main", runId: "run-current" }],
+    ]);
+  });
+
+  it.each([
+    "replacement session",
+    "live delta",
+    "lifecycle restart",
+    "pending send",
+    "late consumer",
+  ])("retains local ownership across %s during idle history", async (change) => {
+    const history = activeHistory("run-history");
+    history.sessionInfo!.sessionId = "same-session";
+    delete history.inFlightRun;
+    Object.assign(history.sessionInfo!, {
+      hasActiveRun: false,
+      activeRunIds: [],
+      lastRunId: "run-history",
+      status: "done",
+    });
+    if (change === "replacement session") {
+      history.sessionInfo!.sessionId = "different-session";
+    }
+    const { state, request, response: pending } = delayed(history);
+    state.currentSessionId = "same-session";
+    adoptStartedChatRun(state, "run-owned", 1);
+    const snapshotOnly = change === "replacement session";
+    if (snapshotOnly) {
+      state.chatStream = "Still locally owned.";
+    }
+    const first = change === "late consumer" ? createState(history) : state;
+    if (first !== state) {
+      first.client = state.client;
+      first.sessions = state.sessions;
+      first.currentSessionId = "same-session";
+      adoptStartedChatRun(first, "run-owned", 1);
+    }
+    const firstLoad = first !== state ? loadChatHistory(first) : undefined;
+    const loading = loadChatHistory(state);
+    expect(request).toHaveBeenCalledOnce();
+    if (change === "lifecycle restart") {
+      reconcileChatRunLifecycle(state, { clearLocalRun: true, publishRunState: false });
+      adoptStartedChatRun(state, "run-owned", 2);
+    } else if (change === "pending send") {
+      state.chatQueue.push({
+        id: "pending",
+        text: "Newer request",
+        createdAt: 2,
+        sendState: "sending",
+        sendRunId: "run-pending",
+      });
+    } else if (change === "live delta") {
+      assistant(state, "run-owned", "Newer live response.");
+    }
+    const stream = state.chatStream;
+    pending.resolve(history);
+    await Promise.all([firstLoad, loading]);
+
+    expect(state.chatRunId).toBe("run-owned");
+    expect(state.chatStream).toBe(snapshotOnly ? "Still locally owned." : stream);
+    if (first !== state) {
+      expect(first.chatRunId).toBeNull();
+    }
   });
 });

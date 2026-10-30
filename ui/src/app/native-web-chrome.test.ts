@@ -28,6 +28,7 @@ describe("native web chrome capability", () => {
     { platform: "ios" },
     { platform: "web", formFactor: "phone" },
     { platform: "ios", formFactor: "watch" },
+    { platform: "macos", formFactor: "desktop", surface: "unknown" },
   ])("rejects malformed embed hosts: %j", (host) => {
     Object.assign(window, { __OPENCLAW_NATIVE_EMBED__: host });
     expect(isNativeEmbedHost()).toBe(false);
@@ -46,6 +47,12 @@ describe("native web chrome capability", () => {
       }
     },
   );
+  it("accepts the conversation surface", () => {
+    const host = { platform: "macos", formFactor: "desktop", surface: "conversation" };
+    Object.assign(window, { __OPENCLAW_NATIVE_EMBED__: host });
+    expect(nativeEmbedHost()).toEqual(host);
+  });
+
   it("requires the document-start capability flag", () => {
     expect(isNativeWebChromeHost()).toBe(false);
     (window as TestNativeWindow)["__OPENCLAW_NATIVE_WEB_CHROME__"] = true;

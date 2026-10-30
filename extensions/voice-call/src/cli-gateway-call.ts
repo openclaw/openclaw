@@ -1,4 +1,3 @@
-// Voice Call plugin module implements cli gateway calls.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   callGatewayFromCli,
@@ -11,8 +10,9 @@ import {
   clampTimerTimeoutMs,
   MAX_TIMER_TIMEOUT_MS,
 } from "openclaw/plugin-sdk/number-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sleep } from "../api.js";
+import type { CallBrief } from "./call-brief.js";
 import { writeCliJson } from "./cli-command-io.js";
 import type { VoiceCallConfig } from "./config.js";
 import type { VoiceCallRuntime } from "./runtime.js";
@@ -20,9 +20,9 @@ import type { VoiceCallRuntime } from "./runtime.js";
 type VoiceCallGatewayMethod =
   | "voicecall.initiate"
   | "voicecall.start"
-  | "voicecall.continue"
   | "voicecall.continue.start"
   | "voicecall.continue.result"
+  | "voicecall.steer"
   | "voicecall.speak"
   | "voicecall.dtmf"
   | "voicecall.end"
@@ -30,20 +30,10 @@ type VoiceCallGatewayMethod =
 
 type VoiceCallGatewayCallResult = { ok: true; payload: unknown } | { ok: false; error: unknown };
 
-type GatewayCallOptions = { timeoutMs?: number };
-
 const VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS = 5000;
 const VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS = 30000;
 const VOICE_CALL_GATEWAY_TRANSCRIPT_BUFFER_MS = 10000;
 const VOICE_CALL_GATEWAY_POLL_INTERVAL_MS = 1000;
-
-function isGatewayUnavailableForLocalFallback(err: unknown): boolean {
-  return (
-    isGatewayTransportError(err) &&
-    err.kind === "closed" &&
-    (err.code === undefined || err.code === 1006)
-  );
-}
 
 function isGatewayCredentialFailure(err: unknown): err is Error {
   return (
@@ -79,16 +69,13 @@ function gatewayOperationalError(err: unknown): Error {
   return new Error(redactSensitiveUrlLikeString(detail));
 }
 
-export function isUnknownMethod(err: unknown, method: VoiceCallGatewayMethod): boolean {
-  return formatErrorMessage(err).includes(`unknown method: ${method}`);
-}
-
 export async function callVoiceCallGateway(
   method: VoiceCallGatewayMethod,
   params?: Record<string, unknown>,
-  opts?: GatewayCallOptions,
+  opts?: { timeoutMs?: number; signal?: AbortSignal },
 ): Promise<VoiceCallGatewayCallResult> {
   try {
+    opts?.signal?.throwIfAborted();
     const timeoutMs =
       typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
         ? Math.max(1, Math.ceil(opts.timeoutMs))
@@ -97,11 +84,18 @@ export async function callVoiceCallGateway(
       method,
       { json: true, timeout: String(timeoutMs) },
       params,
-      { progress: false },
+      { progress: false, ...(opts?.signal ? { signal: opts.signal } : {}) },
     );
     return { ok: true, payload };
   } catch (err) {
-    if (isGatewayUnavailableForLocalFallback(err)) {
+    if (opts?.signal?.aborted && err instanceof Error && err.name === "AbortError") {
+      throw err;
+    }
+    if (
+      isGatewayTransportError(err) &&
+      err.kind === "closed" &&
+      (err.code === undefined || err.code === 1006)
+    ) {
       return { ok: false, error: err };
     }
     throw gatewayOperationalError(err);
@@ -125,72 +119,37 @@ export function resolveContinueTimeout(config: VoiceCallConfig): number {
   );
 }
 
-function resolveVoiceCallDeadlineMs(timeoutMs: number, nowMs = Date.now()): number {
-  return nowMs + (clampTimerTimeoutMs(timeoutMs) ?? MAX_TIMER_TIMEOUT_MS);
-}
-
-function readGatewayOperationId(payload: unknown): string {
-  if (isRecord(payload) && typeof payload.operationId === "string" && payload.operationId) {
-    return payload.operationId;
-  }
-  throw new Error("voicecall gateway response missing operationId");
-}
-
-function readGatewayPollTimeoutMs(payload: unknown, fallbackTimeoutMs: number): number {
-  if (isRecord(payload) && typeof payload.pollTimeoutMs === "number") {
-    return clampTimerTimeoutMs(payload.pollTimeoutMs) ?? fallbackTimeoutMs;
-  }
-  return fallbackTimeoutMs;
-}
-
-function readCompletedContinueResult(
-  payload: unknown,
-):
-  | { status: "pending" }
-  | { status: "completed"; result: unknown }
-  | { status: "failed"; error: string } {
-  if (!isRecord(payload)) {
-    throw new Error("voicecall gateway response missing operation status");
-  }
-  if (payload.status === "pending") {
-    return { status: "pending" };
-  }
-  if (payload.status === "failed") {
-    return {
-      status: "failed",
-      error: typeof payload.error === "string" ? payload.error : "continue failed",
-    };
-  }
-  if (payload.status === "completed") {
-    return { status: "completed", result: payload.result };
-  }
-  throw new Error("voicecall gateway response has unknown operation status");
-}
-
 export async function pollContinueGateway(
   payload: unknown,
   fallbackTimeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<unknown> {
+  signal?.throwIfAborted();
   if (!isRecord(payload) || typeof payload.operationId !== "string") {
     return payload;
   }
-  const params = {
-    operationId: readGatewayOperationId(payload),
-    timeoutMs: readGatewayPollTimeoutMs(payload, fallbackTimeoutMs),
-  };
-  const deadlineMs = resolveVoiceCallDeadlineMs(params.timeoutMs);
+  if (!payload.operationId) {
+    throw new Error("voicecall gateway response missing operationId");
+  }
+  const operationId = payload.operationId;
+  const timeoutMs =
+    typeof payload.pollTimeoutMs === "number"
+      ? (clampTimerTimeoutMs(payload.pollTimeoutMs) ?? fallbackTimeoutMs)
+      : fallbackTimeoutMs;
+  const deadlineMs = performance.now() + (clampTimerTimeoutMs(timeoutMs) ?? MAX_TIMER_TIMEOUT_MS);
 
   for (;;) {
+    signal?.throwIfAborted();
     // Sleep already clamps to remaining budget; the gateway RPC must too.
     // Otherwise the final poll can overrun the continue deadline by a full RPC timeout.
-    const remainingMs = deadlineMs - Date.now();
+    const remainingMs = deadlineMs - performance.now();
     if (remainingMs <= 0) {
       break;
     }
     const gateway = await callVoiceCallGateway(
       "voicecall.continue.result",
-      { operationId: params.operationId },
-      { timeoutMs: Math.min(VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS, remainingMs) },
+      { operationId },
+      { timeoutMs: Math.min(VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS, remainingMs), signal },
     );
     if (!gateway.ok) {
       throw new Error(
@@ -199,18 +158,25 @@ export async function pollContinueGateway(
         )}`,
       );
     }
-    const result = readCompletedContinueResult(gateway.payload);
+    const result = gateway.payload;
+    if (!isRecord(result)) {
+      throw new Error("voicecall gateway response missing operation status");
+    }
+    if (result.status === "failed") {
+      throw new Error(typeof result.error === "string" ? result.error : "continue failed");
+    }
+    if (result.status !== "pending" && result.status !== "completed") {
+      throw new Error("voicecall gateway response has unknown operation status");
+    }
+    signal?.throwIfAborted();
     if (result.status === "completed") {
       return result.result;
     }
-    if (result.status === "failed") {
-      throw new Error(result.error);
-    }
-    const sleepMs = Math.min(VOICE_CALL_GATEWAY_POLL_INTERVAL_MS, deadlineMs - Date.now());
+    const sleepMs = Math.min(VOICE_CALL_GATEWAY_POLL_INTERVAL_MS, deadlineMs - performance.now());
     if (sleepMs <= 0) {
       break;
     }
-    await sleep(sleepMs);
+    await sleepWithAbort(sleepMs, signal);
   }
 
   throw new Error("voicecall continue timed out waiting for gateway operation");
@@ -242,21 +208,27 @@ export async function runGatewayManagerCommand(params: {
     manager: VoiceCallRuntime["manager"],
   ) => Promise<{ success: boolean; error?: string }>;
   failureLabel: string;
+  signal?: AbortSignal;
 }): Promise<void> {
+  params.signal?.throwIfAborted();
   const gateway = await params.gatewayCall();
+  params.signal?.throwIfAborted();
   if (gateway.ok) {
     const payload = params.resolveGatewayPayload
       ? await params.resolveGatewayPayload(gateway.payload)
       : gateway.payload;
+    params.signal?.throwIfAborted();
     writeCliJson(payload);
     return;
   }
 
   const runtime = await ensureStandaloneRuntime(params);
+  params.signal?.throwIfAborted();
   const result = await params.managerFallback(runtime.manager);
   if (!result.success) {
     throw new Error(result.error || `${params.failureLabel} failed`);
   }
+  params.signal?.throwIfAborted();
   writeCliJson(result);
 }
 
@@ -284,6 +256,7 @@ export async function initiateVoiceCall(params: {
   mode?: string;
   defaultMode?: "notify" | "conversation";
   failureMessage?: string;
+  brief?: CallBrief;
 }): Promise<string> {
   const mode =
     params.mode === "notify" || params.mode === "conversation" ? params.mode : params.defaultMode;
@@ -293,6 +266,7 @@ export async function initiateVoiceCall(params: {
       ...(params.to ? { to: params.to } : {}),
       ...(params.message ? { message: params.message } : {}),
       ...(mode ? { mode } : {}),
+      ...(params.brief ? { brief: params.brief } : {}),
     },
     {
       timeoutMs: resolveOperationTimeout(params.config),
@@ -309,6 +283,7 @@ export async function initiateVoiceCall(params: {
   }
   const result = await runtime.manager.initiateCall(to, undefined, {
     message: params.message,
+    brief: params.brief,
     mode,
   });
   if (!result.success) {

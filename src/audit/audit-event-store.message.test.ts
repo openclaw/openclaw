@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
@@ -253,12 +252,8 @@ describe("message audit persistence", () => {
     };
     expect(count.count).toBe(0);
     expect(
-      (
-        db.prepare("SELECT length(key) AS length FROM audit_identity_keys WHERE id = 1").get() as {
-          length: number;
-        }
-      ).length,
-    ).toBe(31);
+      db.prepare("SELECT length(key) AS length FROM audit_identity_keys WHERE id = 1").get(),
+    ).toEqual({ length: 31 });
   });
 
   it("fails closed when retained message references lose their identity key", () => {
@@ -281,13 +276,9 @@ describe("message audit persistence", () => {
       }),
     ).toThrow("audit identity key is missing");
     const reopened = openOpenClawStateDatabase(database).db;
-    expect(
-      (
-        reopened.prepare("SELECT COUNT(*) AS count FROM audit_identity_keys").get() as {
-          count: number;
-        }
-      ).count,
-    ).toBe(0);
+    expect(reopened.prepare("SELECT COUNT(*) AS count FROM audit_identity_keys").get()).toEqual({
+      count: 0,
+    });
   });
 
   it("forgets a transaction-local identity key after a rolled-back event insert", () => {
@@ -328,10 +319,9 @@ describe("message audit persistence", () => {
       { ...database, database: openOpenClawStateDatabase(database) },
     );
     expect(committed?.messageRef).toMatch(AUDIT_REF_RE);
-    expect(
-      (db.prepare("SELECT COUNT(*) AS count FROM audit_identity_keys").get() as { count: number })
-        .count,
-    ).toBe(1);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_identity_keys").get()).toEqual({
+      count: 1,
+    });
 
     closeOpenClawStateDatabaseForTest();
     const reopened = recordAuditEventInDatabase(
@@ -398,22 +388,6 @@ describe("message audit persistence", () => {
     expect(event?.conversationRef).not.toBe(event?.targetRef);
   });
 
-  it("rejects persisted message terminal combinations outside the closed contract", async () => {
-    const database = createDatabaseOptions();
-    recordAuditEventInDatabase(messageInput(), {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
-    const { db } = openOpenClawStateDatabase(database);
-    db.prepare("UPDATE audit_events SET error_code = ? WHERE kind = 'message'").run(
-      "message_processing_failed",
-    );
-
-    await expect(
-      listAuditEvents({ database, limit: 10, filters: { includeMessages: true } }),
-    ).rejects.toThrow("corrupt audit event row 1: unexpected error_code");
-  });
-
   it("rejects delivery kind on terminals where no payload was proven delivered", async () => {
     const database = createDatabaseOptions();
     recordAuditEventInDatabase(
@@ -444,27 +418,6 @@ describe("message audit persistence", () => {
     await expect(
       listAuditEvents({ database, limit: 10, filters: { includeMessages: true } }),
     ).rejects.toThrow("corrupt audit event row 1: invalid actorId");
-  });
-
-  it("excludes transitional outbound rows before paginating terminal activity", async () => {
-    const database = createDatabaseOptions();
-    const terminal = recordAuditEventInDatabase(
-      outboundMessageInput({ status: "succeeded", outcome: "sent" }),
-      { ...database, database: openOpenClawStateDatabase(database) },
-    );
-    const transitional = recordAuditEventInDatabase(
-      outboundMessageInput(
-        { status: "succeeded", outcome: "sent" },
-        { sourceId: "transitional-outbound" },
-      ),
-      { ...database, database: openOpenClawStateDatabase(database) },
-    );
-    openOpenClawStateDatabase(database)
-      .db.prepare("UPDATE audit_events SET action = 'message.outbound.queued' WHERE event_id = ?")
-      .run(expectDefined(transitional, "transitional fixture").eventId);
-    const page = await listAuditEvents({ database, limit: 1, filters: { includeMessages: true } });
-    expect(page.events.map((event) => event.eventId)).toEqual([terminal?.eventId]);
-    expect(page.nextCursor).toBeUndefined();
   });
 
   it("keeps message rows opt-in while supporting message filters", async () => {

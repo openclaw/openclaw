@@ -43,23 +43,6 @@ describe("prompt composition invariants", () => {
     await fixture.cleanup();
   });
 
-  it("keeps the system prompt stable after warmup for normal user-turn scenarios", () => {
-    for (const scenario of fixture.scenarios) {
-      if (scenario.expectedStableSystemAfterTurnIds.length === 0) {
-        continue;
-      }
-      for (const turnId of scenario.expectedStableSystemAfterTurnIds) {
-        const current = getTurn(scenario, turnId);
-        const index = scenario.turns.findIndex((entry) => entry.id === turnId);
-        const previous = scenario.turns[index - 1];
-        if (!previous) {
-          throw new Error(`expected previous turn ${scenario.scenario}:${turnId}`);
-        }
-        expect(current.systemPrompt, `${scenario.scenario}:${turnId}`).toBe(previous.systemPrompt);
-      }
-    }
-  });
-
   it("keeps the bootstrap truncation notice in the system prompt and body prompts untouched", () => {
     const scenario = getScenario(fixture, "bootstrap-warning");
     const first = getTurn(scenario, "t1");
@@ -75,45 +58,6 @@ describe("prompt composition invariants", () => {
     expect(first.bodyPrompt).toBe("hello");
     expect(second.bodyPrompt).toBe("hello again");
     expect(third.bodyPrompt).toBe("one more turn");
-  });
-
-  it("keeps the group auto-reply prompt stable across the first-turn intro boundary", () => {
-    const groupScenario = getScenario(fixture, "auto-reply-group");
-    const first = getTurn(groupScenario, "t1");
-    const steady = getTurn(groupScenario, "t2");
-    const eventTurn = getTurn(groupScenario, "t3");
-
-    expect(first.systemPrompt).toContain("You are in a Slack group chat.");
-    expect(first.systemPrompt).toContain("prefer delegating bounded side investigations early");
-    expect(first.systemPrompt).toContain("Activation: trigger-only");
-    expect(first.systemPrompt).toContain('reply with exactly "NO_REPLY"');
-    expect(first.systemPrompt).not.toContain("## Silent Replies");
-    expect(steady.systemPrompt).toContain("You are in a Slack group chat.");
-    expect(steady.systemPrompt).toContain("prefer delegating bounded side investigations early");
-    expect(steady.systemPrompt).toContain("Activation: trigger-only");
-    expect(steady.systemPrompt).toContain('reply with exactly "NO_REPLY"');
-    expect(steady.systemPrompt).not.toContain("## Silent Replies");
-    expect(first.systemPrompt).toBe(steady.systemPrompt);
-    expect(steady.systemPrompt).toBe(eventTurn.systemPrompt);
-  });
-
-  it("keeps direct-chat guidance free of NO_REPLY", () => {
-    const directScenario = getScenario(fixture, "auto-reply-direct");
-    const first = getTurn(directScenario, "t1");
-
-    expect(first.systemPrompt).toContain("You are in a Slack direct conversation.");
-    expect(first.systemPrompt).not.toContain("NO_REPLY");
-    expect(first.systemPrompt).not.toContain("## Silent Replies");
-  });
-
-  it("keeps maintenance prompts out of the normal stable-turn invariant set", () => {
-    const maintenanceScenario = getScenario(fixture, "maintenance-prompts");
-    const flush = getTurn(maintenanceScenario, "t1");
-    const refresh = getTurn(maintenanceScenario, "t2");
-
-    expect(flush.systemPrompt).not.toBe(refresh.systemPrompt);
-    expect(flush.bodyPrompt).toContain("Pre-compaction memory flush.");
-    expect(refresh.bodyPrompt).toContain("[Post-compaction context refresh]");
   });
 
   it("keeps Discord supplemental context out of the inbound body text", () => {

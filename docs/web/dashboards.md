@@ -27,7 +27,8 @@ Open `/dashboards` to browse dashboard-enabled threads as a card gallery. Search
 by thread or author, filter by author, and sort by recent activity or title.
 Stored sessions without a matching task URL remain visible as previews without an open link.
 Select a linked card to open its owning task using your personal presentation override
-or the dashboard’s shared default. In fullscreen, choose **Restore split** to
+or the dashboard’s shared default. Ordinary card clicks stay in the app and preserve
+retained widget interactions. In fullscreen, choose **Restore split** to
 bring the side panel alongside it. An open Dashboards page updates as threads
 are renamed, archived, or deleted, including
 after a Gateway reconnect.
@@ -83,6 +84,10 @@ your chosen layout. The task toolbar sits above the main pane, aligned with the
 side-panel tabs when the panes are side by side. In a stacked layout, each
 header stays above its own pane. Side-panel tabs appear only when there are
 views to switch between.
+
+When a tab has one full-width widget, its title and controls live in the task
+menu instead of a pill over the widget, in both split and fullscreen views.
+Smaller widgets and multi-widget tabs keep their individual controls.
 
 ## Build a dashboard by asking
 
@@ -143,8 +148,10 @@ never needs the agent.
   panel. With Dashboard active in the side panel, choose **Swap** in the task
   toolbar, then **Focus** for a dashboard-only view. **Restore split** brings
   the side panel back. A tab with one full-width widget fills the focused
-  dashboard edge to edge, using all available width and height without a card
-  border or surrounding padding. Embedded MCP apps follow the available space
+  dashboard, using all available width and height without a card border.
+  Standard HTML widgets keep their content padding when maximized; widgets
+  explicitly set to full-bleed or frameless remain edge to edge.
+  Embedded MCP apps follow the available space
   when you resize the window or restore the split.
   Its widget controls move into the task toolbar’s **…** menu, leaving no
   hover pill or drag and resize handles over the page. Granted permissions
@@ -179,12 +186,11 @@ never needs the agent.
   plugin widgets, moves, resizes, and removes widgets, manages tabs, switches
   the visible tab, and requests a split or expanded dashboard with
   `set_presentation` and `presentation: "split"` or `"expanded"`. The `show_widget` tool
-  creates or refreshes native reports, custom HTML, and registered-source widgets.
-  An update uses `pin: true`, the same `name`, and new `widget_code` for HTML or
-  registered source, or a new `report` object for a native report.
-  Board snapshots identify each widget's `contentOwner` and, when applicable,
-  `registeredContentKind`; remove a widget before replacing its content owner
-  or registered source kind.
+  creates or refreshes native reports and custom HTML widgets.
+  An update uses `pin: true`, the same `name`, and new `widget_code` for HTML,
+  or a new `report` object for a native report.
+  Board snapshots identify each widget's `contentOwner`; remove a widget before
+  replacing its content owner.
   Ask "show the finance tab and expand the dashboard" and watch it happen.
 
   To publish the initial view instead, use `dashboard` with
@@ -206,6 +212,10 @@ never needs the agent.
   `set_presentation` after focusing the tab: `presentation: "expanded"` makes
   the dashboard main and focuses it; `"split"` reveals it using the current
   arrangement, bringing chat alongside when Dashboard is main.
+
+If a widget change fails, its error stays visible when the dashboard refreshes
+without any saved changes. You can retry from the widget menu. A new action or
+updated dashboard state clears the previous error.
 
 ## Show a website fullscreen
 
@@ -265,8 +275,9 @@ existing panel without creating a dashboard widget or expanding the board.
 The Browser plugin's `browser:dashboard` widget presents a tab in a local
 OpenClaw-managed browser. The Control UI streams that tab, so HTTP apps also
 work when the Control UI itself uses HTTPS. The browser's existing navigation
-policy still applies. The website uses the managed browser's login session;
-it does not inherit the browser cookies on your phone or laptop.
+policy still applies. It does not inherit the browser cookies on your phone or
+laptop. Administrators use the managed profile's login session. Other session
+writers use an isolated context with its own cookies and storage.
 
 The agent creates the widget through `dashboard`:
 
@@ -293,7 +304,7 @@ ID. Use `dashboard` to arrange the board, expand it with `set_presentation`, and
 remove widgets; session naming and pinning use `sessions`. No separate
 site-specific tool is needed.
 
-Hiding the dashboard or resetting its conversation keeps its browser tab.
+For administrators, hiding the dashboard or resetting its conversation keeps its browser tab.
 Ordinary tab closing and idle cleanup do not close a tab owned by a dashboard.
 Use **Stop browser** to release a running tab and **Resume browser** to open it
 again. Agent equivalents are `browser` with `action: "close"` or `"open"` and
@@ -306,15 +317,53 @@ is confirmed. Removing or replacing the widget releases
 its old tab when Browser receives the board change; the existing cleanup cycle
 also reconciles missed changes. Gallery previews never start a browser.
 
-Browser dashboards require Browser access and use the `openclaw` managed profile
+Administrator browser dashboards require Browser access and use the `openclaw` managed profile
 by default. Optional `props.profile` selects another local managed profile;
 attached personal browsers, node routing, and remote browser profiles are not
 supported for this widget. The lightweight **Website** widget remains useful
 when you only need to display an embeddable HTTPS website in your own browser.
 
+### Session writer access
+
+With the Browser plugin enabled, a non-admin session writer can open a Browser
+dashboard without `operator.admin`. `operator.write` retains the session's
+existing collaborator rules. The narrower `operator.sessions.write` grants
+access only to the caller's own sessions. Effective browser tool policy still
+applies; this feature does not change role or tool defaults.
+
+The **Session browser** mode uses the configured default local managed profile
+to launch an empty, isolated browser context for that session and widget.
+Custom, attached, personal, extension, node and remote profiles are unsupported.
+Cookies and storage are separate from administrator browsers and other sessions.
+The agent's `dashboard` selector uses this same context when acting for a
+non-admin operator. Administrator views and selectors continue to use their
+separate managed-profile tab; their page state is not shared with Session browser.
+
+Session browser supports page navigation, inspection, screenshots and interaction.
+It does not expose profile management, arbitrary tab selection, file transfers,
+or cookie/storage administration. The general browser tool keeps its existing
+configured host/profile access: this isolation applies to the dashboard route
+and selector, not to the whole agent.
+
+The context survives a normal turn ending or a viewer disconnecting. Revoking a
+person's access stops their viewer and operations without destroying the context
+for other authorized collaborators. Resetting or deleting the session, removing
+the widget, retiring the browser profile, or restarting the Gateway closes the
+context. Session browser's Stop state is in memory; Resume starts from the saved
+widget URL. The Gateway retains at most 64 isolated dashboard records; remove an
+unused browser widget if that limit is reached.
+
+Sessions that require a sandbox or have locked model selection cannot use this
+mode. An isolated Gateway browser context is not a sandbox backend. The existing
+administrator browser path remains available under its existing rules.
+
 ## What widgets are allowed to do
 
-Custom HTML and registered-source widgets that only render need no approval —
+Revoking session access denies new dashboard writes. A write already in progress
+when access is revoked may still finish saving its widget or layout. Reading
+private content and using a widget's tools still require current access.
+
+Custom HTML widgets that only render need no approval —
 they appear instantly, exactly like inline chat widgets, and their network access
 is fully disabled.
 
@@ -337,13 +386,13 @@ explicit session mode, the equivalent configured exec approval policy applies.
 Enabled plugins can add their own named read-only feeds and actions to these capability lists; disabling the plugin removes those integrations.
 
 Grants are bound to the exact widget bytes approved by your session policy.
-Changed HTML or registered-source bytes require a new decision even when the
+Changed HTML bytes require a new decision even when the
 permissions stay the same or shrink. A grant is preserved only when the
 approved bytes still match and the requested permissions do not widen.
 The authoring result distinguishes pending, rejected, and granted access;
 saving a widget does not imply its capabilities were approved.
 Automatic review can reuse a low-risk approval when the same agent recreates
-an HTML or registered-source widget with the same name, source, and declarations
+an HTML widget with the same name, source, and declarations
 in another session. This bounded in-memory reuse resets when the runtime
 configuration or exec-approval policy changes. Each session's current permission
 mode and each widget's grant authority still apply. MCP apps and incognito
@@ -360,20 +409,16 @@ board with fresh sessions. By default they render without server tools or
 same-server resource access. Granting the widget its declared server tools
 enables both bridges while that revision-bound grant remains active.
 
-## A2UI widgets
+<a id="a2ui-widgets" />
 
-When the Canvas plugin is enabled, agents can render A2UI JSONL as a dashboard
-widget. A2UI widgets use the same stable name, tab, size, pinning, sandbox, and
-update-in-place behavior as HTML widgets. The renderer is loaded from the
-Gateway's `/__openclaw__/a2ui/` asset route, so the renderer bundle is not
-copied into each widget. The Canvas plugin and its hosted routes must be
-enabled; both are enabled by default.
+## Retired widget formats
 
-A2UI actions use the normal widget bridge. By default, clicks become quiet
-session notices that the agent sees on its next turn. If the widget declares
-and receives the `prompt` grant, its actions can instead send a visible prompt
-into the thread. Disabling the Canvas plugin removes the A2UI kind and leaves
-stored widgets visibly unavailable until the plugin is enabled again.
+A2UI widgets and the plugin API for registering widget content kinds have been
+removed. Create interactive content as [HTML widgets](/tools/show-widget).
+During an update, candidate Doctor backs up the affected agent database before
+deleting stored A2UI widgets. It records a warning with the number deleted and
+explains that they can be recreated as HTML widgets. Other widgets are preserved.
+See [migration repairs](/gateway/doctor/config-migrations#retired-a2ui-widgets).
 
 ## Retired Workspaces
 

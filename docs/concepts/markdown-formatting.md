@@ -146,6 +146,13 @@ content is hidden or lost.
 5. **Test** with format tests plus an outbound delivery test if the channel
    chunks.
 
+For disjoint text replacements and insertions, `openclaw/plugin-sdk/text-chunking`
+exports `applyMarkdownTextEdits(text, edits)`. Edits use UTF-16 source coordinates;
+the result contains the edited `text` and `mapOffset` for boundaries outside
+replaced interiors. Each edit shifts offsets at and after its end. Insertions at
+the same position retain caller order and precede a replacement starting there.
+Renderers decide which styles include replacement text.
+
 ## Common gotchas
 
 - Slack angle-bracket tokens (`<@U123>`, `<#C123>`, `<https://...>`) must

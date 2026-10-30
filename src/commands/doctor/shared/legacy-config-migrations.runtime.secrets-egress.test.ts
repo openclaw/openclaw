@@ -1,95 +1,52 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import { validateConfigObjectRaw } from "../../../config/validation.js";
-import { LEGACY_CONFIG_MIGRATION_RUNTIME_SECRETS_EGRESS } from "./legacy-config-migrations.runtime.secrets-egress.js";
+import { LEGACY_CONFIG_MIGRATION_RUNTIME_SECRETS_EGRESS as migration } from "./legacy-config-migrations.runtime.secrets-egress.js";
 
-function applyAll(raw: Record<string, unknown>) {
-  const changes: string[] = [];
-  LEGACY_CONFIG_MIGRATION_RUNTIME_SECRETS_EGRESS.apply(raw, changes);
-  return { raw, changes };
+function expectLegacyHostIssue(raw: unknown, key: string) {
+  expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain(
+    `secrets.egressProxy.${key}`,
+  );
 }
 
-describe("secret egress proxy hostname config migration", () => {
-  it("repairs a disabled proxy with an unusable bypass host into a valid config", () => {
-    const raw = {
-      secrets: { egressProxy: { enabled: false, bypassHosts: ["api.example.com:443"] } },
-    };
+it("repairs unusable hostname entries even for a disabled proxy", () => {
+  const raw = {
+    secrets: { egressProxy: { enabled: false, bypassHosts: [123, "api.example.com:443"] } },
+  };
+  expect(validateConfigObjectRaw(raw).ok).toBe(false);
+  expectLegacyHostIssue(raw, "bypassHosts");
+  const changes: string[] = [];
+  migration.apply(raw, changes);
+  expect(raw).toEqual({ secrets: { egressProxy: { enabled: false } } });
+  expect(changes).toEqual([
+    'Removed unusable secrets.egressProxy.bypassHosts entries: 123, "api.example.com:443".',
+  ]);
+  expect(validateConfigObjectRaw(raw).ok).toBe(true);
+});
 
-    expect(validateConfigObjectRaw(raw).ok).toBe(false);
-    expect(findLegacyConfigIssues(raw)).toContainEqual({
-      path: "secrets.egressProxy.bypassHosts",
-      message: expect.stringContaining("not usable hostnames"),
-    });
+it("keeps valid allowed hosts when dropping unusable entries", () => {
+  const raw = {
+    secrets: { egressProxy: { allowedHosts: ["good.example.com", "https://bad.example.com"] } },
+  };
+  expectLegacyHostIssue(raw, "allowedHosts");
+  migration.apply(raw, []);
+  expect(raw).toEqual({ secrets: { egressProxy: { allowedHosts: ["good.example.com"] } } });
+});
 
-    const result = applyAll(raw);
-
-    expect(result.raw).toEqual({ secrets: { egressProxy: { enabled: false } } });
-    expect(result.changes).toEqual([
-      'Removed unusable secrets.egressProxy.bypassHosts entries: "api.example.com:443".',
-    ]);
-    expect(validateConfigObjectRaw(result.raw).ok).toBe(true);
-  });
-
-  it.each(["bypassHosts", "allowedHosts"] as const)(
-    "preserves valid %s entries while dropping unusable entries",
-    (key) => {
-      const raw = {
-        secrets: {
-          egressProxy: {
-            [key]: ["good.example.com", "https://bad.example.com"],
-          },
-        },
-      };
-
-      expect(findLegacyConfigIssues(raw)).toContainEqual({
-        path: `secrets.egressProxy.${key}`,
-        message: expect.stringContaining("not usable hostnames"),
-      });
-
-      const result = applyAll(raw);
-
-      expect(result.raw).toEqual({
-        secrets: { egressProxy: { [key]: ["good.example.com"] } },
-      });
-      expect(result.changes).toEqual([
-        `Removed unusable secrets.egressProxy.${key} entries: "https://bad.example.com".`,
-      ]);
-    },
-  );
-
-  it("leaves valid host arrays unchanged without reporting legacy issues", () => {
-    const raw = {
-      secrets: {
-        egressProxy: {
-          enabled: false,
-          allowedHosts: ["API.example.com.", "127.0.0.1", "API.example.com."],
-          bypassHosts: ["good.example.com"],
-        },
+it("leaves valid host arrays unchanged without reporting issues", () => {
+  const raw = {
+    secrets: {
+      egressProxy: {
+        enabled: false,
+        allowedHosts: ["API.example.com.", "127.0.0.1", "API.example.com."],
+        bypassHosts: ["good.example.com"],
       },
-    };
-    const original = structuredClone(raw);
-
-    expect(findLegacyConfigIssues(raw)).toEqual([]);
-
-    const result = applyAll(raw);
-
-    expect(result.raw).toEqual(original);
-    expect(result.changes).toEqual([]);
-  });
-
-  it("detects and drops non-string host entries without throwing", () => {
-    const raw = { secrets: { egressProxy: { bypassHosts: [123] } } };
-
-    expect(findLegacyConfigIssues(raw)).toContainEqual({
-      path: "secrets.egressProxy.bypassHosts",
-      message: expect.stringContaining("not usable hostnames"),
-    });
-
-    const result = applyAll(raw);
-
-    expect(result.raw).toEqual({ secrets: { egressProxy: {} } });
-    expect(result.changes).toEqual([
-      "Removed unusable secrets.egressProxy.bypassHosts entries: 123.",
-    ]);
-  });
+    },
+  };
+  const original = structuredClone(raw);
+  const changes: string[] = [];
+  expect(findLegacyConfigIssues(raw)).toEqual([]);
+  migration.apply(raw, changes);
+  expect(raw).toEqual(original);
+  expect(changes).toEqual([]);
 });

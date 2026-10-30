@@ -33,8 +33,10 @@ export async function shouldStartLocalOnboarding(
   }
   // Inference persists before setup finishes; only its owning receipt can
   // distinguish interrupted local onboarding from an authored model-only config.
-  const { readLocalOnboardingStateForConfig } = await import("../state/local-onboarding-state.js");
+  const { readLocalOnboardingStateForConfigAsync } =
+    await import("../state/local-onboarding-state.js");
   return (
-    readLocalOnboardingStateForConfig(snapshot.path, snapshot.sourceConfig)?.status === "pending"
+    (await readLocalOnboardingStateForConfigAsync(snapshot.path, snapshot.sourceConfig))?.status ===
+    "pending"
   );
 }

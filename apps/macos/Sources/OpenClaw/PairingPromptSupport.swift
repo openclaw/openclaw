@@ -84,14 +84,26 @@ enum PairingPromptSupport {
     static func startPairingPushTask(
         task: inout Task<Void, Never>?,
         gateway: GatewayConnection,
-        bufferingNewest: Int = 200,
         handlePush: @escaping @MainActor (GatewayConnection.PushDelivery) -> Void)
     {
         guard task == nil else { return }
         task = Task {
             _ = try? await gateway.acquireServerLease()
             await GatewayPushSubscription.consume(
-                connection: gateway, bufferingNewest: bufferingNewest, onPush: handlePush)
+                connection: gateway, bufferingNewest: 200, onPush: handlePush)
+        }
+    }
+
+    static func decodeEventPayload<T: Decodable>(
+        _ payload: AnyCodable?, context: String, logger: Logger) -> T?
+    {
+        guard let payload else { return nil }
+        do {
+            return try GatewayPayloadDecoding.decode(payload)
+        } catch {
+            logger
+                .error("failed to decode \(context, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return nil
         }
     }
 
@@ -139,8 +151,7 @@ enum PairingPromptSupport {
     /// Human-readable subject for pairing notifications: display name when
     /// present, otherwise the raw node/device id.
     static func subjectLabel(displayName: String?, fallback: String) -> String {
-        let name = displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return name?.isEmpty == false ? name! : fallback
+        displayName?.nonEmpty ?? fallback
     }
 
     /// Decisions resolve the card optimistically before the RPC returns; when

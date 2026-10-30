@@ -3,42 +3,13 @@ import {
   skipWhitespaceGraphemes,
 } from "@openclaw/normalization-core/grapheme";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { scanParenAwareBreakpoints } from "./text-breakpoints.js";
 
 export { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 
 function normalizeChunkLimit(limit: number): number {
   // String slicing truncates fractional indexes, so positive limits need an integer progress step.
   return Number.isFinite(limit) && limit > 0 ? resolveIntegerOption(limit, 1, { min: 1 }) : limit;
-}
-
-function scanParenAwareBreakpoints(text: string): { lastNewline: number; lastWhitespace: number } {
-  let lastNewline = -1;
-  let lastWhitespace = -1;
-  let depth = 0;
-
-  for (let i = 0; i < text.length; i++) {
-    const char = text.charAt(i);
-    // Parenthesized spans often contain rewritten links or file references;
-    // avoid splitting them unless the window has no safer outside break.
-    if (char === "(") {
-      depth += 1;
-      continue;
-    }
-    if (char === ")" && depth > 0) {
-      depth -= 1;
-      continue;
-    }
-    if (depth !== 0) {
-      continue;
-    }
-    if (char === "\n") {
-      lastNewline = i;
-    } else if (/\s/.test(char)) {
-      lastWhitespace = i;
-    }
-  }
-
-  return { lastNewline, lastWhitespace };
 }
 
 export type TextChunkRange = {
@@ -55,9 +26,7 @@ function findPreferredRangeEnd(text: string, start: number, end: number): number
   const slice = text.slice(start, end);
   let paragraphEnd: number | undefined;
   for (const match of slice.matchAll(/\n[\t ]*\n+/g)) {
-    if (match.index !== undefined) {
-      paragraphEnd = start + match.index + match[0].length;
-    }
+    paragraphEnd = start + match.index + match[0].length;
   }
   if (paragraphEnd !== undefined) {
     return paragraphEnd;
@@ -127,7 +96,7 @@ export function chunkText(text: string, limit: number): string[] {
     }
     const windowEnd = Math.min(text.length, cursor + normalizedLimit);
     const window = text.slice(cursor, windowEnd);
-    const { lastNewline, lastWhitespace } = scanParenAwareBreakpoints(window);
+    const { lastNewline, lastWhitespace } = scanParenAwareBreakpoints(window, 0, window.length);
     // Prefer block boundaries, then spaces, then a hard size cut when no
     // readable breakpoint exists inside this window.
     const breakOffset = lastNewline > 0 ? lastNewline : lastWhitespace;

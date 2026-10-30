@@ -1,4 +1,3 @@
-import { timingSafeEqual } from "node:crypto";
 import { Resolver } from "node:dns/promises";
 import { authenticate, type AuthenticateResult } from "mailauth";
 import type { AddressObject, ParsedMail } from "mailparser";
@@ -6,6 +5,8 @@ import {
   meetsIdentifierAuthentication,
   type IdentifierAuthentication,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ImapAccountConfig } from "./config.js";
 
 const AUTH_FRESHNESS_MS = 48 * 60 * 60 * 1_000;
@@ -20,21 +21,6 @@ type ImapAuthEvidence = {
     | "unverified-authentication"
     | "authentication-temperror";
 };
-
-type SenderGateVerdict =
-  | { accepted: true; sender: string; reason: "token" }
-  | {
-      accepted: false;
-      sender?: string;
-      reason: "invalid-from" | "sender-not-allowed" | "message-too-old";
-      transient: false;
-    }
-  | (ImapAuthEvidence & { sender: string } & (
-        | { accepted: true }
-        | { accepted: false; transient: boolean }
-      ));
-
-export type MailAuthenticator = typeof authenticate;
 
 function matchesImapSender(sender: string, entries: readonly string[]): boolean {
   const at = sender.lastIndexOf("@");
@@ -60,11 +46,7 @@ function recipientAddresses(mail: ParsedMail): string[] {
   const to = mail.to ? (Array.isArray(mail.to) ? mail.to : [mail.to]) : [];
   const delivered = mail.headers.get("delivered-to");
   const deliveredValues =
-    typeof delivered === "string"
-      ? [delivered]
-      : Array.isArray(delivered)
-        ? delivered.filter((entry): entry is string => typeof entry === "string")
-        : [];
+    typeof delivered === "string" ? [delivered] : filterStringEntries(delivered);
   return [
     ...to.flatMap((address: AddressObject) => address.value.map((entry) => entry.address ?? "")),
     ...deliveredValues,
@@ -77,12 +59,7 @@ function constantTokenMatch(address: string, expected: string): boolean {
   if (plus < 0) {
     return false;
   }
-  const actualBytes = Buffer.from(local.slice(plus + 1));
-  const expectedBytes = Buffer.from(expected);
-  return (
-    actualBytes.byteLength === expectedBytes.byteLength &&
-    timingSafeEqual(actualBytes, expectedBytes)
-  );
+  return safeEqualSecret(local.slice(plus + 1), expected);
 }
 
 function matchingSenderToken(
@@ -171,27 +148,36 @@ export async function evaluateImapSender(params: {
   raw: Buffer;
   internalDate: Date;
   account: ImapAccountConfig;
-  authenticator?: MailAuthenticator;
-}): Promise<SenderGateVerdict> {
+}) {
   const fromValues = params.mail.from?.value ?? [];
   const fromHeaders = params.mail.headerLines.filter(({ key }) => key.toLowerCase() === "from");
   if (fromHeaders.length !== 1 || fromValues.length !== 1 || !fromValues[0]?.address) {
-    return { accepted: false, reason: "invalid-from", transient: false };
+    return { accepted: false as const, reason: "invalid-from" as const, transient: false as const };
   }
   const sender = fromValues[0].address;
   if (!matchesImapSender(sender, params.account.allowedSenders)) {
-    return { accepted: false, sender, reason: "sender-not-allowed", transient: false };
+    return {
+      accepted: false as const,
+      sender,
+      reason: "sender-not-allowed" as const,
+      transient: false as const,
+    };
   }
   if (matchingSenderToken(params.mail, sender, params.account)) {
-    return { accepted: true, sender, reason: "token" };
+    return { accepted: true as const, sender, reason: "token" as const };
   }
   if (Date.now() - params.internalDate.getTime() > AUTH_FRESHNESS_MS) {
-    return { accepted: false, sender, reason: "message-too-old", transient: false };
+    return {
+      accepted: false as const,
+      sender,
+      reason: "message-too-old" as const,
+      transient: false as const,
+    };
   }
   let result: AuthenticateResult | undefined;
   try {
     const resolver = new Resolver({ timeout: DNS_TIMEOUT_MS, tries: 1 });
-    result = await (params.authenticator ?? authenticate)(params.raw, {
+    result = await authenticate(params.raw, {
       resolver: async (domain, type) =>
         type === "TXT" ? await resolver.resolveTxt(domain) : await resolver.resolve(domain),
       disableArc: true,
@@ -207,19 +193,24 @@ export async function evaluateImapSender(params: {
       fallback.strength === "asserted" &&
       meetsIdentifierAuthentication(fallback.strength, params.account.senderAuth.min)
     ) {
-      return { accepted: true, sender, strength: fallback.strength, reason: fallback.reason };
+      return {
+        accepted: true as const,
+        sender,
+        strength: fallback.strength,
+        reason: fallback.reason,
+      };
     }
     return {
-      accepted: false,
+      accepted: false as const,
       sender,
-      strength: "unverified",
-      reason: "authentication-temperror",
-      transient: true,
+      strength: "unverified" as const,
+      reason: "authentication-temperror" as const,
+      transient: true as const,
     };
   }
   const evidence = mapImapAuthStrength(result, authenticationHeaders(params.mail), params.account);
   if (!meetsIdentifierAuthentication(evidence.strength, params.account.senderAuth.min)) {
-    return { accepted: false, sender, ...evidence };
+    return { accepted: false as const, sender, ...evidence };
   }
-  return { accepted: true, sender, strength: evidence.strength, reason: evidence.reason };
+  return { accepted: true as const, sender, strength: evidence.strength, reason: evidence.reason };
 }

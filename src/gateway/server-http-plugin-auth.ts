@@ -1,19 +1,11 @@
 import { resolveBundledChannelGatewayAuthBypassPaths } from "../channels/plugins/gateway-auth-bypass.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
-import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import type { PluginNodeCapabilitySurface } from "./plugin-node-capability.js";
 import {
   isProtectedPluginRoutePathFromContext,
   type PluginRoutePathContext,
 } from "./server/plugins-http/path-context.js";
-
-export type PluginGatewayDispatchContext = {
-  gatewayAuthSatisfied?: boolean;
-  gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
-  gatewayRequestOperatorScopes?: readonly string[];
-  gatewayRequestClientIp?: string;
-};
 
 export type ResolvePluginNodeCapabilityRoute = (
   pathContext: PluginRoutePathContext,
@@ -33,11 +25,7 @@ async function resolvePluginGatewayAuthBypassPaths(
   configSnapshot: OpenClawConfig,
 ): Promise<Set<string>> {
   const paths = new Set<string>();
-  const configuredChannels = configSnapshot.channels;
-  if (!configuredChannels || Object.keys(configuredChannels).length === 0) {
-    return paths;
-  }
-  for (const channelId of Object.keys(configuredChannels)) {
+  for (const channelId of Object.keys(configSnapshot.channels ?? {})) {
     for (const path of await resolveBundledChannelGatewayAuthBypassPaths({
       channelId,
       cfg: configSnapshot,

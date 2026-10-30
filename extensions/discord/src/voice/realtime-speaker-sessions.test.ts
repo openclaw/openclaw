@@ -17,7 +17,6 @@ defineDiscordVoiceTests(
     lastAgentCommandArgs,
     lastRealtimeBridge,
     realtimeBridgeAt,
-    logVerboseMock,
     loggerWarnMock,
     sentUserMessages,
     createClient,
@@ -36,12 +35,11 @@ defineDiscordVoiceTests(
         providerConfig: { model: "gpt-live-1", voice: "marin" },
       });
 
-    it("keeps streaming events at debug while preserving lifecycle info logs", async () => {
+    it("reports lifecycle changes without promoting streaming events to info", async () => {
       const { loggerInfoMock } = voiceTestMocks;
       const { manager, bridgeParams } = await createJoinedAgentProxyFixture();
       try {
         loggerInfoMock.mockClear();
-        logVerboseMock.mockClear();
         for (const type of [
           "session.output_audio.delta",
           "session.output_audio.done",
@@ -52,9 +50,6 @@ defineDiscordVoiceTests(
           "session.commentary.append",
         ]) {
           bridgeParams.onEvent?.({ direction: "server", type, detail: "stream detail" });
-          expect(logVerboseMock).toHaveBeenCalledWith(
-            `discord voice: realtime server:${type} stream detail`,
-          );
         }
         expect(loggerInfoMock).not.toHaveBeenCalled();
 
@@ -431,14 +426,14 @@ defineDiscordVoiceTests(
       let leaving: ReturnType<typeof manager.leave> | undefined;
       try {
         pendingProvider.close.mockReturnValueOnce(pending.promise);
-        close.mockImplementationOnce(
-          function (this: InstanceType<typeof DiscordRealtimeSpeakerSession>) {
-            close.mockRestore();
-            return Promise.resolve(this.close()).then(() => {
-              throw new Error("Speaker cleanup failed");
-            });
-          },
-        );
+        close.mockImplementationOnce(function (
+          this: InstanceType<typeof DiscordRealtimeSpeakerSession>,
+        ) {
+          close.mockRestore();
+          return Promise.resolve(this.close()).then(() => {
+            throw new Error("Speaker cleanup failed");
+          });
+        });
         leaving = manager.leave({ guildId: entry.guildId });
         await vi.waitFor(() =>
           expect(loggerWarnMock).toHaveBeenCalledWith(

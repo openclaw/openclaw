@@ -3,6 +3,7 @@ import {
   extractAllRequestTexts,
   extractLastUserText,
   extractLastMatchingUserTurn,
+  isMockSubagentSettledWake,
   parseToolOutputJson,
   resolveMockSubagentTurn,
   splitMockConversationContext,
@@ -10,6 +11,18 @@ import {
 
 function normalizeChildResult(result: string) {
   return result === "Child result: (no output)" || result === "(no output)" ? "" : result;
+}
+
+export function resolveMockSettledReply(caseName: string) {
+  switch (caseName) {
+    case "visible":
+    case "silent":
+    case "fallback":
+    case "restart":
+      return "";
+    default:
+      return "Completion processed.";
+  }
 }
 
 export function readMockSubagentCompletion(
@@ -27,9 +40,7 @@ export function readMockSubagentCompletion(
   ).exec(current);
   if (
     settled &&
-    current.includes(
-      "[Subagent Context] Every subagent spawned from this session has now settled",
-    ) &&
+    isMockSubagentSettledWake(current) &&
     currentInput.includes("sourceTool=subagent_settle")
   ) {
     return { ok: settled[1] === "ok", result: normalizeChildResult(settled[2] ?? "") };

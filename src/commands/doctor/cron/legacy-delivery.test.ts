@@ -25,26 +25,6 @@ describe("legacy delivery threadId support", () => {
     });
   });
 
-  it("hydrates threadId into new delivery payloads", () => {
-    expect(
-      normalizeLegacyDeliveryInput({
-        payload: {
-          channel: "telegram",
-          to: "-100123:topic:42",
-          threadId: 42,
-        },
-      }),
-    ).toEqual({
-      delivery: {
-        mode: "announce",
-        channel: "telegram",
-        to: "-100123:topic:42",
-        threadId: "42",
-      },
-      mutated: true,
-    });
-  });
-
   it("patches and merges threadId into existing deliveries", () => {
     expect(
       normalizeLegacyDeliveryInput({

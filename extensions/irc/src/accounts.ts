@@ -1,9 +1,8 @@
-// Irc plugin module implements accounts behavior.
 import { resolveAccountWithDefaultFallback } from "openclaw/plugin-sdk/account-core";
 import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { parseOptionalDelimitedEntries } from "openclaw/plugin-sdk/channel-core";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { parseTcpPort } from "openclaw/plugin-sdk/number-runtime";
 import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { resolveSecretInputString } from "openclaw/plugin-sdk/secret-input";
@@ -32,17 +31,6 @@ export type ResolvedIrcAccount = {
   credentialDiagnostics?: CredentialUnavailableDiagnostic[];
   config: IrcAccountConfig;
 };
-
-function parseIntEnv(value?: string): number | undefined {
-  if (!value?.trim()) {
-    return undefined;
-  }
-  const parsed = parseStrictPositiveInteger(value);
-  if (parsed === undefined || parsed > 65535) {
-    return undefined;
-  }
-  return parsed;
-}
 
 const {
   listAccountIds: listIrcAccountIds,
@@ -161,34 +149,30 @@ export function resolveIrcAccount(params: {
           : true;
 
     const envPort =
-      accountId === DEFAULT_ACCOUNT_ID ? parseIntEnv(process.env.IRC_PORT) : undefined;
+      accountId === DEFAULT_ACCOUNT_ID ? parseTcpPort(process.env.IRC_PORT) : undefined;
     const port = merged.port ?? envPort ?? (tls ? 6697 : 6667);
     const envChannels =
       accountId === DEFAULT_ACCOUNT_ID
         ? parseOptionalDelimitedEntries(process.env.IRC_CHANNELS)
         : undefined;
 
-    const host = (
+    const host =
       merged.host?.trim() ||
       (accountId === DEFAULT_ACCOUNT_ID ? process.env.IRC_HOST?.trim() : "") ||
-      ""
-    ).trim();
-    const nick = (
+      "";
+    const nick =
       merged.nick?.trim() ||
       (accountId === DEFAULT_ACCOUNT_ID ? process.env.IRC_NICK?.trim() : "") ||
-      ""
-    ).trim();
-    const username = (
+      "";
+    const username =
       merged.username?.trim() ||
       (accountId === DEFAULT_ACCOUNT_ID ? process.env.IRC_USERNAME?.trim() : "") ||
       nick ||
-      "openclaw"
-    ).trim();
-    const realname = (
+      "openclaw";
+    const realname =
       merged.realname?.trim() ||
       (accountId === DEFAULT_ACCOUNT_ID ? process.env.IRC_REALNAME?.trim() : "") ||
-      "OpenClaw"
-    ).trim();
+      "OpenClaw";
 
     const passwordResolution = resolvePassword(accountId, merged);
     const nickservResolution = resolveNickServConfig(accountId, merged.nickserv);

@@ -3,10 +3,16 @@ summary: "How OpenClaw discovers Ollama models implicitly, plus narrow smoke tes
 read_when:
   - You want to know which models OpenClaw discovers and how
   - You need capability, reasoning, or cost detection rules
-  - You want a narrow text or vision probe that skips the agent tool surface
+  - You want a narrow text or vision check that skips the agent tool surface
 title: "Ollama model discovery"
 sidebarTitle: "Model discovery"
 ---
+
+A successful `/api/tags` listing also checks configured model names. If
+`qwen3:8bb` is configured but absent from the server, `openclaw models list` warns
+to pull it or fix the name. Doctor and `models status` show the prepared Gateway
+warning too. Omitted `:latest` tags remain accepted; an offline server produces no
+missing-model warning. These warnings never reject a model declaration.
 
 ## Model discovery (implicit provider)
 
@@ -14,25 +20,34 @@ When `OLLAMA_API_KEY` (or an auth profile) is set and neither
 `models.providers.ollama` nor another custom provider with `api: "ollama"` is
 defined, OpenClaw discovers models from `http://127.0.0.1:11434`:
 
-| Behavior             | Detail                                                                                                                                                                                                                                                                                        |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Catalog query        | `/api/tags`                                                                                                                                                                                                                                                                                   |
-| Capability detection | Best-effort `/api/show` reads `contextWindow`, `num_ctx` Modelfile parameters, and capabilities (vision/tools/thinking)                                                                                                                                                                       |
-| Vision models        | A `vision` capability from `/api/show` marks the model image-capable (`input: ["text", "image"]`)                                                                                                                                                                                             |
-| Reasoning detection  | Uses the `thinking` capability from `/api/show` when available; falls back to a name heuristic (`r1`, `reason`, `reasoning`, `think`) when Ollama omits capabilities. `glm-5.2:cloud` and `deepseek-v4-flash\|pro:cloud` are always treated as reasoning regardless of reported capabilities. |
-| Token limits         | `maxTokens` defaults to OpenClaw's Ollama max-token cap                                                                                                                                                                                                                                       |
-| Costs                | All costs are `0`                                                                                                                                                                                                                                                                             |
+| Behavior             | Detail                                                                                                                                                                                                                                                                                                                                                                               |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Catalog query        | `/api/tags`                                                                                                                                                                                                                                                                                                                                                                          |
+| Capability detection | Best-effort `/api/show` reads `contextWindow`, `num_ctx` Modelfile parameters, and capabilities (vision/tools/thinking)                                                                                                                                                                                                                                                              |
+| Vision models        | A `vision` capability from `/api/show` marks the model image-capable (`input: ["text", "image"]`)                                                                                                                                                                                                                                                                                    |
+| Reasoning detection  | Uses the `thinking` capability from `/api/show` when available; falls back to a name heuristic (`r1`, `reason`, `reasoning`, `think`) when Ollama omits capabilities. `glm-5.2:cloud`, `glm-5.3:cloud`, `glm-5.3-flash:cloud`, `kimi-k3:cloud`, `deepseek-v4-flash\|pro:cloud`, and `deepseek-v4.1-flash:cloud` are always treated as reasoning regardless of reported capabilities. |
+| Token limits         | `maxTokens` defaults to OpenClaw's Ollama max-token cap                                                                                                                                                                                                                                                                                                                              |
+| Costs                | All costs are `0`                                                                                                                                                                                                                                                                                                                                                                    |
 
 ```bash
 ollama list
 openclaw models list
 ```
 
-A **nonempty** `models.providers.ollama.models` list selects manual models and
-skips discovery. When Ollama is in the agent's model scope, an explicit
-self-hosted endpoint with `models: []` remains eligible for discovery;
+When Ollama is in the agent's model scope, an explicit self-hosted endpoint is
+discovered even when `models.providers.ollama.models` lists models, as setup
+saves them. Configured models keep their settings; other installed chat models
+appear beside them, so a model pulled later shows up on the next model-list
+refresh without a config edit or restart. To list only configured models, set
+`models.mode: "replace"` or `plugins.entries.ollama.config.discovery.enabled: false`.
 `models.providers.ollama.apiKey` alone does not select that provider for Gateway
 model browsing.
+
+With native Ollama, discovery also fills a configured model's missing
+`thinkingLevelMap` from that same server. This keeps reasoning separate from answer
+text for models that always think, including when reasoning display is off.
+Explicit thinking maps and other configured settings are preserved; models using
+the OpenAI-compatible API or a different endpoint do not inherit that metadata.
 
 Failed discovery records an unavailable or catalog-authentication failure and
 keeps the last successful inventory for the same endpoint and credentials. A
@@ -53,7 +68,7 @@ confirms metadata — typos still fail as unknown models.
 
 ### Smoke tests
 
-For a narrow text probe that skips the full agent tool surface:
+For a narrow text check that skips the full agent tool surface:
 
 ```bash
 OLLAMA_API_KEY=ollama-local \
@@ -64,7 +79,7 @@ OLLAMA_API_KEY=ollama-local \
     --json
 ```
 
-Add `--file` with an image for a lean vision-model probe (accepts PNG/JPEG/WebP;
+Add `--file` with an image for a lean vision-model check (accepts PNG/JPEG/WebP;
 non-image files are rejected before Ollama is called — use
 `openclaw infer audio transcribe` for audio):
 
@@ -110,7 +125,7 @@ cloud key may not authorize `/api/embed`):
 export OLLAMA_API_KEY='<your-ollama-cloud-api-key>'
 OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_OLLAMA=1 \
 OPENCLAW_LIVE_OLLAMA_BASE_URL=https://ollama.com \
-OPENCLAW_LIVE_OLLAMA_MODEL=glm-5.1:cloud \
+OPENCLAW_LIVE_OLLAMA_MODEL=glm-5.2:cloud \
 OPENCLAW_LIVE_OLLAMA_WEB_SEARCH=1 \
 pnpm test:live -- extensions/ollama/ollama.live.test.ts
 ```

@@ -19,10 +19,10 @@ import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
-import type { WebInboundCallbackMessage, WebListenerCloseReason } from "./inbound.js";
 import type { WhatsAppSendResult } from "./inbound/send-result.js";
 import { createAcceptedWhatsAppSendResult as createAcceptedWhatsAppSendResultForHarness } from "./inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
+import type { WebInboundCallbackMessage, WebListenerCloseReason } from "./inbound/types.js";
 import { setWhatsAppRuntime } from "./runtime.js";
 // Whatsapp plugin module implements auto reply harness behavior.
 
@@ -126,19 +126,16 @@ function resetWebAutoReplySessionSockets() {
   getSessionSockets().length = 0;
 }
 
+// mock-isolation: The WhatsApp socket fixture supplies model replies and run activity without the process-wide agent runtime.
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   appendCronStyleCurrentTimeLine: (text: string) => text,
   isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
   resolveAgentIdentity: (
-    cfg: { agents?: { list?: Array<{ id: string; identity?: unknown }> } },
+    cfg: { agents?: { entries?: Record<string, { identity?: unknown }> } },
     agentId: string,
-  ) =>
-    cfg.agents?.list?.find(
-      (entry) => entry.id.trim().toLowerCase() === agentId.trim().toLowerCase(),
-    )?.identity,
+  ) => cfg.agents?.entries?.[agentId.trim().toLowerCase()]?.identity,
   resolveIdentityNamePrefix: (cfg: { messages?: { responsePrefix?: string } }, _agentId: string) =>
     cfg.messages?.responsePrefix,
   runEmbeddedAgent: vi.fn(),
@@ -315,21 +312,22 @@ export function createMockWebListener(): MockWebListener {
 
 export function createScriptedWebListenerFactory(): AnyExport {
   const onMessages: Array<(msg: WebInboundCallbackMessage) => Promise<void>> = [];
-  const closeResolvers: Array<(reason: unknown) => void> = [];
+  const closeResolvers: Array<(reason?: WebListenerCloseReason) => void> = [];
   const listeners: MockWebListener[] = [];
 
   const listenerFactory = vi.fn(
     async (opts: { onMessage: (msg: WebInboundCallbackMessage) => Promise<void> }) => {
       onMessages.push(opts.onMessage);
-      let resolveClose: (reason: unknown) => void = () => {};
+      let resolveClose: (reason?: WebListenerCloseReason) => void = () => {};
       const onClose = new Promise<WebListenerCloseReason>((res) => {
-        resolveClose = res as (reason: unknown) => void;
+        // Match the socket-session owner: an unspecified close is not a logout.
+        resolveClose = (reason) => res(reason ?? { isLoggedOut: false, error: "closed" });
         closeResolvers.push(resolveClose);
       });
       const listener: MockWebListener = {
         ...createMockWebListener(),
         onClose,
-        signalClose: vi.fn((reason?: unknown) => resolveClose(reason)),
+        signalClose: vi.fn(resolveClose),
       };
       listeners.push(listener);
       return listener;
@@ -340,7 +338,8 @@ export function createScriptedWebListenerFactory(): AnyExport {
     listenerFactory,
     listeners,
     getOnMessage: (index = onMessages.length - 1) => onMessages[index],
-    resolveClose: (index: number, reason?: unknown) => closeResolvers[index]?.(reason),
+    resolveClose: (index: number, reason?: WebListenerCloseReason) =>
+      closeResolvers[index]?.(reason),
     getListenerCount: () => listenerFactory.mock.calls.length,
   };
 }

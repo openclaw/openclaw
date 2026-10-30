@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
-import { canCallGatewayMethod } from "./gateway-methods.ts";
+import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
+import { canCallGatewayMethod, canPresentGatewayMethod } from "./gateway-methods.ts";
 
 function snapshot(params: {
   connected?: boolean;
@@ -10,7 +11,7 @@ function snapshot(params: {
   includeScopes?: boolean;
 }): ApplicationGatewaySnapshot {
   const connected = params.connected ?? true;
-  return {
+  return createApplicationGatewaySnapshot({
     client: connected ? ({} as ApplicationGatewaySnapshot["client"]) : null,
     phase: connected ? "connected" : "offline",
     offlineStable: !connected,
@@ -25,15 +26,29 @@ function snapshot(params: {
             },
       features: params.methods === undefined ? {} : { methods: params.methods },
     } as ApplicationGatewaySnapshot["hello"],
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: null,
     sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
 }
 
 describe("canCallGatewayMethod", () => {
+  it.each([
+    ["models.list", "operator.read", true],
+    ["chat.metadata", "operator.read", true],
+    ["chat.startup", "operator.read", true],
+    ["chat.history", "operator.read", true],
+    ["sessions.create", "operator.write", false],
+    ["chat.send", "operator.write", false],
+    ["config.get", "operator.admin", false],
+  ] as const)("uses the server scope for %s", (method, requestedScope, allowed) => {
+    expect(
+      canCallGatewayMethod(
+        snapshot({ methods: [method], scopes: ["operator.sessions.write"] }),
+        method,
+        requestedScope,
+      ),
+    ).toBe(allowed);
+  });
+
   it.each([
     ["disconnected", { connected: false }],
     ["method unavailable", { methods: [], scopes: ["operator.admin"] }],
@@ -54,5 +69,27 @@ describe("canCallGatewayMethod", () => {
         { requireAdvertisement: false },
       ),
     ).toBe(true);
+  });
+
+  it.each(["connected", "reconnecting", "offline"] as const)(
+    "separates retained presentation from live dispatch in %s",
+    (phase) => {
+      const retained = { ...snapshot({ methods: ["skills.update"] }), phase };
+      expect(canPresentGatewayMethod(retained, "skills.update", "operator.admin")).toBe(true);
+      expect(canCallGatewayMethod(retained, "skills.update", "operator.admin")).toBe(
+        phase === "connected",
+      );
+    },
+  );
+
+  it.each([
+    { methods: [] },
+    { methods: ["skills.update"], scopes: ["operator.write"] },
+    { methods: ["skills.update"], includeAuth: false },
+    { methods: ["skills.update"], includeScopes: false },
+  ])("does not present unadvertised or unauthorized methods (%j)", (params) => {
+    expect(canPresentGatewayMethod(snapshot(params), "skills.update", "operator.admin")).toBe(
+      false,
+    );
   });
 });

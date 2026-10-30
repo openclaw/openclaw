@@ -1,4 +1,4 @@
-// Formats config validation issues for CLI and diagnostics.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import type { ConfigValidationIssue } from "./types.js";
@@ -16,24 +16,11 @@ type ConfigIssueFormatOptions = {
   sourceFile?: string;
 };
 
-type ConfigIssueSummaryOptions = ConfigIssueFormatOptions & {
-  maxIssues?: number;
-};
-
-/** Normalize missing or blank config issue paths to the root marker used in CLI output. */
-function normalizeConfigIssuePath(path: string | null | undefined): string {
-  if (typeof path !== "string") {
-    return "<root>";
-  }
-  const trimmed = path.trim();
-  return trimmed ? trimmed : "<root>";
-}
-
 /** Return the public config issue shape with a normalized path and non-empty allowed values. */
 function normalizeConfigIssue(issue: ConfigValidationIssue): ConfigValidationIssue {
   const hasAllowedValues = Array.isArray(issue.allowedValues) && issue.allowedValues.length > 0;
   const normalized: ConfigValidationIssue = {
-    path: normalizeConfigIssuePath(issue.path),
+    path: normalizeOptionalString(issue.path) ?? "<root>",
     message: issue.message,
     ...(hasAllowedValues ? { allowedValues: issue.allowedValues } : {}),
     ...(hasAllowedValues &&
@@ -63,25 +50,11 @@ function resolveIssueLocationPrefix(
   opts?: ConfigIssueFormatOptions,
 ): string {
   const sourceFile =
-    typeof issue.sourceFile === "string" && issue.sourceFile.trim()
-      ? issue.sourceFile.trim()
-      : typeof opts?.sourceFile === "string" && opts.sourceFile.trim()
-        ? opts.sourceFile.trim()
-        : "";
+    normalizeOptionalString(issue.sourceFile) ?? normalizeOptionalString(opts?.sourceFile);
   if (!sourceFile || typeof issue.line !== "number" || issue.line <= 0) {
     return "";
   }
   return `${sanitizeTerminalText(sourceFile)}:${issue.line} — `;
-}
-
-function resolveIssuePathForLine(
-  path: string | null | undefined,
-  opts?: ConfigIssueFormatOptions,
-): string {
-  if (opts?.normalizeRoot) {
-    return normalizeConfigIssuePath(path);
-  }
-  return typeof path === "string" ? path : "";
 }
 
 /**
@@ -98,7 +71,13 @@ export function formatConfigIssueLine(
   const issuePath = issue.pathSegments?.length
     ? formatConcreteConfigPath(issue.pathSegments)
     : issue.path;
-  const path = sanitizeTerminalText(resolveIssuePathForLine(issuePath, opts));
+  const path = sanitizeTerminalText(
+    opts?.normalizeRoot
+      ? (normalizeOptionalString(issuePath) ?? "<root>")
+      : typeof issuePath === "string"
+        ? issuePath
+        : "",
+  );
   const message = sanitizeTerminalText(issue.message);
   return `${prefix}${locationPrefix}${path}: ${message}`;
 }
@@ -115,17 +94,12 @@ export function formatConfigIssueLines(
 /** Build a compact, terminal-safe issue summary for logs and recovery diagnostics. */
 export function formatConfigIssueSummary(
   issues: ReadonlyArray<ConfigIssueLineInput>,
-  opts: ConfigIssueSummaryOptions = {},
 ): string | null {
   if (issues.length === 0) {
     return null;
   }
-  const maxIssueCandidate = Math.floor(opts.maxIssues ?? 5);
-  const maxIssues = Number.isFinite(maxIssueCandidate) ? Math.max(1, maxIssueCandidate) : 5;
-  const visibleIssues = issues.slice(0, maxIssues);
-  const lines = formatConfigIssueLines(visibleIssues, "", {
-    normalizeRoot: opts.normalizeRoot ?? true,
-  });
+  const visibleIssues = issues.slice(0, 5);
+  const lines = formatConfigIssueLines(visibleIssues, "", { normalizeRoot: true });
   const hiddenIssueCount = issues.length - visibleIssues.length;
   if (hiddenIssueCount <= 0) {
     return lines.join("; ");

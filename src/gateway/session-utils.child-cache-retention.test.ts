@@ -1,14 +1,14 @@
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { sessionChildCacheRetentionEntrypoint } from "./session-child-cache-retention-entrypoint.test-support.js";
 
 it("keeps child links without retaining released session metadata", async ({ signal }) => {
   const result = await runNodeScript(
-    [
+    (workerArgv) => [
       "--expose-gc",
-      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(sessionChildCacheRetentionEntrypoint)),
+      ...workerArgv(resolveRuntimeWorkerUrl(sessionChildCacheRetentionEntrypoint)),
     ],
     { ...process.env, NODE_OPTIONS: "", TSX_DISABLE_CACHE: "1" },
     15_000,

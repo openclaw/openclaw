@@ -15,7 +15,7 @@ import {
   type RuntimeConfigWriteApplicationStatus,
 } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { applyDefaultModel } from "../../plugins/provider-auth-choice-helpers.js";
+import { applyPrimaryModel } from "../../plugins/provider-model-primary.js";
 import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter, WizardSelectParams } from "../../wizard/prompts.js";
@@ -37,7 +37,7 @@ export function applyProviderLoginDefaultModel(
   config: OpenClawConfig,
   model: string,
 ): OpenClawConfig {
-  const next = applyDefaultModel(config, model);
+  const next = applyPrimaryModel(config, model);
   if (
     resolveConfiguredModelPolicyAllow({ cfg: config }).configPath ===
     LEGACY_MODEL_POLICY_ALLOW_CONFIG_PATH
@@ -50,10 +50,10 @@ export function applyProviderLoginDefaultModel(
 }
 
 /** Provider setup defaults cannot supply consent to change model restrictions. */
-export function withoutProviderModelPolicy(
-  patch: Partial<OpenClawConfig>,
+export function withoutProviderModelPolicy<T extends Pick<Partial<OpenClawConfig>, "agents">>(
+  patch: T,
   config: OpenClawConfig,
-): Partial<OpenClawConfig> {
+): T {
   const connection = structuredClone(patch);
   if (connection.agents?.defaults) {
     delete connection.agents.defaults.modelPolicy;
@@ -64,10 +64,7 @@ export function withoutProviderModelPolicy(
       delete connection.agents.defaults.models;
     }
   }
-  for (const agent of [
-    ...Object.values(connection.agents?.entries ?? {}),
-    ...(connection.agents?.list ?? []),
-  ]) {
+  for (const agent of Object.values(connection.agents?.entries ?? {})) {
     delete agent.modelPolicy;
   }
   return connection;

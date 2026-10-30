@@ -22,6 +22,16 @@ If active memory is not showing up where you expect:
 5. Turn on `config.logging: true` and watch the gateway logs.
 6. Verify memory search itself works with `openclaw status --deep`.
 
+Trigger recall and Remember across conversations are separate paths. Run
+`/active-memory status` to inspect the session toggle and both configuration
+settings. Remember across conversations can be on even when the agent is absent
+from `plugins.entries.active-memory.config.agents`. A session pause does not
+change those configuration settings; destination and tool policies still apply.
+
+When the agent is absent from that allowlist, debug logs include
+`lane-1 skipped reason=agent-not-configured agent=<id>`. With
+`config.logging: true`, the same diagnostic appears at info level.
+
 If memory hits are noisy, tighten `maxSummaryChars`. If active memory is too
 slow, lower `queryMode`, lower `timeoutMs`, or reduce recent turn counts and
 per-turn char caps.

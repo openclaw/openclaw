@@ -1,23 +1,63 @@
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  iterateSqliteQuerySync,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import type { SessionEntrySummary } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryCacheSnapshot } from "./session-accessor.sqlite-entry-cache.types.js";
+import { readSelectedSessionEntriesInDatabase } from "./session-accessor.sqlite-entry-selected.read.js";
+import { projectSqliteSessionParticipantsBatch } from "./session-accessor.sqlite-participant-projection.js";
+import { resolveSqliteScope } from "./session-accessor.sqlite-read-scope.js";
 import {
-  cloneSessionEntry,
-  resolveSqliteScope,
   toDatabaseOptions,
   type ResolvedSqliteScope,
-} from "./session-accessor.sqlite-scope.js";
+} from "./session-accessor.sqlite-scope-helpers.js";
+import { parseSessionEntryJson, selectSessionEntryRows } from "./session-accessor.sqlite-status.js";
 import type { SessionEntryListScope } from "./session-accessor.types.js";
-import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
+import {
+  canonicalSessionKeyMigrationRequiredError,
+  readWithCanonicalSessionReaderContinuation,
+  type CanonicalSessionReaderContinuation,
+} from "./session-canonical-key.js";
+import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
+
+function captureListingSource(
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
+  scope: SessionEntryListScope,
+) {
+  if (!scope.captureSource) {
+    return;
+  }
+  const physical = readOpenClawAgentDatabaseIdentity(database);
+  const source = {
+    agentId: database.agentId,
+    path: database.path,
+    databaseIdentity: physical.identity,
+    databaseBirthtime: physical.birthtime,
+  };
+  assertCapturedSessionEntryReadSource(source, database);
+  scope.captureSource(() =>
+    assertCapturedSessionEntryReadSource(
+      source,
+      typeof source.databaseIdentity === "symbol" ? database : undefined,
+    ),
+  );
+}
 
 /**
  * Lists session entries without opening the agent database writable.
@@ -26,13 +66,42 @@ import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
  */
 export function listSessionEntriesReadOnly(
   scope: SessionEntryListScope = {},
-  options: { deferParticipants?: true } = {},
+  options: {
+    deferParticipants?: true;
+    continuation?: CanonicalSessionReaderContinuation;
+  } = {},
 ): SessionEntrySummary[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => listSqliteSessionEntriesFromDatabase(database, resolved, scope, options),
-    toDatabaseOptions(resolved),
-  );
+  const result = withOpenClawAgentDatabaseReadOnly((database) => {
+    if (scope.sessionKeys && !scope.cronRetention && !scope.expiredCronRuns) {
+      captureListingSource(database, scope);
+      const sessionKeys = scope.sessionKeys;
+      const readSelected = () =>
+        runSqliteReadOperationSync(database.db, () => {
+          const entries = readSelectedSessionEntriesInDatabase(
+            database,
+            sessionKeys,
+            scope.projection === "list" ? {} : { fullEntryKeys: sessionKeys },
+          );
+          if (options.deferParticipants || scope.includeParticipants === false) {
+            return entries;
+          }
+          return [
+            ...projectSqliteSessionParticipantsBatch(
+              database.db,
+              new Map(entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
+            ),
+          ].map(([sessionKey, entry]) => ({ sessionKey, entry }));
+        });
+      return options.continuation
+        ? readWithCanonicalSessionReaderContinuation(database, options.continuation, readSelected)
+        : readSelected();
+    }
+    const read = () => listSqliteSessionEntriesFromDatabase(database, resolved, scope, options);
+    return options.continuation
+      ? readWithCanonicalSessionReaderContinuation(database, options.continuation, read)
+      : read();
+  }, toDatabaseOptions(resolved));
   return result.found ? result.value : [];
 }
 
@@ -40,31 +109,96 @@ export function listSqliteSessionEntriesFromDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   resolved: ResolvedSqliteScope,
   scope: SessionEntryListScope,
-  options: { deferParticipants?: true } = {},
+  options: {
+    deferParticipants?: true;
+    captureCronRunUpdatedAt?: (oldestUpdatedAt: number | null) => void;
+    captureCronRunSessionKey?: (sessionKey: string | null) => void;
+  } = {},
 ): SessionEntrySummary[] {
-  if (scope.expiredCronRuns) {
-    const { agentId, updatedBefore } = scope.expiredCronRuns;
-    const requestedOwner = normalizeAgentId(agentId);
-    return withSqlitePostCommitPublications(database.db, () =>
-      runSqliteDeferredTransactionSync(database.db, () => {
-        const selectedKeys = new Set<string>();
-        const snapshot = readSessionEntryCache(database, {
-          cache: false,
-          retainFullEntry: (sessionKey, entry) => {
-            const selected =
-              isCronRunSessionKey(sessionKey) &&
-              normalizeAgentId(parseAgentSessionKey(sessionKey)!.agentId) === requestedOwner &&
-              !((entry.updatedAt ?? 0) >= updatedBefore);
-            if (selected) {
-              selectedKeys.add(sessionKey);
+  captureListingSource(database, scope);
+  const deferParticipants =
+    options.deferParticipants || scope.includeParticipants === false ? true : undefined;
+  if (scope.cronRetention || scope.expiredCronRuns) {
+    const expired = scope.expiredCronRuns;
+    const requestedOwner = expired ? normalizeAgentId(expired.agentId) : undefined;
+    const captured = withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
+      runSqliteReadSnapshotSync(database.db, () => {
+        let entries: SessionEntrySummary[];
+        if (scope.cronRetention) {
+          const page = scope.cronRetention;
+          const keys: string[] = [];
+          for (const row of iterateSqliteQuerySync(
+            database.db,
+            getNodeSqliteKysely<DB>(database.db)
+              .selectFrom("session_nodes")
+              .select("session_key")
+              .where("session_key", ">", page.afterSessionKey ?? "")
+              .orderBy("session_key"),
+          )) {
+            if (isCronRunSessionKey(row.session_key)) {
+              keys.push(row.session_key);
+              if (keys.length >= page.limit) {
+                break;
+              }
             }
-            return selected;
-          },
+          }
+          options.captureCronRunSessionKey?.(keys.length === page.limit ? keys.at(-1)! : null);
+          entries = readSelectedSessionEntriesInDatabase(database, keys);
+        } else {
+          const snapshot = readSessionEntryCache(database, {
+            cache: false,
+            projection: "list",
+            deferParticipants: true,
+          });
+          entries = Array.from(iterateSessionEntriesForListing(snapshot));
+        }
+        let oldestUpdatedAt: number | null = null;
+        let selected = entries.filter(({ sessionKey, entry }) => {
+          if (
+            !isCronRunSessionKey(sessionKey) ||
+            (expired &&
+              normalizeAgentId(parseAgentSessionKey(sessionKey)!.agentId) !== requestedOwner)
+          ) {
+            return false;
+          }
+          const updatedAt = entry.updatedAt ?? 0;
+          oldestUpdatedAt = Math.min(oldestUpdatedAt ?? updatedAt, updatedAt);
+          return !expired || updatedAt < expired.updatedBefore;
         });
-        // Sibling metadata and participants still cross complete listing validation.
-        return Array.from(iterateSessionEntriesForListing(snapshot, false, selectedKeys));
+        options.captureCronRunUpdatedAt?.(oldestUpdatedAt);
+        if (!deferParticipants) {
+          selected = [
+            ...projectSqliteSessionParticipantsBatch(
+              database.db,
+              new Map(selected.map(({ sessionKey, entry }) => [sessionKey, entry])),
+            ),
+          ].map(([sessionKey, entry]) => ({ sessionKey, entry }));
+        }
+        // Capture only deletion candidates' payloads, in the same snapshot as their metadata.
+        const rows = selected.length
+          ? executeSqliteQuerySync(
+              database.db,
+              selectSessionEntryRows(database, "full")
+                .select("updated_at")
+                .where(
+                  "session_key",
+                  "in",
+                  sqliteStringSet(selected.map(({ sessionKey }) => sessionKey)),
+                ),
+            ).rows
+          : [];
+        return { entries: selected, rows };
       }),
     );
+    // Cold JSON decoding must not extend the worker's deferred read transaction.
+    const fullRows = new Map(captured.rows.map((row) => [row.session_key, row]));
+    for (const summary of captured.entries) {
+      const row = fullRows.get(summary.sessionKey);
+      if (row) {
+        summary.entry = { ...parseSessionEntryJson(row), ...summary.entry };
+      }
+    }
+    return captured.entries;
   }
   const projection = scope.projection ?? "full";
   const cache = !isIncognitoOpenClawAgentSqlitePath(database.path, {
@@ -75,7 +209,7 @@ export function listSqliteSessionEntriesFromDatabase(
     cache,
     latest: scope.readConsistency === "latest",
     projection,
-    deferParticipants: options.deferParticipants,
+    deferParticipants,
   });
   return Array.from(
     iterateSessionEntriesForListing(
@@ -87,7 +221,7 @@ export function listSqliteSessionEntriesFromDatabase(
 }
 
 /** Applies the listing visibility and canonical-key contract to an owned snapshot. */
-export function* iterateSessionEntriesForListing(
+function* iterateSessionEntriesForListing(
   snapshot: SessionEntryCacheSnapshot,
   cloneEntries = false,
   sessionKeys?: ReadonlySet<string>,
@@ -113,7 +247,7 @@ export function* iterateSessionEntriesForListing(
     // Full snapshots own their nested values; list snapshots may share cached entries.
     yield {
       sessionKey,
-      entry: cloneEntries ? cloneSessionEntry(entry) : entry,
+      entry: cloneEntries ? structuredClone(entry) : entry,
     };
   }
 }

@@ -20,8 +20,8 @@ scenario:
     - docs/help/testing.md
   codeRefs:
     - ui/src/e2e/operator-admin.e2e.test.ts
-    - ui/src/pages/skills/skills-page.ts
-    - ui/src/pages/devices/devices-page.ts
+    - ui/src/pages/skills/skills-page.tsx
+    - ui/src/pages/devices/devices-page.tsx
   execution:
     kind: playwright
     path: ui/src/e2e/operator-admin.e2e.test.ts

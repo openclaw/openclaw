@@ -1,14 +1,4 @@
-// Mattermost plugin module implements doctor contract behavior.
-import type { ChannelDoctorConfigMutation } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  createLegacyPrivateNetworkDoctorContract,
-  defineChannelAliasMigration,
-} from "openclaw/plugin-sdk/runtime-doctor-migrations";
-
-const networkContract = createLegacyPrivateNetworkDoctorContract({
-  channelKey: "mattermost",
-});
+import { defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
 // Mattermost has a preview stream mode; runtime resolves it with a "partial"
 // default (resolveChannelPreviewStreamMode(merged, "partial") in accounts.ts),
@@ -16,25 +6,9 @@ const networkContract = createLegacyPrivateNetworkDoctorContract({
 // merge replaces the root streaming object wholesale (resolveMergedAccountConfig
 // without a streaming deep-merge), so migration seeds materialized account
 // objects with the inherited root settings.
-const streamingAliasMigration = defineChannelAliasMigration({
-  channelId: "mattermost",
-  streaming: { defaultMode: "partial" },
-  accountStreamingReplacesRoot: true,
-});
-
-export const legacyConfigRules = [
-  ...networkContract.legacyConfigRules,
-  ...streamingAliasMigration.legacyConfigRules,
-];
-
-export function normalizeCompatibilityConfig({
-  cfg,
-}: {
-  cfg: OpenClawConfig;
-}): ChannelDoctorConfigMutation {
-  const network = networkContract.normalizeCompatibilityConfig({ cfg });
-  return streamingAliasMigration.normalizeChannelConfig({
-    cfg: network.config,
-    changes: network.changes,
+export const { legacyConfigRules, normalizeChannelConfig: normalizeCompatibilityConfig } =
+  defineChannelAliasMigration({
+    channelId: "mattermost",
+    streaming: { defaultMode: "partial" },
+    accountStreamingReplacesRoot: true,
   });
-}

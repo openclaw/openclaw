@@ -1,20 +1,20 @@
-// Resolves npm project roots for plugin package inspection.
 import fs from "node:fs";
-import fsp from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import { isNotFoundPathError } from "../infra/path-guards.js";
-import { resolvePluginNpmProjectsDir } from "./install-paths.js";
-
-function isMissing(error: unknown): boolean {
-  return isNotFoundPathError(error);
-}
+import {
+  isPluginNpmProjectDir,
+  resolvePluginNpmProjectsDir,
+  validatePluginId,
+} from "./install-paths.js";
 
 function sortPaths(paths: string[]): string[] {
   return paths.toSorted((left, right) => left.localeCompare(right));
 }
 
-/** Lists project-level npm roots managed below the plugin npm root. */
-export function listManagedPluginNpmProjectRootsSync(npmRoot: string): string[] {
+/** Lists directory candidates; each consumer establishes its own package ownership. */
+export function listPluginNpmProjectCandidatesSync(npmRoot: string): string[] {
   const projectsDir = resolvePluginNpmProjectsDir(npmRoot);
   try {
     return sortPaths(
@@ -24,36 +24,35 @@ export function listManagedPluginNpmProjectRootsSync(npmRoot: string): string[] 
         .map((entry) => path.join(projectsDir, entry.name)),
     );
   } catch (error) {
-    if (isMissing(error)) {
+    if (isNotFoundPathError(error)) {
       return [];
     }
     throw error;
   }
 }
 
-/** Async variant of project-level managed npm root discovery. */
-async function listManagedPluginNpmProjectRoots(npmRoot: string): Promise<string[]> {
-  const projectsDir = resolvePluginNpmProjectsDir(npmRoot);
-  try {
-    return sortPaths(
-      (await fsp.readdir(projectsDir, { withFileTypes: true }))
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => path.join(projectsDir, entry.name)),
-    );
-  } catch (error) {
-    if (isMissing(error)) {
+/** Lists admitted projects with the manifest that established their managed ownership. */
+export function listManagedPluginNpmProjectsSync(npmRoot: string) {
+  return listPluginNpmProjectCandidatesSync(npmRoot).flatMap((projectRoot) => {
+    const manifest = tryReadJsonSync(path.join(projectRoot, "package.json"));
+    if (!isRecord(manifest) || !isRecord(manifest.dependencies)) {
       return [];
     }
-    throw error;
-  }
+    // Staging, backup, and quarantine directories are not published projects.
+    // Carry the admitted manifest into recovery instead of opening it again.
+    const managed = Object.keys(manifest.dependencies).some(
+      (packageName) =>
+        validatePluginId(packageName) === null &&
+        isPluginNpmProjectDir({ packageName, projectDir: projectRoot, npmDir: npmRoot }),
+    );
+    return managed ? [{ projectRoot, manifest }] : [];
+  });
 }
 
 /** Returns the root npm install plus all managed project npm roots. */
 export function listManagedPluginNpmRootsSync(npmRoot: string): string[] {
-  return [npmRoot, ...listManagedPluginNpmProjectRootsSync(npmRoot)];
-}
-
-/** Async variant of managed npm root discovery. */
-export async function listManagedPluginNpmRoots(npmRoot: string): Promise<string[]> {
-  return [npmRoot, ...(await listManagedPluginNpmProjectRoots(npmRoot))];
+  return [
+    npmRoot,
+    ...listManagedPluginNpmProjectsSync(npmRoot).map(({ projectRoot }) => projectRoot),
+  ];
 }

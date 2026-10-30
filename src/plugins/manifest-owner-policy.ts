@@ -1,6 +1,9 @@
 /** Applies manifest owner policy for plugin availability and activation decisions. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
+import {
+  resolveEffectivePluginActivationState,
+  type NormalizedPluginsConfig,
+} from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
@@ -10,8 +13,6 @@ type OwnerPlugin = Pick<
   "id" | "origin" | "enabledByDefault" | "enabledByDefaultOnPlatforms"
 > &
   Partial<Pick<PluginManifestRecord, "channels">>;
-
-type NormalizedPluginsConfig = ReturnType<typeof normalizePluginsConfig>;
 
 /** Reasons a manifest owner plugin can fail the base activation policy. */
 export type ManifestOwnerBasePolicyBlockReason =
@@ -41,7 +42,6 @@ export function hasExplicitManifestOwnerTrust(params: {
 export function passesManifestOwnerBasePolicy(params: {
   plugin: Pick<PluginManifestRecord, "id">;
   normalizedConfig: NormalizedPluginsConfig;
-  allowExplicitlyDisabled?: boolean;
   allowRestrictiveAllowlistBypass?: boolean;
 }): boolean {
   return resolveManifestOwnerBasePolicyBlock(params) === null;
@@ -51,7 +51,6 @@ export function passesManifestOwnerBasePolicy(params: {
 export function resolveManifestOwnerBasePolicyBlock(params: {
   plugin: Pick<PluginManifestRecord, "id">;
   normalizedConfig: NormalizedPluginsConfig;
-  allowExplicitlyDisabled?: boolean;
   allowRestrictiveAllowlistBypass?: boolean;
 }): ManifestOwnerBasePolicyBlockReason | null {
   if (!params.normalizedConfig.enabled) {
@@ -61,10 +60,7 @@ export function resolveManifestOwnerBasePolicyBlock(params: {
   if (params.normalizedConfig.deny.includes(policyId)) {
     return "blocked-by-denylist";
   }
-  if (
-    params.normalizedConfig.entries[policyId]?.enabled === false &&
-    params.allowExplicitlyDisabled !== true
-  ) {
+  if (params.normalizedConfig.entries[policyId]?.enabled === false) {
     return "plugin-disabled";
   }
   if (

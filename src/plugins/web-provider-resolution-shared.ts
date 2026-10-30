@@ -3,7 +3,8 @@ import { resolveBundledCompatActivationInputs } from "./activation-context.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import { getPluginCache, type PluginCache } from "./plugin-cache.js";
 import { sortPluginEntriesById } from "./plugin-entry-order.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
@@ -39,31 +40,20 @@ function loadInstalledWebProviderManifestRecords(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   pluginIds?: readonly string[];
-  manifestRecords?: readonly PluginManifestRecord[];
 }): readonly PluginManifestRecord[] {
-  const records =
-    params.manifestRecords ??
-    loadManifestMetadataSnapshot({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env ?? process.env,
-    }).plugins;
+  const records = loadManifestMetadataSnapshot({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env ?? process.env,
+  }).plugins;
   const pluginIdSet = createPluginIdScopeSet(params.pluginIds);
   return pluginIdSet ? records.filter((plugin) => pluginIdSet.has(plugin.id)) : records;
 }
 
 /** Returns only plugin ids for manifest-declared web provider candidates. */
-export function resolveManifestDeclaredWebProviderCandidatePluginIds(params: {
-  contract: WebProviderContract;
-  configKey: WebProviderConfigKey;
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  onlyPluginIds?: readonly string[];
-  origin?: PluginManifestRecord["origin"];
-  sandboxed?: boolean;
-  manifestRecords?: readonly PluginManifestRecord[];
-}): string[] | undefined {
+export function resolveManifestDeclaredWebProviderCandidatePluginIds(
+  params: Parameters<typeof resolveManifestDeclaredWebProviderCandidates>[0],
+): string[] | undefined {
   return resolveManifestDeclaredWebProviderCandidates(params).pluginIds;
 }
 
@@ -87,9 +77,7 @@ export function resolveManifestDeclaredWebProviderCandidates(params: {
   const manifestRecords =
     params.manifestRecords ??
     loadInstalledWebProviderManifestRecords({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
+      ...params,
       pluginIds: scopedPluginIds,
     });
   const ids = manifestRecords
@@ -117,20 +105,28 @@ export function resolveManifestDeclaredWebProviderCandidates(params: {
   return { pluginIds: undefined, manifestRecords };
 }
 
-function resolveBundledWebProviderCompatPluginIds(params: {
-  contract: WebProviderContract;
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  manifestRecords?: readonly PluginManifestRecord[];
-}): string[] {
-  return loadInstalledWebProviderManifestRecords(params)
-    .filter(
-      (plugin) =>
-        plugin.origin === "bundled" && (plugin.contracts?.[params.contract]?.length ?? 0) > 0,
-    )
-    .map((plugin) => plugin.id)
-    .toSorted((left, right) => left.localeCompare(right));
+// Owner indexes and auto-enable results are keyed by registry identity; one view per records
+// list and plugin cache owner, so another owner's setup registrations never answer for this one.
+const manifestRecordRegistries = new WeakMap<
+  PluginCache,
+  WeakMap<readonly PluginManifestRecord[], PluginManifestRegistry>
+>();
+
+function getManifestRecordsRegistry(
+  records: readonly PluginManifestRecord[],
+): PluginManifestRegistry {
+  const owner = getPluginCache();
+  let views = manifestRecordRegistries.get(owner);
+  if (!views) {
+    views = new WeakMap();
+    manifestRecordRegistries.set(owner, views);
+  }
+  let registry = views.get(records);
+  if (!registry) {
+    registry = { plugins: [...records], diagnostics: [] };
+    views.set(records, registry);
+  }
+  return registry;
 }
 
 /** Builds bundled-plugin activation config for provider families with legacy enablement defaults. */
@@ -158,21 +154,17 @@ export function resolveBundledWebProviderResolutionConfig(params: {
     env: params.env,
     workspaceDir: params.workspaceDir,
     applyAutoEnable: true,
-    ...(manifestRecords
-      ? { manifestRegistry: { plugins: [...manifestRecords], diagnostics: [] } }
-      : {}),
+    ...(manifestRecords ? { manifestRegistry: getManifestRecordsRegistry(manifestRecords) } : {}),
     ...(currentSnapshot?.discovery ? { discovery: currentSnapshot.discovery } : {}),
-    resolveBundledPluginIds: (compatParams) => {
-      manifestRecords ??= loadInstalledWebProviderManifestRecords({
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-      });
-      return resolveBundledWebProviderCompatPluginIds({
-        contract: params.contract,
-        ...compatParams,
-        manifestRecords,
-      });
+    resolveBundledPluginIds: () => {
+      manifestRecords ??= loadInstalledWebProviderManifestRecords(params);
+      return manifestRecords
+        .filter(
+          (plugin) =>
+            plugin.origin === "bundled" && (plugin.contracts?.[params.contract]?.length ?? 0) > 0,
+        )
+        .map((plugin) => plugin.id)
+        .toSorted((left, right) => left.localeCompare(right));
     },
   });
 

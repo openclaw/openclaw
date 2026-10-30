@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Photos
 import Synchronization
 import Testing
@@ -61,19 +62,21 @@ struct IOSPermissionInitiationTests {
         let authority = PermissionInitiationAuthority()
         let store = PermissionInitiationStore(holdsCompletion: true)
         let requester = EventKitPermissionRequester(store: store)
-        let queue = IOSDeviceSettingsRequestQueue()
+        let queue = DeviceSettingsRequestQueue()
         let (finished, completion) = AsyncStream<Void>.makeStream()
         var applied = false
         var replies: [String?] = []
         let reply = IOSDeviceSettingsReply { _, error in replies.append(error) }
 
-        queue.enqueue(operation: {
+        queue.enqueue {
             let granted = await requester.requestFullAccessToEvents(isCurrent: { authority.isCurrent })
             applied = granted
             if granted { reply.finish(NSNull()) } else { reply.retire() }
             completion.yield()
             completion.finish()
-        }, onCancel: { reply.retire() })
+        } onCancel: {
+            reply.retire()
+        }
         for await _ in store.started {
             break
         }
@@ -127,7 +130,7 @@ struct IOSPermissionInitiationTests {
         let authority = PermissionInitiationAuthority()
         let store = PermissionInitiationStore()
         let requester = EventKitPermissionRequester(store: store)
-        let queue = IOSDeviceSettingsRequestQueue()
+        let queue = DeviceSettingsRequestQueue()
         let (admitted, admission) = AsyncStream<Void>.makeStream()
         let (proceed, resume) = AsyncStream<Void>.makeStream()
         let (finished, completion) = AsyncStream<Void>.makeStream()
@@ -135,7 +138,7 @@ struct IOSPermissionInitiationTests {
         var replies: [String?] = []
         let reply = IOSDeviceSettingsReply { _, error in replies.append(error) }
 
-        queue.enqueue(operation: {
+        queue.enqueue {
             #expect(authority.isCurrent)
             admission.yield()
             admission.finish()
@@ -147,7 +150,9 @@ struct IOSPermissionInitiationTests {
             if granted { reply.finish(NSNull()) } else { reply.retire() }
             completion.yield()
             completion.finish()
-        }, onCancel: { reply.retire() })
+        } onCancel: {
+            reply.retire()
+        }
         for await _ in admitted {
             break
         }

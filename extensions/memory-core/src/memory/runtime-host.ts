@@ -4,4 +4,5 @@ import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js
 export type MemoryCoreRuntimeHost = {
   acquireLocalService?: MemoryCoreAcquireLocalService;
   openKeyedStore?: MemoryCoreOpenKeyedStore;
+  runInBackgroundContext?: <T>(run: () => T) => T;
 };

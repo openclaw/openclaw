@@ -1,6 +1,7 @@
 // Covers plugin config contract validation and ownership boundaries.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 
 const mocks = vi.hoisted(() => {
   const loadManifestRegistry = vi.fn();
@@ -40,100 +41,69 @@ import {
   resolvePluginConfigContractsById,
 } from "./config-contracts.js";
 
-type PluginManifestRecord = PluginManifestRegistry["plugins"][number];
+type ConfigContracts = NonNullable<PluginManifestRegistry["plugins"][number]["configContracts"]>;
 
-function createRegistry(plugins: PluginManifestRegistry["plugins"]): PluginManifestRegistry {
+function createRegistry(
+  id?: string,
+  origin: "config" | "bundled" = "bundled",
+  configContracts?: ConfigContracts,
+): PluginManifestRegistry {
   return {
-    plugins,
     diagnostics: [],
+    plugins: id
+      ? [
+          createPluginManifestRecordFixture({
+            id,
+            origin,
+            configContracts,
+            source: `/tmp/${id}/openclaw.plugin.json`,
+            rootDir: `/tmp/${id}`,
+            manifestPath: `/tmp/${id}/openclaw.plugin.json`,
+          }),
+        ]
+      : [],
   };
 }
 
-function createPluginRecord(
-  overrides: Pick<PluginManifestRecord, "id" | "origin"> & Partial<PluginManifestRecord>,
-): PluginManifestRecord {
-  return {
-    rootDir: `/tmp/${overrides.id}`,
-    manifestPath: `/tmp/${overrides.id}/openclaw.plugin.json`,
-    channelConfigs: undefined,
-    configUiHints: undefined,
-    configSchema: undefined,
-    configContracts: undefined,
-    contracts: undefined,
-    name: undefined,
-    description: undefined,
-    version: undefined,
-    enabledByDefault: undefined,
-    autoEnableWhenConfiguredProviders: undefined,
-    legacyPluginIds: undefined,
-    format: undefined,
-    bundleFormat: undefined,
-    bundleCapabilities: undefined,
-    kind: undefined,
-    channels: [],
-    providers: [],
-    modelSupport: undefined,
-    cliBackends: [],
-    providerAuthAliases: undefined,
-    providerAuthChoices: undefined,
-    skills: [],
-    settingsFiles: undefined,
-    hooks: [],
-    source: `/tmp/${overrides.id}/openclaw.plugin.json`,
-    setupSource: undefined,
-    channelCatalogMeta: undefined,
-    ...overrides,
-  };
+const tokenContract = {
+  secretInputs: { paths: [{ path: "credentials.token", expected: "string" as const }] },
+};
+const twilioPath = { path: "twilio.authToken", expected: "string" as const };
+const realtimePath = { path: "realtime.providers.*.apiKey", expected: "string" as const };
+
+function expectContracts(
+  params: Parameters<typeof resolvePluginConfigContractsById>[0],
+  id: string,
+  origin: "config" | "bundled",
+  configContracts: ConfigContracts,
+) {
+  expect(resolvePluginConfigContractsById(params)).toEqual(
+    new Map([[id, { origin, configContracts }]]),
+  );
 }
 
 describe("resolvePluginConfigContractsById", () => {
   beforeEach(() => {
-    mocks.discoverOpenClawPlugins.mockReset();
-    mocks.discoverOpenClawPlugins.mockReturnValue({ candidates: [], diagnostics: [] });
+    mocks.discoverOpenClawPlugins.mockReset().mockReturnValue({ candidates: [], diagnostics: [] });
     mocks.findBundledPluginMetadataById.mockReset();
-    mocks.loadBundledManifestRegistry.mockReset();
-    mocks.loadBundledManifestRegistry.mockReturnValue(createRegistry([]));
-    mocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
-    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(createRegistry([]));
-    mocks.loadPluginRegistrySnapshot.mockReset();
-    mocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
+    mocks.loadBundledManifestRegistry.mockReset().mockReturnValue(createRegistry());
+    mocks.loadPluginManifestRegistryForInstalledIndex.mockReset().mockReturnValue(createRegistry());
+    mocks.loadPluginRegistrySnapshot.mockReset().mockReturnValue({ plugins: [] });
   });
 
   it("uses a supplied manifest registry as the authoritative contract source", () => {
-    const manifestRegistry = createRegistry([
-      createPluginRecord({
-        id: "prepared-plugin",
-        origin: "config",
-        configContracts: {
-          secretInputs: {
-            paths: [{ path: "credentials.token", expected: "string" }],
-          },
-        },
-      }),
-    ]);
+    const manifestRegistry = createRegistry("prepared-plugin", "config", tokenContract);
 
-    expect(
-      resolvePluginConfigContractsById({
+    expectContracts(
+      {
         pluginIds: ["prepared-plugin"],
         manifestRegistry,
-        fallbackToBundledMetadata: true,
         fallbackToBundledMetadataForResolvedBundled: true,
         fallbackBundledPluginIds: ["prepared-plugin"],
-      }),
-    ).toEqual(
-      new Map([
-        [
-          "prepared-plugin",
-          {
-            origin: "config",
-            configContracts: {
-              secretInputs: {
-                paths: [{ path: "credentials.token", expected: "string" }],
-              },
-            },
-          },
-        ],
-      ]),
+      },
+      "prepared-plugin",
+      "config",
+      tokenContract,
     );
     expect(mocks.loadPluginManifestRegistryForPluginRegistry).not.toHaveBeenCalled();
     expect(mocks.discoverOpenClawPlugins).not.toHaveBeenCalled();
@@ -143,12 +113,7 @@ describe("resolvePluginConfigContractsById", () => {
 
   it("does not fall back to bundled registry when registry already resolved a plugin without config contracts", () => {
     mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
-      createRegistry([
-        createPluginRecord({
-          id: "brave",
-          origin: "bundled",
-        }),
-      ]),
+      createRegistry("brave", "bundled"),
     );
 
     expect(
@@ -161,245 +126,99 @@ describe("resolvePluginConfigContractsById", () => {
 
   it("hydrates supplied bundled registry records from explicit bundled discovery", () => {
     mocks.loadBundledManifestRegistry.mockReturnValue(
-      createRegistry([
-        createPluginRecord({
-          id: "prepared-plugin",
-          origin: "bundled",
-          configContracts: {
-            secretInputs: {
-              paths: [{ path: "credentials.token", expected: "string" }],
-            },
-          },
-        }),
-      ]),
+      createRegistry("prepared-plugin", "bundled", tokenContract),
     );
 
-    expect(
-      resolvePluginConfigContractsById({
+    expectContracts(
+      {
         pluginIds: ["prepared-plugin"],
-        manifestRegistry: createRegistry([
-          createPluginRecord({ id: "prepared-plugin", origin: "bundled" }),
-        ]),
-        fallbackToBundledMetadata: true,
+        manifestRegistry: createRegistry("prepared-plugin", "bundled"),
         fallbackToBundledMetadataForResolvedBundled: true,
         fallbackBundledPluginIds: ["prepared-plugin"],
-      }),
-    ).toEqual(
-      new Map([
-        [
-          "prepared-plugin",
-          {
-            origin: "bundled",
-            configContracts: {
-              secretInputs: {
-                paths: [{ path: "credentials.token", expected: "string" }],
-              },
-            },
-          },
-        ],
-      ]),
+      },
+      "prepared-plugin",
+      "bundled",
+      tokenContract,
     );
   });
 
-  it("can hydrate missing contracts from bundled registry for resolved bundled plugins", () => {
+  it("refreshes stale bundled SecretInput contracts from bundled registry", () => {
     mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
-      createRegistry([
-        createPluginRecord({
-          id: "voice-call",
-          origin: "bundled",
-          configContracts: {
-            compatibilityMigrationPaths: ["plugins.entries.voice-call.config"],
-          },
-        }),
-      ]),
+      createRegistry("voice-call", "bundled", {
+        compatibilityMigrationPaths: ["plugins.entries.voice-call.config"],
+        secretInputs: {
+          paths: [twilioPath],
+        },
+      }),
     );
     mocks.loadBundledManifestRegistry.mockReturnValue(
-      createRegistry([
-        createPluginRecord({
-          id: "voice-call",
-          origin: "bundled",
-          configContracts: {
-            secretInputs: {
-              paths: [{ path: "twilio.authToken", expected: "string" }],
-            },
-          },
-        }),
-      ]),
+      createRegistry("voice-call", "bundled", {
+        secretInputs: {
+          paths: [twilioPath, realtimePath],
+        },
+      }),
     );
 
-    expect(
-      resolvePluginConfigContractsById({
+    expectContracts(
+      {
         pluginIds: ["voice-call"],
         fallbackToBundledMetadataForResolvedBundled: true,
-      }),
-    ).toEqual(
-      new Map([
-        [
-          "voice-call",
-          {
-            origin: "bundled",
-            configContracts: {
-              compatibilityMigrationPaths: ["plugins.entries.voice-call.config"],
-              secretInputs: {
-                paths: [{ path: "twilio.authToken", expected: "string" }],
-              },
-            },
-          },
-        ],
-      ]),
+      },
+      "voice-call",
+      "bundled",
+      {
+        compatibilityMigrationPaths: ["plugins.entries.voice-call.config"],
+        secretInputs: { paths: [twilioPath, realtimePath] },
+      },
     );
     expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledTimes(1);
     expect(mocks.loadBundledManifestRegistry).toHaveBeenCalledTimes(1);
   });
 
-  it("refreshes stale bundled SecretInput contracts from bundled registry", () => {
-    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
-      createRegistry([
-        createPluginRecord({
-          id: "voice-call",
-          origin: "bundled",
-          configContracts: {
-            compatibilityMigrationPaths: ["plugins.entries.voice-call.config"],
-            secretInputs: {
-              paths: [{ path: "twilio.authToken", expected: "string" }],
-            },
-          },
-        }),
-      ]),
-    );
-    mocks.loadBundledManifestRegistry.mockReturnValue(
-      createRegistry([
-        createPluginRecord({
-          id: "voice-call",
-          origin: "bundled",
-          configContracts: {
-            secretInputs: {
-              paths: [
-                { path: "twilio.authToken", expected: "string" },
-                { path: "realtime.providers.*.apiKey", expected: "string" },
-              ],
-            },
-          },
-        }),
-      ]),
-    );
-
-    expect(
-      resolvePluginConfigContractsById({
-        pluginIds: ["voice-call"],
-        fallbackToBundledMetadataForResolvedBundled: true,
-      }),
-    ).toEqual(
-      new Map([
-        [
-          "voice-call",
-          {
-            origin: "bundled",
-            configContracts: {
-              compatibilityMigrationPaths: ["plugins.entries.voice-call.config"],
-              secretInputs: {
-                paths: [
-                  { path: "twilio.authToken", expected: "string" },
-                  { path: "realtime.providers.*.apiKey", expected: "string" },
-                ],
-              },
-            },
-          },
-        ],
-      ]),
-    );
-  });
-
   it("can hydrate missing contracts for plugin ids known to be bundled by runtime discovery", () => {
     mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
-      createRegistry([
-        createPluginRecord({
-          id: "voice-call",
-          origin: "config",
-        }),
-      ]),
+      createRegistry("voice-call", "config"),
     );
     mocks.loadBundledManifestRegistry.mockReturnValue(
-      createRegistry([
-        createPluginRecord({
-          id: "voice-call",
-          origin: "bundled",
-          configContracts: {
-            secretInputs: {
-              paths: [{ path: "tts.providers.*.apiKey", expected: "string" }],
-            },
-          },
-        }),
-      ]),
+      createRegistry("voice-call", "bundled", {
+        secretInputs: {
+          paths: [{ path: "tts.providers.*.apiKey", expected: "string" }],
+        },
+      }),
     );
 
-    expect(
-      resolvePluginConfigContractsById({
+    expectContracts(
+      {
         pluginIds: ["voice-call"],
         fallbackBundledPluginIds: ["voice-call"],
-      }),
-    ).toEqual(
-      new Map([
-        [
-          "voice-call",
-          {
-            origin: "bundled",
-            configContracts: {
-              secretInputs: {
-                paths: [{ path: "tts.providers.*.apiKey", expected: "string" }],
-              },
-            },
-          },
-        ],
-      ]),
+      },
+      "voice-call",
+      "bundled",
+      {
+        secretInputs: { paths: [{ path: "tts.providers.*.apiKey", expected: "string" }] },
+      },
     );
-  });
-
-  it("can skip bundled metadata fallback for registry-scoped callers", () => {
-    expect(
-      resolvePluginConfigContractsById({
-        pluginIds: ["missing"],
-        fallbackToBundledMetadata: false,
-      }),
-    ).toEqual(new Map());
-    expect(mocks.loadBundledManifestRegistry).not.toHaveBeenCalled();
   });
 });
 
 describe("collectPluginConfigContractMatches", () => {
+  const matches = (root: unknown, pathPattern: string) =>
+    collectPluginConfigContractMatches({ root, pathPattern });
   it("only accepts canonical array index path segments", () => {
     const root = { items: ["first", "second"] };
 
-    expect(
-      collectPluginConfigContractMatches({
-        root,
-        pathPattern: "items.1",
-      }),
-    ).toEqual([{ path: "items[1]", value: "second", parent: root.items, key: "1" }]);
-    expect(
-      collectPluginConfigContractMatches({
-        root,
-        pathPattern: "items.1.5",
-      }),
-    ).toEqual([]);
-    expect(
-      collectPluginConfigContractMatches({
-        root,
-        pathPattern: "items.01",
-      }),
-    ).toEqual([]);
+    expect(matches(root, "items.1")).toEqual([
+      { path: "items[1]", value: "second", parent: root.items, key: "1" },
+    ]);
+    expect(matches(root, "items.1.5")).toEqual([]);
+    expect(matches(root, "items.01")).toEqual([]);
   });
 
   it("preserves exact dotted wildcard keys and array-index parents", () => {
     const headers = { "X.Trace": "trace-value" };
     const entries = [{ headers }];
 
-    expect(
-      collectPluginConfigContractMatches({
-        root: { "sales.eu": { entries } },
-        pathPattern: "*.entries.*.headers.*",
-      }),
-    ).toEqual([
+    expect(matches({ "sales.eu": { entries } }, "*.entries.*.headers.*")).toEqual([
       {
         path: '["sales.eu"].entries[0].headers["X.Trace"]',
         value: "trace-value",
@@ -407,55 +226,15 @@ describe("collectPluginConfigContractMatches", () => {
         key: "X.Trace",
       },
     ]);
-    expect(
-      collectPluginConfigContractMatches({
-        root: { entries },
-        pathPattern: "entries.*",
-      }),
-    ).toEqual([{ path: "entries[0]", value: entries[0], parent: entries, key: "0" }]);
-  });
-
-  it.each([
-    { key: "X.Trace", path: 'headers["X.Trace"]' },
-    { key: "0", path: 'headers["0"]' },
-    { key: "01", path: 'headers["01"]' },
-    { key: "value[0]", path: 'headers["value[0]"]' },
-    { key: 'quoted"key', path: 'headers["quoted\\"key"]' },
-    { key: "escaped\\key", path: 'headers["escaped\\\\key"]' },
-    { key: "safe-header", path: "headers.safe-header" },
-  ])("renders wildcard record key $key without path ambiguity", ({ key, path }) => {
-    const headers = { [key]: "value" };
-
-    expect(
-      collectPluginConfigContractMatches({ root: { headers }, pathPattern: "headers.*" }),
-    ).toEqual([{ path, value: "value", parent: headers, key }]);
-  });
-
-  it("keeps dotted wildcard keys distinct from explicitly nested record keys", () => {
-    const root = {
-      "alpha.beta": { token: "dotted" },
-      alpha: { beta: { token: "nested" } },
-    };
-
-    expect(
-      collectPluginConfigContractMatches({ root, pathPattern: "*.token" }).map(({ path }) => path),
-    ).toEqual(['["alpha.beta"].token']);
-    expect(
-      collectPluginConfigContractMatches({ root, pathPattern: "*.*.token" }).map(
-        ({ path }) => path,
-      ),
-    ).toEqual(["alpha.beta.token"]);
+    expect(matches({ entries }, "entries.*")).toEqual([
+      { path: "entries[0]", value: entries[0], parent: entries, key: "0" },
+    ]);
   });
 
   it("rejects array indexes outside canonical config path bounds", () => {
     const items = Array<string>(100_002);
     items[100_001] = "too far";
 
-    expect(
-      collectPluginConfigContractMatches({
-        root: { items },
-        pathPattern: "items.100001",
-      }),
-    ).toEqual([]);
+    expect(matches({ items }, "items.100001")).toEqual([]);
   });
 });

@@ -1,10 +1,8 @@
-/**
- * Browser maintenance API barrel. It exposes tab cleanup and trash helpers for
- * runtime and doctor flows.
- */
 import { closeTrackedBrowserTabsForSessions as closeTrackedBrowserTabs } from "./src/browser/session-tab-registry.js";
 
 type CloseTrackedBrowserTabsParams = Parameters<typeof closeTrackedBrowserTabs>[0];
+
+export const supportsSessionEntryCurrent = true;
 
 /** Route lifecycle cleanup through the currently running Browser runtime when available. */
 export async function closeTrackedBrowserTabsForSessions(

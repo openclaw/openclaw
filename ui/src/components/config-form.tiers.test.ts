@@ -26,8 +26,6 @@ describe("splitConfigSchemaByTier", () => {
       },
     });
 
-    expect(split.commonLeafCount).toBe(2);
-    expect(split.advancedLeafCount).toBe(1);
     expect(split.common?.properties).toEqual({
       port: { type: "integer" },
       reload: { type: "object", properties: { mode: { type: "string" } } },
@@ -46,7 +44,10 @@ describe("splitConfigSchemaByTier", () => {
       hints: {},
     });
     expect(split.common).toBeNull();
-    expect(split.advancedLeafCount).toBe(1);
+    expect(split.advanced).toEqual({
+      type: "object",
+      properties: { option: { type: "boolean" } },
+    });
   });
 
   it("keeps positional tuples atomic so tier projection cannot shift indexes", () => {
@@ -60,7 +61,6 @@ describe("splitConfigSchemaByTier", () => {
       hints: { pair: { advanced: false } },
     });
     expect(split.common).toEqual(tuple);
-    expect(split.commonLeafCount).toBe(1);
     expect(split.advanced).toBeNull();
   });
 
@@ -77,7 +77,5 @@ describe("splitConfigSchemaByTier", () => {
     expect(split.common).toBeNull();
     expect(split.advanced?.properties).toEqual({ enabled: { type: "boolean" } });
     expect(split.advanced?.additionalProperties).toBe(true);
-    expect(split.commonLeafCount).toBe(0);
-    expect(split.advancedLeafCount).toBe(1);
   });
 });

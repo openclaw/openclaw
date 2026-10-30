@@ -10,6 +10,7 @@ export function createMeetingBrowserAudioCaptureSource(
   params: MeetingBrowserAudioCaptureRequest & {
     ownershipSource: string;
     audioOutputsGlobal?: string;
+    webAudioPlaybackGlobal?: string;
   },
 ): string {
   return `async () => {
@@ -37,6 +38,8 @@ export function createMeetingBrowserAudioCaptureSource(
   }
   if (!ownsSession()) throw new Error("Meeting audio capture no longer owns this browser session.");
   if (current) throw new Error("Meeting browser audio capture is already active.");
+  const playbackRegistry = ${params.webAudioPlaybackGlobal ? `window[${JSON.stringify(params.webAudioPlaybackGlobal)}]` : "undefined"};
+  if (${Boolean(params.webAudioPlaybackGlobal)} && !playbackRegistry?.early) throw new Error("Meeting playback observation must start before page audio initialization. Leave and rejoin the meeting, then retry capture.");
   const context = new AudioContext({ sampleRate: 24000 });
   const entries = new Map();
   const pendingMute = new Map();
@@ -91,6 +94,9 @@ export function createMeetingBrowserAudioCaptureSource(
       for (const entry of mutedBridges.values()) {
         restoreOwnedMute(entry, restore);
       }
+      await playbackSync;
+      await Promise.all([...playbackEntries.values()].map(releasePlayback));
+      playbackEntries.clear();
       entries.clear();
       pendingMute.clear();
       for (const node of sourceNodes.values()) node.disconnect();
@@ -134,12 +140,89 @@ export function createMeetingBrowserAudioCaptureSource(
       void capture.stop();
     });
   };
+  const playbackEntries = new Map();
+  let playbackSync;
+  const isSilentSink = (value) => value?.type === "none";
+  const releasePlayback = async (entry) => {
+    for (const { node, output } of entry.sources) {
+      try { node.disconnect(entry.bridge, output); } catch {}
+    }
+    entry.input?.disconnect();
+    entry.bridge.stream.getTracks().forEach((track) => track.stop());
+    if (entry.muted && entry.originalContext.state !== "closed" &&
+        isSilentSink(entry.originalContext.sinkId)) {
+      const resume = entry.originalContext.state === "running";
+      await entry.originalContext.setSinkId(entry.previousSink);
+      if (resume) await entry.originalContext.resume();
+    }
+  };
+  const playbackEntryCurrent = (entry) =>
+    entry.sources.every(({ node, output }) => playbackRegistry?.has(node, output));
+  const syncPlayback = () => {
+    if (!playbackRegistry?.early) return Promise.resolve();
+    if (playbackSync) return playbackSync;
+    playbackSync = (async () => {
+      const grouped = new Map();
+      for (const source of playbackRegistry.sources()) {
+        const originalContext = source.node.context;
+        if (originalContext === context || originalContext.state !== "running") continue;
+        if (!playbackEntries.has(originalContext) && isSilentSink(originalContext.sinkId)) continue;
+        const sources = grouped.get(originalContext) ?? [];
+        sources.push(source);
+        grouped.set(originalContext, sources);
+      }
+      if (grouped.size > 8) throw new Error("Meeting playback context limit exceeded.");
+      for (const [originalContext, entry] of playbackEntries) {
+        const sources = grouped.get(originalContext);
+        if (!sources || sources.length !== entry.sources.length ||
+            !entry.sources.every((source) => sources.some((next) =>
+              next.node === source.node && next.output === source.output))) {
+          playbackEntries.delete(originalContext);
+          chunks.length = 0;
+          await releasePlayback(entry);
+        }
+      }
+      for (const [originalContext, sources] of grouped) {
+        if (!capture.isCurrent()) return;
+        if (playbackEntries.has(originalContext)) continue;
+        if (typeof originalContext.setSinkId !== "function") {
+          throw new Error("Meeting WebAudio playback cannot be isolated in this browser.");
+        }
+        const entry = {
+          originalContext, sources, previousSink: originalContext.sinkId,
+          bridge: originalContext.createMediaStreamDestination(),
+          muted: false, input: undefined,
+        };
+        try {
+          await originalContext.setSinkId({ type: "none" });
+          entry.muted = true;
+          await originalContext.resume();
+          if (!capture.isCurrent() || !playbackEntryCurrent(entry)) {
+            await releasePlayback(entry);
+            continue;
+          }
+          for (const { node, output } of sources) node.connect(entry.bridge, output);
+          entry.input = context.createMediaStreamSource(entry.bridge.stream);
+          entry.input.connect(processor);
+          playbackEntries.set(originalContext, entry);
+        } catch (error) {
+          await releasePlayback(entry);
+          throw error;
+        }
+      }
+    })().catch((error) => {
+      capture.error = error?.message || String(error);
+      void capture.stop();
+    }).finally(() => { playbackSync = undefined; });
+    return playbackSync;
+  };
   function scan() {
     if (!capture.isCurrent() || Date.now() - capture.lastPull > 10000) {
       void capture.stop();
       return;
     }
     if (deviceRefresh) return;
+    void syncPlayback();
     try {
       const bridges = ownedOutputEntries();
       const bridgeElements = new Set(bridges.map((entry) => entry.bridge).filter(Boolean));
@@ -237,6 +320,10 @@ export function createMeetingBrowserAudioCaptureSource(
     processor.onaudioprocess = ({ inputBuffer }) => {
       if (!capture.isCurrent()) { void capture.stop(); return; }
       if (deviceRefresh) return;
+      if (!sourceNodes.size && !playbackEntries.size) return;
+      if ([...playbackEntries.values()].some((entry) => !playbackEntryCurrent(entry))) {
+        chunks.length = 0; void syncPlayback(); return;
+      }
       // Recheck source identity before admitting an asynchronously delivered render quantum.
       if ([...entries.values()].some((entry) => !sameSource(entry))) { chunks.length = 0; scan(); return; }
       const data = inputBuffer.getChannelData(0);
@@ -247,6 +334,7 @@ export function createMeetingBrowserAudioCaptureSource(
       // One second of 512-sample frames; stale backlog never grows without bound.
       if (chunks.length > 47) chunks.splice(0, chunks.length - 47);
     };
+    await syncPlayback();
     await context.resume();
     if (!capture.isCurrent() || context.state !== "running") throw new Error("Meeting browser audio capture could not start. Enable audio playback in the meeting tab and retry.");
     scan();

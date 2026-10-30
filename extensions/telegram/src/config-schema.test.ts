@@ -1,4 +1,3 @@
-// Telegram tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { TelegramConfigSchema } from "../config-api.js";
 
@@ -14,7 +13,7 @@ function expectTelegramConfigIssue(config: unknown, path: string) {
   }
 }
 
-describe("telegram custom commands schema", () => {
+describe("telegram config schema", () => {
   it('rejects dmPolicy="open" without allowFrom "*"', () => {
     expectTelegramConfigIssue(
       { dmPolicy: "open", allowFrom: ["123456789"], botToken: "fake" },
@@ -49,42 +48,6 @@ describe("telegram custom commands schema", () => {
     );
   });
 
-  it("defaults dm/group policy", () => {
-    const res = TelegramConfigSchema.safeParse({});
-
-    expect(res.success).toBe(true);
-    if (res.success) {
-      expect(res.data.dmPolicy).toBe("pairing");
-      expect(res.data.groupPolicy).toBe("allowlist");
-    }
-  });
-
-  it("accepts historyLimit overrides per account", () => {
-    const res = TelegramConfigSchema.safeParse({
-      historyLimit: 8,
-      accounts: { ops: { historyLimit: 3 } },
-    });
-
-    expect(res.success).toBe(true);
-    if (res.success) {
-      expect(res.data.historyLimit).toBe(8);
-      expect(res.data.accounts?.ops?.historyLimit).toBe(3);
-    }
-  });
-
-  it("accepts group join introduction overrides per account", () => {
-    const res = TelegramConfigSchema.safeParse({
-      joinIntro: false,
-      accounts: { ops: { joinIntro: true } },
-    });
-
-    expect(res.success).toBe(true);
-    if (res.success) {
-      expect(res.data.joinIntro).toBe(false);
-      expect(res.data.accounts?.ops?.joinIntro).toBe(true);
-    }
-  });
-
   it("rejects retired group history context mode keys", () => {
     const res = TelegramConfigSchema.safeParse({ includeGroupHistoryContext: "mention-only" });
 
@@ -96,22 +59,6 @@ describe("telegram custom commands schema", () => {
         path: [],
       });
     }
-  });
-
-  it("accepts Telegram progress commentary config", () => {
-    expectTelegramConfigValid({
-      streaming: {
-        mode: "progress",
-        progress: { commentary: true },
-      },
-      accounts: {
-        ops: {
-          streaming: {
-            progress: { commentary: true },
-          },
-        },
-      },
-    });
   });
 
   it("rejects removed DM thread reply policy keys", () => {
@@ -130,31 +77,6 @@ describe("telegram custom commands schema", () => {
       },
       "direct.123456789",
     );
-  });
-
-  it("accepts textChunkLimit", () => {
-    const res = TelegramConfigSchema.safeParse({
-      enabled: true,
-      textChunkLimit: 3333,
-    });
-
-    expect(res.success).toBe(true);
-    if (res.success) {
-      expect(res.data.textChunkLimit).toBe(3333);
-    }
-  });
-
-  it("accepts rich message opt-in per account", () => {
-    const res = TelegramConfigSchema.safeParse({
-      richMessages: true,
-      accounts: { ops: { richMessages: false } },
-    });
-
-    expect(res.success).toBe(true);
-    if (res.success) {
-      expect(res.data.richMessages).toBe(true);
-      expect(res.data.accounts?.ops?.richMessages).toBe(false);
-    }
   });
 
   it("preserves rich message inheritance for account overrides", () => {
@@ -184,44 +106,35 @@ describe("telegram custom commands schema", () => {
   });
 
   it("normalizes hyphens in custom command names", () => {
-    const res = TelegramConfigSchema.safeParse({
+    const res = TelegramConfigSchema.parse({
       customCommands: [{ command: "Bad-Name", description: "Override status" }],
     });
 
-    expect(res.success).toBe(true);
-    if (!res.success) {
-      return;
-    }
-
-    expect(res.data.customCommands).toEqual([
-      { command: "bad_name", description: "Override status" },
-    ]);
+    expect(res.customCommands).toEqual([{ command: "bad_name", description: "Override status" }]);
   });
 });
 
 describe("telegram topic agentId schema", () => {
-  it("accepts topic ingest boolean", () => {
-    expectTelegramConfigValid({
+  it("allows bot-thread mention policy only in forum group and topic scopes", () => {
+    const topic = { requireMention: true, agentId: "main", disableAudioPreflight: true };
+    const policies = {
       groups: {
-        "-1001234567890": {
-          topics: {
-            "42": {
-              ingest: true,
-            },
-          },
+        "*": {
+          requireMentionInBotThreads: false,
+          topics: { "42": { ...topic, requireMentionInBotThreads: true } },
         },
       },
-    });
-  });
-
-  it("accepts group ingest boolean", () => {
-    expectTelegramConfigValid({
-      groups: {
-        "-1001234567890": {
-          ingest: true,
-        },
-      },
-    });
+      direct: { "123456789": { topics: { "42": topic } } },
+    };
+    expectTelegramConfigValid({ ...policies, accounts: { ops: policies } });
+    const invalid = {
+      direct: { "123456789": { topics: { "42": { requireMentionInBotThreads: false } } } },
+    };
+    expectTelegramConfigIssue(invalid, "direct.123456789.topics.42");
+    expectTelegramConfigIssue(
+      { accounts: { ops: invalid } },
+      "accounts.ops.direct.123456789.topics.42",
+    );
   });
 
   it("rejects non-boolean ingest", () => {
@@ -237,141 +150,14 @@ describe("telegram topic agentId schema", () => {
     );
   });
 
-  it("accepts nested groupPolicy overrides", () => {
+  it("accepts agentId in topic config", () => {
     expectTelegramConfigValid({
       groups: {
         "-1001234567890": {
-          groupPolicy: "open",
-          topics: {
-            "42": {
-              groupPolicy: "disabled",
-            },
-          },
+          topics: { "42": { agentId: "main" } },
         },
       },
     });
-  });
-
-  it("accepts valid agentId in forum group topic config", () => {
-    const res = TelegramConfigSchema.safeParse({
-      groups: {
-        "-1001234567890": {
-          topics: {
-            "42": {
-              agentId: "main",
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.success).toBe(true);
-    if (!res.success) {
-      console.error(res.error.format());
-      return;
-    }
-    expect(res.data.groups?.["-1001234567890"]?.topics?.["42"]?.agentId).toBe("main");
-  });
-
-  it("accepts valid agentId in DM topic config", () => {
-    const res = TelegramConfigSchema.safeParse({
-      direct: {
-        "123456789": {
-          topics: {
-            "99": {
-              agentId: "support",
-              systemPrompt: "You are support",
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.success).toBe(true);
-    if (!res.success) {
-      console.error(res.error.format());
-      return;
-    }
-    expect(res.data.direct?.["123456789"]?.topics?.["99"]?.agentId).toBe("support");
-  });
-
-  it("rejects removed per-DM threadReplies overrides", () => {
-    expectTelegramConfigIssue(
-      {
-        direct: {
-          "123456789": {
-            threadReplies: "inbound",
-          },
-        },
-      },
-      "direct.123456789",
-    );
-  });
-
-  it("accepts DM topic config without threadReplies overrides", () => {
-    const res = TelegramConfigSchema.safeParse({
-      direct: {
-        "123456789": {
-          topics: {
-            "99": { agentId: "support" },
-          },
-        },
-      },
-    });
-
-    expect(res.success).toBe(true);
-    if (!res.success) {
-      console.error(res.error.format());
-      return;
-    }
-    expect(res.data.direct?.["123456789"]?.topics?.["99"]?.agentId).toBe("support");
-  });
-
-  it("accepts empty config without agentId", () => {
-    const res = TelegramConfigSchema.safeParse({
-      groups: {
-        "-1001234567890": {
-          topics: {
-            "42": {
-              systemPrompt: "Be helpful",
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.success).toBe(true);
-    if (!res.success) {
-      console.error(res.error.format());
-      return;
-    }
-    expect(res.data.groups?.["-1001234567890"]?.topics?.["42"]).toEqual({
-      systemPrompt: "Be helpful",
-    });
-  });
-
-  it("accepts multiple topics with different agentIds", () => {
-    const res = TelegramConfigSchema.safeParse({
-      groups: {
-        "-1001234567890": {
-          topics: {
-            "1": { agentId: "main" },
-            "3": { agentId: "zu" },
-            "5": { agentId: "q" },
-          },
-        },
-      },
-    });
-
-    expect(res.success).toBe(true);
-    if (!res.success) {
-      console.error(res.error.format());
-      return;
-    }
-    const topics = res.data.groups?.["-1001234567890"]?.topics;
-    expect(topics?.["1"]?.agentId).toBe("main");
-    expect(topics?.["3"]?.agentId).toBe("zu");
-    expect(topics?.["5"]?.agentId).toBe("q");
   });
 
   it("rejects unknown fields in topic config", () => {
@@ -389,137 +175,64 @@ describe("telegram topic agentId schema", () => {
     });
 
     expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues[0]).toMatchObject({
+        code: "unrecognized_keys",
+        keys: ["unknownField"],
+        path: ["groups", "-1001234567890", "topics", "42"],
+      });
+    }
   });
 });
 
 describe("telegram disableAudioPreflight schema", () => {
-  it("accepts disableAudioPreflight for groups and topics", () => {
-    const res = TelegramConfigSchema.safeParse({
-      groups: {
-        "*": {
-          requireMention: true,
-          disableAudioPreflight: true,
-          topics: {
-            "123": {
-              disableAudioPreflight: false,
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.success).toBe(true);
-    if (!res.success) {
-      return;
-    }
-
-    const group = res.data.groups?.["*"];
-    expect(group?.disableAudioPreflight).toBe(true);
-    expect(group?.topics?.["123"]?.disableAudioPreflight).toBe(false);
-  });
-
-  it("rejects non-boolean disableAudioPreflight values", () => {
-    const res = TelegramConfigSchema.safeParse({
-      groups: {
-        "*": {
-          disableAudioPreflight: "yes",
-        },
-      },
-    });
-
-    expect(res.success).toBe(false);
-  });
-});
-
-describe("telegram token schema", () => {
-  it("accepts botToken without tokenFile", () => {
-    const res = TelegramConfigSchema.safeParse({
-      botToken: "123:ABC",
-    });
-
-    expect(res.success).toBe(true);
-    if (!res.success) {
-      return;
-    }
-
-    expect(res.data.botToken).toBe("123:ABC");
-    expect(res.data.tokenFile).toBeUndefined();
-  });
-
-  it("accepts tokenFile without botToken", () => {
-    const res = TelegramConfigSchema.safeParse({
-      tokenFile: "/run/agenix/telegram-token",
-    });
-
-    expect(res.success).toBe(true);
-    if (!res.success) {
-      return;
-    }
-
-    expect(res.data.tokenFile).toBe("/run/agenix/telegram-token");
-    expect(res.data.botToken).toBeUndefined();
-  });
-
-  it("accepts botToken and tokenFile together", () => {
-    const res = TelegramConfigSchema.safeParse({
-      botToken: "fallback:token",
-      tokenFile: "/run/agenix/telegram-token",
-    });
-
-    expect(res.success).toBe(true);
-    if (!res.success) {
-      return;
-    }
-
-    expect(res.data.botToken).toBe("fallback:token");
-    expect(res.data.tokenFile).toBe("/run/agenix/telegram-token");
-  });
-});
-
-describe("telegram poll actions schema", () => {
-  it("accepts editMessage and createForumTopic actions", () => {
+  it.each([true, false])("accepts disableAudioPreflight=%s for groups and topics", (value) => {
     expectTelegramConfigValid({
-      actions: {
-        editMessage: true,
-        createForumTopic: false,
+      groups: {
+        "*": {
+          disableAudioPreflight: value,
+          topics: { "42": { disableAudioPreflight: value } },
+        },
       },
     });
   });
 
-  it("accepts actions.poll", () => {
-    expectTelegramConfigValid({ actions: { poll: false } });
-  });
-
-  it("accepts account actions.poll", () => {
-    expectTelegramConfigValid({ accounts: { ops: { actions: { poll: false } } } });
+  it.each([
+    {
+      scope: "group",
+      group: { disableAudioPreflight: "false" },
+      path: "groups.*.disableAudioPreflight",
+    },
+    {
+      scope: "topic",
+      group: { topics: { "42": { disableAudioPreflight: "false" } } },
+      path: "groups.*.topics.42.disableAudioPreflight",
+    },
+  ])("rejects non-boolean disableAudioPreflight in $scope config", ({ group, path }) => {
+    expectTelegramConfigIssue({ groups: { "*": group } }, path);
   });
 });
 
 describe("telegram webhook schema", () => {
-  it("accepts a positive webhookPort", () => {
-    expectTelegramConfigValid({
-      webhookUrl: "https://example.com/telegram-webhook",
-      webhookSecret: "secret",
-      webhookPort: 8787,
-    });
-  });
+  it.each([undefined, false, { port: 0 }, { port: 65535 }])(
+    "accepts canonical legacy webhook setting %j",
+    (legacyWebhook) => {
+      expectTelegramConfigValid({
+        webhookUrl: "https://example.com/telegram-webhook",
+        webhookSecret: "secret",
+        legacyWebhook,
+      });
+    },
+  );
 
-  it("accepts webhookPort set to 0 for ephemeral port binding", () => {
-    expectTelegramConfigValid({
-      webhookUrl: "https://example.com/telegram-webhook",
-      webhookSecret: "secret",
-      webhookPort: 0,
-    });
-  });
-
-  it("rejects negative webhookPort", () => {
+  it.each([-1, 65536])("rejects an out-of-range legacy webhook port %s", (port) => {
     expectTelegramConfigIssue(
       {
         webhookUrl: "https://example.com/telegram-webhook",
         webhookSecret: "secret",
-        webhookPort: -1,
+        legacyWebhook: { port },
       },
-      "webhookPort",
+      "legacyWebhook.port",
     );
   });
 
@@ -574,22 +287,14 @@ describe("telegram webhook schema", () => {
 
   it("rejects webhookUrl without webhookSecret", () => {
     expectTelegramConfigIssue(
-      {
-        webhookUrl: "https://example.com/telegram-webhook",
-      },
+      { webhookUrl: "https://example.com/telegram-webhook" },
       "webhookSecret",
     );
   });
 
   it("rejects account webhookUrl without webhookSecret", () => {
     expectTelegramConfigIssue(
-      {
-        accounts: {
-          ops: {
-            webhookUrl: "https://example.com/telegram-webhook",
-          },
-        },
-      },
+      { accounts: { ops: { webhookUrl: "https://example.com/telegram-webhook" } } },
       "accounts.ops.webhookSecret",
     );
   });

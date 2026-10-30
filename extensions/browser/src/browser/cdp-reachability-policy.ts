@@ -4,8 +4,8 @@
  * CDP control-plane probes may target loopback even when page navigation policy
  * is stricter, so this module scopes the exception to browser control only.
  */
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { normalizeHostname } from "../sdk-security-runtime.js";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeHostname } from "openclaw/plugin-sdk/security-runtime";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";

@@ -3,26 +3,17 @@ import {
   type ThinkingCatalogPolicyCarrier,
 } from "../plugins/provider-thinking-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
+import {
+  modelTransportRoutesMatch,
+  normalizeCatalogRouteBaseUrl,
+  resolveCatalogOwnedModelCompat,
+} from "./model-compat-catalog.js";
 
 function mergeCatalogFields<T extends object>(
   base: T | undefined,
   override: T | undefined,
 ): T | undefined {
   return base && override ? { ...base, ...override } : (override ?? base);
-}
-
-export function normalizeCatalogRouteBaseUrl(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  try {
-    const url = new URL(value);
-    url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
-    return url.toString();
-  } catch {
-    return value.replace(/\/+$/u, "");
-  }
 }
 
 function catalogRouteChanges(base: ModelCatalogEntry, overlay: ModelCatalogEntry): boolean {
@@ -42,9 +33,13 @@ function clearRouteBoundCatalogMetadata(
 ): ModelCatalogEntry {
   const {
     contextWindow: _contextWindow,
+    contextWindowSource: _contextWindowSource,
+    contextCapacitySource: _contextCapacitySource,
     contextWindows: _contextWindows,
     contextWindowDefault: _contextWindowDefault,
     contextTokens: _contextTokens,
+    parameterCount: _parameterCount,
+    family: _family,
     reasoning: _reasoning,
     configuredReasoning: _configuredReasoning,
     thinkingPolicyProvider: _thinkingPolicyProvider,
@@ -54,9 +49,11 @@ function clearRouteBoundCatalogMetadata(
     params: _params,
     compat: _compat,
     mediaInput: _mediaInput,
+    inference: _inference,
     ...routeNeutral
   } = entry;
-  return routeNeutral;
+  // Losing route provenance must not promote a declared typed route to legacy chat.
+  return { ...routeNeutral, ...(entry.inference ? { inference: { chat: false } } : {}) };
 }
 
 export function overlayCatalogMetadata(
@@ -72,7 +69,13 @@ export function overlayCatalogMetadata(
   // routes. Capabilities are atomic with their route; never carry them across
   // an API/endpoint change when the new source omits those facts.
   const routeChanged = catalogRouteChanges(base, overlay);
-  const routeBase = routeChanged ? clearRouteBoundCatalogMetadata(base) : base;
+  // Applied configured routes need exact capability provenance, while names
+  // retain the existing rule for known transport changes.
+  const clearBaseCapabilities =
+    options?.preserveBaseCompat && !options.preserveBaseRoute
+      ? !modelTransportRoutesMatch(base, overlay)
+      : routeChanged;
+  const routeBase = clearBaseCapabilities ? clearRouteBoundCatalogMetadata(base) : base;
   const params = mergeCatalogFields(routeBase.params, overlay.params);
   const thinkingLevelMap = overlay.thinkingLevelMap ?? routeBase.thinkingLevelMap;
   // Options + default are one normalized unit (default ∈ options): an overlay
@@ -83,34 +86,35 @@ export function overlayCatalogMetadata(
     contextWindowDefault: _baseContextWindowDefault,
     ...selectionNeutralBase
   } = routeBase;
-  const contextWindowSelection =
-    overlay.contextWindows !== undefined
-      ? {
-          contextWindows: overlay.contextWindows,
-          ...(overlay.contextWindowDefault !== undefined
-            ? { contextWindowDefault: overlay.contextWindowDefault }
-            : {}),
-        }
-      : {
-          ...(routeBase.contextWindows !== undefined
-            ? { contextWindows: routeBase.contextWindows }
-            : {}),
-          ...((overlay.contextWindowDefault ?? routeBase.contextWindowDefault)
-            ? {
-                contextWindowDefault:
-                  overlay.contextWindowDefault ?? routeBase.contextWindowDefault,
-              }
-            : {}),
-        };
+  const replacesContextWindows = overlay.contextWindows !== undefined;
+  const contextWindows = replacesContextWindows ? overlay.contextWindows : routeBase.contextWindows;
+  const contextWindowDefault = replacesContextWindows
+    ? overlay.contextWindowDefault
+    : (overlay.contextWindowDefault ?? routeBase.contextWindowDefault) || undefined;
   const applyRoute = !options?.preserveBaseRoute;
+  const inferenceRouteChanged = !modelTransportRoutesMatch(base, overlay);
+  const inference =
+    !applyRoute && inferenceRouteChanged
+      ? base.inference
+      : (overlay.inference ??
+        (inferenceRouteChanged && base.inference ? { chat: false } : base.inference));
   return {
     ...selectionNeutralBase,
-    ...contextWindowSelection,
+    ...(contextWindows !== undefined ? { contextWindows } : {}),
+    ...(contextWindowDefault !== undefined ? { contextWindowDefault } : {}),
     ...(routeChanged ? { name: overlay.name } : {}),
     ...(applyRoute && overlay.api !== undefined ? { api: overlay.api } : {}),
     ...(applyRoute && overlay.baseUrl !== undefined ? { baseUrl: overlay.baseUrl } : {}),
     ...(overlay.contextWindow !== undefined ? { contextWindow: overlay.contextWindow } : {}),
+    ...(overlay.contextWindow !== undefined
+      ? { contextWindowSource: overlay.contextWindowSource }
+      : {}),
     ...(overlay.contextTokens !== undefined ? { contextTokens: overlay.contextTokens } : {}),
+    ...(overlay.parameterCount !== undefined ? { parameterCount: overlay.parameterCount } : {}),
+    ...(overlay.family !== undefined ? { family: overlay.family } : {}),
+    ...(overlay.contextCapacitySource
+      ? { contextCapacitySource: overlay.contextCapacitySource }
+      : {}),
     ...(overlay.reasoning !== undefined ? { reasoning: overlay.reasoning } : {}),
     ...(overlay.configuredReasoning !== undefined
       ? { configuredReasoning: overlay.configuredReasoning }
@@ -119,6 +123,7 @@ export function overlayCatalogMetadata(
     ...(overlay.input !== undefined ? { input: overlay.input } : {}),
     ...(params ? { params } : {}),
     ...(overlay.mediaInput !== undefined ? { mediaInput: overlay.mediaInput } : {}),
+    ...(inference !== undefined ? { inference } : {}),
     ...(overlay.providerOrder !== undefined ? { providerOrder: overlay.providerOrder } : {}),
     ...(overlay.status !== undefined ? { status: overlay.status } : {}),
     ...(overlay.statusReason !== undefined ? { statusReason: overlay.statusReason } : {}),

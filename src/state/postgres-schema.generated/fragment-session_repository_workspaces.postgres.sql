@@ -1,0 +1,31 @@
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
+
+CREATE TABLE "session_repository_workspaces" (
+  "workspace_id" text COLLATE "C" NOT NULL,
+  "agent_id" text COLLATE "C" NOT NULL,
+  "session_key" text COLLATE "C" NOT NULL,
+  "url" text COLLATE "C" NOT NULL,
+  "requested_ref" text COLLATE "C",
+  "run_setup_script" bigint NOT NULL DEFAULT 0,
+  "base_commit" text COLLATE "C",
+  "base_manifest_hash" text COLLATE "C",
+  "branch" text COLLATE "C" NOT NULL,
+  "checkpoint_ref" text COLLATE "C",
+  "manifest_hash" text COLLATE "C",
+  "revision" bigint NOT NULL,
+  "created_at_ms" bigint NOT NULL,
+  "updated_at_ms" bigint NOT NULL,
+  PRIMARY KEY ("workspace_id"),
+  CHECK ((char_length("workspace_id") = 36)),
+  CHECK ((char_length("agent_id") BETWEEN 1 AND 128)),
+  CHECK ((char_length("session_key") BETWEEN 1 AND 1024)),
+  CHECK ((char_length("url") BETWEEN 1 AND 4096)),
+  CHECK ("requested_ref" IS NULL OR (char_length("requested_ref") BETWEEN 1 AND 1024)),
+  CHECK (("run_setup_script" IN (0, 1))),
+  CHECK ("base_commit" IS NULL OR (char_length("base_commit") IN (40, 64))),
+  CHECK ((char_length("branch") BETWEEN 1 AND 256)),
+  CHECK (("revision" >= 0)),
+  CHECK ("base_manifest_hash" IS NULL OR "base_commit" IS NOT NULL),
+  CHECK (("checkpoint_ref" IS NULL AND "manifest_hash" IS NULL) OR ("checkpoint_ref" IS NOT NULL AND "manifest_hash" IS NOT NULL AND "base_manifest_hash" IS NOT NULL)),
+  UNIQUE ("agent_id", "session_key")
+);

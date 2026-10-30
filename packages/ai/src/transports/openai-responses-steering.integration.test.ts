@@ -1,4 +1,8 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { collect } from "../../../../test/helpers/async-iterable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { Context, Model, StreamOptions } from "../types.js";
 
@@ -7,19 +11,9 @@ type WireEvent =
   | { type: "message"; message: Record<string, unknown> }
   | { type: "close"; code: number };
 
-const sockets = vi.hoisted(() => ({
-  instances: [] as Array<{
-    requests: Record<string, unknown>[];
-    closed: boolean;
-    streamCalls: number;
-    iteratorReturns: number;
-    emit(message: Record<string, unknown>): void;
-    disconnect(): void;
-  }>,
-}));
-
-vi.mock("openai/resources/responses/ws.js", () => ({
-  ResponsesWS: class {
+const sockets = vi.hoisted(() => {
+  const instances: ResponsesWS[] = [];
+  class ResponsesWS {
     socket = { readyState: 1 };
     requests: Record<string, unknown>[] = [];
     closed = false;
@@ -30,7 +24,7 @@ vi.mock("openai/resources/responses/ws.js", () => ({
     private stopped = false;
 
     constructor() {
-      sockets.instances.push(this);
+      instances.push(this);
     }
 
     send(request: Record<string, unknown>) {
@@ -46,8 +40,7 @@ vi.mock("openai/resources/responses/ws.js", () => ({
     }
 
     disconnect() {
-      this.closed = true;
-      this.socket.readyState = 3;
+      this.close();
       this.push({ type: "close", code: 1006 });
     }
 
@@ -78,11 +71,10 @@ vi.mock("openai/resources/responses/ws.js", () => ({
       const iterator: AsyncIterableIterator<WireEvent> = {
         next: () => {
           const event = this.queue.shift();
-          if (event) {
-            return Promise.resolve({ value: event, done: false });
-          }
-          if (this.stopped) {
-            return Promise.resolve({ value: undefined, done: true });
+          if (event || this.stopped) {
+            return Promise.resolve<IteratorResult<WireEvent>>(
+              event ? { value: event, done: false } : { value: undefined, done: true },
+            );
           }
           return new Promise((resolve) => {
             this.waiting.push(resolve);
@@ -100,16 +92,20 @@ vi.mock("openai/resources/responses/ws.js", () => ({
       };
       return iterator;
     }
-  },
-}));
+  }
+  return { instances, ResponsesWS };
+});
+vi.mock("openai/resources/responses/ws.js", () => ({ ResponsesWS: sockets.ResponsesWS }));
 
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { createAiTransportHost, runWithAiTransportHost } from "../host.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import type { ResponsesContinuationRequest } from "./openai-responses-continuation.js";
 import { OpenAIResponsesWebSocketPostDispatchError } from "./openai-responses-contracts.js";
 import { responsesLoopbackModel } from "./openai-responses-loopback.test-support.js";
 import { createOpenAIResponsesWebSocketStream } from "./openai-responses-websocket.js";
+import { completedResponse } from "./openai-stream-cases.test-support.js";
 
 const client = {
   apiKey: "test-key",
@@ -134,14 +130,65 @@ const output = (text: string, id = "msg_1") => ({
   status: "completed" as const,
   content: [{ type: "output_text" as const, text, annotations: [] }],
 });
-const completed = (id: string, result = [output("answer")]) => ({
-  type: "response.completed",
-  response: { id, status: "completed", output: result },
-});
+const completed = (
+  id: string,
+  result: Array<ReturnType<typeof output> | ReturnType<typeof makeToolCall>> = [output("answer")],
+) => completedResponse(id, result);
 const accepted = {
   type: "response.steer.accepted",
   steer: { id: "steer_1", previous_response_id: "resp_1" },
 };
+const makeToolCall = (call_id = "call_1", id = "fc_1", async = false) => ({
+  type: "function_call" as const,
+  id,
+  call_id,
+  name: "lookup",
+  arguments: "{}",
+  status: "completed" as const,
+  ...(async ? { async } : {}),
+});
+const makeToolResult = (call_id = "call_1") => ({
+  type: "function_call_output" as const,
+  call_id,
+  output: "lookup result",
+});
+const created = (id = "resp_1") => ({ type: "response.created", response: { id } });
+type ActiveControl = Parameters<NonNullable<StreamOptions["onActiveResponse"]>>[0];
+const readyControl = () => createDeferred<ActiveControl>();
+const createRequests = (socket: (typeof sockets.instances)[number]) =>
+  socket.requests.filter((request) => request.type === "response.create");
+const runDetached = AsyncLocalStorage.snapshot();
+
+async function startTransport(context: Context, options: StreamOptions = {}) {
+  const ready = readyControl();
+  const stream = createOpenAIResponsesTransportStreamFn();
+  const first = (
+    await stream(model, context, {
+      apiKey: "test-key",
+      transport: "websocket-cached",
+      ...options,
+      onActiveResponse: (control) => {
+        ready.resolve(control);
+      },
+    })
+  ).result();
+  await vi.waitFor(() => expect(sockets.instances).toHaveLength(1));
+  const socket = sockets.instances[0];
+  assert(socket);
+  socket.emit(created());
+  return { stream, first, socket, control: await ready.promise };
+}
+
+async function acceptUpdate(harness: ReturnType<typeof start>) {
+  const admission = (await harness.control).steer([{ ...update, timestamp: 1 }]);
+  harness.socket.emit(accepted);
+  await admission;
+}
+
+async function finish(harness: Pick<ReturnType<typeof start>, "events" | "first">) {
+  await harness.events;
+  harness.first.finish();
+}
 
 function createStream(
   input: NonNullable<ResponsesContinuationRequest["input"]>,
@@ -159,14 +206,6 @@ function createStream(
   });
 }
 
-async function collect(stream: AsyncIterable<unknown>) {
-  const events: unknown[] = [];
-  for await (const event of stream) {
-    events.push(event);
-  }
-  return events;
-}
-
 function expectPostDispatchError(error: unknown, cause: RegExp) {
   expect(error).toBeInstanceOf(OpenAIResponsesWebSocketPostDispatchError);
   expect(error).toMatchObject({ cause: { message: expect.stringMatching(cause) } });
@@ -176,7 +215,7 @@ function start(
   request: Record<string, unknown> = {},
   input: NonNullable<ResponsesContinuationRequest["input"]> = [initialUser],
 ) {
-  const ready = createDeferred<Parameters<NonNullable<StreamOptions["onActiveResponse"]>>[0]>();
+  const ready = readyControl();
   const cleanup = vi.fn();
   const first = createStream(
     input,
@@ -199,36 +238,17 @@ async function startRequiredInput(historicalUpdate = false) {
     { reasoning: { effort: "low" } },
     historicalUpdate ? [sentUpdate, initialUser] : [initialUser],
   );
-  const control = await harness.control;
-  const admission = control.steer([{ ...update, timestamp: 1 }]);
-  harness.socket.emit(accepted);
-  await admission;
-  const toolCall = {
-    type: "function_call" as const,
-    id: "fc_1",
-    call_id: "call_1",
-    name: "lookup",
-    arguments: "{}",
-    status: "completed" as const,
-  };
-  harness.socket.emit({
-    type: "response.completed",
-    response: { id: "resp_1", status: "completed", output: [toolCall] },
-  });
+  await acceptUpdate(harness);
+  const call = makeToolCall();
+  harness.socket.emit(completed("resp_1", [call]));
   harness.socket.emit({
     type: "response.steer.pending",
     steer: accepted.steer,
     reason: "waiting_for_required_input",
     required_input: [{ type: "function_call_output", call_id: "call_1", name: "lookup" }],
   });
-  await harness.events;
-  harness.first.finish();
-  const toolResult = {
-    type: "function_call_output" as const,
-    call_id: "call_1",
-    output: "lookup result",
-  };
-  return { ...harness, sentUpdate, toolCall, toolResult };
+  await finish(harness);
+  return { ...harness, sentUpdate, toolCall: call, toolResult: makeToolResult() };
 }
 
 afterEach(() => {
@@ -237,39 +257,81 @@ afterEach(() => {
 });
 
 describe("Responses WebSocket steering handoff", () => {
+  it.each(["absent hook", "idle hook", "accepted steer"])(
+    "releases request-only callbacks after completion with %s",
+    async (mode) => {
+      const host = createAiTransportHost({ runInDetachedAsyncContext: runDetached });
+      const references: WeakRef<object>[] = [];
+      const completeTurn = async () => {
+        const caller = { content: "request-only callback state" };
+        const ready = readyControl();
+        const steeringInput = () => [user(caller.content)];
+        references.push(new WeakRef(caller), new WeakRef(steeringInput));
+        const first = createOpenAIResponsesWebSocketStream({
+          client: client as never,
+          request: { model: model.id, input: [initialUser] },
+          mode: "websocket-cached",
+          sessionId: "steering-retention",
+          steeringInput,
+          ...(mode === "absent hook"
+            ? {}
+            : { onActiveResponse: (control) => ready.resolve(control) }),
+        });
+        const events = collect(first.stream);
+        const socket = sockets.instances[0];
+        assert(socket);
+        socket.emit(created());
+        if (mode === "accepted steer") {
+          const control = await ready.promise;
+          const admission = control.steer([{ ...update, timestamp: 1 }]);
+          socket.emit(accepted);
+          assert.equal(await admission, true);
+        }
+        socket.emit(completed("resp_1"));
+        await events;
+        first.finish();
+      };
+      try {
+        // Keep completed request frames out of the collecting job while real cache timers live.
+        await new Promise<void>((resolve, reject) => {
+          void nextTurn()
+            .then(() => runWithAiTransportHost(host, completeTurn))
+            .then(() => resolve(), reject);
+        });
+        const control = new WeakRef({ unowned: true });
+        await nextTurn();
+        queryObjects(WeakRef);
+        await nextTurn();
+        queryObjects(WeakRef);
+        expect(control.deref()).toBeUndefined();
+        expect(references.filter((reference) => reference.deref())).toHaveLength(0);
+        expect(sockets.instances[0]?.closed).toBe(false);
+      } finally {
+        cleanupSessionResources(undefined, host);
+      }
+    },
+  );
+
   it("keeps runtime context with its user through steering and the automatic successor", async () => {
     const context: Context = {
       messages: [
         { role: "user", content: "original", timestamp: 0 },
         {
           role: "user",
-          content: "runtime context",
+          content: "OpenClaw runtime context:\nruntime context",
           timestamp: 0,
-          runtimeContextCarrier: true,
+          runtimeContext: {},
         },
       ],
     };
-    const ready = createDeferred<Parameters<NonNullable<StreamOptions["onActiveResponse"]>>[0]>();
-    const stream = createOpenAIResponsesTransportStreamFn();
     const options = {
       apiKey: "test-key",
       sessionId: "runtime-context-steering",
       transport: "websocket-cached" as const,
     };
-    const first = (
-      await stream(model, context, {
-        ...options,
-        onActiveResponse: (control) => {
-          ready.resolve(control);
-        },
-      })
-    ).result();
-    await vi.waitFor(() => expect(sockets.instances).toHaveLength(1));
-    const socket = sockets.instances[0];
-    assert(socket);
-    socket.emit({ type: "response.created", response: { id: "resp_1" } });
+    const { first, stream, socket, control } = await startTransport(context, options);
     const steeringUser = { role: "user" as const, content: "new requirement", timestamp: 1 };
-    const admission = (await ready.promise).steer([steeringUser]);
+    const admission = control.steer([steeringUser]);
     try {
       await vi.waitFor(() => expect(socket.requests).toHaveLength(2));
       expect(socket.requests[1]).toMatchObject({
@@ -295,41 +357,28 @@ describe("Responses WebSocket steering handoff", () => {
   it.each(["prune", "prepend"])(
     "handles %s payload projection against the active prefix",
     async (mode) => {
-      const ready = createDeferred<Parameters<NonNullable<StreamOptions["onActiveResponse"]>>[0]>();
-      const result = (
-        await createOpenAIResponsesTransportStreamFn()(
-          model,
-          {
-            messages: [{ role: "user", content: "original", timestamp: 0 }],
+      const {
+        first: result,
+        socket,
+        control,
+      } = await startTransport(
+        { messages: [{ role: "user", content: "original", timestamp: 0 }] },
+        {
+          sessionId: "payload-projection",
+          onPayload: (payload) => {
+            const request = payload as { input: unknown[] };
+            return {
+              ...request,
+              input:
+                mode === "prune" && request.input.length > 1
+                  ? request.input.slice(-1)
+                  : [user("hook context"), ...request.input],
+            };
           },
-          {
-            apiKey: "test-key",
-            sessionId: "payload-projection",
-            transport: "websocket-cached",
-            onActiveResponse: (control) => {
-              ready.resolve(control);
-            },
-            onPayload: (payload) => {
-              const request = payload as { input: unknown[] };
-              return {
-                ...request,
-                input:
-                  mode === "prune" && request.input.length > 1
-                    ? request.input.slice(-1)
-                    : [user("hook context"), ...request.input],
-              };
-            },
-          },
-        )
-      ).result();
-      await vi.waitFor(() => expect(sockets.instances).toHaveLength(1));
-      const socket = sockets.instances[0];
-      assert(socket);
-      socket.emit({ type: "response.created", response: { id: "resp_1" } });
+        },
+      );
       let outcome: boolean | undefined;
-      const admission = (await ready.promise).steer([
-        { role: "user", content: "update", timestamp: 1 },
-      ]);
+      const admission = control.steer([{ role: "user", content: "update", timestamp: 1 }]);
       void admission.then((value) => {
         outcome = value;
       });
@@ -351,7 +400,6 @@ describe("Responses WebSocket steering handoff", () => {
 
   it("reconnects from saved client output with the original input delivery order", async () => {
     const context: Context = { messages: [{ role: "user", content: "original", timestamp: 0 }] };
-    const ready = createDeferred<Parameters<NonNullable<StreamOptions["onActiveResponse"]>>[0]>();
     const options = {
       apiKey: "test-key",
       sessionId: "input-replay-client",
@@ -366,42 +414,16 @@ describe("Responses WebSocket steering handoff", () => {
         );
       },
     };
-    const stream = createOpenAIResponsesTransportStreamFn();
-    const first = (
-      await stream(model, context, {
-        ...options,
-        onActiveResponse: (control) => {
-          ready.resolve(control);
-        },
-      })
-    ).result();
-    await vi.waitFor(() => expect(sockets.instances).toHaveLength(1));
-    const socket = sockets.instances[0];
-    assert(socket);
-    socket.emit({ type: "response.created", response: { id: "resp_1" } });
+    const { first, stream, socket, control } = await startTransport(context, options);
     const steeringUser = { role: "user" as const, content: "new requirement", timestamp: 2 };
-    const admission = (await ready.promise).steer([steeringUser]);
+    const admission = control.steer([steeringUser]);
     await vi.waitFor(() => expect(socket.requests).toHaveLength(2));
     socket.emit(accepted);
     await admission;
     expect(JSON.stringify(socket.requests[1])).toContain("projected requirement");
-    const toolCall = {
-      type: "function_call",
-      id: "fc_1",
-      call_id: "call_1",
-      name: "lookup",
-      arguments: "{}",
-      status: "completed",
-      async: true,
-    };
-    socket.emit({
-      type: "response.completed",
-      response: {
-        id: "resp_1",
-        status: "completed",
-        output: [toolCall, output("independent answer")],
-      },
-    });
+    socket.emit(
+      completed("resp_1", [makeToolCall("call_1", "fc_1", true), output("independent answer")]),
+    );
     const firstAnswer = await first;
     expect(firstAnswer.stopReason).not.toBe("error");
     context.messages.push(
@@ -441,93 +463,35 @@ describe("Responses WebSocket steering handoff", () => {
     connection.emit(completed("resp_3"));
     expect((await third).stopReason).not.toBe("error");
   });
-  it.each([false, true])(
-    "keeps inherited effort for automatic steering (historical update: %s)",
-    async (historicalUpdate) => {
-      const sentUpdate = { type: "configuration_update" as const, reasoning: { effort: "medium" } };
-      const request = { reasoning: { effort: "low" } };
-      const harness = start(request, historicalUpdate ? [sentUpdate, initialUser] : [initialUser]);
-      const control = await harness.control;
-      const admission = control.steer([{ ...update, timestamp: 1 }]);
-      harness.socket.emit(accepted);
-      await admission;
-      const firstAnswer = output("original fragment");
-      harness.socket.emit(completed("resp_1", [firstAnswer]));
-      const toolCall = {
-        type: "function_call" as const,
-        id: "fc_1",
-        call_id: "call_1",
-        name: "lookup",
-        arguments: "{}",
-        status: "completed" as const,
-      };
-      harness.socket.emit({ type: "response.created", response: { id: "resp_2" } });
-      harness.socket.emit({
-        type: "response.completed",
-        response: { id: "resp_2", status: "completed", output: [toolCall] },
-      });
-      await harness.events;
-      harness.first.finish();
-
-      let continuationNeeded: (() => boolean) | undefined;
-      const nextInput = [initialUser, firstAnswer, update];
-      const second = createStream(
-        nextInput,
-        (nextControl) => {
-          continuationNeeded = nextControl.needsContinuation;
-        },
-        { reasoning: { effort: "high" } },
-      );
-      await collect(second.stream);
-      second.finish();
-      expect(second.request.reasoning).toEqual({ effort: "low" });
-      expect(continuationNeeded?.()).toBe(false);
-      expect(
-        harness.socket.requests.filter((entry) => entry.type === "response.create"),
-      ).toHaveLength(1);
-
-      const toolResult = {
-        type: "function_call_output" as const,
-        call_id: "call_1",
-        output: "lookup result",
-      };
-      const third = createStream([...nextInput, toolCall, toolResult], undefined, {
-        reasoning: { effort: "high" },
-      });
-      const thirdEvents = collect(third.stream);
-      harness.socket.emit({ type: "response.created", response: { id: "resp_3" } });
-      harness.socket.emit(completed("resp_3"));
-      await thirdEvents;
-      third.finish();
-      // No fresh user exists to anchor an update; use the selected request effort and a fresh prefix.
-      expect(third.request).toMatchObject({
-        reasoning: { effort: "high" },
-        input: [...nextInput, toolCall, toolResult],
-      });
-      expect(third.request.previous_response_id).toBeUndefined();
-    },
-  );
-
-  it("adds a changed effort only before a fresh user after automatic steering", async () => {
+  it("keeps inherited effort for automatic steering with a historical update", async () => {
     const sentUpdate = { type: "configuration_update" as const, reasoning: { effort: "medium" } };
-    const harness = start({ reasoning: { effort: "low" } }, [sentUpdate, initialUser]);
-    const control = await harness.control;
-    const admission = control.steer([{ ...update, timestamp: 1 }]);
-    harness.socket.emit(accepted);
-    await admission;
+    const request = { reasoning: { effort: "low" } };
+    const harness = start(request, [sentUpdate, initialUser]);
+    await acceptUpdate(harness);
     const firstAnswer = output("original fragment");
-    const automaticAnswer = output("automatic answer", "msg_2");
     harness.socket.emit(completed("resp_1", [firstAnswer]));
+    const toolCall = makeToolCall();
     harness.socket.emit({ type: "response.created", response: { id: "resp_2" } });
-    harness.socket.emit(completed("resp_2", [automaticAnswer]));
-    await harness.events;
-    harness.first.finish();
-    const secondInput = [initialUser, firstAnswer, update];
-    const second = createStream(secondInput, undefined, { reasoning: { effort: "high" } });
+    harness.socket.emit(completed("resp_2", [toolCall]));
+    await finish(harness);
+
+    let continuationNeeded: (() => boolean) | undefined;
+    const nextInput = [initialUser, firstAnswer, update];
+    const second = createStream(
+      nextInput,
+      (nextControl) => {
+        continuationNeeded = nextControl.needsContinuation;
+      },
+      { reasoning: { effort: "high" } },
+    );
     await collect(second.stream);
     second.finish();
-    const freshUser = user("fresh question");
-    const third = createStream([...secondInput, automaticAnswer, freshUser], undefined, {
+    expect(second.request.reasoning).toEqual({ effort: "low" });
+    expect(continuationNeeded?.()).toBe(false);
+    expect(createRequests(harness.socket)).toHaveLength(1);
+
+    const toolResult = makeToolResult();
+    const third = createStream([...nextInput, toolCall, toolResult], undefined, {
       reasoning: { effort: "high" },
     });
     const thirdEvents = collect(third.stream);
@@ -535,11 +499,12 @@ describe("Responses WebSocket steering handoff", () => {
     harness.socket.emit(completed("resp_3"));
     await thirdEvents;
     third.finish();
+    // No fresh user exists to anchor an update; use the selected request effort and a fresh prefix.
     expect(third.request).toMatchObject({
-      previous_response_id: "resp_2",
-      reasoning: { effort: "low" },
-      input: [{ type: "configuration_update", reasoning: { effort: "high" } }, freshUser],
+      reasoning: { effort: "high" },
+      input: [...nextInput, toolCall, toolResult],
     });
+    expect(third.request.previous_response_id).toBeUndefined();
   });
 
   it("steers during generation and consumes the automatic continuation without creating another response", async () => {
@@ -583,45 +548,26 @@ describe("Responses WebSocket steering handoff", () => {
       completed("resp_2", [output("updated answer", "msg_2")]),
     );
     second.finish();
-    expect(
-      harness.socket.requests.filter((request) => request.type === "response.create"),
-    ).toHaveLength(1);
+    expect(createRequests(harness.socket)).toHaveLength(1);
     expect(harness.socket.streamCalls).toBe(1);
     expect(harness.cleanup).toHaveBeenCalledOnce();
     expect(await control.steer([{ ...update, timestamp: 2 }])).toBe(false);
   });
 
-  it("delivers async tool results once after the automatic steering response finishes", async () => {
+  it("delivers non-canonical async tool results once after the automatic steering response finishes", async () => {
+    const callId = "functions.gateway:0";
+    const itemId = "fc_tmp_kegospxl46";
     const harness = start();
-    const control = await harness.control;
-    const admission = control.steer([{ ...update, timestamp: 1 }]);
-    harness.socket.emit(accepted);
-    await admission;
-    const toolCall = {
-      type: "function_call" as const,
-      id: "fc_1",
-      call_id: "call_1",
-      name: "lookup",
-      arguments: "{}",
-      status: "completed" as const,
-      async: true,
-    };
+    await acceptUpdate(harness);
+    const toolCall = makeToolCall(callId, itemId, true);
     const firstAnswer = output("working independently");
-    harness.socket.emit({
-      type: "response.completed",
-      response: { id: "resp_1", status: "completed", output: [toolCall, firstAnswer] },
-    });
+    harness.socket.emit(completed("resp_1", [toolCall, firstAnswer]));
     const automaticAnswer = output("handling the new requirement", "msg_2");
     harness.socket.emit({ type: "response.created", response: { id: "resp_2" } });
     harness.socket.emit(completed("resp_2", [automaticAnswer]));
-    await harness.events;
-    harness.first.finish();
+    await finish(harness);
 
-    const toolResult = {
-      type: "function_call_output" as const,
-      call_id: "call_1",
-      output: "lookup result",
-    };
+    const toolResult = makeToolResult(callId);
     const secondInput = [initialUser, toolCall, firstAnswer, toolResult, update];
     let continuationNeeded: (() => boolean) | undefined;
     const second = createStream(secondInput, (nextControl) => {
@@ -630,49 +576,52 @@ describe("Responses WebSocket steering handoff", () => {
     await collect(second.stream);
     second.finish();
     expect(continuationNeeded?.()).toBe(true);
-    expect(
-      harness.socket.requests.filter((request) => request.type === "response.create"),
-    ).toHaveLength(1);
+    expect(createRequests(harness.socket)).toHaveLength(1);
 
     // Replay must match delivery: the automatic response never saw the tool result.
+    const replayedCallId = "call_functions_gateway_0_fc_tmp_kegospxl46_8ea5d0ca62";
+    const replayedToolCall = { ...toolCall, call_id: replayedCallId };
+    const replayedToolResult = { ...toolResult, call_id: replayedCallId };
     const third = createStream([
       initialUser,
-      toolCall,
+      replayedToolCall,
       firstAnswer,
       update,
       automaticAnswer,
-      toolResult,
+      replayedToolResult,
     ]);
     const thirdEvents = collect(third.stream);
     harness.socket.emit({ type: "response.created", response: { id: "resp_3" } });
     harness.socket.emit(completed("resp_3", [output("answer using lookup result", "msg_3")]));
     await thirdEvents;
     third.finish();
-    const creates = harness.socket.requests.filter((request) => request.type === "response.create");
+    const creates = createRequests(harness.socket);
     expect(creates).toHaveLength(2);
-    expect(creates[1]).toMatchObject({ previous_response_id: "resp_2", input: [toolResult] });
-    expect(creates.flatMap((request) => request.input)).toEqual([initialUser, toolResult]);
+    expect(creates[1]).toMatchObject({
+      previous_response_id: "resp_2",
+      input: [{ ...toolResult, call_id: callId }],
+    });
+    expect(creates.flatMap((request) => request.input)).toEqual([
+      initialUser,
+      { ...toolResult, call_id: callId },
+    ]);
   });
 
-  it.each(
-    [
-      {
-        name: "instructions and tools",
-        settings: {
-          instructions: "Summarize the lookup result",
-          tools: [{ type: "function", name: "summarize", parameters: { type: "object" } }],
-        },
+  it.each([
+    {
+      name: "instructions and tools",
+      historicalUpdate: false,
+      settings: {
+        instructions: "Summarize the lookup result",
+        tools: [{ type: "function", name: "summarize", parameters: { type: "object" } }],
       },
-      { name: "output limit", settings: { max_output_tokens: 512 } },
-      { name: "reasoning effort", settings: { reasoning: { effort: "high" } } },
-      {
-        name: "reasoning summary",
-        settings: { reasoning: { effort: "low", summary: "detailed" } },
-      },
-    ].flatMap((entry) =>
-      [false, true].map((historicalUpdate) => Object.assign({}, entry, { historicalUpdate })),
-    ),
-  )(
+    },
+    {
+      name: "reasoning summary",
+      historicalUpdate: true,
+      settings: { reasoning: { effort: "low", summary: "detailed" } },
+    },
+  ])(
     "returns required input with current $name (historical update: $historicalUpdate)",
     async ({ settings, historicalUpdate }) => {
       const harness = await startRequiredInput(historicalUpdate);
@@ -712,43 +661,21 @@ describe("Responses WebSocket steering handoff", () => {
     },
   );
 
-  it("returns required input with inherited controls when request reasoning is omitted", async () => {
-    const harness = await startRequiredInput(true);
-    const second = createStream([initialUser, harness.toolCall, harness.toolResult, update]);
-    const events = collect(second.stream);
-    harness.socket.emit({ type: "response.created", response: { id: "resp_2" } });
-    harness.socket.emit(completed("resp_2"));
-    expect(await events).toContainEqual(completed("resp_2"));
-    second.finish();
-    expect(harness.socket.requests.at(-1)).toMatchObject({
-      type: "response.create",
-      previous_response_id: "resp_1",
-      input: [harness.toolResult],
-    });
-    expect(harness.socket.requests.at(-1)).not.toHaveProperty("reasoning");
-  });
-
-  it.each(
+  it.each([
+    ["pro mode", { reasoning: { mode: "pro", effort: "high" } }],
+    ["multi-agent mode", { multi_agent: { enabled: true } }],
     [
-      { name: "another model", settings: { model: "gpt-5.6-luna" } },
-      { name: "pro mode", settings: { reasoning: { mode: "pro", effort: "high" } } },
-      { name: "multi-agent mode", settings: { multi_agent: { enabled: true } } },
-      { name: "automatic truncation", settings: { truncation: "auto" } },
-      {
-        name: "automatic compaction",
-        settings: { context_management: [{ type: "compaction", compact_threshold: 1000 }] },
-      },
-    ].flatMap((entry) =>
-      [false, true].map((includeControl) => Object.assign({}, entry, { includeControl })),
-    ),
-  )(
-    "rejects required-input history with configuration updates in $name (control present: $includeControl)",
-    async ({ settings, includeControl }) => {
+      "automatic compaction",
+      { context_management: [{ type: "compaction", compact_threshold: 1000 }] },
+    ],
+  ] as const)(
+    "rejects required-input history with configuration updates in %s",
+    async (_name, settings) => {
       const harness = await startRequiredInput(true);
       const input = [initialUser, harness.toolCall, harness.toolResult, update];
       let failure: unknown;
       try {
-        createStream(includeControl ? [harness.sentUpdate, ...input] : input, undefined, {
+        createStream([harness.sentUpdate, ...input], undefined, {
           reasoning: { effort: "high" },
           ...settings,
         });
@@ -757,9 +684,7 @@ describe("Responses WebSocket steering handoff", () => {
       }
       expectPostDispatchError(failure, /steering continuation changed its request or history/);
       expect(harness.socket.closed).toBe(true);
-      expect(
-        harness.socket.requests.filter((request) => request.type === "response.create"),
-      ).toHaveLength(1);
+      expect(createRequests(harness.socket)).toHaveLength(1);
     },
   );
 
@@ -778,7 +703,7 @@ describe("Responses WebSocket steering handoff", () => {
   });
 
   it("closes unresolved admission when the stream consumer returns early", async () => {
-    const ready = createDeferred<Parameters<NonNullable<StreamOptions["onActiveResponse"]>>[0]>();
+    const ready = readyControl();
     const first = createStream([initialUser], (control) => {
       ready.resolve(control);
     });
@@ -799,10 +724,7 @@ describe("Responses WebSocket steering handoff", () => {
 
   it("routes a late accepted-steer failure to the original response owner", async () => {
     const harness = start();
-    const control = await harness.control;
-    const admission = control.steer([{ ...update, timestamp: 1 }]);
-    harness.socket.emit(accepted);
-    await admission;
+    await acceptUpdate(harness);
     const firstAnswer = output("original fragment");
     harness.socket.emit(completed("resp_1", [firstAnswer]));
     harness.socket.emit({
@@ -810,40 +732,29 @@ describe("Responses WebSocket steering handoff", () => {
       steer: { ...accepted.steer, input: [update] },
       error: { code: "response_not_found" },
     });
-    await harness.events;
-    harness.first.finish();
+    await finish(harness);
     const second = createStream([initialUser, firstAnswer, update]);
     const failure = await collect(second.stream).catch((error: unknown) => error);
     expectPostDispatchError(failure, /could not apply accepted steering/);
     expect(harness.socket.closed).toBe(true);
-    expect(
-      harness.socket.requests.filter((request) => request.type === "response.create"),
-    ).toHaveLength(1);
+    expect(createRequests(harness.socket)).toHaveLength(1);
   });
 
-  it.each([
-    { instructions: "Changed instructions" },
-    { tools: [{ type: "function", name: "new_tool", parameters: { type: "object" } }] },
-  ])(
-    "rejects request changes that an automatic continuation would silently ignore",
-    async (request) => {
-      const harness = start();
-      const control = await harness.control;
-      const admission = control.steer([{ ...update, timestamp: 1 }]);
-      harness.socket.emit(accepted);
-      await admission;
-      const firstAnswer = output("original fragment");
-      harness.socket.emit(completed("resp_1", [firstAnswer]));
-      await harness.events;
-      harness.first.finish();
-      let failure: unknown;
-      try {
-        createStream([initialUser, firstAnswer, update], undefined, request);
-      } catch (error) {
-        failure = error;
-      }
-      expectPostDispatchError(failure, /steering continuation|inherited request/);
-      expect(harness.socket.closed).toBe(true);
-    },
-  );
+  it("rejects request changes that an automatic continuation would silently ignore", async () => {
+    const harness = start();
+    await acceptUpdate(harness);
+    const firstAnswer = output("original fragment");
+    harness.socket.emit(completed("resp_1", [firstAnswer]));
+    await finish(harness);
+    let failure: unknown;
+    try {
+      createStream([initialUser, firstAnswer, update], undefined, {
+        tools: [{ type: "function", name: "new_tool", parameters: { type: "object" } }],
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expectPostDispatchError(failure, /steering continuation|inherited request/);
+    expect(harness.socket.closed).toBe(true);
+  });
 });

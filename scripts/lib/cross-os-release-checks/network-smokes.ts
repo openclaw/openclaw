@@ -17,14 +17,14 @@ import {
 import { stopGateway } from "./process.ts";
 import { formatError, sleep } from "./shared.ts";
 
-export function buildCrossOsDiscordRoundtripNonces() {
+function buildCrossOsDiscordRoundtripNonces() {
   return {
     outboundNonce: `native-cross-os-outbound-${randomUUID()}`,
     inboundNonce: `native-cross-os-inbound-${randomUUID()}`,
   };
 }
 
-export function buildDiscordSmokeGuildsConfig(guildId: string, channelId: string) {
+function buildDiscordSmokeGuildsConfig(guildId: string, channelId: string) {
   return {
     [guildId]: {
       channels: {
@@ -107,30 +107,20 @@ async function configureDiscordSmoke(params: {
     logPath: params.logPath,
     timeoutMs: 2 * 60 * 1000,
   });
-  await runInstalledCli({
-    cliPath: params.cliPath,
-    args: ["config", "set", "channels.discord.enabled", "true"],
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
-  await runInstalledCli({
-    cliPath: params.cliPath,
-    args: ["config", "set", "channels.discord.groupPolicy", "allowlist"],
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
-  await runInstalledCli({
-    cliPath: params.cliPath,
-    args: ["config", "set", "channels.discord.guilds", guildsJson, "--strict-json"],
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
+  for (const args of [
+    ["channels.discord.enabled", "true"],
+    ["channels.discord.groupPolicy", "allowlist"],
+    ["channels.discord.guilds", guildsJson, "--strict-json"],
+  ]) {
+    await runInstalledCli({
+      cliPath: params.cliPath,
+      args: ["config", "set", ...args],
+      cwd: params.cwd,
+      env: params.env,
+      logPath: params.logPath,
+      timeoutMs: 2 * 60 * 1000,
+    });
+  }
   if (!shouldUseManagedGatewayService()) {
     const gatewayEnv = { ...params.env, DISCORD_BOT_TOKEN: params.token };
     const gatewayLogPath = join(

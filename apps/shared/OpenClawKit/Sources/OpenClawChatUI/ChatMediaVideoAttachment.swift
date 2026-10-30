@@ -18,7 +18,6 @@ struct ChatMediaVideoAttachment: View {
     let label: String
     let width: Int?
     let height: Int?
-    let playback: OpenClawChatPlaybackMode?
     let resolverReady: Bool
     let playbackAllowed: @MainActor @Sendable () -> Bool
     let load: @MainActor @Sendable (String) async throws -> OpenClawChatLoadedMedia?
@@ -30,23 +29,9 @@ struct ChatMediaVideoAttachment: View {
         Group {
             switch self.state {
             case .loading:
-                HStack(spacing: 8) {
-                    ProgressView()
-                    Text(String(localized: "Loading video…"))
-                        .font(OpenClawChatTypography.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(minHeight: self.reservedHeight)
-                .frame(maxWidth: .infinity)
+                self.waitingCard(String(localized: "Loading video…"))
             case .preparing:
-                HStack(spacing: 8) {
-                    ProgressView()
-                    Text(String(localized: "Preparing playback…"))
-                        .font(OpenClawChatTypography.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(minHeight: self.reservedHeight)
-                .frame(maxWidth: .infinity)
+                self.waitingCard(String(localized: "Preparing playback…"))
             case let .loaded(player):
                 self.playerCard(player)
             case .unavailable:
@@ -61,6 +46,17 @@ struct ChatMediaVideoAttachment: View {
                 player.cleanup()
             }
         }
+    }
+
+    private func waitingCard(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            ProgressView()
+            Text(message)
+                .font(OpenClawChatTypography.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .frame(minHeight: self.reservedHeight)
+        .frame(maxWidth: .infinity)
     }
 
     @ViewBuilder
@@ -109,24 +105,13 @@ struct ChatMediaVideoAttachment: View {
     }
 
     private var unavailableCard: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "video.badge.exclamationmark")
-            Text(String(localized: "Video unavailable"))
-                .font(OpenClawChatTypography.footnote)
-            Spacer()
-            Button {
-                self.retryGeneration &+= 1
-            } label: {
-                Text(String(localized: "Retry"))
-                    .font(OpenClawChatTypography.footnote)
-            }
-            .buttonStyle(.plain)
+        ChatMediaUnavailableRow(
+            systemImage: "video.badge.exclamationmark",
+            message: String(localized: "Video unavailable"),
+            minimumHeight: self.reservedHeight)
+        {
+            self.retryGeneration &+= 1
         }
-        .foregroundStyle(.secondary)
-        .padding(10)
-        .frame(minHeight: self.reservedHeight)
-        .background(Color.black.opacity(0.04))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private var aspectRatio: CGFloat {
@@ -175,7 +160,7 @@ struct ChatMediaVideoAttachment: View {
 
 @MainActor
 @Observable
-final class ChatMediaVideoPlayer: ChatMediaNowPlayingOwner {
+final class ChatMediaVideoPlayer: ChatMediaPlayer {
     let player: AVPlayer
     private(set) var isPlaying = false
     private(set) var isPlaybackBlocked = false
@@ -227,10 +212,6 @@ final class ChatMediaVideoPlayer: ChatMediaNowPlayingOwner {
         ChatMediaPlaybackCoordinator.shared.updateNowPlaying(self)
     }
 
-    func stopForMediaPlaybackInterruption() {
-        self.pause()
-    }
-
     func pause() {
         self.player.pause()
         self.isPlaying = false
@@ -245,19 +226,6 @@ final class ChatMediaVideoPlayer: ChatMediaNowPlayingOwner {
             duration: duration.isFinite && duration > 0 ? duration : 0,
             elapsed: elapsed.isFinite && elapsed > 0 ? elapsed : 0,
             playbackRate: self.isPlaying ? 1 : 0)
-    }
-
-    func handleRemoteCommand(_ command: ChatMediaRemoteCommand) {
-        switch command {
-        case .play: self.play()
-        case .pause: self.pause()
-        case .toggle:
-            if self.isPlaying {
-                self.pause()
-            } else {
-                self.play()
-            }
-        }
     }
 
     func cleanup() {

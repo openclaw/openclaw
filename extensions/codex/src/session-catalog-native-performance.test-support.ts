@@ -1,9 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import type { HeapProfiler } from "node:inspector";
-import { Session as InspectorSession } from "node:inspector/promises";
 import path from "node:path";
-import { setImmediate as nextTurn } from "node:timers/promises";
 import { CodexAppServerClient } from "./app-server/client.js";
 import { createCodexNativeTestState } from "./app-server/native-app-server.test-support.js";
 import type { CodexThreadListResponse } from "./app-server/protocol.js";
@@ -11,8 +8,9 @@ import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
 import type { CodexCatalogPreviewCache } from "./session-catalog-native-projection.js";
 
 export type NativeCatalogBoundary = "ordinary" | "catalog";
-const PAGE_SIZE = 64;
 const CREATED_AT = "2025-01-01T00:00:00.000Z";
+const rolloutRecord = (type: string, payload: unknown) =>
+  JSON.stringify({ timestamp: CREATED_AT, type, payload });
 
 export async function createNativeCatalogPerformanceFixture(
   root: string,
@@ -23,9 +21,8 @@ export async function createNativeCatalogPerformanceFixture(
   await fs.mkdir(directory, { recursive: true });
   const paragraph =
     "Review the retry queue and preserve the original request deadline. Check cancellation, delayed replies, and the caller that joins while work is pending. Explain the observed failure and verify the resulting behavior.\n";
-  let rolloutBytes = 0;
   for (let offset = 0; offset < options.count; offset += 16) {
-    const sizes = await Promise.all(
+    await Promise.all(
       Array.from({ length: Math.min(16, options.count - offset) }, async (_, index) => {
         const position = offset + index;
         const id = `00000000-0000-4000-8000-${String(position).padStart(12, "0")}`;
@@ -33,46 +30,32 @@ export async function createNativeCatalogPerformanceFixture(
         const message = (
           firstLine + paragraph.repeat(Math.ceil(options.previewBytes / paragraph.length))
         ).slice(0, options.previewBytes);
-        const records = [
-          {
+        const contents = [
+          rolloutRecord("session_meta", {
+            id,
             timestamp: CREATED_AT,
-            type: "session_meta",
-            payload: {
-              id,
-              timestamp: CREATED_AT,
-              cwd: state.cwd,
-              originator: "codex_cli_rs",
-              source: "cli",
-              cli_version: CODEX_APP_SERVER_VERSION,
-              model_provider: "openai",
-            },
-          },
-          {
-            timestamp: CREATED_AT,
-            type: "event_msg",
-            payload: { type: "user_message", message, kind: "plain" },
-          },
-          ...(options.assistantBytes
-            ? [
-                {
-                  timestamp: CREATED_AT,
-                  type: "event_msg",
-                  payload: { type: "agent_message", message: "x".repeat(options.assistantBytes) },
-                },
-              ]
-            : []),
+            cwd: state.cwd,
+            originator: "codex_cli_rs",
+            source: "cli",
+            cli_version: CODEX_APP_SERVER_VERSION,
+            model_provider: "openai",
+          }),
+          rolloutRecord("event_msg", { type: "user_message", message, kind: "plain" }),
         ];
-        const contents = `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
-        await fs.writeFile(
-          path.join(directory, `rollout-2025-01-01T00-00-00-${id}.jsonl`),
-          contents,
-        );
-        return Buffer.byteLength(contents);
+        if (options.assistantBytes) {
+          contents.push(
+            rolloutRecord("event_msg", {
+              type: "agent_message",
+              message: "x".repeat(options.assistantBytes),
+            }),
+          );
+        }
+        const file = path.join(directory, `rollout-2025-01-01T00-00-00-${id}.jsonl`);
+        await fs.writeFile(file, `${contents.join("\n")}\n`);
       }),
     );
-    rolloutBytes += sizes.reduce((sum, size) => sum + size, 0);
   }
-  return { ...state, rolloutBytes };
+  return state;
 }
 
 export async function startNativeCatalogPerformanceClient(
@@ -93,17 +76,21 @@ export async function startNativeCatalogPerformanceClient(
   }
 }
 
+type WalkOptions = {
+  useStateDbOnly: boolean;
+  observePage?: (page: CodexThreadListResponse) => void;
+  previewCache?: CodexCatalogPreviewCache;
+};
 function readPage(
   client: CodexAppServerClient,
   boundary: NativeCatalogBoundary,
-  useStateDbOnly: boolean,
+  { useStateDbOnly, previewCache }: WalkOptions,
   cursor?: string,
-  previewCache?: CodexCatalogPreviewCache,
 ) {
   return client.request<CodexThreadListResponse>(
     "thread/list",
     {
-      limit: PAGE_SIZE,
+      limit: 64,
       archived: false,
       modelProviders: [],
       sortKey: "recency_at",
@@ -124,24 +111,14 @@ function readPage(
 export async function walkNativeCatalog(
   client: CodexAppServerClient,
   boundary: NativeCatalogBoundary,
-  options: {
-    useStateDbOnly: boolean;
-    observePage?: (page: CodexThreadListResponse) => void;
-    previewCache?: CodexCatalogPreviewCache;
-  },
+  options: WalkOptions,
 ) {
   let rows = 0;
   let pages = 0;
   let cursor: string | undefined;
   const cursors = new Set<string>();
   do {
-    const page = await readPage(
-      client,
-      boundary,
-      options.useStateDbOnly,
-      cursor,
-      options.previewCache,
-    );
+    const page = await readPage(client, boundary, options, cursor);
     rows += page.data.length;
     pages++;
     options.observePage?.(page);
@@ -156,87 +133,18 @@ export async function walkNativeCatalog(
   return { rows, pages };
 }
 
-function sampledAllocationBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return (
-    node.selfSize + node.children.reduce((sum, child) => sum + sampledAllocationBytes(child), 0)
-  );
-}
-
-async function measureRetainedPage(
-  inspector: InspectorSession,
-  client: CodexAppServerClient,
-  boundary: NativeCatalogBoundary,
-  previewCache: CodexCatalogPreviewCache,
-) {
-  await nextTurn();
-  await inspector.post("HeapProfiler.collectGarbage");
-  const beforePage = process.memoryUsage();
-  const page = await readPage(client, boundary, true, undefined, previewCache);
-  await nextTurn();
-  await inspector.post("HeapProfiler.collectGarbage");
-  const retainedPageHeapDeltaBytes = process.memoryUsage().heapUsed - beforePage.heapUsed;
-  // Byte serialization is outside the allocation-profiled walk.
-  return {
-    retainedPageBytes: Buffer.byteLength(JSON.stringify(page)),
-    pageRows: page.data.length,
-    maxPreviewCharacters: Math.max(0, ...page.data.map((row) => row.preview?.length ?? 0)),
-    firstThreadId: page.data[0]?.id,
-    retainedPageHeapDeltaBytes,
-  };
-}
-
-async function stopAllocationSampling(inspector: InspectorSession): Promise<number> {
-  const { profile } = await inspector.post("HeapProfiler.stopSampling");
-  return sampledAllocationBytes(profile.head);
-}
-
 export async function measureNativeCatalogBoundary(
   client: CodexAppServerClient,
   boundary: NativeCatalogBoundary,
   previewCache: CodexCatalogPreviewCache,
 ) {
-  const inspector = new InspectorSession();
-  inspector.connect();
-  try {
-    const retainedPage = await measureRetainedPage(inspector, client, boundary, previewCache);
-    await nextTurn();
-    await inspector.post("HeapProfiler.collectGarbage");
-    const beforeWalk = process.memoryUsage();
-    let peakHeapUsedBytes = beforeWalk.heapUsed;
-    let peakRssBytes = beforeWalk.rss;
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32 * 1024,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
-    const startedAt = performance.now();
-    const walk = await walkNativeCatalog(client, boundary, {
-      useStateDbOnly: true,
-      previewCache,
-      observePage: () => {
-        const memory = process.memoryUsage();
-        peakHeapUsedBytes = Math.max(peakHeapUsedBytes, memory.heapUsed);
-        peakRssBytes = Math.max(peakRssBytes, memory.rss);
-      },
-    });
-    const elapsedMs = performance.now() - startedAt;
-    const sampledWalkAllocationBytes = await stopAllocationSampling(inspector);
-    await nextTurn();
-    await inspector.post("HeapProfiler.collectGarbage");
-    const afterWalk = process.memoryUsage();
-    return {
-      boundary,
-      previewCacheUsed: boundary === "catalog",
-      useStateDbOnly: true,
-      ...walk,
-      elapsedMs,
-      ...retainedPage,
-      postWalkHeapDeltaBytes: afterWalk.heapUsed - beforeWalk.heapUsed,
-      sampledWalkAllocationBytes,
-      peakHeapGrowthBytes: peakHeapUsedBytes - beforeWalk.heapUsed,
-      peakRssGrowthBytes: peakRssBytes - beforeWalk.rss,
-    };
-  } finally {
-    inspector.disconnect();
-  }
+  const options = { useStateDbOnly: true, previewCache };
+  const page = await readPage(client, boundary, options);
+  return {
+    ...(await walkNativeCatalog(client, boundary, options)),
+    retainedPageBytes: Buffer.byteLength(JSON.stringify(page)),
+    pageRows: page.data.length,
+    maxPreviewCharacters: Math.max(0, ...page.data.map((row) => row.preview?.length ?? 0)),
+    firstThreadId: page.data[0]?.id,
+  };
 }

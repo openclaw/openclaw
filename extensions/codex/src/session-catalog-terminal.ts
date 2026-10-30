@@ -1,8 +1,12 @@
-// Codex catalog terminal ownership: validated native start/resume commands and plans.
 import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-harness-registration";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { decodeNodePtyResumeParams, decodeNodePtyStartParams } from "openclaw/plugin-sdk/node-host";
+import {
+  decodeNodePtyResumeParams,
+  decodeNodePtyStartParams,
+  resolveNodeHostExecutable,
+  runNodePtyCommand,
+} from "openclaw/plugin-sdk/node-host";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
@@ -20,7 +24,6 @@ import {
   CODEX_LOCAL_SESSION_HOST_ID,
   isInteractiveThreadSource,
 } from "./session-catalog-parsing.js";
-import { resolveNodeHostExecutable, runNodePtyCommand } from "./session-catalog-pty.runtime.js";
 import type {
   CodexSessionCatalogControl,
   CodexSessionCatalogControlFactory,
@@ -87,7 +90,7 @@ function resolveCodexCatalogTerminalHome(
   const startOptions =
     sources.source?.appServer.start ??
     sources.resolveRuntimeOptions({
-      pluginConfig: sources.getPluginConfig(),
+      pluginConfig: readCodexPluginConfig(sources.getPluginConfig()),
     }).start;
   if (startOptions.transport !== "stdio") {
     throw new CatalogParamsError("Native terminal requires a local Codex source");

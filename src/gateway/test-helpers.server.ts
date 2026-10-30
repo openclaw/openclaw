@@ -10,25 +10,24 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import "./test-helpers.mocks.js";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
+import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.js";
 import { WebSocket, type RawData } from "../../packages/gateway-client/src/websocket.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { acquireGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { resetPreparedGatewayModelCatalogForTest } from "../agents/prepared-model-runtime.test-support.js";
+import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-runtime.test-support.js";
 import {
   getRuntimeConfig,
   parseConfigJson5,
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
 } from "../config/config.js";
-import { resolveSystemMainSessionTarget, type SessionEntry } from "../config/sessions.js";
-import {
-  applySessionEntryLifecycleMutation,
-  listSessionEntriesCore,
-  replaceTranscriptEvents,
-} from "../config/sessions/session-accessor.js";
+import { resolveSystemMainSessionTarget } from "../config/sessions/main-session.js";
+import { listSessionEntriesCore } from "../config/sessions/session-accessor.entry.js";
+import { applySessionEntryLifecycleMutation } from "../config/sessions/session-accessor.lifecycle.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
-import type { SessionOrigin } from "../config/sessions/types.js";
+import type { SessionEntry, SessionOrigin } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import {
@@ -52,25 +51,26 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import {
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-} from "../tasks/task-runtime.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { TestPortClaim } from "../test-utils/port-claims.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { gatewayFixtureLifetime } from "./gateway-fixture-lifetime.test-support.js";
 import type { GatewayServerOptions } from "./server.js";
 import { disposeSessionReadContexts } from "./session-read-contexts.test-support.js";
-import { invalidateSessionSharingSnapshot } from "./session-sharing.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
+import type {
+  ConnectReqClient,
+  ConnectReqDevice,
+  ConnectReqOptions,
+} from "./test-helpers.connect-types.js";
 import { GATEWAY_TEST_ENV_KEYS } from "./test-helpers.env.js";
 import { getGatewayTestPort, canRetryPort, startClaimedGateway } from "./test-helpers.listener.js";
 import { resetTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   agentCommandMock,
+  createGatewayTestState,
+  createCompactionResult,
   cronIsolatedRun,
   embeddedRunMock,
   gatewayReplyMock,
@@ -83,9 +83,16 @@ import {
   testTailnetIPv4,
 } from "./test-helpers.runtime-state.js";
 import { resetGatewayLifecycleTestState } from "./test-helpers.server-lifecycle.js";
-import { closeGatewayTestHomeDatabases } from "./test-helpers.server-storage.js";
+import {
+  closeGatewayTestHomeDatabases,
+  recreateGatewayTestStateDir,
+} from "./test-helpers.server-storage.js";
 
 const getServerModule = createLazyRuntimeModule(() => import("./server.js"));
+// Startup module evaluation belongs to fixture setup, before behavior budgets begin.
+const prepareGatewayServerImplementationForTest = createLazyRuntimeModule(
+  () => import("./server-start.js"),
+);
 
 let gatewayEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 let tempHome: string | undefined;
@@ -130,6 +137,12 @@ function publishGatewayTestConfig(
   return config;
 }
 
+function configObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
 async function persistTestSessionConfig(): Promise<void> {
   const configPaths = new Set<string>();
   if (process.env.OPENCLAW_CONFIG_PATH) {
@@ -145,22 +158,14 @@ async function persistTestSessionConfig(): Promise<void> {
     try {
       const raw = await fs.readFile(configPath, "utf-8");
       const parsed = parseConfigJson5(raw);
-      if (
-        parsed.ok &&
-        parsed.parsed &&
-        typeof parsed.parsed === "object" &&
-        !Array.isArray(parsed.parsed)
-      ) {
-        config = parsed.parsed as Record<string, unknown>;
+      if (parsed.ok) {
+        config = configObject(parsed.parsed) ?? {};
       }
     } catch {
-      config = {};
+      // Fixture setup accepts absent or malformed files.
     }
     parsedConfigs.set(configPath, config);
-    const session =
-      config.session && typeof config.session === "object" && !Array.isArray(config.session)
-        ? (config.session as Record<string, unknown>)
-        : undefined;
+    const session = configObject(config.session);
     const existingStore = typeof session?.store === "string" ? session.store.trim() : "";
     if (!preservedTemplateStore && existingStore.includes("{agentId}")) {
       preservedTemplateStore = existingStore;
@@ -172,10 +177,7 @@ async function persistTestSessionConfig(): Promise<void> {
       : preservedTemplateStore;
   for (const configPath of configPaths) {
     const config = { ...parsedConfigs.get(configPath) };
-    const session =
-      config.session && typeof config.session === "object" && !Array.isArray(config.session)
-        ? { ...(config.session as Record<string, unknown>) }
-        : {};
+    const session = { ...configObject(config.session) };
     delete session.mainKey;
     delete session.store;
     if (typeof nextStoreValue === "string" && nextStoreValue.trim().length > 0) {
@@ -249,12 +251,7 @@ export async function writeSessionStore(params: {
       sessionId: entry.sessionId,
       updatedAt: entry.updatedAt ?? 0,
     } as SessionEntry);
-    upserts.push({
-      sessionKey: storeKey,
-      entry: {
-        ...canonicalEntry,
-      },
-    });
+    upserts.push({ sessionKey: storeKey, entry: { ...canonicalEntry } });
     if (typeof entry.sessionFile === "string" && entry.sessionFile.trim()) {
       transcriptImports.push({
         agentId,
@@ -267,7 +264,6 @@ export async function writeSessionStore(params: {
     }
     upsertsByAgentId.set(agentId, upserts);
   }
-  clearSessionStoreCacheForTest();
   await persistTestSessionConfig();
   await fs.mkdir(path.dirname(storePath), { recursive: true });
   if (upsertsByAgentId.size === 0) {
@@ -305,7 +301,6 @@ export async function writeSessionStore(params: {
       events,
     );
   }
-  clearSessionStoreCacheForTest();
 }
 
 async function setupGatewayTestHome() {
@@ -333,42 +328,25 @@ function applyGatewaySkipEnv() {
     : "openclaw-test-no-bundled-extensions";
 }
 
-function resetGatewayMutableTestFixtures(): void {
+function resetGatewayMutableTestFixtures(sessionStorePath?: string): void {
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
   testTailscaleWhois.calls.length = 0;
   agentDiscoveryMock.enabled = false;
   agentDiscoveryMock.discoverCalls = 0;
   agentDiscoveryMock.models = [];
-  testState.gatewayBind = DEFAULT_GATEWAY_TEST_BIND;
-  testState.gatewayAuth = { mode: "token", token: "test-gateway-token-1234567890" };
-  testState.gatewayControlUi = undefined;
-  testState.hooksConfig = undefined;
-  testState.legacyIssues = [];
-  testState.legacyParsed = {};
-  testState.migrationConfig = null;
-  testState.migrationChanges = [];
-  testState.cronEnabled = false;
-  testState.cronTriggersEnabled = undefined;
-  testState.cronStorePath = undefined;
-  testState.sessionConfig = undefined;
-  testState.sessionStorePath = undefined;
-  testState.agentConfig = undefined;
-  testState.agentsConfig = undefined;
-  testState.bindingsConfig = undefined;
-  testState.channelsConfig = undefined;
-  testState.allowFrom = undefined;
-  lastSyncedSessionStorePath = testState.sessionStorePath;
+  Object.assign(testState, createGatewayTestState(), {
+    gatewayBind: DEFAULT_GATEWAY_TEST_BIND,
+    gatewayAuth: { mode: "token", token: "test-gateway-token-1234567890" },
+    sessionStorePath,
+  });
+  lastSyncedSessionStorePath = undefined;
   lastSyncedSessionConfigJson = undefined;
   testIsNixMode.value = false;
-  cronIsolatedRun.mockReset();
-  cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "ok" });
-  agentCommandMock.mockReset();
-  agentCommandMock.mockResolvedValue(undefined);
-  gatewayReplyMock.mockReset();
-  gatewayReplyMock.mockResolvedValue(undefined);
-  sendWhatsAppMock.mockReset();
-  sendWhatsAppMock.mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" });
+  cronIsolatedRun.mockReset().mockResolvedValue({ status: "ok", summary: "ok" });
+  agentCommandMock.mockReset().mockResolvedValue(undefined);
+  gatewayReplyMock.mockReset().mockResolvedValue(undefined);
+  sendWhatsAppMock.mockReset().mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" });
   embeddedRunMock.activeIds.clear();
   embeddedRunMock.abortCalls = [];
   embeddedRunMock.waitCalls = [];
@@ -379,111 +357,71 @@ function resetGatewayMutableTestFixtures(): void {
   }
   embeddedRunMock.endWaiters.clear();
   embeddedRunMock.resolveEndBeforeTimeoutIds.clear();
-  embeddedRunMock.compactEmbeddedAgentSession.mockReset();
-  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValue({
-    ok: true,
-    compacted: true,
-    result: {
-      summary: "summary",
-      firstKeptEntryId: "entry-1",
-      tokensBefore: 120,
-      tokensAfter: 80,
-    },
-  });
+  embeddedRunMock.compactEmbeddedAgentSession
+    .mockReset()
+    .mockResolvedValue(createCompactionResult());
+}
+
+async function removeGatewayTestDir(dir: string) {
+  await fs.rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
 }
 
 async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   gatewayFixtureLifetime.assertReleased();
   // Some tests intentionally use fake timers; ensure they don't leak into gateway suites.
   vi.useRealTimers();
-  await resetGatewayLifecycleTestState({ preserveRuntimeBindings: false });
+  await resetGatewayLifecycleTestState("prepare");
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
   if (!tempHome) {
     throw new Error("resetGatewayTestState called before temp home was initialized");
   }
   applyGatewaySkipEnv();
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
-  resetTaskRegistryForTests({ persist: false });
-  resetTaskFlowRegistryForTests({ persist: false });
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   if (stateDir) {
-    await fs.rm(stateDir, {
-      recursive: true,
-      force: true,
-      maxRetries: 20,
-      retryDelay: 25,
-    });
-    await fs.mkdir(stateDir, { recursive: true });
+    await recreateGatewayTestStateDir(tempHome, stateDir);
   }
-  if (options.uniqueConfigRoot) {
-    const suiteRoot = path.join(tempHome, ".openclaw-test-suite");
-    await fs.mkdir(suiteRoot, { recursive: true });
-    tempConfigRoot = path.join(suiteRoot, `case-${suiteConfigRootSeq++}`);
-    await fs.rm(tempConfigRoot, {
-      recursive: true,
-      force: true,
-      maxRetries: 20,
-      retryDelay: 25,
-    });
-    await fs.mkdir(tempConfigRoot, { recursive: true });
-  } else {
-    tempConfigRoot = path.join(tempHome, ".openclaw-test");
-    await fs.rm(tempConfigRoot, {
-      recursive: true,
-      force: true,
-      maxRetries: 20,
-      retryDelay: 25,
-    });
-    await fs.mkdir(tempConfigRoot, { recursive: true });
-  }
+  tempConfigRoot = options.uniqueConfigRoot
+    ? path.join(tempHome, ".openclaw-test-suite", `case-${suiteConfigRootSeq++}`)
+    : path.join(tempHome, ".openclaw-test");
+  await removeGatewayTestDir(tempConfigRoot);
+  await fs.mkdir(tempConfigRoot, { recursive: true });
   setTestConfigRoot(tempConfigRoot);
   tempControlUiRoot = path.join(tempHome, ".openclaw-test-control-ui");
-  await fs.rm(tempControlUiRoot, {
-    recursive: true,
-    force: true,
-    maxRetries: 20,
-    retryDelay: 25,
-  });
+  await removeGatewayTestDir(tempControlUiRoot);
   await fs.mkdir(tempControlUiRoot, { recursive: true });
   await fs.writeFile(
     path.join(tempControlUiRoot, "index.html"),
     "<!doctype html><title>openclaw-test-control-ui</title>\n",
     "utf-8",
   );
-  setTestConfigRoot(tempConfigRoot);
   resetConfigRuntimeState();
-  invalidateSessionSharingSnapshot();
   resetTestPluginRegistry();
   resetGatewayMutableTestFixtures();
   resetSystemEventsForTest();
-  resetAgentEventsForTest();
-  await resetPreparedGatewayModelCatalogForTest();
+  // Module-owned observers survive fixture resets; the runner retires them between files.
+  resetAgentEventsForTest({ preserveListeners: true });
+  await resetPreparedModelCatalogStateForTest();
   gatewayReplyRuntimePrepared = false;
 }
 
 async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   gatewayFixtureLifetime.assertReleased();
   vi.useRealTimers();
-  // Direct handler projections outlive replies and must release reads before registry closure.
+  // Direct handler projections outlive replies and must release reads before database closure.
   await disposeSessionReadContexts();
-  await resetGatewayLifecycleTestState({ preserveRuntimeBindings: false });
+  await resetGatewayLifecycleTestState("cleanup");
   resetLogger();
-  resetTaskRegistryForTests({ persist: false });
-  resetTaskFlowRegistryForTests({ persist: false });
   if (tempHome) {
-    await closeGatewayTestHomeDatabases(tempHome, options);
+    // Join native borrowers before closing the fixture databases.
+    await closeGatewayTestHomeDatabases(tempHome);
   }
   if (options.restoreEnv) {
     gatewayEnvSnapshot?.restore();
     gatewayEnvSnapshot = undefined;
   }
   if (options.restoreEnv && tempHome) {
-    await fs.rm(tempHome, {
-      recursive: true,
-      force: true,
-      maxRetries: 20,
-      retryDelay: 25,
-    });
+    await removeGatewayTestDir(tempHome);
     tempHome = undefined;
   }
   tempConfigRoot = undefined;
@@ -496,14 +434,15 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
 async function resetGatewayTestRuntimeOnly() {
   gatewayFixtureLifetime.assertAdmission();
   vi.useRealTimers();
-  await resetGatewayLifecycleTestState({ preserveRuntimeBindings: true });
+  await resetGatewayLifecycleTestState("runtime");
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
   applyGatewaySkipEnv();
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
   resetConfigRuntimeState();
-  invalidateSessionSharingSnapshot();
   resetTestPluginRegistry();
-  resetGatewayMutableTestFixtures();
+  // A suite fixture owns this physical store until its explicit disposal.
+  // Publishing a temporary default would revoke its retained execution owner.
+  resetGatewayMutableTestFixtures(testState.sessionStorePath);
   clearSessionStoreCacheForTest();
   await persistTestSessionConfig();
   resetSystemEventsForTest();
@@ -515,13 +454,34 @@ export async function prepareGatewayReplyRuntimeForTest(options?: {
   force?: boolean;
   config?: OpenClawConfig;
 }): Promise<void> {
-  if (
-    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY !== "1" ||
-    (!options?.force && gatewayReplyRuntimePrepared)
-  ) {
+  if (process.env.OPENCLAW_TEST_MINIMAL_GATEWAY !== "1") {
     return;
   }
   const config = publishGatewayTestConfig(options?.config);
+  if (!options?.force && gatewayReplyRuntimePrepared) {
+    const [
+      { listAgentIds },
+      { getPreparedModelCatalogOwnerSnapshot },
+      { readAgentDatabaseAdmissionRefusal },
+    ] = await Promise.all([
+      import("../agents/agent-scope-config.js"),
+      import("../agents/prepared-model-catalog.js"),
+      import("../state/agent-database-admission.js"),
+    ]);
+    if (
+      listAgentIds(config).every(
+        (agentId) =>
+          readAgentDatabaseAdmissionRefusal(agentId) ||
+          getPreparedModelCatalogOwnerSnapshot({
+            agentId,
+            config,
+            allowGatewaySubagentBinding: true,
+          })?.isCurrent(),
+      )
+    ) {
+      return;
+    }
+  }
   const preparedRuntime = await import("../agents/prepared-model-runtime.js");
   await preparedRuntime.refreshPreparedModelRuntimeSnapshots(config, {
     gatewayLifecycle: true,
@@ -534,12 +494,19 @@ export async function prepareGatewayReplyRuntimeForTest(options?: {
 export function installGatewayTestHooks(
   options?:
     | { scope?: "test" }
-    | { scope: "suite"; setup?: () => Promise<void>; cleanup?: () => Promise<void> },
+    | {
+        scope: "suite";
+        prepareServer?: boolean;
+        setup?: () => Promise<void>;
+        cleanup?: () => Promise<void>;
+      },
 ) {
   if (options?.scope === "suite") {
     let homeSetup: Promise<void> | undefined;
     let fixtureSetup: Promise<void> | undefined;
     let suiteCleanup: Promise<void> | undefined;
+    let caseReset: Promise<void> | undefined;
+    let interrupted = false;
     beforeAll(() => {
       gatewayFixtureLifetime.assertAdmission();
       const createHome = activeSuiteHookScopeCount === 0;
@@ -548,11 +515,15 @@ export function installGatewayTestHooks(
       }
       fixtureSetup = undefined;
       suiteCleanup = undefined;
+      interrupted = false;
       homeSetup = (async () => {
         vi.useRealTimers();
         activeSuiteHookScopeCount += 1;
         if (createHome) {
           await setupGatewayTestHome();
+          if (options.prepareServer !== false) {
+            await prepareGatewayServerImplementationForTest();
+          }
           await resetGatewayTestState({ uniqueConfigRoot: false });
         }
       })();
@@ -567,15 +538,21 @@ export function installGatewayTestHooks(
           })),
       );
     }
-    beforeEach(async () => {
-      if (gatewayFixtureLifetime.hasActiveServers()) {
-        await resetGatewayTestRuntimeOnly();
-        return;
-      }
-      await resetGatewayTestState({ uniqueConfigRoot: false });
-    }, 60_000);
-    afterEach(async () => {
-      gatewayFixtureLifetime.assertAdmission();
+    beforeEach(
+      () =>
+        (caseReset = (async () => {
+          if (gatewayFixtureLifetime.hasActiveServers()) {
+            await resetGatewayTestRuntimeOnly();
+            return;
+          }
+          await resetGatewayTestState({ uniqueConfigRoot: false });
+        })()),
+      60_000,
+    );
+    afterEach(async ({ signal }) => {
+      interrupted ||= signal.aborted;
+      await caseReset?.catch(() => {});
+      await gatewayFixtureLifetime.settlePendingWork();
       if (gatewayFixtureLifetime.hasActiveServers()) {
         vi.useRealTimers();
         return;
@@ -599,7 +576,15 @@ export function installGatewayTestHooks(
           // Inner scopes may finish around a live shared server; the final scope
           // keeps its home and selectors until every Gateway owner has closed.
           if (activeSuiteHookScopeCount === 1) {
+            await gatewayFixtureLifetime.settlePendingWork();
+            const leaked = gatewayFixtureLifetime.hasActiveServers();
+            await gatewayFixtureLifetime.closeAll();
             await cleanupGatewayTestHome({ restoreEnv: true });
+            activeSuiteHookScopeCount -= 1;
+            if (leaked && !interrupted) {
+              throw new Error("suite left a Gateway open; closed during teardown");
+            }
+            return;
           }
           activeSuiteHookScopeCount -= 1;
         },
@@ -608,15 +593,30 @@ export function installGatewayTestHooks(
     return;
   }
 
-  beforeEach(async () => {
+  let testSetup: Promise<void> | undefined;
+  beforeEach(() => {
+    testSetup = undefined;
     gatewayFixtureLifetime.assertReleased();
-    vi.useRealTimers();
-    await setupGatewayTestHome();
-    await resetGatewayTestState({ uniqueConfigRoot: false });
+    return (testSetup = (async () => {
+      vi.useRealTimers();
+      await setupGatewayTestHome();
+      await prepareGatewayServerImplementationForTest();
+      await resetGatewayTestState({ uniqueConfigRoot: false });
+    })());
   }, 60_000);
 
-  afterEach(async () => {
+  afterEach(async ({ signal }) => {
+    if (!testSetup) {
+      return;
+    }
+    await testSetup.catch(() => {});
+    await gatewayFixtureLifetime.settlePendingWork();
+    const leaked = gatewayFixtureLifetime.hasActiveServers();
+    await gatewayFixtureLifetime.closeAll();
     await cleanupGatewayTestHome({ restoreEnv: true });
+    if (leaked && !signal.aborted) {
+      throw new Error("test left a Gateway open; closed during teardown");
+    }
   });
 }
 
@@ -638,8 +638,7 @@ const CONNECT_CHALLENGE_TRACKED_KEY = "__openclawTestConnectChallengeTracked";
 type TrackedWs = WebSocket & Record<string, unknown>;
 
 export function getTrackedConnectChallengeNonce(ws: WebSocket): string | undefined {
-  const tracked = (ws as TrackedWs)[CONNECT_CHALLENGE_NONCE_KEY];
-  return typeof tracked === "string" && tracked.trim().length > 0 ? tracked.trim() : undefined;
+  return normalizeOptionalString((ws as TrackedWs)[CONNECT_CHALLENGE_NONCE_KEY]);
 }
 
 export function trackConnectChallengeNonce(ws: WebSocket): void {
@@ -705,34 +704,38 @@ export async function startTestGatewayServer(
   port: number | TestPortClaim,
   opts?: GatewayServerOptions,
 ) {
-  return await startClaimedGateway(port, async () => {
-    gatewayFixtureLifetime.assertAdmission();
-    // Tests mutate testState-backed config before server startup; discard earlier
-    // helper reads so startup observes the current fixture state.
-    resetConfigRuntimeState();
-    clearSessionStoreCacheForTest();
-    const mod = await getServerModule();
-    gatewayFixtureLifetime.assertAdmission();
-    const resolvedOpts = {
-      ...opts,
-      controlUiEnabled: opts?.controlUiEnabled ?? false,
-    };
-    if (
-      resolvedOpts.controlUiEnabled &&
-      process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1" &&
-      tempControlUiRoot &&
-      typeof (testState.gatewayControlUi as { root?: unknown } | undefined)?.root !== "string"
-    ) {
-      testState.gatewayControlUi = {
-        ...testState.gatewayControlUi,
-        root: tempControlUiRoot,
-      };
-    }
-    return await gatewayFixtureLifetime.ownServer(
-      () => mod.startGatewayServer(typeof port === "number" ? port : port.port, resolvedOpts),
-      tempHome,
-    );
-  });
+  gatewayFixtureLifetime.assertAdmission();
+  return await gatewayFixtureLifetime.ownServer(
+    () =>
+      startClaimedGateway(port, async () => {
+        // Tests mutate testState-backed config before server startup; discard earlier
+        // helper reads so startup observes the current fixture state.
+        resetConfigRuntimeState();
+        clearSessionStoreCacheForTest();
+        const mod = await getServerModule();
+        gatewayFixtureLifetime.assertAdmission();
+        const resolvedOpts = {
+          ...opts,
+          controlUiEnabled: opts?.controlUiEnabled ?? false,
+        };
+        if (
+          resolvedOpts.controlUiEnabled &&
+          process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1" &&
+          tempControlUiRoot &&
+          typeof (testState.gatewayControlUi as { root?: unknown } | undefined)?.root !== "string"
+        ) {
+          testState.gatewayControlUi = {
+            ...testState.gatewayControlUi,
+            root: tempControlUiRoot,
+          };
+        }
+        return await mod.startGatewayServer(
+          typeof port === "number" ? port : port.port,
+          resolvedOpts,
+        );
+      }),
+    tempHome,
+  );
 }
 
 export async function startGatewayServerWithRetries(params: {
@@ -781,7 +784,7 @@ export async function withGatewayServer<T>(
     opts: opts?.serverOptions,
   });
   try {
-    return await fn({ port: started.port, server: started.server });
+    return await fn(started);
   } finally {
     await started.server.close();
   }
@@ -801,14 +804,8 @@ export async function createGatewaySuiteHarness(opts?: {
     opts: opts?.serverOptions,
   });
   return {
-    port: started.port,
-    server: started.server,
-    openWs: async (headers?: Record<string, string>) => {
-      return await openTrackedWebSocket({
-        port: started.port,
-        headers,
-      });
-    },
+    ...started,
+    openWs: (headers) => openTrackedWebSocket({ port: started.port, headers }),
     close: async () => {
       await started.server.close();
     },
@@ -826,9 +823,7 @@ export async function startServer(token?: string, opts?: GatewayServerOptions) {
   }
   const fallbackToken =
     token ??
-    (typeof (testState.gatewayAuth as { token?: unknown } | undefined)?.token === "string"
-      ? (testState.gatewayAuth as { token?: string }).token
-      : undefined);
+    (typeof testState.gatewayAuth?.token === "string" ? testState.gatewayAuth.token : undefined);
   if (fallbackToken === undefined) {
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
   } else {
@@ -907,13 +902,30 @@ export async function startConnectedServerWithClient(
   return await acquireGatewayServerClient(token, opts, connectOk);
 }
 
-type ConnectResponse = {
+type GatewayTestResponse<T> = {
   type: "res";
   id: string;
   ok: boolean;
-  payload?: Record<string, unknown>;
+  payload?: T;
   error?: { message?: string; code?: string; details?: unknown };
 };
+type ConnectResponse = GatewayTestResponse<Record<string, unknown>>;
+
+function responseForId(id: string): (value: unknown) => boolean {
+  return (value) => {
+    const response = configObject(value);
+    return response?.type === "res" && response.id === id;
+  };
+}
+
+function defaultAuthValue(key: "token" | "password", skip: boolean | undefined) {
+  const value = testState.gatewayAuth?.[key];
+  return skip === true
+    ? undefined
+    : typeof value === "string"
+      ? value
+      : process.env[key === "token" ? "OPENCLAW_GATEWAY_TOKEN" : "OPENCLAW_GATEWAY_PASSWORD"];
+}
 
 function resolveDefaultTestDeviceIdentityPath(params: {
   clientId: string;
@@ -929,7 +941,7 @@ function resolveDefaultTestDeviceIdentityPath(params: {
     ),
   );
   const suiteRoot = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
-  return path.join(suiteRoot, "test-device-identities", `${safe}.sqlite`);
+  return path.join(suiteRoot, "test-device-identities", safe, "client", "credentials.sqlite");
 }
 
 export async function readConnectChallengeNonce(
@@ -947,101 +959,14 @@ export async function readConnectChallengeNonce(
       (o) => o.type === "event" && o.event === "connect.challenge",
       timeoutMs,
     );
-    const nonce = (evt.payload as { nonce?: unknown } | undefined)?.nonce;
-    if (typeof nonce === "string" && nonce.trim().length > 0) {
-      (ws as TrackedWs)[CONNECT_CHALLENGE_NONCE_KEY] = nonce.trim();
-      return nonce.trim();
+    const nonce = normalizeOptionalString(evt.payload?.nonce);
+    if (nonce) {
+      (ws as TrackedWs)[CONNECT_CHALLENGE_NONCE_KEY] = nonce;
     }
-    return undefined;
+    return nonce;
   } catch {
     return undefined;
   }
-}
-
-function resolveAuthTokenForSignature(opts?: {
-  token?: string;
-  bootstrapToken?: string;
-  deviceToken?: string;
-}) {
-  return opts?.token ?? opts?.bootstrapToken ?? opts?.deviceToken;
-}
-
-type ConnectReqClient = {
-  id: string;
-  displayName?: string;
-  version: string;
-  platform: string;
-  mode: string;
-  deviceFamily?: string;
-  modelIdentifier?: string;
-  instanceId?: string;
-};
-
-type ConnectReqDevice = {
-  id: string;
-  publicKey: string;
-  signature: string;
-  signedAt: number;
-  nonce?: string;
-};
-
-type ConnectReqOptions = {
-  token?: string;
-  bootstrapToken?: string;
-  deviceToken?: string;
-  password?: string;
-  skipDefaultAuth?: boolean;
-  minProtocol?: number;
-  maxProtocol?: number;
-  client?: ConnectReqClient;
-  role?: string;
-  scopes?: string[];
-  caps?: string[];
-  commands?: string[];
-  permissions?: Record<string, boolean>;
-  device?: ConnectReqDevice | null;
-  deviceIdentityPath?: string;
-  skipConnectChallengeNonce?: boolean;
-  prePairDevice?: boolean;
-  browserOrigin?: string;
-  timeoutMs?: number;
-  traceparent?: string;
-};
-
-function shouldPrePairTestDevice(params: {
-  client: ConnectReqClient;
-  opts?: ConnectReqOptions;
-}): boolean {
-  if (params.opts?.device !== undefined || params.opts?.deviceToken) {
-    return false;
-  }
-  if (params.opts?.prePairDevice !== undefined) {
-    return params.opts.prePairDevice;
-  }
-  if (params.opts?.skipDefaultAuth === true) {
-    return false;
-  }
-  return (
-    params.client.mode === GATEWAY_CLIENT_MODES.WEBCHAT ||
-    params.client.id === GATEWAY_CLIENT_NAMES.WEBCHAT_UI
-  );
-}
-
-function pairedDeviceAllowsScopes(params: {
-  paired: Awaited<ReturnType<typeof getPairedDevice>>;
-  publicKey: string;
-  role: string;
-  scopes: string[];
-}): boolean {
-  if (!params.paired || params.paired.publicKey !== params.publicKey) {
-    return false;
-  }
-  const pairedRoles = params.paired.roles ?? (params.paired.role ? [params.paired.role] : []);
-  if (!pairedRoles.includes(params.role)) {
-    return false;
-  }
-  const approvedScopes = params.paired.approvedScopes ?? params.paired.scopes ?? [];
-  return params.scopes.every((scope) => approvedScopes.includes(scope));
 }
 
 async function prePairTestDevice(params: {
@@ -1052,13 +977,12 @@ async function prePairTestDevice(params: {
   browserOrigin?: string;
 }): Promise<void> {
   const paired = await getPairedDevice(params.device.id);
+  const pairedRoles = paired?.roles ?? (paired?.role ? [paired.role] : []);
+  const approvedScopes = paired?.approvedScopes ?? paired?.scopes ?? [];
   if (
-    pairedDeviceAllowsScopes({
-      paired,
-      publicKey: params.device.publicKey,
-      role: params.role,
-      scopes: params.scopes,
-    })
+    paired?.publicKey === params.device.publicKey &&
+    pairedRoles.includes(params.role) &&
+    params.scopes.every((scope) => approvedScopes.includes(scope))
   ) {
     return;
   }
@@ -1095,27 +1019,11 @@ export async function connectReq(
     mode: GATEWAY_CLIENT_MODES.TEST,
   };
   const role = opts?.role ?? "operator";
-  const defaultToken =
-    opts?.skipDefaultAuth === true
-      ? undefined
-      : typeof (testState.gatewayAuth as { token?: unknown } | undefined)?.token === "string"
-        ? ((testState.gatewayAuth as { token?: string }).token ?? undefined)
-        : process.env.OPENCLAW_GATEWAY_TOKEN;
-  const defaultPassword =
-    opts?.skipDefaultAuth === true
-      ? undefined
-      : typeof (testState.gatewayAuth as { password?: unknown } | undefined)?.password === "string"
-        ? ((testState.gatewayAuth as { password?: string }).password ?? undefined)
-        : process.env.OPENCLAW_GATEWAY_PASSWORD;
-  const token = opts?.token ?? defaultToken;
+  const token = opts?.token ?? defaultAuthValue("token", opts?.skipDefaultAuth);
   const bootstrapToken = normalizeOptionalString(opts?.bootstrapToken);
   const deviceToken = normalizeOptionalString(opts?.deviceToken);
-  const password = opts?.password ?? defaultPassword;
-  const authTokenForSignature = resolveAuthTokenForSignature({
-    token,
-    bootstrapToken,
-    deviceToken,
-  });
+  const password = opts?.password ?? defaultAuthValue("password", opts?.skipDefaultAuth);
+  const authTokenForSignature = token ?? bootstrapToken ?? deviceToken;
   const requestedScopes = Array.isArray(opts?.scopes)
     ? opts.scopes
     : role === "operator"
@@ -1167,13 +1075,14 @@ export async function connectReq(
       nonce: connectChallengeNonce,
     };
   })();
-  if (
-    device &&
-    shouldPrePairTestDevice({
-      client,
-      opts,
-    })
-  ) {
+  const prePairDevice =
+    opts?.device === undefined &&
+    !opts?.deviceToken &&
+    (opts?.prePairDevice ??
+      (opts?.skipDefaultAuth !== true &&
+        (client.mode === GATEWAY_CLIENT_MODES.WEBCHAT ||
+          client.id === GATEWAY_CLIENT_NAMES.WEBCHAT_UI)));
+  if (device && prePairDevice) {
     await prePairTestDevice({
       device,
       client,
@@ -1182,14 +1091,7 @@ export async function connectReq(
       browserOrigin: opts?.browserOrigin,
     });
   }
-  const isResponseForId = (o: unknown): boolean => {
-    if (!o || typeof o !== "object" || Array.isArray(o)) {
-      return false;
-    }
-    const rec = o as Record<string, unknown>;
-    return rec.type === "res" && rec.id === id;
-  };
-  const responsePromise = onceMessage<ConnectResponse>(ws, isResponseForId, opts?.timeoutMs);
+  const responsePromise = onceMessage<ConnectResponse>(ws, responseForId(id), opts?.timeoutMs);
   ws.send(
     JSON.stringify({
       type: "req",
@@ -1201,6 +1103,7 @@ export async function connectReq(
         maxProtocol: opts?.maxProtocol ?? PROTOCOL_VERSION,
         client,
         caps: opts?.caps ?? [],
+        includeSessionMessageBodies: opts?.includeSessionMessageBodies,
         commands: opts?.commands ?? [],
         permissions: opts?.permissions ?? undefined,
         role,
@@ -1248,7 +1151,6 @@ export async function connectWebchatClient(params: {
   });
 }
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Gateway test RPC helper lets callers ascribe response payload shape.
 export async function rpcReq<T extends Record<string, unknown>>(
   ws: WebSocket,
   method: string,
@@ -1260,30 +1162,22 @@ export async function rpcReq<T extends Record<string, unknown>>(
   if (hasUnsyncedGatewayTestSessionConfig()) {
     await persistTestSessionConfig();
   }
-  if (method === "agent" || method === "chat.send") {
+  if (method === "agent" || method === "chat.send" || method === "chat.metadata") {
     await prepareGatewayReplyRuntimeForTest();
   }
   const { randomUUID } = await import("node:crypto");
   const id = randomUUID();
-  const responsePromise = onceMessage<{
-    type: "res";
-    id: string;
-    ok: boolean;
-    payload?: T | null | undefined;
-    error?: { message?: string; code?: string; details?: unknown };
-  }>(
+  const responsePromise = onceMessage<GatewayTestResponse<T | null | undefined>>(
     ws,
-    (o) => {
-      if (!o || typeof o !== "object" || Array.isArray(o)) {
-        return false;
-      }
-      const rec = o as Record<string, unknown>;
-      return rec.type === "res" && rec.id === id;
-    },
+    responseForId(id),
     timeoutMs,
   );
   ws.send(JSON.stringify({ type: "req", id, method, params }));
-  return await responsePromise;
+  try {
+    return await responsePromise;
+  } catch (error) {
+    throw new Error(`Gateway test RPC ${method}: ${String(error)}`, { cause: error });
+  }
 }
 
 export async function waitForSystemEvent(timeoutMs = 2000) {

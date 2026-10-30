@@ -12,6 +12,16 @@ export type GatewayStatus =
   | "reload-required"
   | "offline";
 
+/** Reconnect backoff has a deadline; socket/handshake work does not. */
+export function isGatewayConnectionAttemptPending(
+  snapshot: Pick<ApplicationGatewaySnapshot, "phase" | "reconnectAt">,
+): boolean {
+  return (
+    (snapshot.phase === "connecting" || snapshot.phase === "reconnecting") &&
+    snapshot.reconnectAt === undefined
+  );
+}
+
 export type GatewayStatusSnapshot = Pick<
   ApplicationGatewaySnapshot,
   "phase" | "offlineStable" | "restartPending" | "suspensionPhase"
@@ -22,6 +32,7 @@ export type GatewayStatusSnapshot = Pick<
 export function resolveGatewayStatus(
   snapshot: GatewayStatusSnapshot,
   refreshRequired = false,
+  historyRecovering = false,
 ): GatewayStatus | null {
   if (refreshRequired || snapshot.phase === "reload-required") {
     return "reload-required";
@@ -39,7 +50,7 @@ export function resolveGatewayStatus(
     return snapshot.phase;
   }
   if (snapshot.phase === "connected") {
-    return snapshot.client?.recoveryScopeReady === false ? "restoring" : null;
+    return snapshot.client?.recoveryScopeReady === false || historyRecovering ? "restoring" : null;
   }
   if (snapshot.offlineStable) {
     return snapshot.phase === "reconnecting" ? "reconnecting" : "offline";

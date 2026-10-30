@@ -48,7 +48,7 @@ export class DiscordAudioWorker {
   private stopped = false;
   private readonly stopAbort = new AbortController();
   private readonly tasks = new Set<Promise<unknown>>();
-  private readonly onPlayerError = (error: Error) =>
+  private readonly onError = (error: unknown) =>
     this.post({ type: "error", error: serializeDiscordAudioError(error) });
   private readonly onDisconnected = () => {
     if (!this.stopped && this.connection) {
@@ -72,84 +72,71 @@ export class DiscordAudioWorker {
     this.player.on("stateChange", (_old, state) =>
       this.post({ type: "player", status: state.status }),
     );
-    this.player.on("error", this.onPlayerError);
+    this.player.on("error", this.onError);
   }
 
   async connect(): Promise<void> {
-    const deadline = Date.now() + this.options.connectTimeoutMs;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    // Readiness has an elapsed budget; native timeout delays require whole milliseconds.
+    const deadline = performance.now() + this.options.connectTimeoutMs;
+    if (this.stopped) {
+      return;
+    }
+    const connection = this.sdk.joinVoiceChannel({
+      guildId: this.options.guildId,
+      channelId: this.options.channelId,
+      group: this.options.group,
+      selfDeaf: this.options.selfDeaf,
+      selfMute: this.options.selfMute,
+      daveEncryption: this.options.daveEncryption,
+      decryptionFailureTolerance: this.options.decryptionFailureTolerance,
+      adapterCreator: (methods) => {
+        this.adapter = methods;
+        return {
+          sendPayload: (payload) => {
+            // Acceptance queues signalling only. A definite main-gateway send
+            // failure returns through gateway-failed and destroys this attempt.
+            this.post({ type: "gateway-send", payload });
+            return true;
+          },
+          destroy: () => {},
+        };
+      },
+    });
+    this.connection = connection;
+    connection.on("error", this.onError);
+    try {
+      await this.sdk.entersState(
+        connection,
+        this.sdk.VoiceConnectionStatus.Ready,
+        AbortSignal.any([
+          this.stopAbort.signal,
+          AbortSignal.timeout(Math.max(1, Math.floor(deadline - performance.now()))),
+        ]),
+      );
       if (this.stopped) {
         return;
       }
-      const connection = this.sdk.joinVoiceChannel({
-        guildId: this.options.guildId,
-        channelId: this.options.channelId,
-        group: this.options.group,
-        selfDeaf: this.options.selfDeaf,
-        selfMute: this.options.selfMute,
-        daveEncryption: this.options.daveEncryption,
-        decryptionFailureTolerance: this.options.decryptionFailureTolerance,
-        adapterCreator: (methods) => {
-          this.adapter = methods;
-          return {
-            sendPayload: (payload) => {
-              // Acceptance queues signalling only. A definite main-gateway send
-              // failure returns through gateway-failed and destroys this attempt.
-              this.post({ type: "gateway-send", payload });
-              return true;
-            },
-            destroy: () => {},
-          };
-        },
+      connection.subscribe(this.player);
+      connection.on("stateChange", (_old, state) => {
+        this.post({ type: "connection", status: state.status });
       });
-      this.connection = connection;
-      connection.on("error", (error) =>
-        this.post({ type: "error", error: serializeDiscordAudioError(error) }),
-      );
-      try {
-        await this.sdk.entersState(
-          connection,
-          this.sdk.VoiceConnectionStatus.Ready,
-          AbortSignal.any([
-            this.stopAbort.signal,
-            AbortSignal.timeout(Math.max(1, deadline - Date.now())),
-          ]),
-        );
-        if (this.stopped) {
-          return;
-        }
-        connection.subscribe(this.player);
-        connection.on("stateChange", (_old, state) => {
-          this.post({ type: "connection", status: state.status });
-        });
-        connection.on(this.sdk.VoiceConnectionStatus.Destroyed, this.onDestroyed);
-        connection.on(this.sdk.VoiceConnectionStatus.Disconnected, this.onDisconnected);
-        connection.receiver.speaking.on("start", this.onSpeakingStart);
-        connection.receiver.speaking.on("end", this.onSpeakingEnd);
-        for (const userId of connection.receiver.speaking.users.keys()) {
-          this.post({ type: "speaking", userId, speaking: true });
-        }
-        this.post({ type: "connection", status: connection.state.status });
-        this.post({ type: "ready" });
-        return;
-      } catch (error) {
-        if (this.stopped) {
-          return;
-        }
-        if (connection.state.status !== this.sdk.VoiceConnectionStatus.Destroyed) {
-          connection.destroy();
-        }
-        if (
-          attempt === 0 &&
-          !this.stopped &&
-          Date.now() < deadline &&
-          error instanceof Error &&
-          error.message.toLowerCase().includes("operation was aborted")
-        ) {
-          continue;
-        }
-        throw error;
+      connection.on(this.sdk.VoiceConnectionStatus.Destroyed, this.onDestroyed);
+      connection.on(this.sdk.VoiceConnectionStatus.Disconnected, this.onDisconnected);
+      connection.receiver.speaking.on("start", this.onSpeakingStart);
+      connection.receiver.speaking.on("end", this.onSpeakingEnd);
+      for (const userId of connection.receiver.speaking.users.keys()) {
+        this.post({ type: "speaking", userId, speaking: true });
       }
+      this.post({ type: "connection", status: connection.state.status });
+      this.post({ type: "ready" });
+    } catch (error) {
+      if (this.stopped) {
+        return;
+      }
+      if (connection.state.status !== this.sdk.VoiceConnectionStatus.Destroyed) {
+        connection.destroy();
+      }
+      throw error;
     }
   }
 
@@ -251,7 +238,7 @@ export class DiscordAudioWorker {
         break;
       }
       case "output-audio":
-        this.outputs.get(command.id)?.appendAdmitted(Buffer.from(command.audio), command.audible);
+        this.outputs.get(command.id)?.append(Buffer.from(command.audio), command.audible);
         break;
       case "output-mark":
         this.outputs
@@ -290,12 +277,11 @@ export class DiscordAudioWorker {
           break;
         }
         const writable = this.fileInput.stream.write(Buffer.from(command.audio));
+        const onDrain = () => this.post({ type: "stream-drain", id: command.id });
         if (writable) {
-          this.post({ type: "stream-drain", id: command.id });
+          onDrain();
         } else {
-          this.fileInput.stream.once("drain", () =>
-            this.post({ type: "stream-drain", id: command.id }),
-          );
+          this.fileInput.stream.once("drain", onDrain);
         }
         break;
       }
@@ -358,34 +344,30 @@ export class DiscordAudioWorker {
       sdk: this.sdk,
       reason,
       expirySeconds,
-      onVerbose: (message) => this.post({ type: "log", level: "verbose", message }),
       onWarn: (message) => this.post({ type: "log", level: "warn", message }),
     });
   }
 
-  private readonly onSpeakingStart = (userId: string) => {
-    if (this.stopped) {
-      return;
-    }
-    for (const capture of this.captures.values()) {
-      if (capture.userId === userId) {
-        clearTimeout(capture.timer);
-        capture.timer = undefined;
-      }
-    }
-    this.post({ type: "speaking", userId, speaking: true });
-  };
-  private readonly onSpeakingEnd = (userId: string) => {
+  private readonly onSpeakingStart = (userId: string) => this.onSpeaking(userId, true);
+  private readonly onSpeakingEnd = (userId: string) => this.onSpeaking(userId, false);
+
+  private onSpeaking(userId: string, speaking: boolean): void {
     if (this.stopped) {
       return;
     }
     for (const [id, capture] of this.captures) {
-      if (capture.userId === userId) {
+      if (capture.userId !== userId) {
+        continue;
+      }
+      if (speaking) {
+        clearTimeout(capture.timer);
+        capture.timer = undefined;
+      } else {
         this.finalizeLater(id, capture);
       }
     }
-    this.post({ type: "speaking", userId, speaking: false });
-  };
+    this.post({ type: "speaking", userId, speaking });
+  }
   private stopCapture(capture: Capture): void {
     if (capture.closed) {
       return;
@@ -521,7 +503,6 @@ export class DiscordAudioWorker {
           }
         },
         onError,
-        onVerbose: (message) => this.post({ type: "log", level: "verbose", message }),
         onWarn: (message) => this.post({ type: "log", level: "warn", message }),
       });
     } finally {
@@ -584,11 +565,7 @@ export class DiscordAudioWorker {
 
   private track(task: Promise<unknown>): void {
     this.tasks.add(task);
-    void task
-      .catch((error: unknown) =>
-        this.post({ type: "error", error: serializeDiscordAudioError(error) }),
-      )
-      .finally(() => this.tasks.delete(task));
+    void task.catch(this.onError).finally(() => this.tasks.delete(task));
   }
 
   async stop(): Promise<void> {
@@ -611,7 +588,7 @@ export class DiscordAudioWorker {
     // Retire recovery callbacks before destroy emits terminal connection events.
     connection?.off(this.sdk.VoiceConnectionStatus.Disconnected, this.onDisconnected);
     connection?.off(this.sdk.VoiceConnectionStatus.Destroyed, this.onDestroyed);
-    this.player.off("error", this.onPlayerError);
+    this.player.off("error", this.onError);
     if (connection && connection.state.status !== this.sdk.VoiceConnectionStatus.Destroyed) {
       connection.destroy();
     }

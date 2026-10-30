@@ -145,7 +145,6 @@ export async function waitForEmbeddingBatch<TStatus extends EmbeddingBatchStatus
       } catch {
         throw new Error(`${label} timed out after ${params.timeoutMs}ms`, { cause: error });
       }
-      current = undefined;
       continue;
     }
     const state = status.status ?? "unknown";

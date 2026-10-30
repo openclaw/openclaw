@@ -15,6 +15,10 @@ type BuildStatusReplyParams = Omit<BuildStatusTextParams, "statusChannel"> & {
   command: CommandContext;
 };
 
+function markStatusReply(payload: ReplyPayload): ReplyPayload {
+  return setReplyPayloadMetadata(payload, { contextFreeCommand: true });
+}
+
 /** Builds a status reply or suppresses unauthorized status requests. */
 export async function buildStatusReply(
   params: BuildStatusReplyParams,
@@ -33,18 +37,12 @@ export async function buildStatusReply(
     });
     // The text body is the authored plain rendering of the same facts; channels
     // with native table support render the presentation instead.
-    return setReplyPayloadMetadata<ReplyPayload>(
-      { text, presentation, presentationTextMode: "fallback" },
-      { contextFreeCommand: true },
-    );
+    return markStatusReply({ text, presentation, presentationTextMode: "fallback" });
   } catch (error) {
     // Diagnostics stay in logs only; the channel reply is a fixed generic
     // message so internal module paths or runtime details never reach users.
     logError(`/status render failed: ${formatErrorMessage(error)}`);
-    return setReplyPayloadMetadata(
-      { text: "⚠️ Status: error rendering response" },
-      { contextFreeCommand: true },
-    );
+    return markStatusReply({ text: "⚠️ Status: error rendering response" });
   }
 }
 
@@ -63,9 +61,7 @@ export async function buildStatusPluginsReply(
     configKey: "plugins",
   });
   if (disabled) {
-    return disabled.reply
-      ? setReplyPayloadMetadata(disabled.reply, { contextFreeCommand: true })
-      : undefined;
+    return disabled.reply ? markStatusReply(disabled.reply) : undefined;
   }
 
   try {
@@ -75,16 +71,10 @@ export async function buildStatusPluginsReply(
       config: params.cfg,
       workspaceDir: params.workspaceDir,
     });
-    return setReplyPayloadMetadata(
-      { text: formatDetailedPluginHealth(snapshot) },
-      { contextFreeCommand: true },
-    );
+    return markStatusReply({ text: formatDetailedPluginHealth(snapshot) });
   } catch (error) {
     // Match the /status fallback: fixed generic reply, diagnostics in logs only.
     logError(`/status plugins render failed: ${formatErrorMessage(error)}`);
-    return setReplyPayloadMetadata(
-      { text: "⚠️ Plugins: health unavailable" },
-      { contextFreeCommand: true },
-    );
+    return markStatusReply({ text: "⚠️ Plugins: health unavailable" });
   }
 }

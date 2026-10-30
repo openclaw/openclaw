@@ -33,7 +33,9 @@ export async function deleteCronSessionViaGateway(params: {
       expectedLifecycleRevision: params.lifecycleRevision,
       expectedSessionUpdatedAt: params.sessionUpdatedAt,
     },
-    timeoutMs: 10_000,
+    // History archival can outlive a response deadline. Keep the guarded lifecycle
+    // request and its authority alive until deletion settles.
+    timeoutMs: null,
   });
   return result.deleted === true;
 }

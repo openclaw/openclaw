@@ -1,0 +1,13 @@
+format: knowledge-schema-v1
+version: 0.1.0
+name: leads
+label: Leads
+description: Leads records. One primary home per record; references connect
+  related knowledge.
+kind: relationship
+directory: relationships/
+fields: []
+from_types:
+  - person
+to_types:
+  - project

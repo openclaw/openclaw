@@ -1,17 +1,39 @@
-import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Insertable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import {
+  getOrLoadSqliteDatabaseAdmissionForPath,
+  publishSqliteDatabaseAdmission,
+  type SqliteDatabaseAdmissionKey,
+} from "../infra/sqlite-database-admission.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
+import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import type {
   ConfigHealthEntry,
   ConfigHealthEntryChanges,
   ConfigHealthEntryBasis,
-  ConfigHealthSnapshot,
   ConfigHealthFingerprint,
   ConfigHealthState,
 } from "./io.health-state.types.js";
 
 type ConfigHealthDatabase = Pick<DB, "config_health_entries">;
+const healthReceipt: SqliteDatabaseAdmissionKey<object> = {
+  name: "config.health",
+  read: (value) => (isRecord(value) ? value : undefined),
+  // Boot's private snapshot readers close between observations of the live owner.
+  lifetime: "process",
+};
+
+export function readConfigHealthReceipt(databasePath: string): object | undefined {
+  return getOrLoadSqliteDatabaseAdmissionForPath(databasePath, healthReceipt, () => ({}));
+}
+
+export function publishConfigHealthChanged(db: EngineConnection): void {
+  publishSqliteDatabaseAdmission(db, healthReceipt, {});
+}
+
 type ConfigHealthWriteRow = Insertable<ConfigHealthDatabase["config_health_entries"]>;
 export type ConfigHealthPatch = Partial<
   Pick<
@@ -21,24 +43,17 @@ export type ConfigHealthPatch = Partial<
 >;
 
 function parseFingerprint(value: string | null): ConfigHealthFingerprint | undefined {
-  if (!value) {
-    return undefined;
-  }
-  try {
-    const parsed: unknown = JSON.parse(value);
-    // SAFETY: Preserve the existing persisted fingerprint object's permissive read contract.
-    return parsed && typeof parsed === "object" ? (parsed as ConfigHealthFingerprint) : undefined;
-  } catch {
-    return undefined;
-  }
+  const parsed = safeParseJson(value ?? "");
+  // SAFETY: Preserve the existing persisted fingerprint object's permissive read contract.
+  return parsed && typeof parsed === "object" ? (parsed as ConfigHealthFingerprint) : undefined;
 }
 
 function stringifyFingerprint(value: ConfigHealthFingerprint | null | undefined): string | null {
   return value ? JSON.stringify(value) : null;
 }
 
-function selectConfigHealthRows(db: DatabaseSync, configPath?: string) {
-  let query = getNodeSqliteKysely<ConfigHealthDatabase>(db)
+function selectConfigHealthRows(db: EngineConnection) {
+  const query = getNodeSqliteKysely<ConfigHealthDatabase>(db)
     .selectFrom("config_health_entries")
     .select([
       "config_path",
@@ -47,9 +62,6 @@ function selectConfigHealthRows(db: DatabaseSync, configPath?: string) {
       "last_observed_suspicious_signature",
       "updated_at_ms",
     ]);
-  if (configPath !== undefined) {
-    query = query.where("config_path", "=", configPath);
-  }
   return executeSqliteQuerySync(db, query.orderBy("config_path", "asc")).rows;
 }
 
@@ -70,27 +82,32 @@ function decodeConfigHealthRows(
   };
 }
 
-export function readConfigHealthStateInDatabase(db: DatabaseSync): ConfigHealthState {
+export function readConfigHealthStateInDatabase(db: EngineConnection): ConfigHealthState {
   return decodeConfigHealthRows(selectConfigHealthRows(db));
 }
 
-export function readConfigHealthSnapshotInDatabase(db: DatabaseSync): ConfigHealthSnapshot {
-  const rows = selectConfigHealthRows(db);
-  return {
-    state: decodeConfigHealthRows(rows),
-    basis: Object.fromEntries(
-      rows.map((row) => [
-        row.config_path,
-        {
-          lastKnownGoodJson: row.last_known_good_json,
-          lastPromotedGoodJson: row.last_promoted_good_json,
-          suspiciousSignature: row.last_observed_suspicious_signature,
-          updatedAtMs: row.updated_at_ms,
-        } satisfies ConfigHealthEntryBasis,
-      ]),
-    ),
-  };
-}
+export const configHealthReadOperations = {
+  "config.health.read": (_input: undefined, db) => {
+    const rows = selectConfigHealthRows(db);
+    return {
+      type: "config.health.read" as const,
+      snapshot: {
+        state: decodeConfigHealthRows(rows),
+        basis: Object.fromEntries(
+          rows.map((row) => [
+            row.config_path,
+            {
+              lastKnownGoodJson: row.last_known_good_json,
+              lastPromotedGoodJson: row.last_promoted_good_json,
+              suspiciousSignature: row.last_observed_suspicious_signature,
+              updatedAtMs: row.updated_at_ms,
+            } satisfies ConfigHealthEntryBasis,
+          ]),
+        ),
+      },
+    };
+  },
+} satisfies WorkerOperationHandlers<EngineConnection>;
 
 /** Omitted fields remain untouched; explicit undefined and null clear their stored value. */
 export function prepareConfigHealthPatch(changes: ConfigHealthEntryChanges): ConfigHealthPatch {
@@ -109,36 +126,60 @@ export function prepareConfigHealthPatch(changes: ConfigHealthEntryChanges): Con
 
 /** Compare the original read and merge in one write transaction, preserving untouched JSON. */
 export function patchConfigHealthEntryInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   configPath: string,
   patch: ConfigHealthPatch,
   expected: ConfigHealthEntryBasis | null | undefined,
   updatedAtMs: number,
 ): boolean {
-  const current = selectConfigHealthRows(db, configPath)[0];
   if (expected === undefined) {
     return false;
   }
-  if (expected === null) {
-    if (current !== undefined) {
-      return false;
-    }
-  } else if (
-    current === undefined ||
-    current.last_known_good_json !== expected.lastKnownGoodJson ||
-    current.last_promoted_good_json !== expected.lastPromotedGoodJson ||
-    current.last_observed_suspicious_signature !== expected.suspiciousSignature ||
-    current.updated_at_ms !== expected.updatedAtMs
-  ) {
-    return false;
+  const sql = getNodeSqliteKysely<ConfigHealthDatabase>(db);
+  // Compare nulls explicitly while preserving the exact persisted text on either engine.
+  const query =
+    expected === null
+      ? sql
+          .insertInto("config_health_entries")
+          .values({
+            config_path: configPath,
+            last_known_good_json: null,
+            last_promoted_good_json: null,
+            last_observed_suspicious_signature: null,
+            ...patch,
+            updated_at_ms: updatedAtMs,
+          })
+          .onConflict((conflict) => conflict.column("config_path").doNothing())
+      : sql
+          .updateTable("config_health_entries")
+          .set({ ...patch, updated_at_ms: updatedAtMs })
+          .where("config_path", "=", configPath)
+          .where(
+            "last_known_good_json",
+            expected.lastKnownGoodJson === null ? "is" : "=",
+            expected.lastKnownGoodJson,
+          )
+          .where(
+            "last_promoted_good_json",
+            expected.lastPromotedGoodJson === null ? "is" : "=",
+            expected.lastPromotedGoodJson,
+          )
+          .where(
+            "last_observed_suspicious_signature",
+            expected.suspiciousSignature === null ? "is" : "=",
+            expected.suspiciousSignature,
+          )
+          .where("updated_at_ms", "=", expected.updatedAtMs);
+  const applied = executeSqliteQuerySync(db, query).numAffectedRows === 1n;
+  if (applied) {
+    publishConfigHealthChanged(db);
   }
-  writeConfigHealthPatchInDatabase(db, configPath, patch, updatedAtMs);
-  return true;
+  return applied;
 }
 
 /** The caller owns the transaction; omitted fields and sibling paths remain unchanged. */
 export function writeConfigHealthPatchInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   configPath: string,
   patch: ConfigHealthPatch,
   updatedAtMs: number,
@@ -162,4 +203,5 @@ export function writeConfigHealthPatchInDatabase(
         }),
       ),
   );
+  publishConfigHealthChanged(db);
 }

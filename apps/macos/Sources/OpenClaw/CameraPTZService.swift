@@ -24,11 +24,7 @@ struct CameraPTZStatusResponse: Encodable, Equatable, Sendable {
     let canHome: Bool
 }
 
-struct CameraPTZState: Encodable, Equatable, Sendable {
-    let panDegrees: Double?
-    let tiltDegrees: Double?
-    let zoomPercent: Double?
-}
+typealias CameraPTZState = OpenClawCameraPTZAxisValues
 
 struct CameraPTZControlResponse: Encodable, Equatable, Sendable {
     let deviceId: String
@@ -64,11 +60,8 @@ enum CameraPTZError: LocalizedError, Equatable {
     private static func describe(_ state: CameraPTZState?) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        guard let state,
-              let data = try? encoder.encode(state),
-              let json = String(data: data, encoding: .utf8)
-        else { return "unavailable" }
-        return json
+        guard let state, let data = try? encoder.encode(state) else { return "unavailable" }
+        return String(bytes: data, encoding: .utf8)!
     }
 }
 
@@ -282,33 +275,18 @@ actor CameraPTZService: CameraPTZServicing {
             guard let pan = status.pan, let tilt = status.tilt else {
                 throw CameraPTZError.axisUnsupported(axes.panDegrees != nil ? "pan" : "tilt")
             }
-            let appliedPan: Int32
-            if let panDegrees = axes.panDegrees {
-                let requested = Self.requestedDegrees(
-                    value: panDegrees,
-                    current: Self.arcsecondsToDegrees(pan.current),
-                    operation: operation)
-                appliedPan = pan.range.normalize(Self.degreesToArcseconds(requested))
-                if Self.valuesDiffer(Self.arcsecondsToDegrees(appliedPan), requested) {
-                    adjusted.append("panDegrees")
+            func planAngle(_ value: Double?, axis: CameraPTZRawAxisStatus, name: String) -> Int32 {
+                guard let value else { return axis.current }
+                let requested = operation == .move ? Self.arcsecondsToDegrees(axis.current) + value : value
+                let applied = axis.range.normalize(Self.degreesToArcseconds(requested))
+                if Self.valuesDiffer(Self.arcsecondsToDegrees(applied), requested) {
+                    adjusted.append(name)
                 }
-            } else {
-                appliedPan = pan.current
+                return applied
             }
-            let appliedTilt: Int32
-            if let tiltDegrees = axes.tiltDegrees {
-                let requested = Self.requestedDegrees(
-                    value: tiltDegrees,
-                    current: Self.arcsecondsToDegrees(tilt.current),
-                    operation: operation)
-                appliedTilt = tilt.range.normalize(Self.degreesToArcseconds(requested))
-                if Self.valuesDiffer(Self.arcsecondsToDegrees(appliedTilt), requested) {
-                    adjusted.append("tiltDegrees")
-                }
-            } else {
-                appliedTilt = tilt.current
-            }
-            plannedPanTilt = (appliedPan, appliedTilt)
+            plannedPanTilt = (
+                planAngle(axes.panDegrees, axis: pan, name: "panDegrees"),
+                planAngle(axes.tiltDegrees, axis: tilt, name: "tiltDegrees"))
         }
 
         var plannedZoom: Int32?
@@ -335,14 +313,6 @@ actor CameraPTZService: CameraPTZServicing {
             nil
         }
         return WritePlan(panTilt: panTilt, zoom: status.zoom?.range.default, adjusted: [])
-    }
-
-    private static func requestedDegrees(
-        value: Double,
-        current: Double,
-        operation: OpenClawCameraPTZOperation) -> Double
-    {
-        operation == .move ? current + value : value
     }
 
     private func execute(
@@ -459,9 +429,9 @@ actor CameraPTZService: CameraPTZServicing {
     {
         let raw = self.executableStatus(raw)
         let axes = CameraPTZAxesStatus(
-            pan: raw.pan.map { self.angleStatus($0) },
-            tilt: raw.tilt.map { self.angleStatus($0) },
-            zoom: raw.zoom.map { self.zoomStatus($0) })
+            pan: raw.pan.map { self.axisStatus($0, isZoom: false) },
+            tilt: raw.tilt.map { self.axisStatus($0, isZoom: false) },
+            zoom: raw.zoom.map { self.axisStatus($0, isZoom: true) })
         return CameraPTZStatusResponse(
             deviceId: deviceId,
             axes: axes,
@@ -488,28 +458,19 @@ actor CameraPTZService: CameraPTZServicing {
             zoomPercent: raw.zoom.map { $0.range.percent(of: $0.current) })
     }
 
-    private static func angleStatus(_ axis: CameraPTZRawAxisStatus) -> CameraPTZAxisStatus {
-        CameraPTZAxisStatus(
-            current: self.arcsecondsToDegrees(axis.current),
-            min: self.arcsecondsToDegrees(axis.range.min),
-            max: self.arcsecondsToDegrees(axis.range.max),
-            step: self.arcsecondsToDegrees(axis.range.step),
-            default: axis.range.default.map(self.arcsecondsToDegrees),
-            unit: "degrees",
-            canSet: axis.canSet,
-            canMove: axis.canSet)
-    }
-
-    private static func zoomStatus(_ axis: CameraPTZRawAxisStatus) -> CameraPTZAxisStatus {
+    private static func axisStatus(_ axis: CameraPTZRawAxisStatus, isZoom: Bool) -> CameraPTZAxisStatus {
+        let convert = isZoom ? axis.range.percent(of:) : self.arcsecondsToDegrees
         let span = Int64(axis.range.max) - Int64(axis.range.min)
-        let step = span > 0 ? Double(axis.range.step) / Double(span) * 100 : 0
+        let step = isZoom
+            ? (span > 0 ? Double(axis.range.step) / Double(span) * 100 : 0)
+            : convert(axis.range.step)
         return CameraPTZAxisStatus(
-            current: axis.range.percent(of: axis.current),
-            min: 0,
-            max: 100,
+            current: convert(axis.current),
+            min: isZoom ? 0 : convert(axis.range.min),
+            max: isZoom ? 100 : convert(axis.range.max),
             step: step,
-            default: axis.range.default.map { axis.range.percent(of: $0) },
-            unit: "percent",
+            default: axis.range.default.map(convert),
+            unit: isZoom ? "percent" : "degrees",
             canSet: axis.canSet,
             canMove: axis.canSet)
     }

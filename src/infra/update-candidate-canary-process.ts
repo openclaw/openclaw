@@ -1,9 +1,23 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { redactSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
+import {
+  parsePublicConfigDiagnosticLines,
+  redactSupportDiagnosticLine,
+} from "../logging/diagnostic-support-redaction.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { signalProcessTree } from "../process/kill-tree.js";
+import { resolveRuntimeArgs, resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
+import type { UpdateCanaryTarget } from "./update-candidate-canary-commands.js";
+import { UPDATE_CANARY_PROGRESS_PREFIX } from "./update-candidate-canary-progress.js";
+import { createUpdateFailureFact, type UpdateFailureFact } from "./update-failure-facts.js";
+import { warnOnUpdateCleanupFailure } from "./update-maintenance.js";
+import { UPDATE_CANDIDATE_STARTUP_FAILURES } from "./update-preflight-details.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export function launchCanary(params: {
-  entry: string;
+  target: UpdateCanaryTarget;
   args: string[];
   root: string;
   env: NodeJS.ProcessEnv;
@@ -12,29 +26,83 @@ export function launchCanary(params: {
   assertCurrent?: () => void;
   capture: (line: string) => void;
   onLine?: (line: string) => void;
+  /** Receipt lines reach onLine only; they never become logs or failure reasons. */
+  hidesLine?: (line: string) => boolean;
   onStdout?: (stdout: string) => void;
 }) {
-  const { entry, args, env, capture } = params;
+  const { target, args, env, capture } = params;
   params.assertCurrent?.();
-  const child = spawn(params.nodeRunner ?? process.execPath, [entry, ...args], {
+  const runtime = params.nodeRunner ?? process.execPath;
+  const invocation =
+    target.kind === "worker"
+      ? { command: runtime, args: [...resolveRuntimeWorkerArgv(target.url, runtime), ...args] }
+      : resolveOpenClawCliInvocation({
+          execPath: runtime,
+          execArgv: resolveRuntimeArgs(runtime),
+          entryPath: target.entryPath,
+          args,
+        });
+  const child = spawn(invocation.command, invocation.args, {
     cwd: params.root,
     env,
     detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
+  const failureFacts: UpdateFailureFact[] = [];
   let stdout = "";
-  let firstStderrLine: string | undefined;
+  let lastStderrLine: string | undefined;
+  const stderrLines: string[] = [];
+  let fatalHeader: string | undefined;
+  const stderrTail = () => (fatalHeader ? [fatalHeader, ...stderrLines] : stderrLines).join("\n");
   let cliReason: string | undefined;
   const captureStderr = (line: string) => {
-    if (!line.trim()) {
+    if (!line.trim() || line.startsWith(UPDATE_CANARY_PROGRESS_PREFIX)) {
       return;
     }
-    const safe = redactSupportDiagnosticLine(line, { env, stateDir: params.stateDir });
-    firstStderrLine ??= safe;
+    const condition = UPDATE_CANDIDATE_STARTUP_FAILURES.find(([pattern]) => pattern.test(line));
+    const issue = failureFacts.some((fact) => fact.message === "Invalid configuration field")
+      ? parsePublicConfigDiagnosticLines(line)[0]
+      : undefined;
+    const message = issue?.message ?? condition?.[1];
+    if (
+      message &&
+      failureFacts.length < 5 &&
+      !failureFacts.some((fact) => fact.message === message && fact.affectedKey === issue?.path)
+    ) {
+      const match = condition?.[0].exec(line);
+      failureFacts.push(
+        createUpdateFailureFact(
+          {
+            check: issue ? "config" : "startupz",
+            code: issue ? "invalid-config" : "candidate-startup-failed",
+            message,
+            affectedKey: issue?.path,
+            pluginId: message === "plugin load failed" ? (match?.[1] ?? match?.[2]) : undefined,
+          },
+          env,
+        ),
+      );
+    }
+    const safe = redactSupportDiagnosticLine(
+      line,
+      { env, stateDir: params.stateDir },
+      Number.MAX_SAFE_INTEGER,
+    );
+    lastStderrLine = sliceUtf16Safe(safe, -200);
+    if (safe.startsWith("FATAL ERROR:")) {
+      // A long native stack must not evict the fatal cause with earlier warnings.
+      fatalHeader = sliceUtf16Safe(safe, 0, 512);
+      stderrLines.length = 0;
+    } else {
+      stderrLines.push(sliceUtf16Safe(safe, 0, 512));
+    }
+    while (stderrLines.length > (fatalHeader ? 79 : 80) || stderrTail().length > 8192) {
+      stderrLines.shift();
+    }
     // The CLI prints a generic heading before its actual failure reason.
     if (line.startsWith("[openclaw] Reason: ")) {
-      cliReason ??= safe.replace(/^\[openclaw\] Reason: /u, "");
+      cliReason = sliceUtf16Safe(safe.replace(/^\[openclaw\] Reason: /u, ""), -200);
     }
   };
   let stdoutBytes = 0;
@@ -44,6 +112,15 @@ export function launchCanary(params: {
     stream.setEncoding("utf8");
     let pending = "";
     let droppingLine = false;
+    const captureLine = (line: string) => {
+      if (!params.hidesLine?.(line)) {
+        if (stream === child.stderr) {
+          captureStderr(line);
+        }
+        capture(line);
+      }
+      params.onLine?.(line);
+    };
     stream.on("data", (chunk: string) => {
       let text = chunk;
       if (droppingLine) {
@@ -58,29 +135,21 @@ export function launchCanary(params: {
       const lines = pending.split(/\r?\n/u);
       pending = lines.pop() ?? "";
       for (const line of lines) {
-        if (stream === child.stderr) {
-          captureStderr(line);
-        }
-        capture(line);
-        params.onLine?.(line);
+        captureLine(line);
       }
       if (pending.length > 64 * 1024) {
         // Discard an oversized unterminated line whole, never through a secret.
         pending = "";
         droppingLine = true;
         if (stream === child.stderr) {
-          firstStderrLine ??= "[oversized log line omitted]";
+          lastStderrLine ??= "[oversized log line omitted]";
         }
         capture("[oversized log line omitted]");
       }
     });
     return () => {
       if (pending) {
-        if (stream === child.stderr) {
-          captureStderr(pending);
-        }
-        capture(pending);
-        params.onLine?.(pending);
+        captureLine(pending);
         pending = "";
       }
     };
@@ -124,12 +193,14 @@ export function launchCanary(params: {
   });
   return {
     child,
+    failureFacts,
     result,
     closed,
     hasExited: () => exited,
     processExited: () => processExited,
     stdout: () => stdout,
-    firstStderrLine: () => cliReason ?? firstStderrLine,
+    stderrDiagnostic: () => fatalHeader ?? cliReason ?? lastStderrLine,
+    stderrTail,
     outputExceeded: () => outputExceeded,
   };
 }
@@ -139,26 +210,12 @@ export async function waitBounded<T>(
   milliseconds: number,
   signal?: AbortSignal,
 ): Promise<{ status: "completed"; value: T } | { status: "deadline" | "aborted" }> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let abort: (() => void) | undefined;
-  try {
-    return await Promise.race([
-      promise.then((value) => ({ status: "completed" as const, value })),
-      new Promise<{ status: "deadline" | "aborted" }>((resolve) => {
-        timer = setTimeout(() => resolve({ status: "deadline" }), Math.max(0, milliseconds));
-        abort = () => resolve({ status: "aborted" });
-        signal?.addEventListener("abort", abort, { once: true });
-        if (signal?.aborted) {
-          abort();
-        }
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-    if (abort) {
-      signal?.removeEventListener("abort", abort);
-    }
-  }
+  return await raceWithTimeout(
+    promise.then((value) => ({ status: "completed" as const, value })),
+    Math.max(0, milliseconds),
+    (): { status: "deadline" | "aborted" } => ({ status: "deadline" }),
+    { signal, onAbort: () => ({ status: "aborted" }) },
+  );
 }
 
 export async function terminateCanary(
@@ -185,4 +242,41 @@ export async function terminateCanary(
     Math.min(1_000, Math.max(0, deadline - Date.now())),
   );
   return outcome.status === "completed";
+}
+
+export async function stopCanary(params: {
+  running: Pick<ReturnType<typeof launchCanary>, "child" | "closed">;
+  name: string;
+  root: string;
+  deadline: number;
+  recordStep: (step: UpdateStepResult) => Promise<void>;
+  primaryFailure?: unknown;
+}): Promise<void> {
+  const cleanupStarted = Date.now();
+  try {
+    if (await terminateCanary(params.running.child, params.running.closed, params.deadline)) {
+      return;
+    }
+    await params.recordStep({
+      name: `${params.name}-cleanup`,
+      command: "SIGTERM, SIGKILL",
+      cwd: params.root,
+      durationMs: Date.now() - cleanupStarted,
+      exitCode: null,
+      advisory: {
+        kind: "recoverable-maintenance",
+        message:
+          "Update cleanup deadline elapsed before process close and termination requests both completed. Update validation results are unchanged.",
+      },
+    });
+  } catch (cleanupError) {
+    if (hasCommandProcessCleanupError(params.primaryFailure)) {
+      throw new AggregateError(
+        [params.primaryFailure, cleanupError],
+        "Candidate startup and cleanup failed",
+        { cause: cleanupError },
+      );
+    }
+    await warnOnUpdateCleanupFailure(cleanupError, params.root, console.warn);
+  }
 }

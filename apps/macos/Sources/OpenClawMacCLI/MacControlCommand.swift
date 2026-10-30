@@ -2,8 +2,7 @@ import Darwin
 import Foundation
 import OpenClawIPC
 
-func runMacControl(_ context: MacCLIContext) {
-    let args = context.arguments
+func runMacControl(_ context: MacCLIContext, directory: URL) {
     do {
         var options = try MacControlOptions.parse(context)
         if options.help {
@@ -24,34 +23,35 @@ func runMacControl(_ context: MacCLIContext) {
         if options.request.browser == true, options.request.token == nil, options.request.password == nil {
             fputs("Complete sign-in in your browser…\n", stderr)
         }
-        let response = try MacControlClient(options: options).send(options.request)
+        let response = try MacControlClient(options: options, directory: directory).send(options.request)
         let result = try macControlResult(response, primaryOnly: options.primaryOnly)
         if options.json {
-            guard let text = String(data: result, encoding: .utf8) else {
-                throw MacControlError(code: "invalid_response", message: "The app returned invalid text.")
-            }
-            print(text)
+            print(String(bytes: result, encoding: .utf8)!)
         } else {
             try printMacControlResult(result, operation: options.request.operation, primaryOnly: options.primaryOnly)
         }
     } catch {
-        exitMacCLI(error, json: args.contains("--json"))
+        exitMacCLI(error, json: context.arguments.contains("--json"))
     }
 }
 
 func exitMacCLI(_ error: Error, json: Bool) -> Never {
-    let controlError = error as? MacControlError
-        ?? MacControlError(code: "operation_failed", message: "The app control operation failed.")
+    let controlError = macControlError(error)
     if json,
-       let data = try? JSONEncoder().encode(MacControlResponse<String>(error: controlError)),
-       let text = String(data: data, encoding: .utf8)
+       let data = try? JSONEncoder().encode(MacControlResponse<String>(error: controlError))
     {
-        fputs(text + "\n", stderr)
+        fputs(String(bytes: data, encoding: .utf8)! + "\n", stderr)
     } else {
         fputs("openclaw-mac: \(controlError.message)\n", stderr)
     }
     exit(controlError.code == "usage" || controlError
         .code == "invalid_profile" ? 1 : (controlError.code == "unreachable" ? 2 : 3))
+}
+
+func macControlError(_ error: Error) -> MacControlError {
+    if error is MacControlConnectionRefused { return MacControlClient.unreachable() }
+    return error as? MacControlError
+        ?? MacControlError(code: "operation_failed", message: "The app control operation failed.")
 }
 
 func macControlResult(_ response: Data, primaryOnly: Bool) throws -> Data {

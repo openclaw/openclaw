@@ -1,8 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  normalizePluginsConfigWithResolver,
-  resolvePolicyPluginActivationState,
-} from "./config-policy.js";
+import { resolvePluginActivationStateShared } from "./config-activation-shared.js";
+import { normalizePluginsConfigWithResolverCore } from "./config-normalization-shared.js";
 import { resolveMemorySlotDecision } from "./config-state.js";
 import type { PluginManifestRecord } from "./manifest-registry.types.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
@@ -16,7 +14,7 @@ export function* iteratePluginRootContributions(params: {
   /** Availability is checked after activation and before claiming a memory slot. */
   isAvailable?: (record: PluginManifestRecord) => boolean;
 }): IterableIterator<{ record: PluginManifestRecord; roots: string[] }> {
-  const normalizedPlugins = normalizePluginsConfigWithResolver(
+  const normalizedPlugins = normalizePluginsConfigWithResolverCore(
     params.config?.plugins,
     params.metadataSnapshot.normalizePluginId,
   );
@@ -27,7 +25,7 @@ export function* iteratePluginRootContributions(params: {
     if (!roots || roots.length === 0) {
       continue;
     }
-    const activationState = resolvePolicyPluginActivationState({
+    const activationState = resolvePluginActivationStateShared({
       id: record.id,
       origin: record.origin,
       channelIds: record.channels,

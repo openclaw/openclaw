@@ -1,3 +1,16 @@
+import fs from "node:fs/promises";
+import { invalidateConfigGetResponseCache } from "./config-get-response.js";
+
+export async function withConfigFileFixture(configPath: string, run: () => Promise<void>) {
+  const originalRaw = await fs.readFile(configPath, "utf-8");
+  try {
+    await run();
+  } finally {
+    await fs.writeFile(configPath, originalRaw, "utf-8");
+    invalidateConfigGetResponseCache();
+  }
+}
+
 export function configRawPayload(config: unknown, baseHash?: string) {
   return {
     raw: JSON.stringify(config, null, 2),

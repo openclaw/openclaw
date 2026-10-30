@@ -5,7 +5,7 @@ import SwabbleKit
 
 @available(macOS 26.0, *)
 @MainActor
-struct ServeCommand: ParsableCommand {
+struct ServeCommand: CLICommand {
     @Option(name: .long("config"), help: "Path to config JSON") var configPath: String?
     @Flag(name: .long("no-wake"), help: "Disable wake word") var noWake: Bool = false
 
@@ -38,44 +38,34 @@ struct ServeCommand: ParsableCommand {
         let logger = Logger(level: LogLevel(configValue: cfg.logging.level) ?? .info)
         logger.info("swabble serve starting (wake: \(cfg.wake.enabled ? cfg.wake.word : "disabled"))")
         let pipeline = SpeechPipeline()
-        do {
-            let stream = try await pipeline.start(
-                localeIdentifier: cfg.speech.localeIdentifier,
-                etiquette: cfg.speech.etiquetteReplacements)
-            for await seg in stream {
-                if cfg.wake.enabled {
-                    guard Self.matchesWake(text: seg.text, cfg: cfg) else { continue }
-                }
-                let stripped = Self.stripWake(text: seg.text, cfg: cfg)
-                let job = HookJob(text: stripped, timestamp: Date())
-                let executor = HookExecutor(config: cfg)
-                try await executor.run(job: job)
-                if cfg.transcripts.enabled {
-                    await TranscriptsStore.shared.append(text: stripped)
-                }
-                if seg.isFinal {
-                    logger.info("final: \(stripped)")
-                } else {
-                    logger.debug("partial: \(stripped)")
-                }
+        let stream = try await pipeline.start(
+            localeIdentifier: cfg.speech.localeIdentifier,
+            etiquette: cfg.speech.etiquetteReplacements)
+        try await Self.consumeTranscripts(stream, config: cfg)
+    }
+
+    static func consumeTranscripts(
+        _ stream: AsyncStream<SpeechSegment>,
+        config cfg: SwabbleConfig) async throws
+    {
+        let executor = HookExecutor(config: cfg)
+        let triggers = [cfg.wake.word] + cfg.wake.aliases
+        for await seg in stream {
+            if cfg.wake.enabled {
+                guard WakeWordGate.matchesTextOnly(text: seg.text, triggers: triggers) else { continue }
             }
-        } catch {
-            logger.error("serve error: \(error)")
-            throw error
+            let stripped = WakeWordGate.stripWake(text: seg.text, triggers: triggers)
+            if stripped.count >= cfg.hook.minCharacters {
+                let job = HookJob(text: stripped, timestamp: Date())
+                try await executor.run(job: job)
+            }
+            if cfg.transcripts.enabled {
+                await TranscriptsStore.shared.append(text: stripped)
+            }
         }
     }
 
     private var configURL: URL? {
         self.configPath.map { URL(fileURLWithPath: $0) }
-    }
-
-    private static func matchesWake(text: String, cfg: SwabbleConfig) -> Bool {
-        let triggers = [cfg.wake.word] + cfg.wake.aliases
-        return WakeWordGate.matchesTextOnly(text: text, triggers: triggers)
-    }
-
-    private static func stripWake(text: String, cfg: SwabbleConfig) -> String {
-        let triggers = [cfg.wake.word] + cfg.wake.aliases
-        return WakeWordGate.stripWake(text: text, triggers: triggers)
     }
 }

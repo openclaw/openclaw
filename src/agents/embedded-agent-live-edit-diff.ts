@@ -1,4 +1,5 @@
 import { parseStreamingJson } from "@openclaw/ai/internal/runtime";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { countStreamingFileMutationLines } from "./file-mutation-args.js";
 import { resolveFileMutationToolName } from "./tool-mutation-names.js";
@@ -7,7 +8,7 @@ const LIVE_EDIT_DIFF_MIN_INTERVAL_MS = 250;
 const LIVE_EDIT_DIFF_MAX_PARTIAL_JSON_CHARS = 1024 * 1024;
 const LIVE_EDIT_DIFF_MAX_TRACKED_CALLS = 64;
 
-type LiveEditDiffProgressState = {
+export type LiveEditDiffProgressState = {
   added: number;
   removed: number;
   emittedAdded: number;
@@ -15,7 +16,7 @@ type LiveEditDiffProgressState = {
   lastCheckedAtMs: number;
 };
 
-type LiveEditDiffProgress = {
+export type LiveEditDiffProgress = {
   toolCallId: string;
   name: string;
   diff: { added: number; removed: number };
@@ -34,19 +35,13 @@ function readToolCallBlock(event: Record<string, unknown>): Record<string, unkno
     return undefined;
   }
   const content = (partial as { content?: unknown }).content;
-  const block = Array.isArray(content) ? content[contentIndex] : undefined;
-  return block && typeof block === "object" && !Array.isArray(block)
-    ? (block as Record<string, unknown>)
-    : undefined;
+  return asOptionalRecord(Array.isArray(content) ? content[contentIndex] : undefined);
 }
 
 function readToolCallId(event: Record<string, unknown>): string | undefined {
-  const toolCall = event.toolCall;
-  if (toolCall && typeof toolCall === "object" && !Array.isArray(toolCall)) {
-    const id = (toolCall as Record<string, unknown>).id;
-    if (typeof id === "string" && id) {
-      return id;
-    }
+  const id = asOptionalRecord(event.toolCall)?.id;
+  if (typeof id === "string" && id) {
+    return id;
   }
   const block = readToolCallBlock(event);
   return typeof block?.id === "string" && block.id ? block.id : undefined;
@@ -75,12 +70,33 @@ export function updateLiveEditDiffProgress(
   const block = readToolCallBlock(event);
   const toolCallId = typeof block?.id === "string" ? block.id : "";
   const name = typeof block?.name === "string" ? block.name : "";
-  const kind = resolveFileMutationToolName(name);
+  // partialJson is the producer's live buffer, not a per-event snapshot. A lagging reader sees a
+  // newer value (counts only move forward) or none after toolcall_end (skipped); accepted for progress.
   const partialJson = typeof block?.partialJson === "string" ? block.partialJson : "";
-  if (!toolCallId || !kind || !partialJson) {
+  return updateLiveEditDiffProgressFromInput(stateByToolCallId, {
+    toolCallId,
+    name,
+    partialJsonLength: partialJson.length,
+    readPartialJson: () => partialJson,
+  });
+}
+
+/** Share bounded counting without assembling cumulative CLI arguments before admission. */
+export function updateLiveEditDiffProgressFromInput(
+  stateByToolCallId: Map<string, LiveEditDiffProgressState>,
+  input: {
+    toolCallId: string;
+    name: string;
+    partialJsonLength: number;
+    readPartialJson: () => string;
+  },
+): LiveEditDiffProgress | undefined {
+  const { toolCallId, name, partialJsonLength } = input;
+  const kind = resolveFileMutationToolName(name);
+  if (!toolCallId || !kind || !partialJsonLength) {
     return undefined;
   }
-  if (partialJson.length > LIVE_EDIT_DIFF_MAX_PARTIAL_JSON_CHARS) {
+  if (partialJsonLength > LIVE_EDIT_DIFF_MAX_PARTIAL_JSON_CHARS) {
     stateByToolCallId.delete(toolCallId);
     return undefined;
   }
@@ -104,7 +120,10 @@ export function updateLiveEditDiffProgress(
   // Parsing is the expensive part. Rate-limit it before touching cumulative JSON
   // so fragmented large arguments cannot create quadratic work on the event path.
   progress.lastCheckedAtMs = now;
-  const counted = countStreamingFileMutationLines(kind, parseStreamingJson(partialJson));
+  const counted = countStreamingFileMutationLines(
+    kind,
+    parseStreamingJson(input.readPartialJson()),
+  );
   // Streaming parses are best effort. Never move a visible counter backwards if
   // an incomplete JSON boundary temporarily exposes less of the same arguments.
   progress.added = Math.max(progress.added, counted.added);

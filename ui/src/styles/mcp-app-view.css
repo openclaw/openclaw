@@ -1,0 +1,64 @@
+mcp-app-view {
+  display: block;
+  width: 100%;
+}
+mcp-app-view .mount {
+  width: 100%;
+  min-height: 160px;
+}
+mcp-app-view .mount:empty {
+  min-height: 0;
+}
+mcp-app-view[fill-container] {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+mcp-app-view[fill-container] .mount,
+mcp-app-view[display-mode="fullscreen"] .mount {
+  flex: 1;
+  min-height: 0;
+}
+mcp-app-view iframe {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: var(--board-surface, transparent);
+}
+mcp-app-view[display-mode="fullscreen"] {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: var(--bg);
+  padding-top: 40px;
+  margin: 0;
+  border: 0;
+  box-sizing: border-box;
+}
+mcp-app-view .exit-fullscreen {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+}
+mcp-app-view .inactive {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  background: var(--bg-accent);
+  color: var(--text);
+  font-size: 13px;
+  justify-content: space-between;
+}
+mcp-app-view .inactive button {
+  flex-shrink: 0;
+}
+mcp-app-view .error {
+  padding: 14px;
+  color: var(--danger);
+  font-size: 13px;
+}

@@ -1,114 +1,144 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { resolvePluginActivationSourceConfig } from "../plugins/activation-source-config.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   retainLegacyDefaultAgentId,
   tryGetLegacyDefaultAgentId,
 } from "./legacy.default-agent-owner.js";
 import {
   createConfigResolutionFacts,
+  getConfigResolutionFacts,
   getResolvedConfigEnvSecretRef,
   setConfigResolutionFacts,
 } from "./resolution-facts.js";
 import {
-  createRuntimeConfigReader,
-  hashRuntimeConfigValue,
+  createRuntimeConfigReader as createReader,
   resetConfigRuntimeState,
-  setRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot as setSnapshot,
 } from "./runtime-snapshot.js";
 import {
-  captureRuntimeConfig,
-  projectConfigOntoRuntimeSourceSnapshot,
+  captureRuntimeConfig as capture,
+  projectConfigOntoRuntimeSourceSnapshot as projectSource,
 } from "./runtime-source-projection.js";
 import type { OpenClawConfig } from "./types.js";
 
-describe("captured runtime config source", () => {
-  afterEach(() => resetConfigRuntimeState());
+afterEach(() => resetConfigRuntimeState());
 
-  it("captures authored values and provenance with one isolated runtime generation", () => {
-    const source: OpenClawConfig = {
-      agents: { entries: { ops: {}, research: {} } },
-      gateway: { auth: { mode: "token", token: "${GATEWAY_TOKEN}" } },
-    };
-    const runtime: OpenClawConfig = {
-      ...source,
-      gateway: { auth: { mode: "token", token: "synthetic-resolved-token" } },
-    };
-    retainLegacyDefaultAgentId(runtime, "ops");
-    setConfigResolutionFacts(
-      runtime,
-      createConfigResolutionFacts(
-        [],
-        new Map(),
-        "default",
-        new Map([["gateway.auth.token", "GATEWAY_TOKEN"]]),
-      ),
-    );
-    setRuntimeConfigSnapshot(runtime, source);
+const tokenPath = "gateway.auth.token";
+const tokenRef = new Map([[tokenPath, "GATEWAY_TOKEN"]]);
 
-    const captured = captureRuntimeConfig(runtime);
-    const authored = projectConfigOntoRuntimeSourceSnapshot(captured);
-    expect(captured).toEqual(runtime);
-    expect(captured).not.toBe(runtime);
-    expect(authored).toEqual(source);
-    expect(authored).not.toBe(source);
-    expect(hashRuntimeConfigValue(captured)).toBe(hashRuntimeConfigValue(runtime));
-    expect(hashRuntimeConfigValue(authored)).toBe(hashRuntimeConfigValue(source));
-    expect(Object.isFrozen(captured.agents?.entries)).toBe(true);
-    expect(Object.isFrozen(authored.gateway?.auth)).toBe(true);
-    expect(tryGetLegacyDefaultAgentId(captured)).toBe("ops");
-    expect(getResolvedConfigEnvSecretRef(captured, "gateway.auth.token")?.id).toBe("GATEWAY_TOKEN");
-    expect(resolvePluginActivationSourceConfig({ config: captured })).toBe(authored);
-    expect(captureRuntimeConfig(authored)).toBe(authored);
+it("reuses a frozen source capture while preserving edits before freezing and provenance changes", () => {
+  const source = Object.freeze({ gateway: { port: 19001 } });
+  setSnapshot({ ...source, tools: {} }, source);
+  const first = capture(source);
+  expect(capture(source)).not.toBe(first);
+  source.gateway.port = 19002;
+  freezeJsonSnapshot(source);
+  const frozen = capture(source);
+  expect(frozen.gateway?.port).toBe(19002);
+  expect(first.gateway?.port).toBe(19001);
+  expect(frozen).not.toBe(source);
+  expect(capture(source)).toBe(frozen);
+  expect(projectSource(frozen)).toBe(frozen);
 
-    source.gateway!.auth!.token = "changed-source";
-    runtime.gateway!.auth!.token = "changed-runtime";
-    expect(projectConfigOntoRuntimeSourceSnapshot(runtime).gateway?.auth?.token).toBe(
-      "changed-source",
-    );
-    setRuntimeConfigSnapshot({ gateway: { port: 19002 } }, { gateway: { port: 19001 } });
-    expect(projectConfigOntoRuntimeSourceSnapshot(captured)).toBe(authored);
-    expect(captured.gateway?.auth?.token).toBe("synthetic-resolved-token");
-    expect(authored.gateway?.auth?.token).toBe("${GATEWAY_TOKEN}");
-  });
+  const facts = createConfigResolutionFacts([]);
+  setConfigResolutionFacts(source, facts);
+  const rebound = capture(source);
+  expect(rebound).not.toBe(frozen);
+  expect(getConfigResolutionFacts(rebound)).toBe(facts);
+  expect(getConfigResolutionFacts(frozen)).toBeNull();
+  setConfigResolutionFacts(rebound, null);
+  const repaired = capture(source);
+  expect(repaired).not.toBe(rebound);
+  expect(getConfigResolutionFacts(repaired)).toBe(facts);
+  expect(capture(source)).toBe(repaired);
+});
 
-  it("projects runtime edits once while ordinary derived configs remain independent", () => {
-    const source: OpenClawConfig = {
-      gateway: { port: 19001 },
-      tools: { exec: { safeBins: ["jq"] } },
-    };
-    const runtime: OpenClawConfig = { ...source, gateway: { port: 19001, mode: "local" } };
-    setRuntimeConfigSnapshot(runtime, source);
-    const edited = { ...runtime, gateway: { ...runtime.gateway, port: 19002 } };
-    const captured = captureRuntimeConfig(edited);
-    const authored = projectConfigOntoRuntimeSourceSnapshot(captured);
-    expect(authored.gateway).toEqual({ port: 19002 });
-    expect(projectConfigOntoRuntimeSourceSnapshot(captured)).toBe(authored);
+function expectIsolatedCopy(copy: OpenClawConfig, original: OpenClawConfig) {
+  expect(copy).toEqual(original);
+  expect(copy).not.toBe(original);
+}
 
-    const ordinary = projectConfigOntoRuntimeSourceSnapshot(edited);
-    ordinary.tools?.exec?.safeBins?.push("cut");
-    expect(projectConfigOntoRuntimeSourceSnapshot(edited).tools?.exec?.safeBins).toEqual(["jq"]);
-    expect(authored.tools?.exec?.safeBins).toEqual(["jq"]);
-  });
+it("captures authored values and provenance with one isolated runtime generation", () => {
+  const source: OpenClawConfig = {
+    agents: { entries: { ops: {} } },
+    gateway: { auth: { mode: "token", token: "${GATEWAY_TOKEN}" } },
+  };
+  const runtime: OpenClawConfig = {
+    ...source,
+    gateway: { auth: { mode: "token", token: "synthetic-resolved-token" } },
+  };
+  retainLegacyDefaultAgentId(runtime, "ops");
+  setConfigResolutionFacts(
+    runtime,
+    createConfigResolutionFacts([], new Map(), "default", tokenRef),
+  );
+  setSnapshot(runtime, source);
 
-  it("uses one captured value when no authored source is active", () => {
-    const original = { gateway: { port: 19001 } };
-    const captured = captureRuntimeConfig(original);
-    expect(projectConfigOntoRuntimeSourceSnapshot(captured)).toBe(captured);
-    expect(captureRuntimeConfig(captured)).toBe(captured);
-    original.gateway.port = 19002;
-    expect(captured.gateway?.port).toBe(19001);
-  });
+  const captured = capture(runtime);
+  const authored = projectSource(captured);
+  expectIsolatedCopy(captured, runtime);
+  expectIsolatedCopy(authored, source);
+  expect(Object.isFrozen(captured.agents?.entries)).toBe(true);
+  expect(Object.isFrozen(authored.gateway?.auth)).toBe(true);
+  expect(tryGetLegacyDefaultAgentId(captured)).toBeUndefined();
+  expect(getResolvedConfigEnvSecretRef(captured, tokenPath)?.id).toBe("GATEWAY_TOKEN");
+  expect(resolvePluginActivationSourceConfig({ config: captured })).toBe(authored);
+  expect(capture(authored)).toBe(authored);
 
-  it("keeps a scoped capture pinned when its mutable origin later matches the process source", () => {
-    const source: OpenClawConfig = { gateway: { port: 19001 } };
-    const runtime: OpenClawConfig = { gateway: { port: 19001, mode: "local" } };
-    setRuntimeConfigSnapshot(runtime, source);
-    const scoped: OpenClawConfig = { gateway: { port: 19002 } };
-    const captured = captureRuntimeConfig(scoped);
-    scoped.gateway!.port = 19001;
-    const read = createRuntimeConfigReader(captured);
-    expect(read()).toBe(captured);
-    setRuntimeConfigSnapshot({ gateway: { port: 19003 } }, source);
-    expect(read()).toBe(captured);
-  });
+  source.gateway!.auth!.token = "changed-source";
+  runtime.gateway!.auth!.token = "changed-runtime";
+  expect(projectSource(runtime).gateway?.auth?.token).toBe("changed-source");
+  setSnapshot({ gateway: { port: 19002 } }, { gateway: { port: 19001 } });
+  expect(projectSource(captured)).toBe(authored);
+  expect(captured.gateway?.auth?.token).toBe("synthetic-resolved-token");
+  expect(authored.gateway?.auth?.token).toBe("${GATEWAY_TOKEN}");
+  setSnapshot(runtime, source);
+  runtime.gateway!.auth!.token = "after-publication";
+  source.gateway!.auth!.token = "after-publication";
+  const next = capture(runtime);
+  expect(next).not.toBe(captured);
+  expect(next.gateway?.auth?.token).toBe("changed-runtime");
+  expect(projectSource(next).gateway?.auth?.token).toBe("changed-source");
+  expect(capture(runtime)).toBe(next);
+  expect(capture(next)).toBe(next);
+  expect(captured.gateway?.auth?.token).toBe("synthetic-resolved-token");
+});
+
+it("projects runtime edits once while ordinary derived configs remain independent", () => {
+  const source: OpenClawConfig = {
+    gateway: { port: 19001 },
+    tools: { exec: { safeBins: ["jq"] } },
+  };
+  const runtime: OpenClawConfig = { ...source, gateway: { port: 19001, mode: "local" } };
+  setSnapshot(runtime, source);
+  const edited = { ...runtime, gateway: { ...runtime.gateway, port: 19002 } };
+  const captured = capture(edited);
+  const authored = projectSource(captured);
+  expect(authored.gateway).toEqual({ port: 19002 });
+  expect(projectSource(captured)).toBe(authored);
+
+  const ordinary = projectSource(edited);
+  ordinary.tools?.exec?.safeBins?.push("cut");
+  expect(projectSource(edited).tools?.exec?.safeBins).toEqual(["jq"]);
+  expect(authored.tools?.exec?.safeBins).toEqual(["jq"]);
+});
+
+it("keeps a source-free capture pinned when its mutable origin later matches the process source", () => {
+  const original = { gateway: { port: 19001 } };
+  const captured = capture(original);
+  expect(projectSource(captured)).toBe(captured);
+  expect(capture(captured)).toBe(captured);
+  original.gateway.port = 19002;
+  expect(captured.gateway?.port).toBe(19001);
+  const source: OpenClawConfig = { gateway: { port: 19002 } };
+  const runtime: OpenClawConfig = { gateway: { port: 19002, mode: "local" } };
+  setSnapshot(runtime, source);
+  const scoped = { gateway: { port: 19003 } };
+  const pinned = capture(scoped);
+  scoped.gateway.port = 19002;
+  const read = createReader(pinned);
+  expect(read()).toBe(pinned);
+  setSnapshot({ gateway: { port: 19003 } }, source);
+  expect(read()).toBe(pinned);
 });

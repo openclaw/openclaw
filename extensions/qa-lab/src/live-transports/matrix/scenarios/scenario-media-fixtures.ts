@@ -1,4 +1,3 @@
-// QA Lab Matrix plugin module implements scenario media fixtures behavior.
 export const MATRIX_QA_IMAGE_ATTACHMENT_FILENAME = "red-top-blue-bottom.png";
 
 type MatrixQaMediaTypeCoverageCase = {
@@ -12,7 +11,6 @@ type MatrixQaMediaTypeCoverageCase = {
   tokenPrefix: string;
 };
 
-const MATRIX_QA_IMAGE_COLOR_GROUPS = [["red"], ["blue"]] as const;
 const MATRIX_QA_SPLIT_COLOR_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAHElEQVR4nGP4z8DwnxLMMGrAsDCAQv2jBgwPAwAxtf4Q24P5oAAAAABJRU5ErkJggg==";
 const MATRIX_QA_SPLIT_COLOR_JPEG_BASE64 =
@@ -133,7 +131,5 @@ export function buildMatrixQaImageGenerationPrompt(sutUserId: string) {
 
 export function hasMatrixQaExpectedColorReply(body: string | undefined) {
   const normalizedBody = body?.toLowerCase() ?? "";
-  return MATRIX_QA_IMAGE_COLOR_GROUPS.every((group) =>
-    group.some((color) => normalizedBody.includes(color)),
-  );
+  return normalizedBody.includes("red") && normalizedBody.includes("blue");
 }

@@ -13,7 +13,7 @@
 }
 
 .onboarding-memory-import > header,
-.onboarding-memory-import > footer {
+.onboarding-memory-import__actions {
   padding: 22px 24px;
 }
 
@@ -96,32 +96,19 @@
   font-size: 12px;
 }
 
-.onboarding-memory-import > footer {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.onboarding-memory-import__actions {
   border-top: 1px solid var(--border);
 }
 
 .onboarding-memory-import__review {
-  margin-left: auto;
   text-decoration: underline;
   text-underline-offset: 3px;
 }
 
 @media (max-width: 640px) {
   .onboarding-memory-import > header,
-  .onboarding-memory-import > footer,
+  .onboarding-memory-import__actions,
   .onboarding-memory-import > ul {
     padding-inline: 18px;
-  }
-
-  .onboarding-memory-import > footer {
-    flex-wrap: wrap;
-  }
-
-  .onboarding-memory-import__review {
-    width: 100%;
-    margin-left: 0;
   }
 }

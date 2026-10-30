@@ -1,5 +1,3 @@
-// Mattermost helper module supports emoji reaction name normalization.
-
 // Mattermost rejects raw reaction glyphs; preserve unknown names while mapping
 // common model-supplied emoji to the short names its API accepts.
 const MATTERMOST_EMOJI_SHORTNAME_BY_GLYPH: Record<string, string> = {

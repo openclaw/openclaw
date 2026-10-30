@@ -1,7 +1,8 @@
-// Daemon lifecycle config guard tests cover config checks before service lifecycle actions.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { VERSION } from "../../version.js";
+import { beforeEach, expect, it, vi } from "vitest";
+import { createPluginPackagingConfigIssues } from "../../commands/test-runtime-config-helpers.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/config.js";
 import {
+  createGatewayServiceRunArgs as createServiceRunArgs,
   lifecycleTestRuntime,
   resetLifecycleRuntimeLogs,
   resetLifecycleServiceMocks,
@@ -11,11 +12,6 @@ import {
 
 const readConfigFileSnapshotMock = vi.fn();
 const loadConfig = vi.fn(() => ({}));
-const newerConfigHints = [
-  "Run the newer openclaw binary on PATH, or reinstall the intended gateway service from the newer install.",
-  "Set OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 only for an intentional downgrade or recovery action.",
-];
-const newerConfigHintItems = newerConfigHints.map((text) => ({ kind: "generic", text }));
 const invalidConfigRecoveryHint = [
   'Run "openclaw doctor --fix" to repair, then retry.',
   "If startup is still blocked, inspect the adjacent .bak backup before restoring it manually.",
@@ -23,15 +19,26 @@ const invalidConfigRecoveryHint = [
 const pluginPackagingRecoveryHints = [
   "This is a plugin packaging issue, not a local config problem.",
   "Update or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then.",
-];
+] as const;
 const pluginPackagingHintItems = pluginPackagingRecoveryHints.map((text) => ({
   kind: "generic",
   text,
 }));
 
-function expectLatestRuntimeJson(payload: unknown) {
-  const calls = lifecycleTestRuntime.writeJson.mock.calls;
-  expect(calls[calls.length - 1]?.[0]).toEqual(payload);
+function expectLatestRuntimeJson(payload: Record<string, unknown>) {
+  expect(lifecycleTestRuntime.writeJson).toHaveBeenLastCalledWith({
+    ok: false,
+    hints: undefined,
+    hintItems: undefined,
+    warnings: undefined,
+    ...payload,
+  });
+}
+
+function expectWarning(result: string, warning: string) {
+  expect(lifecycleTestRuntime.writeJson).toHaveBeenLastCalledWith(
+    expect.objectContaining({ ok: true, result, warnings: [expect.stringContaining(warning)] }),
+  );
 }
 
 vi.mock("../../config/config.js", () => ({
@@ -48,272 +55,136 @@ vi.mock("../../config/issue-format.js", () => ({
   ) => issues.map((i) => `${i.path}: ${i.message}`),
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: lifecycleTestRuntime,
 }));
 
-function setConfigSnapshot(params: {
-  exists: boolean;
-  valid: boolean;
-  issues?: Array<{ path: string; message: string }>;
-  warnings?: Array<{ path: string; message: string }>;
-  legacyIssues?: Array<{ path: string; message: string }>;
-  lastTouchedVersion?: string;
-}) {
-  const config = params.lastTouchedVersion
-    ? { meta: { lastTouchedVersion: params.lastTouchedVersion } }
-    : {};
+function setConfigSnapshot(
+  params: Partial<Pick<ConfigFileSnapshot, "valid" | "issues" | "warnings">> = {},
+  config: OpenClawConfig = {},
+) {
   readConfigFileSnapshotMock.mockResolvedValue({
-    exists: params.exists,
-    valid: params.valid,
+    exists: true,
+    valid: true,
     config,
     sourceConfig: config,
-    issues: params.issues ?? [],
-    warnings: params.warnings ?? [],
-    legacyIssues: params.legacyIssues ?? [],
+    issues: [],
+    warnings: [],
+    legacyIssues: [],
+    ...params,
   });
 }
 
-function setPluginPackagingInvalidSnapshot() {
+function setInvalidConfig(path: string) {
   setConfigSnapshot({
-    exists: true,
     valid: false,
-    issues: [
-      {
-        path: "plugins.slots.memory",
-        message: "plugin not found: source-only-pack",
-      },
-    ],
-    warnings: [
-      {
-        path: "plugins",
-        message:
-          "plugin source-only-pack: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js. This is a plugin packaging issue, not a local config problem.",
-      },
-    ],
+    issues: [{ path, message: "Unrecognized key" }],
   });
 }
 
-function createServiceRunArgs() {
-  return {
-    serviceNoun: "Gateway",
-    service,
-    renderStartHints: () => [],
-    opts: { json: true },
-  };
-}
+import {
+  runServiceRestart,
+  runServiceStart,
+  runServiceStop,
+  runServiceUninstall,
+} from "./lifecycle-core.js";
 
-describe("runServiceRestart config pre-flight (#35862)", () => {
-  let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
-
-  beforeAll(async () => {
-    ({ runServiceRestart } = await import("./lifecycle-core.js"));
-  });
-
-  beforeEach(() => {
-    resetLifecycleRuntimeLogs();
-    readConfigFileSnapshotMock.mockReset();
-    setConfigSnapshot({ exists: true, valid: true });
-    loadConfig.mockReset();
-    loadConfig.mockReturnValue({});
-    resetLifecycleServiceMocks();
-    stubEmptyGatewayEnv();
-  });
-
-  it("aborts restart when config is invalid", async () => {
-    setConfigSnapshot({
-      exists: true,
-      valid: false,
-      issues: [{ path: "agents.defaults.pdfModel", message: "Unrecognized key" }],
-    });
-
-    await expect(runServiceRestart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
-
-    expect(service.restart).not.toHaveBeenCalled();
-    expectLatestRuntimeJson({
-      action: "restart",
-      ok: false,
-      error: `Gateway aborted: config is invalid.\nagents.defaults.pdfModel: Unrecognized key\n${invalidConfigRecoveryHint}`,
-      hints: undefined,
-      hintItems: undefined,
-      warnings: undefined,
-    });
-  });
-
-  it("points restart at plugin packaging recovery for packaging-only invalid config", async () => {
-    setPluginPackagingInvalidSnapshot();
-
-    await expect(runServiceRestart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
-
-    expect(service.restart).not.toHaveBeenCalled();
-    expectLatestRuntimeJson({
-      action: "restart",
-      ok: false,
-      error: "Gateway restart blocked: plugins.slots.memory: plugin not found: source-only-pack",
-      hints: pluginPackagingRecoveryHints,
-      hintItems: pluginPackagingHintItems,
-      warnings: undefined,
-    });
-  });
-
-  it("blocks restart from an older binary when config was written by a newer one", async () => {
-    setConfigSnapshot({ exists: true, valid: true, lastTouchedVersion: "9999.1.1" });
-
-    await expect(runServiceRestart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
-
-    expect(service.restart).not.toHaveBeenCalled();
-    expectLatestRuntimeJson({
-      action: "restart",
-      ok: false,
-      error: `Gateway restart blocked: Refusing to restart the gateway service because this OpenClaw binary (${VERSION}) is older than the config last written by OpenClaw 9999.1.1.`,
-      hints: newerConfigHints,
-      hintItems: newerConfigHintItems,
-      warnings: undefined,
-    });
-  });
-
-  it("proceeds with restart when config is valid", async () => {
-    setConfigSnapshot({ exists: true, valid: true });
-
-    const result = await runServiceRestart(createServiceRunArgs());
-
-    expect(result).toBe(true);
-    expect(service.restart).toHaveBeenCalledTimes(1);
-  });
-
-  it("proceeds with restart when config file does not exist", async () => {
-    setConfigSnapshot({ exists: false, valid: true });
-
-    const result = await runServiceRestart(createServiceRunArgs());
-
-    expect(result).toBe(true);
-    expect(service.restart).toHaveBeenCalledTimes(1);
-  });
-
-  it("proceeds with restart when snapshot read throws", async () => {
-    readConfigFileSnapshotMock.mockRejectedValue(new Error("read failed"));
-
-    const result = await runServiceRestart(createServiceRunArgs());
-
-    expect(result).toBe(true);
-    expect(service.restart).toHaveBeenCalledTimes(1);
-  });
+beforeEach(() => {
+  resetLifecycleRuntimeLogs();
+  readConfigFileSnapshotMock.mockReset();
+  setConfigSnapshot();
+  loadConfig.mockReset();
+  loadConfig.mockReturnValue({});
+  resetLifecycleServiceMocks();
+  stubEmptyGatewayEnv();
 });
 
-describe("runServiceStart config pre-flight (#35862)", () => {
-  let runServiceStart: typeof import("./lifecycle-core.js").runServiceStart;
+it("restarts the recorded service and warns without repairing from invalid config (#35862)", async () => {
+  setInvalidConfig("agents.defaults.pdfModel");
+  const repairLoadedService = vi.fn();
+  const postRestartCheck = vi.fn();
 
-  beforeAll(async () => {
-    ({ runServiceStart } = await import("./lifecycle-core.js"));
-  });
+  await expect(
+    runServiceRestart({
+      ...createServiceRunArgs(),
+      repairLoadedService,
+      postRestartCheck,
+      checkTokenDrift: true,
+    }),
+  ).resolves.toBe(true);
 
-  beforeEach(() => {
-    resetLifecycleRuntimeLogs();
-    readConfigFileSnapshotMock.mockReset();
-    setConfigSnapshot({ exists: true, valid: true });
-    resetLifecycleServiceMocks();
-  });
+  expect(service.restart).toHaveBeenCalledWith(
+    expect.objectContaining({ preserveDefinition: true }),
+  );
+  expect(repairLoadedService).not.toHaveBeenCalled();
+  expect(loadConfig).not.toHaveBeenCalled();
+  expect(postRestartCheck).toHaveBeenCalledWith(
+    expect.objectContaining({
+      activationAccepted: true,
+      preserveDefinition: true,
+      warnings: [expect.stringContaining("agents.defaults.pdfModel: Unrecognized key")],
+    }),
+  );
+  expectWarning("restarted", "openclaw doctor --fix");
+});
 
-  it("aborts start when config is invalid", async () => {
-    setConfigSnapshot({
-      exists: true,
-      valid: false,
-      issues: [{ path: "agents.defaults.pdfModel", message: "Unrecognized key" }],
-    });
+it("restarts the recorded service when config was written by a newer binary", async () => {
+  setConfigSnapshot({}, { meta: { lastTouchedVersion: "9999.1.1" } });
 
-    await expect(runServiceStart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
-
-    expect(service.start).not.toHaveBeenCalled();
-    expectLatestRuntimeJson({
-      action: "start",
-      ok: false,
+  await expect(runServiceRestart(createServiceRunArgs())).resolves.toBe(true);
+  expect(service.restart).toHaveBeenCalledTimes(1);
+});
+it.each([
+  {
+    name: "invalid config",
+    issues: { issues: [{ path: "agents.defaults.pdfModel", message: "Unrecognized key" }] },
+    failure: {
       error: `Gateway aborted: config is invalid.\nagents.defaults.pdfModel: Unrecognized key\n${invalidConfigRecoveryHint}`,
-      hints: undefined,
-      hintItems: undefined,
-      warnings: undefined,
-    });
-  });
-
-  it("points start at plugin packaging recovery for packaging-only invalid config", async () => {
-    setPluginPackagingInvalidSnapshot();
-
-    await expect(runServiceStart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
-
-    expect(service.start).not.toHaveBeenCalled();
-    expectLatestRuntimeJson({
-      action: "start",
-      ok: false,
+    },
+  },
+  {
+    name: "plugin packaging recovery",
+    issues: createPluginPackagingConfigIssues(),
+    failure: {
       error: "Gateway start blocked: plugins.slots.memory: plugin not found: source-only-pack",
       hints: pluginPackagingRecoveryHints,
       hintItems: pluginPackagingHintItems,
-      warnings: undefined,
-    });
-  });
-
-  it("aborts before not-loaded start recovery when config is invalid", async () => {
-    const onNotLoaded = vi.fn(async () => ({
-      result: "started" as const,
-      loaded: true,
-    }));
-    setConfigSnapshot({
-      exists: true,
-      valid: false,
-      issues: [{ path: "agents.defaults.pdfModel", message: "Unrecognized key" }],
-    });
-
-    await expect(
-      runServiceStart({
-        ...createServiceRunArgs(),
-        onNotLoaded,
-      }),
-    ).rejects.toThrow("__exit__:1");
-
-    expect(onNotLoaded).not.toHaveBeenCalled();
-    expect(service.start).not.toHaveBeenCalled();
-  });
-
-  it("proceeds with start when config is valid", async () => {
-    setConfigSnapshot({ exists: true, valid: true });
-
-    await runServiceStart(createServiceRunArgs());
-
-    expect(service.start).toHaveBeenCalledTimes(1);
-  });
+    },
+  },
+])("blocks start with $name", async ({ issues, failure }) => {
+  setConfigSnapshot({ valid: false, ...issues });
+  await expect(runServiceStart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
+  expect(service.start).not.toHaveBeenCalled();
+  expectLatestRuntimeJson({ action: "start", ...failure });
 });
 
-describe("runServiceStop future-config guard", () => {
-  let runServiceStop: typeof import("./lifecycle-core.js").runServiceStop;
+it("proceeds with start when config is valid", async () => {
+  await runServiceStart(createServiceRunArgs());
+  expect(service.start).toHaveBeenCalledTimes(1);
+});
+it("stops the service before warning about invalid config", async () => {
+  setInvalidConfig("meta.lastTouchedAt");
+  await runServiceStop(createServiceRunArgs());
+  expect(service.stop).toHaveBeenCalledTimes(1);
+  expect(service.stop.mock.invocationCallOrder[0]).toBeLessThan(
+    readConfigFileSnapshotMock.mock.invocationCallOrder[0]!,
+  );
+  expectWarning("stopped", "meta.lastTouchedAt: Unrecognized key");
+});
 
-  beforeAll(async () => {
-    ({ runServiceStop } = await import("./lifecycle-core.js"));
+it("uninstalls the service and warns without rewriting invalid config", async () => {
+  setInvalidConfig("memory.qmd");
+  service.isLoaded.mockResolvedValueOnce(true).mockResolvedValue(false);
+  await runServiceUninstall({
+    ...createServiceRunArgs(),
+    stopBeforeUninstall: true,
+    assertNotLoadedAfterUninstall: true,
   });
-
-  beforeEach(() => {
-    resetLifecycleRuntimeLogs();
-    readConfigFileSnapshotMock.mockReset();
-    setConfigSnapshot({ exists: true, valid: true });
-    resetLifecycleServiceMocks();
-  });
-
-  it("blocks stop from an older binary when config was written by a newer one", async () => {
-    setConfigSnapshot({ exists: true, valid: true, lastTouchedVersion: "9999.1.1" });
-
-    await expect(
-      runServiceStop({
-        serviceNoun: "Gateway",
-        service,
-        opts: { json: true },
-      }),
-    ).rejects.toThrow("__exit__:1");
-
-    expect(service.stop).not.toHaveBeenCalled();
-    expectLatestRuntimeJson({
-      action: "stop",
-      ok: false,
-      error: `Gateway stop blocked: Refusing to stop the gateway service because this OpenClaw binary (${VERSION}) is older than the config last written by OpenClaw 9999.1.1.`,
-      hints: newerConfigHints,
-      hintItems: newerConfigHintItems,
-      warnings: undefined,
-    });
-  });
+  expect(service.stop).toHaveBeenCalledTimes(1);
+  expect(service.uninstall).toHaveBeenCalledTimes(1);
+  expect(service.uninstall.mock.invocationCallOrder[0]).toBeLessThan(
+    readConfigFileSnapshotMock.mock.invocationCallOrder[0]!,
+  );
+  expectWarning("uninstalled", "memory.qmd: Unrecognized key");
 });

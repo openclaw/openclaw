@@ -1,5 +1,5 @@
+import type { CronQuarantinedJob, QuarantinedCronConfigJob } from "../types-shared.js";
 import type { CronStoredJob } from "../types.js";
-import type { CronQuarantinedJob, QuarantinedCronConfigJob } from "./types.js";
 
 export type CronStoreSaveOptions = {
   stateOnly?: boolean;

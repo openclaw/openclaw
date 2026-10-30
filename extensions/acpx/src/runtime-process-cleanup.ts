@@ -4,16 +4,8 @@ import { readAcpxProcessLeaseIdentity, type AcpxProcessLeaseStore } from "./proc
 import {
   cleanupOpenClawOwnedAcpxPendingLease,
   cleanupOpenClawOwnedAcpxProcessTree,
-  type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
-import {
-  type AcpLoadedSessionRecord,
-  readOpenClawGatewayInstanceIdFromRecord,
-  readOpenClawLeaseIdFromRecord,
-  readRecordAgentPid,
-  readSessionRecordName,
-  selectCurrentSessionLease,
-} from "./runtime-session-store.js";
+import { type AcpLoadedSessionRecord, selectCurrentSessionLease } from "./runtime-session-store.js";
 
 export async function prepareAcpxProcessCleanup(params: {
   record: AcpLoadedSessionRecord;
@@ -22,17 +14,16 @@ export async function prepareAcpxProcessCleanup(params: {
   gatewayInstanceId?: string;
   wrapperRoot?: string;
   leaseStore?: AcpxProcessLeaseStore;
-  deps?: AcpxProcessCleanupDeps;
 }): Promise<() => Promise<void>> {
-  const { leaseStore, gatewayInstanceId, wrapperRoot, deps } = params;
+  const { leaseStore, gatewayInstanceId, wrapperRoot } = params;
   // Upstream close may clear the record's PID or replace its command metadata.
-  const rootPid = readRecordAgentPid(params.record);
+  const rootPid = params.record?.pid;
   const rootCommand = params.command ? renderAgentCommand(params.command) : undefined;
   const identity = readAcpxProcessLeaseIdentity(params.command);
-  const leaseId = readOpenClawLeaseIdFromRecord(params.record) ?? identity?.leaseId;
+  const leaseId = params.record?.openclawLeaseId ?? identity?.leaseId;
   const expectedGatewayInstanceId =
-    readOpenClawGatewayInstanceIdFromRecord(params.record) ?? identity?.gatewayInstanceId;
-  const sessionKeys = [params.sessionKey, readSessionRecordName(params.record)];
+    params.record?.openclawGatewayInstanceId ?? identity?.gatewayInstanceId;
+  const sessionKeys = [params.sessionKey, params.record?.name ?? ""];
   // A PID can disambiguate a stale saved lease ID. Without one, only the exact
   // saved lease is evidence of ownership; the newest logical lease may be a reset successor.
   const openLeases =
@@ -41,7 +32,7 @@ export async function prepareAcpxProcessCleanup(params: {
     ? selectCurrentSessionLease({ leases: openLeases, sessionKeys, rootPid })
     : undefined;
   const loadedLease = leaseId ? await leaseStore?.load(leaseId) : undefined;
-  const ownedLease =
+  const lease =
     selectedLease ??
     (loadedLease &&
     loadedLease.gatewayInstanceId === gatewayInstanceId &&
@@ -49,9 +40,6 @@ export async function prepareAcpxProcessCleanup(params: {
     sessionKeys.includes(loadedLease.sessionKey)
       ? loadedLease
       : undefined);
-  // Do not retain a mutable store record across the backend close.
-  const lease = ownedLease ? { ...ownedLease } : undefined;
-
   return async () => {
     if (lease && lease.gatewayInstanceId === gatewayInstanceId) {
       await leaseStore?.markState(lease.leaseId, "closing");
@@ -63,14 +51,12 @@ export async function prepareAcpxProcessCleanup(params: {
               expectedLeaseId: lease.leaseId,
               expectedGatewayInstanceId: lease.gatewayInstanceId,
               wrapperRoot: lease.wrapperRoot,
-              deps,
             })
           : await cleanupOpenClawOwnedAcpxPendingLease({
               leaseId: lease.leaseId,
               gatewayInstanceId: lease.gatewayInstanceId,
               wrapperRoot: lease.wrapperRoot,
               wrapperPath: lease.wrapperPath,
-              deps,
             });
       await leaseStore?.markState(
         lease.leaseId,
@@ -95,7 +81,6 @@ export async function prepareAcpxProcessCleanup(params: {
       ...(leaseId ? { expectedLeaseId: leaseId } : {}),
       ...(expectedGatewayInstanceId ? { expectedGatewayInstanceId } : {}),
       wrapperRoot,
-      deps,
     });
   };
 }

@@ -5,7 +5,7 @@
 // while rich-blocks-html-map.ts owns block-level island mapping.
 import type { MarkdownIR } from "openclaw/plugin-sdk/text-chunking";
 import { decodeTelegramHtmlEntities } from "./format-html.js";
-import type { RichText } from "./rich-block-model.js";
+import { MAX_RICH_BLOCK_NESTING, richTextLink, type RichText } from "./rich-block-model.js";
 
 export type HtmlNode = { start: number; end: number } & (
   | { kind: "text"; text: string }
@@ -16,15 +16,7 @@ const VOID_TAGS = new Set(["br", "hr", "img", "input", "tg-map"]);
 
 const INLINE_STYLE_TAGS: Record<
   string,
-  | "bold"
-  | "italic"
-  | "underline"
-  | "strikethrough"
-  | "code"
-  | "spoiler"
-  | "marked"
-  | "subscript"
-  | "superscript"
+  Exclude<Extract<RichText, { text: RichText }>["type"], "url" | "text_mention" | "anchor_link">
 > = {
   b: "bold",
   strong: "bold",
@@ -64,8 +56,8 @@ export function parseHtmlFragment(ir: MarkdownIR): HtmlNode[] {
     ...(ir.annotations ?? []),
   ];
   const root: HtmlNode[] = [];
-  const stack: Array<{ name: string; node: Extract<HtmlNode, { kind: "element" }> }> = [];
-  const childrenOf = () => (stack.length > 0 ? stack[stack.length - 1]!.node.children : root);
+  const stack: Array<Extract<HtmlNode, { kind: "element" }>> = [];
+  const childrenOf = () => stack.at(-1)?.children ?? root;
   let cursor = 0;
   const pushText = (from: number, to: number) => {
     if (to > from) {
@@ -76,10 +68,12 @@ export function parseHtmlFragment(ir: MarkdownIR): HtmlNode[] {
     const parent = stack.at(-1);
     // Code examples are text, including tag-shaped examples inside a disclosure.
     // Keep them out of matching so they cannot close or create an authored container.
+    // Telegram's `<pre><code class="language-x">` wrapper is the one tag a <pre> opens.
     if (
       literalRanges.some((range) => tag.start >= range.start && tag.start < range.end) ||
       ((parent?.name === "code" || parent?.name === "pre") &&
-        !(tag.closing && tag.name === parent.name))
+        !(tag.closing && tag.name === parent.name) &&
+        !(parent.name === "pre" && !tag.closing && tag.name === "code"))
     ) {
       continue;
     }
@@ -89,8 +83,8 @@ export function parseHtmlFragment(ir: MarkdownIR): HtmlNode[] {
       const openIndex = stack.findLastIndex((entry) => entry.name === tag.name);
       if (openIndex >= 0) {
         for (let depth = openIndex; depth < stack.length; depth += 1) {
-          stack[depth]!.node.closed = depth === openIndex;
-          stack[depth]!.node.end = depth === openIndex ? tag.end : tag.start;
+          stack[depth]!.closed = depth === openIndex;
+          stack[depth]!.end = depth === openIndex ? tag.end : tag.start;
         }
         stack.length = openIndex;
       } else {
@@ -110,27 +104,65 @@ export function parseHtmlFragment(ir: MarkdownIR): HtmlNode[] {
     };
     childrenOf().push(element);
     if (!selfContained) {
-      stack.push({ name: tag.name, node: element });
+      stack.push(element);
     }
   }
   pushText(cursor, text.length);
   // Retain unmatched parents: extracting their children as islands would hide
   // malformed authored markup. Both inline and block rendering keep them literal.
+  // Bound the tree before inline, island, and literal-subtree walkers see it.
+  // The parser itself uses an explicit stack, so even the fallback can retain
+  // all descendant text without first recursing through the hostile input.
+  const pending = [{ nodes: root, depth: 0 }];
+  while (pending.length > 0) {
+    const frame = pending.pop()!;
+    for (let index = 0; index < frame.nodes.length; index += 1) {
+      const node = frame.nodes[index]!;
+      if (node.kind !== "element") {
+        continue;
+      }
+      if (frame.depth >= MAX_RICH_BLOCK_NESTING * 4) {
+        frame.nodes[index] = {
+          kind: "text",
+          start: node.start,
+          end: node.end,
+          text: nodeText([node], true),
+        };
+      } else {
+        pending.push({ nodes: node.children, depth: frame.depth + 1 });
+      }
+    }
+  }
   return root;
 }
 
-export function nodeText(nodes: readonly HtmlNode[]): string {
-  return nodes
-    .map((node) =>
-      node.kind === "text"
-        ? decodeTelegramHtmlEntities(node.text)
-        : `${node.closed ? "" : decodeTelegramHtmlEntities(node.raw)}${nodeText(node.children)}`,
-    )
-    .join("");
-}
-
-function normalizeIslandText(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
+export function nodeText(nodes: readonly HtmlNode[], preserveMediaSources = false): string {
+  const parts: string[] = [];
+  const pending = nodes.toReversed();
+  while (pending.length > 0) {
+    const node = pending.pop()!;
+    if (node.kind === "text") {
+      parts.push(decodeTelegramHtmlEntities(node.text));
+    } else {
+      if (!node.closed) {
+        parts.push(decodeTelegramHtmlEntities(node.raw));
+      }
+      if (
+        preserveMediaSources &&
+        node.closed &&
+        (node.name === "img" || node.name === "video" || node.name === "audio")
+      ) {
+        const source = parseHtmlAttrs(node.raw).get("src");
+        if (source) {
+          parts.push(`\n${source}\n`);
+        }
+      }
+      for (let index = node.children.length - 1; index >= 0; index -= 1) {
+        pending.push(node.children[index]!);
+      }
+    }
+  }
+  return parts.join("");
 }
 
 // Raw round-trip of a subtree; keeps unsupported wrappers fully literal.
@@ -171,14 +203,9 @@ export function htmlNodesToRichText(
   nodes: readonly HtmlNode[],
   renderer: HtmlRichTextRenderer = defaultHtmlRenderer,
 ): RichText {
-  const parts: RichText[] = [];
-  for (const node of nodes) {
+  const renderNode = (node: HtmlNode): RichText | undefined => {
     if (node.kind === "text") {
-      const value = renderer.text(node);
-      if (value) {
-        parts.push(value);
-      }
-      continue;
+      return renderer.text(node) || undefined;
     }
     const children = () => htmlNodesToRichText(node.children, renderer);
     const emit = (build: () => RichText): RichText =>
@@ -193,59 +220,49 @@ export function htmlNodesToRichText(
     const atom = (value: RichText) => emit(() => renderer.atom(node, value));
     const style = Object.hasOwn(INLINE_STYLE_TAGS, node.name) && INLINE_STYLE_TAGS[node.name];
     if (style) {
-      parts.push(wrap((text) => ({ type: style, text })));
-      continue;
+      return wrap((text) => ({ type: style, text }));
     }
     if (node.name === "a") {
       const href = parseHtmlAttrs(node.raw).get("href");
       if (href?.startsWith("#")) {
         // In-message fragments are RichTextAnchorLink, not RichTextUrl.
-        parts.push(wrap((text) => ({ type: "anchor_link", text, anchor_name: href.slice(1) })));
-      } else {
-        parts.push(href ? wrap((text) => ({ type: "url", text, url: href })) : emit(children));
+        return wrap((text) => ({ type: "anchor_link", text, anchor_name: href.slice(1) }));
       }
-      continue;
+      return href ? wrap((text) => richTextLink(text, href)) : emit(children);
     }
     if (node.name === "tg-math") {
-      parts.push(atom({ type: "mathematical_expression", expression: nodeText(node.children) }));
-      continue;
+      return atom({ type: "mathematical_expression", expression: nodeText(node.children) });
     }
     if (node.name === "tg-emoji") {
       const emojiId = parseHtmlAttrs(node.raw).get("emoji-id");
-      const alternative = normalizeIslandText(nodeText(node.children));
+      const alternative = nodeText(node.children).replace(/\s+/g, " ").trim();
       // Wire contract: custom_emoji_id must be a valid Number (live-verified
       // 400 otherwise); unknown-but-numeric IDs degrade server-side.
       if (emojiId && /^\d+$/.test(emojiId) && alternative) {
-        parts.push(
-          atom({
-            type: "custom_emoji",
-            custom_emoji_id: emojiId,
-            alternative_text: alternative,
-          }),
-        );
-        continue;
+        return atom({
+          type: "custom_emoji",
+          custom_emoji_id: emojiId,
+          alternative_text: alternative,
+        });
       }
-      parts.push(atom(alternative));
-      continue;
+      return atom(alternative);
     }
     if (node.name === "br") {
-      parts.push(atom("\n"));
-      continue;
+      return atom("\n");
     }
     if (node.name === "p" || node.name === "span" || node.name === "div") {
-      // Transparent containers: content only.
-      parts.push(emit(children));
-      continue;
+      return emit(children);
     }
     // Unsupported HTML and its HTML descendants stay literal, but independently
     // authored Markdown spans must still apply inside that text range.
-    parts.push(renderer.literal(node, () => serializeHtmlNodes([node])));
+    return renderer.literal(node, () => serializeHtmlNodes([node]));
+  };
+  const parts: RichText[] = [];
+  for (const node of nodes) {
+    const value = renderNode(node);
+    if (value !== undefined) {
+      parts.push(value);
+    }
   }
-  if (parts.length === 0) {
-    return "";
-  }
-  if (parts.length === 1) {
-    return parts[0] ?? "";
-  }
-  return parts;
+  return parts.length > 1 ? parts : (parts[0] ?? "");
 }

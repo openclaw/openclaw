@@ -1,4 +1,3 @@
-// Hosted plugin surface URL resolver for gateway-advertised plugin node endpoints.
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isLoopbackHost } from "./net.js";
 
@@ -16,14 +15,8 @@ export type HostedPluginSurfaceUrlParams = {
 };
 
 const normalizeHost = (value: HostSource, rejectLoopback: boolean) => {
-  if (!value) {
-    return "";
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (rejectLoopback && isLoopbackHost(trimmed)) {
+  const trimmed = value?.trim();
+  if (!trimmed || (rejectLoopback && isLoopbackHost(trimmed))) {
     return "";
   }
   return trimmed;
@@ -38,24 +31,17 @@ const parseHostHeader = (value: HostSource): ParsedHostHeader => {
   if (!value) {
     return { host: "" };
   }
-  try {
-    const parsed = new URL(`http://${value.trim()}`);
-    const portRaw = parsed.port.trim();
-    const port = parseStrictPositiveInteger(portRaw);
-    return {
-      host: parsed.hostname,
-      port: Number.isFinite(port) ? port : undefined,
-    };
-  } catch {
-    return { host: "" };
-  }
+  const parsed = URL.parse(`http://${value.trim()}`);
+  return parsed
+    ? {
+        host: parsed.hostname,
+        port: parseStrictPositiveInteger(parsed.port),
+      }
+    : { host: "" };
 };
 
 const parseForwardedProto = (value: HostSource | HostSource[]) => {
-  if (Array.isArray(value)) {
-    return value[0];
-  }
-  return value;
+  return Array.isArray(value) ? value[0] : value;
 };
 
 const parseForwardedHost = (value: HostSource | HostSource[]) => {

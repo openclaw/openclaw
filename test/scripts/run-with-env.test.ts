@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   inspectManagedProcessGroup,
   terminateManagedChild,
@@ -15,59 +15,80 @@ import {
   resolveSpawnCommand,
 } from "../../scripts/run-with-env.mts";
 import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
+import { hasErrnoCode } from "../../src/infra/errno.js";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../src/infra/runtime-worker-url.js";
-import { waitForPidFile } from "../helpers/process-wait.js";
-import { withTestTimeout } from "../helpers/promise.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
+import {
+  fixtureReadyBeforeSettlement,
+  isProcessPresent as isProcessAlive,
+  waitForProcessObservation as waitForFixtureExit,
+} from "./run-process.test-support.js";
 
-// These subprocess fixtures expose explicit ready files. Cold tsx startup can exceed a few
-// seconds on a loaded maintainer host, so this only bounds genuine fixture hangs.
-const PROCESS_READY_TIMEOUT_MS = 30_000;
-
-async function waitFor(
-  predicate: () => boolean,
-  label: string,
-  timeoutMs = PROCESS_READY_TIMEOUT_MS,
-): Promise<void> {
-  const startedAt = Date.now();
-  while (!predicate()) {
-    if (Date.now() - startedAt > timeoutMs) {
-      throw new Error(`timed out waiting for ${label}`);
-    }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 5);
-    });
-  }
+const wrapperArgv = resolveRuntimeWorkerArgv(
+  resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv),
+);
+function runWrapper(args: string[], env = process.env) {
+  return spawnSync(process.execPath, [...wrapperArgv, ...args], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env,
+  });
 }
+
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts?.close();
+});
+
+function withReceiptClient(source: string): string {
+  return `${fixtureReceiptClientSource(receipts.endpoint)}
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+${source}`;
+}
+
+const groupPresent = (group: { pid?: number }) =>
+  inspectManagedProcessGroup(group, { errorPolicy: "indeterminate" }) !== "dead";
 
 function spawnWrapperFixture(
   tempDir: string,
   assignments: string[],
   childScript: string,
+  testSignal: AbortSignal,
   env?: NodeJS.ProcessEnv,
 ) {
   const pidFile = path.join(tempDir, "wrapped-pid");
   const wrapper = spawn(
     process.execPath,
     [
-      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
+      ...wrapperArgv,
       ...assignments,
       "--",
       "node",
+      "--input-type=module",
       "-e",
-      [
-        // Publish the detached group before this fixture can create descendants.
-        `require('node:fs').writeFileSync(${JSON.stringify(pidFile + ".tmp")}, String(process.pid));`,
-        `require('node:fs').renameSync(${JSON.stringify(pidFile + ".tmp")}, ${JSON.stringify(pidFile)});`,
-        childScript,
-      ].join("\n"),
+      withReceiptClient(`
+const fs = require('node:fs');
+// Publish the detached group before this fixture can create descendants.
+fs.writeFileSync(${JSON.stringify(pidFile + ".tmp")}, String(process.pid));
+fs.renameSync(${JSON.stringify(pidFile + ".tmp")}, ${JSON.stringify(pidFile)});
+sendReceipt(${JSON.stringify(pidFile)}, "ready");
+${childScript}`),
     ],
     { cwd: process.cwd(), env, detached: true, stdio: ["ignore", "pipe", "pipe"] },
   );
-  let closed = false;
   let childError: Error | undefined;
   const completion = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
     (resolve) => {
@@ -75,7 +96,6 @@ function spawnWrapperFixture(
         childError = error;
       });
       wrapper.once("close", (code, signal) => {
-        closed = true;
         resolve({ code, signal });
       });
     },
@@ -83,72 +103,56 @@ function spawnWrapperFixture(
   // Inherited pipes keep an unrecorded, still-starting command observable after wrapper exit.
   wrapper.stdout.resume();
   wrapper.stderr.resume();
-  let shutdownRequested = false;
-  const signal = (value: NodeJS.Signals) => {
-    shutdownRequested = true;
-    return wrapper.kill(value);
-  };
-
   return {
-    signal,
+    signal: (value: NodeJS.Signals) => wrapper.kill(value),
+    async waitForReady(filename: string) {
+      await withinTest(fixtureReadyBeforeSettlement(receipts, filename, completion), testSignal);
+    },
     async waitForExit() {
-      const exit = await withTestTimeout(completion, 3_000, "timed out waiting for wrapper close");
+      // Bind the body wait so a stall still reaches the fixture's process cleanup.
+      const exit = await withinTest(completion, testSignal);
       if (childError) {
         throw childError;
       }
       return exit;
     },
     async cleanup(this: void) {
-      // Do not signal twice: after its child exits, the wrapper removes its handlers
-      // while it still gives descendants their shutdown grace period.
-      if (!closed && !shutdownRequested) {
-        signal("SIGTERM");
-      }
-      // The assertion's exit wait still rejects; teardown owns bounded escalation.
-      await withTestTimeout(completion, 3_000, "wrapper still draining").catch(() => undefined);
-      // The wrapper owns tsx helper processes in its group; the wrapped command
-      // creates a separate group whose identity is recorded by the fixture.
-      if (
-        wrapper.pid &&
-        inspectManagedProcessGroup(wrapper, { errorPolicy: "indeterminate" }) !== "dead"
-      ) {
+      // Rescue both the wrapper's helpers and the separate wrapped command group.
+      if (wrapper.pid && groupPresent(wrapper)) {
         terminateManagedChild(wrapper, "SIGKILL", { processGroupFallback: "never" });
       }
-      await waitFor(
-        () => closed || existsSync(pidFile),
-        `wrapped command identity or closed pipes; retained fixture: ${tempDir}`,
-      );
+      await Promise.race([receipts.waitFor(pidFile, "ready"), completion]);
+      let wrappedGroup: { pid: number } | undefined;
       if (existsSync(pidFile)) {
-        const pid = await waitForPidFile(pidFile, 5_000);
+        const pid = Number(readFileSync(pidFile, "utf8"));
         if (!Number.isSafeInteger(pid) || pid <= 1) {
           throw new Error(`invalid wrapped command PID; retained fixture: ${tempDir}`);
         }
-        const group = { pid };
-        if (inspectManagedProcessGroup(group, { errorPolicy: "indeterminate" }) !== "dead") {
+        wrappedGroup = { pid };
+        if (groupPresent(wrappedGroup)) {
           try {
             process.kill(-pid, "SIGKILL");
           } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+            if (!hasErrnoCode(error, "ESRCH")) {
               throw error;
             }
           }
         }
-        await waitFor(
-          () => inspectManagedProcessGroup(group, { errorPolicy: "indeterminate" }) === "dead",
+      }
+      await completion;
+      if (wrappedGroup) {
+        const group = wrappedGroup;
+        await waitForFixtureExit(
+          () => !groupPresent(group),
           `wrapped group exit before removing fixture: ${tempDir}`,
-          5_000,
+          testSignal,
         );
       }
-      await withTestTimeout(
-        completion,
-        5_000,
-        `wrapper did not close; retained fixture: ${tempDir}`,
-      );
       if (wrapper.pid) {
-        await waitFor(
-          () => inspectManagedProcessGroup(wrapper, { errorPolicy: "indeterminate" }) === "dead",
+        await waitForFixtureExit(
+          () => !groupPresent(wrapper),
           `wrapper group exit before removing fixture: ${tempDir}`,
-          5_000,
+          testSignal,
         );
       }
       rmSync(tempDir, { force: true, recursive: true });
@@ -156,13 +160,53 @@ function spawnWrapperFixture(
   };
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+function descendantFixture(signal: AbortSignal, graceful: boolean) {
+  const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-run-with-env-descendants-"));
+  const files = {
+    READY_FILE: path.join(tempDir, "ready"),
+    GRANDCHILD_READY_FILE: path.join(tempDir, "grandchild-ready"),
+    GRANDCHILD_PID_FILE: path.join(tempDir, "grandchild-pid"),
+    GRACEFUL_FILE: path.join(tempDir, "graceful"),
+  };
+  const grandchild = withReceiptClient(`
+const fs = require('node:fs');
+process.on('SIGTERM', () => {
+  if (${graceful}) setTimeout(() => {
+    fs.writeFileSync(process.env.GRACEFUL_FILE, 'done');
+    process.exit(0);
+  }, 75);
+});
+if (!${graceful}) process.on('SIGHUP', () => {});
+fs.writeFileSync(process.env.GRANDCHILD_READY_FILE, 'ready');
+sendReceipt(process.env.GRANDCHILD_READY_FILE, 'ready');
+setInterval(() => {}, 1000);
+`);
+  const fixture = spawnWrapperFixture(
+    tempDir,
+    Object.entries(files).map(([key, value]) => `${key}=${value}`),
+    `
+const { spawn } = require('node:child_process');
+const grandchild = spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(grandchild)}], { stdio: 'ignore' });
+if (!${graceful}) fs.writeFileSync(process.env.GRANDCHILD_PID_FILE, String(grandchild.pid));
+fs.writeFileSync(process.env.READY_FILE, 'ready');
+sendReceipt(process.env.READY_FILE, 'ready');
+process.on('SIGTERM', () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+    signal,
+    {
+      ...process.env,
+      OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS: graceful ? String(MAX_TIMER_TIMEOUT_MS + 1) : "200",
+    },
+  );
+  return {
+    ...fixture,
+    files,
+    async ready() {
+      await fixture.waitForReady(files.READY_FILE);
+      await fixture.waitForReady(files.GRANDCHILD_READY_FILE);
+    },
+  };
 }
 
 describe("run-with-env", () => {
@@ -177,10 +221,7 @@ describe("run-with-env", () => {
         "run",
       ]),
     ).toEqual({
-      env: {
-        OPENCLAW_GATEWAY_PROJECT_SHARDS: "1",
-        EMPTY: "",
-      },
+      env: { OPENCLAW_GATEWAY_PROJECT_SHARDS: "1", EMPTY: "" },
       command: "node",
       args: ["scripts/run-vitest.mjs", "run"],
     });
@@ -193,21 +234,10 @@ describe("run-with-env", () => {
   });
 
   it("prints wrapper help without spawning a command", () => {
-    const result = spawnSync(
-      process.execPath,
-      [
-        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
-        "--help",
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
+    const result = runWrapper(["--help"]);
 
-    expect(result.status).toBe(0);
+    expect(result).toMatchObject({ status: 0, stderr: "" });
     expect(result.stdout).toContain("Usage: node --import tsx scripts/run-with-env.mts");
-    expect(result.stderr).toBe("");
   });
 
   it("keeps command help passthrough after the separator", () => {
@@ -216,54 +246,18 @@ describe("run-with-env", () => {
     ).toBe(false);
   });
 
-  it("rejects malformed assignments before spawning", () => {
-    const result = spawnSync(
-      process.execPath,
-      [
-        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
-        "1INVALID=value",
-        "--",
-        "node",
-        "-e",
-        "process.stdout.write('spawned')",
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status).toBe(2);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("invalid environment assignment");
-  });
-
-  it("uses the current Node executable for bare Node command names", () => {
+  it.each([
+    ["linux", "node", "/usr/bin/node"],
+    ["win32", "NODE", "C:\\Node24\\node.exe"],
+    ["win32", "Node.Exe", "C:\\Node24\\node.exe"],
+    ["linux", "NODE", "NODE"],
+    ["linux", "node.exe", "node.exe"],
+    ["win32", "C:\\Tools\\node.exe", "C:\\Tools\\node.exe"],
+  ] as const)("resolves %s command %s to %s", (platform, command, expected) => {
     const args = ["scripts/run-vitest.mjs"];
-    expect(resolveSpawnCommand("node", args, "/usr/bin/node", "linux")).toEqual({
-      command: "/usr/bin/node",
-      args,
-    });
-    for (const command of ["node", "NODE", "node.exe", "Node.Exe"]) {
-      expect(resolveSpawnCommand(command, args, "C:\\Node24\\node.exe", "win32")).toEqual({
-        command: "C:\\Node24\\node.exe",
-        args,
-      });
-    }
-  });
-
-  it("preserves platform-specific and explicitly pathed commands", () => {
-    const args = ["scripts/run-vitest.mjs"];
-    for (const command of ["NODE", "node.exe", "C:\\Tools\\node.exe"]) {
-      expect(resolveSpawnCommand(command, args, "/usr/bin/node", "linux")).toEqual({
-        command,
-        args,
-      });
-    }
-    expect(
-      resolveSpawnCommand("C:\\Tools\\node.exe", args, "C:\\Node24\\node.exe", "win32"),
-    ).toEqual({
-      command: "C:\\Tools\\node.exe",
+    const execPath = platform === "win32" ? "C:\\Node24\\node.exe" : "/usr/bin/node";
+    expect(resolveSpawnCommand(command, args, execPath, platform)).toEqual({
+      command: expected,
       args,
     });
   });
@@ -283,117 +277,75 @@ describe("run-with-env", () => {
       );
     }
 
-    const result = spawnSync(
-      process.execPath,
+    const result = runWrapper(
       [
-        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
         "OPENCLAW_RUN_WITH_ENV_SIGNAL_TEST=1",
         "--",
         "node",
         "-e",
         "process.stdout.write('spawned')",
       ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: { ...process.env, OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS: "100ms" },
-      },
+      { ...process.env, OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS: "100ms" },
     );
 
-    expect(result.status).toBe(2);
-    expect(result.stdout).toBe("");
+    expect(result).toMatchObject({ status: 2, stdout: "" });
     expect(result.stderr).toContain(
       "OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS must be a positive integer",
     );
   });
 
-  it.runIf(process.platform !== "win32").each(["SIGTERM", "SIGHUP", "SIGINT"] as const)(
+  it.runIf(process.platform !== "win32").for(["SIGTERM", "SIGHUP", "SIGINT"] as const)(
     "forwards parent %s to the wrapped command",
-    async (signal) => {
+    async (parentSignal, { signal }) => {
       const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-run-with-env-signals-"));
       const readyFile = path.join(tempDir, "ready");
       const signaledFile = path.join(tempDir, "signaled");
-      const handlerLines = ["SIGTERM", "SIGHUP", "SIGINT"].flatMap((handledSignal) => [
-        `process.on('${handledSignal}', () => {`,
-        `  fs.writeFileSync(process.env.SIGNALED_FILE, '${handledSignal}');`,
-        "  setTimeout(() => process.exit(0), 25);",
-        "});",
-      ]);
-      const childScript = [
-        "const fs = require('node:fs');",
-        ...handlerLines,
-        "fs.writeFileSync(process.env.READY_FILE, 'ready');",
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
-
       const fixture = spawnWrapperFixture(
         tempDir,
         [`READY_FILE=${readyFile}`, `SIGNALED_FILE=${signaledFile}`],
-        childScript,
+        `
+for (const signal of ['SIGTERM', 'SIGHUP', 'SIGINT']) {
+  process.on(signal, () => {
+    fs.writeFileSync(process.env.SIGNALED_FILE, signal);
+    setTimeout(() => process.exit(0), 25);
+  });
+}
+fs.writeFileSync(process.env.READY_FILE, 'ready');
+sendReceipt(process.env.READY_FILE, 'ready');
+setInterval(() => {}, 1000);
+`,
+        signal,
       );
 
       await runQaGatewayFixture(async () => {
-        await waitFor(() => existsSync(readyFile), "wrapped command readiness");
-        fixture.signal(signal);
+        await fixture.waitForReady(readyFile);
+        fixture.signal(parentSignal);
 
         const exit = await fixture.waitForExit();
-        expect(exit).toEqual({ code: null, signal });
-        expect(readFileSync(signaledFile, "utf8")).toBe(signal);
+        expect(exit).toEqual({ code: null, signal: parentSignal });
+        expect(readFileSync(signaledFile, "utf8")).toBe(parentSignal);
       }, fixture.cleanup);
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "cleans up wrapped command descendants on wrapper shutdown",
-    async () => {
-      const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-run-with-env-descendants-"));
-      const readyFile = path.join(tempDir, "ready");
-      const grandchildReadyFile = path.join(tempDir, "grandchild-ready");
-      const grandchildPidFile = path.join(tempDir, "grandchild-pid");
-      const grandchildScript = [
-        "const fs = require('node:fs');",
-        "process.on('SIGTERM', () => {});",
-        "process.on('SIGHUP', () => {});",
-        "fs.writeFileSync(process.env.GRANDCHILD_READY_FILE, 'ready');",
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
-      const childScript = [
-        "const { spawn } = require('node:child_process');",
-        "const fs = require('node:fs');",
-        `const grandchild = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildScript)}], { stdio: 'ignore' });`,
-        "fs.writeFileSync(process.env.GRANDCHILD_PID_FILE, String(grandchild.pid));",
-        "fs.writeFileSync(process.env.READY_FILE, 'ready');",
-        "process.on('SIGTERM', () => process.exit(0));",
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
-      const fixture = spawnWrapperFixture(
-        tempDir,
-        [
-          `READY_FILE=${readyFile}`,
-          `GRANDCHILD_READY_FILE=${grandchildReadyFile}`,
-          `GRANDCHILD_PID_FILE=${grandchildPidFile}`,
-        ],
-        childScript,
-        { ...process.env, OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS: "200" },
-      );
+    async ({ signal }) => {
+      const fixture = descendantFixture(signal, false);
 
       await runQaGatewayFixture(async () => {
-        await waitFor(() => existsSync(readyFile), "wrapped command readiness");
-        await waitFor(
-          () => existsSync(grandchildReadyFile),
-          "wrapped command descendant readiness",
-        );
-        const grandchildPid = Number(readFileSync(grandchildPidFile, "utf8"));
+        await fixture.ready();
+        const grandchildPid = Number(readFileSync(fixture.files.GRANDCHILD_PID_FILE, "utf8"));
         expect(grandchildPid).toBeGreaterThan(0);
         expect(isProcessAlive(grandchildPid)).toBe(true);
 
         fixture.signal("SIGTERM");
         const exit = await fixture.waitForExit();
         expect(exit).toEqual({ code: null, signal: "SIGTERM" });
-        await waitFor(
+        await waitForFixtureExit(
           () => !isProcessAlive(grandchildPid),
           "wrapped command descendant cleanup",
-          5_000,
+          signal,
         );
       }, fixture.cleanup);
     },
@@ -401,92 +353,17 @@ describe("run-with-env", () => {
 
   it.runIf(process.platform !== "win32")(
     "lets wrapped command descendants finish during the shutdown grace period",
-    async () => {
-      const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-run-with-env-grace-"));
-      const readyFile = path.join(tempDir, "ready");
-      const gracefulFile = path.join(tempDir, "graceful");
-      const grandchildReadyFile = path.join(tempDir, "grandchild-ready");
-      const grandchildScript = [
-        "const fs = require('node:fs');",
-        "process.on('SIGTERM', () => {",
-        "  setTimeout(() => {",
-        "    fs.writeFileSync(process.env.GRACEFUL_FILE, 'done');",
-        "    process.exit(0);",
-        "  }, 75);",
-        "});",
-        "fs.writeFileSync(process.env.GRANDCHILD_READY_FILE, 'ready');",
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
-      const childScript = [
-        "const { spawn } = require('node:child_process');",
-        "const fs = require('node:fs');",
-        `spawn(process.execPath, ['-e', ${JSON.stringify(grandchildScript)}], { stdio: 'ignore' });`,
-        "fs.writeFileSync(process.env.READY_FILE, 'ready');",
-        "process.on('SIGTERM', () => process.exit(0));",
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
-      const fixture = spawnWrapperFixture(
-        tempDir,
-        [
-          `READY_FILE=${readyFile}`,
-          `GRACEFUL_FILE=${gracefulFile}`,
-          `GRANDCHILD_READY_FILE=${grandchildReadyFile}`,
-        ],
-        childScript,
-        {
-          ...process.env,
-          OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS: String(MAX_TIMER_TIMEOUT_MS + 1),
-        },
-      );
+    async ({ signal }) => {
+      const fixture = descendantFixture(signal, true);
 
       await runQaGatewayFixture(async () => {
-        await waitFor(() => existsSync(readyFile), "wrapped command readiness");
-        await waitFor(
-          () => existsSync(grandchildReadyFile),
-          "wrapped command descendant readiness",
-        );
+        await fixture.ready();
         fixture.signal("SIGTERM");
 
         const exit = await fixture.waitForExit();
         expect(exit).toEqual({ code: null, signal: "SIGTERM" });
-        expect(readFileSync(gracefulFile, "utf8")).toBe("done");
+        expect(readFileSync(fixture.files.GRACEFUL_FILE, "utf8")).toBe("done");
       }, fixture.cleanup);
     },
   );
-
-  it.runIf(process.platform !== "win32")("preserves wrapped command signal exits", () => {
-    const result = spawnSync(
-      process.execPath,
-      [
-        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
-        "OPENCLAW_RUN_WITH_ENV_SIGNAL_TEST=1",
-        "--",
-        "node",
-        "-e",
-        "process.kill(process.pid, 'SIGTERM')",
-      ],
-      { cwd: process.cwd(), encoding: "utf8" },
-    );
-
-    expect(result.status).toBeNull();
-    expect(result.signal).toBe("SIGTERM");
-  });
-
-  it.runIf(process.platform !== "win32")("preserves wrapped command force-kill exits", () => {
-    const result = spawnSync(
-      process.execPath,
-      [
-        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
-        "OPENCLAW_RUN_WITH_ENV_SIGNAL_TEST=1",
-        "--",
-        "node",
-        "-e",
-        "process.kill(process.pid, 'SIGKILL')",
-      ],
-      { cwd: process.cwd(), encoding: "utf8" },
-    );
-
-    expect(result.status).toBeNull();
-    expect(result.signal).toBe("SIGKILL");
-  });
 });

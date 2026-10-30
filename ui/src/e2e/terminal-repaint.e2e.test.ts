@@ -1,36 +1,19 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { Locator } from "playwright";
-import { beforeEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiTerminalReady,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createConfigSuite } from "./config-composer-fixtures.test-support.ts";
+import { nativeAuth, terminalSession } from "./workspace-terminal.test-support.ts";
 
-const suite = createControlUiE2eSuite({
-  name: "Control UI terminal repaint",
-  startServerBeforeBrowser: true,
-  unavailableMessage: (executablePath) =>
-    `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`.`,
-});
+const suite = createConfigSuite("Control UI terminal repaint");
 
 const requestedScreenshotPath = process.env.OPENCLAW_TERMINAL_REPAINT_SCREENSHOT?.trim();
-let screenshotPath: string | undefined;
-beforeEach(() => {
-  screenshotPath = requestedScreenshotPath
-    ? path.join(
-        createControlUiE2eArtifactDir("terminal-repaint", path.dirname(requestedScreenshotPath)),
-        path.basename(requestedScreenshotPath),
-      )
-    : undefined;
-  if (screenshotPath) {
-    console.info(`[control-ui-e2e] screenshot: ${screenshotPath}`);
-  }
-});
 
 async function terminalCanvasDigest(canvas: Locator): Promise<string> {
   const png = await canvas.screenshot({ animations: "disabled", caret: "hide" });
@@ -42,30 +25,16 @@ suite.define(() => {
     await suite.withPage(
       {
         serviceWorkers: "block",
-        viewport: { width: 1180, height: 520 },
+        // Preserve the original terminal content width alongside the new 52px navigation rail.
+        viewport: { width: 1232, height: 520 },
       },
       async ({ page }) => {
-        await page.addInitScript(() => {
-          (
-            window as Window & {
-              ["__OPENCLAW_NATIVE_CONTROL_AUTH__"]?: { gatewayUrl: string; token: string };
-            }
-          )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
-            gatewayUrl: "ws://gateway.example.test",
-            token: "test",
-          };
-        });
+        await nativeAuth(page);
         const gateway = await installMockGateway(page, {
           featureMethods: ["terminal.open"],
           methodResponses: {
             "terminal.list": { sessions: [] },
-            "terminal.open": {
-              agentId: "main",
-              confined: false,
-              cwd: "/workspace",
-              sessionId: "terminal-repaint-e2e",
-              shell: "/bin/zsh",
-            },
+            "terminal.open": terminalSession("terminal-repaint-e2e", { shell: "/bin/zsh" }),
           },
           terminalEnabled: true,
         });
@@ -81,17 +50,21 @@ suite.define(() => {
         const terminalCanvas = page.locator(".tp-host canvas");
         await terminalCanvas.waitFor({ state: "visible" });
         const blankCanvasDigest = await terminalCanvasDigest(terminalCanvas);
+        const terminalOutput = "\u001b[?25lterminal repaint sentinel\r\n$ ";
         await gateway.emitGatewayEvent("terminal.data", {
           sessionId: "terminal-repaint-e2e",
-          seq: 0,
-          data: "\u001b[?25lterminal repaint sentinel\r\n$ ",
+          seq: terminalOutput.length,
+          data: terminalOutput,
         });
         await expect.poll(() => terminalCanvasDigest(terminalCanvas)).not.toBe(blankCanvasDigest);
         const renderedCanvasDigest = await terminalCanvasDigest(terminalCanvas);
 
-        if (screenshotPath) {
-          await fs.mkdir(path.dirname(screenshotPath), { recursive: true });
-          await page.screenshot({ path: screenshotPath });
+        if (requestedScreenshotPath) {
+          const dir = createControlUiE2eArtifactDir(
+            "terminal-repaint",
+            path.dirname(requestedScreenshotPath),
+          );
+          await page.screenshot({ path: path.join(dir, path.basename(requestedScreenshotPath)) });
         }
 
         expect(openParams.cols).toBeTypeOf("number");

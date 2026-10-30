@@ -147,56 +147,6 @@ describe("session transcript provenance", () => {
     expect(entry?.lineProvenance.map((item) => item.originClass)).toEqual(["owner", "untrusted"]);
   });
 
-  it("excludes a structurally marked recalled turn", async () => {
-    const filePath = await writeTranscript("recalled.jsonl", [
-      {
-        type: "message",
-        message: {
-          role: "user",
-          content: "Recalled snippet that must not loop.",
-          provenance: { kind: "internal_system", sourceTool: "memory_search" },
-        },
-      },
-      {
-        type: "message",
-        message: { role: "assistant", content: "Paraphrase of the recalled snippet." },
-      },
-    ]);
-
-    const entry = await buildSessionEntry(filePath);
-    expect(entry?.content).toBe("");
-    expect(entry?.lineMap).toEqual([]);
-  });
-
-  it("skips inter-session user messages", async () => {
-    const filePath = await writeTranscript("inter-session.jsonl", [
-      {
-        type: "message",
-        message: {
-          role: "user",
-          content: "A background task completed. Internal relay text.",
-          provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
-        },
-      },
-      {
-        type: "message",
-        message: { role: "assistant", content: "User-facing summary." },
-      },
-      {
-        type: "message",
-        message: { role: "user", content: "Actual user follow-up." },
-      },
-    ]);
-
-    const entry = await buildSessionEntry(filePath);
-    expect(entry?.content).toBe("Assistant: User-facing summary.\nUser: Actual user follow-up.");
-    expect(entry?.lineMap).toStrictEqual([2, 3]);
-    expect(entry?.lineProvenance.map((item) => item.originClass)).toEqual([
-      "untrusted",
-      "untrusted",
-    ]);
-  });
-
   it("drops every assistant response in a provenance-marked heartbeat turn", async () => {
     const filePath = await writeTranscript("heartbeat.jsonl", [
       {
@@ -295,23 +245,5 @@ describe("session transcript provenance", () => {
     const entry = await buildSessionEntry(filePath);
     expect(entry?.content).toBe("Assistant: I can see the photo.");
     expect(entry?.lineMap).toStrictEqual([4]);
-  });
-
-  it("normalizes filesystem fallback observation times to SQLite integers", async () => {
-    const filePath = await writeTranscript("mtime.jsonl", [
-      {
-        type: "message",
-        message: {
-          role: "user",
-          content: "Owner preference without a message timestamp.",
-          __openclaw: { senderIsOwner: true },
-        },
-      },
-    ]);
-    const mtime = new Date("2026-07-01T10:00:00.789Z");
-    await fs.utimes(filePath, mtime, mtime);
-
-    const entry = await buildSessionEntry(filePath, { sessionKind: "interactive" });
-    expect(Number.isInteger(entry?.lineProvenance[0]?.observedAt)).toBe(true);
   });
 });

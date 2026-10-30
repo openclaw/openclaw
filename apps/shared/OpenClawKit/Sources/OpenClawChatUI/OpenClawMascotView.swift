@@ -25,6 +25,7 @@ public struct OpenClawMascotView: View {
     private let accessory: OpenClawMascotAccessory
     private let interactive: Bool
     private let minimumFrameInterval: TimeInterval
+    private let paused: Bool
 
     private var staticPose: OpenClawMascotPose {
         var pose = OpenClawMascotPose.staticPose(for: self.mood)
@@ -46,18 +47,22 @@ public struct OpenClawMascotView: View {
     ///     a click). Off by default so the mascot never swallows taps meant
     ///     for an enclosing control.
     ///   - minimumFrameInterval: minimum redraw interval for animated poses.
+    ///   - paused: stops redrawing while the mascot is mounted but not shown,
+    ///     such as in a hidden sidebar; SwiftUI cannot detect that on its own.
     public init(
         floats: Bool = true,
         mood: OpenClawMascotMood = .idle,
         accessory: OpenClawMascotAccessory = .none,
         interactive: Bool = false,
-        minimumFrameInterval: TimeInterval = 1.0 / 30.0)
+        minimumFrameInterval: TimeInterval = 1.0 / 30.0,
+        paused: Bool = false)
     {
         self.floats = floats
         self.mood = mood
         self.accessory = accessory
         self.interactive = interactive
         self.minimumFrameInterval = minimumFrameInterval
+        self.paused = paused
         self._animator = State(initialValue: OpenClawMascotAnimator(allowsAutoSleep: interactive))
     }
 
@@ -72,7 +77,10 @@ public struct OpenClawMascotView: View {
 
     @ViewBuilder
     private func animatedMascot(palette: OpenClawMascotPalette) -> some View {
-        let core = TimelineView(.animation(minimumInterval: self.minimumFrameInterval)) { timeline in
+        let core = TimelineView(.animation(
+            minimumInterval: self.minimumFrameInterval,
+            paused: self.paused))
+        { timeline in
             let pose = self.animator.pose(at: timeline.date.timeIntervalSinceReferenceDate)
             // Float translates the whole canvas like the site floats the hero
             // container; drawing the offset inside the canvas would clip the

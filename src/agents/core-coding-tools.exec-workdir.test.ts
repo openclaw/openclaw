@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { saveExecApprovals } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
@@ -40,45 +40,44 @@ describe("coding-tool exec working directory", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([
-    { workdir: undefined, directory: "workspace", pty: false },
-    { workdir: ".", directory: "workspace", pty: false },
-    { workdir: ".", directory: "workspace", pty: true },
-    { workdir: "nested", directory: "workspace/nested", pty: false },
-    { workdir: "~", directory: "workspace/~", pty: false },
-    { workdir: "../sibling", directory: "sibling", pty: false },
-    { workdir: "absolute", directory: "sibling", pty: false },
-  ])("executes in $directory for workdir=$workdir (PTY=$pty)", async (testCase) => {
-    expect(fs.realpathSync(process.cwd())).not.toBe(codingRoot);
-    const tools = createCoreCodingTools({
+  function createExecTool(sandbox?: Parameters<typeof createCoreCodingTools>[0]["sandbox"]) {
+    return createCoreCodingTools({
       codingRoot,
       containmentRoot: codingRoot,
       includeBaseCodingTools: false,
       shellTools: "full",
       workspaceOnly: false,
       readOnly: false,
+      sandbox,
       applyPatchEnabled: false,
       applyPatchWorkspaceOnly: true,
       execDefaults: {
-        host: "gateway",
+        host: sandbox ? "sandbox" : "gateway",
         mode: "full",
         allowBackground: false,
         notifyOnExit: false,
         config: { plugins: { enabled: false } },
       },
       processDefaults: {},
-    });
-    const exec = tools.find((tool) => tool.name === "exec");
-    if (!exec) {
-      throw new Error("Expected the coding exec tool");
-    }
-    const workdir = testCase.workdir === "absolute" ? path.join(root, "sibling") : testCase.workdir;
-    const result = await exec.execute("coding-workdir", {
+    }).find((tool) => tool.name === "exec")!;
+  }
+
+  it.each([
+    [undefined, "workspace", false],
+    [".", "workspace", true],
+    ["nested", "workspace/nested", false],
+    ["~", "workspace/~", false],
+    ["../sibling", "sibling", false],
+    ["absolute", "sibling", false],
+  ] as const)("executes for workdir=%s in %s (PTY=%s)", async (input, directory, pty) => {
+    expect(fs.realpathSync(process.cwd())).not.toBe(codingRoot);
+    const workdir = input === "absolute" ? path.join(root, "sibling") : input;
+    const result = await createExecTool().execute("coding-workdir", {
       command: process.platform === "win32" ? "(Get-Location).Path" : "pwd -P",
       workdir,
-      pty: testCase.pty,
+      pty,
     });
-    const expectedCwd = fs.realpathSync(path.join(root, testCase.directory));
+    const expectedCwd = fs.realpathSync(path.join(root, directory));
     expect(result.details).toMatchObject({ status: "completed", exitCode: 0, cwd: expectedCwd });
     const output = result.content.find((content) => content.type === "text")?.text;
     expect(output?.trim()).toBe(expectedCwd);
@@ -100,11 +99,7 @@ describe("coding-tool exec working directory", () => {
         };
       },
       buildExecSpec: async ({ env }) => ({
-        argv: [
-          process.execPath,
-          "-e",
-          "process.stdout.write(process.env.CODEX_SANDBOX_EXEC_ID ?? 'missing')",
-        ],
+        argv: [process.execPath, "-p", "process.env.CODEX_SANDBOX_EXEC_ID ?? 'missing'"],
         env,
         cwd: codingRoot,
         stdinMode: "pipe-closed",
@@ -120,30 +115,7 @@ describe("coding-tool exec working directory", () => {
         fsBridge: createHostSandboxFsBridge(codingRoot),
       },
     });
-    const tools = createCoreCodingTools({
-      codingRoot,
-      containmentRoot: codingRoot,
-      includeBaseCodingTools: false,
-      shellTools: "full",
-      workspaceOnly: false,
-      readOnly: false,
-      sandbox,
-      applyPatchEnabled: false,
-      applyPatchWorkspaceOnly: true,
-      execDefaults: {
-        host: "sandbox",
-        mode: "full",
-        allowBackground: false,
-        notifyOnExit: false,
-        config: { plugins: { enabled: false } },
-      },
-      processDefaults: {},
-    });
-    const exec = tools.find((tool) => tool.name === "exec");
-    if (!exec) {
-      throw new Error("Expected the builtin exec tool");
-    }
-    const result = await exec.execute("coding-cleanup", { command: "fixture" });
+    const result = await createExecTool(sandbox).execute("coding-cleanup", { command: "fixture" });
     expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
     expect(result.content.find((entry) => entry.type === "text")?.text.trim()).toBe(
       "coding-cleanup",

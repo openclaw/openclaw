@@ -1,9 +1,16 @@
 // Preserve shipped Gateway opt-outs while moving desktop access to pairing approval.
 import { randomUUID } from "node:crypto";
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
+import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
+import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
+import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
 import {
   persistDevicePairingStoreState,
@@ -43,7 +50,7 @@ export function preserveLegacyDesktopStreamOptOut(
     return false;
   }
   if (
-    !surface.commands.every((command) => typeof command === "string") ||
+    !isStringArray(surface.commands) ||
     !Number.isSafeInteger(surface.createdAtMs) ||
     !Number.isSafeInteger(surface.approvedAtMs) ||
     !Number.isSafeInteger(surface.approvedAtMs + 1)
@@ -73,45 +80,55 @@ export async function migrateLegacyDesktopStreamOptOuts(
   baseDir?: string,
 ): Promise<number> {
   return await withDevicePairingLock(async () =>
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const receipt = executeSqliteQueryTakeFirstSync(
-          db,
-          getNodeSqliteKysely<Pick<DB, "migration_runs">>(db)
-            .selectFrom("migration_runs")
-            .select("status")
-            .where("id", "=", MIGRATION_ID),
+    // The lock may await; boot admission covers only the acquired synchronous database work.
+    withEngineStoreAdmission(() => {
+      const options = baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {};
+      if (isArtifactPreservingStateRead("agent", resolveDatabasePath(options))) {
+        throw new Error(
+          "Programming error: shared-state write during artifact-preserving inspection.",
         );
-        if (receipt?.status === "completed") {
-          return 0;
-        }
-        if (receipt) {
-          throw new Error(
-            "Desktop approval migration receipt is incomplete; existing approvals remain unchanged.",
-          );
-        }
-        const now = Date.now();
-        const state = readDevicePairingStoreStateFromDatabase(db);
-        let retired = 0;
-        for (const device of Object.values(state.pairedByDeviceId)) {
-          if (preserveLegacyDesktopStreamOptOut(device, cfg, now)) {
-            retired += 1;
+      }
+      const database = openOpenClawStateDatabase(options);
+      const receipt = executeSqliteQueryTakeFirstSync(
+        database.db,
+        getNodeSqliteKysely<Pick<DB, "migration_runs">>(database.db)
+          .selectFrom("migration_runs")
+          .select("status")
+          .where("id", "=", MIGRATION_ID),
+      );
+      if (receipt?.status === "completed") {
+        return 0;
+      }
+      if (receipt) {
+        throw new Error(
+          "Desktop approval migration receipt is incomplete; existing approvals remain unchanged.",
+        );
+      }
+      return runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          const now = Date.now();
+          const state = readDevicePairingStoreStateFromDatabase(db);
+          let retired = 0;
+          for (const device of Object.values(state.pairedByDeviceId)) {
+            if (preserveLegacyDesktopStreamOptOut(device, cfg, now)) {
+              retired += 1;
+            }
           }
-        }
-        if (retired > 0) {
-          persistDevicePairingStoreState(state, baseDir, "paired");
-        }
-        recordLegacyMigrationRun(db, {
-          runId: MIGRATION_ID,
-          startedAt: now,
-          finishedAt: now,
-          status: "completed",
-          reportJson: JSON.stringify({ retiredDesktopApprovals: retired }),
-        });
-        return retired;
-      },
-      baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {},
-      { operationLabel: "preserve legacy desktop stream opt-outs" },
-    ),
+          if (retired > 0) {
+            persistDevicePairingStoreState(state, baseDir, "paired");
+          }
+          recordLegacyMigrationRun(db, {
+            runId: MIGRATION_ID,
+            startedAt: now,
+            finishedAt: now,
+            status: "completed",
+            reportJson: JSON.stringify({ retiredDesktopApprovals: retired }),
+          });
+          return retired;
+        },
+        { ...options, database },
+        { operationLabel: "preserve legacy desktop stream opt-outs" },
+      );
+    }),
   );
 }

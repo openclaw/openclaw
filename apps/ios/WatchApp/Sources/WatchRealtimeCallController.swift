@@ -426,9 +426,9 @@ final class WatchRealtimeCallController {
             await previous?.value
             async let audioStopped: Void = old.media.stop()
             if old.created, let sessionKey = old.call.sessionKey, let route = old.route,
-               let params = try? Self.encode(TalkRealtimeClientCloseParams(
-                   sessionKey: sessionKey,
-                   voiceSessionId: old.voiceSessionID))
+               let params = try? Self.encode(TalkClientCloseParams(
+                   sessionkey: sessionKey,
+                   voicesessionid: old.voiceSessionID))
             {
                 _ = try? await old.gateway.request(
                     method: "talk.client.close",
@@ -449,10 +449,7 @@ final class WatchRealtimeCallController {
     }
 
     private static func encode(_ value: some Encodable) throws -> String {
-        guard let json = try String(data: JSONEncoder().encode(value), encoding: .utf8) else {
-            throw self.unavailable(String(localized: "Voice could not encode its Gateway request."))
-        }
-        return json
+        try String(bytes: JSONEncoder().encode(value), encoding: .utf8)!
     }
 
     private static func makeURLSession() -> URLSession {

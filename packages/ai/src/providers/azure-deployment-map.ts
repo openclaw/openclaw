@@ -38,10 +38,9 @@ function getDeploymentLookup(source: string | undefined): DeploymentNameLookup {
   }
 
   const exact = parseAzureDeploymentNameMap(source);
-  const folded = new Map<string, string>();
-  for (const [modelId, deploymentName] of exact) {
-    folded.set(modelId.toLowerCase(), deploymentName);
-  }
+  const folded = new Map(
+    [...exact].map(([modelId, deployment]) => [modelId.toLowerCase(), deployment]),
+  );
 
   // Process configuration is stable on hot paths; replacing one source-keyed slot
   // avoids reparsing without retaining obsolete maps or changing deployment value casing.

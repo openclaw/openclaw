@@ -17,30 +17,44 @@ before ordinary model dispatch. Return `{ handled: true, text: "..." }` to
 send a final reply, or `{ handled: true }` to handle it without text. This is a
 claim, not an API for rewriting outbound or inbound content.
 
-`reply_dispatch` is the advanced takeover seam: it receives the finalized
+`reply_dispatch` is the advanced takeover hook: it receives the finalized
 message context and a host dispatcher, and a handled result reports
 `queuedFinal` and delivery `counts`. Use `before_agent_reply` for a simple
 synthetic reply, and the sending hooks below to transform outgoing payloads.
 
-Runtime takeovers should forward `ctx.onAgentRunStart`,
+Runtime takeovers should forward `ctx.onPreparedAgentRunStart`,
 `ctx.userTurnTranscriptRecorder`, and optional
 `ctx.prepareAssistantTranscriptMessage` to their runtime helper. The ACP dispatch
 helper forwards all three automatically. Share the recorder so the runtime and
 Gateway do not append the same user turn independently; mark runtime
 persistence only after a successful transcript write.
 
-The host-provided preparer records display ownership before the canonical
+The optional `ctx.turnAdoption` handle transfers custody of the input to a
+runtime takeover. Await `adopt()` immediately before backend submission; the host
+acknowledges adoption once and stops the ingress startup watchdog. Its
+`assertCurrent()` throws after dispatch cleanup or a failed adoption. Propagate
+adoption failures instead of returning a handled result so the input remains
+retryable. Forward the same handle through adapters, including when rebuilding
+the message context. The ACP helper does this automatically. Older callers may
+omit the handle; no SDK migration is required.
+
+The host-provided preparer records display ownership before the stored
 assistant append, using original runtime text captured before transcript-only
 hooks. It preserves raw content and IDs and grants no file access or write
 authority. Keep it in process and bound to its owning turn; after that turn
 aborts, is replaced, or completes, it returns the message unchanged.
 
-The optional third `onAgentRunStart` argument can offer
-`completionSource: "reply-dispatch"` with a `getResult()` callback. The host must
+The `options` field of the `onPreparedAgentRunStart` notification can offer
+`completionSource: "reply-dispatch"` with a `getResult()` callback. Its required
+`transcriptStart` field carries the prepared boundary or `null` for a run without
+a transcript. The host must
 return `"reply-dispatch"` synchronously to accept completion ownership; observers
 and other callback results leave lifecycle completion unchanged. Wrappers must
-forward every callback argument and its return value. After dispatch settles,
-`getResult()` supplies the canonical `terminalOutcome` and, when an
+forward the complete notification and its return value. The deprecated
+`onAgentRunStart` callback retains its positional arguments for released plugins;
+see [run-start migration](/plugins/sdk-migration/compatibility-policy#reply-run-start-transcript-facts).
+After dispatch settles,
+`getResult()` supplies the recorded `terminalOutcome` and, when an
 assistant write succeeded, its `assistantTranscript` receipt (target, message
 ID, idempotency key, and optional projection anchor). The host then emits one
 chat completion from the delivered, post-hook payloads while retaining runtime
@@ -87,14 +101,14 @@ has visibility-filtered quoted message data: `replyToId`, `replyToIdFull`,
 `replyToBody`, `replyToSender`, and `replyToIsQuote`. Prefer these
 first-class fields before reading legacy metadata.
 
-`before_dispatch` receives the canonical inbound `messageId` in both its event
+`before_dispatch` receives the assigned inbound `messageId` in both its event
 and context.
 
 Prefer typed `threadId` and `replyToId` fields before using channel-specific
 metadata.
 
 Inbound claim and message-received events expose `media?:
-PluginHookMediaFact[]` as the canonical attachment API. Each fact can carry
+PluginHookMediaFact[]` as the standard attachment API. Each fact can carry
 `path`, `url`, `contentType`, `kind`, `transcribed`, `messageId`, and
 `workspaceDir`; array position is attachment identity. When a remote attachment
 has not been staged locally yet, `media` is omitted,

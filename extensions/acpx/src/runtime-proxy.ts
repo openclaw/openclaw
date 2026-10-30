@@ -1,8 +1,5 @@
-/**
- * Lazy ACP runtime proxy for ACPX. It defers resolving the real runtime until
- * the first ACP call while preserving the SDK runtime shape.
- */
 import type { AcpxRuntime as UpstreamRuntime } from "acpx/runtime";
+import { createLazyRuntimeMethodBinder } from "openclaw/plugin-sdk/lazy-runtime";
 import type { AcpRuntime, AcpRuntimeTurn, AcpRuntimeTurnInput } from "../runtime-api.js";
 
 export type CompleteAcpRuntimeTurn = AcpRuntimeTurn &
@@ -66,49 +63,26 @@ function lazyStartRuntimeTurn(
 export function createLazyAcpRuntimeProxy(
   resolveRuntime: () => Promise<CompleteAcpRuntime>,
 ): CompleteAcpRuntime {
+  const bind = createLazyRuntimeMethodBinder(resolveRuntime);
   return {
     ownerAwareSessions: 1,
-    async findSession(input) {
-      return await (await resolveRuntime()).findSession(input);
-    },
-    async shutdown() {
-      await (await resolveRuntime()).shutdown();
-    },
-    async ensureSession(input) {
-      return await (await resolveRuntime()).ensureSession(input);
-    },
+    findSession: bind((runtime) => runtime.findSession.bind(runtime)),
+    shutdown: bind((runtime) => runtime.shutdown.bind(runtime)),
+    ensureSession: bind((runtime) => runtime.ensureSession.bind(runtime)),
     startTurn(input) {
       return lazyStartRuntimeTurn(resolveRuntime, input);
     },
     async *runTurn(input) {
       yield* (await resolveRuntime()).runTurn(input);
     },
-    async getCapabilities(input) {
-      return await (await resolveRuntime()).getCapabilities(input);
-    },
-    async getStatus(input) {
-      return await (await resolveRuntime()).getStatus(input);
-    },
-    async setMode(input) {
-      await (await resolveRuntime()).setMode(input);
-    },
-    async setModel(input) {
-      await (await resolveRuntime()).setModel(input);
-    },
-    async setConfigOption(input) {
-      return await (await resolveRuntime()).setConfigOption(input);
-    },
-    async doctor() {
-      return await (await resolveRuntime()).doctor();
-    },
-    async prepareFreshSession(input) {
-      await (await resolveRuntime()).prepareFreshSession(input);
-    },
-    async cancel(input) {
-      await (await resolveRuntime()).cancel(input);
-    },
-    async close(input) {
-      await (await resolveRuntime()).close(input);
-    },
+    getCapabilities: bind((runtime) => runtime.getCapabilities.bind(runtime)),
+    getStatus: bind((runtime) => runtime.getStatus.bind(runtime)),
+    setMode: bind((runtime) => runtime.setMode.bind(runtime)),
+    setModel: bind((runtime) => runtime.setModel.bind(runtime)),
+    setConfigOption: bind((runtime) => runtime.setConfigOption.bind(runtime)),
+    doctor: bind((runtime) => runtime.doctor.bind(runtime)),
+    prepareFreshSession: bind((runtime) => runtime.prepareFreshSession.bind(runtime)),
+    cancel: bind((runtime) => runtime.cancel.bind(runtime)),
+    close: bind((runtime) => runtime.close.bind(runtime)),
   };
 }

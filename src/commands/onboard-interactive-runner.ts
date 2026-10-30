@@ -1,15 +1,12 @@
 // Shared lifecycle handling for interactive onboarding entrypoints.
 import path from "node:path";
 import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
-import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { t } from "../wizard/i18n/index.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import type { OnboardOptions } from "./onboard-types.js";
 
-export function hasInteractiveOnboardingTty(): boolean {
-  return isTerminalInteractive();
-}
+export { isTerminalInteractive as hasInteractiveOnboardingTty } from "../cli/terminal-interactivity.js";
 
 export async function runInteractiveOnboarding(
   action: () => Promise<void>,
@@ -59,8 +56,8 @@ async function launchHatchTui(workspace: string, local: boolean, agentId?: strin
 }
 
 export type GuidedOnboardingHandoff =
-  | { workspace: string; next: "browser" }
-  | { workspace: string; next: "foreground-gateway"; agentId?: string }
+  | { next: "browser" }
+  | { next: "foreground-gateway"; agentId?: string }
   | { workspace: string; next: "hatch"; local: boolean; agentId?: string }
   | { workspace: string; next: "chat"; agentName?: string };
 
@@ -71,8 +68,6 @@ export type GuidedOnboardingHandoffDeps = {
     acceptRisk: boolean,
     agentName?: string,
   ) => Promise<void>;
-  launchHatchTui?: (workspace: string) => Promise<void>;
-  runForegroundGateway?: typeof import("./onboard-quickstart-host.js").runQuickstartForegroundGateway;
 };
 
 export async function runGuidedOnboardingHandoff(
@@ -85,10 +80,8 @@ export async function runGuidedOnboardingHandoff(
     return;
   }
   if (handoff.next === "foreground-gateway") {
-    const runForegroundGateway =
-      deps.runForegroundGateway ??
-      (await import("./onboard-quickstart-host.js")).runQuickstartForegroundGateway;
-    await runForegroundGateway({
+    const { runQuickstartForegroundGateway } = await import("./onboard-quickstart-host.js");
+    await runQuickstartForegroundGateway({
       runtime,
       ...(handoff.agentId ? { agentId: handoff.agentId } : {}),
       ...(opts.suppressGatewayTokenOutput ? { suppressTokenOutput: true } : {}),
@@ -98,11 +91,7 @@ export async function runGuidedOnboardingHandoff(
   // Interactive surfaces start only after the wizard lifecycle restores stdin
   // so the TUI (or recovery chat) receives a clean TTY.
   if (handoff.next === "hatch") {
-    if (deps.launchHatchTui) {
-      await deps.launchHatchTui(handoff.workspace);
-    } else {
-      await launchHatchTui(handoff.workspace, handoff.local, handoff.agentId);
-    }
+    await launchHatchTui(handoff.workspace, handoff.local, handoff.agentId);
     return;
   }
   if (handoff.next === "browser") {

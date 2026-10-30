@@ -17,13 +17,33 @@ export function createBindingTestState() {
       values.set(key, value);
       return true;
     },
-    update(key, updateValue) {
-      const next = updateValue(values.get(key));
-      if (next === undefined) {
-        return false;
-      }
-      values.set(key, next);
-      return true;
+    withCurrent({ assertCurrent }) {
+      const observe = (key: string) => ({
+        value: structuredClone(values.get(key)),
+        comparison: JSON.stringify(values.get(key) ?? null),
+      });
+      return {
+        async observe(key) {
+          assertCurrent();
+          return observe(key);
+        },
+        async compareAndApply(key, comparison, intent) {
+          assertCurrent();
+          const current = observe(key);
+          if (current.comparison !== comparison) {
+            return { status: "conflict", current };
+          }
+          if (intent.action === "set") {
+            values.set(key, structuredClone(intent.value));
+            return { status: "applied" };
+          }
+          if (intent.action === "delete") {
+            values.delete(key);
+            return { status: "applied" };
+          }
+          return { status: "unchanged" };
+        },
+      };
     },
     deleteIf(key, predicate) {
       const value = values.get(key);

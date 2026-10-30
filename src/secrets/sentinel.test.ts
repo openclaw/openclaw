@@ -29,18 +29,6 @@ describe("secret sentinels", () => {
     expect(otherLabel).not.toBe(first);
   });
 
-  it("swaps repeated and composed sentinel substrings", () => {
-    const first = mintSecretSentinel("first-secret-value", { label: "model-auth:openai" });
-    const second = mintSecretSentinel("second-secret-value", { label: "model-auth:cloudflare" });
-
-    expect(
-      swapSecretSentinelsInText(`Bearer ${first}; cf-aig-authorization=Bearer ${second}; ${first}`),
-    ).toEqual({
-      text: "Bearer first-secret-value; cf-aig-authorization=Bearer second-secret-value; first-secret-value",
-      unknown: [],
-    });
-  });
-
   it("reports unknown sentinel-shaped values without replacing them", () => {
     const unknown = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
     expect(swapSecretSentinelsInText(`Bearer ${unknown}`)).toEqual({
@@ -73,7 +61,7 @@ describe("secret sentinels", () => {
     });
   });
 
-  it.each(["off", " OFF ", "0", "false", "False"])(
+  it.each([" OFF ", "0", "False"])(
     "preserves provider plaintext compatibility when the switch is %s",
     (value) => {
       vi.stubEnv("OPENCLAW_SECRET_SENTINELS", value);

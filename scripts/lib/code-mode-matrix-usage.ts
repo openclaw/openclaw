@@ -22,13 +22,20 @@ import { readSqliteTranscriptPayload } from "./sqlite-transcript-payload.mjs";
 const MAX_ROWS = 20_000;
 const MAX_BYTES = 64 * 1024 * 1024;
 const TOKEN_BUCKETS = ["input", "output", "cacheRead", "cacheWrite"] as const;
+const MODEL_TOKEN_BUCKETS = [
+  ...TOKEN_BUCKETS,
+  "cacheWrite1h",
+  "cacheWrite5m",
+  "reasoningTokens",
+  "total",
+] as const;
 
 type ReportedUsage = Pick<
   NormalizedUsage,
   "input" | "output" | "cacheRead" | "cacheWrite" | "total"
 > & { costUsd?: number };
 
-export type MatrixLedgerRow = {
+type MatrixLedgerRow = {
   storeId: string;
   sessionId: string;
   sessionKey: string;
@@ -85,6 +92,186 @@ function rowIdentity(row: MatrixLedgerRow): string {
 
 function count(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+/** Read the existing process timeline only after the isolated Gateway has joined. */
+export async function readMatrixModelAccounting(params: {
+  file: string;
+  joined: boolean;
+  foregroundRunIds: string[];
+}) {
+  const issues = new Set<string>();
+  const calls = new Map<
+    string,
+    {
+      runId: string;
+      callId: string;
+      provider: string;
+      model: string;
+      foreground: boolean;
+      outcome?: string;
+      usage?: Record<string, number>;
+    }
+  >();
+  const usageObservations: Record<string, unknown>[] = [];
+  const foreground = new Set(params.foregroundRunIds);
+  let identity: string | undefined;
+  let sequence = 0;
+  let started = false;
+  let closed = false;
+  if (!params.joined) {
+    issues.add("Gateway child did not join cleanly.");
+  }
+  if (!foreground.size) {
+    issues.add("Foreground run identity is unavailable.");
+  }
+  try {
+    const file = await fs.open(params.file, "r");
+    let text: string;
+    try {
+      if ((await file.stat()).size > MAX_BYTES) {
+        throw new Error("Timeline exceeds byte bound.");
+      }
+      text = await file.readFile("utf8");
+    } finally {
+      await file.close();
+    }
+    const lines = text.split("\n");
+    if (lines.pop() !== "") {
+      issues.add("Timeline has an incomplete final line.");
+    }
+    if (lines.length > MAX_ROWS) {
+      throw new Error("Timeline exceeds row bound.");
+    }
+    for (const line of lines) {
+      const row: unknown = JSON.parse(line);
+      if (
+        !isRecord(row) ||
+        row.schemaVersion !== "openclaw.diagnostics.v1" ||
+        !isRecord(row.attributes)
+      ) {
+        throw new Error("Invalid timeline row.");
+      }
+      if (closed) {
+        issues.add("Timeline activity follows the terminal capture receipt.");
+      }
+      const attrs = row.attributes;
+      const captureId = readNonEmptyStringPreservingWhitespace(attrs.captureId);
+      const currentIdentity = JSON.stringify([captureId, row.pid]);
+      identity ??= currentIdentity;
+      if (
+        !captureId ||
+        count(row.pid) === undefined ||
+        identity !== currentIdentity ||
+        attrs.sequence !== ++sequence ||
+        attrs.failedWrites !== 0
+      ) {
+        issues.add("Timeline continuity or writer integrity is incomplete.");
+      }
+      if (row.name === "timeline.capture.started") {
+        if (started || closed || attrs.exclusiveProcess !== true) {
+          issues.add("Gateway capture is not a single exclusive process lifetime.");
+        }
+        started = true;
+      } else if (row.name === "timeline.capture.completed") {
+        if (!started || closed || attrs.complete !== true) {
+          issues.add("Gateway producer cleanup did not complete.");
+        }
+        closed = true;
+      } else if (
+        row.name === "model.usage" ||
+        row.name === "provider.request.started" ||
+        row.type === "provider.request"
+      ) {
+        if (!started || closed) {
+          issues.add("Model activity is outside the captured lifetime.");
+        }
+        if (row.name === "model.usage") {
+          // These may mirror terminal call usage or summarize several calls. Never add them.
+          usageObservations.push({ provider: row.provider, ...attrs });
+          continue;
+        }
+        const runId = readNonEmptyStringPreservingWhitespace(row.runId);
+        const callId = readNonEmptyStringPreservingWhitespace(row.spanId);
+        const provider = readNonEmptyStringPreservingWhitespace(row.provider);
+        const model = readNonEmptyStringPreservingWhitespace(attrs.model);
+        if (!runId || !callId || !provider || !model || attrs.observationUnit !== "logical-call") {
+          issues.add("Logical call identity is unavailable.");
+          continue;
+        }
+        const key = JSON.stringify([runId, callId]);
+        if (row.name === "provider.request.started") {
+          if (calls.has(key)) {
+            issues.add("Duplicate logical call start.");
+          } else {
+            calls.set(key, { runId, callId, provider, model, foreground: foreground.has(runId) });
+          }
+          continue;
+        }
+        const call = calls.get(key);
+        if (
+          !call ||
+          call.outcome ||
+          call.provider !== provider ||
+          call.model !== model ||
+          typeof row.ok !== "boolean"
+        ) {
+          issues.add("Unmatched or conflicting logical call terminal.");
+          continue;
+        }
+        call.outcome = row.ok ? "completed" : "error";
+        if (attrs.usageState === "available") {
+          call.usage = Object.fromEntries(
+            MODEL_TOKEN_BUCKETS.flatMap((bucket) => {
+              const value = count(attrs[bucket]);
+              return value === undefined ? [] : [[bucket, value]];
+            }),
+          );
+        }
+      }
+    }
+  } catch {
+    issues.add("Timeline is unavailable, malformed, or exceeds the capture bound.");
+  }
+  if (!started || !closed) {
+    issues.add("Gateway capture start or terminal receipt is missing.");
+  }
+  const observed = [...calls.values()];
+  if (observed.some((call) => !call.outcome)) {
+    issues.add("Logical calls remain unterminated.");
+  }
+  const complete = issues.size === 0;
+  const summarize = (selected: typeof observed) => ({
+    observedCalls: selected.length,
+    completed: selected.filter((call) => call.outcome === "completed").length,
+    errors: selected.filter((call) => call.outcome === "error").length,
+    tokens: Object.fromEntries(
+      MODEL_TOKEN_BUCKETS.map((key) => [
+        key,
+        selected.reduce<number | null>(
+          (sum, call) => {
+            const value = call.usage?.[key];
+            return sum === null || value === undefined ? null : sum + value;
+          },
+          complete ? 0 : null,
+        ),
+      ]),
+    ),
+  });
+  return {
+    coverage: "isolated-gateway-observed-logical-calls" as const,
+    complete,
+    issues: [...issues],
+    foreground: summarize(observed.filter((call) => call.foreground)),
+    other: summarize(observed.filter((call) => !call.foreground)),
+    calls: observed,
+    usageObservations,
+    usageObservationCoverage: "reconciliation-only" as const,
+    physicalHttpAttempts: null,
+    internalRetries: null,
+    providerBilling: null,
+    opaqueRuntimeCoverage: "unmeasured" as const,
+  };
 }
 
 async function exists(file: string): Promise<boolean> {
@@ -418,54 +605,19 @@ export function selectMatrixLedgerRows(params: MatrixLedgerSelection) {
   };
 }
 
-type MatrixUsageTotals = {
-  input: number;
-  cacheRead: number;
-  cacheWrite: number;
-  output: number;
-  knownTotalTokens: number;
-  knownCostUsd: number;
-  assistantTurns: number;
-};
+type MatrixUsageTotals = ReturnType<typeof emptyTotals>;
 
-export type MatrixUsageAccounting = MatrixUsageTotals & {
-  coverage: "observed-transcripts-reconciled-with-runtime";
-  runtimeReconciliation: RuntimeReconciliation[];
-  complete: boolean;
-  costComplete: boolean;
-  reasoningComplete: boolean;
-  totalTokens: number | null;
-  costUsd: number | null;
-  reasoningTokens: number | null;
-  toolFailures: number;
-  modelErrors: number;
-  costProvenance: string[];
-  parents: MatrixUsageTotals;
-  descendants: MatrixUsageTotals;
-  unattributed: MatrixUsageTotals;
-  sessionKeys: string[];
-  issues: string[];
-  costIssues: string[];
-  childRuns: { accepted: number; terminal: number; peakConcurrent: number | null };
-};
-
-type RuntimeReconciliation = {
-  source: "root-response" | "child-session";
-  sessionKey: string;
-  runId?: string;
-  reported: ReportedUsage | null;
-  transcript: MatrixUsageTotals;
-  tokenGap: number;
-  costGapUsd: number;
-  matched: boolean;
-  costMatched: boolean | null;
-};
+export type MatrixUsageAccounting = ReturnType<typeof collectMatrixUsage>;
 
 function reconcileRuntimeUsage(
-  identity: Pick<RuntimeReconciliation, "source" | "sessionKey" | "runId">,
+  identity: {
+    source: "root-response" | "child-session";
+    sessionKey: string;
+    runId?: string;
+  },
   reported: ReportedUsage | undefined,
   transcript: MatrixUsageTotals,
-): RuntimeReconciliation {
+) {
   const completeBuckets =
     reported !== undefined && TOKEN_BUCKETS.every((key) => count(reported[key]) !== undefined);
   const bucketTotal = TOKEN_BUCKETS.reduce((sum, key) => sum + (count(reported?.[key]) ?? 0), 0);
@@ -489,7 +641,7 @@ function reconcileRuntimeUsage(
   };
 }
 
-function emptyTotals(): MatrixUsageTotals {
+function emptyTotals() {
   return {
     input: 0,
     cacheRead: 0,
@@ -509,7 +661,7 @@ export function collectMatrixUsage(
     rootUsage: unknown;
     runtimeLog?: string;
   },
-): MatrixUsageAccounting {
+) {
   const selection = selectMatrixLedgerRows(params);
   const issues = [...selection.issues];
   const costIssues: string[] = [];
@@ -592,19 +744,18 @@ export function collectMatrixUsage(
     if (message.stopReason === "error" || message.stopReason === "aborted") {
       modelErrors += 1;
     }
-    const raw = isRecord(message.usage) ? message.usage : {};
-    const usage = normalizeUsage(raw);
+    const usage = normalizeUsage(isRecord(message.usage) ? message.usage : undefined);
     const buckets = {
-      input: count(raw.input),
-      output: count(raw.output),
-      cacheRead: count(raw.cacheRead),
-      cacheWrite: count(raw.cacheWrite),
+      input: count(usage?.input),
+      output: count(usage?.output),
+      cacheRead: count(usage?.cacheRead),
+      cacheWrite: count(usage?.cacheWrite),
     };
     const bucketTotal = Object.values(buckets).reduce<number>(
       (sum, value) => sum + (value ?? 0),
       0,
     );
-    const reportedTotal = count(raw.totalTokens ?? raw.total);
+    const reportedTotal = count(usage?.total);
     const knownTotal = Math.max(bucketTotal, reportedTotal ?? 0);
     scope.knownTotalTokens += knownTotal;
     sessionUsage.knownTotalTokens += knownTotal;
@@ -615,11 +766,12 @@ export function collectMatrixUsage(
     if (
       Object.values(buckets).some((value) => value === undefined) ||
       (reportedTotal !== undefined && reportedTotal !== bucketTotal) ||
-      knownTotal === 0
+      // Adapter-default zeros are unmeasured unless the response explicitly reports usage.
+      (knownTotal === 0 && usage?.usageReport?.state !== "available")
     ) {
       issues.push(`Incomplete or incoherent model usage: ${identity}`);
     }
-    const reasoning = count(raw.reasoningTokens);
+    const reasoning = count(usage?.reasoningTokens);
     if (reasoning === undefined || reasoning > (buckets.output ?? 0)) {
       reasoningComplete = false;
     } else {
@@ -770,7 +922,7 @@ export function collectMatrixUsage(
   }
   return {
     ...total,
-    coverage: "observed-transcripts-reconciled-with-runtime",
+    coverage: "observed-transcripts-reconciled-with-runtime" as const,
     runtimeReconciliation,
     complete,
     costComplete,

@@ -4,6 +4,7 @@ import type {
   CronAddJobResultSchema,
   CronAddParamsSchema,
   CronAddResultSchema,
+  CronBindParamsSchema,
   CronDeliveryPreviewSchema,
   CronDeclarativeAddResultSchema,
   CronGetParamsSchema,
@@ -25,10 +26,21 @@ export type CronJob = Static<typeof CronJobSchema>;
 /** Definition-free row returned by cron.list when compact is true. */
 export type CronCompactJob = Pick<
   CronJob,
-  "id" | "name" | "declarationKey" | "displayName" | "owner" | "agentId" | "enabled" | "updatedAtMs"
+  | "id"
+  | "name"
+  | "declarationKey"
+  | "displayName"
+  | "owner"
+  | "agentId"
+  | "enabled"
+  | "updatedAtMs"
+  | "streamExecutionHost"
 > &
   Pick<
     CronJob["state"],
+    | "lastMeaningfulResult"
+    | "lastDurationMs"
+    | "lastTriggerEvalAtMs"
     | "runningAtMs"
     | "autoDisabled"
     | "lastDelivered"
@@ -59,6 +71,7 @@ export type CronDeliveryPreview = Static<typeof CronDeliveryPreviewSchema>;
 export type CronDeclarativeAddResult = Static<typeof CronDeclarativeAddResultSchema>;
 export type CronUpdateParams = Static<typeof CronUpdateParamsSchema>;
 export type CronRemoveParams = Static<typeof CronRemoveParamsSchema>;
+export type CronBindParams = Static<typeof CronBindParamsSchema>;
 export type CronRunParams = Static<typeof CronRunParamsSchema>;
 export type CronRunsParams = Static<typeof CronRunsParamsSchema>;
 export type CronScratchGetParams = Static<typeof CronScratchGetParamsSchema>;

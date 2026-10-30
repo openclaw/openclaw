@@ -1,5 +1,3 @@
-// Applies media-understanding outputs to inbound message context, including
-// attachment normalization, provider execution, file text extraction, and echoing.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import pMap from "p-map";
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
@@ -10,26 +8,23 @@ import {
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { runMediaCapability } from "./apply-capability.js";
-import { resolveAttachmentKind } from "./attachments.js";
+import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { resolveAttachmentKind } from "./attachments.normalize.js";
+import { selectAttachments } from "./attachments.select.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
 import type { ExtractedFileImage } from "./extracted-file-images.js";
-import { extractFileContext, type LocalPathSelfServeUpgrade } from "./file-context.js";
+import { extractFileContext } from "./file-context.js";
 import { resolveFileExtractionLimits } from "./file-extraction-limits.js";
 import {
   applyAttachmentMarkerBudget,
   type AttachmentContextBlock,
   renderMediaAttachmentDisposition,
 } from "./media-attachment-outcomes.js";
+import type { MediaExecutionContext } from "./provider-execution.js";
 import { resolveConcurrency } from "./resolve.js";
-import {
-  buildProviderRegistry,
-  createMediaAttachmentCache,
-  normalizeMediaAttachments,
-  resolveMediaAttachmentLocalRoots,
-} from "./runner.js";
+import { createScopedMediaAttachmentCache } from "./runner.attachments.js";
+import { buildProviderRegistry, normalizeMediaAttachments, runCapability } from "./runner.js";
 import type {
-  MediaAttachment,
   MediaUnderstandingCapability,
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -49,83 +44,7 @@ const AUDIO_ONLY_CAPABILITY_ORDER: MediaUnderstandingCapability[] = ["audio"];
 const EMPTY_VOICE_NOTE_PLACEHOLDER =
   "[Voice note could not be transcribed because the audio attachment was too small]";
 
-function appendFileBlocks(body: string | undefined, suffix: string | undefined): string {
-  if (suffix === undefined) {
-    return body ?? "";
-  }
-  const base = typeof body === "string" ? body.trim() : "";
-  if (!base) {
-    return suffix;
-  }
-  return `${base}\n\n${suffix}`.trim();
-}
-
 const SELF_SERVE_CONTEXT_FIELDS = ["Body", "BodyForAgent", "agentText"] as const;
-
-function enableLocalPathSelfServe(
-  upgrades: LocalPathSelfServeUpgrade[],
-  contexts: MsgContext[],
-  stagedPaths?: ReadonlyMap<number, string>,
-): void {
-  for (const context of contexts) {
-    for (const upgrade of upgrades) {
-      const stagedPath = stagedPaths?.get(upgrade.attachmentIndex);
-      if (stagedPaths && !stagedPath) {
-        continue;
-      }
-      const selfServe = upgrade.render(stagedPath);
-      if (!selfServe) {
-        continue;
-      }
-      for (const field of SELF_SERVE_CONTEXT_FIELDS) {
-        const value = context[field];
-        if (typeof value === "string") {
-          context[field] = value.replace(upgrade.fallback, selfServe);
-        }
-      }
-    }
-  }
-}
-
-function renderMediaAttachmentMarkers(params: {
-  attachments: MediaAttachment[];
-  decisions: MediaUnderstandingDecision[];
-  outputs: MediaUnderstandingOutput[];
-  deliveredImageIndexes?: ReadonlySet<number>;
-}): AttachmentContextBlock[] {
-  const handledIndexes = new Set(params.outputs.map((output) => output.attachmentIndex));
-  const decisions = new Map(params.decisions.map((decision) => [decision.capability, decision]));
-  return params.attachments.flatMap((attachment) => {
-    const capability = resolveAttachmentKind(attachment);
-    if (capability !== "image" && capability !== "audio" && capability !== "video") {
-      return [];
-    }
-    // The ACP caller resolved these exact indexes into native turn attachments;
-    // a marker would falsely claim non-delivery. Unresolved images keep theirs.
-    if (capability === "image" && params.deliveredImageIndexes?.has(attachment.index)) {
-      return [];
-    }
-    const decision = decisions.get(capability);
-    if (!decision || handledIndexes.has(attachment.index)) {
-      return [];
-    }
-    const disposition = decision.attachmentDispositions?.[attachment.index];
-    // Vision-capable model → the reply runtime hydrates images natively; an
-    // absence-of-processing marker would contradict what the model sees.
-    // Recorded per-attachment failures stay visible — they are authoritative
-    // regardless of native delivery. Partial/failed native hydration remains
-    // unexplainable at this frozen-prompt stage (#122101).
-    if (
-      capability === "image" &&
-      decision.nativeVisionActive !== false &&
-      disposition?.kind !== "failed"
-    ) {
-      return [];
-    }
-    const text = disposition ? renderMediaAttachmentDisposition(capability, disposition) : null;
-    return text ? [{ text, consumesMarkerBudget: true }] : [];
-  });
-}
 
 export async function applyMediaUnderstanding(params: {
   ctx: MsgContext;
@@ -135,6 +54,7 @@ export async function applyMediaUnderstanding(params: {
   workspaceDir?: string;
   providers?: Record<string, MediaUnderstandingProvider>;
   activeModel?: ActiveMediaModel;
+  execution?: MediaExecutionContext;
   /** Limit utility processing while preserving native image and video inputs. */
   processingMode?: "audio-only" | "files-only" | "audio-and-files";
   /** Render local paths immediately only when the caller owns the final tool surface. */
@@ -149,19 +69,23 @@ export async function applyMediaUnderstanding(params: {
     .find(Boolean);
 
   const attachments = normalizeMediaAttachments(ctx);
-  const providerRegistry = buildProviderRegistry(params.providers, cfg);
-  const cache = createMediaAttachmentCache(attachments, {
-    localPathRoots: resolveMediaAttachmentLocalRoots({
-      cfg,
-      ctx,
-      workspaceDir: params.workspaceDir,
-    }),
-    // The scoped root set is authoritative: merging sessionless defaults back in would restore
-    // the shared workspace/sandbox parents for sandboxed sessions.
-    includeDefaultLocalPathRoots: false,
-    ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
-    workspaceDir: params.workspaceDir,
-  });
+  // Built on first read, at most once per turn: the native-vision skip never reads it.
+  // A build failure is memoized and rethrown after the capabilities run, so it still
+  // reaches the caller's raw-content fallback instead of per-capability failures.
+  let builtProviderRegistry: ReturnType<typeof buildProviderRegistry> | undefined;
+  let providerRegistryError: { error: unknown } | undefined;
+  const providerRegistry = (): ReturnType<typeof buildProviderRegistry> => {
+    if (providerRegistryError) {
+      throw providerRegistryError.error;
+    }
+    try {
+      return (builtProviderRegistry ??= buildProviderRegistry(params.providers, cfg));
+    } catch (error) {
+      providerRegistryError = { error };
+      throw error;
+    }
+  };
+  const cache = createScopedMediaAttachmentCache(attachments, params);
 
   try {
     const results = await pMap(
@@ -170,8 +94,8 @@ export async function applyMediaUnderstanding(params: {
         : params.processingMode === "audio-only" || params.processingMode === "audio-and-files"
           ? AUDIO_ONLY_CAPABILITY_ORDER
           : CAPABILITY_ORDER,
-      async (capability) =>
-        await runMediaCapability({
+      async (capability) => {
+        const request = {
           capability,
           cfg,
           ctx,
@@ -183,9 +107,44 @@ export async function applyMediaUnderstanding(params: {
           providerRegistry,
           config: cfg.tools?.media?.[capability],
           activeModel: params.activeModel,
-        }),
+          execution: params.execution,
+        };
+        try {
+          return await runCapability(request);
+        } catch (err) {
+          if (shouldLogVerbose()) {
+            logVerbose(`Media understanding task failed: ${String(err)}`);
+          }
+          const selection = selectAttachments({
+            capability,
+            attachments,
+            policy: request.config?.attachments,
+          });
+          return {
+            outputs: [],
+            decision: {
+              capability,
+              outcome: "failed" as const,
+              attachments: [],
+              // Dropped attachments were never attempted; only selected ones failed.
+              attachmentDispositions: Object.fromEntries([
+                ...selection.selected.map(
+                  ({ index }) => [index, { kind: "failed" as const }] as const,
+                ),
+                ...selection.droppedAttachmentIndexes.map(
+                  (index) => [index, { kind: "not-selected" as const }] as const,
+                ),
+              ]),
+              ...(capability === "image" ? { nativeVisionActive: false } : {}),
+            },
+          };
+        }
+      },
       { concurrency: resolveConcurrency(cfg), stopOnError: false },
     );
+    if (providerRegistryError) {
+      throw providerRegistryError.error;
+    }
     const outputs: MediaUnderstandingOutput[] = [];
     const decisions: MediaUnderstandingDecision[] = [];
     const audioAttachmentIndexes = new Set<number>();
@@ -274,17 +233,59 @@ export async function applyMediaUnderstanding(params: {
           });
     // Only processed capabilities have decisions, so audio-only runs cannot
     // add markers for image/video inputs still owned by the native harness.
-    const mediaMarkers = renderMediaAttachmentMarkers({
-      attachments,
-      decisions,
-      outputs,
-      deliveredImageIndexes: params.deliveredImageIndexes,
+    const processedCapabilities = new Set(decisions.map((decision) => decision.capability));
+    const markerDecisions = ctx.MediaUnderstandingDecisions ?? [];
+    const deliveredImageIndexes = params.deliveredImageIndexes;
+    const handledIndexes = new Set(outputs.map((output) => output.attachmentIndex));
+    const mediaMarkers: AttachmentContextBlock[] = attachments.flatMap((attachment) => {
+      const capability = resolveAttachmentKind(attachment);
+      if (
+        (capability !== "image" && capability !== "audio" && capability !== "video") ||
+        !processedCapabilities.has(capability)
+      ) {
+        return [];
+      }
+      // The ACP caller resolved these exact indexes into native turn attachments;
+      // a marker would falsely claim non-delivery. Unresolved images keep theirs.
+      if (capability === "image" && deliveredImageIndexes?.has(attachment.index)) {
+        return [];
+      }
+      // A later pass can consume preflight selection without recording new dispositions.
+      const decision = markerDecisions.findLast(
+        (candidate) =>
+          candidate.capability === capability &&
+          candidate.attachmentDispositions?.[attachment.index] !== undefined,
+      );
+      if (!decision || handledIndexes.has(attachment.index)) {
+        return [];
+      }
+      const disposition = decision.attachmentDispositions?.[attachment.index];
+      // Vision-capable model → the reply runtime hydrates images natively; an
+      // absence-of-processing marker would contradict what the model sees.
+      // Recorded per-attachment failures stay visible — they are authoritative
+      // regardless of native delivery. Partial/failed native hydration remains
+      // unexplainable at this frozen-prompt stage (#122101).
+      if (
+        capability === "image" &&
+        decision.nativeVisionActive !== false &&
+        disposition?.kind !== "failed"
+      ) {
+        return [];
+      }
+      const text = disposition ? renderMediaAttachmentDisposition(capability, disposition) : null;
+      return text ? [{ text, consumesMarkerBudget: true }] : [];
     });
     const contextBlocks = applyAttachmentMarkerBudget([...fileContext.blocks, ...mediaMarkers]);
     if (outputs.length > 0 || contextBlocks.length > 0) {
       const fileSuffix = contextBlocks.length > 0 ? contextBlocks.join("\n\n").trim() : undefined;
-      const enrich = (body?: string) =>
-        appendFileBlocks(formatMediaUnderstandingBody({ body, outputs }), fileSuffix);
+      const enrich = (body?: string) => {
+        const formatted = formatMediaUnderstandingBody({ body, outputs });
+        if (fileSuffix === undefined) {
+          return formatted;
+        }
+        const base = typeof formatted === "string" ? formatted.trim() : "";
+        return base ? `${base}\n\n${fileSuffix}`.trim() : fileSuffix;
+      };
       // Channels may carry preflight transcripts only in prepared agent text.
       // Enrich that base before changing the separate transport envelope.
       ctx.agentText = enrich(ctx.agentText ?? ctx.BodyForAgent ?? ctx.Body);
@@ -299,12 +300,27 @@ export async function applyMediaUnderstanding(params: {
             enableLocalPathSelfServe: (
               contexts: MsgContext[],
               stagedPaths?: ReadonlyMap<number, string>,
-            ) =>
-              enableLocalPathSelfServe(
-                fileContext.localPathSelfServeUpgrades,
-                contexts,
-                stagedPaths,
-              ),
+            ) => {
+              const upgrades = fileContext.localPathSelfServeUpgrades;
+              for (const context of contexts) {
+                for (const upgrade of upgrades) {
+                  const stagedPath = stagedPaths?.get(upgrade.attachmentIndex);
+                  if (stagedPaths && !stagedPath) {
+                    continue;
+                  }
+                  const selfServe = upgrade.render(stagedPath);
+                  if (!selfServe) {
+                    continue;
+                  }
+                  for (const field of SELF_SERVE_CONTEXT_FIELDS) {
+                    const value = context[field];
+                    if (typeof value === "string") {
+                      context[field] = value.replace(upgrade.fallback, selfServe);
+                    }
+                  }
+                }
+              }
+            },
           }
         : {}),
     };

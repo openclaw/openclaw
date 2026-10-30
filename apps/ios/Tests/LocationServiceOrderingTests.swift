@@ -19,9 +19,10 @@ struct LocationServiceOrderingTests {
         let forwarded = XCTestExpectation(description: "significant change forwarded")
         forwarded.assertForOverFulfill = true
         var result: CLLocation?
+        let requestID = UUID()
         let waiter = Task { @MainActor in
             result = try await withCheckedThrowingContinuation { continuation in
-                service.locationRequestContinuation = continuation
+                service.locationRequestContinuations[requestID] = continuation
                 registered.fulfill()
             }
             completed.fulfill()
@@ -30,8 +31,7 @@ struct LocationServiceOrderingTests {
             waiter.cancel()
             service.stopMonitoringSignificantLocationChanges()
             service.locationManager.delegate = nil
-            if result == nil, let continuation = service.locationRequestContinuation {
-                service.locationRequestContinuation = nil
+            if result == nil, let continuation = service.locationRequestContinuations.removeValue(forKey: requestID) {
                 continuation.resume(throwing: CancellationError())
             }
         }
@@ -40,7 +40,6 @@ struct LocationServiceOrderingTests {
         service.startMonitoringSignificantLocationChanges { location in
             MainActor.assumeIsolated {
                 #expect(service.locationRequestContinuations.isEmpty)
-                #expect(service.locationRequestContinuation == nil)
                 #expect(location === latest)
                 forwarded.fulfill()
             }

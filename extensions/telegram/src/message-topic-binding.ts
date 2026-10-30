@@ -1,5 +1,5 @@
 // Telegram provider-owned authorization for message mutations in forum topics.
-import { normalizeAccountId, normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-core";
+import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-core";
 import type {
   ChannelMessageActionContext,
   ChannelThreadingToolContext,
@@ -29,12 +29,7 @@ const TOPIC_BINDING_ERROR =
 const CONVERSATION_BINDING_ERROR =
   "Delegated Telegram conversation read requires the exact current chat and account.";
 
-function rejectUnboundTopicMutation(): never {
-  throw new Error(TOPIC_BINDING_ERROR);
-}
-
 type CurrentTelegramConversation = {
-  hasThreadContext: boolean;
   matchesChat: boolean;
   threadId?: number;
 };
@@ -44,7 +39,7 @@ function resolveCurrentTelegramConversation(
   chatId: string,
 ): CurrentTelegramConversation {
   if (toolContext?.currentChannelProvider?.trim().toLowerCase() !== "telegram") {
-    return { hasThreadContext: false, matchesChat: false };
+    return { matchesChat: false };
   }
   const targets = [toolContext.currentChannelId, toolContext.currentMessagingTarget].filter(
     (value): value is string => typeof value === "string" && Boolean(value.trim()),
@@ -59,11 +54,7 @@ function resolveCurrentTelegramConversation(
     targets.length > 0 &&
     parsedTargets.every((target) => target.chatId === chatId) &&
     (threadId === undefined || threadIds.every((value) => value === threadId));
-  return {
-    hasThreadContext: threadIds.length > 0,
-    matchesChat,
-    ...(threadId !== undefined ? { threadId } : {}),
-  };
+  return { matchesChat, threadId };
 }
 
 function resolveMatchingTelegramRequesterAccount(params: {
@@ -75,11 +66,7 @@ function resolveMatchingTelegramRequesterAccount(params: {
     params.accountId ?? resolveDefaultTelegramAccountId(params.cfg),
   );
   const requesterAccountId = normalizeOptionalAccountId(params.context?.requesterAccountId);
-  return accountId &&
-    requesterAccountId &&
-    normalizeAccountId(accountId) === normalizeAccountId(requesterAccountId)
-    ? accountId
-    : undefined;
+  return accountId && accountId === requesterAccountId ? accountId : undefined;
 }
 
 export function resolveTelegramConversationReadChatId(params: {
@@ -132,15 +119,15 @@ export async function resolveTelegramMessageMutationChatId(params: {
   );
   const selectedAccountId = resolveMatchingTelegramRequesterAccount(params);
   if (!selectedAccountId || !currentConversation.matchesChat) {
-    return rejectUnboundTopicMutation();
+    throw new Error(TOPIC_BINDING_ERROR);
   }
 
   const threadId = target.messageThreadId ?? currentConversation.threadId;
-  if (threadId === undefined && !currentConversation.hasThreadContext) {
+  if (threadId === undefined) {
     return target.chatId;
   }
-  if (threadId === undefined || currentConversation.threadId !== threadId) {
-    return rejectUnboundTopicMutation();
+  if (currentConversation.threadId !== threadId) {
+    throw new Error(TOPIC_BINDING_ERROR);
   }
 
   const currentMessageId = parseStrictPositiveInteger(
@@ -168,7 +155,7 @@ export async function resolveTelegramMessageMutationChatId(params: {
     messageId: String(params.messageId),
   });
   if (!hasProviderObservedTelegramThreadBinding(cached, threadId)) {
-    return rejectUnboundTopicMutation();
+    throw new Error(TOPIC_BINDING_ERROR);
   }
   return target.chatId;
 }

@@ -48,19 +48,11 @@ enum NodeDisplayName {
         }
 
         let trimmedDevice = deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let normalized = Self.normalizedDeviceName(trimmedDevice) {
-            return normalized
+        let lower = trimmedDevice.lowercased()
+        if lower.contains("iphone") || lower.contains("ipad") || lower.contains("ios") {
+            return trimmedDevice
         }
 
         return Self.defaultValue(for: interfaceIdiom, isIOSAppOnMac: false)
-    }
-
-    private static func normalizedDeviceName(_ deviceName: String) -> String? {
-        guard !deviceName.isEmpty else { return nil }
-        let lower = deviceName.lowercased()
-        if lower.contains("iphone") || lower.contains("ipad") || lower.contains("ios") {
-            return deviceName
-        }
-        return nil
     }
 }

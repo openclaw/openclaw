@@ -1,53 +1,113 @@
-// Memory Wiki plugin module: shared guarded write for vault pages.
+import {
+  replaceManagedMarkdownBlock,
+  withTrailingNewline,
+} from "openclaw/plugin-sdk/memory-host-markdown";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { decodeWikiPageUtf8, parseWikiMarkdown } from "./markdown.js";
 
 type VaultRoot = Awaited<ReturnType<typeof fsRoot>>;
 
-type FileStatLike = {
-  isFile?: unknown;
-  nlink?: unknown;
-};
-
-export function isRegularFileStat(value: unknown): value is FileStatLike & { nlink: number } {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const stat = value as FileStatLike;
-  const isFile =
-    typeof stat.isFile === "function"
-      ? (stat.isFile as () => boolean).call(stat)
-      : stat.isFile === true;
-  return isFile && typeof stat.nlink === "number";
-}
-
-// A concurrent atomic rewrite (write-temp + rename) of the same vault page by
-// the memory bridge re-export makes fs-safe's opened-fd identity check fail with
-// `path-mismatch` (see @openclaw/fs-safe opened-realpath): the file we opened is
-// replaced under us mid-operation. It is transient (resolves sub-ms) and benign,
-// so a short retry closes the window. Symlink/path-alias swaps and persistent
-// guard failures (e.g. a directory collision) carry their own code and still
-// hard-fail unchanged below.
+// Atomic replacement can invalidate fs-safe's opened-file identity check.
+// Retry only that race; symlink and path-alias failures remain fatal.
 const isConcurrentRewriteRace = (error: unknown): boolean =>
   error instanceof FsSafeError && error.code === "path-mismatch";
 
-/**
- * Write `content` to a vault page, breaking an accidental hardlink first, and map
- * fs-safe guard failures to a labeled error. A transient concurrent-rewrite race
- * is retried briefly; on exhaustion (or any other guard failure) the error
- * propagates so the caller's safety contract is unchanged.
- */
+export async function readWikiPageStat(vault: VaultRoot, pagePath: string) {
+  return vault.stat(pagePath).catch((error: unknown) => {
+    if (
+      error instanceof FsSafeError &&
+      (error.code === "not-found" || error.code === "path-alias")
+    ) {
+      return null;
+    }
+    throw error;
+  });
+}
+
+export function isMissingWikiPageError(error: unknown): boolean {
+  return error instanceof FsSafeError && error.code === "not-found";
+}
+
+export async function readExistingWikiPage(
+  read: () => Promise<string>,
+  emptyOn: (error: unknown) => boolean,
+  fallback: () => string = () => "",
+): Promise<string> {
+  try {
+    return await read();
+  } catch {
+    // Retry before classifying absence so a transient read cannot erase Notes.
+    try {
+      return await read();
+    } catch (error) {
+      if (emptyOn(error)) {
+        return fallback();
+      }
+      throw error;
+    }
+  }
+}
+
+export function readExistingWikiPageUtf8(
+  vault: VaultRoot,
+  relativePath: string,
+  fallback: () => string,
+): Promise<string> {
+  return readExistingWikiPage(
+    async () => decodeWikiPageUtf8(await vault.readBytes(relativePath), relativePath),
+    isMissingWikiPageError,
+    fallback,
+  );
+}
+
+export async function writeManagedMarkdownFile(params: {
+  rootDir: string;
+  relativePath: string;
+  title: string;
+  startMarker: string;
+  endMarker: string;
+  body: string;
+  signal?: AbortSignal;
+}): Promise<boolean> {
+  params.signal?.throwIfAborted();
+  const root = await fsRoot(params.rootDir);
+  const original = await readExistingWikiPageUtf8(
+    root,
+    params.relativePath,
+    () => `# ${params.title}\n`,
+  );
+  params.signal?.throwIfAborted();
+  // Generated indexes bypass page discovery. Parse existing content here so
+  // managed-block updates cannot rewrite malformed frontmatter.
+  parseWikiMarkdown(original);
+  const updated = replaceManagedMarkdownBlock({
+    original,
+    heading: "## Generated",
+    startMarker: params.startMarker,
+    endMarker: params.endMarker,
+    body: params.body,
+  });
+  const rendered = withTrailingNewline(updated);
+  if (rendered === original) {
+    return false;
+  }
+  await root.write(params.relativePath, rendered);
+  params.signal?.throwIfAborted();
+  return true;
+}
+
 export async function writeGuardedVaultPage(params: {
   vault: VaultRoot;
   pagePath: string;
   content: string;
-  pageStat: unknown;
+  pageStat: Awaited<ReturnType<VaultRoot["stat"]>> | null;
   pageLabel: string;
 }): Promise<void> {
   try {
     await retryAsync(
       async () => {
-        if (isRegularFileStat(params.pageStat) && params.pageStat.nlink > 1) {
+        if (params.pageStat?.isFile && params.pageStat.nlink > 1) {
           await params.vault.remove(params.pagePath);
         }
         await params.vault.write(params.pagePath, params.content);

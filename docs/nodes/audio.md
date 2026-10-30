@@ -15,7 +15,7 @@ When audio understanding is enabled (or auto-detected), OpenClaw:
 
 1. Locates the first audio attachment (local path or URL) and downloads it if needed.
 2. Enforces `maxBytes` before sending to each model entry.
-3. Runs the first eligible model entry in order (provider or CLI); if an entry fails or skips (size/timeout), the next entry is tried.
+3. Runs the first eligible model entry in order (provider or CLI); if an entry fails or skips (size/timeout), the next entry is tried. A provider that returns an empty transcript for audio without detected speech is skipped, not failed; a batch response missing a required transcript field in any channel is still a failure. A Deepgram Flux stream that closes cleanly after flushing audio without any turns also represents silence.
 4. On success, replaces `Body` with an `[Audio]` block and sets `{{Transcript}}`.
 
 When transcription succeeds, `CommandBody`/`RawBody` are also set to the transcript so slash commands still work. With `--verbose`, logs show when transcription runs and when it replaces the body.
@@ -45,7 +45,7 @@ If you have not configured models and `tools.media.audio.enabled` is not `false`
    - `parakeet-mlx` on Apple Silicon (MLX-capable; device use remains unobserved)
    - `whisper` (Python CLI; downloads models automatically)
 
-Install/link provenance is capability evidence, not execution evidence. It never moves a candidate ahead of CPU sherpa by itself. OpenClaw does not load a model during setup or status checks just to probe a backend.
+Install/link provenance is capability evidence, not execution evidence. It never moves a candidate ahead of CPU sherpa by itself. OpenClaw does not load a model during setup or status checks just to check a backend.
 Auto-detected whisper.cpp keeps its normal model-run logs enabled so OpenClaw can record the upstream `using … backend` line. Explicit CLI entries keep their configured output flags.
 
 Gemini CLI and Antigravity are not auto-detected for media understanding. Audio
@@ -153,7 +153,7 @@ installation, run them once for that agent.
 
 The `profile` field is not required when OpenClaw can unambiguously select a
 compatible API-key profile, but it is strongly recommended. Explicit selection
-keeps audio routing deterministic if another OpenAI API-key profile exists now or
+keeps audio routing fixed if another OpenAI API-key profile exists now or
 is added later. The auth order still keeps the OAuth profile first for ordinary
 provider resolution.
 
@@ -263,6 +263,8 @@ provider-wide rather than scoped to the audio model entry.
 - OpenAI auto-detect default is `gpt-4o-transcribe`; set `model: "gpt-4o-mini-transcribe"` for a cheaper/faster option.
 - Transcript is available to templates as `{{Transcript}}`.
 - `tools.media.audio.echoTranscript` is off by default; `echoFormat` accepts a `{transcript}` placeholder.
+- Telegram echoes with an account, chat, and source message ID use the durable outbound queue to suppress same-source replays. Completed receipts are retained for 24 hours, capped at 2,000 receipts across Telegram transcript echoes; replay after pruning can echo again. If durable admission fails, the keyed echo is skipped while transcription and agent replies continue.
+- For deliverable channels (Telegram, Discord, WhatsApp, …) the echo is sent as an outbound message before agent processing. WebChat/Control UI and the mobile apps are internal clients, not deliverable channels: there the formatted transcript is persisted as part of the user's own turn text in the session transcript, so it stays visible in `chat.history` after reload. WebChat never becomes an outbound channel for the echo. Internal clients use the configured audio attachment selection for this transcription and reuse that selection during later media processing. An empty `echoFormat` or one without `{transcript}` leaves speech processing to the normal media pipeline and adds no transcript text to history.
 - CLI stdout is capped at 5MB; keep CLI output concise.
 - CLI `args` should use `{{AttachmentPath}}` for the local audio file path. Run `openclaw doctor --fix` to migrate deprecated `{input}` placeholders from older `audio.transcription.command` configs (retired key: `audio.transcription`, replaced by `tools.media.models`). `{{MediaPath}}` remains a deprecated compatibility alias.
 - `tools.media.concurrency` bounds media tasks; it is not a GPU scheduler.
@@ -304,7 +306,7 @@ On channels that support audio preflight, OpenClaw transcribes audio **before** 
 ## Gotchas
 
 - Scope rules use first-match-wins; `chatType` is normalized to `direct`, `group`, or `channel`.
-- Ensure your CLI exits 0 and prints plain text; JSON output needs to be massaged via `jq -r .text`.
+- Check that your CLI exits 0 and prints plain text; JSON output needs to be massaged via `jq -r .text`.
 - Known file-output modes are authoritative: an empty or missing inferred transcript file produces no transcript instead of falling back to CLI progress output.
 - For `parakeet-mlx`, use `--output-format txt` (or `all`) with `--output-dir` and the default `{filename}` output template. The upstream `PARAKEET_OUTPUT_FORMAT` and `PARAKEET_OUTPUT_TEMPLATE` environment variables are also honored. OpenClaw reads `<output-dir>/<media-basename>.txt`; the default `srt` format, other formats, and custom output templates continue to use stdout.
 - Keep timeouts reasonable (`timeoutSeconds`, default 60s) to avoid blocking the reply queue.

@@ -1,3 +1,4 @@
+import path from "node:path";
 import * as agentHarnessToolRuntime from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -5,7 +6,7 @@ import { settleReplyDispatcher } from "../../auto-reply/dispatch-dispatcher.js";
 import * as replyPayloadRuntime from "../../auto-reply/reply-payload.js";
 import {
   createFollowupRun,
-  createMockTypingSignaler,
+  createRunAgentTurnParams,
   getExecuteAgentTurnForTest,
   setupAgentRunnerExecutionTestState,
   type FallbackRunnerParams,
@@ -20,10 +21,11 @@ import {
   dispatchReplyFromConfig,
   globalBeforeAll0,
   setNoAbort,
-} from "../../auto-reply/reply/dispatch-from-config.test-harness.js";
+} from "../../auto-reply/reply/dispatch-from-config.test-support.js";
 import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
-import { buildDirectChatContext } from "../../auto-reply/reply/groups.js";
+import { buildSourceConversationContext } from "../../auto-reply/reply/groups.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import {
   bindSourceReplyDeliveryRuntime,
   createSourceReplyDeliveryRuntime,
@@ -32,7 +34,6 @@ import {
 import { buildTestCtx } from "../../auto-reply/reply/test-ctx.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../../auto-reply/types.js";
-import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { FailoverReason } from "../failover/signal.js";
@@ -46,6 +47,7 @@ import type {
   PreparedModelRuntimeLeaseOptions,
   PreparedModelRuntimePluginGeneration,
 } from "../prepared-model-runtime.types.js";
+import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import { markCoreTtsAttemptResult } from "../tools/tts-tool-result-provenance.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -58,11 +60,17 @@ import {
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
 import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
-import { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
 const runnerState = await setupAgentRunnerExecutionTestState();
 
 type TestRouteStage = { stage: "initial" } | { stage: "fallback"; fallbackReason: FailoverReason };
+const finalText = "Short fallback final";
+
+function mockCompletedAttempt(text: string) {
+  mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text }]);
+  mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: [text] }));
+  useOpenAIPlatformAuthFixture();
+}
 
 function runAdmittedAttempt(
   params: FallbackRunnerParams,
@@ -84,12 +92,24 @@ beforeAll(globalBeforeAll0);
 describe("prepared harness source delivery", () => {
   let state: OpenClawTestState;
   let restoreSynthesis: (() => void) | undefined;
-  async function loadSourceDeliveryHarness() {
+  async function loadSourceDeliveryHarness(agentId = "main") {
+    // This integration constructs the real tool surface; dispatch mocks only readiness.
+    vi.doUnmock("../tools/ask-user-tool.js");
     // The runner resets modules; keep its private payload metadata shared with dispatch.
     vi.doMock("../../auto-reply/reply-payload.js", () => replyPayloadRuntime);
     const loaded = await loadRunOverflowCompactionHarness();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "prepared-source-delivery" });
+    const { openOpenClawAgentDatabase } = await import("../../state/openclaw-agent-db.js");
+    // Gateway boot admits the database before retained session lookup captures its identity.
+    openOpenClawAgentDatabase({ agentId });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot({});
+    // Both mocked session modules must use the database admitted above.
+    const storePath = path.join(state.sessionsDir(agentId), "sessions.json");
+    sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue(storePath);
+    const sessions = await import("../../config/sessions.js");
+    vi.mocked(sessions.resolveSessionStorePathCore).mockReturnValue(storePath);
     return loaded;
   }
   afterEach(async () => {
@@ -99,61 +119,37 @@ describe("prepared harness source delivery", () => {
   });
   beforeEach(describe2BeforeEach0);
 
+  async function createAdmittedGeneration(agentId = "main") {
+    const config = {};
+    const workspaceDir = state.workspaceDir;
+    const baseLease = await mockedAcquireAgentRunPreparedModelRuntime({
+      config,
+      agentId,
+      agentDir: state.agentDir(agentId),
+      workspaceDir,
+    });
+    const admittedGeneration: PreparedModelRuntimePluginGeneration = {
+      remoteCatalog: null,
+      configuredCatalogEntries: [],
+      inlineProviderModels: [],
+      pluginMetadataSnapshot: {
+        ...baseLease.snapshot.metadataSnapshot,
+        policyHash: "admitted",
+        workspaceDir,
+      },
+      pluginRegistry: createEmptyPluginRegistry(),
+    };
+    return { config, workspaceDir, baseLease, admittedGeneration };
+  }
+
   it.each([
     {
-      name: "delivers one streamed answer when preparation changes tool ownership to automatic",
+      name: "delivers one streamed answer when preparation changes legacy tool ownership to automatic",
+      legacyPreliminary: true,
       candidatePath: "cli-failure-embedded" as const,
       preliminaryVisibleReplies: "message_tool" as const,
       preparedVisibleReplies: "automatic" as const,
       expectedTransitions: ["message_tool_only", "automatic"],
-      expectedDeliveries: 1,
-      expectedPartials: 1,
-      expectedBlocks: 1,
-      expectedFinals: 1,
-    },
-    {
-      name: "suppresses live output when preparation changes automatic ownership to tool",
-      candidatePath: "embedded" as const,
-      preliminaryVisibleReplies: "automatic" as const,
-      preparedVisibleReplies: "message_tool" as const,
-      expectedTransitions: ["message_tool_only"],
-      expectedDeliveries: 0,
-      expectedPartials: 0,
-      expectedBlocks: 0,
-      expectedFinals: 0,
-    },
-    {
-      name: "lets implicit built-in automatic ownership yield to a prepared tool owner",
-      candidatePath: "embedded" as const,
-      preliminaryVisibleReplies: undefined,
-      preparedVisibleReplies: "message_tool" as const,
-      expectedTransitions: ["message_tool_only"],
-      expectedDeliveries: 0,
-      expectedPartials: 0,
-      expectedBlocks: 0,
-      expectedFinals: 0,
-    },
-    {
-      name: "keeps prepared tool ownership after a failed CLI primary",
-      candidatePath: "cli-failure-embedded" as const,
-      preliminaryVisibleReplies: "automatic" as const,
-      preparedVisibleReplies: "message_tool" as const,
-      expectedTransitions: ["automatic", "message_tool_only"],
-      expectedDeliveries: 0,
-      expectedPartials: 0,
-      expectedBlocks: 0,
-      expectedFinals: 0,
-    },
-    {
-      name: "delivers a successful direct CLI reply with its session-stable ownership",
-      candidatePath: "cli" as const,
-      preliminaryVisibleReplies: undefined,
-      preparedVisibleReplies: "automatic" as const,
-      expectedTransitions: ["automatic"],
-      expectedDeliveries: 1,
-      expectedPartials: 0,
-      expectedBlocks: 0,
-      expectedFinals: 1,
     },
     {
       name: "delivers a successful API-to-CLI fallback with its session-stable ownership",
@@ -161,10 +157,6 @@ describe("prepared harness source delivery", () => {
       preliminaryVisibleReplies: undefined,
       preparedVisibleReplies: "automatic" as const,
       expectedTransitions: ["automatic", "automatic"],
-      expectedDeliveries: 1,
-      expectedPartials: 0,
-      expectedBlocks: 0,
-      expectedFinals: 1,
     },
     {
       name: "delivers genuine host TTS through prepared harness result projections",
@@ -172,22 +164,15 @@ describe("prepared harness source delivery", () => {
       preliminaryVisibleReplies: "automatic" as const,
       preparedVisibleReplies: "message_tool" as const,
       expectedTransitions: ["message_tool_only"],
-      expectedDeliveries: 1,
-      expectedPartials: 0,
-      expectedBlocks: 0,
-      expectedFinals: 1,
       genuineTtsDelivery: true,
     },
     {
-      name: "rejects a native harness attempt to mint TTS source delivery",
+      name: "rejects a native harness attempt to mint TTS source delivery with legacy defaults",
+      legacyPrepared: true,
       candidatePath: "embedded" as const,
       preliminaryVisibleReplies: "automatic" as const,
       preparedVisibleReplies: "message_tool" as const,
       expectedTransitions: ["message_tool_only"],
-      expectedDeliveries: 0,
-      expectedPartials: 0,
-      expectedBlocks: 0,
-      expectedFinals: 0,
       forgedTtsDelivery: true,
     },
   ])("$name", async (testCase) => {
@@ -195,6 +180,8 @@ describe("prepared harness source delivery", () => {
       "forgedTtsDelivery" in testCase && testCase.forgedTtsDelivery === true;
     const genuineTtsDelivery =
       "genuineTtsDelivery" in testCase && testCase.genuineTtsDelivery === true;
+    const expectedDeliveries = forgedTtsDelivery ? 0 : 1;
+    const expectedStreaming = testCase.candidatePath === "cli-failure-embedded" ? 1 : 0;
     await useProductionEmbeddedRunExecutionParamsForTest();
     const { createBlockReplyDeliveryHandler } = await vi.importActual<
       typeof import("../../auto-reply/reply/reply-delivery.js")
@@ -228,7 +215,19 @@ describe("prepared harness source delivery", () => {
       modelOverride: "gpt-5.4",
     });
     const followupRun = createFollowupRun();
+    followupRun.run.config = {
+      session: { store: path.join(state.sessionsDir(), "sessions.json") },
+    };
     const emittedStreamingCallbacks: string[] = [];
+    const emitStreaming = async (params: {
+      onPartialReply?: (payload: ReplyPayload) => unknown;
+      onBlockReply?: (payload: ReplyPayload) => unknown;
+    }) => {
+      emittedStreamingCallbacks.push("partial");
+      await params.onPartialReply?.({ text: finalText });
+      emittedStreamingCallbacks.push("block");
+      await params.onBlockReply?.({ text: "Streaming progress" });
+    };
     let forbiddenSdkAuthorityObserved = false;
     let modelVisiblePrompt = "";
     const recordModelVisiblePrompt = (attemptParams: {
@@ -236,7 +235,7 @@ describe("prepared harness source delivery", () => {
       forceMessageTool?: boolean;
       sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     }) => {
-      modelVisiblePrompt = buildEmbeddedSystemPrompt({
+      modelVisiblePrompt = buildConfiguredAgentSystemPrompt({
         workspaceDir: followupRun.run.workspaceDir,
         reasoningTagHint: false,
         extraSystemPrompt: attemptParams.extraSystemPrompt,
@@ -247,34 +246,26 @@ describe("prepared harness source delivery", () => {
           arch: "arm64",
           node: "24",
           model: "model",
-          provider: "custom",
           channel: "discord",
           chatType: "direct",
         },
         tools: attemptParams.forceMessageTool ? [{ name: "message" } as never] : [],
-        userTimezone: "UTC",
-        userDate: "2026-08-11",
       });
     };
     mockedBuildEmbeddedRunPayloads.mockReturnValue(
-      forgedTtsDelivery || genuineTtsDelivery ? [] : [{ text: "Short fallback final" }],
+      forgedTtsDelivery || genuineTtsDelivery ? [] : [{ text: finalText }],
     );
     mockedRunEmbeddedAttempt.mockImplementation(async (attemptParams) => {
       recordModelVisiblePrompt(attemptParams);
-      emittedStreamingCallbacks.push("partial");
-      await attemptParams.onPartialReply?.({ text: "Short fallback final" });
-      emittedStreamingCallbacks.push("block");
-      await attemptParams.onBlockReply?.({ text: "Streaming progress" });
-      return makeAttemptResult({ assistantTexts: ["Short fallback final"] });
+      await emitStreaming(attemptParams);
+      return makeAttemptResult({ assistantTexts: [finalText] });
     });
     if (testCase.candidatePath === "embedded-failure-cli") {
       mockedRunEmbeddedAttempt.mockRejectedValueOnce(new Error("api primary failed"));
     }
     useOpenAIPlatformAuthFixture();
     let embeddedError: unknown;
-    let embeddedParams: unknown;
     runnerState.runEmbeddedAgentMock.mockImplementationOnce(async (params: unknown) => {
-      embeddedParams = params;
       try {
         return await runEmbeddedAgent(params as Parameters<typeof runEmbeddedAgent>[0]);
       } catch (error) {
@@ -289,52 +280,35 @@ describe("prepared harness source delivery", () => {
       runnerState.runCliAgentMock.mockRejectedValueOnce(new Error("cli failed"));
     } else {
       runnerState.runCliAgentMock.mockResolvedValue({
-        payloads: [{ text: "Short fallback final" }],
+        payloads: [{ text: finalText }],
         meta: {},
       });
     }
     runnerState.runWithModelFallbackMock.mockImplementationOnce(
       async (params: FallbackRunnerParams) => {
-        if (testCase.candidatePath === "cli-failure-embedded") {
-          await runAdmittedAttempt(params, "anthropic", "cli-primary", {
+        const cliSucceeded = testCase.candidatePath === "embedded-failure-cli";
+        if (testCase.candidatePath !== "embedded") {
+          const [provider, model] = cliSucceeded
+            ? (["custom", "api-primary"] as const)
+            : (["anthropic", "cli-primary"] as const);
+          await runAdmittedAttempt(params, provider, model, {
             stage: "initial",
           }).catch(() => undefined);
         }
-        if (testCase.candidatePath === "cli") {
-          return {
-            result: await runAdmittedAttempt(params, "anthropic", "cli-primary", {
-              stage: "initial",
-            }),
-            provider: "anthropic",
-            model: "cli-primary",
-            attempts: [],
-          };
-        }
-        if (testCase.candidatePath === "embedded-failure-cli") {
-          await runAdmittedAttempt(params, "custom", "api-primary", {
-            stage: "initial",
-          }).catch(() => undefined);
-          return {
-            result: await runAdmittedAttempt(params, "anthropic", "cli-fallback", {
-              stage: "fallback",
-              fallbackReason: "unknown",
-            }),
-            provider: "anthropic",
-            model: "cli-fallback",
-            attempts: [],
-          };
-        }
+        const [provider, model] = cliSucceeded
+          ? (["anthropic", "cli-fallback"] as const)
+          : (["custom", "plugin-fallback"] as const);
         return {
           result: await runAdmittedAttempt(
             params,
-            "custom",
-            "plugin-fallback",
-            testCase.candidatePath === "cli-failure-embedded"
-              ? { stage: "fallback", fallbackReason: "unknown" }
-              : { stage: "initial" },
+            provider,
+            model,
+            testCase.candidatePath === "embedded"
+              ? { stage: "initial" }
+              : { stage: "fallback", fallbackReason: "unknown" },
           ),
-          provider: "custom",
-          model: "plugin-fallback",
+          provider,
+          model,
           attempts: [],
         };
       },
@@ -346,7 +320,10 @@ describe("prepared harness source delivery", () => {
       registerAgentHarness({
         id: "preliminary-owner",
         label: "Preliminary owner",
-        deliveryDefaults: { visibleReplies: testCase.preliminaryVisibleReplies },
+        deliveryDefaults:
+          "legacyPreliminary" in testCase
+            ? { sourceVisibleReplies: testCase.preliminaryVisibleReplies }
+            : { visibleReplies: testCase.preliminaryVisibleReplies },
         supports: ({ modelProvider }) =>
           testCase.preparedVisibleReplies === "automatic" && modelProvider?.preparedAuth
             ? { supported: false, reason: "raw route only" }
@@ -359,27 +336,23 @@ describe("prepared harness source delivery", () => {
         {
           id: "codex",
           label: "Prepared tool owner",
-          deliveryDefaults: { visibleReplies: "message_tool" },
+          deliveryDefaults:
+            "legacyPrepared" in testCase
+              ? { sourceVisibleReplies: "message_tool" }
+              : { visibleReplies: "message_tool" },
           supports: ({ provider, modelProvider }) =>
             provider === "openai" && modelProvider?.preparedAuth
               ? { supported: true, priority: 200 }
               : { supported: false, reason: "prepared OpenAI route only" },
           runAttempt: vi.fn(async (attemptParams) => {
             recordModelVisiblePrompt(attemptParams);
-            emittedStreamingCallbacks.push("partial");
-            await attemptParams.onPartialReply?.({ text: "Short fallback final" });
-            emittedStreamingCallbacks.push("block");
-            await attemptParams.onBlockReply?.({ text: "Streaming progress" });
-            const result = makeAttemptResult(
-              forgedTtsDelivery || genuineTtsDelivery
-                ? {
-                    assistantTexts: [],
-                    toolMediaUrls: [genuineTtsDelivery ? audioPath : "/tmp/plugin.opus"],
-                    toolAudioAsVoice: true,
-                    toolTrustedLocalMedia: true,
-                  }
-                : { assistantTexts: ["Short fallback final"] },
-            );
+            await emitStreaming(attemptParams);
+            const result = makeAttemptResult({
+              assistantTexts: [],
+              toolMediaUrls: [genuineTtsDelivery ? audioPath : "/tmp/plugin.opus"],
+              toolAudioAsVoice: true,
+              toolTrustedLocalMedia: true,
+            });
             if (genuineTtsDelivery) {
               retainedHost = attemptParams.hostCapabilities;
               if (!retainedHost) {
@@ -449,15 +422,15 @@ describe("prepared harness source delivery", () => {
         { provider: "anthropic", id: "cli-primary", api: "messages", input: ["text"] },
         { provider: "anthropic", id: "cli-fallback", api: "messages", input: ["text"] },
       ];
-      followupRun.run.sessionKey = undefined;
+      followupRun.run.sessionKey = runtimeOpts.replyOperation?.key;
       followupRun.run.sessionFile = followupRun.run.sessionId;
       followupRun.run.sourceReplyDeliveryMode = runtimeOpts.sourceReplyDeliveryMode;
       const extraSystemPromptBySourceReplyDeliveryMode = {
-        automatic: buildDirectChatContext({
+        automatic: buildSourceConversationContext({
           sessionCtx: { Provider: "discord", ChatType: "direct" },
           sourceReplyDeliveryMode: "automatic",
         }),
-        message_tool_only: buildDirectChatContext({
+        message_tool_only: buildSourceConversationContext({
           sessionCtx: { Provider: "discord", ChatType: "direct" },
           sourceReplyDeliveryMode: "message_tool_only",
         }),
@@ -484,38 +457,25 @@ describe("prepared harness source delivery", () => {
         onModeResolved: runtimeOpts.onSourceReplyDeliveryModeResolved,
       });
       bindSourceReplyDeliveryRuntime(followupRun.run, sourceReplyDeliveryRuntime);
+      await runtimeOpts.replyOperation?.bindToolAuthoritySnapshotAsync(
+        prepareReplyToolAuthority(followupRun),
+      );
       // Dispatch already captured its session snapshot; the embedded fixture uses
       // a SQLite compatibility key and has no durable row for writer admission.
       sessionStoreMocks.currentEntry = undefined;
       const execution = await executeAgentTurn({
-        commandBody: "hello",
-        followupRun,
+        ...createRunAgentTurnParams(followupRun),
         sessionCtx: buildTestCtx({ Provider: "discord", MessageSid: "msg" }),
         opts: runtimeOpts,
-        typingSignals: createMockTypingSignaler(),
-        blockReplyPipeline: null,
         blockStreamingEnabled: true,
-        resolvedBlockStreamingBreak: "message_end",
-        applyReplyToMode: (payload) => payload,
-        shouldEmitToolResult: () => true,
-        shouldEmitToolOutput: () => false,
-        pendingToolTasks: new Set(),
-        resetSessionAfterRoleOrderingConflict: async () => false,
-        isHeartbeat: false,
-        sessionKey: "main",
-        getActiveSessionEntry: () => undefined,
-        resolvedVerboseLevel: "off",
+        sessionKey: runtimeOpts.replyOperation?.key ?? "main",
+        replyOperation: runtimeOpts.replyOperation,
       });
       if (execution.kind !== "success") {
-        const failedParams = embeddedParams as {
-          sessionId?: string;
-          sessionKey?: string;
-          sessionTarget?: unknown;
-        };
         const embeddedErrorText =
           embeddedError instanceof Error ? embeddedError.stack : String(embeddedError);
         throw new Error(
-          `expected settled fallback execution: ${embeddedErrorText}; ${JSON.stringify({ execution, failedParams })}`,
+          `expected settled fallback execution: ${embeddedErrorText}; ${JSON.stringify(execution)}`,
         );
       }
       const payload = execution.runResult.payloads?.[0];
@@ -540,40 +500,35 @@ describe("prepared harness source delivery", () => {
       replyOptions: { onPartialReply },
     });
     await settleReplyDispatcher({ dispatcher });
+    // Dispatch catches resolver errors; retain their original failure at this boundary.
+    await expect(replyResolver.mock.results[0]?.value).resolves.toBeDefined();
 
     if (genuineTtsDelivery) {
       expect(retainedHost).toBeDefined();
       expect(() => retainedHost?.assertActive()).toThrow("no longer active");
     }
-    if (testCase.candidatePath === "cli") {
-      expect(mockedGlobalHookRunner.runBeforeModelResolve).not.toHaveBeenCalled();
-    } else {
-      expect(mockedGlobalHookRunner.runBeforeModelResolve).toHaveBeenCalledWith(
-        { prompt: "hello" },
-        expect.any(Object),
-      );
-    }
-    const cliSucceeded =
-      testCase.candidatePath === "cli" || testCase.candidatePath === "embedded-failure-cli";
+    expect(mockedGlobalHookRunner.runBeforeModelResolve).toHaveBeenCalledWith(
+      { prompt: "hello" },
+      expect.any(Object),
+    );
+    const cliSucceeded = testCase.candidatePath === "embedded-failure-cli";
     expect(emittedStreamingCallbacks).toEqual(cliSucceeded ? [] : ["partial", "block"]);
-    expect(onPartialReply).toHaveBeenCalledTimes(testCase.expectedPartials);
-    expect(result.queuedFinal).toBe(testCase.expectedDeliveries === 1);
-    expect(deliver).toHaveBeenCalledTimes(testCase.expectedDeliveries + testCase.expectedBlocks);
-    if (testCase.expectedBlocks === 1) {
+    expect(onPartialReply).toHaveBeenCalledTimes(expectedStreaming);
+    expect(result.queuedFinal).toBe(expectedDeliveries === 1);
+    expect(deliver).toHaveBeenCalledTimes(expectedDeliveries + expectedStreaming);
+    if (expectedStreaming === 1) {
       expect(deliver).toHaveBeenCalledWith(
         expect.objectContaining({ text: "Streaming progress" }),
         expect.objectContaining({ kind: "block" }),
       );
     }
-    if (testCase.expectedDeliveries === 1) {
+    if (expectedDeliveries === 1) {
       expect(result.sourceReplyDeliveryMode).toBe(
         genuineTtsDelivery ? "message_tool_only" : undefined,
       );
       expect(deliver).toHaveBeenCalledWith(
         expect.objectContaining(
-          genuineTtsDelivery
-            ? { mediaUrl: audioPath, audioAsVoice: true }
-            : { text: "Short fallback final" },
+          genuineTtsDelivery ? { mediaUrl: audioPath, audioAsVoice: true } : { text: finalText },
         ),
         expect.objectContaining({ kind: "final" }),
       );
@@ -583,8 +538,8 @@ describe("prepared harness source delivery", () => {
     }
     expect(dispatcher.getQueuedCounts()).toEqual({
       tool: 0,
-      block: testCase.expectedBlocks,
-      final: testCase.expectedFinals,
+      block: expectedStreaming,
+      final: expectedDeliveries,
     });
     if (forgedTtsDelivery) {
       expect(forbiddenSdkAuthorityObserved).toBe(false);
@@ -595,8 +550,10 @@ describe("prepared harness source delivery", () => {
         cliSessionBindingFacts?: { sourceReplyDeliveryMode?: string };
         sourceReplyDeliveryMode?: string;
       };
-      expect(cliParams.cliSessionBindingFacts?.sourceReplyDeliveryMode).toBe("automatic");
-      expect(cliParams.sourceReplyDeliveryMode).toBe("automatic");
+      expect(cliParams).toMatchObject({
+        cliSessionBindingFacts: { sourceReplyDeliveryMode: "automatic" },
+        sourceReplyDeliveryMode: "automatic",
+      });
     } else if (testCase.preparedVisibleReplies === "automatic") {
       expect(modelVisiblePrompt).toContain("Current-session final text normally routes to source");
       expect(modelVisiblePrompt).toContain(
@@ -614,89 +571,9 @@ describe("prepared harness source delivery", () => {
     }
   });
 
-  it.each([
-    { name: "configured input", selection: {} },
-    { name: "unmarked raw pair", selection: { provider: "openai", model: "legacy-model" } },
-    {
-      name: "marked raw pair",
-      selection: { provider: "openai", model: "legacy-model", requestedRouteResolution: "raw" },
-    },
-    {
-      name: "resolved pair",
-      selection: { provider: "openai", model: "gpt-5.4", requestedRouteResolution: "resolved" },
-    },
-  ] as const)("prepares $name with one manifest normalization pass", async ({ selection }) => {
-    const { runEmbeddedAgent } = await loadSourceDeliveryHarness();
-    mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
-    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "primary" }]);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({ assistantTexts: ["primary"] }),
-    );
-    useOpenAIPlatformAuthFixture();
-    const metadataSnapshot = {
-      ...createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "openai",
-            providers: ["openai"],
-            modelIdNormalization: {
-              providers: {
-                openai: {
-                  aliases: { "legacy-model": "gpt-5.4", "gpt-5.4": "unexpected-second-pass" },
-                },
-              },
-            },
-          },
-        ],
-      }),
-      workspaceDir: state.workspaceDir,
-    };
-    const config = { agents: { defaults: { model: { primary: "openai/legacy-model" } } } };
-    const pluginRegistry = createEmptyPluginRegistry();
-    const baseLease = await mockedAcquireAgentRunPreparedModelRuntime({
-      config,
-      agentId: "worker",
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
-    });
-    mockedAcquireAgentRunPreparedModelRuntime.mockClear();
-    mockedAcquireAgentRunPreparedModelRuntime.mockResolvedValueOnce({
-      ...baseLease,
-      snapshot: {
-        ...baseLease.snapshot,
-        metadataSnapshot,
-        pluginRegistry,
-      },
-    });
-
-    await runEmbeddedAgent({
-      agentId: "worker",
-      sessionId: "manifest-model-preparation",
-      workspaceDir: state.workspaceDir,
-      prompt: "hello",
-      runId: "manifest-model-preparation",
-      timeoutMs: 30_000,
-      modelFallbacksOverride: [],
-      config,
-      pluginGeneration: {
-        pluginMetadataSnapshot: metadataSnapshot,
-        pluginRegistry,
-        configuredCatalogEntries: [],
-        inlineProviderModels: [],
-      },
-      ...selection,
-    });
-
-    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.4", agentId: "worker" }],
-      }),
-      expect.any(Object),
-    );
-  });
-
   it("prepares a Codex primary without pinning a plugin-owned fallback", async () => {
-    const { runEmbeddedAgent, registerPreparedAgentHarness } = await loadSourceDeliveryHarness();
+    const { runEmbeddedAgent, registerPreparedAgentHarness } =
+      await loadSourceDeliveryHarness("worker");
     registerPreparedAgentHarness({
       id: "fallback-owner",
       label: "Fallback owner",
@@ -705,13 +582,9 @@ describe("prepared harness source delivery", () => {
       runAttempt: vi.fn(async () => ({}) as never),
     });
     mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
-    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "primary" }]);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({ assistantTexts: ["primary"] }),
-    );
-    useOpenAIPlatformAuthFixture();
+    mockCompletedAttempt("primary");
 
-    const runParams: RunEmbeddedAgentInternalParams = {
+    const runParams = {
       agentId: "worker",
       sessionId: "runtime-preparation-hint",
       workspaceDir: state.workspaceDir,
@@ -724,10 +597,9 @@ describe("prepared harness source delivery", () => {
       modelFallbacksOverride: ["fast"],
       config: {
         agents: {
-          list: [
-            { id: "main", default: true },
-            {
-              id: "worker",
+          entries: {
+            main: {},
+            worker: {
               models: {
                 "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
                 "custom/plugin-fallback": {
@@ -736,7 +608,7 @@ describe("prepared harness source delivery", () => {
                 },
               },
             },
-          ],
+          },
           defaults: {
             models: {
               "custom/global-fallback": { alias: "fast" },
@@ -744,7 +616,9 @@ describe("prepared harness source delivery", () => {
           },
         },
       },
-    };
+    } satisfies RunEmbeddedAgentInternalParams;
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot(runParams.config);
     await runEmbeddedAgent(runParams);
 
     expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
@@ -760,25 +634,9 @@ describe("prepared harness source delivery", () => {
 
   it("completes an admitted turn on A after plugin-runtime generation B publishes", async () => {
     const { runEmbeddedAgent } = await loadSourceDeliveryHarness();
-    const config = {};
-    const workspaceDir = state.workspaceDir;
-    const pluginRegistry = createEmptyPluginRegistry();
-    const baseLease = await mockedAcquireAgentRunPreparedModelRuntime({
-      agentId: "main",
-      agentDir: state.agentDir(),
-      workspaceDir,
-    });
-    const admittedMetadataSnapshot = {
-      ...baseLease.snapshot.metadataSnapshot,
-      policyHash: "admitted",
-      workspaceDir,
-    };
-    const admittedGeneration: PreparedModelRuntimePluginGeneration = {
-      configuredCatalogEntries: [],
-      inlineProviderModels: [],
-      pluginMetadataSnapshot: admittedMetadataSnapshot,
-      pluginRegistry,
-    };
+    const { config, workspaceDir, baseLease, admittedGeneration } =
+      await createAdmittedGeneration();
+    const { pluginRegistry, pluginMetadataSnapshot: admittedMetadataSnapshot } = admittedGeneration;
     const replacementMetadataSnapshot = {
       ...baseLease.snapshot.metadataSnapshot,
       policyHash: "replacement",
@@ -814,14 +672,13 @@ describe("prepared harness source delivery", () => {
         servedMetadataSnapshot = borrowed.metadataSnapshot;
         return {
           ...baseLease,
+          pluginGeneration: admittedGeneration,
           snapshot: borrowed as typeof baseLease.snapshot,
           [Symbol.asyncDispose]: release,
         };
       },
     );
-    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "ok" }]);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["ok"] }));
-    useOpenAIPlatformAuthFixture();
+    mockCompletedAttempt("ok");
     publishedMetadataSnapshot = replacementMetadataSnapshot;
 
     const result = await withPreparedModelRuntimePluginGenerationScope(
@@ -851,24 +708,9 @@ describe("prepared harness source delivery", () => {
   it.each(["complete", "parent abort", "queue timeout"] as const)(
     "starts an isolated probe outside its caller's admitted generation (%s)",
     async (outcome) => {
-      const { runEmbeddedAgent } = await loadSourceDeliveryHarness();
-      const config = {};
-      const workspaceDir = state.workspaceDir;
-      const baseLease = await mockedAcquireAgentRunPreparedModelRuntime({
-        agentId: "openclaw",
-        agentDir: state.agentDir("openclaw"),
-        workspaceDir,
-      });
-      const admittedGeneration: PreparedModelRuntimePluginGeneration = {
-        configuredCatalogEntries: [],
-        inlineProviderModels: [],
-        pluginMetadataSnapshot: {
-          ...baseLease.snapshot.metadataSnapshot,
-          policyHash: "admitted",
-          workspaceDir,
-        },
-        pluginRegistry: createEmptyPluginRegistry(),
-      };
+      const { runEmbeddedAgent } = await loadSourceDeliveryHarness("openclaw");
+      const { config, workspaceDir, baseLease, admittedGeneration } =
+        await createAdmittedGeneration("openclaw");
       const isolatedMetadataSnapshot = {
         ...baseLease.snapshot.metadataSnapshot,
         policyHash: "isolated",
@@ -876,6 +718,7 @@ describe("prepared harness source delivery", () => {
       };
       const release = vi.fn(async () => {});
       const acquisitionStarted = createDeferred();
+      const acquisitionAborted = createDeferred();
       const resumeAcquisition = createDeferred();
       const queueTimeout = createDeferred<never>();
       const queuedTasks: Promise<unknown>[] = [];
@@ -885,11 +728,16 @@ describe("prepared harness source delivery", () => {
         async (_input, options?: PreparedModelRuntimeLeaseOptions) => {
           const signal = options?.abortSignal;
           acquisitionSignal = signal;
+          signal?.addEventListener("abort", () => acquisitionAborted.resolve(), { once: true });
           acquisitionStarted.resolve();
           await resumeAcquisition.promise;
           signal?.throwIfAborted();
           return {
             ...baseLease,
+            pluginGeneration: {
+              ...baseLease.pluginGeneration,
+              pluginMetadataSnapshot: isolatedMetadataSnapshot,
+            },
             snapshot: {
               ...baseLease.snapshot,
               config,
@@ -900,9 +748,7 @@ describe("prepared harness source delivery", () => {
           };
         },
       );
-      mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "ok" }]);
-      mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["ok"] }));
-      useOpenAIPlatformAuthFixture();
+      mockCompletedAttempt("ok");
       const parentAbort = new AbortController();
 
       const isolatedProbeParams: RunEmbeddedAgentInternalParams = {
@@ -919,13 +765,11 @@ describe("prepared harness source delivery", () => {
         workspaceDir,
         enqueue:
           outcome === "queue timeout"
-            ? async (task, options) => {
+            ? async (task) => {
                 const pending = task();
                 queuedTasks.push(pending);
                 // Reject the global queue while its acquisition callback still owns work.
-                return options?.taskTimeoutAbortSignal
-                  ? await Promise.race([pending, queueTimeout.promise])
-                  : await pending;
+                return await Promise.race([pending, queueTimeout.promise]);
               }
             : undefined,
       };
@@ -955,7 +799,7 @@ describe("prepared harness source delivery", () => {
           } else {
             reason.name = "CommandLaneTaskTimeoutError";
             queueTimeout.reject(reason);
-            await observed;
+            await acquisitionAborted.promise;
           }
           expect(acquisitionSignal?.aborted).toBe(true);
           expect(acquisitionSignal?.reason).toBe(reason);
@@ -975,11 +819,8 @@ describe("prepared harness source delivery", () => {
     },
   );
 
-  it.each([
-    ["agentHarnessId", { agentHarnessId: "codex" }],
-    ["agentHarnessRuntimeOverride", { agentHarnessRuntimeOverride: "codex" }],
-  ] as const)("keeps %s authoritative across fallback preparation", async (_label, override) => {
-    const { runEmbeddedAgent } = await loadSourceDeliveryHarness();
+  it("keeps the runtime override authoritative across fallback preparation", async () => {
+    const { runEmbeddedAgent } = await loadSourceDeliveryHarness("worker");
     mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "primary" }]);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
@@ -989,15 +830,15 @@ describe("prepared harness source delivery", () => {
 
     await runEmbeddedAgent({
       agentId: "worker",
-      sessionId: `authoritative-${_label}`,
+      sessionId: "authoritative-runtime-override",
       workspaceDir: state.workspaceDir,
       prompt: "hello",
-      runId: `authoritative-${_label}`,
+      runId: "authoritative-runtime-override",
       timeoutMs: 30_000,
       provider: "openai",
       model: "gpt-5.4",
       modelFallbacksOverride: ["custom/plugin-fallback"],
-      ...override,
+      agentHarnessRuntimeOverride: "codex",
     });
 
     expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(

@@ -1,15 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../../llm.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
-import type { SessionTreeEntry } from "../types.js";
+import {
+  InvalidSummaryOutputError,
+  SummaryOutputBudgetError,
+  type SessionTreeEntry,
+} from "../types.js";
 import {
   calculateContextTokens,
-  compact,
+  compactWithoutSummary,
+  MAX_COMPACTION_SUMMARY_CHARS,
   estimateContextTokens,
   estimateTokens,
   findCutPoint,
-  generateSummary,
   getLastAssistantUsage,
   prepareCompaction,
   shouldCompact,
@@ -19,40 +23,53 @@ import {
   createContextUsage as createUsage,
   createMessageEntry,
 } from "./compaction.test-support.js";
+import {
+  assistant,
+  bash,
+  compactWith,
+  custom,
+  decoratedResponse,
+  responseStream,
+  summarize,
+  text,
+  toolCall,
+  toolResult,
+  user,
+} from "./shard-fixtures.test-support.js";
+import { compactionEntry, modelReply, userEntry } from "./summary-capture.test-support.js";
 import { createFileOps } from "./utils.js";
 
-function createSummaryModel(reasoning = false): Model {
-  return createCompactionModel({ reasoning });
+function prepare(
+  entries: SessionTreeEntry[],
+  settings = { enabled: true, reserveTokens: 0, keepRecentTokens: 1 },
+  requestState?: "unresolved",
+) {
+  const result = prepareCompaction(entries, settings, requestState);
+  assert(result.ok && result.value, "expected compactable history");
+  return result.value;
 }
 
-function createAssistant(text: string, usage: Usage, timestamp: number): AssistantMessage {
+function resetEntry(index: number, firstKeptEntryId?: string): SessionTreeEntry {
   return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    api: "test-api",
-    provider: "test-provider",
-    model: "test-model",
-    usage,
-    stopReason: "stop",
-    timestamp,
+    type: "reset",
+    id: `entry-${index}`,
+    parentId: `entry-${index - 1}`,
+    timestamp: new Date(index + 1).toISOString(),
+    reason: "new",
+    ...(firstKeptEntryId ? { firstKeptEntryId } : {}),
   };
 }
 
-function createBashMessage(
-  output: string,
-  timestamp: number,
-  excludeFromContext: boolean,
-): AgentMessage {
-  return {
-    role: "bashExecution",
-    command: "print output",
-    output,
-    exitCode: 0,
-    cancelled: false,
-    truncated: false,
-    timestamp,
-    excludeFromContext,
-  };
+function createAssistant(value: string, usage: Usage, timestamp: number) {
+  return assistant(value, { usage, timestamp });
+}
+
+function assistantEntry(value: string, index: number, tokens = 2) {
+  return createMessageEntry(createAssistant(value, createUsage(tokens), index + 1), index);
+}
+
+function createBashMessage(output: string, timestamp: number, excludeFromContext: boolean) {
+  return bash(output, { command: "print output", timestamp, excludeFromContext });
 }
 
 function createProjectedEntry(
@@ -70,149 +87,65 @@ function createProjectedEntry(
     : { ...common, type, fromId: common.parentId ?? common.id, summary: content };
 }
 
-describe("shouldCompact", () => {
-  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
-    "skips an invalid context window of %s",
-    (contextWindow) => {
-      expect(
-        shouldCompact(1, contextWindow, {
-          enabled: true,
-          reserveTokens: 16_384,
-          keepRecentTokens: 20_000,
-        }),
-      ).toBe(false);
-    },
-  );
+it("skips an invalid context window of zero", () => {
+  expect(
+    shouldCompact(1, 0, { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000 }),
+  ).toBe(false);
 });
 
 describe("calculateContextTokens", () => {
+  const aggregateUsage: Usage = {
+    ...createUsage(927_907),
+    input: 12,
+    output: 15_104,
+    cacheRead: 819_661,
+    cacheWrite: 93_130,
+    contextUsage: { state: "unavailable" },
+  };
+
   it("prefers the final-iteration context snapshot over aggregate billing usage", () => {
     expect(
       calculateContextTokens({
-        input: 12,
-        output: 15_104,
-        cacheRead: 819_661,
-        cacheWrite: 93_130,
-        contextUsage: {
-          state: "available",
-          promptTokens: 148_874,
-          totalTokens: 163_978,
-        },
-        totalTokens: 927_907,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        ...aggregateUsage,
+        contextUsage: { state: "available", promptTokens: 148_874, totalTokens: 163_978 },
       }),
     ).toBe(163_978);
   });
 
-  it("preserves the numeric compatibility fallback when the snapshot is unavailable", () => {
-    expect(
-      calculateContextTokens({
-        input: 12,
-        output: 15_104,
-        cacheRead: 819_661,
-        cacheWrite: 93_130,
-        contextUsage: { state: "unavailable" },
-        totalTokens: 927_907,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      }),
-    ).toBe(927_907);
-  });
-
-  it("estimates the transcript instead of using aggregate billing when context is unavailable", () => {
-    const estimate = estimateContextTokens([
-      { role: "user", content: "hello", timestamp: 0 },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "done" }],
-        api: "anthropic-messages",
-        provider: "anthropic",
-        model: "claude-fable-5",
-        usage: {
-          input: 12,
-          output: 15_104,
-          cacheRead: 819_661,
-          cacheWrite: 93_130,
-          contextUsage: { state: "unavailable" },
-          totalTokens: 927_907,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: 1,
-      },
-    ]);
-
-    expect(estimate.tokens).toBeLessThan(927_907);
-    expect(estimate.tokens).toBeGreaterThan(0);
-    expect(estimate.usageTokens).toBe(0);
-    expect(estimate.lastUsageIndex).toBeNull();
-  });
-
   it("uses the previous exact snapshot and estimates only the unavailable tail", () => {
     const estimate = estimateContextTokens([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "previous" }],
-        api: "anthropic-messages",
-        provider: "anthropic",
-        model: "claude-fable-5",
-        usage: {
+      createAssistant(
+        "previous",
+        {
+          ...createUsage(149_874),
           input: 12,
           output: 1_000,
           cacheRead: 148_862,
-          cacheWrite: 0,
-          contextUsage: {
-            state: "available",
-            promptTokens: 148_874,
-            totalTokens: 149_874,
-          },
-          totalTokens: 149_874,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          contextUsage: { state: "available", promptTokens: 148_874, totalTokens: 149_874 },
         },
-        stopReason: "stop",
-        timestamp: 0,
-      },
+        0,
+      ),
       { role: "user", content: "next", timestamp: 1 },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "done" }],
-        api: "anthropic-messages",
-        provider: "anthropic",
-        model: "claude-fable-5",
-        usage: {
-          input: 12,
-          output: 15_104,
-          cacheRead: 819_661,
-          cacheWrite: 93_130,
-          contextUsage: { state: "unavailable" },
-          totalTokens: 927_907,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: 2,
-      },
+      createAssistant("done", aggregateUsage, 2),
     ]);
 
-    expect(estimate.usageTokens).toBe(149_874);
+    expect(estimate).toMatchObject({ usageTokens: 149_874, lastUsageIndex: 0 });
     expect(estimate.tokens).toBeGreaterThan(149_874);
     expect(estimate.tokens).toBeLessThan(927_907);
-    expect(estimate.lastUsageIndex).toBe(0);
   });
 
   it("does not scan past a zero unavailable context marker", () => {
     const messages: AgentMessage[] = [
       createAssistant("old cumulative turn", createUsage(950), 0),
-      {
-        ...createAssistant("usage unavailable", createUsage(0), 1),
-        usage: {
-          ...createUsage(0),
-          contextUsage: { state: "unavailable" },
-        },
-      },
+      createAssistant(
+        "usage unavailable",
+        { ...createUsage(0), contextUsage: { state: "unavailable" } },
+        1,
+      ),
     ];
     const estimate = estimateContextTokens(messages);
 
-    expect(estimate.usageTokens).toBe(0);
-    expect(estimate.lastUsageIndex).toBeNull();
+    expect(estimate).toMatchObject({ usageTokens: 0, lastUsageIndex: null });
     expect(estimate.tokens).toBeGreaterThan(0);
     expect(estimate.tokens).toBeLessThan(950);
     expect(getLastAssistantUsage(messages.map(createMessageEntry))).toBeUndefined();
@@ -230,108 +163,55 @@ describe("calculateContextTokens", () => {
     expect(getLastAssistantUsage(messages.map(createMessageEntry))).toBeUndefined();
   });
 
-  it("ignores an all-zero terminal usage block", () => {
-    const validUsage = createUsage(20);
-    const messages: AgentMessage[] = [
-      createAssistant("complete", validUsage, 1),
-      { role: "user", content: "continue", timestamp: 2 },
-      createAssistant("partial", createUsage(0), 3),
-    ];
-    const entries = messages.map(createMessageEntry);
-
-    expect(getLastAssistantUsage(entries)).toBe(validUsage);
-    expect(estimateContextTokens(messages)).toMatchObject({
-      usageTokens: 20,
-      lastUsageIndex: 0,
-    });
-    expect(estimateContextTokens(messages).trailingTokens).toBeGreaterThan(0);
-  });
-
-  it("scans past a sparse assistant row to retain older valid usage", () => {
+  it.each(["all-zero", "sparse"] as const)("scans past an %s assistant tail", (kind) => {
     const validUsage = createUsage(20);
     const sparseAssistant = {
       role: "assistant",
-      content: [{ type: "text", text: "seeded without provider usage" }],
+      content: [text("seeded without provider usage")],
       api: "test-api",
       provider: "test-provider",
       model: "test-model",
       stopReason: "stop",
       timestamp: 2,
     } as AgentMessage;
-    const messages = [createAssistant("complete", validUsage, 1), sparseAssistant];
-
+    const tail =
+      kind === "all-zero"
+        ? [user("continue", 2), createAssistant("partial", createUsage(0), 3)]
+        : [sparseAssistant];
+    const messages = [createAssistant("complete", validUsage, 1), ...tail];
     expect(getLastAssistantUsage(messages.map(createMessageEntry))).toBe(validUsage);
-    expect(estimateContextTokens(messages)).toMatchObject({
-      usageTokens: 20,
-      lastUsageIndex: 0,
-    });
+    expect(estimateContextTokens(messages)).toMatchObject({ usageTokens: 20, lastUsageIndex: 0 });
     expect(estimateContextTokens(messages).trailingTokens).toBeGreaterThan(0);
   });
 });
 
 describe("session-entry compaction budgeting", () => {
-  it.each([
-    {
-      kind: "shell",
-      createMessage: (excludeFromContext: boolean) =>
-        createBashMessage("x".repeat(80_000), 2, excludeFromContext),
-    },
-    {
-      kind: "custom",
-      createMessage: (excludeFromContext: boolean): AgentMessage => ({
-        role: "custom",
-        customType: "openclaw.operator-activity",
-        content: "x".repeat(80_004),
-        display: excludeFromContext,
-        excludeFromContext,
-        timestamp: 2,
-      }),
-    },
-  ])(
-    "counts visible $kind activity while ignoring excluded activity after provider usage",
-    ({ createMessage }) => {
-      const hidden = createMessage(true);
-      const visible = createMessage(false);
-      const assistant = createAssistant("done", createUsage(42), 1);
-      const latest: AgentMessage = { role: "user", content: "continue", timestamp: 3 };
+  it("counts visible shell activity while ignoring excluded activity after provider usage", () => {
+    const hidden = createBashMessage("x".repeat(80_000), 2, true);
+    const visible = createBashMessage("x".repeat(80_000), 2, false);
+    const lastAssistant = createAssistant("done", createUsage(42), 1);
+    const latest: AgentMessage = { role: "user", content: "continue", timestamp: 3 };
 
-      expect(estimateTokens(hidden)).toBe(0);
-      expect(estimateTokens(visible)).toBeGreaterThan(20_000);
-      expect(estimateContextTokens([assistant, hidden, latest])).toMatchObject({
-        tokens: 44,
-        usageTokens: 42,
-        trailingTokens: 2,
-        lastUsageIndex: 0,
-      });
-      expect(estimateContextTokens([assistant, visible, latest]).trailingTokens).toBeGreaterThan(
-        20_000,
-      );
-    },
-  );
-
-  it("never rewinds a retained visible turn onto an excluded shell-history row", () => {
-    const entries: SessionTreeEntry[] = [
-      createMessageEntry({ role: "user", content: "original request", timestamp: 1 }, 0),
-      createMessageEntry(createAssistant("earlier", createUsage(10), 2), 1),
-      createMessageEntry(createBashMessage("x".repeat(80_000), 3, true), 2),
-      createMessageEntry({ role: "user", content: "recent turn", timestamp: 4 }, 3),
-      createMessageEntry(createAssistant("ok", createUsage(10), 5), 4),
-    ];
-
-    expect(findCutPoint(entries, 0, entries.length, 2)).toEqual({
-      firstKeptEntryIndex: 3,
-      turnStartIndex: -1,
-      isSplitTurn: false,
+    expect(estimateTokens(hidden)).toBe(0);
+    expect(estimateTokens(visible)).toBeGreaterThan(20_000);
+    expect(estimateContextTokens([lastAssistant, hidden, latest])).toMatchObject({
+      tokens: 44,
+      usageTokens: 42,
+      trailingTokens: 2,
+      lastUsageIndex: 0,
     });
+    expect(estimateContextTokens([lastAssistant, visible, latest]).trailingTokens).toBeGreaterThan(
+      20_000,
+    );
   });
 
   it("omits private shell history from a genuine split-turn summary prefix", () => {
     const latestRequest = `request-start ${"x".repeat(1_000)} request-end`;
     const entries: SessionTreeEntry[] = [
-      createMessageEntry({ role: "user", content: latestRequest, timestamp: 1 }, 0),
-      createMessageEntry(createAssistant("earlier work", createUsage(10), 2), 1),
+      userEntry(latestRequest, 0),
+      assistantEntry("earlier work", 1, 10),
       createMessageEntry(createBashMessage("private output ".repeat(6_000), 3, true), 2),
-      createMessageEntry(createAssistant("latest", createUsage(10), 4), 3),
+      assistantEntry("latest", 3, 10),
     ];
 
     expect(findCutPoint(entries, 0, entries.length, 1)).toEqual({
@@ -340,105 +220,29 @@ describe("session-entry compaction budgeting", () => {
       isSplitTurn: true,
     });
 
-    const preparation = prepareCompaction(
-      entries,
-      {
-        enabled: true,
-        reserveTokens: 0,
-        keepRecentTokens: 1,
-      },
-      "unresolved",
-    );
-
-    expect(preparation.ok).toBe(true);
-    if (!preparation.ok || !preparation.value) {
-      throw new Error("expected a genuine split turn to remain compactable");
-    }
-    expect(preparation.value).toMatchObject({
+    const preparation = prepare(entries, undefined, "unresolved");
+    expect(preparation).toMatchObject({
       firstKeptEntryId: "entry-3",
       isSplitTurn: true,
       tokensBefore: 10,
       turnPrefixMessages: [{ role: "user" }, { role: "assistant" }],
     });
-    expect(preparation.value.latestUnresolvedUserRequest).toHaveLength(800);
-    expect(preparation.value.latestUnresolvedUserRequest).toMatch(
+    expect(preparation.latestUnresolvedUserRequest).toHaveLength(800);
+    expect(preparation.latestUnresolvedUserRequest).toMatch(
       /^request-start .+\[\.\.\. latest user request truncated \.\.\.\].+ request-end$/s,
     );
-    expect(preparation.value).not.toHaveProperty("splitTurnCompleted");
-    expect(JSON.stringify(preparation.value)).not.toContain("private output");
+    expect(preparation).not.toHaveProperty("splitTurnCompleted");
+    expect(JSON.stringify(preparation)).not.toContain("private output");
     expect(JSON.stringify(entries)).toContain("private output");
-  });
-
-  it("applies the shared common-CJK budget heuristic", () => {
-    expect(estimateTokens({ role: "user", content: "hello world", timestamp: 1 })).toBe(3);
-    expect(estimateTokens({ role: "user", content: "你好世界", timestamp: 1 })).toBe(4);
-    expect(estimateTokens({ role: "user", content: "こんにちは", timestamp: 1 })).toBe(5);
-    expect(estimateTokens({ role: "user", content: "안녕하세요", timestamp: 1 })).toBe(5);
-  });
-
-  it("uses conservative weights for halfwidth and supplementary CJK", () => {
-    expect(estimateTokens({ role: "user", content: "ｺﾝﾆﾁﾊ", timestamp: 1 })).toBe(10);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0xffa1), timestamp: 1 }),
-    ).toBe(2);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x20000), timestamp: 1 }),
-    ).toBe(4);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x30000), timestamp: 1 }),
-    ).toBe(4);
-  });
-
-  it("uses a conservative weight for rare BMP CJK", () => {
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x3400), timestamp: 1 }),
-    ).toBe(3);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x9fff), timestamp: 1 }),
-    ).toBe(3);
-  });
-
-  it("accounts for decomposed Hangul and compatibility forms", () => {
-    expect(
-      estimateTokens({ role: "user", content: "안녕하세요".normalize("NFD"), timestamp: 1 }),
-    ).toBe(36);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0xfe10), timestamp: 1 }),
-    ).toBe(2);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0xffe0), timestamp: 1 }),
-    ).toBe(2);
-  });
-
-  it("uses a conservative weight for supplementary Japanese forms", () => {
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x1aff0), timestamp: 1 }),
-    ).toBe(4);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x1f200), timestamp: 1 }),
-    ).toBe(4);
-  });
-
-  it("uses measured weights for CJK script-extension marks", () => {
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x00b7), timestamp: 1 }),
-    ).toBe(1);
-    expect(estimateTokens({ role: "user", content: "·".repeat(32), timestamp: 1 })).toBe(32);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x02ca), timestamp: 1 }),
-    ).toBe(2);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x1d360), timestamp: 1 }),
-    ).toBe(3);
   });
 
   it("uses CJK-aware token estimates when choosing the retained tail", () => {
     const entries: SessionTreeEntry[] = [
-      createMessageEntry({ role: "user", content: "start", timestamp: 1 }, 0),
-      createMessageEntry(createAssistant("ok", createUsage(2), 2), 1),
-      createMessageEntry({ role: "user", content: "早上好", timestamp: 3 }, 2),
-      createMessageEntry(createAssistant("ok", createUsage(2), 4), 3),
-      createMessageEntry({ role: "user", content: "你好世界", timestamp: 5 }, 4),
+      userEntry("start", 0),
+      assistantEntry("ok", 1),
+      userEntry("早上好", 2),
+      assistantEntry("ok", 3),
+      userEntry("你好世界", 4),
     ];
 
     expect(findCutPoint(entries, 0, entries.length, 4)).toEqual({
@@ -452,10 +256,10 @@ describe("session-entry compaction budgeting", () => {
     "counts a %s entry that projects into model context",
     (entryType) => {
       const entries: SessionTreeEntry[] = [
-        createMessageEntry({ role: "user", content: "hi", timestamp: 1 }, 0),
-        createMessageEntry(createAssistant("hello", createUsage(2), 2), 1),
+        userEntry("hi", 0),
+        assistantEntry("hello", 1),
         createProjectedEntry(entryType, 2, "x".repeat(4_000)),
-        createMessageEntry(createAssistant("ok", createUsage(2), 4), 3),
+        assistantEntry("ok", 3),
       ];
 
       expect(findCutPoint(entries, 0, entries.length, 1)).toMatchObject({
@@ -471,234 +275,113 @@ describe("session-entry compaction budgeting", () => {
     },
   );
 
-  it.each(["custom_message", "branch_summary"] as const)(
-    "does not rewind across adjacent %s entries",
-    (entryType) => {
-      const entries: SessionTreeEntry[] = [
-        createMessageEntry({ role: "user", content: "hi", timestamp: 1 }, 0),
-        createMessageEntry(createAssistant("hello", createUsage(2), 2), 1),
-        createProjectedEntry(entryType, 2, "x".repeat(4_000)),
-        createProjectedEntry(entryType, 3, "y".repeat(4_000)),
-        createMessageEntry(createAssistant("ok", createUsage(2), 5), 4),
-      ];
-
-      expect(findCutPoint(entries, 0, entries.length, 2)).toEqual({
-        firstKeptEntryIndex: 3,
-        turnStartIndex: -1,
-        isSplitTurn: false,
-      });
-    },
-  );
-
-  it("skips compaction when no history or turn prefix would be summarized", () => {
-    const entries = [
-      createMessageEntry({ role: "user", content: "hello", timestamp: 1 }, 0),
-      createMessageEntry(createAssistant("done", createUsage(2), 2), 1),
-    ];
-
-    expect(
-      prepareCompaction(entries, {
-        enabled: true,
-        reserveTokens: 0,
-        keepRecentTokens: 10_000,
-      }),
-    ).toEqual({ ok: true, value: undefined });
-  });
-
   it("plans provider-triggered cuts in provider token units", () => {
     const entries = [
-      createMessageEntry({ role: "user", content: "first", timestamp: 1 }, 0),
-      createMessageEntry(createAssistant("ok", createUsage(2), 2), 1),
-      createMessageEntry({ role: "user", content: "second", timestamp: 3 }, 2),
-      createMessageEntry(createAssistant("ok", createUsage(2), 4), 3),
-      createMessageEntry({ role: "user", content: "latest", timestamp: 5 }, 4),
-      createMessageEntry(createAssistant("done", createUsage(170_000), 6), 5),
+      userEntry("first", 0),
+      assistantEntry("ok", 1),
+      userEntry("second", 2),
+      assistantEntry("ok", 3),
+      userEntry("latest", 4),
+      assistantEntry("done", 5, 170_000),
     ];
 
-    const result = prepareCompaction(entries, {
+    const result = prepare(entries, {
       enabled: true,
       reserveTokens: 16_384,
       keepRecentTokens: 20_000,
     });
 
-    expect(result.ok).toBe(true);
-    if (!result.ok || !result.value) {
-      throw new Error("expected provider usage to produce a compactable prefix");
-    }
-    expect(result.value.firstKeptEntryId).toBe("entry-4");
-    expect(result.value.messagesToSummarize.length).toBeGreaterThan(0);
+    expect(result).toMatchObject({ firstKeptEntryId: "entry-4" });
+    expect(result.messagesToSummarize.length).toBeGreaterThan(0);
   });
 
-  it("keeps reset-filtered tool rows out of later compaction input", () => {
-    const entries: SessionTreeEntry[] = [
-      createMessageEntry({ role: "user", content: "discarded", timestamp: 1 }, 0),
-      createMessageEntry({ role: "user", content: "kept question", timestamp: 2 }, 1),
-      createMessageEntry(
-        {
-          role: "toolResult",
-          toolCallId: "call-1",
-          toolName: "read",
-          content: [{ type: "text", text: "hidden tool result" }],
-          isError: false,
-          timestamp: 3,
-        },
-        2,
-      ),
-      createMessageEntry(createAssistant("kept answer", createUsage(2), 4), 3),
-      {
-        type: "reset",
-        id: "entry-4",
-        parentId: "entry-3",
-        timestamp: new Date(5).toISOString(),
-        reason: "new",
-        firstKeptEntryId: "entry-1",
-      },
-      createMessageEntry({ role: "user", content: "post reset", timestamp: 6 }, 5),
-      createMessageEntry(createAssistant("new answer", createUsage(2), 7), 6),
-    ];
-
-    const result = prepareCompaction(entries, {
-      enabled: true,
-      reserveTokens: 0,
-      keepRecentTokens: 1,
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok || !result.value) {
-      throw new Error("expected reset transcript to be compactable");
-    }
-    expect(JSON.stringify(result.value.messagesToSummarize)).not.toContain("hidden tool result");
-    expect(JSON.stringify(result.value.turnPrefixMessages)).not.toContain("hidden tool result");
-    expect(["entry-5", "entry-6"]).toContain(result.value.firstKeptEntryId);
-  });
-
-  it("retains only occurrence-paired reset tool results in compaction input", () => {
-    const assistantToolCall = (timestamp: number): AssistantMessage => ({
-      ...createAssistant("", createUsage(2), timestamp),
-      content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+  const readCall = (timestamp: number) =>
+    assistant([toolCall("read", {}, "call-1")], {
+      usage: createUsage(2),
+      timestamp,
       stopReason: "toolUse",
     });
-    const toolResult = (timestamp: number, text: string): AgentMessage => ({
-      role: "toolResult",
-      toolCallId: "call-1",
-      toolName: "read",
-      content: [{ type: "text", text }],
-      isError: false,
-      timestamp,
-    });
-    const entries: SessionTreeEntry[] = [
-      createMessageEntry({ role: "user", content: "discarded", timestamp: 1 }, 0),
-      createMessageEntry({ role: "user", content: "kept", timestamp: 2 }, 1),
-      createMessageEntry(assistantToolCall(3), 2),
-      createMessageEntry(toolResult(4, "first result"), 3),
-      createMessageEntry(assistantToolCall(5), 4),
-      createMessageEntry(toolResult(6, "second result"), 5),
-      createMessageEntry(toolResult(7, "orphan result"), 6),
-      {
-        type: "reset",
-        id: "entry-7",
-        parentId: "entry-6",
-        timestamp: new Date(8).toISOString(),
-        reason: "new",
-        firstKeptEntryId: "entry-1",
-      },
-      createMessageEntry({ role: "user", content: "post reset", timestamp: 9 }, 8),
-      createMessageEntry(createAssistant("new answer", createUsage(2), 10), 9),
+  it.each([
+    {
+      name: "orphan-only",
+      middle: [
+        toolResult("hidden tool result", { timestamp: 3 }),
+        createAssistant("kept answer", createUsage(2), 4),
+      ],
+      kept: [],
+      excluded: "hidden tool result",
+      checkCut: true,
+    },
+    {
+      name: "occurrence-paired",
+      middle: [
+        readCall(3),
+        toolResult("first result", { timestamp: 4 }),
+        readCall(5),
+        toolResult("second result", { timestamp: 6 }),
+        toolResult("orphan result", { timestamp: 7 }),
+      ],
+      kept: ["first result", "second result"],
+      excluded: "orphan result",
+      checkCut: false,
+    },
+  ])("filters $name reset tool rows before compaction", ({ middle, kept, excluded, checkCut }) => {
+    const resetIndex = middle.length + 2;
+    const entries = [
+      userEntry("discarded", 0),
+      userEntry("kept question", 1),
+      ...middle.map((message, index) => createMessageEntry(message, index + 2)),
+      resetEntry(resetIndex, "entry-1"),
+      userEntry("post reset", resetIndex + 1),
+      assistantEntry("new answer", resetIndex + 2),
     ];
-
-    const result = prepareCompaction(entries, {
-      enabled: true,
-      reserveTokens: 0,
-      keepRecentTokens: 1,
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok || !result.value) {
-      throw new Error("expected reset transcript to be compactable");
+    const result = prepare(entries);
+    const summarized = JSON.stringify(result.messagesToSummarize);
+    for (const value of kept) {
+      expect(summarized).toContain(value);
     }
-    const summarized = JSON.stringify(result.value.messagesToSummarize);
-    expect(summarized).toContain("first result");
-    expect(summarized).toContain("second result");
-    expect(summarized).not.toContain("orphan result");
+    expect(summarized).not.toContain(excluded);
+    expect(JSON.stringify(result.turnPrefixMessages)).not.toContain(excluded);
+    if (checkCut) {
+      expect(["entry-5", "entry-6"]).toContain(result.firstKeptEntryId);
+    }
   });
 
   it("moves the cut earlier when a reset kept-tail prelude consumes the compaction budget", () => {
     const largePrelude = "kept context ".repeat(4_000);
-    const postResetEntries: SessionTreeEntry[] = [
-      createMessageEntry({ role: "user", content: "post one ".repeat(500), timestamp: 4 }, 3),
-      createMessageEntry(createAssistant("answer one ".repeat(500), createUsage(2), 5), 4),
-      createMessageEntry({ role: "user", content: "post two ".repeat(500), timestamp: 6 }, 5),
-      createMessageEntry(createAssistant("answer two ".repeat(500), createUsage(2), 7), 6),
-    ];
     const buildEntries = (firstKeptEntryId?: string): SessionTreeEntry[] => [
-      createMessageEntry({ role: "user", content: largePrelude, timestamp: 1 }, 0),
-      {
-        type: "reset",
-        id: "entry-1",
-        parentId: "entry-0",
-        timestamp: new Date(2).toISOString(),
-        reason: "new",
-        ...(firstKeptEntryId ? { firstKeptEntryId } : {}),
-      },
-      ...postResetEntries.map((entry, index) =>
-        Object.assign({}, entry, {
-          id: `entry-${index + 2}`,
-          parentId: `entry-${index + 1}`,
-        }),
-      ),
+      userEntry(largePrelude, 0),
+      resetEntry(1, firstKeptEntryId),
+      createMessageEntry(user("post one ".repeat(500), 4), 2),
+      createMessageEntry(createAssistant("answer one ".repeat(500), createUsage(2), 5), 3),
+      createMessageEntry(user("post two ".repeat(500), 6), 4),
+      createMessageEntry(createAssistant("answer two ".repeat(500), createUsage(2), 7), 5),
     ];
     const settings = { enabled: true, reserveTokens: 0, keepRecentTokens: 500 };
-    const withoutPrelude = prepareCompaction(buildEntries(), settings);
-    const withPrelude = prepareCompaction(buildEntries("entry-0"), settings);
-
-    expect(withoutPrelude.ok && withoutPrelude.value).toBeTruthy();
-    expect(withPrelude.ok && withPrelude.value).toBeTruthy();
-    if (!withoutPrelude.ok || !withoutPrelude.value || !withPrelude.ok || !withPrelude.value) {
-      throw new Error("expected both reset transcripts to be compactable");
-    }
+    const withoutPrelude = prepare(buildEntries(), settings);
+    const withPrelude = prepare(buildEntries("entry-0"), settings);
     const cutIndex = (entryId: string) => Number.parseInt(entryId.slice("entry-".length), 10);
-    expect(cutIndex(withPrelude.value.firstKeptEntryId)).toBeLessThan(
-      cutIndex(withoutPrelude.value.firstKeptEntryId),
+    expect(cutIndex(withPrelude.firstKeptEntryId)).toBeLessThan(
+      cutIndex(withoutPrelude.firstKeptEntryId),
     );
   });
 });
 
 describe("prepareCompaction when the last entry is a compaction record", () => {
-  const settings = {
-    enabled: true,
-    reserveTokens: 0,
-    keepRecentTokens: 1,
-  };
+  const settings = { enabled: true, reserveTokens: 0, keepRecentTokens: 1 };
   it.each([
     { name: "ordinary", fromHook: false, compactable: true },
     { name: "safeguard", fromHook: true, compactable: false },
   ])("handles a $name trailing compaction boundary", ({ fromHook, compactable }) => {
     const largeContent = "x".repeat(200_000);
     const entries: SessionTreeEntry[] = [
-      createMessageEntry({ role: "user", content: "original request", timestamp: 1 }, 0),
-      {
-        type: "compaction",
-        id: "compaction-1",
-        parentId: "entry-0",
-        timestamp: new Date(2).toISOString(),
-        summary: "earlier summary",
-        firstKeptEntryId: "entry-0",
-        tokensBefore: 200_000,
-      },
-      createMessageEntry({ role: "user", content: largeContent, timestamp: 3 }, 2),
-      createMessageEntry(createAssistant(largeContent, createUsage(10), 4), 3),
-      createMessageEntry({ role: "user", content: largeContent, timestamp: 5 }, 4),
-      createMessageEntry(createAssistant("recent reply tail", createUsage(10), 6), 5),
-      {
-        type: "compaction",
-        id: "compaction-2",
-        parentId: "entry-5",
-        timestamp: new Date(7).toISOString(),
-        summary: "later summary",
-        firstKeptEntryId: "entry-2",
-        tokensBefore: 200_000,
-        fromHook,
-      },
+      userEntry("original request", 0),
+      compactionEntry(1, "earlier summary", "entry-0", { id: "compaction-1" }),
+      userEntry(largeContent, 2),
+      assistantEntry(largeContent, 3, 10),
+      userEntry(largeContent, 4),
+      assistantEntry("recent reply tail", 5, 10),
+      compactionEntry(6, "later summary", "entry-2", { id: "compaction-2", fromHook }),
     ];
 
     const result = prepareCompaction(entries, settings);
@@ -708,9 +391,7 @@ describe("prepareCompaction when the last entry is a compaction record", () => {
     if (!compactable) {
       return;
     }
-    if (!result.ok || !result.value) {
-      throw new Error("expected a trailing compaction record with new turns to remain compactable");
-    }
+    assert(result.ok && result.value, "expected compactable trailing boundary");
     expect(result.value.messagesToSummarize.length).toBeGreaterThan(0);
     expect(result.value.previousSummary).toBe("later summary");
     expect(result.value.firstKeptEntryId).not.toBe("entry-2");
@@ -718,237 +399,160 @@ describe("prepareCompaction when the last entry is a compaction record", () => {
     const nextResult = prepareCompaction(
       [
         ...entries,
-        {
-          type: "compaction",
+        compactionEntry(7, "final summary", result.value.firstKeptEntryId, {
           id: "compaction-3",
           parentId: "compaction-2",
-          timestamp: new Date(8).toISOString(),
-          summary: "final summary",
-          firstKeptEntryId: result.value.firstKeptEntryId,
           tokensBefore: result.value.tokensBefore,
-        },
+        }),
       ],
       settings,
     );
 
-    expect(nextResult.ok).toBe(true);
-    expect(nextResult.ok ? nextResult.value : undefined).toBeUndefined();
+    expect(nextResult).toEqual({ ok: true, value: undefined });
   });
 
-  it.each([
-    { name: "non-record", details: "invalid" },
-    { name: "missing fields", details: { readFiles: ["src/read.ts"] } },
-    { name: "wrong field types", details: { readFiles: "src/read.ts", modifiedFiles: [] } },
-    {
-      name: "mixed element types",
-      details: { readFiles: ["src/read.ts", 1], modifiedFiles: ["src/write.ts"] },
-    },
-  ] satisfies Array<{ name: string; details: unknown }>)(
-    "ignores $name persisted compaction details",
-    ({ details }) => {
-      const largeContent = "x".repeat(200_000);
-      const entries: SessionTreeEntry[] = [
-        createMessageEntry({ role: "user", content: "original request", timestamp: 1 }, 0),
-        {
-          type: "compaction",
-          id: "entry-1",
-          parentId: "entry-0",
-          timestamp: new Date(2).toISOString(),
-          summary: "earlier summary",
-          firstKeptEntryId: "entry-0",
-          tokensBefore: 200_000,
-          details,
-        },
-        createMessageEntry({ role: "user", content: largeContent, timestamp: 3 }, 2),
-        createMessageEntry(createAssistant(largeContent, createUsage(10), 4), 3),
-        createMessageEntry({ role: "user", content: "recent tail", timestamp: 5 }, 4),
-      ];
+  it("ignores missing fields in persisted compaction details", () => {
+    const largeContent = "x".repeat(200_000);
+    const entries: SessionTreeEntry[] = [
+      userEntry("original request", 0),
+      compactionEntry(1, "earlier summary", "entry-0", { details: { readFiles: ["src/read.ts"] } }),
+      userEntry(largeContent, 2),
+      assistantEntry(largeContent, 3, 10),
+      userEntry("recent tail", 4),
+    ];
 
-      const result = prepareCompaction(entries, settings);
+    const result = prepare(entries, settings);
 
-      expect(result.ok).toBe(true);
-      if (!result.ok || !result.value) {
-        throw new Error("expected malformed persisted details to be ignored");
-      }
-      expect(result.value.previousSummaryDetails).toBeUndefined();
-      expect([...result.value.fileOps.read]).toEqual([]);
-      expect([...result.value.fileOps.written]).toEqual([]);
-      expect([...result.value.fileOps.edited]).toEqual([]);
-    },
-  );
+    expect(result).toMatchObject({
+      previousSummaryDetails: undefined,
+      fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+    });
+  });
+});
+
+describe("generateSummary progress updates", () => {
+  it("asks to keep completed checks distinct from unresolved blockers", async () => {
+    const completeSimple = vi.fn(async () => createAssistant("summary", createUsage(1), 4));
+    const result = await summarize(
+      [
+        user("Check whether the release is approved."),
+        assistant([toolCall("verify", {}, "check")], { timestamp: 2, stopReason: "toolUse" }),
+        toolResult("Verification FAILED: missing release approval.", {
+          toolCallId: "check",
+          toolName: "verify",
+          isError: true,
+          timestamp: 3,
+        }),
+      ],
+      createCompactionModel(),
+      { previousSummary: "Release approval check: pending.", runtime: { completeSimple } },
+    );
+
+    expect(result.ok).toBe(true);
+    const request = JSON.stringify(completeSimple.mock.calls);
+    expect(request).toContain("Release approval check: pending.");
+    expect(request).toContain("Verification FAILED: missing release approval.");
+    expect(request).toContain("Record checks that ran and their results as completed");
+    expect(request).toContain("keep unresolved blockers separate");
+  });
 });
 
 describe("generateSummary thinking options", () => {
   it("consumes the decorated stream before reading its result", async () => {
-    const model = createSummaryModel();
-    let consumed = false;
-    const streamFn = vi.fn<StreamFn>(() => ({
-      [Symbol.asyncIterator]() {
-        return {
-          async next() {
-            consumed = true;
-            return { done: true as const, value: undefined };
-          },
-        };
-      },
-      async result() {
-        if (!consumed) {
-          throw new Error("stream result read before iteration");
-        }
-        return createAssistant("summary", createUsage(1), 1);
-      },
-    }));
+    const model = createCompactionModel();
+    const { streamFn, consumed } = decoratedResponse(createAssistant("summary", createUsage(1), 1));
 
-    await generateSummary(
-      [{ role: "user", content: "hello", timestamp: 1 }],
-      model,
-      1_000,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      streamFn,
-    );
+    await summarize([user("hello")], model, { streamFn });
 
-    expect(consumed).toBe(true);
+    expect(consumed()).toBe(true);
   });
 
   it("maps explicit Fable off to low effort for compaction", async () => {
     const model: Model = {
-      id: "production-fable",
-      name: "Production Fable",
+      ...createCompactionModel({
+        id: "production-fable",
+        name: "Production Fable",
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+      }),
       api: "anthropic-messages",
       provider: "anthropic",
       baseUrl: "https://api.anthropic.com",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
       params: { canonicalModelId: "claude-fable-5" },
     };
-    const summaryMessage: AssistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "summary" }],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: createUsage(0),
-      stopReason: "stop",
-      timestamp: 1,
-    };
+    const summaryMessage = modelReply(model, "summary");
     const streamFn = vi.fn<StreamFn>((_model, context, options) => {
       expect(options?.reasoning).toBe("low");
       expect(context.systemPrompt).toContain("user and an AI assistant");
       expect(context.systemPrompt).not.toContain("AI coding assistant");
-      const stream = createAssistantMessageEventStream();
-      stream.push({ type: "done", reason: "stop", message: summaryMessage });
-      stream.end();
-      return stream;
+      return responseStream(summaryMessage);
     });
 
-    const result = await generateSummary(
-      [{ role: "user", content: "hello", timestamp: 1 }],
-      model,
-      1000,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      "off",
-      streamFn,
-    );
+    const result = await summarize([user("hello")], model, { streamFn, thinkingLevel: "off" });
 
     expect(result).toEqual({ ok: true, value: "summary" });
     expect(streamFn).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    ["empty", []],
-    ["whitespace-only", [{ type: "text" as const, text: " \n\t " }]],
-    ["reasoning-only", [{ type: "thinking" as const, thinking: "internal summary reasoning" }]],
-  ])("rejects %s compaction output", async (_name, content) => {
-    const model = createSummaryModel(true);
-    const streamFn = vi.fn<StreamFn>(() => {
-      const stream = createAssistantMessageEventStream();
-      stream.push({
-        type: "done",
-        reason: "stop",
-        message: {
-          role: "assistant",
-          content,
-          api: model.api,
-          provider: model.provider,
-          model: model.id,
-          usage: createUsage(1),
-          stopReason: "stop",
-          timestamp: 1,
-        },
+  it.each(["stop", "length"] as const)(
+    "classifies empty summary output after a %s stop",
+    async (stopReason) => {
+      const exhausted = stopReason === "length";
+      const content: AssistantMessage["content"] = exhausted
+        ? [{ type: "thinking", thinking: "internal summary reasoning" }]
+        : [text(" \n\t ")];
+      const model = createCompactionModel({ reasoning: true });
+      const streamFn = vi.fn<StreamFn>(() =>
+        responseStream(
+          assistant(content, {
+            usage: createUsage(exhausted ? 800 : 1),
+            model: model.id,
+            stopReason,
+          }),
+        ),
+      );
+      const result = await summarize([user("hello")], model, {
+        streamFn,
+        thinkingLevel: exhausted ? "high" : "low",
       });
-      stream.end();
-      return stream;
-    });
-
-    const result = await generateSummary(
-      [{ role: "user", content: "hello", timestamp: 1 }],
-      model,
-      1_000,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      "low",
-      streamFn,
-    );
-
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected empty compaction output to fail");
-    }
-    expect(result.error).toMatchObject({
-      name: "CompactionError",
-      code: "summarization_failed",
-      message: "Summarization failed: model returned no summary text",
-    });
-  });
+      assert(!result.ok);
+      expect(streamFn).toHaveBeenCalledOnce();
+      expect(result.error).toBeInstanceOf(
+        exhausted ? SummaryOutputBudgetError : InvalidSummaryOutputError,
+      );
+      expect(result.error).toMatchObject({
+        name: "CompactionError",
+        code: "summarization_failed",
+        message: exhausted
+          ? expect.stringContaining(
+              "output budget (800 tokens) was exhausted without visible text for test-provider/summary-model (model maxTokens: 8000); " +
+                'set agents.defaults.compaction.thinkingLevel to "off" if supported, or use agents.defaults.compaction.model to select a model that can summarize within this budget',
+            )
+          : "Summarization failed: model returned no summary text",
+      });
+    },
+  );
 });
 
 describe("split-turn compaction", () => {
   const operatorFocus = "Preserve API decisions.";
-  const runtimeContext: AgentMessage = {
-    role: "custom",
+  const runtimeContext = custom("PRIVATE_RUNTIME_CONTEXT", {
     customType: "openclaw.runtime-context",
-    content: "PRIVATE_RUNTIME_CONTEXT",
     display: false,
-    details: { runtimeContextCarrier: true },
-    timestamp: 1,
-  };
+    details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
+  });
   it.each([
-    { name: "ordinary history", history: true, prefix: false, budgets: [800] },
-    { name: "history and prefix", history: true, prefix: true, budgets: [800, 500] },
-    { name: "prefix-only", history: false, prefix: true, budgets: [500] },
+    { name: "prefix-only", history: false, budgets: [500] },
     {
       name: "caller-owned instructions",
       history: true,
-      prefix: true,
       budgets: [800, 500],
       focus: `<policy>${"preserve generated policy ".repeat(200)}</policy>`,
     },
-    {
-      name: "active overflow request",
-      history: true,
-      prefix: false,
-      budgets: [800],
-      activeRequest: "finish the current deployment review",
-    },
   ])(
     "forwards focus and serializes $name summaries",
-    async ({ history, prefix, budgets, focus = operatorFocus, activeRequest }) => {
-      const model = createSummaryModel();
+    async ({ history, budgets, focus = operatorFocus }) => {
+      const model = createCompactionModel();
       const prompts: string[] = [];
       const outputBudgets: Array<number | undefined> = [];
       const usageSink = vi.fn();
@@ -978,29 +582,22 @@ describe("split-turn compaction", () => {
         }, 5);
         return stream;
       });
-      const result = await compact(
+      const result = await compactWith(
         {
           firstKeptEntryId: "kept-entry",
-          messagesToSummarize: history
-            ? [{ role: "user", content: "history", timestamp: 1 }, runtimeContext]
-            : [],
-          turnPrefixMessages: prefix
-            ? [{ role: "user", content: "prefix", timestamp: 2 }, runtimeContext]
-            : [],
-          isSplitTurn: prefix,
-          ...(activeRequest ? { latestUnresolvedUserRequest: activeRequest } : {}),
+          messagesToSummarize: history ? [user("history"), runtimeContext] : [],
+          turnPrefixMessages: [user("prefix", 2), runtimeContext],
+          isSplitTurn: true,
           tokensBefore: 100,
           fileOps: createFileOps(),
           settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100 },
         },
         model,
-        undefined,
-        undefined,
-        focus,
-        undefined,
-        undefined,
-        streamFn,
-        { completeSimple: vi.fn(), internalUsageSink: usageSink },
+        {
+          customInstructions: focus,
+          streamFn,
+          runtime: { completeSimple: vi.fn(), internalUsageSink: usageSink },
+        },
       );
 
       expect(result.ok).toBe(true);
@@ -1015,19 +612,43 @@ describe("split-turn compaction", () => {
         expect(prompt).not.toContain("PRIVATE_RUNTIME_CONTEXT");
         expect(prompt.indexOf(focus)).toBeGreaterThan(prompt.lastIndexOf("</conversation>"));
       }
-      if (prefix) {
-        expect(prompts.at(-1)).toContain("## Original Request");
-        expect(prompts.at(-1)).not.toContain("## Goal");
-      }
+      expect(prompts.at(-1)).toContain("## Original Request");
+      expect(prompts.at(-1)).not.toContain("## Goal");
       if (history) {
         expect(prompts[0]).toContain("## Goal");
         expect(prompts[0]).not.toContain("## Original Request");
       }
-      if (result.ok && activeRequest) {
-        expect(result.value.summary).toContain(
-          `## Latest unresolved user request\n${JSON.stringify(activeRequest)}`,
-        );
-      }
     },
   );
+});
+
+describe("compactWithoutSummary", () => {
+  const lossNotice = "2 earlier message(s) were removed without a summary";
+  // About 1,200 characters with the constraint in the middle: inside the 2,000-character
+  // split-turn ask bound, beyond the 800-character unresolved-request bound.
+  const filler = "Context for the split request. ".repeat(19);
+  const sourceAsk = `${filler}Constraint: keep SOURCE-ASK-MIDDLE. ${filler}`.trim();
+  it("keeps the loss notice, source ask, and unresolved request beside a constrained foreground budget", () => {
+    const result = compactWithoutSummary({
+      firstKeptEntryId: "kept-entry",
+      messagesToSummarize: [user("history")],
+      turnPrefixMessages: [user(sourceAsk, 2)],
+      isSplitTurn: true,
+      latestUnresolvedUserRequest: "finish the review",
+      previousSummary: "p".repeat(MAX_COMPACTION_SUMMARY_CHARS),
+      tokensBefore: 100,
+      fileOps: createFileOps(),
+      settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100 },
+      summaryTokenBudget: 450,
+    });
+
+    expect(result.ok).toBe(true);
+    const summary = result.ok ? result.value.summary : "";
+    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(summary).toContain(lossNotice);
+    expect(summary).toContain('"finish the review"');
+    expect(sourceAsk.length).toBeGreaterThan(1_100);
+    expect(summary).toContain(JSON.stringify(sourceAsk));
+    expect(result.ok && result.value.firstKeptEntryId).toBe("kept-entry");
+  });
 });

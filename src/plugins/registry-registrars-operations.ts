@@ -6,6 +6,7 @@ import {
 import {
   normalizeStringEntries,
   normalizeUniqueStringEntries,
+  uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import {
   normalizeCommandDescriptorName,
@@ -18,7 +19,11 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
   NODE_WORKER_PRIVATE_COMMANDS,
 } from "../infra/node-commands.js";
-import { isReservedCommandName, registerPluginCommandInRegistry } from "./command-registration.js";
+import {
+  isReservedCommandName,
+  registerPluginCommandInRegistry,
+  snapshotPluginCommandRuntimeCapabilities,
+} from "./command-registration.js";
 import { bindPluginGatewayAccessPolicy } from "./gateway-access-policy-registration.js";
 import type { PluginGatewayAccessPolicy } from "./gateway-access-policy.types.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
@@ -36,6 +41,7 @@ import type {
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
+  OpenClawPluginServiceV2,
 } from "./types.js";
 
 function isOfficialCodexPluginRecord(
@@ -161,7 +167,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       .filter(
         (descriptor): descriptor is OpenClawPluginCliRootCommandDescriptor => descriptor !== null,
       );
-    const commands = normalizeUniqueStringEntries(
+    const commands = uniqueStrings(
       [...(opts?.commands ?? []), ...descriptors.map((descriptor) => descriptor.name)]
         .map((command) => normalizeCommandRoot(command, "command"))
         .filter((command): command is string => command !== null),
@@ -175,12 +181,12 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     const commandPathSet = new Set(commandPaths);
     const existing = registry.cliRegistrars.find((entry) =>
       entry.commands
-        .map((command) => [...(entry.parentPath ?? []), command].join(" "))
+        .map((command) => [...entry.parentPath, command].join(" "))
         .some((commandPath) => commandPathSet.has(commandPath)),
     );
     if (existing) {
       const existingCommandPaths = new Set(
-        existing.commands.map((command) => [...(existing.parentPath ?? []), command].join(" ")),
+        existing.commands.map((command) => [...existing.parentPath, command].join(" ")),
       );
       const overlap = commandPaths.find((commandPath) => existingCommandPaths.has(commandPath));
       reportRegistrationError(
@@ -366,7 +372,10 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     return undefined;
   };
 
-  const registerService = (record: PluginRecord, service: OpenClawPluginService) => {
+  const registerService = (
+    record: PluginRecord,
+    service: OpenClawPluginService | OpenClawPluginServiceV2,
+  ) => {
     const id = resolveServiceRegistrationId(record, service, "service");
     if (!id) {
       return;
@@ -400,7 +409,11 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     });
   };
 
-  const registerCommand = (record: PluginRecord, command: OpenClawPluginCommandDefinition) => {
+  const registerCommand = (
+    record: PluginRecord,
+    callerCommand: OpenClawPluginCommandDefinition,
+  ) => {
+    const command = snapshotPluginCommandRuntimeCapabilities(callerCommand);
     const name = command.name.trim();
     if (!name) {
       reportRegistrationError(record, "command registration missing name");
@@ -430,6 +443,16 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     }
     const { ownership: _ownership, ...commandForRegistration } = command;
     void _ownership;
+    if (
+      command.runtimeCapabilities?.includes("scheduledTurns") &&
+      !record.contracts?.sessionScheduledTurns?.includes("requester-command")
+    ) {
+      reportRegistrationError(
+        record,
+        'scheduled command turns require contracts.sessionScheduledTurns: ["requester-command"]',
+      );
+      return;
+    }
     const result = registerPluginCommandInRegistry(
       registry,
       record.id,
@@ -440,6 +463,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
         allowReservedCommandNames,
         allowOwnerStatusExposure: canClaimReservedCommandOwnership(record),
       },
+      record.contracts?.commandRuntimeCapabilities,
     );
     if (!result.ok) {
       reportRegistrationError(record, `command registration failed: ${result.error}`);

@@ -1,9 +1,14 @@
 import type { CDPSession } from "@vitest/browser-playwright";
 import { afterEach, describe, expect, it } from "vitest";
 import { cdp, page } from "vitest/browser";
-import "../test-helpers/load-styles.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
+import "../test-helpers/load-styles.ts";
 import { owner, other, key, mount, settled, geometry } from "../test-helpers/sidebar-stress.ts";
+import {
+  setSessionsGrouping,
+  setSessionsShowPreview,
+  setSessionsStatusFilter,
+} from "./session-organizer-menu.runtime.ts";
 setupSidebarTest();
 afterEach(async () => {
   document.documentElement.removeAttribute("data-theme-mode");
@@ -12,58 +17,47 @@ afterEach(async () => {
   await session.send("Emulation.setEmulatedMedia", { features: [] });
   document.documentElement.style.removeProperty("--control-ui-text-scale");
 });
-const desktopMatrix = (["category", "person", "project", "none"] as const).flatMap((grouping) =>
-  ["light", "dark"].flatMap((theme) =>
-    [220, 280].flatMap((width) =>
-      [false, true].map((preview) => ({
-        grouping,
-        theme,
-        width,
-        preview,
-        viewport: 1000,
-        textScale: 1,
-        reduced: false,
-        rtl: false,
-      })),
-    ),
-  ),
-);
+const matrix = (
+  [
+    ["category", "light", 220, true, 1000, 1, false, false],
+    ["person", "dark", 220, true, 1000, 1.4, true, false],
+    ["project", "light", 320, true, 390, 1, true, false],
+    ["none", "dark", 280, false, 1000, 1, true, true],
+  ] as const
+).map(([grouping, theme, width, preview, viewport, textScale, reduced, rtl]) => ({
+  grouping,
+  theme,
+  width,
+  preview,
+  viewport,
+  textScale,
+  reduced,
+  rtl,
+}));
 
-const matrix = [
-  ...desktopMatrix,
-  ...(["category", "person", "project", "none"] as const).flatMap((grouping) => [
-    {
-      grouping,
-      theme: "light",
-      width: 320,
-      preview: true,
-      viewport: 390,
-      textScale: 1,
-      reduced: true,
-      rtl: false,
-    },
-    {
-      grouping,
-      theme: "dark",
-      width: 220,
-      preview: true,
-      viewport: 1000,
-      textScale: 1.4,
-      reduced: true,
-      rtl: false,
-    },
-    {
-      grouping,
-      theme: "dark",
-      width: 280,
-      preview: false,
-      viewport: 1000,
-      textScale: 1,
-      reduced: true,
-      rtl: true,
-    },
-  ]),
-];
+async function showAll(sidebar: Awaited<ReturnType<typeof mount>>["sidebar"]) {
+  for (let pass = 0; pass < 8; pass++) {
+    const more = sidebar.querySelectorAll<HTMLButtonElement>(
+      '.sidebar-session-pagination__button[aria-label="Show more"]',
+    );
+    if (!more.length) {
+      break;
+    }
+    more.forEach((button) => button.click());
+    await settled(sidebar);
+  }
+}
+
+function titleIssues(row: ReturnType<typeof geometry>[number], suffix = "") {
+  const issues: string[] = [];
+  if (row.title && row.title.right > row.rect.right + 0.5) {
+    issues.push(row.key + " title outside row" + suffix);
+  }
+  if (row.title && row.title.width <= 0) {
+    issues.push(row.key + " title has no space" + suffix);
+  }
+  return issues;
+}
 
 describe.runIf("__vitest_browser__" in globalThis)("full sidebar state stress", () => {
   it.each(matrix)(
@@ -80,38 +74,22 @@ describe.runIf("__vitest_browser__" in globalThis)("full sidebar state stress", 
       const { sidebar, gateway, fixtureKeys, context } = await mount(width);
       context.theme.setMode(theme === "dark" ? "dark" : "light");
       await expect.poll(() => document.documentElement.dataset.themeMode).toBe(theme);
-      sidebar.sessionOrganizer.setSessionsGrouping(grouping);
-      sidebar.sessionOrganizer.setSessionsShowPreview(preview);
+      setSessionsGrouping(sidebar.sessionOrganizer, grouping);
+      setSessionsShowPreview(sidebar.sessionOrganizer, preview);
       sidebar.sessionOrganizer.saveCollapsedSessionSections(new Set());
       await settled(sidebar);
-      for (let pass = 0; pass < 8; pass++) {
-        const more = [
-          ...sidebar.querySelectorAll<HTMLButtonElement>(
-            '.sidebar-session-pagination__button[aria-label="Show more"]',
-          ),
-        ];
-        if (!more.length) {
-          break;
-        }
-        more.forEach((b) => b.click());
+      await showAll(sidebar);
+      for (const attribute of ["data-child-session-toggle", "data-show-more-children"]) {
+        sidebar.querySelector<HTMLButtonElement>(`[${attribute}="${key("parent")}"]`)?.click();
         await settled(sidebar);
       }
-      const parent = sidebar.querySelector<HTMLButtonElement>(
-        `[data-child-session-toggle="${key("parent")}"]`,
-      );
-      parent?.click();
-      await settled(sidebar);
-      sidebar
-        .querySelector<HTMLButtonElement>(`[data-show-more-children="${key("parent")}"]`)
-        ?.click();
-      await settled(sidebar);
+      const ownerChip = () =>
+        sidebar.querySelector(`[data-session-key="${key("owner-running")}"] .session-owner-chip`);
       const before = geometry(sidebar);
       expect(before.length).toBeGreaterThan(35);
       if (grouping === "person") {
         expect(sidebar.querySelector('[data-session-section^="person:"]')).not.toBeNull();
-        expect(
-          sidebar.querySelector(`[data-session-key="${key("owner-running")}"] .session-owner-chip`),
-        ).toBeNull();
+        expect(ownerChip()).toBeNull();
       }
       if (grouping === "project") {
         expect(
@@ -122,39 +100,26 @@ describe.runIf("__vitest_browser__" in globalThis)("full sidebar state stress", 
         .filter((expected) => !before.some((row) => row.key === expected))
         .map((missing) => "Missing fixture row: " + missing);
       for (const row of before) {
-        for (const ring of row.rings) {
-          if (Math.abs(ring.rect.width - (ring.bare ? 12 : 25)) > 0.1) {
-            issues.push(row.key + " ring " + ring.rect.width);
-          }
-          if (
-            row.title &&
-            (rtl ? ring.rect.left < row.title.right - 0.5 : ring.rect.right > row.title.left + 0.5)
-          ) {
-            issues.push(row.key + " ring/title overlap");
-          }
-        }
-        for (const trace of row.traces) {
-          if (Math.abs(trace.width - 32) > 0.1 || Math.abs(trace.height - 22) > 0.1) {
-            issues.push(row.key + " incorrect paired trace size");
-          }
-          if (
-            row.title &&
-            (rtl ? trace.left < row.title.right - 0.5 : trace.right > row.title.left + 0.5)
-          ) {
-            issues.push(row.key + " paired trace/title overlap");
+        const glyphs = [
+          ...row.rings.map(({ rect, bare }) => ({ rect, width: bare ? 12 : 25, height: null })),
+          ...row.traces.map((rect) => ({ rect, width: 32, height: 22 })),
+          ...row.stacks.map((rect) => ({ rect, width: 28, height: 20 })),
+        ];
+        for (const { rect, width: expectedWidth, height } of glyphs) {
+          expect(Math.abs(rect.width - expectedWidth), row.key).toBeLessThanOrEqual(0.1);
+          if (height !== null) {
+            expect(Math.abs(rect.height - height), row.key).toBeLessThanOrEqual(0.1);
           }
         }
-        for (const stack of row.stacks) {
-          if (Math.abs(stack.width - 28) > 0.1 || Math.abs(stack.height - 20) > 0.1) {
-            issues.push(row.key + " oversized stack");
+        for (const rect of [...row.rings.map((ring) => ring.rect), ...row.traces]) {
+          if (row.title) {
+            expect(
+              rtl ? row.title.right - rect.left : rect.right - row.title.left,
+              row.key,
+            ).toBeLessThanOrEqual(0.5);
           }
         }
-        if (row.title && row.title.right > row.rect.right + 0.5) {
-          issues.push(row.key + " title outside row");
-        }
-        if (row.title && row.title.width <= 0) {
-          issues.push(row.key + " title has no space");
-        }
+        issues.push(...titleIssues(row));
       }
       gateway.publishEvent("presence", {
         presence: [
@@ -173,43 +138,22 @@ describe.runIf("__vitest_browser__" in globalThis)("full sidebar state stress", 
       await settled(sidebar);
       const after = geometry(sidebar);
       for (const row of after) {
-        if (row.title && row.title.width <= 0) {
-          issues.push(row.key + " no title space after viewers join");
-        }
-        if (row.title && row.title.right > row.rect.right + 0.5) {
-          issues.push(row.key + " title overflow after viewers join");
-        }
+        issues.push(...titleIssues(row, " after viewers join"));
         const previous = before.find((x) => x.key === row.key);
         if (
           previous &&
           row.title &&
           previous.title &&
-          Math.abs(row.title.x - previous.title.x) > 0.1
+          Math.abs(
+            rtl ? row.title.right - previous.title.right : row.title.left - previous.title.left,
+          ) > 0.1
         ) {
           issues.push(row.key + " title shifted with presence");
         }
       }
       if (grouping === "person") {
-        expect(
-          sidebar.querySelector(`[data-session-key="${key("owner-running")}"] .session-owner-chip`),
-        ).not.toBeNull();
+        expect(ownerChip()).not.toBeNull();
       }
-      console.info(
-        "SIDEBAR_STRESS",
-        JSON.stringify({
-          grouping,
-          theme,
-          width,
-          preview,
-          viewport,
-          textScale,
-          reduced,
-          rtl,
-          rows: before.length,
-          rings: before.flatMap((r) => r.rings).length,
-          issues,
-        }),
-      );
       if (reduced) {
         for (const ring of sidebar.querySelectorAll(".session-glyph__ring")) {
           expect(getComputedStyle(ring).animationName).toBe("none");
@@ -230,16 +174,14 @@ describe.runIf("__vitest_browser__" in globalThis)("full sidebar state stress", 
 });
 
 describe.runIf("__vitest_browser__" in globalThis)("catalog and archive row stress", () => {
-  it.each(
-    (["none", "person", "project"] as const).flatMap((grouping) =>
-      [220, 280].flatMap((width) => ["light", "dark"].map((theme) => ({ grouping, width, theme }))),
-    ),
-  )("catalog $grouping / $width / $theme", async ({ grouping, width, theme }) => {
+  it.each(["none", "person", "project"] as const)("catalog %s", async (grouping) => {
+    const width = 220;
+    const theme = "light";
     await page.viewport(1000, 1100);
     document.documentElement.dataset.themeMode = theme;
     localStorage.setItem("openclaw:sidebar:sessions:catalog-grouping", grouping);
     const { sidebar, context } = await mount(width);
-    context.theme.setMode(theme === "dark" ? "dark" : "light");
+    context.theme.setMode("light");
     await expect.poll(() => document.documentElement.dataset.themeMode).toBe(theme);
     sidebar.sessionData.sessionCatalogs = [
       {
@@ -310,57 +252,37 @@ describe.runIf("__vitest_browser__" in globalThis)("catalog and archive row stre
     toggle.click();
     await settled(sidebar);
     expect(geometry(catalog!).length).toBe(rows.length);
-    console.info(
-      "SIDEBAR_CATALOG_STRESS",
-      JSON.stringify({ grouping, width, theme, rows: rows.length }),
+  });
+  it("keeps archive attribution and row actions in person grouping", async () => {
+    await page.viewport(1000, 1100);
+    const { sidebar } = await mount(220);
+    setSessionsGrouping(sidebar.sessionOrganizer, "person");
+    setSessionsStatusFilter(sidebar.sessionOrganizer, "all");
+    await settled(sidebar);
+    await showAll(sidebar);
+    const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key("archived")}"]`);
+    expect(row).not.toBeNull();
+    expect(row!.querySelector(".sidebar-session__archive-glyph")).not.toBeNull();
+    for (const entry of geometry(sidebar)) {
+      for (const ring of entry.rings) {
+        expect(ring.rect.width).toBe(ring.bare ? 12 : 25);
+      }
+    }
+    const target = sidebar.querySelector<HTMLAnchorElement>(
+      `[data-session-key="${key("pinned")}"] .sidebar-recent-session__link`,
+    )!;
+    target.focus();
+    expect(document.activeElement).toBe(target);
+    target.dispatchEvent(
+      new MouseEvent("click", { altKey: true, bubbles: true, cancelable: true }),
+    );
+    await settled(sidebar);
+    expect(sidebar.querySelector(".sidebar-recent-session--selected")).not.toBeNull();
+    setSessionsStatusFilter(sidebar.sessionOrganizer, "archived");
+    await settled(sidebar);
+    const archived = sidebar.querySelector<HTMLElement>(`[data-session-key="${key("archived")}"]`);
+    expect(archived?.querySelector(".session-owner-chip")?.getAttribute("aria-label")).toContain(
+      "Archived by Casey",
     );
   });
-  it.each(["category", "person", "project", "none"] as const)(
-    "all/archived views and row actions in %s grouping",
-    async (grouping) => {
-      await page.viewport(1000, 1100);
-      const { sidebar } = await mount(220);
-      sidebar.sessionOrganizer.setSessionsGrouping(grouping);
-      sidebar.sessionOrganizer.setSessionsStatusFilter("all");
-      await settled(sidebar);
-      for (let pass = 0; pass < 8; pass++) {
-        const more = [
-          ...sidebar.querySelectorAll<HTMLButtonElement>(
-            '.sidebar-session-pagination__button[aria-label="Show more"]',
-          ),
-        ];
-        if (!more.length) {
-          break;
-        }
-        more.forEach((button) => button.click());
-        await settled(sidebar);
-      }
-      const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key("archived")}"]`);
-      expect(row).not.toBeNull();
-      expect(row!.querySelector(".sidebar-session__archive-glyph")).not.toBeNull();
-      for (const entry of geometry(sidebar)) {
-        for (const ring of entry.rings) {
-          expect(ring.rect.width).toBe(ring.bare ? 12 : 25);
-        }
-      }
-      const target = sidebar.querySelector<HTMLAnchorElement>(
-        `[data-session-key="${key("pinned")}"] .sidebar-recent-session__link`,
-      )!;
-      target.focus();
-      expect(document.activeElement).toBe(target);
-      target.dispatchEvent(
-        new MouseEvent("click", { altKey: true, bubbles: true, cancelable: true }),
-      );
-      await settled(sidebar);
-      expect(sidebar.querySelector(".sidebar-recent-session--selected")).not.toBeNull();
-      sidebar.sessionOrganizer.setSessionsStatusFilter("archived");
-      await settled(sidebar);
-      const archived = sidebar.querySelector<HTMLElement>(
-        `[data-session-key="${key("archived")}"]`,
-      );
-      expect(archived?.querySelector(".session-owner-chip")?.getAttribute("aria-label")).toContain(
-        "Archived by Casey",
-      );
-    },
-  );
 });

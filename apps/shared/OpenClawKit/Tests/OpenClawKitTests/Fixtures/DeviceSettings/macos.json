@@ -7,7 +7,8 @@
       "selectedId": "paper",
       "available": [{"id": "paper", "name": "Original"}, {"id": "origami", "name": "Origami"}]
     },
-    "launchAtLoginAvailable": false, "quickChatEnabled": true, "quickChatShortcut": null, "debugPaneEnabled": false
+    "launchAtLoginAvailable": false, "keepGatewayRunning": false, "keepGatewayRunningAvailable": true,
+    "quickChatEnabled": true, "quickChatShortcut": null, "debugPaneEnabled": false
   },
   "capabilities": {
     "canvasEnabled": true, "cameraEnabled": false, "computerControlEnabled": true,

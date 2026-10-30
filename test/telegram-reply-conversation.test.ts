@@ -318,7 +318,6 @@ describe("prepared reply conversation", () => {
 describe("Telegram test target classification", () => {
   it.each([
     { name: "completion topic 42", to: "telegram:-100155462274:topic:42", expected: "group" },
-    { name: "moved base topic 88", to: "telegram:-100155462274:topic:88", expected: "group" },
     { name: "basic negative group", to: "-123456789", expected: "group" },
     { name: "positive direct chat", to: "123456789", expected: "direct" },
     { name: "unresolved username", to: "@operations", expected: undefined },

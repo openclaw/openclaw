@@ -1,4 +1,5 @@
 import type {
+  ProviderLoginOption,
   SystemAgentSetupActivateResult,
   SystemAgentSetupDetectResult,
   SystemAgentSetupVerifyResult,
@@ -17,7 +18,7 @@ export const MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS = null;
 export type ModelSetupPageState =
   | { phase: "loading" }
   | { phase: "ready"; result: SystemAgentSetupDetectResult }
-  | { phase: "detect-error"; message: string };
+  | { phase: "detect-error" };
 
 export function preparedModelPageState(
   result: SystemAgentSetupDetectResult,
@@ -62,9 +63,15 @@ export type ModelSetupWizardResult =
   | WizardNextResult
   | { done: true; status: "not-admitted"; error: string };
 
+export type ModelSetupWizardRecovery = {
+  sessionId: string;
+  authChoice: string;
+  authKind?: ProviderLoginOption["kind"];
+};
+
 type ModelSetupWizardPhase =
   | { phase: "idle" }
-  | { phase: "starting"; authChoice: string }
+  | { phase: "starting"; authChoice: string; notice?: string }
   | {
       phase: "step";
       authChoice: string;
@@ -73,12 +80,54 @@ type ModelSetupWizardPhase =
       busy: boolean;
       validationError: string | null;
     }
-  | { phase: "done"; authChoice: string; preparedModelRef?: string }
+  | { phase: "done" }
   | { phase: "cancelled"; message: string }
   | { phase: "error"; message: string };
 
-export type ModelSetupWizardState = ModelSetupWizardPhase & { authLabel?: string };
+// authBrandId is the Gateway-supplied brand of the selected sign-in, not its choice id.
+export type ModelSetupWizardState = ModelSetupWizardPhase & {
+  authLabel?: string;
+  authBrandId?: string;
+};
 export type ModelSetupWizardDraft = { stepId: string | null; value: unknown };
+
+export type ModelSetupState = {
+  pageState: ModelSetupPageState;
+  activationState: ModelSetupActivationState;
+  verifyState: ModelSetupVerifyState;
+  wizardState: ModelSetupWizardState;
+  wizardMode: "auth" | "prepare" | "activate";
+  wizardDraft: ModelSetupWizardDraft;
+  manualProviderId: string;
+  manualApiKey: string;
+  manualError: string | null;
+  moreSignInOpen: boolean;
+  nativeSessionCatalogsEnabled: boolean;
+  iconUrls: Record<string, string>;
+  setupRefreshWarning: string | null;
+  detectionRequest: object | null;
+  cancellationNotice: string | null;
+};
+
+export function createModelSetupState(): ModelSetupState {
+  return {
+    pageState: { phase: "loading" },
+    activationState: { phase: "idle" },
+    verifyState: { phase: "idle" },
+    wizardState: { phase: "idle" },
+    wizardMode: "auth",
+    wizardDraft: { stepId: null, value: undefined },
+    manualProviderId: "",
+    manualApiKey: "",
+    manualError: null,
+    moreSignInOpen: false,
+    nativeSessionCatalogsEnabled: false,
+    iconUrls: {},
+    setupRefreshWarning: null,
+    detectionRequest: null,
+    cancellationNotice: null,
+  };
+}
 
 export function updateModelSetupWizardDraft(
   draft: ModelSetupWizardDraft,
@@ -124,7 +173,7 @@ export function mapActivationResult(params: {
       phase: "success",
       modelRef: result.modelRef,
       ...(result.modelTarget ? { modelTarget: result.modelTarget } : {}),
-      ...(typeof result.latencyMs === "number" ? { latencyMs: result.latencyMs } : {}),
+      ...(result.latencyMs !== undefined ? { latencyMs: result.latencyMs } : {}),
       ...(warning ? { warning } : {}),
     };
   }
@@ -142,7 +191,7 @@ export function mapVerifyResult(result: SystemAgentSetupVerifyResult): ModelSetu
       phase: "ok",
       modelRef: result.modelRef,
       ...(result.modelTarget ? { modelTarget: result.modelTarget } : {}),
-      ...(typeof result.latencyMs === "number" ? { latencyMs: result.latencyMs } : {}),
+      ...(result.latencyMs !== undefined ? { latencyMs: result.latencyMs } : {}),
     };
   }
   return { phase: "failed", status: result.status, error: formatUiExternalText(result.error) };
@@ -163,16 +212,15 @@ export function wizardStateFromResult(
     };
   }
   if (result.done && result.status === "done") {
-    return {
-      phase: "done",
-      authChoice,
-      ...(result.preparedModelRef ? { preparedModelRef: result.preparedModelRef } : {}),
-    };
+    return { phase: "done" };
   }
-  if (result.status === "cancelled") {
-    return { phase: "cancelled", message: formatUiExternalText(result.error, fallbackError) };
-  }
-  return { phase: "error", message: formatUiExternalText(result.error, fallbackError) };
+  const cancelled = result.status === "cancelled";
+  // The Gateway ends its own wizard sessions with the bare word "cancelled"; show our sentence instead.
+  const error = cancelled && result.error?.trim().toLowerCase() === "cancelled" ? "" : result.error;
+  return {
+    phase: cancelled ? "cancelled" : "error",
+    message: formatUiExternalText(error, fallbackError),
+  };
 }
 
 export function initialWizardValue(step: WizardStep): unknown {

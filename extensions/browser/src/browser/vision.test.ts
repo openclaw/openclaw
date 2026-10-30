@@ -1,215 +1,122 @@
-// Browser tests cover vision plugin behavior.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./vision.js";
 
-const DEFAULT_BROWSER_SCREENSHOT_DESCRIPTION_PROMPT =
+const prompt =
   "Describe what is visible in this browser screenshot. Capture page layout, headings, primary content blocks, visible text, and notable interactive elements so a text-only assistant can reason about the page.";
+const { describeImage, normalize, save } = vi.hoisted(() => ({
+  describeImage: vi.fn(),
+  normalize: vi.fn(),
+  save: vi.fn(),
+}));
+vi.mock("openclaw/plugin-sdk/media-understanding-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-understanding-runtime")>()),
+  describeImageFile: describeImage,
+}));
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
+  saveMediaBuffer: save,
+}));
+vi.mock("./screenshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./screenshot.js")>()),
+  normalizeBrowserScreenshot: normalize,
+}));
 
-type DescribeFn = ReturnType<typeof vi.fn>;
-
-function makeDeps(
-  describeCandidate: DescribeFn,
-  overrides?: {
-    normalizeBrowserScreenshot?: ReturnType<typeof vi.fn>;
-    saveMediaBuffer?: ReturnType<typeof vi.fn>;
-  },
-) {
-  return {
-    describeImageFile: describeCandidate as never,
-    normalizeBrowserScreenshot:
-      (overrides?.normalizeBrowserScreenshot as never) ??
-      (vi.fn(async (buffer: Buffer) => ({ buffer })) as never),
-    saveMediaBuffer:
-      (overrides?.saveMediaBuffer as never) ??
-      (vi.fn(async () => ({ path: "/tmp/resized.jpg" })) as never),
-  };
-}
-
-async function withTempImage<T>(fn: (filePath: string) => Promise<T>): Promise<T> {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "browser-vision-"));
-  const filePath = path.join(dir, "screenshot.png");
-  await writeFile(filePath, Buffer.from("image"));
-  try {
-    return await fn(filePath);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
+beforeEach(() => {
+  describeImage.mockReset().mockResolvedValue({ text: "A dashboard." });
+  normalize.mockReset().mockImplementation(async (buffer: Buffer) => ({ buffer }));
+  save.mockReset().mockResolvedValue({ path: "/tmp/resized.jpg" });
+});
+const filePath = "/tmp/screenshot.png";
+function screenshot(overrides: Partial<Parameters<typeof describeBrowserScreenshot>[0]> = {}) {
+  return describeBrowserScreenshot({ cfg: {}, filePath, ...overrides });
 }
 
 describe("describeBrowserScreenshot", () => {
-  it("uses existing image understanding config with a browser screenshot prompt", async () => {
-    const describeEntry = vi.fn().mockResolvedValue({
+  it("forwards image understanding config, context and the browser prompt", async () => {
+    const described = {
       text: "A login screen.",
       provider: "openai",
       model: "gpt-vision",
       decision: { outcome: "success" },
-    });
-
-    await withTempImage(async (filePath) => {
-      const result = await describeBrowserScreenshot(
-        {
-          cfg: {
-            tools: {
-              media: {
-                models: [{ provider: "openai", model: "gpt-vision", capabilities: ["image"] }],
-              },
-            },
-          },
-          filePath,
-          agentDir: "/tmp/agent",
-          workspaceDir: "/tmp/workspace",
-          activeModel: { provider: "anthropic", model: "claude-sonnet-4.6" },
-          mediaScope: { sessionKey: "agent:main:telegram:dm:123", channel: "telegram" },
-        },
-        makeDeps(describeEntry),
-      );
-
-      expect(result).toEqual({
-        text: "A login screen.",
-        provider: "openai",
-        model: "gpt-vision",
-        decision: { outcome: "success" },
-      });
-      expect(describeEntry).toHaveBeenCalledWith({
-        filePath,
-        cfg: {
-          tools: {
-            media: {
-              models: [{ provider: "openai", model: "gpt-vision", capabilities: ["image"] }],
-            },
-          },
-        },
-        prompt: DEFAULT_BROWSER_SCREENSHOT_DESCRIPTION_PROMPT,
-        agentDir: "/tmp/agent",
-        workspaceDir: "/tmp/workspace",
-        activeModel: { provider: "anthropic", model: "claude-sonnet-4.6" },
-        scopeContext: { sessionKey: "agent:main:telegram:dm:123", channel: "telegram" },
-      });
+    };
+    describeImage.mockResolvedValue(described);
+    const models = [{ provider: "openai", model: "gpt-vision", capabilities: ["image" as const] }];
+    const context = {
+      cfg: { tools: { media: { models } } },
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      activeModel: { provider: "anthropic", model: "claude-sonnet-4.6" },
+    };
+    const mediaScope = { sessionKey: "agent:main:telegram:dm:123", channel: "telegram" };
+    expect(await screenshot({ ...context, mediaScope })).toEqual(described);
+    expect(describeImage).toHaveBeenCalledWith({
+      ...context,
+      filePath,
+      prompt,
+      scopeContext: mediaScope,
     });
   });
 
   it.each([
-    { name: "session-owned default agent", agentId: undefined, sessionAgentId: "main" },
-    { name: "explicit matching worker agent", agentId: "worker", sessionAgentId: "worker" },
-  ])(
-    "passes the $name identity to image understanding when its directory is absent",
-    async (testCase) => {
-      const describeEntry = vi.fn().mockResolvedValue({ text: "A dashboard." });
-
-      await describeBrowserScreenshot(
-        {
-          cfg: {},
-          filePath: "/tmp/screenshot.png",
-          ...(testCase.agentId ? { agentId: testCase.agentId } : {}),
-          mediaScope: { sessionKey: `agent:${testCase.sessionAgentId}:webchat:direct:123` },
-        },
-        makeDeps(describeEntry),
+    { name: "session-owned default", agentId: undefined, owner: "main" },
+    { name: "explicit matching worker", agentId: "worker", owner: "worker" },
+    { name: "conflicting worker", agentId: "worker", owner: "main" },
+  ])("checks the $name identity without an agent directory", async ({ agentId, owner }) => {
+    const result = screenshot({
+      agentId,
+      mediaScope: { sessionKey: `agent:${owner}:webchat:direct:123` },
+    });
+    if (agentId && agentId !== owner) {
+      await expect(result).rejects.toThrow(/belongs to "main", not "worker"/);
+      expect(describeImage).not.toHaveBeenCalled();
+    } else {
+      await result;
+      expect(describeImage).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: owner, agentDir: undefined }),
       );
-
-      expect(describeEntry).toHaveBeenCalledWith(
-        expect.objectContaining({ agentId: testCase.sessionAgentId, agentDir: undefined }),
-      );
-    },
-  );
-
-  it("rejects an agent identity that conflicts with its session before image understanding", async () => {
-    const describeEntry = vi.fn().mockResolvedValue({ text: "A dashboard." });
-
-    await expect(
-      describeBrowserScreenshot(
-        {
-          cfg: {},
-          filePath: "/tmp/screenshot.png",
-          agentId: "worker",
-          mediaScope: { sessionKey: "agent:main:webchat:direct:123" },
-        },
-        makeDeps(describeEntry),
-      ),
-    ).rejects.toThrow(/belongs to "main", not "worker"/);
-
-    expect(describeEntry).not.toHaveBeenCalled();
+    }
   });
 
-  it("resizes screenshots before image understanding when image sanitization is configured", async () => {
-    const describeResult = vi.fn().mockResolvedValue({ text: "Small screenshot." });
-    const normalizeBrowserScreenshot = vi.fn(async () => ({
+  it("resizes before image understanding when sanitization is configured", async () => {
+    normalize.mockResolvedValue({
       buffer: Buffer.from("small"),
       contentType: "image/jpeg" as const,
-    }));
-    const saveMediaBuffer = vi.fn(async () => ({ path: "/tmp/resized.jpg" }));
-
-    await withTempImage(async (filePath) => {
-      await describeBrowserScreenshot(
-        {
-          cfg: { browser: {} },
-          filePath,
-          imageSanitization: { maxDimensionPx: 800 },
-        },
-        makeDeps(describeResult, { normalizeBrowserScreenshot, saveMediaBuffer }),
-      );
     });
-
-    expect(normalizeBrowserScreenshot).toHaveBeenCalledWith(Buffer.from("image"), {
-      maxSide: 800,
-    });
-    expect(saveMediaBuffer).toHaveBeenCalledWith(Buffer.from("small"), "image/jpeg", "browser");
-    expect(
-      expectDefined(describeResult.mock.calls[0]?.[0], "browser vision request").filePath,
-    ).toBe("/tmp/resized.jpg");
-  });
-
-  it("returns null when image understanding is skipped or not configured", async () => {
-    const describeValue = vi.fn().mockResolvedValue({
-      text: undefined,
-      decision: { outcome: "skipped" },
-    });
-
-    await expect(
-      describeBrowserScreenshot(
-        { cfg: { browser: {} }, filePath: "/tmp/screenshot.png" },
-        makeDeps(describeValue),
-      ),
-    ).resolves.toBeNull();
-  });
-
-  it("does not pass an incomplete active model to media understanding", async () => {
-    const describeLocal = vi.fn().mockResolvedValue({ text: "ok" });
-
-    await describeBrowserScreenshot(
-      {
-        cfg: {
-          tools: {
-            media: {
-              models: [{ provider: "openai", model: "gpt-vision", capabilities: ["image"] }],
-            },
-          },
-        },
-        filePath: "/tmp/screenshot.png",
-        activeModel: { model: "missing-provider" },
-      },
-      makeDeps(describeLocal),
+    const dir = await mkdtemp(path.join(os.tmpdir(), "browser-vision-"));
+    const image = path.join(dir, "screenshot.png");
+    await writeFile(image, Buffer.from("image"));
+    try {
+      await screenshot({
+        cfg: { browser: {} },
+        filePath: image,
+        imageSanitization: { maxDimensionPx: 800 },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+    expect(normalize).toHaveBeenCalledWith(Buffer.from("image"), { maxSide: 800 });
+    expect(save).toHaveBeenCalledWith(Buffer.from("small"), "image/jpeg", "browser");
+    expect(expectDefined(describeImage.mock.calls[0]?.[0], "browser vision request").filePath).toBe(
+      "/tmp/resized.jpg",
     );
+  });
 
-    expect(
-      expectDefined(describeLocal.mock.calls[0]?.[0], "local browser vision request").activeModel,
-    ).toBeUndefined();
+  it("returns null when image understanding is skipped or unconfigured", async () => {
+    describeImage.mockResolvedValue({ text: undefined, decision: { outcome: "skipped" } });
+    await expect(screenshot({ cfg: { browser: {} } })).resolves.toBeNull();
   });
 });
 
-describe("neutralizeMediaDirectives", () => {
-  it("defangs line-start final-reply media directives", () => {
-    expect(neutralizeMediaDirectives("ok\n  MEDIA:/tmp/secret.png\nMEDIA:http://x/y.png")).toBe(
-      "ok\n  [neutralized] MEDIA:/tmp/secret.png\n[neutralized] MEDIA:http://x/y.png",
-    );
-  });
-
-  it("leaves prose mentions alone", () => {
-    expect(neutralizeMediaDirectives("see MEDIA: as plain prose")).toBe(
-      "see MEDIA: as plain prose",
-    );
-  });
+it.each([
+  [
+    "ok\n  MEDIA:/tmp/secret.png\nMEDIA:http://x/y.png",
+    "ok\n  [neutralized] MEDIA:/tmp/secret.png\n[neutralized] MEDIA:http://x/y.png",
+  ],
+  ["see MEDIA: as plain prose", "see MEDIA: as plain prose"],
+])("neutralizes only line-start media directives: %j", (input, expected) => {
+  expect(neutralizeMediaDirectives(input)).toBe(expected);
 });

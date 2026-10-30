@@ -9,9 +9,11 @@ import type { TtsAutoMode } from "../config/types.tts.js";
 import { createTtsDirectiveTextStreamCleaner } from "./directives.js";
 import { resolveStatusTtsSnapshot } from "./status-config.js";
 import { resolveConfiguredTtsMode } from "./tts-config.js";
+import type { PreparedTtsPreferences } from "./tts-preferences.js";
 
 export function shouldDeferFinalTtsText(params: {
   cfg: OpenClawConfig;
+  preparedTtsPreferences?: PreparedTtsPreferences;
   ttsAuto?: TtsAutoMode;
   agentId?: string;
   channelId?: string;
@@ -32,6 +34,7 @@ export function shouldDeferFinalTtsText(params: {
   }
   const status = resolveStatusTtsSnapshot({
     cfg: params.cfg,
+    preparedTtsPreferences: params.preparedTtsPreferences,
     sessionAuto: params.ttsAuto,
     agentId: params.agentId,
     channelId: params.channelId,
@@ -48,10 +51,10 @@ export function shouldDeferFinalTtsText(params: {
 export function mergeDeferredFinalText(streamedText: string, finalText?: string): string {
   const streamed = streamedText.trim();
   const final = finalText?.trim() ?? "";
-  if (!streamed) {
+  if (!streamed || streamed.replace(/\n{2,}/g, "\n") === final.replace(/\n{2,}/g, "\n")) {
     return final;
   }
-  if (!final || streamed === final || streamed.startsWith(final)) {
+  if (!final || streamed.startsWith(final)) {
     return streamed;
   }
   if (final.startsWith(streamed)) {
@@ -69,7 +72,7 @@ export function cleanDeferredFinalText(text: string | undefined): string {
     return "";
   }
   const cleaner = createTtsDirectiveTextStreamCleaner();
-  return `${cleaner.push(text)}${cleaner.flush()}`.replace(/[ \t]+\n/gu, "\n");
+  return `${cleaner.push(text)}${cleaner.flush()}`;
 }
 
 export function buildCaptionedFinalTextFallback(payload: ReplyPayload): ReplyPayload {

@@ -1,20 +1,63 @@
-/**
- * OAuth identity comparison and mirroring decisions.
- * Guards cross-agent credential copy/adoption so refreshed credentials cannot
- * overwrite a different account's local auth state.
- */
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  loadBundledPluginPublicSurfaceModuleSyncCore,
+  MissingPublicSurfaceError,
+} from "../../plugin-sdk/facade-loader.js";
 import type { AuthProfileCredential, OAuthCredential } from "./types.js";
 
-/** Normalize account-id style identity tokens for exact comparison. */
-export function normalizeAuthIdentityToken(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+type GithubCopilotOAuthSurface = {
+  normalizeGithubCopilotOAuthScope: (raw: string | undefined) => string | undefined;
+};
+
+export function isSafeToCopyOAuthRoutingScope(
+  existing: Pick<OAuthCredential, "provider" | "enterpriseUrl">,
+  incoming: Pick<OAuthCredential, "provider" | "enterpriseUrl">,
+): boolean {
+  if (existing.provider !== incoming.provider) {
+    return false;
+  }
+  if (existing.provider !== "github-copilot") {
+    return true;
+  }
+  // Credential identity uses shipped policy even when plugin runtime is disabled.
+  // Never select a replacement policy from an environment-controlled plugin root.
+  let surface: GithubCopilotOAuthSurface;
+  try {
+    surface = loadBundledPluginPublicSurfaceModuleSyncCore<GithubCopilotOAuthSurface>({
+      dirName: "github-copilot",
+      artifactBasename: "api.js",
+      env: {},
+    });
+  } catch (error) {
+    if (error instanceof MissingPublicSurfaceError) {
+      return false;
+    }
+    throw error;
+  }
+  const { normalizeGithubCopilotOAuthScope } = surface;
+  const existingScope = normalizeGithubCopilotOAuthScope(existing.enterpriseUrl);
+  const incomingScope = normalizeGithubCopilotOAuthScope(incoming.enterpriseUrl);
+  return existingScope !== undefined && existingScope === incomingScope;
 }
 
-/** Normalize email identity tokens for case-insensitive comparison. */
-export function normalizeAuthEmailToken(value: string | undefined): string | undefined {
-  return normalizeAuthIdentityToken(value)?.toLowerCase();
+export type OAuthIdentity = Pick<OAuthCredential, "accountId" | "email" | "issuer" | "clientId"> &
+  Partial<Pick<OAuthCredential, "provider" | "enterpriseUrl">>;
+
+export function hasOidcRegistration(credential: OAuthIdentity): boolean {
+  return credential.issuer !== undefined && credential.clientId !== undefined;
+}
+
+/** Identity evidence includes OIDC registration, even when its subject is unavailable. */
+export function hasOAuthIdentity(credential: OAuthIdentity): boolean {
+  return (
+    hasOidcRegistration(credential) ||
+    normalizeOptionalString(credential.accountId) !== undefined ||
+    normalizeOptionalLowercaseString(credential.email) !== undefined
+  );
 }
 
 /**
@@ -23,13 +66,33 @@ export function normalizeAuthEmailToken(value: string | undefined): string | und
  * - adopt: main-agent store -> sub-agent store
  */
 export function isSafeToCopyOAuthIdentity(
-  existing: Pick<OAuthCredential, "accountId" | "email">,
-  incoming: Pick<OAuthCredential, "accountId" | "email">,
+  existing: OAuthIdentity,
+  incoming: OAuthIdentity,
 ): boolean {
-  const aAcct = normalizeAuthIdentityToken(existing.accountId);
-  const bAcct = normalizeAuthIdentityToken(incoming.accountId);
-  const aEmail = normalizeAuthEmailToken(existing.email);
-  const bEmail = normalizeAuthEmailToken(incoming.email);
+  if (
+    existing.provider !== undefined &&
+    incoming.provider !== undefined &&
+    !isSafeToCopyOAuthRoutingScope(
+      { provider: existing.provider, enterpriseUrl: existing.enterpriseUrl },
+      { provider: incoming.provider, enterpriseUrl: incoming.enterpriseUrl },
+    )
+  ) {
+    return false;
+  }
+  const aAcct = normalizeOptionalString(existing.accountId);
+  const bAcct = normalizeOptionalString(incoming.accountId);
+  if (hasOidcRegistration(existing) || hasOidcRegistration(incoming)) {
+    // The provider binds accountId to its verified registration identity before
+    // persistence. Older unbound credentials must reconnect, never fall back to email.
+    return (
+      existing.issuer === incoming.issuer &&
+      existing.clientId === incoming.clientId &&
+      aAcct !== undefined &&
+      aAcct === bAcct
+    );
+  }
+  const aEmail = normalizeOptionalLowercaseString(existing.email);
+  const bEmail = normalizeOptionalLowercaseString(incoming.email);
 
   if (aAcct !== undefined && bAcct !== undefined) {
     return aAcct === bAcct;
@@ -46,49 +109,36 @@ export function isSafeToCopyOAuthIdentity(
   return true;
 }
 
-type OAuthMirrorDecisionReason =
-  | "no-existing-credential"
-  | "incoming-fresher"
-  | "non-oauth-existing-credential"
-  | "provider-mismatch"
+type OAuthMirrorDecision =
+  | "mirror"
+  | "keep"
   | "identity-mismatch-or-regression"
   | "incoming-not-fresher";
 
-type OAuthMirrorDecision =
-  | {
-      shouldMirror: true;
-      reason: Extract<OAuthMirrorDecisionReason, "no-existing-credential" | "incoming-fresher">;
-    }
-  | {
-      shouldMirror: false;
-      reason: Exclude<OAuthMirrorDecisionReason, "no-existing-credential" | "incoming-fresher">;
-    };
-
-/** Decide whether a refreshed OAuth credential should mirror into another store. */
-export function shouldMirrorRefreshedOAuthCredential(params: {
+export function resolveOAuthMirrorDecision(params: {
   existing: AuthProfileCredential | undefined;
   refreshed: OAuthCredential;
 }): OAuthMirrorDecision {
   const { existing, refreshed } = params;
   if (!existing) {
-    return { shouldMirror: true, reason: "no-existing-credential" };
+    return "mirror";
   }
   if (existing.type !== "oauth") {
-    return { shouldMirror: false, reason: "non-oauth-existing-credential" };
+    return "keep";
   }
   if (existing.provider !== refreshed.provider) {
-    return { shouldMirror: false, reason: "provider-mismatch" };
+    return "keep";
   }
   if (!isSafeToCopyOAuthIdentity(existing, refreshed)) {
-    return { shouldMirror: false, reason: "identity-mismatch-or-regression" };
+    return "identity-mismatch-or-regression";
   }
   const refreshedExpires = asDateTimestampMs(refreshed.expires);
   if (refreshedExpires === undefined) {
-    return { shouldMirror: false, reason: "incoming-not-fresher" };
+    return "incoming-not-fresher";
   }
   const existingExpires = asDateTimestampMs(existing.expires);
   if (existingExpires !== undefined && existingExpires >= refreshedExpires) {
-    return { shouldMirror: false, reason: "incoming-not-fresher" };
+    return "incoming-not-fresher";
   }
-  return { shouldMirror: true, reason: "incoming-fresher" };
+  return "mirror";
 }

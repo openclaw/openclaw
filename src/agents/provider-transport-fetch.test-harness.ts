@@ -101,10 +101,8 @@ export {
   ensureModelProviderLocalServiceMock,
   fetchWithSsrFGuardMock,
   managedStreamCleanupRegistrations,
-  mergeModelProviderRequestOverridesMock,
   resolveProviderRequestPolicyConfigMock,
   shouldUseEnvHttpProxyForUrlMock,
-  withTrustedEnvProxyGuardedFetchModeMock,
 };
 
 export function installProviderTransportFetchTestHooks() {

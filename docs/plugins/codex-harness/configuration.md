@@ -21,7 +21,7 @@ The Codex harness configuration map and the turn-level behavior each setting con
 | Allow eligible OpenAI turns to use Codex implicitly | Exact official HTTPS Responses/ChatGPT route, no authored provider request override, runtime unset/`auto` | OpenAI provider/model config       |
 | Sign in with ChatGPT/Codex OAuth                    | `openclaw models auth login --provider openai`                                                            | CLI auth profile                   |
 | Add API-key backup for Codex runs                   | `openai:*` API-key profile listed after subscription auth in `auth.order.openai`                          | CLI auth profile + OpenClaw config |
-| Fail closed when Codex is unavailable               | Provider or model `agentRuntime.id: "codex"`                                                              | OpenClaw model/provider config     |
+| Stop execution when Codex is unavailable            | Provider or model `agentRuntime.id: "codex"`                                                              | OpenClaw model/provider config     |
 | Use direct OpenAI API traffic                       | Provider or model `agentRuntime.id: "openclaw"` with normal OpenAI auth                                   | OpenClaw model/provider config     |
 | Tune app-server behavior                            | `plugins.entries.codex.config.appServer.*`                                                                | Codex plugin config                |
 | Enable native Codex plugin apps                     | `plugins.entries.codex.config.codexPlugins.*`                                                             | Codex plugin config                |
@@ -49,11 +49,24 @@ cutoff controls are runtime controls, not request overrides.
 
 ### Restricted turns and ring zero
 
-OpenClaw applies Codex restrictions per turn, not as a permanent session mode.
-An existing session can therefore run one restricted turn and return to its
-normal Codex thread on the next unrestricted turn. When a restriction is
-temporary, OpenClaw preserves the normal thread binding and uses a temporary
-restricted thread where necessary.
+OpenClaw evaluates Codex tool policy on every turn. Compatible conversation-wide
+restrictions reuse the same native thread, including after a connection restart.
+Temporary restrictions, such as per-run allowlists, scheduled restrictions, or
+sender-specific restrictions, use an isolated thread where necessary and preserve
+the conversation's existing binding. A temporary first turn does not establish
+a permanent restricted binding. Verified subagent completions carrying inherited
+tool restrictions also use this temporary scope, so the next owner turn can
+resume the original thread with the unseen completion input and answer as quoted
+context. A successful owner turn covers that delta so later turns do not replay it.
+The completion still obeys its inherited restrictions;
+the child's own persistent policy is unchanged.
+
+When a managed restricted thread's creation policy changes, or an older binding
+has no saved policy fingerprint, OpenClaw creates a compatible successor and
+projects the prepared conversation history into it. A failed replacement keeps
+the previous binding. Existing ownership guards still reject replacing an
+externally owned thread or one protected by active work; changing policy does
+not broaden that thread's permissions.
 
 An ordinary **policy-restricted turn** occurs when an explicit OpenClaw tool
 policy cannot be mapped safely onto Codex's native tool surface. Common
@@ -123,15 +136,35 @@ whether any individual file was fully loaded or truncated.
 
 ### Compaction
 
-Do not set `compaction.model` or `compaction.provider` on Codex-backed
-agents. Codex compacts through its native app-server thread state, so
-OpenClaw ignores those local summarizer overrides at runtime, and
-`openclaw doctor --fix` removes them when the agent uses Codex.
+`agents.defaults.compaction.model` selects the model for OpenClaw host summaries,
+including the history summary before seeding a fresh Codex thread. Doctor preserves
+this setting. Native Codex compaction and `/compact` remain owned by Codex and do
+not use this override. A locked model selection also takes precedence over the
+host summary model.
+
+After native compaction, context usage reflects Codex's new history estimate.
+When Codex supplies no estimate, context usage stays unknown until the next
+reported measurement. Compaction does not reset cumulative token usage.
+
+Do not set `compaction.provider` on Codex-backed agents. Doctor removes unsupported
+provider overrides and migrates legacy Lossless configuration as described below.
 
 An authored `models.providers.*.models[].contextTokens` cap is forwarded to
 Codex thread start and resume as `model_context_window`. Codex clamps the value
 to the model's native maximum and derives automatic compaction from the capped
-window. When the model entry has no authored cap, OpenClaw sends no override.
+window. This applies to configured model chats even when Codex supplies the
+model catalog. When the model entry has no authored cap, OpenClaw sends no
+override. Sessions pinned to an existing native runtime retain their own
+context settings instead of inheriting the outer agent's model cap.
+
+On ordinary configured model chats, that authored cap also bounds host context
+engine assembly and maintenance. OpenClaw reserves space for the current input,
+instructions, tools, and output before assembling history, and retains the
+successful assembly's budget when recovering accepted turns. A smaller current
+run budget still wins. This is operator policy, not discovery of Codex's usable
+allowance: Codex can apply a smaller native limit or a model-specific reserve.
+Choose the authored limit with enough native headroom. Unconfigured models do
+not inherit another model's cap.
 
 Lossless remains supported as a context engine for assembly, ingestion, and
 maintenance around Codex turns, configured through
@@ -144,14 +177,67 @@ owns compaction. The native app-server harness supports context engines
 that need pre-prompt assembly; generic CLI backends, including `codex-cli`,
 do not provide that host capability.
 
+When OpenClaw has no resolved token budget, context engines receive the usable
+window reported by Codex. Assembly can reuse a bound thread's observation only
+for the same model and when no newer unreported turn superseded it. Before an
+observation is available, only an explicit authored cap supplies a budget;
+otherwise the budget remains unknown. Resolved OpenClaw budgets take precedence,
+and learning a native window does not change the thread's bootstrap policy.
+
+For explicitly budgeted context-engine projections, history selected by assembly
+is not silently shortened again to fit a single native user input. It travels as
+quoted-user fragments of at most 8 KiB of UTF-8 text, with images carried
+separately, preserving text, sender labels, and image order. Framing overhead is
+reserved before assembly. The current request remains normal user input,
+separate from quoted history.
+
+OpenClaw seeds selected history once when a native thread starts. Later selections
+that extend the same history append only their new suffix; an unchanged selection
+is not injected again, including after a restart or native thread resume. A
+rewritten selection or changed bootstrap epoch starts a fresh native thread with
+the new selected history instead of reinjecting the full selection into the old
+thread. Codex owns the resulting native history and compaction and may summarize
+it. Use the built-in OpenClaw runtime (`agentRuntime.id: "openclaw"`) when a context
+engine must fully control the model's history and compaction.
+
+Selected saved attachments are restored under the same finite remaining history
+allowance used for assembly. Complete restored text, file wrappers, sender
+labels, separators, and image estimates consume that allowance together. An
+expansion that exceeds it stops before native history or inference is dispatched,
+instead of silently clipping the selected quote. Existing file-extraction limits
+and visible extraction dispositions remain the host media owner's policy.
+
+Ordinary assembly failures retain the existing prompt fallback. Saved attachment
+failures, continuations, and runtime refreshes retain their stricter handling.
+A failed fresh-thread seed is not marked ready. An uncertain append to a reused
+thread releases its OpenClaw binding without deleting the native transcript, so
+a retry starts fresh instead of blindly repeating the append. A crash after an
+append but before its acknowledgment is saved can still require a fresh thread;
+this carrier does not introduce an exactly-once durability guarantee.
+Transport limits still apply and produce an error instead of a partial history.
+
+Fresh Codex threads, including ordinary **Fork conversation** sessions, receive
+recent saved history within a bounded continuity window. Conversation text and
+summaries that fit this window are preserved without a separate per-message
+cutoff; longer history keeps its newest tail. Tool payloads and restored
+attachments retain their own limits.
+
 For Codex-backed agents, `/compact` starts native Codex app-server
 compaction on the bound thread and waits for its terminal result. The shared
 `agents.defaults.compaction.timeoutSeconds` budget applies; on timeout,
 OpenClaw asks Codex to interrupt the native turn and keeps the per-thread fence
 until termination is confirmed. It never falls back to a context engine or
 public OpenAI summarizer. If the native Codex thread binding is missing or
-stale, the command fails closed instead of silently switching compaction
-backends.
+stale, the command stops with an error instead of silently switching compaction
+backends. A SIWC-backed native thread cannot use manual `/compact`.
+Automatic in-turn compaction remains available; continue the conversation
+or start a new session when you need a fresh context.
+
+Cancellation prevents native requests that have not been submitted, including
+overload retries. After submission, OpenClaw keeps the thread occupied until
+native completion, interruption, or safe retirement is confirmed. Stopped turns
+close visible compaction progress without marking unfinished compaction successful
+or making previously observed native work eligible for replay.
 
 ### Direct API long context
 
@@ -294,7 +380,7 @@ of `875900`. Active context grew from `197032` to `377386`, `561957`, and
 `750745` tokens without manual compaction; the next small turn triggered
 automatic compaction to `75980` active tokens, with a minimum after-compaction
 snapshot of `68375`. Compaction took `2810` ms and persisted a count of one. A
-durable marker survived compaction and restart, a deterministic long response
+durable marker survived compaction and restart, a fixed long response
 produced `5442` output tokens, and OpenClaw sent the Codex app-server tier
 `priority` on every call. That request evidence does not prove which upstream
 tier processed each call. The full suite took `401.37` seconds. These timings
@@ -318,7 +404,7 @@ limits, and billing. See
 </Warning>
 
 The rest of this guide covers
-[deployment shape and fail-closed routing](/plugins/codex-harness/routing),
+[deployment shape and routing that requires Codex](/plugins/codex-harness/routing),
 [guardian approval policy](/plugins/codex-harness/app-server), and
 [native Codex plugins and Computer Use](/plugins/codex-harness/native-features).
 For full option lists, defaults, enums, discovery, environment isolation,

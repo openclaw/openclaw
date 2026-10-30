@@ -1,7 +1,7 @@
 import { kindFromMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-// DashScope-compatible video provider adapts DashScope-style generation APIs.
+import { toImageDataUrl } from "../image-generation/image-assets.js";
 import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
 import {
   assertOkOrThrowHttpError,
@@ -9,167 +9,34 @@ import {
   createProviderOperationTimeoutResolver,
   executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
-  postJsonRequest,
+  postJsonResponse,
   readProviderBinaryResponse,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
+  type postJsonRequest,
   type ProviderOperationDeadline,
   type ProviderOperationTimeoutMs,
 } from "../plugin-sdk/provider-http.js";
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
+import {
+  DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
+  DASHSCOPE_WAN_VIDEO_SIZE_BY_GEOMETRY,
+} from "./dashscope-wan-models.js";
+import { normalizeVideoGenerationDuration } from "./duration-support.js";
 import type {
   GeneratedVideoAsset,
-  VideoGenerationCatalogModelEntry,
-  VideoGenerationProviderCapabilities,
   VideoGenerationRequest,
   VideoGenerationResult,
   VideoGenerationSourceAsset,
 } from "./types.js";
 
-// DashScope-compatible video helper for Wan-style async task APIs: submit JSON,
-// poll task status, then download generated video URLs with byte limits.
-export const DEFAULT_DASHSCOPE_WAN_VIDEO_MODEL = "wan2.6-t2v";
-export const DASHSCOPE_WAN_VIDEO_MODELS = [
+export {
+  DASHSCOPE_WAN_VIDEO_CAPABILITIES,
+  DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
+  DASHSCOPE_WAN_VIDEO_MODELS,
   DEFAULT_DASHSCOPE_WAN_VIDEO_MODEL,
-  "wan2.6-i2v",
-  "wan2.6-r2v",
-  "wan2.6-r2v-flash",
-  "wan2.7-r2v",
-];
-
-const DASHSCOPE_WAN_VIDEO_RESOLUTIONS = ["720P", "1080P"] as const;
-const DASHSCOPE_WAN_VIDEO_ASPECT_RATIOS = ["16:9", "9:16", "1:1", "4:3", "3:4"] as const;
-const DASHSCOPE_WAN_LONG_VIDEO_DURATIONS = [
-  2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-] as const;
-const DASHSCOPE_WAN_SHORT_VIDEO_DURATIONS = [2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
-const DASHSCOPE_WAN_VIDEO_SIZE_BY_GEOMETRY: Readonly<
-  Record<string, Readonly<Record<string, string>>>
-> = {
-  "480P": {
-    "16:9": "832*480",
-    "9:16": "480*832",
-    "1:1": "624*624",
-  },
-  "720P": {
-    "16:9": "1280*720",
-    "9:16": "720*1280",
-    "1:1": "960*960",
-    "4:3": "1088*832",
-    "3:4": "832*1088",
-  },
-  "1080P": {
-    "16:9": "1920*1080",
-    "9:16": "1080*1920",
-    "1:1": "1440*1440",
-    "4:3": "1632*1248",
-    "3:4": "1248*1632",
-  },
-};
-const DASHSCOPE_WAN_VIDEO_SIZES = DASHSCOPE_WAN_VIDEO_RESOLUTIONS.flatMap((resolution) =>
-  Object.values(DASHSCOPE_WAN_VIDEO_SIZE_BY_GEOMETRY[resolution] ?? {}),
-);
-
-export const DASHSCOPE_WAN_VIDEO_CAPABILITIES = {
-  generate: {
-    maxVideos: 1,
-    maxDurationSeconds: 15,
-    supportedDurationSeconds: DASHSCOPE_WAN_LONG_VIDEO_DURATIONS,
-    sizes: DASHSCOPE_WAN_VIDEO_SIZES,
-    aspectRatios: DASHSCOPE_WAN_VIDEO_ASPECT_RATIOS,
-    resolutions: DASHSCOPE_WAN_VIDEO_RESOLUTIONS,
-    supportsSize: true,
-    supportsAspectRatio: true,
-    supportsResolution: true,
-    supportsAudio: true,
-    supportsWatermark: true,
-  },
-  imageToVideo: {
-    enabled: true,
-    maxVideos: 1,
-    maxInputImages: 1,
-    maxDurationSeconds: 15,
-    supportedDurationSeconds: DASHSCOPE_WAN_LONG_VIDEO_DURATIONS,
-    resolutions: DASHSCOPE_WAN_VIDEO_RESOLUTIONS,
-    supportsSize: false,
-    supportsAspectRatio: false,
-    supportsResolution: true,
-    supportsAudio: true,
-    supportsWatermark: true,
-  },
-  videoToVideo: {
-    enabled: true,
-    maxVideos: 1,
-    maxInputImages: 5,
-    maxInputVideos: 3,
-    maxDurationSeconds: 10,
-    supportedDurationSeconds: DASHSCOPE_WAN_SHORT_VIDEO_DURATIONS,
-    sizes: DASHSCOPE_WAN_VIDEO_SIZES,
-    aspectRatios: DASHSCOPE_WAN_VIDEO_ASPECT_RATIOS,
-    resolutions: DASHSCOPE_WAN_VIDEO_RESOLUTIONS,
-    supportsSize: true,
-    supportsAspectRatio: true,
-    supportsResolution: true,
-    supportsAudio: true,
-    supportsWatermark: true,
-  },
-} satisfies VideoGenerationProviderCapabilities;
-
-const disabledVideoTransform = { enabled: false } as const;
-const dashscopeWanR2vCapabilities = {
-  ...DASHSCOPE_WAN_VIDEO_CAPABILITIES,
-  imageToVideo: {
-    ...DASHSCOPE_WAN_VIDEO_CAPABILITIES.videoToVideo,
-    enabled: true,
-  },
-};
-
-// One model catalog drives both agent-visible modes and request-local runtime
-// capability overlays, so the tool cannot advertise a mode the model rejects.
-export const DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL: Readonly<
-  Record<string, VideoGenerationCatalogModelEntry>
-> = {
-  "wan2.6-t2v": {
-    modes: ["generate"],
-    capabilities: {
-      generate: DASHSCOPE_WAN_VIDEO_CAPABILITIES.generate,
-      imageToVideo: disabledVideoTransform,
-      videoToVideo: disabledVideoTransform,
-    },
-  },
-  "wan2.6-i2v": {
-    modes: ["imageToVideo"],
-    capabilities: {
-      imageToVideo: DASHSCOPE_WAN_VIDEO_CAPABILITIES.imageToVideo,
-      videoToVideo: disabledVideoTransform,
-    },
-  },
-  "wan2.6-r2v": {
-    modes: ["imageToVideo", "videoToVideo"],
-    capabilities: dashscopeWanR2vCapabilities,
-  },
-  "wan2.6-r2v-flash": {
-    modes: ["imageToVideo", "videoToVideo"],
-    capabilities: dashscopeWanR2vCapabilities,
-  },
-  "wan2.7-r2v": {
-    modes: ["imageToVideo", "videoToVideo"],
-    capabilities: {
-      ...dashscopeWanR2vCapabilities,
-      imageToVideo: {
-        ...dashscopeWanR2vCapabilities.imageToVideo,
-        supportsAspectRatio: true,
-        supportsAudio: false,
-      },
-      videoToVideo: {
-        ...dashscopeWanR2vCapabilities.videoToVideo,
-        supportsAspectRatio: true,
-        supportsAudio: false,
-      },
-    },
-  },
-};
+} from "./dashscope-wan-models.js";
 
 export const DEFAULT_VIDEO_GENERATION_DURATION_SECONDS = 5;
 export const DEFAULT_VIDEO_GENERATION_TIMEOUT_MS = 120_000;
@@ -182,7 +49,7 @@ export const DEFAULT_VIDEO_RESOLUTION_TO_SIZE: Record<string, string> = {
 const DEFAULT_VIDEO_GENERATION_POLL_INTERVAL_MS = 2_500;
 const DEFAULT_VIDEO_GENERATION_MAX_POLL_ATTEMPTS = 120;
 
-export type DashscopeVideoGenerationResponse = {
+type DashscopeVideoGenerationResponse = {
   output?: {
     task_id?: string;
     task_status?: string;
@@ -202,6 +69,21 @@ export type DashscopeVideoGenerationResponse = {
 };
 
 type DashscopeWanVideoMode = "t2v" | "i2v" | "r2v";
+
+function resolveDashscopeWanVideoModel(req: VideoGenerationRequest): string {
+  const model = req.model.trim();
+  if (
+    /^wan[^/]*-t2v(?:-|$)/u.test(model) &&
+    req.inputImages?.length === 1 &&
+    !req.inputVideos?.length
+  ) {
+    const sibling = model.replace("-t2v", "-i2v");
+    if (DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL[sibling]?.modes?.includes("imageToVideo")) {
+      return sibling;
+    }
+  }
+  return model;
+}
 
 function resolveDashscopeWanVideoMode(req: VideoGenerationRequest): DashscopeWanVideoMode {
   const model = req.model.trim().toLowerCase();
@@ -255,14 +137,11 @@ export function buildDashscopeVideoGenerationInput(params: {
   providerLabel: string;
   req: VideoGenerationRequest;
 }): Record<string, unknown> {
-  const unsupported = [...(params.req.inputImages ?? []), ...(params.req.inputVideos ?? [])].some(
-    (asset) => !asset.url?.trim(),
-  );
-  // DashScope accepts remote references in this path; buffer uploads require a
-  // different provider-specific flow, so fail before silently dropping refs.
-  if (unsupported) {
+  if (
+    (params.req.inputVideos ?? []).some((asset) => !/^https?:\/\//iu.test(asset.url?.trim() ?? ""))
+  ) {
     throw new Error(
-      `${params.providerLabel} video generation currently requires remote http(s) URLs for reference images/videos.`,
+      `${params.providerLabel} video generation requires remote http(s) URLs for reference videos.`,
     );
   }
   const input: Record<string, unknown> = {
@@ -270,17 +149,47 @@ export function buildDashscopeVideoGenerationInput(params: {
   };
   const mode = resolveDashscopeWanVideoMode(params.req);
   assertDashscopeWanVideoInputs({ ...params, mode });
-  const referenceUrls = resolveVideoGenerationReferenceUrls(
-    params.req.inputImages,
-    params.req.inputVideos,
-  );
+  const wan27 = isDashscopeWan27Model(params.req.model);
+  // Model Studio allows 20 MB for Wan 2.5/2.6 I2V and Wan 2.7 media images;
+  // older or unlisted generations use the conservative 10 MB limit.
+  const maxImageMb = /^wan2\.[567](?:-|$)/iu.test(params.req.model) ? 20 : 10;
+  const assertImageWithinLimit = (bytes: number) => {
+    if (bytes > maxImageMb * 1024 * 1024) {
+      throw new Error(
+        `${params.providerLabel} reference image exceeds the ${maxImageMb} MB limit.`,
+      );
+    }
+  };
+  const imageUrls = (params.req.inputImages ?? []).map((asset) => {
+    const url = asset.url?.trim();
+    if (mode === "r2v" && !wan27) {
+      if (!url || !/^https?:\/\//iu.test(url)) {
+        throw new Error(
+          `${params.providerLabel} model ${params.req.model} requires remote http(s) URLs for reference images; use an i2v or Wan 2.7 model for local images.`,
+        );
+      }
+      return url;
+    }
+    if (url) {
+      const inline = /^data:[^,]*;base64,/iu.exec(url);
+      if (inline) {
+        assertImageWithinLimit(Buffer.byteLength(url.slice(inline[0].length), "base64"));
+      }
+      return url;
+    }
+    if (!asset.buffer?.length) {
+      throw new Error(`${params.providerLabel} image-to-video input is missing image data.`);
+    }
+    assertImageWithinLimit(asset.buffer.length);
+    return toImageDataUrl({ ...asset, buffer: asset.buffer, defaultMimeType: "image/png" });
+  });
   if (mode === "i2v") {
-    input.img_url = referenceUrls[0];
-  } else if (mode === "r2v" && isDashscopeWan27Model(params.req.model)) {
+    input.img_url = imageUrls[0];
+  } else if (mode === "r2v" && wan27) {
     input.media = [
-      ...(params.req.inputImages ?? []).map((asset) => ({
+      ...(params.req.inputImages ?? []).map((asset, index) => ({
         type: asset.role?.trim() || "reference_image",
-        url: asset.url?.trim() ?? "",
+        url: imageUrls[index],
       })),
       ...(params.req.inputVideos ?? []).map((asset) => ({
         type: asset.role?.trim() || "reference_video",
@@ -288,7 +197,10 @@ export function buildDashscopeVideoGenerationInput(params: {
       })),
     ];
   } else if (mode === "r2v") {
-    input.reference_urls = referenceUrls;
+    input.reference_urls = [
+      ...imageUrls,
+      ...resolveVideoGenerationReferenceUrls(undefined, params.req.inputVideos),
+    ];
   }
   return input;
 }
@@ -338,8 +250,9 @@ export function buildDashscopeVideoGenerationParameters(
       parameters.size = size;
     }
   }
-  if (typeof req.durationSeconds === "number" && Number.isFinite(req.durationSeconds)) {
-    parameters.duration = Math.max(1, Math.round(req.durationSeconds));
+  const duration = normalizeVideoGenerationDuration({ durationSeconds: req.durationSeconds });
+  if (duration !== undefined) {
+    parameters.duration = duration;
   }
   if (typeof req.audio === "boolean" && !wan27) {
     parameters.audio = req.audio;
@@ -555,6 +468,8 @@ export async function runDashscopeVideoGenerationTask(params: {
   dispatcherPolicy?: Parameters<typeof postJsonRequest>[0]["dispatcherPolicy"];
   defaultTimeoutMs?: number;
 }): Promise<VideoGenerationResult> {
+  const model = resolveDashscopeWanVideoModel({ ...params.req, model: params.model });
+  const req = { ...params.req, model };
   const defaultTimeoutMs = params.defaultTimeoutMs ?? DEFAULT_VIDEO_GENERATION_TIMEOUT_MS;
   const deadline = createProviderOperationDeadline({
     timeoutMs: params.timeoutMs ?? defaultTimeoutMs,
@@ -565,18 +480,18 @@ export async function runDashscopeVideoGenerationTask(params: {
     timeoutMs: createProviderOperationTimeoutResolver({ deadline, defaultTimeoutMs }),
     totalTimeoutMs: deadline.timeoutMs,
   });
-  const { response, release } = await postJsonRequest({
+  const submitted = await postJsonResponse<DashscopeVideoGenerationResponse>({
     url: params.url,
     headers: params.headers,
     body: {
-      model: params.model,
+      model,
       input: buildDashscopeVideoGenerationInput({
         providerLabel: params.providerLabel,
-        req: params.req,
+        req,
       }),
       parameters: buildDashscopeVideoGenerationParameters(
         {
-          ...params.req,
+          ...req,
           durationSeconds: params.req.durationSeconds ?? DEFAULT_VIDEO_GENERATION_DURATION_SECONDS,
         },
         DEFAULT_VIDEO_RESOLUTION_TO_SIZE,
@@ -586,22 +501,14 @@ export async function runDashscopeVideoGenerationTask(params: {
     fetchFn: params.fetchFn,
     allowPrivateNetwork: params.allowPrivateNetwork,
     dispatcherPolicy: params.dispatcherPolicy,
-  });
-
-  let submitted: DashscopeVideoGenerationResponse;
-  try {
-    await assertOkOrThrowHttpError(response, `${params.providerLabel} video generation failed`, {
+    errorLabel: `${params.providerLabel} video generation failed`,
+    responseLabel: `${params.providerLabel} video generation`,
+    errorOptions: {
       bodyTimeoutMs: bodyReadOptions.timeoutMs,
       onBodyTimeout: bodyReadOptions.onTimeout,
-    });
-    submitted = await readProviderJsonResponse<DashscopeVideoGenerationResponse>(
-      response,
-      `${params.providerLabel} video generation`,
-      bodyReadOptions,
-    );
-  } finally {
-    await release();
-  }
+    },
+    readOptions: bodyReadOptions,
+  });
 
   const taskId = submitted.output?.task_id?.trim();
   if (!taskId) {
@@ -634,7 +541,7 @@ export async function runDashscopeVideoGenerationTask(params: {
   });
   return {
     videos,
-    model: params.model,
+    model,
     metadata: {
       requestId: submitted.request_id,
       taskId,

@@ -1,16 +1,7 @@
-/**
- * Web-search provider credential resolver.
- *
- * Reads config values, env-backed secret refs, and provider-specific environment variables.
- */
 import { normalizeSecretInputString, resolveSecretInputRef } from "../../config/types.secrets.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
+import { readWebProviderEnvValue } from "../../web/provider-runtime-shared.js";
 
-/**
- * Resolves web-search provider credentials from config values, secret refs, or
- * provider-specific environment variables.
- */
-/** Returns the first usable credential for a web-search provider. */
 export function resolveWebSearchProviderCredential(params: {
   credentialValue: unknown;
   path: string;
@@ -22,25 +13,11 @@ export function resolveWebSearchProviderCredential(params: {
       // Web-search providers only accept concrete env-backed values at runtime.
       return undefined;
     }
-    const fromEnvRef = normalizeSecretInput(process.env[credentialRef.id]);
-    if (fromEnvRef) {
-      return fromEnvRef;
-    }
-    return undefined;
+    return normalizeSecretInput(process.env[credentialRef.id]) || undefined;
   }
 
-  const fromConfigRaw = normalizeSecretInputString(params.credentialValue);
-  const fromConfig = normalizeSecretInput(fromConfigRaw);
-  if (fromConfig) {
-    return fromConfig;
-  }
-
-  for (const envVar of params.envVars) {
-    const fromEnv = normalizeSecretInput(process.env[envVar]);
-    if (fromEnv) {
-      return fromEnv;
-    }
-  }
-
-  return undefined;
+  return (
+    normalizeSecretInput(normalizeSecretInputString(params.credentialValue)) ||
+    readWebProviderEnvValue(params.envVars)
+  );
 }

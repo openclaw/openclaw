@@ -101,26 +101,19 @@ final class GatewayConnectivityCoordinator {
 
     private func registerSleepWakeObservers() {
         let center = NSWorkspace.shared.notificationCenter
-        self.workspaceObservers.append(center.addObserver(
-            forName: NSWorkspace.willSleepNotification,
-            object: nil,
-            queue: .main)
-        { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self, let sleepCycleController = self.sleepCycleController else { return }
-                await sleepCycleController.willSleep(mode: self.resolvedMode)
-            }
-        })
-        self.workspaceObservers.append(center.addObserver(
-            forName: NSWorkspace.didWakeNotification,
-            object: nil,
-            queue: .main)
-        { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self, let sleepCycleController = self.sleepCycleController else { return }
-                await sleepCycleController.didWake(mode: self.resolvedMode)
-            }
-        })
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.didWakeNotification] {
+            self.workspaceObservers
+                .append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        guard let self, let sleepCycleController = self.sleepCycleController else { return }
+                        if name == NSWorkspace.willSleepNotification {
+                            await sleepCycleController.willSleep(mode: self.resolvedMode)
+                        } else {
+                            await sleepCycleController.didWake(mode: self.resolvedMode)
+                        }
+                    }
+                })
+        }
     }
 
     var localEndpointHostLabel: String? {

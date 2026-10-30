@@ -17,8 +17,8 @@ vi.mock("node:os", async (importOriginal) => {
 });
 
 describe.runIf(process.platform === "win32")("usage footer Windows home paths", () => {
-  afterEach(() => {
-    clearUsageBarTemplateCacheForTest();
+  afterEach(async () => {
+    await clearUsageBarTemplateCacheForTest();
     homeState.home = undefined;
   });
 

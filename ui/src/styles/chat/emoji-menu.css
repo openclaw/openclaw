@@ -1,13 +1,10 @@
-/* Keep the first paint hidden until the popup owner has applied its coordinates. */
-.emoji-menu-popup:not([data-current-placement]),
-.emoji-menu-popup:not([data-current-placement])::part(popup),
-.emoji-menu-popup:not([data-current-placement]) .emoji-menu {
-  visibility: hidden;
-}
-
-.emoji-menu-popup::part(popup) {
+.emoji-menu-popup {
+  --oc-overlay-max-width: min(300px, calc(100vw - 24px));
+  --oc-overlay-max-height: min(280px, 42vh);
   width: max-content;
-  max-width: min(300px, calc(100vw - 24px));
+  border: 0;
+  padding: 0;
+  background: transparent;
 }
 
 /* The popup owns placement; do not inherit the full-width slash sheet geometry. */
@@ -17,14 +14,14 @@
   width: max-content;
   min-width: 0;
   max-width: min(300px, calc(100vw - 24px));
-  max-height: min(280px, var(--auto-size-available-height, 42vh));
+  max-height: min(280px, var(--oc-overlay-available-height, 42vh));
   border-radius: var(--menu-radius);
   corner-shape: round;
   box-shadow: var(--overlay-shadow);
 }
 
 .emoji-menu .slash-menu__scroll {
-  max-height: max(0px, calc(min(280px, var(--auto-size-available-height, 42vh)) - 10px));
+  max-height: max(0px, calc(min(280px, var(--oc-overlay-available-height, 42vh)) - 10px));
   margin: 4px;
   padding: 0;
   overflow-x: hidden;

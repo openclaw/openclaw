@@ -1,4 +1,5 @@
 // TTS media-store tests cover stable paths, Control UI roots, and TTL cleanup.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

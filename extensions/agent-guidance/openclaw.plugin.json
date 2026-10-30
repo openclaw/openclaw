@@ -1,0 +1,49 @@
+{
+  "id": "agent-guidance",
+  "name": "Agent Guidance",
+  "description": "Shares instruction files across selected agents without editing their workspace files.",
+  "categories": ["other"],
+  "activation": { "onStartup": true },
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["directory", "agents"],
+    "anyOf": [
+      { "required": ["prepend"], "properties": { "prepend": { "minItems": 1 } } },
+      { "required": ["append"], "properties": { "append": { "minItems": 1 } } }
+    ],
+    "properties": {
+      "directory": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Absolute, operator-controlled directory outside agent-writable workspaces."
+      },
+      "agents": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 64,
+        "uniqueItems": true,
+        "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+      },
+      "prepend": {
+        "type": "array",
+        "maxItems": 8,
+        "uniqueItems": true,
+        "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+      },
+      "append": {
+        "type": "array",
+        "maxItems": 8,
+        "uniqueItems": true,
+        "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    }
+  },
+  "uiHints": {
+    "directory": { "label": "Guidance directory", "placeholder": "/srv/agent-guidance" },
+    "agents": { "label": "Agent IDs", "help": "Only these exact agent IDs receive guidance." },
+    "prepend": { "label": "Prepend files", "help": "Relative files added before the system prompt. Reload after edits." },
+    "append": { "label": "Append files", "help": "Relative files added after the system prompt. Reload after edits." }
+  }
+}

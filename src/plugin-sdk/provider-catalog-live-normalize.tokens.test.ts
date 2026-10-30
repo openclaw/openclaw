@@ -1,5 +1,6 @@
 // Plugin SDK tests cover vendor token-limit field mapping in live discovery.
 import { describe, expect, it } from "vitest";
+import { model as makeCatalogModel } from "../agents/model-catalog-fixtures.test-support.js";
 import { buildOpenAICompatibleLiveModels } from "./provider-catalog-live-normalize.internal.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
@@ -21,16 +22,7 @@ describe("live discovery vendor token-limit fields", () => {
       [{ id: "transport-only", object: "model", context_window: 262_144 }],
       {
         ...fallback,
-        models: [
-          {
-            id: "transport-only",
-            name: "Transport only",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            maxTokens: 8192,
-          },
-        ],
+        models: [makeCatalogModel("transport-only", "Transport only", { maxTokens: 8192 })],
       },
     );
 

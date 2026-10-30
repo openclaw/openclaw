@@ -1,17 +1,12 @@
-import type { PluginCategorySlug } from "../../packages/plugin-package-contract/src/index.js";
+import { managementMetadata } from "./management-service.test-support.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+const path = "/tmp/openclaw.json";
 
 export function configSnapshot(config: Record<string, unknown> = {}) {
   return {
-    snapshot: {
-      valid: true,
-      parsed: {},
-      path: "/tmp/openclaw.json",
-      sourceConfig: config,
-      hash: "base-hash",
-    },
+    snapshot: { valid: true, parsed: {}, path, sourceConfig: config, hash: "base-hash" },
     writeOptions: {
-      expectedConfigPath: "/tmp/openclaw.json",
+      expectedConfigPath: path,
       includeFileHashesForWrite: { "/tmp/plugins.json": "include-hash" },
       includeFileTargetsForWrite: { "/tmp/plugins.json": "/tmp/plugins.json" },
     },
@@ -22,14 +17,15 @@ export function metadataSnapshot(params: {
   enabled: boolean;
   id?: string;
   name?: string;
-  origin?: "bundled" | "global";
+  origin?: "bundled" | "global" | "config";
   installRecord?: Record<string, unknown>;
   packageBuild?: { bundledDist?: boolean };
   packageDependencies?: Record<string, string>;
   iconPath?: string;
   activityIconPath?: string;
   toolActivityIconPaths?: Record<string, string>;
-  categories?: PluginCategorySlug[];
+  categories?: PluginManifestRecord["categories"];
+  contracts?: PluginManifestRecord["contracts"];
   packageVersion?: string;
   configSchema?: PluginManifestRecord["configSchema"];
   channels?: string[];
@@ -39,12 +35,11 @@ export function metadataSnapshot(params: {
   const installRecord =
     params.installRecord ??
     (origin === "global" ? { source: "path", installPath: `/tmp/${id}` } : undefined);
+  const base = managementMetadata({ id, name: params.name, enabled: params.enabled });
   const manifest: PluginManifestRecord = {
-    id,
-    name: params.name ?? "Workboard",
-    description: "Coordinate agent work in a shared board.",
-    catalog: { featured: true, order: 10 },
+    ...base.plugins[0]!,
     ...(params.categories ? { categories: params.categories } : {}),
+    ...(params.contracts ? { contracts: params.contracts } : {}),
     ...(params.packageDependencies ? { packageDependencies: params.packageDependencies } : {}),
     ...(params.iconPath ? { iconPath: params.iconPath } : {}),
     ...(params.activityIconPath ? { activityIconPath: params.activityIconPath } : {}),
@@ -52,60 +47,38 @@ export function metadataSnapshot(params: {
       ? { toolActivityIconPaths: params.toolActivityIconPaths }
       : {}),
     channels: params.channels ?? [],
-    providers: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
     origin,
-    rootDir: `/tmp/${id}`,
-    source: `/tmp/${id}/index.ts`,
-    manifestPath: `/tmp/${id}/openclaw.plugin.json`,
     ...(params.configSchema ? { configSchema: params.configSchema } : {}),
   };
+  const record = {
+    ...base.index.plugins[0]!,
+    packageName: `@openclaw/${id}`,
+    ...(origin === "global" ? { installOwner: id } : {}),
+    ...(params.packageVersion ? { packageVersion: params.packageVersion } : {}),
+    origin,
+    ...(params.packageBuild ? { packageBuild: params.packageBuild } : {}),
+  };
   return {
+    ...base,
     index: {
-      plugins: [
-        {
-          pluginId: id,
-          ...(origin === "global" ? { installOwner: id } : {}),
-          packageName: `@openclaw/${id}`,
-          ...(params.packageVersion ? { packageVersion: params.packageVersion } : {}),
-          origin,
-          enabled: params.enabled,
-          rootDir: `/tmp/${id}`,
-          ...(params.packageBuild ? { packageBuild: params.packageBuild } : {}),
-        },
-      ],
+      plugins: [record],
       installRecords: installRecord ? { [id]: installRecord } : {},
     },
     byPluginId: new Map([[id, manifest]]),
     plugins: [manifest],
-    diagnostics: [],
-    normalizePluginId: (pluginId: string) => pluginId,
   };
 }
 
-export function emptyMetadataSnapshot() {
-  return {
-    index: { plugins: [], installRecords: {} },
-    byPluginId: new Map(),
-    plugins: [],
-    diagnostics: [],
-    normalizePluginId: (pluginId: string) => pluginId,
-  };
-}
+export const emptyMetadataSnapshot = () => ({
+  index: { plugins: [], installRecords: {} },
+  byPluginId: new Map(),
+  plugins: [],
+  diagnostics: [],
+  normalizePluginId: (pluginId: string) => pluginId,
+});
 
-export const hostedDiffsEntry = {
-  name: "@openclaw/diffs",
-  version: "2.0.0",
-  description: "Hosted description",
-  openclaw: {
-    plugin: { id: "diffs", label: "Hosted Diffs" },
-    install: { clawhubSpec: "clawhub:@openclaw/diffs", defaultChoice: "clawhub" },
-  },
-};
+export const hostedDiffsEntry = { openclaw: { plugin: { id: "diffs" } } };
 
-// Mirrors the ClawHub feed: package identity is remote, while runtime metadata stays local.
 export const hostedFeedDiffsEntry = {
   id: "@openclaw/diffs",
   title: "Diffs",
@@ -123,3 +96,15 @@ export const hostedFeedDiffsEntry = {
     ],
   },
 };
+
+export function mockHostedOfficialCatalog(
+  mock: { mockResolvedValue(value: unknown): unknown },
+  entries: unknown[],
+) {
+  mock.mockResolvedValue({
+    source: "hosted",
+    entries,
+    feed: { schemaVersion: 1, id: "test", generatedAt: "now", sequence: 1, entries: [] },
+    metadata: { url: "https://clawhub.ai/feed", status: 200, checksum: "hash" },
+  });
+}

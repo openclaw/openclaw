@@ -32,6 +32,10 @@ function resolvePtyCwd(candidate?: string, required = false): string {
   return os.homedir();
 }
 
+function isPtyDimension(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 2000;
+}
+
 function decodePtyInput(payloadJSON: string): NodePtyInput | null {
   try {
     const value = JSON.parse(payloadJSON) as unknown;
@@ -42,16 +46,8 @@ function decodePtyInput(payloadJSON: string): NodePtyInput | null {
     if (input.kind === "data" && typeof input.data === "string") {
       return { kind: "data", data: input.data };
     }
-    if (
-      input.kind === "resize" &&
-      Number.isInteger(input.cols) &&
-      Number.isInteger(input.rows) &&
-      (input.cols as number) >= 1 &&
-      (input.cols as number) <= 2000 &&
-      (input.rows as number) >= 1 &&
-      (input.rows as number) <= 2000
-    ) {
-      return { kind: "resize", cols: input.cols as number, rows: input.rows as number };
+    if (input.kind === "resize" && isPtyDimension(input.cols) && isPtyDimension(input.rows)) {
+      return { kind: "resize", cols: input.cols, rows: input.rows };
     }
     return null;
   } catch {
@@ -80,12 +76,7 @@ function decodePtyParams(paramsJSON: string | null | undefined, action: "start" 
     throw new Error(`INVALID_REQUEST: unknown terminal ${action} parameter: ${unknown}`);
   }
   const dimension = (candidate: unknown, label: string) => {
-    if (
-      typeof candidate !== "number" ||
-      !Number.isInteger(candidate) ||
-      candidate < 1 ||
-      candidate > 2000
-    ) {
+    if (!isPtyDimension(candidate)) {
       throw new Error(`INVALID_REQUEST: ${label} must be an integer from 1 to 2000`);
     }
     return candidate;

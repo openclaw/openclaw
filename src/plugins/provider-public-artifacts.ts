@@ -1,5 +1,4 @@
 import path from "node:path";
-// Extracts provider public artifacts from plugin metadata.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
@@ -23,7 +22,7 @@ import {
   type ProviderPolicySurface,
 } from "./provider-policy-surface.js";
 import { loadValidatedPublicSurfaceModule } from "./public-surface-loader.js";
-import { resolvePluginRootPublicSurfacePath } from "./public-surface-runtime.js";
+import { resolvePluginRootPublicSurfaceLocation } from "./public-surface-runtime.js";
 import { resolvePluginRuntimeRecord } from "./runtime-context.js";
 
 export { listProviderPolicyOwners } from "./provider-policy-owners.js";
@@ -36,26 +35,6 @@ type ProviderPolicyMetadata = {
   /** Direct result from this synchronous resolution; null records an observed miss. */
   directSurface?: BundledProviderPolicySurface | null;
 };
-
-function resolveBundledProviderPolicyPlugin(
-  providerId: string,
-  options: ProviderPolicyMetadata = {},
-): PluginManifestRecord | null {
-  const normalizedProviderId = normalizeProviderId(providerId);
-  if (!normalizedProviderId) {
-    return null;
-  }
-  const bundledPluginsDir = resolveBundledPluginsDir();
-  if (!bundledPluginsDir) {
-    return null;
-  }
-
-  const registry =
-    options.manifestRegistry ??
-    options.loadManifestRegistry?.() ??
-    loadPluginManifestRegistryCore();
-  return resolveBundledProviderPolicyOwner(normalizedProviderId, registry);
-}
 
 /** Resolves provider policy hooks for a bundled provider or its owning plugin. */
 export function resolveBundledProviderPolicySurface(
@@ -73,19 +52,23 @@ export function resolveBundledProviderPolicySurface(
   if (directSurface) {
     return directSurface;
   }
-  const ownerPlugin = resolveBundledProviderPolicyPlugin(normalizedProviderId, options);
-  if (ownerPlugin) {
-    const ownerSurface = resolveDirectBundledProviderPolicySurface(ownerPlugin.id);
-    if (ownerSurface) {
-      return ownerSurface;
-    }
+  if (!resolveBundledPluginsDir()) {
+    return null;
   }
+  const registry =
+    options.manifestRegistry ??
+    options.loadManifestRegistry?.() ??
+    loadPluginManifestRegistryCore();
+  const ownerPlugin = resolveBundledProviderPolicyOwner(normalizedProviderId, registry);
   if (!ownerPlugin) {
     return null;
   }
   // A stable plugin id can differ from its stock directory name. Use the
   // registry-owned root basename so its pre-runtime policy stays discoverable.
-  return resolveDirectBundledProviderPolicySurface(path.basename(ownerPlugin.rootDir));
+  return (
+    resolveDirectBundledProviderPolicySurface(ownerPlugin.id) ??
+    resolveDirectBundledProviderPolicySurface(path.basename(ownerPlugin.rootDir))
+  );
 }
 
 /** Resolves provider policy hooks from bundled or trusted official plugin artifacts. */
@@ -154,18 +137,17 @@ export function resolveProviderPolicySurfaceForOwner(
   if (record.origin !== "bundled" && record.trustedOfficialInstall !== true) {
     return null;
   }
-  const modulePath = resolvePluginRootPublicSurfacePath({
+  const resolved = resolvePluginRootPublicSurfaceLocation({
     pluginRoot: record.rootDir,
     pluginId: record.id,
     entrySource: record.source,
     artifactBasename: PROVIDER_POLICY_ARTIFACT,
   });
-  if (!modulePath) {
+  if (!resolved) {
     return null;
   }
   const location = {
-    modulePath,
-    boundaryRoot: record.rootDir,
+    ...resolved,
     surfaceLabel: `plugin public surface ${PROVIDER_POLICY_ARTIFACT}`,
     origin: record.origin,
     pluginId: record.id,
@@ -182,7 +164,7 @@ export function resolveProviderPolicySurfaceForOwner(
     boundaryLabel: "plugin root",
     rejectHardlinks: shouldRejectHardlinkedPluginFiles(record),
   }).modulePath;
-  const loader = getPluginSetupModuleLoader(record, source, record.rootDir);
+  const loader = getPluginSetupModuleLoader(record, source, resolved.boundaryRoot);
   return loader.initialize(() =>
     // SAFETY: The public-artifact extractor validates each named export before exposing it.
     extractProviderPolicySurface(loader(source) as Record<string, unknown>),

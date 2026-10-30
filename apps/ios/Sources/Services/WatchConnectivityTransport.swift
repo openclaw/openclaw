@@ -142,15 +142,11 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
     }
 
     private func updateCallbacks(_ update: (inout WatchConnectivityTransportCallbacks) -> Void) {
-        self.callbacksLock.lock()
-        defer { self.callbacksLock.unlock() }
-        update(&self.callbacks)
+        self.callbacksLock.withLock { update(&self.callbacks) }
     }
 
     private func callbacksSnapshot() -> WatchConnectivityTransportCallbacks {
-        self.callbacksLock.lock()
-        defer { self.callbacksLock.unlock() }
-        return self.callbacks
+        self.callbacksLock.withLock { self.callbacks }
     }
 
     private func requireReadySession() throws -> WCSession {
@@ -269,9 +265,6 @@ extension WatchConnectivityTransport: WCSessionDelegate {
                 + "error=\(error?.localizedDescription ?? "none")")
         if let error {
             Self.logger.error("watch activation failed: \(error.localizedDescription, privacy: .public)")
-        } else {
-            Self.logger.debug(
-                "watch activation state=\(Self.activationStateLabel(activationState), privacy: .public)")
         }
         self.emitStatusUpdate(Self.status(for: session))
     }
@@ -289,15 +282,10 @@ extension WatchConnectivityTransport: WCSessionDelegate {
     }
 
     func sessionWatchStateDidChange(_ session: WCSession) {
-        GatewayDiagnostics.log(
-            "watch messaging: watch state changed "
-                + "paired=\(session.isPaired) installed=\(session.isWatchAppInstalled)")
         self.emitStatusUpdate(Self.status(for: session))
     }
 
     func session(_: WCSession, didReceiveMessage message: [String: Any]) {
-        let type = (message["type"] as? String) ?? "unknown"
-        GatewayDiagnostics.log("watch messaging: didReceiveMessage type=\(type)")
         self.receivePayload(message, transport: "sendMessage")
     }
 
@@ -306,8 +294,6 @@ extension WatchConnectivityTransport: WCSessionDelegate {
         didReceiveMessage message: [String: Any],
         replyHandler: @escaping ([String: Any]) -> Void)
     {
-        let type = (message["type"] as? String) ?? "unknown"
-        GatewayDiagnostics.log("watch messaging: didReceiveMessageWithReply type=\(type)")
         self.receivePayload(
             message,
             transport: "sendMessage",
@@ -315,16 +301,10 @@ extension WatchConnectivityTransport: WCSessionDelegate {
     }
 
     func session(_: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
-        let type = (userInfo["type"] as? String) ?? "unknown"
-        GatewayDiagnostics.log("watch messaging: didReceiveUserInfo type=\(type)")
         self.receivePayload(userInfo, transport: "transferUserInfo")
     }
 
     func sessionReachabilityDidChange(_ session: WCSession) {
-        GatewayDiagnostics.log(
-            "watch messaging: reachability changed "
-                + "reachable=\(session.isReachable) paired=\(session.isPaired) "
-                + "installed=\(session.isWatchAppInstalled)")
         self.emitStatusUpdate(Self.status(for: session))
     }
 }

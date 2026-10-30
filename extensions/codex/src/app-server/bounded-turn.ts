@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { parse as parseToml } from "smol-toml";
@@ -10,10 +11,11 @@ import {
   closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
 } from "./attempt-client-cleanup.js";
-import type { CodexAppServerAuthRequirement, CodexAppServerPreparedAuth } from "./auth-bridge.js";
+import type { CodexAppServerAuthRequirement, CodexAppServerPreparedAuth } from "./auth-types.js";
 import { assertCodexPrivateHookIsolation } from "./bounded-hook-policy.js";
+import { isCodexOutputSchemaUnsupported } from "./bounded-turn-output-schema.js";
 import type { CodexAppServerClient } from "./client.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { resolveCodexAppServerRuntimeOptions, type CodexPluginConfig } from "./config.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { CodexEphemeralTurn } from "./ephemeral-turn.js";
 import type { CodexUsageProjection } from "./event-projector-usage.js";
@@ -34,18 +36,17 @@ import type {
   JsonValue,
 } from "./protocol.js";
 import { resolveCodexAppServerReasoningEffort } from "./reasoning-effort.js";
-import {
-  isCodexAppServerStartSelectionChangedError,
-  type createIsolatedCodexAppServerClient,
-} from "./shared-client.js";
-import { buildCodexRuntimeThreadConfig } from "./thread-lifecycle.js";
+import { codexPrewriteRejectionCause } from "./rpc-error.js";
 import {
   assertCodexManagedRequirementsDoNotOverrideToolPolicy,
   attestCodexRestrictedToolSurfaceMcpServersDisabled,
+  buildCodexRuntimeThreadConfig,
   buildCodexRingZeroThreadConfigPatch,
   readCodexInheritedMcpServerNames,
 } from "./thread-requests.js";
 import { resolveCodexPromptError } from "./usage-limit-error.js";
+
+const loadSharedClient = createLazyRuntimeModule(() => import("./shared-client.js"));
 
 const CODEX_APP_SERVER_ARGS_ENV_KEY = "OPENCLAW_CODEX_APP_SERVER_ARGS";
 const CODEX_BOUNDED_THREAD_CONFIG: JsonObject = {
@@ -69,13 +70,13 @@ const CODEX_SETTLED_FINALIZER_THREAD_CONFIG: JsonObject = {
 };
 
 export type CodexBoundedTurnOptions = {
-  pluginConfig?: unknown;
-  clientFactory?: typeof createIsolatedCodexAppServerClient;
+  pluginConfig?: CodexPluginConfig;
 };
 
 type CodexBoundedTurnResult = {
   text: string;
   items: CodexThreadItem[];
+  submittedInput: CodexUserInput[];
   model: string;
   nativeSelection: { model: string; modelProvider?: string | null };
   managedHooksEnabled: boolean;
@@ -87,7 +88,10 @@ type CodexBoundedTurnModelSelection = { mode: "required"; id: string } | { mode:
 class CodexBoundedTurnTimeoutError extends Error {
   override name = "TimeoutError";
 
-  constructor(taskLabel: string, timeoutMs: number) {
+  constructor(
+    taskLabel: string,
+    readonly timeoutMs: number,
+  ) {
     const bound = timeoutMs % 1_000 === 0 ? `${timeoutMs / 1_000}s` : `${timeoutMs}ms`;
     super(`codex app-server ${taskLabel} turn timed out after ${bound}`);
   }
@@ -110,6 +114,7 @@ type CodexBoundedTurnParams = {
   taskLabel: string;
   developerInstructions: string;
   input: CodexUserInput[];
+  outputSchema?: JsonObject;
   requiredModalities: string[];
   isolation: "configured-transport" | "private-stdio";
   threadConfig?: JsonObject;
@@ -156,12 +161,10 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   params: CodexBoundedTurnParams,
   appServer: ReturnType<typeof resolveCodexAppServerRuntimeOptions>,
   workspace: { codexHome?: string; cwd: string },
-  selectionAttempt = 0,
   timing?: { deadline: number; timeoutMs: number },
 ): Promise<CodexBoundedTurnResult> {
   const totalTimeoutMs = timing?.timeoutMs ?? resolveTimerTimeoutMs(params.timeoutMs, 100, 100);
   const timeoutError = new CodexBoundedTurnTimeoutError(params.taskLabel, totalTimeoutMs);
-  // Startup and selection retries share an elapsed budget, not a wall-clock deadline.
   const deadline = timing?.deadline ?? performance.now() + totalTimeoutMs;
   const timeoutMs = deadline - performance.now();
   if (timeoutMs <= 0) {
@@ -180,7 +183,6 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         params.requireNoExternalCapabilities === true,
       )
     : appServer.start;
-  const ownsClient = !params.options.clientFactory;
   const authSelection = params.preparedAuth
     ? { preparedAuth: params.preparedAuth }
     : { authProfileId: params.profile };
@@ -194,14 +196,12 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     assertCurrent: params.assertCurrent,
     ...(params.signal ? { abandonSignal: params.signal } : {}),
   };
-  const client = params.options.clientFactory
-    ? await params.options.clientFactory(clientOptions)
-    : await import("./shared-client.js").then(({ createIsolatedCodexAppServerClient }) =>
-        createIsolatedCodexAppServerClient({
-          ...clientOptions,
-          authProfileStore: params.authProfileStore,
-        }),
-      );
+  const client = await loadSharedClient().then(({ createIsolatedCodexAppServerClient }) =>
+    createIsolatedCodexAppServerClient({
+      ...clientOptions,
+      authProfileStore: params.authProfileStore,
+    }),
+  );
   const abortController = new AbortController();
   let activeThreadId: string | undefined;
   let activeTurnId = "";
@@ -234,7 +234,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   }
   const timeout = setTimeout(() => abortRun(timeoutError), Math.max(1, remainingRunMs));
   timeout.unref?.();
-  let retrySelection = false;
+  let fallbackInput: CodexUserInput[];
   const requestOptions = {
     timeoutMs,
     signal: abortController.signal,
@@ -345,6 +345,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
                     modelId: modelSelection.model,
                     supportedReasoningEfforts: modelSelection.supportedReasoningEfforts,
                   }),
+            ...(params.outputSchema ? { outputSchema: params.outputSchema } : {}),
           } satisfies CodexTurnStartParams,
           requestOptions,
         ),
@@ -393,6 +394,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       return {
         text,
         items: result.items,
+        submittedInput: params.input,
         usage: result.usage,
         model: modelSelection.id,
         nativeSelection: { model: thread.model, modelProvider: thread.modelProvider },
@@ -410,29 +412,32 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         timeoutError,
       );
     }
-    if (ownsClient && isCodexAppServerStartSelectionChangedError(error) && selectionAttempt === 0) {
-      retrySelection = true;
-    } else {
-      throw error;
+    if (!params.outputSchema || !isCodexOutputSchemaUnsupported(error)) {
+      throw codexPrewriteRejectionCause(error);
     }
+    fallbackInput = [
+      ...params.input,
+      {
+        type: "text",
+        text:
+          "Return one valid JSON value matching this JSON Schema. Do not include markdown or commentary.\n\n" +
+          JSON.stringify(params.outputSchema),
+        text_elements: [],
+      },
+    ];
   } finally {
     clearTimeout(timeout);
     params.signal?.removeEventListener("abort", abortFromCaller);
     await interruptPromise;
-    if (ownsClient) {
-      await closeCodexStartupClientBestEffort(client);
-    }
+    await closeCodexStartupClientBestEffort(client);
   }
-  if (retrySelection) {
-    return await runBoundedCodexAppServerTurnInWorkspace(
-      params,
-      appServer,
-      workspace,
-      selectionAttempt + 1,
-      { deadline, timeoutMs: totalTimeoutMs },
-    );
-  }
-  throw new Error("Codex bounded turn selection retry exited unexpectedly");
+  // Retry only after the rejected client's cleanup, within the original deadline.
+  return await runBoundedCodexAppServerTurnInWorkspace(
+    { ...params, input: fallbackInput, outputSchema: undefined },
+    appServer,
+    workspace,
+    { deadline, timeoutMs: totalTimeoutMs },
+  );
 }
 
 function resolveBoundedThreadConfig(
@@ -441,18 +446,13 @@ function resolveBoundedThreadConfig(
   inheritedMcpServerNames: readonly string[],
   enableManagedHooks: boolean,
 ): JsonObject {
-  const boundedConfig =
-    mergeCodexThreadConfigs(CODEX_BOUNDED_THREAD_CONFIG, params.threadConfig) ??
-    CODEX_BOUNDED_THREAD_CONFIG;
-  const privateConfig = workspace.codexHome
-    ? (mergeCodexThreadConfigs(boundedConfig, CODEX_PRIVATE_BOUNDED_THREAD_CONFIG) ?? boundedConfig)
-    : boundedConfig;
-  if (!params.requireNoExternalCapabilities) {
-    return privateConfig;
-  }
-  return (
-    mergeCodexThreadConfigs(
-      privateConfig,
+  const configs = [
+    CODEX_BOUNDED_THREAD_CONFIG,
+    params.threadConfig,
+    workspace.codexHome ? CODEX_PRIVATE_BOUNDED_THREAD_CONFIG : undefined,
+  ];
+  if (params.requireNoExternalCapabilities) {
+    configs.push(
       CODEX_SETTLED_FINALIZER_THREAD_CONFIG,
       buildCodexRingZeroThreadConfigPatch(
         { toolsAllow: ["openclaw"] },
@@ -462,8 +462,9 @@ function resolveBoundedThreadConfig(
       // Native administrator hooks remain active; the private process has no
       // operator/project hook sources or model-callable tools to inherit.
       enableManagedHooks ? { "features.hooks": true } : undefined,
-    ) ?? privateConfig
-  );
+    );
+  }
+  return mergeCodexThreadConfigs(...configs) ?? CODEX_BOUNDED_THREAD_CONFIG;
 }
 
 function buildPrivateCodexAppServerStartOptions(

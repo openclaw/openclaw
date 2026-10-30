@@ -7,7 +7,7 @@ import {
 import { resolveSessionToolAccess } from "./sessions-access.js";
 
 describe("resolveSessionToolAccess scoped providers", () => {
-  it.each(["grant", "unregister", "empty", "blank", "reject"] as const)(
+  it.each(["grant", "empty", "blank", "reject"] as const)(
     "awaits the scoped provider's %s outcome at the session-tool boundary",
     async (outcome) => {
       const requesterSessionKey = "agent:main:requester";
@@ -30,9 +30,6 @@ describe("resolveSessionToolAccess scoped providers", () => {
           visibility: "self",
           a2aPolicy: createAgentToAgentPolicy({}),
         });
-        if (outcome === "unregister") {
-          unregister();
-        }
         if (outcome === "reject") {
           pending.reject(new Error("provider unavailable"));
         } else {
@@ -48,6 +45,7 @@ describe("resolveSessionToolAccess scoped providers", () => {
           await expect(access).resolves.toEqual({
             allowed: true,
             expectedSessionId: "async-incarnation",
+            basis: "scoped-grant",
           });
         } else {
           await expect(access).resolves.toMatchObject({

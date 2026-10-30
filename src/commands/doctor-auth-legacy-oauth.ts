@@ -1,11 +1,11 @@
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
-/** Removes retired provider profiles and repairs legacy OAuth profile ids. */
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { repairOAuthProfileIdMismatch } from "../agents/auth-profiles/repair.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import { applyProviderConfigDefaultsForConfig } from "../config/provider-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { HealthFinding } from "../flows/health-checks.js";
 import {
   configReferencesAuthProfile,
   removeAuthProfileConfig,
@@ -30,6 +30,7 @@ export async function maybeRepairLegacyOAuthProfileIds(
 ): Promise<LegacyOAuthProfileRepairResult> {
   let nextCfg = cfg;
   const retiredProfileCleanupPlans: RetiredAuthProfileCleanupPlan[] = [];
+  const findings: HealthFinding[] = [];
   const repairCandidates = listAuthProfileRepairCandidates(cfg, process.env).map(
     ({ agentDir }) => ({
       agentDir,
@@ -46,7 +47,7 @@ export async function maybeRepairLegacyOAuthProfileIds(
     ) &&
     repairCandidates.every(({ profiles }) => Object.keys(profiles).length === 0)
   ) {
-    return { config: nextCfg, retiredProfileCleanupPlans };
+    return { config: nextCfg, retiredProfileCleanupPlans, findings };
   }
   const { resolvePluginProvidersCore } = await import("../plugins/providers.runtime.js");
   const providers = resolvePluginProvidersCore({
@@ -74,6 +75,16 @@ export async function maybeRepairLegacyOAuthProfileIds(
         initialValue: true,
       });
       if (!apply) {
+        findings.push({
+          checkId: "core/doctor/auth-migration/retired-profile",
+          target: profileId,
+          severity: "warning",
+          category: "recommended",
+          message: `Retired auth profile ${profileId} remains configured. Its provider's native login is unchanged.`,
+          fixHint:
+            "Run openclaw doctor --fix and accept the retired-profile cleanup to remove stale profile references. Keep your provider's native login.",
+          docsUrl: "https://docs.openclaw.ai/cli/doctor/running#auth-migration-recovery",
+        });
         continue;
       }
       const configuredProfileProvider = nextCfg.auth?.profiles?.[profileId]?.provider;
@@ -108,11 +119,11 @@ export async function maybeRepairLegacyOAuthProfileIds(
     }
   }
   if (!Object.values(nextCfg.auth?.profiles ?? {}).some((profile) => profile?.mode === "oauth")) {
-    return { config: nextCfg, retiredProfileCleanupPlans };
+    return { config: nextCfg, retiredProfileCleanupPlans, findings };
   }
   const store = ensureAuthProfileStoreWithoutExternalProfiles();
   if (Object.keys(store.profiles).length === 0) {
-    return { config: nextCfg, retiredProfileCleanupPlans };
+    return { config: nextCfg, retiredProfileCleanupPlans, findings };
   }
   for (const provider of providers) {
     for (const repairSpec of provider.oauthProfileIdRepairs ?? []) {
@@ -137,12 +148,22 @@ export async function maybeRepairLegacyOAuthProfileIds(
         initialValue: true,
       });
       if (!apply) {
+        findings.push({
+          checkId: "core/doctor/auth-migration/oauth-profile-id",
+          target: repairSpec.legacyProfileId,
+          severity: "warning",
+          category: "fix-now",
+          message: `OAuth profile references for ${label} still use a legacy profile ID.`,
+          fixHint:
+            "Run openclaw doctor --fix and accept the OAuth profile ID repair, then check openclaw models status for the intended account.",
+          docsUrl: "https://docs.openclaw.ai/cli/doctor/running#auth-migration-recovery",
+        });
         continue;
       }
       nextCfg = repair.config;
     }
   }
-  return { config: nextCfg, retiredProfileCleanupPlans };
+  return { config: nextCfg, retiredProfileCleanupPlans, findings };
 }
 
 export type RetiredAuthProfileCleanupPlan = {
@@ -153,4 +174,5 @@ export type RetiredAuthProfileCleanupPlan = {
 export type LegacyOAuthProfileRepairResult = {
   config: OpenClawConfig;
   retiredProfileCleanupPlans: readonly RetiredAuthProfileCleanupPlan[];
+  findings: readonly HealthFinding[];
 };

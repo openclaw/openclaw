@@ -1,17 +1,38 @@
-import type { Runtime } from "node:inspector";
+import type { Profiler, Runtime } from "node:inspector";
 import type { Session } from "node:inspector/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { parseNodeOptionsEnvVar } from "../infra/node-options.js";
+import type { HeapSpaceInfo } from "node:v8";
+import * as v8 from "node:v8";
+import { isMainThread } from "node:worker_threads";
+import { parseNodeOptionsEnvVar } from "../../node-runtime-env.mjs";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 
 export const DIAGNOSTIC_PROFILE_MAX_BYTES = 1024 * 1024;
-const ENGINE_NAMES = new Set(["(root)", "(program)", "(idle)", "(garbage collector)"]);
+const ENGINE_NAMES = new Set([
+  "(root)",
+  "(program)",
+  "(idle)",
+  "(garbage collector)",
+  // V8's heap sampler names its VM state when no JavaScript frame is available.
+  "(GC)",
+  "(PARSER)",
+  "(COMPILER)",
+  "(BYTECODE_COMPILER)",
+  "(V8 API)",
+  "(EXTERNAL)",
+  "(LOGGING)",
+  "(IDLE_EXTERNAL)",
+  "(IDLE)",
+  "(JS)",
+  "(deopt)",
+]);
 let capturing = false;
-let cleanupUncertain = false;
 
 type FailureReason =
+  | "cooldown"
+  | "heap-too-large"
   | "busy"
   | "unsupported"
   | "conflict"
@@ -26,12 +47,7 @@ export type DiagnosticProfileOutcome<Result> =
   | { status: "complete"; result: Result }
   | { status: "unavailable"; reason: FailureReason; cleanupFailed: boolean };
 
-type ProfileMeasurement = {
-  durationMs: number;
-  before: NodeJS.MemoryUsage;
-  after: NodeJS.MemoryUsage;
-};
-
+type ProfileMemoryUsage = NodeJS.MemoryUsage & { heapSpaces: HeapSpaceInfo[] };
 export class ProfileFailure extends Error {
   constructor(readonly reason: FailureReason) {
     super(reason);
@@ -44,11 +60,87 @@ export function assertProfile(valid: boolean): asserts valid {
   }
 }
 
-function hasProfilerConflict() {
+export function parseNativeCpuProfile(json: string): Profiler.Profile {
+  // V8 writes names and URLs verbatim. Escape them before decoding its native format.
+  const escaped = json.replace(
+    /"functionName":"(.*?)"(,"lineNumber":-?\d+,"columnNumber":-?\d+,"scriptId":-?\d+,"url":)"(.*?)"}(?=,"(?:children|deoptReason|positionTicks)":|})/gs,
+    (_match, name: string, location: string, url: string) =>
+      `"functionName":${JSON.stringify(name)}${location}${JSON.stringify(url)}}`,
+  );
+  // SAFETY: Only V8's native serializer supplies this graph and numeric script IDs.
+  const profile = JSON.parse(escaped) as Omit<Profiler.Profile, "nodes"> & {
+    nodes: (Omit<Profiler.ProfileNode, "callFrame"> & {
+      callFrame: Omit<Runtime.CallFrame, "scriptId"> & { scriptId: number };
+    })[];
+  };
+  // The native serializer owns this shape; inspector consumers require string IDs.
+  const nodes: Profiler.ProfileNode[] = [];
+  for (const node of profile.nodes) {
+    const frame = node.callFrame;
+    nodes.push({ ...node, callFrame: { ...frame, scriptId: String(frame.scriptId) } });
+  }
+  return { ...profile, nodes };
+}
+
+type ProfileCapture<Profile> = {
+  setup?: () => Promise<unknown>;
+  start: () => unknown;
+  stop: () => Promise<{ profile: Profile }> | { profile: Profile } | undefined;
+  close: () => unknown;
+};
+
+export function createInspectorProfileCapture<Profile>(
+  inspector: typeof import("node:inspector/promises"),
+  options: {
+    setup: (session: Session) => Promise<unknown>;
+    start: (session: Session) => Promise<unknown>;
+    stop: (session: Session) => Promise<{ profile: Profile }>;
+    disable: (session: Session) => Promise<unknown>;
+  },
+): ProfileCapture<Profile> {
+  const session = new inspector.Session();
+  session.connect();
+  return {
+    setup: () => options.setup(session),
+    start: () => options.start(session),
+    stop: () => options.stop(session),
+    close: async () => {
+      let disabled = false;
+      try {
+        await options.disable(session);
+        disabled = true;
+      } catch {
+        // Disconnect must still release the inspector after a failed disable.
+      }
+      session.disconnect();
+      if (!disabled) {
+        throw new ProfileFailure("cleanup-failed");
+      }
+    },
+  };
+}
+
+export function createNativeCpuProfileCapture(
+  intervalMicros: number,
+): ProfileCapture<Profiler.Profile> {
+  let handle: v8.SyncCPUProfileHandle | undefined;
+  return {
+    // Node shares its native profiler with the stall recorder's overlapping windows.
+    start: () => (handle = v8.startCpuProfile({ sampleInterval: intervalMicros / 1_000 })),
+    stop: () => handle && { profile: parseNativeCpuProfile(handle.stop()) },
+    close: () => handle?.[Symbol.dispose](),
+  };
+}
+
+export function hasProfilerConflict() {
   const options = parseNodeOptionsEnvVar(process.env.NODE_OPTIONS);
   return (
     options === null ||
     Boolean(process.env.NODE_V8_COVERAGE) ||
+    // Bun's environment-started inspector is not reported by inspector.url().
+    Boolean(
+      process.versions.bun && (process.env.BUN_INSPECT || process.env.BUN_INSPECT_CONNECT_TO),
+    ) ||
     [...process.execArgv, ...(options ?? [])].some((option) =>
       /^--(?:inspect|cpu-prof|heap-prof|prof|perf-|.*coverage)/.test(option.replaceAll("_", "-")),
     )
@@ -59,17 +151,14 @@ function codeUrl(url: string, packageRoot: string | null): string | undefined {
   if (/^node:[a-zA-Z0-9_./-]+$/.test(url)) {
     return url;
   }
-  if (!packageRoot || url.length > 2_048) {
+  // Path normalization can erase suffix segments containing parent traversals.
+  if (url.length > 2_048 || /[?#]/.test(url)) {
     return undefined;
   }
   let filename = url;
   if (url.startsWith("file:")) {
     try {
-      const parsed = new URL(url);
-      if (parsed.search || parsed.hash) {
-        return undefined;
-      }
-      filename = fileURLToPath(parsed);
+      filename = fileURLToPath(url);
     } catch {
       return undefined;
     }
@@ -77,9 +166,23 @@ function codeUrl(url: string, packageRoot: string | null): string | undefined {
   if (!path.isAbsolute(filename)) {
     return undefined;
   }
-  const relative = path.relative(packageRoot, filename).split(path.sep).join("/");
-  return /^(?:src|dist|node_modules)\/[a-zA-Z0-9_@./+-]+\.[cm]?js$/.test(relative) ||
-    /^src\/[a-zA-Z0-9_@./+-]+\.ts$/.test(relative)
+  const relative = packageRoot
+    ? path.relative(packageRoot, filename).split(path.sep).join("/")
+    : "";
+  // Ignore the installation's enclosing node_modules; classify only its contents.
+  const dependency = (
+    packageRoot && !relative.startsWith("..")
+      ? `/${relative}`
+      : path.normalize(filename).split(path.sep).join("/")
+  ).match(
+    /.*\/node_modules\/((?:@[a-zA-Z0-9_-][a-zA-Z0-9._-]*\/)?[a-zA-Z0-9_-][a-zA-Z0-9._-]*)\//,
+  )?.[1];
+  if (dependency) {
+    return `node_modules/${dependency}`;
+  }
+  return /^(?:packages\/[a-zA-Z0-9_@.+-]+\/)?(?:src|dist)\/[a-zA-Z0-9_@./+-]+\.[cm]?js$/.test(
+    relative,
+  ) || /^(?:packages\/[a-zA-Z0-9_@.+-]+\/)?src\/[a-zA-Z0-9_@./+-]+\.ts$/.test(relative)
     ? `openclaw:${relative}`
     : undefined;
 }
@@ -101,16 +204,20 @@ export function sanitizeDiagnosticProfileFrame(
   );
   const url = codeUrl(frame.url, packageRoot);
   const engine = frame.url === "" && ENGINE_NAMES.has(frame.functionName);
+  const attribution = url?.startsWith("node_modules/")
+    ? `[dep:${url.slice(13)}]`
+    : frame.scriptId === "0" && frame.url === "" && frame.lineNumber < 0 && !engine
+      ? "[native]"
+      : undefined;
   const safeName =
     engine ||
     (url !== undefined &&
       frame.functionName.length <= 256 &&
       /^(?:(?:(?:get|set) )?[$A-Z_a-z][$\w]*(?:\.[$A-Z_a-z][$\w]*)*)?$/.test(frame.functionName));
-  const redacted = !safeName || (!engine && !url);
   return {
-    redacted,
+    redacted: !safeName && !attribution,
     callFrame: {
-      functionName: safeName ? frame.functionName : "[redacted]",
+      functionName: attribution ?? (safeName ? frame.functionName : "[redacted]"),
       scriptId: frame.scriptId,
       url: url ?? "",
       lineNumber: frame.lineNumber,
@@ -119,20 +226,24 @@ export function sanitizeDiagnosticProfileFrame(
   };
 }
 
-/** Owns one ephemeral main-isolate capture; it never opens an inspector listener. */
+/** Owns one ephemeral isolate-local capture; it never opens an inspector listener. */
 export async function captureDiagnosticProfile<Profile, Result>(options: {
-  signal: AbortSignal;
+  signal?: AbortSignal;
   hasAuthority: () => boolean;
   durationMs: number;
-  setup: (session: Session) => Promise<unknown>;
-  start: (session: Session) => Promise<unknown>;
-  stop: (session: Session) => Promise<{ profile: Profile }>;
-  disable: (session: Session) => Promise<unknown>;
+  /** Worker captures require tracing admission from the Gateway; trace_events is main-only. */
+  workerTracingInactive?: true;
+  create: (inspector: typeof import("node:inspector/promises")) => ProfileCapture<Profile>;
   sanitize: (
     profile: Profile,
     packageRoot: string | null,
-    measurement: ProfileMeasurement,
-  ) => Result;
+    measurement: {
+      durationMs: number;
+      startBlockedMs: number;
+      before: ProfileMemoryUsage;
+      after: ProfileMemoryUsage;
+    },
+  ) => Result | Promise<Result>;
 }): Promise<DiagnosticProfileOutcome<Result>> {
   const unavailable = (
     reason: FailureReason,
@@ -142,40 +253,39 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
     reason,
     cleanupFailed,
   });
-  if (cleanupUncertain) {
-    return unavailable("cleanup-failed", true);
-  }
   if (capturing) {
     return unavailable("busy");
   }
   capturing = true;
-  let session: import("node:inspector/promises").Session | undefined;
-  let connected = false;
+  let capture: ProfileCapture<Profile> | undefined;
   let startAttempted = false;
   let stopAttempted = false;
   let failure: FailureReason | undefined;
   let cleanupFailed = false;
   let profile: Profile | undefined;
-  let before: NodeJS.MemoryUsage | undefined;
-  let after: NodeJS.MemoryUsage | undefined;
+  let before: ProfileMemoryUsage | undefined;
+  let after: ProfileMemoryUsage | undefined;
   let durationMs = 0;
+  let startBlockedMs = 0;
   let packageRoot: string | null = null;
   const assertActive = () => {
-    if (options.signal.aborted || !options.hasAuthority()) {
+    if (options.signal?.aborted || !options.hasAuthority()) {
       throw new ProfileFailure("cancelled");
     }
   };
   try {
     assertActive();
-    if (process.versions.bun) {
-      throw new ProfileFailure("unsupported");
-    }
     const inspector = await import("node:inspector/promises").catch(() => {
       throw new ProfileFailure("unsupported");
     });
-    const { getEnabledCategories } = await import("node:trace_events").catch(() => {
-      throw new ProfileFailure("unsupported");
-    });
+    const getEnabledCategories =
+      !isMainThread && options.workerTracingInactive
+        ? () => undefined
+        : (
+            await import("node:trace_events").catch(() => {
+              throw new ProfileFailure("unsupported");
+            })
+          ).getEnabledCategories;
     const assertTracingInactive = () => {
       // V8 can stream raw ProfileChunk data to an existing trace writer before
       // sanitization. Refuse all tracing; legacy and Perfetto match categories differently.
@@ -191,67 +301,73 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
       throw new ProfileFailure("conflict");
     }
     assertTracingInactive();
-    session = new inspector.Session();
-    session.connect();
-    connected = true;
-    await options.setup(session);
+    capture = options.create(inspector);
+    await capture.setup?.();
     assertActive();
     assertTracingInactive();
-    before = process.memoryUsage();
+    before = { ...process.memoryUsage(), heapSpaces: v8.getHeapSpaceStatistics() };
     const startedAt = performance.now();
     startAttempted = true;
-    await options.start(session);
+    // Inspector dispatch can synchronously scan V8's heap before returning a promise.
+    const starting = capture.start();
+    startBlockedMs = performance.now() - startedAt;
+    await starting;
     // The event loop owns this timer. Requested duration is not a hard wall-time
     // or V8 allocation bound when the Gateway is blocked; return native actual timing.
-    await delay(options.durationMs, undefined, { signal: options.signal });
+    if (options.durationMs > 0) {
+      await delay(options.durationMs, undefined, { signal: options.signal });
+    }
     assertActive();
     stopAttempted = true;
-    ({ profile } = await options.stop(session));
+    const stopped = await capture.stop();
+    if (!stopped) {
+      throw new ProfileFailure("capture-failed");
+    }
+    ({ profile } = stopped);
     durationMs = performance.now() - startedAt;
-    after = process.memoryUsage();
+    after = { ...process.memoryUsage(), heapSpaces: v8.getHeapSpaceStatistics() };
   } catch (error) {
     failure =
       error instanceof ProfileFailure
         ? error.reason
-        : options.signal.aborted
+        : options.signal?.aborted
           ? "cancelled"
-          : "capture-failed";
+          : error instanceof Error && error.message.startsWith("Inspector error -32601:")
+            ? "unsupported"
+            : "capture-failed";
   } finally {
-    if (session && connected) {
+    if (capture) {
       if (startAttempted && !stopAttempted) {
         try {
-          await options.stop(session);
+          await capture.stop();
         } catch {
           cleanupFailed = true;
         }
       }
       try {
-        await options.disable(session);
+        await capture.close();
       } catch {
         cleanupFailed = true;
       }
-      try {
-        session.disconnect();
-      } catch {
-        cleanupFailed = cleanupUncertain = true;
-      }
     }
-    capturing = false;
   }
   if (failure || cleanupFailed) {
+    capturing = false;
     return unavailable(failure ?? "cleanup-failed", cleanupFailed);
   }
   try {
     assertActive();
-    return {
-      status: "complete",
-      result: options.sanitize(profile!, packageRoot, {
-        durationMs,
-        before: before!,
-        after: after!,
-      }),
-    };
+    const result = await options.sanitize(profile!, packageRoot, {
+      durationMs,
+      startBlockedMs,
+      before: before!,
+      after: after!,
+    });
+    assertActive();
+    return { status: "complete", result };
   } catch (error) {
     return unavailable(error instanceof ProfileFailure ? error.reason : "invalid-profile");
+  } finally {
+    capturing = false;
   }
 }

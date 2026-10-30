@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { pathDisplayName } from "../../lib/path-display.ts";
 import { projectCloneInput, resolveProjectChip } from "./project-chip.ts";
 
 const projects = [
@@ -19,13 +20,12 @@ const projects = [
 describe("What chip state", () => {
   it.each([
     {
-      name: "filters registered and workspace projects locally",
+      name: "hides recent places and an unmatched workspace during a project query",
       query: "site",
-      expectedProjects: ["website"],
       expectedRecents: 0,
       showWorkspace: false,
     },
-  ])("$name", ({ query, expectedProjects, expectedRecents, showWorkspace }) => {
+  ])("$name", ({ query, expectedRecents, showWorkspace }) => {
     const state = resolveProjectChip({
       folder: "",
       workspace: "/workspace",
@@ -35,9 +35,25 @@ describe("What chip state", () => {
       recents: [],
       projectQuery: query,
     });
-    expect(state.localProjects.map((project) => project.id)).toEqual(expectedProjects);
     expect(state.recents).toHaveLength(expectedRecents);
     expect(state.showWorkspace).toBe(showWorkspace);
+  });
+
+  it("matches canonically equivalent Unicode in the workspace row", () => {
+    // Stored NFD path segment; user types NFC (precomposed é).
+    const nfcQuery = "Caf\u00e9";
+    const nfdWorkspace = "/workspace/Cafe\u0301";
+    expect(pathDisplayName(nfdWorkspace)).not.toBe(nfcQuery);
+    const state = resolveProjectChip({
+      folder: "",
+      workspace: nfdWorkspace,
+      projectId: "",
+      selectedRemoteProject: null,
+      projects,
+      recents: [],
+      projectQuery: nfcQuery,
+    });
+    expect(state.showWorkspace).toBe(true);
   });
 
   it("omits project recents already shown in the project list", () => {

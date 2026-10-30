@@ -27,12 +27,24 @@ export type StructuredInputCompileResult =
   | { kind: "ready"; plan: StructuredInputPlan }
   | { kind: "unsupported"; message: string };
 
+/** The existing MCP view owner supplies and retires this capability with the elicitation. */
+export type StructuredInputResourceContext = {
+  viewId: string;
+  uploads: boolean;
+  previews: boolean;
+  /** Checks resources admitted by this exact pending form, never arbitrary URI syntax. */
+  isUploadedResource: (questionId: string, uri: string) => boolean;
+};
+
 export type StructuredInputCompilerOptions = {
   protocolName: string;
   allowEmptyForm?: boolean;
   minimumChoiceCount?: 1 | 2;
   allowEnumNames?: boolean;
   allowImagePicker?: boolean;
+  /** OpenAI rich forms, including suggestions, thumbnails, and resource choices. */
+  allowRichForms?: boolean;
+  resourceContext?: StructuredInputResourceContext;
   booleanLabels?: readonly [string, string];
   metadata?: {
     secretPath?: readonly string[];
@@ -45,15 +57,24 @@ const MAX_SNAPSHOT_DEPTH = 8;
 const MAX_SNAPSHOT_NODES = 256;
 const MAX_SNAPSHOT_OBJECT_KEYS = 32;
 const MAX_SNAPSHOT_ARRAY_ITEMS = 16;
-const MAX_SNAPSHOT_TEXT = 65_536;
+export const STRUCTURED_INPUT_MAX_TEXT_CHARS = 65_536;
 const MAX_FIELD_NAME = 256;
 
 /** Copies only bounded, enumerable own data properties without invoking accessors. */
-export function snapshotStructuredInput(value: unknown): StructuredInputValue | undefined {
+export function snapshotStructuredInput(
+  value: unknown,
+  options?: { richForm?: boolean },
+): StructuredInputValue | undefined {
+  // Resource preview targets contain nested tool arguments below the resource metadata.
+  // Only negotiated rich forms get this bound; ordinary/native questions retain theirs.
+  const maximumDepth = options?.richForm ? 16 : MAX_SNAPSHOT_DEPTH;
+  const maximumNodes = options?.richForm ? 2048 : MAX_SNAPSHOT_NODES;
+  const maximumItems = options?.richForm ? 64 : MAX_SNAPSHOT_ARRAY_ITEMS;
   let nodes = 0;
+  let textLength = 0;
   const visit = (current: unknown, depth: number): StructuredInputValue | undefined => {
     nodes += 1;
-    if (nodes > MAX_SNAPSHOT_NODES || depth > MAX_SNAPSHOT_DEPTH) {
+    if (nodes > maximumNodes || depth > maximumDepth) {
       return undefined;
     }
     if (current === null || typeof current === "boolean") {
@@ -63,16 +84,16 @@ export function snapshotStructuredInput(value: unknown): StructuredInputValue | 
       return Number.isFinite(current) ? current : undefined;
     }
     if (typeof current === "string") {
-      return current.length <= MAX_SNAPSHOT_TEXT ? current : undefined;
+      textLength += current.length;
+      return current.length <= STRUCTURED_INPUT_MAX_TEXT_CHARS && textLength <= 4 * 1024 * 1024
+        ? current
+        : undefined;
     }
     if (typeof current !== "object") {
       return undefined;
     }
     if (Array.isArray(current)) {
-      if (
-        Object.getPrototypeOf(current) !== Array.prototype ||
-        current.length > MAX_SNAPSHOT_ARRAY_ITEMS
-      ) {
+      if (Object.getPrototypeOf(current) !== Array.prototype || current.length > maximumItems) {
         return undefined;
       }
       const descriptors = Object.getOwnPropertyDescriptors(current);
@@ -122,12 +143,7 @@ export function snapshotStructuredInput(value: unknown): StructuredInputValue | 
       if (item === undefined) {
         return undefined;
       }
-      Object.defineProperty(result, key, {
-        configurable: true,
-        enumerable: true,
-        value: item,
-        writable: true,
-      });
+      result[key] = item;
     }
     return result;
   };
@@ -201,28 +217,21 @@ export function structuredInputInteger(
   return Number.isInteger(value) && value >= minimum ? value : null;
 }
 
-export function readStructuredInputText(value: unknown, maximum: number): string | undefined {
-  return typeof value === "string" && value.length <= maximum && !hasUnsafeVisibleCharacters(value)
-    ? value
-    : undefined;
+export function readStructuredInputText(
+  value: unknown,
+  maximum: number,
+  multiline = false,
+): string | undefined {
+  if (typeof value !== "string" || value.length > maximum) {
+    return undefined;
+  }
+  // Ignore only paragraph whitespace for display validation; preserve the original text.
+  const visibleText = multiline ? value.replace(/[\t\n\r]/gu, "") : value;
+  return hasUnsafeVisibleCharacters(visibleText) ? undefined : value;
 }
 
 export function hasUnsafeVisibleCharacters(value: string): boolean {
-  for (const character of value) {
-    const codePoint = character.codePointAt(0) ?? 0;
-    if (
-      codePoint <= 0x1f ||
-      (codePoint >= 0x7f && codePoint <= 0x9f) ||
-      (codePoint >= 0x200b && codePoint <= 0x200f) ||
-      (codePoint >= 0x2028 && codePoint <= 0x202e) ||
-      codePoint === 0x2060 ||
-      (codePoint >= 0x2066 && codePoint <= 0x2069) ||
-      codePoint === 0xfeff
-    ) {
-      return true;
-    }
-  }
-  return false;
+  return /[\p{Cc}\u200b-\u200f\u2028-\u202e\u2060\u2066-\u2069\ufeff]/u.test(value);
 }
 
 export function boundStructuredInputText(value: string, maximum: number): string {

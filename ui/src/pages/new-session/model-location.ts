@@ -2,6 +2,7 @@ import {
   buildModelCatalogRef,
   parseModelCatalogRef,
 } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import {
   newSessionLocationFromSearch,
   newSessionSearch,
@@ -9,14 +10,7 @@ import {
 } from "./location.ts";
 
 function requestedModel(value: string | null): string | undefined {
-  if (
-    !value ||
-    value.length > 2048 ||
-    Array.from(value).some((character) => {
-      const code = character.charCodeAt(0);
-      return code < 32 || code === 127;
-    })
-  ) {
+  if (!value || value.length > 2048 || containsAsciiControlCharacter(value)) {
     return undefined;
   }
   const parsed = parseModelCatalogRef(value);

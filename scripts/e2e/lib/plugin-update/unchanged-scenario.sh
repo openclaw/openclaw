@@ -9,9 +9,6 @@ openclaw_e2e_install_package /tmp/openclaw-install.log "mounted OpenClaw package
 package_root="$(openclaw_e2e_package_root /tmp/npm-prefix)"
 entry="$(openclaw_e2e_package_entrypoint "$package_root")"
 probe="scripts/e2e/lib/plugin-update/probe.mjs"
-package_version="$(node -p "require('$package_root/package.json').version")"
-OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(node "$probe" legacy-compat "$package_version")"
-export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 export PATH="/tmp/npm-prefix/bin:$PATH"
 
 node "$probe" seed
@@ -41,10 +38,7 @@ if ! node "$probe" wait-registry; then
   exit 1
 fi
 
-before_config_hash=""
-if [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" != "1" ]; then
-  before_config_hash="$(sha256sum "$OPENCLAW_CONFIG_PATH" | awk '{print $1}')"
-fi
+before_config_hash="$(sha256sum "$OPENCLAW_CONFIG_PATH" | awk '{print $1}')"
 plugin_update_timeout_seconds="$(openclaw_e2e_read_positive_int_env OPENCLAW_PLUGIN_UPDATE_TIMEOUT_SECONDS 180)"
 
 node "$probe" snapshot > /tmp/plugin-update-before.json
@@ -62,13 +56,11 @@ if [ "$plugin_update_status" -ne 0 ]; then
   exit "$plugin_update_status"
 fi
 
-if [ -n "$before_config_hash" ]; then
-  after_config_hash="$(sha256sum "$OPENCLAW_CONFIG_PATH" | awk '{print $1}')"
-  if [ "$before_config_hash" != "$after_config_hash" ]; then
-    echo "Config changed unexpectedly for modern package $package_version"
-    openclaw_e2e_print_log /tmp/plugin-update-output.log
-    exit 1
-  fi
+after_config_hash="$(sha256sum "$OPENCLAW_CONFIG_PATH" | awk '{print $1}')"
+if [ "$before_config_hash" != "$after_config_hash" ]; then
+  echo "Config changed unexpectedly during an unchanged plugin update"
+  openclaw_e2e_print_log /tmp/plugin-update-output.log
+  exit 1
 fi
 
 node "$probe" assert-snapshot /tmp/plugin-update-before.json

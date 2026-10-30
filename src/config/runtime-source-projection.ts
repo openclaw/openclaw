@@ -9,6 +9,9 @@ import type { OpenClawConfig } from "./types.js";
 
 /** Captures runtime and authored values together for one admitted preparation generation. */
 export function captureRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
+  if (config === getRuntimeConfigSnapshot()) {
+    return getRuntimeConfigSnapshot({ capture: true })!;
+  }
   if (getRuntimeConfigCapture(config)) {
     return config;
   }

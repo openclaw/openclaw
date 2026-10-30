@@ -13,11 +13,12 @@ private func questionRecord(
     expiresAtMs: Int = 4_000_000_000_000,
     status: QuestionStatus = .pending,
     answers: QuestionAnswers? = nil,
-    runId: String? = "run-question") -> QuestionRecord
+    runId: String? = "run-question",
+    questions: [Question]? = nil) -> QuestionRecord
 {
     QuestionRecord(
         id: "ask_123",
-        questions: [
+        questions: questions ?? [
             Question(
                 questionid: "meal",
                 header: "Meal",
@@ -44,7 +45,7 @@ private func questionRecord(
 struct ChatQuestionCardTests {
     @Test func `question card single select and other are exclusive`() {
         let model = OpenClawQuestionCardModel(record: questionRecord())
-        model.toggleOption(questionID: "meal", label: "Pizza")
+        model.toggleOption(questionID: "meal", value: "Pizza")
         #expect(model.beginSubmission() == ["meal": ["Pizza"]])
         model.failSubmission("retry")
 
@@ -55,8 +56,8 @@ struct ChatQuestionCardTests {
 
     @Test func `question card multi select uses declared option order`() {
         let model = OpenClawQuestionCardModel(record: questionRecord(multiSelect: true))
-        model.toggleOption(questionID: "meal", label: "Tacos")
-        model.toggleOption(questionID: "meal", label: "Pizza")
+        model.toggleOption(questionID: "meal", value: "Tacos")
+        model.toggleOption(questionID: "meal", value: "Pizza")
         #expect(model.beginSubmission() == ["meal": ["Pizza", "Tacos"]])
     }
 
@@ -67,6 +68,37 @@ struct ChatQuestionCardTests {
         #expect(model.toggleOption(questionID: "meal", optionNumber: 1))
         #expect(!model.toggleOption(questionID: "meal", optionNumber: 4))
         #expect(model.beginSubmission() == ["meal": ["Pizza", "Tacos"]])
+    }
+
+    @Test func `rich choices submit values while preserving custom text and labels`() throws {
+        let question = Question(
+            questionid: "part", header: "Part", question: "Choose parts",
+            options: [QuestionOption(label: "Bolt", value: "part:m4"), QuestionOption(label: "Bolt", value: "part:m6")],
+            presentation: "form", multiselect: true, isother: true)
+        let model = OpenClawQuestionCardModel(record: questionRecord(questions: [question]))
+        model.toggleOption(questionID: "part", value: "Bolt")
+        #expect(model.beginSubmission() == nil)
+        model.toggleOption(questionID: "part", value: "part:m6")
+        model.toggleOption(questionID: "part", value: "part:m4")
+        model.setOtherText(questionID: "part", value: "Bolt")
+        let answers = try #require(model.beginSubmission())
+        #expect(answers == ["part": ["part:m4", "part:m6", "Bolt"]])
+        model.markAnsweredLocally(answers: QuestionAnswers(answers: answers.mapValues(AnyCodable.init)))
+        #expect(model.terminalSummaryText(for: question) == "Bolt, Bolt, Bolt")
+    }
+
+    @Test func `rich form defaults preserve whitespace and cleared optional answers`() {
+        let question = Question(
+            questionid: "tags", header: "Tags", question: "Enter tags", options: [],
+            presentation: "form", multiselect: true, answerformat: "lines", allowempty: true,
+            defaultanswers: [" first ", "second"], isother: true)
+        let record = questionRecord(questions: [question])
+        let model = OpenClawQuestionCardModel(record: record)
+        #expect(model.beginSubmission() == ["tags": [" first ", "second"]])
+        model.failSubmission("retry")
+        model.setOtherText(questionID: "tags", value: "")
+        model.apply(record: record)
+        #expect(model.beginSubmission() == ["tags": []])
     }
 
     @Test func `question card maps expiry and answer origin`() {
@@ -87,7 +119,7 @@ struct ChatQuestionCardTests {
 
     @Test func `question card pending refresh preserves submission`() {
         let model = OpenClawQuestionCardModel(record: questionRecord(expiresAtMs: Int.max))
-        model.toggleOption(questionID: "meal", label: "Pizza")
+        model.toggleOption(questionID: "meal", value: "Pizza")
         #expect(model.beginSubmission() != nil)
 
         #expect(model.apply(record: questionRecord(createdAtMs: 2_000_000, expiresAtMs: Int.max)))
@@ -107,7 +139,7 @@ struct ChatQuestionCardTests {
 
     @Test func `question card preserves canonical answers across answerless refresh`() throws {
         let model = OpenClawQuestionCardModel(record: questionRecord())
-        model.toggleOption(questionID: "meal", label: "Pizza")
+        model.toggleOption(questionID: "meal", value: "Pizza")
         let answers = try #require(model.beginSubmission())
         model.markAnsweredLocally(answers: QuestionAnswers(answers: answers.mapValues(AnyCodable.init)))
 
@@ -117,7 +149,7 @@ struct ChatQuestionCardTests {
 
     @Test func `question card preserves canonical answers across answerless resolved event`() throws {
         let model = OpenClawQuestionCardModel(record: questionRecord())
-        model.toggleOption(questionID: "meal", label: "Pizza")
+        model.toggleOption(questionID: "meal", value: "Pizza")
         let answers = try #require(model.beginSubmission())
         model.markAnsweredLocally(answers: QuestionAnswers(answers: answers.mapValues(AnyCodable.init)))
 
@@ -159,7 +191,7 @@ struct ChatQuestionCardTests {
 
     @Test func `question card stores canonical answers in gateway record shape`() throws {
         let model = OpenClawQuestionCardModel(record: questionRecord())
-        model.toggleOption(questionID: "meal", label: "Pizza")
+        model.toggleOption(questionID: "meal", value: "Pizza")
         let answers = try #require(model.beginSubmission())
         model.markAnsweredLocally(answers: QuestionAnswers(answers: answers.mapValues(AnyCodable.init)))
 
@@ -171,7 +203,7 @@ struct ChatQuestionCardTests {
 
     @Test func `question completions override unavailable recovery race`() throws {
         let answered = OpenClawQuestionCardModel(record: questionRecord())
-        answered.toggleOption(questionID: "meal", label: "Pizza")
+        answered.toggleOption(questionID: "meal", value: "Pizza")
         let answers = try #require(answered.beginSubmission())
         answered.markRecoveryUnavailable()
         answered.markAnsweredLocally(answers: QuestionAnswers(answers: answers.mapValues(AnyCodable.init)))

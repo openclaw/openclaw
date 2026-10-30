@@ -1,7 +1,12 @@
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type { AutomationResult } from "../../packages/gateway-protocol/src/schema/cron-automation-result.js";
 import type {
+  CronDeliveryPreview as CronDeliveryPreviewWire,
   CronJob as CronJobWire,
   CronRunLogEntry as CronRunLogWireEntry,
+  CronUpdateParams as CronUpdateParamsWire,
 } from "../../packages/gateway-protocol/src/schema/cron.types.js";
+import type { AgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 /** Cron scheduling, delivery, diagnostics, and store data contracts. */
 import type { FailoverReason } from "../agents/failover/signal.js";
@@ -11,6 +16,11 @@ import type { SessionCreatedActor } from "../config/sessions/session-entry-prove
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { CronAuthenticatedChannelRequester } from "../gateway/cron-creator-authority-grant.types.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
+import type { CronCompletionStatus } from "./completion-status.js";
+import type {
+  PluginCommandSchedule,
+  PluginCommandScheduleBinding,
+} from "./plugin-command-schedule.types.js";
 import type { CronRuntimeAuthority } from "./runtime-authority.js";
 import type {
   CronScheduledToolCallerOrigin,
@@ -18,7 +28,8 @@ import type {
   CronToolsAllowExecTarget,
   CronToolsAllowExecTargetRequirement,
 } from "./scheduled-tool-policy.js";
-import type { CronJobBase, CronPacing } from "./types-shared.js";
+import type { CronStreamSandboxTarget } from "./stream-sandbox-target.js";
+import type { CronActiveHours, CronJobBase, CronPacing } from "./types-shared.js";
 
 export type { CronPacing } from "./types-shared.js";
 export type {
@@ -39,17 +50,20 @@ export type CronSchedule = CronJobWire["schedule"];
 type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
 
 /** Wake policy for main-session jobs waiting on heartbeat/user activity. */
-type CronWakeMode = "next-heartbeat" | "now";
+type CronWakeMode = CronJobWire["wakeMode"];
 
 /** Messaging channel id accepted by cron delivery settings. */
 export type CronMessageChannel = ChannelId;
 
 /** Delivery mode for job completion output. */
-export type CronDeliveryMode = "none" | "announce" | "webhook";
+type CronDeliveryMode = "none" | "announce" | "webhook";
 
 /** Completion delivery configuration for cron job output. */
 export type CronDelivery = {
   mode: CronDeliveryMode;
+  /** Resolve the owner's current direct-message route at execution time. */
+  target?: "owner";
+  directPolicy?: "allow" | "block";
   channel?: CronMessageChannel;
   to?: string;
   /** Explicit thread/topic id for channels that support threaded delivery. */
@@ -79,14 +93,13 @@ type CronFailureDestination = {
 
 /** Partial failure-destination update shape; null clears individual override fields. */
 type CronFailureDestinationPatch = {
-  channel?: CronMessageChannel | null;
-  to?: string | null;
-  accountId?: string | null;
-  mode?: "announce" | "webhook" | null;
+  [K in keyof CronFailureDestination]?: CronFailureDestination[K] | null;
 };
 
 /** Partial delivery update shape; null clears optional delivery destinations or fields. */
 export type CronDeliveryPatch = Partial<Pick<CronDelivery, "mode" | "bestEffort">> & {
+  target?: "owner" | null;
+  directPolicy?: "allow" | "block" | null;
   channel?: CronMessageChannel | null;
   to?: string | null;
   threadId?: string | number | null;
@@ -96,10 +109,16 @@ export type CronDeliveryPatch = Partial<Pick<CronDelivery, "mode" | "bestEffort"
 };
 
 /** Execution outcome, separate from delivery outcome. */
-export type CronRunStatus = "ok" | "error" | "skipped";
+export type CronRunStatus = NonNullable<CronRunLogWireEntry["status"]>;
 
 /** Delivery outcome for completion or failure-notification sends. */
-export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
+export type CronDeliveryStatus = NonNullable<CronRunLogWireEntry["deliveryStatus"]>;
+
+/** Transport evidence for a primary webhook, including an unacknowledged request. */
+export type CronWebhookDeliveryOutcome = {
+  status: "delivered" | "not-delivered" | "unknown";
+  error?: string;
+};
 
 /** Delivery target snapshot recorded for audit/debug output. */
 export type CronDeliveryTraceTarget = NonNullable<CronDeliveryTrace["intended"]>;
@@ -113,30 +132,48 @@ export type CronDeliveryTraceMessageTarget = NonNullable<
 export type CronDeliveryTrace = NonNullable<CronRunLogWireEntry["delivery"]>;
 
 /** Last failed-run notification delivery state stored on job state and run logs. */
-export type CronFailureNotificationDelivery = {
-  /** Whether the last failed run's failure notification reached the target channel. */
-  delivered?: boolean;
-  status: CronDeliveryStatus;
-  error?: string;
-};
+export type CronFailureNotificationDelivery = NonNullable<
+  CronRunLogWireEntry["failureNotificationDelivery"]
+>;
 
 /** Resolved delivery state recorded with a completed cron run. */
-export type CronResolvedDeliveryState = {
-  delivered?: boolean;
-  status: CronDeliveryStatus;
-  error?: string;
+export type CronResolvedDeliveryState = CronFailureNotificationDelivery & {
   deliverySuppressionReason?: NormalizeReplySkipReason;
   failureNotification: CronFailureNotificationDelivery;
 };
 
 /** Human-readable delivery target preview for list/detail surfaces. */
-export type CronDeliveryPreview = {
-  label: string;
-  detail: string;
-};
+export type CronDeliveryPreview = CronDeliveryPreviewWire;
 
 /** Model/provider/usage telemetry attached to cron run results and logs. */
 export type CronRunTelemetry = Pick<CronRunLogWireEntry, "model" | "provider" | "usage">;
+
+/** Scheduler lifecycle event projected to Gateway clients and notification adapters. */
+export type CronEvent = {
+  jobId: string;
+  action: "added" | "updated" | "removed" | "started" | "finished" | "scheduled";
+  /** Snapshot of the job at the time of the event. Present for all actions where the job is accessible. */
+  job?: CronJob;
+  runAtMs?: number;
+  durationMs?: number;
+  status?: CronRunStatus;
+  completionStatus?: CronCompletionStatus;
+  error?: string;
+  summary?: string;
+  result?: AutomationResult;
+  diagnostics?: CronRunDiagnostics;
+  delivered?: boolean;
+  deliveryStatus?: CronDeliveryStatus;
+  deliveryError?: string;
+  deliverySuppressionReason?: NormalizeReplySkipReason;
+  failureNotificationDelivery?: CronFailureNotificationDelivery;
+  delivery?: CronDeliveryTrace;
+  sessionId?: string;
+  sessionKey?: string;
+  runId?: string;
+  nextRunAtMs?: number;
+  triggerFired?: boolean;
+} & CronRunTelemetry;
 
 /** Severity level for persisted cron run diagnostics. */
 export type CronRunDiagnosticSeverity = CronRunDiagnostic["severity"];
@@ -153,7 +190,9 @@ export type CronRunDiagnostics = NonNullable<CronRunLogWireEntry["diagnostics"]>
 /** Explicit execution-error disposition used consistently by retry, history, and alerts. */
 export type CronRunErrorClassification =
   | { kind: "reason"; reason: FailoverReason }
-  | { kind: "permanent" };
+  | { kind: "permanent" }
+  /** Operator cancellation or lifecycle retirement, never an execution timeout. */
+  | { kind: "aborted" };
 
 /** Closed producer-authored facts allowed in operator-facing failure notifications. */
 export type CronFailureNotificationDetail =
@@ -171,18 +210,62 @@ export type CronRunOutcome = {
   error?: string;
   /** True once agent execution begins; retries after this point can replay side effects. */
   executionStarted?: boolean;
+  /** Admission deferral preserves the unstarted occurrence's scheduled slot. */
+  admissionDeferred?: boolean;
+  admissionDeferredReason?: "busy" | "active-hours";
+  /** Lifecycle-owned restart fact; transient input to cron settlement, not a public event. */
+  interruptedByRestart?: boolean;
   /** Optional classifier for execution errors to guide fallback behavior. */
   errorKind?: "delivery-target";
   errorClassification?: CronRunErrorClassification;
   /** Transient internal detail; never project into persisted or public cron events. */
   failureNotificationDetail?: CronFailureNotificationDetail;
   summary?: string;
+  result?: AutomationResult;
+  /** Producer-authored terminal reply fact without exposing reply text. */
+  replyDisposition?: AgentRunTerminalReplySnapshot["disposition"];
   sessionId?: string;
   sessionKey?: string;
   diagnostics?: CronRunDiagnostics;
+  /** Transient: the run was skipped because its parent conversation is gone; pause the job. */
+  parentUnavailable?: CronParentUnavailable;
 };
 
-/** One run's requested delay before the same paced job runs again. */
+/** Why a parent-linked job pauses before any session is created. */
+export type CronParentUnavailable = {
+  reason: "removed" | "archived" | "worktree-missing";
+  parentSessionKey: string;
+  worktreePath?: string;
+};
+
+export type CronRunDeliveryResult = {
+  /** True after verified delivery, including a matching messaging-tool send. */
+  delivered?: boolean;
+  /** Delivery may have been attempted without a confirmed transport acknowledgment. */
+  deliveryAttempted?: boolean;
+  deliveryError?: string;
+  deliverySuppressionReason?: NormalizeReplySkipReason;
+  deliveryState?: CronResolvedDeliveryState;
+  delivery?: CronDeliveryTrace;
+};
+
+export type CronTriggerEvalOutcome = {
+  fired: boolean;
+  stateChanged: boolean;
+  state?: unknown;
+  busy?: true;
+};
+
+export type CronJobExecutionResult = CronRunOutcome &
+  CronRunTelemetry &
+  CronRunDeliveryResult & {
+    nextCheck?: CronNextCheckProposal;
+    scriptStateChanged?: boolean;
+    scriptState?: unknown;
+    triggerEval?: CronTriggerEvalOutcome;
+  };
+
+/** One run's requested delay before the same paced job or one-shot continuation runs again. */
 export type CronNextCheckProposal = {
   delayMs: number;
 };
@@ -196,6 +279,8 @@ export type CronAgentExecutionStarted = {
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
+  /** Invocation run id; every attempt registers its embedded handle under it. */
+  runId?: string;
   /** True when this runner belongs to a later candidate in the same fallback chain. */
   isFallback?: boolean;
   phase?: CronAgentExecutionPhase;
@@ -214,18 +299,7 @@ export type CronAgentExecutionPhaseUpdate = CronAgentExecutionStarted & {
 };
 
 /** Failure alert policy persisted on a cron job. */
-export type CronFailureAlert = {
-  after?: number;
-  channel?: CronMessageChannel;
-  to?: string;
-  cooldownMs?: number;
-  /** When true, consecutive skipped runs count toward the alert threshold. */
-  includeSkipped?: boolean;
-  /** Delivery mode: announce (via messaging channels) or webhook (HTTP POST). */
-  mode?: "announce" | "webhook";
-  /** Account ID for multi-account channel configurations. */
-  accountId?: string;
-};
+export type CronFailureAlert = Exclude<NonNullable<CronJobWire["failureAlert"]>, false>;
 
 /** Partial failure-alert update; null clears an inherited field override. */
 export type CronFailureAlertPatch = {
@@ -234,110 +308,21 @@ export type CronFailureAlertPatch = {
 
 /** Payload variants cron can execute in main-session or detached modes. */
 export type CronPayload =
-  | ({ kind: "systemEvent"; text: string } & CronPayloadToolAllow)
-  | (CronAgentTurnPayload & CronPayloadToolAllow)
-  | (CronCommandPayload & CronPayloadToolAllow)
-  | (CronScriptPayload & CronPayloadToolAllow)
-  // System-owned heartbeat monitor: execution requests an interval heartbeat
-  // wake. Gateway-converged only; not accepted from client create/patch APIs.
-  | ({ kind: "heartbeat" } & CronPayloadToolAllow);
+  | Exclude<CronJobWire["payload"], { kind: "agentTurn" }>
+  | (Extract<CronJobWire["payload"], { kind: "agentTurn" }> & CronExternalContent);
 
 /** Partial payload update shape used by cron patch/edit flows. */
 export type CronPayloadPatch =
-  | ({ kind: "systemEvent"; text?: string } & CronPayloadToolAllowPatch)
-  | (CronAgentTurnPayloadPatch & CronPayloadToolAllowPatch)
-  | (CronCommandPayloadPatch & CronPayloadToolAllowPatch)
-  | (CronScriptPayloadPatch & CronPayloadToolAllowPatch)
-  // Representable so the service can reject it with a typed boundary error;
-  // transports and tools never accept it.
-  | ({ kind: "heartbeat" } & CronPayloadToolAllowPatch);
+  | Exclude<CronPayloadPatchWire, { kind: "agentTurn" }>
+  | (Extract<CronPayloadPatchWire, { kind: "agentTurn" }> & CronExternalContent);
 
-export function isSystemOwnedCronPayloadKind(kind: unknown): kind is "heartbeat" {
-  return kind === "heartbeat";
-}
+type CronPayloadPatchWire = NonNullable<CronUpdateParamsWire["patch"]["payload"]>;
 
-type CronPayloadToolAllow = {
-  /** Restricts agentTurn execution, or the trigger runtime for other payload kinds. */
-  toolsAllow?: string[];
-  /** Server-managed marker for auto-stamped defaults; explicit restrictions omit it. */
-  toolsAllowIsDefault?: boolean;
-};
-
-type CronPayloadToolAllowPatch = {
-  toolsAllow?: string[] | null;
-  toolsAllowIsDefault?: boolean;
-};
-
-type CronAgentTurnPayloadFields = {
-  message: string;
-  /** Optional model override (provider/model or alias). */
-  model?: string;
-  /** Optional per-job fallback models; overrides agent/global fallbacks when defined. */
-  fallbacks?: string[];
-  thinking?: string;
-  timeoutSeconds?: number;
-  allowUnsafeExternalContent?: boolean;
+type CronExternalContent = {
   /** Immutable external hook provenance for async dispatch. */
   externalContentSource?: HookExternalContentSource;
-  /** If true, run with lightweight bootstrap context. */
-  lightContext?: boolean;
 };
 
-type CronAgentTurnPayload = {
-  kind: "agentTurn";
-} & CronAgentTurnPayloadFields;
-
-type CronAgentTurnPayloadPatch = {
-  kind: "agentTurn";
-} & Partial<
-  Omit<
-    CronAgentTurnPayloadFields,
-    "model" | "fallbacks" | "toolsAllow" | "thinking" | "timeoutSeconds"
-  >
-> & {
-    model?: string | null;
-    fallbacks?: string[] | null;
-    toolsAllow?: string[] | null;
-    thinking?: string | null;
-    timeoutSeconds?: number | null;
-  };
-
-type CronCommandPayloadFields = {
-  /** Explicit argv vector to execute. Use a shell wrapper argv for shell syntax. */
-  argv: string[];
-  cwd?: string;
-  env?: Record<string, string>;
-  input?: string;
-  timeoutSeconds?: number;
-  noOutputTimeoutSeconds?: number;
-  outputMaxBytes?: number;
-};
-
-type CronCommandPayload = {
-  kind: "command";
-} & CronCommandPayloadFields;
-
-type CronCommandPayloadPatch = {
-  kind: "command";
-} & Partial<Omit<CronCommandPayloadFields, "timeoutSeconds">> & {
-    timeoutSeconds?: number | null;
-  };
-
-type CronScriptPayloadFields = {
-  script: string;
-  timeoutSeconds?: number;
-  toolBudget?: number;
-};
-
-type CronScriptPayload = {
-  kind: "script";
-} & CronScriptPayloadFields;
-
-type CronScriptPayloadPatch = {
-  kind: "script";
-} & Partial<Omit<CronScriptPayloadFields, "timeoutSeconds">> & {
-    timeoutSeconds?: number | null;
-  };
 /** Mutable runtime state persisted beside the immutable cron job spec. */
 // scheduleActivatedAtMs fences catch-up to slots belonging to the active schedule;
 // edits must not invent missed work. Without activation, every computed slot is real.
@@ -353,14 +338,27 @@ export type CronJobState = Omit<
   pacedNextRunAtMs?: number;
   /** Exact occurrence retained across a manual run; authored one-shots survive pause. */
   forcePreservedNextRunAtMs?: number;
+  /** Store-private, monotonic launch attempts for a requester-admitted plugin command. */
+  pluginCommandRuns?: number;
+  /** Store-private restart continuity for a plugin command schedule; see its type. */
+  pluginCommandBinding?: PluginCommandScheduleBinding;
   /** Durable pre-admission reservation. Cleared on restart without recording a run. */
   queuedAtMs?: number;
   /** Exact receipt awaiting scheduler reconciliation, even after execution authority closes. */
   runningReceiptId?: string;
   /** Nonce for a committed schedule edit during the pending run. */
   runningScheduleChangeId?: string;
-  /** Unresolved recovery scope and last notified signature, when an alert was requested. */
-  failureAlertIncident?: { signature?: string; scope: "run" | "trigger" };
+  /**
+   * Unresolved recovery scope and last notified signature, when an alert was requested.
+   * `repair` records the owner-conversation repair request that replaced the streak's first
+   * alert, and `alerted` that its fallback alert was sent. It lasts until the job succeeds,
+   * so a streak is repaired at most once.
+   */
+  failureAlertIncident?: {
+    signature?: string;
+    scope: "run" | "trigger";
+    repair?: { atMs: number; deadlineAtMs?: number; settledAtMs?: number; alerted?: true };
+  };
   /** Fences notification settlement when multiple cycles share a timestamp. */
   lastFailureNotificationId?: string;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */
@@ -371,10 +369,7 @@ export type CronJobState = Omit<
   deliverySuppressionReason?: NormalizeReplySkipReason;
 };
 
-type CronTrigger = {
-  script: string;
-  once?: boolean;
-};
+type CronTrigger = SchemaContract<NonNullable<CronJobWire["trigger"]>>;
 
 /**
  * Closed failure taxonomy for trigger-script evaluation. Mirrors the code-mode
@@ -410,6 +405,13 @@ export type CronJob = CronJobBase<
 > & {
   declarationKey?: string;
   displayName?: string;
+  /** Read-only execution placement derived from the stored stream target. */
+  streamExecutionHost?: "gateway" | "sandbox";
+  /**
+   * Read-only stored payload kind when `payload` is a compatibility placeholder. A plugin command
+   * schedule keeps its reserved agentTurn sentinel in `payload` for existing readers.
+   */
+  payloadSource?: { kind: "pluginCommand"; pluginId: string; command: string };
   owner?: {
     agentId?: string;
     sessionKey?: string;
@@ -447,7 +449,24 @@ export type CronToolsAllowProvenance =
     ));
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
-export type CronStoredJob = CronJob & {
+export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource"> & {
+  /** Immutable host-captured scheduled command invocation; never public create/patch input. */
+  pluginCommand?: PluginCommandSchedule;
+  /** Original authenticated source for a same-conversation continuation, never a public grant. */
+  operatorSource?: {
+    source: import("../gateway/operator-run-recovery-source.codec.js").RestartRecoveryOperatorSource;
+    executionRevision: string;
+  };
+  /** Captured inference owner; private and independent of scheduled tool authority. */
+  inferenceBinding?: import("./inference-binding.js").CronInferenceBinding;
+  /** Creation-bound destination for isolated results when no external route exists. */
+  sourceConversation?: {
+    sessionKey: string;
+    sessionId: string;
+    lifecycleRevision?: string;
+  };
+  /** Trusted logical sandbox and original access basis, never public create/patch input. */
+  streamSandbox?: CronStreamSandboxTarget;
   /** Immutable revisions inherited from the authorized creator session, never human mutation authority. */
   skillLibrarySelections?: SessionEntry["skillLibrarySelections"];
   /** Immutable creator provenance stamped by the trusted cron creation seam. */
@@ -471,18 +490,28 @@ export type CronStoreFile = {
 type CronJobStateInput = Partial<
   Omit<
     CronJobState,
+    | "lastMeaningfulResult"
     | "autoDisabled"
     | "scheduleActivatedAtMs"
     | "streamSourceIdentity"
+    | "sourceIdentity"
     | "runningReceiptId"
     | "runningScheduleChangeId"
+    | "pluginCommandRuns"
+    | "pluginCommandBinding"
   >
 >;
 
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
 export type CronJobCreate = Omit<
   CronJob,
-  "id" | "createdAtMs" | "updatedAtMs" | "state" | "scheduledToolPolicy"
+  | "id"
+  | "createdAtMs"
+  | "updatedAtMs"
+  | "state"
+  | "scheduledToolPolicy"
+  | "streamExecutionHost"
+  | "payloadSource"
 > & {
   /** Internal callers can reserve a durable id before creation; public cron.add omits this. */
   id?: string;
@@ -503,12 +532,18 @@ export type CronJobPatch = Partial<
     | "displayName"
     | "owner"
     | "scheduledToolPolicy"
+    | "streamExecutionHost"
+    | "payloadSource"
     | "pacing"
+    | "activeHours"
+    | "idleOnly"
     | "trigger"
   >
 > & {
   displayName?: string | null;
   pacing?: CronPacing | null;
+  activeHours?: CronActiveHours | null;
+  idleOnly?: boolean | null;
   trigger?: CronTrigger | null;
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;

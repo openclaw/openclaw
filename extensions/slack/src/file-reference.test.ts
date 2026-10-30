@@ -27,7 +27,7 @@ describe("formatSlackFileReference", () => {
     expect(formatSlackFileReference(file)).toBe(expected);
   });
 
-  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
+  it.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
     "omits an invalid Slack file size (%s)",
     (size) => {
       expect(

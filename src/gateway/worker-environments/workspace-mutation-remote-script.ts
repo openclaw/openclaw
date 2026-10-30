@@ -41,26 +41,7 @@ const transactionRootStats = fs.lstatSync(transactionRoot);
 if (transactionRootStats.isSymbolicLink() || !transactionRootStats.isDirectory()) {
   throw new Error("unsafe workspace mutation directory");
 }
-const workspaceKey = crypto.createHash("sha256").update(root).digest("hex");
-function removeTree(target) {
-  let stats;
-  try {
-    stats = fs.lstatSync(target);
-  } catch (error) {
-    if (error && error.code === "ENOENT") return;
-    throw error;
-  }
-  if (stats.isDirectory() && !stats.isSymbolicLink()) {
-    fs.chmodSync(target, 0o700);
-    for (const name of fs.readdirSync(target)) removeTree(path.join(target, name));
-    fs.rmdirSync(target);
-  } else {
-    fs.unlinkSync(target);
-  }
-}
-function sameInode(left, right) {
-  return left.dev === right.dev && left.ino === right.ino;
-}`;
+const workspaceKey = crypto.createHash("sha256").update(root).digest("hex");`;
 
 export const REMOTE_WORKSPACE_RSYNC_RECEIVER_RUNTIME_JS = String.raw`const receiverArgs = process.argv.slice(receiverArgvIndex);
 const receiverDestination = receiverArgs.at(-1);
@@ -99,7 +80,7 @@ let gateOpened = false;
     gate.end("open\n");
     const result = await receiverExit;
     const groupWait = new Int32Array(new SharedArrayBuffer(4));
-    while (processGroupIsAlive(lockOwnerPid)) Atomics.wait(groupWait, 0, 0, 10);
+    while (processIsAlive(-lockOwnerPid)) Atomics.wait(groupWait, 0, 0, 10);
     releaseWorkspaceLock();
     lockAcquired = false;
     if (result.signal) process.kill(process.pid, result.signal);

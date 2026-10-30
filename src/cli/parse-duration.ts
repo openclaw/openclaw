@@ -1,14 +1,17 @@
-// Duration parser shared by CLI flags, command directives, and config-backed timing values.
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
-import milliseconds from "ms";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { durationUnitMs } from "../infra/format-time/duration-units.js";
 
-/** Options for choosing the unit used by bare numeric duration values. */
 type DurationMsParseOptions = {
   defaultUnit?: "ms" | "s" | "m" | "h" | "d";
 };
+
+const DURATION_UNIT_MS = new Map<string, number>([
+  ["ms", durationUnitMs.millisecond],
+  ["s", durationUnitMs.second],
+  ["m", durationUnitMs.minute],
+  ["h", durationUnitMs.hour],
+  ["d", durationUnitMs.day],
+]);
 
 function invalidDuration(raw: string, reason?: string): Error {
   const value = raw.trim() ? `"${raw}"` : "empty value";
@@ -17,7 +20,11 @@ function invalidDuration(raw: string, reason?: string): Error {
 }
 
 function parseDurationToken(raw: string, value: string, unit: string): number {
-  const parsed = milliseconds(`${value}${unit}` as Parameters<typeof milliseconds>[0]);
+  const multiplier = DURATION_UNIT_MS.get(unit);
+  if (multiplier === undefined || value.length + unit.length > 100) {
+    throw invalidDuration(raw);
+  }
+  const parsed = Number(value) * multiplier;
   if (!Number.isFinite(parsed) || parsed < 0) {
     throw invalidDuration(raw);
   }
@@ -32,18 +39,16 @@ function roundSafeDurationMs(raw: string, value: number): number {
   return ms;
 }
 
-/** Parse a non-negative duration into milliseconds, supporting single and composite units. */
 export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): number {
-  const trimmed = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw) ?? "");
+  const trimmed = normalizeLowercaseStringOrEmpty(raw);
   if (!trimmed) {
     throw invalidDuration(raw, "empty");
   }
 
-  // Fast path for a single token (supports default unit for bare numbers).
   const single = /^(\d+(?:\.\d+)?)(ms|s|m|h|d)?$/.exec(trimmed);
   if (single) {
     const value = single[1] ?? "";
-    const unit = (single[2] ?? opts?.defaultUnit ?? "ms") as "ms" | "s" | "m" | "h" | "d";
+    const unit = single[2] ?? opts?.defaultUnit ?? "ms";
     return roundSafeDurationMs(raw, parseDurationToken(raw, value, unit));
   }
 
@@ -64,7 +69,7 @@ export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): num
     consumed += full.length;
   }
 
-  if (consumed !== trimmed.length || consumed === 0) {
+  if (consumed !== trimmed.length) {
     throw invalidDuration(raw);
   }
 

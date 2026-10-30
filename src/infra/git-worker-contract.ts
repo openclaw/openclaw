@@ -9,11 +9,38 @@ import type {
 import type { WorkspaceManifestComputationOperations } from "../gateway/worker-environments/workspace-manifest-computation.js";
 import type { WorkspaceArtifactReadOperations } from "../gateway/worker-environments/workspace-result-inventory.js";
 import type { BufferedCommandOptions, BufferedCommandResult } from "../process/exec.js";
+import type { DiffReadTiming } from "./diff-read-timing.js";
 import type { GitCommandBytesResult, GitCommandOptions } from "./git-exec.js";
 import type { GitReadOperations } from "./git-read-operations.js";
 
-export type GitWorkerOperations = GitReadOperations &
-  GitWorktreeOperations &
+export type GitWorkerOperations = Omit<
+  GitReadOperations,
+  "pull-request.branch-facts" | "checkout.diff"
+> & {
+  "checkout.diff": {
+    input: GitReadOperations["checkout.diff"]["input"] & {
+      cleanWorktree?: NonNullable<
+        GitReadOperations["checkout.revision"]["output"]
+      >["cleanWorktree"];
+    };
+    output: GitReadOperations["checkout.diff"]["output"];
+  };
+  "pull-request.branch-comparison": {
+    input: Omit<GitReadOperations["pull-request.branch-facts"]["input"], "refreshIndex">;
+    output: {
+      statsBase: string | null;
+      creatable: boolean;
+      equalPushedTips: boolean;
+      complete: boolean;
+    };
+  };
+  "pull-request.branch-facts": {
+    input: GitReadOperations["pull-request.branch-facts"]["input"] & {
+      comparison: GitWorkerOperations["pull-request.branch-comparison"]["output"];
+    };
+    output: GitReadOperations["pull-request.branch-facts"]["output"];
+  };
+} & GitWorktreeOperations &
   WorkspaceArtifactReadOperations &
   WorkspaceInventoryComputationOperations &
   WorkspaceManifestComputationOperations;
@@ -21,7 +48,7 @@ export type GitWorkerCommand = {
   [K in keyof GitWorkerOperations]: {
     type: K;
     input: GitWorkerOperations[K]["input"];
-    filesystemRefs?: boolean;
+    filesystemRefs?: string;
   };
 }[keyof GitWorkerOperations];
 export type GitWorkerResult = GitWorkerOperations[keyof GitWorkerOperations]["output"];
@@ -58,4 +85,10 @@ export type GitWorkerFailure = {
   code?: string | number;
   origin?: number;
 };
-export type GitWorkerReply<T> = { ok: true; value: T } | { ok: false; error: GitWorkerFailure };
+export type GitWorkerReply<T> =
+  | {
+      ok: true;
+      value: T;
+      revisionUnavailableReason?: DiffReadTiming["revisionUnavailableReason"];
+    }
+  | { ok: false; error: GitWorkerFailure };

@@ -2,92 +2,59 @@
  * WebSocket handshake auth log limiter tests.
  */
 import { describe, expect, it } from "vitest";
-import {
-  buildHandshakeAuthLogKey,
-  HandshakeAuthLogLimiter,
-  shouldLimitMissingCredentialAuthLog,
-} from "./handshake-auth-log-limiter.js";
+import { HandshakeAuthLogLimiter } from "./handshake-auth-log-limiter.js";
 
 describe("HandshakeAuthLogLimiter", () => {
   it("suppresses repeated selected failures for the same client key within the interval", () => {
-    const limiter = new HandshakeAuthLogLimiter({ intervalMs: 1_000 });
-    const key = buildHandshakeAuthLogKey({
+    const limiter = new HandshakeAuthLogLimiter();
+    const client = {
       reason: "token_missing",
       remoteAddr: "127.0.0.1",
       client: "gateway:sessions.list",
       mode: "backend",
       authProvided: "none",
-    });
+    };
 
-    expect(limiter.register(key, 10_000)).toEqual({
-      shouldLog: true,
-      suppressedSinceLastLog: 0,
-    });
-    expect(limiter.register(key, 10_100)).toEqual({
-      shouldLog: false,
-      suppressedSinceLastLog: 0,
-    });
-    expect(limiter.register(key, 10_200)).toEqual({
-      shouldLog: false,
-      suppressedSinceLastLog: 0,
-    });
-    expect(limiter.register(key, 11_001)).toEqual({
-      shouldLog: true,
-      suppressedSinceLastLog: 2,
-    });
+    expect(limiter.missingCredentialLogSuffix(client, 10_000)).toBe("");
+    expect(limiter.missingCredentialLogSuffix(client, 10_100)).toBeUndefined();
+    expect(limiter.missingCredentialLogSuffix(client, 10_200)).toBeUndefined();
+    expect(limiter.missingCredentialLogSuffix(client, 40_001)).toBe(" suppressed=2");
   });
 
   it("does not suppress distinct clients", () => {
-    const limiter = new HandshakeAuthLogLimiter({ intervalMs: 1_000 });
+    const limiter = new HandshakeAuthLogLimiter();
 
-    expect(limiter.register("token_missing|127.0.0.1|gateway:sessions.list", 10)).toEqual({
-      shouldLog: true,
-      suppressedSinceLastLog: 0,
-    });
-    expect(limiter.register("token_missing|127.0.0.1|gateway:health", 20)).toEqual({
-      shouldLog: true,
-      suppressedSinceLastLog: 0,
-    });
+    for (const client of ["gateway:sessions.list", "gateway:health"]) {
+      expect(
+        limiter.missingCredentialLogSuffix(
+          { reason: "token_missing", remoteAddr: "127.0.0.1", client, authProvided: "none" },
+          10,
+        ),
+      ).toBe("");
+    }
   });
 
-  it("uses default limits for non-finite options", () => {
-    const limiter = new HandshakeAuthLogLimiter({
-      intervalMs: Number.NaN,
-      maxEntries: Number.POSITIVE_INFINITY,
-    });
+  it("evicts the oldest client after reaching its entry limit", () => {
+    const limiter = new HandshakeAuthLogLimiter();
+    const first = { reason: "token_missing", authProvided: "none", client: "first" };
 
-    expect(limiter.register("first", 0)).toEqual({
-      shouldLog: true,
-      suppressedSinceLastLog: 0,
-    });
-    expect(limiter.register("first", 1_000)).toEqual({
-      shouldLog: false,
-      suppressedSinceLastLog: 0,
-    });
+    expect(limiter.missingCredentialLogSuffix(first, 0)).toBe("");
+    expect(limiter.missingCredentialLogSuffix(first, 1_000)).toBeUndefined();
 
     for (let i = 0; i < 256; i += 1) {
-      limiter.register(`key-${i}`, i);
+      limiter.missingCredentialLogSuffix({ ...first, client: `key-${i}` }, i);
     }
 
-    expect(limiter.register("first", 2_000)).toEqual({
-      shouldLog: true,
-      suppressedSinceLastLog: 0,
-    });
+    expect(limiter.missingCredentialLogSuffix(first, 2_000)).toBe("");
   });
 
   it("only rate-limits benign missing-credential startup retries", () => {
-    expect(
-      shouldLimitMissingCredentialAuthLog({
-        reason: "token_missing",
-        authProvided: "none",
-      }),
-    ).toBe(true);
-    expect(
-      shouldLimitMissingCredentialAuthLog({
-        reason: "password_missing",
-        authProvided: "none",
-      }),
-    ).toBe(true);
+    const limiter = new HandshakeAuthLogLimiter();
+    for (const reason of ["token_missing", "password_missing"]) {
+      const client = { reason, authProvided: "none" };
+      expect(limiter.missingCredentialLogSuffix(client, 0)).toBe("");
+      expect(limiter.missingCredentialLogSuffix(client, 1)).toBeUndefined();
+    }
 
     for (const reason of [
       "token_mismatch",
@@ -96,18 +63,12 @@ describe("HandshakeAuthLogLimiter", () => {
       "rate_limited",
       "token_missing_config",
     ]) {
-      expect(
-        shouldLimitMissingCredentialAuthLog({
-          reason,
-          authProvided: "none",
-        }),
-      ).toBe(false);
+      const client = { reason, authProvided: "none" };
+      expect(limiter.missingCredentialLogSuffix(client, 0)).toBe("");
+      expect(limiter.missingCredentialLogSuffix(client, 1)).toBe("");
     }
-    expect(
-      shouldLimitMissingCredentialAuthLog({
-        reason: "token_missing",
-        authProvided: "token",
-      }),
-    ).toBe(false);
+    const credentialProvided = { reason: "token_missing", authProvided: "token" };
+    expect(limiter.missingCredentialLogSuffix(credentialProvided, 0)).toBe("");
+    expect(limiter.missingCredentialLogSuffix(credentialProvided, 1)).toBe("");
   });
 });

@@ -1,4 +1,3 @@
-// Qa Lab provider module implements deterministic QA-only web_search behavior.
 import {
   MAX_SEARCH_COUNT,
   readPositiveIntegerParam,

@@ -1,4 +1,4 @@
-import type { WorkerPlacementMoveIntent } from "./worker-environments/placement-move-intent.js";
+import type { WorkerPlacementMoveIntent } from "./worker-environments/placement-move-intent.types.js";
 import type { WorkerEnvironmentPlacementFacts } from "./worker-environments/placement-read-projection.types.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 
@@ -7,6 +7,7 @@ export type SessionRowPlacementFacts = {
   move: WorkerPlacementMoveIntent | undefined;
   environment: WorkerEnvironmentPlacementFacts | undefined;
   workspaceResultReconciling: boolean;
+  workspaceRecoveryPending: boolean;
 };
 
 export type SessionRowPlacementFactsReader = {

@@ -73,15 +73,11 @@ type CuaPageTarget = {
   tabId: string;
 };
 
-type CuaBrowserElementTarget = {
-  nativeRef: string;
-};
-
 type CuaBrowserObservationState = {
   id: string;
   browserRef: string;
   pageRef: string;
-  elements: Map<string, CuaBrowserElementTarget>;
+  elements: Map<string, string>;
 };
 
 type CuaDialogState = {
@@ -103,6 +99,24 @@ function opaqueRef(
   kind: "app" | "window" | "observation" | "element" | "browser" | "page" | "dialog",
 ): string {
   return `cua:v2:${kind}:${randomUUID()}`;
+}
+
+function issueRef<T>(
+  kind: Parameters<typeof opaqueRef>[0],
+  targets: Map<string, T>,
+  target: T,
+  matches?: (current: T) => boolean,
+): string {
+  if (matches) {
+    for (const [ref, current] of targets) {
+      if (matches(current)) {
+        return ref;
+      }
+    }
+  }
+  const ref = opaqueRef(kind);
+  targets.set(ref, target);
+  return ref;
 }
 
 export function adoptGeneration(state: CuaFrameState, generation: string): void {
@@ -129,34 +143,28 @@ export function verifyGeneration(state: CuaFrameState, generation: string): void
 }
 
 export function issueAppRef(state: CuaFrameState, target: CuaAppTarget): string {
-  state.apps ??= new Map();
-  const ref = opaqueRef("app");
-  state.apps.set(ref, target);
-  return ref;
-}
-
-export function resolveAppRef(state: CuaFrameState, ref: string): CuaAppTarget | undefined {
-  return state.apps?.get(ref);
+  return issueRef("app", (state.apps ??= new Map()), target);
 }
 
 export function issueWindowRef(state: CuaFrameState, target: CuaWindowTarget): string {
-  state.windows ??= new Map();
-  for (const [ref, current] of state.windows) {
-    if (current.pid === target.pid && current.windowId === target.windowId) {
-      return ref;
-    }
-  }
-  const ref = opaqueRef("window");
-  state.windows.set(ref, target);
-  return ref;
+  return issueRef(
+    "window",
+    (state.windows ??= new Map()),
+    target,
+    (current) => current.pid === target.pid && current.windowId === target.windowId,
+  );
 }
 
-export function resolveWindowRef(state: CuaFrameState, ref: string): CuaWindowTarget {
-  const target = state.windows?.get(ref);
-  if (!target) {
+function requireRef<T>(targets: Map<string, T> | undefined, ref: string): T {
+  const target = targets?.get(ref);
+  if (target === undefined) {
     throw staleObservation();
   }
   return target;
+}
+
+export function resolveWindowRef(state: CuaFrameState, ref: string): CuaWindowTarget {
+  return requireRef(state.windows, ref);
 }
 
 export function issueObservation(
@@ -180,9 +188,7 @@ export function issueElementRef(
   observation: CuaObservationState,
   target: CuaElementTarget,
 ): string {
-  const ref = opaqueRef("element");
-  observation.elements.set(ref, target);
-  return ref;
+  return issueRef("element", observation.elements, target);
 }
 
 export function resolveObservation(
@@ -201,43 +207,29 @@ export function resolveElementRef(
   observation: CuaObservationState,
   elementRef: string,
 ): CuaElementTarget {
-  const target = observation.elements.get(elementRef);
-  if (!target) {
-    throw staleObservation();
-  }
-  return target;
+  return requireRef(observation.elements, elementRef);
 }
 
 export function issueBrowserRef(state: CuaFrameState, target: CuaBrowserTarget): string {
-  state.browsers ??= new Map();
-  for (const [ref, current] of state.browsers) {
-    if (current.targetId === target.targetId && current.windowRef === target.windowRef) {
-      return ref;
-    }
-  }
-  const ref = opaqueRef("browser");
-  state.browsers.set(ref, target);
-  return ref;
+  return issueRef(
+    "browser",
+    (state.browsers ??= new Map()),
+    target,
+    (current) => current.targetId === target.targetId && current.windowRef === target.windowRef,
+  );
 }
 
 export function resolveBrowserRef(state: CuaFrameState, ref: string): CuaBrowserTarget {
-  const target = state.browsers?.get(ref);
-  if (!target) {
-    throw staleObservation();
-  }
-  return target;
+  return requireRef(state.browsers, ref);
 }
 
 export function issuePageRef(state: CuaFrameState, browserRef: string, tabId: string): string {
-  state.pages ??= new Map();
-  for (const [ref, current] of state.pages) {
-    if (current.browserRef === browserRef && current.tabId === tabId) {
-      return ref;
-    }
-  }
-  const ref = opaqueRef("page");
-  state.pages.set(ref, { browserRef, tabId });
-  return ref;
+  return issueRef(
+    "page",
+    (state.pages ??= new Map()),
+    { browserRef, tabId },
+    (current) => current.browserRef === browserRef && current.tabId === tabId,
+  );
 }
 
 export function resolvePageRef(
@@ -274,9 +266,7 @@ export function issueBrowserElementRef(
   observation: CuaBrowserObservationState,
   nativeRef: string,
 ): string {
-  const ref = opaqueRef("element");
-  observation.elements.set(ref, { nativeRef });
-  return ref;
+  return issueRef("element", observation.elements, nativeRef);
 }
 
 export function resolveBrowserObservation(
@@ -301,11 +291,7 @@ export function resolveBrowserElementRef(
   observation: CuaBrowserObservationState,
   elementRef: string,
 ): string {
-  const target = observation.elements.get(elementRef);
-  if (!target) {
-    throw staleObservation();
-  }
-  return target.nativeRef;
+  return requireRef(observation.elements, elementRef);
 }
 
 export function invalidateBrowserObservation(state: CuaFrameState): void {
@@ -346,10 +332,6 @@ export function resolveDialogRef(
     throw staleObservation();
   }
   return dialog.nativeId;
-}
-
-export function clearDialogRef(state: CuaFrameState): void {
-  state.dialog = undefined;
 }
 
 /**

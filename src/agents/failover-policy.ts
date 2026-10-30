@@ -1,16 +1,14 @@
 /**
  * Shared failover policy helpers for auth profile cooldown probing.
  */
-import type { FailoverReason } from "./embedded-agent-helpers.js";
+import type { FailoverReason } from "./failover/signal.js";
 
-/** Returns true when a failed model can be probed during cooldown. */
 export function shouldAllowCooldownProbeForReason(
   reason: FailoverReason | null | undefined,
 ): boolean {
   return reason === "billing" || shouldUseTransientCooldownProbeSlot(reason);
 }
 
-/** Returns true when a transient failure should consume a cooldown probe slot. */
 export function shouldUseTransientCooldownProbeSlot(
   reason: FailoverReason | null | undefined,
 ): boolean {

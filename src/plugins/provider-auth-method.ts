@@ -32,6 +32,7 @@ export async function runProviderPluginAuthMethodUnpersisted(
   assertCurrent();
   const result = await params.method.run({
     config: params.config,
+    existingProfiles: params.existingProfiles,
     credentialOnly: params.credentialOnly,
     assertCurrent,
     env: params.env,

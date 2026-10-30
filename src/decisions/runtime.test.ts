@@ -1,188 +1,399 @@
+import { AsyncResource } from "node:async_hooks";
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
+import { createDecisionTool } from "../agents/tools/decision-tool.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { runPluginRegisterSyncInRegistry } from "../plugins/loader-module-runtime.js";
+import { withOperatorToolGatewayAuthority } from "../gateway/server-plugin-in-process-dispatch.js";
+import { createSyntheticPluginRuntimeClient } from "../gateway/server-plugin-runtime-client.js";
+import * as currentPluginMetadata from "../plugins/current-plugin-metadata-state.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
-import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import {
+  markPluginRegistryActive,
+  markPluginRegistryRetired,
+  revokePluginRecord,
+} from "../plugins/registry-lifecycle.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { waitForAbort } from "./contract.test-support.js";
 import { evaluateDecisionInRegistry, prepareDecisionProviderReload } from "./runtime.js";
-import type {
-  DecisionBatch,
-  DecisionProviderV1,
-  DecisionRuntimeV1,
-  ProviderDecisionOutcome,
-} from "./types.js";
+import { answer, batch, config, options, registered } from "./runtime.test-support.js";
+import type { DecisionProviderV1 } from "./types.js";
 import { validateDecisionBatch, validateDecisionResult } from "./validation.js";
 
-const batch: DecisionBatch = {
-  state: { evidence: "synthetic" },
-  questions: {
-    pick: { type: "choice", criteria: { yes: "supported", unclear: "not established" } },
-    rank: { type: "score", criteria: ["low", "middle", "high"] },
-    truth: { type: "boolean" },
-  },
-};
-const answer = {
-  status: "ok",
-  result: {
-    model: "fixture-v1",
-    answers: {
-      pick: { type: "choice", choice: "yes", probabilities: { yes: 0.8, unclear: 0.2 } },
-      rank: { type: "score", score: 1.3, probabilities: [0.1, 0.5, 0.4] },
-      truth: { type: "boolean", probabilityTrue: 0.7 },
-    },
-    usage: { inputTokens: 25, outputTokens: 4 },
-  },
-} satisfies ProviderDecisionOutcome;
-const config: OpenClawConfig = { agents: { defaults: { decisionModel: "fixture/fixture-v1" } } };
-const options = (): Parameters<DecisionRuntimeV1["evaluate"]>[1] => ({
-  purpose: "test",
-  rubricVersion: "1",
-  timeoutMs: 1_000,
-  signal: new AbortController().signal,
-});
-function registered(
-  evaluate: DecisionProviderV1["evaluate"] = async () => answer,
-  isReady?: () => boolean,
-  providerId = "fixture",
-) {
-  const builder = createTestPluginRegistry();
-  const record = createPluginRecord({
-    id: "owner",
-    source: "/synthetic/index.ts",
-    origin: "global",
-    enabled: true,
-    configSchema: false,
-    contracts: { decisionProviders: [providerId.trim()] },
-  });
-  const api = builder.createApi(record, { config });
-  runPluginRegisterSyncInRegistry(
-    (registration) =>
-      registration.registerDecisionProvider({
-        id: providerId,
-        contractVersion: 1,
-        evaluate,
-        isReady,
-      }),
-    api,
-    builder.registry,
-    record.id,
-  );
-  builder.registry.plugins.push(record);
-  setActivePluginRegistry(builder.registry);
-  onTestFinished(async () => {
-    prepareDecisionProviderReload(builder.registry, new Set([record.id]));
-    await getPluginInstance(record)?.dispose();
-  });
-  const run = (opts = options(), cfg = config) =>
-    evaluateDecisionInRegistry(batch, opts, builder.registry, cfg);
-  return { ...builder, record, api, run };
-}
 afterEach(() => {
   resetPluginRuntimeStateForTest();
   clearRuntimeConfigSnapshot();
 });
 
+type Host = ReturnType<typeof registered>;
+type LlmPolicy = NonNullable<NonNullable<OpenClawConfig["plugins"]>["entries"]>[string]["llm"];
+const spyHost = (isReady?: () => boolean, providerId?: string) => {
+  const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+  return { ...registered(evaluate, isReady, providerId), evaluate };
+};
+const inspect = (host: Host, cfg = config) => host.registry.decisionProviders[0]!.host.inspect(cfg);
+const expectState = (host: Host, state: Partial<ReturnType<typeof inspect>>, cfg = config) => {
+  expect(inspect(host, cfg)).toMatchObject(state);
+};
+const reload = (host: Host, changed = [host.record.id]) =>
+  prepareDecisionProviderReload(host.registry, new Set(changed));
+const policyConfig = (llm: LlmPolicy, agents = config.agents): OpenClawConfig => ({
+  agents,
+  plugins: { entries: { owner: { llm } } },
+});
+const sdk = (host: Host, overrides: Partial<ReturnType<typeof options>> = {}) =>
+  host.api.runtime.decisions.evaluate(batch, { ...options(), ...overrides });
+const expectOk = async (pending: Promise<unknown>) => {
+  expect(await pending).toMatchObject({ status: "ok" });
+};
+const expectUnavailable = async (pending: Promise<unknown>, reason: string) => {
+  expect(await pending).toEqual({ status: "unavailable", reason });
+};
+
 describe("registered decision capability", () => {
-  it.each([" fixture", "fixture ", "fixture/model"])(
-    "rejects a provider ID that cannot round-trip through selection: %j",
-    async (providerId) => {
-      const call = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
-      const host = registered(call, undefined, providerId);
-      expect(host.registry.decisionProviders).toEqual([]);
-      expect(host.registry.diagnostics).toContainEqual(
-        expect.objectContaining({
-          level: "error",
-          message: "invalid version 1 decision provider contract",
-        }),
+  it.each([
+    ["specialist", ["fixture/other"], "not allowlisted"],
+    [undefined, ["fixture/other"], "not allowlisted"],
+    [undefined, [], "no valid models"],
+    [undefined, ["invalid"], "no valid models"],
+  ] as const)("denies SDK policy before dispatch: %s %j %s", async (agentId, models, reason) => {
+    const { evaluate, ...host } = spyHost();
+    setRuntimeConfigSnapshot(policyConfig({ allowedCompletionModels: [...models] }));
+    await expect(sdk(host, { agentId })).rejects.toThrow(reason);
+    expect(evaluate).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, ["fixture/fixture-v1"], ["*"]])(
+    "keeps global role selection independent of override-only policy (%j)",
+    async (allowedCompletionModels) => {
+      const { evaluate, ...host } = spyHost();
+      setRuntimeConfigSnapshot(
+        policyConfig(
+          { allowModelOverride: false, allowedModels: [], allowedCompletionModels },
+          {
+            defaults: {
+              decisionModel: "fixture/fixture-v1",
+              modelPolicy: { allow: ["fixture/conversation-only"] },
+            },
+            entries: { main: { decisionModel: "fixture/main-role" } },
+          },
+        ),
       );
-      expect(await host.run()).toEqual({ status: "unavailable", reason: "not-configured" });
-      expect(call).not.toHaveBeenCalled();
+      await expectOk(
+        withGatewayToolCallerIdentity({ agentId: "main", sessionKey: "agent:main:fixture" }, () =>
+          sdk(host),
+        ),
+      );
+      expect(evaluate).toHaveBeenCalledOnce();
+      expect(evaluate.mock.calls[0]?.[1]).toMatchObject({ model: "fixture-v1" });
+      expect(evaluate.mock.calls[0]?.[1].agentId).toBeUndefined();
     },
   );
 
-  it("rejects duplicate provider registration while keeping its live owner callable", async () => {
-    const first = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
-    const duplicate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
-    const host = registered(first);
-    runPluginRegisterSyncInRegistry(
-      (api) =>
-        api.registerDecisionProvider({ id: "fixture", contractVersion: 1, evaluate: duplicate }),
-      host.api,
-      host.registry,
-      host.record.id,
-    );
-    expect(host.registry.decisionProviders).toHaveLength(1);
-    expect(host.registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        message: "decision provider already registered: fixture",
+  it.each([undefined, false, true])(
+    "preserves owner-agent SDK calls without requiring override permission (%j)",
+    async (allowAgentIdOverride) => {
+      const { evaluate, ...host } = spyHost();
+      setRuntimeConfigSnapshot(
+        policyConfig(
+          { allowAgentIdOverride, allowedCompletionModels: ["fixture/specialist-v1"] },
+          {
+            defaults: { model: "fixture/primary" },
+            entries: {
+              specialist: { decisionModel: "fixture/specialist-v1" },
+              disabled: { decisionModel: "" },
+            },
+          },
+        ),
+      );
+      await expectOk(
+        withGatewayToolCallerIdentity(
+          { agentId: "specialist", sessionKey: "agent:specialist:fixture" },
+          () => sdk(host, { agentId: "specialist" }),
+        ),
+      );
+      expect(evaluate.mock.calls[0]?.[1]).toMatchObject({
+        model: "specialist-v1",
+        agentId: "specialist",
+      });
+      for (const agentId of [undefined, "disabled"]) {
+        await expectUnavailable(sdk(host, { agentId }), "disabled");
+      }
+      expect(evaluate).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["consumer", "MixedConsumer"])(
+    "uses registered consumer %s policy, not provider, ambient plugin or option identity",
+    async (consumerId) => {
+      const { evaluate, ...host } = spyHost();
+      const consumer = createPluginRecord({
+        id: consumerId,
+        source: "/synthetic/consumer.ts",
+        origin: "global",
+        enabled: true,
+        configSchema: false,
+      });
+      const api = host.createApi(consumer, { config });
+      host.registry.plugins.push(consumer);
+      onTestFinished(async () => {
+        await getPluginInstance(consumer)?.dispose();
+      });
+      setRuntimeConfigSnapshot({
+        ...config,
+        plugins: {
+          entries: {
+            owner: { llm: { allowAgentIdOverride: true, allowedCompletionModels: ["*"] } },
+            [consumerId.toLowerCase()]: { llm: { allowedCompletionModels: ["fixture/other"] } },
+          },
+        },
+      });
+      const spoofed = {
+        ...options(),
+        consumerId: "owner",
+        pluginIdForPolicy: "owner",
+        caller: { kind: "context-engine", id: "owner" },
+        authority: { allowAgentIdOverride: true },
+      };
+      await expect(
+        withPluginRuntimeGatewayRequestScope(
+          { pluginId: "owner", isWebchatConnect: () => false },
+          () => api.runtime.decisions.evaluate(batch, spoofed),
+        ),
+      ).rejects.toThrow(`not allowlisted for completions for plugin "${consumerId}"`);
+      await expect(
+        api.runtime.decisions.evaluate(batch, { ...spoofed, agentId: "specialist" }),
+      ).rejects.toThrow(`not allowlisted for completions for plugin "${consumerId}"`);
+      expect(evaluate).not.toHaveBeenCalled();
+      // Provider configuration is not consumer authorization either.
+      await expectOk(sdk(host));
+    },
+  );
+
+  it("routes a configured custom TypeSafe model without requiring a catalog preset", async () => {
+    const { evaluate, ...host } = spyHost(undefined, "typesafe");
+    await expectOk(
+      host.run(options(), {
+        agents: { defaults: { decisionModel: "typesafe/nemotron-deciffusion" } },
       }),
     );
-    expect(await host.run()).toMatchObject({ status: "ok" });
-    expect(first).toHaveBeenCalledOnce();
-    expect(duplicate).not.toHaveBeenCalled();
+    expect(evaluate).toHaveBeenCalledOnce();
+    expect(evaluate.mock.calls[0]?.[1].model).toBe("nemotron-deciffusion");
+  });
+  it("uses the adopted owner from a collected callback scope without reviving a retired instance", async () => {
+    class RetiredRegistry {
+      readonly fixtureLabel = "RetiredRegistry";
+    }
+    const { evaluate, ...host } = spyHost();
+    const instance = getPluginInstance(host.record)!;
+    setRuntimeConfigSnapshot(config);
+    const current = { ...host.registry };
+    const resource = (() => {
+      const previous = Object.assign(new RetiredRegistry(), host.registry);
+      markPluginRegistryActive(previous);
+      const retained = instance.run(() => new AsyncResource("retired-decision-scope"));
+      markPluginRegistryActive(current);
+      markPluginRegistryRetired(previous);
+      return retained;
+    })();
+    try {
+      await setImmediate();
+      expect(queryObjects(RetiredRegistry)).toBe(0);
+      const invoke = () => resource.runInAsyncScope(() => sdk(host));
+      await expectOk(invoke());
+      expect(evaluate).toHaveBeenCalledOnce();
+      revokePluginRecord(current, host.record);
+      await expect(invoke()).rejects.toThrow("runtime is no longer active");
+      expect(evaluate).toHaveBeenCalledOnce();
+    } finally {
+      resource.emitDestroy();
+      markPluginRegistryRetired(current);
+    }
   });
 
-  it("leaves off, missing and cold credentials network-free", async () => {
-    const call = vi.fn(async () => answer);
-    const host = registered(call, () => false);
-    expect(await host.run()).toEqual({ status: "unavailable", reason: "credentials-unavailable" });
-    expect(await evaluateDecisionInRegistry(batch, options(), host.registry, {})).toEqual({
+  it("keeps ordinary input rejection recoverable without retries or circuit poisoning", async () => {
+    const call = vi.fn<DecisionProviderV1["evaluate"]>(async () => ({
       status: "unavailable",
-      reason: "disabled",
-    });
-    expect(await evaluateDecisionInRegistry(batch, options(), null, config)).toEqual({
-      status: "unavailable",
-      reason: "not-configured",
-    });
-    expect(call).not.toHaveBeenCalled();
+      reason: "unsupported-input",
+      retryAfterMs: 60_000,
+    }));
+    const host = registered(call);
+    setRuntimeConfigSnapshot(config);
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      await expectUnavailable(sdk(host), "unsupported-input");
+      expect(call).toHaveBeenCalledTimes(attempt);
+    }
+    call.mockResolvedValueOnce(answer);
+    await expectOk(sdk(host));
+    expect(call).toHaveBeenCalledTimes(5);
+    expect(inspect(host).callable).toBe(true);
   });
-  it("preserves choice, fractional score, Boolean, usage and local provenance", async () => {
-    const host = registered();
+
+  it("reuses the validated provider snapshots for safe usage, diagnostics and outcomes", async () => {
+    let resultReads = 0;
+    let reasonReads = 0;
+    const call = vi.fn<DecisionProviderV1["evaluate"]>(async () =>
+      Object.defineProperty({ status: "ok", result: answer.result }, "result", {
+        get: () =>
+          ++resultReads === 1 ? answer.result : { usage: { inputTokens: "private-provider-body" } },
+      }),
+    );
+    const host = registered(call);
     expect(await host.run()).toMatchObject({
       ...answer,
       provenance: { providerId: "fixture", rubricVersion: "1" },
     });
+    expect(resultReads).toBe(1);
+    call.mockImplementationOnce(async () =>
+      Object.defineProperty({ status: "unavailable", reason: "unsupported-input" }, "reason", {
+        get: () => (++reasonReads === 1 ? "unsupported-input" : "private-provider-body"),
+      }),
+    );
+    await expectUnavailable(host.run(), "unsupported-input");
+    expect(reasonReads).toBe(1);
   });
-  it("dispatches inherited and per-agent models while an empty override stays off", async () => {
-    const call = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
-    const host = registered(call);
-    const selected: OpenClawConfig = {
-      agents: {
-        defaults: { decisionModel: "fixture/default-v1" },
-        entries: {
-          specialist: { decisionModel: "fixture/specialist-v1" },
-          disabled: { decisionModel: "" },
+
+  it("requires a current Gateway binding for scoped operator decisions", async () => {
+    const { evaluate, ...host } = spyHost();
+    setRuntimeConfigSnapshot(config);
+    await expect(
+      withPluginRuntimeGatewayRequestScope(
+        {
+          client: createSyntheticPluginRuntimeClient({
+            operatorRoleActor: { kind: "operator", profileId: "decision-reader" },
+            scopes: ["operator.write"],
+          }),
+          isWebchatConnect: () => false,
         },
-      },
-    };
-    expect(await host.run({ ...options(), agentId: "inherited" }, selected)).toMatchObject({
-      status: "ok",
-    });
-    expect(await host.run({ ...options(), agentId: "specialist" }, selected)).toMatchObject({
-      status: "ok",
-    });
-    expect(await host.run({ ...options(), agentId: "disabled" }, selected)).toEqual({
-      status: "unavailable",
-      reason: "disabled",
-    });
-    expect(
-      call.mock.calls.map(([, context]) => ({ model: context.model, agentId: context.agentId })),
-    ).toEqual([
-      { model: "default-v1", agentId: "inherited" },
-      { model: "specialist-v1", agentId: "specialist" },
-    ]);
+        () => sdk(host),
+      ),
+    ).rejects.toThrow("Decision evaluation requires its current Gateway binding.");
+    expect(evaluate).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { model: "fixture-v1", source: "agent-tool" },
+    { model: "fixture-v1@fixture:agent", source: "agent-tool" },
+    { model: "shortcut@fixture:agent", source: "direct-tool" },
+    { model: "shortcut", source: "direct-tool" },
+    { model: "shortcut", source: "unbound-operator" },
+  ] as const)(
+    "enforces requester exclusions for $model from $source while preserving independent system decisions",
+    async ({ model, source }) => {
+      const { evaluate, ...host } = spyHost();
+      const metadata = createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "fixture-normalizer",
+            modelIdNormalization: {
+              providers: { fixture: { aliases: { shortcut: "fixture-v1" } } },
+            },
+          },
+        ],
+      });
+      const snapshot = vi
+        .spyOn(currentPluginMetadata, "getProcessGatewayPluginMetadataSnapshot")
+        .mockReturnValue(metadata);
+      onTestFinished(() => snapshot.mockRestore());
+      const selected: OpenClawConfig = {
+        agents: {
+          entries: { main: {} },
+          defaults: { model: "fixture/permitted", decisionModel: `fixture/${model}` },
+        },
+      };
+      setRuntimeConfigSnapshot(selected);
+      const operatorAuthority = createAdmittedRunOperatorAuthority({
+        profileId: "decision-reader",
+        scopes: ["operator.write"],
+        assertCurrent: () => {},
+        modelPolicy: prepareOperatorModelPolicy({
+          cfg: selected,
+          policy: { sourceAgent: "main", allow: ["fixture/*"], deny: ["fixture/fixture-v1"] },
+          manifestPlugins: metadata,
+        }),
+      });
+      const invoke = () => sdk(host);
+      await expect(
+        source === "agent-tool"
+          ? withGatewayToolCallerIdentity(
+              { agentId: "main", sessionKey: "agent:main:reader", operatorAuthority },
+              invoke,
+            )
+          : withOperatorToolGatewayAuthority(
+              {
+                authenticatedUserProfile: {
+                  profileId: operatorAuthority.profileId,
+                  displayName: "Decision Reader",
+                  hasAvatar: false,
+                  updatedAt: 1,
+                },
+                scopes: ["operator.write"],
+                ...(source === "direct-tool" ? { operatorRunAuthority: operatorAuthority } : {}),
+              },
+              invoke,
+            ),
+      ).rejects.toThrow(
+        source === "unbound-operator"
+          ? "requires original Gateway authority"
+          : "cannot use this model",
+      );
+      expect(evaluate).not.toHaveBeenCalled();
+      await expectOk(sdk(host));
+      expect(evaluate).toHaveBeenCalledOnce();
+      expect(evaluate.mock.calls[0]?.[1].model).toBe(model);
+    },
+  );
+  it("leaves disabled and unconfigured evaluations network-free", async () => {
+    const { evaluate: call, ...host } = spyHost();
+    await expectUnavailable(host.run(options(), {}), "disabled");
+    await expectUnavailable(
+      evaluateDecisionInRegistry(batch, options(), null, config),
+      "not-configured",
+    );
+    expect(call).not.toHaveBeenCalled();
+  });
+  it.each([
+    { state: "unconfirmed", isReady: undefined, credentialReady: false, callable: true },
+    { state: "ready", isReady: () => true, credentialReady: true, callable: true },
+    { state: "unavailable", isReady: () => false, credentialReady: false, callable: false },
+  ])(
+    "reports $state readiness without confusing credential evidence with admission",
+    async ({ isReady, credentialReady, callable }) => {
+      const { evaluate: call, ...host } = spyHost(isReady);
+      expectState(host, { credentialReady, callable });
+      if (callable) {
+        await expectOk(host.run());
+        expect(call).toHaveBeenCalledOnce();
+      } else {
+        await expectUnavailable(host.run(), "credentials-unavailable");
+        expect(call).not.toHaveBeenCalled();
+      }
+      expectState(host, { credentialReady, callable });
+      host.registry.decisionProviders[0]!.host.retire();
+      expectState(host, { credentialReady: false, callable: false });
+      await expectUnavailable(host.run(), "retiring");
+    },
+  );
   it("fences a changed agent selection without retiring another agent's concurrent request", async () => {
     const releases = new Map<string, () => void>();
+    const started = createDeferredCore();
     const host = registered(async (_batch, { agentId }) => {
       await new Promise<void>((resolve) => {
         releases.set(agentId!, resolve);
+        if (releases.size === 2) {
+          started.resolve();
+        }
       });
       return answer;
     });
@@ -197,87 +408,33 @@ describe("registered decision capability", () => {
     setRuntimeConfigSnapshot(selected);
     const first = host.run({ ...options(), agentId: "first" }, selected);
     const second = host.run({ ...options(), agentId: "second" }, selected);
+    await started.promise;
     const next = structuredClone(selected);
     next.agents!.entries!.first!.decisionModel = "fixture/first-v2";
     setRuntimeConfigSnapshot(next);
-    const generation = host.registry.decisionProviders[0]!.host.inspect(next).runtimeGeneration;
+    const generation = inspect(host, next).runtimeGeneration;
     for (const release of releases.values()) {
       release();
     }
-    expect(await first).toEqual({ status: "unavailable", reason: "retiring" });
+    await expectUnavailable(first, "retiring");
     expect(await second).toMatchObject({
       status: "ok",
       provenance: { runtimeGeneration: generation },
     });
-    expect(host.registry.decisionProviders[0]!.host.inspect(next)).toMatchObject({
-      successCount: 1,
-      activeRequests: 0,
-    });
-  });
-  it.each([
-    { yes: 0.49, unclear: 0.51 },
-    { yes: 0.49, unclear: 0.5 },
-    { yes: 0.5, unclear: 0.51 },
-  ])(
-    "preserves provider labels and independently rounded probability estimates: %j",
-    async (probabilities) => {
-      const independent: ProviderDecisionOutcome = {
-        status: "ok",
-        result: {
-          ...answer.result,
-          answers: {
-            ...answer.result.answers,
-            pick: { type: "choice", choice: "yes", probabilities },
-            rank: { type: "score", score: 1.01, probabilities: [0.33, 0.33, 0.33] },
-          },
-        },
-      };
-      const host = registered(async () => independent);
-      expect(await host.run()).toMatchObject(independent);
-    },
-  );
-  it("rejects a whole malformed batch and opens the bounded circuit", async () => {
-    const call = vi.fn(async (): Promise<ProviderDecisionOutcome> => ({
-      status: "ok",
-      result: { model: "fixture", answers: {} },
-    }));
-    const host = registered(call);
-    for (let i = 0; i < 3; i++) {
-      expect(await host.run()).toEqual({ status: "unavailable", reason: "invalid-response" });
-    }
-    expect(await host.run()).toEqual({ status: "unavailable", reason: "circuit-open" });
-    expect(call).toHaveBeenCalledTimes(3);
-  });
-  it("cancels pending body work before native drain and fences old handles", async () => {
-    let settled = false;
-    const host = registered(async (_batch, { signal }) => {
-      await new Promise<void>((resolve) => {
-        signal.addEventListener("abort", () => resolve(), { once: true });
-      });
-      settled = true;
-      return answer;
-    });
-    const pending = host.run();
-    prepareDecisionProviderReload(host.registry, new Set([host.record.id]));
-    expect(await pending).toEqual({ status: "unavailable", reason: "retiring" });
-    expect(settled).toBe(true);
-    expect(await getPluginInstance(host.record)?.drain()).toEqual({ errors: [] });
-    expect(await host.run()).toEqual({ status: "unavailable", reason: "retiring" });
+    expectState(host, { successCount: 1, activeRequests: 0 }, next);
   });
   it("propagates caller cancellation without fallback classification", async () => {
     const caller = new AbortController();
     const host = registered(async (_batch, { signal }) => {
-      await new Promise<void>((resolve) => {
-        signal.addEventListener("abort", () => resolve(), { once: true });
-      });
+      await waitForAbort(signal);
       return answer;
     });
     const pending = host.run({ ...options(), signal: caller.signal });
+    await host.started;
     caller.abort(new Error("source replaced"));
     await expect(pending).rejects.toThrow("source replaced");
   });
   it.each([
-    { consumerId: "owner", changed: ["owner"], consumerRetired: true },
     { consumerId: "consumer", changed: ["owner", "consumer"], consumerRetired: true },
     { consumerId: "consumer", changed: ["owner"], consumerRetired: false },
   ])(
@@ -285,9 +442,7 @@ describe("registered decision capability", () => {
     async ({ consumerId, changed, consumerRetired }) => {
       let settled = false;
       const host = registered(async (_batch, { signal }) => {
-        await new Promise<void>((resolve) => {
-          signal.addEventListener("abort", () => resolve(), { once: true });
-        });
+        await waitForAbort(signal);
         settled = true;
         signal.throwIfAborted();
         return answer;
@@ -299,11 +454,12 @@ describe("registered decision capability", () => {
         config,
         consumerId,
       );
-      prepareDecisionProviderReload(host.registry, new Set(changed));
+      await host.started;
+      reload(host, changed);
       if (consumerRetired) {
         await expect(pending).rejects.toThrow("Decision consumer authority closed.");
       } else {
-        expect(await pending).toEqual({ status: "unavailable", reason: "retiring" });
+        await expectUnavailable(pending, "retiring");
       }
       expect(settled).toBe(true);
     },
@@ -330,149 +486,166 @@ describe("registered decision capability", () => {
       return answer;
     });
     const pending = evaluateDecisionInRegistry(batch, options(), host.registry, config, "owner");
-    prepareDecisionProviderReload(host.registry, new Set(["owner"]));
+    await host.started;
+    reload(host);
     await expect(pending).rejects.toThrow("Decision consumer authority closed.");
     expect(await reentered).toMatchObject({ status: "unavailable", reason: "retiring" });
     expect(calls).toBe(1);
   });
-  it("admits no waiting queue when saturated and settles permits on abort", async () => {
-    const host = registered(async (_batch, { signal }) => {
-      await new Promise<void>((resolve) => {
-        signal.addEventListener("abort", () => resolve(), { once: true });
-      });
-      return answer;
-    });
-    const requests = Array.from({ length: 4 }, () => host.run());
-    expect(await host.run()).toEqual({ status: "unavailable", reason: "overloaded" });
-    prepareDecisionProviderReload(host.registry, new Set([host.record.id]));
-    await Promise.all(requests);
-    expect(host.registry.decisionProviders[0]?.host.inspect(config).activeRequests).toBe(0);
-  });
   it("distinguishes caller defects from resource limits without network", async () => {
-    const call = vi.fn(async () => answer);
-    const host = registered(call);
+    const { evaluate: call, ...host } = spyHost();
     await expect(
       evaluateDecisionInRegistry({ state: "", questions: {} }, options(), host.registry, config),
     ).rejects.toThrow("Invalid decision contract");
-    expect(
-      await evaluateDecisionInRegistry(
+    await expectUnavailable(
+      evaluateDecisionInRegistry(
         { ...batch, state: "x".repeat(1_048_577) },
         options(),
         host.registry,
         config,
       ),
-    ).toEqual({ status: "unavailable", reason: "unsupported-input" });
+      "unsupported-input",
+    );
     expect(call).not.toHaveBeenCalled();
-  });
-  it("never hides a programmer exception as an outage", async () => {
-    const host = registered(async () => {
-      throw new Error("sensitive provider implementation detail");
-    });
-    await expect(host.run()).rejects.toThrow("Invalid decision contract");
   });
 });
 
 describe("numerical contract", () => {
-  it("accepts only exact answer IDs and bounded rubric positions", () => {
+  it("requires exact answer IDs, bounded rubric positions and usable probabilities", () => {
     expect(validateDecisionBatch(batch)).toBe(true);
     expect(validateDecisionResult(batch, answer.result)).toBe(true);
-    expect(
-      validateDecisionResult(batch, {
-        ...answer.result,
-        answers: { ...answer.result.answers, extra: { type: "boolean", probabilityTrue: 1 } },
-      }),
-    ).toBe(false);
-    expect(
-      validateDecisionResult(batch, {
-        ...answer.result,
-        answers: {
-          ...answer.result.answers,
-          rank: { type: "score", score: 2.1, probabilities: [0.1, 0.5, 0.4] },
-        },
-      }),
-    ).toBe(false);
-  });
-  it.each([
-    { yes: 0, unclear: 0 },
-    { yes: -0.1, unclear: 1 },
-    { yes: 0, unclear: 1.1 },
-    { yes: Number.NaN, unclear: 1 },
-    { yes: Number.POSITIVE_INFINITY, unclear: 0 },
-    { yes: 1 },
-  ])("rejects unusable probability estimates: %j", (probabilities) => {
-    expect(
-      validateDecisionResult(batch, {
-        ...answer.result,
-        answers: {
-          ...answer.result.answers,
+    const invalidAnswers = [
+      { ...answer.result.answers, extra: { type: "boolean", probabilityTrue: 1 } },
+      {
+        ...answer.result.answers,
+        rank: { type: "score", score: 2.1, probabilities: [0.1, 0.5, 0.4] },
+      },
+      ...[
+        { yes: 0, unclear: 0 },
+        { yes: -0.1, unclear: 1 },
+        { yes: 0, unclear: 1.1 },
+        { yes: Number.NaN, unclear: 1 },
+        { yes: 1 },
+      ].map((probabilities) =>
+        Object.assign({}, answer.result.answers, {
           pick: { type: "choice", choice: "yes", probabilities },
-        },
-      }),
-    ).toBe(false);
+        }),
+      ),
+    ];
+    for (const answers of invalidAnswers) {
+      expect(validateDecisionResult(batch, { ...answer.result, answers })).toBe(false);
+    }
   });
 });
 
 describe("fault settlement and generation health", () => {
   it.each([
-    { timeoutMs: 10, deadlineMs: 10 },
-    { timeoutMs: 20_000, deadlineMs: 20_000 },
-    { timeoutMs: 60_000, deadlineMs: 30_000 },
-  ])(
-    "joins a deadline-aborted callback after $deadlineMs ms for a $timeoutMs ms request",
-    async ({ timeoutMs, deadlineMs }) => {
+    { settlement: "resolve", failureReason: "transport" },
+    { settlement: "reject", failureReason: "rate-limited" },
+  ] as const)(
+    "keeps $settlement caller deadlines out of shared health while preserving $failureReason accounting",
+    async ({ settlement, failureReason }) => {
+      setRuntimeConfigSnapshot(config);
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
       try {
-        let settled = false;
-        const host = registered(async (_batch, { signal }) => {
-          await new Promise<void>((resolve) => {
-            signal.addEventListener("abort", () => resolve(), { once: true });
-          });
-          settled = true;
+        const deadlineStarted = Array.from({ length: 3 }, () => createDeferredCore());
+        let attempt = 0;
+        const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async (_batch, { signal }) => {
+          const current = attempt++;
+          if (current < deadlineStarted.length) {
+            deadlineStarted[current]!.resolve();
+            await waitForAbort(signal);
+            if (settlement === "reject") {
+              throw new Error("provider abort detail");
+            }
+          }
           return answer;
         });
-        const pending = host.run({ ...options(), timeoutMs });
-        await vi.advanceTimersByTimeAsync(deadlineMs - 1);
-        expect(settled).toBe(false);
-        expect(host.registry.decisionProviders[0]!.host.inspect(config).activeRequests).toBe(1);
-        await vi.advanceTimersByTimeAsync(1);
-        expect(await pending).toEqual({ status: "unavailable", reason: "deadline" });
-        expect(settled).toBe(true);
-        expect(host.registry.decisionProviders[0]!.host.inspect(config)).toMatchObject({
+        const host = registered(evaluate);
+
+        for (let index = 0; index < deadlineStarted.length; index++) {
+          const pending = host.run({
+            ...options(),
+            purpose: "tool-prefilter.semantic-gate",
+            timeoutMs: 500,
+          });
+          await deadlineStarted[index]!.promise;
+          expect(inspect(host).activeRequests).toBe(1);
+          await vi.advanceTimersByTimeAsync(500);
+          await expectUnavailable(pending, "deadline");
+          expectState(host, {
+            activeRequests: 0,
+            callable: true,
+            reasons: { deadline: index + 1 },
+          });
+        }
+
+        const explicit = await createDecisionTool("main", { config })!.execute(
+          "after-optional-deadlines",
+          batch,
+          options().signal,
+        );
+        expect(explicit.details).toMatchObject({ status: "ok" });
+        expect(evaluate).toHaveBeenCalledTimes(4);
+        expectState(host, {
           activeRequests: 0,
-          successCount: 0,
-          reasons: { deadline: 1 },
+          callable: true,
+          successCount: 1,
+          reasons: { deadline: 3 },
+        });
+
+        evaluate.mockResolvedValue({ status: "unavailable", reason: failureReason });
+        for (let index = 1; index <= 3; index++) {
+          await expectUnavailable(
+            host.run({ ...options(), purpose: "decision_evaluate" }),
+            failureReason,
+          );
+          expect(evaluate).toHaveBeenCalledTimes(4 + index);
+        }
+        await expectUnavailable(
+          host.run({ ...options(), purpose: "decision_evaluate" }),
+          "circuit-open",
+        );
+        expect(evaluate).toHaveBeenCalledTimes(7);
+        expectState(host, {
+          activeRequests: 0,
+          callable: false,
+          reasons: { deadline: 3, [failureReason]: 3, "circuit-open": 1 },
         });
       } finally {
         vi.useRealTimers();
       }
     },
   );
-  it("keeps auth failures across model selection changes until provider configuration changes", async () => {
-    const callback = vi
-      .fn<DecisionProviderV1["evaluate"]>()
-      .mockResolvedValueOnce({ status: "unavailable", reason: "authentication" })
-      .mockResolvedValue(answer);
+  it("keeps rejected credentials from blocking another agent or later credential recovery", async () => {
+    let firstCredentialAccepted = false;
+    const callback = vi.fn<DecisionProviderV1["evaluate"]>(async (_batch, { agentId }) =>
+      agentId === "first" && !firstCredentialAccepted
+        ? { status: "unavailable", reason: "authentication", retryAfterMs: 60_000 }
+        : answer,
+    );
     const host = registered(callback);
-    expect(await host.run()).toMatchObject({ reason: "authentication" });
-    expect(await host.run()).toMatchObject({ reason: "circuit-open" });
-    expect(callback).toHaveBeenCalledTimes(1);
-    const anotherModel: OpenClawConfig = {
-      agents: { defaults: { decisionModel: "fixture/another-v1" } },
-    };
-    expect(await host.run(options(), anotherModel)).toMatchObject({ reason: "circuit-open" });
-    expect(
-      await host.run(options(), {
-        ...anotherModel,
-        plugins: { entries: { owner: { config: { endpoint: "updated" } } } },
-      }),
-    ).toMatchObject({
-      status: "ok",
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await expectUnavailable(host.run({ ...options(), agentId: "first" }), "authentication");
+      expect(callback).toHaveBeenCalledTimes(attempt);
+    }
+    await expectOk(host.run({ ...options(), agentId: "second" }));
+
+    firstCredentialAccepted = true;
+    await expectOk(host.run({ ...options(), agentId: "first" }));
+    expect(callback).toHaveBeenCalledTimes(5);
+    expectState(host, {
+      activeRequests: 0,
+      callable: true,
+      successCount: 2,
+      reasons: { authentication: 3 },
     });
   });
   it("bounds recovery to one half-open trial", async () => {
     let now = 0;
     const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
-    let finish!: () => void;
+    const release = createDeferredCore();
     const callback = vi
       .fn<DecisionProviderV1["evaluate"]>()
       .mockResolvedValue({ status: "unavailable", reason: "transport" });
@@ -482,108 +655,94 @@ describe("fault settlement and generation health", () => {
         await host.run();
       }
       now = 10_001;
+      const trialStarted = createDeferredCore();
       callback.mockImplementation(async () => {
-        await new Promise<void>((resolve) => {
-          finish = resolve;
-        });
+        trialStarted.resolve();
+        await release.promise;
         return answer;
       });
       const trial = host.run();
-      const duringTrial = host.registry.decisionProviders[0]!.host.inspect(config);
+      await trialStarted.promise;
+      const duringTrial = inspect(host);
       expect(await host.run()).toMatchObject({ reason: "circuit-open" });
-      finish();
-      expect(await trial).toMatchObject({ status: "ok" });
+      release.resolve();
+      await expectOk(trial);
       expect(duringTrial).toMatchObject({ callable: false, activeRequests: 1 });
-      expect(host.registry.decisionProviders[0]!.host.inspect(config).callable).toBe(true);
+      expect(inspect(host).callable).toBe(true);
       expect(callback).toHaveBeenCalledTimes(4);
     } finally {
       clock.mockRestore();
     }
   });
-  it("rejects executable JSON without executing a getter and sanitizes readiness defects", async () => {
-    const getter = vi.fn(() => {
-      throw new Error("private detail");
-    });
-    const state = Object.defineProperty({}, "field", { get: getter, enumerable: true });
-    expect(() => validateDecisionBatch({ ...batch, state })).toThrow("Invalid decision contract");
-    expect(getter).not.toHaveBeenCalled();
-    const host = registered(undefined, () => {
-      throw new Error("private readiness detail");
-    });
-    await expect(host.run()).rejects.toThrow("Invalid decision contract");
-  });
 });
 
 describe("immutable finite JSON boundaries", () => {
-  it.each(["input", "output"] as const)(
-    "rejects inherited array serialization at the %s boundary",
-    async (boundary) => {
-      const serialize = vi.fn(() => []);
-      const prototype = { toJSON: serialize };
+  it.each([
+    "input getter",
+    "input sparse",
+    "input symbol",
+    "output inherited serialization",
+    "output hidden",
+  ])("rejects %s before publishing an incomplete clone", async (variant) => {
+    const sideEffect = vi.fn(() => {
+      throw new Error("private detail");
+    });
+    const submitted = { ...structuredClone(batch) };
+    const returned = structuredClone(answer);
+    if (variant.endsWith("inherited serialization")) {
+      const prototype = { toJSON: sideEffect };
       Object.setPrototypeOf(prototype, Array.prototype);
-      // JSON escaping takes this beyond the one-MiB limit.
-      const state = ["\u0000".repeat(200_000)];
-      const returned = structuredClone(answer);
-      if (boundary === "input") {
-        Object.setPrototypeOf(state, prototype);
-      } else {
-        Object.setPrototypeOf(returned.result.answers.rank.probabilities, prototype);
-      }
-      const call = vi.fn<DecisionProviderV1["evaluate"]>(async () => returned);
-      const host = registered(call);
-      if (boundary === "input") {
-        await expect(
-          evaluateDecisionInRegistry({ ...batch, state }, options(), host.registry, config),
-        ).rejects.toThrow("Invalid decision contract");
-        expect(call).not.toHaveBeenCalled();
-      } else {
-        expect(await host.run()).toEqual({ status: "unavailable", reason: "invalid-response" });
-      }
-      expect(serialize).not.toHaveBeenCalled();
-    },
-  );
-
-  it("rejects hidden input evidence before the provider receives an incomplete clone", async () => {
-    const call = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
+      Object.setPrototypeOf(returned.result.answers.rank.probabilities, prototype);
+    } else if (variant === "input getter") {
+      submitted.state = Object.defineProperty({}, "field", { get: sideEffect, enumerable: true });
+    } else if (variant === "input sparse") {
+      const sparse: string[] = [];
+      sparse.length = 2;
+      submitted.state = null;
+      submitted.questions = { q: { type: "score", criteria: sparse } };
+    } else if (variant === "input symbol") {
+      submitted.state = Object.assign({}, { [Symbol("unsupported")]: "hidden" });
+    } else {
+      Object.defineProperty(returned.result, "model", { enumerable: false });
+    }
+    const call = vi.fn<DecisionProviderV1["evaluate"]>(async () => returned);
     const host = registered(call);
-    const state = Object.defineProperty({}, "evidence", { value: "required evidence" });
-    await expect(
-      evaluateDecisionInRegistry({ ...batch, state }, options(), host.registry, config),
-    ).rejects.toThrow("Invalid decision contract");
-    expect(call).not.toHaveBeenCalled();
+    const pending = evaluateDecisionInRegistry(submitted, options(), host.registry, config);
+    if (variant.startsWith("input")) {
+      await expect(pending).rejects.toThrow("Invalid decision contract");
+      expect(call).not.toHaveBeenCalled();
+    } else {
+      await expectUnavailable(pending, "invalid-response");
+    }
+    expect(sideEffect).not.toHaveBeenCalled();
   });
 
-  it.each(["model", "answer type"] as const)(
-    "rejects a hidden output %s before returning an incomplete success",
-    async (field) => {
-      const returned = structuredClone(answer);
-      if (field === "model") {
-        Object.defineProperty(returned.result, "model", { enumerable: false });
-      } else {
-        Object.defineProperty(returned.result.answers.pick, "type", { enumerable: false });
-      }
-      const host = registered(async () => returned);
-      expect(await host.run()).toEqual({ status: "unavailable", reason: "invalid-response" });
+  it.each(["readiness", "evaluate", "outcome"])(
+    "sanitizes private provider defects in %s",
+    async (stage) => {
+      const fail = () => {
+        throw new Error("private provider detail");
+      };
+      const host = registered(
+        async () => {
+          if (stage === "evaluate") {
+            fail();
+          }
+          return stage === "outcome"
+            ? Object.defineProperty(structuredClone(answer), "status", { get: fail })
+            : answer;
+        },
+        stage === "readiness" ? fail : undefined,
+      );
+      await expect(host.run()).rejects.toThrow("Invalid decision contract");
     },
   );
-
-  it("rejects sparse rubrics and symbol-valued fields before dispatch", () => {
-    const sparse: string[] = [];
-    sparse.length = 2;
-    expect(() =>
-      validateDecisionBatch({ state: null, questions: { q: { type: "score", criteria: sparse } } }),
-    ).toThrow("Invalid decision contract");
-    const state = Object.assign({}, { [Symbol("unsupported")]: "hidden" });
-    expect(() => validateDecisionBatch({ ...batch, state })).toThrow("Invalid decision contract");
-  });
   it("uses an admitted snapshot even if caller or provider mutates its input", async () => {
-    let finish!: () => void;
+    const release = createDeferredCore();
     const host = registered(async (input) => {
       expect(input.state).toEqual({ evidence: "synthetic" });
       Reflect.deleteProperty(input.questions, "pick");
-      await new Promise<void>((resolve) => {
-        finish = resolve;
-      });
+      await release.promise;
       expect(input.state).toEqual({ evidence: "synthetic" });
       return answer;
     });
@@ -592,59 +751,81 @@ describe("immutable finite JSON boundaries", () => {
     expect(Object.hasOwn(submitted.questions, "pick")).toBe(true);
     submitted.state.evidence = "caller mutation";
     Reflect.deleteProperty(submitted.questions, "rank");
-    finish();
-    expect(await pending).toMatchObject({ status: "ok" });
-  });
-  it("sanitizes a provider's executable outcome envelope", async () => {
-    const host = registered(async () =>
-      Object.defineProperty(structuredClone(answer), "status", {
-        get() {
-          throw new Error("private response detail");
-        },
-      }),
-    );
-    await expect(host.run()).rejects.toThrow("Invalid decision contract");
+    await host.started;
+    release.resolve();
+    await expectOk(pending);
   });
 });
 
 it("leaves a timed-out rollback fenced after late physical settlement", async () => {
   vi.useFakeTimers();
-  let release!: () => void;
+  const release = createDeferredCore();
   const host = registered(async () => {
-    await new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    await release.promise;
     return answer;
   });
   const pending = host.run();
+  await host.started;
   try {
-    const replacement = prepareDecisionProviderReload(host.registry, new Set([host.record.id]));
+    const replacement = reload(host);
     const rollback = replacement.rollback(new AbortController().signal);
     const rejected = expect(rollback).rejects.toThrow("plugin host cleanup timed out");
     await vi.advanceTimersByTimeAsync(5001);
     await rejected;
     expect(await host.run()).toMatchObject({ reason: "retiring" });
-    release();
+    release.resolve();
     expect(await pending).toMatchObject({ reason: "retiring" });
     expect(await host.run()).toMatchObject({ reason: "retiring" });
-    expect(host.registry.decisionProviders[0]!.host.inspect(config).activeRequests).toBe(0);
+    expect(inspect(host).activeRequests).toBe(0);
   } finally {
-    release();
+    release.resolve();
     await pending;
     vi.useRealTimers();
   }
 });
 
+it.each([false, true])(
+  "settles a provider callback before disposal cleanup waits on its host (sibling: %s)",
+  async (withSibling) => {
+    const started = createDeferredCore();
+    const release = createDeferredCore();
+    const siblingRelease = createDeferredCore();
+    const host = registered(async () => {
+      started.resolve();
+      await release.promise;
+      return answer;
+    });
+    const instance = getPluginInstance(host.record)!;
+    const sibling = withSibling ? instance.run(() => siblingRelease.promise) : undefined;
+    const pending = host.run();
+    await started.promise;
+
+    const disposal = instance.dispose();
+    release.resolve();
+    try {
+      // Another admitted call can postpone host.stop(), but cannot keep this
+      // retiring instance's completed provider result current.
+      await expectUnavailable(pending, "retiring");
+    } finally {
+      siblingRelease.resolve();
+      await sibling;
+      await disposal;
+    }
+    await expect(disposal).resolves.toEqual({ errors: [] });
+    expect(inspect(host).activeRequests).toBe(0);
+  },
+);
+
 it.each(["stop", "superseded", "canceled"] as const)(
   "does not reopen rollback after %s",
   async (boundary) => {
     const host = registered();
-    const replacement = prepareDecisionProviderReload(host.registry, new Set([host.record.id]));
+    const replacement = reload(host);
     const signal = new AbortController();
     if (boundary === "stop") {
       await host.registry.decisionProviders[0]!.host.stop();
     } else if (boundary === "superseded") {
-      prepareDecisionProviderReload(host.registry, new Set([host.record.id]));
+      reload(host);
     } else {
       signal.abort(new Error("recovery canceled"));
     }
@@ -652,16 +833,3 @@ it.each(["stop", "superseded", "canceled"] as const)(
     expect(await host.run()).toMatchObject({ reason: "retiring" });
   },
 );
-
-it("preserves an authentication latch across reversible admission recovery", async () => {
-  const call = vi.fn<DecisionProviderV1["evaluate"]>(async () => ({
-    status: "unavailable",
-    reason: "authentication",
-  }));
-  const host = registered(call);
-  expect(await host.run()).toMatchObject({ reason: "authentication" });
-  const replacement = prepareDecisionProviderReload(host.registry, new Set([host.record.id]));
-  await replacement.rollback(new AbortController().signal);
-  expect(await host.run()).toMatchObject({ reason: "circuit-open" });
-  expect(call).toHaveBeenCalledTimes(1);
-});

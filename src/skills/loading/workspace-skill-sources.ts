@@ -1,7 +1,7 @@
 import path from "node:path";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
-import { isDefaultStateDir } from "../../config/paths.js";
+import { isDefaultStateDir, resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -9,9 +9,13 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
+import type { PluginSkillRoot } from "./plugin-skill-root.js";
 import { resolvePluginSkillRoots, resolvePluginSkillRootsFromMetadata } from "./plugin-skills.js";
 import { resolvePluginSkillsDir, resolveSkillsUserHomeDir } from "./skill-paths.js";
-import { resolveWorkspaceSkillDirectories } from "./workspace-skill-roots.js";
+import {
+  resolveWorkspaceSkillDirectories,
+  type ExecutionSkillWorkspace,
+} from "./workspace-skill-roots.js";
 import type {
   WorkspaceSkillSourcePlan,
   WorkspaceSkillSource,
@@ -24,7 +28,10 @@ export type {
 } from "./workspace-skill-sources.types.js";
 
 /** Gateway-installed sources stay local; only workspace-owned files cross the boundary. */
-export function splitSkillSourcePlan(plan: WorkspaceSkillSourcePlan) {
+export function splitSkillSourcePlan(
+  plan: WorkspaceSkillSourcePlan,
+  execution: ExecutionSkillWorkspace = {},
+) {
   const isWorkspaceOwned = (root: WorkspaceSkillSource) =>
     root.tier === "workspace" ||
     ((root.tier === "managed" || root.tier === "extra") &&
@@ -34,7 +41,14 @@ export function splitSkillSourcePlan(plan: WorkspaceSkillSourcePlan) {
   const gatewayRoots = roots.filter((root) => !isWorkspaceOwned(root));
   const workspaceRoots = roots.filter(isWorkspaceOwned);
   return {
-    gatewayRoots,
+    gatewayExecutionWorkspaceDir:
+      execution.executionWorkspaceFileHost === "gateway"
+        ? execution.executionWorkspaceDir
+        : undefined,
+    workspaceExecutionWorkspaceDir:
+      execution.executionWorkspaceFileHost === "gateway"
+        ? undefined
+        : execution.executionWorkspaceDir,
     gatewayPlan: { ...plan, roots: gatewayRoots },
     workspacePlan: {
       ...plan,
@@ -63,18 +77,22 @@ export function resolveCustodianSkillAgentId(
     : undefined;
 }
 
+export type WorkspaceSkillSourcePlanOptions = {
+  config?: OpenClawConfig;
+  agentId?: string;
+  workspaceOnly?: boolean;
+  managedSkillsDir?: string;
+  bundledSkillsDir?: string;
+  pluginSkillsDir?: string;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  /** Prepared on the discovery worker when the caller only needs root composition. */
+  pluginSkillRoots?: PluginSkillRoot[];
+};
+
 /** Source selection and precedence are shared by local discovery and provisioned remote discovery. */
 export function resolveWorkspaceSkillSourcePlan(
   workspaceDir: string,
-  opts?: {
-    config?: OpenClawConfig;
-    agentId?: string;
-    workspaceOnly?: boolean;
-    managedSkillsDir?: string;
-    bundledSkillsDir?: string;
-    pluginSkillsDir?: string;
-    pluginMetadataSnapshot?: PluginMetadataSnapshot;
-  },
+  opts?: WorkspaceSkillSourcePlanOptions,
 ): WorkspaceSkillSourcePlan {
   const workspaceOnly = opts?.workspaceOnly === true;
   const userHomeDir = resolveSkillsUserHomeDir();
@@ -86,12 +104,13 @@ export function resolveWorkspaceSkillSourcePlan(
   const pluginParams = { workspaceDir, config: opts?.config, pluginSkillsDir };
   const pluginSkillRoots = workspaceOnly
     ? []
-    : opts?.pluginMetadataSnapshot
-      ? resolvePluginSkillRootsFromMetadata({
-          ...pluginParams,
-          metadataSnapshot: opts.pluginMetadataSnapshot,
-        })
-      : resolvePluginSkillRoots(pluginParams);
+    : (opts?.pluginSkillRoots ??
+      (opts?.pluginMetadataSnapshot
+        ? resolvePluginSkillRootsFromMetadata({
+            ...pluginParams,
+            metadataSnapshot: opts.pluginMetadataSnapshot,
+          })
+        : resolvePluginSkillRoots(pluginParams)));
   const roots: WorkspaceSkillSource[] = [];
   if (!workspaceOnly) {
     roots.push(
@@ -141,6 +160,10 @@ export function resolveWorkspaceSkillSourcePlan(
       tier: "workspace" as const,
     })),
   );
+  const worktreeRoot = opts?.config?.worktreeRoot ?? path.join(resolveStateDir(), "worktrees");
+  for (const root of roots) {
+    root.worktree = isPathInside(worktreeRoot, root.dir);
+  }
   return {
     roots,
     allowSymlinkTargets: normalizeTrimmedStringList(

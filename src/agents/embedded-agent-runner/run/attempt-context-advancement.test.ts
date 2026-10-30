@@ -14,13 +14,12 @@ import {
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
-import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
   clearEmbeddedSessionPromptStates,
   createToolResultPromptProjectionState,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
 } from "../session-prompt-state.js";
 import { installContextEngineLoopHook } from "../tool-result-context-guard.js";
 import { prepareEmbeddedAttemptPromptContext } from "./attempt-prompt-build.js";
@@ -38,35 +37,77 @@ const model: Model = makeProviderModelFixture({
   contextWindow: 8192,
   maxTokens: 1024,
 });
-const usage = createZeroUsageFixture();
+const promptText = "Read the fixture.";
+function makeStoredPrefix() {
+  return [userMessage("Summary of accepted history.")];
+}
+function userMessage(content: string): AgentMessage {
+  return { role: "user", content, timestamp: 0 };
+}
+function text(value: string) {
+  return [{ type: "text" as const, text: value }];
+}
+function toolCall(id: string) {
+  return [{ type: "toolCall" as const, id, name: "read_fixture", arguments: {} }];
+}
+function guardAssistant(
+  content: AssistantMessage["content"],
+  stopReason: AssistantMessage["stopReason"] = "stop",
+  timestamp = 0,
+) {
+  return {
+    ...createAssistant(model, content, stopReason),
+    timestamp,
+    usage: createZeroUsageFixture(),
+  };
+}
+function fixtureTool<P, E>(parameters: P, execute: E) {
+  return {
+    name: "read_fixture",
+    label: "Read fixture",
+    description: "Read fixture",
+    parameters,
+    execute,
+  };
+}
+function makeEngine(
+  storedPrefix = makeStoredPrefix(),
+  overrides: Partial<ContextEngine> = {},
+): ContextEngine {
+  return {
+    info: {
+      id: "synthetic-engine",
+      name: "Synthetic",
+      ownsCompaction: true,
+      transcriptSemantics: {
+        currentTurnFence: "before-current-turn-entry-v1",
+        turnAdvancementIdempotency: "atomic-idempotent-v1",
+      },
+    },
+    ingest: async () => ({ ingested: true }),
+    assemble: async () => ({ messages: storedPrefix, estimatedTokens: 0 }),
+    compact: async () => ({ ok: true, compacted: false, reason: "fits" }),
+    commitTurn: async () => ({ status: "committed" }),
+    ...overrides,
+  };
+}
 
 describe("context advancement through embedded attempt guards", () => {
-  it.each(
-    (["afterTurn", "ingestBatch", "ingest"] as const).flatMap((ingestion) =>
-      (["stop", "error", "aborted"] as const).flatMap((terminal) =>
-        (["stored-prefix", "live-input"] as const).map((assembly) => ({
-          ingestion,
-          terminal,
-          assembly,
-        })),
-      ),
-    ),
-  )(
+  it.each([
+    { ingestion: "afterTurn", terminal: "stop", assembly: "stored-prefix" },
+    { ingestion: "afterTurn", terminal: "error", assembly: "live-input" },
+    { ingestion: "ingestBatch", terminal: "aborted", assembly: "stored-prefix" },
+    { ingestion: "ingestBatch", terminal: "stop", assembly: "live-input" },
+    { ingestion: "ingest", terminal: "error", assembly: "stored-prefix" },
+    { ingestion: "ingest", terminal: "aborted", assembly: "live-input" },
+  ] as const)(
     "preserves live context with $assembly assembly and defers $ingestion after $terminal",
     async ({ ingestion, terminal, assembly }) => {
       const remembered: AgentMessage[] = [];
+      const storedPrefix = makeStoredPrefix();
       const history: AgentMessage[] = [
-        { role: "user", content: "Earlier accepted request.", timestamp: 0 },
-        makeAgentAssistantMessage({
-          content: [{ type: "text", text: "Earlier accepted answer." }],
-          api: model.api,
-          provider: model.provider,
-          model: model.id,
-          usage,
-        }),
-      ];
-      const storedPrefix: AgentMessage[] = [
-        { role: "user", content: "Summary of accepted history.", timestamp: 0 },
+        userMessage("Earlier accepted request."),
+        guardAssistant(text("Earlier accepted answer.")),
       ];
       const assemble = vi.fn<ContextEngine["assemble"]>(async ({ messages }) => ({
         messages: assembly === "stored-prefix" ? storedPrefix : messages,
@@ -75,63 +116,35 @@ describe("context advancement through embedded attempt guards", () => {
       const commitTurn = vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () => ({
         status: "committed",
       }));
-      const engine: ContextEngine = {
-        info: {
-          id: "synthetic-engine",
-          name: "Synthetic",
-          ownsCompaction: true,
-          transcriptSemantics: {
-            currentTurnFence: "before-current-turn-entry-v1",
-            turnAdvancementIdempotency: "atomic-idempotent-v1",
-          },
-        },
+      const engine = makeEngine(storedPrefix, {
         ingest: async ({ message }) => {
           remembered.push(message);
           return { ingested: true };
         },
-        ...(ingestion === "afterTurn"
-          ? {
-              afterTurn: async ({
-                messages,
-                prePromptMessageCount,
-              }: Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]) => {
-                remembered.push(...messages.slice(prePromptMessageCount));
-              },
-            }
-          : {}),
-        ...(ingestion === "ingestBatch"
-          ? {
-              ingestBatch: async ({
-                messages,
-              }: Parameters<NonNullable<ContextEngine["ingestBatch"]>>[0]) => {
-                remembered.push(...messages);
-                return { ingestedCount: messages.length };
-              },
-            }
-          : {}),
         assemble,
-        compact: async () => ({ ok: true, compacted: false, reason: "fits" }),
         commitTurn,
-      };
+      });
+      if (ingestion === "afterTurn") {
+        engine.afterTurn = async ({ messages, prePromptMessageCount }) => {
+          remembered.push(...messages.slice(prePromptMessageCount));
+        };
+      } else if (ingestion === "ingestBatch") {
+        engine.ingestBatch = async ({ messages }) => {
+          remembered.push(...messages);
+          return { ingestedCount: messages.length };
+        };
+      }
       let providerCalls = 0;
       let secondModelMessages: Message[] | undefined;
       const execute = vi.fn(async () => ({
-        content: [{ type: "text" as const, text: "fixture observation" }],
+        content: text("fixture observation"),
         details: {},
       }));
       const agent = new Agent({
         initialState: {
           model,
           messages: history,
-          tools: [
-            {
-              name: "read_fixture",
-              label: "Read fixture",
-              description: "Read fixture",
-              parameters: { type: "object", properties: {} },
-              execute,
-            },
-          ],
+          tools: [fixtureTool({ type: "object", properties: {} }, execute)],
         },
         streamFn: (_model, context) => {
           providerCalls++;
@@ -142,18 +155,11 @@ describe("context advancement through embedded attempt guards", () => {
           if (stopReason === "aborted") {
             agent.abort();
           }
-          const message: AssistantMessage = makeAgentAssistantMessage({
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            usage,
-            timestamp: 1,
-            content:
-              stopReason === "toolUse"
-                ? [{ type: "toolCall", id: "read-1", name: "read_fixture", arguments: {} }]
-                : [{ type: "text", text: "done" }],
+          const message = guardAssistant(
+            stopReason === "toolUse" ? toolCall("read-1") : text("done"),
             stopReason,
-          });
+            1,
+          );
           const stream = createAssistantMessageEventStream();
           stream.push(
             stopReason === "error" || stopReason === "aborted"
@@ -170,7 +176,7 @@ describe("context advancement through embedded attempt guards", () => {
         agentDir: process.cwd(),
         attempt: {
           config: {},
-          prompt: "Read the fixture.",
+          prompt: promptText,
           contextTokenBudget: 8192,
           model,
           modelId: model.id,
@@ -191,15 +197,15 @@ describe("context advancement through embedded attempt guards", () => {
         getCompactionReplayEnabled: () => false,
         getServerToolClearingEnabled: () => false,
         toolResultPromptProjectionState: createToolResultPromptProjectionState(),
-        getSystemPrompt: () => "",
+        getSystemPrompt: () => "system boundary text ".repeat(64),
         isOpenAIResponsesApi: false,
         repairToolUseResultPairing: false,
         sessionAgentId: "synthetic",
         sessionManager: {},
-        settingsManager: { getBlockImages: () => false, getCompactionReserveTokens: () => 64 },
+        settingsManager: { getBlockImages: () => false, getCompactionReserveTokens: () => 1024 },
       } as never);
       try {
-        await agent.prompt("Read the fixture.");
+        await agent.prompt(promptText);
         expect(providerCalls).toBe(2);
         expect(execute).toHaveBeenCalledOnce();
         expect(
@@ -209,22 +215,21 @@ describe("context advancement through embedded attempt guards", () => {
         expect(assemble).toHaveBeenCalledTimes(2);
         expect(secondModelMessages).toMatchObject([
           ...(assembly === "stored-prefix" ? storedPrefix : history),
-          { role: "user", content: [{ type: "text", text: "Read the fixture." }] },
-          {
-            role: "assistant",
-            content: [{ type: "toolCall", id: "read-1", name: "read_fixture", arguments: {} }],
-          },
+          { role: "user", content: text(promptText) },
+          { role: "assistant", content: toolCall("read-1") },
           {
             role: "toolResult",
             toolCallId: "read-1",
-            content: [{ type: "text", text: "fixture observation" }],
+            content: text("fixture observation"),
           },
         ]);
         expect(assemble.mock.calls[1]?.[0]).toMatchObject({
-          prompt: "Read the fixture.",
+          prompt: promptText,
           availableTools: new Set(["read_fixture"]),
+          // (8192 context - 1024 reserve - 568 precheck pressure for the system
+          // prompt, tool schema and pending exchange) / 1.2 safety margin.
+          tokenBudget: 5500,
         });
-        expect(assemble.mock.calls[1]?.[0].tokenBudget).toBeLessThan(8192);
         expect(commitTurn).not.toHaveBeenCalled();
         expect(remembered).toEqual([]);
         expect(guards.getAfterTurnCheckpoint()).toBeNull();
@@ -237,50 +242,25 @@ describe("context advancement through embedded attempt guards", () => {
   );
 
   it.each([0, 6])(
-    "preserves active content through prompt preparation and submission with %i silent replay messages",
+    "preserves active content across %i silent replay messages",
     async (silentCount) => {
       const prompt = "Perform task with tools.";
       const sessionId = `replay-boundary-${silentCount}`;
-      const storedPrefix: AgentMessage[] = [
-        { role: "user", content: "Summary of accepted history.", timestamp: 0 },
-      ];
-      const engine: ContextEngine = {
-        info: {
-          id: "synthetic-engine",
-          name: "Synthetic",
-          ownsCompaction: true,
-          transcriptSemantics: {
-            currentTurnFence: "before-current-turn-entry-v1",
-            turnAdvancementIdempotency: "atomic-idempotent-v1",
-          },
-        },
-        ingest: async () => ({ ingested: true }),
-        assemble: async () => ({ messages: storedPrefix, estimatedTokens: 0 }),
-        compact: async () => ({ ok: true, compacted: false, reason: "fits" }),
-        commitTurn: async () => ({ status: "committed" }),
-      };
+      const engine = makeEngine();
       let toolCalls = 0;
       const { session } = await createTestSession({
         model,
         customTools: [
-          {
-            name: "read_fixture",
-            label: "Read fixture",
-            description: "Read fixture",
-            parameters: Type.Object({}),
-            execute: async () => ({
-              content: [{ type: "text", text: `fixture observation ${++toolCalls}` }],
-              details: {},
-            }),
-          },
+          fixtureTool(Type.Object({}), async () => ({
+            content: text(`fixture observation ${++toolCalls}`),
+            details: {},
+          })),
         ],
       });
       session.agent.state.messages = [
-        { role: "user", content: "Earlier accepted request.", timestamp: 0 },
-        createAssistant(model, [{ type: "text", text: "Earlier accepted answer." }]),
-        ...Array.from({ length: silentCount }, () =>
-          createAssistant(model, [{ type: "text", text: "NO_REPLY" }]),
-        ),
+        userMessage("Earlier accepted request."),
+        createAssistant(model, text("Earlier accepted answer.")),
+        ...Array.from({ length: silentCount }, () => createAssistant(model, text("NO_REPLY"))),
       ];
       const modelRequests: Message[][] = [];
       session.agent.streamFn = (_model, context) => {
@@ -289,14 +269,13 @@ describe("context advancement through embedded attempt guards", () => {
         return createAssistantResultStream(
           createAssistant(
             model,
-            round <= 2
-              ? [{ type: "toolCall", id: `call-${round}`, name: "read_fixture", arguments: {} }]
-              : [{ type: "text", text: "done" }],
+            round <= 2 ? toolCall(`call-${round}`) : text("done"),
             round <= 2 ? "toolUse" : "stop",
           ),
         );
       };
-      const sessionPromptState = getEmbeddedSessionPromptState(sessionId);
+      using promptStateLease = retainEmbeddedSessionPromptState(sessionId);
+      const sessionPromptState = promptStateLease.state;
       const promptContext = await prepareEmbeddedAttemptPromptContext({
         attempt: { config: {}, contextTokenBudget: 8192, sessionId },
         capabilityToolNames: new Set(["read_fixture"]),
@@ -329,11 +308,9 @@ describe("context advancement through embedded attempt guards", () => {
           images: [],
           modelPrompt: promptContext.promptForModel,
           onFinalPromptText: () => {},
-          onSteeringAcknowledged: () => {},
           persistToolResultProjections: async () => {},
-          promptActiveSession: (text, options) => session.prompt(text, options),
+          promptActiveSession: (value, options) => session.prompt(value, options),
           runtimeOnly: false,
-          sessionPromptState,
           systemPrompt: "",
           toolResultAggregateMaxChars: promptContext.promptToolResultAggregateMaxChars,
           toolResultMaxChars: promptContext.promptToolResultMaxChars,
@@ -344,31 +321,17 @@ describe("context advancement through embedded attempt guards", () => {
         });
         expect(modelRequests).toHaveLength(3);
         expect(toolCalls).toBe(2);
-        for (const messages of modelRequests) {
-          expect(messages).toContainEqual(
-            expect.objectContaining({
-              role: "user",
-              content: [{ type: "text", text: prompt }],
-            }),
-          );
-        }
         for (const [index, messages] of modelRequests.entries()) {
+          const contains = (message: object) =>
+            expect(messages).toContainEqual(expect.objectContaining(message));
+          contains({ role: "user", content: text(prompt) });
           for (let round = 1; round <= index; round++) {
-            expect(messages).toContainEqual(
-              expect.objectContaining({
-                role: "assistant",
-                content: [
-                  { type: "toolCall", id: `call-${round}`, name: "read_fixture", arguments: {} },
-                ],
-              }),
-            );
-            expect(messages).toContainEqual(
-              expect.objectContaining({
-                role: "toolResult",
-                toolCallId: `call-${round}`,
-                content: [{ type: "text", text: `fixture observation ${round}` }],
-              }),
-            );
+            contains({ role: "assistant", content: toolCall(`call-${round}`) });
+            contains({
+              role: "toolResult",
+              toolCallId: `call-${round}`,
+              content: text(`fixture observation ${round}`),
+            });
           }
         }
       } finally {

@@ -19,6 +19,8 @@ here too because they use doctor-style RPC methods but are not part of the
   <Accordion title="19. Workspace tips (backup + memory system)">
     Doctor suggests a workspace memory system when missing and prints a backup tip if the workspace is not already under git.
 
+    When both `MEMORY.md` and legacy `memory.md` exist, `doctor --fix` can archive and merge the legacy file. Invalid UTF-8 leaves both files unchanged before archiving. If a file becomes invalid during archiving, Doctor leaves the canonical file unwritten and reports the preserved archive. Keep the original bytes, convert a copy to UTF-8, and restore the legacy file from the archive if needed before retrying.
+
     See [/concepts/agent-workspace](/concepts/agent-workspace) for a full guide to workspace structure and git backup (recommended private GitHub or GitLab).
 
   </Accordion>

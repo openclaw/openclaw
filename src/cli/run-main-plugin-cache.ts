@@ -1,12 +1,13 @@
 import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { pluginSourceCaptureMaintenance } from "../plugins/plugin-source-capture-context.js";
 import { withCliCommandCleanup, type CliHarnessCleanup } from "./runtime-cleanup-scope.js";
 
 /** Executable commands own their inventory until Gateway publication adopts it. */
-export function withCliPluginInvocation<T>(
+export async function withCliPluginInvocation<T>(
   gatewayRun: boolean,
-  run: (cleanup?: CliHarnessCleanup) => T,
-): T {
-  return withCliCommandCleanup(gatewayRun, (cleanup) => {
+  run: (cleanup?: CliHarnessCleanup) => T | Promise<T>,
+): Promise<T> {
+  return await withCliCommandCleanup(gatewayRun, async (cleanup) => {
     if (gatewayRun) {
       return run();
     }
@@ -25,6 +26,14 @@ export function withCliPluginInvocation<T>(
         }
       },
     });
-    return withPluginCache(cache, () => run(cleanup));
+    const invoke = () => withPluginCache(cache, () => run(cleanup));
+    if (!cleanup?.pluginResources) {
+      return invoke();
+    }
+    const resources = cleanup.pluginResources;
+    return pluginSourceCaptureMaintenance.run(
+      { scheduler: cleanup.scheduler, run: (operation) => resources.run(operation) },
+      invoke,
+    );
   });
 }

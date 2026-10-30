@@ -17,7 +17,6 @@ export async function resolveRemoteCanonicalPath(params: {
   containerPath: string;
   mountRootPath: string;
   action: string;
-  allowFinalSymlinkForUnlink?: boolean;
   signal?: AbortSignal;
   runRemoteShellScript(command: SandboxBackendCommandParams): Promise<SandboxBackendCommandResult>;
 }): Promise<RemoteCanonicalPath> {
@@ -26,35 +25,29 @@ export async function resolveRemoteCanonicalPath(params: {
   const script = [
     "set -eu",
     'target="$1"',
-    'allow_final="$2"',
     'suffix=""',
-    'probe="$target"',
-    'if [ "$allow_final" = "1" ] && [ -L "$target" ]; then probe=$(dirname -- "$target"); fi',
-    'cursor="$probe"',
+    'cursor="$target"',
     'while [ ! -e "$cursor" ] && [ ! -L "$cursor" ]; do',
-    '  parent=$(dirname -- "$cursor")',
+    "  cursor=${cursor%/}",
+    "  parent=${cursor%/*}; parent=${parent:-/}",
     '  if [ "$parent" = "$cursor" ]; then break; fi',
-    '  base=$(basename -- "$cursor")',
+    "  base=${cursor##*/}",
     '  suffix="/$base$suffix"',
     '  cursor="$parent"',
     "done",
-    'canonical=$(readlink -f -- "$cursor")',
-    'canonical_root=$(readlink -f -- "$3")',
-    'printf "%s%s\\n%s\\n" "$canonical" "$suffix" "$canonical_root"',
+    // Preserve path newlines through command substitution and response framing.
+    'canonical=$(readlink -n -f -- "$cursor" && printf .)',
+    "canonical=${canonical%.}",
+    'canonical_root=$(readlink -n -f -- "$2" && printf .)',
+    "canonical_root=${canonical_root%.}",
+    'printf "%s%s\\0%s\\0" "$canonical" "$suffix" "$canonical_root"',
   ].join("\n");
   const result = await params.runRemoteShellScript({
     script,
-    args: [
-      params.containerPath,
-      params.allowFinalSymlinkForUnlink ? "1" : "0",
-      params.mountRootPath,
-    ],
+    args: [params.containerPath, params.mountRootPath],
     signal: params.signal,
   });
-  const [canonicalRaw = "", canonicalRootRaw = ""] = result.stdout
-    .toString("utf8")
-    .trim()
-    .split("\n");
+  const [canonicalRaw = "", canonicalRootRaw = ""] = result.stdout.toString("utf8").split("\0");
   if (!canonicalRaw || !canonicalRootRaw) {
     throw new Error(
       `Sandbox path canonicalization failed; cannot ${params.action}: ${params.containerPath}`,

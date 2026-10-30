@@ -33,7 +33,13 @@ function resolveNativeWorkerCount(env: NodeJS.ProcessEnv): number {
 
 /** Applies local Vitest scheduling and native worker budget env. */
 export function resolveVitestProcessEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const baseEnv = resolveLocalVitestEnv(env);
+  // Node and Chromium fix their default Intl locale at startup, so pin the
+  // locale CI uses; otherwise host locales change formatted test output.
+  const baseEnv: NodeJS.ProcessEnv = {
+    ...resolveLocalVitestEnv(env),
+    LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
+  };
   if (!shouldApplyNativeWorkerBudget(baseEnv)) {
     return baseEnv;
   }
@@ -53,6 +59,8 @@ export function resolveSharedVitestCompilerEnv(
   const resolved = environments.map((env) => resolveVitestProcessEnv(env));
   const shared = { ...resolved[0] };
   const testOnlyKeys = new Set([
+    // test-projects owns group overlap; the worker compiler does not schedule tests.
+    "OPENCLAW_TEST_PROJECTS_PARALLEL",
     "OPENCLAW_VITEST_MAX_WORKERS",
     "OPENCLAW_TEST_WORKERS",
     "OPENCLAW_VITEST_SHARD_NAME",
@@ -94,11 +102,11 @@ export const DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS = 30_000;
 /** Longer watchdog timeout for known long-running Vitest configs. */
 export const DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS = 300_000;
 /** Extra-long watchdog timeout for broad configs that can stay silent on macOS. */
-export const DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS = 2_400_000;
+const DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS = 2_400_000;
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
 const GATEWAY_VITEST_CONFIG = "test/vitest/vitest.gateway.config.ts";
-export const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
+const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
   ["test/vitest/vitest.e2e.config.ts", DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
   // Keep the SDK fixture's E2E silence window while it builds packages with captured output.
   [

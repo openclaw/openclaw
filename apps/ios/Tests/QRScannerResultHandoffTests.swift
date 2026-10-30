@@ -70,55 +70,6 @@ struct QRScannerResultHandoffTests {
     }
 }
 
-struct GatewaySetupLinkStagingTests {
-    private static func link() -> GatewayConnectDeepLink {
-        GatewayConnectDeepLink(
-            host: "gateway.example.com",
-            port: 443,
-            tls: true,
-            bootstrapToken: "bootstrap",
-            token: "token",
-            password: "password")
-    }
-
-    @Test func `staged link is consumed once`() {
-        var staging = GatewaySetupLinkStaging()
-        let link = Self.link()
-
-        staging.stage(link)
-
-        #expect(staging.take() == link)
-        #expect(staging.take() == nil)
-    }
-
-    @Test func `cancel discards staged credentials`() {
-        var staging = GatewaySetupLinkStaging()
-        staging.stage(Self.link())
-
-        let cancelled = staging.cancel()
-
-        #expect(cancelled)
-        #expect(staging.link == nil)
-        let cancelledAgain = staging.cancel()
-        #expect(!cancelledAgain)
-    }
-
-    @Test func `new setup link replaces the pending candidate`() {
-        var staging = GatewaySetupLinkStaging()
-        let replacement = GatewayConnectDeepLink(
-            host: "replacement.example.com",
-            port: 8443,
-            tls: true,
-            bootstrapToken: nil,
-            token: nil,
-            password: nil)
-        staging.stage(Self.link())
-        staging.stage(replacement)
-
-        #expect(staging.take() == replacement)
-    }
-}
-
 struct OnboardingQRCodeCompletionTests {
     private static let link = GatewayConnectDeepLink(
         host: "gateway.example.com",

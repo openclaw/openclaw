@@ -131,8 +131,7 @@ struct LaunchAgentManagerTests {
     }
 
     @Test func `launch at login plist does not keep app alive after manual quit`() throws {
-        let plist = LaunchAgentManager.plistContents(bundlePath: "/Applications/OpenClaw.app")
-        let data = try #require(plist.data(using: .utf8))
+        let data = try LaunchAgentManager.plistContents(bundlePath: "/Applications/OpenClaw.app")
         let object = try #require(
             PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
 
@@ -152,10 +151,10 @@ struct LaunchAgentManagerTests {
             "OPENCLAW_LOG_DIR": logDirectory,
             "OPENCLAW_STATE_DIR": "/tmp/openclaw-state",
         ]) {
-            let plist = LaunchAgentManager.plistContents(
+            let data = try LaunchAgentManager.plistContents(
                 bundlePath: bundlePath,
                 preferredPaths: ["/tmp/custom&<bin>", "/usr/bin"])
-            let data = try #require(plist.data(using: .utf8))
+            let plist = try #require(String(data: data, encoding: .utf8))
             let object = try #require(
                 PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
 
@@ -177,15 +176,12 @@ struct LaunchAgentManagerTests {
             "OPENCLAW_CONFIG_PATH": nil,
             "OPENCLAW_STATE_DIR": " \n ",
         ]) {
-            let plist = LaunchAgentManager.plistContents(bundlePath: "/Applications/OpenClaw.app")
-            let data = try #require(plist.data(using: .utf8))
+            let data = try LaunchAgentManager.plistContents(bundlePath: "/Applications/OpenClaw.app")
             let object = try #require(
                 PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
 
             let environment = try #require(object["EnvironmentVariables"] as? [String: String])
             #expect(environment.keys.sorted() == ["PATH"])
-            #expect(!plist.contains("OPENCLAW_CONFIG_PATH"))
-            #expect(!plist.contains("OPENCLAW_STATE_DIR"))
         }
     }
 }

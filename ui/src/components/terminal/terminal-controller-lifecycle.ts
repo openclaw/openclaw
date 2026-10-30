@@ -1,15 +1,5 @@
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 
-type TerminalControllerSlot = {
-  controller: GhosttyTerminalController;
-  host: HTMLDivElement;
-};
-
-type TerminalControllerFactory = (
-  parent: HTMLElement,
-  options?: { readOnly?: boolean },
-) => Promise<GhosttyTerminalController>;
-
 const terminalOutputEncoder = new TextEncoder();
 
 function activeElementFor(host: HTMLElement): Element | null {
@@ -17,10 +7,6 @@ function activeElementFor(host: HTMLElement): Element | null {
   return root instanceof ShadowRoot
     ? (root.activeElement ?? document.activeElement)
     : document.activeElement;
-}
-
-function hostOwnsFocus(host: HTMLElement, focused: Element | null): boolean {
-  return focused === host || host.contains(focused);
 }
 
 function focusIfConnected(target: Element | null): void {
@@ -44,8 +30,14 @@ export function disposeTerminalController(
 
 /** Replays recovery output into a hidden replacement, then atomically swaps it in. */
 export async function replaceTerminalController(
-  target: TerminalControllerSlot,
-  createController: TerminalControllerFactory,
+  target: {
+    controller: GhosttyTerminalController;
+    host: HTMLDivElement;
+  },
+  createController: (
+    parent: HTMLElement,
+    options?: { readOnly?: boolean },
+  ) => Promise<GhosttyTerminalController>,
   replay: string,
   signal: AbortSignal,
 ): Promise<boolean> {
@@ -56,7 +48,7 @@ export async function replaceTerminalController(
   const previousController = target.controller;
   const previousHost = target.host;
   const previouslyFocused = activeElementFor(previousHost);
-  const previousTerminalOwnedFocus = hostOwnsFocus(previousHost, previouslyFocused);
+  const previousTerminalOwnedFocus = previousHost.contains(previouslyFocused);
   const replacementHost = previousHost.cloneNode() as HTMLDivElement;
   // The host is absolutely inset in the viewport. Keep it measurable while
   // hidden so Ghostty fits the authoritative replay to the real terminal grid.
@@ -67,7 +59,7 @@ export async function replaceTerminalController(
 
   let replacement: GhosttyTerminalController | undefined;
   const disposeUnpublishedReplacement = () => {
-    if (hostOwnsFocus(replacementHost, activeElementFor(replacementHost))) {
+    if (replacementHost.contains(activeElementFor(replacementHost))) {
       focusIfConnected(previouslyFocused);
     }
     if (replacement) {
@@ -102,9 +94,9 @@ export async function replaceTerminalController(
 
   const currentlyFocused = activeElementFor(previousHost);
   let focusTarget: Element | null = null;
-  if (hostOwnsFocus(previousHost, currentlyFocused)) {
+  if (previousHost.contains(currentlyFocused)) {
     focusTarget = replacementHost;
-  } else if (hostOwnsFocus(replacementHost, currentlyFocused)) {
+  } else if (replacementHost.contains(currentlyFocused)) {
     focusTarget = previousTerminalOwnedFocus ? replacementHost : previouslyFocused;
   }
   replacementHost.inert = false;

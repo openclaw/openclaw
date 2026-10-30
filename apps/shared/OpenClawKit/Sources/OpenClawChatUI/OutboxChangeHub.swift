@@ -7,37 +7,28 @@ final class OutboxChangeHub: @unchecked Sendable {
     func stream() -> AsyncStream<OpenClawChatOutboxChange> {
         let id = UUID()
         let pair = AsyncStream<OpenClawChatOutboxChange>.makeStream()
-        self.lock.lock()
-        self.continuations[id] = pair.continuation
-        self.lock.unlock()
+        self.lock.withLock { self.continuations[id] = pair.continuation }
         pair.continuation.onTermination = { [weak self] _ in
-            self?.remove(id)
+            guard let self else { return }
+            _ = self.lock.withLock { self.continuations.removeValue(forKey: id) }
         }
         return pair.stream
     }
 
     func yield(_ change: OpenClawChatOutboxChange) {
-        self.lock.lock()
-        let continuations = Array(self.continuations.values)
-        self.lock.unlock()
+        let continuations = self.lock.withLock { Array(self.continuations.values) }
         for continuation in continuations {
             continuation.yield(change)
         }
     }
 
     func finish() {
-        self.lock.lock()
-        let continuations = Array(self.continuations.values)
-        self.continuations.removeAll()
-        self.lock.unlock()
+        let continuations = self.lock.withLock {
+            defer { self.continuations.removeAll() }
+            return Array(self.continuations.values)
+        }
         for continuation in continuations {
             continuation.finish()
         }
-    }
-
-    private func remove(_ id: UUID) {
-        self.lock.lock()
-        self.continuations.removeValue(forKey: id)
-        self.lock.unlock()
     }
 }

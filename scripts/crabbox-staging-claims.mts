@@ -2,6 +2,11 @@ import { isUtf8 } from "node:buffer";
 import { lstatSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
+import {
+  captureDirectoryIdentity,
+  directoryIdentitySchema,
+  sameDirectoryIdentity,
+} from "./crabbox-staging-identity.mts";
 import { hasUnjoinedWork, runManagedCommand } from "./lib/managed-child-process.mts";
 
 const stdoutLimit = 4 * 1024 * 1024;
@@ -19,7 +24,7 @@ export const claimNamespaceSchema = z.strictObject({
   platform: z.string(),
   cwd: pathSchema,
   directory: pathSchema,
-  anchor: z.strictObject({ path: pathSchema, dev: z.string(), ino: z.string() }),
+  anchor: directoryIdentitySchema.extend({ path: pathSchema }),
 });
 export type ClaimNamespace = z.infer<typeof claimNamespaceSchema>;
 
@@ -30,7 +35,9 @@ const inventorySchema = z.object({
     .array(
       z.object({
         leaseId: z.string().min(1).max(512),
-        repoRoot: pathSchema,
+        // Crabbox records provider resources not yet attached to a repository
+        // with an empty root, and never clears an attached root without reclaim.
+        repoRoot: z.union([z.literal(""), pathSchema]),
       }),
     )
     .max(10_000),
@@ -119,7 +126,7 @@ function directoryLocation(path: string) {
       }
       return {
         directory: resolve(physical, ...missing),
-        anchor: { path: physical, dev: String(stat.dev), ino: String(stat.ino) },
+        anchor: { path: physical, ...captureDirectoryIdentity(physical, stat) },
         generation: `${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`,
       };
     }
@@ -152,16 +159,23 @@ export function captureClaimNamespace(
   });
 }
 
-function inspectNamespace(namespace: ClaimNamespace, env: NodeJS.ProcessEnv) {
+function inspectNamespace(
+  namespace: ClaimNamespace,
+  env: NodeJS.ProcessEnv,
+  legacyBeforeNs?: bigint,
+) {
   if (namespace.platform !== process.platform) {
     throw new ClaimInventoryHold("The native claims namespace belongs to a different platform.");
   }
   const anchor = lstatSync(namespace.anchor.path, { bigint: true });
   if (
     !anchor.isDirectory() ||
-    String(anchor.dev) !== namespace.anchor.dev ||
-    String(anchor.ino) !== namespace.anchor.ino ||
-    realpathSync(namespace.anchor.path) !== namespace.anchor.path
+    realpathSync(namespace.anchor.path) !== namespace.anchor.path ||
+    !sameDirectoryIdentity(
+      captureDirectoryIdentity(namespace.anchor.path, anchor),
+      namespace.anchor,
+      legacyBeforeNs,
+    )
   ) {
     throw new ClaimInventoryHold("The original native claims namespace was replaced.");
   }
@@ -204,6 +218,7 @@ export async function verifyNoStagingClaims(params: {
   signal?: AbortSignal;
   namespace: ClaimNamespace;
   sourceRoot: string;
+  legacyBeforeNs?: bigint;
 }): Promise<ClaimVerification> {
   try {
     params.signal?.throwIfAborted();
@@ -213,7 +228,7 @@ export async function verifyNoStagingClaims(params: {
     }
     const namespace = parsedNamespace.data;
     const env = { ...(params.env ?? process.env) };
-    const before = inspectNamespace(namespace, env);
+    const before = inspectNamespace(namespace, env, params.legacyBeforeNs);
     if (!isAbsolute(params.sourceRoot) || params.sourceRoot.includes("\0")) {
       throw new ClaimInventoryHold("The staging source path must be absolute.");
     }
@@ -304,7 +319,7 @@ export async function verifyNoStagingClaims(params: {
       if (Date.now() >= deadline) {
         throw new ClaimInventoryHold("Native claim inventory exceeded its inspection budget.");
       }
-      if (within(sourceRoot, directoryLocation(claim.repoRoot).directory)) {
+      if (claim.repoRoot && within(sourceRoot, directoryLocation(claim.repoRoot).directory)) {
         matches.add(claim.leaseId);
         if (matches.size === 16) {
           break;
@@ -317,7 +332,7 @@ export async function verifyNoStagingClaims(params: {
         [...matches],
       );
     }
-    const after = inspectNamespace(namespace, env);
+    const after = inspectNamespace(namespace, env, params.legacyBeforeNs);
     if (JSON.stringify(after.current) !== JSON.stringify(before.current)) {
       throw new ClaimInventoryHold("The native claims namespace changed during inventory.");
     }

@@ -11,18 +11,18 @@ function emitUpsert(
   sock: { ev: { emit: (event: string, payload: unknown) => void } },
   params: {
     id: string;
-    body: string;
-    remoteJid: string;
-    type: "append" | "notify";
+    body?: string;
+    remoteJid?: string;
+    type?: "append" | "notify";
     timestamp: unknown;
   },
 ) {
   sock.ev.emit("messages.upsert", {
-    type: params.type,
+    type: params.type ?? "append",
     messages: [
       {
-        key: { id: params.id, fromMe: false, remoteJid: params.remoteJid },
-        message: { conversation: params.body },
+        key: { id: params.id, fromMe: false, remoteJid: params.remoteJid ?? "999@s.whatsapp.net" },
+        message: { conversation: params.body ?? params.id },
         messageTimestamp: params.timestamp,
         pushName: "Tester",
       },
@@ -34,71 +34,35 @@ describe("append upsert handling (#20952)", () => {
   installWebMonitorInboxUnitTestHooks();
 
   it.each([
-    {
-      name: "delivery coordinator processes recent append messages",
-      id: "recent-1",
-      body: "hello from group",
-      remoteJid: "120363@g.us",
-      type: "append" as const,
-      timestamp: () => Math.floor(Date.now() / 1000) - 5,
-      expectedCalls: 1,
-    },
-    {
-      name: "delivery coordinator skips stale append messages",
-      id: "stale-1",
-      body: "old history sync",
-      remoteJid: "120363@g.us",
-      type: "append" as const,
-      timestamp: () => Math.floor(Date.now() / 1000) - 300,
-      expectedCalls: 0,
-    },
-    {
-      name: "delivery coordinator skips append messages with non-finite timestamps",
-      id: "nan-1",
-      body: "bad timestamp",
-      remoteJid: "120363@g.us",
-      type: "append" as const,
-      timestamp: () => Number.NaN,
-      expectedCalls: 0,
-    },
-    {
-      name: "delivery coordinator skips append messages with non-decimal timestamps",
-      id: "hex-1",
-      body: "hex timestamp",
-      remoteJid: "120363@g.us",
-      type: "append" as const,
-      timestamp: () => {
-        const recent = Math.floor(Date.now() / 1000) - 5;
-        return `0x${recent.toString(16)}`;
-      },
-      expectedCalls: 0,
-    },
-    {
-      name: "delivery coordinator handles Long-like protobuf timestamps",
-      id: "long-1",
-      body: "long timestamp",
-      remoteJid: "120363@g.us",
-      type: "append" as const,
-      timestamp: () => {
+    ["recent append", "recent-1", () => Math.floor(Date.now() / 1000) - 5, 1],
+    ["stale append", "stale-1", () => Math.floor(Date.now() / 1000) - 300, 0],
+    ["non-finite timestamp", "nan-1", () => Number.NaN, 0],
+    [
+      "non-decimal timestamp",
+      "hex-1",
+      () => `0x${(Math.floor(Date.now() / 1000) - 5).toString(16)}`,
+      0,
+    ],
+    [
+      "Long-like timestamp",
+      "long-1",
+      () => {
         const recent = Math.floor(Date.now() / 1000) - 5;
         return { low: recent, high: 0, unsigned: true, valueOf: () => recent };
       },
-      expectedCalls: 1,
-    },
-    {
-      name: "delivery coordinator always processes notify messages",
-      id: "notify-1",
-      body: "normal message",
-      remoteJid: "999@s.whatsapp.net",
-      type: "notify" as const,
-      timestamp: () => Math.floor(Date.now() / 1000) - 86_400,
-      expectedCalls: 1,
-    },
-  ])("$name", async ({ id, body, remoteJid, type, timestamp, expectedCalls }) => {
+      1,
+    ],
+    ["old notify", "notify-1", () => Math.floor(Date.now() / 1000) - 86_400, 1],
+  ] as const)("delivery coordinator handles %s", async (_name, id, timestamp, expectedCalls) => {
     const onMessage = vi.fn(async () => {});
     const { listener, sock } = await startInboxMonitor(onMessage);
 
-    emitUpsert(sock, { id, body, remoteJid, type, timestamp: timestamp() });
+    emitUpsert(sock, {
+      id,
+      timestamp: timestamp(),
+      type: id === "notify-1" ? "notify" : "append",
+      remoteJid: id === "notify-1" ? "999@s.whatsapp.net" : "120363@g.us",
+    });
     if (expectedCalls === 1) {
       await waitForMessageCalls(onMessage, 1);
     } else {
@@ -119,29 +83,17 @@ describe("append upsert handling (#20952)", () => {
       },
     });
 
-    sock.ev.emit("messages.upsert", {
-      type: "append",
-      messages: [
-        {
-          key: { id: "catch-up-1", fromMe: false, remoteJid: "999@s.whatsapp.net" },
-          message: { conversation: "missed while reconnecting" },
-          messageTimestamp: Math.floor(Date.now() / 1000) - 15 * 60,
-          pushName: "Reconnect Tester",
-        },
-      ],
+    emitUpsert(sock, {
+      id: "catch-up-1",
+      body: "missed while reconnecting",
+      timestamp: Math.floor(Date.now() / 1000) - 15 * 60,
     });
     await waitForMessageCalls(onMessage, 1);
 
-    sock.ev.emit("messages.upsert", {
-      type: "append",
-      messages: [
-        {
-          key: { id: "catch-up-old", fromMe: false, remoteJid: "999@s.whatsapp.net" },
-          message: { conversation: "before the recovery window" },
-          messageTimestamp: Math.floor(Date.now() / 1000) - 25 * 60,
-          pushName: "Reconnect Tester",
-        },
-      ],
+    emitUpsert(sock, {
+      id: "catch-up-old",
+      body: "before the recovery window",
+      timestamp: Math.floor(Date.now() / 1000) - 25 * 60,
     });
     await settleInboundWork();
 
@@ -160,31 +112,19 @@ describe("append upsert handling (#20952)", () => {
       },
     });
 
-    sock.ev.emit("messages.upsert", {
-      type: "append",
-      messages: [
-        {
-          key: { id: "catch-up-late", fromMe: false, remoteJid: "999@s.whatsapp.net" },
-          message: { conversation: "arrived after recovery" },
-          messageTimestamp: Math.floor(Date.now() / 1000) - 5 * 60,
-          pushName: "Reconnect Tester",
-        },
-      ],
+    emitUpsert(sock, {
+      id: "catch-up-late",
+      body: "arrived after recovery",
+      timestamp: Math.floor(Date.now() / 1000) - 5 * 60,
     });
     await settleInboundWork();
 
     expect(onMessage).not.toHaveBeenCalled();
 
-    sock.ev.emit("messages.upsert", {
-      type: "append",
-      messages: [
-        {
-          key: { id: "fresh-after-catch-up", fromMe: false, remoteJid: "999@s.whatsapp.net" },
-          message: { conversation: "fresh after recovery" },
-          messageTimestamp: Math.floor(Date.now() / 1000),
-          pushName: "Reconnect Tester",
-        },
-      ],
+    emitUpsert(sock, {
+      id: "fresh-after-catch-up",
+      body: "fresh after recovery",
+      timestamp: Math.floor(Date.now() / 1000),
     });
     await waitForMessageCalls(onMessage, 1);
 
@@ -209,20 +149,10 @@ describe("append upsert handling (#20952)", () => {
         },
       });
       try {
-        sock.ev.emit("messages.upsert", {
-          type: "append",
-          messages: [
-            {
-              key: {
-                id: "catch-up-same-second",
-                fromMe: false,
-                remoteJid: "999@s.whatsapp.net",
-              },
-              message: { conversation: "same second, different message" },
-              messageTimestamp: boundarySeconds,
-              pushName: "Reconnect Tester",
-            },
-          ],
+        emitUpsert(sock, {
+          id: "catch-up-same-second",
+          body: "same second, different message",
+          timestamp: boundarySeconds,
         });
         await waitForMessageCalls(onMessage, 1);
 

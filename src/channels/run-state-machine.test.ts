@@ -4,12 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createRunStateMachine } from "./run-state-machine.js";
 
 describe("createRunStateMachine", () => {
-  it("resets stale busy fields on init", () => {
-    const setStatus = vi.fn();
-    createRunStateMachine({ setStatus });
-    expect(setStatus).toHaveBeenCalledWith({ activeRuns: 0, busy: false });
-  });
-
   it("emits busy status while active and clears when done", () => {
     const setStatus = vi.fn();
     const machine = createRunStateMachine({

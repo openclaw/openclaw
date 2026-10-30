@@ -1,7 +1,5 @@
 import { isIP } from "node:net";
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
-// Litellm provider module implements model/runtime integration.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createOpenAiCompatibleImageGenerationProvider,
   imageSourceUploadFileName,
@@ -27,58 +25,22 @@ const LITELLM_SUPPORTED_SIZES = [
 ] as const;
 const LITELLM_MAX_INPUT_IMAGES = 5;
 
-type LitellmProviderConfig = NonNullable<
-  NonNullable<OpenClawConfig["models"]>["providers"]
->[string];
-
-function resolveLitellmProviderConfig(
-  cfg: OpenClawConfig | undefined,
-): LitellmProviderConfig | undefined {
-  return cfg?.models?.providers?.litellm;
-}
-
-function resolveConfiguredLitellmBaseUrl(cfg: OpenClawConfig | undefined): string {
-  return normalizeOptionalString(resolveLitellmProviderConfig(cfg)?.baseUrl) ?? LITELLM_BASE_URL;
-}
-
 // LiteLLM's default proxy is loopback. Auto-enable private-network access only
 // for loopback-style hosts; LAN/custom private endpoints should use the
 // explicit models.providers.litellm.request.allowPrivateNetwork opt-in.
-function isAutoAllowedLitellmHostname(hostname: string): boolean {
-  if (!hostname) {
-    return false;
-  }
-  // Strip IPv6 brackets if any: "[::1]" -> "::1".
-  const host =
-    hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
-  const lowered = host.toLowerCase();
-  if (
-    lowered === "localhost" ||
-    lowered === "host.docker.internal" ||
-    lowered.endsWith(".localhost")
-  ) {
-    return true;
-  }
-  // Only IPv4 literals may use the 127/8 loopback exemption.
-  if (isIP(lowered) === 4 && lowered.startsWith("127.")) {
-    return true;
-  }
-  if (lowered === "::1" || lowered === "0:0:0:0:0:0:0:1") {
-    return true;
-  }
-  return false;
-}
-
 function shouldAutoAllowPrivateLitellmEndpoint(baseUrl: string): boolean {
-  try {
-    const parsed = new URL(baseUrl);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return false;
-    }
-    return isAutoAllowedLitellmHostname(parsed.hostname);
-  } catch {
+  const url = URL.parse(baseUrl);
+  if (!url || (url.protocol !== "http:" && url.protocol !== "https:")) {
     return false;
   }
+  const { hostname } = url;
+  return (
+    hostname === "localhost" ||
+    hostname === "host.docker.internal" ||
+    hostname.endsWith(".localhost") ||
+    hostname === "[::1]" ||
+    (isIP(hostname) === 4 && hostname.startsWith("127."))
+  );
 }
 
 export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
@@ -107,7 +69,6 @@ export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
       },
     },
     defaultBaseUrl: LITELLM_BASE_URL,
-    resolveBaseUrl: ({ req }) => resolveConfiguredLitellmBaseUrl(req.cfg),
     resolveAllowPrivateNetwork: ({ baseUrl }) =>
       shouldAutoAllowPrivateLitellmEndpoint(baseUrl) ? true : undefined,
     useConfiguredRequest: true,

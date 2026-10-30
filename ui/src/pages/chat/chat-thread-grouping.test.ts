@@ -1,594 +1,385 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import type { MessageClientSource } from "../../../../src/chat/message-client-source.js";
-import type { ChatItem } from "../../lib/chat/chat-types.ts";
-import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
+import type { ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
+import { assistantGroupCanOwnActiveRunStatus } from "./chat-assistant-reply.ts";
 import {
-  assistantGroupCanOwnActiveRunStatus,
-  collapseCompletedTurnWork,
-  coalesceActivityRuns,
-  groupMessages,
-} from "./chat-thread-grouping.ts";
-import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
+  groupsOf,
+  message,
+  messagesOf,
+  nativeMessage,
+  pending,
+  queued,
+  signedText as signed,
+  toolResult,
+} from "./chat-thread-fixtures.test-support.ts";
+import { groupMessages } from "./chat-thread-grouping.ts";
+import { buildItems, type CachedChatItemsProps } from "./chat-thread.test-support.ts";
+import { resetChatThreadState } from "./chat-thread.ts";
+import { collapseCompletedTurnWork, coalesceActivityRuns } from "./chat-turn-presentation.ts";
 
-function forwardedMessage(sessionKey: string, content = "Forwarded report") {
-  return {
-    role: "assistant",
-    content,
-    timestamp: 1,
-    senderLabel: "Forwarded from main",
-    senderSession: { sessionKey, agentId: "main" },
-  };
-}
-
+const sessionKey = "agent:main:dashboard:answers";
+const cli: MessageClientSource = { id: "cli", mode: "cli", displayName: "Release helper" };
+const web: MessageClientSource = { id: "openclaw-control-ui", mode: "webchat" };
+const clients = [cli, web];
+const senderIdentity = { type: "profile", id: "same-person" };
+const origin = { sessionKey: "agent:main:main", agentId: "main", label: undefined };
 function cachedGroups(messages: unknown[]) {
-  return buildCachedChatItems({
-    paneId: "forwarded-attribution",
-    sessionKey: "agent:target:main",
-    messages,
-    toolMessages: [],
-    streamSegments: [],
-    stream: null,
-    streamStartedAt: null,
-    showToolCalls: true,
-  }).filter((item) => item.kind === "group");
+  return groupsOf(buildItems({ messages }));
 }
-
-describe("message client attribution", () => {
-  beforeEach(() => resetChatThreadState());
-
-  const cli: MessageClientSource = { id: "cli", mode: "cli", displayName: "Release helper" };
-  const web: MessageClientSource = { id: "openclaw-control-ui", mode: "webchat" };
-  const messageFrom = (clients: MessageClientSource[], content = "Continue the task.") => ({
-    role: "user",
-    content,
-    timestamp: 1,
-    __openclaw: {
-      senderId: "same-person",
-      senderIdentity: { type: "profile", id: "same-person" },
-      transport: { clients },
-    },
-  });
-
-  it.each([
-    { source: "different clients", next: [web] },
-    { source: "different app labels", next: [{ ...cli, displayName: "Deploy helper" }] },
-    { source: "a collected source list", next: [cli, web] },
-  ])("keeps identical messages from $source separate for the same human", ({ next }) => {
-    const groups = cachedGroups([messageFrom([cli]), messageFrom(next)]);
-    expect(groups).toHaveLength(2);
-    expect(groups.map((group) => group.sourceClients)).toEqual([[cli], next]);
-    expect(groups.map((group) => group.sender?.identity)).toEqual([
-      { type: "profile", id: "same-person" },
-      { type: "profile", id: "same-person" },
-    ]);
-    expect(groups.flatMap((group) => group.messages).map((entry) => entry.duplicateCount)).toEqual([
-      undefined,
-      undefined,
-    ]);
-  });
-
-  it("groups different text from the same client and keeps all collected client labels", () => {
-    const clients = [cli, web];
-    const groups = cachedGroups([
-      messageFrom(clients, "First collected turn."),
-      messageFrom(clients, "Second collected turn."),
-    ]);
-    expect(groups).toHaveLength(1);
-    expect(groups[0]?.sourceClients).toEqual(clients);
-    expect(groups[0]?.messages).toHaveLength(2);
-  });
-
-  it("refreshes cached source attribution after an in-place history projection changes", () => {
-    const message = messageFrom([cli]);
-    const initial = cachedGroups([message]);
-    message["__openclaw"].transport.clients = [web];
-    const refreshed = cachedGroups([message]);
-    expect(initial[0]?.sourceClients).toEqual([cli]);
-    expect(refreshed[0]?.sourceClients).toEqual([web]);
-    expect(refreshed[0]).not.toBe(initial[0]);
-  });
-});
-
-describe("reasoning activity boundaries", () => {
-  it.each([
-    { type: "text", text: "Visible answer" },
-    { type: "image", source: { type: "url", url: "https://example.com/result.png" } },
-    {
-      type: "attachment",
-      attachment: { kind: "document", url: "https://example.com/result.pdf", label: "Result" },
-    },
-    {
-      type: "canvas",
-      preview: {
-        kind: "canvas",
-        surface: "assistant_message",
-        render: "url",
-        url: "https://example.com/result",
-      },
-    },
-    { type: "future-visible-block" },
-  ])("preserves mixed reasoning and $type as the visible outcome", (outcome) => {
-    const thinking = { type: "thinking", thinking: "Checking the evidence." };
-    const messages = [
-      { role: "user", content: "Check it.", timestamp: 1_000 },
-      { role: "assistant", content: [thinking], timestamp: 2_000 },
-      { role: "assistant", content: [thinking, outcome], timestamp: 3_000 },
-    ];
-    const groups = groupMessages(
-      messages.map((message, index) => ({
-        kind: "message",
-        key: `message:${index}`,
-        message,
-      })),
-    );
-    expect(
-      collapseCompletedTurnWork(groups, {
-        sessionKey: "agent:main:dashboard:reasoning",
-        runWorking: false,
-      }),
-    ).toMatchObject([
-      { kind: "group", role: "user" },
-      { kind: "work-group", groups: [{ messages: [{ message: messages[1] }] }] },
-      { kind: "group", messages: [{ message: messages[2] }] },
-    ]);
-    const reasoningGroup = groups[1];
-    expect(reasoningGroup?.kind).toBe("group");
-    if (reasoningGroup?.kind === "group") {
-      expect(assistantGroupCanOwnActiveRunStatus(reasoningGroup)).toBe(false);
-    }
-  });
-});
-
-describe("forwarded source-session grouping", () => {
-  beforeEach(() => resetChatThreadState());
-
-  it("carries the first message's source session while grouping messages from that source", () => {
-    const messages = [
-      forwardedMessage("agent:main:main", "First report"),
-      forwardedMessage("agent:main:main", "Second report"),
-    ];
-    const items: ChatItem[] = messages.map((message, index) => ({
-      kind: "message",
-      key: `message:${index}`,
-      message,
-    }));
-
-    expect(groupMessages(items)).toMatchObject([
-      {
-        senderLabel: "Forwarded from main",
-        senderSession: { sessionKey: "agent:main:main", agentId: "main" },
-        messages: [{ message: messages[0] }, { message: messages[1] }],
-      },
-    ]);
-  });
-
-  it("splits messages from different source sessions even when the agent labels match", () => {
-    const items: ChatItem[] = ["agent:main:main", "agent:main:dashboard:other"].map(
-      (sessionKey, index) => ({
-        kind: "message",
-        key: `message:${index}`,
-        message: forwardedMessage(sessionKey, `Report ${index}`),
-      }),
-    );
-
-    const groups = groupMessages(items);
-    expect(groups).toHaveLength(2);
-    expect(groups).toMatchObject([
-      { senderSession: { sessionKey: "agent:main:main" } },
-      { senderSession: { sessionKey: "agent:main:dashboard:other" } },
-    ]);
-  });
-
-  it("does not collapse identical reports from different source sessions before grouping", () => {
-    const groups = cachedGroups([
-      forwardedMessage("agent:main:main"),
-      forwardedMessage("agent:main:dashboard:other"),
-    ]);
-
-    expect(groups).toHaveLength(2);
-    expect(groups.every((group) => group.messages.length === 1)).toBe(true);
-    expect(groups.flatMap((group) => group.messages).map((entry) => entry.duplicateCount)).toEqual([
-      undefined,
-      undefined,
-    ]);
-  });
-
-  it("keeps distinct automation labels on identical reports from the same source session", () => {
-    const groups = cachedGroups(
-      ["Daily report", "Renamed report"].map((label) =>
-        Object.assign(forwardedMessage("agent:main:cron:daily:run:first"), {
-          senderSession: { sessionKey: "agent:main:cron:daily:run:first", agentId: "main", label },
-        }),
-      ),
-    );
-
-    expect(groups.map((group) => group.senderSession?.label)).toEqual([
-      "Daily report",
-      "Renamed report",
-    ]);
-    expect(groups.flatMap((group) => group.messages).map((entry) => entry.duplicateCount)).toEqual([
-      undefined,
-      undefined,
-    ]);
-  });
-
-  it.each([
-    { senderSession: { sessionKey: "agent:main:main", agentId: "main" } },
-    { provenance: { kind: "inter_session", sourceTool: "sessions_send" } },
-  ])("clears stale human reply attribution at a forwarded boundary %o", (attribution) => {
-    const groups = cachedGroups([
-      { role: "user", content: "Alice's question", __openclaw: { senderId: "alice" } },
-      { role: "user", content: "Bob's question", __openclaw: { senderId: "bob" } },
-      { role: "assistant", content: "Answer for Bob" },
-      {
-        role: "assistant",
-        content: "Forwarded report",
-        senderLabel: "Forwarded from main",
-        ...attribution,
-      },
-      { role: "assistant", content: "Response to the forwarded report" },
-    ]);
-
-    expect(groups).toHaveLength(5);
-    expect(groups[2]?.replyToSender).toEqual({ id: "bob" });
-    expect(groups[3]?.replyToSender).toBeUndefined();
-    expect(groups[4]?.replyToSender).toBeUndefined();
-  });
-
-  it.each([
-    { sessionKey: "agent:main:dashboard:other", agentId: "main" },
-    { sessionKey: "agent:main:main", agentId: "updated" },
-    { sessionKey: "agent:main:main", agentId: "main", label: "Automation name" },
-  ])("refreshes cached attribution when the source changes to %o", (senderSession) => {
-    const message = forwardedMessage("agent:main:main");
-    const initial = cachedGroups([message]);
-    message.senderSession = senderSession;
-
-    const refreshed = cachedGroups([message]);
-
-    expect(refreshed[0]?.senderSession).toEqual(senderSession);
-    expect(refreshed[0]).not.toBe(initial[0]);
-  });
-
-  it.each(["Renamed report", undefined])(
-    "refreshes the displayed automation label after a rename or removal: %s",
-    (label) => {
-      const senderSession: { sessionKey: string; agentId: string; label?: string } = {
-        sessionKey: "agent:main:cron:daily:run:first",
-        agentId: "main",
-        label: "Daily report",
-      };
-      const message = {
-        ...forwardedMessage("agent:main:cron:daily:run:first"),
-        senderSession,
-      };
-      const initial = cachedGroups([message]);
-      expect(initial[0]?.senderSession?.label).toBe("Daily report");
-
-      message.senderSession.label = label;
-      const refreshed = cachedGroups([message]);
-
-      expect(refreshed[0]?.senderSession?.label).toBe(label);
-      expect(refreshed[0]).not.toBe(initial[0]);
-    },
+function groupHistory(messages: unknown[], showReasoning = false) {
+  return groupMessages(
+    messages.map((entry, index) => ({ kind: "message", key: `message:${index}`, message: entry })),
+    {},
+    undefined,
+    showReasoning,
   );
-});
-
-describe("cached group content classification", () => {
-  beforeEach(() => resetChatThreadState());
-
-  it.each(["user", "assistant", "toolResult"])(
-    "preserves %s messages when normalization skips malformed content blocks",
-    (role) => {
-      for (const content of [[null], [null, { type: "text", text: "Still visible" }]]) {
-        const message = { role, content };
-        expect(groupMessages([{ kind: "message", key: "malformed", message }])).toMatchObject([
-          { kind: "group", messages: [{ key: "malformed", message }] },
-        ]);
-      }
-    },
+}
+function collapse(messages: unknown[]) {
+  return collapseCompletedTurnWork(cachedGroups(messages), { sessionKey, runWorking: false });
+}
+function projected(messages: unknown[]) {
+  return coalesceActivityRuns(collapse(messages));
+}
+function visible(items: ReturnType<typeof projected>) {
+  return messagesOf(groupsOf(items));
+}
+function work(
+  items: ReturnType<typeof projected>,
+  kind: "work-group" | "activity-run" = "work-group",
+) {
+  return messagesOf(
+    items.flatMap((item) =>
+      (item.kind === "work-group" || item.kind === "activity-run") && item.kind === kind
+        ? item.groups
+        : [],
+    ),
   );
-
-  it("keeps media visible and folds commentary after the same message changes in place", () => {
-    const content: Record<string, unknown>[] = [
-      { type: "image", url: "https://example.com/diagram.png" },
-    ];
-    const preview = {
-      role: "assistant",
-      content,
-      timestamp: 2,
-    };
-    const messages = [
-      { role: "user", content: "Build a diagram", timestamp: 1 },
-      preview,
-      {
-        role: "toolResult",
-        toolCallId: "render-diagram",
-        toolName: "render",
-        content: "Ready",
-        timestamp: 3,
-      },
-      { role: "assistant", content: "Done", timestamp: 4 },
-    ];
-    const project = () =>
-      collapseCompletedTurnWork(cachedGroups([...messages]), {
-        sessionKey: "agent:target:dashboard:history",
-        runWorking: false,
-      });
-
-    expect(project()).toMatchObject([
-      { kind: "group", role: "user" },
-      { kind: "work-group", groups: [{ role: "tool" }] },
-      { kind: "group", role: "assistant", messages: [{ message: preview }] },
-      { kind: "group", role: "assistant" },
-    ]);
-
-    preview.content.splice(0, 1, { type: "text", text: "Preparing a diagram" });
-
-    expect(project()).toMatchObject([
-      { kind: "group", role: "user" },
-      {
-        kind: "work-group",
-        groups: [{ role: "assistant", messages: [{ message: preview }] }, { role: "tool" }],
-      },
-      { kind: "group", role: "assistant" },
-    ]);
-  });
-});
-
-describe("explicit answer visibility across continuations", () => {
-  beforeEach(() => resetChatThreadState());
-
-  it.each([
-    { phase: "final_answer", tool: true },
-    { phase: "final_answer", tool: false },
-    { phase: "commentary", tool: true },
-    { phase: "commentary", tool: false },
-  ] as const)(
-    "preserves an answer before $phase with intervening tool=$tool",
-    ({ phase, tool }) => {
-      const signed = (text: string, messagePhase: string) => ({
-        type: "text",
-        text,
-        textSignature: JSON.stringify({ v: 1, id: text, phase: messagePhase }),
-      });
-      const messages = [
-        { role: "user", content: "Investigate", timestamp: 1, __openclaw: { runId: "run" } },
-        {
-          role: "assistant",
-          content: [signed("Substantive answer", "final_answer")],
-          timestamp: 2,
-          __openclaw: { runId: "run" },
-        },
-        ...(tool
-          ? [
-              {
-                role: "toolResult",
-                toolCallId: "call",
-                toolName: "read",
-                content: "Evidence",
-                timestamp: 3,
-                __openclaw: { runId: "run" },
-              },
-            ]
-          : []),
-        {
-          role: "assistant",
-          content: [signed("Later update", phase)],
-          timestamp: 4,
-          __openclaw: { runId: "run" },
-        },
-      ];
-      // Exercise the renderer's complete grouping pipeline, including a history reload.
-      for (const history of [messages, structuredClone(messages)]) {
-        const items = coalesceAgentRunFrames(
-          coalesceActivityRuns(
-            collapseCompletedTurnWork(cachedGroups(history), {
-              sessionKey: "agent:main:dashboard:answers",
-              runWorking: false,
-            }),
-          ),
-        );
-        const parts = items.flatMap((item) =>
-          item.kind === "agent-run-frame" ? item.parts : [item],
-        );
-        const visible = parts.flatMap((item) =>
-          item.kind === "group" ? item.messages.map(({ message }) => message) : [],
-        );
-        expect(visible).toContainEqual(messages[1]);
-        if (phase === "final_answer") {
-          expect(visible).toContainEqual(messages.at(-1));
-        } else {
-          expect(visible).not.toContainEqual(messages.at(-1));
-        }
-        const work = parts.filter((item) => item.kind === "work-group");
-        const expectedWork = [
-          ...(tool ? [messages[2]] : []),
-          ...(phase === "commentary" ? [messages.at(-1)] : []),
-        ];
-        expect(
-          work.flatMap((item) =>
-            item.groups.flatMap((group) => group.messages.map(({ message }) => message)),
-          ),
-        ).toEqual(expectedWork);
-        expect(work).toHaveLength(expectedWork.length ? 1 : 0);
-        if (expectedWork.length) {
-          expect(parts[1]?.kind).toBe("work-group");
-        }
-      }
-    },
-  );
-
-  it.each(["same-run", "independent-run", "unscoped"])(
-    "keeps %s trailing activity with its presentation owner",
-    (ownership) => {
-      const messages = [
-        { role: "user", content: "Watch the queue", timestamp: 1 },
-        {
-          role: "assistant",
-          phase: "commentary",
-          content: "Checking",
-          timestamp: 2,
-          runId: "reply",
-        },
-        {
-          role: "assistant",
-          phase: "final_answer",
-          content: "Watching",
-          timestamp: 3,
-          runId: "reply",
-        },
-        ...[1, 2].flatMap((index) => {
-          const runId =
-            ownership === "unscoped"
-              ? undefined
-              : ownership === "same-run"
-                ? "reply"
-                : `wake-${index}`;
-          return [
-            {
-              role: "assistant",
-              content: [{ type: "toolCall", id: `call-${index}`, name: "read", arguments: {} }],
-              timestamp: 4 * index,
-              runId,
-            },
-            {
-              role: "toolResult",
-              toolCallId: `call-${index}`,
-              toolName: "read",
-              content: "ok",
-              timestamp: 4 * index + 1,
-              runId,
-            },
-          ];
-        }),
-      ];
-      for (const history of [messages, structuredClone(messages)]) {
-        const items = coalesceActivityRuns(
-          collapseCompletedTurnWork(
-            groupMessages(
-              history.map((message, index) => ({
-                kind: "message",
-                key: `message:${index}`,
-                message,
-              })),
-            ),
-            {
-              sessionKey: "agent:main:dashboard:answers",
-              runWorking: false,
-            },
-          ),
-        );
-        expect(items.map((item) => item.kind)).toEqual(
-          ownership === "independent-run"
-            ? ["group", "work-group", "group", "activity-run"]
-            : ["group", "work-group", "group"],
-        );
-        const work = items.filter((item) => item.kind === "work-group");
-        expect(
-          work.flatMap((item) =>
-            item.groups.flatMap((group) => group.messages.map(({ message }) => message)),
-          ),
-        ).toEqual(
-          ownership === "independent-run" ? [messages[1]] : [messages[1], ...messages.slice(3)],
-        );
-        if (ownership === "independent-run") {
-          expect(work[0]?.durationMs).toBeNull();
-        }
-        const activity = items.filter((item) => item.kind === "activity-run");
-        expect(
-          activity.flatMap((item) =>
-            item.groups.flatMap((group) => group.messages.map(({ message }) => message)),
-          ),
-        ).toEqual(ownership === "independent-run" ? messages.slice(3) : []);
-      }
-    },
-  );
-
-  it("collects activity on both sides of answers without crossing the next user", () => {
-    const messages = [
-      { role: "user", content: "First question", timestamp: 1 },
-      { role: "assistant", phase: "commentary", content: "Checking first", timestamp: 2 },
-      { role: "assistant", phase: "final_answer", content: "First answer", timestamp: 3 },
-      {
-        role: "toolResult",
-        toolCallId: "first",
-        toolName: "read",
-        content: "Evidence",
-        timestamp: 4,
-      },
-      { role: "assistant", phase: "final_answer", content: "Addendum", timestamp: 5 },
-      { role: "assistant", phase: "commentary", content: "Final check", timestamp: 6 },
-      {
-        role: "toolResult",
-        toolCallId: "last",
-        toolName: "read",
-        content: "Confirmed",
-        timestamp: 7,
-      },
-      { role: "user", content: "Second question", timestamp: 8 },
-      { role: "assistant", phase: "commentary", content: "Checking second", timestamp: 9 },
-      { role: "assistant", phase: "final_answer", content: "Second answer", timestamp: 10 },
-    ];
-    const snapshot = structuredClone(messages);
-    const items = collapseCompletedTurnWork(cachedGroups(messages), {
-      sessionKey: "agent:main:dashboard:answers",
-      runWorking: false,
+}
+function tool(id: string, timestamp: number, extra: object = {}) {
+  return toolResult(id, "read", "Evidence", timestamp, extra);
+}
+function expectProvenance(messages: unknown[]) {
+  const groups = cachedGroups(messages);
+  expect(groups.map((group) => group.messages.map((source) => source.message))).toEqual([messages]);
+  return groups;
+}
+function expectHistory(messages: unknown[], shown: number[], folded: number[]) {
+  for (const history of [messages, structuredClone(messages)]) {
+    const items = projected(history);
+    expect({ shown: visible(items), folded: work(items) }).toEqual({
+      shown: shown.map((index) => messages[index]),
+      folded: folded.map((index) => messages[index]),
     });
-    expect(items.map((item) => item.kind)).toEqual([
-      "group",
-      "work-group",
-      "group",
-      "group",
-      "group",
-      "work-group",
-      "group",
-    ]);
-    const work = items.filter((item) => item.kind === "work-group");
-    expect(
-      work.map((item) =>
-        item.groups.flatMap((group) => group.messages.map(({ message }) => message)),
-      ),
-    ).toEqual([[messages[1], messages[3], messages[5], messages[6]], [messages[8]]]);
-    expect(work[0]?.durationMs).toBeNull();
-    expect(
-      items
-        .filter((item) => item.kind === "group")
-        .flatMap((item) => item.messages.map(({ message }) => message)),
-    ).toEqual([messages[0], messages[2], messages[4], messages[7], messages[9]]);
-    expect(messages).toEqual(snapshot);
-  });
+    expect(items.filter((item) => item.kind === "work-group")).toHaveLength(folded.length ? 1 : 0);
+  }
+}
+beforeEach(() => resetChatThreadState());
 
-  it("preserves mixed-phase answer text when later tools and an answer arrive", () => {
-    const answer = {
-      role: "assistant",
-      content: ["commentary", "final_answer"].map((phase) => ({
-        type: "text",
-        text: phase === "commentary" ? "Checking" : "Substantive answer",
-        textSignature: JSON.stringify({ v: 1, id: phase, phase }),
-      })),
-      timestamp: 2,
-    };
-    const items = collapseCompletedTurnWork(
-      cachedGroups([
-        { role: "user", content: "Investigate", timestamp: 1 },
-        answer,
-        {
-          role: "toolResult",
-          toolCallId: "call",
-          toolName: "read",
-          content: "Evidence",
-          timestamp: 3,
-        },
-        { role: "assistant", phase: "final_answer", content: "Later update", timestamp: 4 },
-      ]),
-      { sessionKey: "agent:main:dashboard:answers", runWorking: false },
-    );
-    expect(
-      items
-        .filter((item) => item.kind === "group")
-        .flatMap((item) => item.messages.map(({ message }) => message)),
-    ).toContainEqual(answer);
+it("keeps provider speech separate from answer ownership and completed-work rollups", () => {
+  const answer = message("assistant", "The command exited with code 0.", 2);
+  const speech = message("assistant", "The command exited with code zero.", 3, {
+    __openclaw: { voiceTranscript: "provider-owned" },
   });
+  const groups = cachedGroups([message("user", "Check the command.", 1), answer, speech]);
+  expect(groups.map((group) => group.messages.map((item) => item.message))).toEqual([
+    [expect.objectContaining({ role: "user" })],
+    [answer],
+    [speech],
+  ]);
+  expect(assistantGroupCanOwnActiveRunStatus(groups[1]!)).toBe(true);
+  expect(assistantGroupCanOwnActiveRunStatus(groups[2]!)).toBe(false);
+  expect(collapseCompletedTurnWork(groups, { sessionKey, runWorking: false })).toEqual(groups);
+});
+
+it("keeps each queued message in the same row through acceptance and persistence", () => {
+  const queue: ChatQueueItem[] = ["First queued input", "Second queued input"].map((text, index) =>
+    queued(`local-${index}`, text, index + 1, "waiting-reconnect", {
+      sendRunId: `send-${index}`,
+      sendAttempts: 1,
+    }),
+  );
+  const pendingInputs = queue.map((item, index) =>
+    pending(
+      `accepted-${index}`,
+      item.sendRunId,
+      nativeMessage("user", item.text, index + 1, { id: `pending:accepted-${index}` }),
+      index + 1,
+    ),
+  );
+  const persisted = queue.map((item, index) =>
+    nativeMessage("user", item.text, index + 1, {
+      id: `persisted-${index}`,
+      seq: index + 1,
+      idempotencyKey: `${item.sendRunId}:user`,
+      runId: `execution-${index}`,
+    }),
+  );
+  const render = (input: Pick<CachedChatItemsProps, "messages" | "pendingInputs">) =>
+    groupsOf(
+      buildItems({
+        paneId: "queued-input-continuity",
+        sessionKey: "agent:main:dashboard:queued-inputs",
+        queue,
+        ...input,
+      }),
+    );
+  const initial = render({ messages: [] });
+  const rowKeys = initial.map((group) => group.key);
+  const messageKeys = initial.map((group) => group.messages[0]?.key);
+
+  expect(initial.map((group) => group.messages.length)).toEqual([1, 1]);
+  for (const input of [
+    { messages: [], pendingInputs: pendingInputs.slice(0, 1) },
+    { messages: [], pendingInputs },
+    { messages: persisted.slice(0, 1), pendingInputs: pendingInputs.slice(1) },
+    { messages: persisted, pendingInputs: [] },
+  ]) {
+    const groups = render(input);
+    expect(groups.map((group) => group.key)).toEqual(rowKeys);
+    expect(groups.map((group) => group.messages.length)).toEqual([1, 1]);
+    expect(groups.map((group) => group.messages[0]?.key)).toEqual(messageKeys);
+  }
+});
+it.each([
+  {
+    name: "collected clients",
+    from: (content: string) =>
+      nativeMessage("user", content, 1, {
+        senderId: "same-person",
+        senderIdentity: { ...senderIdentity },
+        transport: { clients },
+      }),
+    attribution: (group: MessageGroup) => [group.sourceClients, group.sender?.identity],
+    expected: [clients, senderIdentity],
+  },
+  {
+    name: "forwarded session",
+    from: (content: string) =>
+      message("assistant", content, 1, {
+        senderLabel: "Forwarded from main",
+        senderSession: { ...origin },
+      }),
+    attribution: (group: MessageGroup) => [group.senderSession, group.senderLabel],
+    expected: [origin, "Forwarded from main"],
+  },
+])("groups the same $name without losing provenance", ({ from, attribution, expected }) => {
+  const groups = expectProvenance([from("First report"), from("Second report")]);
+  expect(groups.map((group) => attribution(group))).toEqual([expected]);
+});
+it.each([
+  { type: "image", source: { type: "url", url: "https://example.com/result.png" } },
+  {
+    type: "attachment",
+    attachment: { kind: "document", url: "https://example.com/result.pdf", label: "Result" },
+  },
+  {
+    type: "canvas",
+    preview: {
+      kind: "canvas",
+      render: "url",
+      url: "https://example.com/result",
+    },
+  },
+])("keeps mixed reasoning and $type visible", (outcome) => {
+  const thinking = { type: "thinking", thinking: "Checking the evidence." };
+  const messages = [
+    message("user", "Check it.", 1000),
+    message("assistant", [thinking], 2000),
+    message("assistant", [thinking, outcome], 3000),
+  ];
+  const groups = groupHistory(messages, true);
+  const output = collapseCompletedTurnWork(groups, { sessionKey, runWorking: false });
+  expect(output.map((item) => item.kind)).toEqual(["group", "work-group", "group"]);
+  const foldedWork = output[1];
+  expect(
+    foldedWork?.kind === "work-group" &&
+      foldedWork.groups.flatMap((group) => group.messages).length,
+  ).toBe(2);
+  const visibleOutput = output[2];
+  expect(visibleOutput?.kind === "group" && visibleOutput.messages[0]?.message).toMatchObject({
+    content: [outcome],
+  });
+  const reasoning = groups[1];
+  expect(reasoning?.kind).toBe("group");
+  if (reasoning?.kind === "group") {
+    expect(assistantGroupCanOwnActiveRunStatus(reasoning)).toBe(false);
+  }
+});
+
+it("preserves malformed user content", () => {
+  for (const content of [[null], [null, { type: "text", text: "Still visible" }]]) {
+    const entry = { role: "user", content };
+    expect(groupMessages([{ kind: "message", key: "malformed", message: entry }])).toMatchObject([
+      { kind: "group", messages: [{ key: "malformed", message: entry }] },
+    ]);
+  }
+});
+
+it("keeps media and replacement commentary in place", () => {
+  const preview = message(
+    "assistant",
+    [{ type: "image", url: "https://example.com/diagram.png" }],
+    2,
+  );
+  const messages = [
+    message("user", "Build a diagram", 1),
+    preview,
+    tool("render-diagram", 3),
+    message("assistant", "Done", 4),
+  ];
+  expect(collapse(messages)).toMatchObject([
+    { kind: "group", role: "user" },
+    { kind: "group", role: "assistant", messages: [{ message: preview }] },
+    { kind: "work-group", groups: [{ role: "tool" }] },
+    { kind: "group", role: "assistant" },
+  ]);
+  const replacement = { ...preview, content: [{ type: "text", text: "Preparing a diagram" }] };
+  expect(
+    collapse(messages.map((entry) => (entry === preview ? replacement : entry))),
+  ).toMatchObject([
+    { kind: "group", role: "user" },
+    { kind: "group", role: "assistant", messages: [{ message: replacement }] },
+    { kind: "work-group", groups: [{ role: "tool" }] },
+    { kind: "group", role: "assistant" },
+  ]);
+});
+it.each([true, false])(
+  "keeps work with its answer above a trailing steer (working=%s)",
+  (runWorking) => {
+    const runId = "target-run";
+    const prompt = nativeMessage("user", "Inspect the file", 1, {
+      idempotencyKey: `${runId}:user`,
+    });
+    const evidence = tool("read-file", 2, { runId });
+    const answer = message("assistant", "File inspected", 3, { runId });
+    const queuedMessage = nativeMessage("user", "Queued follow-up", 4, {
+      idempotencyKey: "queued-run:user",
+    });
+    const steer = nativeMessage("user", "Also check permissions", 5, {
+      idempotencyKey: "steer-run:user",
+      steerTargetRunId: runId,
+    });
+    const ordered = [prompt, evidence, answer, queuedMessage, steer];
+    const items = collapseCompletedTurnWork(groupHistory(ordered), {
+      sessionKey,
+      runWorking,
+    });
+    expect(visible(items)).toEqual(runWorking ? ordered : [prompt, answer, queuedMessage, steer]);
+    expect(work(items)).toEqual(runWorking ? [] : [evidence]);
+    if (!runWorking) {
+      expect(items[1]).toMatchObject({ kind: "work-group", replyRunId: runId, durationMs: null });
+    }
+  },
+);
+
+it.each<[string, object, boolean, boolean?]>([
+  ["settled terminal", {}, true],
+  ["explicit commentary", { phase: "commentary" }, false],
+  ["interrupted text", { openclawAbort: { aborted: true } }, false],
+  ["legacy unphased reply", {}, false, true],
+])("preserves %s through history reload", (_name, extra, _preserved, legacy) => {
+  const run = { runId: "completed-run" };
+  const messages = [
+    nativeMessage("user", "Inspect the file", 1, run),
+    tool("read-file", 2, { __openclaw: run }),
+    message("assistant", "File verified — café 雪 🦞", 3, {
+      stopReason: "stop",
+      ...extra,
+      __openclaw: {
+        ...run,
+        ...(!legacy ? { mirrorOrigin: "codex-app-server", runTerminal: true } : {}),
+      },
+    }),
+    message("assistant", "Gateway restart config-patch ok", 4, {
+      api: "openclaw-transcript",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      stopReason: "stop",
+    }),
+  ];
+  expectHistory(messages, [0, 2, 3], [1]);
+});
+it.each<[string, boolean, number[], number[]]>([
+  ["final_answer", false, [0, 1, 2], []],
+  ["commentary", true, [0, 1, 3], [2]],
+])("preserves signed answer before %s through history reload", (phase, withTool, shown, folded) => {
+  const run = { __openclaw: { runId: "run" } };
+  const first = message("user", "Investigate", 1, run);
+  const answer = message("assistant", [signed("Substantive answer", "final_answer")], 2, run);
+  const evidence = withTool ? [tool("call", 3, run)] : [];
+  const later = message("assistant", [signed("Later update", phase)], 4, run);
+  expectHistory([first, answer, ...evidence, later], shown, folded);
+});
+
+it("keeps the earlier answer visible when a late exec completion starts the follow-up turn", () => {
+  const messages = [
+    message("user", "Review the change", 1),
+    message("assistant", "long final answer", 3),
+    message("assistant", "should I fix points 1-4?", 4, { __openclaw: { turnBoundary: true } }),
+  ];
+  expectHistory(messages, [0, 1, 2], []);
+});
+
+it("keeps independent-run trailing activity with its owner", () => {
+  const messages = [
+    message("user", "Watch the queue", 1),
+    message("assistant", "Checking", 2, { phase: "commentary", runId: "reply" }),
+    message("assistant", "Watching", 3, { phase: "final_answer", runId: "reply" }),
+    ...[1, 2].flatMap((index) => {
+      const runId = `wake-${index}`;
+      return [
+        message(
+          "assistant",
+          [{ type: "toolCall", id: `call-${index}`, name: "read", arguments: {} }],
+          4 * index,
+          { runId },
+        ),
+        tool(`call-${index}`, 4 * index + 1, { runId }),
+      ];
+    }),
+  ];
+  for (const history of [messages, structuredClone(messages)]) {
+    const items = coalesceActivityRuns(
+      collapseCompletedTurnWork(groupHistory(history), { sessionKey, runWorking: false }),
+    );
+    expect(items.map((item) => item.kind)).toEqual(["group", "group", "group", "activity-run"]);
+    expect(work(items)).toEqual([]);
+    expect(visible(items)).toEqual(messages.slice(0, 3));
+    expect(work(items, "activity-run")).toEqual(messages.slice(3));
+  }
+});
+
+it("keeps thinking plus tool calls as activity and omits assistant rows with nothing to display", () => {
+  const groups = cachedGroups([
+    message("user", "Check the parent", 1_000),
+    message(
+      "assistant",
+      [
+        { type: "thinking", thinking: "Find the parent." },
+        { type: "toolCall", id: "list", name: "sessions_list", arguments: {} },
+      ],
+      2_000,
+    ),
+    message("assistant", [{ type: "thinking", thinking: "Nothing to say." }], 3_000),
+  ]);
+  expect(groups.map((item) => item.role)).toEqual(["user", "tool"]);
+});
+
+it("retains prepared tool outcomes without content blocks as activity", () => {
+  const outcome = message("assistant", [], 1_000, {
+    activity: [
+      {
+        itemId: "read",
+        kind: "tool",
+        phase: "end",
+        name: "read",
+        title: "Read",
+        status: "blocked",
+      },
+    ],
+  });
+  expect(buildItems({ messages: [outcome] })).toMatchObject([
+    { kind: "group", role: "tool", messages: [{ message: outcome }] },
+  ]);
 });

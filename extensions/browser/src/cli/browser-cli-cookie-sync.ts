@@ -2,6 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import {
   cacheKeychainSecret,
   type KeychainSecretReader,
@@ -11,13 +13,12 @@ import {
   assertSystemCookiePlatform,
   readSystemProfileCookies,
   resolveSystemCookieSource,
-} from "../system-profile-api.js";
+} from "../browser/system-profiles.js";
 import {
   callBrowserRequest,
   runBrowserCliCommand,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
-import { defaultRuntime } from "./core-api.js";
 
 const COOKIE_SYNC_DEBOUNCE_MS = 1_500;
 
@@ -29,34 +30,9 @@ type CookieSyncOptions = {
   watch?: boolean;
 };
 
-type CookieSyncSummary = {
-  browser: string;
-  systemProfile: string;
-  into: string;
-  gateway: string;
-  total: number;
-  pushed: number;
-  skipped: number;
-  failed: number;
-  domains: string[];
-};
-
-function parseCookieSyncDomains(raw: string | undefined): string[] {
-  if (raw === undefined) {
-    throw new Error("--domains is required; cookie sync never sends an unrestricted cookie jar");
-  }
-  const domains = parseSystemProfileDomains(raw.split(","));
-  if (!domains) {
-    throw new Error("--domains must include at least one non-empty domain");
-  }
-  return domains;
-}
-
-function describeGatewayTarget(parent: BrowserParentOpts): string {
-  return parent.url?.trim() || "configured/default";
-}
-
-function formatCookieSyncSummary(summary: CookieSyncSummary): string {
+function formatCookieSyncSummary(
+  summary: Awaited<ReturnType<typeof pushSystemProfileCookies>>,
+): string {
   const domains = summary.domains.length > 0 ? summary.domains.join(",") : "none";
   return (
     `cookie sync ${summary.browser}/${summary.systemProfile} -> ${summary.into} ` +
@@ -71,7 +47,7 @@ async function pushSystemProfileCookies(params: {
   domains: readonly string[];
   signal?: AbortSignal;
   readSecret?: KeychainSecretReader;
-}): Promise<CookieSyncSummary> {
+}) {
   const source = await readSystemProfileCookies(
     {
       browser: params.options.browser,
@@ -95,7 +71,7 @@ async function pushSystemProfileCookies(params: {
     browser: source.browser,
     systemProfile: source.systemProfile,
     into: params.options.into,
-    gateway: describeGatewayTarget(params.parent),
+    gateway: params.parent.url?.trim() || "configured/default",
     total: source.counts.total,
     pushed,
     skipped: source.counts.skipped,
@@ -104,113 +80,6 @@ async function pushSystemProfileCookies(params: {
   };
 }
 
-async function watchSystemProfileCookies(params: {
-  options: CookieSyncOptions;
-  parent: BrowserParentOpts;
-  domains: readonly string[];
-}): Promise<void> {
-  assertSystemCookiePlatform();
-  const source = resolveSystemCookieSource({
-    browser: params.options.browser,
-    systemProfile: params.options.system,
-  });
-  const controller = new AbortController();
-  const readSecret = await cacheKeychainSecret(source.browser, controller.signal);
-  let debounce: NodeJS.Timeout | undefined;
-  let inFlight = false;
-  let pending = false;
-  let stopped = false;
-  let stopError: Error | undefined;
-  let resolveStopped: (() => void) | undefined;
-  let rejectStopped: ((error: Error) => void) | undefined;
-  const stoppedPromise = new Promise<void>((resolve, reject) => {
-    resolveStopped = resolve;
-    rejectStopped = reject;
-  });
-
-  const runCycle = async () => {
-    if (stopped) {
-      return;
-    }
-    if (inFlight) {
-      pending = true;
-      return;
-    }
-    pending = false;
-    inFlight = true;
-    try {
-      const summary = await pushSystemProfileCookies({
-        ...params,
-        readSecret,
-        signal: controller.signal,
-      });
-      defaultRuntime.error(formatCookieSyncSummary(summary));
-    } catch (error) {
-      if (!stopped) {
-        defaultRuntime.error(`cookie sync failed: ${String(error)}`);
-      }
-    } finally {
-      inFlight = false;
-      if (stopped) {
-        if (stopError) {
-          rejectStopped?.(stopError);
-        } else {
-          resolveStopped?.();
-        }
-      } else if (pending) {
-        void runCycle();
-      }
-    }
-  };
-
-  const sourceName = path.basename(source.cookiesFile);
-  const watcher = fs.watch(path.dirname(source.cookiesFile), (_event, filename) => {
-    const changedName = filename === null ? null : path.basename(filename);
-    if (
-      changedName !== null &&
-      changedName !== sourceName &&
-      !changedName.startsWith(`${sourceName}-`)
-    ) {
-      return;
-    }
-    clearTimeout(debounce);
-    debounce = setTimeout(() => void runCycle(), COOKIE_SYNC_DEBOUNCE_MS);
-  });
-  const stop = () => {
-    if (stopped) {
-      return;
-    }
-    stopped = true;
-    clearTimeout(debounce);
-    watcher.close();
-    controller.abort(new Error("cookie sync stopped"));
-    if (!inFlight) {
-      if (stopError) {
-        rejectStopped?.(stopError);
-      } else {
-        resolveStopped?.();
-      }
-    }
-  };
-  const fail = (error: Error) => {
-    stopError = error;
-    stop();
-  };
-  watcher.on("error", fail);
-  process.once("SIGINT", stop);
-  process.once("SIGTERM", stop);
-  try {
-    await runCycle();
-    await stoppedPromise;
-  } finally {
-    process.removeListener("SIGINT", stop);
-    process.removeListener("SIGTERM", stop);
-    watcher.removeListener("error", fail);
-    stop();
-  }
-}
-
-/** Register `browser cookie-sync`. */
 export function registerBrowserCookieSyncCommand(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -225,10 +94,112 @@ export function registerBrowserCookieSyncCommand(
     .option("--watch", "Watch the source Cookies database and re-sync changes", false)
     .action((options: CookieSyncOptions, command: Command) =>
       runBrowserCliCommand(async () => {
-        const domains = parseCookieSyncDomains(options.domains);
+        if (options.domains === undefined) {
+          throw new Error(
+            "--domains is required; cookie sync never sends an unrestricted cookie jar",
+          );
+        }
+        const domains = parseSystemProfileDomains(options.domains.split(","));
+        if (!domains) {
+          throw new Error("--domains must include at least one non-empty domain");
+        }
         const parent = parentOpts(command);
         if (options.watch) {
-          await watchSystemProfileCookies({ options, parent, domains });
+          assertSystemCookiePlatform();
+          const source = await resolveSystemCookieSource({
+            browser: options.browser,
+            systemProfile: options.system,
+          });
+          const controller = new AbortController();
+          const readSecret = await cacheKeychainSecret(source.browser, controller.signal);
+          let debounce: NodeJS.Timeout | undefined;
+          let inFlight = false;
+          let pending = false;
+          let stopped = false;
+          let stopError: Error | undefined;
+          const stoppedResult = createDeferred<void>();
+          const settleStopped = () => {
+            if (stopError) {
+              stoppedResult.reject(stopError);
+            } else {
+              stoppedResult.resolve();
+            }
+          };
+
+          const runCycle = async () => {
+            if (stopped) {
+              return;
+            }
+            if (inFlight) {
+              pending = true;
+              return;
+            }
+            pending = false;
+            inFlight = true;
+            try {
+              const summary = await pushSystemProfileCookies({
+                options,
+                parent,
+                domains,
+                readSecret,
+                signal: controller.signal,
+              });
+              defaultRuntime.error(formatCookieSyncSummary(summary));
+            } catch (error) {
+              if (!stopped) {
+                defaultRuntime.error(`cookie sync failed: ${String(error)}`);
+              }
+            } finally {
+              inFlight = false;
+              if (stopped) {
+                settleStopped();
+              } else if (pending) {
+                void runCycle();
+              }
+            }
+          };
+
+          const sourceName = path.basename(source.cookiesFile);
+          const watcher = fs.watch(path.dirname(source.cookiesFile), (_event, filename) => {
+            const changedName = filename === null ? null : path.basename(filename);
+            if (
+              changedName !== null &&
+              changedName !== sourceName &&
+              !changedName.startsWith(`${sourceName}-`)
+            ) {
+              return;
+            }
+            clearTimeout(debounce);
+            debounce = setTimeout(() => void runCycle(), COOKIE_SYNC_DEBOUNCE_MS);
+          });
+          const stop = () => {
+            if (stopped) {
+              return;
+            }
+            stopped = true;
+            clearTimeout(debounce);
+            watcher.close();
+            controller.abort(new Error("cookie sync stopped"));
+            if (!inFlight) {
+              settleStopped();
+            }
+          };
+          const fail = (error: Error) => {
+            stopError = error;
+            stop();
+          };
+          watcher.on("error", fail);
+          process.once("SIGINT", stop);
+          process.once("SIGTERM", stop);
+          try {
+            await runCycle();
+            await stoppedResult.promise;
+          } finally {
+            process.removeListener("SIGINT", stop);
+            process.removeListener("SIGTERM", stop);
+            watcher.removeListener("error", fail);
+            stop();
+          }
           return;
         }
         const summary = await pushSystemProfileCookies({ options, parent, domains });

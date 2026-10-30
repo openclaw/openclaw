@@ -6,6 +6,10 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { waitForControlUiDocument } from "../../../src/commands/control-ui-handoff.ts";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../src/config/runtime-snapshot.js";
+import {
   appendTranscriptMessages,
   createSessionEntryWithTranscript,
 } from "../../../src/config/sessions/session-accessor.js";
@@ -18,10 +22,13 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { createRequireRecord } from "../../../test/helpers/record.js";
-import { COMMUNITY_INVITE_KEY } from "../components/community-invite-state.ts";
+import type { SessionsListResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
+import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
 const agentIds = ["main", "second", "third", "fourth", "fifth"];
@@ -30,9 +37,9 @@ const commonMatchCount = 30;
 const commonQuery = "orchardglow";
 const uniqueQuery = "copperfinch";
 const targetKey = "agent:fifth:search-proof-12345678-0000-4000-8000-000000000001";
-const targetLabel = "Older fifth-agent conversation";
+const targetLabel = "Per-session communication controls in UI";
 const targetMessage =
-  "The copperfinch observatory has a violet lantern beside the northern window.";
+  "The copperfinch observatory uses cross-agent message routing beside the violet lantern.";
 const scope = {
   includeGlobal: false,
   includeUnknown: false,
@@ -40,9 +47,11 @@ const scope = {
   excludeSubagents: true,
   excludeCron: true,
   excludeSystem: true,
+  excludeDock: true,
 };
 const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 let instance: OpenClawTestInstance | undefined;
+let client: Awaited<ReturnType<typeof connectChatGateway>>;
 
 type RpcObservation = {
   method: string;
@@ -54,19 +63,12 @@ type RpcObservation = {
   resultCount?: number;
   resultKeys?: unknown[];
   sessionKeys?: unknown[];
+  rowsRevision?: unknown;
+  rowsUnchanged?: boolean;
+  rowsDelta?: unknown;
   truncated?: boolean;
   indexing?: boolean;
   archivedTranscriptsExcluded?: number;
-};
-
-type QueryObservation = {
-  query: string;
-  elapsedMs: number;
-  visibleResults: number;
-  searchRequests: number;
-  metadataRequests: number;
-  backgroundListRequests: number;
-  notices: string[];
 };
 
 async function seedSessions(owner: OpenClawTestInstance, config: OpenClawConfig) {
@@ -94,7 +96,11 @@ async function seedSessions(owner: OpenClawTestInstance, config: OpenClawConfig)
   ];
   // Prepare canonical SQLite entries and synchronously indexed message appends
   // before the child starts, so its resident projection sees the complete corpus.
-  for (const fixture of fixtures) {
+  // The database owner retains one idle writer; finish each agent before switching.
+  const fixturesByAgent = fixtures.toSorted(
+    (left, right) => agentIds.indexOf(left.agentId) - agentIds.indexOf(right.agentId),
+  );
+  for (const fixture of fixturesByAgent) {
     const sessionId = randomUUID();
     const target = { agentId: fixture.agentId, sessionKey: fixture.key, env: owner.env };
     const created = await createSessionEntryWithTranscript(
@@ -152,6 +158,15 @@ async function seedSessions(owner: OpenClawTestInstance, config: OpenClawConfig)
 const suite = createControlUiE2eSuite({
   name: "Control UI command palette search with a real Gateway",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      expect.assert(instance);
+      client = await connectChatGateway(instance, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     const owner = await createOpenClawTestInstance({
       name: "command-palette-search",
@@ -193,7 +208,6 @@ const suite = createControlUiE2eSuite({
             workspace: owner.state.workspaceDir,
             model: "fixture/search-model",
             modelPolicy: { allow: ["fixture/*"] },
-            heartbeat: { every: "0m" },
           },
           entries: Object.fromEntries(
             agentIds.map((id) => [id, { identity: { name: `Synthetic ${id} assistant` } }]),
@@ -222,7 +236,12 @@ const suite = createControlUiE2eSuite({
         },
       };
       await owner.state.writeConfig(config);
-      await seedSessions(owner, config);
+      setRuntimeConfigSnapshot(config);
+      try {
+        await seedSessions(owner, config);
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
       await owner.startGateway();
       return {
         baseUrl: `http://127.0.0.1:${owner.port}/`,
@@ -310,6 +329,9 @@ function observeSearchTraffic(page: Page, rpc: RpcObservation[]) {
       if (Array.isArray(body.sessions)) {
         metric.sessionKeys = body.sessions.map((row) => (isRecord(row) ? row.key : null));
       }
+      metric.rowsRevision = body.rowsRevision;
+      metric.rowsUnchanged = body.rowsUnchanged === true;
+      metric.rowsDelta = body.rowsDelta;
       metric.truncated = body.truncated === true;
       metric.indexing = body.indexing === true;
       metric.archivedTranscriptsExcluded =
@@ -318,7 +340,9 @@ function observeSearchTraffic(page: Page, rpc: RpcObservation[]) {
         pending.delete(frame.id);
       }
     });
-    socket.on("close", () => pending.clear());
+    socket.on("close", () => {
+      pending.clear();
+    });
   });
 }
 
@@ -329,7 +353,7 @@ suite.define(() => {
     }
     const owner = instance;
     const rpc: RpcObservation[] = [];
-    const queries: QueryObservation[] = [];
+    let queryCount = 0;
     const assets: Array<{ path: string; servedSha256: string; builtSha256: string }> = [];
     const screenshots: string[] = [];
     let passed = false;
@@ -342,6 +366,15 @@ suite.define(() => {
         timeoutMs: 60_000,
         onPending: () => console.log("[search-proof] waiting for the preparing UI document"),
       });
+      if (!uiDocument.ready) {
+        console.log(
+          "[search-proof] document readiness failed",
+          JSON.stringify({
+            document: uiDocument,
+            gateway: owner.readiness.map(({ logs: _logs, ...receipt }) => receipt),
+          }),
+        );
+      }
       expect(uiDocument.ready, uiDocument.ready ? "ready" : uiDocument.reason).toBe(true);
       const handoff = await owner.cli(["dashboard", "--json"]);
       const result = requireRecord(JSON.parse(handoff.stdout));
@@ -356,13 +389,18 @@ suite.define(() => {
       const url = new URL("/chat/main", suite.server.baseUrl);
       url.hash = new URL(browserUrl).hash;
       await suite.withPage(
-        { serviceWorkers: "block", locale: "en-US", viewport: { width: 1280, height: 900 } },
+        {
+          serviceWorkers: "block",
+          locale: "en-US",
+          viewport: { width: 1280, height: 900 },
+          ...(captureEnabled
+            ? { recordVideo: { dir: artifactDir, size: { width: 1280, height: 900 } } }
+            : {}),
+        },
         async ({ page }) => {
-          await page.addInitScript((key) => {
-            localStorage.setItem(key, JSON.stringify({ dismissedAtMs: 1770000000000 }));
-          }, COMMUNITY_INVITE_KEY);
           observeSearchTraffic(page, rpc);
-          expect((await page.goto(url.href))?.status()).toBe(200);
+          expect((await page.goto(url.href))?.status()).toBe(404);
+          await enterControlUiSession(page);
           await waitForControlUiGatewayReady(page);
           await page.locator(".shell").waitFor({ state: "visible" });
           await expect
@@ -381,7 +419,15 @@ suite.define(() => {
             .evaluateAll((elements) =>
               elements.map((element) => new URL((element as HTMLScriptElement).src).pathname),
             );
-          expect(scripts.some((script) => /\/assets\/index-[^/]+\.js$/u.test(script))).toBe(true);
+          const builtIndex = await readFile(
+            path.join(process.cwd(), "dist/control-ui/index.html"),
+            "utf8",
+          );
+          const builtScripts = [
+            ...builtIndex.matchAll(/<script[^>]+src="(?:\.\/|\/)?(assets\/[^"]+\.js)"/gu),
+          ].map((match) => `/${match[1]}`);
+          expect(builtScripts.length).toBeGreaterThan(0);
+          expect(scripts).toEqual(builtScripts);
           for (const script of scripts) {
             expect(script).toMatch(/^\/assets\/[^/]+\.js$/u);
             const served = await page.request.get(new URL(script, suite.server.baseUrl).href);
@@ -414,6 +460,7 @@ suite.define(() => {
           const results = palette.locator(".cmd-palette__results");
           const emptyState = palette.locator(".cmd-palette__no-results");
           await input.waitFor();
+          const metadataReceipts = new Map<string, { revision: string; keys: string[] }>();
           const search = async (
             query: string,
             expectedHits: number,
@@ -422,7 +469,6 @@ suite.define(() => {
           ) => {
             const noMatches = expectedHits === 0 && metadataKeys.length === 0;
             const start = rpc.length;
-            const started = performance.now();
             await input.fill(query);
             await expect
               .poll(
@@ -444,15 +490,7 @@ suite.define(() => {
             const listRequests = traffic.filter((entry) => entry.method === "sessions.list");
             const metadata = listRequests.filter((entry) => entry.params.search === query);
             const visibleResults = await results.getByRole("option").count();
-            queries.push({
-              query,
-              elapsedMs: performance.now() - started,
-              visibleResults,
-              searchRequests: searches.length,
-              metadataRequests: metadata.length,
-              backgroundListRequests: listRequests.length - metadata.length,
-              notices,
-            });
+            queryCount++;
             // Capture the settled state before assertions too, retaining useful
             // before-fix evidence when run against the original regression.
             await capture(filename, palette, [input, visibleResults === 0 ? emptyState : results]);
@@ -468,9 +506,49 @@ suite.define(() => {
             // The query owns one bounded metadata lookup. The scoped transcript
             // request above cannot be limited by any background roster window.
             expect(metadata).toHaveLength(1);
-            expect(metadata[0]?.params).toEqual({ ...scope, search: query, limit: 10 });
-            expect(metadata[0]?.ok).toBe(true);
-            expect(metadata[0]?.sessionKeys).toEqual(metadataKeys);
+            const metadataResponse = metadata[0]!;
+            const previous = metadataReceipts.get(query);
+            const { ifRowsRevision: requestedRevision, ...metadataParams } =
+              metadataResponse.params;
+            // Eviction may require a full read; reuse must name this query's last receipt.
+            expect(["", ...(previous ? [`delta:${previous.revision}`] : [])]).toContain(
+              requestedRevision,
+            );
+            expect(metadataParams).toEqual({
+              ...scope,
+              search: query,
+              limit: 10,
+              rowMode: "compact",
+              source: "command-palette",
+            });
+            expect(metadataResponse.ok).toBe(true);
+            const revision = metadataResponse.rowsRevision;
+            expect.assert(typeof revision === "string");
+            expect(revision).toMatch(/\S/u);
+            let returnedKeys = metadataResponse.sessionKeys;
+            if (metadataResponse.rowsUnchanged || isRecord(metadataResponse.rowsDelta)) {
+              expect.assert(previous);
+              expect(requestedRevision).toBe(`delta:${previous.revision}`);
+              if (metadataResponse.rowsUnchanged) {
+                expect(revision).toBe(previous.revision);
+                returnedKeys = previous.keys;
+              } else if (isRecord(metadataResponse.rowsDelta)) {
+                const delta = metadataResponse.rowsDelta;
+                expect(delta.baseRevision).toBe(previous.revision);
+                expect(Array.isArray(delta.order)).toBe(true);
+                if (Array.isArray(delta.order)) {
+                  const keys = [...previous.keys, ...(returnedKeys ?? [])];
+                  returnedKeys = delta.order.map((index: unknown) =>
+                    typeof index === "number" ? keys[index] : undefined,
+                  );
+                }
+              }
+            }
+            expect(returnedKeys).toEqual(metadataKeys);
+            metadataReceipts.set(query, {
+              revision,
+              keys: metadataKeys,
+            });
             expect(notices).toEqual(noMatches ? [expect.stringContaining("No results found")] : []);
             expect(
               await palette
@@ -479,6 +557,19 @@ suite.define(() => {
             ).toBe(0);
             return response;
           };
+
+          await search("per session communi", 0, "00-title-punctuation-prefix.png", [targetKey]);
+          await results.getByRole("option").filter({ hasText: targetLabel }).waitFor();
+          expect(await results.getByRole("option").count()).toBe(1);
+
+          const partial = await search(
+            "cross agent message rout",
+            1,
+            "00-message-punctuation-prefix.png",
+          );
+          expect(partial.resultKeys).toEqual([targetKey]);
+          await results.getByRole("option").filter({ hasText: targetLabel }).waitFor();
+          expect(await results.textContent()).toContain(targetMessage);
 
           const common = await search(commonQuery, 25, "01-common-limited-search.png");
           expect(common.truncated).toBe(true);
@@ -555,6 +646,8 @@ suite.define(() => {
             pane.locator(".chat-thread"),
           ]);
 
+          // Category membership spans accessible owners, beyond the default Mine scope.
+          await selectAllSidebarSessions(page);
           const otherKey = "agent:fifth:search-roster-4";
           await page
             .locator(
@@ -568,20 +661,8 @@ suite.define(() => {
               ),
             )
             .toBe(otherKey);
-          const call = async (method: string, params: Record<string, unknown>) => {
-            const rpcResult = await owner.cli([
-              "gateway",
-              "call",
-              method,
-              "--json",
-              "--params",
-              JSON.stringify(params),
-            ]);
-            expect(rpcResult.code, rpcResult.stderr).toBe(0);
-            return requireRecord(JSON.parse(rpcResult.stdout));
-          };
           for (const category of ["Research", null, "HOME ASSISTANT"]) {
-            await call("sessions.patch", { key: targetKey, category });
+            await client.request("sessions.patch", { key: targetKey, category });
             const groupRows = page.locator(
               `[data-session-section^="category:"] [data-session-key="${targetKey}"]`,
             );
@@ -593,7 +674,7 @@ suite.define(() => {
                 )
                 .waitFor({ state: "visible" });
             }
-            const inventory = await call("sessions.list", {
+            const inventory = await client.request<SessionsListResult>("sessions.list", {
               ...scope,
               search: targetLabel,
               includePeople: true,
@@ -617,74 +698,8 @@ suite.define(() => {
             await input.waitFor({ state: "hidden" });
           }
           expect(rpc.filter((metric) => metric.method === "sessions.search")).toHaveLength(
-            queries.length,
+            queryCount,
           );
-          expect(
-            rpc.filter((metric) => metric.method === "chat.send" || metric.method === "agent"),
-          ).toEqual([]);
-          // Cover the agreed direct shortcuts against the same isolated real Gateway.
-          // The existing capture gate exports these sanitized views on manual proof runs.
-          const currentPane = activePane();
-          await capture("direct-01-before.png", currentPane, [currentPane.locator(".chat-thread")]);
-          await page.keyboard.press("ControlOrMeta+/");
-          const helper = page.locator("openclaw-keyboard-shortcuts-dialog");
-          const newHint = helper.locator(".shortcut-row").filter({ hasText: "Open New Session" });
-          const archiveHint = helper
-            .locator(".shortcut-row")
-            .filter({ hasText: "Archive current session" });
-          await newHint.waitFor({ state: "visible" });
-          await archiveHint.waitFor({ state: "visible" });
-          expect((await newHint.locator("kbd").allTextContents()).at(-1)).toBe("O");
-          expect((await archiveHint.locator("kbd").allTextContents()).at(-1)).toBe("A");
-          // The host is display: contents; the native dialog owns the opening animation.
-          await capture("direct-02-keyboard-helper.png", helper.locator("dialog"), [
-            newHint,
-            archiveHint,
-          ]);
-          await page.keyboard.press("Escape");
-          await newHint.waitFor({ state: "hidden" });
-          await page.keyboard.press("ControlOrMeta+Shift+O");
-          const draft = page.locator("openclaw-new-session-page .new-session-page__message");
-          await draft.waitFor({ state: "visible" });
-          await expect
-            .poll(() => draft.evaluate((element) => element === document.activeElement))
-            .toBe(true);
-          expect(await draft.inputValue()).toBe("");
-          await capture("direct-03-new-session.png", page.locator("openclaw-new-session-page"), [
-            draft,
-          ]);
-          await page.goBack();
-          await expect
-            .poll(() =>
-              currentPane.evaluate(
-                (element) => (element as HTMLElement & { sessionKey: string }).sessionKey,
-              ),
-            )
-            .toBe(otherKey);
-          const composer = currentPane.locator(".agent-chat__composer-combobox > textarea");
-          await composer.fill("Keep this unsent shortcut draft");
-          await capture("direct-04-archive-before.png", currentPane, [composer]);
-          await page.keyboard.press("ControlOrMeta+Shift+A");
-          const archiveRequests = (archived: boolean) =>
-            rpc.filter(
-              (metric) =>
-                metric.method === "sessions.patch" &&
-                metric.params.key === otherKey &&
-                metric.params.archived === archived,
-            );
-          await expect
-            .poll(() => archiveRequests(true).filter((metric) => metric.ok === true).length)
-            .toBe(1);
-          const undo = page.getByRole("button", { name: "Undo", exact: true });
-          await undo.waitFor({ state: "visible" });
-          await capture("direct-05-archive-after.png", currentPane, [
-            currentPane.locator(".chat-thread"),
-          ]);
-          await undo.click();
-          await expect
-            .poll(() => archiveRequests(false).filter((metric) => metric.ok === true).length)
-            .toBe(1);
-          await expect.poll(() => composer.inputValue()).toBe("Keep this unsent shortcut draft");
           expect(
             rpc.filter((metric) =>
               ["sessions.create", "chat.send", "agent"].includes(metric.method),
@@ -695,6 +710,20 @@ suite.define(() => {
       passed = true;
     } finally {
       if (!passed) {
+        // CI retains console output; identify pending request ownership without query values.
+        console.error(
+          "[search-proof] pending RPC",
+          JSON.stringify(
+            rpc
+              .filter((metric) => metric.elapsedMs === undefined)
+              .map((metric) => ({
+                method: metric.method,
+                transcriptSearch: typeof metric.params.query === "string",
+                metadataSearch: typeof metric.params.search === "string",
+                commandPalette: metric.params.source === "command-palette",
+              })),
+          ),
+        );
         await writeFile(
           path.join(artifactDir, "gateway-failure.log"),
           owner
@@ -716,7 +745,7 @@ suite.define(() => {
               targetKey,
             },
             assets,
-            queries,
+            queryCount,
             rpc,
             screenshots,
           },

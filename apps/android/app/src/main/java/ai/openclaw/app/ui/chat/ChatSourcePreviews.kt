@@ -139,14 +139,12 @@ internal fun extractChatSourcePreviews(
 private fun markdownSourceLinks(text: String): List<String> =
   buildList {
     fun walk(start: Node?) {
-      var node = start
-      while (node != null) {
+      for (node in markdownSiblings(start)) {
         when (node) {
           is Link -> node.destination?.let(::chatSourceKey)?.let(::add)
           is Code, is FencedCodeBlock, is IndentedCodeBlock, is Image -> Unit
           else -> walk(node.firstChild)
         }
-        node = node.next
       }
     }
     walk(parseChatMarkdown(text).firstChild)
@@ -155,8 +153,7 @@ private fun markdownSourceLinks(text: String): List<String> =
 private fun inlineSourceText(start: Node?): String =
   buildString {
     fun walk(start: Node?) {
-      var node = start
-      while (node != null) {
+      for (node in markdownSiblings(start)) {
         when (node) {
           is Text -> append(node.literal)
           is Code -> append(node.literal)
@@ -164,34 +161,29 @@ private fun inlineSourceText(start: Node?): String =
           is Image, is FencedCodeBlock, is IndentedCodeBlock -> Unit
           else -> walk(node.firstChild)
         }
-        node = node.next
       }
     }
     walk(start)
   }.replace(Regex("\\s+"), " ").trim()
 
 private fun sourceTitle(prose: String): String =
-  buildList {
-    var block = parseChatMarkdown(prose).firstChild
-    while (block != null) {
-      inlineSourceText(block.firstChild).takeIf(String::isNotEmpty)?.let(::add)
-      block = block.next
-    }
-  }.joinToString(" ").takeUtf16Safe(180)
+  markdownSiblings(parseChatMarkdown(prose).firstChild)
+    .map { inlineSourceText(it.firstChild) }
+    .filter(String::isNotEmpty)
+    .joinToString(" ")
+    .takeUtf16Safe(180)
 
 private fun sourceExcerpt(
   prose: String,
   page: Boolean,
 ): String? {
   fun find(start: Node?): String? {
-    var node = start
-    while (node != null) {
+    for (node in markdownSiblings(start)) {
       if (node is Paragraph && (!page || node.parent is Document)) {
         val text = inlineSourceText(node.firstChild)
         if (text.length >= if (page) 60 else 1) return if (text.length > 280) text.takeUtf16Safe(279).trimEnd() + "…" else text
       }
       if (!page) find(node.firstChild)?.let { return it }
-      node = node.next
     }
     return null
   }

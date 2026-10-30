@@ -11,7 +11,6 @@ describe("browser screenshot normalization", () => {
 
     const normalized = await normalizeBrowserScreenshot(bigPng, {
       maxSide: 2000,
-      maxBytes: 5 * 1024 * 1024,
     });
 
     expect(normalized.buffer.byteLength).toBeLessThanOrEqual(5 * 1024 * 1024);
@@ -23,11 +22,10 @@ describe("browser screenshot normalization", () => {
   }, 120_000);
 
   it("keeps already-small screenshots unchanged", async () => {
-    const jpeg = await fs.readFile("docs/assets/showcase/roof-camera-sky.jpg");
+    const jpeg = await fs.readFile("test/fixtures/media/roof-camera-sky.jpg");
 
     const normalized = await normalizeBrowserScreenshot(jpeg, {
       maxSide: 2000,
-      maxBytes: 5 * 1024 * 1024,
     });
 
     expect(normalized.buffer.equals(jpeg)).toBe(true);

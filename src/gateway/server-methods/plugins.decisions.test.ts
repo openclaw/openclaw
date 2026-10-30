@@ -1,14 +1,15 @@
 import { Value } from "typebox/value";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { PluginsInspectResultSchema } from "../../../packages/gateway-protocol/src/schema/plugins.js";
+import { createPluginDeclaredSurface } from "../../../test/helpers/plugin-declared-surface.js";
+import { createDecisionRegistry } from "../../decisions/contract.test-support.js";
 import { evaluateDecisionInRegistry } from "../../decisions/runtime.js";
+import { answer, batch, config, options } from "../../decisions/runtime.test-support.js";
 import { emptyInstalledPluginComponents } from "../../plugins/installed-plugin-components.js";
-import { runPluginRegisterSyncInRegistry } from "../../plugins/loader-module-runtime.js";
-import { createPluginRecord } from "../../plugins/loader-records.js";
 import { getPluginInstance } from "../../plugins/plugin-instance-scope.js";
-import { createTestPluginRegistry } from "../../plugins/registry-runtime.test-helpers.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const inspect = vi.hoisted(() => vi.fn());
@@ -20,82 +21,49 @@ const { pluginsHandlers } = await import("./plugins.js");
 
 afterEach(() => resetPluginRuntimeStateForTest());
 
-it.each([false, true])(
+it.each([1, 2] as const)(
   "validates the actual inspection response with a decision provider: %s",
-  async (registered) => {
-    const config = { agents: { defaults: { decisionModel: "fixture/fast" } } };
-    const builder = createTestPluginRegistry();
-    const record = createPluginRecord({
-      id: "decision-plugin",
-      source: "/synthetic/index.ts",
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-      contracts: { decisionProviders: ["fixture"] },
-    });
-    if (registered) {
-      let calls = 0;
-      const api = builder.createApi(record, { config });
-      runPluginRegisterSyncInRegistry(
-        (registration) =>
-          registration.registerDecisionProvider({
+  async (contractVersion) => {
+    let calls = 0;
+    const builder = createDecisionRegistry(
+      config,
+      contractVersion === 2
+        ? {
+            id: "fixture",
+            contractVersion: 2,
+            provider: { label: "Fixture", auth: [] },
+            async evaluate() {
+              throw new Error("Inspection must not evaluate a V2 provider");
+            },
+          }
+        : {
             id: "fixture",
             contractVersion: 1,
             async evaluate() {
               if (++calls > 1) {
                 return { status: "unavailable", reason: "transport" };
               }
-              return {
-                status: "ok",
-                result: {
-                  model: "fast",
-                  answers: { check: { type: "boolean", probabilityTrue: 1 } },
-                  usage: { inputTokens: 2, outputTokens: 1 },
-                },
-              };
+              return answer;
             },
-          }),
-        api,
-        builder.registry,
-        record.id,
-      );
-      builder.registry.plugins.push(record);
-      onTestFinished(async () => {
-        await getPluginInstance(record)?.dispose();
-      });
-    }
-    setActivePluginRegistry(builder.registry);
-    if (registered) {
-      for (let index = 0; index < 2; index++) {
-        await evaluateDecisionInRegistry(
-          { state: "synthetic", questions: { check: { type: "boolean" } } },
-          {
-            purpose: "inspection-proof",
-            rubricVersion: "1",
-            timeoutMs: 1000,
-            signal: new AbortController().signal,
           },
-          builder.registry,
-          config,
-        );
+    );
+    const {
+      registry,
+      record: { id: pluginId },
+    } = builder;
+    onTestFinished(async () => {
+      await getPluginInstance(builder.record)?.dispose();
+    });
+    if (contractVersion === 1) {
+      for (let index = 0; index < 2; index++) {
+        await evaluateDecisionInRegistry(batch, options(), registry, config);
       }
     }
     const inspection = {
       ok: true,
-      plugin: { id: record.id, name: "Decision fixture", installed: true, enabled: true },
+      plugin: { id: pluginId, name: "Decision fixture", installed: true, enabled: true },
       reviewToken: "synthetic-review-token",
-      declared: {
-        channels: [],
-        providers: [],
-        tools: [],
-        contracts: ["decisionProviders: fixture"],
-        hooks: [],
-        mcpServers: [],
-        cliCommands: [],
-        cliBackends: [],
-        skills: [],
-        dangerousConfigFlags: [],
-      },
+      declared: createPluginDeclaredSurface({ contracts: ["decisionProviders: fixture"] }),
       grants: {
         hooks: {
           allowPromptInjection: { effective: false },
@@ -106,15 +74,10 @@ it.each([false, true])(
     };
     inspect.mockResolvedValueOnce(inspection);
     let response: unknown;
-    await withPluginRuntimeRegistryScope(builder.registry, () =>
+    await withPluginRuntimeRegistryScope(registry, () =>
       pluginsHandlers["plugins.inspect"]!({
-        req: {
-          type: "req",
-          id: "inspect",
-          method: "plugins.inspect",
-          params: { pluginId: record.id },
-        },
-        params: { pluginId: record.id },
+        req: gatewayRequest("inspect", "plugins.inspect", { pluginId }),
+        params: { pluginId },
         client: null,
         isWebchatConnect: () => false,
         context: { getRuntimeConfig: () => config } as GatewayRequestContext,
@@ -126,35 +89,36 @@ it.each([false, true])(
       }),
     );
     expect(response).toMatchObject({
-      decisions: registered
-        ? [
-            {
-              providerId: "fixture",
-              pluginId: record.id,
-              configured: true,
-              credentialReady: true,
-              callable: true,
-              successCount: 1,
-              activeRequests: 0,
-              usage: { inputTokens: 2, outputTokens: 1 },
-              reasons: { transport: 1 },
-            },
-          ]
-        : [],
+      decisions: [
+        {
+          providerId: "fixture",
+          pluginId,
+          configured: true,
+          ...(contractVersion === 1 ? { credentialReady: false } : {}),
+          callable: true,
+          successCount: contractVersion === 1 ? 1 : 0,
+          activeRequests: 0,
+          usage:
+            contractVersion === 1
+              ? { inputTokens: 25, outputTokens: 4 }
+              : { inputTokens: 0, outputTokens: 0 },
+          reasons: contractVersion === 1 ? { transport: 1 } : {},
+        },
+      ],
     });
+    if (contractVersion === 2) {
+      expect(response).not.toHaveProperty("decisions.0.credentialReady");
+    }
     expect(Value.Check(PluginsInspectResultSchema, response)).toBe(true);
-    expect(Value.Check(PluginsInspectResultSchema, inspection)).toBe(true);
-    if (registered) {
-      const observed = builder.registry.decisionProviders[0]!.host.inspect(config);
-      for (const malformed of [
-        { ...observed, activeRequests: -1 },
-        { ...observed, reasons: { unrecognized: 1 } },
-        { ...observed, apiKey: "must-not-be-exposed" },
-      ]) {
-        expect(
-          Value.Check(PluginsInspectResultSchema, { ...inspection, decisions: [malformed] }),
-        ).toBe(false);
-      }
+    const observed = registry.decisionProviders[0]!.host.inspect(config);
+    for (const malformed of [
+      { ...observed, activeRequests: -1 },
+      { ...observed, reasons: { unrecognized: 1 } },
+      { ...observed, apiKey: "must-not-be-exposed" },
+    ]) {
+      expect(
+        Value.Check(PluginsInspectResultSchema, { ...inspection, decisions: [malformed] }),
+      ).toBe(false);
     }
   },
 );

@@ -1,4 +1,3 @@
-// Qa Lab plugin module resolves evidence runtime metadata.
 import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";

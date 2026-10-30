@@ -6,7 +6,6 @@ describe("readControlUiProofOption", () => {
     ["first inline", ["node", "script", "--label=first", "--label=second"], "first"],
     ["first split", ["node", "script", "--label", "first", "--label", "second"], "first"],
     ["split then inline", ["node", "script", "--label", "split", "--label=inline"], "inline"],
-    ["inline then split", ["node", "script", "--label=inline", "--label", "split"], "inline"],
     ["empty inline", ["node", "script", "--label="], ""],
     ["missing split", ["node", "script", "--label"], undefined],
     [

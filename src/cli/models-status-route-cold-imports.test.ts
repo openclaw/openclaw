@@ -1,4 +1,5 @@
 // The real non-probe models-status route must scope discovery to providers already in use.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

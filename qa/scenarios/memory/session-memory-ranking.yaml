@@ -165,10 +165,13 @@ flow:
               - set: rankingHistory
                 value:
                   expr: "await env.gateway.call('chat.history', { sessionKey: 'agent:qa:session-memory-ranking', limit: 100, maxChars: 131072 }, { timeoutMs: liveTurnTimeoutMs(env, 15000) })"
+              - set: rankingMessages
+                value:
+                  expr: "projectQaToolMessages(rankingHistory.messages ?? [])"
               - set: searchCalls
                 value:
                   expr: |-
-                    (rankingHistory.messages ?? []).flatMap((message, messageIndex) =>
+                    rankingMessages.flatMap((message, messageIndex) =>
                       message?.role === 'assistant' && Array.isArray(message.content)
                         ? message.content.flatMap((item) =>
                             ['toolCall', 'toolUse', 'tool_use'].includes(item?.type) &&
@@ -190,7 +193,7 @@ flow:
                 value:
                   expr: |-
                     searchCalls.flatMap((call) => {
-                      const result = (rankingHistory.messages ?? []).find((message, messageIndex) =>
+                      const result = rankingMessages.find((message, messageIndex) =>
                         messageIndex > call.messageIndex &&
                         message?.role === 'toolResult' &&
                         message.toolName === 'memory_search' &&

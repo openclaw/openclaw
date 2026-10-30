@@ -1,11 +1,10 @@
-// Generic agent-event bridge machinery shared by the CLI runner's per-stream
-// delivery bridges (assistant, reasoning, commentary, plan).
 import { type AgentEventPayload, onAgentEventForRun } from "../../infra/agent-events.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 
 export type AgentEventDeliveryStartOrder = {
   preserveCallbackStartOrder?: boolean;
   schedule: (
-    deliver: () => Promise<unknown>,
+    deliver: () => unknown,
     options?: { waitForEarlierDeliveries?: boolean },
   ) => Promise<void>;
 };
@@ -20,10 +19,8 @@ export function createAgentEventDeliveryStartOrder(options?: {
     schedule: (deliver, deliveryOptions) => {
       const previousStart = startTail;
       const previousSettlement = settledTail;
-      let releaseStart: (() => void) | undefined;
-      startTail = new Promise<void>((resolve) => {
-        releaseStart = resolve;
-      });
+      const start = createDeferredCore();
+      startTail = start.promise;
       const scheduled = (async () => {
         await previousStart;
         // Completed answers must follow earlier presentation, not merely callback invocation.
@@ -31,11 +28,11 @@ export function createAgentEventDeliveryStartOrder(options?: {
         if (deliveryOptions?.waitForEarlierDeliveries) {
           await previousSettlement;
         }
-        let delivery: Promise<unknown>;
+        let delivery: unknown;
         try {
           delivery = deliver();
         } finally {
-          releaseStart?.();
+          start.resolve();
         }
         await delivery;
       })();
@@ -47,14 +44,16 @@ export function createAgentEventDeliveryStartOrder(options?: {
   };
 }
 
-export function createAgentEventBridge<T>(params: {
+export type AgentEventBridgeParams<T> = {
   runId: string;
   suppressed?: boolean;
   read: (evt: AgentEventPayload) => T | undefined;
-  deliver?: (payload: T) => Promise<unknown>;
+  deliver?: (payload: T) => unknown;
   startOrder?: AgentEventDeliveryStartOrder;
   waitForEarlierDeliveries?: (payload: T) => boolean;
-}) {
+};
+
+export function createAgentEventBridge<T>(params: AgentEventBridgeParams<T>) {
   const deliver = params.deliver;
   if (!deliver) {
     return {
@@ -62,12 +61,8 @@ export function createAgentEventBridge<T>(params: {
       drain: async (): Promise<void> => undefined,
     };
   }
-  let unsubscribed = false;
   let delivery: Promise<unknown> = Promise.resolve();
-  const rawUnsubscribe = onAgentEventForRun(params.runId, (evt) => {
-    if (evt.runId !== params.runId) {
-      return;
-    }
+  const unsubscribe = onAgentEventForRun(params.runId, (evt) => {
     if (params.suppressed) {
       return;
     }
@@ -93,13 +88,7 @@ export function createAgentEventBridge<T>(params: {
     delivery = Promise.all([delivery, scheduled]).then(() => undefined);
   });
   return {
-    unsubscribe() {
-      if (unsubscribed) {
-        return;
-      }
-      unsubscribed = true;
-      rawUnsubscribe();
-    },
+    unsubscribe,
     async drain(): Promise<void> {
       await delivery;
     },

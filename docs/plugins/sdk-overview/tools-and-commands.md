@@ -35,7 +35,7 @@ operation continue to own their signal and work lifetime.
 
 Explicit widget presenters declare a unique model-visible target such as `node_panel`. Current-channel presenters use `target: "current_channel"`, provide a synchronous `match(context)` predicate over trusted delivery facts, and declare supported source kinds and delivery limits. Multiple transport presenters may coexist, but core selects an implicit route only when exactly one matches.
 
-Core validates the canonical `show_widget` schema, composes the bounded HTML document, and passes immutable HTML plus an optional hosted URL to `present(...)`. Presenters return either a generic message receipt or a node receipt. Expected availability and presentation failures use the closed error result instead of throwing; core falls back inline only for an actual `inline-widgets` client and otherwise surfaces the failure.
+Core validates the shared `show_widget` schema, composes the bounded HTML document, and passes immutable HTML plus an optional hosted URL to `present(...)`. Presenters return either a generic message receipt or a node receipt. Expected availability and presentation failures use the closed error result instead of throwing; core falls back inline only for an actual `inline-widgets` client and otherwise surfaces the failure.
 
 Computer Use providers use `registerComputerUseProvider(api, provider)` from
 `openclaw/plugin-sdk/computer-use`. It registers the shared
@@ -57,6 +57,11 @@ original identity and command invocation; retaining it cannot start new work
 after the handler returns. Already accepted operations still finish their
 settlement and cleanup. Ordinary authorized read commands and explicit Gateway
 scope checks retain their existing behavior.
+
+For native Discord commands, OpenClaw lowercases the selected command name and
+skips names longer than 32 characters with a diagnostic. Use
+`nativeNames: { discord: "short-name" }` when the primary name is longer. Slack
+retains its selected alias spelling.
 
 Commands may also declare a bounded client presentation action for parsed no-argument
 invocations:
@@ -136,3 +141,15 @@ still retained. Keep teardown in the command's existing lifecycle, such as
 `onDisconnect`, and report idle only after that work settles. `onDisconnect` alone
 does not establish idleness. Update older plugins to add the hook or use
 `openclaw update` and an operator-controlled node restart.
+
+ACP-backed catalogs can use `createAcpSessionCatalogAdoption` from
+the private-local `openclaw/plugin-sdk/session-catalog-runtime` to share
+adopted-session lookup and creation. Supply the catalog ID, local host ID,
+session-key prefix, plugin marker keys, and transcript reader. The helper preserves
+the marker shape, creates the ACP binding, and imports history before the session
+entry finishes initialization.
+
+Append-only JSONL catalogs can use `readSessionCatalogJsonlActivity` from the same
+private runtime seam for bounded upstream activity reads. The helper owns file
+opening, the one-MiB scan window, and offset advancement; the catalog classifies
+complete rows and retains its own timestamp and user-message semantics.

@@ -70,7 +70,7 @@ class ChatScreenTest {
   fun fastModeControlRequiresSupportAndAnIdleConnectedChat() {
     fun enabled(
       supported: Boolean = true,
-      adminAuthorized: Boolean = true,
+      writeAuthorized: Boolean = true,
       connected: Boolean = true,
       gatewayAvailable: Boolean = true,
       loading: Boolean = false,
@@ -78,11 +78,11 @@ class ChatScreenTest {
       activeRun: Boolean = false,
       streaming: Boolean = false,
       settingsMutationPending: Boolean = false,
-    ) = chatFastModeControlEnabled(supported, adminAuthorized, connected, gatewayAvailable, loading, sending, activeRun, streaming, settingsMutationPending)
+    ) = chatFastModeControlEnabled(supported, writeAuthorized, connected, gatewayAvailable, loading, sending, activeRun, streaming, settingsMutationPending)
 
     assertTrue(enabled())
     assertFalse(enabled(supported = false))
-    assertFalse(enabled(adminAuthorized = false))
+    assertFalse(enabled(writeAuthorized = false))
     assertFalse(enabled(connected = false))
     assertFalse(enabled(gatewayAvailable = false))
     assertFalse(enabled(loading = true))
@@ -168,7 +168,7 @@ class ChatScreenTest {
       resolveChatComposerPrimaryAction(talkActive = false, runActive = true, hasContent = false),
     )
     assertEquals(
-      ChatComposerPrimaryAction.None,
+      ChatComposerPrimaryAction.Talk,
       resolveChatComposerPrimaryAction(talkActive = false, runActive = false, hasContent = false),
     )
   }
@@ -271,10 +271,8 @@ class ChatScreenTest {
         hosts =
           listOf(
             SessionCatalogHost(
-              catalogId = "codex",
               hostId = "local",
               label = "Local",
-              kind = "local",
               connected = true,
               sessions = listOf(matching),
             ),

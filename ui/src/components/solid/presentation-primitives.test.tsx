@@ -1,0 +1,150 @@
+import { cleanup, fireEvent, render } from "@solidjs/testing-library";
+import { createSignal, flush } from "solid-js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  AgentStartupState,
+  LazyElementModal,
+  LazyViewError,
+  PanelErrorState,
+  type LazyElementState,
+} from "./lazy-view-error.tsx";
+import { LoadingState } from "./loading-state.tsx";
+import { PanelEmptyState } from "./panel-empty-state.tsx";
+import { PanelIconButton } from "./panel-icon-button.tsx";
+import { PanelLoadingSkeleton } from "./panel-loading-skeleton.tsx";
+
+afterEach(cleanup);
+
+describe("Solid presentation primitives", () => {
+  it("announces the empty-state heading", () => {
+    const view = render(() => (
+      <PanelEmptyState heading="No files" description="Choose a workspace" />
+    ));
+    expect(view.getByRole("status").textContent).toContain("No files");
+  });
+
+  it("hides the decorative desktop spinner from accessibility", () => {
+    const view = render(() => <PanelLoadingSkeleton variant="desktop" label="Connecting" />);
+    expect(view.container.querySelector(".desktop-spinner")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
+  });
+
+  it("announces loading and startup states while keeping decorative skeletons hidden", () => {
+    const view = render(() => (
+      <>
+        <LoadingState />
+        <AgentStartupState />
+      </>
+    ));
+    expect(view.getAllByRole("status")).toHaveLength(2);
+    expect(view.getByRole("status", { name: "Loading…" })).toBeTruthy();
+    expect(view.container.querySelector(".loading-skeleton")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
+    expect(view.container.querySelector(".agent-startup-state")?.textContent).not.toBe("");
+  });
+
+  it("retains prior content with a recoverable error and forwards retry and close actions", () => {
+    const retry = vi.fn();
+    const close = vi.fn();
+    const original = vi.fn();
+    const [updated, setUpdated] = createSignal(false);
+    const view = render(() => (
+      <LazyViewError
+        error={new Error("Synthetic module load failure")}
+        stale
+        subtitle="Workspace panel"
+        render={() => <p>Last loaded panel</p>}
+        onRetry={updated() ? retry : original}
+        onClose={updated() ? close : original}
+      />
+    ));
+    expect(view.getByText("Last loaded panel")).toBeTruthy();
+    expect(view.getByRole("alert").classList.contains("lazy-view-error--inline")).toBe(true);
+    expect(view.getByRole("alert").classList.contains("lazy-view-error--stale")).toBe(true);
+    expect(view.getByText("Workspace panel")).toBeTruthy();
+    expect(view.container.querySelector("details code")?.textContent).toContain(
+      "Synthetic module load failure",
+    );
+    setUpdated(true);
+    flush();
+    fireEvent.click(view.getByRole("button", { name: "Reload" }));
+    fireEvent.click(view.getByRole("button", { name: "Close" }));
+    expect(retry).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+    expect(original).not.toHaveBeenCalled();
+  });
+
+  it("supports non-alert panel errors with no details or actions", () => {
+    const view = render(() => (
+      <PanelErrorState
+        class="session-route-not-found"
+        title="Panel unavailable"
+        subtitle="Reconnect to continue."
+        role="status"
+      />
+    ));
+    expect(view.getByRole("status").getAttribute("class")).toBe(
+      "lazy-view-error session-route-not-found",
+    );
+    expect(view.getByRole("status").textContent).toContain("Reconnect to continue.");
+    expect(view.container.querySelector("details")).toBeNull();
+    expect(view.queryByRole("button")).toBeNull();
+  });
+
+  it.each(["button", "modal-cancel"])(
+    "closes a retained loading modal through the current callback (%s)",
+    (source) => {
+      const original = vi.fn();
+      const close = vi.fn();
+      const retry = vi.fn();
+      const state: LazyElementState = { status: "loading", element: { label: "Workspace panel" } };
+      const [updated, setUpdated] = createSignal(false);
+      const view = render(() => (
+        <LazyElementModal state={state} onRetry={retry} onClose={updated() ? close : original} />
+      ));
+      const modal = view.container.querySelector("openclaw-modal-dialog")!;
+      const button = view.getByRole("button", { name: "Close" });
+      setUpdated(true);
+      flush();
+      expect(view.container.querySelector("openclaw-modal-dialog")).toBe(modal);
+      expect(view.getByRole("button", { name: "Close" })).toBe(button);
+      if (source === "button") {
+        fireEvent.click(button);
+      } else {
+        fireEvent(modal, new Event("modal-cancel", { bubbles: true }));
+      }
+      expect(close).toHaveBeenCalledOnce();
+      expect(original).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps icon-button semantics synchronized with disabled and busy props", () => {
+    const click = vi.fn();
+    const original = vi.fn();
+    const [busy, setBusy] = createSignal(true);
+    const view = render(() => (
+      <PanelIconButton
+        label="Open file"
+        icon={<svg aria-hidden="true" />}
+        onClick={busy() ? original : click}
+        class="panel-action"
+        disabled={busy()}
+        busy={busy()}
+        newTab
+      />
+    ));
+    const button = view.getByRole<HTMLButtonElement>("button", { name: "Open file" });
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("aria-busy")).toBe("true");
+    expect(button.hasAttribute("data-new-tab-action")).toBe(true);
+    setBusy(false);
+    flush();
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute("aria-busy")).toBe("false");
+    fireEvent.click(button);
+    expect(click).toHaveBeenCalledOnce();
+    expect(original).not.toHaveBeenCalled();
+  });
+});

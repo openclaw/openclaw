@@ -1,0 +1,108 @@
+.chat-mobile-people-grid {
+  display: grid;
+  place-items: center;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  cursor: default;
+
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+
+  > span {
+    position: relative;
+    width: 32px;
+    height: 32px;
+    isolation: isolate;
+
+    > span {
+      position: absolute;
+      display: grid;
+      place-items: center;
+      width: 18px;
+      height: 18px;
+      overflow: hidden;
+      border-radius: 50%;
+      background: var(--bg-elevated);
+      box-shadow: 0 0 0 1px var(--chat-mobile-people-grid-surface, var(--bg));
+
+      &:first-child {
+        top: 0;
+        left: 0;
+        z-index: 4;
+      }
+      &:nth-child(2) {
+        top: 0;
+        right: 0;
+        z-index: 3;
+      }
+      &:nth-child(3) {
+        bottom: 0;
+        left: 0;
+        z-index: 2;
+      }
+      &:nth-child(4) {
+        bottom: 0;
+        right: 0;
+        z-index: 5;
+      }
+    }
+
+    &[data-count="2"] > :first-child {
+      top: 10px;
+      left: 2px;
+      width: 20px;
+      height: 20px;
+    }
+
+    &[data-count="2"] > :nth-child(2),
+    &[data-count="3"] > :nth-child(2),
+    &[data-count="3"] > :nth-child(3) {
+      width: 16px;
+      height: 16px;
+    }
+
+    &[data-count="3"] > :first-child {
+      top: 6px;
+      width: 20px;
+      height: 20px;
+    }
+    &[data-count="2"] > :nth-child(2) {
+      top: 2px;
+      right: 2px;
+    }
+    &[data-count="3"] > :nth-child(3) {
+      right: 0;
+      left: auto;
+    }
+
+    > .chat-mobile-people-grid__more {
+      background: color-mix(in srgb, var(--muted) 28%, var(--panel-strong));
+      color: var(--text);
+      font: 400 8.5px/1 var(--font-body);
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.35px;
+    }
+  }
+
+  .chat-author-avatar {
+    flex: none;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    border-radius: inherit;
+    outline: 0;
+    box-shadow: none;
+  }
+
+  .chat-author-avatar__initials {
+    font-weight: 500;
+  }
+}

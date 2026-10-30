@@ -18,9 +18,5 @@ class MobileUiHandler {
     @Suppress("UNUSED_PARAMETER") paramsJson: String?,
   ): GatewaySession.InvokeResult = unavailable()
 
-  private fun unavailable(): GatewaySession.InvokeResult =
-    GatewaySession.InvokeResult.error(
-      code = "MOBILE_UI_UNAVAILABLE",
-      message = "MOBILE_UI_UNAVAILABLE: accessibility control is not available on this build",
-    )
+  private fun unavailable(): GatewaySession.InvokeResult = nodeInvokeError("MOBILE_UI_UNAVAILABLE", "accessibility control is not available on this build")
 }

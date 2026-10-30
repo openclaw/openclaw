@@ -1,8 +1,10 @@
 import type { Server } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
   isPreviewCompletion,
+  parseJsonObjectBody,
   type QaMockProviderDispatchResult,
   type ResponsesInputItem,
 } from "./mock-openai-contracts.js";
@@ -17,30 +19,6 @@ type QaMockResponsesWebSocketHistory = {
   body: Record<string, unknown>;
   input: ResponsesInputItem[];
 };
-
-function readWebSocketText(data: RawData): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString("utf8");
-  }
-  return data.toString("utf8");
-}
-
-function readWebSocketRequest(raw: string): Record<string, unknown> | undefined {
-  try {
-    const value: unknown = JSON.parse(raw);
-    return value !== null && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 function sendWebSocketEvent(socket: WebSocket, event: unknown): void {
   if (socket.readyState === WebSocket.OPEN) {
@@ -94,8 +72,8 @@ export function attachQaMockResponsesWebSocketServer(params: {
           // Responses stream sequence numbers describe one response, not
           // all responses that happen to reuse the same WebSocket.
           sequenceNumber = 0;
-          const raw = readWebSocketText(data);
-          const request = isBinary ? undefined : readWebSocketRequest(raw);
+          const raw = rawDataToString(data);
+          const request = isBinary ? undefined : parseJsonObjectBody(raw);
           if (!request || request.type !== "response.create") {
             sendEvent({
               type: "error",
@@ -212,8 +190,15 @@ export function attachQaMockResponsesWebSocketServer(params: {
             };
           }
           for (const [index, event] of events.entries()) {
-            if (dispatched.previewPauseMs && isPreviewCompletion(event, events[index - 1])) {
-              await sleep(dispatched.previewPauseMs);
+            if (
+              (dispatched.previewPauseMs || dispatched.previewPause) &&
+              isPreviewCompletion(event, events[index - 1])
+            ) {
+              if (dispatched.previewPause) {
+                await dispatched.previewPause();
+              } else if (dispatched.previewPauseMs) {
+                await sleep(dispatched.previewPauseMs);
+              }
             }
             sendEvent(event);
           }

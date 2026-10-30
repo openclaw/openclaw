@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { bindCreatedGoalContinuation } from "../../auto-reply/reply/goal-continuation-return.js";
 import { SessionGoalTransitionError } from "../../config/sessions/goals-transitions.js";
 import {
   createSessionGoal,
@@ -19,17 +20,14 @@ import {
 } from "./common.js";
 
 type GoalToolOptions = {
+  runId?: string;
   agentSessionKey?: string;
   runSessionKey?: string;
   sessionAgentId?: string;
   config?: OpenClawConfig;
 };
 
-type GoalSessionScope = {
-  sessionKey: string;
-  agentId: string;
-  storePath: string;
-};
+const GetGoalToolSchema = Type.Object({});
 
 const CreateGoalToolSchema = Type.Object({
   objective: Type.String({
@@ -49,7 +47,7 @@ const UpdateGoalToolSchema = Type.Object({
   note: Type.Optional(Type.String({ description: "Short status note." })),
 });
 
-function resolveGoalSessionScope(options: GoalToolOptions): GoalSessionScope {
+function resolveGoalSessionScope(options: GoalToolOptions) {
   const sessionKey = options.runSessionKey?.trim() || options.agentSessionKey?.trim();
   if (!sessionKey) {
     throw new ToolInputError("session key required");
@@ -76,7 +74,7 @@ export function createGetGoalTool(options: GoalToolOptions): AnyAgentTool {
     displaySummary: "Get the current thread goal",
     description:
       "Get the current session goal, including its full objective, status, token usage, and optional budget.",
-    parameters: Type.Object({}),
+    parameters: GetGoalToolSchema,
     execute: async () => {
       const snapshot = await getSessionGoal({
         ...resolveGoalSessionScope(options),
@@ -108,6 +106,7 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
         objective,
         ...(tokenBudget !== undefined ? { tokenBudget } : {}),
       });
+      bindCreatedGoalContinuation({ ...scope, runId: options.runId, goalId: goal.id });
       return jsonResult({ status: "created", goal });
     },
   };

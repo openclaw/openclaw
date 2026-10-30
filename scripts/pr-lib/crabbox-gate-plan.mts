@@ -4,9 +4,24 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  matchesVitestGlob,
+  sharedVitestExcludePatterns,
+  vitestE2eTestGlob,
+} from "../../test/vitest/vitest.pattern-file.ts";
+import {
+  controlUiE2eTestGlobs,
+  controlUiTestGlobs,
+  isControlUiSourcePath,
+  uiE2eRealGatewayTestFiles,
+} from "../../test/vitest/vitest.ui-paths.mjs";
+import { listTrackedTestPlanFiles } from "../lib/extension-test-plan.mts";
+import {
+  buildVitestRunPlans,
   findUnmatchedExplicitTestTargets,
   isTestFileTarget,
   resolveChangedTestTargetPlan,
+  resolveControlUiTestConsumers,
+  UI_E2E_VITEST_CONFIG,
 } from "../test-projects.test-support.mts";
 import { crabboxGatePlanDigest, validateCrabboxGatePlan } from "./crabbox-gate-contract.mjs";
 
@@ -77,6 +92,38 @@ export function createCrabboxGatePlan({
     throw new Error("Crabbox gate plan requires exact base and head SHAs");
   }
   const targets = new Set<string>();
+  const uiInventories = new Map<boolean, string[]>();
+  const expandUiTarget = (target: string): string[] => {
+    if (!isControlUiSourcePath(target) || isTestFileTarget(target)) {
+      return [target];
+    }
+    const e2e = buildVitestRunPlans([target], cwd).some(
+      (plan) => plan.config === UI_E2E_VITEST_CONFIG,
+    );
+    let inventory = uiInventories.get(e2e);
+    if (!inventory) {
+      const files = listTrackedTestPlanFiles(cwd, [
+        ...(e2e ? controlUiE2eTestGlobs : controlUiTestGlobs).map((pattern) => `:(glob)${pattern}`),
+        ...(e2e ? uiE2eRealGatewayTestFiles : []),
+      ]);
+      if (!files) {
+        throw new Error(`Crabbox gate cannot inventory Control UI tests for ${target}`);
+      }
+      const exclude = sharedVitestExcludePatterns.filter(
+        (pattern) => !e2e || pattern !== vitestE2eTestGlob,
+      );
+      inventory = files.filter(
+        (file) => !exclude.some((pattern) => matchesVitestGlob(file, pattern)),
+      );
+      uiInventories.set(e2e, inventory);
+    }
+    if (inventory.length === 0) {
+      throw new Error(`Crabbox gate has no complete Control UI test inventory for ${target}`);
+    }
+    // UI source intentionally selects its whole owner, not just import consumers.
+    // Bind that inventory to concrete files without losing host-side source readers.
+    return [...inventory, ...resolveControlUiTestConsumers([target], cwd)];
+  };
   for (const entry of changedPaths) {
     if (DOCS_OR_INSTRUCTIONS.test(entry.path)) {
       continue;
@@ -92,7 +139,7 @@ export function createCrabboxGatePlan({
     ) {
       throw new Error(`Crabbox gate has no complete targeted test plan for ${entry.path}`);
     }
-    for (const target of pathPlan.targets) {
+    for (const target of pathPlan.targets.flatMap(expandUiTarget)) {
       if (
         !isTestFileTarget(target) ||
         /^test\/vitest\/.+\.config\.ts$/u.test(target) ||

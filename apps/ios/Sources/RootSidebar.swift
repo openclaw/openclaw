@@ -22,7 +22,12 @@ struct RootSidebar: View {
     let hideSidebar: () -> Void
 
     var body: some View {
-        let sessionLayout = Self.sessionLayout(self.visibleSessionSections)
+        let categories = self.sessionCategories
+        let sessionLayout = Self.sessionLayout(self.visibleSessionSections(categories: categories))
+        let rowPass = SessionRowPass(
+            selectedSessionKey: self.resolvedSelectedSessionKey,
+            mainSessionKey: self.resolvedMainSessionKey,
+            categories: categories)
         VStack(spacing: 0) {
             self.brandHeader
             if self.isSearchActive {
@@ -33,10 +38,11 @@ struct RootSidebar: View {
                 // the picker card's clearance all match.
                 LazyVStack(alignment: .leading, spacing: 10) {
                     self.agentsSection
-                    self.pagesSection(pinnedSessionNodes: sessionLayout.pinnedNodes)
+                    self.pagesSection(pinnedSessionNodes: sessionLayout.pinnedNodes, rowPass: rowPass)
                     self.sessionsSection(
                         sections: sessionLayout.sections,
-                        hasPinnedSessions: !sessionLayout.pinnedNodes.isEmpty)
+                        hasPinnedSessions: !sessionLayout.pinnedNodes.isEmpty,
+                        rowPass: rowPass)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 10)
@@ -46,7 +52,10 @@ struct RootSidebar: View {
         .foregroundStyle(OpenClawSidebarPalette.text)
         .background(OpenClawSidebarPalette.background)
         .onChange(of: self.isDismissButtonEnabled) { _, isVisible in
-            if !isVisible { self.presentedAttention = nil }
+            if !isVisible {
+                self.presentedAttention = nil
+                self.isSearchFocused = false
+            }
         }
         .sheet(isPresented: self.$showsPagesEditor) {
             RootSidebarPagesEditor(
@@ -87,7 +96,8 @@ struct RootSidebar: View {
     private var brandHeader: some View {
         HStack(spacing: 4) {
             HStack(spacing: 8) {
-                OpenClawProMark(size: 26, shadowRadius: 2)
+                // The shell keeps a hidden sidebar mounted; an unpaused mascot would redraw unseen.
+                OpenClawProMark(size: 26, shadowRadius: 2, paused: !self.isDismissButtonEnabled)
                     .accessibilityHidden(true)
                 Text(String(localized: "OpenClaw"))
                     .font(OpenClawType.headline)
@@ -353,12 +363,11 @@ struct RootSidebar: View {
         .padding(.bottom, 4)
     }
 
-    @ViewBuilder
     private func sessionsSection(
         sections: [ChatSessionSidebarModel.Section],
-        hasPinnedSessions: Bool) -> some View
+        hasPinnedSessions: Bool,
+        rowPass: SessionRowPass) -> some View
     {
-        let selectedSessionKey = self.resolvedSelectedSessionKey
         VStack(alignment: .leading, spacing: 6) {
             if let sessionErrorText = self.model.sessionErrorText {
                 Text(verbatim: sessionErrorText)
@@ -396,7 +405,7 @@ struct RootSidebar: View {
                             for: Self.flattened(section.nodes).map(\.session), targetID: "section:\(section.id)")
                     }
                     ForEach(self.sessionNodes(for: section)) { node in
-                        self.sessionButton(node, selectedSessionKey: selectedSessionKey)
+                        self.sessionButton(node, rowPass: rowPass)
                     }
                 }
             }
@@ -420,7 +429,10 @@ struct RootSidebar: View {
         }
     }
 
-    private func pagesSection(pinnedSessionNodes: [ChatSessionSidebarModel.Node]) -> some View {
+    private func pagesSection(
+        pinnedSessionNodes: [ChatSessionSidebarModel.Node],
+        rowPass: SessionRowPass) -> some View
+    {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
                 self.sectionTitle(String(localized: "Pages"))
@@ -439,7 +451,7 @@ struct RootSidebar: View {
             }
             self.homeRow
             ForEach(pinnedSessionNodes) { node in
-                self.sessionButton(node, selectedSessionKey: self.resolvedSelectedSessionKey)
+                self.sessionButton(node, rowPass: rowPass)
             }
             ForEach(self.pinnedPages) { destination in
                 self.destinationButton(destination)
@@ -529,31 +541,33 @@ struct RootSidebar: View {
     }
 
     private var resolvedMainSessionKey: String {
-        ChatSessionSidebarModel.selectedSessionKey(
-            sessions: self.model.sessions,
-            currentSessionKey: "main",
-            mainSessionKey: self.appModel.defaultChatSessionKey,
+        self.model.resolvedSessionKey(
+            current: "main",
+            mainSessionKey: self.appModel.mainSessionKey,
             activeAgentID: self.appModel.chatAgentId,
             sessionRoutingContract: self.appModel.chatSessionRoutingContract)
     }
 
     private var resolvedSelectedSessionKey: String {
-        ChatSessionSidebarModel.selectedSessionKey(
-            sessions: self.model.sessions,
-            currentSessionKey: self.appModel.chatSessionKey,
-            mainSessionKey: self.appModel.defaultChatSessionKey,
+        self.model.resolvedSessionKey(
+            current: self.appModel.chatSessionKey,
+            mainSessionKey: self.appModel.mainSessionKey,
             activeAgentID: self.appModel.chatAgentId,
             sessionRoutingContract: self.appModel.chatSessionRoutingContract)
     }
 
-    private var visibleSessionSections: [ChatSessionSidebarModel.Section] {
-        self.model.sections(
+    private func visibleSessionSections(categories: [String]) -> [ChatSessionSidebarModel.Section] {
+        RootSidebarModel.sections(
+            sessions: self.model.sessions,
             query: self.searchText,
             currentSessionKey: self.appModel.chatSessionKey,
-            mainSessionKey: self.appModel.defaultChatSessionKey,
+            mainSessionKey: self.appModel.mainSessionKey,
             activeAgentID: self.appModel.chatAgentId,
-            groups: self.sessionGroups,
-            sessionRoutingContract: self.appModel.chatSessionRoutingContract)
+            groups: categories.enumerated().map { offset, name in
+                OpenClawChatSessionGroup(name: name, position: offset)
+            },
+            sessionRoutingContract: self.appModel.chatSessionRoutingContract,
+            now: self.model.now)
     }
 
     struct SessionLayout: Equatable {
@@ -576,12 +590,6 @@ struct RootSidebar: View {
         CommandSessionGrouping.categories(from: self.model.sessions, knownGroups: SessionGroupStore.load())
     }
 
-    private var sessionGroups: [OpenClawChatSessionGroup] {
-        self.sessionCategories.enumerated().map { offset, name in
-            OpenClawChatSessionGroup(name: name, position: offset)
-        }
-    }
-
     private static func flattened(_ nodes: [ChatSessionSidebarModel.Node]) -> [ChatSessionSidebarModel.Node] {
         nodes.flatMap { [$0] + self.flattened($0.children) }
     }
@@ -598,12 +606,19 @@ struct RootSidebar: View {
         searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 20 : nil
     }
 
+    /// Value inputs are shared within one render pass, never retained across a state change.
+    private struct SessionRowPass {
+        let selectedSessionKey: String
+        let mainSessionKey: String
+        let categories: [String]
+    }
+
     private func sessionButton(
         _ node: ChatSessionSidebarModel.Node,
-        selectedSessionKey: String) -> some View
+        rowPass: SessionRowPass) -> some View
     {
         let session = node.session
-        let isSelected = session.key == selectedSessionKey
+        let isSelected = session.key == rowPass.selectedSessionKey
         return HStack(spacing: 0) {
             Button {
                 self.selectSession(session)
@@ -675,23 +690,17 @@ struct RootSidebar: View {
             }
             .commandSessionActions(
                 session: session,
-                categories: self.sessionCategories,
+                mainSessionKey: rowPass.mainSessionKey,
+                categories: rowPass.categories,
                 isEnabled: self.appModel.isOperatorGatewayConnected,
                 canArchive: ChatSessionSidebarModel.canArchiveSession(
                     session,
-                    mainSessionKey: self.resolvedMainSessionKey),
+                    mainSessionKey: rowPass.mainSessionKey),
                 canDelete: ChatSessionSidebarModel.canDeleteSession(
                     key: session.key,
-                    mainSessionKey: self.resolvedMainSessionKey),
-                actions: CommandSessionActions(
-                    rename: { self.patchSession(session, label: .some($0)) },
-                    moveToGroup: { self.patchSession(session, category: .some($0)) },
-                    setColor: { self.patchSession(session, color: .some($0)) },
-                    togglePinned: { self.patchSession(session, pinned: session.pinned != true) },
-                    toggleUnread: { self.patchSession(session, unread: session.unread != true) },
-                    fork: { self.forkSession(session) },
-                    toggleArchived: { self.patchSession(session, archived: true) },
-                    delete: { self.deleteSession(session) }))
+                    mainSessionKey: rowPass.mainSessionKey),
+                performMutation: self.performSessionMutation,
+                fork: { self.forkSession(session) })
             .accessibilityValue(Self.sessionAccessibilityValue(
                 isPinned: session.pinned == true,
                 isUnread: session.unread == true))
@@ -808,41 +817,14 @@ struct RootSidebar: View {
         return String(localized: "Connection")
     }
 
-    private func patchSession(
-        _ session: OpenClawChatSessionEntry,
-        label: String?? = nil,
-        category: String?? = nil,
-        color: String?? = nil,
-        pinned: Bool? = nil,
-        archived: Bool? = nil,
-        unread: Bool? = nil)
+    private func performSessionMutation(
+        resetActiveSessionKey: String?,
+        _ operation: @escaping CommandSessionActionsModifier.Mutation)
     {
         Task {
             do {
-                try await self.appModel.makeChatTransport().patchSession(
-                    key: session.key,
-                    expectedSessionID: archived == nil ? nil : session.sessionId,
-                    label: label,
-                    category: category,
-                    color: color,
-                    pinned: pinned,
-                    archived: archived,
-                    unread: unread)
-                if archived == true, session.key == self.appModel.chatSessionKey {
-                    self.appModel.focusChatSession(nil)
-                }
-                await self.model.refreshSessions(appModel: self.appModel)
-            } catch {
-                self.model.reportSessionError(error)
-            }
-        }
-    }
-
-    private func deleteSession(_ session: OpenClawChatSessionEntry) {
-        Task {
-            do {
-                try await self.appModel.makeChatTransport().deleteSession(key: session.key)
-                if session.key == self.appModel.chatSessionKey {
+                try await operation(self.appModel.makeChatTransport())
+                if resetActiveSessionKey == self.appModel.chatSessionKey {
                     self.appModel.focusChatSession(nil)
                 }
                 await self.model.refreshSessions(appModel: self.appModel)

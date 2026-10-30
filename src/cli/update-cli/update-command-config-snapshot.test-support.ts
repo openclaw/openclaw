@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 
 export async function runUpdateSnapshotIsolationProof(
   fixtureRoot: string,
@@ -15,28 +16,28 @@ export async function runUpdateSnapshotIsolationProof(
   const homeB = path.join(root, "B");
   const configA = path.join(homeA, ".openclaw", "openclaw.json");
   const defaultB = path.join(homeB, ".openclaw", "openclaw.json");
-  const configB =
-    selection === "explicit"
-      ? path.join(homeB, "custom.json")
-      : selection === "state"
-        ? path.join(homeB, "selected-state", "openclaw.json")
-        : selection === "profile"
-          ? path.join(homeB, ".openclaw-snapshot-proof", "openclaw.json")
-          : defaultB;
+  const configB = path.join(
+    homeB,
+    {
+      home: ".openclaw/openclaw.json",
+      explicit: "custom.json",
+      state: "selected-state/openclaw.json",
+      profile: ".openclaw-snapshot-proof/openclaw.json",
+    }[selection],
+  );
   const sourceA = '{ "canary": "synthetic-A" }\n';
   const sourceB = '{ "canary": "synthetic-B" }\n';
-  const oldBackupA = "synthetic-old-backup-A\n";
   const sources = new Map([
     [configA, sourceA],
     [defaultB, "synthetic-unselected-default-B\n"],
     [configB, sourceB],
-    [`${configA}.pre-update`, oldBackupA],
+    [`${configA}.pre-update`, "synthetic-old-backup-A\n"],
   ]);
   for (const [file, content] of sources) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, content, { mode: 0o600 });
   }
-  const before = fs.readdirSync(root, { recursive: true, encoding: "utf8" });
+  const before = listDirectoryTreeStrictSync(root).map((walkEntry) => walkEntry.relativePath);
   const selectHome = (home: string) => {
     Object.assign(process.env, {
       HOME: home,
@@ -53,8 +54,8 @@ export async function runUpdateSnapshotIsolationProof(
   const writes: string[] = [];
   const blocked: string[] = [];
   function checkTarget(value: unknown): asserts value is string {
-    assert.equal(typeof value, "string");
-    assert.ok(typeof value === "string" && path.resolve(value).startsWith(root + path.sep));
+    assert.ok(typeof value === "string");
+    assert.ok(path.resolve(value).startsWith(root + path.sep));
     assert.ok(fs.realpathSync(path.dirname(value)).startsWith(root + path.sep));
     if (fs.existsSync(value)) {
       assert.equal(fs.lstatSync(value).isSymbolicLink(), false);
@@ -63,31 +64,11 @@ export async function runUpdateSnapshotIsolationProof(
   const writeFile = fsp.writeFile.bind(fsp);
   const copyFile = fsp.copyFile.bind(fsp);
   const openSync = fs.openSync.bind(fs);
-  for (const name of [
-    "appendFile",
-    "chmod",
-    "chown",
-    "lchmod",
-    "lchown",
-    "lutimes",
-    "mkdir",
-    "mkdtemp",
-    "open",
-    "rename",
-    "rm",
-    "rmdir",
-    "symlink",
-    "link",
-    "truncate",
-    "unlink",
-    "utimes",
-    "write",
-    "writev",
-    "writeFile",
-    "copyFile",
-    "cp",
-    "createWriteStream",
-  ]) {
+  const mutationAPIs = (
+    "appendFile chmod chown lchmod lchown lutimes mkdir mkdtemp open rename rm rmdir " +
+    "symlink link truncate unlink utimes write writev writeFile copyFile cp createWriteStream"
+  ).split(" ");
+  for (const name of mutationAPIs) {
     for (const owner of [fs, fsp]) {
       for (const key of [name, `${name}Sync`]) {
         if (typeof Object.getOwnPropertyDescriptor(owner, key)?.value !== "function") {
@@ -132,11 +113,12 @@ export async function runUpdateSnapshotIsolationProof(
   checkTarget(CONFIG_PATH);
   const { createUpdateConfigSnapshot } = await import("./update-command-config-snapshot.js");
   selectHome(homeB);
-  if (selection === "home") {
-    delete process.env.OPENCLAW_STATE_DIR;
-    delete process.env.OPENCLAW_CONFIG_PATH;
-  } else if (selection === "state") {
-    process.env.OPENCLAW_STATE_DIR = path.dirname(configB);
+  if (selection === "home" || selection === "state") {
+    if (selection === "home") {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = path.dirname(configB);
+    }
     delete process.env.OPENCLAW_CONFIG_PATH;
   } else if (selection === "explicit") {
     process.env.OPENCLAW_CONFIG_PATH = configB;
@@ -157,7 +139,7 @@ export async function runUpdateSnapshotIsolationProof(
   assert.deepEqual(writes, [`${configB}.pre-update`]);
   assert.deepEqual(blocked, []);
   assert.deepEqual(
-    new Set(fs.readdirSync(root, { recursive: true, encoding: "utf8" })),
+    new Set(listDirectoryTreeStrictSync(root).map((walkEntry) => walkEntry.relativePath)),
     new Set([...before, path.relative(root, `${configB}.pre-update`)]),
   );
 }

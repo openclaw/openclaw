@@ -1,3 +1,4 @@
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -13,13 +14,13 @@ struct CameraControllerClampTests {
     }
 
     @Test func `clamp duration defaults and bounds`() {
-        #expect(CameraController.clampDurationMs(nil) == 3000)
-        #expect(CameraController.clampDurationMs(0) == 250)
-        #expect(CameraController.clampDurationMs(249) == 250)
-        #expect(CameraController.clampDurationMs(250) == 250)
-        #expect(CameraController.clampDurationMs(1000) == 1000)
-        #expect(CameraController.clampDurationMs(60000) == 60000)
-        #expect(CameraController.clampDurationMs(60001) == 60000)
+        #expect(CaptureRateLimits.clampDurationMs(nil, defaultMs: 3000) == 3000)
+        #expect(CaptureRateLimits.clampDurationMs(0, defaultMs: 3000) == 250)
+        #expect(CaptureRateLimits.clampDurationMs(249, defaultMs: 3000) == 250)
+        #expect(CaptureRateLimits.clampDurationMs(250, defaultMs: 3000) == 250)
+        #expect(CaptureRateLimits.clampDurationMs(1000, defaultMs: 3000) == 1000)
+        #expect(CaptureRateLimits.clampDurationMs(60000, defaultMs: 3000) == 60000)
+        #expect(CaptureRateLimits.clampDurationMs(60001, defaultMs: 3000) == 60000)
     }
 
     @Test func `preferred facing defaults and explicit override`() {

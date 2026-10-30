@@ -1,4 +1,3 @@
-// Check No Monolithic Plugin Sdk Entry Imports script supports OpenClaw repository automation.
 import fs from "node:fs";
 import path from "node:path";
 import { discoverOpenClawPlugins } from "../src/plugins/discovery.js";
@@ -32,10 +31,6 @@ function collectPluginSourceFiles(rootDir: string): string[] {
   });
 }
 
-function collectSharedExtensionSourceFiles(): string[] {
-  return collectPluginSourceFiles(path.join(process.cwd(), "extensions", "shared"));
-}
-
 function collectBundledExtensionSourceFiles(): string[] {
   const extensionsDir = path.join(process.cwd(), "extensions");
   let entries: fs.Dirent[];
@@ -67,7 +62,9 @@ function main() {
       filesToCheck.add(srcFile);
     }
   }
-  for (const sharedFile of collectSharedExtensionSourceFiles()) {
+  for (const sharedFile of collectPluginSourceFiles(
+    path.join(process.cwd(), "extensions", "shared"),
+  )) {
     filesToCheck.add(sharedFile);
   }
   for (const extensionFile of collectBundledExtensionSourceFiles()) {
@@ -89,15 +86,13 @@ function main() {
   }
 
   if (legacyBroadSubpathOffenders.size > 0) {
-    if (legacyBroadSubpathOffenders.size > 0) {
-      console.error(
-        "Bundled plugin source files must not import deprecated broad plugin-sdk subpaths.",
-      );
-      for (const [file, labels] of [...legacyBroadSubpathOffenders.entries()].toSorted(
-        ([left], [right]) => left.localeCompare(right),
-      )) {
-        console.error(`- ${relativeToCwd(file)} (${labels.join(", ")})`);
-      }
+    console.error(
+      "Bundled plugin source files must not import deprecated broad plugin-sdk subpaths.",
+    );
+    for (const [file, labels] of [...legacyBroadSubpathOffenders.entries()].toSorted(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
+      console.error(`- ${relativeToCwd(file)} (${labels.join(", ")})`);
     }
     console.error("Use focused openclaw/plugin-sdk/<domain> subpaths for bundled plugins.");
     process.exit(1);

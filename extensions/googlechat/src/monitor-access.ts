@@ -1,24 +1,22 @@
-// Googlechat plugin module implements monitor access behavior.
 import {
   channelIngressRoutes,
   type ChannelIngressContextBinding,
-  type ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import type { ChannelBotLoopProtectionConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import {
+  GROUP_POLICY_BLOCKED_LABEL,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "openclaw/plugin-sdk/runtime-group-policy";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeStringEntries,
+  normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  GROUP_POLICY_BLOCKED_LABEL,
-  createChannelPairingController,
-  isDangerousNameMatchingEnabled,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-  warnMissingProviderGroupPolicyFallbackOnce,
-  type OpenClawConfig,
-} from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { sendGoogleChatMessage } from "./api.js";
 import { buildGoogleChatGroupPolicyScope } from "./group-policy.js";
@@ -26,60 +24,10 @@ import { googleChatIngressIdentity, normalizeGoogleChatUserId } from "./ingress-
 import type { GoogleChatCoreRuntime } from "./monitor-types.js";
 import type { GoogleChatAnnotation, GoogleChatMessage, GoogleChatSpace } from "./types.js";
 
-type GoogleChatGroupEntry = {
-  requireMention?: boolean;
-  enabled?: boolean;
-  botLoopProtection?: ChannelBotLoopProtectionConfig;
-  users?: Array<string | number>;
-  systemPrompt?: string;
-};
-
-function resolveGoogleChatGroupConfig(params: {
-  groupId: string;
-  groupName?: string | null;
-  groups?: Record<string, GoogleChatGroupEntry>;
-}) {
-  const { groupId, groupName, groups } = params;
-  const entries = groups ?? {};
-  const keys = Object.keys(entries);
-  if (keys.length === 0) {
-    return { entry: undefined, allowlistConfigured: false, deprecatedNameMatch: false };
-  }
-  const { "*": fallback, ...scopes } = entries;
-  const scope = buildGoogleChatGroupPolicyScope({
-    tree: { defaults: fallback, scopes },
-    groupId,
-  });
-  const entry = scope.matchKey ? entries[scope.matchKey] : undefined;
-  const normalizedGroupName = normalizeLowercaseStringOrEmpty(groupName ?? "");
-  // Mutable display-name keys deliberately block wildcard selection when no stable id matches.
-  // The canonical scope owns exact/wildcard lookup; this monitor-only guard owns deprecation.
-  const deprecatedNameMatch =
-    !entry &&
-    Boolean(
-      groupName &&
-      keys.some((key) => {
-        const trimmed = key.trim();
-        if (!trimmed || trimmed === "*" || /^spaces\//i.test(trimmed)) {
-          return false;
-        }
-        return (
-          trimmed === groupName || normalizeLowercaseStringOrEmpty(trimmed) === normalizedGroupName
-        );
-      }),
-    );
-  return {
-    entry: deprecatedNameMatch ? undefined : (entry ?? fallback),
-    allowlistConfigured: true,
-    fallback,
-    deprecatedNameMatch,
-  };
-}
-
 function extractMentionInfo(annotations: GoogleChatAnnotation[], botUser?: string | null) {
   const mentionAnnotations = annotations.filter((entry) => entry.type === "USER_MENTION");
   const hasAnyMention = mentionAnnotations.length > 0;
-  const botTargets = new Set(["users/app", botUser?.trim()].filter(Boolean) as string[]);
+  const botTargets = new Set(normalizeTrimmedStringList(["users/app", botUser]));
   const wasMentioned = mentionAnnotations.some((entry) => {
     const userName = entry.userMention?.user?.name;
     if (!userName) {
@@ -96,48 +44,25 @@ function extractMentionInfo(annotations: GoogleChatAnnotation[], botUser?: strin
 const warnedDeprecatedUsersEmailAllowFrom = new Set<string>();
 const warnedMutableGroupKeys = new Set<string>();
 
-function warnDeprecatedUsersEmailEntries(logVerbose: (message: string) => void, entries: string[]) {
-  const deprecated = entries
-    .map((v) => normalizeOptionalString(v))
-    .filter((v): v is string => Boolean(v))
-    .filter((v) => /^users\/.+@.+/i.test(v));
-  if (deprecated.length === 0) {
-    return;
-  }
-  const key = deprecated
-    .map((v) => normalizeLowercaseStringOrEmpty(v))
+function markDeprecatedEntriesWarning(entries: string[], warned: Set<string>): boolean {
+  const key = entries
+    .map((entry) => normalizeLowercaseStringOrEmpty(entry))
     .toSorted((a, b) => a.localeCompare(b))
     .join(",");
-  if (warnedDeprecatedUsersEmailAllowFrom.has(key)) {
-    return;
+  if (entries.length === 0 || warned.has(key)) {
+    return false;
   }
-  warnedDeprecatedUsersEmailAllowFrom.add(key);
-  logVerbose(
-    `Deprecated allowFrom entry detected: "users/<email>" is no longer treated as an email allowlist. Use raw email (alice@example.com) or immutable user id (users/<id>). entries=${deprecated.join(", ")}`,
-  );
+  warned.add(key);
+  return true;
 }
 
-function warnMutableGroupKeysConfigured(
-  logVerbose: (message: string) => void,
-  groups?: Record<string, GoogleChatGroupEntry>,
-) {
-  const mutableKeys = Object.keys(groups ?? {})
-    .map((key) => key.trim())
-    .filter((key) => key && key !== "*" && !/^spaces\//i.test(key));
-  if (mutableKeys.length === 0) {
-    return;
+function warnDeprecatedUsersEmailEntries(logVerbose: (message: string) => void, entries: string[]) {
+  const deprecated = normalizeTrimmedStringList(entries).filter((v) => /^users\/.+@.+/i.test(v));
+  if (markDeprecatedEntriesWarning(deprecated, warnedDeprecatedUsersEmailAllowFrom)) {
+    logVerbose(
+      `Deprecated allowFrom entry detected: "users/<email>" is no longer treated as an email allowlist. Use raw email (alice@example.com) or immutable user id (users/<id>). entries=${deprecated.join(", ")}`,
+    );
   }
-  const warningKey = mutableKeys
-    .map((key) => normalizeLowercaseStringOrEmpty(key))
-    .toSorted((a, b) => a.localeCompare(b))
-    .join(",");
-  if (warnedMutableGroupKeys.has(warningKey)) {
-    return;
-  }
-  warnedMutableGroupKeys.add(warningKey);
-  logVerbose(
-    `Deprecated Google Chat group key detected: group routing now requires stable space ids (spaces/<spaceId>). Update channels.googlechat.groups keys: ${mutableKeys.join(", ")}`,
-  );
 }
 
 export async function applyGoogleChatInboundAccessPolicy(params: {
@@ -154,17 +79,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
   contextBinding: ChannelIngressContextBinding;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   logVerbose: (message: string) => void;
-}): Promise<
-  | {
-      ok: true;
-      channelIngress: ResolvedChannelMessageIngress;
-      commandAuthorized: boolean | undefined;
-      effectiveWasMentioned: boolean | undefined;
-      groupBotLoopProtection: ChannelBotLoopProtectionConfig | undefined;
-      groupSystemPrompt: string | undefined;
-    }
-  | { ok: false }
-> {
+}) {
   const {
     account,
     config,
@@ -201,12 +116,52 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
     blockedLabel: GROUP_POLICY_BLOCKED_LABEL.space,
     log: logVerbose,
   });
-  warnMutableGroupKeysConfigured(logVerbose, account.config.groups ?? undefined);
-  const groupConfigResolved = resolveGoogleChatGroupConfig({
-    groupId: spaceId,
-    groupName: space.displayName ?? null,
-    groups: account.config.groups ?? undefined,
-  });
+  const mutableKeys = Object.keys(account.config.groups ?? {})
+    .map((key) => key.trim())
+    .filter((key) => key && key !== "*" && !/^spaces\//i.test(key));
+  if (markDeprecatedEntriesWarning(mutableKeys, warnedMutableGroupKeys)) {
+    logVerbose(
+      `Deprecated Google Chat group key detected: group routing now requires stable space ids (spaces/<spaceId>). Update channels.googlechat.groups keys: ${mutableKeys.join(", ")}`,
+    );
+  }
+  const groupName = space.displayName ?? null;
+  const groups = account.config.groups;
+  const groupConfigResolved = (() => {
+    const entries = groups ?? {};
+    const keys = Object.keys(entries);
+    if (keys.length === 0) {
+      return { entry: undefined, allowlistConfigured: false, deprecatedNameMatch: false };
+    }
+    const { "*": fallback, ...scopes } = entries;
+    const scope = buildGoogleChatGroupPolicyScope({
+      tree: { defaults: fallback, scopes },
+      groupId: spaceId,
+    });
+    const entry = scope.matchKey ? entries[scope.matchKey] : undefined;
+    const normalizedGroupName = normalizeLowercaseStringOrEmpty(groupName ?? "");
+    // Mutable display-name keys deliberately block wildcard selection when no stable id matches.
+    // The canonical scope owns exact/wildcard lookup; this monitor-only guard owns deprecation.
+    const deprecatedNameMatch =
+      !entry &&
+      Boolean(
+        groupName &&
+        keys.some((key) => {
+          const trimmed = key.trim();
+          if (!trimmed || trimmed === "*" || /^spaces\//i.test(trimmed)) {
+            return false;
+          }
+          return (
+            trimmed === groupName ||
+            normalizeLowercaseStringOrEmpty(trimmed) === normalizedGroupName
+          );
+        }),
+      );
+    return {
+      entry: deprecatedNameMatch ? undefined : (entry ?? fallback),
+      allowlistConfigured: true,
+      deprecatedNameMatch,
+    };
+  })();
   const groupEntry = groupConfigResolved.entry;
   const groupUsers = groupEntry?.users ?? account.config.groupAllowFrom ?? [];
   let effectiveWasMentioned: boolean | undefined;
@@ -328,7 +283,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
   if (isGroup) {
     if (groupConfigResolved.deprecatedNameMatch) {
       logVerbose(`drop group message (deprecated mutable group key matched, space=${spaceId})`);
-      return { ok: false };
+      return { ok: false as const };
     }
     const routeBlockReason = resolvedAccess.routeAccess.reason;
     if (routeBlockReason && routeBlockReason !== "sender_empty_allowlist") {
@@ -339,13 +294,13 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
       } else if (routeBlockReason === "route_disabled") {
         logVerbose(`drop group message (space disabled, space=${spaceId})`);
       }
-      return { ok: false };
+      return { ok: false as const };
     }
 
     if (senderAccess.effectiveGroupAllowFrom.length > 0 && senderAccess.decision !== "allow") {
       warnDeprecatedUsersEmailEntries(logVerbose, senderAccess.effectiveGroupAllowFrom);
       logVerbose(`drop group message (sender not allowed, ${senderId})`);
-      return { ok: false };
+      return { ok: false as const };
     }
   }
 
@@ -356,7 +311,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
     effectiveWasMentioned = resolvedAccess.activationAccess.effectiveWasMentioned;
     if (resolvedAccess.activationAccess.shouldSkip) {
       logVerbose(`drop group message (mention required, space=${spaceId})`);
-      return { ok: false };
+      return { ok: false as const };
     }
   }
 
@@ -366,13 +321,13 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
         ? "groupPolicy=allowlist (empty allowlist)"
         : senderAccess.reasonCode;
     logVerbose(`drop group message (sender policy blocked, reason=${reason}, space=${spaceId})`);
-    return { ok: false };
+    return { ok: false as const };
   }
 
   if (!isGroup) {
     if (account.config.dm?.enabled === false) {
       logVerbose(`Blocked Google Chat DM from ${senderId} (dmPolicy=disabled)`);
-      return { ok: false };
+      return { ok: false as const };
     }
 
     if (senderAccess.decision !== "allow") {
@@ -399,7 +354,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
       } else {
         logVerbose(`Blocked unauthorized Google Chat sender ${senderId} (dmPolicy=${dmPolicy})`);
       }
-      return { ok: false };
+      return { ok: false as const };
     }
   }
 
@@ -409,11 +364,11 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
     commandAuthorized !== true
   ) {
     logVerbose(`googlechat: drop control command from ${senderId}`);
-    return { ok: false };
+    return { ok: false as const };
   }
 
   return {
-    ok: true,
+    ok: true as const,
     channelIngress: resolvedAccess,
     commandAuthorized,
     effectiveWasMentioned,

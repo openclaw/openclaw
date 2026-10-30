@@ -1,0 +1,25 @@
+# Control UI querySelector calls; shrink only.
+# Run pnpm check:control-ui-controllers --prune after removing calls.
+ui/src/app/control-ui-environment-presentation.runtime.ts	1
+ui/src/components/desktop/desktop-client.ts	1
+ui/src/components/link-reader-hovercard-owner.ts	1
+ui/src/components/link-reader-markdown.tsx	3
+ui/src/components/link-reader-panel-owner.ts	1
+ui/src/components/link-reader-prefetch-owner.ts	1
+ui/src/components/lobster-image.ts	2
+ui/src/components/markdown-blocks-owner.ts	7
+ui/src/components/markdown-code-blocks.ts	3
+ui/src/components/markdown-mermaid.tsx	3
+ui/src/components/markdown-tables.ts	10
+ui/src/components/markdown.ts	1
+ui/src/components/session-progress-card-view.tsx	1
+ui/src/components/session-progress-card.ts	1
+ui/src/lib/chat/pasted-text-excerpt.ts	2
+ui/src/lib/markdown-dom-reconciler.ts	1
+ui/src/pages/chat/components/chat-context-copy.ts	2
+ui/src/pages/chat/components/chat-image-lightbox.ts	1
+ui/src/pages/chat/components/chat-message-overflow.ts	1
+ui/src/pages/chat/link-favicon-loader.ts	1
+ui/src/pages/plugins/svg-icon-rasterizer.ts	2
+ui/src/plugins/control-ui-components.ts	1
+ui/src/plugins/control-ui-view.solid.tsx	1

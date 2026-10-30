@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runInNewContext } from "node:vm";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createNoisyPngBuffer,
   createSolidPngBuffer,
@@ -11,31 +13,38 @@ import {
   releaseAgentRunDelegatedAuthority,
   rotateAgentRunRegistryLifecycleGeneration,
 } from "../../infra/agent-run-registry.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import * as rootLogger from "../../logger.js";
 import * as localMediaAccess from "../../media/local-media-access.js";
 import { readPersistedMediaFacts } from "../../media/media-facts.js";
 import * as mediaReferences from "../../media/media-reference.js";
-import { cleanOldMedia, saveMediaBuffer } from "../../media/store.js";
+import { cleanOldMedia, getMediaDir, saveMediaBuffer } from "../../media/store.js";
+import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import {
   buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
+  type UserTurnInput,
 } from "../../sessions/user-turn-transcript.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
+import { NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES } from "../../worker/node-workspace-protocol.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
+import { result as processResult } from "./bootstrap.test-support.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import {
-  ENVIRONMENT_ID,
-  MANIFEST_REF,
-  OWNER_EPOCH,
+  environmentForTunnel,
+  expectUncalled,
+  runIdentity,
+} from "./worker-turn-launcher-flow.test-support.js";
+import {
+  createWorkerTurnTunnel,
+  reconcileUnchangedLocalWorkspace,
   SESSION_ID,
-  SESSION_KEY,
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
-  credential,
-  measureLaunchTurn,
   openSessionManager,
   placements,
   root,
@@ -45,279 +54,315 @@ import {
   turn,
 } from "./worker-turn-launcher.test-support.js";
 
-function harness() {
+afterAll(closeStateDatabaseForTest);
+
+function recordInput(input: Parameters<typeof createUserTurnTranscriptRecorder>[0]["input"]) {
+  return createUserTurnTranscriptRecorder({
+    target: { ...sessionTarget, sessionEntry: undefined },
+    input,
+  });
+}
+
+type Input = UserTurnInput;
+type Prompt = WorkerLaunchPlan["assignment"]["prompt"];
+function parts(prompt: Prompt) {
+  if (!Array.isArray(prompt)) {
+    throw new Error("missing multimodal prompt");
+  }
+  return prompt;
+}
+const imageData = (prompt: Prompt) =>
+  parts(prompt)
+    .filter((part) => part.type === "image")
+    .map((part) => part.data);
+const urls = (message: Parameters<typeof readPersistedMediaFacts>[0]) =>
+  readPersistedMediaFacts(message)?.map((fact) => fact.url);
+const save = (bytes: Buffer, type = "image/png") => saveMediaBuffer(bytes, type, "inbound");
+const ref = ({ id }: { id: string }, contentType = "image/png", hydrationSuppressed = false) => ({
+  url: `media://inbound/${id}`,
+  contentType,
+  ...(hydrationSuppressed ? { hydrationSuppressed } : {}),
+});
+const workerPath = (file: string) =>
+  path.posix.join("/worker/workspace", file.split(path.sep).join("/"));
+const inlineImage = () => ({
+  type: "image" as const,
+  data: createSolidPngBuffer(2, 2, { r: 255, g: 0, b: 0 }).toString("base64"),
+  mimeType: "image/png",
+});
+const messages = async () => (await openSessionManager()).buildSessionContext().messages;
+const users = async () =>
+  (await openSessionManager())
+    .getBranch()
+    .flatMap((entry) =>
+      entry.type === "message" && entry.message.role === "user" ? [entry.message] : [],
+    );
+const appendInput = async (input: Input) =>
+  (await openSessionManager()).appendMessageAsync(buildPersistedUserTurnMessage(input));
+const silentWarning = () => vi.spyOn(rootLogger, "logWarn").mockImplementation(() => {});
+
+async function imagePair(png: Buffer) {
+  const image = await save(png);
+  const described = await save(png);
+  const media = [ref(image), ref(described, "image/png", true)];
+  return { image, described, media };
+}
+
+async function harness(assistantText = "image received", workspace?: string) {
+  await seedActivePlacement("worker-turn", workspace);
   const launches: WorkerLaunchPlan[] = [];
   const remoteFiles = new Map<string, Buffer>();
   const environment = attachedEnvironment();
-  const tunnel: WorkerTurnTunnelHandle = {
-    environmentId: ENVIRONMENT_ID,
-    ownerEpoch: OWNER_EPOCH,
-    runWorkspaceCommand: vi.fn(),
+  const tunnel: WorkerTurnTunnelHandle = createWorkerTurnTunnel({
     syncWorkspace: vi.fn(async () => {
       throw new Error("must not resync active workspace");
     }),
     stageAttachments: vi.fn(async (request) => {
       expect(request.isAuthorized()).toBe(true);
-      for (const file of await fs.readdir(request.localPath, { recursive: true })) {
+      for (const file of (await listDirectoryTreeStrict(request.localPath)).map(
+        (walkEntry) => walkEntry.relativePath,
+      )) {
         const source = path.join(request.localPath, file);
-        if ((await fs.stat(source)).isFile()) {
-          if (!remoteFiles.has(file)) {
-            remoteFiles.set(file, await fs.readFile(source));
-          }
+        if ((await fs.stat(source)).isFile() && !remoteFiles.has(file)) {
+          remoteFiles.set(file, await fs.readFile(source));
         }
       }
     }),
     quiesceWorkspace: vi.fn(async () => ({ assertActive: async () => {}, resume: async () => {} })),
-    reconcileWorkspace: vi.fn(async (request) => {
-      if (request.source.kind !== "local") {
-        throw new Error("expected a local workspace source");
-      }
-      request.source.journal.commit(MANIFEST_REF);
-      return {
-        manifestRef: MANIFEST_REF,
-        changed: false,
-        verifyStable: async () => {},
-        verifyLocalStable: async () => {},
-      };
-    }),
-    stop: vi.fn(async () => {}),
-    measureLaunchTurn,
+    reconcileWorkspace: vi.fn(reconcileUnchangedLocalWorkspace),
     launchTurn: vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
       launches.push(structuredClone(request.plan));
       request.onDispatchReady?.();
-      const leaf = openSessionManager().appendMessage(
+      const leaf = await (
+        await openSessionManager()
+      ).appendMessageAsync(
         makeAgentAssistantMessage({
-          content: [{ type: "text", text: "image received" }],
+          content: [{ type: "text", text: assistantText }],
           timestamp: Date.now(),
         }),
       );
       const seq = request.plan.assignment.transcript.nextSeq;
-      createWorkerSessionPlacementGate(placements).updateAckCursors({
+      await createWorkerSessionPlacementGate(placements).updateAckCursors({
         claim: request.turnClaim,
         transcriptSeq: seq,
         liveSeq: request.plan.assignment.liveEvents.nextSeq,
       });
-      return {
+      return processResult({
         stdout: JSON.stringify({
           status: "completed",
           transcriptLeafId: leaf,
           transcriptNextSeq: seq + 1,
         }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      };
+      });
     }),
-  };
+  });
   const provider = createWorkerSessionTurnPlacementProvider({
     placements,
-    environments: {
+    environments: environmentForTunnel({
       get: () => environment,
-      acquireTurnCredential: async () => credential(),
-      acknowledgeCredentialDelivery: async () => true,
       startTunnel: async () => tunnel,
-      stopTunnel: async () => {},
       destroy: async () => environment,
-    },
+    }),
   });
   const runLocal = vi.fn(async () => ({ meta: { durationMs: 0 } }));
   const execute = async (input: Parameters<typeof provider.executeTurn>[1]) =>
-    await provider.executeTurn(
-      { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: input.runId },
-      input,
-      runLocal,
-    );
+    await provider.executeTurn(runIdentity(input.runId), input, runLocal);
   const inputFiles = () =>
     new Map([...remoteFiles].filter(([file]) => path.basename(file) !== ".gitignore"));
-  return { launches, remoteFiles, inputFiles, tunnel, environment, execute, runLocal };
+  const record = (
+    runId: string,
+    input: Input,
+    overrides: Partial<Parameters<typeof execute>[0]> = {},
+  ) => execute({ ...turn(runId), userTurnTranscriptRecorder: recordInput(input), ...overrides });
+  const assignment = (index = 0) => launches[index]!.assignment;
+  return {
+    launches,
+    remoteFiles,
+    inputFiles,
+    tunnel,
+    environment,
+    execute,
+    record,
+    assignment,
+    runLocal,
+  };
 }
 
 describe("cloud turn media boundary", () => {
-  beforeEach(setupWorkerTurnLauncherTest);
+  beforeEach(async () => {
+    await setupWorkerTurnLauncherTest();
+    const bin = path.join(root, "bin");
+    await fs.mkdir(bin);
+    await fs.writeFile(path.join(bin, "gh"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH ?? ""}`);
+  });
   afterEach(async () => {
     vi.restoreAllMocks();
-    await cleanupWorkerTurnLauncherTest();
+    await cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true });
+    vi.unstubAllEnvs();
+  });
+
+  it("stages relative worker reply bytes before post-turn reconciliation without using the Gateway copy", async () => {
+    const remoteRoot = path.join(root, "remote-output");
+    const remotePath = path.join(remoteRoot, "reply.txt");
+    const bytes = Buffer.from("worker-only output\n".repeat(5_000));
+    await fs.mkdir(remoteRoot);
+    await fs.writeFile(remotePath, bytes);
+    await fs.writeFile(path.join(root, "reply.txt"), "stale Gateway copy");
+    const text = "MEDIA:./reply.txt";
+    const rig = await harness(text, remoteRoot);
+    vi.mocked(rig.tunnel.runWorkspaceCommand).mockImplementation(async ({ argv }) => {
+      let stdout = "";
+      let stderr = "";
+      const commandProcess = {
+        argv: [process.execPath, path.resolve(remoteRoot, argv[4]!), ...argv.slice(5)],
+        platform: process.platform,
+        exitCode: 0,
+        stdout: { write: (value: string) => (stdout += value) },
+        stderr: { write: (value: string) => (stderr += value) },
+      };
+      runInNewContext(argv[2]!, {
+        Buffer,
+        process: commandProcess,
+        require: createRequire(import.meta.url),
+      });
+      return processResult({
+        stdout: stdout.slice(0, NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES),
+        stderr,
+        code: commandProcess.exitCode,
+      });
+    });
+    vi.mocked(rig.tunnel.reconcileWorkspace)
+      // Input refresh precedes the reply; only completed-turn cleanup removes its source.
+      .mockImplementationOnce(reconcileUnchangedLocalWorkspace)
+      .mockImplementationOnce(async (request) => {
+        await fs.rm(remotePath);
+        return await reconcileUnchangedLocalWorkspace(request);
+      });
+
+    const result = await rig.execute(turn("outbound-relative"));
+    await waitForSessionRunEnd(SESSION_ID, null);
+    const mediaUrl = result.payloads?.[0]?.mediaUrl;
+    expect(mediaUrl).toBeTypeOf("string");
+    expect(path.dirname(mediaUrl!)).toBe(path.join(getMediaDir(), "outbound"));
+    await expect(fs.readFile(mediaUrl!)).resolves.toEqual(bytes);
+    await expect(fs.stat(remotePath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await openSessionManager()).getLeafEntry()).toMatchObject({
+      type: "message",
+      message: { role: "assistant", content: [{ type: "text", text }] },
+    });
   });
 
   it("preserves ordered managed image input, follow-up files, replay and canonical paths", async () => {
-    seedActivePlacement();
-    const rig = harness();
+    const rig = await harness();
     const png = createNoisyPngBuffer(256, 256);
     expect(png.length).toBeGreaterThan(64 * 1024);
     const small = createSolidPngBuffer(2, 2, { r: 255, g: 0, b: 0 });
-    const saved = await saveMediaBuffer(png, "image/png", "inbound");
-    const savedInline = await saveMediaBuffer(small, "image/png", "inbound");
-    const media = [
-      { url: `media://inbound/${saved.id}`, contentType: "image/png" },
-      { url: `media://inbound/${savedInline.id}`, contentType: "image/png" },
-    ];
-    const recorder = createUserTurnTranscriptRecorder({
-      target: { ...sessionTarget, sessionEntry: undefined },
-      input: {
-        text: "compare in order",
-        media,
-        mediaImageLayout: {
-          slots: [
-            { kind: "offloaded", factIndex: 0 },
-            { kind: "inline", factIndex: 1 },
-          ],
-        },
+    const saved = await save(png);
+    const media = [ref(saved), ref(await save(small))];
+    const input = {
+      text: "compare in order",
+      media,
+      mediaImageLayout: {
+        slots: [
+          { kind: "offloaded", factIndex: 0 },
+          { kind: "inline", factIndex: 1 },
+        ],
       },
-    });
-    const parsed = await parseMessageWithAttachments("compare in order", [
+    } satisfies Input;
+    const {
+      images: [inline],
+    } = await parseMessageWithAttachments("compare in order", [
       { content: small.toString("base64"), mimeType: "image/png", fileName: "inline.png" },
     ]);
-    const inline = parsed.images[0];
-    expect(inline?.sourceIndex).toBe(0);
+    expect(inline).toEqual({
+      type: "image",
+      data: small.toString("base64"),
+      mimeType: "image/png",
+    });
     if (!inline) {
       throw new Error("missing parsed inline image");
     }
     const wireInline = { type: "image" as const, data: inline.data, mimeType: inline.mimeType };
-    await rig.execute({
-      ...turn("images-first"),
+    await rig.record("images-first", input, {
       prompt: "compare in order",
       images: [inline],
       imageOrder: ["offloaded", "inline"],
-      userTurnTranscriptRecorder: recorder,
     });
-    const content = rig.launches[0]?.assignment.prompt;
-    expect(Array.isArray(content)).toBe(true);
-    if (!Array.isArray(content)) {
-      throw new Error("missing multimodal prompt");
-    }
-    expect(content.filter((part) => part.type === "image").map((part) => part.data)).toEqual([
-      png.toString("base64"),
-      inline.data,
-    ]);
+    const content = parts(rig.assignment().prompt);
+    expect(imageData(content)).toEqual([png.toString("base64"), inline.data]);
     expect(rig.inputFiles().size).toBe(2);
     const promptText = content
       .filter((part) => part.type === "text")
       .map((part) => part.text)
       .join("\n");
     for (const file of rig.inputFiles().keys()) {
-      expect(promptText).toContain(
-        path.posix.join("/worker/workspace", file.split(path.sep).join("/")),
-      );
+      expect(promptText).toContain(workerPath(file));
     }
     const preservedPath = [...rig.inputFiles().keys()][0]!;
     rig.remoteFiles.set(preservedPath, Buffer.from("worker edit"));
 
-    const document = await saveMediaBuffer(
-      Buffer.from("second turn document"),
-      "text/plain",
-      "inbound",
-    );
-    const followupRecorder = createUserTurnTranscriptRecorder({
-      target: { ...sessionTarget, sessionEntry: undefined },
-      input: {
+    const document = await save(Buffer.from("second turn document"), "text/plain");
+    await rig.record(
+      "images-followup",
+      {
         text: "read the file",
-        media: [{ url: `media://inbound/${document.id}`, contentType: "text/plain" }],
+        media: [ref(document, "text/plain")],
       },
-    });
-    await rig.execute({
-      ...turn("images-followup"),
-      prompt: "read the file",
-      userTurnTranscriptRecorder: followupRecorder,
-    });
+      { prompt: "read the file" },
+    );
     expect(rig.inputFiles().size).toBe(3);
     expect(rig.remoteFiles.get(preservedPath)?.toString()).toBe("worker edit");
     expect(
       [...rig.inputFiles().values()].some((data) => data.toString() === "second turn document"),
     ).toBe(true);
-    const replay = rig.launches[1]?.assignment.initialMessages.find(
-      (message) => message.role === "user",
-    );
-    expect(
-      replay?.content.filter((part) => part.type === "image").map((part) => part.data),
-    ).toEqual([png.toString("base64"), inline.data]);
+    const replay = rig.assignment(1).initialMessages.find((message) => message.role === "user");
     expect(replay?.content).toEqual(content);
-    const users = openSessionManager()
-      .getBranch()
-      .flatMap((entry) =>
-        entry.type === "message" && entry.message.role === "user" ? [entry.message] : [],
-      );
-    expect(users).toHaveLength(2);
-    expect(readPersistedMediaFacts(users[0]!)).toMatchObject(media);
-    expect(JSON.stringify(users)).not.toContain("/worker/workspace");
+    const userMessages = await users();
+    expect(userMessages).toHaveLength(2);
+    expect(readPersistedMediaFacts(userMessages[0]!)).toMatchObject(media);
+    expect(JSON.stringify(userMessages)).not.toContain("/worker/workspace");
     await expect(fs.readFile(saved.path)).resolves.toEqual(png);
     await rig.execute({ ...turn("image-only"), prompt: "", images: [inline] });
-    const imageOnly = rig.launches[2]!.assignment.prompt;
+    const imageOnly = rig.assignment(2).prompt;
     expect(imageOnly).toEqual(expect.arrayContaining([wireInline]));
     expect(rig.inputFiles().size).toBe(4);
-    expect(
-      openSessionManager()
-        .getBranch()
-        .filter((entry) => entry.type === "message" && entry.message.role === "user"),
-    ).toHaveLength(3);
-    expect(rig.runLocal).not.toHaveBeenCalled();
-    expect(rig.tunnel.syncWorkspace).not.toHaveBeenCalled();
+    expect(await users()).toHaveLength(3);
+    expectUncalled(rig.runLocal, rig.tunnel.syncWorkspace);
   });
 
   it("restores ordered mixed input without a recorder", async () => {
-    seedActivePlacement();
-    const rig = harness();
+    const rig = await harness();
     const offloaded = createSolidPngBuffer(3, 3, { r: 0, g: 0, b: 255 });
-    const inline = {
-      type: "image" as const,
-      data: createSolidPngBuffer(2, 2, { r: 255, g: 0, b: 0 }).toString("base64"),
-      mimeType: "image/png",
-    };
-    const saved = await saveMediaBuffer(offloaded, "image/png", "inbound");
+    const inline = inlineImage();
+    const saved = await save(offloaded);
     await rig.execute({
       ...turn("raw-mixed"),
       prompt: "compare",
       images: [inline],
       imageOrder: ["inline", "offloaded"],
-      media: [{ url: `media://inbound/${saved.id}`, contentType: "image/png" }],
+      media: [ref(saved)],
     });
-    const prompt = rig.launches[0]!.assignment.prompt;
-    if (!Array.isArray(prompt)) {
-      throw new Error("missing image input");
-    }
-    expect(prompt.filter((part) => part.type === "image").map((part) => part.data)).toEqual([
-      inline.data,
-      offloaded.toString("base64"),
-    ]);
+    const prompt = parts(rig.assignment().prompt);
+    expect(imageData(prompt)).toEqual([inline.data, offloaded.toString("base64")]);
     await rig.execute(turn("raw-mixed-replay"));
     expect(
-      rig.launches[1]!.assignment.initialMessages.find((message) => message.role === "user")
-        ?.content,
+      rig.assignment(1).initialMessages.find((message) => message.role === "user")?.content,
     ).toEqual(prompt);
   });
 
   it("honors a text-only selected model for current and replay images while staging attachments", async () => {
-    seedActivePlacement();
-    const rig = harness();
-    const rawImage = {
-      type: "image" as const,
-      data: createSolidPngBuffer(2, 2, { r: 255, g: 0, b: 0 }).toString("base64"),
-      mimeType: "image/png",
-    };
+    const rig = await harness();
+    const rawImage = inlineImage();
     await rig.execute({ ...turn("raw-history"), prompt: "raw image", images: [rawImage] });
     const png = createSolidPngBuffer(2, 2, { r: 0, g: 255, b: 0 });
-    const historical = await saveMediaBuffer(png, "image/png", "inbound");
-    const describedHistory = await saveMediaBuffer(png, "image/png", "inbound");
-    const historyRecorder = createUserTurnTranscriptRecorder({
-      target: { ...sessionTarget, sessionEntry: undefined },
-      input: {
-        text: "structured images",
-        media: [
-          { url: `media://inbound/${historical.id}`, contentType: "image/png" },
-          {
-            url: `media://inbound/${describedHistory.id}`,
-            contentType: "image/png",
-            hydrationSuppressed: true,
-          },
-        ],
-      },
-    });
-    await rig.execute({
-      ...turn("structured-history"),
-      userTurnTranscriptRecorder: historyRecorder,
-    });
-    const canonicalHistory = structuredClone(openSessionManager().buildSessionContext().messages);
+    const {
+      image: historical,
+      described: describedHistory,
+      media: historyMedia,
+    } = await imagePair(png);
+    await rig.record("structured-history", { text: "structured images", media: historyMedia });
+    const canonicalHistory = structuredClone(await messages());
     const rawHistory = canonicalHistory[0];
     if (rawHistory?.role !== "user") {
       throw new Error("missing raw user history");
@@ -326,30 +371,19 @@ describe("cloud turn media boundary", () => {
     expect(rawHistory.content).toContainEqual(rawImage);
     expect(rig.inputFiles().size).toBe(3);
 
-    const current = await saveMediaBuffer(png, "image/png", "inbound");
-    const describedCurrent = await saveMediaBuffer(png, "image/png", "inbound");
-    const media = [
-      { url: `media://inbound/${current.id}`, contentType: "image/png" },
-      {
-        url: `media://inbound/${describedCurrent.id}`,
-        contentType: "image/png",
-        hydrationSuppressed: true,
-      },
-    ];
-    const recorder = createUserTurnTranscriptRecorder({
-      target: { ...sessionTarget, sessionEntry: undefined },
-      input: { text: "read attachment files", media },
-    });
+    const { image: current, described: describedCurrent, media } = await imagePair(png);
     vi.mocked(rig.tunnel.stageAttachments!).mockClear();
-    await rig.execute({
-      ...turn("text-only"),
-      modelHasVision: false,
-      prompt: "read attachment files",
-      images: [rawImage],
-      userTurnTranscriptRecorder: recorder,
-    });
+    await rig.record(
+      "text-only",
+      { text: "read attachment files", media },
+      {
+        modelHasVision: false,
+        prompt: "read attachment files",
+        images: [rawImage],
+      },
+    );
 
-    const assignment = rig.launches[2]!.assignment;
+    const assignment = rig.assignment(2);
     expect(rig.tunnel.stageAttachments).toHaveBeenCalledTimes(1);
     expect(rig.inputFiles().size).toBe(5);
     for (const saved of [historical, describedHistory, current, describedCurrent]) {
@@ -359,7 +393,7 @@ describe("cloud turn media boundary", () => {
       expect(file).toBeDefined();
       expect(rig.inputFiles().get(file!)).toEqual(png);
       expect(JSON.stringify([assignment.prompt, assignment.initialMessages])).toContain(
-        path.posix.join("/worker/workspace", file!.split(path.sep).join("/")),
+        workerPath(file!),
       );
     }
     const currentParts = typeof assignment.prompt === "string" ? [] : assignment.prompt;
@@ -369,39 +403,23 @@ describe("cloud turn media boundary", () => {
     expect
       .soft(replayUsers.flatMap((message) => message.content).some((part) => part.type === "image"))
       .toBe(false);
-    expect(replayUsers[0]?.content).toEqual([{ type: "text", text: "raw image" }]);
-    const canonical = openSessionManager().buildSessionContext().messages;
+    expect(replayUsers[0]?.content).toEqual([
+      { type: "text", text: expect.stringMatching(/^\[[^\]]+\] raw image$/u) },
+    ]);
+    const canonical = await messages();
     expect(canonical.slice(0, canonicalHistory.length)).toEqual(canonicalHistory);
-    expect(readPersistedMediaFacts(canonical.at(-2)!)?.map((fact) => fact.url)).toEqual(
-      media.map((fact) => fact.url),
-    );
+    expect(urls(canonical.at(-2)!)).toEqual(media.map((fact) => fact.url));
     expect(JSON.stringify(canonical)).not.toContain("/worker/workspace");
     expect(rig.runLocal).not.toHaveBeenCalled();
   });
 
   it("continues plaintext replay after a recent canonical image expires while private input survives", async () => {
-    seedActivePlacement();
-    const rig = harness();
+    const rig = await harness();
     const png = createSolidPngBuffer(2, 2, { r: 255, g: 0, b: 0 });
-    const expired = await saveMediaBuffer(png, "image/png", "inbound");
-    const described = await saveMediaBuffer(png, "image/png", "inbound");
-    const media = [
-      { url: `media://inbound/${expired.id}`, contentType: "image/png" },
-      {
-        url: `media://inbound/${described.id}`,
-        contentType: "image/png",
-        hydrationSuppressed: true,
-      },
-    ];
-    const recorder = createUserTurnTranscriptRecorder({
-      target: { ...sessionTarget, sessionEntry: undefined },
-      input: { text: "inspect the image", media },
-    });
-    await rig.execute({ ...turn("before-expiry"), userTurnTranscriptRecorder: recorder });
-    const canonical = structuredClone(openSessionManager().buildSessionContext().messages[0]);
-    expect(readPersistedMediaFacts(canonical!)?.map((fact) => fact.url)).toEqual(
-      media.map((fact) => fact.url),
-    );
+    const { image: expired, described, media } = await imagePair(png);
+    await rig.record("before-expiry", { text: "inspect the image", media });
+    const canonical = structuredClone((await messages())[0]);
+    expect(urls(canonical!)).toEqual(media.map((fact) => fact.url));
     const privateInputs = rig.inputFiles();
     expect(privateInputs.size).toBe(2);
     await rig.execute(turn("plaintext-one"));
@@ -415,14 +433,13 @@ describe("cloud turn media boundary", () => {
     await expect(fs.readFile(described.path)).resolves.toEqual(png);
     expect(rig.inputFiles()).toEqual(privateInputs);
     vi.mocked(rig.tunnel.stageAttachments!).mockClear();
-    const warning = vi.spyOn(rootLogger, "logWarn").mockImplementation(() => {});
+    const warning = silentWarning();
 
     await rig.execute({ ...turn("after-expiry"), prompt: "What is two plus two?" });
 
     expect(rig.launches).toHaveLength(4);
-    expect(rig.launches[3]?.assignment.prompt).toBe("What is two plus two?");
-    const replay = rig.launches[3]?.assignment.initialMessages;
-    const firstUser = replay?.find((message) => message.role === "user");
+    expect(rig.assignment(3).prompt).toMatch(/^\[[^\]]+\] What is two plus two\?$/u);
+    const firstUser = rig.assignment(3).initialMessages.find((message) => message.role === "user");
     expect(firstUser?.content).toEqual([
       { type: "text", text: expect.stringContaining("inspect the image") },
     ]);
@@ -434,7 +451,7 @@ describe("cloud turn media boundary", () => {
     });
     expect(rig.tunnel.stageAttachments).toHaveBeenCalledTimes(1);
     expect(rig.inputFiles()).toEqual(privateInputs);
-    expect(openSessionManager().buildSessionContext().messages[0]).toEqual(canonical);
+    expect((await messages())[0]).toEqual(canonical);
     expect(warning.mock.calls).toEqual([
       ["worker-media: Omitted an unavailable historical attachment source"],
     ]);
@@ -442,63 +459,34 @@ describe("cloud turn media boundary", () => {
   });
 
   it.each([
-    {
-      modelHasVision: true,
-      contentType: "image/png",
-      hydrationSuppressed: false,
-      error: /could not load 1 image/,
-    },
-    {
-      modelHasVision: true,
-      contentType: "image/png",
-      hydrationSuppressed: true,
-      error: /media ID does not resolve/,
-    },
-    {
-      modelHasVision: true,
-      contentType: "text/plain",
-      hydrationSuppressed: true,
-      error: /media ID does not resolve/,
-    },
-    {
-      modelHasVision: false,
-      contentType: "image/png",
-      hydrationSuppressed: false,
-      error: /media ID does not resolve/,
-    },
-  ])(
-    "rejects unavailable current $contentType input (vision=$modelHasVision, suppressed=$hydrationSuppressed)",
-    async ({ modelHasVision, contentType, hydrationSuppressed, error }) => {
-      seedActivePlacement();
-      const rig = harness();
+    ["image/png", false, /could not load 1 image/],
+    ["text/plain", true, /media ID does not resolve/],
+  ] as const)(
+    "rejects unavailable current %s input (suppressed=%s)",
+    async (contentType, hydrationSuppressed, error) => {
+      const rig = await harness();
       await expect(
         rig.execute({
           ...turn("missing-current"),
-          modelHasVision,
+          modelHasVision: true,
           media: [{ url: "media://inbound/missing", contentType, hydrationSuppressed }],
         }),
       ).rejects.toThrow(error);
       expect(rig.launches).toHaveLength(0);
-      expect(rig.tunnel.stageAttachments).not.toHaveBeenCalled();
-      expect(rig.runLocal).not.toHaveBeenCalled();
+      expectUncalled(rig.tunnel.stageAttachments, rig.runLocal);
     },
   );
 
   it.each(["cancellation", "admission", "placement"] as const)(
     "does not omit %s loss while loading a historical source",
     async (failure) => {
-      seedActivePlacement();
-      const rig = harness();
+      const rig = await harness();
       const input = turn("expired-authority");
       const controller = new AbortController();
-      openSessionManager().appendMessage(
-        buildPersistedUserTurnMessage({
-          text: "described image",
-          media: [
-            { url: "media://inbound/missing", contentType: "image/png", hydrationSuppressed: true },
-          ],
-        }),
-      );
+      await appendInput({
+        text: "described image",
+        media: [ref({ id: "missing" }, "image/png", true)],
+      });
       const loseAuthority = async () => {
         if (failure === "cancellation") {
           controller.abort(new Error("cancelled during source loading"));
@@ -519,15 +507,14 @@ describe("cloud turn media boundary", () => {
         );
         vi.spyOn(localMediaAccess, "readLocalMediaFile").mockImplementationOnce(loseAuthority);
       }
-      const warning = vi.spyOn(rootLogger, "logWarn").mockImplementation(() => {});
+      const warning = silentWarning();
       await expect(rig.execute({ ...input, abortSignal: controller.signal })).rejects.toThrow(
         failure === "cancellation"
           ? /cancelled during source loading/
           : /placement|claim|authority/,
       );
-      expect(warning).not.toHaveBeenCalled();
       expect(rig.launches).toHaveLength(0);
-      expect(rig.tunnel.stageAttachments).not.toHaveBeenCalled();
+      expectUncalled(warning, rig.tunnel.stageAttachments);
     },
   );
 
@@ -542,8 +529,7 @@ describe("cloud turn media boundary", () => {
   ] as const)(
     "cancels in-flight attachments on %s closure without launching an abandoned turn",
     async (closure) => {
-      seedActivePlacement();
-      const rig = harness();
+      const rig = await harness();
       const input = turn("in-flight-media");
       let cancelledAtBoundary: boolean | undefined;
       let launchCancelled: boolean | undefined;
@@ -556,7 +542,7 @@ describe("cloud turn media boundary", () => {
         return await launch(request);
       });
       const controller = new AbortController();
-      const saved = await saveMediaBuffer(Buffer.from("document"), "text/plain", "inbound");
+      const saved = await save(Buffer.from("document"), "text/plain");
       vi.mocked(rig.tunnel.stageAttachments!).mockImplementationOnce(async (request) => {
         transferSignal = request.signal;
         expect(request.isAuthorized()).toBe(true);
@@ -578,7 +564,7 @@ describe("cloud turn media boundary", () => {
           if (!claim) {
             throw new Error("missing active claim");
           }
-          placements.releaseTurn(claim);
+          await placements.releaseTurn(claim);
         }
         cancelledAtBoundary = request.signal?.aborted;
         request.signal?.throwIfAborted();
@@ -591,11 +577,12 @@ describe("cloud turn media boundary", () => {
             input.preparedRunAdmission.close();
           }
         },
-        media: [{ url: `media://inbound/${saved.id}`, contentType: "text/plain" }],
+        media: [ref(saved, "text/plain")],
       });
       if (closure === "unrelated") {
         await operation;
         expect(rig.launches).toHaveLength(1);
+        await waitForSessionRunEnd(SESSION_ID, null);
         expect(transferSignal?.aborted).toBe(true);
         input.preparedRunAdmission.close();
       } else {
@@ -614,15 +601,9 @@ describe("cloud turn media boundary", () => {
   it.each(["staging write", "transfer"] as const)(
     "propagates historical attachment %s failures",
     async (failure) => {
-      seedActivePlacement();
-      const rig = harness();
-      const saved = await saveMediaBuffer(Buffer.from("document"), "text/plain", "inbound");
-      openSessionManager().appendMessage(
-        buildPersistedUserTurnMessage({
-          text: "read the document",
-          media: [{ url: `media://inbound/${saved.id}`, contentType: "text/plain" }],
-        }),
-      );
+      const rig = await harness();
+      const saved = await save(Buffer.from("document"), "text/plain");
+      await appendInput({ text: "read the document", media: [ref(saved, "text/plain")] });
       const error = new Error(`historical ${failure} failed`);
       if (failure === "transfer") {
         vi.mocked(rig.tunnel.stageAttachments!).mockRejectedValueOnce(error);
@@ -640,32 +621,32 @@ describe("cloud turn media boundary", () => {
           return await writeFile(...args);
         });
       }
-      const warning = vi.spyOn(rootLogger, "logWarn").mockImplementation(() => {});
+      const warning = silentWarning();
       await expect(rig.execute(turn("failed-staging"))).rejects.toBe(error);
-      expect(warning).not.toHaveBeenCalled();
       expect(rig.launches).toHaveLength(0);
-      expect(rig.runLocal).not.toHaveBeenCalled();
+      expectUncalled(warning, rig.runLocal);
     },
   );
 
   it("stages described image sources without reinjection or pruned history and rejects a retired turn before transfer", async () => {
-    seedActivePlacement();
-    const rig = harness();
+    const rig = await harness();
     const unavailable = { path: path.join(root, "missing.png"), contentType: "image/png" };
-    const manager = openSessionManager();
-    manager.appendMessage(buildPersistedUserTurnMessage({ text: "old", media: [unavailable] }));
+    const manager = await openSessionManager();
+    const append = (input: Input) =>
+      manager.appendMessageAsync(buildPersistedUserTurnMessage(input));
+    await append({ text: "old", media: [unavailable] });
     for (let index = 0; index < 4; index++) {
-      manager.appendMessage(
+      await manager.appendMessageAsync(
         makeAgentAssistantMessage({ content: [{ type: "text", text: "processed" }] }),
       );
-      manager.appendMessage(buildPersistedUserTurnMessage({ text: "next" }));
+      await append({ text: "next" });
     }
     const png = createSolidPngBuffer(2, 2, { r: 0, g: 255, b: 0 });
-    const saved = await saveMediaBuffer(png, "image/png", "inbound");
+    const saved = await save(png);
     const prompt = `described [media attached: ${saved.path}]`;
-    const recorder = createUserTurnTranscriptRecorder({
-      target: { ...sessionTarget, sessionEntry: undefined },
-      input: {
+    await rig.record(
+      "suppressed",
+      {
         text: prompt,
         media: [{ path: saved.path, contentType: "image/png", hydrationSuppressed: true }],
         mediaImageLayout: {
@@ -673,24 +654,23 @@ describe("cloud turn media boundary", () => {
           suppressedFactIndexes: [0],
         },
       },
-    });
-    await rig.execute({
-      ...turn("suppressed"),
-      prompt,
-      userTurnTranscriptRecorder: recorder,
-    });
+      { prompt },
+    );
     expect(
-      rig.launches[0]?.assignment.initialMessages.some((message) =>
-        message.content.some((part) => part.type === "image"),
-      ),
+      rig
+        .assignment()
+        .initialMessages.some(
+          (message) =>
+            typeof message.content !== "string" &&
+            message.content.some((part) => part.type === "image"),
+        ),
     ).toBe(false);
     expect(rig.tunnel.stageAttachments).toHaveBeenCalledTimes(1);
     expect([...rig.inputFiles().values()]).toEqual([png]);
-    const remotePath = path.posix.join(
-      "/worker/workspace",
-      [...rig.inputFiles().keys()][0]!.split(path.sep).join("/"),
+    const remotePath = workerPath([...rig.inputFiles().keys()][0]!);
+    expect(rig.assignment().prompt).toEqual(
+      expect.stringContaining(`described [media attached: ${remotePath}]`),
     );
-    expect(rig.launches[0]?.assignment.prompt).toBe(`described [media attached: ${remotePath}]`);
 
     const invalidRecorder = createUserTurnTranscriptRecorder({
       target: { ...sessionTarget, sessionEntry: undefined },

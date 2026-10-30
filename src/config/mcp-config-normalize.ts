@@ -2,7 +2,6 @@
 import { normalizeLowercaseStringOrEmpty as normalizeMcpString } from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../utils.js";
 
-type ConfigMcpServers = Record<string, Record<string, unknown>>;
 type OpenClawMcpHttpTransport = "sse" | "streamable-http";
 
 const CLI_MCP_TYPE_TO_OPENCLAW_TRANSPORT: Record<string, OpenClawMcpHttpTransport | "stdio"> = {
@@ -11,6 +10,14 @@ const CLI_MCP_TYPE_TO_OPENCLAW_TRANSPORT: Record<string, OpenClawMcpHttpTranspor
   sse: "sse",
   stdio: "stdio",
 };
+
+/** Reads the canonical transport prepared by config migration or bundle ingestion. */
+export function resolveConfiguredMcpTransport(server: unknown): string | undefined {
+  if (!isRecord(server)) {
+    return undefined;
+  }
+  return normalizeMcpString(server.transport) || undefined;
+}
 
 /** Maps CLI-native MCP type aliases to OpenClaw HTTP transport names. */
 export function resolveOpenClawMcpTransportAlias(
@@ -43,29 +50,18 @@ export function canonicalizeConfiguredMcpServer(
   if (isKnownCliMcpTypeAlias(next.type)) {
     delete next.type;
   }
-  if (typeof next.cwd !== "string" && typeof next.workingDirectory === "string") {
-    next.cwd = next.workingDirectory;
+  for (const [legacy, canonical, type] of [
+    ["workingDirectory", "cwd", "string"],
+    ["supports_parallel_tool_calls", "supportsParallelToolCalls", "boolean"],
+    ["ssl_verify", "sslVerify", "boolean"],
+    ["client_cert", "clientCert", "string"],
+    ["client_key", "clientKey", "string"],
+  ] as const) {
+    if (typeof next[legacy] === type && typeof next[canonical] !== type) {
+      next[canonical] = next[legacy];
+    }
+    delete next[legacy];
   }
-  delete next.workingDirectory;
-  if (
-    typeof next.supports_parallel_tool_calls === "boolean" &&
-    typeof next.supportsParallelToolCalls !== "boolean"
-  ) {
-    next.supportsParallelToolCalls = next.supports_parallel_tool_calls;
-  }
-  delete next.supports_parallel_tool_calls;
-  if (typeof next.ssl_verify === "boolean" && typeof next.sslVerify !== "boolean") {
-    next.sslVerify = next.ssl_verify;
-  }
-  delete next.ssl_verify;
-  if (typeof next.client_cert === "string" && typeof next.clientCert !== "string") {
-    next.clientCert = next.client_cert;
-  }
-  delete next.client_cert;
-  if (typeof next.client_key === "string" && typeof next.clientKey !== "string") {
-    next.clientKey = next.client_key;
-  }
-  delete next.client_key;
   const codex = isRecord(next.codex) ? { ...next.codex } : undefined;
   if (codex) {
     if (
@@ -78,16 +74,4 @@ export function canonicalizeConfiguredMcpServer(
     next.codex = codex;
   }
   return next;
-}
-
-/** Returns a cloned map of object-shaped MCP server configs, dropping invalid entries. */
-export function normalizeConfiguredMcpServers(value: unknown): ConfigMcpServers {
-  if (!isRecord(value)) {
-    return {};
-  }
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([, server]) => isRecord(server))
-      .map(([name, server]) => [name, { ...(server as Record<string, unknown>) }]),
-  );
 }

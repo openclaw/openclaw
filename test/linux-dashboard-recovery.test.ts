@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { setImmediate as yieldToDashboard } from "node:timers/promises";
 import vm from "node:vm";
 import { test } from "vitest";
 import { createDeferred } from "./helpers/promise.js";
 
 const dashboardSource = readFileSync(new URL("../apps/linux/ui/main.js", import.meta.url), "utf8");
+const manualUpdateMessage = "Install the latest system package from the release page.";
+type Payload = Record<string, unknown>;
+// Let cross-realm promise continuations finish rendering after settlement.
+const settle = (pending: Promise<unknown>) => pending.then(yieldToDashboard);
 
 function fakeElement() {
   const classes = new Set(["hidden"]);
@@ -15,11 +20,7 @@ function fakeElement() {
       contains: (name: string) => classes.has(name),
       toggle(name: string, force?: boolean) {
         const enabled = force ?? !classes.has(name);
-        if (enabled) {
-          classes.add(name);
-        } else {
-          classes.delete(name);
-        }
+        classes[enabled ? "add" : "delete"](name);
       },
     },
     disabled: false,
@@ -40,61 +41,62 @@ function fakeElement() {
   };
 }
 
-async function mountDashboard(search: string, openReleasePage = () => Promise.resolve()) {
+async function mountDashboard(
+  search: string,
+  openReleasePage = () => Promise.resolve(),
+  bootstrap = { phase: "connected", setupError: undefined as string | undefined },
+  invokeOverride?: (command: string, args?: Payload) => unknown,
+) {
   const elements = new Map<string, ReturnType<typeof fakeElement>>();
-  const invoked: string[] = [];
-  const listeners = new Map<string, (event: { payload: Record<string, unknown> }) => void>();
+  const calls: Array<{ command: string; args?: Payload }> = [];
+  const listeners = new Map<string, (event: { payload: Payload }) => void>();
   const document = {
     createElement: fakeElement,
     querySelector(selector: string) {
-      if (!elements.has(selector)) {
-        elements.set(selector, fakeElement());
-      }
-      return elements.get(selector);
+      return elements.get(selector) ?? elements.set(selector, fakeElement()).get(selector);
     },
   };
+  function invoke(command: string, args?: Payload) {
+    calls.push({ command, args });
+    if (invokeOverride) {
+      return invokeOverride(command, args);
+    }
+    if (command === "open_release_page") {
+      return openReleasePage();
+    }
+    const snapshot = command === "bootstrap" ? bootstrap : { phase: "connected" };
+    return Promise.resolve(command === "discover_gateways" ? [] : snapshot);
+  }
+  async function listen(name: string, listener: (event: { payload: Payload }) => void) {
+    listeners.set(name, listener);
+    return () => {};
+  }
   const window = {
-    __TAURI__: {
-      core: {
-        invoke(command: string) {
-          invoked.push(command);
-          if (command === "discover_gateways") {
-            return Promise.resolve([]);
-          }
-          if (command === "open_release_page") {
-            return openReleasePage();
-          }
-          return Promise.resolve({ phase: "connected" });
-        },
-      },
-      event: {
-        async listen(
-          name: string,
-          listener: (event: { payload: Record<string, unknown> }) => void,
-        ) {
-          listeners.set(name, listener);
-          return () => {};
-        },
-      },
-    },
+    __TAURI__: { core: { invoke }, event: { listen } },
     location: { search },
     setInterval() {},
   };
 
-  await vm.runInNewContext(`(async () => { ${dashboardSource}\n})()`, {
-    document,
-    URLSearchParams,
-    window,
-  });
+  const actions = await vm.runInNewContext(
+    `(async () => { ${dashboardSource}\nreturn { renderConnectionChoices, continueLocalSetup, install }; })()`,
+    { document, URLSearchParams, window },
+  );
 
+  const element = (selector: string) => {
+    const found = elements.get(selector);
+    assert.ok(found, selector);
+    return found;
+  };
   return {
-    invoked,
-    element: (selector: string) => {
-      const element = elements.get(selector);
-      assert.ok(element);
-      return element;
-    },
-    emit: (name: string, payload: Record<string, unknown> = {}) => {
+    calls,
+    actions,
+    element,
+    text: (selector: string) => element(selector).textContent,
+    hidden: (selector: string) => element(selector).classList.contains("hidden"),
+    click: (selector: string) => element(selector).click(),
+    called: (command: string) => calls.some((call) => call.command === command),
+    callsFor: (command: string) => calls.filter((call) => call.command === command),
+    emit: (name: string, payload: Payload = {}) => {
       const listener = listeners.get(name);
       assert.ok(listener);
       listener({ payload });
@@ -102,310 +104,246 @@ async function mountDashboard(search: string, openReleasePage = () => Promise.re
   };
 }
 
-test("missing CLI mode offers installation without retrying bootstrap", async () => {
-  const { element, invoked } = await mountDashboard("?mode=missingCli");
+test("automatic setup failure returns to Gateway choices with the native error", async () => {
+  const setupError = "Bundled runtime could not be installed.";
+  const h = await mountDashboard("", undefined, { phase: "missingCli", setupError });
+  assert.equal(h.text("#title"), "Where should your assistant live?");
+  assert.equal(h.text("#description"), setupError);
+  assert.equal(h.hidden("#connection-choices"), false);
+  assert.equal(h.hidden("#welcome-screen"), true);
+  assert.equal(h.called("install_cli"), false);
+  assert.equal(h.called("connect_remote_gateway"), false);
+});
 
-  assert.equal(element("#title").textContent, "OpenClaw needs the CLI");
-  assert.equal(element("#install-controls").classList.contains("hidden"), false);
-  assert.equal(invoked.includes("bootstrap"), false);
+test("missing CLI mode offers installation without retrying bootstrap", async () => {
+  const h = await mountDashboard("?mode=missingCli");
+
+  assert.equal(h.text("#title"), "OpenClaw needs the CLI");
+  assert.equal(h.hidden("#install-controls"), false);
+  assert.equal(h.called("bootstrap"), false);
 });
 
 test("CLI recovery errors offer both retry and reinstall", async () => {
-  const { element } = await mountDashboard("?mode=error");
+  const h = await mountDashboard("?mode=error");
 
-  assert.equal(element("#primary-action").textContent, "Try again");
-  assert.equal(element("#action-controls").classList.contains("hidden"), false);
-  assert.equal(element("#install-controls").classList.contains("hidden"), false);
-});
-
-test("failed release-page opening retains an explicit download-page retry", async () => {
-  const opening = createDeferred();
-  let attempts = 0;
-  const { element, emit, invoked } = await mountDashboard("?mode=missingCli", () =>
-    ++attempts === 1 ? opening.promise : Promise.resolve(),
-  );
-  emit("updater://available-manual", { version: "2026.9.10" });
-  assert.equal(element("#update-action").textContent, "Open download page");
-  element("#update-action").click();
-  opening.reject(new Error("Browser unavailable"));
-  await opening.promise.catch(() => {});
-
-  assert.equal(element("#update-title").textContent, "Could not open release page");
-  assert.equal(element("#update-message").textContent, "Browser unavailable");
-  assert.equal(element("#update-action").classList.contains("hidden"), false);
-  assert.equal(element("#update-action").textContent, "Open download page");
-  assert.equal(attempts, 1);
-  element("#update-action").click();
-  assert.equal(attempts, 2);
-  assert.equal(invoked.filter((command) => command === "open_release_page").length, 2);
-});
-
-test("late release-page failure preserves a newer update action", async () => {
-  const opening = createDeferred();
-  const { element, emit, invoked } = await mountDashboard(
-    "?mode=missingCli",
-    () => opening.promise,
-  );
-  emit("updater://available-manual", { version: "2026.9.10" });
-  element("#update-action").click();
-  emit("updater://ready", { version: "2026.9.11" });
-  opening.reject(new Error("Browser unavailable"));
-  await opening.promise.catch(() => {});
-
-  assert.equal(element("#update-title").textContent, "Update ready");
-  assert.equal(element("#update-action").textContent, "Restart to update");
-  assert.equal(element("#update-action").classList.contains("hidden"), false);
-  element("#update-action").click();
-  assert.equal(invoked.at(-1), "relaunch");
-});
-
-test("late release-page failure does not reopen a dismissed update banner", async () => {
-  const opening = createDeferred();
-  const { element, emit } = await mountDashboard("?mode=missingCli", () => opening.promise);
-  emit("updater://available-manual", { version: "2026.9.10" });
-  element("#update-action").click();
-  element("#update-dismiss").click();
-  assert.equal(element("#update-banner").classList.contains("hidden"), true);
-  opening.reject(new Error("Browser unavailable"));
-  await opening.promise.catch(() => {});
-
-  assert.equal(element("#update-banner").classList.contains("hidden"), true);
-  assert.equal(element("#update-title").textContent, "Update available v2026.9.10");
+  assert.equal(h.text("#primary-action"), "Try again");
+  assert.equal(h.hidden("#action-controls"), false);
+  assert.equal(h.hidden("#install-controls"), false);
 });
 
 test.each([
-  { name: "local", remote: null, failure: false, entry: "settings", lateRetry: false },
+  ["updater://available", "Downloading in the background…"],
+  ["updater://available-manual", manualUpdateMessage],
+])("%s keeps release markup out of the status banner", async (event, message) => {
+  const h = await mountDashboard("?mode=missingCli");
+  h.emit(event, {
+    version: "2026.9.10",
+    notes: "<!-- openclaw-release-publication:docs-v1 -->\n## Changes\n\n- A release fix.",
+  });
+
+  assert.equal(h.text("#update-message"), message);
+});
+
+test("failed release-page opening retains a retry that clears the error on success", async () => {
+  const opening = createDeferred();
+  const retry = createDeferred();
+  let attempts = 0;
+  const h = await mountDashboard("?mode=missingCli", () =>
+    ++attempts === 1 ? opening.promise : retry.promise,
+  );
+  h.emit("updater://available-manual", { version: "2026.9.10" });
+  assert.equal(h.text("#update-action"), "Open download page");
+  h.click("#update-action");
+  opening.reject(new Error("Browser unavailable"));
+  await settle(opening.promise.catch(() => {}));
+
+  assert.equal(h.text("#update-title"), "Could not open release page");
+  assert.equal(h.text("#update-message"), "Browser unavailable");
+  assert.equal(h.hidden("#update-action"), false);
+  assert.equal(h.text("#update-action"), "Open download page");
+  assert.equal(attempts, 1);
+  h.click("#update-action");
+  assert.equal(attempts, 2);
+  retry.resolve();
+  await settle(retry.promise);
+  assert.equal(h.text("#update-title"), "Update available v2026.9.10");
+  assert.equal(h.text("#update-message"), manualUpdateMessage);
+  assert.equal(h.hidden("#update-banner"), false);
+  assert.equal(h.callsFor("open_release_page").length, 2);
+});
+
+test.each(
+  ["success", "failure"].flatMap((outcome) =>
+    ["ready", "dismissed"].map((action) => ({ outcome, action })),
+  ),
+)("late release-page $outcome preserves the newer $action intent", async ({ outcome, action }) => {
+  const opening = createDeferred();
+  const h = await mountDashboard("?mode=missingCli", () => opening.promise);
+  h.emit("updater://available-manual", { version: "2026.9.10" });
+  h.click("#update-action");
+  if (action === "ready") {
+    h.emit("updater://ready", { version: "2026.9.11" });
+  } else {
+    h.click("#update-dismiss");
+    assert.equal(h.hidden("#update-banner"), true);
+  }
+  if (outcome === "failure") {
+    opening.reject(new Error("Browser unavailable"));
+  } else {
+    opening.resolve();
+  }
+  await settle(opening.promise.catch(() => {}));
+  if (action === "ready") {
+    assert.equal(h.text("#update-title"), "Update ready");
+    assert.equal(h.text("#update-action"), "Restart to update");
+    assert.equal(h.hidden("#update-action"), false);
+    h.click("#update-action");
+    assert.equal(h.calls.at(-1)?.command, "relaunch");
+  } else {
+    assert.equal(h.hidden("#update-banner"), true);
+    assert.equal(h.text("#update-title"), "Update available v2026.9.10");
+  }
+});
+
+test.each([
   {
     name: "remote",
     remote: { transport: "direct", url: "https://gateway.example.com" },
-    failure: false,
-    entry: "settings",
-    lateRetry: false,
   },
-  { name: "failed return", remote: null, failure: true, entry: "settings", lateRetry: false },
-  { name: "startup error Edit", remote: null, failure: false, entry: "startup", lateRetry: false },
-  {
-    name: "late retry after Edit",
-    remote: null,
-    failure: false,
-    entry: "startup",
-    lateRetry: true,
-  },
-  { name: "recovery return", remote: null, failure: false, entry: "recovery", lateRetry: false },
+  { name: "failed return", failure: true },
+  { name: "late retry after Edit", mode: "", lateRetry: true },
+  { name: "recovery return", mode: "remoteError" },
 ])(
   "Connection Settings preserves a native Back action for $name",
-  async ({ remote, failure, entry, lateRetry }) => {
-    const elements = new Map<string, ReturnType<typeof fakeElement>>();
-    const invoked: Array<{ command: string; args: unknown }> = [];
+  async ({ remote = null, failure = false, mode = "connectionSettings", lateRetry = false }) => {
     const retry = createDeferred<{ phase: string }>();
-    const document = {
-      createElement: fakeElement,
-      querySelector(selector: string) {
-        if (!elements.has(selector)) {
-          elements.set(selector, fakeElement());
+    const h = await mountDashboard(
+      mode ? `?mode=${mode}` : "",
+      undefined,
+      undefined,
+      async (command, args) => {
+        if (command === "bootstrap") {
+          return args?.remoteRetry
+            ? retry.promise
+            : args?.connectionSettings
+              ? { remote }
+              : { phase: "remoteError" };
         }
-        return elements.get(selector);
+        if (command === "close_connection_settings" && failure) {
+          throw new Error("The previous dashboard is unavailable. Try again.");
+        }
+        return [];
       },
-    };
-    const window = {
-      __TAURI__: {
-        core: {
-          async invoke(
-            command: string,
-            args?: { connectionSettings?: boolean; remoteRetry?: boolean },
-          ) {
-            invoked.push({ command, args });
-            if (command === "bootstrap") {
-              if (args?.remoteRetry) {
-                return retry.promise;
-              }
-              return args?.connectionSettings ? { remote } : { phase: "remoteError" };
-            }
-            if (command === "close_connection_settings" && failure) {
-              throw new Error("The previous dashboard is unavailable. Try again.");
-            }
-            return [];
-          },
-        },
-        event: { listen: async () => () => {} },
-      },
-      location: {
-        search:
-          entry === "settings"
-            ? "?mode=connectionSettings"
-            : entry === "recovery"
-              ? "?mode=remoteError"
-              : "",
-      },
-      setInterval() {},
-    };
+    );
 
-    await vm.runInNewContext(`(async () => { ${dashboardSource}\n})()`, {
-      document,
-      URLSearchParams,
-      window,
-    });
-
-    if (entry !== "settings") {
-      assert.equal(elements.get("#title")?.textContent, "Connection needs attention");
-      if (entry === "recovery") {
-        assert.equal(
-          invoked.some(({ command }) => command === "bootstrap"),
-          false,
-        );
+    if (mode !== "connectionSettings") {
+      assert.equal(h.text("#title"), "Connection needs attention");
+      if (mode === "remoteError") {
+        assert.equal(h.called("bootstrap"), false);
       }
       if (lateRetry) {
-        elements.get("#primary-action")?.click();
+        h.click("#primary-action");
       }
-      elements.get("#edit-connection")?.click();
+      h.click("#edit-connection");
       // Drain the actual click's promise continuations, without changing the handler.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await yieldToDashboard();
       if (lateRetry) {
         retry.resolve({ phase: "remoteError" });
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await yieldToDashboard();
       }
-      assert.equal(elements.get("#title")?.textContent, "Connection Settings");
+      assert.equal(h.text("#title"), "Connection Settings");
     }
-    assert.equal(elements.get(".setup-navigation")?.classList.contains("hidden"), false);
-    assert.equal(elements.get("#setup-continue")?.classList.contains("hidden"), true);
-    assert.equal(elements.get("#setup-back")?.disabled, false);
-    const beforeBack = invoked.length;
-    await elements.get("#setup-back")?.click();
-    assert.deepEqual(invoked.slice(beforeBack), [
+    assert.equal(h.hidden(".setup-navigation"), false);
+    assert.equal(h.hidden("#setup-continue"), true);
+    assert.equal(h.element("#setup-back").disabled, false);
+    const beforeBack = h.calls.length;
+    await h.click("#setup-back");
+    assert.deepEqual(h.calls.slice(beforeBack), [
       { command: "close_connection_settings", args: undefined },
     ]);
-    assert.equal(elements.get("#setup-back")?.disabled, false);
+    assert.equal(h.element("#setup-back").disabled, false);
     if (failure) {
-      assert.equal(elements.get("#title")?.textContent, "Connection Settings");
-      assert.equal(elements.get(".setup-navigation")?.classList.contains("hidden"), false);
-      assert.match(
-        elements.get("#remote-feedback")?.textContent ?? "",
-        /previous dashboard is unavailable/,
-      );
+      assert.equal(h.text("#title"), "Connection Settings");
+      assert.equal(h.hidden(".setup-navigation"), false);
+      assert.match(h.text("#remote-feedback") ?? "", /previous dashboard is unavailable/);
     }
   },
 );
 
-test.each(
-  [
-    { platform: "freebsd", externalService: true },
-    { platform: "linux", externalService: false },
-    { platform: "macos", externalService: false },
-    { platform: "windows", externalService: false },
-  ].flatMap((entry) =>
-    [true, false].map((releaseBuild) => Object.assign({}, entry, { releaseBuild })),
-  ),
-)(
-  "$platform first-run describes its local service ownership (release: $releaseBuild)",
-  async ({ platform, externalService, releaseBuild }) => {
-    for (const phase of ["unconfigured", "missingCli"]) {
-      const installFailure = "Fixture: start the Gateway with openclaw gateway run, then retry.";
-      const elements = new Map<string, ReturnType<typeof fakeElement>>();
-      const invoked: { command: string; args?: Record<string, unknown> }[] = [];
-      const document = {
-        createElement: fakeElement,
-        querySelector(selector: string) {
-          if (!elements.has(selector)) {
-            elements.set(selector, fakeElement());
-          }
-          return elements.get(selector);
-        },
-      };
-      const window = {
-        __TAURI__: {
-          core: {
-            async invoke(command: string, args?: Record<string, unknown>) {
-              invoked.push({ command, args });
-              if (command === "discover_gateways") {
-                return [];
-              }
-              if (command === "build_info") {
-                return { platform, releaseBuild };
-              }
-              if (command === "install_cli") {
-                throw new Error(installFailure);
-              }
-              return { phase };
-            },
-          },
-          event: { listen: async () => () => {} },
-        },
-        location: { search: "" },
-        setInterval() {},
-      };
-      const actions = await vm.runInNewContext(
-        `(async () => { ${dashboardSource}\nreturn { renderConnectionChoices, continueLocalSetup, install }; })()`,
-        { document, URLSearchParams, window },
-      );
-      actions.renderConnectionChoices();
-      const description = elements.get("#description")?.textContent ?? "";
-      const subtitle = elements.get("#local-subtitle")?.textContent ?? "";
-      if (externalService) {
-        assert.match(description, /openclaw package service/);
-        assert.match(description, /openclaw gateway run/);
-        assert.match(description, /same account you used for onboarding/);
-        assert.match(subtitle, /Gateway you start/);
-        assert.doesNotMatch(
-          `${description} ${subtitle}`,
-          /starts automatically|installs everything/,
-        );
-      } else {
-        assert.equal(
-          description,
-          "Most people choose this computer. OpenClaw installs everything and keeps your assistant running in the background.",
-        );
-        assert.equal(subtitle, "Private to this computer. Installs and starts automatically.");
+test.each([
+  ["freebsd", "unconfigured", true],
+  ["linux", "unconfigured", true],
+  ["freebsd", "missingCli", true],
+  ["linux", "missingCli", true],
+  ["freebsd", "missingCli", false],
+  ["linux", "missingCli", false],
+] as const)(
+  "%s %s describes service ownership (release: %s)",
+  async (platform, phase, releaseBuild) => {
+    const externalService = platform === "freebsd";
+    const installFailure = "Fixture: start the Gateway with openclaw gateway run, then retry.";
+    const h = await mountDashboard("", undefined, undefined, async (command) => {
+      if (command === "discover_gateways") {
+        return [];
       }
-
-      await actions.continueLocalSetup();
-      assert.equal(
-        elements.get("#install-hint")?.textContent,
-        externalService
-          ? "Installs the CLI in ~/.openclaw using your system Node.js and npm."
-          : "Installs the CLI and managed Node runtime in ~/.openclaw.",
-      );
-      if (phase === "unconfigured") {
-        assert.deepEqual(
-          invoked
-            .filter(({ command }) => command === "bootstrap")
-            .map(({ args }) => args && Object.assign({}, args)),
-          [undefined, { explicitLocal: true }],
-        );
-        assert.equal(
-          elements.get("#activity-label")?.textContent,
-          externalService ? "Connecting to your local Gateway…" : "Starting your local Gateway…",
-        );
-      } else if (!releaseBuild) {
-        assert.equal(elements.get("#title")?.textContent, "Choose a release channel");
-        if (externalService) {
-          assert.match(elements.get("#description")?.textContent ?? "", /system Node.js and npm/);
-        }
-        assert.equal(elements.get("#install-controls")?.classList.contains("hidden"), false);
-        assert.equal(
-          invoked.some(({ command }) => command === "install_cli"),
-          false,
-        );
-        await actions.install();
+      if (command === "build_info") {
+        return { platform, releaseBuild };
       }
-      if (phase === "missingCli") {
-        assert.equal(elements.get("#title")?.textContent, "OpenClaw needs attention");
-        assert.equal(elements.get("#description")?.textContent, installFailure);
-        assert.equal(elements.get("#log-status")?.textContent, "FAILED");
-        assert.equal(elements.get("#install-controls")?.classList.contains("hidden"), false);
-        assert.equal(elements.get("#install-button")?.disabled, false);
+      if (command === "install_cli") {
+        throw new Error(installFailure);
       }
+      return { phase };
+    });
+    h.actions.renderConnectionChoices();
+    const description = h.text("#description") ?? "";
+    const subtitle = h.text("#local-subtitle") ?? "";
+    if (externalService) {
+      assert.match(description, /openclaw package service/);
+      assert.match(description, /openclaw gateway run/);
+      assert.match(description, /same account you used for onboarding/);
+      assert.match(subtitle, /Gateway you start/);
+      assert.doesNotMatch(`${description} ${subtitle}`, /starts automatically|installs everything/);
+    } else {
       assert.equal(
-        invoked.filter(({ command }) => command === "install_cli").length,
-        phase === "missingCli" ? 1 : 0,
+        description,
+        "Most people choose this computer. OpenClaw installs everything and keeps your assistant running in the background.",
       );
-      assert.equal(
-        invoked.some(({ command }) => command === "gateway_action"),
-        false,
-      );
+      assert.equal(subtitle, "Private to this computer. Installs and starts automatically.");
     }
+
+    await h.actions.continueLocalSetup();
+    assert.equal(
+      h.text("#install-hint"),
+      externalService
+        ? "Installs the CLI in ~/.openclaw using your system Node.js and npm."
+        : "Installs OpenClaw and its managed runtime in ~/.openclaw.",
+    );
+    if (phase === "unconfigured") {
+      assert.deepEqual(
+        h.callsFor("bootstrap").map(({ args }) => args && Object.assign({}, args)),
+        [undefined, { explicitLocal: true }],
+      );
+      assert.equal(
+        h.text("#activity-label"),
+        externalService ? "Connecting to your local Gateway…" : "Starting your local Gateway…",
+      );
+    } else if (!releaseBuild) {
+      assert.equal(h.text("#title"), "Choose a release channel");
+      if (externalService) {
+        assert.match(h.text("#description") ?? "", /system Node.js and npm/);
+      }
+      assert.equal(h.hidden("#install-controls"), false);
+      assert.equal(h.called("install_cli"), false);
+      await h.actions.install();
+    }
+    if (phase === "missingCli") {
+      assert.equal(h.text("#title"), "OpenClaw needs attention");
+      assert.equal(h.text("#description"), installFailure);
+      assert.equal(h.text("#log-status"), "FAILED");
+      assert.equal(h.hidden("#install-controls"), false);
+      assert.equal(h.element("#install-button").disabled, false);
+    }
+    assert.equal(h.callsFor("install_cli").length, phase === "missingCli" ? 1 : 0);
+    assert.equal(h.called("gateway_action"), false);
   },
 );

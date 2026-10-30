@@ -14,7 +14,7 @@ struct DashboardBackgroundTests {
             html: "<!doctype html><html><head></head><body></body></html>",
             contentSecurityPolicy: "default-src 'none'; style-src 'unsafe-inline'")
         defer { server.stop() }
-        let auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
+        let auth = DashboardWindowAuth.unauthenticated
         let controller = DashboardWindowController(
             url: server.url(),
             auth: auth,
@@ -25,11 +25,8 @@ struct DashboardBackgroundTests {
         let window = try #require(controller.window)
         window.appearance = NSAppearance(named: appearance)
         controller.show(url: server.url(), auth: auth)
-        let deadline = ContinuousClock.now + .seconds(5)
-        while controller.webView.isLoading || !controller.canDeliverNativeCommands {
-            guard ContinuousClock.now < deadline else { throw URLError(.timedOut) }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        try await waitForNativeDashboardDocument(controller)
+        try #require(controller.canDeliverNativeCommands)
 
         // Freeze the unstyled stage: an opaque white pixel here flashes before
         // the Control UI's inline theme can paint, even in a dark native window.

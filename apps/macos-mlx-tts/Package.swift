@@ -13,10 +13,9 @@ let package = Package(
         .executable(name: "openclaw-mlx-tts", targets: ["OpenClawMLXTTSHelper"]),
     ],
     dependencies: [
-        // Progressive Fish chunks and cancellation are newer than the latest tagged release.
         .package(
             url: "https://github.com/Blaizzy/mlx-audio-swift",
-            revision: "3506fb93cc3b9e4a642079d5384eaca0373962e6"),
+            exact: "0.1.5"),
         .package(path: "../shared/OpenClawMLXTTSProtocol"),
     ],
     targets: [

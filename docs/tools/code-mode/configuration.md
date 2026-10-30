@@ -43,6 +43,10 @@ shared saved-result allowance; it does not cap Node's retained live context.
 
 `timeoutMs` is a wall-clock budget per `exec` or `wait` call. Worker preparation, guest
 computation, and inline tool waits share that budget; approval waits pause it.
+For an explicitly `awaitResults: true` cell, off-VM tool waiting also pauses the
+execution allowance. The same unused allowance resumes after settlement;
+worker preparation and guest execution never receive a fresh budget. Existing
+agent-run and tool deadlines continue running during required waits.
 The model-facing `exec` description includes the effective limit. Blocking guest
 computation that exhausts the budget fails with `timeout`. Unfinished tool calls
 can instead return `waiting`, so a later `wait` can resume them with a fresh call
@@ -52,8 +56,8 @@ headless wall-clock deadline. A checkpoint does not reset that wall deadline.
 When the shell `exec` tool is available, use it for heavier computation
 and keep guest JavaScript focused on coordinating tools and processing results.
 
-If code mode is enabled but the selected executor cannot load, OpenClaw fails closed
-for that run; it does not silently expose normal tools as a fallback. This
+If code mode is enabled but the selected executor cannot load, OpenClaw stops
+that run; it does not silently expose normal tools as a fallback. This
 holds for `true` and for `"auto"` runs where the model resolves as preferred:
 an engaged run never silently falls back to another executor or broad direct
 tool exposure.
@@ -91,17 +95,17 @@ plugin's catalog; core only reads the generic compat field.
 
 Bundled provider catalogs currently flag these models as `"preferred"`:
 
-| Provider  | Models                                                                                                                                                           |
-| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| anthropic | `claude-fable-5`, `claude-opus-5-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-mythos-5`, `claude-opus-4-8`                                                    |
-| deepseek  | `deepseek-v4-pro`, `deepseek-v4-flash`                                                                                                                           |
-| google    | `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.7-flash` |
-| kimi      | `k3`, `k3-256k`                                                                                                                                                  |
-| minimax   | `MiniMax-M3`                                                                                                                                                     |
-| moonshot  | `kimi-k3`                                                                                                                                                        |
-| openai    | `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.5-pro`                                                                              |
-| xiaomi    | `mimo-v2.6-pro`, `mimo-v2.6-flash`                                                                                                                               |
-| zai       | `glm-5.3`, `glm-5.2`, `glm-5.1`                                                                                                                                  |
+| Provider  | Models                                                                                                                                                                                                 |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| anthropic | `claude-fable-5`, `claude-opus-5-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-mythos-5`, `claude-opus-4-8`                                                                                          |
+| deepseek  | `deepseek-v4-pro`, `deepseek-v4-flash`                                                                                                                                                                 |
+| google    | `gemini-4-argon`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.7-flash`, `gemini-3.8-flash` |
+| kimi      | `k3`, `k3-256k`                                                                                                                                                                                        |
+| minimax   | `MiniMax-M3`                                                                                                                                                                                           |
+| moonshot  | `kimi-k3`                                                                                                                                                                                              |
+| openai    | `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.5-pro`                                                                                                                    |
+| xiaomi    | `mimo-v2.6-pro`, `mimo-v2.6-flash`                                                                                                                                                                     |
+| zai       | `glm-5.3`, `glm-5.2`, `glm-5.1`                                                                                                                                                                        |
 
 `claude-haiku-4-5` is marked `"capable"`: it remains available through an
 explicit `true` agent or model setting, but `"auto"` does not engage it.
@@ -120,7 +124,7 @@ Every catalog row for a shared model therefore states its tier explicitly once
 any sibling row states one. Rows are matched on the vendor's own name for the
 weights, so a catalog that republishes a model under a namespaced id or
 different casing is matched automatically: `novita/moonshotai/kimi-k3`,
-`nvidia/z-ai/glm-5.2`, and `together/deepseek-ai/DeepSeek-V4-Pro` all group with
+`deepinfra/zai-org/GLM-5.2`, and `together/zai-org/GLM-5.2` all group with
 the first-party rows without anyone declaring anything. Only genuinely different
 names need the manifest's `upstreamModel` marker, as the `kimi` catalog uses for
 `moonshot/kimi-k3`.

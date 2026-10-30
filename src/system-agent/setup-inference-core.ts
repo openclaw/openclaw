@@ -5,27 +5,19 @@ import type {
   SetupInferenceFailureStatus,
 } from "../../packages/gateway-protocol/src/schema/setup-inference.js";
 import type { AgentRunResultView } from "../agents/agent-run-result.js";
-import type { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
-import type { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
-import type { FailoverReason } from "../agents/failover/signal.js";
+import { describeFailoverError } from "../agents/failover-error.js";
+import { FAILOVER_PROBE_STATUS as SETUP_STATUS_BY_FAILOVER_REASON } from "../agents/failover/probe-status.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace-default.js";
-import type {
-  detectInferenceBackends,
-  InferenceBackendKind,
-} from "../commands/onboard-inference.js";
+import type { InferenceBackendKind } from "../commands/onboard-inference.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { enablePluginInConfig } from "../plugins/enable.js";
-import type {
-  ProviderAuthChoiceMetadata,
-  resolveManifestProviderAuthChoice,
-  resolveManifestProviderAuthChoices,
-} from "../plugins/provider-auth-choices.js";
-import type { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
+import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import type { SetupRecommendedInstall } from "../plugins/recommended-tool-installs.js";
+import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -36,12 +28,7 @@ import type {
   SetupInferencePrepareOption,
 } from "./setup-inference-auth-options.js";
 import type { SetupNativeSessionCatalogOption } from "./setup-native-session-catalogs.js";
-import type {
-  captureSystemAgentOwnerPluginArtifacts,
-  createSystemAgentVerifiedInferenceBinding,
-  SystemAgentVerifiedInferenceBinding,
-  SystemAgentVerifiedInferenceDeps,
-} from "./verified-inference.js";
+import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 
 export const setupInferenceLog = createSubsystemLogger("system-agent/setup-inference");
 
@@ -75,8 +62,8 @@ export type SetupInferenceCandidate = {
   label: string;
   detail: string;
   modelRef: string;
-  /** @deprecated Gateway wire compatibility for older macOS clients. Always false. */
-  recommended: false;
+  /** Highest-ranked usable primary-model candidate from passive discovery. */
+  recommended: boolean;
   credentials?: boolean;
   icon?: string;
   website?: string;
@@ -128,20 +115,14 @@ export type { SetupInferenceFailureStatus };
 export type SetupInferenceStatus = "ok" | SetupInferenceFailureStatus;
 
 export type ActivateSetupInferenceResult =
-  | {
-      ok: true;
-      modelTarget?: "utility";
-      modelRef: string;
-      latencyMs: number;
+  | (Extract<VerifySetupInferenceResult, { ok: true }> & {
       lines: string[];
+      modelName?: string;
       gatewayRestartRequired?: true;
-    }
-  | {
-      ok: false;
-      status: SetupInferenceFailureStatus;
-      error: string;
+    })
+  | (Extract<VerifySetupInferenceResult, { ok: false }> & {
       disposition?: SetupInferenceActivationRejection["disposition"];
-    };
+    });
 
 /**
  * The config commit may have happened, so callers must verify current setup
@@ -178,21 +159,23 @@ export type VerifySetupInferenceResult =
     };
 
 export type CompleteSetupInferenceResult =
-  | { ok: true; modelRef: string; latencyMs: number; text: string }
-  | { ok: false; status: SetupInferenceFailureStatus; error: string };
+  | (Omit<Extract<VerifySetupInferenceResult, { ok: true }>, "modelTarget"> & {
+      text: string;
+    })
+  | Extract<VerifySetupInferenceResult, { ok: false }>;
 
 export type BoundVerifySetupInferenceResult =
-  | {
-      ok: true;
-      modelTarget?: "utility";
-      modelRef: string;
-      latencyMs: number;
+  | (Extract<VerifySetupInferenceResult, { ok: true }> & {
       binding: SystemAgentVerifiedInferenceBinding;
-    }
-  | { ok: false; status: SetupInferenceFailureStatus; error: string };
+    })
+  | Extract<VerifySetupInferenceResult, { ok: false }>;
 
 export type ActivateSetupInferenceParams = {
   kind: SetupInferenceKind | "api-key" | "provider-auth";
+  /** Gateway first-run policy; never inherited by the manual picker. */
+  automaticSetup?: true;
+  /** Enable and verify access without changing the agent's selected model. */
+  selectModel?: boolean;
   /** Acknowledge utility-only activation; older clients must not promote it as primary-ready. */
   modelTarget?: "utility";
   /** Configured agent that owns the route being tested and persisted. */
@@ -220,15 +203,18 @@ export type ActivateSetupInferenceParams = {
   signal?: AbortSignal;
   /** Session cancellation gate; interactive credentials must never persist after cancel. */
   isCancelled?: () => boolean;
+  /** Revalidate the caller's live authority before provider I/O or persistent effects. */
+  assertCurrent?: () => void;
   /** Lock the caller's cancellation boundary before the first durable setup effect. */
   beforePersistentEffect?: () => void | Promise<void>;
   /** Preparation effects are complete; the selected route is ready for its live test. */
   onPreparationComplete?: () => void;
+  /** Present installation and activation separately from the live connection test. */
+  onActivationStarted?: () => void;
   /** Observe the authored config held by the inference writer before it commits. */
   onCommitStarted?: (sourceConfig: OpenClawConfig) => void;
   /** Finish application or recovery only after releasing the Gateway setup queue. */
   onActivationCompletion?: (complete: () => Promise<boolean>) => void;
-  deps?: ActivateSetupInferenceDeps;
 };
 
 export class SetupInferenceCancelledError extends Error {
@@ -238,82 +224,24 @@ export class SetupInferenceCancelledError extends Error {
 }
 
 export function throwIfSetupInferenceCancelled(
-  params: Pick<ActivateSetupInferenceParams, "signal" | "isCancelled">,
+  params: Pick<ActivateSetupInferenceParams, "signal" | "isCancelled" | "assertCurrent">,
 ): void {
   if (params.signal?.aborted || params.isCancelled?.()) {
     throw new SetupInferenceCancelledError();
   }
+  params.assertCurrent?.();
 }
 
 export async function waitForProviderAuth<T>(
   promise: Promise<T>,
   signal?: AbortSignal,
 ): Promise<T> {
-  if (!signal) {
-    return await promise;
-  }
-  if (signal.aborted) {
-    // The provider can cancel synchronously while constructing this already-started promise.
-    // Retain its rejection handler even though cancellation wins immediately.
-    void promise.catch(() => {});
-    throw new SetupInferenceCancelledError();
-  }
-  let rejectAborted: ((reason: unknown) => void) | undefined;
-  const aborted = new Promise<never>((_resolve, reject) => {
-    rejectAborted = reject;
-  });
-  const onAbort = () => rejectAborted?.(new SetupInferenceCancelledError());
-  signal.addEventListener("abort", onAbort, { once: true });
-  try {
-    return await Promise.race([promise, aborted]);
-  } finally {
-    signal.removeEventListener("abort", onAbort);
-  }
+  return await racePromiseWithAbortSignal(
+    promise,
+    signal,
+    () => new SetupInferenceCancelledError(),
+  );
 }
-
-type SetupInferenceRunEmbeddedAgent = (
-  params: Parameters<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>[0] & {
-    onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
-    authProfileStateMode?: "read-write" | "read-only";
-    preparedModelRuntimeMode?: "isolated-read-only";
-  },
-) => ReturnType<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>;
-
-export type ActivateSetupInferenceDeps = {
-  readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-  runEmbeddedAgent?: SetupInferenceRunEmbeddedAgent;
-  runCliAgent?: typeof import("../agents/cli-runner.js").runCliAgent;
-  ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
-  transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
-  resolvePluginProviders?: typeof resolvePluginProvidersCore;
-  resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
-  resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
-  enablePluginInConfig?: typeof enablePluginInConfig;
-  loadAuthProfileStoreForRuntime?: typeof loadAuthProfileStoreForRuntime;
-  resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
-  resolveCliRuntimeArtifactFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeArtifactFingerprint;
-  resolveCliRuntimeOwnerFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeOwnerFingerprint;
-  resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
-  resolvePluginMetadataSnapshot?: typeof import("../plugins/plugin-metadata-snapshot.js").resolvePluginMetadataSnapshot;
-  readCodexCliActiveApiKey?: typeof readCodexCliActiveApiKey;
-  loadPluginRegistrySnapshot?: SystemAgentVerifiedInferenceDeps["loadPluginRegistrySnapshot"];
-  fingerprintPluginRuntimeArtifact?: SystemAgentVerifiedInferenceDeps["fingerprintPluginRuntimeArtifact"];
-  captureSystemAgentOwnerPluginArtifacts?: typeof captureSystemAgentOwnerPluginArtifacts;
-  createSystemAgentVerifiedInferenceBinding?: typeof createSystemAgentVerifiedInferenceBinding;
-  markRetainedManagedNpmInstall?: typeof import("../plugins/managed-npm-retention.js").markRetainedManagedNpmInstall;
-  createTempDir?: () => Promise<string>;
-  removeTempDir?: (dir: string) => Promise<void>;
-  timeoutMs?: number;
-};
-
-export type DetectSetupInferenceDeps = {
-  /** Supplies prepared setup choices before native or provider discovery starts. */
-  onPartial?: (detection: SetupInferenceDetection) => void;
-  detectInferenceBackends?: typeof detectInferenceBackends;
-  resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
-  resolvePluginProviders?: typeof resolvePluginProvidersCore;
-  enablePluginInConfig?: typeof enablePluginInConfig;
-};
 
 export function toProviderAutoSetupKind(choiceId: string): ProviderAutoSetupInferenceKind {
   return `${PROVIDER_AUTO_SETUP_KIND_PREFIX}${encodeURIComponent(choiceId)}`;
@@ -324,18 +252,7 @@ export function toSavedAuthSetupKind(profileId: string): SavedAuthSetupInference
 }
 
 export function parseSavedAuthSetupProfileId(kind: string): string | undefined {
-  if (!kind.startsWith(SAVED_AUTH_SETUP_KIND_PREFIX)) {
-    return undefined;
-  }
-  const encoded = kind.slice(SAVED_AUTH_SETUP_KIND_PREFIX.length);
-  if (!encoded) {
-    return undefined;
-  }
-  try {
-    return decodeURIComponent(encoded) || undefined;
-  } catch {
-    return undefined;
-  }
+  return parseEncodedSetupKind(kind, SAVED_AUTH_SETUP_KIND_PREFIX);
 }
 
 export function parseInferenceRef(modelRef: string): { provider: string; model: string } {
@@ -346,15 +263,15 @@ export function parseInferenceRef(modelRef: string): { provider: string; model: 
 }
 
 export function parseProviderAutoSetupChoiceId(kind: string): string | undefined {
-  if (!kind.startsWith(PROVIDER_AUTO_SETUP_KIND_PREFIX)) {
-    return undefined;
-  }
-  const encoded = kind.slice(PROVIDER_AUTO_SETUP_KIND_PREFIX.length);
-  if (!encoded) {
+  return parseEncodedSetupKind(kind, PROVIDER_AUTO_SETUP_KIND_PREFIX);
+}
+
+function parseEncodedSetupKind(kind: string, prefix: string): string | undefined {
+  if (!kind.startsWith(prefix)) {
     return undefined;
   }
   try {
-    return decodeURIComponent(encoded) || undefined;
+    return decodeURIComponent(kind.slice(prefix.length)) || undefined;
   } catch {
     return undefined;
   }
@@ -395,7 +312,13 @@ export function resolveCandidatePresentation(
       entry.choiceId === candidate.kind ||
       entry.deprecatedChoiceIds?.includes(candidate.kind) === true,
   );
-  const brandId = resolveSetupInferenceCandidateBrandId(candidate, choice?.providerId);
+  // Built-in CLI detection kinds are runtime identities, not display brands.
+  const brandId =
+    candidate.kind === "claude-cli"
+      ? "claude"
+      : candidate.kind === "codex-cli"
+        ? "openai"
+        : choice?.providerId?.trim() || candidate.modelRef.split("/", 1)[0]?.trim() || undefined;
   return {
     ...(brandId ? { brandId } : {}),
     ...(choice?.icon ? { icon: choice.icon } : {}),
@@ -413,29 +336,29 @@ export function resolveSetupInferenceWorkspace(
   );
 }
 
-const SETUP_STATUS_BY_FAILOVER_REASON = {
-  auth: "auth",
-  auth_permanent: "auth",
-  format: "format",
-  rate_limit: "rate_limit",
-  overloaded: "rate_limit",
-  billing: "billing",
-  server_error: "unknown",
-  timeout: "timeout",
-  tls_certificate: "unknown",
-  context_overflow: "unknown",
-  model_not_found: "format",
-  session_expired: "unknown",
-  empty_response: "unknown",
-  no_error_details: "unknown",
-  unclassified: "unknown",
-  unknown: "unknown",
-} satisfies Record<FailoverReason, SetupInferenceFailureStatus>;
-
-export function mapFailoverReasonToSetupStatus(
-  reason?: FailoverReason | null,
-): SetupInferenceFailureStatus {
-  return reason ? SETUP_STATUS_BY_FAILOVER_REASON[reason] : "unknown";
+export function describeSetupInferenceError(
+  error: unknown,
+  route: SystemAgentConfiguredRoute,
+): { status: SetupInferenceFailureStatus; error: string } {
+  const described = describeFailoverError(error);
+  const origin = URL.parse(
+    route.runConfig.models?.providers?.[route.provider]?.baseUrl ?? "",
+  )?.origin;
+  const connectionError = !origin
+    ? undefined
+    : described.code === "ECONNREFUSED"
+      ? `Nothing is listening at ${origin}. Start the server or check the URL, then retry setup.`
+      : described.code === "ENOTFOUND"
+        ? `The server name in ${origin} could not be found. Check the URL and DNS settings, then retry setup.`
+        : described.code === "EHOSTUNREACH" || described.code === "ENETUNREACH"
+          ? `Cannot reach ${origin}. Check the URL and network connection from the Gateway host, then retry setup.`
+          : undefined;
+  return connectionError
+    ? { status: "unavailable", error: `${connectionError} No default model was changed.` }
+    : {
+        status: described.reason ? SETUP_STATUS_BY_FAILOVER_REASON[described.reason] : "unknown",
+        error: described.message,
+      };
 }
 
 export function validateSetupInferenceOwnerEvidence(params: {
@@ -443,31 +366,20 @@ export function validateSetupInferenceOwnerEvidence(params: {
   configuredHarnessId?: string;
   auth: AgentExecutionAuthBinding;
 }): Extract<ActivateSetupInferenceResult, { ok: false }> | undefined {
+  let reason: string | undefined;
   if (
     !params.auth.authFingerprint &&
     (!params.auth.runtimeOwnerFingerprint ||
       !params.auth.runtimeOwnerKind ||
       !params.auth.runtimeOwnerId?.trim())
   ) {
-    return {
-      ok: false,
-      status: "unknown",
-      error:
-        "Inference succeeded, but its runtime did not report an owner that OpenClaw can safely reuse. No default model was changed.",
-    };
-  }
-  if (
+    reason = "its runtime did not report an owner that OpenClaw can safely reuse";
+  } else if (
     params.runner === "cli" &&
     (!params.auth.runtimeArtifactFingerprint || !params.auth.runtimeArtifactId?.trim())
   ) {
-    return {
-      ok: false,
-      status: "unknown",
-      error:
-        "Inference succeeded, but its CLI executable/package artifact could not be safely reused. No default model was changed.",
-    };
-  }
-  if (params.runner === "embedded") {
+    reason = "its CLI executable/package artifact could not be safely reused";
+  } else if (params.runner === "embedded") {
     const successfulHarnessId = params.auth.agentHarnessId?.trim();
     const configuredHarnessId = params.configuredHarnessId?.trim();
     if (
@@ -476,43 +388,24 @@ export function validateSetupInferenceOwnerEvidence(params: {
         configuredHarnessId !== "auto" &&
         successfulHarnessId !== configuredHarnessId)
     ) {
-      return {
-        ok: false,
-        status: "unknown",
-        error:
-          "Inference succeeded, but its exact agent harness could not be safely reused. No default model was changed.",
-      };
-    }
-    if (
+      reason = "its exact agent harness could not be safely reused";
+    } else if (
       successfulHarnessId !== "openclaw" &&
       (params.auth.runtimeOwnerKind !== "plugin-harness" ||
         params.auth.runtimeOwnerId?.trim() !== successfulHarnessId ||
         !params.auth.runtimeArtifactFingerprint ||
         !params.auth.runtimeArtifactId?.trim())
     ) {
-      return {
-        ok: false,
-        status: "unknown",
-        error:
-          "Inference succeeded, but its agent harness artifact could not be safely reused. No default model was changed.",
-      };
+      reason = "its agent harness artifact could not be safely reused";
     }
   }
-  return undefined;
-}
-
-function resolveSetupInferenceCandidateBrandId(
-  candidate: { kind: string; modelRef: string },
-  providerId?: string,
-): string | undefined {
-  // Built-in CLI detection kinds are runtime identities, not display brands.
-  if (candidate.kind === "claude-cli") {
-    return "claude";
-  }
-  if (candidate.kind === "codex-cli") {
-    return "openai";
-  }
-  return providerId?.trim() || candidate.modelRef.split("/", 1)[0]?.trim() || undefined;
+  return reason
+    ? {
+        ok: false,
+        status: "unknown",
+        error: `Inference succeeded, but ${reason}. No default model was changed.`,
+      }
+    : undefined;
 }
 
 /** CLI backends need a hard tool-free mode; the probe must not let a CLI act on the host. */
@@ -580,6 +473,20 @@ export type StagedCandidate = {
   pendingPluginInstalls?: Record<string, PluginInstallRecord>;
 };
 export type StageFailure = { error: string };
+export type SaveSetupCredentialParams = {
+  profile: ProviderAuthResult["profiles"][number];
+  config: OpenClawConfig;
+  baseConfig: OpenClawConfig;
+  agentDir: string;
+  modelRef: string;
+  authChoice?: string;
+  pluginId?: string;
+  agentRuntimeId?: string;
+  beforePersistentEffect?: () => void | Promise<void>;
+  beforeWrite?: () => void;
+  /** Retains the wizard auth owner's selected state directory and cancellation boundary. */
+  persistAuthProfiles?: (profiles: ProviderAuthResult["profiles"]) => Promise<void>;
+};
 export function validateSetupModelTarget(
   expected: "utility" | undefined,
   requested: "utility" | undefined,
@@ -595,13 +502,13 @@ export function validateSetupModelTarget(
 }
 export type StageContext = {
   params: ActivateSetupInferenceParams;
-  deps: ActivateSetupInferenceDeps;
   snapshot: ConfigFileSnapshot;
   cfg: OpenClawConfig;
   routeAgentId: string;
   agentDir: string;
   workspace: string;
-  credentialsSaved: boolean;
+  /** Caller authority ends once configPersisted is set; saved activation then completes. */
+  effects: { credentialsSaved: boolean; configPersisted: boolean };
   beforePersistentEffect: (effect?: "credential") => Promise<void>;
 };
 

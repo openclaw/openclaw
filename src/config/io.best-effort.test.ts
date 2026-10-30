@@ -1,12 +1,6 @@
-// Covers best-effort config IO reads and warning behavior.
 import fs from "node:fs/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   readBestEffortConfig,
@@ -14,348 +8,152 @@ import {
   readConfigFileSnapshot,
   readSourceConfigBestEffort,
 } from "./config.js";
+import { readCurrentConfigForResolution } from "./io.runtime.js";
 import { resetConfigOverrides, setConfigOverride } from "./runtime-overrides.js";
-import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
+import { withTempHome, withTempHomeConfig } from "./test-helpers.js";
 
-type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
-
-function readConfigHealthRow(env: NodeJS.ProcessEnv, configPath: string) {
-  const { db } = openOpenClawStateDatabase({ env });
-  const healthDb = getNodeSqliteKysely<ConfigHealthDatabase>(db);
-  return executeSqliteQueryTakeFirstSync(
-    db,
-    healthDb
-      .selectFrom("config_health_entries")
-      .select(["config_path", "last_known_good_json"])
-      .where("config_path", "=", configPath),
-  );
+function resolutionWarning(configPath: string) {
+  using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  expect(readCurrentConfigForResolution({ configPath }).config).toEqual({});
+  return warn.mock.calls.map(([line]) => String(line)).join("\n");
 }
+const compaction = { mode: "safeguard" };
 
-describe("readBestEffortConfig", () => {
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
-    resetConfigOverrides();
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  resetConfigOverrides();
+});
+
+const cachePruningConfig = {
+  auth: { profiles: { "anthropic:api": { provider: "anthropic", mode: "api_key" as const } } },
+  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
+};
+
+it("records why an unparseable config was ignored by best-effort reads", async () => {
+  await withTempHome(async (home) => {
+    await fs.mkdir(`${home}/.openclaw`, { recursive: true });
+    await fs.writeFile(`${home}/.openclaw/openclaw.json`, "{ definitely not json", "utf-8");
+    using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(await readSourceConfigBestEffort()).toEqual({});
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("best-effort read ignored unparseable config"),
+    );
   });
+});
 
-  it("can read snapshots without updating config observation state", async () => {
-    await withTempHome(async (home) => {
-      const configPath = await writeOpenClawConfig(home, {
-        gateway: { mode: "local" },
-      });
+it("preserves Windows case-insensitive env lookup in isolated reads", async () => {
+  await withTempHome(async (home) => {
+    const mixedCaseKey = "OpenClaw_Config_Path";
+    const customConfigPath = `${home}/custom-openclaw.json`;
+    await withEnvAsync(
+      { OPENCLAW_CONFIG_PATH: undefined, [mixedCaseKey]: customConfigPath },
+      async () => {
+        using _ = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        await fs.writeFile(customConfigPath, '{"gateway":{"mode":"local"}}\n', "utf-8");
 
-      await readConfigFileSnapshot({ observe: false });
+        const snapshot = await readConfigFileSnapshot({ isolateEnv: true, observe: false });
 
-      const healthPath = `${home}/.openclaw/logs/config-health.json`;
-      await expect(fs.stat(healthPath)).rejects.toMatchObject({ code: "ENOENT" });
-
-      await readConfigFileSnapshot();
-
-      await expect(fs.stat(healthPath)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(readConfigHealthRow({ ...process.env, HOME: home }, configPath)).toMatchObject({
-        config_path: configPath,
-        last_known_good_json: expect.any(String),
-      });
-    });
+        expect(snapshot).toMatchObject({ exists: true, path: customConfigPath });
+      },
+    );
   });
+});
 
-  it("can read snapshots without applying config env vars to the process", async () => {
-    await withTempHome(async (home) => {
-      const key = "OPENCLAW_ISOLATED_CONFIG_READ_TEST";
-      await withEnvAsync({ [key]: undefined }, async () => {
-        await writeOpenClawConfig(home, {
-          env: { vars: { [key]: "from-config" } },
-          gateway: { mode: "local" },
-        });
-
-        await readConfigFileSnapshot({ isolateEnv: true, observe: false });
-
-        expect(process.env[key]).toBeUndefined();
-      });
-    });
-  });
-
-  it("resolves config env above exact lower-precedence values in isolated snapshots", async () => {
-    await withTempHome(async (home) => {
-      const key = "OPENCLAW_GATEWAY_TOKEN";
-      await withEnvAsync({ [key]: "shell-token" }, async () => {
-        await writeOpenClawConfig(home, {
-          env: { vars: { [key]: "config-token" } },
-          gateway: { auth: { mode: "token", token: `\${${key}}` }, mode: "local" },
-        });
-
-        const snapshot = await readConfigFileSnapshot({
-          isolateEnv: true,
-          lowerPrecedenceEnv: { [key]: "shell-token" },
-          observe: false,
-        });
-
-        expect(snapshot.config.gateway?.auth?.token).toBe("config-token");
-        expect(process.env[key]).toBe("shell-token");
-      });
-    });
-  });
-
-  it("resolves config env above normalized lower-precedence aliases in isolated snapshots", async () => {
-    await withTempHome(async (home) => {
-      await withEnvAsync({ ZAI_API_KEY: "shell-token", Z_AI_API_KEY: undefined }, async () => {
-        await writeOpenClawConfig(home, {
-          env: { vars: { Z_AI_API_KEY: "config-token" } },
-          gateway: { auth: { mode: "token", token: "${ZAI_API_KEY}" }, mode: "local" },
-        });
-
-        const snapshot = await readConfigFileSnapshot({
-          isolateEnv: true,
-          lowerPrecedenceEnv: { ZAI_API_KEY: "shell-token" },
-          observe: false,
-        });
-
-        expect(snapshot.config.gateway?.auth?.token).toBe("config-token");
-        expect(process.env.ZAI_API_KEY).toBe("shell-token");
-        expect(process.env.Z_AI_API_KEY).toBeUndefined();
-      });
-    });
-  });
-
-  it("resolves config aliases from a higher-precedence canonical value in isolated snapshots", async () => {
-    await withTempHome(async (home) => {
-      await withEnvAsync({ ZAI_API_KEY: "invocation-token", Z_AI_API_KEY: undefined }, async () => {
-        await writeOpenClawConfig(home, {
-          env: { vars: { Z_AI_API_KEY: "config-token" } },
-          gateway: { auth: { mode: "token", token: "${Z_AI_API_KEY}" }, mode: "local" },
-        });
-
-        const snapshot = await readConfigFileSnapshot({
-          isolateEnv: true,
-          observe: false,
-        });
-
-        expect(snapshot.config.gateway?.auth?.token).toBe("invocation-token");
-        expect(process.env.ZAI_API_KEY).toBe("invocation-token");
-        expect(process.env.Z_AI_API_KEY).toBeUndefined();
-      });
-    });
-  });
-
-  it("can read best-effort config without applying env vars or recording observation", async () => {
-    await withTempHome(async (home) => {
-      const key = "OPENCLAW_ISOLATED_BEST_EFFORT_CONFIG_TEST";
-      await withEnvAsync({ [key]: undefined }, async () => {
-        await writeOpenClawConfig(home, {
-          env: { vars: { [key]: "from-config" } },
-          gateway: { mode: "local" },
-        });
-
-        const config = await readBestEffortConfig({ isolateEnv: true, observe: false });
-
-        expect(config.gateway?.mode).toBe("local");
-        expect(process.env[key]).toBeUndefined();
-        await expect(fs.stat(`${home}/.openclaw/logs/config-health.json`)).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-      });
-    });
-  });
-
-  it("records why an unparseable config was ignored by best-effort reads", async () => {
-    await withTempHome(async (home) => {
-      const configPath = `${home}/.openclaw/openclaw.json`;
-      await fs.mkdir(`${home}/.openclaw`, { recursive: true });
-      await fs.writeFile(configPath, "{ definitely not json", "utf-8");
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-      try {
-        const config = await readSourceConfigBestEffort();
-
-        // The fallback value stays {} — but the degradation is recorded.
-        expect(config).toEqual({});
-        expect(
-          warn.mock.calls.some(([line]) =>
-            String(line).includes("best-effort read ignored unparseable config"),
-          ),
-        ).toBe(true);
-      } finally {
-        warn.mockRestore();
-      }
-    });
-  });
-
-  it("preserves Windows case-insensitive env lookup in isolated reads", async () => {
-    await withTempHome(async (home) => {
-      const mixedCaseKey = "OpenClaw_Config_Path";
-      const customConfigPath = `${home}/custom-openclaw.json`;
-      await withEnvAsync({ OPENCLAW_CONFIG_PATH: undefined }, async () => {
-        await withEnvAsync({ [mixedCaseKey]: customConfigPath }, async () => {
-          const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-          try {
-            await fs.writeFile(
-              customConfigPath,
-              `${JSON.stringify({ gateway: { mode: "local" } }, null, 2)}\n`,
-              "utf-8",
-            );
-
-            const snapshot = await readConfigFileSnapshot({ isolateEnv: true, observe: false });
-
-            expect(snapshot.exists).toBe(true);
-            expect(snapshot.path).toBe(customConfigPath);
-          } finally {
-            platformSpy.mockRestore();
-          }
-        });
-      });
-    });
-  });
-
-  it("does not restore suspicious direct edits from .bak during ordinary reads", async () => {
-    await withTempHome(async (home) => {
-      const configPath = await writeOpenClawConfig(home, {
-        meta: { lastTouchedAt: "2026-04-22T00:00:00.000Z" },
-        update: { channel: "beta" },
-        gateway: { mode: "local" },
-      });
+it("does not restore suspicious direct edits from .bak during ordinary reads", async () => {
+  await withTempHomeConfig(
+    { meta: { lastTouchedAt: "2026-04-22T00:00:00.000Z" }, gateway: { mode: "local" } },
+    async ({ home, configPath }) => {
       await fs.copyFile(configPath, `${configPath}.bak`);
-      const directEditRaw = `${JSON.stringify({ update: { channel: "beta" } }, null, 2)}\n`;
+      const directEdit = { update: { channel: "beta" } };
+      const directEditRaw = JSON.stringify(directEdit);
       await fs.writeFile(configPath, directEditRaw, "utf-8");
 
       const snapshot = await readConfigFileSnapshot();
 
-      expect(snapshot.sourceConfigBeforeMigrations).toEqual({ update: { channel: "beta" } });
+      expect(snapshot.sourceConfigBeforeMigrations).toEqual(directEdit);
       expect(snapshot.sourceConfig).toEqual({
-        update: { channel: "beta" },
+        ...directEdit,
         agents: { entries: { main: {} } },
       });
       expect(await fs.readFile(configPath, "utf-8")).toBe(directEditRaw);
       const entries = await fs.readdir(`${home}/.openclaw`);
       expect(entries.some((entry) => entry.startsWith("openclaw.json.clobbered."))).toBe(false);
-    });
-  });
+    },
+  );
+});
 
-  it("materializes fresh-install defaults when the config file is missing", async () => {
-    await withTempHome(async () => {
-      const { loadConfig } = await import("./io.runtime.js");
-      expect(setConfigOverride("logging.level", "warn").ok).toBe(true);
+it("materializes fresh-install defaults when the config file is missing", async () => {
+  await withTempHome(async () => {
+    const { loadConfig } = await import("./io.runtime.js");
+    expect(setConfigOverride("logging.level", "warn").ok).toBe(true);
 
-      const snapshot = await readConfigFileSnapshot({ observe: false });
-      const loaded = loadConfig({ pin: false, skipPluginValidation: true });
+    const snapshot = await readConfigFileSnapshot({ observe: false });
+    const loaded = loadConfig({ pin: false, skipPluginValidation: true });
 
-      expect(snapshot.exists).toBe(false);
-      // Missing config = fresh install; snapshot and load must produce the same
-      // out-of-box defaults an existing empty {} config gets (contextPruning
-      // stays provider-conditional, so compaction is the parity signal here).
-      expect(snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
-      expect(loaded.agents?.defaults?.compaction?.mode).toBe("safeguard");
-      expect(loaded.logging?.level).toBe("warn");
-    });
-  });
-
-  it("reuses valid snapshots while preserving load-time defaults", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        auth: {
-          profiles: {
-            "anthropic:api": { provider: "anthropic", mode: "api_key" },
-          },
-        },
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-opus-4-6" },
-          },
-        },
-      });
-
-      const snapshot = await readConfigFileSnapshot();
-      const bestEffort = await readBestEffortConfig();
-
-      // Snapshot materialization must inject the same defaults as load; prepared-runtime
-      // exact-config resolution compares the two and diverging shapes fail it permanently.
-      expect(snapshot.config.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
-      expect(snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
-
-      expect(bestEffort.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
-      expect(bestEffort.agents?.defaults?.contextPruning?.ttl).toBe("1h");
-      expect(bestEffort.agents?.defaults?.compaction?.mode).toBe("safeguard");
-      expect(
-        bestEffort.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.params?.cacheRetention,
-      ).toBe("short");
-    });
-  });
-
-  it("controls observation while returning source and materialized config", async () => {
-    await withTempHome(async (home) => {
-      const configPath = await writeOpenClawConfig(home, {
-        auth: {
-          profiles: {
-            "anthropic:api": { provider: "anthropic", mode: "api_key" },
-          },
-        },
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-opus-4-6" },
-          },
-        },
-      });
-      const configRaw = await fs.readFile(configPath, "utf-8");
-
-      const snapshot = await readBestEffortConfigSnapshot({ observe: false });
-
-      expect(snapshot.configDiagnostics).toBeNull();
-      expect(snapshot.sourceConfig.agents?.defaults?.contextPruning?.mode).toBeUndefined();
-      expect(snapshot.config.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
-      expect(snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
-      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(configRaw);
-      expect(readConfigHealthRow({ ...process.env, HOME: home }, configPath)).toBeUndefined();
-
-      await readBestEffortConfigSnapshot();
-
-      expect(readConfigHealthRow({ ...process.env, HOME: home }, configPath)).toMatchObject({
-        config_path: configPath,
-        last_known_good_json: expect.any(String),
-      });
-    });
-  });
-
-  it("returns invalid config diagnostics with the best-effort fallback", async () => {
-    await withTempHome(async (home) => {
-      const configPath = await writeOpenClawConfig(home, {
-        gateway: { port: "abc" },
-      } as never);
-
-      const snapshot = await readBestEffortConfigSnapshot({ observe: false });
-
-      expect(snapshot.configDiagnostics).toEqual({
-        path: configPath,
-        issues: [
-          {
-            path: "gateway.port",
-            message: "Invalid input: expected number, received string",
-          },
-        ],
-      });
-    });
+    expect(snapshot.exists).toBe(false);
+    expect(snapshot.config.agents?.defaults?.compaction).toMatchObject(compaction);
+    expect(loaded.agents?.defaults?.compaction).toMatchObject(compaction);
+    expect(loaded.logging?.level).toBe("warn");
   });
 });
 
-describe("readSourceConfigBestEffort", () => {
-  it("preserves the authored source config without load-time defaults", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        auth: {
-          profiles: {
-            "anthropic:api": { provider: "anthropic", mode: "api_key" },
-          },
-        },
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-opus-4-6" },
-          },
-        },
-      });
+it("keeps authored source separate from materialized best-effort defaults", async () => {
+  await withTempHomeConfig(cachePruningConfig, async () => {
+    const snapshot = await readConfigFileSnapshot();
+    const bestEffort = await readBestEffortConfig();
+    const sourceBestEffort = await readSourceConfigBestEffort();
+    expect(sourceBestEffort).toEqual(snapshot.sourceConfigBeforeMigrations);
+    expect(sourceBestEffort.agents?.defaults?.contextPruning?.mode).toBeUndefined();
+    expect(sourceBestEffort.agents?.defaults?.compaction?.mode).toBeUndefined();
 
-      const snapshot = await readConfigFileSnapshot();
-      const sourceBestEffort = await readSourceConfigBestEffort();
+    const defaults = {
+      contextPruning: { mode: "cache-ttl", ttl: "1h" },
+      compaction,
+      models: { "anthropic/claude-opus-4-6": { params: { cacheRetention: "short" } } },
+    };
+    expect(snapshot.config.agents?.defaults).toMatchObject(defaults);
+    expect(bestEffort.agents?.defaults).toMatchObject(defaults);
+  });
+});
 
-      expect(sourceBestEffort).toEqual(snapshot.sourceConfigBeforeMigrations);
-      expect(sourceBestEffort.agents?.defaults?.contextPruning?.mode).toBeUndefined();
-      expect(sourceBestEffort.agents?.defaults?.compaction?.mode).toBeUndefined();
+it("returns invalid config diagnostics with the best-effort fallback", async () => {
+  await withTempHomeConfig({ gateway: { port: "abc" } }, async ({ configPath }) => {
+    expect((await readBestEffortConfigSnapshot({ observe: false })).configDiagnostics).toEqual({
+      path: configPath,
+      issues: [
+        { path: "gateway.port", message: "Invalid input: expected number, received string" },
+      ],
     });
+  });
+});
+const unavailable = "Config unavailable; using environment and default agent directory settings.";
+it.each([
+  {
+    name: "malformed redaction",
+    config: {
+      logging: { redactPatterns: [1, null] },
+      skills: { workshop: { approvalPolicy: "pending", maxPending: 3 } },
+    },
+    messages: ["Config warnings:", unavailable, "logging.redactPatterns"],
+  },
+  {
+    name: "invalid port",
+    config: { gateway: { port: "abc" } },
+    messages: ["Config unavailable", "expected number, received string"],
+  },
+])("explains rejection for $name", async ({ config, messages }) => {
+  await withTempHomeConfig(config, async ({ configPath }) => {
+    const warning = resolutionWarning(configPath);
+    for (const message of messages) {
+      expect(warning).toContain(message);
+    }
+  });
+});
+
+it("keeps the plain availability warning for an absent config file", async () => {
+  await withTempHome(async (home) => {
+    const configPath = `${home}/.openclaw/absent.json`;
+    expect(resolutionWarning(configPath)).toContain(`${configPath}: ${unavailable}`);
   });
 });

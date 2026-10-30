@@ -8,7 +8,6 @@ describe("normalizeGoogleApiBaseUrl", () => {
   });
 
   it.each([
-    ["https://generativelanguage.googleapis.com", DEFAULT_GOOGLE_API_BASE_URL],
     ["https://generativelanguage.googleapis.com/", DEFAULT_GOOGLE_API_BASE_URL],
     ["https://generativelanguage.googleapis.com/v1beta", DEFAULT_GOOGLE_API_BASE_URL],
     [

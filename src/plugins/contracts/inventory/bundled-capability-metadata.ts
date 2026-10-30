@@ -25,6 +25,7 @@ export type BundledPluginContractSnapshot = {
   providerIds: string[];
   providerEnvVars: Record<string, string[]>;
   workerProviderIds: string[];
+  storageProviderIds: string[];
   embeddingProviderIds: string[];
   speechProviderIds: string[];
   realtimeTranscriptionProviderIds: string[];
@@ -124,96 +125,38 @@ function normalizeSetupProviderEnvVars(setup: PluginManifest["setup"]): Record<s
 function buildBundledPluginContractSnapshot(
   manifest: BundledCapabilityManifest,
 ): BundledPluginContractSnapshot {
+  const ids = (values: readonly string[] | undefined) =>
+    normalizeContractStringValues(values, (value) => value.trim());
+  const contracts = manifest.contracts;
   return {
     pluginId: manifest.id,
-    cliBackendIds: normalizeContractStringValues(manifest.cliBackends, (value) => value.trim()),
-    providerIds: normalizeContractStringValues(manifest.providers, (value) => value.trim()),
+    cliBackendIds: ids(manifest.cliBackends),
+    providerIds: ids(manifest.providers),
     providerEnvVars: normalizeSetupProviderEnvVars(manifest.setup),
-    workerProviderIds: normalizeContractStringValues(manifest.contracts?.workerProviders, (value) =>
-      value.trim(),
-    ),
-    embeddingProviderIds: normalizeContractStringValues(
-      manifest.contracts?.embeddingProviders,
-      (value) => value.trim(),
-    ),
-    speechProviderIds: normalizeContractStringValues(manifest.contracts?.speechProviders, (value) =>
-      value.trim(),
-    ),
-    realtimeTranscriptionProviderIds: normalizeContractStringValues(
-      manifest.contracts?.realtimeTranscriptionProviders,
-      (value) => value.trim(),
-    ),
-    realtimeVoiceProviderIds: normalizeContractStringValues(
-      manifest.contracts?.realtimeVoiceProviders,
-      (value) => value.trim(),
-    ),
-    mediaUnderstandingProviderIds: normalizeContractStringValues(
-      manifest.contracts?.mediaUnderstandingProviders,
-      (value) => value.trim(),
-    ),
-    transcriptSourceProviderIds: normalizeContractStringValues(
-      manifest.contracts?.transcriptSourceProviders,
-      (value) => value.trim(),
-    ),
-    documentExtractorIds: normalizeContractStringValues(
-      manifest.contracts?.documentExtractors,
-      (value) => value.trim(),
-    ),
-    imageGenerationProviderIds: normalizeContractStringValues(
-      manifest.contracts?.imageGenerationProviders,
-      (value) => value.trim(),
-    ),
-    videoGenerationProviderIds: normalizeContractStringValues(
-      manifest.contracts?.videoGenerationProviders,
-      (value) => value.trim(),
-    ),
-    musicGenerationProviderIds: normalizeContractStringValues(
-      manifest.contracts?.musicGenerationProviders,
-      (value) => value.trim(),
-    ),
-    webContentExtractorIds: normalizeContractStringValues(
-      manifest.contracts?.webContentExtractors,
-      (value) => value.trim(),
-    ),
-    webFetchProviderIds: normalizeContractStringValues(
-      manifest.contracts?.webFetchProviders,
-      (value) => value.trim(),
-    ),
-    webSearchProviderIds: normalizeContractStringValues(
-      manifest.contracts?.webSearchProviders,
-      (value) => value.trim(),
-    ),
-    migrationProviderIds: normalizeContractStringValues(
-      manifest.contracts?.migrationProviders,
-      (value) => value.trim(),
-    ),
-    toolNames: normalizeContractStringValues(manifest.contracts?.tools, (value) => value.trim()),
+    workerProviderIds: ids(contracts?.workerProviders),
+    storageProviderIds: ids(contracts?.storageProviders),
+    embeddingProviderIds: ids(contracts?.embeddingProviders),
+    speechProviderIds: ids(contracts?.speechProviders),
+    realtimeTranscriptionProviderIds: ids(contracts?.realtimeTranscriptionProviders),
+    realtimeVoiceProviderIds: ids(contracts?.realtimeVoiceProviders),
+    mediaUnderstandingProviderIds: ids(contracts?.mediaUnderstandingProviders),
+    transcriptSourceProviderIds: ids(contracts?.transcriptSourceProviders),
+    documentExtractorIds: ids(contracts?.documentExtractors),
+    imageGenerationProviderIds: ids(contracts?.imageGenerationProviders),
+    videoGenerationProviderIds: ids(contracts?.videoGenerationProviders),
+    musicGenerationProviderIds: ids(contracts?.musicGenerationProviders),
+    webContentExtractorIds: ids(contracts?.webContentExtractors),
+    webFetchProviderIds: ids(contracts?.webFetchProviders),
+    webSearchProviderIds: ids(contracts?.webSearchProviders),
+    migrationProviderIds: ids(contracts?.migrationProviders),
+    toolNames: ids(contracts?.tools),
   };
 }
 
 function hasBundledPluginContractSnapshotCapabilities(
   entry: BundledPluginContractSnapshot,
 ): boolean {
-  return (
-    entry.cliBackendIds.length > 0 ||
-    entry.providerIds.length > 0 ||
-    entry.workerProviderIds.length > 0 ||
-    entry.embeddingProviderIds.length > 0 ||
-    entry.speechProviderIds.length > 0 ||
-    entry.realtimeTranscriptionProviderIds.length > 0 ||
-    entry.realtimeVoiceProviderIds.length > 0 ||
-    entry.mediaUnderstandingProviderIds.length > 0 ||
-    entry.transcriptSourceProviderIds.length > 0 ||
-    entry.documentExtractorIds.length > 0 ||
-    entry.imageGenerationProviderIds.length > 0 ||
-    entry.videoGenerationProviderIds.length > 0 ||
-    entry.musicGenerationProviderIds.length > 0 ||
-    entry.webContentExtractorIds.length > 0 ||
-    entry.webFetchProviderIds.length > 0 ||
-    entry.webSearchProviderIds.length > 0 ||
-    entry.migrationProviderIds.length > 0 ||
-    entry.toolNames.length > 0
-  );
+  return Object.values(entry).some((value) => Array.isArray(value) && value.length > 0);
 }
 
 export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSnapshot[] =

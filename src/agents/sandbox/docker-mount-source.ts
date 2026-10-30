@@ -83,9 +83,6 @@ function readOptionalProcFile(file: string): string {
 async function discoverSourceNamespace(
   engine: SandboxContainerEngine,
 ): Promise<readonly InspectedSandboxMount[] | undefined> {
-  if (engine.id !== "docker" || process.platform !== "linux") {
-    return undefined;
-  }
   const cgroup = readOptionalProcFile("/proc/self/cgroup");
   const ids: string[] = [];
   for (const match of cgroup.matchAll(/(?:\/docker\/|docker-)([a-f0-9]{64})(?:\/|\.scope|$)/gm)) {

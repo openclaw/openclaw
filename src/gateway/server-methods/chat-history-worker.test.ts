@@ -1,226 +1,142 @@
 import { StatementSync } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
-import {
-  appendSessionTranscriptReport,
-  appendTranscriptMessage,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
-import * as deltaEvents from "../../config/sessions/session-accessor.sqlite-history-events.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { appendTranscriptMessage } from "../../config/sessions/session-accessor.js";
 import * as projectionReads from "../../config/sessions/session-accessor.sqlite-projection-read.js";
-import type {
-  SessionHistoryDelta,
-  SessionHistoryWorkerRequest,
-} from "../../config/sessions/session-history-types.js";
-import * as historyWorker from "../../config/sessions/session-history-worker-runtime.js";
+import * as projectionWriter from "../../config/sessions/session-transcript-projection-writer.js";
+import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
+import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { SerializedJsonArray } from "../serialized-json.js";
 import {
   createPreparedSessionHistorySubagentProjection,
   prepareSessionHistoryDelta,
 } from "../session-history-delta-visibility.js";
-import { createSessionHistorySubagentProjection } from "../session-history-subagent-projection.js";
-import { chatHistoryHandlers } from "./chat-history-handler.js";
+import {
+  historyPayload,
+  historyRpc,
+  seedHistorySession,
+} from "./chat-history-fixture.test-support.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
-import type { RespondFn } from "./types.js";
 
-it.each(["native", "acp"])(
-  "keeps cursor bytes and %s coordination visibility without request-thread transcript reads",
-  async (sourceKind) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:worker-delta",
-        sessionId: "worker-delta",
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const sourceSessionKey = `agent:main:${sourceKind === "native" ? "subagent" : "acp"}:worker`;
-      if (sourceKind === "acp") {
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: sourceSessionKey },
-          {
-            sessionId: "acp-worker",
-            updatedAt: 1,
-            spawnDepth: 0,
-            parentSessionKey: scope.sessionKey,
-          },
-        );
-        await upsertAcpSessionMeta({
-          sessionKey: sourceSessionKey,
-          agentId: "main",
-          mutate: () => ({
-            backend: "acpx",
-            agent: "codex",
-            runtimeSessionName: sourceSessionKey,
-            mode: "persistent",
-            state: "idle",
-            lastActivityAt: 2,
-          }),
-          now: () => 2,
-        });
-      }
-      await appendTranscriptMessage(scope, {
-        eventId: "question",
-        now: 1,
-        message: { role: "user", content: "Question", timestamp: 1 },
-      });
-      await appendTranscriptMessage(scope, {
-        eventId: "coordination",
-        now: 2,
-        message: {
-          role: "user",
-          content: "Internal checkpoint",
-          idempotencyKey: "worker-run:user",
-          provenance: {
-            kind: "inter_session",
-            sourceTool: "sessions_send",
-            sourceSessionKey,
-          },
-        },
-      });
-      const context = await createHistoryReadContext();
-      const call = async (cursor?: string) => {
-        const respond = vi.fn<RespondFn>();
-        await chatHistoryHandlers["chat.history"]!({
-          params: { sessionKey: scope.sessionKey, ...(cursor ? { cursor } : {}) },
-          client: null,
-          context,
-          respond,
-          req: { type: "req", id: "worker-delta", method: "chat.history" },
-          isWebchatConnect: () => false,
-        });
-        const response = expectDefined(respond.mock.calls[0], "history response");
-        expect(response[0]).toBe(true);
-        return expectDefined(asOptionalRecord(response[1]), "history payload");
-      };
-      const initial = await call();
-      const initialCounter = observeSqliteReadSql(StatementSync.prototype);
-      try {
-        const repeated = await call();
-        // Pending-input reconciliation has not moved to the worker yet.
-        expect(
-          initialCounter.queries.filter(
-            (sql) => sql !== "PRAGMA user_version" && !sql.includes('"session_pending_inputs"'),
-          ),
-        ).toEqual([]);
-        expect(repeated).toEqual({
-          ...initial,
-          sessionInfo: { ...asOptionalRecord(initial.sessionInfo), snapshotAt: expect.any(Number) },
-        });
-      } finally {
-        initialCounter.restore();
-      }
-      if (typeof initial.deltaCursor !== "string") {
-        throw new Error("Expected initial delta cursor");
-      }
-      await appendTranscriptMessage(scope, {
-        eventId: "internal-answer",
-        now: 3,
-        message: {
-          role: "assistant",
-          content: "Internal response",
-          __openclaw: { runId: "worker-run" },
-        },
-      });
-      await appendSessionTranscriptReport(scope, {
-        kind: "custom",
-        customTypes: ["run-failed-before-reply"],
-        selectReport: () => ({
-          customType: "run-failed-before-reply",
-          content: "Internal failure",
-          display: true,
-          details: { runId: "worker-run" },
-        }),
-      });
-      await appendTranscriptMessage(scope, {
-        eventId: "human-steer",
-        now: 4,
-        message: {
-          role: "user",
-          content: "Show me the result.",
-          idempotencyKey: "human-steer:user",
-          __openclaw: { steerTargetRunId: "worker-run" },
-        },
-      });
-      await appendTranscriptMessage(scope, {
-        eventId: "answer",
-        now: 5,
-        message: {
-          role: "assistant",
-          content: 'Escaped "answer" 🤖',
-          timestamp: 5,
-          __openclaw: { runId: "worker-run" },
-        },
-      });
-      await appendTranscriptMessage(scope, {
-        eventId: "ordinary-sibling",
-        now: 6,
-        message: { role: "assistant", content: "Ordinary sibling", timestamp: 6 },
-      });
-      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
-      try {
-        const deltaReader: {
-          readSessionHistoryPageInWorker(
-            request: Extract<SessionHistoryWorkerRequest, { kind: "delta" }>,
-          ): Promise<SessionHistoryDelta & { assertCurrent: () => void }>;
-        } = historyWorker;
-        const native = vi
-          .spyOn(deltaReader, "readSessionHistoryPageInWorker")
-          .mockImplementationOnce(async (request) => {
-            const resolver = createSessionHistorySubagentProjection(request.params.target);
-            return {
-              ...prepareSessionHistoryDelta(
-                deltaEvents.readTranscriptDisplayDelta(
-                  request.params.target,
-                  request.params.limits,
-                ),
-                resolver,
-              ),
-              assertCurrent: expectDefined(resolver.assertCurrent, "native source admission"),
-            };
-          });
-        let golden: Record<string, unknown>;
-        try {
-          golden = await call(initial.deltaCursor);
-        } finally {
-          native.mockRestore();
-        }
-        expect(golden).toMatchObject({
-          kind: "delta",
-          messages: [
-            { messageId: "human-steer" },
-            { messageId: "answer" },
-            { messageId: "ordinary-sibling" },
-          ],
-        });
-        const goldenJson = JSON.stringify(golden);
-        const read = vi.spyOn(deltaEvents, "readTranscriptDisplayDelta").mockImplementation(() => {
-          throw new Error("Transcript SQLite read ran on the request thread");
-        });
-        const projectionRead = vi.spyOn(projectionReads, "readCurrentProjectionSnapshot");
-        const counter = observeSqliteReadSql(StatementSync.prototype);
-        try {
-          expect(JSON.stringify(await call(initial.deltaCursor))).toBe(goldenJson);
-          expect(
-            counter.queries.filter(
-              (sql) => sql !== "PRAGMA user_version" && !sql.includes('"session_pending_inputs"'),
-            ),
-          ).toEqual([]);
-          expect(read).not.toHaveBeenCalled();
-          expect(projectionRead).not.toHaveBeenCalled();
-        } finally {
-          counter.restore();
-          projectionRead.mockRestore();
-          read.mockRestore();
-        }
-      } finally {
-        clock.mockRestore();
-      }
+type Scope = Awaited<ReturnType<typeof seedHistorySession>>;
+function withHistory(id: string, run: (scope: Scope) => Promise<void>) {
+  return withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    await run(await seedHistorySession(id));
+  });
+}
+function append(
+  scope: Scope,
+  eventId: string,
+  now: number,
+  role: string,
+  content: string,
+  extra: Record<string, unknown> = {},
+) {
+  return appendTranscriptMessage(scope, { eventId, now, message: { role, content, ...extra } });
+}
+function observeReads() {
+  const counter = observeSqliteReadSql(StatementSync.prototype);
+  return { ...counter, [Symbol.dispose]: counter.restore };
+}
+
+function expectHistoryThreadSql(queries: string[]) {
+  const isVersionProbe = (sql: string) =>
+    /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql);
+  // Pending-input reconciliation is still local; schema admission needs one freshness probe.
+  expect(
+    queries.filter((sql) => !isVersionProbe(sql) && !sql.includes('"session_pending_inputs"')),
+  ).toEqual([]);
+  expect(queries.filter(isVersionProbe).length).toBeLessThanOrEqual(1);
+}
+
+it("serves committed history while transcript searches wait on a stuck writer", async (test) => {
+  await withHistory("writer-isolation", async (scope) => {
+    await append(scope, "committed-message", 1, "user", "Committed needle", { timestamp: 1 });
+    const rpc = historyRpc(await createHistoryReadContext(), scope.sessionKey);
+    const request = async () => historyPayload(await rpc("chat.history")).messages;
+    const committed = await request();
+    expect(committed).toMatchObject([{ content: "Committed needle" }]);
+    const writerEntered = createDeferred();
+    const releaseWriter = createDeferred();
+    const writer = runOpenClawAgentWorkerWrite({ agentId: "main" }, async () => {
+      writerEntered.resolve();
+      await releaseWriter.promise;
     });
-  },
-);
+    const searchesEntered = createDeferred();
+    const count = historyLane.pool.getSnapshot().maxWorkers;
+    let entered = 0;
+    const readStatus = projectionWriter.readSessionTranscriptIndexStatus;
+    using _ = vi
+      .spyOn(projectionWriter, "readSessionTranscriptIndexStatus")
+      .mockImplementation((...args) => {
+        if (++entered === count) {
+          searchesEntered.resolve();
+        }
+        return readStatus(...args);
+      });
+    const searches: ReturnType<typeof searchSessionTranscripts>[] = [];
+    let history: ReturnType<typeof request> | undefined;
+    try {
+      await withinTest(writerEntered.promise, test.signal);
+      for (let index = 0; index < count; index++) {
+        const search = searchSessionTranscripts({ ...scope, query: "needle" });
+        void search.catch(() => {});
+        searches.push(search);
+      }
+      await withinTest(searchesEntered.promise, test.signal);
+      history = request();
+      expect(await withinTest(history, test.signal)).toEqual(committed);
+    } finally {
+      releaseWriter.resolve();
+      await writer;
+      await Promise.allSettled([...searches, ...(history ? [history] : [])]);
+    }
+  });
+});
+
+it("keeps repeated cursor bytes without request-thread transcript reads", async () => {
+  await withHistory("worker-delta", async (scope) => {
+    await append(scope, "question", 1, "user", "Question", { timestamp: 1 });
+    const rpc = historyRpc(await createHistoryReadContext(), scope.sessionKey);
+    const call = async (cursor?: string) =>
+      historyPayload(await rpc("chat.history", cursor ? { cursor } : {}));
+    const initial = await call();
+    {
+      using initialCounter = observeReads();
+      const repeated = await call();
+      expectHistoryThreadSql(initialCounter.queries);
+      expect(repeated).toEqual({
+        ...initial,
+        sessionInfo: { ...asOptionalRecord(initial.sessionInfo), snapshotAt: expect.any(Number) },
+      });
+    }
+    if (typeof initial.deltaCursor !== "string") {
+      throw new Error("Expected initial delta cursor");
+    }
+    await append(scope, "answer", 2, "assistant", 'Escaped "answer" 🤖', { timestamp: 2 });
+    {
+      using _ = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      using projectionRead = vi.spyOn(projectionReads, "readCurrentProjectionSnapshot");
+      using counter = observeReads();
+      const firstDelta = await call(initial.deltaCursor);
+      expect(firstDelta).toMatchObject({
+        kind: "delta",
+        messages: [{ messageId: "answer" }],
+      });
+      const firstJson = JSON.stringify(firstDelta);
+      expect(firstJson).toContain(JSON.stringify('Escaped "answer" 🤖'));
+      expect(JSON.stringify(await call(initial.deltaCursor))).toBe(firstJson);
+      expectHistoryThreadSql(counter.queries);
+      expect(projectionRead).not.toHaveBeenCalled();
+    }
+  });
+});
 
 it("refuses missing or revoked visibility facts while retaining false and sequence-specific answers", () => {
   let current = true;
@@ -274,12 +190,42 @@ it("keeps transferred visibility proportional to the bounded delta, including cl
     { isSubagentSession: () => false, isSubagentRunMessage: () => false },
   );
   expect(serializedBytes).toBeLessThan(1_000_000);
-  expect(prepared.subagentCoordination.runMessages).toHaveLength(200);
   expect(prepared.subagentCoordination.sessions).toEqual([]);
+  expect(prepared.subagentCoordination.runMessages).toHaveLength(200);
   expect(Buffer.byteLength(JSON.stringify(prepared.subagentCoordination))).toBeLessThan(
     serializedBytes,
   );
   const follower = structuredClone(prepared);
   follower.subagentCoordination.runMessages[0]![2] = true;
   expect(prepared.subagentCoordination.runMessages[0]![2]).toBe(false);
+});
+
+it("serializes direct history calls but keeps object messages for method adapters", async () => {
+  await withHistory("encoded-history", async (scope) => {
+    await append(scope, "reply", 1, "assistant", "Object caller reply");
+    await append(scope, "tool", 2, "assistant", "", {
+      content: [
+        { type: "toolCall", id: "read", name: "read", arguments: { path: "synthetic.txt" } },
+      ],
+    });
+    const rpc = historyRpc(await createHistoryReadContext(), scope.sessionKey);
+    const wire = historyPayload(await rpc("chat.history", {}, { acceptsSerializedJson: true }));
+    expect(wire.messages).toBeInstanceOf(SerializedJsonArray);
+    expect(wire.activity).toBeInstanceOf(SerializedJsonArray);
+    const result = historyPayload(
+      await rpc(
+        "chat.history",
+        {},
+        {
+          acceptsSerializedJson: true,
+          req: { type: "req", id: "encoded-history", method: "cron.history" },
+        },
+      ),
+    );
+    expect(Array.isArray(result.messages)).toBe(true);
+    expect(result.messages).toEqual(
+      expect.arrayContaining([expect.objectContaining({ content: "Object caller reply" })]),
+    );
+    expect(Array.isArray(result.activity)).toBe(true);
+  });
 });

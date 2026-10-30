@@ -1,4 +1,3 @@
-// Applies low-level redaction transforms to raw config snapshot data.
 import { isDeepStrictEqual } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
@@ -31,11 +30,8 @@ export function shouldFallbackToStructuredRawRedaction(params: {
   try {
     const parsed = JSON5.parse(params.redactedRaw);
     const restored = params.restoreParsed(parsed);
-    if (!restored.ok) {
-      return true;
-    }
     // Raw replacement is only safe when parsing and restoring produces the original config shape.
-    return !isDeepStrictEqual(restored.result, params.originalConfig);
+    return !restored.ok || !isDeepStrictEqual(restored.result, params.originalConfig);
   } catch {
     return true;
   }

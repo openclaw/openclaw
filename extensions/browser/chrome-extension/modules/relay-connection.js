@@ -3,7 +3,6 @@ import {
   EXTENSION_RELAY_V2_PROTOCOL,
   parseRelayAuthJson,
 } from "./relay-auth-v2.js";
-import { buildRelayWsProtocols } from "./relay-core.js";
 
 /** Open one v2-only relay socket and expose application frames only after auth.ok. */
 export function openAuthenticatedRelaySocket({
@@ -16,7 +15,7 @@ export function openAuthenticatedRelaySocket({
   onClose,
 }) {
   const authClientPromise = createExtensionRelayAuthClient({ token, relayUrl });
-  const ws = new WebSocket(relayUrl, buildRelayWsProtocols());
+  const ws = new WebSocket(relayUrl, [EXTENSION_RELAY_V2_PROTOCOL]);
   let authenticated = false;
 
   ws.addEventListener("open", () => {

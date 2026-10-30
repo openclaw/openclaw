@@ -5,6 +5,7 @@ import type {
   ManagedHandoffParent,
 } from "../../infra/update-managed-service-handoff-lease.js";
 import type { HandoffProcessIdentity } from "../../infra/update-managed-service-handoff-schema.js";
+import { requireUpdateCommandAcquisition } from "./update-command-executor-capabilities.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
 export type LegacyUpdateExecutorParent =
@@ -19,11 +20,12 @@ export type LegacyUpdateExecutorParent =
 export function releaseLegacyPackageUpdateParent(
   store: ReturnType<typeof createManagedHandoffLeaseStore>,
   lease: ManagedHandoffLease,
+  paired: ManagedHandoffLease[] = [],
 ): boolean {
   // The published parent is still waiting for our result, so it cannot exit
   // first. Its lifetime fenced all effects; only settled cleanup rebinds here.
   const settled = store.bind(lease, process.pid);
-  return settled !== null && store.release(settled);
+  return settled !== null && store.releaseAll([settled, ...paired]);
 }
 
 /** Keep a shipped parent's lifetime in the same lineage checked by native grandchildren. */
@@ -86,13 +88,10 @@ export function acquireLegacyUpdateExecutorParent(params: {
         lease = legacy;
         borrowed = true;
       } else {
-        const acquired = store.acquire(key, runId, { kind: "update" });
-        if (acquired.kind !== "acquired") {
-          throw new UpdateCommandRecoveryPendingError(
-            "Another update executor owns this installation.",
-          );
-        }
-        lease = acquired.lease;
+        lease = requireUpdateCommandAcquisition(
+          store.acquire(key, runId, { kind: "update" }),
+          "Another update executor owns this installation.",
+        ).lease;
         const bound = store.bind(lease, parent.identity.pid);
         if (!bound) {
           throw new UpdateCommandRecoveryPendingError("Legacy package parent binding failed.");
@@ -103,30 +102,26 @@ export function acquireLegacyUpdateExecutorParent(params: {
         }
       }
     }
-    const acquiredChild = store.acquire(
-      `${lease.key}/.openclaw-update-child-${params.childName}`,
-      runId,
-      { kind: "update" },
-      false,
-      lease.version === 1 ? lease : undefined,
-    );
-    if (acquiredChild.kind !== "acquired") {
-      throw new UpdateCommandRecoveryPendingError(
-        "Legacy finalizer lifetime could not be acquired.",
-      );
-    }
-    child = acquiredChild.lease;
+    child = requireUpdateCommandAcquisition(
+      store.acquire(
+        `${lease.key}/.openclaw-update-child-${params.childName}`,
+        runId,
+        { kind: "update" },
+        false,
+        lease.version === 1 ? lease : undefined,
+      ),
+      "Legacy finalizer lifetime could not be acquired.",
+    ).lease;
     if (lease.key !== key) {
       // The caller proved the active pnpm generation through the canonical
       // handoff-root owner. Keep both generations held for the whole phase.
       if (!store.current(lease)) {
         throw new UpdateCommandRecoveryPendingError("Legacy source generation changed.");
       }
-      const acquired = store.acquire(key, runId, { kind: "update" });
-      if (acquired.kind !== "acquired") {
-        throw new UpdateCommandRecoveryPendingError("Active package generation is already owned.");
-      }
-      target = acquired.lease;
+      target = requireUpdateCommandAcquisition(
+        store.acquire(key, runId, { kind: "update" }),
+        "Active package generation is already owned.",
+      ).lease;
     }
     return { lease, child, target, borrowed };
   } catch (error) {

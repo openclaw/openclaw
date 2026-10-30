@@ -40,7 +40,7 @@ Sandboxing is controlled by `agents.defaults.sandbox.mode`:
 `agents.defaults.sandbox.workspaceAccess` controls what the sandbox can see: `"none"`, `"ro"`, or `"rw"`.
 
 An operator role with `sandbox: "required"` overrides agent mode, cannot be
-escaped through elevated execution or host overrides, and fails closed when its
+escaped through elevated execution or host overrides, and blocks execution when its
 sandbox cannot be provisioned. See
 [Named operator roles](/gateway/operator-scopes#named-operator-roles).
 
@@ -102,7 +102,7 @@ Available groups:
 - `group:memory`: `memory_search`, `memory_get`
 - `group:web`: `web_search`, `x_search`, `web_fetch`
 - `group:ui`: `browser`, `screen`, `terminal`, `canvas`, `progress_card`, `show_widget`
-- `group:automation`: `heartbeat_respond`, `cron`, `gateway`
+- `group:automation`: `cron`, `gateway`
 - `group:messaging`: `message`
 - `group:nodes`: `nodes`, `computer`
 - `group:agents`: `agents_list`, `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
 
 const observation = vi.hoisted(() => ({ imports: 0, loads: 0 }));
 

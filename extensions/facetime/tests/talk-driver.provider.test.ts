@@ -10,7 +10,7 @@ import type { RealtimeVoicePlaybackItem } from "openclaw/plugin-sdk/realtime-voi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "../../openai/api.js";
 import { resolveFaceTimeConfig } from "../src/config.js";
-import { startFaceTimeTalkDriver, type FaceTimeTalkDriver } from "../src/talk-driver.js";
+import { startFaceTimeTalkDriver } from "../src/talk-driver.js";
 
 const audio = vi.hoisted(() => ({
   suppressionReady: vi.fn(async () => {}),
@@ -43,7 +43,8 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 vi.mock("openclaw/plugin-sdk/realtime-bootstrap-context", () => ({
-  resolveRealtimeBootstrapContextInstructions: async () => undefined,
+  resolveRealtimeVoiceAgentContextInstructions: async () =>
+    "Agent context: shared voice agent context.",
 }));
 
 const providerMocks = await vi.hoisted(async () => {
@@ -66,10 +67,14 @@ const providerMocks = await vi.hoisted(async () => {
     },
   };
 });
-vi.mock("ws", () => ({ default: providerMocks.FakeWebSocket }));
+vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/websocket-runtime")>()),
+  WebSocket: providerMocks.FakeWebSocket,
+}));
 vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
   isProviderAuthProfileConfigured: providerMocks.isProviderAuthProfileConfiguredMock,
+  isProviderAuthProfileConfiguredAsync: providerMocks.isProviderAuthProfileConfiguredMock,
   resolveProviderAuthProfileApiKey: providerMocks.resolveProviderAuthProfileApiKeyMock,
 }));
 vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
@@ -81,11 +86,11 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>()),
   resolveDebugProxySettings: vi.fn(),
   createDebugProxyWebSocketAgent: vi.fn(),
-  captureWsEvent: vi.fn(),
+  captureWsEventAsync: vi.fn().mockResolvedValue(undefined),
 }));
 
 type Socket = InstanceType<typeof providerMocks.FakeWebSocket>;
-const activeDrivers = new Set<FaceTimeTalkDriver>();
+const activeDrivers = new Set<Awaited<ReturnType<typeof startFaceTimeTalkDriver>>>();
 
 function emit(socket: Socket, event: Record<string, unknown>) {
   socket.emit("message", Buffer.from(JSON.stringify(event)));
@@ -165,10 +170,10 @@ describe("FaceTime realtime provider boundary", () => {
     const agentDir = "/synthetic/agents/voice-owner";
     const fullConfig: OpenClawConfig = {
       agents: {
-        list: [
-          { id: "main", default: true },
-          { id: "voice-owner", agentDir },
-        ],
+        entries: {
+          main: {},
+          "voice-owner": { agentDir },
+        },
       },
     };
     providerMocks.isProviderAuthProfileConfiguredMock.mockImplementation(
@@ -183,7 +188,7 @@ describe("FaceTime realtime provider boundary", () => {
       },
     );
 
-    const { driver } = await startConnectedDriver(
+    const { driver, socket } = await startConnectedDriver(
       startParams({
         fullConfig,
         config: resolveFaceTimeConfig({
@@ -194,6 +199,14 @@ describe("FaceTime realtime provider boundary", () => {
     );
 
     expect(driver.realtimeActive()).toBe(true);
+    expect(sentEvents(socket)).toContainEqual(
+      expect.objectContaining({
+        type: "session.update",
+        session: expect.objectContaining({
+          instructions: expect.stringContaining("Agent context: shared voice agent context."),
+        }),
+      }),
+    );
     expect(providerMocks.resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledWith(
       expect.objectContaining({ cfg: fullConfig, agentDir }),
     );
@@ -208,15 +221,6 @@ describe("FaceTime realtime provider boundary", () => {
       audioMs: [1_000],
       playedItemMs: [500],
       truncatedMs: [],
-    },
-    {
-      name: "enabled",
-      interrupt: true,
-      playedMs: 500,
-      completed: false,
-      audioMs: [1_000],
-      playedItemMs: [500],
-      truncatedMs: [500],
     },
     {
       name: "early echo guard",

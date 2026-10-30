@@ -1,15 +1,13 @@
-// QA Lab WhatsApp observed-message matching and diagnostics.
 import type { WhatsAppQaDriverObservedMessage } from "@openclaw/whatsapp/api.js";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import type {
-  WhatsAppObservedMessage,
   WhatsAppQaDriverQuotedMessageKey,
   WhatsAppQaMessageScenarioContext,
   WhatsAppQaMessageScenarioRun,
-  WhatsAppQaObservedMessagesContext,
 } from "./whatsapp-live.contracts.js";
 
-export function messageMatches(message: WhatsAppObservedMessage, matchText: string | RegExp) {
+export function messageMatches(message: { text: string }, matchText: string | RegExp) {
   return typeof matchText === "string"
     ? message.text.includes(matchText)
     : matchText.test(message.text);
@@ -74,17 +72,12 @@ export async function waitForWhatsAppSutReactionToTrigger(
 
 export async function waitForWhatsAppSutReactionSequenceToTrigger(
   context: WhatsAppQaMessageScenarioContext,
-  params: {
-    emojis: readonly string[];
-    observedAfter?: Date;
-    timeoutMs?: number;
-  },
+  emojis: readonly string[],
 ) {
   requireWhatsAppTriggerMessageId(context);
-  const observedAfter = params.observedAfter ?? context.requestStartedAt;
-  const deadline = Date.now() + (params.timeoutMs ?? 30_000);
+  const deadline = Date.now() + 60_000;
   const matched: WhatsAppQaDriverObservedMessage[] = [];
-  let lastMatchedObservedAtMs = observedAfter.getTime();
+  let lastMatchedObservedAtMs = context.requestStartedAt.getTime();
   let lastMatchedObservedIndex = -1;
 
   const scan = () => {
@@ -98,7 +91,7 @@ export async function waitForWhatsAppSutReactionSequenceToTrigger(
         return timeDelta === 0 ? left.index - right.index : timeDelta;
       });
     for (const { index, message } of messages) {
-      if (matched.length >= params.emojis.length) {
+      if (matched.length >= emojis.length) {
         return true;
       }
       const observedAtMs = new Date(message.observedAt).getTime();
@@ -108,7 +101,7 @@ export async function waitForWhatsAppSutReactionSequenceToTrigger(
       ) {
         continue;
       }
-      const expectedEmoji = params.emojis[matched.length];
+      const expectedEmoji = emojis[matched.length];
       if (!expectedEmoji) {
         return false;
       }
@@ -118,18 +111,16 @@ export async function waitForWhatsAppSutReactionSequenceToTrigger(
         lastMatchedObservedIndex = index;
       }
     }
-    return matched.length >= params.emojis.length;
+    return matched.length >= emojis.length;
   };
 
   while (!scan()) {
     if (Date.now() >= deadline) {
       throw new Error(
-        `timed out waiting for WhatsApp status reaction sequence ${params.emojis.join(" -> ")}`,
+        `timed out waiting for WhatsApp status reaction sequence ${emojis.join(" -> ")}`,
       );
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 250);
-    });
+    await sleep(250);
   }
   return matched;
 }
@@ -141,41 +132,106 @@ export async function waitForScenarioObservedMessage(
       label: string;
       match: (message: WhatsAppQaDriverObservedMessage) => boolean;
     }>;
-    expectedSender?: (message: WhatsAppQaDriverObservedMessage) => boolean;
     match: (message: WhatsAppQaDriverObservedMessage) => boolean;
     observedAfter?: Date;
     timeoutMs?: number;
   },
 ) {
-  let message: WhatsAppQaDriverObservedMessage;
-  try {
-    message = await context.driver.waitForMessage({
+  return await waitForWhatsAppObservedMessage(
+    context.driver,
+    {
       observedAfter: params.observedAfter,
       timeoutMs: params.timeoutMs ?? 45_000,
       match: (candidate) =>
-        (params.expectedSender?.(candidate) ??
-          isWhatsAppScenarioSutMessage(candidate, {
-            observedAfter: params.observedAfter ?? new Date(0),
-            sutPhoneE164: context.sutPhoneE164,
-            target: context.target,
-            targetKind: context.targetKind,
-          })) &&
-        params.match(candidate),
-    });
+        isWhatsAppScenarioSutMessage(candidate, {
+          observedAfter: params.observedAfter ?? new Date(0),
+          sutPhoneE164: context.sutPhoneE164,
+          target: context.target,
+          targetKind: context.targetKind,
+        }) && params.match(candidate),
+    },
+    () => {
+      const lowerBoundMs = params.observedAfter?.getTime();
+      const messages = context.driver.getObservedMessages().filter((message) => {
+        if (lowerBoundMs === undefined) {
+          return true;
+        }
+        return new Date(message.observedAt).getTime() >= lowerBoundMs;
+      });
+      if (messages.length === 0) {
+        return "observed 0 WhatsApp driver message(s) after wait lower bound";
+      }
+      const formatted = messages.slice(-5).map((message, index) => {
+        const checks = (params.diagnosticChecks ?? []).map((check) => {
+          try {
+            const matched = check.match(message);
+            return `${check.label}=${matched ? "yes" : "no"}`;
+          } catch {
+            return `${check.label}=no`;
+          }
+        });
+        return [
+          formatWhatsAppMessageShape(message, index),
+          `fromExpectedSut=${
+            isWhatsAppScenarioSutMessage(message, {
+              observedAfter: params.observedAfter ?? new Date(0),
+              sutPhoneE164: context.sutPhoneE164,
+              target: context.target,
+              targetKind: context.targetKind,
+            })
+              ? "yes"
+              : "no"
+          }`,
+          ...checks,
+        ].join(" ");
+      });
+      return `observed ${messages.length} WhatsApp driver message(s) after wait lower bound: ${formatted.join("; ")}`;
+    },
+  );
+}
+
+export async function waitForWhatsAppQuotedMessage(
+  context: WhatsAppQaMessageScenarioContext,
+  params: {
+    textMarker: string;
+    quotedMessageId: string | undefined;
+    diagnosticLabels: readonly [string, string];
+    distinctFrom?: WhatsAppQaDriverObservedMessage;
+    observedAfter: Date;
+    timeoutMs?: number;
+  },
+) {
+  const hasMarker = (message: WhatsAppQaDriverObservedMessage) =>
+    message.text.includes(params.textMarker);
+  const quotesMessage = (message: WhatsAppQaDriverObservedMessage) =>
+    message.quoted?.messageId === params.quotedMessageId;
+  return await waitForScenarioObservedMessage(context, {
+    observedAfter: params.observedAfter,
+    timeoutMs: params.timeoutMs,
+    diagnosticChecks: [
+      { label: params.diagnosticLabels[0], match: hasMarker },
+      { label: params.diagnosticLabels[1], match: quotesMessage },
+    ],
+    match: (message) =>
+      (!params.distinctFrom || message.messageId !== params.distinctFrom.messageId) &&
+      hasMarker(message) &&
+      quotesMessage(message),
+  });
+}
+
+export async function waitForWhatsAppObservedMessage(
+  driver: Pick<WhatsAppQaMessageScenarioContext["driver"], "waitForMessage">,
+  params: Parameters<typeof driver.waitForMessage>[0],
+  describeTimeout: () => string,
+) {
+  try {
+    return await driver.waitForMessage(params);
   } catch (error) {
     if (/\btimed out waiting for WhatsApp QA driver message\b/iu.test(formatErrorMessage(error))) {
-      throw new Error(
-        `${formatErrorMessage(error)}; ${formatWhatsAppScenarioWaitDiagnostics(context, {
-          diagnosticChecks: params.diagnosticChecks,
-          observedAfter: params.observedAfter,
-        })}`,
-        { cause: error },
-      );
+      throw new Error(`${formatErrorMessage(error)}; ${describeTimeout()}`, { cause: error });
     }
     throw error;
   }
-  context.recordObservedMessage(message);
-  return message;
 }
 
 export function formatDiagnosticId(value: string | undefined | null) {
@@ -195,57 +251,9 @@ function formatWhatsAppMessageShape(message: WhatsAppQaDriverObservedMessage, in
   ].join(" ");
 }
 
-function formatWhatsAppScenarioWaitDiagnostics(
-  context: WhatsAppQaObservedMessagesContext,
-  params: {
-    diagnosticChecks?: Array<{
-      label: string;
-      match: (message: WhatsAppQaDriverObservedMessage) => boolean;
-    }>;
-    observedAfter?: Date;
-  },
-) {
-  const lowerBoundMs = params.observedAfter?.getTime();
-  const messages = context.driver.getObservedMessages().filter((message) => {
-    if (lowerBoundMs === undefined) {
-      return true;
-    }
-    return new Date(message.observedAt).getTime() >= lowerBoundMs;
-  });
-  if (messages.length === 0) {
-    return "observed 0 WhatsApp driver message(s) after wait lower bound";
-  }
-  const formatted = messages.slice(-5).map((message, index) => {
-    const checks = (params.diagnosticChecks ?? []).map((check) => {
-      try {
-        const matched = check.match(message);
-        return `${check.label}=${matched ? "yes" : "no"}`;
-      } catch {
-        return `${check.label}=no`;
-      }
-    });
-    return [
-      formatWhatsAppMessageShape(message, index),
-      `fromExpectedSut=${
-        isWhatsAppScenarioSutMessage(message, {
-          observedAfter: params.observedAfter ?? new Date(0),
-          sutPhoneE164: context.sutPhoneE164,
-          target: context.target,
-          targetKind: context.targetKind,
-        })
-          ? "yes"
-          : "no"
-      }`,
-      ...checks,
-    ].join(" ");
-  });
-  return `observed ${messages.length} WhatsApp driver message(s) after wait lower bound: ${formatted.join("; ")}`;
-}
-
 function hasWhatsAppBatchExpectations(run: WhatsAppQaMessageScenarioRun) {
   return (
     run.expectedSutMessageCount !== undefined ||
-    run.expectedSutMessageCountRange !== undefined ||
     (run.expectedJoinedSutTextIncludes?.length ?? 0) > 0
   );
 }
@@ -268,29 +276,7 @@ export function isWhatsAppScenarioSutMessage(
   return message.fromPhoneE164 === params.sutPhoneE164;
 }
 
-export function assertWhatsAppMessageFromSutPhone(
-  message: WhatsAppQaDriverObservedMessage,
-  context: Pick<WhatsAppQaMessageScenarioContext, "sutPhoneE164">,
-) {
-  if (message.fromPhoneE164 === context.sutPhoneE164) {
-    return;
-  }
-  throw new Error(
-    `expected WhatsApp group reply from configured SUT phone; ${formatWhatsAppMessageShape(message, 0)}`,
-  );
-}
-
-export function assertWhatsAppMessagesFromSutPhone(
-  messages: readonly WhatsAppQaDriverObservedMessage[],
-  context: Pick<WhatsAppQaMessageScenarioContext, "sutPhoneE164">,
-) {
-  for (const message of messages) {
-    assertWhatsAppMessageFromSutPhone(message, context);
-  }
-}
-
 export async function assertWhatsAppScenarioMessageBatch(params: {
-  alreadyRecordedMessageIds: Set<string>;
   context: WhatsAppQaMessageScenarioContext;
   observedAfter: Date;
   run: WhatsAppQaMessageScenarioRun;
@@ -298,9 +284,7 @@ export async function assertWhatsAppScenarioMessageBatch(params: {
   if (!hasWhatsAppBatchExpectations(params.run)) {
     return undefined;
   }
-  await new Promise((resolve) => {
-    setTimeout(resolve, params.run.settleMs ?? 4_000);
-  });
+  await sleep(params.run.settleMs ?? 4_000);
   const messages = params.context.driver.getObservedMessages().filter((message) =>
     isWhatsAppScenarioSutMessage(message, {
       observedAfter: params.observedAfter,
@@ -320,28 +304,11 @@ export async function assertWhatsAppScenarioMessageBatch(params: {
       }: ${formatWhatsAppBatchMessageDiagnostics(uniqueMessages)}`,
     );
   }
-  if (params.run.expectedSutMessageCountRange !== undefined) {
-    const [min, max] = params.run.expectedSutMessageCountRange;
-    if (uniqueMessages.length < min || uniqueMessages.length > max) {
-      throw new Error(
-        `expected ${min}-${max} SUT message(s), observed ${
-          uniqueMessages.length
-        }: ${formatWhatsAppBatchMessageDiagnostics(uniqueMessages)}`,
-      );
-    }
-  }
   const joinedText = uniqueMessages.map((message) => message.text).join("\n");
   for (const expected of params.run.expectedJoinedSutTextIncludes ?? []) {
     if (!joinedText.includes(expected)) {
       throw new Error(`expected joined WhatsApp SUT text to include ${expected}`);
     }
-  }
-  for (const message of uniqueMessages) {
-    if (!message.messageId || params.alreadyRecordedMessageIds.has(message.messageId)) {
-      continue;
-    }
-    params.context.recordObservedMessage(message);
-    params.alreadyRecordedMessageIds.add(message.messageId);
   }
   return `observed ${uniqueMessages.length} SUT message(s) after settle`;
 }

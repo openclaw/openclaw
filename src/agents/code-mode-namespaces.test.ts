@@ -3,6 +3,8 @@ import {
   createCodeModeNamespaceRuntime,
   describeCodeModeNamespacesForPrompt,
 } from "./code-mode-namespaces.js";
+import { consumeMcpCodeModeGuestResult, projectMcpCallToolResult } from "./mcp-content.js";
+import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 
 type McpCatalogEntry = NonNullable<Parameters<typeof createCodeModeNamespaceRuntime>[0]>[number];
 
@@ -35,6 +37,38 @@ function mcpCatalogEntry(params: {
 }
 
 describe("Code Mode MCP namespace model", () => {
+  it("passes the bridge-owned MCP snapshot through without copying it again", async () => {
+    const runtime = createCodeModeNamespaceRuntime([mcpCatalogEntry({ id: "github__read_file" })]);
+    const source = {
+      content: [{ type: "text", text: "Repository 名称" }],
+      structuredContent: { path: "README.md", lines: [1, 2] },
+    };
+    const projected = projectMcpCallToolResult(source);
+    const values = vi.spyOn(Object, "values");
+    const transcript = snapshotToolSearchTargetTranscriptResult(projected);
+    const copiedResultArrays = values.mock.calls.filter(
+      ([value]) => Array.isArray(value) && value[0] === 1,
+    );
+    values.mockRestore();
+    expect(copiedResultArrays).toHaveLength(0);
+    const transcriptBytes = JSON.stringify(transcript);
+    const guest = consumeMcpCodeModeGuestResult(transcript);
+    const result = await runtime.invoke("mcp", ["github", "readFile"], [{}], async () => guest);
+
+    expect(result).toBe(guest);
+    expect(JSON.stringify(result)).toBe(
+      '{"content":[{"type":"text","text":"Repository 名称"}],"structuredContent":{"path":"README.md","lines":[1,2]}}',
+    );
+    source.content[0]!.text = "later producer edit";
+    source.structuredContent.lines.push(3);
+    expect(JSON.stringify(transcript)).toBe(transcriptBytes);
+    expect(result).toEqual({
+      content: [{ type: "text", text: "Repository 名称" }],
+      structuredContent: { path: "README.md", lines: [1, 2] },
+    });
+    expect(consumeMcpCodeModeGuestResult(transcript)).toBeUndefined();
+  });
+
   it("describes server names without inspecting tool parameter schemas", () => {
     const readProperties = vi.fn(() => ({ query: { type: "string" } }));
     const catalog = [
@@ -84,6 +118,9 @@ describe("Code Mode MCP namespace model", () => {
     }
 
     catalog[0] = mcpCatalogEntry({ id: "replacement__tool", serverName: "replacement" });
+    // The published descriptor is data, not authority over registered call targets.
+    runtime.descriptors[0]!.id = "replacement";
+    runtime.descriptors[0]!.scope = { kind: "object", entries: [] };
     const executeTool = vi.fn(async ({ input }: { input: unknown }) => input);
     await expect(
       runtime.invoke("mcp", ["github", "readFile"], [{ path: "README.md" }], executeTool),

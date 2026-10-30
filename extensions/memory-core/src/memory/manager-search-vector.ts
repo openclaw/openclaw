@@ -1,36 +1,24 @@
 import type { DatabaseSync } from "node:sqlite";
-import {
-  cosineSimilarity,
-  decodeMemoryEmbedding,
-  truncateUtf16Safe,
-} from "openclaw/plugin-sdk/memory-core-host-engine-knn";
-import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { VectorKnnRequest, VectorKnnResponse } from "./manager-search-knn.js";
-import { resolveSnippetProjection, type SearchRowResult } from "./manager-search-shared.js";
+import { createEmbeddingScorer } from "./manager-search-scorer.js";
+import {
+  buildMemoryModelFilter,
+  projectMemorySearchRow,
+  resolveSnippetProjection,
+  type MemorySearchRow,
+  type SearchRowResult,
+} from "./manager-search-shared.js";
+import { buildSqliteMemorySourceFilter, type MemorySourceFilter } from "./source-filter.js";
 
 // Bound scan batches so worker cancellation can interrupt large vectorless indexes.
 const FALLBACK_VECTOR_BATCH_SIZE = 256;
-
-function yieldToEventLoop(): Promise<void> {
-  return new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}
-
-type SearchSource = MemorySource;
 
 function resolveProviderModels(primary: string, aliases: string[] | undefined): string[] {
   return Array.from(new Set([primary, ...(aliases ?? []).filter(Boolean)]));
 }
 
-function buildModelFilter(column: string, models: string[]): string {
-  return models.length === 1
-    ? `${column} = ?`
-    : `${column} IN (${models.map(() => "?").join(", ")})`;
-}
-
 export async function searchVector(params: {
-  vectorTable: string;
   providerModel: string;
   providerModelAliases?: string[];
   queryVec: number[];
@@ -40,7 +28,7 @@ export async function searchVector(params: {
   ensureVectorReady: (dimensions: number) => Promise<boolean>;
   runVectorKnn?: (request: VectorKnnRequest, signal?: AbortSignal) => Promise<VectorKnnResponse>;
   runFallback: () => Promise<SearchRowResult[]>;
-  sourceFilterVec: { sql: string; params: SearchSource[] };
+  sourceFilterVec: MemorySourceFilter;
 }): Promise<SearchRowResult[]> {
   if (params.queryVec.length === 0 || params.limit <= 0) {
     return [];
@@ -55,7 +43,6 @@ export async function searchVector(params: {
     }
     const response = await params.runVectorKnn(
       {
-        vectorTable: params.vectorTable,
         providerModels,
         queryVec: params.queryVec,
         limit: params.limit,
@@ -64,18 +51,11 @@ export async function searchVector(params: {
       },
       params.signal,
     );
-    if (response.fallbackScanRequired) {
-      return await params.runFallback();
+    if (!response.fallbackScanRequired) {
+      return response.rows.map((row) =>
+        projectMemorySearchRow(row, params.snippetMaxChars, 1 - row.dist),
+      );
     }
-    return response.rows.map((row) => ({
-      id: row.id,
-      path: row.path,
-      startLine: row.start_line,
-      endLine: row.end_line,
-      score: 1 - row.dist,
-      snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
-      source: row.source,
-    }));
   }
 
   return await params.runFallback();
@@ -85,24 +65,29 @@ export async function searchChunksByEmbedding(params: {
   db: DatabaseSync;
   providerModel: string;
   providerModelAliases?: string[];
-  sourceFilter: { sql: string; params: SearchSource[] };
+  sourceFilter: MemorySourceFilter;
   queryVec: number[];
   limit: number;
   snippetMaxChars: number;
+  candidateIds?: string[];
   signal?: AbortSignal;
 }): Promise<SearchRowResult[]> {
-  if (params.limit <= 0) {
+  if (params.limit <= 0 || params.candidateIds?.length === 0) {
     return [];
   }
   const providerModels = resolveProviderModels(params.providerModel, params.providerModelAliases);
-  const modelFilter = buildModelFilter("model", providerModels);
+  const modelFilter = buildMemoryModelFilter("model", providerModels);
+  const candidateFilter = params.candidateIds
+    ? ` AND id IN (${params.candidateIds.map(() => "?").join(", ")})`
+    : "";
   // Keep batches bounded instead of calling `.all()` across the entire chunks
   // table, and do not hold a sqlite iterator open across the setImmediate yield
   // below. The rowid cursor keeps memory bounded without OFFSET rescans.
   const projection = `SELECT rowid AS rowid, embedding
   FROM memory_index_chunks
- WHERE ${modelFilter}`;
-  const ordering = `${params.sourceFilter.sql}\n ORDER BY rowid ASC\n LIMIT ?`;
+ WHERE ${modelFilter}${candidateFilter}`;
+  const sourceFilter = buildSqliteMemorySourceFilter(params.sourceFilter);
+  const ordering = `${sourceFilter.sql}\n ORDER BY rowid ASC\n LIMIT ?`;
   // The first batch includes zero and negative identities, including INT64_MIN;
   // later batches retain an indexed range predicate and the exact native cursor.
   const firstStmt = params.db.prepare(`${projection}${ordering}`);
@@ -117,38 +102,24 @@ export async function searchChunksByEmbedding(params: {
   const payloadStmt = params.db.prepare(
     `SELECT id, path, start_line, end_line, ${snippet.sql} AS text, source FROM memory_index_chunks WHERE rowid = ?`,
   );
-  type ChunkPayload = {
-    id: string;
-    path: string;
-    start_line: number;
-    end_line: number;
-    text: string;
-    source: SearchSource;
-  };
-
+  const scoreEmbedding = createEmbeddingScorer(params.queryVec);
   const topResults: SearchRowResult[] = [];
   let lastRowid: bigint | undefined;
   while (true) {
-    const rows =
-      lastRowid === undefined
-        ? firstStmt.iterate(
-            ...providerModels,
-            ...params.sourceFilter.params,
-            FALLBACK_VECTOR_BATCH_SIZE,
-          )
-        : stmt.iterate(
-            ...providerModels,
-            lastRowid,
-            ...params.sourceFilter.params,
-            FALLBACK_VECTOR_BATCH_SIZE,
-          );
+    const rows = (lastRowid === undefined ? firstStmt : stmt).iterate(
+      ...providerModels,
+      ...(params.candidateIds ?? []),
+      ...(lastRowid === undefined ? [] : [lastRowid]),
+      ...sourceFilter.params,
+      FALLBACK_VECTOR_BATCH_SIZE,
+    );
     // SAFETY: Both scans read INTEGER rowids as bigint and embeddings from a STRICT BLOB column.
     const batch = rows as IterableIterator<ChunkEmbeddingRow>;
     let batchSize = 0;
     for (const row of batch) {
       batchSize += 1;
       lastRowid = row.rowid;
-      const score = cosineSimilarity(params.queryVec, decodeMemoryEmbedding(row.embedding));
+      const score = scoreEmbedding(row.embedding);
       const lowest = topResults.at(-1);
       if (
         Number.isFinite(score) &&
@@ -157,16 +128,8 @@ export async function searchChunksByEmbedding(params: {
         // Hydrate contenders before yielding so an old score cannot acquire a
         // replacement chunk's payload.
         // SAFETY: these schema-defined columns belong to this rowid in the active read snapshot.
-        const payload = payloadStmt.get(...snippet.params, row.rowid) as ChunkPayload;
-        const result: SearchRowResult = {
-          id: payload.id,
-          path: payload.path,
-          startLine: payload.start_line,
-          endLine: payload.end_line,
-          score,
-          snippet: truncateUtf16Safe(payload.text, params.snippetMaxChars),
-          source: payload.source,
-        };
+        const payload = payloadStmt.get(...snippet.params, row.rowid) as MemorySearchRow;
+        const result = projectMemorySearchRow(payload, params.snippetMaxChars, score);
         if (topResults.length < params.limit) {
           topResults.push(result);
           if (topResults.length === params.limit) {

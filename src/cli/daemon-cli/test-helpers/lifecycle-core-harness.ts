@@ -22,21 +22,12 @@ type LifecycleServiceHarness = GatewayService & {
 
 export const lifecycleTestRuntime: LifecycleRuntimeHarness = lifecycleRuntimeCapture.defaultRuntime;
 
-export function createGatewayUninstallArgs() {
-  return {
-    serviceNoun: "Gateway",
-    service,
-    opts: { json: true as const },
-    stopBeforeUninstall: true,
-    assertNotLoadedAfterUninstall: true,
-  };
-}
-
 export function createGatewayServiceRunArgs(checkTokenDrift?: boolean) {
   return {
     serviceNoun: "Gateway",
     service,
     renderStartHints: () => [],
+    renderFailureHints: () => [],
     opts: { json: true as const },
     ...(checkTokenDrift ? { checkTokenDrift } : {}),
   };

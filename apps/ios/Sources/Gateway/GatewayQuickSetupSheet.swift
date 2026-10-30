@@ -63,10 +63,8 @@ struct GatewayQuickSetupSheet: View {
                                 self.connecting = true
                                 Task {
                                     let err = await self.gatewayController.connectWithDiagnostics(candidate)
-                                    await MainActor.run {
-                                        self.connecting = false
-                                        self.connectError = err
-                                    }
+                                    self.connecting = false
+                                    self.connectError = err
                                 }
                             } label: {
                                 Group {

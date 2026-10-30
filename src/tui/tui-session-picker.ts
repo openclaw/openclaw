@@ -20,11 +20,6 @@ export type SessionPickerChoice = {
   matchText: string;
 };
 
-export type ResumeResolution =
-  | { kind: "match"; session: SessionPickerChoice }
-  | { kind: "ambiguous"; candidates: SessionPickerChoice[] }
-  | { kind: "none" };
-
 /** Load the same bounded recent-session window used by the TUI Ctrl+P picker. */
 export async function loadRecentSessions(
   client: Pick<TuiBackend, "listSessions">,
@@ -42,17 +37,14 @@ export async function loadRecentSessions(
   return result.sessions;
 }
 
-/** Build labels and matching text for recent-session pickers. */
 export function buildSessionChoices(sessions: readonly TuiSessionEntry[]): SessionPickerChoice[] {
   return sessions.map((session) => {
     const title = session.derivedTitle ?? session.displayName;
-    const formattedKey = formatSessionKey(session.key);
+    const formattedKey = parseAgentSessionKey(session.key)?.rest ?? session.key;
     const label = title && title !== formattedKey ? `${title} (${formattedKey})` : formattedKey;
-    const timePart = session.updatedAt
-      ? formatRelativeTimestamp(session.updatedAt, { dateFallback: true, fallback: "" })
-      : "";
+    const timePart = session.updatedAt ? formatRelativeTimestamp(session.updatedAt) : "";
     const preview = session.lastMessagePreview?.replace(/\s+/g, " ").trim();
-    const description = timePart && preview ? `${timePart} · ${preview}` : (preview ?? timePart);
+    const description = timePart && preview ? `${timePart} · ${preview}` : preview || timePart;
     const searchableNames = [
       session.derivedTitle,
       session.displayName,
@@ -75,9 +67,12 @@ export function buildSessionChoices(sessions: readonly TuiSessionEntry[]): Sessi
 export function resolveResumeSession(
   sessions: readonly TuiSessionEntry[],
   query: string,
-): ResumeResolution {
+):
+  | { kind: "match"; session: SessionPickerChoice }
+  | { kind: "ambiguous"; candidates: SessionPickerChoice[] }
+  | { kind: "none" } {
   const trimmedQuery = query.trim();
-  const normalizedQuery = normalizeLowercaseStringOrEmpty(trimmedQuery);
+  const normalizedQuery = normalizeLowercaseStringOrEmpty(trimmedQuery).normalize("NFC");
   const choices = buildSessionChoices(sessions);
   const exact = choices.find((choice) => choice.value === trimmedQuery);
   if (exact) {
@@ -85,12 +80,12 @@ export function resolveResumeSession(
   }
 
   const substringMatches = choices.filter((choice) =>
-    normalizeLowercaseStringOrEmpty(choice.matchText).includes(normalizedQuery),
+    normalizeLowercaseStringOrEmpty(choice.matchText).normalize("NFC").includes(normalizedQuery),
   );
   const matches =
     substringMatches.length > 0
       ? substringMatches
-      : fuzzyFilter(choices, trimmedQuery, (choice) => choice.matchText);
+      : fuzzyFilter(choices, normalizedQuery, (choice) => choice.matchText.normalize("NFC"));
   const match = matches[0];
   if (matches.length === 1 && match) {
     return { kind: "match", session: match };
@@ -99,8 +94,4 @@ export function resolveResumeSession(
     return { kind: "ambiguous", candidates: matches };
   }
   return { kind: "none" };
-}
-
-function formatSessionKey(key: string): string {
-  return parseAgentSessionKey(key)?.rest ?? key;
 }

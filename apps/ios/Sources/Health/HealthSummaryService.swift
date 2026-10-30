@@ -14,17 +14,12 @@ enum HealthAuthorization {
     }
 
     static var readTypes: Set<HKObjectType> {
-        var types: Set<HKObjectType> = [HKWorkoutType.workoutType()]
-        if let steps = HKObjectType.quantityType(forIdentifier: .stepCount) {
-            types.insert(steps)
-        }
-        if let sleep = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) {
-            types.insert(sleep)
-        }
-        if let restingHeartRate = HKObjectType.quantityType(forIdentifier: .restingHeartRate) {
-            types.insert(restingHeartRate)
-        }
-        return types
+        [
+            HKWorkoutType.workoutType(),
+            HKQuantityType(.stepCount),
+            HKCategoryType(.sleepAnalysis),
+            HKQuantityType(.restingHeartRate),
+        ]
     }
 
     @MainActor
@@ -70,11 +65,7 @@ protocol HealthSummaryServicing: Sendable {
 }
 
 actor HealthSummaryService: HealthSummaryServicing {
-    private let healthStore: HKHealthStore
-
-    init(healthStore: HKHealthStore = HKHealthStore()) {
-        self.healthStore = healthStore
-    }
+    private let healthStore = HKHealthStore()
 
     func summary(params: OpenClawHealthSummaryParams) async throws -> OpenClawHealthSummaryPayload {
         guard HealthAuthorization.isEnabled else {
@@ -140,8 +131,7 @@ actor HealthSummaryService: HealthSummaryServicing {
     }
 
     private func stepCount(in range: DateInterval) async throws -> Int? {
-        guard let type = HKObjectType.quantityType(forIdentifier: .stepCount) else { return nil }
-        let predicate = Self.quantityPredicate(type: type, range: range)
+        let predicate = Self.quantityPredicate(type: HKQuantityType(.stepCount), range: range)
         let statistics = try await HKStatisticsQueryDescriptor(
             predicate: predicate,
             options: .cumulativeSum).result(for: self.healthStore)
@@ -149,8 +139,7 @@ actor HealthSummaryService: HealthSummaryServicing {
     }
 
     private func restingHeartRate(in range: DateInterval) async throws -> Double? {
-        guard let type = HKObjectType.quantityType(forIdentifier: .restingHeartRate) else { return nil }
-        let predicate = Self.quantityPredicate(type: type, range: range)
+        let predicate = Self.quantityPredicate(type: HKQuantityType(.restingHeartRate), range: range)
         let statistics = try await HKStatisticsQueryDescriptor(
             predicate: predicate,
             options: .discreteAverage).result(for: self.healthStore)
@@ -159,13 +148,12 @@ actor HealthSummaryService: HealthSummaryServicing {
     }
 
     private func sleepDuration(in range: DateInterval) async throws -> TimeInterval? {
-        guard let type = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else { return nil }
         let predicate = HKQuery.predicateForSamples(
             withStart: range.start,
             end: range.end,
             options: [])
         let descriptor = HKSampleQueryDescriptor(
-            predicates: [.categorySample(type: type, predicate: predicate)],
+            predicates: [.categorySample(type: HKCategoryType(.sleepAnalysis), predicate: predicate)],
             sortDescriptors: [],
             limit: nil)
         let samples = try await descriptor.result(for: self.healthStore)

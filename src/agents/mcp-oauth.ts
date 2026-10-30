@@ -1,29 +1,31 @@
 /** MCP OAuth credential provider, flow coordinator, and login helpers. */
-import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { FetchLike } from "@modelcontextprotocol/client";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import {
   type OpenClawStateAsyncLeaseContext,
   withOpenClawStateLeaseAsync,
 } from "../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import { buildMcpOAuthAuthorizationFetch, buildMcpOAuthHttpFetch } from "./mcp-http-fetch.js";
 import {
-  buildMcpHttpFetch,
-  withoutMcpAuthorizationHeader,
-  withSameOriginMcpHttpHeaders,
-} from "./mcp-http-fetch.js";
-import { requesterMcpOAuthStoreKeyPrefix, type McpOAuthIdentity } from "./mcp-oauth-identity.js";
+  mcpOAuthSignInHint,
+  requesterMcpOAuthStoreKeyPrefix,
+  type McpOAuthIdentity,
+} from "./mcp-oauth-identity.js";
 import {
   createMcpOAuthClientProvider,
   type McpOAuthConfig,
   type McpOAuthLoginLifecycle,
   withMcpOAuthLeaseSignal,
 } from "./mcp-oauth-provider.js";
+import { createMcpOAuthRefreshBoundary } from "./mcp-oauth-refresh-boundary.js";
 import {
   projectMcpOAuthCredentialsStatus,
   type McpOAuthPrincipalStatus,
 } from "./mcp-oauth-status.js";
+import { mcpOAuthAuthorizationRequiredError } from "./mcp-oauth-store.authorization.js";
 import {
   clearMcpOAuthStore,
   consumeOAuthState,
@@ -38,15 +40,10 @@ import {
   writeMcpOAuthPendingAuthorization,
   type McpOAuthStore,
 } from "./mcp-oauth-store.js";
-import type { resolveMcpTransportConfig } from "./mcp-transport-config.js";
+import type { ResolvedHttpMcpTransportConfig } from "./mcp-transport-config.js";
 
 export type { McpOAuthPrincipalStatus } from "./mcp-oauth-status.js";
 export type { McpOAuthConfig } from "./mcp-oauth-provider.js";
-
-type ResolvedHttpMcpTransportConfig = Extract<
-  NonNullable<ReturnType<typeof resolveMcpTransportConfig>>,
-  { kind: "http" }
->;
 
 type McpOAuthAuthorizationStartResult =
   | { status: "authorized" }
@@ -81,12 +78,6 @@ async function withMcpOAuthLease<T>(
   );
 }
 
-function mcpOAuthAdditionalAuthorizationError(serverName: string): Error {
-  return new Error(
-    `MCP server "${serverName}" requires additional OAuth authorization. Run openclaw mcp login ${serverName}.`,
-  );
-}
-
 type ResolveMcpOAuthAccessTokenParams = {
   identity: McpOAuthIdentity;
   config?: McpOAuthConfig;
@@ -101,7 +92,24 @@ type ResolveMcpOAuthAccessTokenParams = {
   signal?: AbortSignal;
 };
 
-/** Returns a current MCP-native OAuth token under one cross-process flow lease. */
+function isStoredMcpOAuthAccessTokenUsable(
+  store: McpOAuthStore,
+  params: ResolveMcpOAuthAccessTokenParams,
+): boolean {
+  const tokens = store.tokens;
+  if (!tokens?.access_token || params.rejectedAccessToken === tokens.access_token) {
+    return false;
+  }
+  const tokenIsFresh =
+    store.tokenExpiresAt !== undefined && store.tokenExpiresAt > Date.now() + TOKEN_EXPIRY_SKEW_MS;
+  return (
+    tokenIsFresh ||
+    (store.tokenExpiresAt === undefined &&
+      (params.acceptUnknownExpiry === true || !tokens.refresh_token))
+  );
+}
+
+/** Returns a current MCP-native OAuth token; refreshes run under one cross-process flow lease. */
 export function resolveMcpOAuthAccessToken(
   params: ResolveMcpOAuthAccessTokenParams & { allowMissingToken: true },
 ): Promise<string | undefined>;
@@ -112,9 +120,31 @@ export async function resolveMcpOAuthAccessToken(
   params: ResolveMcpOAuthAccessTokenParams,
 ): Promise<string | undefined> {
   const storeKey = params.identity.storeKey;
-  return await withMcpOAuthLease(
+  const caller = params.signal;
+  caller?.throwIfAborted();
+  // Reusable credentials need no flow lease; mutations still re-read under the lease.
+  if (params.authorizationChallenge !== true) {
+    const store = await readMcpOAuthStoreReadOnly(storeKey);
+    caller?.throwIfAborted();
+    if (
+      store.pendingAuthorizationChallenge?.requiresAuthorization !== true &&
+      !store.refreshClaim &&
+      isStoredMcpOAuthAccessTokenUsable(store, params)
+    ) {
+      return store.tokens?.access_token;
+    }
+  }
+  // Lease waiting follows the caller; once admitted, a caller abort detaches instead of
+  // interrupting a possibly rotating exchange that must settle under its lease.
+  const waiting = new AbortController();
+  const detached = new AbortController();
+  let admitted = false;
+  const onAbort = () => (admitted ? detached : waiting).abort(caller?.reason);
+  caller?.addEventListener("abort", onAbort, { once: true });
+  const work = withMcpOAuthLease(
     storeKey,
     async (lease, context) => {
+      admitted = true;
       const store = await readMcpOAuthStore(storeKey, context);
       await lease.assertOwned();
       const tokens = store.tokens;
@@ -142,69 +172,78 @@ export async function resolveMcpOAuthAccessToken(
         params.interactiveAuthorizationRequired === true &&
         challengeAppliesToCurrentState
       ) {
-        throw mcpOAuthAdditionalAuthorizationError(params.identity.serverName);
+        throw mcpOAuthAuthorizationRequiredError(params.identity, context.admission, true);
       }
       if (store.pendingAuthorizationChallenge?.requiresAuthorization === true) {
-        throw mcpOAuthAdditionalAuthorizationError(params.identity.serverName);
+        throw mcpOAuthAuthorizationRequiredError(params.identity, context.admission, true);
+      }
+      if (store.refreshClaim) {
+        throw new Error("MCP OAuth refresh outcome is uncertain; sign in again.");
       }
       if (!tokens?.access_token) {
         if (params.allowMissingToken === true) {
           return undefined;
         }
-        throw new Error(
-          `MCP server "${params.identity.serverName}" requires OAuth authorization. Run openclaw mcp login ${params.identity.serverName}.`,
-        );
+        throw mcpOAuthAuthorizationRequiredError(params.identity, context.admission);
       }
 
-      const tokenIsFresh =
-        store.tokenExpiresAt !== undefined &&
-        store.tokenExpiresAt > Date.now() + TOKEN_EXPIRY_SKEW_MS;
-      if (
-        !rejectedCurrentToken &&
-        (tokenIsFresh ||
-          (store.tokenExpiresAt === undefined &&
-            (params.acceptUnknownExpiry === true || !tokens.refresh_token)))
-      ) {
+      if (isStoredMcpOAuthAccessTokenUsable(store, params)) {
         return tokens.access_token;
       }
       if (!tokens.refresh_token) {
         throw new Error(
-          `MCP server "${params.identity.serverName}" has expired OAuth credentials. Run openclaw mcp login ${params.identity.serverName}.`,
+          `MCP server "${params.identity.serverName}" has expired OAuth credentials. ${mcpOAuthSignInHint(params.identity)}`,
         );
       }
 
+      const { auth } = await import("@modelcontextprotocol/client");
+      await lease.assertOwned();
       const pendingChallenge = store.pendingAuthorizationChallenge;
       await mutateMcpOAuthStore({ storeKey, lease, context }, { kind: "bindTokensIssuer" });
+      const boundary = createMcpOAuthRefreshBoundary({ storeKey, lease, context });
       const provider = await createMcpOAuthClientProvider({
         identity: params.identity,
         config: params.config,
         lease,
         storeContext: context,
+        refreshBoundary: boundary,
       });
-      const result = await auth(provider, {
-        serverUrl: params.identity.serverUrl,
-        resourceMetadataUrl:
-          params.resourceMetadataUrl ??
-          (pendingChallenge?.resourceMetadataUrl
-            ? new URL(pendingChallenge.resourceMetadataUrl)
-            : undefined),
-        scope:
-          params.scope ??
-          normalizeOptionalString(pendingChallenge?.scope) ??
-          normalizeOptionalString(params.config?.scope),
-        fetchFn: withMcpOAuthLeaseSignal(params.fetchFn, lease.signal),
-      });
+      const fetchFn =
+        params.fetchFn ?? buildMcpOAuthHttpFetch({ resourceUrl: params.identity.serverUrl });
+      let result: Awaited<ReturnType<typeof auth>>;
+      try {
+        result = await auth(provider, {
+          serverUrl: params.identity.serverUrl,
+          resourceMetadataUrl:
+            params.resourceMetadataUrl ??
+            (pendingChallenge?.resourceMetadataUrl
+              ? new URL(pendingChallenge.resourceMetadataUrl)
+              : undefined),
+          scope:
+            params.scope ??
+            normalizeOptionalString(pendingChallenge?.scope) ??
+            normalizeOptionalString(params.config?.scope),
+          fetchFn: boundary.wrap(withMcpOAuthLeaseSignal(fetchFn, lease.signal)),
+        });
+      } finally {
+        await boundary.finish();
+      }
       await lease.assertOwned();
       const refreshedTokens = await provider.tokens();
       if (result !== "AUTHORIZED" || !refreshedTokens?.access_token) {
         throw new Error(
-          `MCP server "${params.identity.serverName}" could not refresh OAuth credentials. Run openclaw mcp login ${params.identity.serverName}.`,
+          `MCP server "${params.identity.serverName}" could not refresh OAuth credentials. ${mcpOAuthSignInHint(params.identity)}`,
         );
       }
       return refreshedTokens.access_token;
     },
-    params.signal,
+    waiting.signal,
   );
+  try {
+    return await racePromiseWithAbortSignal(work, detached.signal);
+  } finally {
+    caller?.removeEventListener("abort", onAbort);
+  }
 }
 
 /** Persist a terminal resource rejection without overwriting newer credentials. */
@@ -302,31 +341,13 @@ export async function readMcpOAuthCredentialsStatus(
   return projectMcpOAuthCredentialsStatus(store);
 }
 
-function buildMcpOAuthAuthorizationFetch(
-  config: ResolvedHttpMcpTransportConfig,
-  beforeRequest?: () => void,
-): FetchLike {
-  const fetchFn = buildMcpHttpFetch({
-    sslVerify: config.sslVerify,
-    clientCert: config.clientCert,
-    clientKey: config.clientKey,
-    resourceUrl: config.url,
-    timeoutMs: config.requestTimeoutMs,
-    beforeRequest,
-  });
-  return withSameOriginMcpHttpHeaders({
-    fetchFn,
-    headers: withoutMcpAuthorizationHeader(config.headers),
-    resourceUrl: config.url,
-  });
-}
-
 async function runMcpOAuthAuthorizationAttempt(
   params: {
     identity: McpOAuthIdentity;
     config: McpOAuthConfig;
     fetchFn: FetchLike;
     authorizationCode?: string;
+    iss?: string;
     resourceMetadataUrl?: URL;
     scope?: string;
     suppressStoredTokens?: boolean;
@@ -335,24 +356,39 @@ async function runMcpOAuthAuthorizationAttempt(
   lease: OpenClawStateAsyncLeaseContext,
   context: OpenClawStateWorkerContext,
 ): Promise<"authorized" | "redirect"> {
+  const { auth } = await import("@modelcontextprotocol/client");
   params.login?.assertCurrent();
+  const boundary = createMcpOAuthRefreshBoundary(
+    { storeKey: params.identity.storeKey, lease, context },
+    params.login?.assertCurrent,
+  );
   const provider = await createMcpOAuthClientProvider({
     identity: params.identity,
     config: params.config,
     allowAuthorizationRedirect: true,
     suppressStoredTokens: params.suppressStoredTokens,
+    replaceAuthorization: Boolean(params.authorizationCode) || params.suppressStoredTokens,
     lease,
     login: params.login,
     storeContext: context,
+    refreshBoundary: boundary,
   });
   params.login?.assertCurrent();
-  const result = await auth(provider, {
-    serverUrl: params.identity.serverUrl,
-    authorizationCode: normalizeOptionalString(params.authorizationCode),
-    resourceMetadataUrl: params.resourceMetadataUrl,
-    scope: normalizeOptionalString(params.scope) ?? normalizeOptionalString(params.config?.scope),
-    fetchFn: withMcpOAuthLeaseSignal(params.fetchFn, lease.signal, params.login?.assertCurrent),
-  });
+  let result: Awaited<ReturnType<typeof auth>> | undefined;
+  try {
+    result = await auth(provider, {
+      serverUrl: params.identity.serverUrl,
+      authorizationCode: normalizeOptionalString(params.authorizationCode),
+      iss: params.iss,
+      resourceMetadataUrl: params.resourceMetadataUrl,
+      scope: normalizeOptionalString(params.scope) ?? normalizeOptionalString(params.config?.scope),
+      fetchFn: boundary.wrap(
+        withMcpOAuthLeaseSignal(params.fetchFn, lease.signal, params.login?.assertCurrent),
+      ),
+    });
+  } finally {
+    await boundary.finish({ redirected: result === "REDIRECT" });
+  }
   params.login?.assertCurrent();
   await lease.assertOwned();
   params.login?.assertCurrent();
@@ -373,9 +409,11 @@ export async function startMcpOAuthAuthorization(
       opts.login?.assertCurrent();
       await lease.assertOwned();
       opts.login?.assertCurrent();
+      // A fenced refresh claim blocks every token use, so only a new sign-in can clear it.
       if (
         opts.login &&
         store.tokens?.access_token &&
+        !store.refreshClaim &&
         store.pendingAuthorizationChallenge?.requiresAuthorization !== true &&
         (store.tokenExpiresAt === undefined ||
           store.tokenExpiresAt > Date.now() + TOKEN_EXPIRY_SKEW_MS)
@@ -385,11 +423,11 @@ export async function startMcpOAuthAuthorization(
       const pendingChallenge = store.pendingAuthorizationChallenge;
       const configuredRedirectUrl =
         normalizeOptionalString(opts.redirectUrl) ??
-        normalizeOptionalString(config.oauth?.redirectUrl) ??
-        store.redirectUrl;
+        normalizeOptionalString(config.oauth?.redirectUrl);
+      const redirectUrl = configuredRedirectUrl ?? store.redirectUrl;
       const oauthConfig: McpOAuthConfig = {
         ...config.oauth,
-        ...(configuredRedirectUrl ? { redirectUrl: configuredRedirectUrl } : {}),
+        ...(redirectUrl ? { redirectUrl } : {}),
       };
       const attempt = {
         identity,
@@ -407,11 +445,7 @@ export async function startMcpOAuthAuthorization(
         result = await runMcpOAuthAuthorizationAttempt(attempt, lease, context);
       } catch (error) {
         opts.login?.assertCurrent();
-        if (
-          !normalizeOptionalString(opts.redirectUrl) &&
-          !normalizeOptionalString(config.oauth?.redirectUrl) &&
-          isMcpOAuthRedirectRegistrationError(error)
-        ) {
+        if (!configuredRedirectUrl && isMcpOAuthRedirectRegistrationError(error)) {
           result = await runMcpOAuthAuthorizationAttempt(
             {
               ...attempt,
@@ -452,7 +486,7 @@ export async function startMcpOAuthAuthorization(
 export async function completeMcpOAuthAuthorization(
   identity: McpOAuthIdentity,
   config: ResolvedHttpMcpTransportConfig,
-  input: { code: string },
+  input: { code: string; iss?: string },
 ): Promise<"authorized"> {
   const storeKey = identity.storeKey;
   return await withMcpOAuthLease<"authorized">(storeKey, async (lease, context) => {
@@ -474,7 +508,7 @@ function readMcpOAuthAuthorizationState(authorizationUrl: string | undefined): s
 async function completeMcpOAuthAuthorizationUnderLease(
   identity: McpOAuthIdentity,
   config: ResolvedHttpMcpTransportConfig,
-  input: { code: string },
+  input: { code: string; iss?: string },
   lease: OpenClawStateAsyncLeaseContext,
   context: OpenClawStateWorkerContext,
   login?: McpOAuthLoginLifecycle,
@@ -499,6 +533,7 @@ async function completeMcpOAuthAuthorizationUnderLease(
       config: { ...config.oauth, redirectUrl: store.redirectUrl },
       fetchFn: buildMcpOAuthAuthorizationFetch(config, login?.assertCurrent),
       authorizationCode,
+      iss: input.iss,
       resourceMetadataUrl: pendingChallenge?.resourceMetadataUrl
         ? new URL(pendingChallenge.resourceMetadataUrl)
         : undefined,
@@ -526,7 +561,7 @@ async function completeMcpOAuthAuthorizationUnderLease(
 export async function completeOAuthCallback(
   identity: McpOAuthIdentity,
   config: ResolvedHttpMcpTransportConfig,
-  input: { code: string; state: string },
+  input: { code: string; state: string; iss?: string },
   login?: McpOAuthLoginLifecycle,
   context: OpenClawStateWorkerContext = captureOpenClawStateWorkerContext(),
 ): Promise<"authorized" | "expired"> {

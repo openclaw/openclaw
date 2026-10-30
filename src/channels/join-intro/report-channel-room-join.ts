@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDefaultDeps } from "../../cli/deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { admitEventOccurrence } from "../../cron/event-occurrence-admission.js";
 import type { CronJob } from "../../cron/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -49,25 +50,6 @@ type ChannelJoinIntroParams = {
   }) => Promise<ChannelJoinedRoomContext | null>;
 };
 
-function logChannelJoinIntroOutcome(
-  params: ChannelJoinIntroParams,
-  outcome: ChannelJoinIntroOutcome,
-): ChannelJoinIntroOutcome {
-  const meta = {
-    channel: params.channel,
-    accountId: params.accountId,
-    conversationId: params.conversationId,
-    kind: outcome.kind,
-    ...(outcome.kind !== "posted" ? { reason: outcome.reason } : {}),
-  };
-  if (outcome.kind === "failed") {
-    log.warn("channel room join introduction failed", meta);
-  } else {
-    log.info("channel room join introduction settled", meta);
-  }
-  return outcome;
-}
-
 function resolveChannelJoinIntroEnabled(params: ChannelJoinIntroParams): boolean {
   const channelConfig = asOptionalRecord(params.cfg.channels?.[params.channel]);
   const accountConfig = asOptionalRecord(
@@ -103,12 +85,28 @@ function resolveChannelJoinIntroDedupe(channel: string) {
 export async function reportChannelRoomJoin(
   params: ChannelJoinIntroParams,
 ): Promise<ChannelJoinIntroOutcome> {
+  function logChannelJoinIntroOutcome(outcome: ChannelJoinIntroOutcome): ChannelJoinIntroOutcome {
+    const meta = {
+      channel: params.channel,
+      accountId: params.accountId,
+      conversationId: params.conversationId,
+      kind: outcome.kind,
+      ...(outcome.kind !== "posted" ? { reason: outcome.reason } : {}),
+    };
+    if (outcome.kind === "failed") {
+      log.warn("channel room join introduction failed", meta);
+    } else {
+      log.info("channel room join introduction settled", meta);
+    }
+    return outcome;
+  }
+
   if (!resolveChannelJoinIntroEnabled(params)) {
-    return logChannelJoinIntroOutcome(params, { kind: "skipped", reason: "disabled" });
+    return logChannelJoinIntroOutcome({ kind: "skipped", reason: "disabled" });
   }
   // A self-join has no sender message to mention the bot; admission is room-only.
   if (!params.roomAllowed) {
-    return logChannelJoinIntroOutcome(params, { kind: "skipped", reason: "room-not-allowed" });
+    return logChannelJoinIntroOutcome({ kind: "skipped", reason: "room-not-allowed" });
   }
 
   const dedupe = resolveChannelJoinIntroDedupe(params.channel);
@@ -126,7 +124,7 @@ export async function reportChannelRoomJoin(
       },
     );
     if (claim.kind === "duplicate") {
-      return logChannelJoinIntroOutcome(params, {
+      return logChannelJoinIntroOutcome({
         kind: "skipped",
         reason: "already-introduced",
       });
@@ -140,7 +138,7 @@ export async function reportChannelRoomJoin(
         dedupe.release(dedupeKey, {
           error: new ChannelJoinIntroRetryableError("room context was unavailable"),
         });
-        return logChannelJoinIntroOutcome(params, { kind: "skipped", reason: "no-context" });
+        return logChannelJoinIntroOutcome({ kind: "skipped", reason: "no-context" });
       }
 
       const message = buildChannelJoinIntroPrompt({
@@ -176,10 +174,18 @@ export async function reportChannelRoomJoin(
         state: { nextRunAtMs: nowMs },
       };
       const { runCronIsolatedAgentTurn } = await import("../../cron/isolated-agent.js");
+      const occurrence = await admitEventOccurrence({
+        cfg: params.cfg,
+        job,
+        agentId: params.route.agentId,
+      });
       const result = await runCronIsolatedAgentTurn({
+        occurrence,
         cfg: params.cfg,
         deps: createDefaultDeps(),
         job,
+        trigger: "event",
+        deliveryAttemptFence: null,
         message,
         sessionKey: params.route.sessionKey,
         agentId: params.route.agentId,
@@ -187,12 +193,12 @@ export async function reportChannelRoomJoin(
       if (result.status !== "ok" || result.delivered !== true) {
         const reason = result.deliveryError ?? result.error ?? "introduction was not delivered";
         dedupe.release(dedupeKey, { error: new ChannelJoinIntroRetryableError(reason) });
-        return logChannelJoinIntroOutcome(params, { kind: "failed", reason });
+        return logChannelJoinIntroOutcome({ kind: "failed", reason });
       }
     } catch (error) {
       const reason = formatErrorMessage(error);
       dedupe.release(dedupeKey, { error: new ChannelJoinIntroRetryableError(reason) });
-      return logChannelJoinIntroOutcome(params, {
+      return logChannelJoinIntroOutcome({
         kind: "failed",
         reason,
       });
@@ -208,9 +214,9 @@ export async function reportChannelRoomJoin(
           error: formatErrorMessage(error),
         }),
     });
-    return logChannelJoinIntroOutcome(params, { kind: "posted" });
+    return logChannelJoinIntroOutcome({ kind: "posted" });
   } catch (error) {
-    return logChannelJoinIntroOutcome(params, {
+    return logChannelJoinIntroOutcome({
       kind: "failed",
       reason: formatErrorMessage(error),
     });

@@ -1,10 +1,10 @@
-import type { OverlayHandle } from "@earendil-works/pi-tui";
-import type { Result } from "@openclaw/normalization-core/result";
 import { expect, vi } from "vitest";
 import type { SessionProjectionState } from "../../packages/gateway-client/src/session-projection.js";
+import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
+import { createOverlayHandle } from "./tui-overlay-handle.test-support.js";
 import type { TuiPendingSubmit } from "./tui-submit-state.js";
-import type { SessionInfo, TuiOptions } from "./tui-types.js";
+import type { SessionInfo, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
 export type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
 type RunAuthFlow = NonNullable<Parameters<typeof createCommandHandlers>[0]["runAuthFlow"]>;
@@ -13,25 +13,15 @@ type AbortActiveMock = ReturnType<typeof vi.fn> &
 export type SelectableOverlay = {
   items?: Array<{ value: string; label?: string; description?: string }>;
   onSelect?: (item: { value: string; label?: string; description?: string }) => void;
+  render: (width: number) => string[];
+  handleInput: (data: string) => void;
 };
 type SetActivityStatusMock = ReturnType<typeof vi.fn> & ((text: string) => void);
 export type SetSessionMock = ReturnType<typeof vi.fn> &
   ((key: string, agentId?: string) => Promise<void>);
 export type ConsumeCompletedRunMock = ReturnType<typeof vi.fn> & ((runId: string) => boolean);
 type FlushPendingHistoryRefreshMock = ReturnType<typeof vi.fn> & (() => void);
-export type RefreshAgentsMock = ReturnType<typeof vi.fn> & (() => Promise<Result<void, string>>);
-
-function createOverlayHandle(): OverlayHandle {
-  return {
-    hide: vi.fn(),
-    setHidden: vi.fn(),
-    isHidden: vi.fn(() => false),
-    focus: vi.fn(),
-    unfocus: vi.fn(),
-    isFocused: vi.fn(() => true),
-    getBounds: () => undefined,
-  };
-}
+export type RefreshAgentsMock = ReturnType<typeof vi.fn> & (() => Promise<boolean>);
 
 export async function flushAsyncSelect() {
   await new Promise<void>((resolve) => {
@@ -77,10 +67,12 @@ export function firstMockArg(mock: MockWithCalls, label: string) {
 }
 
 export function createTuiCommandHandlersHarness(params?: {
+  state?: TuiStateAccess;
   sendChat?: ReturnType<typeof vi.fn>;
   getGatewayStatus?: ReturnType<typeof vi.fn>;
   listSessions?: ReturnType<typeof vi.fn>;
   listModels?: ReturnType<typeof vi.fn>;
+  getKnownModels?: TuiBackend["getKnownModels"];
   patchSession?: ReturnType<typeof vi.fn>;
   createSession?: ReturnType<typeof vi.fn>;
   resetSession?: ReturnType<typeof vi.fn>;
@@ -95,6 +87,7 @@ export function createTuiCommandHandlersHarness(params?: {
   applySessionMutationResult?: ReturnType<typeof vi.fn>;
   setActivityStatus?: SetActivityStatusMock;
   isConnected?: boolean;
+  historyLoaded?: boolean;
   activeChatRunId?: string | null;
   pendingSubmit?: TuiPendingSubmit | null;
   activityStatus?: string;
@@ -145,11 +138,6 @@ export function createTuiCommandHandlersHarness(params?: {
   const dropPendingUser = vi.fn();
   const rekeyPendingUser = vi.fn();
   const addSystem = vi.fn();
-  const pendingSystemNotices = new Map<string, string>();
-  const addPendingSystem = vi.fn((runId: string, text: string) => {
-    pendingSystemNotices.set(runId, text);
-  });
-  const dismissPendingSystem = vi.fn((runId: string) => pendingSystemNotices.delete(runId));
   const clearTools = vi.fn();
   const reserveAssistantSlot = vi.fn();
   const requestRender = vi.fn();
@@ -170,8 +158,7 @@ export function createTuiCommandHandlersHarness(params?: {
   const abortActive =
     params?.abortActive ?? (vi.fn().mockResolvedValue(undefined) as AbortActiveMock);
   const refreshAgents =
-    params?.refreshAgents ??
-    (vi.fn().mockResolvedValue({ ok: true, value: undefined }) as RefreshAgentsMock);
+    params?.refreshAgents ?? (vi.fn().mockResolvedValue(true) as RefreshAgentsMock);
   const runAuthFlow: RunAuthFlow | undefined =
     params?.runAuthFlow ??
     (params?.opts?.local
@@ -181,21 +168,38 @@ export function createTuiCommandHandlersHarness(params?: {
           commandArgv: '["codex","login"]',
         }) as unknown as RunAuthFlow)
       : undefined);
-  const state = {
-    agentDefaultId: params?.agentDefaultId ?? "main",
-    agents: params?.agents ?? [],
-    currentAgentId: params?.currentAgentId ?? "main",
-    currentSessionKey: params?.currentSessionKey ?? "agent:main:main",
-    currentSessionId: params?.currentSessionId ?? null,
-    sessionGeneration: params?.sessionGeneration ?? 0,
-    sessionProjection: params?.sessionProjection,
-    activeChatRunId: params?.activeChatRunId ?? null,
-    pendingSubmit: params?.pendingSubmit ?? null,
-    activityStatus: params?.activityStatus ?? "idle",
-    isConnected: params?.isConnected ?? true,
-    sessionInfo: params?.sessionInfo ?? {},
-  };
+  const state = params?.state
+    ? Object.assign(params.state, { sessionGeneration: params.state.sessionGeneration ?? 0 })
+    : {
+        agentDefaultId: params?.agentDefaultId ?? "main",
+        agents: params?.agents ?? [],
+        currentAgentId: params?.currentAgentId ?? "main",
+        currentSessionKey: params?.currentSessionKey ?? "agent:main:main",
+        currentSessionId: params?.currentSessionId ?? null,
+        sessionGeneration: params?.sessionGeneration ?? 0,
+        sessionProjection: params?.sessionProjection,
+        activeChatRunId: params?.activeChatRunId ?? null,
+        pendingSubmit: params?.pendingSubmit ?? null,
+        activityStatus: params?.activityStatus ?? "idle",
+        isConnected: params?.isConnected ?? true,
+        historyLoaded: params?.historyLoaded ?? true,
+        sessionInfo: params?.sessionInfo ?? {},
+      };
 
+  const modelEvents: Pick<TuiBackend, "onModelsChanged"> = {};
+  const client = {
+    ...modelEvents,
+    sendChat,
+    getGatewayStatus,
+    listSessions,
+    listModels,
+    getKnownModels: params?.getKnownModels,
+    patchSession,
+    createSession,
+    resetSession,
+    runGoalCommand,
+    runUsageCostCommand,
+  };
   const {
     handleCommand,
     sendMessage,
@@ -204,25 +208,13 @@ export function createTuiCommandHandlersHarness(params?: {
     reportBlockedMessageSubmit,
     openSessionSelector,
   } = createCommandHandlers({
-    client: {
-      sendChat,
-      getGatewayStatus,
-      listSessions,
-      listModels,
-      patchSession,
-      createSession,
-      resetSession,
-      runGoalCommand,
-      runUsageCostCommand,
-    } as never,
+    client: client as never,
     chatLog: {
       addUser,
       addPendingUser,
       dropPendingUser,
       rekeyPendingUser,
       addSystem,
-      addPendingSystem,
-      dismissPendingSystem,
       clearTools,
       reserveAssistantSlot,
     } as never,
@@ -238,7 +230,6 @@ export function createTuiCommandHandlersHarness(params?: {
     refreshAgents,
     abortActive,
     setActivityStatus,
-    formatSessionKey: vi.fn(),
     applySessionInfoFromPatch: applySessionInfoFromPatch as never,
     applySessionMutationResult: applySessionMutationResult as never,
     noteLocalRunId,
@@ -255,6 +246,7 @@ export function createTuiCommandHandlersHarness(params?: {
   });
 
   return {
+    client,
     handleCommand,
     sendMessage,
     captureMessageAdmission,
@@ -279,9 +271,6 @@ export function createTuiCommandHandlersHarness(params?: {
     dropPendingUser,
     rekeyPendingUser,
     addSystem,
-    addPendingSystem,
-    dismissPendingSystem,
-    pendingSystemNotices,
     clearTools,
     reserveAssistantSlot,
     requestRender,

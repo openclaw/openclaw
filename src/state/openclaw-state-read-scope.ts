@@ -1,5 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { throwSqliteLifecycleErrors } from "../infra/sqlite-coordinator.js";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import {
+  SqliteCoordinatorError,
+  throwSqliteLifecycleErrors,
+} from "../infra/sqlite-lifecycle-errors.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { StateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
@@ -30,7 +34,7 @@ export function assertRetainedReadScopeAdmission(
 
 export function createRetainedReadScope(
   pathname: string,
-  identity: DatabasePathIdentity,
+  identity: DatabasePathIdentity | (() => DatabasePathIdentity | undefined),
   cleanup?: () => Promise<void>,
 ): RetainedReadScope {
   let pending: Promise<void> | undefined;
@@ -45,17 +49,20 @@ export function createRetainedReadScope(
         return Promise.resolve();
       }
       // The callback owns its private copy until settlement, even if live writers close.
-      unregister ??= registerOpenClawStateDatabaseAsyncResource({
-        async close(current) {
-          if (
-            !current ||
-            current.key === identity.key ||
-            current.canonicalPath === identity.canonicalPath
-          ) {
-            await scope.close();
-          }
-        },
-      });
+      const ownedIdentity = typeof identity === "function" ? identity() : identity;
+      if (ownedIdentity) {
+        unregister ??= registerOpenClawStateDatabaseAsyncResource({
+          async close(current) {
+            if (
+              !current ||
+              current.key === ownedIdentity.key ||
+              current.canonicalPath === ownedIdentity.canonicalPath
+            ) {
+              await scope.close();
+            }
+          },
+        });
+      }
       return (pending ??= (async () => {
         await scope.work.drain();
         const settled = await Promise.allSettled(
@@ -80,12 +87,11 @@ export async function runRetainedReadScope<T>(
   scope: RetainedReadScope,
   operation: () => Promise<T>,
 ): Promise<T> {
-  let outcome: { value: T } | { error: unknown };
+  let result!: T;
   const errors: unknown[] = [];
   try {
-    outcome = { value: await operation() };
+    result = await operation();
   } catch (error) {
-    outcome = { error };
     errors.push(error);
   }
   try {
@@ -94,8 +100,47 @@ export async function runRetainedReadScope<T>(
     errors.push(error);
   }
   throwSqliteLifecycleErrors(errors, "Shared-state read scope and cleanup failed");
-  if ("error" in outcome) {
-    throw outcome.error;
+  return result;
+}
+
+/** Leave synchronous admission before native cleanup can reenter a reader. */
+export function runSynchronousReadScope<T>(
+  scope: { readers: Map<string, { close: () => boolean }>; leave: () => void },
+  operation: () => T,
+): T {
+  let result!: T;
+  let failed = false;
+  let failure: unknown;
+  const cleanupErrors: unknown[] = [];
+  try {
+    result = operation();
+    if (isPromiseLike(result)) {
+      throw new SqliteCoordinatorError("SQLite metadata snapshot scope must remain synchronous");
+    }
+  } catch (error) {
+    failed = true;
+    failure = error;
+  } finally {
+    scope.leave();
+    for (const reader of scope.readers.values()) {
+      try {
+        if (!reader.close()) {
+          cleanupErrors.push(new Error("Shared-state metadata snapshot cleanup is incomplete."));
+        }
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+    scope.readers.clear();
   }
-  return outcome.value;
+  if (cleanupErrors.length) {
+    throw new AggregateError(
+      failed ? [failure, ...cleanupErrors] : cleanupErrors,
+      "Shared-state metadata snapshot cleanup failed.",
+    );
+  }
+  if (failed) {
+    throw failure;
+  }
+  return result;
 }

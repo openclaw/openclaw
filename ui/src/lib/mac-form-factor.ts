@@ -52,24 +52,30 @@ const MACBOOK_AIR_IDENTIFIERS = new Set([
   "Mac16,13",
 ]);
 
+const MAC_FORM_FACTOR_PREFIXES = [
+  ["MacBook", "laptop"],
+  ["Macmini", "mini"],
+  ["MacPro", "pro"],
+  ["iMac", "imac"],
+] as const;
+
+const MAC_FORM_FACTOR_NAMES = [
+  [/\bmac\s*book(?:\s*(?:pro|air))?\b/i, "laptop"],
+  [/\bmac\s*mini\b/i, "mini"],
+  [/\bmac\s*studio\b/i, "studio"],
+] as const;
+
 export function resolveMacFormFactor(identifier?: string): MacFormFactor | undefined {
   const model = identifier?.trim();
   if (!model) {
     return undefined;
   }
-  if (model.startsWith("MacBook")) {
-    return "laptop";
-  }
-  if (model.startsWith("Macmini")) {
-    return "mini";
-  }
-  if (model.startsWith("MacPro")) {
-    return "pro";
-  }
-  if (model.startsWith("iMac")) {
-    return "imac";
-  }
-  return APPLE_SILICON_FORM_FACTORS[model];
+  return (
+    MAC_FORM_FACTOR_PREFIXES.find(([prefix]) => model.startsWith(prefix))?.[1] ??
+    (Object.hasOwn(APPLE_SILICON_FORM_FACTORS, model)
+      ? APPLE_SILICON_FORM_FACTORS[model]
+      : undefined)
+  );
 }
 
 /** Presentation hint for inventories that expose a display name, not a hardware identifier. */
@@ -78,16 +84,7 @@ export function resolveMacFormFactorFromName(name?: string): MacFormFactor | und
   if (!label) {
     return undefined;
   }
-  if (/\bmac\s*book(?:\s*(?:pro|air))?\b/i.test(label)) {
-    return "laptop";
-  }
-  if (/\bmac\s*mini\b/i.test(label)) {
-    return "mini";
-  }
-  if (/\bmac\s*studio\b/i.test(label)) {
-    return "studio";
-  }
-  return undefined;
+  return MAC_FORM_FACTOR_NAMES.find(([pattern]) => pattern.test(label))?.[1];
 }
 
 export function macFamilyLabel(identifier?: string): string | undefined {
@@ -95,21 +92,14 @@ export function macFamilyLabel(identifier?: string): string | undefined {
   if (!model) {
     return undefined;
   }
-  switch (resolveMacFormFactor(model)) {
-    case "laptop":
-      if (model.startsWith("MacBookAir") || MACBOOK_AIR_IDENTIFIERS.has(model)) {
-        return "MacBook Air";
-      }
-      return /^MacBook\d/.test(model) ? "MacBook" : "MacBook Pro";
-    case "mini":
-      return "Mac mini";
-    case "studio":
-      return "Mac Studio";
-    case "pro":
-      return "Mac Pro";
-    case "imac":
-      return "iMac";
-    default:
-      return undefined;
+  const formFactor = resolveMacFormFactor(model);
+  if (formFactor === "laptop") {
+    if (model.startsWith("MacBookAir") || MACBOOK_AIR_IDENTIFIERS.has(model)) {
+      return "MacBook Air";
+    }
+    return /^MacBook\d/.test(model) ? "MacBook" : "MacBook Pro";
   }
+  return formFactor
+    ? { mini: "Mac mini", studio: "Mac Studio", pro: "Mac Pro", imac: "iMac" }[formFactor]
+    : undefined;
 }

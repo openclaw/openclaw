@@ -110,10 +110,10 @@ async function isStaleSocket(socketPath: string, abortSignal?: AbortSignal): Pro
   return new Promise((resolve, reject) => {
     const socket = createConnection(socketPath);
     const timer = setTimeout(
-      () => finish(new Error("Signal socket ownership probe timed out")),
+      () => finish(new Error("Signal socket ownership check timed out")),
       1_000,
     );
-    const onAbort = () => finish(new Error("Signal socket ownership probe aborted"));
+    const onAbort = () => finish(new Error("Signal socket ownership check aborted"));
     function finish(error?: Error, stale = false) {
       clearTimeout(timer);
       abortSignal?.removeEventListener("abort", onAbort);
@@ -184,7 +184,7 @@ export async function prepareSignalSocketPath(
         await unlink(socketPath);
         return;
       }
-      throw new Error("Signal socketPath changed during its ownership probe; retry startup");
+      throw new Error("Signal socketPath changed during its ownership check; retry startup");
     }
     throw new Error(
       "Signal socketPath already exists; stop its owner or choose a different socket path before starting",

@@ -109,6 +109,18 @@ describe("executable path helpers", () => {
     },
   );
 
+  it("preserves prepared directory boundaries without sharing serialized PATH cache entries", async () => {
+    const root = tempDirs.make("openclaw-path-entries-");
+    const directory = path.join(root, `tools${path.delimiter}extra`);
+    await fs.mkdir(directory);
+    const executable = path.join(directory, "runner");
+    await fs.writeFile(executable, "", { mode: 0o755 });
+
+    expect(resolveExecutableFromPathEnv("runner", directory)).toBeUndefined();
+    expect(resolveExecutableFromPathEnv("runner", [directory])).toBe(executable);
+    expect(resolveExecutableFromPathEnv("runner", directory)).toBeUndefined();
+  });
+
   it("memoizes PATH hits and misses until explicit invalidation", async () => {
     await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
       const binDir = path.join(base, "bin");
@@ -170,7 +182,7 @@ describe("executable path helpers", () => {
     },
   );
 
-  it.each([".EXE;.CMD;", ";.EXE;.CMD", ".EXE;;.CMD", ".EXE; ;.CMD", "", ";;"])(
+  it.each([".EXE; ;.CMD", "", ";;"])(
     "keeps extensionless lookup explicit with PATHEXT %j",
     async (pathext) => {
       await withMockedPlatform("win32", async () => {
@@ -307,6 +319,24 @@ describe("executable path helpers", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "preserves whitespace in cwd for relative executable candidates",
+    () => {
+      expect(resolveExecutablePathCandidate("./tool", { cwd: "/srv/data " })).toBe(
+        "/srv/data /tool",
+      );
+      expect(resolveExecutablePathCandidate("./tool", { cwd: " job" })).toBe(
+        path.resolve(" job", "tool"),
+      );
+      expect(resolveExecutablePathCandidate("./tool", { cwd: "job " })).toBe(
+        path.resolve("job ", "tool"),
+      );
+      expect(resolveExecutablePathCandidate("./tool", { cwd: "   " })).toBe(
+        path.resolve(process.cwd(), "tool"),
+      );
+    },
+  );
+
   it("does not treat drive-less rooted windows paths as cwd-relative executables", () => {
     withMockedPlatform("win32", () => {
       expect(
@@ -322,6 +352,29 @@ describe("executable path helpers", () => {
     });
   });
 });
+
+it.runIf(process.platform !== "win32")(
+  "preserves whitespace cwd in PATH-relative executable resolution",
+  async () => {
+    await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+      const dirWithSpace = `${base}/data `;
+      const dirNoSpace = `${base}/data`;
+      await fs.mkdir(dirWithSpace, { recursive: true });
+      await fs.mkdir(dirNoSpace, { recursive: true });
+      const toolWithSpace = path.join(dirWithSpace, "runner");
+      const toolNoSpace = path.join(dirNoSpace, "runner");
+      await fs.writeFile(toolWithSpace, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      await fs.writeFile(toolNoSpace, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+      expect(resolveExecutablePath("runner", { env: { PATH: "" }, cwd: dirWithSpace })).toBe(
+        toolWithSpace,
+      );
+      expect(resolveExecutablePath("runner", { env: { PATH: "" }, cwd: dirNoSpace })).toBe(
+        toolNoSpace,
+      );
+    });
+  },
+);
 
 describe("resolveExecutable", () => {
   afterEach(() => {

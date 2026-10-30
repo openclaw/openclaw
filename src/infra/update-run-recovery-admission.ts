@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { hasNodeErrorCode } from "./path-guards.js";
+import { pathEntryExists } from "./path-existence.js";
 import { assertNoPendingUpdateRecovery } from "./update-run-recovery.js";
 
 /** Read-only admission; neither a missing nor a replaced DB retires old recovery. */
@@ -23,12 +23,7 @@ export async function assertUpdateRecoveryDirectoryAdmission(
   databasePath: string,
 ): Promise<boolean> {
   const parent = path.dirname(databasePath);
-  try {
-    await fs.lstat(parent);
-  } catch (error) {
-    if (!hasNodeErrorCode(error, "ENOENT")) {
-      throw error;
-    }
+  if (!(await pathEntryExists(parent))) {
     return false;
   }
   // A family may hold the only original DB even when another canonical file

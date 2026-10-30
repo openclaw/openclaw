@@ -140,7 +140,7 @@ export function restoreCronPinnedExecGrant(params: {
     return undefined;
   }
   const requirement = resolveMatchingCronExecTarget(params);
-  if (!requirement || params.toolsAllow.includes("exec")) {
+  if (!requirement || params.toolsAllow.includes("exec") || params.toolsAllow.includes("*")) {
     return [...params.toolsAllow];
   }
   const restored = [...params.toolsAllow];

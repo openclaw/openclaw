@@ -1,43 +1,36 @@
 /* Page hubs use quiet text tabs on a hairline track so route navigation stays
    distinct from segmented filters inside each page. */
-wa-tab-group.hub-tabs {
+.hub-tabs {
   --track-color: color-mix(in srgb, var(--border) 60%, transparent);
   --indicator-color: var(--accent);
-}
 
-wa-tab-group.hub-tabs::part(body) {
-  display: none;
-}
-
-wa-tab-group.hub-tabs::part(tabs) {
+  display: flex;
+  min-block-size: min-content;
+  align-items: stretch;
+  overflow-x: auto;
+  padding-block-end: 2px;
+  box-shadow: inset 0 -2px 0 var(--track-color);
   gap: var(--space-2);
 }
 
-wa-tab-group.hub-tabs--sub::part(tabs) {
+.hub-tabs--sub {
   gap: var(--space-1);
 }
 
-wa-tab.hub-tab {
+.hub-tab {
   font-size: var(--control-ui-text-sm);
   font-weight: 550;
   color: var(--muted);
   transition: color var(--duration-normal) var(--ease-out);
-}
-
-/* Neutralize wa-tab's stock 1em padding; keep a slim nav-tab hit area. */
-wa-tab.hub-tab::part(base) {
   padding: var(--space-1) var(--space-2) var(--space-2);
+  display: inline-flex;
+  align-items: center;
   gap: 6px;
-  font: inherit;
-  color: inherit;
 }
 
-.hub-tabs--sub wa-tab.hub-tab {
+.hub-tabs--sub .hub-tab {
   font-size: var(--control-ui-text-xs);
   font-weight: 550;
-}
-
-.hub-tabs--sub wa-tab.hub-tab::part(base) {
   padding: 3px var(--space-2) var(--space-1);
 }
 
@@ -54,29 +47,43 @@ wa-tab.hub-tab::part(base) {
   line-height: 1;
 }
 
-wa-tab.hub-tab[active] .hub-tab__badge {
+.hub-tab[active] .hub-tab__badge {
   background: var(--accent-subtle);
   color: var(--accent);
 }
 
-wa-tab.hub-tab:hover {
+.hub-tab:hover {
   color: var(--text);
 }
 
-wa-tab.hub-tab[active] {
+.hub-tab[active] {
   color: var(--text-strong);
+  box-shadow: 0 2px 0 var(--indicator-color);
 }
 
-wa-tab.hub-tab:focus-visible {
+.hub-tab:focus-visible {
   outline: none;
   border-radius: var(--radius-sm);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-/* Web Awesome also draws its stock focus ring on the inner base part;
-   without this reset both rings render at once. */
-wa-tab.hub-tab:focus-visible::part(base) {
-  outline: none;
+.hub-tab[active]:focus-visible {
+  box-shadow:
+    0 2px 0 var(--indicator-color),
+    0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+@media (forced-colors: active) {
+  .hub-tab[active] {
+    text-decoration-line: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 4px;
+  }
+
+  .hub-tab:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
 }
 
 /* Equal outer columns keep hub tabs centered whether or not the active route
@@ -84,6 +91,54 @@ wa-tab.hub-tab:focus-visible::part(base) {
 .content-header.hub-page-header {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+}
+
+.content-header.hub-page-header--stacked {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "title actions"
+    "tabs tabs";
+  align-items: end;
+  row-gap: var(--space-2);
+  width: 100%;
+  max-width: 1120px;
+  max-height: none;
+  margin-inline: auto;
+  padding-inline: var(--settings-header-inline-padding, var(--space-4));
+}
+
+.content-header.hub-page-header--untabbed {
+  grid-template-areas: "title actions";
+}
+
+/* Full-width page bodies start at the content edge; the header follows them. */
+.content-header.hub-page-header--wide {
+  max-width: none;
+  padding-inline: 0;
+}
+
+.content-header.hub-page-header--stacked .hub-page-header__title {
+  grid-area: title;
+  justify-self: start;
+}
+
+.content-header.hub-page-header--stacked .page-title {
+  font-size: 26px;
+}
+
+.content-header.hub-page-header--stacked .hub-page-header__tabs {
+  grid-area: tabs;
+  justify-self: start;
+  padding-block: var(--space-2);
+}
+
+.content-header.hub-page-header--stacked .hub-page-header__actions {
+  grid-area: actions;
+}
+
+/* Keep the stacked-header gap independent of lazy stylesheet order. */
+.content-header.hub-page-header--stacked + .settings-workspace {
+  margin-top: 0;
 }
 
 .hub-page-header__title,
@@ -144,5 +199,46 @@ wa-tab.hub-tab:focus-visible::part(base) {
   .hub-page-header .hub-page-header__actions {
     grid-area: actions;
     justify-self: center;
+  }
+
+  .content-header.hub-page-header--stacked {
+    grid-template-areas:
+      "title"
+      "tabs"
+      "actions";
+    justify-items: stretch;
+  }
+
+  .content-header.hub-page-header--untabbed {
+    grid-template-areas:
+      "title"
+      "actions";
+  }
+
+  .content-header.hub-page-header--stacked .hub-page-header__title {
+    grid-area: title;
+  }
+
+  .content-header.hub-page-header--stacked .hub-page-header__actions {
+    justify-self: end;
+  }
+
+  .content-header.hub-page-header--stacked .page-title {
+    font-size: 22px;
+  }
+}
+
+/* The shared page header owns its shell's mobile inset, including on pages that do
+   not load the settings stylesheet. */
+@media (max-width: 640px) {
+  .content.content--hub-header {
+    --content-inline-padding: var(--space-3);
+    --settings-header-inline-padding: 0;
+    padding: var(--space-3) var(--space-3) var(--space-4);
+  }
+
+  /* Outranks the settings-page header column inset regardless of stylesheet order. */
+  .content.content--hub-header .content-header.hub-page-header {
+    padding-inline: 0;
   }
 }

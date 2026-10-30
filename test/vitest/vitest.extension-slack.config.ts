@@ -1,4 +1,5 @@
 // Vitest extension slack config wires the extension slack test shard.
+import { databaseWorkerExtensionTestFiles } from "./vitest.extension-database-workers-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 export function createExtensionSlackVitestConfig(
@@ -7,6 +8,7 @@ export function createExtensionSlackVitestConfig(
   return createScopedVitestConfig(["extensions/slack/**/*.test.ts"], {
     dir: "extensions",
     env,
+    exclude: databaseWorkerExtensionTestFiles,
     includeOpenClawRuntimeSetup: false,
     // The non-isolated runner resets each file's mocks and module-local fixtures.
     isolate: false,

@@ -36,10 +36,8 @@ Voice subsystem is `ai.openclaw`. Each component logs under its own category:
 | `voicewake.overlay`     | `VoiceWakeOverlayController`/`VoiceWakeOverlay` |
 | `voicewake.ptt`         | Push-to-talk hotkey and capture                 |
 | `voicewake.runtime`     | Wake-word runtime                               |
-| `voicewake.chime`       | Chime playback                                  |
 | `voicewake.sync`        | Global settings sync                            |
 | `voicewake.forward`     | Transcript forwarding                           |
-| `voicewake.meter`       | Mic level monitor                               |
 
 ## Debugging checklist
 

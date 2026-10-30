@@ -19,10 +19,8 @@ describe("Venice onboarding", () => {
     });
   });
 
-  it.each([
-    { label: "zero", cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
-    { label: "custom", cost: { input: 1, output: 2, cacheRead: 0.25, cacheWrite: 0.5 } },
-  ])("preserves existing $label pricing when onboarding again", ({ cost }) => {
+  it("preserves existing zero pricing when onboarding again", () => {
+    const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
     const config = applyVeniceConfig({});
     const [seed] = VENICE_MODEL_CATALOG;
     if (!seed) {

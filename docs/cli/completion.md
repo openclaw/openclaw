@@ -41,8 +41,12 @@ The install writes a small `# OpenClaw Completion` block into your shell profile
 | zsh        | `$ZDOTDIR/.zshrc` when `ZDOTDIR` is defined; otherwise `~/.zshrc` (an empty `ZDOTDIR` resolves to `/.zshrc`)                                                                               |
 
 Profile changes are staged beside the destination and atomically replace it only after a complete durable write. A failed install leaves an existing profile unchanged.
+Profiles must be regular files; symlinks to regular files are supported. Pipes and
+other special files are rejected before reading, so completion does not wait for a writer.
 
 Installed source lines preserve literal cache paths, including spaces, quotes, dollar signs, and backslashes. Reinstalling replaces OpenClaw's previous source line after the state directory changes.
+
+Installation messages display control characters in profile paths as visible escapes. If the reload command would contain terminal controls, the installer tells you to restart your shell instead; the installed profile still uses the literal path.
 
 A user-managed portable hook for the same cached script (for example `[[ -f "${HOME}/.openclaw/completions/openclaw.bash" ]] && source "${HOME}/.openclaw/completions/openclaw.bash"`, as a dotfile manager would write) is recognized as completion being configured. Doctor and `completion --install` leave such managed lines byte-for-byte untouched instead of appending a duplicate literal-path block.
 
@@ -65,9 +69,10 @@ profile selected in the table above. It has no profile-file destination option.
 - Completion generation eagerly loads the full command tree, including plugin CLI commands, so nested subcommands are included.
 - If invalid configuration prevents plugin discovery, generation warns and still includes core commands. Repair the configuration and regenerate to include plugin commands.
 - Bash completion supports both `--flag value` and `--flag=value`, including named profiles before nested commands and single-quoted, double-quoted, or backslash-escaped value prefixes.
+- Zsh completion supports both `--flag value` and `--flag=value`. Commands with hyphens or underscores, nested command paths, and aliases retain their own option completions. Regenerate cached scripts with `openclaw completion --shell zsh --write-state` after upgrading.
 - After an option terminator (`--`), Bash completes command names but does not suggest options or option values.
 - PowerShell completes commands and option values at the cursor, including when later arguments are already present.
-- `openclaw update` refreshes the completion cache automatically after a successful update. `openclaw doctor` can repair missing or stale completion setups.
+- `openclaw update` refreshes the core completion cache automatically without loading plugin CLI commands. Run `openclaw completion --write-state` to include plugin commands. `openclaw doctor` can repair missing or stale completion setups.
 
 ## Related
 

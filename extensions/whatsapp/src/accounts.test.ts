@@ -1,5 +1,5 @@
-// Whatsapp tests cover accounts plugin behavior.
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
   listWhatsAppAccountIds,
@@ -8,24 +8,22 @@ import {
   resolveWhatsAppAuthDir,
 } from "./accounts.js";
 
+function config(whatsapp: NonNullable<OpenClawConfig["channels"]>["whatsapp"]): OpenClawConfig {
+  return { channels: { whatsapp } };
+}
+
 describe("resolveWhatsAppAuthDir", () => {
-  const stubCfg = { channels: { whatsapp: { accounts: {} } } } as Parameters<
-    typeof resolveWhatsAppAuthDir
-  >[0]["cfg"];
+  const base = config({ accounts: {} });
 
   it("sanitizes path traversal sequences in accountId", () => {
-    const { authDir } = resolveWhatsAppAuthDir({
-      cfg: stubCfg,
-      accountId: "../../../etc/passwd",
-    });
-    // Sanitized accountId must not escape the whatsapp auth directory.
+    const { authDir } = resolveWhatsAppAuthDir({ cfg: base, accountId: "../../../etc/passwd" });
     expect(authDir).not.toContain("..");
     expect(path.basename(authDir)).not.toContain("/");
   });
 
   it("sanitizes special characters in accountId", () => {
     const { authDir } = resolveWhatsAppAuthDir({
-      cfg: stubCfg,
+      cfg: base,
       accountId: "foo/bar\\baz",
     });
     // Sprawdzaj sanityzacje na segmencie accountId, nie na calej sciezce
@@ -36,10 +34,7 @@ describe("resolveWhatsAppAuthDir", () => {
   });
 
   it("returns default directory for empty accountId", () => {
-    const { authDir } = resolveWhatsAppAuthDir({
-      cfg: stubCfg,
-      accountId: "",
-    });
+    const { authDir } = resolveWhatsAppAuthDir({ cfg: base, accountId: "" });
     expect(authDir).toMatch(/whatsapp[/\\]default$/);
   });
 
@@ -48,12 +43,10 @@ describe("resolveWhatsAppAuthDir", () => {
       channels: {
         whatsapp: {
           authDir: "~/.openclaw/whatsapp-default",
-          accounts: {
-            work: { enabled: false },
-          },
+          accounts: { work: { enabled: false } },
         },
       },
-    } as Parameters<typeof resolveWhatsAppAccount>[0]["cfg"];
+    };
 
     expect(listWhatsAppAccountIds(cfg)).toEqual(["default", "work"]);
     expect(resolveDefaultWhatsAppAccountId(cfg)).toBe("default");
@@ -62,7 +55,7 @@ describe("resolveWhatsAppAuthDir", () => {
 
   it("preserves valid accountId unchanged", () => {
     const { authDir } = resolveWhatsAppAuthDir({
-      cfg: stubCfg,
+      cfg: base,
       accountId: "my-account-1",
     });
     expect(authDir).toMatch(/whatsapp[/\\]my-account-1$/);
@@ -156,19 +149,12 @@ describe("resolveWhatsAppAuthDir", () => {
 
   it("does not inherit default-account authDir for named accounts", () => {
     const resolved = resolveWhatsAppAccount({
-      cfg: {
-        channels: {
-          whatsapp: {
-            accounts: {
-              default: {
-                authDir: "/tmp/default-auth",
-                name: "Personal",
-              },
-              work: {},
-            },
-          },
+      cfg: config({
+        accounts: {
+          default: { authDir: "/tmp/default-auth", name: "Personal" },
+          work: {},
         },
-      } as Parameters<typeof resolveWhatsAppAccount>[0]["cfg"],
+      }),
       accountId: "work",
     });
 

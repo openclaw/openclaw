@@ -50,7 +50,7 @@ explanations, and dashboard content. Keep session and board organization here.
 
 ## Navigate and arrange the UI
 
-Use `screen` for deterministic client commands:
+Use `screen` for direct client commands:
 
 - `navigate` to open a session by `sessionKey`;
 - `sidebar_show` / `sidebar_hide` for the session sidebar;
@@ -59,8 +59,8 @@ Use `screen` for deterministic client commands:
   docked panels.
 
 `screen` broadcasts to every connected Control UI that advertises UI commands;
-it cannot select one browser tab. Confirm the blast radius when several clients
-may be open. If it reports no capable client, ask the user to open the Control
+it cannot select one browser tab. Check which clients are connected before sending
+a command. If it reports no capable client, ask the user to open the Control
 UI and retry.
 
 Use the in-app browser or an available browser-control tool when the task needs

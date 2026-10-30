@@ -1,10 +1,11 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   SkillsLibraryActivateResult,
   SkillsLibraryListResult,
   SkillsLibraryReadResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import { buildSkillLibraryMock } from "../../test-helpers/skill-library-fixtures.ts";
 import { ComposerLibrarySession } from "./composer-library-session.ts";
@@ -31,14 +32,9 @@ describe("composer session library ownership", () => {
     "discards a late %s result after the viewer connection changes",
     async (operation) => {
       const client = new GatewayBrowserClient({ url: "ws://127.0.0.1:12345" });
-      let resolve!: (
-        value: SkillsLibraryListResult | SkillsLibraryReadResult | SkillsLibraryActivateResult,
-      ) => void;
-      const deferred = new Promise<
+      const { promise: deferred, resolve } = createDeferred<
         SkillsLibraryListResult | SkillsLibraryReadResult | SkillsLibraryActivateResult
-      >((done) => {
-        resolve = done;
-      });
+      >();
       const request = vi.spyOn(client, "request").mockImplementationOnce(async () => deferred);
       const library = new ComposerLibrarySession(vi.fn());
       let epoch = 1;
@@ -64,10 +60,12 @@ describe("composer session library ownership", () => {
         isCurrent: () => epoch === 2,
       });
       resolve(operation === "list" ? list : operation === "read" ? read : activated);
-      await pending;
+      const feedback = await pending;
+      if (operation === "activate") {
+        expect(feedback).toBeNull();
+      }
       expect(library.result).toBeNull();
       expect(library.read).toBeNull();
-      expect(library.notice).toBeNull();
       expect(library.busy).toBe(false);
       expect(library.loading).toBe(false);
       expect(request).toHaveBeenCalledTimes(1);
@@ -76,6 +74,47 @@ describe("composer session library ownership", () => {
       expect(library.result).toEqual(list);
       expect(request).toHaveBeenLastCalledWith("skills.library.list", { sessionKey });
       request.mockRestore();
+    },
+  );
+
+  it.each(["success", "write-error", "refresh-error"] as const)(
+    "returns current activation feedback only after successful refresh (%s)",
+    async (outcome) => {
+      const client = new GatewayBrowserClient({ url: "ws://127.0.0.1:12345" });
+      const request = vi.spyOn(client, "request").mockResolvedValue({ commands: [] });
+      onTestFinished(() => request.mockRestore());
+      if (outcome === "write-error") {
+        request.mockRejectedValueOnce(new Error("Selection could not be saved."));
+      } else {
+        request.mockResolvedValueOnce(activated);
+        if (outcome === "refresh-error") {
+          request.mockRejectedValueOnce(new Error("Library could not be refreshed."));
+        } else {
+          request.mockResolvedValueOnce(list);
+        }
+      }
+      const library = new ComposerLibrarySession(vi.fn());
+      library.synchronize({
+        client,
+        connectionEpoch: 1,
+        sessionKey,
+        agentId: "main",
+        isCurrent: () => true,
+      });
+      const feedback = await library.activate("refresh", read.entry.skillId);
+      expect(feedback).toBe(
+        outcome === "success"
+          ? "Skill selections updated for the next turn. An active turn keeps its current revision."
+          : null,
+      );
+      expect(library.busy).toBe(false);
+      expect(library.error).toBe(
+        outcome === "success"
+          ? null
+          : outcome === "write-error"
+            ? "Selection could not be saved."
+            : "Library could not be refreshed.",
+      );
     },
   );
 });

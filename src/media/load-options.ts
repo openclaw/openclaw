@@ -25,18 +25,13 @@ type OutboundMediaLoadParams = {
 };
 
 /** Normalized outbound media loader options consumed by fetch/local media helpers. */
-type OutboundMediaLoadOptions = {
-  maxBytes?: number;
+type OutboundMediaLoadOptions = Omit<
+  OutboundMediaLoadParams,
+  "mediaAccess" | "mediaLocalRoots" | "mediaReadFile"
+> & {
   localRoots?: readonly string[] | "any";
-  readFile?: (filePath: string) => Promise<Buffer>;
-  proxyUrl?: string;
-  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-  requestInit?: RequestInit;
-  trustExplicitProxyDns?: boolean;
+  readFile?: OutboundMediaReadFile;
   hostReadCapability?: boolean;
-  optimizeImages?: boolean;
-  /** Agent workspace directory for resolving relative media paths. */
-  workspaceDir?: string;
 };
 
 /** Normalizes empty root lists while preserving the explicit all-roots opt-in sentinel. */

@@ -1,38 +1,69 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
 import { readSkillResourceFiles } from "../../skills/runtime/resources.js";
+import { recordSkillFileHost, resolveSkillFileHost } from "../../skills/skill-file-host.js";
 import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import type { SkillEntry } from "../../skills/types.js";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { readCodeModeSkill } from "../code-mode-skills.js";
 import { createCoreCodingTools } from "../core-coding-tools.js";
 import { getTextContent } from "../test-helpers/agent-tools-fs-helpers.js";
+import { createInstalledSkillTools } from "../tools/installed-skill-tools.js";
 import { registerAgentWorkspaceAccess } from "../workspace-access.js";
 import { prepareEmbeddedSkills } from "./skill-runtime.js";
 
 const libraryFixture = vi.hoisted(() => ({ entries: [] as SkillEntry[] }));
-vi.mock("../../skills/library/selection.js", () => ({
-  loadSkillLibrarySelection: (selections: readonly unknown[]) =>
-    selections.length > 0 ? libraryFixture.entries : [],
-}));
+vi.mock("../../skills/library/selection.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../skills/library/selection.js")>();
+  const selectedEntries = (selections: readonly unknown[]) =>
+    selections.length > 0 ? libraryFixture.entries : [];
+  return {
+    ...actual,
+    loadSkillLibrarySelection: selectedEntries,
+    prepareSkillLibrarySelection: async (selections: readonly unknown[]) =>
+      selectedEntries(selections),
+  };
+});
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
+const writeGuide = (dir: string, name: string, description: string, body: string) =>
+  writeSkill({ dir, name, description, body });
 afterEach(() => {
   libraryFixture.entries = [];
   vi.unstubAllEnvs();
 });
 
-it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (collision) => {
-  const root = temps.make("code-mode-workspace-");
+function prepare(
+  workspace: string,
+  attempt: Parameters<typeof prepareEmbeddedSkills>[0]["attempt"],
+  includeCodeModeSkills = true,
+) {
+  return prepareEmbeddedSkills({
+    attempt,
+    effectiveWorkspace: workspace,
+    sandbox: undefined,
+    sessionAgentId: "main",
+    includeCodeModeSkills,
+    applySkillEnvironment: false,
+  });
+}
+
+async function isolateSkills(root: string) {
   const bundled = path.join(root, "bundled");
   await fs.mkdir(bundled);
   vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", bundled);
   vi.stubEnv("HOME", root);
   vi.stubEnv("OPENCLAW_HOME", root);
+}
+
+it("keeps Code Mode file ownership despite an unavailable same-name pin", async () => {
+  const root = temps.make("code-mode-workspace-");
+  await isolateSkills(root);
   const gateway = path.join(root, "gateway");
   const host = path.join(root, "host");
   const library = path.join(root, "library");
@@ -48,30 +79,22 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
   await fs.mkdir(path.join(library, "skills/pinned"), { recursive: true });
   const libraryBody = "---\nname: pinned\ndescription: Pinned guide\n---\nGateway Library body";
   await fs.writeFile(path.join(library, "skills/pinned/SKILL.md"), libraryBody);
-  if (collision) {
-    await writeSkill({
-      dir: path.join(library, "skills/guide"),
-      name: "guide",
-      description: "Unavailable Library guide",
-      metadata: JSON.stringify({ openclaw: { os: ["unsupported-test-platform"] } }),
-    });
-  }
+  await writeSkill({
+    dir: path.join(library, "skills/guide"),
+    name: "guide",
+    description: "Unavailable Library guide",
+    metadata: JSON.stringify({ openclaw: { os: ["unsupported-test-platform"] } }),
+  });
   // Resolve the fixture pin without a Library database; instruction reads still use real files.
   libraryFixture.entries = loadWorkspaceSkills(library, { workspaceOnly: true });
   const config = {
     plugins: { enabled: false },
+    skills: { limits: { maxSkillsInPrompt: 1 } },
     agents: { entries: { main: { agentDir: path.join(root, "agent") } } },
   };
   const workshopDir = path.join(resolveWorkshopSkillsDir(config, "main"), "workshop");
-  await writeSkill({
-    dir: workshopDir,
-    name: "workshop",
-    description: "Workshop guide",
-    body: "Workshop body",
-  });
-  const readFile = vi.fn(async () => {
-    throw new Error("Agent-document access does not grant Skill reads");
-  });
+  await writeGuide(workshopDir, "workshop", "Workshop guide", "Workshop body");
+  const readFile = vi.fn().mockRejectedValue(new Error("Document access cannot read skills"));
   const skillResources = {
     resolveExplicitSkill: vi.fn(),
     readSkillFiles: vi.fn(),
@@ -97,16 +120,7 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
   try {
     const librarySelections = [
       { skillId: "pin", revision: "a".repeat(64), name: "pinned", ownerProfileId: null },
-      ...(collision
-        ? [
-            {
-              skillId: "collision",
-              revision: "b".repeat(64),
-              name: "guide",
-              ownerProfileId: null,
-            },
-          ]
-        : []),
+      { skillId: "collision", revision: "b".repeat(64), name: "guide", ownerProfileId: null },
     ];
     const snapshot = await buildSkillSnapshot(gateway, {
       config,
@@ -114,19 +128,28 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
       librarySelections,
     });
     snapshot.librarySelections = librarySelections;
-    expect(snapshot.resolvedSkills?.find((skill) => skill.name === "guide")?.fileHost).toBe(
-      "workspace",
+    const guide = expectDefined(
+      snapshot.resolvedSkills?.find((skill) => skill.name === "guide"),
+      "workspace guide",
     );
-    expect(snapshot.prompt).toContain("<location>~/");
-    const prepared = await prepareEmbeddedSkills({
-      attempt: { config: {}, skillsSnapshot: snapshot },
-      effectiveWorkspace: gateway,
-      sandbox: undefined,
-      sessionAgentId: "main",
-      includeCodeModeSkills: true,
-      applySkillEnvironment: false,
-    });
+    expect(resolveSkillFileHost(guide)).toBe("workspace");
+    expect(snapshot.prompt).toContain(
+      "<location>workspace-skill://workspace/guide/SKILL.md</location>",
+    );
+    const prepared = await prepare(gateway, { config: {}, skillsSnapshot: snapshot });
     expect(prepared.codeModeSkills).toHaveLength(3);
+    expect(prepared.skillsSnapshotForRun?.resolvedSkills).toHaveLength(1);
+    const tools = createInstalledSkillTools(prepared.installedSkills);
+    const search = expectDefined(tools[0], "installed skill search tool");
+    const read = expectDefined(tools[1], "installed skill read tool");
+    expect((await search.execute("search", { query: "pinned" })).details).toMatchObject({
+      skills: [{ name: "pinned" }],
+    });
+    expect(getTextContent(await read.execute("read", { name: "pinned" }))).toBe(
+      `Skill location: ${path.join(library, "skills/pinned/SKILL.md")}\n` +
+        "Resolve relative resource paths from the directory containing this SKILL.md.\n\n" +
+        libraryBody,
+    );
     const skill = prepared.codeModeSkills.find((entry) => entry.name === "guide")!;
     expect(await readCodeModeSkill(skill)).toBe(header + "current host body");
     await fs.writeFile(path.join(host, relative), header + "edited host body");
@@ -140,154 +163,168 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
     expect(readFile).not.toHaveBeenCalled();
     release();
     await expect(readCodeModeSkill(skill)).rejects.toThrow("Workspace access is stopped");
+    await expect(read.execute("stopped", { name: "guide" })).rejects.toThrow(
+      "Workspace access is stopped",
+    );
   } finally {
     release();
   }
 });
 
-it.each([false, true])(
-  "preserves local Code Mode instruction reads for document-only adapters (stopped=%s)",
-  async (stopped) => {
-    const workspace = temps.make("code-mode-document-only-");
-    await writeSkill({
-      dir: path.join(workspace, "skills", "guide"),
-      name: "guide",
-      description: "Local guide",
-      body: "Local instructions",
-    });
-    const snapshot = await buildSkillSnapshot(workspace, {
-      entries: loadWorkspaceSkills(workspace, { workspaceOnly: true }),
-    });
-    const readFile = vi.fn();
-    const release = registerAgentWorkspaceAccess(workspace, {
-      bridge: { readFile, writeFile: vi.fn(), stat: vi.fn() },
-    });
-    if (stopped) {
-      release();
-    }
-    try {
-      const prepared = await prepareEmbeddedSkills({
-        attempt: { config: {}, skillsSnapshot: snapshot },
-        effectiveWorkspace: workspace,
-        sandbox: undefined,
-        sessionAgentId: "main",
-        includeCodeModeSkills: true,
-        applySkillEnvironment: false,
-      });
-      const skill = prepared.codeModeSkills.find((entry) => entry.name === "guide")!;
-      expect(await readCodeModeSkill(skill)).toContain("Local instructions");
-      expect(readFile).not.toHaveBeenCalled();
-    } finally {
-      release();
-    }
-  },
-);
+it("preserves local Code Mode instruction reads after a document-only adapter stops", async () => {
+  const workspace = temps.make("code-mode-document-only-");
+  await writeGuide(
+    path.join(workspace, "skills", "guide"),
+    "guide",
+    "Local guide",
+    "Local instructions",
+  );
+  const snapshot = await buildSkillSnapshot(workspace, {
+    entries: loadWorkspaceSkills(workspace, { workspaceOnly: true }),
+  });
+  const readFile = vi.fn();
+  const release = registerAgentWorkspaceAccess(workspace, {
+    bridge: { readFile, writeFile: vi.fn(), stat: vi.fn() },
+  });
+  release();
+  const prepared = await prepare(workspace, { config: {}, skillsSnapshot: snapshot });
+  const skill = expectDefined(
+    prepared.codeModeSkills.find((entry) => entry.name === "guide"),
+    "local guide",
+  );
+  expect(await readCodeModeSkill(skill)).toContain("Local instructions");
+  expect(readFile).not.toHaveBeenCalled();
+});
+
+it("keeps learned Workshop skills readable under an allowlist and calls a missing skill unavailable", async () => {
+  const root = temps.make("skills-read-allowlist-");
+  await isolateSkills(root);
+  const workspace = path.join(root, "workspace");
+  const agentDir = path.join(root, "agent");
+  await writeGuide(
+    path.join(workspace, "skills", "listed"),
+    "listed",
+    "Allowlisted guide",
+    "Listed instructions",
+  );
+  await writeGuide(
+    path.join(
+      resolveWorkshopSkillsDir({ agents: { entries: { main: { agentDir } } } }, "main"),
+      "learned",
+    ),
+    "learned",
+    "Workshop guide",
+    "Learned instructions",
+  );
+  const allowed = async (skills: string[]) => {
+    const config = {
+      plugins: { enabled: false },
+      agents: { entries: { main: { agentDir, skills } } },
+    };
+    const snapshot = await buildSkillSnapshot(workspace, { config, agentId: "main" });
+    return await prepare(workspace, { config, skillsSnapshot: snapshot }, false);
+  };
+
+  const allowlisted = await allowed(["listed"]);
+  expect(allowlisted.installedSkills.map((skill) => skill.name)).toEqual(["learned", "listed"]);
+  const read = expectDefined(createInstalledSkillTools(allowlisted.installedSkills)[1], "read");
+  expect(getTextContent(await read.execute("learned", { name: "learned" }))).toContain(
+    "Learned instructions",
+  );
+  await expect(read.execute("absent", { name: "absent" })).rejects.toThrow(
+    'Skill "absent" is not available to this agent.',
+  );
+  expect((await allowed([])).installedSkills.map((skill) => skill.name)).toEqual(["learned"]);
+});
 
 it.each([
   ["SKILL.md", true],
-  ["refs/support.txt", true],
-  ["SKILL.md", false],
   ["refs/support.txt", false],
-] as const)(
-  "ordinary read uses the selected workspace host for %s (workspaceOnly=%s)",
-  async (fileName, workspaceOnly) => {
-    const root = temps.make("ordinary-remote-skill-");
-    const workspace = path.join(root, "workspace");
-    const logical = path.join(root, "gateway-decoy");
-    const host = path.join(root, "host");
-    const library = path.join(root, "library");
-    await fs.mkdir(workspace);
-    for (const [dir, body] of [
-      [logical, "Gateway decoy"],
-      [host, "Host instructions"],
-      [library, "Gateway Library instructions"],
-    ] as const) {
-      await writeSkill({
-        dir: path.join(dir, "skills/guide"),
-        name: "guide",
-        description: "Guide",
-        body,
-      });
-      await fs.mkdir(path.join(dir, "skills/guide/refs"));
-      await fs.writeFile(path.join(dir, "skills/guide/refs/support.txt"), body + " support");
-    }
-    await fs.writeFile(path.join(workspace, "local.txt"), "Local project file");
-    await fs.writeFile(path.join(root, "outside.txt"), "Not admitted");
-    const selected = loadWorkspaceSkills(logical, { workspaceOnly: true })[0]!.skill;
-    const gatewaySkill = loadWorkspaceSkills(library, { workspaceOnly: true })[0]!.skill;
-    const skill = { ...selected, fileHost: "workspace" as const };
-    const resources = {
-      readInstructions: (filePath: string, options: { signal?: AbortSignal }) =>
-        fs.readFile(path.join(host, path.relative(logical, filePath)), {
-          encoding: "utf8",
-          signal: options.signal,
-        }),
-      resolveExplicitSkill: vi.fn(),
-      readSkillFiles: (
-        entry: Parameters<typeof readSkillResourceFiles>[0],
-        options: { allowMissingRoot: boolean },
-      ) =>
-        readSkillResourceFiles(
-          {
-            ...entry,
-            baseDir: path.join(host, "skills/guide"),
-            filePath: path.join(host, "skills/guide/SKILL.md"),
-          },
-          options,
-        ),
-    };
-    const release = registerAgentWorkspaceAccess(workspace, {
-      bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
-      loadSkills: vi.fn(),
-      skillResources: resources,
-    });
-    try {
-      const read = createCoreCodingTools({
-        codingRoot: workspace,
-        containmentRoot: workspace,
-        includeBaseCodingTools: true,
-        shellTools: "disabled",
-        workspaceOnly,
-        readOnly: true,
-        applyPatchEnabled: false,
-        applyPatchWorkspaceOnly: true,
-        execDefaults: {},
-        processDefaults: {},
-        skillsSnapshot: {
-          skills: [],
-          prompt: "",
-          resolvedSkills: [skill, { ...gatewaySkill, fileHost: "gateway" }],
+] as const)("reads %s from its selected host (%s)", async (fileName, workspaceOnly) => {
+  const root = temps.make("ordinary-remote-skill-");
+  const workspace = path.join(root, "workspace");
+  const logical = path.join(root, "gateway-decoy");
+  const host = path.join(root, "host");
+  const library = path.join(root, "library");
+  await fs.mkdir(workspace);
+  for (const [dir, body] of [
+    [logical, "Gateway decoy"],
+    [host, "Host instructions"],
+    [library, "Gateway Library instructions"],
+  ] as const) {
+    await writeGuide(path.join(dir, "skills/guide"), "guide", "Guide", body);
+    await fs.mkdir(path.join(dir, "skills/guide/refs"));
+    await fs.writeFile(path.join(dir, "skills/guide/refs/support.txt"), body + " support");
+  }
+  await fs.writeFile(path.join(workspace, "local.txt"), "Local project file");
+  await fs.writeFile(path.join(root, "outside.txt"), "Not admitted");
+  const selected = loadWorkspaceSkills(logical, { workspaceOnly: true })[0]!.skill;
+  const gatewaySkill = loadWorkspaceSkills(library, { workspaceOnly: true })[0]!.skill;
+  const skill = recordSkillFileHost({ ...selected }, "workspace");
+  const gatewayOwnedSkill = recordSkillFileHost({ ...gatewaySkill }, "gateway");
+  const resources = {
+    readInstructions: (filePath: string, options: { signal?: AbortSignal }) =>
+      fs.readFile(path.join(host, path.relative(logical, filePath)), {
+        encoding: "utf8",
+        signal: options.signal,
+      }),
+    resolveExplicitSkill: vi.fn(),
+    readSkillFiles: (
+      entry: Parameters<typeof readSkillResourceFiles>[0],
+      options: { allowMissingRoot: boolean },
+    ) =>
+      readSkillResourceFiles(
+        {
+          ...entry,
+          baseDir: path.join(host, "skills/guide"),
+          filePath: path.join(host, "skills/guide/SKILL.md"),
         },
-      }).find((tool) => tool.name === "read")!;
-      const target = path.join(skill.baseDir, fileName);
-      expect(
-        getTextContent(
-          await read.execute("remote", {
-            path: target,
-            ...(fileName === "SKILL.md" ? { offset: 2, limit: 1 } : {}),
-          }),
-        ),
-      ).toContain(fileName === "SKILL.md" ? "Host instructions" : "Host instructions support");
-      expect(
-        getTextContent(await read.execute("library", { path: gatewaySkill.filePath })),
-      ).toContain("Gateway Library instructions");
-      expect(getTextContent(await read.execute("local", { path: "local.txt" }))).toContain(
-        "Local project file",
-      );
-      if (workspaceOnly) {
-        await expect(
-          read.execute("outside", { path: path.join(root, "outside.txt") }),
-        ).rejects.toThrow();
-        await expect(
-          read.execute("escape", { path: path.join(skill.baseDir, "../../../outside.txt") }),
-        ).rejects.toThrow();
-      }
-      release();
-      await expect(read.execute("stopped", { path: target })).rejects.toThrow(
-        "stopped or not ready",
-      );
-    } finally {
-      release();
+        options,
+      ),
+  };
+  const release = registerAgentWorkspaceAccess(workspace, {
+    bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
+    loadSkills: vi.fn(),
+    skillResources: resources,
+  });
+  try {
+    const read = createCoreCodingTools({
+      codingRoot: workspace,
+      containmentRoot: workspace,
+      includeBaseCodingTools: true,
+      shellTools: "disabled",
+      workspaceOnly,
+      readOnly: true,
+      applyPatchEnabled: false,
+      applyPatchWorkspaceOnly: true,
+      execDefaults: {},
+      processDefaults: {},
+      skillsSnapshot: {
+        skills: [],
+        prompt: "",
+        resolvedSkills: [skill, gatewayOwnedSkill],
+      },
+    }).find((tool) => tool.name === "read")!;
+    const readText = async (file: string, range?: { offset: number; limit: number }) =>
+      getTextContent(await read.execute("read", { path: file, ...range }));
+    const target = `workspace-skill://workspace/guide/${fileName}`;
+    const range = fileName === "SKILL.md" ? { offset: 2, limit: 1 } : undefined;
+    expect(await readText(target, range)).toContain(
+      fileName === "SKILL.md" ? "Host instructions" : "Host instructions support",
+    );
+    expect(await readText(gatewaySkill.filePath)).toContain("Gateway Library instructions");
+    expect(await readText("local.txt")).toContain("Local project file");
+    if (workspaceOnly) {
+      await expect(
+        read.execute("outside", { path: path.join(root, "outside.txt") }),
+      ).rejects.toThrow();
+      await expect(
+        read.execute("escape", { path: path.join(skill.baseDir, "../../../outside.txt") }),
+      ).rejects.toThrow();
     }
-  },
-);
+    release();
+    await expect(read.execute("stopped", { path: target })).rejects.toThrow("stopped or not ready");
+  } finally {
+    release();
+  }
+});

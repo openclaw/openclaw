@@ -1,7 +1,8 @@
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderGroupedMessage } from "./chat-message-bubble.ts";
-import { prepareChatMessageRender } from "./chat-message-markdown.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { GroupedMessage } from "./chat-message-bubble-view.tsx";
+import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
+import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 describe("plugin activity icons", () => {
   it.each([
@@ -13,7 +14,7 @@ describe("plugin activity icons", () => {
     ["assistant", "lobster"],
   ])(
     "uses the owner's monochrome mask for %s %s rows and restores the fallback after failure",
-    (role, name) => {
+    async (role, name) => {
       const container = document.createElement("div");
       const message =
         role === "assistant"
@@ -34,10 +35,16 @@ describe("plugin activity icons", () => {
         showToolCalls: true,
         pluginToolIcons: new Map([[name, { url: "blob:activity-icon", onError }]]),
       };
-      render(
-        renderGroupedMessage(prepareChatMessageRender(message), "message", options),
+      const mounted = mountSolid(
+        GroupedMessage,
+        {
+          preparation: prepareChatMessageRender(message),
+          messageKey: "message",
+          options,
+        },
         container,
       );
+      await settleToolBridges(container);
       const mask = container.querySelector<HTMLElement>(".chat-tool-activity-icon");
       expect(mask?.style.maskImage).toBe('url("blob:activity-icon")');
       expect(mask?.getAttribute("aria-hidden")).toBe("true");
@@ -48,13 +55,12 @@ describe("plugin activity icons", () => {
       icon?.dispatchEvent(new Event("error"));
       expect(onError).toHaveBeenCalledOnce();
 
-      render(
-        renderGroupedMessage(prepareChatMessageRender(message), "message", {
-          ...options,
-          pluginToolIcons: new Map(),
-        }),
-        container,
-      );
+      mounted.update({
+        preparation: prepareChatMessageRender(message),
+        messageKey: "message",
+        options: { ...options, pluginToolIcons: new Map() },
+      });
+      await settleToolBridges(container);
       expect(container.querySelector(".chat-tool-activity-icon")).toBeNull();
       expect(container.querySelector(".chat-tool-msg-summary__icon img")).toBeNull();
       expect(container.querySelector(".chat-tool-msg-summary__icon svg")).not.toBeNull();

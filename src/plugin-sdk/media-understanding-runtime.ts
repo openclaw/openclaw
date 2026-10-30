@@ -1,6 +1,3 @@
-/**
- * Runtime SDK subpath for media understanding, image description, and audio transcription.
- */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { sendTranscriptEcho } from "../media-understanding/echo-transcript.js";

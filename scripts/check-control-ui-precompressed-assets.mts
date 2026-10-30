@@ -5,7 +5,7 @@ import path from "node:path";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const repoRoot: string = resolveRepoRoot(import.meta.url);
-const assetsDir = path.join(repoRoot, "dist", "control-ui", "assets");
+const assetsDir = path.join(process.argv[2] ?? path.join(repoRoot, "dist/control-ui"), "assets");
 const errors = [];
 let checked = 0;
 

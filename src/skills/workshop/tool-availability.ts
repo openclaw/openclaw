@@ -1,14 +1,10 @@
 import type { SkillLibraryAuthoringCapability } from "../library/authoring.js";
 
-export type SkillWorkshopToolConstructionContext = {
+/** Host-side Workshop access requires an unsandboxed run or a host-issued library capability. */
+export function resolveSkillWorkshopToolConstructionBlock(context: {
   sandboxed?: boolean;
   libraryAuthoring?: SkillLibraryAuthoringCapability;
-};
-
-/** Host-side Workshop access requires an unsandboxed run or a host-issued library capability. */
-export function resolveSkillWorkshopToolConstructionBlock(
-  context: SkillWorkshopToolConstructionContext,
-): { detail: string; fix: string } | undefined {
+}): { detail: string; fix: string } | undefined {
   if (context.sandboxed && !context.libraryAuthoring) {
     return {
       detail:

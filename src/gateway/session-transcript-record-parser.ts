@@ -1,11 +1,7 @@
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
-import {
-  extractJsonNullableStringFieldPrefix,
-  extractJsonNumberFieldPrefix,
-  extractJsonStringFieldPrefix,
-  readNonBlankStringPreservingWhitespace,
-} from "./session-transcript-json.js";
 
 export type TranscriptRecord = {
   byteLength: number;
@@ -21,8 +17,35 @@ const OVERSIZED_TRANSCRIPT_METADATA_SUFFIX_CHARS = 64 * 1024;
 const MAX_OVERSIZED_TRANSCRIPT_RECOVERY_CANDIDATES = 32;
 const TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER = "[chat.history omitted: message too large]";
 
-export function isOversizedTranscriptLine(line: string): boolean {
-  return Buffer.byteLength(line, "utf8") > MAX_TRANSCRIPT_PARSE_LINE_BYTES;
+const TRANSCRIPT_STRING_FIELD_REGEXES = {
+  id: /"id"\s*:\s*"((?:\\.|[^"\\])*)"/,
+  parentId: /"parentId"\s*:\s*"((?:\\.|[^"\\])*)"/,
+  type: /"type"\s*:\s*"((?:\\.|[^"\\])*)"/,
+  timestamp: /"timestamp"\s*:\s*"((?:\\.|[^"\\])*)"/,
+  role: /"role"\s*:\s*"((?:\\.|[^"\\])*)"/,
+  idempotencyKey: /"idempotencyKey"\s*:\s*"((?:\\.|[^"\\])*)"/,
+};
+const TRANSCRIPT_PARENT_ID_NULL_RE = /"parentId"\s*:\s*null/;
+const TRANSCRIPT_TIMESTAMP_NUMBER_RE = /"timestamp"\s*:\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/;
+
+function extractJsonStringFieldPrefix(
+  prefix: string,
+  field: keyof typeof TRANSCRIPT_STRING_FIELD_REGEXES,
+): string | undefined {
+  const match = TRANSCRIPT_STRING_FIELD_REGEXES[field].exec(prefix);
+  if (!match) {
+    return undefined;
+  }
+  return readNonBlankString(safeParseJson(`"${match[1]}"`));
+}
+
+function extractJsonNumberFieldPrefix(prefix: string): number | undefined {
+  const match = TRANSCRIPT_TIMESTAMP_NUMBER_RE.exec(prefix);
+  if (!match) {
+    return undefined;
+  }
+  const decoded = Number(match[1]);
+  return Number.isFinite(decoded) ? decoded : undefined;
 }
 
 function isJsonObjectFieldToken(source: string, tokenIndex: number): boolean {
@@ -36,40 +59,25 @@ function isJsonObjectFieldToken(source: string, tokenIndex: number): boolean {
   return true;
 }
 
-function extractJsonStringFieldWindow(
-  source: string,
-  field: string,
-  startIndex = 0,
-  endIndex = source.length,
-): string | undefined {
+function extractJsonStringFieldSuffix(source: string, field: string): string | undefined {
   const fieldToken = JSON.stringify(field);
-  let searchIndex = startIndex;
-  while (searchIndex < endIndex) {
+  let searchIndex = Math.max(0, source.length - OVERSIZED_TRANSCRIPT_METADATA_SUFFIX_CHARS);
+  while (searchIndex < source.length) {
     const tokenIndex = source.indexOf(fieldToken, searchIndex);
-    if (tokenIndex < 0 || tokenIndex >= endIndex) {
+    if (tokenIndex < 0) {
       return undefined;
     }
     searchIndex = tokenIndex + fieldToken.length;
     if (!isJsonObjectFieldToken(source, tokenIndex)) {
       continue;
     }
-    const match = /^\s*:\s*"((?:\\.|[^"\\])*)"/.exec(source.slice(searchIndex, endIndex));
+    const match = /^\s*:\s*"((?:\\.|[^"\\])*)"/.exec(source.slice(searchIndex));
     if (!match) {
       continue;
     }
-    try {
-      const decoded = JSON.parse(`"${match[1]}"`) as unknown;
-      return readNonBlankStringPreservingWhitespace(decoded);
-    } catch {
-      return undefined;
-    }
+    return readNonBlankString(safeParseJson(`"${match[1]}"`));
   }
   return undefined;
-}
-
-function extractJsonStringFieldSuffix(source: string, field: string): string | undefined {
-  const startIndex = Math.max(0, source.length - OVERSIZED_TRANSCRIPT_METADATA_SUFFIX_CHARS);
-  return extractJsonStringFieldWindow(source, field, startIndex);
 }
 
 function recoverOversizedMultimodalTranscriptRecord(
@@ -247,7 +255,7 @@ export function parseTranscriptRecord(line: string): TranscriptRecord | null {
       if (!isRecord(record)) {
         return null;
       }
-      const id = readNonBlankStringPreservingWhitespace(record.id);
+      const id = readNonBlankString(record.id);
       return {
         byteLength,
         ...(id ? { id } : {}),
@@ -262,11 +270,13 @@ export function parseTranscriptRecord(line: string): TranscriptRecord | null {
   const messageMatch = /"message"\s*:/.exec(prefix);
   const recordPrefix = messageMatch ? prefix.slice(0, messageMatch.index) : prefix;
   const id = extractJsonStringFieldPrefix(prefix, "id");
-  const parentId = extractJsonNullableStringFieldPrefix(prefix, "parentId");
+  const parentId = TRANSCRIPT_PARENT_ID_NULL_RE.test(prefix)
+    ? null
+    : extractJsonStringFieldPrefix(prefix, "parentId");
   const type = extractJsonStringFieldPrefix(prefix, "type");
   const timestamp =
     extractJsonStringFieldPrefix(recordPrefix, "timestamp") ??
-    extractJsonNumberFieldPrefix(recordPrefix, "timestamp");
+    extractJsonNumberFieldPrefix(recordPrefix);
   const role = extractJsonStringFieldPrefix(prefix, "role") ?? "assistant";
   const idempotencyKey =
     extractJsonStringFieldPrefix(prefix, "idempotencyKey") ??

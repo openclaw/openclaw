@@ -1,8 +1,8 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
+import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -17,61 +17,66 @@ const foreignKey = "agent:main:dashboard:background-conversation";
 const baseTime = 1_900_000_000_000;
 
 type MeasuredPane = HTMLElement & {
-  state: Pick<ChatPageHost, "sessionKey" | "chatMessages" | "chatAvatarStatus">;
-  presencePayload?: PresencePayload;
+  state: Pick<
+    ChatPageHost,
+    | "sessionKey"
+    | "chatMessages"
+    | "chatAvatarStatus"
+    | "modelAuthStatusResult"
+    | "chatBranchesSessionKey"
+  >;
+  presence: { readonly snapshot: PresencePayload | undefined };
   render: () => unknown;
   updateComplete: Promise<boolean>;
 };
 
 async function observePaneRenders(page: Page) {
-  return page.evaluateHandle(
-    async ({ foreignKey: observedKey }) => {
-      const app = document.querySelector<
-        HTMLElement & { runtime?: { context: ApplicationContext } }
-      >("openclaw-app");
-      const pane = document.querySelector<MeasuredPane>(
-        "openclaw-chat-pane.chat-pane-cache__pane--active",
-      );
-      const sidebar = document.querySelector<
-        HTMLElement & {
-          updateComplete: Promise<boolean>;
-          sessionData: { presencePayload?: PresencePayload };
+  const context = await getControlUiContextHandle(page);
+  try {
+    return await context.evaluateHandle(
+      async (appContext, { foreignKey: observedKey }) => {
+        const pane = document.querySelector<MeasuredPane>(
+          "openclaw-chat-pane.chat-pane-cache__pane--active",
+        );
+        const sidebar = document.querySelector<HTMLElement & Pick<MeasuredPane, "updateComplete">>(
+          "openclaw-app-sidebar",
+        );
+        const sessions = appContext.sessions;
+        if (!pane || !sidebar || !sessions) {
+          throw new Error("The mounted conversation and shared roster must be ready");
         }
-      >("openclaw-app-sidebar");
-      const sessions = app?.runtime?.context.sessions;
-      if (!pane || !sidebar || !sessions) {
-        throw new Error("The mounted conversation and shared roster must be ready");
-      }
-      await Promise.all([pane.updateComplete, sidebar.updateComplete]);
-      const originalRender = pane.render;
-      let renders = 0;
-      pane.render = function () {
-        renders += 1;
-        return originalRender.call(this);
-      };
-      return {
-        pane,
-        async read() {
-          await Promise.all([pane.updateComplete, sidebar.updateComplete]);
-          const count = renders;
-          renders = 0;
-          return {
-            renders: count,
-            sharedLabel: sessions.state.result?.sessions.find((row) => row.key === observedKey)
-              ?.label,
-            selectedKey: pane.state.sessionKey,
-            messages: pane.state.chatMessages.length,
-            panePresenceTs: pane.presencePayload?.presence[0]?.ts,
-            sidebarPresenceTs: sidebar.sessionData.presencePayload?.presence[0]?.ts,
-          };
-        },
-        restore() {
-          pane.render = originalRender;
-        },
-      };
-    },
-    { foreignKey },
-  );
+        await Promise.all([pane.updateComplete, sidebar.updateComplete]);
+        const originalRender = pane.render;
+        let renders = 0;
+        pane.render = function () {
+          renders += 1;
+          return originalRender.call(this);
+        };
+        return {
+          pane,
+          async read() {
+            await Promise.all([pane.updateComplete, sidebar.updateComplete]);
+            const count = renders;
+            renders = 0;
+            return {
+              renders: count,
+              sharedLabel: sessions.state.result?.sessions.find((row) => row.key === observedKey)
+                ?.label,
+              selectedKey: pane.state.sessionKey,
+              messages: pane.state.chatMessages.length,
+              panePresenceTs: pane.presence.snapshot?.presence[0]?.ts,
+            };
+          },
+          restore() {
+            pane.render = originalRender;
+          },
+        };
+      },
+      { foreignKey },
+    );
+  } finally {
+    await context.dispose();
+  }
 }
 
 suite.define(() => {
@@ -79,10 +84,33 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       // Startup timers must belong to the clock before the app schedules them.
       await page.clock.install();
+      const idleModules = [
+        "chat-header-panel-menu-content",
+        "chat-interaction-runtime",
+        "chat-composer-plus-menu-content",
+      ];
+      const evaluatedModules = new Set<string>();
+      page.on("console", (message) => {
+        if (message.type() === "debug" && idleModules.includes(message.text())) {
+          evaluatedModules.add(message.text());
+        }
+      });
+      await page.route(new RegExp(`/(${idleModules.join("|")})-[^/]+\\.js$`), async (route) => {
+        const response = await route.fetch();
+        const name = idleModules.find((module) => route.request().url().includes(`/${module}-`));
+        const headers = response.headers();
+        delete headers["content-length"];
+        delete headers["content-encoding"];
+        await route.fulfill({
+          response,
+          headers,
+          body: `${await response.text()}\nconsole.debug(${JSON.stringify(name)});`,
+        });
+      });
       let selected = createControlUiSessionRow(selectedKey, "Foreground conversation", baseTime);
       let foreign = createControlUiSessionRow(foreignKey, "Background conversation", baseTime);
       const gateway = await installMockGateway(page, {
-        deferredMethods: ["agent.identity.get"],
+        deferredMethods: ["agent.identity.get", "models.authStatus", "sessions.branches.list"],
         sessionKey: selectedKey,
         sessions: [selected, foreign],
         historyMessages: [
@@ -102,48 +130,77 @@ suite.define(() => {
       await page.getByText("The retained conversation is ready.", { exact: true }).waitFor();
       const backgroundRow = page.locator(`[data-session-key="${foreignKey}"]`);
       await backgroundRow.waitFor({ state: "visible" });
+      const mountedPane = await page.evaluateHandle(() =>
+        document.querySelector<MeasuredPane>("openclaw-chat-pane.chat-pane-cache__pane--active"),
+      );
+      // Await both accepted results; virtual time cannot settle their outstanding requests.
       await gateway.waitForRequest("agent.identity.get");
+      expect(await mountedPane.evaluate((pane) => pane?.state.chatAvatarStatus)).toBeNull();
+      await gateway.resolveDeferred("agent.identity.get");
+      await page.waitForFunction((pane) => pane?.state.chatAvatarStatus === "none", mountedPane);
+      await gateway.waitForRequest("models.authStatus", { match: { agentId: "main" } });
+      expect(await mountedPane.evaluate((pane) => pane?.state.modelAuthStatusResult)).toBeNull();
+      await gateway.resolveDeferred("models.authStatus");
+      await page.waitForFunction(
+        (pane) => pane?.state.modelAuthStatusResult?.providers.length === 0,
+        mountedPane,
+      );
+      await pauseVirtualClock(page);
+      // Advance delayed swarm scheduling and queued render frames before measuring events.
+      await page.clock.runFor(1_000);
+      await gateway.waitForRequest("sessions.branches.list");
       expect(
         await page.evaluate(
           () =>
             document.querySelector<MeasuredPane>("openclaw-chat-pane.chat-pane-cache__pane--active")
-              ?.state.chatAvatarStatus,
+              ?.state.chatBranchesSessionKey,
         ),
       ).toBeNull();
-      await gateway.resolveDeferred("agent.identity.get");
-      // Transcript paint precedes the idle avatar read. Its accepted status owns
-      // completion; virtual time alone cannot settle an outstanding identity request.
+      await gateway.resolveDeferred("sessions.branches.list");
+      // Branch discovery starts after transcript paint and publishes pane state.
+      // Join its accepted result before attributing renders to foreign events.
       await page.waitForFunction(
-        () =>
+        (key) =>
           document.querySelector<MeasuredPane>("openclaw-chat-pane.chat-pane-cache__pane--active")
-            ?.state.chatAvatarStatus === "none",
+            ?.state.chatBranchesSessionKey === key,
+        selectedKey,
       );
-      await pauseVirtualClock(page);
-      // Finish the delayed swarm roster read and its render before measuring events.
-      await page.clock.runFor(1_000);
+      // Observe evaluation, not preloaded bytes or an earlier network-idle event.
+      await expect.poll(() => evaluatedModules.size).toBe(idleModules.length);
+      // The shared interaction chunk initializes its catalog in the import continuation.
+      // A browser task drains that promise chain before the existing pane commit fence.
+      await page.evaluate(async () => {
+        const { port1, port2 } = new MessageChannel();
+        await new Promise<void>((resolve) => {
+          port1.addEventListener("message", () => resolve(), { once: true });
+          port1.start();
+          port2.postMessage(null);
+        });
+        port1.close();
+        port2.close();
+      });
       const probe = await observePaneRenders(page);
       const counts = { foreign: [] as number[], presence: 0, selected: 0, viewer: 0 };
       try {
         const initial = await probe.evaluate((owner) => owner.read());
         expect(initial).toMatchObject({ selectedKey, messages: 2 });
-        for (let revision = 1; revision <= 3; revision++) {
-          const label = `Background revision ${revision}`;
-          foreign = Object.assign({}, foreign, {
-            label,
-            displayName: label,
-            updatedAt: baseTime + revision,
-          });
+        const publishTitle = async (session: typeof selected) => {
           await gateway.setSessionsListResponse({ sessions: [selected, foreign] });
           await gateway.emitGatewayEvent("sessions.changed", {
-            key: foreignKey,
-            sessionKey: foreignKey,
+            key: session.key,
+            sessionKey: session.key,
             agentId: "main",
             reason: "chat.title",
-            session: foreign,
+            session,
             ancestorSessions: [],
           });
-          // Advance the real frame/debounce owners using virtual time, without wall-clock sleeps.
+          // Advance the real frame/debounce owners without wall-clock sleeps.
           await page.clock.runFor(1_000);
+        };
+        for (let revision = 1; revision <= 3; revision++) {
+          const label = `Background revision ${revision}`;
+          foreign = createControlUiSessionRow(foreignKey, label, baseTime + revision);
+          await publishTitle(foreign);
           const observation = await probe.evaluate((owner) => owner.read());
           counts.foreign.push(observation.renders);
           expect(observation).toMatchObject({ sharedLabel: label, selectedKey, messages: 2 });
@@ -155,7 +212,7 @@ suite.define(() => {
         expect.soft(counts.foreign.slice(1)).toEqual([0, 0]);
 
         const heartbeat = await probe.evaluate((owner) => ({
-          presence: owner.pane.presencePayload!.presence.map((entry) =>
+          presence: owner.pane.presence.snapshot!.presence.map((entry) =>
             Object.assign({}, entry, {
               ts: 1_900_000_000_010,
               lastInputSeconds: (entry.lastInputSeconds ?? 0) + 10,
@@ -168,26 +225,11 @@ suite.define(() => {
         counts.presence = presence.renders;
         expect(presence).toMatchObject({
           panePresenceTs: baseTime + 10,
-          sidebarPresenceTs: baseTime + 10,
         });
         expect.soft(counts.presence).toBe(0);
 
-        selected = {
-          ...selected,
-          label: "Foreground renamed",
-          displayName: "Foreground renamed",
-          updatedAt: baseTime + 11,
-        };
-        await gateway.setSessionsListResponse({ sessions: [selected, foreign] });
-        await gateway.emitGatewayEvent("sessions.changed", {
-          key: selectedKey,
-          sessionKey: selectedKey,
-          agentId: "main",
-          reason: "chat.title",
-          session: selected,
-          ancestorSessions: [],
-        });
-        await page.clock.runFor(1_000);
+        selected = createControlUiSessionRow(selectedKey, "Foreground renamed", baseTime + 11);
+        await publishTitle(selected);
         counts.selected = (await probe.evaluate((owner) => owner.read())).renders;
         expect(counts.selected).toBeGreaterThan(0);
         expect(await page.locator(".chat-pane__session-title-text").textContent()).toBe(
@@ -204,13 +246,18 @@ suite.define(() => {
         await page.clock.runFor(1_000);
         counts.viewer = (await probe.evaluate((owner) => owner.read())).renders;
         expect(counts.viewer).toBeGreaterThan(0);
-        expect(
-          await page.locator('.chat-pane__presence [data-viewer-id="collaborator"]').count(),
-        ).toBe(1);
+        const collaborator = '[data-viewer-id="collaborator"]';
+        const paneViewer = page.locator(`.chat-pane__presence ${collaborator}`);
+        const sidebarViewer = page.locator(
+          `openclaw-app-sidebar [data-session-key="${selectedKey}"] ${collaborator}`,
+        );
+        expect(await paneViewer.count()).toBe(1);
+        await expect.poll(() => sidebarViewer.count()).toBe(1);
         console.info(JSON.stringify({ proof: "idle-conversation-event-renders", ...counts }));
       } finally {
         await probe.evaluate((owner) => owner.restore());
         await probe.dispose();
+        await mountedPane.dispose();
       }
     });
   });

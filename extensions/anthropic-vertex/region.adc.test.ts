@@ -1,4 +1,3 @@
-// Anthropic Vertex tests cover region.adc plugin behavior.
 import { platform } from "node:os";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -49,9 +48,6 @@ describe("anthropic-vertex ADC reads", () => {
       GOOGLE_APPLICATION_CREDENTIALS: "/tmp/vertex-adc.json",
     } as NodeJS.ProcessEnv;
 
-    existsSyncMock.mockClear();
-    readFileSyncMock.mockClear();
-
     expect(resolveAnthropicVertexProjectId(env)).toBe("vertex-project");
     expect(hasAnthropicVertexAvailableAuth(env)).toBe(true);
     expect(existsSyncMock).not.toHaveBeenCalled();
@@ -68,13 +64,12 @@ describe("anthropic-vertex ADC reads", () => {
       HOME: homeDir,
     } as NodeJS.ProcessEnv;
 
-    readFileSyncMock.mockImplementation((pathname, options) =>
-      String(pathname) === defaultAdcPath
-        ? '{"project_id":"vertex-project"}'
-        : (() => {
-            throw new Error(`unexpected readFileSync(${String(pathname)}, ${String(options)})`);
-          })(),
-    );
+    readFileSyncMock.mockImplementation((pathname) => {
+      if (String(pathname) !== defaultAdcPath) {
+        throw new Error(`unexpected ADC fixture path: ${String(pathname)}`);
+      }
+      return '{"project_id":"vertex-project"}';
+    });
 
     expect(resolveAnthropicVertexProjectId(env)).toBe("vertex-project");
     expect(hasAnthropicVertexAvailableAuth(env)).toBe(true);

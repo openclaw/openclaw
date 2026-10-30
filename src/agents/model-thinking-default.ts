@@ -22,10 +22,7 @@ export async function resolveThinkingDefaultWithRuntimeCatalogCore(params: {
   const configuredSelectedEntry = configuredCatalog.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,
   );
-  const needsRuntimeCatalog =
-    configuredCatalog.length === 0 ||
-    !configuredSelectedEntry ||
-    configuredSelectedEntry.reasoning === undefined;
+  const needsRuntimeCatalog = configuredSelectedEntry?.reasoning === undefined;
   const runtimeCatalog = needsRuntimeCatalog ? await params.loadRuntimeCatalog() : undefined;
   const runtimeSelectedEntry = runtimeCatalog?.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,

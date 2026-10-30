@@ -1,4 +1,3 @@
-// Wizard i18n helpers resolve translated onboarding copy by locale.
 import { en } from "./locales/en.js";
 import { zh_CN } from "./locales/zh-CN.js";
 import { zh_TW } from "./locales/zh-TW.js";
@@ -29,7 +28,7 @@ function normalizeLocaleToken(raw: string | undefined): string {
 
 // Resolve shell/browser locale strings such as zh_Hant_TW.UTF-8 into supported
 // setup locales, falling back to English for unknown languages.
-function resolveWizardLocale(value: string | undefined): WizardLocale {
+export function resolveWizardLocale(value: string | undefined): WizardLocale {
   const normalized = normalizeLocaleToken(value);
   if (!normalized) {
     return WIZARD_DEFAULT_LOCALE;

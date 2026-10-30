@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { runMacFixtureTool } from "../scripts/mac-native-fixtures.test-support.js";
 import type { MacScriptFixture } from "../scripts/mac-script-fixture.test-support.js";
 import { machoFixture } from "./mac-native.js";
 
@@ -136,13 +137,23 @@ type SigningEvent = {
 };
 type FileEvent = { args: string[]; magics: string[] };
 
+export async function writeFat64Fixture(filename: string, mac: MacScriptFixture): Promise<Buffer> {
+  await runMacFixtureTool(
+    "/usr/bin/lipo",
+    ["-create", "-fat64", "/usr/bin/true", "-output", filename],
+    path.dirname(filename),
+    mac,
+  );
+  return readFile(filename);
+}
+
 export async function makeSigningFixture(
   mac: MacScriptFixture,
   root: string,
   appName = "Odd ' app.app",
 ) {
   const app = path.join(root, appName);
-  const worker = path.join(app, "Contents/Resources/node-worker/arm64");
+  const runtime = path.join(app, "Contents/Resources/runtime");
   const bin = path.join(root, "bin");
   const options = path.join(root, "options.json");
   const capture = path.join(app, "Contents/test-capture");
@@ -151,7 +162,7 @@ export async function makeSigningFixture(
   const files = path.join(root, "file.jsonl");
   const sealed = path.join(capture, "sealed");
   const swaps = path.join(capture, "swaps.jsonl");
-  for (const dir of [worker, bin, capture]) {
+  for (const dir of [runtime, bin, capture]) {
     await mkdir(dir, { recursive: true });
   }
   await writeFile(options, "{}");
@@ -336,7 +347,7 @@ with tempfile.TemporaryDirectory(prefix='oc-sign-swap-', dir='/tmp') as control:
   }
   return {
     app,
-    worker,
+    runtime,
     async put(relative: string, data: Buffer | string = machoFixture()) {
       const filename = path.join(app, relative);
       await mkdir(path.dirname(filename), { recursive: true });

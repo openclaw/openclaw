@@ -1,6 +1,7 @@
 // Gmail Windows tests cover gog watcher command invocation on Windows.
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 

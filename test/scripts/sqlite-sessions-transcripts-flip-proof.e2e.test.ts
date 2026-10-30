@@ -5,9 +5,9 @@ import { assertSqliteFlipProofCore } from "../helpers/sqlite-sessions-transcript
 import { runSqliteSessionsTranscriptsFlipProof } from "../helpers/sqlite-sessions-transcripts-flip-proof.ts";
 
 describe("SQLite sessions/transcripts flip proof harness", () => {
-  it("proves isolated gateway lifecycle state stays SQLite-first", async () => {
+  it("proves isolated gateway lifecycle state stays SQLite-first", async ({ signal }) => {
     const report = await withEnvAsync({ ZAI_API_KEY: "ambient-provider-fixture" }, () =>
-      runSqliteSessionsTranscriptsFlipProof(),
+      runSqliteSessionsTranscriptsFlipProof({ signal }),
     );
 
     assertSqliteFlipProofCore(report);

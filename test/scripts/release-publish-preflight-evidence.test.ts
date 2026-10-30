@@ -1,23 +1,27 @@
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
-import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import corePackagePolicy from "../../scripts/lib/npm-core-release-packages.json" with { type: "json" };
 import {
   createPublishPreflightEvidenceClient,
+  ensureReleasePublishToolingTag,
   inspectPublishPreflightTelegramEvidence,
   readPublishPreflightRelease,
   validatePublishPreflightNpm,
   verifyPublishedPreflightTarball,
+  type PublishPreflightGh,
 } from "../../scripts/lib/release-publish-preflight-evidence.mts";
 import { createPluginSdkApiReleaseEvidence } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { createNestedGitEnv, writeJsonFile } from "../helpers/temp-repo.js";
+import { writeJsonFile } from "../helpers/temp-repo.js";
+import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
+import { fixtureGit } from "./release-publish.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const version = "2026.9.5";
+const repo = "openclaw/openclaw";
+const api = (endpoint: string) => ["api", `repos/${repo}/${endpoint}`, "--method", "GET"];
 const sha256 = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
 afterEach(() => {
@@ -25,12 +29,109 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("protected tooling tag resolution", () => {
+  const toolingSha = "a".repeat(40);
+  const prefix = "release-publish/aaaaaaaaaaaa-";
+  const compare = [...api(`compare/${toolingSha}...main`), "--jq", ".status"];
+  const inventory = api(`git/matching-refs/tags/${prefix}`);
+  const ref = (suffix: string, type = "commit", sha = toolingSha) => ({
+    ref: `refs/tags/${prefix}${suffix}`,
+    object: { type, sha },
+  });
+  const scriptedGh = (...responses: string[]) => {
+    const runGh = vi.fn<PublishPreflightGh>(() => {
+      throw new Error("Unexpected GitHub request");
+    });
+    for (const response of responses) {
+      runGh.mockReturnValueOnce(response);
+    }
+    return runGh;
+  };
+
+  it.each(["ahead", "identical", "behind", "diverged"])(
+    "qualifies %s main ancestry before selecting the newest lightweight tag",
+    (ancestry) => {
+      const runGh = scriptedGh(
+        `${ancestry}\n`,
+        JSON.stringify([
+          ref("10"),
+          ref("9"),
+          ref("11", "tag"),
+          ref("12", "commit", "b".repeat(40)),
+          ref("0"),
+          ref("01"),
+          ref("13-extra"),
+          null,
+        ]),
+      );
+      const ensure = () => ensureReleasePublishToolingTag({ runGh, repo, toolingSha });
+      if (["behind", "diverged"].includes(ancestry)) {
+        expect(ensure).toThrow(`Tooling SHA ${toolingSha} is not reachable from trusted main.`);
+        expect(runGh.mock.calls.map(([args]) => args)).toEqual([compare]);
+      } else {
+        expect(ensure()).toEqual({ tag: `${prefix}10`, created: false });
+        expect(runGh.mock.calls.map(([args]) => args)).toEqual([compare, inventory]);
+      }
+    },
+  );
+
+  it.each([true, false])(
+    "mints through git refs and verifies the created target (matches: %s)",
+    (matches) => {
+      const tag = `${prefix}1750000000`;
+      const runGh = scriptedGh(
+        "ahead",
+        JSON.stringify([ref("1750000001", "tag"), ref("1750000002", "commit", "b".repeat(40))]),
+        "ignored POST output",
+        JSON.stringify({ object: { type: "commit", sha: matches ? toolingSha : "b".repeat(40) } }),
+      );
+      const ensure = () =>
+        ensureReleasePublishToolingTag({ runGh, repo, toolingSha, now: () => 1750000000999 });
+      if (matches) {
+        expect(ensure()).toEqual({ tag, created: true });
+      } else {
+        expect(ensure).toThrow(`Protected tooling tag ${tag} does not resolve to ${toolingSha}.`);
+      }
+      expect(runGh.mock.calls.map(([args]) => args)).toEqual([
+        compare,
+        inventory,
+        [
+          "api",
+          `repos/${repo}/git/refs`,
+          "--method",
+          "POST",
+          "-f",
+          `ref=refs/tags/${tag}`,
+          "-f",
+          `sha=${toolingSha}`,
+        ],
+        api(`git/ref/tags/${tag}`),
+      ]);
+    },
+  );
+
+  it("rejects malformed SHAs before API access and malformed inventory before mutation", () => {
+    const runGh = scriptedGh("ahead", "{}");
+    expect(() => ensureReleasePublishToolingTag({ runGh, repo, toolingSha: "ABC123" })).toThrow(
+      "Tooling SHA must be a lowercase 40-character commit SHA.",
+    );
+    expect(runGh).not.toHaveBeenCalled();
+    expect(() => ensureReleasePublishToolingTag({ runGh, repo, toolingSha })).toThrow(
+      "Invalid protected tooling tag inventory.",
+    );
+    expect(runGh.mock.calls.map(([args]) => args)).toEqual([compare, inventory]);
+  });
+});
+
 describe("publish preflight release inventory", () => {
   it.each(["malformed", "interrupted", "unbounded"])(
     "refuses absence from an %s inventory",
     (state) => {
       let reads = 0;
-      const runGh = () => {
+      const runGh = (args: string[]) => {
+        if (args[1]?.includes("/releases/tags/")) {
+          throw new Error("HTTP 404: Not Found");
+        }
         reads++;
         if (state === "malformed") {
           return JSON.stringify([{ draft: true }]);
@@ -45,7 +146,7 @@ describe("publish preflight release inventory", () => {
           Array.from({ length: 100 }, (_, index) => ({ tag_name: `other-${reads}-${index}` })),
         );
       };
-      expect(() => readPublishPreflightRelease(runGh, "openclaw/openclaw", `v${version}`)).toThrow(
+      expect(() => readPublishPreflightRelease(runGh, repo, `v${version}`)).toThrow(
         state === "malformed"
           ? "Invalid GitHub release inventory."
           : state === "interrupted"
@@ -55,24 +156,12 @@ describe("publish preflight release inventory", () => {
     },
   );
 
-  it.each([false, true])("retains matching release metadata (draft: %s)", (draft) => {
-    const release = {
-      id: 8,
-      draft,
-      prerelease: false,
-      tag_name: `v${version}`,
-      html_url: `https://github.com/openclaw/openclaw/releases/tag/v${version}`,
-      target_commitish: "a".repeat(40),
-      body: "Published release notes",
-      assets: [{ name: "dependency-evidence.zip" }],
-    };
-    expect(
-      readPublishPreflightRelease(
-        () => JSON.stringify([release]),
-        "openclaw/openclaw",
-        `v${version}`,
-      ),
-    ).toEqual({ state: "found", release });
+  it("does not mask a failed exact-tag read as absence", () => {
+    const runGh = vi.fn(() => {
+      throw new Error("HTTP 502: Bad Gateway");
+    });
+    expect(() => readPublishPreflightRelease(runGh, repo, `v${version}`)).toThrow("HTTP 502");
+    expect(runGh).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -85,62 +174,46 @@ describe("publish preflight optional Telegram evidence", () => {
     status: "completed",
     conclusion: "success",
   };
+  const inspect = (runGh: PublishPreflightGh, runId = "123") =>
+    inspectPublishPreflightTelegramEvidence({ repo, runId, workflowRef, runGh });
 
-  it.each([
-    { head_branch: "main", conclusion: "success", expected: "PASS" },
-    { head_branch: workflowRef, conclusion: "success", expected: "PASS" },
-    { head_branch: "main", conclusion: "failure", expected: "WARN" },
-    { head_branch: workflowRef, conclusion: "cancelled", expected: "WARN" },
-  ])("retains $head_branch/$conclusion evidence as $expected", (entry) => {
-    const runGh = vi.fn(() => JSON.stringify({ ...completedRun, ...entry }));
-    const gate = inspectPublishPreflightTelegramEvidence({
-      repo: "openclaw/openclaw",
-      runId: "123",
-      workflowRef,
-      runGh,
+  it.each<
+    [Partial<Omit<typeof completedRun, "conclusion">> & { conclusion?: string | null }, string]
+  >([
+    [{ head_branch: "main", conclusion: "success" }, "PASS"],
+    [{ head_branch: workflowRef, conclusion: "success" }, "PASS"],
+    [{ head_branch: "main", conclusion: "failure" }, "WARN"],
+    [{ head_branch: workflowRef, conclusion: "cancelled" }, "WARN"],
+    [{ name: "CI" }, "FAIL"],
+    [{ event: "push" }, "FAIL"],
+    [{ head_branch: "release-publish/bbbbbbbbbbbb-123" }, "FAIL"],
+    [{ status: "in_progress", conclusion: null }, "FAIL"],
+  ])("qualifies optional Telegram evidence: %j", (overrides, expected) => {
+    const runGh = vi.fn(() => JSON.stringify({ ...completedRun, ...overrides }));
+    expect(inspect(runGh)).toMatchObject({
+      status: expected,
+      ...(expected === "FAIL"
+        ? { remediation: expect.stringContaining("omit the optional npm_telegram_run_id") }
+        : {}),
     });
-    expect(gate.status).toBe(entry.expected);
-    expect(runGh.mock.calls).toEqual([
-      [["api", "repos/openclaw/openclaw/actions/runs/123", "--method", "GET"]],
-    ]);
-  });
-
-  it.each([
-    { name: "CI" },
-    { event: "push" },
-    { head_branch: "release-publish/bbbbbbbbbbbb-123" },
-    { status: "in_progress", conclusion: null },
-  ])("rejects supplied evidence that the postpublish verifier refuses: %j", (overrides) => {
-    const gate = inspectPublishPreflightTelegramEvidence({
-      repo: "openclaw/openclaw",
-      runId: "123",
-      workflowRef,
-      runGh: () => JSON.stringify({ ...completedRun, ...overrides }),
-    });
-    expect(gate.status).toBe("FAIL");
-    expect(gate.remediation).toContain("omit the optional npm_telegram_run_id");
+    expect(runGh.mock.calls).toEqual([[api("actions/runs/123")]]);
   });
 
   it("does not query an invalid run id and reports an unavailable valid run", () => {
     const runGh = vi.fn(() => {
       throw new Error("HTTP 404: Not Found");
     });
-    const inspect = (runId: string) =>
-      inspectPublishPreflightTelegramEvidence({
-        repo: "openclaw/openclaw",
-        runId,
-        workflowRef,
-        runGh,
-      });
-    expect(inspect("../jobs/123").status).toBe("FAIL");
+    expect(inspect(runGh, "../jobs/123").status).toBe("FAIL");
     expect(runGh).not.toHaveBeenCalled();
-    expect(inspect("123")).toMatchObject({ status: "FAIL", message: "HTTP 404: Not Found" });
+    expect(inspect(runGh)).toMatchObject({ status: "FAIL", message: "HTTP 404: Not Found" });
   });
 });
 
 function coreEvidenceFixture() {
   const source = tempDirs.make("publish-preflight-source-");
   const artifacts = tempDirs.make("publish-preflight-artifacts-");
+  const writeArtifact = (name: string, bytes: string | Uint8Array) =>
+    writeFileSync(join(artifacts, name), bytes);
   writeJsonFile(join(source, "package.json"), {
     name: "openclaw",
     version,
@@ -153,22 +226,7 @@ function coreEvidenceFixture() {
       openclaw: { release: { publishToNpm: true } },
     });
   }
-  const git = (...args: string[]) =>
-    execFileSync(
-      "git",
-      [
-        "-C",
-        source,
-        "-c",
-        "user.name=Release fixture",
-        "-c",
-        "user.email=release-fixture@example.invalid",
-        "-c",
-        "commit.gpgsign=false",
-        ...args,
-      ],
-      { env: createNestedGitEnv(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    ).trim();
+  const git = fixtureGit(source, "Release fixture", "release-fixture@example.invalid");
   git("init", "--quiet");
   git("add", ".");
   git("commit", "--quiet", "-m", "release source fixture");
@@ -178,7 +236,7 @@ function coreEvidenceFixture() {
   const corePackages = corePackagePolicy.map((policy) => {
     const tarballName = `${policy.name.replace(/^@/u, "").replace("/", "-")}-${version}.tgz`;
     const bytes = Buffer.from(`synthetic immutable ${policy.name}`);
-    writeFileSync(join(artifacts, tarballName), bytes);
+    writeArtifact(tarballName, bytes);
     return {
       packageName: policy.name,
       packageVersion: version,
@@ -187,9 +245,9 @@ function coreEvidenceFixture() {
     };
   });
   const rootBytes = Buffer.from("synthetic immutable openclaw");
-  writeFileSync(join(artifacts, "openclaw.tgz"), rootBytes);
-  writeFileSync(
-    join(artifacts, "core-packages-SHA256SUMS"),
+  writeArtifact("openclaw.tgz", rootBytes);
+  writeArtifact(
+    "core-packages-SHA256SUMS",
     corePackages.map((entry) => `${entry.tarballSha256}  ${entry.tarballName}\n`).join(""),
   );
   const payload = { entrypointsAdded: [], entrypointsRemoved: [], exports: [] };
@@ -233,7 +291,7 @@ function coreEvidenceFixture() {
     throw new Error(`Unexpected GitHub request: ${args.join(" ")}`);
   };
   return {
-    artifacts,
+    writeArtifact,
     corePackages,
     manifest,
     writeManifest,
@@ -260,9 +318,9 @@ function coreEvidenceFixture() {
 }
 
 describe("publish preflight immutable npm evidence", () => {
-  it("qualifies the complete prepared core package set against exact source metadata", () => {
+  it("qualifies the complete prepared core package set against exact source metadata", async () => {
     const fixture = coreEvidenceFixture();
-    expect(fixture.verify().corePackages).toEqual(fixture.corePackages);
+    expect((await fixture.verify()).corePackages).toEqual(fixture.corePackages);
   });
 
   it.each([
@@ -272,7 +330,7 @@ describe("publish preflight immutable npm evidence", () => {
     ["invalid checksums", "checksum verification failed"],
     ["changed reused manifest", "changed after candidate validation"],
     ["changed reused root bytes", "wrong digest"],
-  ])("rejects %s before publication", (mode, message) => {
+  ])("rejects %s before publication", async (mode, message) => {
     const fixture = coreEvidenceFixture();
     if (mode === "missing required package") {
       fixture.manifest.corePackageTarballs = fixture.corePackages.slice(0, -1);
@@ -282,21 +340,18 @@ describe("publish preflight immutable npm evidence", () => {
     }
     fixture.writeManifest();
     if (mode === "corrupt core bytes") {
-      writeFileSync(
-        join(fixture.artifacts, fixture.corePackages[1]!.tarballName),
-        "changed core bytes",
-      );
+      fixture.writeArtifact(fixture.corePackages[1]!.tarballName, "changed core bytes");
     }
     if (mode === "invalid checksums") {
-      writeFileSync(join(fixture.artifacts, "core-packages-SHA256SUMS"), "broken\n");
+      fixture.writeArtifact("core-packages-SHA256SUMS", "broken\n");
     }
     if (mode === "changed reused manifest") {
       fixture.manifest.tarballName = "changed.tgz";
     }
     if (mode === "changed reused root bytes") {
-      writeFileSync(join(fixture.artifacts, "openclaw.tgz"), "changed root bytes");
+      fixture.writeArtifact("openclaw.tgz", "changed root bytes");
     }
-    expect(() => fixture.verify()).toThrow(message);
+    await expect(fixture.verify()).rejects.toThrow(message);
   });
 
   it.each([
@@ -345,7 +400,7 @@ describe("publish preflight immutable npm evidence", () => {
 
   it.skipIf(process.platform === "win32")(
     "downloads each exact validation attempt once and verifies its artifact digest",
-    async () => {
+    () => {
       const directory = tempDirs.make("publish-preflight-manifest-");
       const bin = join(directory, "bin");
       mkdirSync(bin);
@@ -357,23 +412,21 @@ describe("publish preflight immutable npm evidence", () => {
         runId: "123",
         runAttempt: String(attempt),
       }));
-      const artifacts = await Promise.all(
-        manifests.map(async (manifest, index) => {
-          const archive = await new JSZip()
-            .file("full-release-validation-manifest.json", JSON.stringify(manifest))
-            .generateAsync({ type: "nodebuffer", compression: "STORE", platform: "UNIX" });
-          const id = 90 + index;
-          writeFileSync(join(directory, `${id}.zip`), archive);
-          return {
-            id,
-            name: `full-release-validation-123-${index + 1}`,
-            expired: false,
-            digest: `sha256:${sha256(archive)}`,
-            size_in_bytes: archive.length,
-            workflow_run: { id: 123 },
-          };
-        }),
-      );
+      const artifacts = manifests.map((manifest, index) => {
+        const archive = makeStoredZip({
+          "full-release-validation-manifest.json": JSON.stringify(manifest),
+        });
+        const id = 90 + index;
+        writeFileSync(join(directory, `${id}.zip`), archive);
+        return {
+          id,
+          name: `full-release-validation-123-${index + 1}`,
+          expired: false,
+          digest: `sha256:${sha256(archive)}`,
+          size_in_bytes: archive.length,
+          workflow_run: { id: 123 },
+        };
+      });
       writeFileSync(
         join(bin, "gh"),
         `#!${process.execPath}

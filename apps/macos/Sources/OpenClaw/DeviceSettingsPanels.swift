@@ -66,9 +66,9 @@ final class DeviceSettingsPanels: NSObject, NSWindowDelegate {
             parentWindow.beginSheet(panel)
         } else {
             panel.center()
-            panel.makeKeyAndOrderFront(nil)
+            AppActivation.shared.makeKeyAndOrderFront(window: panel)
         }
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.shared.activate()
     }
 
     private func close() {

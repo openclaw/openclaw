@@ -3,8 +3,11 @@ import {
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
+  expectDefined,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { catalogList } from "./sidebar-assertions.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -14,14 +17,26 @@ suite.define(() => {
     const catalogSessionKey = "agent:main:catalog:codex:gateway%3Acodex:thread-1";
 
     await suite.withPage(
-      {
-        hasTouch: false,
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
+      { ...createControlUiE2eContextOptions(), hasTouch: false },
       async ({ page }) => {
         const nowSeconds = Math.floor(Date.now() / 1000);
+        const catalog = catalogList({
+          id: "codex",
+          label: "Codex",
+          host: "Local Codex",
+          thread: "thread-1",
+          name: "Catalog release review",
+          status: "stored",
+          archive: true,
+        });
+        const host = expectDefined(catalog.catalogs[0]?.hosts[0], "catalog host");
+        host.hostId = "gateway:codex";
+        Object.assign(expectDefined(host.sessions[0], "catalog session"), {
+          cwd: "/work/openclaw",
+          gitBranch: "catalog-hovercard",
+          createdAt: nowSeconds - 2 * 60 * 60,
+          updatedAt: nowSeconds - 5 * 60,
+        });
         await installMockGateway(page, {
           featureMethods: [
             "chat.metadata",
@@ -34,37 +49,7 @@ suite.define(() => {
             "sessions.list": chatSessionListResponse([
               { key: selectedSessionKey, kind: "direct", label: "Selected", updatedAt: 1 },
             ]),
-            "sessions.catalog.list": {
-              catalogs: [
-                {
-                  id: "codex",
-                  label: "Codex",
-                  capabilities: { continueSession: true, archive: true },
-                  hosts: [
-                    {
-                      hostId: "gateway:codex",
-                      label: "Local Codex",
-                      kind: "gateway",
-                      connected: true,
-                      sessions: [
-                        {
-                          threadId: "thread-1",
-                          name: "Catalog release review",
-                          cwd: "/work/openclaw",
-                          gitBranch: "catalog-hovercard",
-                          createdAt: nowSeconds - 2 * 60 * 60,
-                          updatedAt: nowSeconds - 5 * 60,
-                          status: "stored",
-                          archived: false,
-                          canContinue: true,
-                          canArchive: true,
-                        },
-                      ],
-                    },
-                  ],
-                },
-              ],
-            },
+            "sessions.catalog.list": catalog,
           },
           sessionKey: selectedSessionKey,
         });
@@ -75,11 +60,10 @@ suite.define(() => {
         await row.hover();
         const card = page.locator(".session-progress-hovercard");
         await card.waitFor({ state: "visible" });
-        expect(await card.locator(".session-hovercard__title").textContent()).toBe(
-          "Catalog release review",
-        );
-        expect(await card.locator(".session-hovercard__created-age").textContent()).toBe("2h");
-        expect(await card.locator(".session-hovercard__context-text").allTextContents()).toEqual([
+        const part = (name: string) => card.locator(`.session-hovercard__${name}`);
+        expect(await part("title").textContent()).toBe("Catalog release review");
+        expect(await part("created-age").textContent()).toBe("2h");
+        expect(await part("context-text").allTextContents()).toEqual([
           "openclaw",
           "catalog-hovercard",
         ]);

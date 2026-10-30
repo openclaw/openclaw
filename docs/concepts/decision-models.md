@@ -35,20 +35,36 @@ chooses the provider for explicit evaluation and supported consumers. The core
 Selection does not start background work or replace the chat model.
 Automatic experimental consumers additionally require explicit
 [Decision assistance opt-in](/concepts/experimental-features#decision-assistance).
-That Labs entry currently provides the gate foundation only, with no automatic
-consumers connected; explicit `decision_evaluate` remains independent of Labs.
+The built-in OpenClaw runtime uses that opt-in for conversational tool filtering
+with bounded recent conversation. The selected Decision provider receives that
+secondary evidence; see the [privacy and fallback contract](/concepts/experimental-features#conversational-tool-filtering).
+Explicit `decision_evaluate` remains independent of Labs.
 
 ## Choose a provider and model
 
 Configure the provider plugin before selecting its model:
 
+- [Liquid AI](/providers/liquid-ai) connects directly to hosted d1 and d1 Ultra.
+  Install the plugin candidate from a compatible development checkout and
+  configure a Liquid AI API key. Text/JSON and inline image evidence use the
+  native Decision endpoint; connecting it does not change the chat model.
 - [ONNX](/plugins/onnx) runs local CPU classifiers in a persistent subprocess.
   Follow its development-checkout or compatible-package setup, then explicitly
   download the model or prepare a local export. Inference needs no hosted API credential.
-- [TypeSafe AI](/plugins/typesafe) connects to hosted Jev or a local System One
+- [OpenAI](/providers/openai#decision-models) uses the bundled `openai` plugin
+  and the OpenAI Platform Decisions API. Configure an OpenAI API key;
+  ChatGPT/Codex subscription credentials do not authorize this endpoint.
+  Evaluations send the supplied evidence to OpenAI and incur Platform usage charges.
+- [SubQ](/plugins/subq) connects to hosted SubQ Snap for text/JSON decisions.
+  Configure a protected SubQ credential. This V1 adapter supports text/JSON
+  input only; it does not expose the vendor API's image input.
+- [TypeSafe AI](/plugins/typesafe) connects to hosted Jev or a self-hosted System One
   server such as Kev. Install and enable the external plugin, then configure a
-  protected hosted credential or an explicit loopback `baseUrl`. Hosted
-  evaluations send the selected evidence to TypeSafe and incur its normal usage charges.
+  protected hosted credential, the existing loopback setting, or a
+  [standard model-provider endpoint](/plugins/typesafe#custom-endpoint-and-provider-request-settings)
+  through `models.providers.typesafe`. Evaluations send user content to that
+  endpoint; hosted calls incur TypeSafe's normal charges. Select `typesafe/kev-latest`
+  for Kev; router-backed servers must use their own routing model ID.
 
 The current plugins declare these model references:
 
@@ -61,11 +77,13 @@ The current plugins declare these model references:
 | `onnx/gliclass-instruct-edge-v1.0`   | GLiClass Instruct Edge | Local export                                           |
 | `onnx/gliner2.5-base-v1`             | GLiNER 2.5 Base        | Download pinned ONNX artifacts                         |
 | `onnx/gliner2.5-small-v1`            | GLiNER 2.5 Small       | Download pinned ONNX artifacts                         |
+| `openai/gpt-6-luna`                  | GPT-6 Luna             | OpenAI Platform API key and Decisions API access       |
+| `subq/subq-snap-preview`             | SubQ Snap (preview)    | SubQ credential and account credits                    |
 | `typesafe/jev-1.13.0`                | Jev 1.13.0             | TypeSafe credential                                    |
 | `typesafe/jev-latest`                | Jev                    | TypeSafe credential; follows the vendor's latest model |
 | `typesafe/kev-latest`                | Kev (local server)     | Running System One server and explicit loopback URL    |
 
-Both plugins are currently unpublished candidates. Their setup pages explain
+The ONNX, SubQ, and TypeSafe AI plugins are currently unpublished candidates. Their setup pages explain
 source-checkout use and the packaged host floor. The table describes the plugins' declared models,
 not which artifacts or credentials are ready on your machine.
 
@@ -151,15 +169,39 @@ answer. The tool collects no ambient conversation. Its trusted calling-agent
 binding selects the provider and model; input cannot override that identity or
 selection.
 
-Results preserve Boolean probabilities, fractional zero-based scores, original
-distributions and rounding, optional confidence and usage, and provider/model
-provenance. They do not generate explanations or grant permission to act.
+The tool preserves this input format and also accepts `contractVersion: 2` with
+tagged state: `text`, `json`, `image`, or `list`. This explicit discriminator keeps
+existing JSON state from being mistaken for image or list instructions. For example:
+
+```json
+{
+  "contractVersion": 2,
+  "state": { "type": "image", "dataUri": "data:image/png;base64,...", "text": "Listing photo" },
+  "questions": {
+    "present": { "type": "boolean", "instructions": "Is the product visible?" },
+    "region": { "type": "box", "instructions": "the product in the listing photo" }
+  }
+}
+```
+
+The selected provider must declare support for the input and question types.
+Images use inline PNG, JPEG, or WebP data, up to 4 MiB decoded; provider limits can
+be stricter. Box questions require image state and return normalized edges, not
+proof that the target exists. V2 also supports `sort` over list item IDs and
+`tags` over named criteria when the provider declares those operations.
+
+Results preserve explicit Boolean answers separately from probabilities,
+abstention (`null`), per-question errors, fractional scores, original distributions,
+optional confidence, provider metadata and usage, including reported USD cost and
+native units. Missing fields stay absent; estimates are not normalized or derived.
+V1 providers remain supported through the lossless bridge. Results do not grant
+permission to act.
 Evidence goes to the selected provider's configured endpoint or local runtime;
 only send data authorized for that destination. Provider plugins own credentials,
 model loading, transport, and wire-specific validation.
 
-Provider capabilities are declared with their model metadata and exposed in
-`models.list.decisionModels`. Unsupported questions and bounds produce actionable,
+Provider capabilities come from the prepared model catalog or canonical manifest
+catalog, also exposed in `models.list.decisionModels`. Unsupported questions and bounds produce actionable,
 bounded guidance. Requests are rejected rather than silently truncated or split.
 Do not substitute shell or HTTP calls when a configured provider is unavailable,
 request credentials in chat, or treat a failure as a negative answer.
@@ -288,18 +330,23 @@ perform another effect.
 
 ## Limits and unavailable results
 
-For portable rubrics, use at most 32 questions, 2–64 Choice alternatives, 2–10
+For portable rubrics, use at most 16 questions, 2–64 Choice alternatives, 2–10
 meaningful Score anchors, explicit true/false descriptions, and concise evidence.
 Provider limits differ:
 
 | Provider    | Choice alternatives | Score levels | Additional limits                                                                  |
 | ----------- | ------------------- | ------------ | ---------------------------------------------------------------------------------- |
 | ONNX        | 2–64                | 2–64         | Up to 32 questions; 512 tokens per encoded input; one MiB of compiled batch inputs |
+| SubQ        | 2–255               | 2–10         | Up to 16 questions; text/JSON state; question IDs at most 100 characters           |
 | TypeSafe AI | 2–255               | 2–10         | Subject to the host's batch limits and the vendor input contract                   |
 
-The host bounds requests to one MiB, 20,000 JSON nodes, depth 32, and 256 questions. It admits at most four
-requests per provider and caps each deadline at 30 seconds. Provider-specific
-limits can be tighter. Unsupported input is rejected instead of silently truncated.
+The host bounds JSON evidence to one MiB, 20,000 nodes, and depth 32. V1 accepts
+up to 256 questions; V2 accepts up to 400, subject to the selected provider's limit.
+Version 2 image state has a separate four-MiB decoded image limit. It admits at most four
+requests per provider and caps each deadline at 30 seconds. Optional assistance
+leaves the fourth slot for requested evaluations; under contention, the tool
+prefilter skips evaluation and retains tools. Provider-specific limits can be
+tighter. Unsupported input is rejected instead of silently truncated.
 
 An `unavailable` outcome includes a reason such as `disabled`, `not-configured`,
 `unsupported-input`, `overloaded`, or `deadline`. The consumer decides whether to
@@ -307,6 +354,20 @@ skip, defer, or use its existing fallback. Caller cancellation, closed consumer
 authority, and contract errors reject; do not turn cancellation into fallback work.
 See the [SDK contract](/plugins/sdk-overview/capabilities#decision-models-contract-version-1)
 for the complete lifecycle and error behavior.
+
+Consumers should build bounded useful evidence, evaluate it once, and retain their
+normal behavior when the provider returns `unsupported-input`, including context
+overflow. The runtime does not estimate model tokens, truncate evidence, retry,
+or choose another provider/model. Input rejection does not open the provider
+circuit; cancellation and closed authority remain terminal.
+
+The `decisions` logger records DEBUG outcomes, dispatch status, elapsed time,
+question count, supplied JSON byte count, and actual provider usage when available.
+JSON bytes are not model tokens. Purpose/provider/model identifiers are hashed;
+existing ambient trace correlation is preserved. It logs no submitted text,
+rubrics, credentials, or provider error bodies, and does no extra input serialization
+when DEBUG is disabled. Generic input-rejection warnings are rate limited. Logs
+distinguish the provider result from the caller effect, which remains unobserved here.
 
 For ONNX, cold-loading a large model can exceed the deadline on slower machines.
 Keep active models warm when memory permits, or choose a smaller model. See
@@ -316,12 +377,19 @@ its [setup instructions](/plugins/typesafe#enable-and-configure).
 
 ## Provide models from a plugin
 
-A provider plugin implements `DecisionProviderV1` from
+New providers should use the [prepared V2 execution contract](/plugins/sdk-overview/capabilities#prepared-decision-execution-contract-version-2)
+with normal provider catalog and auth ownership. V1 remains supported through
+lossless codecs; native V2 features require a V2 caller and provider.
+
+A V1 provider plugin implements `DecisionProviderV1` from
 `openclaw/plugin-sdk/decisions` and registers it with
 `api.registerDecisionProvider(provider)`. Its `id` and `contractVersion: 1`
 identify the contract; `evaluate(batch, context)` returns validated typed answers
 or a supported unavailable reason. The context includes the selected model,
-optional agent ID, composed cancellation signal, and monotonic deadline.
+optional agent ID, composed cancellation signal, monotonic deadline, and an optional
+host-owned `isAdmissible()` predicate for automatic consumers. External transports
+check that predicate at final synchronous I/O, after awaited preparation; see the
+[provider contract](/plugins/sdk-overview/capabilities#decision-models-contract-version-1).
 
 Declare provider ownership and static model metadata in the plugin manifest:
 
@@ -339,8 +407,10 @@ provider. It does not register a provider itself.
 Providers own model-specific input translation, transport or local inference,
 prepared credentials where needed, and physical cleanup on cancellation.
 Registration and optional `isReady()` must be synchronous and network-free;
-`isReady()` checks prepared credential availability, not model warmup. Return real
-model estimates rather than manufacturing certainty from a label-only response.
+`isReady()` checks prepared credential availability, not model warmup. Omitting it
+leaves readiness unconfirmed without blocking evaluation; returning `false`
+blocks evaluation until the provider reports ready. Return real model estimates
+rather than manufacturing certainty from a label-only response.
 
 The [provider contract](/plugins/sdk-overview/capabilities#decision-models-contract-version-1)
 owns the full SDK rules; the [manifest reference](/plugins/manifest/capabilities#decision-models-reference)

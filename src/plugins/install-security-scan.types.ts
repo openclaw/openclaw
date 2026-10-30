@@ -1,6 +1,9 @@
-// Defines plugin install security scan result types.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { InstallPolicyFinding } from "../security/install-policy.js";
+import type { SkillInstallSpec } from "../skills/types.js";
+
+/** Skill install metadata shape passed into shared install policy evaluation. */
+export type SkillInstallSpecMetadata = SkillInstallSpec;
 
 export type InstallPolicyWarningDetails = {
   targetName: string;

@@ -7,7 +7,8 @@ import { asResolvedSourceConfig, asRuntimeConfig } from "./materialize.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
 export function createSnapshot(params: {
-  hash: string;
+  hash?: string;
+  raw?: string | null;
   path?: string;
   parsed?: unknown;
   sourceConfig: OpenClawConfig;
@@ -19,18 +20,30 @@ export function createSnapshot(params: {
   return {
     path: params.path ?? "/tmp/openclaw.json",
     exists: true,
-    raw: `${JSON.stringify(parsed, null, 2)}\n`,
+    raw: params.raw === undefined ? `${JSON.stringify(parsed, null, 2)}\n` : params.raw,
     parsed,
     sourceConfig,
     resolved: sourceConfig,
     valid: true,
     runtimeConfig,
     config: runtimeConfig,
-    hash: params.hash,
+    ...(params.hash === undefined ? {} : { hash: params.hash }),
     issues: [],
     warnings: [],
     legacyIssues: [],
   };
+}
+
+export function includeSnapshot(
+  configPath: string,
+  sourceConfig: OpenClawConfig,
+): ConfigFileSnapshot {
+  return createSnapshot({
+    hash: "include-hash",
+    path: configPath,
+    parsed: { plugins: { $include: "./config/plugins.json5" } },
+    sourceConfig,
+  });
 }
 
 export async function createPluginIncludeFixture(home: string) {

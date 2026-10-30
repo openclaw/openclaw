@@ -32,6 +32,27 @@ const enPortals = {
     writeAccessRequiredTitle: "Write access required",
     writeAccessRequiredBody: "This portal requires an operator with write access.",
     retry: "Retry",
+    embeddedRefresh: "Refresh",
+    embeddedOptions: "Portal options",
+    embeddedCopyLink: "Copy link",
+    embeddedCopied: "Link copied",
+    embeddedCopyFailed: "Could not copy the link. Try again.",
+    embeddedOpen: "Open portal",
+    embeddedOpenBrowser: "Open in browser",
+    embeddedClose: "Close portal",
+    embeddedEmptyTitle: "No portal open",
+    embeddedEmptyBody: "Ask the agent to start an application in a portal.",
+    embeddedUnavailableTitle: "Portal is no longer available",
+    embeddedUnavailableBody: "Ask the agent to reopen the application.",
+    embeddedWriteAccessBody: "You need write access to view this portal.",
+    embeddedNewTabRequiredTitle: "Can’t display this portal",
+    embeddedNewTabRequiredBody:
+      "This portal uses HTTP. An HTTPS address allows it to appear inside this panel.",
+    embeddedIngressRequiredTitle: "This portal needs a remote address",
+    embeddedIngressRequiredBody:
+      "This local address belongs to the Gateway’s machine. Use a remote portal address that this browser can reach.",
+    embeddedUnreachableTitle: "Portal isn’t reachable",
+    embeddedUnreachableBody: "Check the portal address and your connection, then try again.",
   },
 } satisfies TranslationMap;
 

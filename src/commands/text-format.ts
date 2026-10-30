@@ -1,4 +1,3 @@
-// Text formatting helpers shared by command output.
 import * as terminalAnsi from "../../packages/terminal-core/src/ansi.js";
 
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });

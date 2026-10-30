@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { SessionsDeleteParams } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   applySessionEntryLifecycleMutation,
   loadExactSessionEntry,
-  replaceSessionEntry as replaceSessionEntryCore,
+  replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteScope,
@@ -15,6 +16,7 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
 import { clearCronJobActive, markCronJobActive } from "./active-jobs.js";
+import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import * as cronCleanup from "./service/locked.js";
@@ -24,26 +26,14 @@ const gatewayTestState = vi.hoisted(() => ({
   targetBySessionKey: new Map<string, { agentId: string; storePath: string }>(),
 }));
 
-vi.mock("../gateway/call.js", () => ({
-  callGateway: gatewayTestState.callGateway,
-}));
+// mock-isolation: the in-process lifecycle fixture replaces Gateway transport with exact store operations.
+vi.mock("../gateway/call.js", () => ({ callGateway: gatewayTestState.callGateway }));
 
 gatewayTestState.callGateway.mockImplementation(
-  async (request: {
-    params: {
-      key: string;
-      expectedSessionId: string;
-      expectedLifecycleRevision?: string;
-      expectedSessionUpdatedAt?: number;
-    };
-  }) => {
-    const { key, expectedSessionId, expectedLifecycleRevision, expectedSessionUpdatedAt } =
-      request.params;
+  async ({ params }: { params: SessionsDeleteParams }) => {
+    const { key, expectedSessionId, expectedLifecycleRevision, expectedSessionUpdatedAt } = params;
     const target = gatewayTestState.targetBySessionKey.get(key)!;
-    const existing = loadExactSessionEntry({
-      storePath: target.storePath,
-      sessionKey: key,
-    })?.entry;
+    const existing = loadExactSessionEntry({ ...target, sessionKey: key })?.entry;
     if (
       !existing ||
       existing.sessionId !== expectedSessionId ||
@@ -53,8 +43,7 @@ gatewayTestState.callGateway.mockImplementation(
       return { deleted: false };
     }
     const result = await applySessionEntryLifecycleMutation({
-      agentId: target.agentId,
-      storePath: target.storePath,
+      ...target,
       removals: [
         {
           sessionKey: key,
@@ -70,26 +59,55 @@ gatewayTestState.callGateway.mockImplementation(
   },
 );
 
-function replaceSessionEntry(...args: Parameters<typeof replaceSessionEntryCore>) {
-  const target = args[0];
-  if (!target.agentId || !target.storePath) {
-    throw new Error("cron cleanup tests require an explicit agent and session store");
-  }
-  gatewayTestState.targetBySessionKey.set(target.sessionKey, {
-    agentId: target.agentId,
-    storePath: target.storePath,
-  });
-  return replaceSessionEntryCore(...args);
-}
-
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-remove-session-cleanup-",
+  fakeTimers: false,
 });
 
 afterEach(() => {
   gatewayTestState.targetBySessionKey.clear();
   closeOpenClawAgentDatabasesForTest();
 });
+
+type JobOptions = Partial<Parameters<CronService["add"]>[0]>;
+
+async function setup(initialSession?: string, options: JobOptions = {}) {
+  const { storePath } = await makeStorePath();
+  const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
+  const target = { agentId: "main", storePath: sessionStorePath };
+  const createCron = () =>
+    new CronService({
+      ...cronTestDeps({ storePath, nowMs: undefined }),
+      defaultAgentId: "main",
+      resolveSessionStorePath: () => sessionStorePath,
+      log: logger,
+    });
+  const read = (sessionKey: string) => loadExactSessionEntry({ ...target, sessionKey });
+  const write = (sessionKey: string, sessionId: string) => {
+    gatewayTestState.targetBySessionKey.set(sessionKey, target);
+    return replaceSessionEntry({ ...target, sessionKey }, { sessionId, updatedAt: Date.now() });
+  };
+  const cron = createCron();
+  const jobId = `cleanup-${initialSession ?? options.sessionTarget ?? "never-ran"}`;
+  const job = await addJob(cron, jobId, options);
+  const sessionKey = `agent:main:cron:${job.id}`;
+  if (initialSession) {
+    await write(sessionKey, initialSession);
+  }
+  const scope = resolveSqliteScope({ ...target, sessionKey });
+  return { cron, job, sessionKey, createCron, scope, read, write };
+}
+
+function addJob(cron: CronService, id: string, overrides: JobOptions = {}) {
+  return cron.add(
+    cronTestInput({
+      id,
+      name: id,
+      payload: { kind: "agentTurn", message: "work" },
+      ...overrides,
+    }),
+  );
+}
 
 describe("CronService.remove session cleanup", () => {
   let cleanupInFlight: Promise<unknown> | undefined;
@@ -103,33 +121,8 @@ describe("CronService.remove session cleanup", () => {
   });
 
   it("does not materialize a session database when the deleted job never ran", async () => {
-    const { storePath } = await makeStorePath();
-    const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
-    const cron = new CronService({
-      storePath,
-      cronEnabled: true,
-      defaultAgentId: "main",
-      resolveSessionStorePath: () => sessionStorePath,
-      log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
-    const job = await cron.add({
-      id: "never-ran",
-      name: "never ran",
-      enabled: false,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "work" },
-    });
-    const sessionKey = `agent:main:cron:${job.id}`;
-    const databasePath = resolveSqliteScope({
-      agentId: "main",
-      sessionKey,
-      storePath: sessionStorePath,
-    }).path!;
+    const { cron, job, scope } = await setup(undefined, { enabled: false });
+    const databasePath = scope.path!;
 
     expect(fs.existsSync(databasePath)).toBe(false);
 
@@ -141,94 +134,16 @@ describe("CronService.remove session cleanup", () => {
     ).toBe(false);
   });
 
-  it("removes only the deleted isolated job's base session", async () => {
-    const { storePath } = await makeStorePath();
-    const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
-    const cron = new CronService({
-      storePath,
-      cronEnabled: true,
-      defaultAgentId: "main",
-      resolveSessionStorePath: () => sessionStorePath,
-      log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
-    const job = await cron.add({
-      id: "deleted-job",
-      name: "deleted job",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "work" },
-    });
-    const baseSessionKey = `agent:main:cron:${job.id}`;
-    const runSessionKey = `${baseSessionKey}:run:retained-run`;
+  it("removes only the base session without holding the cron lock on the lifecycle writer", async () => {
+    const { cron, job, sessionKey, read, write, scope } = await setup("contended-session");
+    const runSessionKey = `${sessionKey}:run:retained-run`;
     const otherSessionKey = "agent:main:cron:other-job";
-    await replaceSessionEntry(
-      { agentId: "main", storePath: sessionStorePath, sessionKey: baseSessionKey },
-      { sessionId: "base-session", updatedAt: Date.now() },
-    );
-    await replaceSessionEntry(
-      { agentId: "main", storePath: sessionStorePath, sessionKey: runSessionKey },
-      { sessionId: "run-session", updatedAt: Date.now() },
-    );
-    await replaceSessionEntry(
-      { agentId: "main", storePath: sessionStorePath, sessionKey: otherSessionKey },
-      { sessionId: "other-session", updatedAt: Date.now() },
-    );
-
-    await expect(cron.remove(job.id)).resolves.toEqual({ ok: true, removed: true });
-
-    expect(loadExactSessionEntry({ storePath: sessionStorePath, sessionKey: baseSessionKey })).toBe(
-      undefined,
-    );
-    expect(
-      loadExactSessionEntry({ storePath: sessionStorePath, sessionKey: runSessionKey }),
-    ).toMatchObject({ entry: { sessionId: "run-session" } });
-    expect(
-      loadExactSessionEntry({ storePath: sessionStorePath, sessionKey: otherSessionKey }),
-    ).toMatchObject({ entry: { sessionId: "other-session" } });
-  });
-
-  it("releases the cron lock before waiting for the session lifecycle writer", async () => {
-    const { storePath } = await makeStorePath();
-    const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
-    const cron = new CronService({
-      storePath,
-      cronEnabled: true,
-      defaultAgentId: "main",
-      resolveSessionStorePath: () => sessionStorePath,
-      log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
-    const job = await cron.add({
-      id: "contended-session-writer",
-      name: "contended session writer",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "work" },
-    });
-    const sessionKey = `agent:main:cron:${job.id}`;
-    await replaceSessionEntry(
-      { agentId: "main", storePath: sessionStorePath, sessionKey },
-      { sessionId: "contended-session", updatedAt: Date.now() },
-    );
-
+    await write(runSessionKey, "run-session");
+    await write(otherSessionKey, "other-session");
     const writerEntered = createDeferred();
     const releaseWriter = createDeferred();
-    const resolvedSessionScope = resolveSqliteScope({
-      agentId: "main",
-      sessionKey,
-      storePath: sessionStorePath,
-    });
     const heldWriter = runExclusiveSqliteSessionWrite(
-      resolvedSessionScope,
+      scope,
       async () => {
         writerEntered.resolve();
         await releaseWriter.promise;
@@ -238,117 +153,49 @@ describe("CronService.remove session cleanup", () => {
     await writerEntered.promise;
 
     const removal = cron.remove(job.id);
-    let unrelatedAdded = false;
-    const unrelatedAdd = cron
-      .add({
-        id: "unrelated-during-session-cleanup",
-        name: "unrelated during session cleanup",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 120_000 },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "unrelated" },
-      })
-      .then(() => {
-        unrelatedAdded = true;
-      });
+    const unrelatedAdd = addJob(cron, "unrelated-during-session-cleanup");
 
     try {
-      await vi.advanceTimersByTimeAsync(50);
-      await unrelatedAdd;
-      expect(unrelatedAdded).toBe(true);
+      await expect(unrelatedAdd).resolves.toMatchObject({ id: "unrelated-during-session-cleanup" });
     } finally {
       releaseWriter.resolve();
       await heldWriter;
-      await Promise.all([removal, unrelatedAdd]);
+      await Promise.all([
+        expect(removal).resolves.toEqual({ ok: true, removed: true }),
+        unrelatedAdd,
+      ]);
     }
-
-    expect(loadExactSessionEntry({ storePath: sessionStorePath, sessionKey })).toBeUndefined();
+    expect([read(sessionKey), read(runSessionKey), read(otherSessionKey)]).toMatchObject([
+      undefined,
+      { entry: { sessionId: "run-session" } },
+      { entry: { sessionId: "other-session" } },
+    ]);
   });
 
   it("reports failed session cleanup after removal and preserves the session for retry", async () => {
-    const { storePath } = await makeStorePath();
-    const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
-    const cron = new CronService({
-      storePath,
-      cronEnabled: true,
-      defaultAgentId: "main",
-      resolveSessionStorePath: () => sessionStorePath,
-      log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
-    const job = await cron.add({
-      id: "cleanup-transport-failure",
-      name: "cleanup transport failure",
-      enabled: false,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "work" },
-    });
-    const sessionKey = `agent:main:cron:${job.id}`;
-    await replaceSessionEntry(
-      { agentId: "main", storePath: sessionStorePath, sessionKey },
-      { sessionId: "transport-session", updatedAt: Date.now() },
-    );
+    const { cron, job, sessionKey, read } = await setup("transport-session", { enabled: false });
     gatewayTestState.callGateway.mockRejectedValueOnce(new Error("Gateway disconnected"));
 
     await expect(cron.remove(job.id)).rejects.toThrow("Gateway disconnected");
 
     expect(await cron.list({ includeDisabled: true })).toEqual([]);
-    expect(
-      loadExactSessionEntry({ storePath: sessionStorePath, sessionKey })?.entry.sessionId,
-    ).toBe("transport-session");
+    expect(read(sessionKey)?.entry.sessionId).toBe("transport-session");
   });
 
   it("removes a base session recreated by an already-admitted run", async ({ signal }) => {
-    const { storePath } = await makeStorePath();
-    const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
-    const cron = new CronService({
-      storePath,
-      cronEnabled: true,
-      defaultAgentId: "main",
-      resolveSessionStorePath: () => sessionStorePath,
-      log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
-    const job = await cron.add({
-      id: "active-deleted-job",
-      name: "active deleted job",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "work" },
-    });
-    const sessionKey = `agent:main:cron:${job.id}`;
+    const { cron, job, sessionKey, read, write } = await setup("active-session");
     const marker = markCronJobActive(job.id);
 
-    await replaceSessionEntry(
-      { agentId: "main", storePath: sessionStorePath, sessionKey },
-      { sessionId: "active-session", updatedAt: Date.now() },
-    );
-
     const cleanupRegistration = vi.spyOn(cronCleanup, "registerPendingCronSessionCleanup");
-    onTestFinished(() => {
-      cleanupRegistration.mockRestore();
-    });
+    onTestFinished(() => cleanupRegistration.mockRestore());
     await expect(cron.remove(job.id)).resolves.toEqual({
       ok: true,
       removed: true,
+      activeRunCancellationRequested: true,
       sessionCleanup: "pending",
     });
-    expect(loadExactSessionEntry({ storePath: sessionStorePath, sessionKey })).toMatchObject({
-      entry: { sessionId: "active-session" },
-    });
-    await replaceSessionEntry(
-      { agentId: "main", storePath: sessionStorePath, sessionKey },
-      { sessionId: "late-session", updatedAt: Date.now() },
-    );
+    expect(read(sessionKey)).toMatchObject({ entry: { sessionId: "active-session" } });
+    await write(sessionKey, "late-session");
     const cleanupDone = cleanupRegistration.mock.calls.find(
       ([, registeredJobId]) => registeredJobId === job.id,
     )?.[2];
@@ -358,174 +205,43 @@ describe("CronService.remove session cleanup", () => {
     cleanupInFlight = cleanupDone;
     clearCronJobActive(job.id, marker);
 
-    // The cron owner releases pending cleanup after the real lifecycle mutation settles.
     await racePromiseWithAbortSignal(cleanupDone, signal);
-    expect(cronCleanup.hasPendingCronSessionCleanupForAgent("main")).toBe(false);
-    expect(loadExactSessionEntry({ storePath: sessionStorePath, sessionKey })).toBeUndefined();
-  });
-
-  it("preserves the session of a replacement job with the same id", async () => {
-    const { storePath } = await makeStorePath();
-    const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
-    const cron = new CronService({
-      storePath,
-      cronEnabled: true,
-      defaultAgentId: "main",
-      resolveSessionStorePath: () => sessionStorePath,
-      log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
-    const original = await cron.add({
-      id: "reused-job-id",
-      name: "original job",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "original" },
-    });
-    const sessionKey = `agent:main:cron:${original.id}`;
-    const originalMarker = markCronJobActive(original.id);
-
-    await replaceSessionEntry(
-      { agentId: "main", storePath: sessionStorePath, sessionKey },
-      { sessionId: "original-session", updatedAt: Date.now() },
-    );
-
-    await cron.remove(original.id);
-    let replacementAdded = false;
-    const replacementPromise = cron
-      .add({
-        id: original.id,
-        name: "replacement job",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 120_000 },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "replacement" },
-      })
-      .then((job) => {
-        replacementAdded = true;
-        return job;
-      });
-    await vi.advanceTimersByTimeAsync(50);
-    expect(replacementAdded).toBe(false);
-
-    clearCronJobActive(original.id, originalMarker);
-    await replacementPromise;
-    expect(loadExactSessionEntry({ storePath: sessionStorePath, sessionKey })).toBeUndefined();
-    await replaceSessionEntry(
-      { agentId: "main", storePath: sessionStorePath, sessionKey },
-      { sessionId: "replacement-session", updatedAt: Date.now() },
-    );
-
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(loadExactSessionEntry({ storePath: sessionStorePath, sessionKey })).toMatchObject({
-      entry: { sessionId: "replacement-session" },
-    });
+    expect(read(sessionKey)).toBeUndefined();
   });
 
   it("fences same-id replacement across services sharing one store", async () => {
-    const { storePath } = await makeStorePath();
-    const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
-    const createCron = () =>
-      new CronService({
-        storePath,
-        cronEnabled: true,
-        defaultAgentId: "main",
-        resolveSessionStorePath: () => sessionStorePath,
-        log: logger,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      });
-    const removingCron = createCron();
+    const { cron, job, sessionKey, createCron, read, write } = await setup("original-session");
     const replacementCron = createCron();
-    const original = await removingCron.add({
-      id: "cross-service-reused-id",
-      name: "original job",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "original" },
-    });
-    const sessionKey = `agent:main:cron:${original.id}`;
-    const originalMarker = markCronJobActive(original.id);
-    await replaceSessionEntry(
-      { agentId: "main", storePath: sessionStorePath, sessionKey },
-      { sessionId: "original-session", updatedAt: Date.now() },
-    );
+    const originalMarker = markCronJobActive(job.id);
 
-    await removingCron.remove(original.id);
+    await cron.remove(job.id);
     let replacementAdded = false;
-    const replacementPromise = replacementCron
-      .add({
-        id: original.id,
-        name: "replacement job",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 120_000 },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "replacement" },
-      })
-      .then((job) => {
-        replacementAdded = true;
-        return job;
-      });
-    await vi.advanceTimersByTimeAsync(50);
+    const replacementPromise = addJob(replacementCron, job.id).then(() => {
+      replacementAdded = true;
+    });
+    await replacementCron.status();
     expect(replacementAdded).toBe(false);
 
-    clearCronJobActive(original.id, originalMarker);
+    clearCronJobActive(job.id, originalMarker);
     await replacementPromise;
-    await replaceSessionEntry(
-      { agentId: "main", storePath: sessionStorePath, sessionKey },
-      { sessionId: "replacement-session", updatedAt: Date.now() },
-    );
+    expect(read(sessionKey)).toBeUndefined();
+    await write(sessionKey, "replacement-session");
 
     await Promise.resolve();
     await Promise.resolve();
-    expect(loadExactSessionEntry({ storePath: sessionStorePath, sessionKey })).toMatchObject({
-      entry: { sessionId: "replacement-session" },
-    });
+    expect(read(sessionKey)).toMatchObject({ entry: { sessionId: "replacement-session" } });
   });
 
   it("does not delete a shared main session", async () => {
-    const { storePath } = await makeStorePath();
-    const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
-    const cron = new CronService({
-      storePath,
-      cronEnabled: true,
-      defaultAgentId: "main",
-      resolveSessionStorePath: () => sessionStorePath,
-      log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
-    const job = await cron.add({
-      id: "main-session-job",
-      name: "main session job",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
+    const { cron, job, read, write } = await setup(undefined, {
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "work" },
     });
     const sessionKey = "agent:main:main";
-    await replaceSessionEntry(
-      { agentId: "main", storePath: sessionStorePath, sessionKey },
-      { sessionId: "main-session", updatedAt: Date.now() },
-    );
+    await write(sessionKey, "main-session");
 
     await cron.remove(job.id);
 
-    expect(loadExactSessionEntry({ storePath: sessionStorePath, sessionKey })).toMatchObject({
-      entry: { sessionId: "main-session" },
-    });
+    expect(read(sessionKey)).toMatchObject({ entry: { sessionId: "main-session" } });
   });
 });

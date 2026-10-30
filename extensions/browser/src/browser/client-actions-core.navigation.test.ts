@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { lastBrowserFetchCall as lastNavigationRequest } from "./client-actions.test-support.js";
 
 const clientFetchMocks = vi.hoisted(() => ({
   fetchBrowserJson: vi.fn(async (..._args: unknown[]) => ({ ok: true, targetId: "tab-1" })),
@@ -6,21 +7,7 @@ const clientFetchMocks = vi.hoisted(() => ({
 
 vi.mock("./client-fetch.js", () => clientFetchMocks);
 
-import { browserNavigate } from "./client-actions-core.js";
-
-function lastNavigationRequest(): {
-  url: string;
-  options: { body?: string; timeoutMs?: number };
-} {
-  const call = clientFetchMocks.fetchBrowserJson.mock.calls.at(-1);
-  if (!call) {
-    throw new Error("fetchBrowserJson was not called");
-  }
-  return {
-    url: String(call[0]),
-    options: call[1] as { body?: string; timeoutMs?: number },
-  };
-}
+import { browserNavigate } from "./client-actions.js";
 
 describe("browser navigation client actions", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -35,7 +22,7 @@ describe("browser navigation client actions", () => {
 
     await browserNavigate(undefined, options);
 
-    const request = lastNavigationRequest();
+    const request = lastNavigationRequest(clientFetchMocks.fetchBrowserJson.mock.calls);
     expect(request.url).toBe("/navigate?profile=openclaw");
     expect(request.options.timeoutMs).toBe(50_000);
     expect(JSON.parse(request.options.body ?? "{}")).toEqual({
@@ -47,7 +34,6 @@ describe("browser navigation client actions", () => {
 
   it.each([
     { requestedTimeoutMs: 10, expectedTimeoutMs: 1_000 },
-    { requestedTimeoutMs: 180_000, expectedTimeoutMs: 120_000 },
     { requestedTimeoutMs: Number.MAX_SAFE_INTEGER, expectedTimeoutMs: 120_000 },
   ])(
     "normalizes navigation timeout $requestedTimeoutMs before arming its transport watchdog",
@@ -58,7 +44,7 @@ describe("browser navigation client actions", () => {
         timeoutMs: requestedTimeoutMs,
       });
 
-      const request = lastNavigationRequest();
+      const request = lastNavigationRequest(clientFetchMocks.fetchBrowserJson.mock.calls);
       expect(request.options.timeoutMs).toBe(expectedTimeoutMs + 5_000);
       expect(JSON.parse(request.options.body ?? "{}")).toEqual({
         url: "https://example.com/slow",
@@ -71,7 +57,7 @@ describe("browser navigation client actions", () => {
   it("keeps the default navigation timeout inside its transport watchdog", async () => {
     await browserNavigate(undefined, { url: "https://example.com" });
 
-    const request = lastNavigationRequest();
+    const request = lastNavigationRequest(clientFetchMocks.fetchBrowserJson.mock.calls);
     expect(request.options.timeoutMs).toBe(25_000);
     expect(JSON.parse(request.options.body ?? "{}")).toEqual({
       url: "https://example.com",

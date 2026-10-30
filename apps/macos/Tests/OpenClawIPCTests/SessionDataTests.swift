@@ -24,8 +24,11 @@ struct SessionDataTests {
         ])
     }
 
-    @Test func `session token stats percent used clamps to100`() {
-        let stats = SessionTokenStats(total: 250_000, contextTokens: 200_000)
-        #expect(stats.percentUsed == 100)
+    @Test(arguments: [(250_000, 200_000, 100), (Int.max, 1, 100), (1, 8, 13)])
+    func `session token stats round and clamp before integer conversion`(
+        total: Int, contextTokens: Int, expected: Int)
+    {
+        let stats = SessionTokenStats(total: total, contextTokens: contextTokens)
+        #expect(stats.percentUsed == expected)
     }
 }

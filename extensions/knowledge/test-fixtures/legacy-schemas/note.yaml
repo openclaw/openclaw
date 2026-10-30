@@ -1,0 +1,9 @@
+format: knowledge-schema-v1
+version: 0.1.0
+name: note
+label: Note
+description: Note records. One primary home per record; references connect
+  related knowledge.
+kind: page
+directory: notes/
+fields: []

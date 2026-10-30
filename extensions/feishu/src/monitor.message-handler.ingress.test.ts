@@ -9,24 +9,31 @@ import {
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
+import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createNonExitingRuntimeEnv,
+  createPluginRuntimeMock,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import type { PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import { normalizeFeishuCommandProbeBody } from "./bot-content.js";
+import { parseFeishuMessageEvent } from "./bot.js";
+import { createFeishuTestEvent } from "./bot.test-support.js";
 import * as dedup from "./dedup.js";
+import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { createFeishuDurableIngress, type FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
+import { getFeishuSequentialKey } from "./sequential-key.js";
 
 type MessageReceiveHandlerContext = Parameters<typeof createFeishuMessageReceiveHandler>[0];
 type HandleMessageParams = Parameters<MessageReceiveHandlerContext["handleMessage"]>[0];
-type DebounceEntry = Parameters<
-  Parameters<PluginRuntime["channel"]["debounce"]["createInboundDebouncer"]>[0]["onFlush"]
->[0][number];
-type DebounceFlush = ReturnType<
-  Parameters<PluginRuntime["channel"]["debounce"]["createInboundDebouncer"]>[0]["onFlush"]
->;
-type DebounceFlushFactory = typeof createTestInboundDebounceFlush;
+type DebouncerOptions = Parameters<
+  PluginRuntime["channel"]["debounce"]["createInboundDebouncer"]
+>[0];
+type DebounceEntry = Parameters<DebouncerOptions["onFlush"]>[0][number];
 
 function createTextEvent(
   eventId: string,
@@ -34,25 +41,20 @@ function createTextEvent(
   text: string,
 ): FeishuMessageEvent & { event_id: string } {
   return {
+    ...createFeishuTestEvent({
+      messageId,
+      senderOpenId: "ou-user",
+      senderType: "user",
+      chatId: "oc-chat",
+      text,
+      message: { create_time: "1710000000000" },
+    }),
     event_id: eventId,
-    sender: {
-      sender_id: { open_id: "ou-user" },
-      sender_type: "user",
-    },
-    message: {
-      message_id: messageId,
-      chat_id: "oc-chat",
-      chat_type: "p2p",
-      message_type: "text",
-      content: JSON.stringify({ text }),
-      create_time: "1710000000000",
-    },
   };
 }
 
 function createLifecycle() {
   const controller = new AbortController();
-  const abandonHandlers = new Set<() => void | Promise<void>>();
   const calls = {
     adopted: vi.fn(async () => {}),
     deferred: vi.fn(),
@@ -65,12 +67,8 @@ function createLifecycle() {
     onDeferred: calls.deferred,
     onAdoptionFinalizing: calls.finalizing,
     onAbandoned: async () => {
-      await Promise.all([...abandonHandlers].map(async (handler) => await handler()));
+      await lifecycle.onBeforeAbandon?.();
       await calls.abandoned();
-    },
-    registerAbandonHandler: (handler) => {
-      abandonHandlers.add(handler);
-      return () => abandonHandlers.delete(handler);
     },
   };
   return { calls, controller, lifecycle };
@@ -88,34 +86,28 @@ function createHarness(params: {
   lifecycles: ReadonlyMap<string, FeishuIngressLifecycle>;
   claims: readonly dedup.FeishuMessageProcessingClaim[];
   adoptTurn: boolean;
+  accountId?: string;
 }) {
-  let onFlush:
-    | ((entries: DebounceEntry[], createFlush: DebounceFlushFactory) => DebounceFlush)
-    | undefined;
-  let onError: ((err: unknown, entries: DebounceEntry[]) => void) | undefined;
+  let onFlush: DebouncerOptions["onFlush"] | undefined;
+  let onError: DebouncerOptions["onError"] | undefined;
   const entries: DebounceEntry[] = [];
   const runtimeError = vi.fn();
   const channelRuntime = {
     commands: { isControlCommandMessage: () => false },
     debounce: {
       resolveInboundDebounceMs: () => 25,
-      createInboundDebouncer: vi.fn(
-        (options: {
-          onFlush: (entries: DebounceEntry[], createFlush: DebounceFlushFactory) => DebounceFlush;
-          onError: (err: unknown, entries: DebounceEntry[]) => void;
-        }) => {
-          onFlush = options.onFlush;
-          onError = options.onError;
-          return {
-            enqueue: async (entry: DebounceEntry) => {
-              entries.push(entry);
-            },
-            flushKey: async () => {},
-            cancelKey: () => false,
-            drain: async () => {},
-          };
-        },
-      ),
+      createInboundDebouncer: vi.fn((options: DebouncerOptions) => {
+        onFlush = options.onFlush;
+        onError = options.onError;
+        return {
+          enqueue: async (entry: DebounceEntry) => {
+            entries.push(entry);
+          },
+          flushKey: async () => {},
+          cancelKey: () => false,
+          drain: async () => {},
+        };
+      }),
     },
   } as unknown as PluginRuntime["channel"];
   const handleMessage = vi.fn(async (turn: HandleMessageParams) => {
@@ -130,9 +122,9 @@ function createHarness(params: {
   }
   const hasProcessedMessage = vi.fn(async (_messageId: string | undefined | null) => false);
   const handler = createFeishuMessageReceiveHandler({
-    cfg: {} as ClawdbotConfig,
+    cfg: {},
     channelRuntime,
-    accountId: "default",
+    accountId: params.accountId ?? "default",
     runtime: { ...createNonExitingRuntimeEnv(), error: runtimeError } satisfies RuntimeEnv,
     chatHistories: new Map(),
     handleMessage,
@@ -167,23 +159,182 @@ function createHarness(params: {
   };
 }
 
-afterEach(() => {
+function createTurn(name: string, options: { adoptTurn?: boolean; noClaim?: boolean } = {}) {
+  const transport = createLifecycle();
+  const logicalClaim = createClaim(name);
+  const event = createTextEvent(`evt-${name}`, `om-${name}`, "queued");
+  const harness = createHarness({
+    lifecycles: new Map([[event.event_id, transport.lifecycle]]),
+    claims: options.noClaim ? [] : [logicalClaim],
+    adoptTurn: options.adoptTurn ?? true,
+  });
+  return { transport, logicalClaim, event, harness };
+}
+
+function createBatch(names: [string, string]) {
+  const transports = [createLifecycle(), createLifecycle()] as const;
+  const claims = names.map(createClaim);
+  const event = (name: string) => createTextEvent(`evt-${name}`, `om-${name}`, name);
+  const events = [event(names[0]), event(names[1])] as const;
+  const harness = createHarness({
+    lifecycles: new Map([
+      [events[0].event_id, transports[0].lifecycle],
+      [events[1].event_id, transports[1].lifecycle],
+    ]),
+    claims,
+    adoptTurn: true,
+  });
+  return { transports, claims, events, harness };
+}
+
+afterEach(async () => {
   vi.restoreAllMocks();
+  await closeOpenClawStateDatabaseAsync();
+});
+
+it("drops the current bot before debounce and processing claims", async () => {
+  const harness = createHarness({ lifecycles: new Map(), claims: [], adoptTurn: false });
+  const event = (senderOpenId: string) =>
+    createFeishuTestEvent({
+      messageId: "om_reused",
+      senderOpenId,
+      senderType: "bot",
+      chatId: "oc_chat_1",
+    });
+  await harness.handler(event("ou-bot"));
+  expect(harness.entries).toEqual([]);
+  expect(harness.claim).not.toHaveBeenCalled();
+  await harness.handler(event("ou_other_bot"));
+  expect(harness.entries).toHaveLength(1);
+  await harness.flush();
+  expect(harness.handleMessage).toHaveBeenCalledTimes(1);
+  expect(harness.handleMessage.mock.calls[0]?.[0].event.sender.sender_id.open_id).toBe(
+    "ou_other_bot",
+  );
+});
+
+it("keeps same-id media variants distinct at receive time", async () => {
+  const harness = createHarness({
+    lifecycles: new Map(),
+    claims: [],
+    adoptTurn: false,
+    accountId: "receive-media-dedupe",
+  });
+  const audioEvent = (fileKey: string) =>
+    createFeishuTestEvent({
+      messageId: "msg-audio-receive-reused-id",
+      senderOpenId: "ou-audio-receive-dedup",
+      messageType: "audio",
+      content: JSON.stringify({ file_key: fileKey, duration: 1200 }),
+    });
+  const first = audioEvent("file_audio_receive_first");
+  const second = audioEvent("file_audio_receive_second");
+  for (const event of [first, second, audioEvent("file_audio_receive_first")]) {
+    await harness.handler(event);
+    await harness.flush();
+  }
+  expect(harness.handleMessage).toHaveBeenCalledTimes(2);
+  expect(harness.handleMessage.mock.calls.map(([call]) => call.event)).toEqual([first, second]);
+  expect(
+    harness.handleMessage.mock.calls.map(([call]) => typeof call.processingClaim?.commit),
+  ).toEqual(["function", "function"]);
+});
+
+it("admits controls during an active turn while ordinary messages retain FIFO order", async () => {
+  vi.useFakeTimers();
+  const active = createDeferred<void>();
+  const started: string[] = [];
+  const completed: string[] = [];
+  const pending: Promise<unknown>[] = [];
+  const channelRuntime = createPluginRuntimeMock({
+    channel: {
+      commands: { isControlCommandMessage },
+      debounce: {
+        resolveInboundDebounceMs: () => 1000,
+        createInboundDebouncer,
+      },
+    },
+  }).channel;
+  vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockImplementation(async () => ({
+    kind: "claimed",
+    handle: createClaim("control-admission"),
+  }));
+  const handler = createFeishuMessageReceiveHandler({
+    cfg: {},
+    channelRuntime,
+    accountId: "control-admission",
+    runtime: createNonExitingRuntimeEnv(),
+    chatHistories: new Map(),
+    resolveSequentialKey: getFeishuSequentialKey,
+    getBotOpenId: () => "ou-bot",
+    resolveDebounceText: ({ event, botOpenId }) =>
+      parseFeishuMessageEvent(event, botOpenId).content,
+    hasProcessedMessage: async () => false,
+    handleMessage: async ({ event, turnAdoptionLifecycle }) => {
+      await turnAdoptionLifecycle?.onAdopted();
+      const text = normalizeFeishuCommandProbeBody(parseFeishuMessageEvent(event).content);
+      started.push(text);
+      if (text === "first ordinary turn" || text === "/compact") {
+        await active.promise;
+      }
+      completed.push(text);
+    },
+  });
+  const receive = (text: string, index: number) => {
+    const event = createTextEvent(`evt-control-${index}`, `om-control-${index}`, text);
+    event.message.chat_type = "group";
+    if (text.startsWith("/")) {
+      event.message.content = JSON.stringify({ text: `@_bot @_other ${text}` });
+      event.message.mentions = [
+        { key: "@_bot", id: { open_id: "ou-bot" }, name: "Bot" },
+        { key: "@_other", id: { open_id: "ou-other" }, name: "Other Bot" },
+      ];
+    }
+    pending.push(handler(event));
+  };
+  try {
+    receive("first ordinary turn", 0);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(started).toEqual(["first ordinary turn"]);
+    receive("second ordinary turn", 1);
+    for (const [index, text] of ["/status", "/new", "/stop", "/btw progress?"].entries()) {
+      receive(text, index + 2);
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(completed).toEqual(
+      expect.arrayContaining(["/status", "/new", "/stop", "/btw progress?"]),
+    );
+    expect(started).not.toContain("second ordinary turn");
+    expect(completed).not.toContain("first ordinary turn");
+    receive("/compact", 6);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(started).toContain("/compact");
+    receive("/stop", 7);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(completed.filter((text) => text === "/stop")).toHaveLength(2);
+    expect(completed).not.toContain("/compact");
+    active.resolve();
+    await vi.advanceTimersByTimeAsync(1000);
+    await Promise.all(pending);
+    expect(completed.filter((text) => text.endsWith("ordinary turn"))).toEqual([
+      "first ordinary turn",
+      "second ordinary turn",
+    ]);
+  } finally {
+    active.resolve();
+    await vi.advanceTimersByTimeAsync(1000);
+    await Promise.all(pending);
+    vi.useRealTimers();
+  }
 });
 
 describe("Feishu durable ingress debounce lifecycle", () => {
   it("releases a claim acquired after ingress abandonment instead of enqueueing it", async () => {
-    const transport = createLifecycle();
-    const logicalClaim = createClaim("delayed-admission");
+    const { transport, logicalClaim, event, harness } = createTurn("delayed", { noClaim: true });
     const pending =
       createDeferred<Awaited<ReturnType<typeof dedup.claimUnprocessedFeishuMessage>>>();
-    const harness = createHarness({
-      lifecycles: new Map([["evt-delayed", transport.lifecycle]]),
-      claims: [],
-      adoptTurn: true,
-    });
     harness.claim.mockReturnValueOnce(pending.promise);
-    const handling = harness.handler(createTextEvent("evt-delayed", "om-delayed", "hello"));
+    const handling = harness.handler(event);
     transport.controller.abort();
     await transport.lifecycle.onAbandoned();
     pending.resolve({ kind: "claimed", handle: logicalClaim });
@@ -196,195 +347,74 @@ describe("Feishu durable ingress debounce lifecycle", () => {
     expect(transport.calls.adopted).not.toHaveBeenCalled();
   });
 
-  it.each(["group", "topic_group", "private", "p2p"] as const)(
-    "accepts an empty %s message body without losing bot mentions or ingress adoption",
-    async (chatType) => {
-      const transport = createLifecycle();
-      const logicalClaim = createClaim("empty-group-mention");
-      const harness = createHarness({
-        lifecycles: new Map([["evt-empty-group-mention", transport.lifecycle]]),
-        claims: [logicalClaim],
-        adoptTurn: true,
-      });
-      const event = createTextEvent("evt-empty-group-mention", "om-empty-group-mention", "");
-      event.message.chat_type = chatType;
-      event.message.content = "";
-      event.message.mentions = [
-        {
-          key: "@_bot_1",
-          id: { open_id: "ou-bot" },
-          name: "OpenClaw",
-        },
-      ];
+  it("accepts an empty private message body without losing bot mentions or ingress adoption", async () => {
+    const { transport, logicalClaim, event, harness } = createTurn("empty-group-mention");
 
-      await expect(harness.handler(event)).resolves.toEqual({ kind: "deferred" });
-      await harness.flush();
+    event.message.chat_type = "private";
+    event.message.content = "";
+    event.message.mentions = [{ key: "@_bot_1", id: { open_id: "ou-bot" }, name: "OpenClaw" }];
 
-      expect(harness.handleMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          event: expect.objectContaining({
-            message: expect.objectContaining({
-              chat_type: chatType,
-              content: "",
-              mentions: event.message.mentions,
-            }),
-          }),
-        }),
-      );
-      expect(logicalClaim.commit).toHaveBeenCalledTimes(1);
-      expect(transport.calls.adopted).toHaveBeenCalledTimes(1);
-      expect(transport.calls.abandoned).not.toHaveBeenCalled();
-      expect(harness.runtimeError).not.toHaveBeenCalled();
-    },
-  );
+    await expect(harness.handler(event)).resolves.toEqual({ kind: "deferred" });
+    await harness.flush();
 
-  it.each([" group ", "GROUP", 42])(
-    "rejects chat type %j with a valid body before claims or dispatch",
-    async (chatType) => {
-      const transport = createLifecycle();
-      const harness = createHarness({
-        lifecycles: new Map([["evt-invalid-chat-type", transport.lifecycle]]),
-        claims: [],
-        adoptTurn: true,
-      });
-      const event = createTextEvent("evt-invalid-chat-type", "om-invalid-chat-type", "hello");
-      Reflect.set(event.message, "chat_type", chatType);
+    expect(harness.handleMessage).toHaveBeenCalledOnce();
+    expect(harness.handleMessage.mock.calls[0]?.[0].event.message).toEqual(event.message);
+    expect(logicalClaim.commit).toHaveBeenCalledTimes(1);
+    expect(transport.calls.adopted).toHaveBeenCalledTimes(1);
+    expect(transport.calls.abandoned).not.toHaveBeenCalled();
+    expect(harness.runtimeError).not.toHaveBeenCalled();
+  });
 
-      await expect(harness.handler(event)).rejects.toThrow(
-        "Feishu durable message event payload is malformed.",
-      );
+  it("rejects a non-string chat type with a valid body before claims or dispatch", async () => {
+    const { transport, event, harness } = createTurn("invalid-chat-type", { noClaim: true });
 
-      expect(harness.claim).not.toHaveBeenCalled();
-      expect(harness.entries).toEqual([]);
-      expect(harness.handleMessage).not.toHaveBeenCalled();
-      expect(transport.calls.adopted).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    {
-      name: "missing",
-      setContent: (event: FeishuMessageEvent) => Reflect.deleteProperty(event.message, "content"),
-    },
-    {
-      name: "non-string",
-      setContent: (event: FeishuMessageEvent) => Reflect.set(event.message, "content", 42),
-    },
-  ])("rejects a $name message body before durable dispatch", async ({ setContent }) => {
-    const transport = createLifecycle();
-    const harness = createHarness({
-      lifecycles: new Map([["evt-invalid-body", transport.lifecycle]]),
-      claims: [],
-      adoptTurn: true,
-    });
-    const event = createTextEvent("evt-invalid-body", "om-invalid-body", "");
-    setContent(event);
+    Reflect.set(event.message, "chat_type", 42);
 
     await expect(harness.handler(event)).rejects.toThrow(
       "Feishu durable message event payload is malformed.",
     );
 
     expect(harness.claim).not.toHaveBeenCalled();
+    expect(harness.entries).toEqual([]);
     expect(harness.handleMessage).not.toHaveBeenCalled();
     expect(transport.calls.adopted).not.toHaveBeenCalled();
   });
 
-  it.each([undefined, 0, 1])(
-    "rechecks replay state and adopts every constituent (processed index: %s)",
-    async (processedIndex) => {
-      const first = createLifecycle();
-      const second = createLifecycle();
-      const firstClaim = createClaim("first");
-      const secondClaim = createClaim("second");
-      const events = [
-        createTextEvent("evt-a", "om-a", "alpha"),
-        createTextEvent("evt-b", "om-b", "beta"),
-      ];
-      const harness = createHarness({
-        lifecycles: new Map([
-          ["evt-a", first.lifecycle],
-          ["evt-b", second.lifecycle],
-        ]),
-        claims: [firstClaim, secondClaim],
-        adoptTurn: true,
-      });
-      for (const event of events) {
-        await expect(harness.handler(event)).resolves.toEqual({ kind: "deferred" });
-      }
-      const keys = harness.claim.mock.calls.map(([params]) => params.messageId);
-      if (processedIndex !== undefined) {
-        harness.hasProcessedMessage.mockImplementation(async (key) => key === keys[processedIndex]);
-      }
-      await harness.flush();
-
-      const dispatchIndex = processedIndex === 1 ? 0 : 1;
-      expect(harness.handleMessage).toHaveBeenCalledTimes(1);
-      expect(harness.handleMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          event: events[dispatchIndex],
-          messageDedupeKey: keys[dispatchIndex],
-          preparedContent:
-            processedIndex === undefined ? "alpha\nbeta" : processedIndex === 0 ? "beta" : "alpha",
-        }),
-      );
-      expect(firstClaim.commit).toHaveBeenCalledTimes(1);
-      expect(secondClaim.commit).toHaveBeenCalledTimes(1);
-      expect(first.calls.finalizing).toHaveBeenCalledTimes(1);
-      expect(second.calls.finalizing).toHaveBeenCalledTimes(1);
-      expect(first.calls.adopted).toHaveBeenCalledTimes(1);
-      expect(second.calls.adopted).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it("completes gated no-dispatch transport claims and releases the logical guard", async () => {
-    const transport = createLifecycle();
-    const logicalClaim = createClaim("gated");
-    const harness = createHarness({
-      lifecycles: new Map([["evt-gated", transport.lifecycle]]),
-      claims: [logicalClaim],
-      adoptTurn: false,
-    });
-
-    await harness.handler(createTextEvent("evt-gated", "om-gated", "gated"));
+  it("adopts every constituent while dispatching the combined messages", async () => {
+    const { transports, claims, events, harness } = createBatch(["alpha", "beta"]);
+    for (const event of events) {
+      await expect(harness.handler(event)).resolves.toEqual({ kind: "deferred" });
+    }
+    const keys = harness.claim.mock.calls.map(([params]) => params.messageId);
+    expect(keys[1]).toBe(resolveFeishuMessageDedupeKey(events[1]));
     await harness.flush();
 
-    expect(logicalClaim.commit).not.toHaveBeenCalled();
-    expect(logicalClaim.release).toHaveBeenCalledTimes(1);
-    expect(transport.calls.adopted).toHaveBeenCalledTimes(1);
-    expect(transport.calls.abandoned).not.toHaveBeenCalled();
-  });
-
-  it("completes the transport claim when the permanent logical guard suppresses a twin", async () => {
-    const transport = createLifecycle();
-    const harness = createHarness({
-      lifecycles: new Map([["evt-twin", transport.lifecycle]]),
-      claims: [],
-      adoptTurn: false,
-    });
-    harness.claim.mockResolvedValueOnce({ kind: "duplicate" });
-
-    await expect(harness.handler(createTextEvent("evt-twin", "om-twin", "twin"))).resolves.toBe(
-      undefined,
+    expect(harness.handleMessage).toHaveBeenCalledTimes(1);
+    expect(harness.handleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: events[1],
+        messageDedupeKey: keys[1],
+        preparedContent: "alpha\nbeta",
+      }),
     );
-
-    expect(harness.entries).toHaveLength(0);
-    expect(transport.calls.finalizing).toHaveBeenCalledTimes(1);
-    expect(transport.calls.adopted).toHaveBeenCalledTimes(1);
-    expect(transport.calls.abandoned).not.toHaveBeenCalled();
+    expect(resolveFeishuMessageDedupeKey(harness.handleMessage.mock.calls[0]![0].event)).toBe(
+      keys[1],
+    );
+    for (const claim of claims) {
+      expect(claim.commit).toHaveBeenCalledOnce();
+    }
+    for (const transport of transports) {
+      expect(transport.calls.finalizing).toHaveBeenCalledOnce();
+      expect(transport.calls.adopted).toHaveBeenCalledOnce();
+    }
   });
 
   it("releases a deferred logical claim when the drain abandons before debounce flush", async () => {
-    const transport = createLifecycle();
-    const logicalClaim = createClaim("pre-flush-abandonment");
-    const harness = createHarness({
-      lifecycles: new Map([["evt-abandoned", transport.lifecycle]]),
-      claims: [logicalClaim],
+    const { transport, logicalClaim, event, harness } = createTurn("abandoned", {
       adoptTurn: false,
     });
 
-    await expect(
-      harness.handler(createTextEvent("evt-abandoned", "om-abandoned", "queued")),
-    ).resolves.toEqual({ kind: "deferred" });
+    await expect(harness.handler(event)).resolves.toEqual({ kind: "deferred" });
     await transport.lifecycle.onAbandoned();
     await harness.flush();
 
@@ -394,16 +424,12 @@ describe("Feishu durable ingress debounce lifecycle", () => {
   });
 
   it("reports rejected durable abandonment after a debounce flush error", async () => {
-    const transport = createLifecycle();
-    transport.calls.abandoned.mockRejectedValueOnce(new Error("state store unavailable"));
-    const logicalClaim = createClaim("flush-error");
-    const harness = createHarness({
-      lifecycles: new Map([["evt-flush-error", transport.lifecycle]]),
-      claims: [logicalClaim],
+    const { transport, logicalClaim, event, harness } = createTurn("flush-error", {
       adoptTurn: false,
     });
+    transport.calls.abandoned.mockRejectedValueOnce(new Error("state store unavailable"));
 
-    await harness.handler(createTextEvent("evt-flush-error", "om-flush-error", "queued"));
+    await harness.handler(event);
     harness.failFlush(new Error("flush failed"));
 
     await vi.waitFor(() => {
@@ -415,35 +441,27 @@ describe("Feishu durable ingress debounce lifecycle", () => {
   });
 
   it("does not dispatch a queued turn after its ingress claim aborts", async () => {
-    const first = createLifecycle();
-    const second = createLifecycle();
-    let finishFirst!: () => void;
-    const firstGate = new Promise<void>((resolve) => {
-      finishFirst = resolve;
-    });
-    const harness = createHarness({
-      lifecycles: new Map([
-        ["evt-first", first.lifecycle],
-        ["evt-second", second.lifecycle],
-      ]),
-      claims: [createClaim("first-queued"), createClaim("second-queued")],
-      adoptTurn: true,
-    });
+    const {
+      transports: [, second],
+      events,
+      harness,
+    } = createBatch(["first", "second"]);
+    const firstGate = createDeferred<void>();
     harness.handleMessage.mockImplementationOnce(async (turn) => {
-      await firstGate;
+      await firstGate.promise;
       turn.turnAdoptionLifecycle?.onAdoptionFinalizing();
       await turn.turnAdoptionLifecycle?.onAdopted();
     });
 
-    await harness.handler(createTextEvent("evt-first", "om-first", "first"));
+    await harness.handler(events[0]);
     const firstFlush = harness.flush();
     await vi.waitFor(() => expect(harness.handleMessage).toHaveBeenCalledTimes(1));
-    await harness.handler(createTextEvent("evt-second", "om-second", "second"));
+    await harness.handler(events[1]);
     const secondFlush = harness.flush();
     await Promise.resolve();
     second.controller.abort(new Error("adoption timeout"));
     await second.lifecycle.onAbandoned();
-    finishFirst();
+    firstGate.resolve();
     await Promise.all([firstFlush, secondFlush]);
 
     expect(harness.handleMessage).toHaveBeenCalledTimes(1);
@@ -484,7 +502,7 @@ describe("Feishu durable ingress debounce lifecycle", () => {
         },
       } as unknown as PluginRuntime["channel"];
       const handler = createFeishuMessageReceiveHandler({
-        cfg: {} as ClawdbotConfig,
+        cfg: {},
         channelRuntime,
         accountId: "default",
         runtime: createNonExitingRuntimeEnv(),
@@ -525,29 +543,30 @@ describe("Feishu durable ingress debounce lifecycle", () => {
       return { ...observed, lastAttemptAt };
     };
 
-    try {
-      const first = createIntegratedIngress();
-      first.start();
-      await first.invokeWebhook(event);
-      const firstAttempt = await pendingAttempt(1);
-      expect(handleMessage).toHaveBeenCalledTimes(1);
-      await first.stop();
-
-      vi.setSystemTime(firstAttempt.lastAttemptAt + 999);
-      const blocked = createIntegratedIngress();
-      blocked.start();
-      await blocked.invokeWebhook(event);
+    const runAttempt = async (attempts: number, dispatches: number) => {
+      const ingress = createIntegratedIngress();
+      ingress.start();
+      await ingress.invokeWebhook(event);
+      const pending = await pendingAttempt(attempts);
+      expect(handleMessage).toHaveBeenCalledTimes(dispatches);
+      await ingress.stop();
+      return pending;
+    };
+    const expectBackoff = async (dispatches: number) => {
+      const ingress = createIntegratedIngress();
+      ingress.start();
+      await ingress.invokeWebhook(event);
       await vi.advanceTimersByTimeAsync(0);
-      expect(handleMessage).toHaveBeenCalledTimes(1);
-      await blocked.stop();
+      expect(handleMessage).toHaveBeenCalledTimes(dispatches);
+      await ingress.stop();
+    };
 
+    try {
+      const firstAttempt = await runAttempt(1, 1);
+      vi.setSystemTime(firstAttempt.lastAttemptAt + 999);
+      await expectBackoff(1);
       vi.setSystemTime(firstAttempt.lastAttemptAt + 1_001);
-      const second = createIntegratedIngress();
-      second.start();
-      await second.invokeWebhook(event);
-      const secondAttempt = await pendingAttempt(2);
-      expect(handleMessage).toHaveBeenCalledTimes(2);
-      await second.stop();
+      const secondAttempt = await runAttempt(2, 2);
 
       for (let attempt = 3; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
         const claim = await queue.claim("evt-abandon-retry", { ownerId: `seed-${attempt}` });
@@ -561,32 +580,75 @@ describe("Feishu durable ingress debounce lifecycle", () => {
       }
 
       vi.setSystemTime(secondAttempt.lastAttemptAt + 64_001);
-      const threshold = createIntegratedIngress();
-      threshold.start();
-      await threshold.invokeWebhook(event);
-      const thresholdAttempt = await pendingAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS);
-      expect(handleMessage).toHaveBeenCalledTimes(3);
-      await threshold.stop();
-
+      const thresholdAttempt = await runAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS, 3);
       vi.setSystemTime(thresholdAttempt.lastAttemptAt + 128_001);
-      const beyond = createIntegratedIngress();
-      beyond.start();
-      await beyond.invokeWebhook(event);
-      const beyondAttempt = await pendingAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS + 1);
-      expect(handleMessage).toHaveBeenCalledTimes(4);
-      await beyond.stop();
-
+      const beyondAttempt = await runAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS + 1, 4);
       vi.setSystemTime(beyondAttempt.lastAttemptAt + 1_000);
-      const blockedRestart = createIntegratedIngress();
-      blockedRestart.start();
-      await blockedRestart.invokeWebhook(event);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(handleMessage).toHaveBeenCalledTimes(4);
-      await blockedRestart.stop();
+      await expectBackoff(4);
     } finally {
       closeOpenClawStateDatabaseForTest();
       await fs.rm(stateDir, { recursive: true, force: true });
       vi.useRealTimers();
     }
   });
+});
+
+it("admits mention-prefixed stop and btw without batching behind an active turn", async () => {
+  vi.useFakeTimers();
+  const active = createDeferred<void>();
+  const completed: string[] = [];
+  const pending: Promise<unknown>[] = [];
+  vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockImplementation(async () => ({
+    kind: "claimed",
+    handle: createClaim("mention-controls"),
+  }));
+  const handler = createFeishuMessageReceiveHandler({
+    cfg: {},
+    channelRuntime: createPluginRuntimeMock({
+      channel: {
+        commands: { isControlCommandMessage },
+        debounce: { resolveInboundDebounceMs: () => 1000, createInboundDebouncer },
+      },
+    }).channel,
+    accountId: "mention-controls",
+    runtime: createNonExitingRuntimeEnv(),
+    chatHistories: new Map(),
+    getBotOpenId: () => "ou-bot",
+    resolveSequentialKey: getFeishuSequentialKey,
+    resolveDebounceText: ({ event, botOpenId }) =>
+      parseFeishuMessageEvent(event, botOpenId).content,
+    hasProcessedMessage: async () => false,
+    handleMessage: async ({ event, turnAdoptionLifecycle }) => {
+      await turnAdoptionLifecycle?.onAdopted();
+      if (event.message.message_id === "om-active") {
+        await active.promise;
+      }
+      completed.push(event.message.message_id);
+    },
+  });
+  try {
+    pending.push(handler(createTextEvent("evt-active", "om-active", "ordinary turn")));
+    await vi.advanceTimersByTimeAsync(1000);
+    for (const [index, text] of ["@_bot/stop", "@_bot /btw progress?"].entries()) {
+      const event = createTextEvent(`evt-control-${index}`, `om-control-${index}`, text);
+      event.message.mentions = [{ key: "@_bot", id: { open_id: "ou-bot" }, name: "Bot" }];
+      pending.push(handler(event));
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(completed).toEqual(expect.arrayContaining(["om-control-0", "om-control-1"]));
+    expect(completed).not.toContain("om-active");
+    pending.push(handler(createTextEvent("evt-queued", "om-queued", "next ordinary turn")));
+    active.resolve();
+    await vi.advanceTimersByTimeAsync(1000);
+    await Promise.all(pending);
+    expect(completed.filter((id) => ["om-active", "om-queued"].includes(id))).toEqual([
+      "om-active",
+      "om-queued",
+    ]);
+  } finally {
+    active.resolve();
+    await vi.advanceTimersByTimeAsync(1000);
+    await Promise.all(pending);
+    vi.useRealTimers();
+  }
 });

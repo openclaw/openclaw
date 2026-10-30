@@ -58,12 +58,13 @@ describe("resolveRequiredNodeCommandAuthority", () => {
   it.each(cases)("$name", ({ declared, effective, withheld, allowlist, state }) => {
     expect(
       resolveRequiredNodeCommandAuthority({
+        nodeId: "authority-node",
         requiredCommands: [COMMAND],
         declaredCommands: declared,
         effectiveCommands: effective,
         withheldCommands: withheld,
         allowlist: new Set(allowlist),
       }),
-    ).toEqual({ command: COMMAND, state });
+    ).toMatchObject({ command: COMMAND, state });
   });
 });

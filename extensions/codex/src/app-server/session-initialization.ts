@@ -6,7 +6,10 @@ import {
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
 
-const codexInitializations = createNativeSessionInitializationOwner<
+export const {
+  prepare: prepareCodexSessionInitialization,
+  getRollback: getCodexSessionInitializationRollback,
+} = createNativeSessionInitializationOwner<
   CodexAppServerBindingStore,
   CodexAppServerBindingIdentity,
   CodexAppServerThreadBinding
@@ -21,7 +24,3 @@ const codexInitializations = createNativeSessionInitializationOwner<
     ownerChanged: "Codex initialization binding owner changed before rollback",
   },
 });
-
-export const prepareCodexSessionInitialization = codexInitializations.prepare;
-
-export const getCodexSessionInitializationRollback = codexInitializations.getRollback;

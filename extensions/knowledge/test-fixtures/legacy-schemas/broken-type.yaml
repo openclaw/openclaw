@@ -1,0 +1,4 @@
+format: knowledge-schema-v1
+version: 0.1.0
+name: broken-type
+fields: [unterminated

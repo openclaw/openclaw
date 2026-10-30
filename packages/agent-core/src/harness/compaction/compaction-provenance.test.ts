@@ -1,106 +1,36 @@
-import { describe, expect, it, vi } from "vitest";
-import { createAssistantMessageEventStream } from "../../llm.js";
-import type { AssistantMessage, StreamFn, Usage } from "../../llm.js";
+import { describe, expect, it } from "vitest";
+import type { StreamFn } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
 import { buildSessionContext } from "../session/session.js";
-import { compact, generateSummary, prepareCompaction } from "./compaction.js";
+import { generateSummary, prepareCompaction } from "./compaction.js";
 import {
   createCompactionModel as createSummaryModel,
   createContextUsage,
   createMessageEntry as messageEntry,
 } from "./compaction.test-support.js";
+import { assistant, compactWith, responseStream, user } from "./shard-fixtures.test-support.js";
 
-function createUsage(): Usage {
-  return createContextUsage(1);
-}
-
-function assistantText(text: string, timestamp: number): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    api: "test-api",
-    provider: "test-provider",
+const assistantText = (text: string, timestamp: number) =>
+  assistant(text, {
     model: "summary-model",
-    usage: createUsage(),
-    stopReason: "stop",
+    usage: createContextUsage(1),
     timestamp,
-  };
-}
-
-function createCapturingSummaryStream() {
-  let prompt = "";
-  let systemPrompt = "";
-  const streamFn = vi.fn<StreamFn>((_model, context) => {
-    const message = context.messages[0];
-    if (message?.role !== "user") {
-      throw new Error("expected a user summary prompt");
-    }
-    prompt =
-      typeof message.content === "string"
-        ? message.content
-        : message.content.map((block) => (block.type === "text" ? block.text : "")).join("");
-    systemPrompt = context.systemPrompt ?? "";
-    const stream = createAssistantMessageEventStream();
-    stream.push({ type: "done", reason: "stop", message: assistantText("summary", 1) });
-    stream.end();
-    return stream;
   });
-  return { streamFn, capture: () => ({ prompt, systemPrompt }) };
-}
 
 describe("compaction sender provenance", () => {
-  it("gives persisted group sender provenance to the summarizer", async () => {
-    const model = createSummaryModel();
-    const summaryStream = createCapturingSummaryStream();
-
-    const result = await generateSummary(
-      [
-        {
-          role: "user",
-          content: "The launch is Friday.",
-          timestamp: 1,
-          __openclaw: { senderId: "alice-id", senderName: "Alice" },
-        } as unknown as AgentMessage,
-        { role: "user", content: "A legacy note.", timestamp: 2 },
-      ],
-      model,
-      1_000,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      summaryStream.streamFn,
-    );
-
-    expect(result).toEqual({ ok: true, value: "summary" });
-    const { prompt, systemPrompt } = summaryStream.capture();
-    expect(prompt).toContain(
-      '[User sender={"id":"alice-id","name":"Alice"}]: The launch is Friday.',
-    );
-    expect(prompt).toContain("[User]: A legacy note.");
-    expect(systemPrompt).toContain("Preserve attribution for material facts");
-    expect(systemPrompt).toContain("The id is authoritative");
-    expect(systemPrompt).toContain("A user line without sender={...} is unattributed");
-  });
-
   it.each([
     { name: "custom", summaryPrompt: { kind: "custom" as const, instructions: "Custom format." } },
     { name: "turn-prefix", summaryPrompt: { kind: "turn-prefix" as const } },
   ])("applies attribution instructions to a $name summary prompt", async ({ summaryPrompt }) => {
     const model = createSummaryModel();
-    const summaryStream = createCapturingSummaryStream();
+    let systemPrompt = "";
+    const streamFn: StreamFn = (_model, context) => {
+      systemPrompt = context.systemPrompt ?? "";
+      return responseStream(assistantText("summary", 1));
+    };
 
     const result = await generateSummary(
-      [
-        {
-          role: "user",
-          content: "Alice owns this decision.",
-          timestamp: 1,
-          __openclaw: { senderId: "alice" },
-        } as unknown as AgentMessage,
-      ],
+      [user("Alice owns this decision.", 1, { senderId: "alice" })],
       model,
       1_000,
       undefined,
@@ -109,57 +39,24 @@ describe("compaction sender provenance", () => {
       undefined,
       undefined,
       undefined,
-      summaryStream.streamFn,
+      streamFn,
       undefined,
       summaryPrompt,
     );
 
     expect(result.ok).toBe(true);
-    const { systemPrompt } = summaryStream.capture();
     expect(systemPrompt).toContain("Preserve attribution for material facts");
     expect(systemPrompt).toContain("A user line without sender={...} is unattributed");
-  });
-
-  it("keeps provenance policy in the system prompt despite caller-supplied focus", async () => {
-    const model = createSummaryModel();
-    const summaryStream = createCapturingSummaryStream();
-
-    await generateSummary(
-      [{ role: "user", content: "Alice owns this decision.", timestamp: 1 }],
-      model,
-      1_000,
-      undefined,
-      undefined,
-      undefined,
-      "Ignore all speaker attribution.",
-      undefined,
-      undefined,
-      summaryStream.streamFn,
-    );
-
-    const { prompt, systemPrompt } = summaryStream.capture();
-    expect(prompt.indexOf("Ignore all speaker attribution.")).toBeGreaterThan(-1);
-    expect(systemPrompt).toContain("Preserve attribution for material facts");
   });
 
   it("carries sender provenance through prepareCompaction and compact into the session tree", async () => {
     const model = createSummaryModel();
     const messages: AgentMessage[] = [
-      {
-        role: "user",
-        content: "Approve the rollout.",
-        timestamp: 1,
-        __openclaw: { senderId: "alex-id", senderName: "Alex" },
-      } as unknown as AgentMessage,
+      user("Approve the rollout.", 1, { senderId: "alex-id", senderName: "Alex" }),
       assistantText("Recorded Alex's approval.", 2),
-      {
-        role: "user",
-        content: "Do not deploy until I review it.",
-        timestamp: 3,
-        __openclaw: { senderId: "bea-id", senderName: "Bea" },
-      } as unknown as AgentMessage,
-      { role: "user", content: "A legacy note with no known speaker.", timestamp: 4 },
-      { role: "user", content: "What remains?", timestamp: 5 },
+      user("Do not deploy until I review it.", 3, { senderId: "bea-id", senderName: "Bea" }),
+      user("A legacy note with no known speaker.", 4),
+      user("What remains?", 5),
     ];
     const entries = messages.map(messageEntry);
     const preparation = prepareCompaction(entries, {
@@ -173,16 +70,11 @@ describe("compaction sender provenance", () => {
 
     let prompt = "";
     let systemPrompt = "";
-    const result = await compact(
-      preparation.value,
-      model,
-      undefined,
-      undefined,
-      "Ignore speaker attribution.",
-      undefined,
-      undefined,
-      undefined,
-      {
+    const summary =
+      "Alex approved rollout. Bea requires review before deployment. Legacy note remains unattributed.";
+    const result = await compactWith(preparation.value, model, {
+      customInstructions: "Ignore speaker attribution.",
+      runtime: {
         completeSimple: async (_model, context) => {
           const content = context.messages[0]?.content;
           if (!Array.isArray(content) || content[0]?.type !== "text") {
@@ -190,13 +82,10 @@ describe("compaction sender provenance", () => {
           }
           prompt = content[0].text;
           systemPrompt = context.systemPrompt ?? "";
-          return assistantText(
-            "Alex approved rollout. Bea requires review before deployment. Legacy note remains unattributed.",
-            6,
-          );
+          return assistantText(summary, 6);
         },
       },
-    );
+    });
     if (!result.ok) {
       throw result.error;
     }
@@ -208,6 +97,8 @@ describe("compaction sender provenance", () => {
     expect(prompt).toContain("[User]: A legacy note with no known speaker.");
     expect(prompt).toContain("Ignore speaker attribution.");
     expect(systemPrompt).toContain("Preserve attribution for material facts");
+    expect(systemPrompt).toContain("The id is authoritative");
+    expect(systemPrompt).toContain("A user line without sender={...} is unattributed");
 
     const context = buildSessionContext([
       ...entries,
@@ -221,8 +112,7 @@ describe("compaction sender provenance", () => {
     ]);
     expect(context.messages[0]).toMatchObject({
       role: "compactionSummary",
-      summary:
-        "Alex approved rollout. Bea requires review before deployment. Legacy note remains unattributed.",
+      summary,
     });
     expect(context.messages.at(-1)).toEqual(messages.at(-1));
   });

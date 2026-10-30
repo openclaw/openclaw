@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { formatExternalSupervisorActionRequired } from "../infra/gateway-supervision.js";
 import type { detectGatewayRespawnSupervisor } from "../infra/supervisor-markers.js";
-import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { prepareHostedStopExecutor } from "./hosted-stop-executor.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { probeLaunchAgentState, resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
@@ -68,16 +67,9 @@ export async function prepareHostedGatewayStop(
     };
   }
   const pid = process.pid;
-  const start = getFileLockProcessStartTime(pid);
-  if (start === null) {
-    throw new Error("Cannot verify the Gateway process identity. Stop it from an external shell.");
-  }
   const assertProcess = (assertCurrent: () => void) => {
     signal.throwIfAborted();
     assertCurrent();
-    if (getFileLockProcessStartTime(pid) !== start) {
-      throw new Error("Gateway process identity changed before native stop.");
-    }
   };
   const assertPreparing = () => assertProcess(assertCaller);
   assertPreparing();

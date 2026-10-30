@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements Mantis command-stage behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   addTimerTimeoutGraceMs,
@@ -44,13 +43,14 @@ const [expectedDevice, expectedInode, command, ...args] = process.argv.slice(1);
 const current = fs.lstatSync(".", { bigint: true });
 if (!current.isDirectory() || current.dev !== BigInt(expectedDevice) || current.ino !== BigInt(expectedInode)) {
   process.stderr.write("Mantis owner-bound command refused a replaced working directory\n");
-  process.exit(78);
+  process.exitCode = 78;
+} else {
+  const result = spawnSync(command, args, { stdio: "inherit", windowsHide: true });
+  if (result.error) {
+    throw result.error;
+  }
+  process.exitCode = result.status ?? 1;
 }
-const result = spawnSync(command, args, { stdio: "inherit", windowsHide: true });
-if (result.error) {
-  throw result.error;
-}
-process.exit(result.status ?? 1);
 `;
 
 function resolveQaCommandTimeoutMs(scenarioId: string): number {
@@ -76,25 +76,15 @@ export function resolveMantisCommandTimeouts(
   scenarioId: string,
   overrides: MantisCommandTimeoutOverrides | undefined,
 ): MantisCommandTimeouts {
-  const defaults: MantisCommandTimeouts = {
-    "worktree-add": DEFAULT_WORKTREE_ADD_TIMEOUT_MS,
-    install: DEFAULT_INSTALL_TIMEOUT_MS,
-    build: DEFAULT_BUILD_TIMEOUT_MS,
-    qa: resolveQaCommandTimeoutMs(scenarioId),
-    "worktree-cleanup": MANTIS_WORKTREE_CLEANUP_TIMEOUT_MS,
-  };
+  const qaTimeoutMs = resolveQaCommandTimeoutMs(scenarioId);
+  const timeout = (stage: MantisCommandStage, fallback: number) =>
+    resolvePositiveTimerTimeoutMs(overrides?.[stage], fallback);
   return {
-    "worktree-add": resolvePositiveTimerTimeoutMs(
-      overrides?.["worktree-add"],
-      defaults["worktree-add"],
-    ),
-    install: resolvePositiveTimerTimeoutMs(overrides?.install, defaults.install),
-    build: resolvePositiveTimerTimeoutMs(overrides?.build, defaults.build),
-    qa: resolvePositiveTimerTimeoutMs(overrides?.qa, defaults.qa),
-    "worktree-cleanup": resolvePositiveTimerTimeoutMs(
-      overrides?.["worktree-cleanup"],
-      defaults["worktree-cleanup"],
-    ),
+    "worktree-add": timeout("worktree-add", DEFAULT_WORKTREE_ADD_TIMEOUT_MS),
+    install: timeout("install", DEFAULT_INSTALL_TIMEOUT_MS),
+    build: timeout("build", DEFAULT_BUILD_TIMEOUT_MS),
+    qa: timeout("qa", qaTimeoutMs),
+    "worktree-cleanup": timeout("worktree-cleanup", MANTIS_WORKTREE_CLEANUP_TIMEOUT_MS),
   };
 }
 

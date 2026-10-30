@@ -1,30 +1,28 @@
-/**
- * ClickClack name/id resolution helpers for workspace and channel config.
- */
 import type { ClickClackClient } from "./http-client.js";
+import type { ClickClackWorkspace } from "./types.js";
 
-/**
- * Resolves a workspace slug/name/id from config to a ClickClack workspace id.
- */
+export function findClickClackWorkspace(
+  workspaces: readonly ClickClackWorkspace[],
+  selector: string,
+): ClickClackWorkspace | undefined {
+  return workspaces.find(
+    (candidate) =>
+      candidate.id === selector || candidate.slug === selector || candidate.name === selector,
+  );
+}
+
 export async function resolveWorkspaceId(client: ClickClackClient, workspace: string) {
   if (workspace.startsWith("wsp_")) {
     return workspace;
   }
   const workspaces = await client.workspaces();
-  const found = workspaces.find(
-    (candidate) =>
-      candidate.id === workspace || candidate.slug === workspace || candidate.name === workspace,
-  );
+  const found = findClickClackWorkspace(workspaces, workspace);
   if (!found) {
     throw new Error(`ClickClack workspace not found: ${workspace}`);
   }
   return found.id;
 }
 
-/**
- * Resolves a channel name/id from config or target input to a ClickClack
- * channel id.
- */
 export async function resolveChannelId(
   client: ClickClackClient,
   workspaceId: string,

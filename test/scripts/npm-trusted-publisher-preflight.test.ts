@@ -4,17 +4,27 @@ import { preflightNpmTrustedPublisher } from "../../scripts/npm-trusted-publishe
 const githubRequestToken = "github-request-secret";
 const githubOidcToken = "github-oidc-secret";
 const npmToken = "npm-exchange-secret";
+const packageName = "@openclaw/fish-audio-speech";
+const preflight = () => preflightNpmTrustedPublisher(packageName);
+const requestUrl = "https://token.actions.githubusercontent.com/request?job=123";
+const auth = (token: string) => ({ Accept: "application/json", Authorization: `Bearer ${token}` });
+const exchange = (body: unknown, status = 200) => [
+  Response.json({ value: githubOidcToken }),
+  Response.json(body, { status }),
+];
 
-function jsonResponse(body: unknown, status = 200): Response {
-  return Response.json(body, { status });
+function mockResponses(...responses: Response[]) {
+  const fetchMock = vi.fn<typeof fetch>();
+  for (const response of responses) {
+    fetchMock.mockResolvedValueOnce(response);
+  }
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
 }
 
 describe("npm trusted-publisher preflight", () => {
   beforeEach(() => {
-    vi.stubEnv(
-      "ACTIONS_ID_TOKEN_REQUEST_URL",
-      "https://token.actions.githubusercontent.com/request?job=123",
-    );
+    vi.stubEnv("ACTIONS_ID_TOKEN_REQUEST_URL", requestUrl);
     vi.stubEnv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", githubRequestToken);
   });
 
@@ -25,87 +35,44 @@ describe("npm trusted-publisher preflight", () => {
   });
 
   it("requests the npm audience and exchanges the GitHub token for the exact package", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse({ value: githubOidcToken }))
-      .mockResolvedValueOnce(jsonResponse({ token: npmToken }));
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = mockResponses(...exchange({ token: npmToken }));
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-    await preflightNpmTrustedPublisher("@openclaw/fish-audio-speech");
+    await preflight();
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const githubCall = fetchMock.mock.calls[0];
-    const npmCall = fetchMock.mock.calls[1];
-    expect(githubCall).toBeDefined();
-    expect(npmCall).toBeDefined();
-    const [githubUrl, githubInit] = githubCall!;
-    expect(githubUrl).toBe(
-      "https://token.actions.githubusercontent.com/request?job=123&audience=npm%3Aregistry.npmjs.org",
-    );
-    expect(githubInit).toMatchObject({
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${githubRequestToken}`,
-      },
-    });
-    const [npmUrl, npmInit] = npmCall!;
-    expect(npmUrl).toBe(
-      "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/@openclaw%2ffish-audio-speech",
-    );
-    expect(npmInit).toMatchObject({
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${githubOidcToken}`,
-      },
-    });
+    expect(fetchMock.mock.calls).toMatchObject([
+      [`${requestUrl}&audience=npm%3Aregistry.npmjs.org`, { headers: auth(githubRequestToken) }],
+      [
+        "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/@openclaw%2ffish-audio-speech",
+        { method: "POST", headers: auth(githubOidcToken) },
+      ],
+    ]);
     expect(log).toHaveBeenCalledWith(
       "npm trusted-publisher OIDC exchange verified for @openclaw/fish-audio-speech.",
     );
   });
 
-  it("reports a GitHub token request failure without attempting npm exchange", async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(jsonResponse({}, 403));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(preflightNpmTrustedPublisher("@openclaw/fish-audio-speech")).rejects.toThrow(
-      "GitHub OIDC token request failed (HTTP 403).",
-    );
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("reports an npm exchange failure without leaking response or request tokens", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse({ value: githubOidcToken }))
-      .mockResolvedValueOnce(
-        jsonResponse({ message: `${githubRequestToken} ${githubOidcToken} ${npmToken}` }, 404),
-      );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const error = await preflightNpmTrustedPublisher("@openclaw/fish-audio-speech").catch(
-      (cause: unknown) => cause,
-    );
+  it.each([
+    ["GitHub OIDC token request failed (HTTP 403).", () => [Response.json({}, { status: 403 })], 1],
+    [
+      `npm trusted-publisher exchange for ${packageName} failed (HTTP 404).`,
+      () => exchange({ message: `${githubRequestToken} ${githubOidcToken} ${npmToken}` }, 404),
+      2,
+    ],
+    [
+      `npm trusted-publisher exchange for ${packageName} response is missing token.`,
+      () => exchange({ token: "" }),
+      2,
+    ],
+  ] as const)("reports %s without leaking tokens", async (message, responses, calls) => {
+    const fetchMock = mockResponses(...responses());
+    const error = await preflight().catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);
     const visibleError = error instanceof Error ? error.message : String(error);
-    expect(visibleError).toBe(
-      "npm trusted-publisher exchange for @openclaw/fish-audio-speech failed (HTTP 404).",
-    );
-    expect(visibleError).not.toContain(githubRequestToken);
-    expect(visibleError).not.toContain(githubOidcToken);
-    expect(visibleError).not.toContain(npmToken);
-  });
-
-  it("rejects an npm exchange response without a token", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse({ value: githubOidcToken }))
-      .mockResolvedValueOnce(jsonResponse({ token: "" }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(preflightNpmTrustedPublisher("@openclaw/fish-audio-speech")).rejects.toThrow(
-      "npm trusted-publisher exchange for @openclaw/fish-audio-speech response is missing token.",
-    );
+    expect(visibleError).toBe(message);
+    expect(fetchMock).toHaveBeenCalledTimes(calls);
+    for (const token of [githubRequestToken, githubOidcToken, npmToken]) {
+      expect(visibleError).not.toContain(token);
+    }
   });
 });

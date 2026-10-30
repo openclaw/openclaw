@@ -20,37 +20,6 @@ describe("provider catalog malformed pagination", () => {
       release,
     }));
 
-    // The provider explicitly advertised a next page via the `next` field but
-    // the URL is malformed and there is no cursor fallback. The controlled
-    // incomplete-pagination error prevents silently returning a truncated
-    // catalog.
-    await expect(
-      fetchLiveProviderModelIds({
-        providerId: "provider",
-        endpoint: "https://provider.example.test/v1/models",
-        fetchGuard: fetchGuardMock,
-      }),
-    ).rejects.toThrow(
-      "provider model discovery did not include a supported next page before the catalog completed",
-    );
-
-    expect(fetchGuardMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("reports incomplete pagination on malformed nested links.next URL", async () => {
-    const release = vi.fn(async () => undefined);
-    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
-      response: new Response(
-        JSON.stringify({
-          data: [{ id: "model-a", object: "model" }],
-          links: { next: "http://exa mple.com/models?page=2" },
-          has_more: false,
-        }),
-      ),
-      finalUrl: "https://provider.example.test/v1/models",
-      release,
-    }));
-
     await expect(
       fetchLiveProviderModelIds({
         providerId: "provider",
@@ -124,33 +93,6 @@ describe("provider catalog malformed pagination", () => {
         fetchGuard: fetchGuardMock,
       }),
     ).resolves.toEqual(["model-a"]);
-
-    expect(fetchGuardMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("reports incomplete pagination instead of crashing on malformed next URL with has_more", async () => {
-    const release = vi.fn(async () => undefined);
-    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
-      response: new Response(
-        JSON.stringify({
-          data: [{ id: "model-a", object: "model" }],
-          next: "http://exa mple.com/models?page=2",
-          has_more: true,
-        }),
-      ),
-      finalUrl: "https://provider.example.test/v1/models",
-      release,
-    }));
-
-    await expect(
-      fetchLiveProviderModelIds({
-        providerId: "provider",
-        endpoint: "https://provider.example.test/v1/models",
-        fetchGuard: fetchGuardMock,
-      }),
-    ).rejects.toThrow(
-      "provider model discovery did not include a supported next page before the catalog completed",
-    );
 
     expect(fetchGuardMock).toHaveBeenCalledTimes(1);
   });

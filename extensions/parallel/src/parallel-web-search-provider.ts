@@ -1,7 +1,10 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
-import { createParallelWebSearchProviderBase } from "./parallel-web-search-provider.shared.js";
+import {
+  createWebSearchProviderContractFields,
+  type WebSearchProviderPlugin,
+} from "openclaw/plugin-sdk/provider-web-search-contract";
 
+const PARALLEL_CREDENTIAL_PATH = "plugins.entries.parallel.config.webSearch.apiKey";
 const PARALLEL_MAX_SEARCH_COUNT = 40;
 const PARALLEL_MAX_SEARCH_QUERIES = 5;
 const PARALLEL_MAX_SEARCH_QUERY_CHARS = 200;
@@ -57,7 +60,23 @@ export const ParallelSearchSchema = {
 
 export function createParallelWebSearchProvider(): WebSearchProviderPlugin {
   return {
-    ...createParallelWebSearchProviderBase(),
+    id: "parallel",
+    label: "Parallel Search",
+    hint: "LLM-optimized dense excerpts from web sources",
+    onboardingScopes: ["text-inference"],
+    credentialLabel: "Parallel API key",
+    envVars: ["PARALLEL_API_KEY"],
+    placeholder: "par-...",
+    signupUrl: "https://platform.parallel.ai",
+    docsUrl: "https://docs.openclaw.ai/tools/parallel-search",
+    autoDetectOrder: 75,
+    credentialPath: PARALLEL_CREDENTIAL_PATH,
+    ...createWebSearchProviderContractFields({
+      credentialPath: PARALLEL_CREDENTIAL_PATH,
+      searchCredential: { type: "scoped", scopeId: "parallel" },
+      configuredCredential: { pluginId: "parallel" },
+      selectionPluginId: "parallel",
+    }),
     createTool: (ctx) => ({
       description:
         "Search the web using Parallel. Returns ranked, LLM-optimized dense excerpts from web sources. Pass an `objective` describing the underlying question along with 2-3 short keyword `search_queries` (Parallel's recommended pairing). For multi-step research, thread the prior result's `sessionId` back in as `session_id` to keep Parallel's context grouped.",

@@ -1,396 +1,178 @@
-// Prompt metadata carrier tests cover collect batching, deferral, and retry identity.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  attachToolAllowlistIntersection,
-  readToolAllowlistIntersection,
-} from "../../agents/tool-policy.js";
-import {
-  compareChannelAdmissionParticipants,
-  createChannelAdmissionAudit,
-  consumeChannelAdmissionEvidence,
-} from "../../channels/message-access/admission-evidence.js";
+import * as policy from "../../agents/tool-policy.js";
+import * as identity from "../../audit/execution-identity-admission.js";
+import * as admission from "../../channels/message-access/admission-evidence.js";
+import * as ingress from "../../gateway/local-user-ingress.js";
+import { applyRunHydrationSuppression, readPersistedMediaFacts } from "../../media/media-facts.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
-import type { FollowupRun, QueueSettings } from "./queue.js";
-import { enqueueFollowupRun, FollowupRunDeferredError, scheduleFollowupDrain } from "./queue.js";
-import { createQueueTestRun } from "./queue.test-helpers.js";
+import { createSteerParams } from "./agent-runner-steer-adoption.test-support.js";
+import { prepareChannelRunAdmission } from "./channel-run-admission.js";
+import { createQueueCase } from "./queue.case.test-support.js";
+import type { FollowupRun } from "./queue.js";
 import {
-  createOverflowSummaryRetrySource,
-  resolveFollowupDeliveryContextKey,
-} from "./queue/delivery-context.js";
+  createQueueTestRun,
+  installQueueRuntimeErrorSilencer,
+  rejectQueuePreparation,
+} from "./queue.test-helpers.js";
+import { resolveFollowupDeliveryStorageKey } from "./queue/delivery-context.js";
 import { clearFollowupQueue } from "./queue/state.js";
-import { createReplyOperation } from "./reply-run-registry.js";
-import { createMockTypingController } from "./test-helpers.js";
-import { createTypingSignaler } from "./typing-mode.js";
-
-const queueKeys = new Set<string>();
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 const evidenceCleanups = new Set<() => void>();
-
-function addCombinedCarrierFacts(run: FollowupRun): void {
-  run.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"], ["exec", "message"]]);
-  run.disableTools = true;
-  run.run = {
-    ...run.run,
+function trackedQueue(...args: Parameters<typeof createQueueCase>) {
+  const q = createQueueCase(...args);
+  evidenceCleanups.add(() => clearFollowupQueue(q.key));
+  return q;
+}
+const image = (data: string, mimeType: string) => ({ type: "image" as const, data, mimeType });
+const skill = (name: string, directory = name) => ({
+  name,
+  path: `/tmp/skills/${directory}/SKILL.md`,
+});
+const carrierRun = {
+  provider: "openai",
+  model: "gpt-route",
+  memberRoleIds: ["operator", "member"],
+  trustedInternalHandoff: {
+    kind: "subagent-completion",
+    sourceSessionKey: "agent:child",
+    targetSessionKey: "agent:parent",
+    targetSessionId: "session-1",
     provider: "openai",
     model: "gpt-route",
-    memberRoleIds: ["operator", "member"],
-    trustedInternalHandoff: {
-      kind: "subagent-completion",
-      sourceSessionKey: "agent:child",
-      targetSessionKey: "agent:parent",
-      targetSessionId: "session-1",
-      provider: "openai",
-      model: "gpt-route",
-    },
-    scheduledToolPolicy: { version: 1, mode: "trusted" },
-    runtimePluginToolGrant: {
-      pluginId: "workboard",
-      toolNames: ["workboard_complete"],
-    },
-  };
-}
-
-function expectCombinedCarrierFacts(run: FollowupRun | undefined): void {
-  expect(run).toBeDefined();
-  expect(run?.toolsAllow).toEqual(["exec"]);
-  expect(run?.toolsAllow ? readToolAllowlistIntersection(run.toolsAllow) : undefined).toEqual([
-    ["exec"],
-    ["exec", "message"],
-  ]);
-  expect(run?.disableTools).toBe(true);
-  expect(run?.run).toMatchObject({
-    provider: "openai",
-    model: "gpt-route",
-    memberRoleIds: ["operator", "member"],
-    trustedInternalHandoff: {
-      kind: "subagent-completion",
-      sourceSessionKey: "agent:child",
-      targetSessionKey: "agent:parent",
-      targetSessionId: "session-1",
-      provider: "openai",
-      model: "gpt-route",
-    },
-    scheduledToolPolicy: { version: 1, mode: "trusted" },
-    runtimePluginToolGrant: {
-      pluginId: "workboard",
-      toolNames: ["workboard_complete"],
-    },
-  });
-}
-
+  },
+  scheduledToolPolicy: { version: 1, mode: "trusted" },
+  runtimePluginToolGrant: { pluginId: "workboard", toolNames: ["workboard_complete"] },
+} satisfies Partial<FollowupRun["run"]>;
 afterEach(() => {
-  for (const key of queueKeys) {
-    clearFollowupQueue(key);
-  }
-  queueKeys.clear();
-  for (const cleanup of evidenceCleanups) {
+  for (const cleanup of [...evidenceCleanups].toReversed()) {
     cleanup();
   }
   evidenceCleanups.clear();
 });
-
-describe("followup prompt metadata carrier", () => {
-  it("drains the complete parked image turn after active steering rejects it", async () => {
-    const key = "agent:main:parked-media-fallback";
-    queueKeys.add(key);
-    const run = createQueueTestRun({
-      prompt: "  preserve this caption\n",
-      messageId: "media-fallback",
-    });
-    run.images = [{ type: "image", data: "inline-png", mimeType: "image/png" }];
-    run.imageOrder = ["offloaded", "inline"];
-    run.media = [{ path: "/tmp/stored.png", contentType: "image/png" }, { kind: "image" }];
-    const recorder = createUserTurnTranscriptRecorder({
-      input: { text: run.prompt, media: run.media },
-      target: () => undefined,
-    });
-    run.userTurnTranscriptRecorder = recorder;
-    const persist = vi.spyOn(recorder, "persistApproved");
-    const operation = createReplyOperation({
-      sessionKey: key,
-      sessionId: run.run.sessionId,
-      resetTriggered: false,
-    });
-    operation.bindToolAuthoritySnapshot({
-      fingerprint: () => "media-authority",
-      project: () => "media-authority",
-    });
-    const reject = vi.fn(async () => {
-      throw new Error("no active turn to steer");
-    });
-    operation.attachBackend({
-      kind: "embedded",
-      supportsQueueMessageImages: true,
-      toolAuthorityFingerprint: "media-authority",
-      cancel: vi.fn(),
-      messageInjection: { isAvailable: () => true, queueMessage: reject },
-    });
-    operation.setPhase("running");
-    const delivered = createDeferred<FollowupRun>();
-    const runFollowup = vi.fn(async (queued: FollowupRun) => {
-      delivered.resolve(queued);
-    });
-    const typing = createMockTypingController();
-    try {
-      await expect(
-        runActiveReplySteer({
-          followupRun: run,
-          opts: undefined,
-          providedReplyOperation: operation,
-          queueKey: key,
-          releaseAdmissionTicket: vi.fn(),
-          replyOperationRunState: undefined,
-          resolvedQueue: { mode: "steer", debounceMs: 0 },
-          restartRecoverySourceTurnId: "media-fallback",
-          runFollowup,
-          sessionCtx: {},
-          sessionKey: key,
-          touchActiveSessionEntry: async () => {},
-          typing,
-          typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
-          toolAuthorityFingerprint: "media-authority",
+it("drains the complete parked image turn after active steering rejects it", async () => {
+  const q = trackedQueue();
+  const key = q.key;
+  const run = createQueueTestRun({ prompt: "  caption\n", messageId: key });
+  Object.assign(run.run, {
+    agentId: "main",
+    sessionKey: key,
+    messageProvider: "telegram",
+    senderId: "media-requester",
+  });
+  run.images = [image("inline-png", "image/png")];
+  run.imageOrder = ["offloaded", "inline"];
+  run.media = [{ path: "/tmp/stored.png", contentType: "image/png" }, { kind: "image" }];
+  const expectedMedia = structuredClone([run.prompt, run.images, run.imageOrder, run.media]);
+  const recorder = createUserTurnTranscriptRecorder({
+    input: { text: run.prompt, media: run.media },
+    target: () => undefined,
+  });
+  run.userTurnTranscriptRecorder = recorder;
+  const operation = createReplyOperation({
+    sessionKey: key,
+    sessionId: run.run.sessionId,
+    resetTriggered: false,
+  });
+  await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
+  const toolAuthorityFingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
+  const reject = vi
+    .fn<() => Promise<never>>()
+    .mockRejectedValue(new Error("no active turn to steer"));
+  operation.attachBackend({
+    kind: "embedded",
+    supportsTranscriptCommitWait: true,
+    supportsQueueMessageImages: true,
+    toolAuthorityFingerprint,
+    cancel: vi.fn(),
+    messageInjectionV2: {
+      version: 2,
+      isAvailable: () => true,
+      queueMessage: async (_text, _options, assertCurrent) => {
+        assertCurrent();
+        await reject();
+      },
+    },
+  });
+  operation.setPhase("running");
+  try {
+    await expect(
+      runActiveReplySteer(
+        createSteerParams(key, run, operation, {
+          sourceTurnId: run.messageId,
+          runFollowup: q.runFollowup,
         }),
-      ).resolves.toBe("handled");
-      expect(reject).toHaveBeenCalledOnce();
-      expect(persist).not.toHaveBeenCalled();
-      operation.complete();
-      await vi.waitFor(() => expect(runFollowup).toHaveBeenCalledOnce());
-      const fallback = await delivered.promise;
-      expect({
-        text: fallback.prompt,
-        images: fallback.images,
-        imageOrder: fallback.imageOrder,
-        media: fallback.media,
-      }).toEqual({
-        text: "  preserve this caption\n",
-        images: [{ type: "image", data: "inline-png", mimeType: "image/png" }],
-        imageOrder: ["offloaded", "inline"],
-        media: [{ path: "/tmp/stored.png", contentType: "image/png" }, { kind: "image" }],
-      });
-      expect(fallback.userTurnTranscriptRecorder).toBe(recorder);
-      expect(recorder.hasPersisted()).toBe(false);
-    } finally {
-      operation.complete();
-      persist.mockRestore();
-    }
-  });
-
-  it("keeps participant evidence out of sender-scoped collect routing", () => {
-    const audit = createChannelAdmissionAudit({ enabled: true });
-    evidenceCleanups.add(() => audit.close());
-    const runs = ["person-1", "person-2"].map((senderId) => {
-      const item = createQueueTestRun({
-        prompt: `from ${senderId}`,
-        originatingChannel: "slack",
-        originatingTo: "channel:A",
-      });
-      item.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
-        audit,
-        channelId: "slack",
-        accountId: "default",
-        participantId: senderId,
-      });
-      item.run = {
-        ...item.run,
-        senderId,
-        senderE164: `+1555000${senderId.at(-1)}`,
-        senderIsOwner: false,
-      };
-      return item;
-    });
-
-    expect(resolveFollowupDeliveryContextKey(runs[0]!)).not.toBe(
-      resolveFollowupDeliveryContextKey(runs[1]!),
+      ),
+    ).resolves.toBe("handled");
+    expect(reject).toHaveBeenCalledOnce();
+    operation.complete();
+    await q.done.promise;
+    expect(q.calls).toHaveLength(1);
+    const fallback = q.calls[0]!;
+    expect([fallback.prompt, fallback.images, fallback.imageOrder, fallback.media]).toEqual(
+      expectedMedia,
     );
-  });
-  it("keeps collected prompt bytes and ordered facts stable across deferred admission", async () => {
-    const audit = createChannelAdmissionAudit({ enabled: true });
-    evidenceCleanups.add(() => audit.close());
-    const key = `prompt-media-collect-${Date.now()}`;
-    queueKeys.add(key);
-    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
-    const done = createDeferred();
-    const calls: FollowupRun[] = [];
+    expect(fallback.userTurnTranscriptRecorder).toBe(recorder);
+    expect(recorder.hasPersisted()).toBe(false);
+  } finally {
+    operation.complete();
+  }
+});
 
-    for (const [prompt, path, contentType, skillName, sharedSkillName] of [
-      [
-        "[media attached: /tmp/a.png (image/png)]\nfirst",
-        "/tmp/a.png",
-        "image/png",
-        "a",
-        "shared-first",
-      ],
-      [
-        "[media attached: /tmp/b.pdf (application/pdf)]\nsecond",
-        "/tmp/b.pdf",
-        "application/pdf",
-        "b",
-        "shared-last",
-      ],
-    ] as const) {
-      const run = createQueueTestRun({ prompt });
-      addCombinedCarrierFacts(run);
-      run.images = [{ type: "image", data: path, mimeType: contentType }];
-      run.imageOrder = ["inline"];
-      run.media = [{ path, contentType }];
-      run.explicitSkillSelections = [
-        { name: skillName, path: `/tmp/skills/${skillName}/SKILL.md` },
-        { name: sharedSkillName, path: "/tmp/skills/shared/SKILL.md" },
-      ];
-      run.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
-        audit,
-        channelId: "test",
-        participantId: "person-1",
-      });
-      enqueueFollowupRun(key, run, settings);
-    }
-
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      if (calls.length === 1) {
-        throw new FollowupRunDeferredError();
-      }
-      done.resolve();
+it("keeps participant evidence out of sender-scoped collect routing", () => {
+  const audit = admission.createChannelAdmissionAudit({ enabled: true });
+  evidenceCleanups.add(() => audit.close());
+  const runs = ["person-1", "person-2"].map((senderId) => {
+    const item = createQueueTestRun({
+      prompt: `from ${senderId}`,
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
     });
-    await done.promise;
-
-    const expectedPrompt = [
-      "[Queued messages while agent was busy]",
-      "---\nQueued #1\n[media attached: /tmp/a.png (image/png)]\nfirst",
-      "---\nQueued #2\n[media attached: /tmp/b.pdf (application/pdf)]\nsecond",
-    ].join("\n\n");
-    expect(calls.map((run) => run.prompt)).toEqual([expectedPrompt, expectedPrompt]);
-    expect(calls.map((run) => run.media)).toEqual([
-      [
-        { path: "/tmp/a.png", contentType: "image/png" },
-        { path: "/tmp/b.pdf", contentType: "application/pdf" },
-      ],
-      [
-        { path: "/tmp/a.png", contentType: "image/png" },
-        { path: "/tmp/b.pdf", contentType: "application/pdf" },
-      ],
-    ]);
-    expect(calls.map((run) => run.images)).toEqual([
-      [
-        { type: "image", data: "/tmp/a.png", mimeType: "image/png" },
-        { type: "image", data: "/tmp/b.pdf", mimeType: "application/pdf" },
-      ],
-      [
-        { type: "image", data: "/tmp/a.png", mimeType: "image/png" },
-        { type: "image", data: "/tmp/b.pdf", mimeType: "application/pdf" },
-      ],
-    ]);
-    expect(calls.map((run) => run.imageOrder)).toEqual([
-      ["inline", "inline"],
-      ["inline", "inline"],
-    ]);
-    const expectedSkills = [
-      { name: "a", path: "/tmp/skills/a/SKILL.md" },
-      { name: "shared-last", path: "/tmp/skills/shared/SKILL.md" },
-      { name: "b", path: "/tmp/skills/b/SKILL.md" },
-    ];
-    expect(calls.map((run) => run.explicitSkillSelections)).toEqual([
-      expectedSkills,
-      expectedSkills,
-    ]);
-    for (const call of calls) {
-      expectCombinedCarrierFacts(call);
-    }
-    expect(
-      compareChannelAdmissionParticipants(calls.map((run) => run.channelAdmissionEvidence)),
-    ).toBe("same");
-    expect(consumeChannelAdmissionEvidence(calls[1]?.channelAdmissionEvidence)).toMatchObject({
-      ingressState: "present",
-      invoker: { state: "present", kind: "person" },
+    item.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
+      audit,
+      channelId: "slack",
+      accountId: "default",
+      participantId: senderId,
     });
+    item.run = {
+      ...item.run,
+      senderId,
+      senderE164: `+1555000${senderId.at(-1)}`,
+      senderIsOwner: false,
+    };
+    return item;
   });
 
-  it.each([
-    { name: "trace", first: { traceLevelOverride: "off" }, second: { traceLevelOverride: "raw" } },
-    { name: "thinking", first: { thinkLevel: "low" }, second: { thinkLevel: "high" } },
-    {
-      name: "original thinking",
-      first: { thinkLevel: "off", thinkLevelOverride: "high" },
-      second: { thinkLevel: "off", thinkLevelOverride: "off" },
-    },
-    { name: "fast", first: { fastMode: false }, second: { fastMode: true } },
-    {
-      name: "fast preference source",
-      first: { fastMode: true, fastModeOverride: false },
-      second: { fastMode: true, fastModeOverride: true },
-    },
-    {
-      name: "fast auto duration source",
-      first: { fastMode: "auto", fastModeAutoOnSeconds: 30, fastModeAutoOnSecondsOverride: false },
-      second: { fastMode: "auto", fastModeAutoOnSeconds: 30, fastModeAutoOnSecondsOverride: true },
-    },
-    {
-      name: "fast auto duration",
-      first: { fastMode: "auto", fastModeAutoOnSeconds: 30, fastModeAutoOnSecondsOverride: true },
-      second: { fastMode: "auto", fastModeAutoOnSeconds: 120, fastModeAutoOnSecondsOverride: true },
-    },
-    { name: "verbose", first: { verboseLevel: "off" }, second: { verboseLevel: "on" } },
-    { name: "reasoning", first: { reasoningLevel: "off" }, second: { reasoningLevel: "on" } },
-  ] as const)(
-    "keeps conflicting turn $name choices in separate collected replies",
-    async ({ name, first, second }) => {
-      const key = `turn-choice-collect-${name}`;
-      queueKeys.add(key);
-      const done = createDeferred();
-      const calls: FollowupRun[] = [];
-      for (const [index, settings] of [first, second, second, first].entries()) {
-        const run = createQueueTestRun({ prompt: `task ${index}`, messageId: `choice-${index}` });
-        run.run = { ...run.run, traceAuthorized: true, ...settings };
-        enqueueFollowupRun(key, run, { mode: "collect", debounceMs: 0 });
-      }
-      scheduleFollowupDrain(key, async (run) => {
-        calls.push(run);
-        if (run.prompt.includes("task 3")) {
-          done.resolve();
-        }
-      });
-      await done.promise;
-      expect(calls).toHaveLength(3);
-      expect(calls[0]?.run).toMatchObject(first);
-      expect(calls[1]?.run).toMatchObject(second);
-      expect(calls[2]?.run).toMatchObject(first);
-      expect(calls[0]?.prompt).toContain("task 0");
-      expect(calls[1]?.prompt).toContain("task 1");
-      expect(calls[1]?.prompt).toContain("task 2");
-      expect(calls[2]?.prompt).toContain("task 3");
-    },
+  expect(resolveFollowupDeliveryStorageKey(runs[0]!)).not.toBe(
+    resolveFollowupDeliveryStorageKey(runs[1]!),
   );
+});
 
-  it("removes sender authority when collected evidence identifies mixed participants", async () => {
-    const audit = createChannelAdmissionAudit({ enabled: true });
-    evidenceCleanups.add(() => audit.close());
-    const key = `prompt-metadata-mixed-${Date.now()}`;
-    queueKeys.add(key);
-    const done = createDeferred();
-    const calls: FollowupRun[] = [];
-
-    for (const [participantId, skillName] of [
-      ["person-1", "a"],
-      ["person-2", "b"],
-    ] as const) {
-      const run = createQueueTestRun({
-        prompt: `from ${participantId}`,
-        originatingChannel: "test",
-        originatingTo: "room:shared",
-      });
-      addCombinedCarrierFacts(run);
-      run.explicitSkillSelections = [
-        { name: skillName, path: `/tmp/skills/${skillName}/SKILL.md` },
-      ];
-      run.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
-        audit,
-        channelId: "test",
-        participantId,
-      });
-      run.run = {
-        ...run.run,
+it.each(["same", "mixed"] as const)("preserves deferred %s-participant facts", async (kind) => {
+  const mixed = kind === "mixed";
+  const audit = admission.createChannelAdmissionAudit({ enabled: true });
+  evidenceCleanups.add(() => audit.close());
+  const q = trackedQueue({ mode: "collect", debounceMs: 0 }, 2);
+  const turns = [
+    ["a", "first", "/tmp/a.png", "image/png"],
+    ["b", "second", "/tmp/b.pdf", "application/pdf"],
+  ] as const;
+  const media = turns.map((turn) => ({ path: turn[2], contentType: turn[3] }));
+  for (const [skillName, label, path, contentType] of turns) {
+    const prompt = `[media attached: ${path} (${contentType})]\n${label}`;
+    const run = createQueueTestRun({ prompt });
+    run.toolsAllow = policy.attachToolAllowlistIntersection(
+      ["exec"],
+      [["exec"], ["exec", "message"]],
+    );
+    run.disableTools = true;
+    run.run = { ...run.run, ...structuredClone(carrierRun) };
+    if (mixed) {
+      Object.assign(run, { originatingChannel: "test", originatingTo: "room:shared" });
+      Object.assign(run.run, {
         senderId: "ambiguous-transport-sender",
         senderName: "Ambiguous Sender",
         senderUsername: "ambiguous",
@@ -398,62 +180,245 @@ describe("followup prompt metadata carrier", () => {
         senderIsOwner: true,
         traceAuthorized: true,
         ownerNumbers: ["+15550000000"],
-      };
-      enqueueFollowupRun(key, run, { mode: "collect", debounceMs: 0 });
+      });
     }
-
-    scheduleFollowupDrain(key, async (run) => {
-      calls.push(run);
-      done.resolve();
-    });
-    await done.promise;
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.explicitSkillSelections).toEqual([
-      { name: "a", path: "/tmp/skills/a/SKILL.md" },
-      { name: "b", path: "/tmp/skills/b/SKILL.md" },
-    ]);
-    expect(consumeChannelAdmissionEvidence(calls[0]?.channelAdmissionEvidence)).toMatchObject({
-      ingressState: "unknown",
-      invoker: { state: "unknown" },
-    });
-    expect(calls[0]?.run).toMatchObject({
-      senderId: undefined,
-      senderName: undefined,
-      senderUsername: undefined,
-      senderE164: undefined,
-      senderIsOwner: false,
-      traceAuthorized: false,
-      ownerNumbers: [],
-    });
-    expectCombinedCarrierFacts(calls[0]);
-  });
-
-  it("preserves facts when an overflow source is rebuilt for retry", () => {
-    const audit = createChannelAdmissionAudit({ enabled: true });
-    evidenceCleanups.add(() => audit.close());
-    const source = createQueueTestRun({
-      prompt: "[media attached: /tmp/retry.png (image/png)]\nretry me",
-    });
-    addCombinedCarrierFacts(source);
-    source.images = [{ type: "image", data: "png", mimeType: "image/png" }];
-    source.imageOrder = ["offloaded"];
-    source.media = [{ path: "/tmp/retry.png", contentType: "image/png" }];
-    source.explicitSkillSelections = [{ name: "retry", path: "/tmp/skills/retry/SKILL.md" }];
-    source.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
+    run.images = [image(path, contentType)];
+    run.imageOrder = ["inline"];
+    run.media = [{ path, contentType }];
+    run.explicitSkillSelections = [
+      skill(skillName),
+      skill(`shared-${skillName === "a" ? "first" : "last"}`, "shared"),
+    ];
+    run.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
       audit,
       channelId: "test",
-      participantId: "person-1",
+      participantId: mixed ? skillName : "person-1",
     });
+    q.add(run);
+  }
+  q.start(async (run) => {
+    q.calls.push(run);
+    if (q.calls.length === 1) {
+      rejectQueuePreparation(run, new Error("Synthetic pre-admission preparation failure"));
+    }
+    q.done.resolve();
+  });
+  await q.done.promise;
+  const senderSuffix = mixed ? " (from Ambiguous Sender)" : "";
+  const expectedPrompt = [
+    "[Queued messages while agent was busy]",
+    ...turns.map(
+      ([, label, path, type], i) =>
+        `---\nQueued #${i + 1}${senderSuffix}\n[media attached: ${path} (${type})]\n${label}`,
+    ),
+  ].join("\n\n");
+  expect(q.calls.map((run) => run.prompt)).toEqual([expectedPrompt, expectedPrompt]);
+  for (const run of q.calls) {
+    expect([run.media, run.images, run.imageOrder, run.toolsAllow, run.disableTools]).toEqual([
+      media,
+      media.map(({ path, contentType }) => image(path, contentType)),
+      ["inline", "inline"],
+      ["exec"],
+      true,
+    ]);
+    expect(run.explicitSkillSelections).toEqual([
+      skill("a"),
+      skill("shared-last", "shared"),
+      skill("b"),
+    ]);
+    expect(
+      run.toolsAllow ? policy.readToolAllowlistIntersection(run.toolsAllow) : undefined,
+    ).toEqual([["exec"], ["exec", "message"]]);
+    expect(run.run).toMatchObject(carrierRun);
+    if (mixed) {
+      expect(run.run).toMatchObject({
+        senderId: undefined,
+        senderName: undefined,
+        senderUsername: undefined,
+        senderE164: undefined,
+        senderIsOwner: false,
+        traceAuthorized: false,
+        ownerNumbers: [],
+      });
+    }
+  }
+  if (kind === "same") {
+    expect(
+      admission.compareChannelAdmissionParticipants(
+        q.calls.map((run) => run.channelAdmissionEvidence),
+      ),
+    ).toBe("same");
+  }
+  expect(
+    admission.consumeChannelAdmissionEvidence(q.calls[1]?.channelAdmissionEvidence),
+  ).toMatchObject(
+    kind === "same"
+      ? { ingressState: "present", invoker: { state: "present", kind: "person" } }
+      : { ingressState: "unknown", invoker: { state: "unknown" } },
+  );
+});
 
-    const retry = createOverflowSummaryRetrySource(source);
+it.each([
+  { name: "trace", first: { traceLevelOverride: "off" }, second: { traceLevelOverride: "raw" } },
+  { name: "thinking", first: { thinkLevel: "low" }, second: { thinkLevel: "high" } },
+  {
+    name: "fast auto duration",
+    first: { fastMode: "auto", fastModeAutoOnSeconds: 30, fastModeAutoOnSecondsOverride: true },
+    second: { fastMode: "auto", fastModeAutoOnSeconds: 120, fastModeAutoOnSecondsOverride: true },
+  },
+] as const)("separates conflicting $name turns", async ({ first, second }) => {
+  const q = trackedQueue({ cap: 20 }, 3);
+  for (const [index, settings] of [first, second, second, first].entries()) {
+    q.enqueue(
+      { prompt: `task ${index}`, messageId: `choice-${index}` },
+      { traceAuthorized: true, ...settings },
+    );
+  }
+  await q.drain();
+  expect(q.calls.map((run) => run.run)).toMatchObject([first, second, first]);
+  for (const [index, texts] of [["task 0"], ["task 1", "task 2"], ["task 3"]].entries()) {
+    for (const text of texts) {
+      expect(q.calls[index]?.prompt).toContain(text);
+    }
+  }
+});
+it("pairs each collected source's run-only image skip with the transcript facts", async () => {
+  const q = trackedQueue();
+  const shared = { path: "/tmp/shared.png", contentType: "image/png" };
+  // Same path in both sources: only the second one could not be read this turn.
+  for (const [prompt, skipped] of [
+    ["one", false],
+    ["two", true],
+  ] as const) {
+    q.add({
+      ...createQueueTestRun({ prompt }),
+      media: [
+        skipped ? { ...shared, hydrationSuppressed: true, unresolvedThisTurn: true } : shared,
+      ],
+      userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
+        input: { text: prompt, media: [shared] },
+        target: createTestUserTurnTranscriptTarget(),
+        updateMode: "none",
+      }),
+    });
+  }
+  await q.drain();
+  expect(q.calls).toHaveLength(1);
+  const message = await q.calls[0]?.userTurnTranscriptRecorder?.resolveMessage();
+  const recorded = message ? readPersistedMediaFacts(message) : undefined;
+  expect(
+    applyRunHydrationSuppression(recorded ?? [], q.calls[0]?.media).map(
+      (fact) => fact.hydrationSuppressed === true,
+    ),
+  ).toEqual([false, true]);
+});
+describe("queued Gateway attach evidence", () => {
+  installQueueRuntimeErrorSilencer();
+  const admissions: identity.ExecutionIdentityAdmissionWork[] = [];
+  beforeEach(() => {
+    admissions.length = 0;
+    evidenceCleanups.add(
+      identity.configureExecutionIdentityAdmissionSink((work) => {
+        admissions.push(work);
+        return true;
+      }),
+    );
+  });
+  async function admit(run: FollowupRun) {
+    const prepared = prepareChannelRunAdmission({
+      cfg: { logging: { audit: { executionIdentity: true } } },
+      runId: "queued-attach",
+      agentId: "main",
+      ingressKind: "channel",
+      boundary: "auto-reply.agent-runner",
+      evidence: run.channelAdmissionEvidence,
+      gatewayLocalUserIngress: run.gatewayLocalUserIngress,
+    });
+    try {
+      await prepared.admit("embedded");
+    } finally {
+      prepared.close();
+    }
+  }
+  const prepareIngress = (profileId: string) =>
+    ingress.prepareGatewayLocalUserIngress({
+      authMethod: "token",
+      authenticatedUserExpected: true,
+      profile: { profileId },
+      isLocalClient: false,
+    });
+  function expectAdmission(profileId?: string) {
+    expect(admissions).toMatchObject([
+      {
+        kind: "capture",
+        envelope: {
+          ingress: {
+            kind: "gateway-client",
+            boundary: "gateway.ws.authenticated-connect",
+            state: profileId ? "present" : "unknown",
+            ...(profileId ? { rawSourceRef: profileId } : {}),
+          },
+          invoker: profileId
+            ? { state: "present", kind: "person", rawPrincipalRef: profileId }
+            : { state: "unknown" },
+          assurance: profileId
+            ? [
+                {
+                  kind: "durable-profile",
+                  rawEvidenceRef: profileId,
+                  strength: "boundary-verified",
+                },
+              ]
+            : expect.not.arrayContaining([expect.objectContaining({ kind: "durable-profile" })]),
+        },
+      },
+    ]);
+  }
+  it.each(["matching", "mixed"] as const)(
+    "preserves %s ingress and sender authority",
+    async (kind) => {
+      const q = trackedQueue({ cap: 20 });
+      for (const index of [0, 1]) {
+        const run = createQueueTestRun({ prompt: `queued ${index}` });
+        run.gatewayLocalUserIngress = prepareIngress(
+          kind === "mixed" && index === 1 ? "person-2" : "person-1",
+        );
+        run.run = { ...run.run, senderId: "transport", senderIsOwner: true };
+        q.add(run);
+      }
+      await q.drain();
+      const collected = q.calls[0]!;
+      expect(collected.prompt).toContain("queued 0");
+      expect(collected.prompt).toContain("queued 1");
+      await admit(collected);
+      expectAdmission(kind === "matching" ? "person-1" : undefined);
+      expect(collected.run).toMatchObject({ senderId: "transport", senderIsOwner: true });
+    },
+  );
 
-    expect(retry.prompt).toBe(source.prompt);
-    expect(retry.images).toEqual(source.images);
-    expect(retry.imageOrder).toEqual(source.imageOrder);
-    expect(retry.media).toEqual(source.media);
-    expect(retry.explicitSkillSelections).toEqual(source.explicitSkillSelections);
-    expect(retry.channelAdmissionEvidence).toBe(source.channelAdmissionEvidence);
-    expectCombinedCarrierFacts(retry);
+  it("retains the original attach snapshot when overflow delivery retries after profile replacement", async () => {
+    const q = trackedQueue({ mode: "collect", debounceMs: 0, cap: 1, dropPolicy: "summarize" }, 1);
+    const client = {};
+    ingress.attachGatewayLocalUserIngress(client, prepareIngress("original-person"));
+    const source = createQueueTestRun({ prompt: "overflow source" });
+    source.gatewayLocalUserIngress = ingress.getGatewayLocalUserIngress(client);
+    q.add(source);
+    q.add(createQueueTestRun({ prompt: "surviving source" }));
+    let attempts = 0;
+    q.start(async (run) => {
+      if (!run.prompt.includes("overflow source")) {
+        q.done.resolve();
+        return;
+      }
+      attempts += 1;
+      if (attempts === 1) {
+        ingress.attachGatewayLocalUserIngress(client, prepareIngress("replacement-person"));
+        rejectQueuePreparation(run, new Error("Synthetic pre-admission preparation failure"));
+      }
+      await admit(run);
+    });
+    await q.done.promise;
+    expect(attempts).toBe(2);
+    expectAdmission("original-person");
   });
 });

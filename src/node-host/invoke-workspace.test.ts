@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type {
@@ -47,6 +48,15 @@ describe("node workspace invocation ownership", () => {
       },
     );
     const registry = createEmptyPluginRegistry();
+    registry.plugins = [
+      createPluginRecord({
+        id: "workspace-plugin",
+        source: "test",
+        origin: "bundled",
+        enabled: true,
+        configSchema: true,
+      }),
+    ];
     registry.nodeHostCommands = [
       {
         pluginId: "workspace-plugin",
@@ -105,6 +115,15 @@ describe("node workspace invocation ownership", () => {
         | undefined;
       let retainedAcquire: OpenClawPluginNodeHostCommandContext["acquireManagedWorkspaceAsync"];
       const registry = createEmptyPluginRegistry();
+      registry.plugins = [
+        createPluginRecord({
+          id: "workspace-plugin",
+          source: "test",
+          origin: "bundled",
+          enabled: true,
+          configSchema: true,
+        }),
+      ];
       registry.nodeHostCommands = [
         {
           pluginId: "workspace-plugin",

@@ -12,14 +12,15 @@ import { resolveApiKeyForProviderCore } from "../src/agents/model-auth.js";
 import { loadConfig, type OpenClawConfig } from "../src/config/config.js";
 import {
   DEFAULT_LIVE_IMAGE_MODELS,
-  parseCaseFilter,
-  parseImageProviderFilter,
-  parseProviderModelMap,
   resolveConfiguredLiveImageModels,
-  resolveLiveImageAuthStore,
 } from "../src/image-generation/live-test-helpers.js";
 import { isTruthyEnvValue } from "../src/infra/env.js";
 import { getShellEnvAppliedKeys } from "../src/infra/shell-env.js";
+import {
+  parseLiveCsvFilter,
+  parseProviderModelMap,
+  resolveLiveAuthStore,
+} from "../src/media-generation/live-test-helpers.js";
 import { encodePngRgba, fillPixel } from "../src/media/png-encode.js";
 import { maybeLoadShellEnvForGenerationProviders } from "../src/test-utils/generation-live-test-helpers.js";
 import { loadBundledProviderPlugin as loadBundledProviderPluginFromTestHelper } from "./helpers/media-generation/bundled-provider-builders.js";
@@ -28,10 +29,11 @@ const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS =
   isLiveProfileKeyModeEnabled() || isTruthyEnvValue(process.env.OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS);
 const describeLive = LIVE ? describe : describe.skip;
-const providerFilter = parseImageProviderFilter(
-  process.env.OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS,
-);
-const caseFilter = parseCaseFilter(process.env.OPENCLAW_LIVE_IMAGE_GENERATION_CASES);
+const providerFilter = parseLiveCsvFilter(process.env.OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS, {
+  lowercase: false,
+});
+// Case labels are lowercased; provider ids retain their original casing.
+const caseFilter = parseLiveCsvFilter(process.env.OPENCLAW_LIVE_IMAGE_GENERATION_CASES);
 const envModelMap = parseProviderModelMap(process.env.OPENCLAW_LIVE_IMAGE_GENERATION_MODELS);
 const DEFAULT_LIVE_IMAGE_GENERATION_TIMEOUT_MS = 120_000;
 const LIVE_IMAGE_GENERATION_TIMEOUT_MS = resolvePositiveIntegerEnv(
@@ -253,7 +255,7 @@ describeLive("image generation live (provider sweep)", () => {
         }
 
         const hasLiveKeys = collectProviderApiKeys(providerCase.providerId).length > 0;
-        const authStore = resolveLiveImageAuthStore({
+        const authStore = resolveLiveAuthStore({
           requireProfileKeys: REQUIRE_PROFILE_KEYS,
           hasLiveKeys,
         });

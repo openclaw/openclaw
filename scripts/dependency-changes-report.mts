@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Builds dependency change reports from lockfile and manifest diffs.
 import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -33,20 +32,12 @@ const DEPENDENCY_DIFF_PATHS = [
 
 type DependencyPayload = Record<string, string[]>;
 type DependencyFileChange = { oldPath: string | null; path: string; status: string };
-const nullableString = (value: string | null) => value;
 
 function payloadFromLockfile(lockfileText: string): DependencyPayload {
   const packages = collectAllResolvedPackagesFromLockfile(lockfileText);
   return createBulkAdvisoryPayload(packages) satisfies DependencyPayload;
 }
 
-function versionsFor(payload: DependencyPayload, packageName: string) {
-  return new Set(payload[packageName] ?? []);
-}
-
-/**
- * Creates a structured dependency diff report from base/head payloads.
- */
 export function createDependencyChangesReport({
   basePayload,
   headPayload,
@@ -74,8 +65,8 @@ export function createDependencyChangesReport({
   }> = [];
 
   for (const packageName of packageNames) {
-    const baseVersions = versionsFor(basePayload, packageName);
-    const headVersions = versionsFor(headPayload, packageName);
+    const baseVersions = new Set(basePayload[packageName] ?? []);
+    const headVersions = new Set(headPayload[packageName] ?? []);
     if (baseVersions.size === 0) {
       addedPackages.push({
         packageName,
@@ -166,16 +157,15 @@ function renderMarkdownReport(report: ReturnType<typeof createDependencyChangesR
     lines.push("");
   }
 
-  if (report.addedPackages.length > 0) {
-    lines.push("## Added Resolved Packages", "");
-    for (const item of report.addedPackages) {
-      lines.push(`- ${markdownCode(item.packageName)}: ${item.versions.join(", ")}`);
+  for (const [title, packages] of [
+    ["Added", report.addedPackages],
+    ["Removed", report.removedPackages],
+  ] as const) {
+    if (packages.length === 0) {
+      continue;
     }
-    lines.push("");
-  }
-  if (report.removedPackages.length > 0) {
-    lines.push("## Removed Resolved Packages", "");
-    for (const item of report.removedPackages) {
+    lines.push(`## ${title} Resolved Packages`, "");
+    for (const item of packages) {
       lines.push(`- ${markdownCode(item.packageName)}: ${item.versions.join(", ")}`);
     }
     lines.push("");
@@ -201,9 +191,6 @@ function readGitFile(ref: string, filePath: string, cwd: string) {
   });
 }
 
-/**
- * Reports whether a path is a dependency-related file.
- */
 export function isDependencyFile(filePath: unknown) {
   if (typeof filePath !== "string") {
     return false;
@@ -211,9 +198,6 @@ export function isDependencyFile(filePath: unknown) {
   return DEPENDENCY_FILE_PATTERNS.some((pattern) => pattern.test(filePath));
 }
 
-/**
- * Returns git pathspecs used for dependency diff collection.
- */
 export function dependencyDiffPathspecs() {
   return [...DEPENDENCY_DIFF_PATHS];
 }
@@ -254,13 +238,20 @@ function gitDiffDependencyFiles(baseRef: string, cwd: string) {
 }
 
 export function parseArgs(argv: string[]) {
-  const options = {
+  const options: {
+    rootDir: string;
+    baseRef: string | null;
+    baseLockfile: string | null;
+    headLockfile: string;
+    jsonPath: string | null;
+    markdownPath: string | null;
+  } = {
     rootDir: process.cwd(),
-    baseRef: nullableString(null),
-    baseLockfile: nullableString(null),
+    baseRef: null,
+    baseLockfile: null,
     headLockfile: "pnpm-lock.yaml",
-    jsonPath: nullableString(null),
-    markdownPath: nullableString(null),
+    jsonPath: null,
+    markdownPath: null,
   };
   const flagEntries = [
     ["--root", "rootDir"],
@@ -295,9 +286,6 @@ export function parseArgs(argv: string[]) {
   throw new Error("Expected --base-ref <git-ref> or --base-lockfile <path>.");
 }
 
-/**
- * Generates and writes dependency change report artifacts.
- */
 async function runDependencyChangesReport(options: ReturnType<typeof parseArgs>) {
   const headLockfileText = await readFile(path.join(options.rootDir, options.headLockfile), "utf8");
   const baseLockfileText =
@@ -315,9 +303,6 @@ async function runDependencyChangesReport(options: ReturnType<typeof parseArgs>)
   });
 }
 
-/**
- * Runs the dependency changes report CLI.
- */
 export async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   const report = await runDependencyChangesReport(options);

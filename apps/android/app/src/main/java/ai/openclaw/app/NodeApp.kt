@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.ToolDisplayConfig
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.notifyNativeLocaleChanged
 import ai.openclaw.app.wear.GoogleWearMessageSender
@@ -21,6 +22,10 @@ import java.util.concurrent.atomic.AtomicReference
  */
 class NodeApp : Application() {
   val prefs: SecurePrefs by lazy { SecurePrefs(this) }
+
+  internal val toolDisplayConfig: ToolDisplayConfig by lazy {
+    assets.open("tool-display.json").bufferedReader().use { ToolDisplayConfig.parse(it.readText()) }
+  }
 
   // System share senders can create overlapping Activity tasks; keep one bounded process queue.
   internal val chatShareDraftSeq = AtomicLong()

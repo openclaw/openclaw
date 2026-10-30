@@ -85,7 +85,7 @@ class ChatFullMessageCancellationTest {
       withReader { fixture ->
         val old = fixture.prepare()
         val oldConnection = fixture.gateway.operatorConnection.get()
-        val gate = RequestGate()
+        val gate = RequestGate("chat.message.get")
         fixture.dispatchGate.set(gate)
         val pending = async(Dispatchers.IO) { old.execute() }
         try {
@@ -121,10 +121,19 @@ class ChatFullMessageCancellationTest {
       withReader { fixture ->
         val old = fixture.prepare()
         val connection = fixture.gateway.operatorConnection.get()
-        val gate = RequestGate()
+        val gate = RequestGate("chat.message.get")
         fixture.dispatchGate.set(gate)
-        val pending = async(Dispatchers.IO) { old.execute() }
+        val pending = async(Dispatchers.IO, start = CoroutineStart.LAZY) { old.execute() }
+        // Bootstrap can still be fetching metadata after chat readiness. An unrelated
+        // endpoint request must not consume the gate before the full-message read starts.
+        val discovery =
+          async(start = CoroutineStart.UNDISPATCHED) {
+            fixture.controller.fetchSessionSelectionCandidates("main")
+          }
         try {
+          assertFalse("Session discovery must not consume the full-message gate", gate.entered.isCompleted)
+          withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) { discovery.await() }
+          pending.start()
           withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) { gate.entered.await() }
           fixture.controller.switchSession(FULL_MESSAGE_SECOND_CHAT, ownerAgentId = "main")
           fixture.awaitReady(FULL_MESSAGE_SECOND_CHAT)
@@ -133,7 +142,9 @@ class ChatFullMessageCancellationTest {
           fixture.assertOnlyCurrentRead(connection)
           assertEquals(ChatFullMessageState.Loading, old.state.value)
         } finally {
+          fixture.dispatchGate.compareAndSet(gate, null)
           gate.release.complete(Unit)
+          discovery.cancelAndJoin()
           pending.cancelAndJoin()
         }
       }
@@ -228,125 +239,211 @@ class ChatFullMessageCancellationTest {
       }
     }
 
-  private suspend fun withReader(block: suspend CoroutineScope.(ReaderFixture) -> Unit) =
-    coroutineScope {
-      val app = RuntimeEnvironment.getApplication()
-      val gateway = FullMessageGateway()
-      val ownerJob = SupervisorJob()
-      val scope = CoroutineScope(ownerJob + Dispatchers.IO)
-      val hello = MutableStateFlow<GatewayHelloSummary?>(null)
-      val catalogRevision = AtomicLong()
-      val cancelDuringValidation = AtomicReference<Job?>()
-      val dispatchGate = AtomicReference<RequestGate?>()
-      val selectionSetupGate = AtomicReference<SelectionSetupGate?>()
-      val controllerRef = AtomicReference<ChatController?>()
-      var session: GatewaySession? = null
-      try {
-        val prefs = SecurePrefs(app, app.getSharedPreferences("full-message-cancel-${UUID.randomUUID()}", Context.MODE_PRIVATE))
-        val liveSession =
-          GatewaySession(
-            scope = scope,
-            identityStore = testDeviceIdentityStore(app),
-            deviceAuthStore = DeviceAuthStore(prefs),
-            onConnected = { summary ->
-              catalogRevision.incrementAndGet()
-              hello.value = summary
-              controllerRef.get()?.onGatewayConnected()
-            },
-            onDisconnected = { message ->
-              catalogRevision.incrementAndGet()
-              hello.value = null
-              controllerRef.get()?.onDisconnected(message)
-            },
-            onEvent = { _, _ -> },
-          )
-        session = liveSession
-        liveSession.connect(
-          endpoint = gateway.endpoint,
-          token = "synthetic-full-message-proof",
-          bootstrapToken = null,
-          password = null,
-          options =
-            GatewayConnectOptions(
-              role = "operator",
-              scopes = listOf("operator.read", "operator.write"),
-              caps = emptyList(),
-              commands = emptyList(),
-              permissions = emptyMap(),
-              client = GatewayClientInfo(id = "openclaw-android", displayName = "Full message test", version = "test", platform = "android", mode = "ui", instanceId = "full-message-test", deviceFamily = null, modelIdentifier = null),
-            ),
-        )
-        withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) { hello.first { it != null } }
-        val controller =
-          ChatController(
-            scope = scope,
-            commandOutbox = scope.createChatCommandOutbox(),
-            json = Json { ignoreUnknownKeys = true },
-            requestGateway = { method, params -> liveSession.request(method, params) },
-            requestGatewayForGateway = { gatewayId, method, params -> liveSession.requestForEndpoint(gatewayId, method, params) },
-            captureRequestLease = { gatewayScope ->
-              liveSession.captureRequestLease(gatewayScope?.gatewayId)?.let { actualLease ->
-                GatewaySession.RequestLease(
-                  endpointStableId = actualLease.endpointStableId,
-                  isCurrentImpl = actualLease::isCurrent,
-                  commitIfCurrentImpl = actualLease::commitIfCurrent,
-                ) { method, params, timeout, withEnqueue ->
-                  // The request boundary is outside the controller's logical monitor. A real
-                  // replacement hello can complete here; all lease authority stays delegated.
-                  dispatchGate.getAndSet(null)?.let { gate ->
-                    gate.entered.complete(Unit)
-                    withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) { gate.release.await() }
-                  }
-                  actualLease.request(method, params, timeout, withEnqueue)
-                }
-              }
-            },
-            cacheScope = { ChatCacheScope(gateway.endpoint.stableId, catalogRevision.get()) },
-            gatewayAdvertisesMethod = { method ->
-              val gate = selectionSetupGate.get()
-              if (
-                method == "progressCard.get" &&
-                gate != null &&
-                gate.ownerThread.get() === Thread.currentThread() &&
-                selectionSetupGate.compareAndSet(gate, null)
-              ) {
-                // Pause only this selection's synchronous catalog read, outside owner locks;
-                // a newer refresh must remain free to complete through the real socket.
-                gate.entered.complete(Unit)
-                check(gate.release.await(FULL_MESSAGE_READY_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                  "Selection setup gate was not released"
-                }
-              }
-              hello.value?.methods?.contains(method)
-            },
-            currentGatewayCatalogRevision = {
-              // Model cancellation while the owner check holds its monitor, after execute's
-              // initial cancellation check. The catalog value itself remains the real hello fact.
-              cancelDuringValidation.getAndSet(null)?.cancel()
-              catalogRevision.get()
-            },
-          )
-        controllerRef.set(controller)
-        controller.switchSession(FULL_MESSAGE_FIRST_CHAT, ownerAgentId = "main")
-        val fixture = ReaderFixture(gateway, liveSession, controller, hello, catalogRevision, cancelDuringValidation, dispatchGate, selectionSetupGate)
-        fixture.awaitReady()
-        block(fixture)
-      } finally {
+  @Test
+  fun transcriptRecoveryRejectsReassignedAgentBeforePhysicalEnqueue() =
+    runBlocking {
+      withReader(defaultSession = true) { fixture ->
+        val before = fixture.gateway.historyAgentReads.value.size
+        fixture.gateway.historyRetryableRefusals.set(1)
+        fixture.controller.handleGatewayEvent("sessions.changed", """{"sessionKey":"main","agentId":"main","phase":"message"}""")
+        withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) { fixture.gateway.historyAgentReads.first { it.size == before + 1 } }
+        val gate = RequestGate("chat.history")
+        fixture.dispatchGate.set(gate)
         try {
-          session?.disconnectAndJoin()
-        } finally {
-          try {
-            ownerJob.cancelAndJoin()
-          } finally {
-            gateway.close()
+          withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) { gate.entered.await() }
+          // Runtime publishes the new default before notifying the controller. Keep the
+          // same session key and physical connection to exercise that ownership interval.
+          fixture.defaultAgent.set("other")
+          fixture.defaultAgentRevision.incrementAndGet()
+          gate.release.complete(Unit)
+          withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) { gate.finished.await() }
+          assertEquals("The stale retry must enqueue no history frame for either agent", before + 1, fixture.gateway.historyAgentReads.value.size)
+          fixture.controller.onDefaultAgentChanged("other")
+          withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) {
+            fixture.gateway.historyAgentReads.first { it.drop(before + 1).contains("main" to "other") }
           }
+          assertTrue(
+            fixture.gateway.historyReads.value
+              .all { it.first == fixture.gateway.operatorConnection.get() },
+          )
+        } finally {
+          fixture.dispatchGate.compareAndSet(gate, null)
+          gate.release.complete(Unit)
         }
       }
     }
 
-  private class RequestGate {
+  @Test
+  fun transcriptRecoveryRetainsCapturedAgentOnThePhysicalSocket() =
+    runBlocking {
+      withReader(defaultSession = true) { fixture ->
+        val before = fixture.gateway.historyAgentReads.value.size
+        fixture.gateway.historyRetryableRefusals.set(1)
+        fixture.gateway.historyTextOverride = "Recovered durable transcript"
+        fixture.controller.handleGatewayEvent("sessions.changed", """{"sessionKey":"main","agentId":"main","phase":"message"}""")
+        withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) {
+          fixture.controller.messages.first { messages ->
+            messages
+              .singleOrNull()
+              ?.content
+              ?.singleOrNull()
+              ?.text == "Recovered durable transcript"
+          }
+        }
+        assertEquals(
+          listOf("main" to "main", "main" to "main"),
+          fixture.gateway.historyAgentReads.value
+            .drop(before),
+        )
+        assertTrue(
+          fixture.gateway.historyReads.value
+            .all { it.first == fixture.gateway.operatorConnection.get() },
+        )
+      }
+    }
+
+  private suspend fun withReader(
+    defaultSession: Boolean = false,
+    block: suspend CoroutineScope.(ReaderFixture) -> Unit,
+  ) = coroutineScope {
+    val app = RuntimeEnvironment.getApplication()
+    val gateway = FullMessageGateway()
+    val ownerJob = SupervisorJob()
+    val scope = CoroutineScope(ownerJob + Dispatchers.IO)
+    val hello = MutableStateFlow<GatewayHelloSummary?>(null)
+    val catalogRevision = AtomicLong()
+    val cancelDuringValidation = AtomicReference<Job?>()
+    val dispatchGate = AtomicReference<RequestGate?>()
+    val selectionSetupGate = AtomicReference<SelectionSetupGate?>()
+    val controllerRef = AtomicReference<ChatController?>()
+    val defaultAgent = AtomicReference("main")
+    val defaultAgentRevision = AtomicLong()
+
+    suspend fun throughDispatchGate(
+      method: String,
+      block: suspend () -> String,
+    ): String {
+      val gate = dispatchGate.get()?.takeIf { it.method == method && dispatchGate.compareAndSet(it, null) }
+      try {
+        gate?.let {
+          it.entered.complete(Unit)
+          withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) { it.release.await() }
+        }
+        return block()
+      } finally {
+        gate?.finished?.complete(Unit)
+      }
+    }
+    var session: GatewaySession? = null
+    try {
+      val prefs = SecurePrefs(app, app.getSharedPreferences("full-message-cancel-${UUID.randomUUID()}", Context.MODE_PRIVATE))
+      val liveSession =
+        GatewaySession(
+          scope = scope,
+          identityStore = testDeviceIdentityStore(app),
+          deviceAuthStore = DeviceAuthStore(prefs),
+          onConnected = { summary ->
+            catalogRevision.incrementAndGet()
+            hello.value = summary
+            controllerRef.get()?.onGatewayConnected()
+          },
+          onDisconnected = { message ->
+            catalogRevision.incrementAndGet()
+            hello.value = null
+            controllerRef.get()?.onDisconnected(message)
+          },
+          onEvent = { _, _ -> },
+        )
+      session = liveSession
+      liveSession.connect(
+        endpoint = gateway.endpoint,
+        token = "synthetic-full-message-proof",
+        bootstrapToken = null,
+        password = null,
+        options =
+          GatewayConnectOptions(
+            role = "operator",
+            scopes = listOf("operator.read", "operator.write"),
+            caps = emptyList(),
+            commands = emptyList(),
+            permissions = emptyMap(),
+            client = GatewayClientInfo(id = "openclaw-android", displayName = "Full message test", version = "test", platform = "android", mode = "ui", instanceId = "full-message-test", deviceFamily = null, modelIdentifier = null),
+          ),
+      )
+      withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) { hello.first { it != null } }
+      val controller =
+        ChatController(
+          scope = scope,
+          commandOutbox = scope.createChatCommandOutbox(),
+          json = Json { ignoreUnknownKeys = true },
+          requestGateway = { method, params -> liveSession.request(method, params) },
+          requestGatewayForGateway = { gatewayId, method, params ->
+            throughDispatchGate(method) { liveSession.requestForEndpoint(gatewayId, method, params) }
+          },
+          currentDefaultAgentId = defaultAgent::get,
+          currentDefaultAgentRevision = defaultAgentRevision::get,
+          captureRequestLease = { gatewayScope ->
+            liveSession.captureRequestLease(gatewayScope?.gatewayId)?.let { actualLease ->
+              GatewaySession.RequestLease(
+                endpointStableId = actualLease.endpointStableId,
+                isCurrentImpl = actualLease::isCurrent,
+                commitIfCurrentImpl = actualLease::commitIfCurrent,
+              ) { method, params, timeout, withEnqueue ->
+                // The request boundary is outside the controller's logical monitor. A real
+                // replacement hello can complete here; all lease authority stays delegated.
+                throughDispatchGate(method) { actualLease.request(method, params, timeout, withEnqueue) }
+              }
+            }
+          },
+          cacheScope = { ChatCacheScope(gateway.endpoint.stableId, catalogRevision.get()) },
+          gatewayAdvertisesMethod = { method ->
+            val gate = selectionSetupGate.get()
+            if (
+              method == "progressCard.get" &&
+              gate != null &&
+              gate.ownerThread.get() === Thread.currentThread() &&
+              selectionSetupGate.compareAndSet(gate, null)
+            ) {
+              // Pause only this selection's synchronous catalog read, outside owner locks;
+              // a newer refresh must remain free to complete through the real socket.
+              gate.entered.complete(Unit)
+              check(gate.release.await(FULL_MESSAGE_READY_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                "Selection setup gate was not released"
+              }
+            }
+            hello.value?.methods?.contains(method)
+          },
+          currentGatewayCatalogRevision = {
+            // Model cancellation while the owner check holds its monitor, after execute's
+            // initial cancellation check. The catalog value itself remains the real hello fact.
+            cancelDuringValidation.getAndSet(null)?.cancel()
+            catalogRevision.get()
+          },
+        )
+      controllerRef.set(controller)
+      if (defaultSession) controller.load("main") else controller.switchSession(FULL_MESSAGE_FIRST_CHAT, ownerAgentId = "main")
+      val fixture = ReaderFixture(gateway, liveSession, controller, hello, catalogRevision, cancelDuringValidation, dispatchGate, selectionSetupGate, defaultAgent, defaultAgentRevision)
+      fixture.awaitReady(if (defaultSession) "main" else FULL_MESSAGE_FIRST_CHAT)
+      block(fixture)
+    } finally {
+      try {
+        session?.disconnectAndJoin()
+      } finally {
+        try {
+          ownerJob.cancelAndJoin()
+        } finally {
+          gateway.close()
+        }
+      }
+    }
+  }
+
+  private class RequestGate(
+    val method: String,
+  ) {
     val entered = CompletableDeferred<Unit>()
     val release = CompletableDeferred<Unit>()
+    val finished = CompletableDeferred<Unit>()
   }
 
   private class SelectionSetupGate {
@@ -364,6 +461,8 @@ class ChatFullMessageCancellationTest {
     val cancelDuringValidation: AtomicReference<Job?>,
     val dispatchGate: AtomicReference<RequestGate?>,
     val selectionSetupGate: AtomicReference<SelectionSetupGate?>,
+    val defaultAgent: AtomicReference<String>,
+    val defaultAgentRevision: AtomicLong,
   ) {
     fun prepare(sessionKey: String = FULL_MESSAGE_FIRST_CHAT) =
       checkNotNull(

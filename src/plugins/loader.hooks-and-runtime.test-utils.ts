@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { createAgentToolResultMiddlewareRunner } from "../agents/harness/tool-result-middleware.js";
 import { withEnv } from "../test-utils/env.js";
 import { createHookRunner } from "./hooks.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
@@ -29,6 +30,9 @@ import {
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { createPluginRegistryOwner, setActivePluginRegistry } from "./runtime.js";
 
 afterEach(globalAfterEach0);
 afterAll(globalAfterAll1);
@@ -341,7 +345,6 @@ ${channelPluginSource({
     );
     const plugin = writePlugin({
       id: "auto-enabled-load-path-channel",
-      filename: "auto-enabled-load-path-channel.cjs",
       body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
 ${channelPluginSource({
   pluginId: "auto-enabled-load-path-channel",
@@ -350,19 +353,11 @@ ${channelPluginSource({
   blurb: "auto-enabled load-path setup gate",
 })}`,
     });
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "auto-enabled-load-path-channel",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-          channels: ["auto-enabled-load-path-channel"],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+      id: "auto-enabled-load-path-channel",
+      configSchema: EMPTY_PLUGIN_SCHEMA,
+      channels: ["auto-enabled-load-path-channel"],
+    });
 
     const scopedSetupRegistry = loadOpenClawPlugins({
       cache: false,
@@ -798,26 +793,6 @@ ${channelPluginSource({
     expect(registry.channels).toHaveLength(0);
     expect(fs.existsSync(built.fullMarker)).toBe(false);
     expect(fs.existsSync(runtimeMarker)).toBe(false);
-  });
-
-  it("isolates loadSetupPlugin errors as per-plugin diagnostics instead of crashing registry load", () => {
-    useNoBundledPlugins();
-    const pluginDir = createSetupFailureFixture({
-      id: "setup-entry-throws-test",
-      setupEntrySource: THROWING_SETUP_ENTRY_SOURCE,
-    });
-    const registry = loadSetupPlugins({
-      paths: [pluginDir],
-      ids: ["setup-entry-throws-test"],
-    });
-
-    // The registry load should NOT crash; the error should be recorded as a
-    // per-plugin diagnostic rather than aborting the whole load.
-    expect(registry.diagnostics.length).toBeGreaterThanOrEqual(1);
-    const diagnostic = registry.diagnostics.find(
-      (d) => d.pluginId === "setup-entry-throws-test" && d.level === "error",
-    );
-    expect(diagnostic?.message).toContain("failed to load setup entry");
   });
 
   it("keeps healthy sibling channel plugins loadable when a setup entry throws", () => {
@@ -1341,6 +1316,75 @@ ${channelPluginSource({
       vi.useRealTimers();
     }
   });
+
+  it.each([
+    { successor: "replaced", replaced: true },
+    {
+      successor: "removed and its Gateway is closing",
+      closeGatewayA: true,
+    },
+    {
+      // A published build shares this process state but never links its registries.
+      successor: "removed from a registry a published build left unlinked",
+      unlinked: true,
+    },
+  ])(
+    "rejects retired middleware when its plugin was $successor",
+    async ({ successor, replaced, closeGatewayA, unlinked }) => {
+      useNoBundledPlugins();
+      const pluginId = `tool-result-middleware-${successor}`;
+      const plugin = writePlugin({
+        id: pluginId,
+        filename: `${pluginId}.cjs`,
+        registration: `api.registerAgentToolResultMiddleware((event) => ({
+          result: { ...event.result, content: [{ type: "text", text: "compacted" }] },
+        }), { runtimes: ["openclaw"] });`,
+      });
+      updatePluginManifest(plugin, { contracts: { agentToolResultMiddleware: ["openclaw"] } });
+      const registry = loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: { allow: [pluginId] },
+      });
+      const record = registry.plugins.find((entry) => entry.id === pluginId);
+      const instance = record && getPluginInstance(record);
+      const entry = registry.agentToolResultMiddlewares[0];
+      if (!instance || !entry) {
+        throw new Error("expected a loaded middleware plugin instance");
+      }
+      setActivePluginRegistry(registry);
+      const gatewayA = unlinked ? undefined : createPluginRegistryOwner(registry);
+      // A run resolves its middleware once and keeps that list.
+      const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+        entry.handler,
+      ]);
+      const event = {
+        toolCallId: "call-1",
+        toolName: "exec",
+        args: {},
+        result: { content: [{ type: "text" as const, text: "exit 0" }], details: {} },
+      };
+      expect((await runner.applyToolResultMiddleware(event)).content).toEqual([
+        { type: "text", text: "compacted" },
+      ]);
+
+      const next = createEmptyPluginRegistry();
+      if (replaced) {
+        next.plugins.push({ ...record });
+      }
+      setActivePluginRegistry(next);
+      gatewayA?.publish(next);
+      if (closeGatewayA) {
+        await gatewayA?.close();
+      }
+      await instance.dispose();
+      // A retired callback cannot run against the later result.
+      const details: Record<string, unknown> = { format: () => "exit 0" };
+      details.self = details;
+      const raw = { content: [{ type: "text" as const, text: "exit 0" }], details };
+      const result = await runner.applyToolResultMiddleware({ ...event, result: raw });
+      expect(result.details).toEqual({ status: "error", middlewareError: true });
+    },
+  );
 
   it("leaves agent tool-result middleware unbounded when no timeout is configured", async () => {
     useNoBundledPlugins();

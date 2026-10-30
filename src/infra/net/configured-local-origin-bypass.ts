@@ -1,63 +1,33 @@
 // Configured local-origin bypass logic decides when managed proxy routing may
-// skip proxying a known loopback provider origin.
+// skip proxying a known loopback provider origin, and which host-granted
+// address exemptions apply to that exact origin.
 import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
+import { normalizeHostname } from "./hostname.js";
 import { getActiveManagedProxyLoopbackMode } from "./proxy/active-proxy-state.js";
-import { SsrFBlockedError } from "./ssrf.js";
+import { withTrustedHostPodmanGatewayLinkLocalExemption } from "./ssrf-trusted-host-linklocal-exemptions.js";
+import { SsrFBlockedError, type SsrFPolicy } from "./ssrf.js";
 
 // Configured local-origin bypass allows managed proxy calls to skip proxying
 // only when config, DNS, and active loopback policy all prove a loopback target.
 export type ConfiguredLocalOriginManagedProxyBypass = {
   kind: "configured-local-origin";
   baseUrl: string;
+  /** Grant link-local DNS only to the exact configured host.containers.internal origin. */
+  allowPodmanHostGatewayLinkLocal?: boolean;
 };
 
-function resolveHttpOrigin(value: string): string | undefined {
-  try {
-    const parsed = new URL(value.trim());
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    parsed.hostname = parsed.hostname.replace(/\.+$/, "");
-    return parsed.origin.toLowerCase();
-  } catch {
+function parseHttpUrl(value: string): URL | undefined {
+  const parsed = URL.parse(value.trim());
+  if (!parsed || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
     return undefined;
   }
+  parsed.hostname = parsed.hostname.replace(/\.+$/, "");
+  return parsed;
 }
 
 function isLoopbackManagedProxyBypassHost(hostname: string): boolean {
-  const normalized = hostname
-    .trim()
-    .toLowerCase()
-    .replace(/\.+$/, "")
-    .replace(/^\[(.*)\]$/, "$1");
+  const normalized = normalizeHostname(hostname);
   return normalized === "localhost" || isLoopbackIpAddress(normalized);
-}
-
-function isExactConfiguredLocalOriginBypass(params: {
-  url: URL;
-  managedProxyBypass: ConfiguredLocalOriginManagedProxyBypass | undefined;
-}): boolean {
-  if (params.managedProxyBypass?.kind !== "configured-local-origin") {
-    return false;
-  }
-  const baseOrigin = resolveHttpOrigin(params.managedProxyBypass.baseUrl);
-  if (!baseOrigin) {
-    return false;
-  }
-  let baseHostname: string;
-  try {
-    baseHostname = new URL(params.managedProxyBypass.baseUrl.trim()).hostname;
-  } catch {
-    return false;
-  }
-  if (!isLoopbackManagedProxyBypassHost(baseHostname)) {
-    return false;
-  }
-  return resolveHttpOrigin(params.url.toString()) === baseOrigin;
-}
-
-function isPinnedLoopbackTarget(addresses: readonly string[]): boolean {
-  return addresses.length > 0 && addresses.every((address) => isLoopbackIpAddress(address));
 }
 
 /** Return whether proving a configured local-origin bypass requires target DNS. */
@@ -65,7 +35,14 @@ export function shouldResolveConfiguredLocalOriginManagedProxyBypass(params: {
   url: URL;
   managedProxyBypass: ConfiguredLocalOriginManagedProxyBypass | undefined;
 }): boolean {
-  return isExactConfiguredLocalOriginBypass(params);
+  if (params.managedProxyBypass?.kind !== "configured-local-origin") {
+    return false;
+  }
+  const baseUrl = parseHttpUrl(params.managedProxyBypass.baseUrl);
+  if (!baseUrl || !isLoopbackManagedProxyBypassHost(baseUrl.hostname)) {
+    return false;
+  }
+  return parseHttpUrl(params.url.toString())?.origin.toLowerCase() === baseUrl.origin.toLowerCase();
 }
 
 /** Return whether a configured local provider origin may bypass the managed proxy. */
@@ -74,7 +51,7 @@ export function shouldUseConfiguredLocalOriginManagedProxyBypass(params: {
   managedProxyBypass: ConfiguredLocalOriginManagedProxyBypass | undefined;
   resolvedAddresses: readonly string[];
 }): boolean {
-  if (!isExactConfiguredLocalOriginBypass(params)) {
+  if (!shouldResolveConfiguredLocalOriginManagedProxyBypass(params)) {
     return false;
   }
   const loopbackMode = getActiveManagedProxyLoopbackMode();
@@ -86,5 +63,28 @@ export function shouldUseConfiguredLocalOriginManagedProxyBypass(params: {
       "proxy: configured local provider loopback connections are blocked by proxy.loopbackMode",
     );
   }
-  return isPinnedLoopbackTarget(params.resolvedAddresses);
+  return (
+    params.resolvedAddresses.length > 0 &&
+    params.resolvedAddresses.every((address) => isLoopbackIpAddress(address))
+  );
+}
+
+/** Derive the host-only grant independently for each exact-origin hop. */
+export function resolveConfiguredLocalOriginLinkLocalHopPolicy(params: {
+  url: URL;
+  policy: SsrFPolicy | undefined;
+  managedProxyBypass: ConfiguredLocalOriginManagedProxyBypass | undefined;
+}): SsrFPolicy | undefined {
+  const { policy, managedProxyBypass } = params;
+  if (!policy || managedProxyBypass?.allowPodmanHostGatewayLinkLocal !== true) {
+    return policy;
+  }
+  const baseUrl = parseHttpUrl(managedProxyBypass.baseUrl);
+  if (
+    baseUrl?.hostname !== "host.containers.internal" ||
+    parseHttpUrl(params.url.href)?.origin !== baseUrl.origin
+  ) {
+    return policy;
+  }
+  return withTrustedHostPodmanGatewayLinkLocalExemption(policy);
 }

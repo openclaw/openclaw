@@ -1,6 +1,6 @@
 import { resolveOpenAICompletionsCompat } from "@openclaw/ai/internal/openai-completions-compat";
-// Normalizes provider model compatibility metadata from plugins.
-import "@openclaw/ai/internal/tool-schema";
+import { extractToolSchemaModelCompat } from "@openclaw/ai/internal/tool-schema";
+import { normalizeModelTransportBaseUrl } from "../agents/model-compat-catalog.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import { getModelProviderRequestRouteFacts } from "../agents/provider-request-config.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
@@ -13,14 +13,7 @@ export { resolveUnsupportedToolSchemaKeywords } from "@openclaw/ai/internal/tool
 export function extractModelCompat(
   modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
 ): ModelCompatConfig | undefined {
-  if (!modelOrCompat || typeof modelOrCompat !== "object") {
-    return undefined;
-  }
-  if ("compat" in modelOrCompat) {
-    const compat = (modelOrCompat as { compat?: unknown }).compat;
-    return compat && typeof compat === "object" ? (compat as ModelCompatConfig) : undefined;
-  }
-  return modelOrCompat as ModelCompatConfig;
+  return extractToolSchemaModelCompat(modelOrCompat);
 }
 
 /** @deprecated Provider-owned model compat helper; do not use from third-party plugins. */
@@ -59,25 +52,15 @@ function isOpenAiCompletionsModel(model: Model): model is Model<"openai-completi
   return model.api === "openai-completions";
 }
 
-function isAnthropicMessagesModel(model: Model): model is Model<"anthropic-messages"> {
-  return model.api === "anthropic-messages";
-}
-
-function normalizeAnthropicBaseUrl(baseUrl: string): string {
-  return baseUrl.replace(/\/v1\/?$/, "");
-}
-
 export function normalizeModelCompat(
   model: Model,
   providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps,
 ): Model {
   const baseUrl = model.baseUrl ?? "";
 
-  if (isAnthropicMessagesModel(model) && baseUrl) {
-    const normalized = normalizeAnthropicBaseUrl(baseUrl);
-    if (normalized !== baseUrl) {
-      return { ...model, baseUrl: normalized } as Model<"anthropic-messages">;
-    }
+  const normalized = normalizeModelTransportBaseUrl(model.api, baseUrl);
+  if (normalized !== baseUrl) {
+    return { ...model, baseUrl: normalized };
   }
 
   if (!isOpenAiCompletionsModel(model)) {

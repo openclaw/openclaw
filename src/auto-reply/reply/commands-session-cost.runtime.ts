@@ -29,7 +29,6 @@ export async function formatSessionUsageCostSummary(params: {
   const agentId = sessionAgentId ?? DEFAULT_AGENT_ID;
   const sessionSummary = await loadSessionCostSummary({
     sessionId: params.sessionEntry?.sessionId,
-    sessionEntry: params.sessionEntry,
     ...(params.sessionEntry?.sessionId && params.sessionKey
       ? {
           sessionTarget: {

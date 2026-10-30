@@ -8,15 +8,10 @@ const sdkState = vi.hoisted(() => ({
 
 vi.mock("@microsoft/teams.apps", () => ({
   App: class {
-    tokenManager = {
-      async getBotToken() {
-        if (sdkState.stall === "bot") {
-          return await new Promise<never>(() => {});
-        }
-        return { toString: () => "test-token" };
-      },
-      async getGraphToken() {
-        if (sdkState.stall === "graph") {
+    tokenProvider = {
+      async getAppToken(scope: string) {
+        const kind = scope === "https://graph.microsoft.com/.default" ? "graph" : "bot";
+        if (sdkState.stall === kind) {
           return await new Promise<never>(() => {});
         }
         return { toString: () => "test-token" };
@@ -63,7 +58,7 @@ describe("probeMSTeams request deadline", () => {
       expected: {
         ok: false,
         appId: "app-id",
-        error: `MS Teams Bot Framework probe token timed out after ${MSTEAMS_REQUEST_TIMEOUT_MS}ms`,
+        error: `MS Teams Bot Framework token check timed out after ${MSTEAMS_REQUEST_TIMEOUT_MS}ms`,
       },
     },
     {
@@ -73,7 +68,7 @@ describe("probeMSTeams request deadline", () => {
         appId: "app-id",
         graph: {
           ok: false,
-          error: `MS Teams Graph probe token timed out after ${MSTEAMS_REQUEST_TIMEOUT_MS}ms`,
+          error: `MS Teams Graph token check timed out after ${MSTEAMS_REQUEST_TIMEOUT_MS}ms`,
         },
       },
     },

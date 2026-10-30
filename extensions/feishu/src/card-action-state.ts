@@ -1,7 +1,4 @@
-export const processedCardActions = new Map<
-  string,
-  { status: "inflight" | "completed"; expiresAt: number }
->();
+export const processedCardActions = new Map<string, { expiresAt: number }>();
 
 export const resolvedCardActionChatTypes = new Map<
   string,

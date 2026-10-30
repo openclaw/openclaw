@@ -1,7 +1,6 @@
 // Normalizes markdown table configuration by channel and rendering mode.
 import { normalizeChannelId } from "../channels/plugins/index.js";
-import { listChannelPlugins } from "../channels/plugins/registry.js";
-import { getActivePluginChannelRegistryVersion } from "../plugins/runtime.js";
+import { getLoadedChannelPlugin } from "../channels/plugins/registry.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import type { ResolveMarkdownTableModeParams } from "./markdown-tables.types.js";
@@ -16,29 +15,6 @@ type MarkdownConfigEntry = {
 type MarkdownConfigSection = MarkdownConfigEntry & {
   accounts?: Record<string, MarkdownConfigEntry>;
 };
-
-function buildDefaultTableModes(): Map<string, MarkdownTableMode> {
-  return new Map(
-    listChannelPlugins()
-      .flatMap((plugin) => {
-        const defaultMarkdownTableMode = plugin.messaging?.defaultMarkdownTableMode;
-        return defaultMarkdownTableMode ? [[plugin.id, defaultMarkdownTableMode] as const] : [];
-      })
-      .toSorted(([left], [right]) => left.localeCompare(right)),
-  );
-}
-
-let cachedDefaultTableModes: Map<string, MarkdownTableMode> | null = null;
-let cachedDefaultTableModesRegistryVersion: number | null = null;
-
-function getDefaultTableModes(): Map<string, MarkdownTableMode> {
-  const registryVersion = getActivePluginChannelRegistryVersion();
-  if (!cachedDefaultTableModes || cachedDefaultTableModesRegistryVersion !== registryVersion) {
-    cachedDefaultTableModes = buildDefaultTableModes();
-    cachedDefaultTableModesRegistryVersion = registryVersion;
-  }
-  return cachedDefaultTableModes;
-}
 
 const isMarkdownTableMode = (value: unknown): value is MarkdownTableMode =>
   value === "off" || value === "bullets" || value === "code" || value === "block";
@@ -68,7 +44,9 @@ export function resolveMarkdownTableMode(
   params: ResolveMarkdownTableModeParams,
 ): MarkdownTableMode {
   const channel = normalizeChannelId(params.channel);
-  const defaultMode = channel ? (getDefaultTableModes().get(channel) ?? "code") : "code";
+  const defaultMode = channel
+    ? (getLoadedChannelPlugin(channel)?.messaging?.defaultMarkdownTableMode ?? "code")
+    : "code";
   let resolved = defaultMode;
   if (channel && params.cfg) {
     const channelsConfig = params.cfg.channels as Record<string, unknown> | undefined;

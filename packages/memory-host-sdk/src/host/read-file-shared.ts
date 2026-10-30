@@ -5,9 +5,9 @@ import type { MemoryReadResult } from "./types.js";
 // Shared memory-file read result shaping and truncation notices.
 
 /** Default number of lines returned by memory read helpers. */
-export const DEFAULT_MEMORY_READ_LINES = 120;
+const DEFAULT_MEMORY_READ_LINES = 120;
 /** Default max character budget for memory read helper output. */
-export const DEFAULT_MEMORY_READ_MAX_CHARS = 12_000;
+const DEFAULT_MEMORY_READ_MAX_CHARS = 12_000;
 
 export type { LegacyMemoryReadResult, MemoryReadResult } from "./types.js";
 

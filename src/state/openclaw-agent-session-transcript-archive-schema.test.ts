@@ -1,133 +1,87 @@
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
+  closeOpenClawAgentDatabasesForTest as closeDatabases,
+  openOpenClawAgentDatabase as openDatabase,
 } from "./openclaw-agent-db.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
-  ensureSessionTranscriptArchiveSchema,
+  ensureSessionTranscriptArchiveSchema as ensureArchives,
   SESSION_TRANSCRIPT_ARCHIVES_TABLE,
 } from "./openclaw-agent-session-transcript-archive-schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const schemaEntry = (database: Parameters<typeof ensureArchives>[0], type: string, name: string) =>
+  database
+    .prepare("SELECT name FROM main.sqlite_schema WHERE type = ? AND name = ?")
+    .get(type, name);
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-});
-
-function schemaWithoutTranscriptArchives(): string {
-  const start = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(
-    `CREATE TABLE IF NOT EXISTS ${SESSION_TRANSCRIPT_ARCHIVES_TABLE} (`,
-  );
-  const end = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(
-    "CREATE TABLE IF NOT EXISTS transcript_rewrite_watermarks (",
-    start,
-  );
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-  return `${OPENCLAW_AGENT_SCHEMA_SQL.slice(0, start)}${OPENCLAW_AGENT_SCHEMA_SQL.slice(end)}`;
+function withMissingArchiveTable(sql = "") {
+  const options = {
+    agentId: "main",
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-session-archive-schema-") },
+  };
+  const { path: pathname } = openDatabase(options);
+  closeDatabases();
+  using database = new DatabaseSync(pathname);
+  database.exec(`
+    DROP INDEX idx_agent_session_transcript_archives_pending;
+    DROP INDEX idx_agent_session_transcript_archives_retention;
+    DROP TABLE ${SESSION_TRANSCRIPT_ARCHIVES_TABLE};
+    ${sql}
+  `);
+  return { options, before: metadata(database) };
 }
 
-describe("session transcript archive schema", () => {
-  it("keeps a current database table-free until first archive use without changing its version", () => {
-    const stateDir = tempDirs.make("openclaw-session-archive-schema-");
-    const options = { agentId: "main", env: { OPENCLAW_STATE_DIR: stateDir } };
-    const initial = openOpenClawAgentDatabase(options);
-    const databasePath = initial.path;
-    closeOpenClawAgentDatabasesForTest();
-
-    const shipped = new DatabaseSync(databasePath);
-    shipped.exec(`
-      DROP INDEX idx_agent_session_transcript_archives_pending;
-      DROP INDEX idx_agent_session_transcript_archives_retention;
-      DROP TABLE ${SESSION_TRANSCRIPT_ARCHIVES_TABLE};
-    `);
-    const versionBefore = shipped.prepare("PRAGMA user_version").get();
-    const metadataBefore = shipped
+function metadata(database: Parameters<typeof ensureArchives>[0]) {
+  return {
+    version: database.prepare("PRAGMA user_version").get(),
+    schema: database
       .prepare("SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary'")
-      .get();
-    shipped.close();
+      .get(),
+  };
+}
 
-    const reopened = openOpenClawAgentDatabase(options);
-    expect(
-      reopened.db
-        .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get(SESSION_TRANSCRIPT_ARCHIVES_TABLE),
-    ).toBeUndefined();
+afterEach(() => closeDatabases());
 
-    ensureSessionTranscriptArchiveSchema(reopened.db);
+it("keeps a current database table-free until first archive use without changing its version", () => {
+  const { options, before } = withMissingArchiveTable();
+  const reopened = openDatabase(options).db;
+  const archive = () => schemaEntry(reopened, "table", SESSION_TRANSCRIPT_ARCHIVES_TABLE);
+  expect(archive()).toBeUndefined();
+  ensureArchives(reopened);
+  expect(archive()).toEqual({ name: SESSION_TRANSCRIPT_ARCHIVES_TABLE });
+  expect(metadata(reopened)).toEqual(before);
+});
 
-    expect(
-      reopened.db
-        .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get(SESSION_TRANSCRIPT_ARCHIVES_TABLE),
-    ).toEqual({ 1: 1 });
-    expect(reopened.db.prepare("PRAGMA user_version").get()).toEqual(versionBefore);
-    expect(
-      reopened.db
-        .prepare("SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary'")
-        .get(),
-    ).toEqual(metadataBefore);
-  });
+it("rejects a drifted archive table instead of treating it as an optional absence", () => {
+  const { options } = withMissingArchiveTable(`
+    CREATE TABLE ${SESSION_TRANSCRIPT_ARCHIVES_TABLE} (
+      session_id TEXT NOT NULL PRIMARY KEY,
+      archive_blob BLOB NOT NULL
+    ) STRICT;
+  `);
 
-  it("keeps a populated additive archive table usable by the previous schema contract", () => {
-    const database = new DatabaseSync(":memory:");
-    try {
-      database.exec(OPENCLAW_AGENT_SCHEMA_SQL);
-      database
-        .prepare(
-          `INSERT INTO ${SESSION_TRANSCRIPT_ARCHIVES_TABLE} (
-             session_id, generation, session_key, reason, encoding, archive_blob, archive_sha256,
-             archive_name, created_at
-           ) VALUES (?, ?, ?, 'deleted', 'identity', ?, ?, ?, ?)`,
-        )
-        .run(
-          "session-1",
-          "generation-1",
-          "agent:main:session-1",
-          Buffer.from("{}\n"),
-          "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
-          "session-1.jsonl.deleted.2026-08-14T00-00-00.000Z",
-          Date.now(),
-        );
+  expect(() => openDatabase(options)).toThrow(/session_transcript_archives|schema/u);
+});
 
-      expect(() =>
-        assertSqliteSchemaContains(
-          database,
-          "previous agent schema",
-          schemaWithoutTranscriptArchives(),
-        ),
-      ).not.toThrow();
-      expect(
-        database.prepare("SELECT archive_name FROM session_transcript_archives").get(),
-      ).toEqual({ archive_name: "session-1.jsonl.deleted.2026-08-14T00-00-00.000Z" });
-    } finally {
-      database.close();
-    }
-  });
-
-  it("rejects a drifted archive table instead of treating it as an optional absence", () => {
-    const stateDir = tempDirs.make("openclaw-session-archive-drift-");
-    const options = { agentId: "main", env: { OPENCLAW_STATE_DIR: stateDir } };
-    const initial = openOpenClawAgentDatabase(options);
-    const databasePath = initial.path;
-    closeOpenClawAgentDatabasesForTest();
-
-    const drifted = new DatabaseSync(databasePath);
-    drifted.exec(`
-      DROP INDEX idx_agent_session_transcript_archives_pending;
-      DROP INDEX idx_agent_session_transcript_archives_retention;
-      DROP TABLE ${SESSION_TRANSCRIPT_ARCHIVES_TABLE};
-      CREATE TABLE ${SESSION_TRANSCRIPT_ARCHIVES_TABLE} (
-        session_id TEXT NOT NULL PRIMARY KEY,
-        archive_blob BLOB NOT NULL
-      ) STRICT;
-    `);
-    drifted.close();
-
-    expect(() => openOpenClawAgentDatabase(options)).toThrow(/session_transcript_archives|schema/u);
-  });
+it("repairs a missing index on first admission and local companion-table removal on the next use", () => {
+  const filename = path.join(tempDirs.make("archive-schema-refresh-"), "agent.sqlite");
+  using peer = new DatabaseSync(filename);
+  ensureArchives(peer);
+  peer.exec("DROP INDEX idx_agent_session_transcript_archives_pending");
+  peer.close();
+  using database = openNodeSqliteDatabase(filename);
+  admitSqliteSchema(database);
+  ensureArchives(database);
+  const index = "idx_agent_session_transcript_archives_pending";
+  expect(schemaEntry(database, "index", index)).toEqual({ name: index });
+  database.exec("DROP TABLE session_transcript_cold_archives");
+  ensureArchives(database);
+  expect(database.prepare("SELECT session_id FROM session_transcript_cold_archives").all()).toEqual(
+    [],
+  );
 });

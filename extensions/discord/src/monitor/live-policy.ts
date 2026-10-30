@@ -85,10 +85,9 @@ export function createDiscordLivePolicyReader(params: {
         ? startupConfig
         : mergeDiscordAccountConfig(cfg, params.accountId);
       const discordConfig = { ...startupConfig, ...selectDiscordLivePolicyConfig(merged) };
-      const allowFrom = useInitialPolicy
-        ? (startupConfig.allowFrom ??
-          resolveDiscordAccountAllowFrom({ cfg, accountId: params.accountId }))
-        : resolveDiscordAccountAllowFrom({ cfg, accountId: params.accountId });
+      const allowFrom =
+        (useInitialPolicy ? startupConfig.allowFrom : undefined) ??
+        resolveDiscordAccountAllowFrom({ cfg, accountId: params.accountId });
       const key = JSON.stringify({
         guildEntries: discordConfig.guilds,
         allowFrom,
@@ -97,6 +96,7 @@ export function createDiscordLivePolicyReader(params: {
       if (!resolution || key !== resolutionKey) {
         resolutionKey = key;
         resolution = resolveDiscordAllowlistConfig({
+          accountId: params.accountId,
           token,
           guildEntries: discordConfig.guilds,
           allowFrom,

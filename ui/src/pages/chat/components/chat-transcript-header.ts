@@ -1,10 +1,8 @@
 import type { Virtualizer } from "@tanstack/virtual-core";
-import { resolveTranscriptScrollMargin } from "./chat-transcript-geometry.ts";
 
 /** Compensate a header change when unchanged row keys do not trigger a prepend anchor. */
 export function reconcileTranscriptHeaderMargin(
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
-  scrollElement: HTMLDivElement | null,
   headerHeight: number,
   appliedHeaderHeight: number,
 ): number {
@@ -14,7 +12,7 @@ export function reconcileTranscriptHeaderMargin(
   const delta = headerHeight - appliedHeaderHeight;
   virtualizer.setOptions({
     ...virtualizer.options,
-    scrollMargin: resolveTranscriptScrollMargin(scrollElement, headerHeight),
+    scrollMargin: virtualizer.options.scrollMargin + delta,
   });
   const offset = virtualizer.scrollOffset;
   const next = offset === null ? null : Math.max(0, offset + delta);

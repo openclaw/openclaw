@@ -238,18 +238,18 @@ struct DashboardNativeBrowserContractTests {
     @MainActor
     @Test func `new windows route HTTP reading links and ignore blank popups`() throws {
         let url = try #require(URL(string: "https://example.test/new"))
-        #expect(DashboardWindowController.newWindowAction(
+        #expect(ControlUIDocumentHost.newWindowAction(
             for: url, sourceIsNativeReadingTab: true) == .openTab(url))
-        #expect(DashboardWindowController.newWindowAction(
+        #expect(ControlUIDocumentHost.newWindowAction(
             for: url, sourceIsNativeReadingTab: false) == .openExternal(url))
         for sourceIsNativeReadingTab in [false, true] {
             for address in ["about:blank", "file:///tmp/private", "mailto:reader@example.test"] {
                 let target = try #require(URL(string: address))
-                #expect(DashboardWindowController.newWindowAction(
+                #expect(ControlUIDocumentHost.newWindowAction(
                     for: target,
                     sourceIsNativeReadingTab: sourceIsNativeReadingTab) == .ignore)
             }
-            #expect(DashboardWindowController.newWindowAction(
+            #expect(ControlUIDocumentHost.newWindowAction(
                 for: nil, sourceIsNativeReadingTab: sourceIsNativeReadingTab) == .ignore)
         }
     }
@@ -258,12 +258,12 @@ struct DashboardNativeBrowserContractTests {
     @Test func `reading browser navigation reserves auxiliary schemes for subframes`() throws {
         let webURL = try #require(URL(string: "https://example.test/"))
         let blankURL = try #require(URL(string: "about:blank"))
-        #expect(DashboardWindowController.shouldAllowBrowserNavigation(to: webURL, isMainFrame: true))
-        #expect(DashboardWindowController.shouldAllowBrowserNavigation(to: webURL, isMainFrame: false))
-        #expect(!DashboardWindowController.shouldAllowBrowserNavigation(to: blankURL, isMainFrame: true))
-        #expect(DashboardWindowController.shouldAllowBrowserNavigation(to: blankURL, isMainFrame: false))
+        #expect(ControlUIDocumentHost.shouldAllowBrowserNavigation(to: webURL, isMainFrame: true))
+        #expect(ControlUIDocumentHost.shouldAllowBrowserNavigation(to: webURL, isMainFrame: false))
+        #expect(!ControlUIDocumentHost.shouldAllowBrowserNavigation(to: blankURL, isMainFrame: true))
+        #expect(ControlUIDocumentHost.shouldAllowBrowserNavigation(to: blankURL, isMainFrame: false))
         for address in ["file:///tmp/private", "mailto:reader@example.test"] {
-            #expect(try !DashboardWindowController.shouldAllowBrowserNavigation(
+            #expect(try !ControlUIDocumentHost.shouldAllowBrowserNavigation(
                 to: #require(URL(string: address)), isMainFrame: false))
         }
     }
@@ -278,20 +278,20 @@ struct DashboardNativeBrowserContractTests {
             (false, false, .cancel),
         ]
         for testCase in cases {
-            #expect(DashboardWindowController.browserResponseAction(
+            #expect(ControlUIDocumentHost.browserResponseAction(
                 for: url, canShowMIMEType: false,
                 isMainFrame: testCase.mainFrame, userActivated: testCase.activated) == testCase.expected)
-            #expect(DashboardWindowController.browserResponseAction(
+            #expect(ControlUIDocumentHost.browserResponseAction(
                 for: url, canShowMIMEType: true,
                 isMainFrame: testCase.mainFrame, userActivated: testCase.activated) == .allow)
         }
         for address in ["file:///private/download", "mailto:reader@example.test", "about:blank"] {
             let target = try #require(URL(string: address))
-            #expect(DashboardWindowController.browserResponseAction(
+            #expect(ControlUIDocumentHost.browserResponseAction(
                 for: target, canShowMIMEType: false,
                 isMainFrame: true, userActivated: true) == .cancel)
         }
-        #expect(DashboardWindowController.browserResponseAction(
+        #expect(ControlUIDocumentHost.browserResponseAction(
             for: nil, canShowMIMEType: false, isMainFrame: true, userActivated: true) == .cancel)
     }
 
@@ -314,7 +314,7 @@ struct DashboardNativeBrowserContractTests {
 @Suite(.serialized)
 @MainActor
 struct DashboardNativeBrowserHostTests {
-    @Test func `navigation clears only the navigating tab's favicon from state`() throws {
+    @Test func `a committed document clears only its tab's favicon from state`() throws {
         let fixture = self.fixture()
         defer { fixture.host.dispose() }
         let blank = try #require(URL(string: "about:blank"))
@@ -327,7 +327,7 @@ struct DashboardNativeBrowserHostTests {
         }
         #expect(fixture.host.state.tabs.map(\.favicon) == [favicon, favicon])
         let first = try #require(fixture.host.webView(for: "mac-first"))
-        fixture.host.navigationWillStart(try #require(URL(string: "https://example.test/next")), in: first)
+        fixture.host.navigationDidCommit(in: first)
         #expect(fixture.host.state.tabs.map(\.favicon) == [nil, favicon])
     }
 
@@ -557,5 +557,96 @@ struct DashboardNativeBrowserHostTests {
             dashboardWebView: dashboard, container: container,
             websiteDataStore: store, onStateChange: onStateChange)
         return (host, container, dashboard)
+    }
+}
+
+@Suite(.serialized, .timeLimit(.minutes(1)))
+@MainActor
+struct DashboardNativeBrowserFaviconTests {
+    private static let favicon = "data:image/png;base64," +
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+
+    @Test func `navigations that keep the displayed page keep its favicon`() async throws {
+        let unreachable = try await DashboardHTTPFixture.start()
+        let unreachableURL = unreachable.url("/gone")
+        unreachable.stop()
+        let server = try await Self.server()
+        defer { server.stop() }
+        let controller = Self.controller(server)
+        defer { controller.closeDashboard() }
+        try controller.nativeBrowser.open(tabId: "mac-article", url: server.url("/article"), sessionKey: "")
+        let article = try #require(controller.nativeBrowser.webView(for: "mac-article"))
+
+        for trigger in ["fragment", "unreachable", "cancelled"] {
+            try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/article"))
+            try await TestWait.state("article favicon before \(trigger)") {
+                !article.isLoading && controller.nativeBrowser.state.tabs.first?.favicon == Self.favicon
+            }
+            if trigger == "fragment" {
+                _ = try await article.evaluateJavaScript("document.getElementById('jump').click(); true")
+                try await TestWait.state("fragment navigation") { article.url?.fragment == "section" }
+            } else {
+                try controller.nativeBrowser.navigate(
+                    tabId: "mac-article",
+                    url: trigger == "unreachable" ? unreachableURL : server.url("/archive.bin"))
+                try #require(article.isLoading)
+                try await TestWait.state("\(trigger) navigation ends") { !article.isLoading }
+                #expect(article.url?.path == "/article")
+            }
+            #expect(controller.nativeBrowser.state.tabs.first?.favicon == Self.favicon, "\(trigger)")
+        }
+    }
+
+    @Test func `replacement documents drop the previous page's favicon, including history restores`() async throws {
+        let server = try await Self.server()
+        defer { server.stop() }
+        let controller = Self.controller(server)
+        defer { controller.closeDashboard() }
+        try controller.nativeBrowser.open(tabId: "mac-article", url: server.url("/article"), sessionKey: "")
+        let article = try #require(controller.nativeBrowser.webView(for: "mac-article"))
+        try await TestWait.state("article favicon") {
+            controller.nativeBrowser.state.tabs.first?.favicon == Self.favicon
+        }
+
+        try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/plain"))
+        try await TestWait.state("plain page") { !article.isLoading && article.url?.path == "/plain" }
+        #expect(controller.nativeBrowser.state.tabs.first?.favicon == nil)
+
+        article.goBack()
+        try await TestWait.state("article favicon after back") {
+            !article.isLoading && controller.nativeBrowser.state.tabs.first?.favicon == Self.favicon
+        }
+        article.goForward()
+        try await TestWait.state("plain page after forward") { !article.isLoading && article.url?.path == "/plain" }
+        #expect(controller.nativeBrowser.state.tabs.first?.favicon == nil)
+    }
+
+    private static func server() async throws -> DashboardHTTPFixture {
+        try await DashboardHTTPFixture.start(
+            html: """
+            <!doctype html><html><head><title>Article</title><link rel="icon" href="\(self.favicon)"></head>
+            <body><a id="jump" href="#section">Section</a><h2 id="section">Section</h2></body></html>
+            """,
+            contentSecurityPolicy: "default-src 'none'; img-src data:; connect-src data:",
+            rawResponseHandler: { request in
+                let responses = [
+                    "/archive.bin": ("application/octet-stream", "PK\u{3}\u{4}"),
+                    "/plain": ("text/html", "<!doctype html><title>Plain</title>"),
+                ]
+                guard let (type, body) = responses.first(where: { request.hasPrefix("GET \($0.key) ") })?.value
+                else { return nil }
+                return .init(data: Data((
+                    "HTTP/1.1 200 OK\r\nContent-Type: \(type)\r\nContent-Length: \(body.utf8.count)\r\n" +
+                        "Connection: close\r\n\r\n\(body)").utf8))
+            })
+    }
+
+    private static func controller(_ server: DashboardHTTPFixture) -> DashboardWindowController {
+        DashboardWindowController(
+            url: server.url("/control/"),
+            auth: DashboardWindowAuth.unauthenticated,
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
     }
 }

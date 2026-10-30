@@ -1,17 +1,36 @@
 import path from "node:path";
 
-type WorkspaceSkillRoots = {
-  agentWorkspaceDir: string;
+export type ExecutionSkillWorkspace = {
   executionWorkspaceDir?: string;
+  /** Managed canonical sources belong to Gateway, not the agent workspace host. */
+  executionWorkspaceFileHost?: "gateway";
 };
+
+type WorkspaceSkillRoots = ExecutionSkillWorkspace & { agentWorkspaceDir: string };
+
+export function resolveSessionSkillExecutionWorkspace(
+  canonicalWorkspaceDir: string | undefined,
+  executionWorkspaceDir: string | undefined,
+): ExecutionSkillWorkspace {
+  return canonicalWorkspaceDir
+    ? { executionWorkspaceDir: canonicalWorkspaceDir, executionWorkspaceFileHost: "gateway" }
+    : { executionWorkspaceDir };
+}
 
 export function normalizeWorkspaceSkillRoots(roots: WorkspaceSkillRoots): WorkspaceSkillRoots {
   const agentWorkspaceDir = path.resolve(roots.agentWorkspaceDir);
   const executionWorkspaceDir = roots.executionWorkspaceDir
     ? path.resolve(roots.executionWorkspaceDir)
     : undefined;
-  return executionWorkspaceDir && executionWorkspaceDir !== agentWorkspaceDir
-    ? { agentWorkspaceDir, executionWorkspaceDir }
+  return executionWorkspaceDir &&
+    (executionWorkspaceDir !== agentWorkspaceDir || roots.executionWorkspaceFileHost)
+    ? {
+        agentWorkspaceDir,
+        executionWorkspaceDir,
+        ...(roots.executionWorkspaceFileHost
+          ? { executionWorkspaceFileHost: roots.executionWorkspaceFileHost }
+          : {}),
+      }
     : { agentWorkspaceDir };
 }
 

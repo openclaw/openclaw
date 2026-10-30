@@ -1,179 +1,180 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { loadUsageResultCached, type UsageCacheEntry } from "./usage-cache.js";
 
-function createSummary(totalTokens = 1) {
-  return {
-    updatedAt: Date.now(),
-    startDate: "2026-02-01",
-    endDate: "2026-02-02",
-    daily: [],
-    totals: {
-      totalTokens,
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalCost: 0,
-    },
-  };
+const summary = (totalTokens = 1) => ({ totals: { totalTokens } });
+type Summary = ReturnType<typeof summary> & { complete?: boolean };
+type Query = Parameters<typeof loadUsageResultCached<Summary>>[0];
+const loader = vi.fn<() => Promise<Summary>>();
+let cache: Map<string, UsageCacheEntry<Summary>>;
+let configRef: object;
+let now: number;
+const work: Promise<unknown>[] = [];
+const releases: (() => void)[] = [];
+const owners: AsyncWorkScope[] = [];
+function query(cacheKey = "all-sessions", overrides: Partial<Query> = {}): Query {
+  return { cache, cacheKey, configRef, revision: 0, load: loader, ...overrides };
 }
 
-type Summary = ReturnType<typeof createSummary> & { complete?: boolean };
+function load(params: Query) {
+  const result = loadUsageResultCached(params);
+  work.push(result);
+  const flight = cache.get(params.cacheKey)?.inFlight;
+  if (flight) {
+    work.push(flight);
+  }
+  return result;
+}
+function blocked(totalTokens = 1) {
+  const pending = createDeferredCore<Summary>();
+  releases.push(() => pending.resolve(summary(totalTokens)));
+  return pending;
+}
+function owner() {
+  const scope = new AsyncWorkScope();
+  owners.push(scope);
+  return scope;
+}
+beforeEach(() => {
+  cache = new Map();
+  configRef = {};
+  now = 1_000;
+  vi.useRealTimers();
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  loader.mockReset().mockResolvedValue(summary());
+});
+afterEach(async () => {
+  releases.splice(0).forEach((release) => release());
+  await Promise.allSettled(work.splice(0));
+  await Promise.all(owners.splice(0).map((scope) => scope.drain()));
+  vi.restoreAllMocks();
+});
 
-const loadSummary = vi.fn<() => Promise<Summary>>();
-let cache: Map<string, UsageCacheEntry<Summary>>;
-let now = 1_000;
-
-describe("usage result cache", () => {
-  const DAY_MS = 24 * 60 * 60 * 1000;
-
-  beforeEach(() => {
-    cache = new Map();
-    now = 1_000;
-    vi.useRealTimers();
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    loadSummary.mockReset().mockResolvedValue(createSummary());
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("retains a stale refresh after its cache entry is replaced", async () => {
-    const owner = new AsyncWorkScope();
-    const replacementOwner = new AsyncWorkScope();
-    const gate = createDeferredCore<Summary>();
-    const params = { cache, cacheKey: "stale", configRef: {}, load: loadSummary };
-    const first = await owner.track(() => loadUsageResultCached(params));
-    expect(cache.get(params.cacheKey)?.updatedAt).toBe(now);
-    now = 31_000;
-    loadSummary.mockReturnValueOnce(gate.promise);
-    let refresh: Promise<unknown> | undefined;
-    let closing: Promise<void> | undefined;
-    let drained = false;
-    try {
-      const stale = await owner.track(() => loadUsageResultCached(params));
-      expect(stale).toEqual(first);
-      // Keep the exact old tail even when work tracking is the regression under test.
-      refresh = cache.get(params.cacheKey)?.inFlight;
-      expect(refresh).toBeDefined();
-      await replacementOwner.track(() => loadUsageResultCached({ ...params, configRef: {} }));
-      await replacementOwner.drain();
-      expect(loadSummary).toHaveBeenCalledTimes(3);
-      closing = owner.drain().then(() => {
-        drained = true;
-      });
-      await nextTurn();
-      expect(drained).toBe(false);
-    } finally {
-      gate.resolve(createSummary());
-      await refresh;
-      await closing;
-      await Promise.all([owner.drain(), replacementOwner.drain()]);
-    }
-    expect(drained).toBe(true);
-  });
-
-  it("does not grow without bound when (startMs, endMs) varies across day rollover and range switches", async () => {
-    const configRef = {};
-    const ITERATIONS = 600;
-    for (let i = 0; i < ITERATIONS; i++) {
-      const startMs = Date.UTC(2026, 0, 1) + i * DAY_MS;
-      const endMs = startMs + (i % 3 === 0 ? DAY_MS : 7 * DAY_MS) - 1;
-      await loadUsageResultCached({
-        cache,
-        cacheKey: `${startMs}-${endMs}`,
-        configRef,
-        load: loadSummary,
-      });
-    }
-    // Observe retained entries as well as lookup behavior; empty-key leaks must fail.
-    expect(cache.size).toBeLessThan(ITERATIONS);
-    const lastStartMs = Date.UTC(2026, 0, 1) + (ITERATIONS - 1) * DAY_MS;
-    const lastEndMs = lastStartMs + ((ITERATIONS - 1) % 3 === 0 ? DAY_MS : 7 * DAY_MS) - 1;
-    expect(cache.has(`${lastStartMs}-${lastEndMs}`)).toBe(true);
-    const firstStartMs = Date.UTC(2026, 0, 1);
-    const firstEndMs = firstStartMs + DAY_MS - 1;
-    expect(cache.has(`${firstStartMs}-${firstEndMs}`)).toBe(false);
-  });
-
-  it("evicts settled entries before in-flight entries when possible", async () => {
-    const configRef = {};
-    const pending = createDeferredCore<Summary>();
-    loadSummary.mockReturnValueOnce(pending.promise);
-    const params = { cache, cacheKey: "active", configRef, load: loadSummary };
-    const inFlight = loadUsageResultCached(params);
-    let repeated: typeof inFlight | undefined;
-    try {
-      await Promise.resolve();
-      for (let i = 0; i < 256; i++) {
-        const startMs = Date.UTC(2026, 0, 1) + i * DAY_MS;
-        const endMs = startMs + DAY_MS - 1;
-        await loadUsageResultCached({
-          cache,
-          cacheKey: `${startMs}-${endMs}`,
-          configRef,
-          load: loadSummary,
-        });
+it.each([false, true])(
+  "replaces revisions without retaining history (revisionOnly=%s)",
+  async (revisionOnly) => {
+    const revisions = revisionOnly ? 2 : 32;
+    for (let revision = 1; revision <= revisions; revision++) {
+      loader.mockResolvedValueOnce(summary(revision));
+      const params = query("overview", { revision, revisionOnly });
+      const result = await load(params);
+      expect(result.totals.totalTokens).toBe(revision);
+      expect(cache.size).toBe(1);
+      if (revisionOnly && revision === 1) {
+        now += 60_000;
+        expect(await load(params)).toBe(result);
+        expect(loader).toHaveBeenCalledTimes(1);
       }
-      repeated = loadUsageResultCached(params);
-      await Promise.resolve();
-      expect(cache.has(params.cacheKey)).toBe(true);
-      expect(loadSummary).toHaveBeenCalledTimes(257);
-    } finally {
-      pending.resolve(createSummary());
-      await Promise.all([inFlight, repeated]);
     }
-  });
+    expect(loader).toHaveBeenCalledTimes(revisions);
+  },
+);
 
-  it("preserves a complete stale result when a refresh is partial", async () => {
-    const params = {
-      cache,
-      cacheKey: "partial",
-      configRef: {},
-      load: loadSummary,
-      isComplete: (summary: Summary) => summary.complete !== false,
-    };
-    loadSummary.mockResolvedValueOnce(createSummary(10));
-    const first = await loadUsageResultCached(params);
-    expect(first.totals.totalTokens).toBe(10);
-    loadSummary.mockResolvedValueOnce({ ...createSummary(0), complete: false });
-    now = 31_000;
-    await loadUsageResultCached(params);
-    await cache.get(params.cacheKey)?.inFlight;
-    expect(cache.get(params.cacheKey)?.inFlight).toBeUndefined();
+it("does not let a displaced revision overwrite the current result", async () => {
+  const pending = blocked();
+  loader.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(summary(2));
+  const old = load(query("all-sessions", { revision: 1 }));
+  const current = query("all-sessions", { revision: 2 });
+  const latest = load(current);
+  pending.resolve(summary());
+  expect((await latest).totals.totalTokens).toBe(2);
+  expect((await old).totals.totalTokens).toBe(1);
+  expect((await load(current)).totals.totalTokens).toBe(2);
+  expect(cache.size).toBe(1);
+  expect(loader).toHaveBeenCalledTimes(2);
+});
 
-    const blocked = createDeferredCore<Summary>();
-    const started = createDeferredCore();
-    loadSummary.mockImplementationOnce(() => {
-      started.resolve();
-      return blocked.promise;
-    });
-    let returned = false;
-    let next: Promise<Summary> | undefined;
-    let refresh: Promise<Summary> | undefined;
-    try {
-      next = loadUsageResultCached(params).then((result) => {
-        returned = true;
-        return result;
-      });
-      refresh = cache.get(params.cacheKey)?.inFlight;
-      expect(refresh).toBeDefined();
-      await started.promise;
-      await Promise.resolve();
-      expect(returned).toBe(true);
-      expect((await next).totals.totalTokens).toBe(10);
-      blocked.resolve(createSummary(20));
-      await refresh;
-      expect(cache.get(params.cacheKey)?.inFlight).toBeUndefined();
-      expect((await loadUsageResultCached(params)).totals.totalTokens).toBe(20);
-      expect(loadSummary).toHaveBeenCalledTimes(3);
-    } finally {
-      blocked.resolve(createSummary(20));
-      await Promise.allSettled([next, refresh, blocked.promise]);
+it.each([true, false])(
+  "reclaims expired variants before the count cap (complete=%s)",
+  async (complete) => {
+    for (let index = 0; index < 32; index++) {
+      await load(query(`date-range-${index}`, { isComplete: () => complete }));
+      expect(cache.size).toBe(1);
+      now += 30_001;
     }
+    expect(loader).toHaveBeenCalledTimes(32);
+  },
+);
+
+it("retains a stale refresh after its cache entry is replaced", async () => {
+  const original = owner(),
+    replacement = owner();
+  const gate = blocked();
+  const params = query("stale");
+  const first = await original.track(() => load(params));
+  expect(cache.get(params.cacheKey)?.updatedAt).toBe(now);
+  now = 31_000;
+  loader.mockReturnValueOnce(gate.promise);
+  expect(await original.track(() => load(params))).toEqual(first);
+  const refresh = cache.get(params.cacheKey)?.inFlight;
+  expect(refresh).toBeDefined();
+  await replacement.track(() => load({ ...params, configRef: {} }));
+  await replacement.drain();
+  expect(loader).toHaveBeenCalledTimes(3);
+  let drained = false;
+  const closing = original.drain().then(() => {
+    drained = true;
   });
+  await nextTurn();
+  expect(drained).toBe(false);
+  gate.resolve(summary());
+  await refresh;
+  await closing;
+  expect(drained).toBe(true);
+});
+
+it("evicts the oldest settled entry before an in-flight entry", async () => {
+  const pending = blocked();
+  loader.mockReturnValueOnce(pending.promise);
+  const params = query("active");
+  const active = load(params);
+  await Promise.resolve();
+  now += 30_001;
+  for (let i = 0; i < 256; i++) {
+    await load(query(String(i)));
+  }
+  const retained = load(params);
+  await Promise.resolve();
+  expect(cache.size).toBe(256);
+  expect(cache.has("0")).toBe(false);
+  expect(cache.has("255")).toBe(true);
+  expect(cache.has(params.cacheKey)).toBe(true);
+  expect(loader).toHaveBeenCalledTimes(257);
+  pending.resolve(summary());
+  await Promise.all([active, retained]);
+});
+
+it("preserves a complete stale result when a refresh is partial", async () => {
+  const params = query("partial", { isComplete: (value) => value.complete !== false });
+  loader.mockResolvedValueOnce(summary(10));
+  expect((await load(params)).totals.totalTokens).toBe(10);
+  loader.mockResolvedValueOnce({ ...summary(0), complete: false });
+  now = 31_000;
+  await load(params);
+  await cache.get(params.cacheKey)?.inFlight;
+  expect(cache.get(params.cacheKey)?.inFlight).toBeUndefined();
+  const pending = blocked(20),
+    started = createDeferredCore();
+  loader.mockImplementationOnce(() => {
+    started.resolve();
+    return pending.promise;
+  });
+  let returned = false;
+  const next = load(params).then((result) => {
+    returned = true;
+    return result;
+  });
+  const refresh = cache.get(params.cacheKey)?.inFlight;
+  expect(refresh).toBeDefined();
+  await started.promise;
+  await Promise.resolve();
+  expect(returned).toBe(true);
+  expect((await next).totals.totalTokens).toBe(10);
+  pending.resolve(summary(20));
+  await refresh;
+  expect(cache.get(params.cacheKey)?.inFlight).toBeUndefined();
+  expect((await load(params)).totals.totalTokens).toBe(20);
+  expect(loader).toHaveBeenCalledTimes(3);
 });

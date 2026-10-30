@@ -2,6 +2,23 @@ import { expect, vi } from "vitest";
 import { isPathInside } from "../../infra/path-guards.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
+export async function createRunWorkspaceMock() {
+  const { resolveCanonicalRunRuntimeWorkspace, resolveRootedRunRuntimeWorkspace } =
+    await vi.importActual<typeof import("../workspace-run.js")>("../workspace-run.js");
+  return {
+    resolveCanonicalRunRuntimeWorkspace,
+    resolveRootedRunRuntimeWorkspace,
+    resolveRunWorkspaceDir: vi.fn((params: { workspaceDir: string; agentId?: string }) => ({
+      workspaceDir: params.workspaceDir,
+      usedFallback: false,
+      isCanonicalWorkspace: false,
+      fallbackReason: undefined,
+      agentId: params.agentId ?? "main",
+    })),
+    redactRunIdentifier: vi.fn((value?: string) => value ?? ""),
+  };
+}
+
 /** Guard the real consumers before discovery can touch an unowned workspace. */
 export async function guardRunWorkspaceOwnership(
   state: Pick<OpenClawTestState, "root" | "home" | "stateDir">,

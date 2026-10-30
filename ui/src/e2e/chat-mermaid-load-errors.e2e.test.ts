@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiE2eBuiltAssetRequest,
+  controlUiE2eBuiltModuleRequest,
+} from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Mermaid asset load errors" });
@@ -18,7 +22,14 @@ suite.define(() => {
     "reports a blocked %s script as a renderer failure and recovers after reload",
     async (asset) => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-        const blockedScript = new RegExp(`/${asset}-[^/]+\\.js(?:\\?.*)?$`, "u");
+        if (asset === "frame") {
+          await page.clock.install();
+        }
+        // frame.js is a classic-script ?url asset; it has no bundled module sourcemap.
+        const blockedScript =
+          asset === "frame"
+            ? controlUiE2eBuiltAssetRequest("packages/mermaid-renderer/src/frame.js")
+            : controlUiE2eBuiltModuleRequest("ui/src/components/markdown-mermaid.tsx");
         let blocked = 0;
         await page.route(blockedScript, (route) => {
           blocked += 1;
@@ -33,7 +44,12 @@ suite.define(() => {
           ],
         });
         await page.goto(`${suite.server.baseUrl}chat`);
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
+        if (asset === "frame") {
+          // The renderer arms its deadline before appending the frame that requests this script.
+          await expect.poll(() => blocked).toBeGreaterThan(0);
+          await page.clock.runFor(15_001);
+        }
         const failure = page.getByText(/check proxy or authentication rules/u);
         await failure.waitFor({ timeout: 25_000 });
         expect(blocked).toBeGreaterThan(0);

@@ -16,16 +16,12 @@ import {
   WORKER_INFERENCE_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
 } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 
 export function workerProtocolError(
   reason: WorkerProtocolCloseReason,
-  options: {
-    code?: WorkerErrorShape["code"];
-    message?: string;
-    retryable?: boolean;
-    retryAfterMs?: number;
-  } = {},
+  options: Partial<Omit<WorkerErrorShape, "details">> = {},
 ): WorkerErrorShape {
   return {
     code: options.code ?? ErrorCodes.INVALID_REQUEST,
@@ -37,7 +33,8 @@ export function workerProtocolError(
 }
 
 export function workerMaxPayload(identity: WorkerConnectionIdentity): number {
-  return identity.protocolFeatures.includes(WORKER_INFERENCE_PROTOCOL_FEATURE)
+  return identity.protocolFeatures.includes(WORKER_INFERENCE_PROTOCOL_FEATURE) ||
+    identity.protocolFeatures.includes(WORKER_TURN_ADMISSION_PROTOCOL_FEATURE)
     ? WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES
     : WORKER_PROTOCOL_MAX_PAYLOAD_BYTES;
 }

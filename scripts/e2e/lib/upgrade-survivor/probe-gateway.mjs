@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 
 // Probes gateway state for upgrade-survivor E2E scenarios.
-import fs from "node:fs";
-import path from "node:path";
 import { readBoundedResponseText } from "../../../lib/bounded-response.mjs";
+import { writeJson } from "../fixtures/common.mjs";
 
 const args = process.argv.slice(2);
 
@@ -31,11 +30,6 @@ function optionValue(name, envName, fallback) {
     label: envName,
     value: process.env[envName] ?? fallback,
   };
-}
-
-function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function readStrictInteger({ allowZero = false, label, value }) {
@@ -82,13 +76,16 @@ const timeoutMs = readStrictInteger({ ...timeoutOption, allowZero: true });
 const attemptTimeoutMs = readStrictInteger(attemptTimeoutOption);
 const maxBodyBytes = readStrictInteger(maxBodyOption);
 const url = new URL(probePath, baseUrl).toString();
-if (expectKind !== "live" && expectKind !== "ready") {
+if (expectKind !== "live" && expectKind !== "ready" && expectKind !== "started") {
   throw new Error(`unknown probe expectation: ${expectKind}`);
 }
 
 function matchesExpectation(body) {
   if (expectKind === "live") {
     return body?.ok === true && body?.status === "live";
+  }
+  if (expectKind === "started") {
+    return body?.ok === true && body?.status === "started";
   }
   return body?.ready === true;
 }
@@ -175,7 +172,7 @@ while (Date.now() - startedAt < timeoutMs) {
   if (remainingDelayMs <= 0) {
     break;
   }
-  const delayMs = Math.min(500, remainingDelayMs);
+  const delayMs = Math.min(100, remainingDelayMs);
   await new Promise((resolve) => {
     setTimeout(resolve, delayMs);
   });

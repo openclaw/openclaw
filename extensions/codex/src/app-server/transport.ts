@@ -1,30 +1,30 @@
-/**
- * Shared transport lifecycle helpers for stdio and WebSocket Codex app-server
- * connections.
- */
 import { finished } from "node:stream/promises";
 import { terminateCodexAppServerDescendants } from "./transport-process-containment.js";
 import { waitForCodexAppServerProcessRegistrationCleanup } from "./transport-process-registration.js";
 
 export type CodexAppServerCloseResult =
-  | { exited: true; cleanup: "closed" | "uncertain" }
+  | { exited: true; cleanup: "closed" | "terminated" | "uncertain" }
   | { exited: false; cleanup: "uncertain" };
 
 type TransportClose = {
-  closing: Promise<"natural" | "contained" | "uncertain">;
+  closing: Promise<"natural" | "graceful" | "contained" | "uncertain">;
   naturalExit: boolean;
   wasForced: () => boolean;
 };
 const CODEX_APP_SERVER_TRANSPORT_CLOSES = new WeakMap<object, TransportClose>();
 
-type TransportCloseOptions = { forceKillDelayMs?: number; drainStdio?: boolean };
+type TransportCloseOptions = {
+  forceKillDelayMs?: number;
+  drainStdio?: boolean;
+  /** Safe only when native commands cannot have left untracked descendants. */
+  gracefulExit?: boolean;
+};
 
 /** True only after bounded settlement proves an exit that cleanup did not cause. */
 export function hasCodexAppServerNaturalExit(child: CodexAppServerTransport): boolean {
   return CODEX_APP_SERVER_TRANSPORT_CLOSES.get(child)?.naturalExit === true;
 }
 
-/** Child-process-like transport shape consumed by the Codex app-server client. */
 export type CodexAppServerTransport = {
   startupFailure?: { error?: Error; complete(): void };
   maxFrameBytes?: number;
@@ -78,26 +78,32 @@ function beginCodexAppServerTransportClose(
     if (hasCodexAppServerTransportExited(child)) {
       return "natural";
     }
+    if (options.gracefulExit) {
+      // The npm launcher owns the native server as a child. Killing descendants
+      // first kills that server, and the launcher mirrors its fatal signal.
+      child.stdin.end?.();
+      // Client admission is closed; discard late notifications so stdout cannot
+      // block Codex's shutdown drain after the message reader has detached.
+      child.stdout.resume();
+      if (await waitForCodexAppServerTransportExit(child, options.forceKillDelayMs ?? 1_000)) {
+        return "graceful";
+      }
+    }
     if (process.platform === "win32" || !child.pid || !child.kill) {
       finishCodexAppServerTransportClose(child, options, forceKill);
       return "uncertain";
     }
-    let contained;
-    try {
-      contained = await terminateCodexAppServerDescendants(child);
-    } catch {
-      contained = undefined;
-    }
+    const contained = await terminateCodexAppServerDescendants(child).catch(() => undefined);
     if (contained === "exited") {
-      return "natural";
+      return options.gracefulExit ? "graceful" : "natural";
     }
     try {
       finishCodexAppServerTransportClose(child, options, forceKill, contained?.resume);
     } catch {
       forceKill();
     }
-    // Only observed descendant termination followed by graceful root exit
-    // certifies cleanup. EOF or a forced root exit alone cannot prove it.
+    // A forced root exit is safe only after descendant termination was observed.
+    // Failed containment cannot certify cleanup from the root's exit alone.
     return contained ? "contained" : "uncertain";
   })();
   const closure = { closing, naturalExit: false, wasForced: () => forced };
@@ -171,21 +177,28 @@ export async function closeCodexAppServerTransportAndWait(
     child.stdout.destroy?.();
     child.stderr.destroy?.();
   }
-  return settled
-    ? {
-        exited: true,
-        cleanup:
-          containment === "contained" && !closure.wasForced() && child.signalCode == null
-            ? "closed"
-            : "uncertain",
-      }
-    : { exited: false, cleanup: "uncertain" };
+  if (!settled) {
+    return { exited: false, cleanup: "uncertain" };
+  }
+  if (containment === "contained") {
+    return {
+      exited: true,
+      cleanup: !closure.wasForced() && child.signalCode == null ? "closed" : "terminated",
+    };
+  }
+  return {
+    exited: true,
+    cleanup:
+      (containment === "graceful" || (containment === "natural" && options.gracefulExit)) &&
+      child.exitCode === 0 &&
+      child.signalCode == null
+        ? "closed"
+        : "uncertain",
+  };
 }
 
 function hasCodexAppServerTransportExited(child: CodexAppServerTransport): boolean {
-  return child.exitCode !== null && child.exitCode !== undefined
-    ? true
-    : child.signalCode !== null && child.signalCode !== undefined;
+  return child.exitCode != null || child.signalCode != null;
 }
 
 async function waitForCodexAppServerTransportExit(

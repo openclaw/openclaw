@@ -110,8 +110,5 @@ export function resolveRoutedReplyDeliveryOutcome(result: {
   if (!result.ok) {
     return resolveReplyDispatchErrorOutcome(result.cause);
   }
-  return resolveReplyDispatchDeliveryOutcome({
-    visibleReplySent: result.delivered,
-    suppression: { reason: result.reason },
-  });
+  return result.reason === "channel_transform" ? "channel-transform" : "delivered-not-visible";
 }

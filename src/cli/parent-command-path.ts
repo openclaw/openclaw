@@ -43,7 +43,6 @@ const PARENT_COMMAND_FLAGS: ReadonlyMap<string, ParentCommandFlags> = new Map([
   ["update", [UPDATE_PARENT_BOOLEAN_FLAGS, UPDATE_PARENT_VALUE_FLAGS]],
 ]);
 
-/** Resolve the parent commands whose options may precede a child command. */
 export function resolveCliParentCommandPath(
   argv: readonly string[],
   expectedParent?: "models" | "config" | "skills",

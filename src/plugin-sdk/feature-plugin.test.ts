@@ -1,29 +1,38 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
-import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createCapturedPluginRegistration } from "../plugins/captured-registration.js";
 import type {
   PluginCommandContext,
   OpenClawPluginCommandDefinition,
 } from "../plugins/plugin-command.types.js";
-import { startPluginServices } from "../plugins/services.js";
+import { startPluginServices } from "../plugins/services.test-support.js";
 import type { OpenClawPluginToolFactory } from "../plugins/tool-types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { defineFeatureContract } from "./feature-contract.js";
-import { defineFeaturePlugin, type FeatureInvocationContext } from "./feature-plugin.js";
+import {
+  defineFeaturePlugin,
+  type DefineFeaturePluginOptions,
+  type FeatureInvocationContext,
+} from "./feature-plugin.js";
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
 } from "./test-helpers/contracts-testkit.js";
 import { getToolPluginMetadata } from "./tool-plugin.js";
 
+const valueSchema = Type.Object({ value: Type.String() }, { additionalProperties: false });
+const baseOperation = {
+  description: "Fixture value.",
+  input: valueSchema,
+  output: valueSchema,
+};
 const contract = defineFeatureContract({
   pluginId: "feature-fixture",
   operations: {
     inspect: {
       kind: "query",
-      description: "Read a fixture value.",
-      input: Type.Object({ value: Type.String() }, { additionalProperties: false }),
+      ...baseOperation,
       output: Type.Object(
         { value: Type.String({ minLength: 1 }) },
         { additionalProperties: false },
@@ -33,14 +42,40 @@ const contract = defineFeatureContract({
   },
   events: { changed: Type.Object({ value: Type.String() }) },
 });
+const definition = { contract, name: "Feature fixture", description: "Fixture operations." };
 
 describe("typed feature plugins", () => {
+  let captured: ReturnType<typeof createCapturedPluginRegistration>;
+  let factory: OpenClawPluginToolFactory | undefined;
+  let command: OpenClawPluginCommandDefinition | undefined;
+  beforeEach(() => {
+    captured = createCapturedPluginRegistration({ id: contract.pluginId });
+    factory = undefined;
+    command = undefined;
+    captured.api.registerTool = (tool) => {
+      if (typeof tool === "function") {
+        factory = tool;
+      }
+    };
+    captured.api.registerCommand = (value) => {
+      command = value;
+    };
+  });
+  function register(setup: DefineFeaturePluginOptions<typeof contract>["setup"]) {
+    defineFeaturePlugin({ ...definition, setup }).register(captured.api);
+    return expectDefined(captured.sessionActions[0], "registered feature action");
+  }
+  function createTool(context: Parameters<OpenClawPluginToolFactory>[0] = {}) {
+    const tool = expectDefined(factory, "registered feature tool factory")(context);
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("Expected one feature tool");
+    }
+    return tool;
+  }
   it("shares typed handlers without losing action, tool, or command invocation context", async () => {
     const contexts: FeatureInvocationContext[] = [];
     const entry = defineFeaturePlugin({
-      contract,
-      name: "Feature fixture",
-      description: "Fixture operations.",
+      ...definition,
       setup: () => ({
         inspect(input, context) {
           expectTypeOf(input.value).toEqualTypeOf<string>();
@@ -59,17 +94,6 @@ describe("typed feature plugins", () => {
     expect(getToolPluginMetadata(entry)?.tools).toMatchObject([
       { name: "fixture_inspect", outputSchema: contract.operations.inspect.output },
     ]);
-    const captured = createCapturedPluginRegistration({ id: contract.pluginId });
-    let factory: OpenClawPluginToolFactory | undefined;
-    let command: OpenClawPluginCommandDefinition | undefined;
-    captured.api.registerTool = (tool) => {
-      if (typeof tool === "function") {
-        factory = tool;
-      }
-    };
-    captured.api.registerCommand = (value) => {
-      command = value;
-    };
     entry.register(captured.api);
     const action = expectDefined(captured.sessionActions[0], "registered feature action");
     const actionContext = {
@@ -82,10 +106,7 @@ describe("typed feature plugins", () => {
     expect(action.requiredScopes).toEqual(["operator.read"]);
 
     const toolContext = { sessionKey: "agent:fixture:task", agentId: "fixture", sandboxed: true };
-    const tool = expectDefined(factory, "registered feature tool factory")(toolContext);
-    if (!tool || Array.isArray(tool)) {
-      throw new Error("Expected one feature tool");
-    }
+    const tool = createTool(toolContext);
     const controller = new AbortController();
     const onUpdate = vi.fn();
     expect(
@@ -117,60 +138,28 @@ describe("typed feature plugins", () => {
 
   it("rejects invalid inputs before execution and invalid outputs before returning success", async () => {
     const execute = vi.fn(() => ({ value: "" }));
-    const entry = defineFeaturePlugin({
-      contract,
-      name: "Feature fixture",
-      description: "Fixture operations.",
-      setup: () => ({
-        inspect: execute,
-      }),
-    });
-    const captured = createCapturedPluginRegistration({ id: contract.pluginId });
-    entry.register(captured.api);
-    const action = expectDefined(captured.sessionActions[0], "registered feature action");
-    expect(
-      await action.handler({
+    const action = register(() => ({ inspect: execute }));
+    const invoke = (value: number | string) =>
+      action.handler({
         pluginId: contract.pluginId,
         actionId: "inspect",
-        payload: { value: 4 },
-      }),
-    ).toMatchObject({ ok: false, code: "INVALID_INPUT" });
+        payload: { value },
+      });
+    expect(await invoke(4)).toMatchObject({ ok: false, code: "INVALID_INPUT" });
     expect(execute).not.toHaveBeenCalled();
-    expect(
-      await action.handler({
-        pluginId: contract.pluginId,
-        actionId: "inspect",
-        payload: { value: "valid" },
-      }),
-    ).toMatchObject({ ok: false, code: "INVALID_OUTPUT" });
+    expect(await invoke("valid")).toMatchObject({ ok: false, code: "INVALID_OUTPUT" });
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it("propagates tool cancellation across awaited feature handlers", async () => {
     const { promise: pending, resolve: finish } = createDeferredCore();
-    const entry = defineFeaturePlugin({
-      contract,
-      name: "Feature fixture",
-      description: "Fixture operations.",
-      setup: () => ({
-        inspect: async (input) => {
-          await pending;
-          return input;
-        },
-      }),
-    });
-    const captured = createCapturedPluginRegistration({ id: contract.pluginId });
-    let factory: OpenClawPluginToolFactory | undefined;
-    captured.api.registerTool = (tool) => {
-      if (typeof tool === "function") {
-        factory = tool;
-      }
-    };
-    entry.register(captured.api);
-    const tool = expectDefined(factory, "feature tool factory")({});
-    if (!tool || Array.isArray(tool)) {
-      throw new Error("Expected one feature tool");
-    }
+    register(() => ({
+      inspect: async (input) => {
+        await pending;
+        return input;
+      },
+    }));
+    const tool = createTool();
     const controller = new AbortController();
     const result = tool.execute("cancelled-call", { value: "pending" }, controller.signal);
     controller.abort(new Error("tool cancelled"));
@@ -184,17 +173,11 @@ describe("typed feature plugins", () => {
       { pluginId: "feature-alpha", operation: "update", event: "updated" },
       { pluginId: "feature-beta", operation: "publish", event: "published" },
     ];
-    const valueSchema = Type.Object({ value: Type.String() }, { additionalProperties: false });
-    for (const { pluginId, operation, event } of fixtures) {
+    for (const { pluginId, operation: actionId, event } of fixtures) {
       const pluginContract = defineFeatureContract({
         pluginId,
         operations: {
-          [operation]: {
-            kind: "action",
-            description: "Publish a fixture value.",
-            input: valueSchema,
-            output: valueSchema,
-          },
+          [actionId]: { ...baseOperation, kind: "action" },
         },
         events: { [event]: valueSchema },
       });
@@ -203,7 +186,7 @@ describe("typed feature plugins", () => {
         name: pluginId,
         description: "Fixture event operations.",
         setup: (_api, events) => ({
-          [operation]: (input) => {
+          [actionId]: (input) => {
             events.emit(event, input);
             return input;
           },

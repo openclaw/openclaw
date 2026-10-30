@@ -1,38 +1,18 @@
-import type { DatabaseSync } from "node:sqlite";
-import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
-import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { SESSION_PARTICIPANTS_TABLE } from "./openclaw-agent-db-contract.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+import { sessionParticipantsSchemaSql } from "./openclaw-agent-schema-history.js";
 
-const ensuredDatabases = new WeakSet<DatabaseSync>();
+export { sessionParticipantsSchemaSql } from "./openclaw-agent-schema-history.js";
 
-export function sessionParticipantsSchemaSql(): string {
-  return extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, SESSION_PARTICIPANTS_TABLE, {
-    endMarker: "CREATE TABLE IF NOT EXISTS session_key_contract (",
-    includeEndMarker: false,
-    errorMessage: "OpenClaw session participant schema markers are missing.",
-  });
-}
+const ensureNativeSessionParticipantsSchema = createSqliteSchemaEnsurer(
+  sessionParticipantsSchemaSql,
+  { tables: [SESSION_PARTICIPANTS_TABLE] },
+);
 
-/** Lazily installs the additive participant table on the first admitted prompt. */
-export function ensureSessionParticipantsSchema(database: DatabaseSync): boolean {
-  if (ensuredDatabases.has(database)) {
-    return false;
+export function ensureSessionParticipantsSchema(database: EngineConnection): void {
+  // PostgreSQL admits the complete agent schema, including participants, at open.
+  if (!isPostgresSqlConnection(database)) {
+    ensureNativeSessionParticipantsSchema(database);
   }
-  const ensure = () => {
-    // sqlite-allow-raw -- canonical additive DDL only.
-    database.exec(sessionParticipantsSchemaSql());
-  };
-  if (database.isTransaction) {
-    ensure();
-    return true;
-  }
-  runSqliteImmediateTransactionSync(database, ensure);
-  ensuredDatabases.add(database);
-  return false;
-}
-
-/** Cache a first-use ensure only after its owning transaction commits. */
-export function confirmSessionParticipantsSchemaEnsured(database: DatabaseSync): void {
-  ensuredDatabases.add(database);
 }

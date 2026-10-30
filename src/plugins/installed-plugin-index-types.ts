@@ -5,9 +5,10 @@ import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginCandidate, PluginDiscoveryResult } from "./discovery.types.js";
 import type { PluginInstallSourceInfo } from "./install-source-info.types.js";
 import type { InstalledPluginFileSignature } from "./installed-plugin-index-hash.js";
-import type { PluginManifestRecord } from "./manifest-registry.types.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.types.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { OpenClawPackageBuild, PluginPackageChannel } from "./package-manifest.types.js";
+import type { PluginSourceAdmissionReceipt } from "./plugin-source-admission.types.js";
 
 /** Schema version for installed plugin index files. */
 export const INSTALLED_PLUGIN_INDEX_VERSION = 1;
@@ -49,67 +50,21 @@ export type InstalledPluginContributionInfo = {
   contracts: Readonly<Record<string, readonly string[]>>;
 };
 
-export type InstalledPluginInstallRecordInfo = Pick<
-  PluginInstallRecord,
-  | "source"
-  | "spec"
-  | "sourcePath"
-  | "installPath"
-  | "version"
-  | "resolvedName"
-  | "resolvedVersion"
-  | "resolvedSpec"
-  | "integrity"
-  | "shasum"
-  | "resolvedAt"
-  | "installedAt"
-  | "clawhubUrl"
-  | "clawhubPackage"
-  | "clawhubFamily"
-  | "clawhubChannel"
-  | "clawhubTrustDisposition"
-  | "clawhubTrustScanStatus"
-  | "clawhubTrustModerationState"
-  | "clawhubTrustReasons"
-  | "clawhubTrustPending"
-  | "clawhubTrustStale"
-  | "clawhubTrustCheckedAt"
-  | "clawhubTrustAcknowledgedAt"
-  | "artifactKind"
-  | "artifactFormat"
-  | "npmIntegrity"
-  | "npmShasum"
-  | "npmTarballName"
-  | "clawpackSha256"
-  | "clawpackSpecVersion"
-  | "clawpackManifestSha256"
-  | "clawpackSize"
-  | "gitUrl"
-  | "gitRef"
-  | "gitCommit"
-  | "marketplaceName"
-  | "marketplaceSource"
-  | "marketplacePlugin"
-  | "acceptedSurface"
-  | "acceptedSurfaceHash"
-  | "acceptedSurfaceAt"
-  | "acceptedSurfaceIntegrity"
->;
+export type InstalledPluginInstallRecordInfo = PluginInstallRecord;
 
 export type InstalledPluginPackageChannelInfo = PluginPackageChannel;
 
 /** One manifest-backed plugin entry in the generated installed plugin index. */
 export type InstalledPluginIndexRecord = {
   pluginId: string;
+  /** Retained manifest ownership; readable even when plugin files are unavailable. */
+  contextEngineIds?: readonly string[];
   packageName?: string;
   packageVersion?: string;
-  /**
-   * Legacy embedded install record accepted when reading earlier index files.
-   * New index writes keep install records in InstalledPluginIndex.installRecords.
-   */
-  installRecord?: InstalledPluginInstallRecordInfo;
   /** Hash of the top-level installRecords entry; used to detect source-changed invalidation. */
   installRecordHash?: string;
+  /** Native source admissions survive process restarts while the install owner is unchanged. */
+  sourceAdmissions?: Record<string, PluginSourceAdmissionReceipt>;
   /**
    * Package-authored openclaw.install metadata. This describes catalog/package
    * install intent and must not be treated as the durable install record.
@@ -162,7 +117,6 @@ export type InstalledPluginIndex = {
 
 export type InstalledPluginIndexScopeLookup = {
   addAgentHarnessOwners: (target: Set<string>, ids: readonly string[]) => void;
-  addChannelContributionOwners: (target: Set<string>, ids: readonly string[]) => void;
   addDirectChannelOwners: (target: Set<string>, ids: readonly string[]) => void;
   addDirectProviderOwners: (target: Set<string>, ids: readonly string[]) => void;
   addProviderContributionOwners: (target: Set<string>, ids: readonly string[]) => void;
@@ -186,6 +140,7 @@ export type InstalledPluginIndexFacts = {
   fingerprint?: string;
   scopeLookup?: InstalledPluginIndexScopeLookup;
   installRecords?: Record<string, PluginInstallRecord>;
+  idNormalizers?: WeakMap<PluginManifestRegistry, (pluginId: string) => string>;
 };
 
 export type LoadInstalledPluginIndexParams = {

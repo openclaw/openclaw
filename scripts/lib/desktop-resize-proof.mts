@@ -133,7 +133,11 @@ function desktopNodeStreamCloses(value: unknown) {
 }
 
 /** Read at most 1 MiB, including when a live fixture log grows after admission. */
-async function readDesktopProofLog(file: string) {
+async function readDesktopProofLog<T>(
+  file: string,
+  project: (records: unknown[]) => T,
+  prefix = "",
+) {
   try {
     const stat = await lstat(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) {
@@ -162,14 +166,21 @@ async function readDesktopProofLog(file: string) {
     } finally {
       await handle.close();
     }
-    return text.split("\n").flatMap((line): unknown[] => {
+    const records = text.split("\n").flatMap((line): unknown[] => {
+      if (!line.startsWith(prefix)) {
+        return [];
+      }
       try {
-        return [JSON.parse(line)];
-      } catch {
+        return [JSON.parse(line.slice(prefix.length))];
+      } catch (error) {
+        if (prefix) {
+          throw error;
+        }
         // An in-progress final write is not a completed lifecycle record.
         return [];
       }
     });
+    return project(records);
   } catch {
     // Diagnostic collection must not replace the framebuffer assertion failure.
     return null;
@@ -178,12 +189,8 @@ async function readDesktopProofLog(file: string) {
 
 /** Preserve the existing node projection while sharing the actual-byte read bound. */
 export async function readDesktopProofNodeStreamCloses(file: string) {
-  const records = await readDesktopProofLog(file);
-  if (!records) {
-    return null;
-  }
-  try {
-    return desktopNodeStreamCloses(
+  return await readDesktopProofLog(file, (records) =>
+    desktopNodeStreamCloses(
       records
         .flatMap((record) =>
           isRecord(record) &&
@@ -195,10 +202,8 @@ export async function readDesktopProofNodeStreamCloses(file: string) {
             : [],
         )
         .slice(-8),
-    );
-  } catch {
-    return null;
-  }
+    ),
+  );
 }
 
 function diagnosticEvents<T>(value: unknown, project: (event: unknown) => T) {
@@ -343,28 +348,22 @@ function desktopGatewayCloses(value: unknown) {
 }
 
 export async function readDesktopProofGatewayCloses(file: string) {
-  const records = await readDesktopProofLog(file);
-  if (!records) {
-    return null;
-  }
-  const events = (message: string) => {
-    const matching = records.flatMap((record) =>
-      isRecord(record) &&
-      record["0"] === '{"subsystem":"gateway/desktop"}' &&
-      record["2"] === message
-        ? [record["1"]]
-        : [],
-    );
-    return { events: matching.slice(-8), omitted: Math.max(0, matching.length - 8) };
-  };
-  try {
+  return await readDesktopProofLog(file, (records) => {
+    const events = (message: string) => {
+      const matching = records.flatMap((record) =>
+        isRecord(record) &&
+        record["0"] === '{"subsystem":"gateway/desktop"}' &&
+        record["2"] === message
+          ? [record["1"]]
+          : [],
+      );
+      return { events: matching.slice(-8), omitted: Math.max(0, matching.length - 8) };
+    };
     return desktopGatewayCloses({
       observerCloses: events("desktop observer closed"),
       sshTunnelExits: events("desktop SSH tunnel exited"),
     });
-  } catch {
-    return null;
-  }
+  });
 }
 
 function desktopViewerResizeFailure(value: unknown) {
@@ -441,6 +440,12 @@ function publicTestFailure(value: unknown) {
   return { category, failureLocations: locations };
 }
 
+function desktopTimingMs(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 12 * 60_000
+    ? value
+    : null;
+}
+
 /** Project the private built-in Vitest report; no error text, arbitrary metadata, or paths escape. */
 export function desktopProofTestReport(value: unknown) {
   if (!isRecord(value) || !Array.isArray(value.testResults) || value.testResults.length > 4) {
@@ -483,6 +488,7 @@ export function desktopProofTestReport(value: unknown) {
           return {
             index,
             status: test.status,
+            durationMs: desktopTimingMs(test.duration),
             phase,
             declarationLocation: isRecord(test.location)
               ? {
@@ -506,13 +512,35 @@ export function desktopProofTestReport(value: unknown) {
   };
 }
 
-export async function readDesktopProofTestReport(file: string) {
+export async function readDesktopProofTestReport(file: string, timingLog?: string) {
   const stat = await lstat(file);
   // Includes both bounded readiness histories and private Vitest failure logs before projection.
   if (!stat.isFile() || stat.size > 8 * 1024 * 1024) {
     throw new Error("Desktop test report must be a bounded regular file");
   }
-  return desktopProofTestReport(JSON.parse(await readFile(file, "utf8")));
+  const report = desktopProofTestReport(JSON.parse(await readFile(file, "utf8")));
+  // Interrupted or oversized logs can lack terminal timing; preserve the proof's outcome.
+  const timing = timingLog
+    ? await readDesktopProofLog(
+        timingLog,
+        (records) => {
+          const matching = records.filter(
+            (record) => isRecord(record) && record.file === desktopTestFile,
+          );
+          const record = matching[0];
+          if (matching.length !== 1 || !isRecord(record) || !isRecord(record.diagnostic)) {
+            return null;
+          }
+          const executionMs = desktopTimingMs(record.diagnostic.duration);
+          const collectionMs = desktopTimingMs(record.diagnostic.collectDuration);
+          return executionMs === null || collectionMs === null
+            ? null
+            : { executionMs, collectionMs };
+        },
+        "[vitest:module] ",
+      )
+    : null;
+  return { ...report, files: report.files.map((entry) => Object.assign(entry, { timing })) };
 }
 
 /** The joined child's last observed phase is evidence, not a completion or stall verdict. */
@@ -765,7 +793,7 @@ export function desktopProofAssets(value: unknown) {
   return Object.fromEntries(
     Object.entries(value).map(([name, hash]) => {
       if (
-        !/^(?:index|desktop)[\w.-]*\.js$/u.test(name) ||
+        !/^(?:index|desktop|novnc-)[\w.-]*\.js$/u.test(name) ||
         typeof hash !== "string" ||
         !digest.test(hash)
       ) {

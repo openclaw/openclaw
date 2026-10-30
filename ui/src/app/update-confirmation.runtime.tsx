@@ -1,0 +1,587 @@
+// Implementation of the Control UI's disruptive-update dialog. It stays behind
+// the `update-confirmation.ts` lazy boundary because nothing here runs until an
+// operator clicks an update affordance, and the startup bundle has no room for
+// a dialog nobody has opened yet.
+//
+// The dialog is the operator's primary surface for the whole update: it opens
+// as a confirmation, becomes a progress report on confirm, and reports a
+// failure in place. It is mounted on `document.body`, outside the shell, so the
+// Gateway restart that tears down the connection cannot unmount it.
+import { render } from "@solidjs/web";
+import { createMemo, createStore, Errored, For, isPending, Loading, Show } from "solid-js";
+import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
+import { isReportableUpdateRun } from "../../../src/shared/update-outcome-classification.ts";
+import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import { UpdateGitRevisions } from "../components/solid/update-git-revisions.tsx";
+import { UpdateRunView } from "../components/update-run-view.tsx";
+import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
+import "../components/modal-dialog.tsx";
+import { formatUiError } from "../lib/format-error.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { hasNativeUpdateBridge, postNativeUpdate } from "./native-link-routing.ts";
+import type { ConfirmAndStartUpdateParams, UpdateProgress } from "./update-confirmation.ts";
+import { formatUpdateTargetLabel, getUpdateGitComparison } from "./update-schedule-projection.ts";
+
+registerEnglishCatalog(registerUpdateActionsEnglish);
+
+/** Bounds the wait for the request to be accepted before calling it a no-start. */
+const UPDATE_ACCEPT_GRACE_MS = 4_000;
+const UPDATE_DIALOG_OPEN_CLASS = "update-dialog-open";
+
+type DialogPhase =
+  | { kind: "confirm" | "working" }
+  | { kind: "run"; run: UpdateRunRecord }
+  | { kind: "failed"; message: string };
+
+type StatusRead = { promise: Promise<"idle" | "success"> } | { error: string };
+
+let updateDialogOpen = false;
+
+function formatInstalledAndAvailable(
+  updateAvailable: UpdateAvailable | null,
+  updateSchedule: UpdateScheduleState | null,
+): string | undefined {
+  const currentVersion = updateAvailable?.currentVersion?.trim();
+  const installed = currentVersion
+    ? t("updates.target.version", { version: currentVersion })
+    : null;
+  const available = formatUpdateTargetLabel(updateSchedule, updateAvailable);
+  if (installed && available) {
+    // A commit count already reads as a distance, so "Available 246 commits
+    // behind" would double the framing; only a version needs the label.
+    const behind = getUpdateGitComparison(updateSchedule, updateAvailable) !== null;
+    return t(behind ? "updates.confirm.versionsBehind" : "updates.confirm.versions", {
+      available,
+      installed,
+    });
+  }
+  return installed ?? available ?? undefined;
+}
+
+export async function confirmAndStartUpdateRuntime(
+  params: ConfirmAndStartUpdateParams,
+): Promise<void> {
+  // Native confirms block reentrancy; refuse a second request rather than
+  // stacking a dialog over an update that is already being reported.
+  if (updateDialogOpen || (!params.existingRun && !params.isCurrentTarget())) {
+    return;
+  }
+  const host = document.createElement("div");
+  document.body.append(host);
+  // One surface owns the outcome at a time: the ambient copy stays hidden while
+  // the dialog that started this update is still reporting it.
+  document.body.classList.add(UPDATE_DIALOG_OPEN_CLASS);
+  let viaNativeApp = params.viaNativeApp;
+  let prepareRetry = params.prepareRetry;
+  let { updateAvailable, updateSchedule } = params;
+  await new Promise<void>((resolve) => {
+    let phase: DialogPhase = params.existingRun
+      ? { kind: "run", run: params.existingRun }
+      : { kind: "confirm" };
+    let settled = false;
+    let stopWatching: (() => void) | undefined;
+    let acceptTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+    let sawBusy = false;
+    let latestProgress: UpdateProgress | undefined;
+    // Admission stays synchronous while the native boundary observes completion.
+    let checkingStatus = false;
+    let statusRead: StatusRead | null = null;
+    let dispose: (() => void) | undefined;
+    let updateView: ((view: ReturnType<typeof readView>) => void) | undefined;
+
+    const close = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      stopWatching?.();
+      if (acceptTimer !== undefined) {
+        globalThis.clearTimeout(acceptTimer);
+      }
+      dispose?.();
+      host.remove();
+      document.body.classList.remove(UPDATE_DIALOG_OPEN_CLASS);
+      updateDialogOpen = false;
+      resolve();
+    };
+    const finish = () => {
+      if (!settled && phase.kind === "run" && phase.run.status !== "running") {
+        params.onAcknowledge?.();
+      }
+      close();
+    };
+    const retainTarget = () => {
+      if (params.isCurrentTarget()) {
+        return true;
+      }
+      close();
+      return false;
+    };
+    const watchProgress = (
+      watch: NonNullable<ConfirmAndStartUpdateParams["watchUpdateProgress"]>,
+      listener: (progress: UpdateProgress) => void,
+    ) => {
+      const stop = watch((progress) => {
+        if (settled) {
+          return;
+        }
+        latestProgress = progress;
+        // Restart retains the scoped row; its removal retires permission to display it.
+        if (phase.kind === "run" && !progress.run) {
+          close();
+          return;
+        }
+        listener(progress);
+      });
+      // Subscribe may synchronously retire an existing row before returning its disposer.
+      if (settled) {
+        stop();
+      } else {
+        stopWatching = stop;
+      }
+    };
+    updateDialogOpen = true;
+
+    function readView() {
+      const current = phase;
+      const route = viaNativeApp
+        ? {
+            confirmLabel: t("updates.confirm.macAction"),
+            message: t("updates.confirm.macMessage"),
+            title: t("chat.sidebar.updateMacAndGateway"),
+          }
+        : {
+            confirmLabel: t("updates.confirm.action"),
+            message: t(
+              formatUpdateTargetLabel(updateSchedule, updateAvailable)
+                ? "updates.confirm.message"
+                : "updates.confirm.noKnownUpdateMessage",
+            ),
+            title: t("chat.sidebar.updateGateway"),
+          };
+
+      const details = formatInstalledAndAvailable(updateAvailable, updateSchedule);
+      const run = current.kind === "run" ? current.run : null;
+      const readError = current.kind === "run" ? latestProgress?.readError : null;
+      const working = current.kind === "working" || run?.status === "running";
+      const finished = run !== null && run.status !== "running";
+      const failed = current.kind === "failed" || (run !== null && isReportableUpdateRun(run));
+      const showRecovery =
+        failed || Boolean(readError) || (current.kind !== "confirm" && statusRead !== null);
+      const disconnected = latestProgress?.connected === false;
+      const body =
+        current.kind === "run"
+          ? (readError ?? "")
+          : current.kind === "failed"
+            ? current.message
+            : current.kind === "working"
+              ? t(disconnected ? "updates.dialog.disconnected" : "updates.dialog.installing")
+              : `${route.message} ${t("updates.confirm.impact")}`;
+      return {
+        route,
+        details,
+        run,
+        working,
+        finished,
+        failed,
+        statusRead,
+        readError,
+        showRecovery,
+        disconnected,
+        body,
+        confirmed: current.kind === "confirm",
+        updateAvailable,
+        updateSchedule,
+      };
+    }
+
+    const draw = () => {
+      if (settled) {
+        return;
+      }
+      const snapshot = readView();
+      if (updateView) {
+        updateView(snapshot);
+        return;
+      }
+      dispose = render(() => {
+        // Run and schedule records retain the identity published by their owner.
+        const [view, setView] = createStore(snapshot, { shallow: true });
+        // Controls retain their idle read while each status receipt gets its own boundary.
+        const statusCompletion = createMemo(() => {
+          const read = view.statusRead;
+          return read && "promise" in read ? read.promise : "idle";
+        });
+        const statusPending = () => isPending(statusCompletion);
+        let cancelButton!: HTMLButtonElement;
+        let closeButton: HTMLButtonElement | undefined;
+        updateView = (next) => setView(() => next);
+        return (
+          <openclaw-modal-dialog
+            prop:initialFocus={() => (closeButton?.isConnected ? closeButton : cancelButton)}
+            label={view.route.title}
+            description={view.body}
+            onModal-cancel={finish}
+          >
+            <div class="exec-approval-card update-run-dialog">
+              <div class="exec-approval-header">
+                <div>
+                  <div class="exec-approval-title">{view.route.title}</div>
+                  <div class="exec-approval-sub" style="white-space: pre-line">
+                    {view.body}
+                  </div>
+                </div>
+              </div>
+              <For each={[view.statusRead]}>
+                {(read) => {
+                  const statusMessage = (refreshed = false) => (
+                    <div role="status" aria-live="polite" class="exec-approval-sub">
+                      {view.disconnected && view.showRecovery
+                        ? t("updates.dialog.checkStatusDisconnected")
+                        : refreshed && !view.readError
+                          ? t("updates.dialog.statusRefreshed")
+                          : null}
+                    </div>
+                  );
+                  const statusError = (message: () => string) => (
+                    <>
+                      {statusMessage()}
+                      <div role="alert" class="exec-approval-sub">
+                        {message()}
+                      </div>
+                    </>
+                  );
+                  if (read && "error" in read) {
+                    return statusError(() => read.error);
+                  }
+                  const completion = createMemo(() => read?.promise ?? "idle");
+                  return (
+                    <Errored fallback={(error) => statusError(() => formatUiError(error()))}>
+                      <Loading fallback={statusMessage()}>
+                        <Show when={completion()}>
+                          {(status) => (
+                            <>
+                              {statusMessage(status() === "success")}
+                              <Show when={view.details && view.confirmed && !statusPending()}>
+                                <div class="exec-approval-command mono update-confirmation-details">
+                                  <div>{view.details}</div>
+                                  <UpdateGitRevisions
+                                    schedule={view.updateSchedule}
+                                    updateAvailable={view.updateAvailable}
+                                  />
+                                </div>
+                              </Show>
+                            </>
+                          )}
+                        </Show>
+                      </Loading>
+                    </Errored>
+                  );
+                }}
+              </For>
+              <Show when={view.run}>
+                {(run) => <UpdateRunView run={run()} connected={!view.disconnected} />}
+              </Show>
+              <openclaw-modal-actions class="exec-approval-actions">
+                <Show
+                  when={view.finished || view.showRecovery}
+                  fallback={
+                    <>
+                      <button
+                        ref={(element) => {
+                          cancelButton = element;
+                        }}
+                        type="button"
+                        class="btn"
+                        autofocus
+                        onClick={finish}
+                      >
+                        {view.working ? t("common.close") : t("common.cancel")}
+                      </button>
+                      <button
+                        type="button"
+                        class={["btn danger", { "btn--busy": view.working || statusPending() }]}
+                        disabled={view.working || statusPending()}
+                        onClick={() => void confirm()}
+                      >
+                        {statusPending() ? (
+                          t("updates.dialog.checkingStatus")
+                        ) : view.working ? (
+                          <>
+                            <span class="btn__spinner" aria-hidden="true" />
+                            {t("chat.updating")}
+                          </>
+                        ) : (
+                          view.route.confirmLabel
+                        )}
+                      </button>
+                    </>
+                  }
+                >
+                  <button
+                    ref={(element) => {
+                      closeButton = element;
+                    }}
+                    type="button"
+                    class="btn"
+                    autofocus
+                    onClick={finish}
+                  >
+                    {t("common.close")}
+                  </button>
+                  <Show when={view.failed && params.onReviewUpdate}>
+                    <button
+                      type="button"
+                      class="btn"
+                      onClick={() => {
+                        finish();
+                        params.onReviewUpdate?.();
+                      }}
+                    >
+                      {t("updates.reviewUpdate")}
+                    </button>
+                  </Show>
+                  <Show when={view.showRecovery && params.onCheckStatus}>
+                    <button
+                      type="button"
+                      class={["btn", { "btn--busy": statusPending() }]}
+                      disabled={statusPending() || view.disconnected}
+                      onClick={() => void checkStatus()}
+                    >
+                      {statusPending() ? (
+                        <>
+                          <span class="btn__spinner" aria-hidden="true" />
+                          {t("updates.dialog.checkingStatus")}
+                        </>
+                      ) : (
+                        t("updates.dialog.checkStatus")
+                      )}
+                    </button>
+                  </Show>
+                  <Show when={view.failed}>
+                    <button
+                      type="button"
+                      class="btn primary"
+                      disabled={statusPending() || view.disconnected}
+                      onClick={() => void retry()}
+                    >
+                      {t("updates.dialog.retryUpdate")}
+                    </button>
+                  </Show>
+                </Show>
+              </openclaw-modal-actions>
+            </div>
+          </openclaw-modal-dialog>
+        );
+      }, host);
+    };
+
+    function observeStatus(promise: Promise<"idle" | "success">) {
+      statusRead = { promise };
+      // Closing the dialog retires its boundary before an admitted read may settle.
+      void promise.catch(() => undefined);
+      draw();
+    }
+
+    async function refreshTarget(
+      prepare: NonNullable<ConfirmAndStartUpdateParams["prepareRetry"]>,
+    ) {
+      if (!retainTarget()) {
+        return false;
+      }
+      checkingStatus = true;
+      const request = (async () => {
+        const target = await prepare();
+        if (settled || !retainTarget()) {
+          return false;
+        }
+        if (!target) {
+          throw new Error(t("updates.dialog.statusNotRefreshed"));
+        }
+        ({ updateAvailable, updateSchedule } = target);
+        return true;
+      })();
+      observeStatus(request.then(() => "idle"));
+      try {
+        const refreshed = await request;
+        statusRead = null;
+        return refreshed;
+      } catch {
+        return false;
+      } finally {
+        checkingStatus = false;
+        draw();
+      }
+    }
+
+    function checkNativePermission(): boolean {
+      if (params.canStartNativeUpdate?.() !== true) {
+        statusRead = { error: t("updates.adminRequired") };
+        draw();
+        return false;
+      }
+      return true;
+    }
+
+    function restoreNativeOwner(): "unchanged" | "restored" | "denied" {
+      if (
+        (!params.viaNativeApp && !params.prepareGatewayFallback) ||
+        viaNativeApp ||
+        !hasNativeUpdateBridge()
+      ) {
+        return "unchanged";
+      }
+      if (!checkNativePermission()) {
+        return "denied";
+      }
+      viaNativeApp = true;
+      prepareRetry = undefined;
+      return "restored";
+    }
+
+    async function retry() {
+      if (checkingStatus || latestProgress?.connected === false || !retainTarget()) {
+        return;
+      }
+      if (restoreNativeOwner() === "denied") {
+        return;
+      }
+      if (prepareRetry && !(await refreshTarget(prepareRetry))) {
+        return;
+      }
+      phase = { kind: "confirm" };
+      statusRead = null;
+      stopWatching?.();
+      draw();
+    }
+
+    async function checkStatus() {
+      const check = params.onCheckStatus;
+      if (checkingStatus || latestProgress?.connected === false || !check || !retainTarget()) {
+        return;
+      }
+      checkingStatus = true;
+      const request = (async (): Promise<"idle" | "success"> => {
+        if (await check()) {
+          return "success";
+        }
+        if (latestProgress?.readError) {
+          return "idle";
+        }
+        throw new Error(t("updates.dialog.statusNotRefreshed"));
+      })();
+      observeStatus(request);
+      try {
+        if ((await request) === "idle") {
+          statusRead = null;
+        }
+      } catch {
+        // The status boundary owns this read's visible error.
+      } finally {
+        checkingStatus = false;
+        draw();
+      }
+    }
+
+    async function confirm() {
+      if (phase.kind !== "confirm" || checkingStatus || !retainTarget()) {
+        return;
+      }
+      const nativeOwner = restoreNativeOwner();
+      if (nativeOwner !== "unchanged") {
+        if (nativeOwner === "restored") {
+          statusRead = null;
+          draw();
+        }
+        return;
+      }
+      if (viaNativeApp) {
+        if (!checkNativePermission()) {
+          return;
+        }
+        if (postNativeUpdate()) {
+          finish();
+          return;
+        }
+        if (params.prepareGatewayFallback) {
+          if (await refreshTarget(params.prepareGatewayFallback)) {
+            viaNativeApp = false;
+            prepareRetry = params.prepareGatewayFallback;
+            draw();
+          }
+          return;
+        }
+      }
+      const watch = params.watchUpdateProgress;
+      if (!watch) {
+        if (!retainTarget()) {
+          return;
+        }
+        params.startGatewayUpdate();
+        finish();
+        return;
+      }
+      sawBusy = false;
+      if (acceptTimer !== undefined) {
+        globalThis.clearTimeout(acceptTimer);
+      }
+      phase = { kind: "working" };
+      draw();
+      // Start before subscribing: an accepted run clears the retained banner
+      // synchronously, before its first await. Producers then emit that fresh
+      // snapshot as the subscribe-time emit, so a failure still present on it
+      // belongs to the previous attempt and is not this update's outcome —
+      // a refused request is reported by the accept timer below instead.
+      if (!retainTarget()) {
+        return;
+      }
+      params.startGatewayUpdate();
+      let retainedEmit = true;
+      watchProgress(watch, (progress) => {
+        const staleFailure = retainedEmit;
+        retainedEmit = false;
+        if (phase.kind === "confirm") {
+          return;
+        }
+        if (progress.run && (!staleFailure || progress.run.status === "running")) {
+          sawBusy = true;
+          phase = { kind: "run", run: progress.run };
+          draw();
+          return;
+        }
+        const failure =
+          progress.failure && progress.readError
+            ? `${progress.failure}\n${progress.readError}`
+            : (progress.failure ?? progress.readError);
+        if (failure && !staleFailure) {
+          phase = { kind: "failed", message: failure };
+          draw();
+          return;
+        }
+        sawBusy ||= progress.busy;
+        phase = { kind: "working" };
+        draw();
+      });
+      if (settled) {
+        return;
+      }
+      acceptTimer = globalThis.setTimeout(() => {
+        if (settled || sawBusy || phase.kind !== "working") {
+          return;
+        }
+        phase = { kind: "failed", message: t("updates.dialog.notStarted") };
+        draw();
+      }, UPDATE_ACCEPT_GRACE_MS);
+    }
+
+    if (params.existingRun && params.watchUpdateProgress) {
+      watchProgress(params.watchUpdateProgress, (progress) => {
+        if (progress.run) {
+          phase = { kind: "run", run: progress.run };
+          draw();
+        }
+      });
+    }
+    draw();
+  });
+}

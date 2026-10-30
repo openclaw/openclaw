@@ -112,5 +112,6 @@ pack:
     - Check both DM and channel behavior.
     - Include a Lobster Invaders build task.
     - Include a cron reminder about one minute in the future.
+    - Check that an operator-created cron job can message a configured channel outside its agent's interactive bindings.
     - Read docs and source before proposing extra QA scenarios.
     - Keep your tone in the configured dev C-3PO personality.

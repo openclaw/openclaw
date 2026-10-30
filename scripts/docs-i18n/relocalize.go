@@ -113,9 +113,6 @@ func setPostprocessVersion(frontMatter, version string) string {
 	if xi18nLine == -1 {
 		return frontMatter
 	}
-	if insertAt == -1 {
-		insertAt = len(lines)
-	}
 
 	lines = append(lines[:insertAt], append([]string{childIndent + "postprocess_version: " + version}, lines[insertAt:]...)...)
 	return strings.Join(lines, "\n")

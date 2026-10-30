@@ -1,26 +1,23 @@
-// Matrix tests cover client plugin behavior.
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createMockMatrixClient,
-  expectExplicitMatrixClientConfig,
   expectOneOffSharedMatrixClient,
   matrixClientResolverMocks,
   primeMatrixClientResolverMocks,
   setAcquiredMatrixClient,
 } from "../client-resolver.test-helpers.js";
+import { createMatrixMonitorTaskRunner } from "../monitor/task-runner.js";
+import { captureMatrixSendCurrentness } from "../sdk/send-currentness.js";
 
-const {
-  getMatrixRuntimeMock,
-  acquireSharedMatrixClientMock,
-  sharedLeaseReleaseMock,
-  resolveMatrixAuthContextMock,
-} = matrixClientResolverMocks;
+const { getMatrixRuntimeMock, acquireSharedMatrixClientMock, sharedLeaseReleaseMock } =
+  matrixClientResolverMocks;
 
-const TEST_CFG = {};
+const BORROWED_OPTIONS = { cfg: {}, accountId: "default" };
 
+// mock-isolation: Lease fixtures replace shared network/crypto client ownership.
 vi.mock("../client.js", () => ({
   acquireSharedMatrixClient: (...args: unknown[]) => acquireSharedMatrixClientMock(...args),
-  resolveMatrixAuthContext: resolveMatrixAuthContextMock,
 }));
 
 vi.mock("../../runtime.js", () => ({
@@ -36,100 +33,34 @@ describe("matrix send client helpers", () => {
       await import("./client.js"));
   });
 
-  beforeEach(() => {
-    primeMatrixClientResolverMocks({ resolved: {} });
-  });
+  beforeEach(primeMatrixClientResolverMocks);
 
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it("starts and persists borrowed send clients", async () => {
-    const result = await withResolvedMatrixSendClient(
-      { cfg: TEST_CFG, accountId: "default" },
-      async () => "ok",
-    );
-
-    await expectOneOffSharedMatrixClient({
-      prepareForOneOffCalls: 0,
-      startCalls: 1,
-      releaseMode: "persist",
-    });
-    expect(result).toBe("ok");
-  });
-
-  it("forwards the transient retirement signal to send work", async () => {
-    const sharedClient = createMockMatrixClient();
-    const lease = setAcquiredMatrixClient(sharedClient);
-
-    await withResolvedMatrixSendClient(
-      { cfg: TEST_CFG, accountId: "default" },
-      async (_client, abortSignal) => {
+  it.each(["send", "control"] as const)(
+    "borrows, forwards retirement and persists a %s client with the required readiness",
+    async (kind) => {
+      const lease = setAcquiredMatrixClient(createMockMatrixClient());
+      const run = kind === "send" ? withResolvedMatrixSendClient : withResolvedMatrixControlClient;
+      const result = await run(BORROWED_OPTIONS, async (_client, abortSignal) => {
         expect(abortSignal).toBe(lease.abortSignal);
-      },
-    );
-  });
-
-  it("uses the effective account id when auth resolution is implicit", async () => {
-    resolveMatrixAuthContextMock.mockReturnValue({
-      cfg: TEST_CFG,
-      env: process.env,
-      accountId: "ops",
-      resolved: {},
-    });
-
-    await withResolvedMatrixSendClient({ cfg: TEST_CFG }, async () => {});
-
-    await expectOneOffSharedMatrixClient({
-      accountId: "ops",
-      prepareForOneOffCalls: 0,
-      startCalls: 1,
-      releaseMode: "persist",
-    });
-  });
-
-  it("uses explicit cfg instead of loading runtime config", async () => {
-    const explicitCfg = {
-      channels: {
-        matrix: {
-          defaultAccount: "ops",
-        },
-      },
-    };
-
-    await withResolvedMatrixSendClient({ cfg: explicitCfg, accountId: "ops" }, async () => {});
-
-    expectExplicitMatrixClientConfig({
-      cfg: explicitCfg,
-      accountId: "ops",
-    });
-  });
+        return "ok";
+      });
+      await expectOneOffSharedMatrixClient({
+        prepareForOneOffCalls: 0,
+        startCalls: kind === "send" ? 1 : 0,
+        releaseMode: "persist",
+      });
+      expect(result).toBe("ok");
+    },
+  );
 
   it("persists borrowed send clients when wrapped sends fail", async () => {
-    const sharedClient = createMockMatrixClient();
-    setAcquiredMatrixClient(sharedClient);
-
     await expect(
-      withResolvedMatrixSendClient({ cfg: TEST_CFG, accountId: "default" }, async () => {
+      withResolvedMatrixSendClient(BORROWED_OPTIONS, async () => {
         throw new Error("boom");
       }),
     ).rejects.toThrow("boom");
 
     expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "persist" });
-  });
-
-  it("keeps borrowed control clients unstarted and releases without persistence", async () => {
-    const result = await withResolvedMatrixControlClient(
-      { cfg: TEST_CFG, accountId: "default" },
-      async () => "ok",
-    );
-
-    await expectOneOffSharedMatrixClient({
-      prepareForOneOffCalls: 0,
-      startCalls: 0,
-      releaseMode: "stop",
-    });
-    expect(result).toBe("ok");
   });
 
   it("does not borrow or stop explicitly injected clients", async () => {
@@ -146,5 +77,37 @@ describe("matrix send client helpers", () => {
     expect(start).not.toHaveBeenCalled();
     expect(acquireSharedMatrixClientMock).not.toHaveBeenCalled();
     expect(sharedLeaseReleaseMock).not.toHaveBeenCalled();
+  });
+
+  it("does not use an injected client after the monitor task is retired", async () => {
+    vi.useFakeTimers();
+    const injected = createMockMatrixClient();
+    const tasks = createMatrixMonitorTaskRunner({
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      logVerboseMessage: vi.fn(),
+    });
+    const sendEntered = createDeferred<void>();
+    const releaseSend = createDeferred<void>();
+    let wireSend = false;
+    const task = tasks.runDetachedTask("reply", async () => {
+      await withResolvedMatrixSendClient({ client: injected }, async () => {
+        sendEntered.resolve();
+        await releaseSend.promise;
+        captureMatrixSendCurrentness(injected)?.();
+        wireSend = true;
+      });
+    });
+    const idle = tasks.waitForIdle();
+    try {
+      await sendEntered.promise;
+      await vi.advanceTimersByTimeAsync(30_000);
+      await idle;
+      releaseSend.resolve();
+      await task;
+      expect(wireSend).toBe(false);
+    } finally {
+      tasks.close();
+      vi.useRealTimers();
+    }
   });
 });

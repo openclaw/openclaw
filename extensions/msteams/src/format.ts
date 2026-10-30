@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { getMarkdownTableSource } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
+  applyMarkdownTextEdits,
   convertMarkdownTables,
   FormatCapabilityProfile,
   type MarkdownIR,
+  type MarkdownTextEdit,
   markdownToIR,
   markdownToIRWithMeta,
   renderMarkdownWithMarkers,
@@ -37,18 +39,6 @@ const MSTEAMS_MARKERS = {
   strikethrough: { open: "~~", close: "~~" },
 } as const;
 
-function createTokenPrefix(text: string, label: string): string {
-  // With these parser options, the leading marker must be literal or entity-decoded.
-  const normalized = /[\u{E000}&]/u.test(text)
-    ? markdownToIR(text, { autolink: false, linkify: false }).text
-    : "";
-  let prefix: string;
-  do {
-    prefix = `\u{E000}${label}-${randomUUID()}\u{E001}`;
-  } while (text.includes(prefix) || normalized.includes(prefix));
-  return prefix;
-}
-
 function restoreTokens(text: string, prefix: string, values: readonly string[]): string {
   // Empty value tables can still have matching markers after normalization.
   if (!text.includes(prefix)) {
@@ -61,36 +51,9 @@ function restoreTokens(text: string, prefix: string, values: readonly string[]):
   );
 }
 
-type TextEdit = { start: number; end: number; text: string };
-
-function rewriteMarkdownIR(ir: MarkdownIR, edits: readonly TextEdit[]): MarkdownIR {
-  const ordered = edits.toSorted((a, b) => a.start - b.start);
-  const cumulativeDeltas: number[] = [];
-  const exactEdits = new Map<string, TextEdit>();
-  let text = "";
-  let cursor = 0;
-  let delta = 0;
-  for (const edit of ordered) {
-    text += ir.text.slice(cursor, edit.start) + edit.text;
-    cursor = edit.end;
-    delta += edit.text.length - (edit.end - edit.start);
-    cumulativeDeltas.push(delta);
-    exactEdits.set(`${edit.start}:${edit.end}`, edit);
-  }
-  text += ir.text.slice(cursor);
-  const mapOffset = (offset: number): number => {
-    let low = 0;
-    let high = ordered.length;
-    while (low < high) {
-      const middle = low + Math.floor((high - low) / 2);
-      if ((ordered[middle]?.end ?? Number.POSITIVE_INFINITY) <= offset) {
-        low = middle + 1;
-      } else {
-        high = middle;
-      }
-    }
-    return offset + (low > 0 ? (cumulativeDeltas[low - 1] ?? 0) : 0);
-  };
+function rewriteMarkdownIR(ir: MarkdownIR, edits: readonly MarkdownTextEdit[]): MarkdownIR {
+  const { text, mapOffset } = applyMarkdownTextEdits(ir.text, edits);
+  const exactEdits = new Map(edits.map((edit) => [`${edit.start}:${edit.end}`, edit]));
   const mapRange = <T extends { start: number; end: number }>(range: T): T => {
     const exact = exactEdits.get(`${range.start}:${range.end}`);
     const start = mapOffset(range.start);
@@ -114,46 +77,6 @@ function rewriteMarkdownIR(ir: MarkdownIR, edits: readonly TextEdit[]): Markdown
   };
 }
 
-function prefixMSTeamsBlockquotes(ir: MarkdownIR): MarkdownIR {
-  const quoteSpans = ir.styles.filter((span) => span.style === "blockquote");
-  const edits = quoteSpans.flatMap((span) => {
-    const positions = [span.start];
-    for (let index = span.start; index < span.end; index += 1) {
-      if (ir.text[index] === "\n" && index + 1 < span.end) {
-        positions.push(index + 1);
-      }
-    }
-    return positions.map((position) => ({ start: position, end: position, text: "> " }));
-  });
-  const rewritten = rewriteMarkdownIR(ir, edits);
-  return {
-    ...rewritten,
-    styles: rewritten.styles.filter((span) => span.style !== "blockquote"),
-  };
-}
-
-function longestBacktickRun(text: string): number {
-  return Math.max(0, ...(text.match(/`+/gu)?.map((run) => run.length) ?? []));
-}
-
-function renderMSTeamsCode(style: "code" | "code_block", text: string): string {
-  const marker = "`".repeat(Math.max(style === "code_block" ? 3 : 1, longestBacktickRun(text) + 1));
-  if (style === "code_block") {
-    return `${marker}\n${text}${marker}`;
-  }
-  const needsPadding =
-    text.startsWith("`") ||
-    text.endsWith("`") ||
-    (text.startsWith(" ") && text.endsWith(" ") && text.trim().length > 0);
-  return `${marker}${needsPadding ? " " : ""}${text}${needsPadding ? " " : ""}${marker}`;
-}
-
-function serializeMarkdownDestination(href: string): string {
-  return `<${href.replace(/([\\<>])/gu, "\\$1")}>`;
-}
-
-type DelimitedMarkdownScan = { end: number } | { next: number } | undefined;
-
 function blankBlockEnd(text: string, index: number): number | undefined {
   if (text[index] !== "\n" && text[index] !== "\r") {
     return undefined;
@@ -166,7 +89,7 @@ function scanDelimitedMarkdown(
   text: string,
   start: number,
   nestedOpener: "![" | "@[",
-): DelimitedMarkdownScan {
+): { end: number } | { next: number } | undefined {
   let bracketDepth = 1;
   let altEnd: number | undefined;
   let fallbackNext: number | undefined;
@@ -243,104 +166,6 @@ function protectDelimitedMarkdown(
   return protectedText + text.slice(cursor);
 }
 
-function protectRawTables(text: string, tokenPrefix: string, rawTables: string[]): string {
-  if (!text.includes("|")) {
-    return text;
-  }
-  const { tables } = markdownToIRWithMeta(text, {
-    autolink: false,
-    linkify: false,
-    tableMode: "block",
-  });
-  let result = "";
-  let cursor = 0;
-  for (const table of tables) {
-    const source = expectDefined(getMarkdownTableSource(table), "Markdown table source");
-    // Preserve raw indentation and CRLF trivia without hiding the enclosing quote markers.
-    const lineStart =
-      Math.max(text.lastIndexOf("\n", source.start - 1), text.lastIndexOf("\r", source.start - 1)) +
-      1;
-    const quotePrefix = /^(?: {0,3}>[ \t]?)*/u.exec(text.slice(lineStart, source.start))?.[0] ?? "";
-    const start = lineStart + quotePrefix.length;
-    const end = source.end + (text.slice(source.end, source.end + 2) === "\r\n" ? 1 : 0);
-    const index = rawTables.push(text.slice(start, end)) - 1;
-    result += text.slice(cursor, start) + `${tokenPrefix}t${index}${TOKEN_END}`;
-    cursor = end;
-  }
-  return result + text.slice(cursor);
-}
-
-function protectMSTeamsCode(
-  ir: MarkdownIR,
-  tokenPrefix: string,
-  code: string[],
-  protectedValues: readonly { prefix: string; values: readonly string[] }[],
-): MarkdownIR {
-  const codeSpans = ir.styles.filter(
-    (span) => span.style === "code" || span.style === "code_block",
-  );
-  const codeBlocks = codeSpans.filter((span) => span.style === "code_block");
-  const adjustedStyles = ir.styles.flatMap((span) => {
-    if (span.style !== "blockquote") {
-      return [span];
-    }
-    let segments = [span];
-    for (const codeBlock of codeBlocks) {
-      segments = segments.flatMap((segment) => {
-        if (codeBlock.end <= segment.start || codeBlock.start >= segment.end) {
-          return [segment];
-        }
-        return [
-          ...(segment.start < codeBlock.start ? [{ ...segment, end: codeBlock.start }] : []),
-          ...(codeBlock.end < segment.end ? [{ ...segment, start: codeBlock.end }] : []),
-        ];
-      });
-    }
-    return segments;
-  });
-  const rewritten = rewriteMarkdownIR(
-    { ...ir, styles: adjustedStyles },
-    codeSpans.map((span) => {
-      const codeStyle = span.style === "code_block" ? "code_block" : "code";
-      const source = protectedValues.reduce(
-        (text, protectedValue) => restoreTokens(text, protectedValue.prefix, protectedValue.values),
-        ir.text.slice(span.start, span.end),
-      );
-      const quoteDepth =
-        codeStyle === "code_block"
-          ? ir.styles.filter(
-              (candidate) =>
-                candidate.style === "blockquote" &&
-                span.start >= candidate.start &&
-                span.start < candidate.end,
-            ).length
-          : 0;
-      const rendered = renderMSTeamsCode(codeStyle, source);
-      let quoted =
-        quoteDepth > 0
-          ? `${"> ".repeat(quoteDepth)}${rendered.replaceAll("\n", `\n${"> ".repeat(quoteDepth)}`)}`
-          : rendered;
-      const hasTrailingQuotedText =
-        codeStyle === "code_block" &&
-        ir.styles.some(
-          (candidate) =>
-            candidate.style === "blockquote" &&
-            span.start >= candidate.start &&
-            candidate.end > span.end,
-        );
-      if (hasTrailingQuotedText && !quoted.endsWith("\n")) {
-        quoted += "\n";
-      }
-      const index = code.push(quoted) - 1;
-      return { start: span.start, end: span.end, text: `${tokenPrefix}c${index}${TOKEN_END}` };
-    }),
-  );
-  return {
-    ...rewritten,
-    styles: rewritten.styles.filter((span) => span.style !== "code" && span.style !== "code_block"),
-  };
-}
-
 export function formatMSTeamsMarkdown(markdown: string, tableMode: MarkdownTableMode): string {
   if (markdown === "") {
     return markdown;
@@ -351,7 +176,8 @@ export function formatMSTeamsMarkdown(markdown: string, tableMode: MarkdownTable
   const images: string[] = [];
   const mentions: string[] = [];
   const entities: string[] = [];
-  const tokenPrefix = createTokenPrefix(markdown, "msteamsformat");
+  // A fresh UUID makes authored-placeholder collisions best-effort, without a second parse.
+  const tokenPrefix = `\u{E000}msteamsformat-${randomUUID()}\u{E001}`;
   const entitiesProtected = markdown.replace(MARKDOWN_ENTITY_RE, (entity) => {
     const index = entities.push(entity) - 1;
     return `${tokenPrefix}h${index}${TOKEN_END}`;
@@ -369,8 +195,33 @@ export function formatMSTeamsMarkdown(markdown: string, tableMode: MarkdownTable
     mentions,
   );
   const tableInput = convertMarkdownTables(mentionsProtected, tableMode);
-  const converted =
-    tableMode === "off" ? protectRawTables(tableInput, tokenPrefix, rawTables) : tableInput;
+  let converted = tableInput;
+  if (tableMode === "off" && tableInput.includes("|")) {
+    const { tables } = markdownToIRWithMeta(tableInput, {
+      autolink: false,
+      linkify: false,
+      tableMode: "block",
+    });
+    let result = "";
+    let cursor = 0;
+    for (const table of tables) {
+      const source = expectDefined(getMarkdownTableSource(table), "Markdown table source");
+      // Preserve raw indentation and CRLF trivia without hiding the enclosing quote markers.
+      const lineStart =
+        Math.max(
+          tableInput.lastIndexOf("\n", source.start - 1),
+          tableInput.lastIndexOf("\r", source.start - 1),
+        ) + 1;
+      const quotePrefix =
+        /^(?: {0,3}>[ \t]?)*/u.exec(tableInput.slice(lineStart, source.start))?.[0] ?? "";
+      const start = lineStart + quotePrefix.length;
+      const end = source.end + (tableInput.slice(source.end, source.end + 2) === "\r\n" ? 1 : 0);
+      const index = rawTables.push(tableInput.slice(start, end)) - 1;
+      result += tableInput.slice(cursor, start) + `${tokenPrefix}t${index}${TOKEN_END}`;
+      cursor = end;
+    }
+    converted = result + tableInput.slice(cursor);
+  }
   const protectedMarkdown = converted.replace(ESCAPED_MARKDOWN_RE, (escaped) => {
     const index = escapedMarkdown.push(escaped) - 1;
     return `${tokenPrefix}e${index}${TOKEN_END}`;
@@ -383,15 +234,109 @@ export function formatMSTeamsMarkdown(markdown: string, tableMode: MarkdownTable
     linkify: false,
     blockquotePrefix: "",
   });
-  const ir = prefixMSTeamsBlockquotes(
-    protectMSTeamsCode(parsed, tokenPrefix, codeRegions, [
-      { prefix: `${tokenPrefix}e`, values: escapedMarkdown },
-      { prefix: `${tokenPrefix}t`, values: rawTables },
-      { prefix: `${tokenPrefix}m`, values: mentions },
-      { prefix: `${tokenPrefix}i`, values: images },
-      { prefix: `${tokenPrefix}h`, values: entities },
-    ]),
+  const protectedValues = [
+    { prefix: `${tokenPrefix}e`, values: escapedMarkdown },
+    { prefix: `${tokenPrefix}t`, values: rawTables },
+    { prefix: `${tokenPrefix}m`, values: mentions },
+    { prefix: `${tokenPrefix}i`, values: images },
+    { prefix: `${tokenPrefix}h`, values: entities },
+  ];
+  const codeSpans = parsed.styles.filter(
+    (span) => span.style === "code" || span.style === "code_block",
   );
+  const codeBlocks = codeSpans.filter((span) => span.style === "code_block");
+  const adjustedStyles = parsed.styles.flatMap((span) => {
+    if (span.style !== "blockquote") {
+      return [span];
+    }
+    let segments = [span];
+    for (const codeBlock of codeBlocks) {
+      segments = segments.flatMap((segment) => {
+        if (codeBlock.end <= segment.start || codeBlock.start >= segment.end) {
+          return [segment];
+        }
+        return [
+          ...(segment.start < codeBlock.start ? [{ ...segment, end: codeBlock.start }] : []),
+          ...(codeBlock.end < segment.end ? [{ ...segment, start: codeBlock.end }] : []),
+        ];
+      });
+    }
+    return segments;
+  });
+  const codeRewritten = rewriteMarkdownIR(
+    { ...parsed, styles: adjustedStyles },
+    codeSpans.map((span) => {
+      const codeStyle = span.style === "code_block" ? "code_block" : "code";
+      const source = protectedValues.reduce(
+        (text, protectedValue) => restoreTokens(text, protectedValue.prefix, protectedValue.values),
+        parsed.text.slice(span.start, span.end),
+      );
+      let quoteDepth = 0;
+      let hasTrailingQuotedText = false;
+      if (codeStyle === "code_block") {
+        for (const candidate of parsed.styles) {
+          if (candidate.style === "blockquote" && span.start >= candidate.start) {
+            if (span.start < candidate.end) {
+              quoteDepth += 1;
+            }
+            hasTrailingQuotedText ||= candidate.end > span.end;
+          }
+        }
+      }
+      const marker = "`".repeat(
+        Math.max(
+          codeStyle === "code_block" ? 3 : 1,
+          Math.max(0, ...(source.match(/`+/gu)?.map((run) => run.length) ?? [])) + 1,
+        ),
+      );
+      let rendered: string;
+      if (codeStyle === "code_block") {
+        rendered = `${marker}\n${source}${marker}`;
+      } else {
+        const needsPadding =
+          source.startsWith("`") ||
+          source.endsWith("`") ||
+          (source.startsWith(" ") && source.endsWith(" ") && source.trim().length > 0);
+        rendered = `${marker}${needsPadding ? " " : ""}${source}${needsPadding ? " " : ""}${marker}`;
+      }
+      let quoted =
+        quoteDepth > 0
+          ? `${"> ".repeat(quoteDepth)}${rendered.replaceAll("\n", `\n${"> ".repeat(quoteDepth)}`)}`
+          : rendered;
+      // In a list item the next item follows a code block directly, and a closing fence with
+      // text after it does not close the block.
+      const followedByText =
+        codeStyle === "code_block" &&
+        span.end < parsed.text.length &&
+        parsed.text[span.end] !== "\n";
+      if ((hasTrailingQuotedText || followedByText) && !quoted.endsWith("\n")) {
+        quoted += "\n";
+      }
+      const index = codeRegions.push(quoted) - 1;
+      return { start: span.start, end: span.end, text: `${tokenPrefix}c${index}${TOKEN_END}` };
+    }),
+  );
+  const codeProtected = {
+    ...codeRewritten,
+    styles: codeRewritten.styles.filter(
+      (span) => span.style !== "code" && span.style !== "code_block",
+    ),
+  };
+  const quoteSpans = codeProtected.styles.filter((span) => span.style === "blockquote");
+  const edits = quoteSpans.flatMap((span) => {
+    const positions = [span.start];
+    for (let index = span.start; index < span.end; index += 1) {
+      if (codeProtected.text[index] === "\n" && index + 1 < span.end) {
+        positions.push(index + 1);
+      }
+    }
+    return positions.map((position) => ({ start: position, end: position, text: "> " }));
+  });
+  const rewritten = rewriteMarkdownIR(codeProtected, edits);
+  const ir = {
+    ...rewritten,
+    styles: rewritten.styles.filter((span) => span.style !== "blockquote"),
+  };
   const rendered = renderMarkdownWithMarkers(
     ir,
     {
@@ -401,15 +346,13 @@ export function formatMSTeamsMarkdown(markdown: string, tableMode: MarkdownTable
         start: link.start,
         end: link.end,
         open: "[",
-        close: `](${serializeMarkdownDestination(link.href)})`,
+        close: `](<${link.href.replace(/([\\<>])/gu, "\\$1")}>)`,
       }),
     },
     MSTEAMS_FORMAT_CAPABILITIES,
   );
-  let restored = restoreTokens(rendered, `${tokenPrefix}c`, codeRegions);
-  restored = restoreTokens(restored, `${tokenPrefix}e`, escapedMarkdown);
-  restored = restoreTokens(restored, `${tokenPrefix}t`, rawTables);
-  restored = restoreTokens(restored, `${tokenPrefix}m`, mentions);
-  restored = restoreTokens(restored, `${tokenPrefix}i`, images);
-  return restoreTokens(restored, `${tokenPrefix}h`, entities);
+  return protectedValues.reduce(
+    (text, { prefix, values }) => restoreTokens(text, prefix, values),
+    restoreTokens(rendered, `${tokenPrefix}c`, codeRegions),
+  );
 }

@@ -12,21 +12,6 @@ function isPluginsPath(path: string): boolean {
   return path === "plugins" || path.startsWith("plugins.");
 }
 
-function isPluginEntryIssue(issue: ConfigValidationIssue): boolean {
-  const path = issue.path.trim();
-  if (!path.startsWith(PLUGIN_ENTRY_PATH_PREFIX)) {
-    return false;
-  }
-  return path.slice(PLUGIN_ENTRY_PATH_PREFIX.length).trim().length > 0;
-}
-
-function isPluginPolicyIssue(issue: ConfigValidationIssue): boolean {
-  return (
-    PLUGIN_POLICY_PATHS.has(issue.path.trim()) &&
-    issue.message.trim().startsWith("plugin not found:")
-  );
-}
-
 /** Return true for plugin validation issues caused by missing compiled runtime output. */
 function isPluginPackagingRuntimeOutputIssue(issue: ConfigValidationIssue): boolean {
   const path = issue.path.trim();
@@ -34,29 +19,14 @@ function isPluginPackagingRuntimeOutputIssue(issue: ConfigValidationIssue): bool
   return isPluginsPath(path) && message.includes(COMPILED_RUNTIME_OUTPUT_DIAGNOSTIC);
 }
 
-function isPluginPackagingFalloutIssue(issue: ConfigValidationIssue): boolean {
-  const path = issue.path.trim();
-  const message = issue.message.trim();
-  return isPluginsPath(path) && message.startsWith("plugin not found:");
-}
-
 function normalizePluginIssueId(value: string | undefined): string | null {
-  const normalized = value?.trim().toLowerCase();
-  return normalized ? normalized : null;
-}
-
-function extractPluginPackagingRuntimeOutputPluginId(issue: ConfigValidationIssue): string | null {
-  if (!isPluginPackagingRuntimeOutputIssue(issue)) {
-    return null;
-  }
-  return normalizePluginIssueId(PLUGIN_DIAGNOSTIC_PREFIX_PATTERN.exec(issue.message.trim())?.[1]);
+  return value?.trim().toLowerCase() || null;
 }
 
 function extractPluginNotFoundIssuePluginId(issue: ConfigValidationIssue): string | null {
-  if (!isPluginPackagingFalloutIssue(issue)) {
-    return null;
-  }
-  return normalizePluginIssueId(PLUGIN_NOT_FOUND_PATTERN.exec(issue.message.trim())?.[1]);
+  return isPluginsPath(issue.path.trim())
+    ? normalizePluginIssueId(PLUGIN_NOT_FOUND_PATTERN.exec(issue.message.trim())?.[1])
+    : null;
 }
 
 /**
@@ -75,7 +45,9 @@ export function isPluginPackagingRuntimeOutputInvalidConfigSnapshot(
   );
   const packagingPluginIds = new Set(
     packagingIssues
-      .map((issue) => extractPluginPackagingRuntimeOutputPluginId(issue))
+      .map((issue) =>
+        normalizePluginIssueId(PLUGIN_DIAGNOSTIC_PREFIX_PATTERN.exec(issue.message.trim())?.[1]),
+      )
       .filter((pluginId): pluginId is string => pluginId !== null),
   );
   return (
@@ -101,7 +73,14 @@ export function isPluginLocalInvalidConfigSnapshot(
   if (snapshot.valid || snapshot.legacyIssues.length > 0 || snapshot.issues.length === 0) {
     return false;
   }
-  return snapshot.issues.every((issue) => isPluginEntryIssue(issue) || isPluginPolicyIssue(issue));
+  return snapshot.issues.every((issue) => {
+    const path = issue.path.trim();
+    return (
+      (path.startsWith(PLUGIN_ENTRY_PATH_PREFIX) &&
+        path.slice(PLUGIN_ENTRY_PATH_PREFIX.length).trim().length > 0) ||
+      (PLUGIN_POLICY_PATHS.has(path) && issue.message.trim().startsWith("plugin not found:"))
+    );
+  });
 }
 
 /**
@@ -111,10 +90,7 @@ export function isPluginLocalInvalidConfigSnapshot(
 export function shouldAttemptLastKnownGoodRecovery(
   snapshot: Pick<ConfigFileSnapshot, "valid" | "issues" | "legacyIssues">,
 ): boolean {
-  if (snapshot.valid) {
-    return false;
-  }
-  return !isPluginLocalInvalidConfigSnapshot(snapshot);
+  return !snapshot.valid && !isPluginLocalInvalidConfigSnapshot(snapshot);
 }
 
 function isSensitiveConfigPath(pathLabel: string): boolean {

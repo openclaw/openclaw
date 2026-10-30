@@ -1,30 +1,29 @@
-const leaseErrorCodes = [
-  "OPENCLAW_STATE_LEASE_INVALID_INPUT",
-  "OPENCLAW_STATE_LEASE_HELD",
-  "OPENCLAW_STATE_LEASE_ABORTED",
-  "OPENCLAW_STATE_LEASE_LOST",
-  "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
-] as const;
-export type OpenClawStateLeaseErrorCode = (typeof leaseErrorCodes)[number];
+import { formatStateLeaseLoss, type StateLeaseLoss } from "../shared/state-lease-loss.js";
+
+export type OpenClawStateLeaseErrorCode =
+  | "OPENCLAW_STATE_LEASE_INVALID_INPUT"
+  | "OPENCLAW_STATE_LEASE_HELD"
+  | "OPENCLAW_STATE_LEASE_ABORTED"
+  | "OPENCLAW_STATE_LEASE_LOST"
+  | "OPENCLAW_STATE_LEASE_STORAGE_FAILED";
 
 type OpenClawStateLeaseAcquisitionFailure =
   | { kind: "held"; holder: { owner: string; epoch: number } }
   | { kind: "store-unavailable"; reason: "sqlite-busy" | "lifecycle-busy" | "storage-error" }
   | { kind: "aborted"; reason: "caller-signal"; elapsedMs: number };
 
-export function isOpenClawStateLeaseErrorCode(
-  value: unknown,
-): value is OpenClawStateLeaseErrorCode {
-  return leaseErrorCodes.some((code) => code === value);
-}
-
 export class OpenClawStateLeaseError extends Error {
   readonly code: OpenClawStateLeaseErrorCode;
+  readonly loss?: StateLeaseLoss;
 
-  constructor(message: string, options: { code: OpenClawStateLeaseErrorCode; cause?: unknown }) {
+  constructor(
+    message: string,
+    options: { code: OpenClawStateLeaseErrorCode; cause?: unknown; loss?: StateLeaseLoss },
+  ) {
     super(message, { cause: options.cause });
     this.name = "OpenClawStateLeaseError";
     this.code = options.code;
+    this.loss = options.loss;
   }
 }
 
@@ -69,11 +68,31 @@ export function createOpenClawStateLeaseError(
   code: OpenClawStateLeaseErrorCode,
   message: string,
   cause?: unknown,
+  loss?: StateLeaseLoss,
 ): OpenClawStateLeaseError {
-  return new OpenClawStateLeaseError(message, {
-    code,
-    ...(cause === undefined ? {} : { cause }),
-  });
+  return new OpenClawStateLeaseError(message, { code, cause, loss });
+}
+
+export function createOpenClawStateLeaseLostError(
+  identity: {
+    scope: string;
+    key: string;
+    leaseLabel?: string;
+    renewalTimer?: { dueAt?: number; lateByMs: number };
+  },
+  cause?: unknown,
+  loss?: StateLeaseLoss,
+): OpenClawStateLeaseError {
+  const timer = identity.renewalTimer;
+  const lateByMs = timer
+    ? Math.max(timer.lateByMs, timer.dueAt === undefined ? 0 : Date.now() - timer.dueAt)
+    : 0;
+  const diagnostic =
+    loss?.reason === "expired" && lateByMs > 0 ? { ...loss, renewalTimerLateByMs: lateByMs } : loss;
+  return new OpenClawStateLeaseError(
+    `${identity.leaseLabel ?? "state lease"} ${identity.scope}/${identity.key} was lost${diagnostic ? ` (${formatStateLeaseLoss(diagnostic)})` : ""}`,
+    { code: "OPENCLAW_STATE_LEASE_LOST", cause, loss: diagnostic },
+  );
 }
 
 export function createOpenClawStateLeaseAbortError(
@@ -86,4 +105,20 @@ export function createOpenClawStateLeaseAbortError(
     `${leaseLabel} ${label} was aborted`,
     signal.reason,
   );
+}
+
+export function resolveOpenClawStateLeaseOperationError(
+  operationError: unknown,
+  settledError: unknown,
+  authorityError: unknown,
+): unknown {
+  if (!(authorityError instanceof Error)) {
+    return settledError;
+  }
+  if (settledError !== operationError && authorityError instanceof OpenClawStateLeaseError) {
+    // Nested owners retain the caller's authority code and all operation/drainage causes.
+    const { code, message, loss } = authorityError;
+    return createOpenClawStateLeaseError(code, message, settledError, loss);
+  }
+  return authorityError;
 }

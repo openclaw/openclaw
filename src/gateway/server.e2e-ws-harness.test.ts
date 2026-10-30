@@ -1,14 +1,18 @@
+import { createServer as createHttpServer } from "node:http";
 import { afterEach, expect, test, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import type { TestPortClaim } from "../test-utils/port-claims.js";
 import { gatewayFixtureLifetime } from "./gateway-fixture-lifetime.test-support.js";
 import { startGatewayServerHarness } from "./server.e2e-ws-harness.js";
+import type { GatewayServer } from "./server.js";
 
 const startup = vi.hoisted(() => ({
-  port: vi.fn<() => Promise<TestPortClaim>>(),
-  server: vi.fn<(claim: TestPortClaim) => Promise<never>>(),
+  reservation: vi.fn<typeof import("./test-helpers.listener.js").reserveGatewayTestListener>(),
+  server: vi.fn<(claim: TestPortClaim) => Promise<GatewayServer>>(),
 }));
-vi.mock("../test-utils/port-claims.js", () => ({ acquireTestPortBlock: startup.port }));
+vi.mock("./test-helpers.listener.js", () => ({
+  reserveGatewayTestListener: startup.reservation,
+}));
 vi.mock("./test-helpers.js", () => ({
   startTestGatewayServer: startup.server,
   connectOk: vi.fn(),
@@ -27,13 +31,25 @@ test.each(["port", "admission", "server"] as const)(
     const failure = new Error(`injected ${stage} acquisition failure`);
     process.env.OPENCLAW_GATEWAY_TOKEN = "fixture-token";
     const release = vi.fn(async () => {});
-    startup.port.mockResolvedValue({ port: 12345, release });
+    let released = false;
+    const closeUnadopted = async () => {
+      if (!released) {
+        released = true;
+        await release();
+      }
+    };
+    startup.reservation.mockResolvedValue({
+      port: 12345,
+      listener: createHttpServer(),
+      closeUnadopted,
+      start: async (run) => run(),
+    });
     startup.server.mockImplementation(async (claim) => {
       await claim.release();
       throw failure;
     });
     if (stage === "port") {
-      startup.port.mockRejectedValue(failure);
+      startup.reservation.mockRejectedValue(failure);
     }
     if (stage === "admission") {
       vi.spyOn(gatewayFixtureLifetime, "assertAdmission")

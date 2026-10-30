@@ -1,296 +1,277 @@
 import { FILE_TYPE_SNIFF_MAX_BYTES } from "@openclaw/media-core/mime";
-import { Type } from "typebox";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { getAiTransportHost } from "../../packages/ai/src/host.js";
 import { convertMessages } from "../../packages/ai/src/openai-completions-messages.js";
 import { streamSimpleAnthropic } from "../../packages/ai/src/providers/anthropic.js";
-import { extractToolResultText } from "../../packages/ai/src/providers/tool-result-text.js";
 import { resolveOpenAICompletionsCompat } from "../../packages/ai/src/transports/openai-completions-compat.js";
-import type { Context, Model } from "../../packages/ai/src/types.js";
+import type { Context, Model, ToolResultMessage } from "../../packages/ai/src/types.js";
 import { projectProviderError } from "../../packages/ai/src/utils/provider-error.js";
-import { createOpenClawReadTool } from "../agents/agent-tools.read.js";
-import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
+import {
+  makeAgentAssistantMessage,
+  makeAgentUserMessage,
+} from "../agents/test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
+import {
+  withGuardedFetchBeforeRequest,
+  withGuardedFetchRequestAuthority,
+} from "../infra/net/fetch-request-authority.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
+import { loggingState } from "../logging/state.js";
 import {
   createSolidPngBuffer,
   createTinyJpegBuffer,
 } from "../plugin-sdk/test-helpers/image-fixtures.js";
 import "./ai-transport-host.js";
+import { withModelTransportContext } from "./model-transport-context.js";
 
-afterEach(resetSecretRedactionRegistryForTest);
+afterEach(() => {
+  resetSecretRedactionRegistryForTest();
+  resetLogger();
+  loggingState.rawConsole = null;
+  vi.restoreAllMocks();
+});
 
-describe("OpenClaw Anthropic inline images", () => {
-  it("keeps complete canonical user and tool-result images through the installed host", async () => {
-    const jpeg = Buffer.alloc(FILE_TYPE_SNIFF_MAX_BYTES + 32);
-    createTinyJpegBuffer().copy(jpeg);
-    jpeg.write("user-image-tail", jpeg.length - 15);
-    const png = Buffer.alloc(FILE_TYPE_SNIFF_MAX_BYTES + 33);
-    createSolidPngBuffer(1, 1, { r: 18, g: 52, b: 86 }).copy(png);
-    png.write("tool-image-tail", png.length - 15);
-    const jpegData = jpeg.toString("base64");
-    const pngData = png.toString("base64");
-    const model = {
-      id: "claude-test",
-      name: "Claude test",
-      api: "anthropic-messages",
-      provider: "anthropic",
-      baseUrl: "https://api.anthropic.com",
-      reasoning: false,
-      input: ["text", "image"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 16_000,
-      maxTokens: 1_024,
-    } satisfies Model<"anthropic-messages">;
-    const network = vi.fn<typeof fetch>().mockRejectedValue(new Error("unexpected network"));
-    const fetchPolicy = vi.spyOn(getAiTransportHost(), "buildModelFetch").mockReturnValue(network);
-    let payload: unknown;
-    try {
-      const stream = streamSimpleAnthropic(
-        model,
-        {
-          messages: [
-            {
-              role: "user",
-              timestamp: 0,
-              content: [
-                { type: "text", text: "user image" },
-                {
-                  type: "image",
-                  data: ` ${jpegData.slice(0, 80)}\n${jpegData.slice(80)} `,
-                  mimeType: "image/png",
-                },
-              ],
-            },
-            {
-              role: "assistant",
-              api: "anthropic-messages",
-              provider: "anthropic",
-              model: model.id,
-              content: [{ type: "toolCall", id: "image-1", name: "read", arguments: {} }],
-              usage: createZeroUsageFixture(),
-              stopReason: "toolUse",
-              timestamp: 1,
-            },
-            {
-              role: "toolResult",
-              toolCallId: "image-1",
-              toolName: "read",
-              isError: false,
-              timestamp: 2,
-              content: [
-                { type: "text", text: "before tool image" },
-                { type: "image", data: pngData.replace(/=+$/, ""), mimeType: "image/jpeg" },
-                { type: "text", text: "after tool image" },
-              ],
-            },
+it.each(["logInfo", "logWarn"] as const)(
+  "formats transport context for %s only while its sink is enabled",
+  (method) => {
+    const requestId = vi.fn(() => "fixture-request:1");
+    const sink = vi.fn();
+    loggingState.rawConsole = { log: sink, info: sink, warn: sink, error: sink };
+    const host = getAiTransportHost();
+    withModelTransportContext(
+      {
+        sessionKey: "fixture-session",
+        runId: "fixture-run",
+        get requestId() {
+          return requestId();
+        },
+      },
+      () => {
+        for (const consoleLevel of ["silent", "info", "silent"] as const) {
+          setLoggerOverride({ level: "silent", consoleLevel, consoleStyle: "compact" });
+          requestId.mockClear();
+          sink.mockClear();
+          host[method](
+            "fixture-transport",
+            "attempt failed",
+            method === "logWarn" ? { requestId: "provider-request" } : undefined,
+          );
+          if (consoleLevel === "silent") {
+            expect(requestId).not.toHaveBeenCalled();
+            expect(sink).not.toHaveBeenCalled();
+          } else {
+            expect(requestId).toHaveBeenCalled();
+            expect(sink).toHaveBeenCalledExactlyOnceWith(
+              expect.stringContaining(
+                `attempt failed sessionKey="fixture-session" runId="fixture-run" ${method === "logWarn" ? "clientRequestId" : "requestId"}="fixture-request:1" requestNumber=1`,
+              ),
+            );
+            if (method === "logWarn") {
+              expect(sink).toHaveBeenCalledWith(
+                expect.stringContaining(" requestId=provider-request"),
+              );
+            }
+          }
+        }
+      },
+    );
+  },
+);
+
+const anthropicModel = makeProviderModelFixture<"anthropic-messages">({
+  id: "claude-test",
+  api: "anthropic-messages",
+  provider: "anthropic",
+  baseUrl: "https://api.anthropic.com",
+});
+
+const textBlock = (text: string) => ({ type: "text" as const, text });
+const imageBlock = (data: string, mimeType: string) => ({ type: "image" as const, data, mimeType });
+const wireImage = (data: string, media_type: string) => ({
+  type: "image",
+  source: { type: "base64", media_type, data },
+});
+const toolImageContent = <T>(image: T) => [
+  textBlock("before tool image"),
+  image,
+  textBlock("after tool image"),
+];
+
+function toolExchange(content: ToolResultMessage["content"]): Context["messages"] {
+  const id = "call-1";
+  return [
+    makeAgentAssistantMessage({
+      api: anthropicModel.api,
+      provider: anthropicModel.provider,
+      model: anthropicModel.id,
+      content: [{ type: "toolCall", id, name: "read", arguments: {} }],
+      stopReason: "toolUse",
+      timestamp: 1,
+    }),
+    { role: "toolResult", toolCallId: id, toolName: "read", content, isError: false, timestamp: 2 },
+  ];
+}
+
+async function captureAnthropic(context: Context, model = anthropicModel) {
+  let payload: unknown;
+  await streamSimpleAnthropic(model, context, {
+    apiKey: "test-provider-key",
+    reasoning: "off",
+    onPayload: (value) => {
+      payload = value;
+      throw new Error("payload captured");
+    },
+  }).result();
+  return payload;
+}
+
+it("keeps complete canonical user and tool-result images through the installed host", async () => {
+  const jpeg = Buffer.alloc(FILE_TYPE_SNIFF_MAX_BYTES + 32);
+  createTinyJpegBuffer().copy(jpeg);
+  jpeg.write("user-image-tail", jpeg.length - 15);
+  const png = Buffer.alloc(FILE_TYPE_SNIFF_MAX_BYTES + 33);
+  createSolidPngBuffer(1, 1, { r: 18, g: 52, b: 86 }).copy(png);
+  png.write("tool-image-tail", png.length - 15);
+  const jpegData = jpeg.toString("base64");
+  const pngData = png.toString("base64");
+  const network = vi.fn<typeof fetch>().mockRejectedValue(new Error("unexpected network"));
+  vi.spyOn(getAiTransportHost(), "buildModelFetch").mockReturnValue(network);
+  const payload = await captureAnthropic(
+    {
+      messages: [
+        makeAgentUserMessage({
+          content: [
+            textBlock("user image"),
+            imageBlock(` ${jpegData.slice(0, 80)}\n${jpegData.slice(80)} `, "image/png"),
           ],
-        },
-        {
-          apiKey: "test-provider-key",
-          reasoning: "off",
-          onPayload: (value) => {
-            payload = value;
-            throw new Error("payload captured");
-          },
-        },
-      );
-      expect((await stream.result()).stopReason).toBe("error");
-      expect(network).not.toHaveBeenCalled();
-      expect(payload).toMatchObject({
-        messages: [
+        }),
+        ...toolExchange(toolImageContent(imageBlock(pngData.replace(/=+$/, ""), "image/jpeg"))),
+      ],
+    },
+    { ...anthropicModel, input: ["text", "image"] },
+  );
+  expect(network).not.toHaveBeenCalled();
+  expect(payload).toMatchObject({
+    messages: [
+      {
+        role: "user",
+        content: [textBlock("user image"), wireImage(jpegData, "image/jpeg")],
+      },
+      { role: "assistant", content: [{ type: "tool_use", id: "call-1" }] },
+      {
+        role: "user",
+        content: [
           {
-            role: "user",
-            content: [
-              { type: "text", text: "user image" },
-              {
-                type: "image",
-                source: { type: "base64", media_type: "image/jpeg", data: jpegData },
-              },
-            ],
-          },
-          { role: "assistant", content: [{ type: "tool_use", id: "image-1" }] },
-          {
-            role: "user",
-            content: [
-              {
-                type: "tool_result",
-                tool_use_id: "image-1",
-                content: [
-                  { type: "text", text: "before tool image" },
-                  {
-                    type: "image",
-                    source: { type: "base64", media_type: "image/png", data: pngData },
-                  },
-                  { type: "text", text: "after tool image" },
-                ],
-              },
-            ],
+            type: "tool_result",
+            tool_use_id: "call-1",
+            content: toolImageContent(wireImage(pngData, "image/png")),
           },
         ],
-      });
-    } finally {
-      fetchPolicy.mockRestore();
-    }
+      },
+    ],
   });
 });
 
-describe("OpenClaw provider error redaction", () => {
-  it("preserves a nested transport code after installed host redaction", () => {
-    const cause = Object.assign(new Error("getaddrinfo failed at fixture.invalid"), {
-      code: "EAI_AGAIN",
-      authorization: "Bearer fixture-sensitive-authorization",
-    });
-    const projected = projectProviderError(new Error("Connection error.", { cause }));
-    expect(projected).toEqual({
-      stopReason: "error",
-      errorMessage: "Connection error.",
-      errorCode: "EAI_AGAIN",
-    });
-  });
-
-  it("keeps registered transport strings secret in provider errors", () => {
+it.each([false, true])("redacts nested codes only when registered (%s)", (registered) => {
+  if (registered) {
     registerSecretValueForRedaction("EAI_AGAIN");
-    const cause = Object.assign(new Error("lookup failed"), { code: "EAI_AGAIN" });
-    expect(projectProviderError(new Error("Connection error.", { cause })).errorCode).not.toBe(
-      "EAI_AGAIN",
-    );
-  });
-
-  it("redacts registered opaque secrets from ordinary provider error messages", () => {
-    const secret = "opaque-configured-provider-value";
-    registerSecretValueForRedaction(secret);
-
-    const projected = projectProviderError({
-      message: `provider rejected configured value ${secret}`,
-    });
-
-    expect(projected.errorMessage).toContain("provider rejected configured value");
-    expect(projected.errorMessage).not.toContain(secret);
-  });
+  }
+  const cause = Object.assign(new Error("DNS lookup failed"), { code: "EAI_AGAIN" });
+  const projected = projectProviderError(new Error("Connection error.", { cause }));
+  expect(projected).toMatchObject({ stopReason: "error", errorMessage: "Connection error." });
+  expect(projected.errorCode === "EAI_AGAIN").toBe(!registered);
 });
 
-describe("OpenClaw provider tool-result redaction", () => {
-  const toolResultContent = [
-    {
-      type: "resource" as const,
-      source: "if let token = timeObserverToken {",
-      jsonSource: '{"token":"timeObserverToken"}',
-      api_key: "provider-secret-value",
-    },
-  ];
+it("redacts registered opaque secrets from ordinary provider error messages", () => {
+  const secret = "opaque-configured-provider-value";
+  registerSecretValueForRedaction(secret);
+  const projected = projectProviderError({ message: `provider rejected ${secret}` });
+  expect(projected.errorMessage).toContain("provider rejected");
+  expect(projected.errorMessage).not.toContain(secret);
+});
 
-  it("preserves source assignments while masking structured credentials", () => {
-    const text = extractToolResultText(toolResultContent);
+it("carries original tool results into Anthropic and OpenAI-compatible payloads", async () => {
+  const source =
+    'api_key: provider-secret-value\nAPI_TOKEN = computeToken()\n{"token":"timeObserverToken"}';
+  const context: Context = { messages: toolExchange([{ type: "text", text: source }]) };
+  const anthropicPayload = await captureAnthropic(context);
 
-    expect(text).toContain("if let token = timeObserverToken {");
-    expect(text).toContain(String.raw`\"token\":\"timeObserverToken\"`);
-    expect(text).not.toContain("provider-secret-value");
+  const openAiModel = {
+    ...anthropicModel,
+    id: "openai-compatible-test",
+    api: "openai-completions",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+  } satisfies Model<"openai-completions">;
+  for (const payload of [
+    anthropicPayload,
+    convertMessages(openAiModel, context, resolveOpenAICompletionsCompat(openAiModel)),
+  ]) {
+    expect(JSON.stringify(payload)).toContain(JSON.stringify(source).slice(1, -1));
+  }
+});
+
+it.each(
+  ["EAI_AGAIN", "CERT_REVOKED"].flatMap((code) =>
+    [false, true].map((registered) => ({ code, registered })),
+  ),
+)("redacts nested fetch $code only when registered ($registered)", ({ code, registered }) => {
+  if (registered) {
+    registerSecretValueForRedaction(code);
+  }
+  const cause = new TypeError("fetch failed", {
+    cause: Object.assign(new Error("fixture transport failure"), {
+      code,
+      authorization: "Bearer fixture-sensitive-authorization",
+    }),
   });
-
-  it("carries the redacted result into Anthropic and OpenAI-compatible payloads", async () => {
-    const configCredential = "unquoted-provider-config-credential-1234567890";
-    const envCredential = "provider-env-credential-1234567890";
-    const sourceLines = [
-      "API_TOKEN = computeToken()",
-      "API_KEY: str = computeKey()",
-      "api_key: ConfigValue",
-    ];
-    const readTool = createOpenClawReadTool({
-      name: "read",
-      label: "read",
-      description: "test read",
-      parameters: Type.Object({ path: Type.String() }),
-      execute: async (_toolCallId, args: { path: string }) => {
-        const text = args.path.endsWith(".yaml")
-          ? `api_key: ${configCredential}`
-          : args.path.endsWith(".env")
-            ? `API_KEY=${envCredential}`
-            : sourceLines.join("\n");
-        return {
-          content: [{ type: "text" as const, text }],
-          details: { kind: "text", content: text },
-        };
-      },
-    });
-    const configResult = await readTool.execute("read-config", { path: "settings.yaml" });
-    const envResult = await readTool.execute("read-env", { path: "production.env" });
-    const sourceResult = await readTool.execute("read-source", { path: "settings.py" });
-    const providerText = [
-      extractToolResultText(toolResultContent),
-      extractToolResultText(configResult.content),
-      extractToolResultText(envResult.content),
-      extractToolResultText(sourceResult.content),
-    ].join("\n");
-    const context: Context = {
-      messages: [
-        {
-          role: "assistant",
-          api: "anthropic-messages",
-          provider: "anthropic",
-          model: "claude-test",
-          content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
-          usage: createZeroUsageFixture(),
-          stopReason: "toolUse",
-          timestamp: 1,
+  const projected = projectProviderError(new Error("Connection error.", { cause }));
+  expect(projected).toEqual(
+    registered
+      ? expect.not.objectContaining({ errorCode: code })
+      : {
+          stopReason: "error",
+          errorMessage: "Connection error.",
+          errorCode: code,
         },
-        {
-          role: "toolResult",
-          toolCallId: "call-1",
-          toolName: "read",
-          content: [{ type: "text", text: providerText }],
-          isError: false,
-          timestamp: 2,
-        },
-      ],
-    };
-    const anthropicModel = {
-      id: "claude-test",
-      name: "Claude test",
-      api: "anthropic-messages",
-      provider: "anthropic",
-      baseUrl: "https://api.anthropic.com",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 16_000,
-      maxTokens: 1_024,
-    } satisfies Model<"anthropic-messages">;
-    let anthropicPayload: unknown;
-    const stream = streamSimpleAnthropic(anthropicModel, context, {
-      apiKey: "test-provider-key",
-      reasoning: "off",
-      onPayload: (payload) => {
-        anthropicPayload = payload;
-        throw new Error("payload captured");
-      },
-    });
-    await stream.result();
+  );
+  expect(JSON.stringify(projected)).not.toContain("fixture-sensitive-authorization");
+});
 
-    const openAiModel = {
-      ...anthropicModel,
-      id: "openai-compatible-test",
-      name: "OpenAI-compatible test",
-      api: "openai-completions",
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
-    } satisfies Model<"openai-completions">;
-    const openAiPayload = convertMessages(
-      openAiModel,
-      context,
-      resolveOpenAICompletionsCompat(openAiModel),
-    );
-
-    for (const payload of [anthropicPayload, openAiPayload]) {
-      const serialized = JSON.stringify(payload);
-      expect(serialized).toContain("if let token = timeObserverToken {");
-      expect(serialized).toContain(String.raw`\\\"token\\\":\\\"timeObserverToken\\\"`);
-      for (const sourceLine of sourceLines) {
-        expect(serialized).toContain(sourceLine);
-      }
-      expect(serialized).not.toContain("provider-secret-value");
-      expect(serialized).toContain(configCredential);
-      expect(serialized).not.toContain(envCredential);
-    }
+it("requires managed fetch only inside a request-owned egress guard", async () => {
+  const host = getAiTransportHost();
+  const model = makeProviderModelFixture<"openai-chatgpt-responses">({
+    id: "gpt-test",
+    api: "openai-chatgpt-responses",
+    provider: "openai",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
   });
+  const guard = vi.fn();
+  expect(host.requiresManagedTransport(model, "fetch")).toBe(false);
+  const guarded = withGuardedFetchBeforeRequest(guard, async () => {
+    expect(host.requiresManagedTransport(model, "fetch")).toBe(true);
+    await Promise.resolve();
+    expect(host.requiresManagedTransport(model, "fetch")).toBe(true);
+  });
+  // The concurrent unguarded caller keeps its ordinary transport selection.
+  expect(host.requiresManagedTransport(model, "fetch")).toBe(false);
+  await guarded;
+  expect(host.requiresManagedTransport(model, "fetch")).toBe(false);
+  // Native session forks already carry a send-time lifecycle assertion; that
+  // lifetime-only scope must not disable their independent WebSocket transport.
+  await withGuardedFetchRequestAuthority(guard, async () => {
+    expect(host.requiresManagedTransport(model, "fetch")).toBe(false);
+    await withGuardedFetchBeforeRequest(guard, async () => {
+      expect(host.requiresManagedTransport(model, "fetch")).toBe(true);
+      await withGuardedFetchRequestAuthority(undefined, async () => {
+        expect(host.requiresManagedTransport(model, "fetch")).toBe(true);
+      });
+    });
+    expect(host.requiresManagedTransport(model, "fetch")).toBe(false);
+  });
+  // Selecting a transport is not itself a physical submission.
+  // The two lifetime entries assert; no transport-selection call does.
+  expect(guard).toHaveBeenCalledTimes(2);
 });

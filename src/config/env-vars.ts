@@ -3,5 +3,4 @@ export {
   cloneEnvWithPlatformSemantics,
   collectConfigRuntimeEnvVars,
   createConfigRuntimeEnv,
-  isConfigRuntimeEnvVarAllowed,
 } from "./config-env-vars.js";

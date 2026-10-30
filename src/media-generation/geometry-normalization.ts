@@ -31,7 +31,6 @@ export function resolveMediaGeometryOverrides<TResolution extends string>(params
   resolution?: TResolution;
   capabilities?: MediaGeometryCapabilities<TResolution>;
   fallbackSizes?: readonly string[];
-  resolutionOrder?: readonly TResolution[];
   reportUnrecognizedOverrides?: boolean;
   useAspectRatioForRequestedSize?: boolean;
 }): {
@@ -58,6 +57,9 @@ export function resolveMediaGeometryOverrides<TResolution extends string>(params
     });
     if (normalizedSize && normalizedSize !== size) {
       normalization.size = { requested: size, applied: normalizedSize };
+    } else if (!normalizedSize && params.reportUnrecognizedOverrides) {
+      // Video-only sentinel values must remain visible when another provider rejects them.
+      ignoredOverrides.push({ key: "size", value: size });
     }
     size = normalizedSize;
   }
@@ -116,7 +118,6 @@ export function resolveMediaGeometryOverrides<TResolution extends string>(params
     const normalizedResolution = resolveClosestResolution({
       requestedResolution: resolution,
       supportedResolutions: caps.resolutions,
-      order: params.resolutionOrder,
     });
     if (normalizedResolution && normalizedResolution !== resolution) {
       normalization.resolution = { requested: resolution, applied: normalizedResolution };

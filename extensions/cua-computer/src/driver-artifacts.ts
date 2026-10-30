@@ -13,7 +13,9 @@ const requireFromPlugin = createRequire(import.meta.url);
 function resolvePackageEntry(packageName: string): string | undefined {
   try {
     return requireFromPlugin.resolve(packageName);
-  } catch {}
+  } catch {
+    // Import-only packages are resolved with import conditions below.
+  }
   // The CUA Driver SDK is ESM-only: its exports map carries only the "import"
   // condition, so require-condition resolution throws PATH_NOT_EXPORTED even
   // when the package is installed. Resolve with import conditions before
@@ -40,7 +42,9 @@ function resolvePackageJson(packageName: string): string | undefined {
   }
   try {
     return requireFromPlugin.resolve(`${packageName}/package.json`);
-  } catch {}
+  } catch {
+    // The exports map may hide package.json; find the manifest from its entry below.
+  }
   const entry = resolvePackageEntry(packageName);
   if (!entry) {
     return undefined;
@@ -52,7 +56,9 @@ function resolvePackageJson(packageName: string): string | undefined {
       if (readPackageIdentity(candidate).name === packageName) {
         return candidate;
       }
-    } catch {}
+    } catch {
+      // Ancestors without a readable matching manifest are not the package root.
+    }
     const parent = path.dirname(current);
     if (parent === current) {
       return undefined;

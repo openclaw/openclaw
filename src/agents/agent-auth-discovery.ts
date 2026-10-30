@@ -1,5 +1,5 @@
-/** Discovers agent runtime credentials from auth profiles, env, and synthetic providers. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   prepareProviderSyntheticAuthWithPlugin,
   resolveProviderSyntheticAuthWithPlugin,
@@ -9,17 +9,24 @@ import {
   resolveAgentCredentialMapFromStore,
   type AgentCredentialMap,
 } from "./agent-auth-credentials.js";
-import {
-  addEnvBackedAgentCredentials,
-  type AgentDiscoveryAuthLookupOptions,
-} from "./agent-auth-discovery-core.js";
 import { isAmbientCredentialAllowedByProviderAuthPin } from "./auth-profiles/ambient-auth.js";
 import type { ExternalCliAuthDiscovery } from "./auth-profiles/external-cli-discovery.js";
 import {
-  ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreAsync,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
 } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import {
+  listProviderEnvAuthLookupKeys,
+  resolveProviderEnvAuthLookupMaps,
+} from "./model-auth-env-vars.js";
+import { resolveEnvApiKey } from "./model-auth-env.js";
+
+type AgentDiscoveryAuthLookupOptions = {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+};
 
 /** Options for discovering credentials without prompting for secret material. */
 export type DiscoverAuthStorageOptions = {
@@ -48,7 +55,36 @@ type AmbientAgentCredentialOptions = AgentDiscoveryAuthLookupOptions & {
 function resolveAmbientCredentialInputs(
   options: Omit<AmbientAgentCredentialOptions, "resolveSyntheticAuth">,
 ) {
-  const credentials = addEnvBackedAgentCredentials({}, options);
+  const credentials: AgentCredentialMap = {};
+  const env = options.env ?? process.env;
+  const {
+    aliasMap,
+    envCandidateMap: candidateMap,
+    authEvidenceMap,
+  } = resolveProviderEnvAuthLookupMaps({
+    config: options.config,
+    workspaceDir: options.workspaceDir,
+    env,
+  });
+  // Mirror env-backed provider auth so discovery sees the providers runtime auth can use.
+  for (const provider of listProviderEnvAuthLookupKeys({
+    envCandidateMap: candidateMap,
+    authEvidenceMap,
+  })) {
+    if (credentials[provider]) {
+      continue;
+    }
+    const resolved = resolveEnvApiKey(provider, env, {
+      config: options.config,
+      workspaceDir: options.workspaceDir,
+      aliasMap,
+      candidateMap,
+      authEvidenceMap,
+    });
+    if (resolved?.apiKey) {
+      credentials[provider] = { type: "api_key", key: resolved.apiKey };
+    }
+  }
   const syntheticAuthProviderRefs =
     options.syntheticAuthProviderRefs ?? resolveRuntimeSyntheticAuthProviderRefs();
   const authoritativeSyntheticAuthProviderRefs = new Set(
@@ -136,6 +172,7 @@ export async function prepareAmbientAgentCredentialsForDiscovery(
   options: Omit<AmbientAgentCredentialOptions, "resolveSyntheticAuth"> & {
     resolveSyntheticAuth?: (provider: string) => Promise<SyntheticAuth>;
     signal?: AbortSignal;
+    preparationOwner?: object;
   } = {},
 ): Promise<AgentCredentialMap> {
   const { credentials, providers } = resolveAmbientCredentialInputs(options);
@@ -146,6 +183,7 @@ export async function prepareAmbientAgentCredentialsForDiscovery(
       : await prepareProviderSyntheticAuthWithPlugin({
           ...syntheticAuthParams(options, provider),
           signal: options.signal,
+          preparationOwner: options.preparationOwner,
         });
     options.signal?.throwIfAborted();
     addSyntheticCredential(credentials, provider, resolved);
@@ -153,11 +191,10 @@ export async function prepareAmbientAgentCredentialsForDiscovery(
   return credentials;
 }
 
-/** Resolves the effective auth store and provider credentials for one discovery generation. */
-export function resolveAgentDiscoveryAuthFacts(
+export async function resolveAgentDiscoveryAuthFacts(
   agentDir: string,
   options?: DiscoverAuthStorageOptions,
-): { store: AuthProfileStore; credentials: AgentCredentialMap } {
+): Promise<{ store: AuthProfileStore; credentials: AgentCredentialMap }> {
   const storeOptions = {
     allowKeychainPrompt: false,
     ...(options?.config ? { config: options.config } : {}),
@@ -167,12 +204,12 @@ export function resolveAgentDiscoveryAuthFacts(
   const store = options?.preparedStore
     ? options.preparedStore
     : options?.skipExternalAuthProfiles === true
-      ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+      ? await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir, {
           allowKeychainPrompt: false,
           ...(options?.inheritedAuthDir ? { inheritedAuthDir: options.inheritedAuthDir } : {}),
           ...(options?.readOnly === true ? { readOnly: true } : {}),
         })
-      : ensureAuthProfileStore(agentDir, {
+      : await ensureAuthProfileStoreAsync(agentDir, {
           ...storeOptions,
           ...(options?.readOnly === true ? { readOnly: true } : {}),
         });

@@ -1,7 +1,7 @@
-// Memory Wiki plugin module serializes vault mutation transactions.
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 
 type ActiveVaultMutation = { active: boolean };
@@ -55,7 +55,7 @@ export async function resolveMemoryWikiVaultMutationKey(vaultPath: string): Prom
 }
 
 /**
- * Keep coordinated vault read-modify-write transactions isolated from concurrent work in this process.
+ * Keep coordinated vault read-modify-write transactions isolated across CLI and Gateway processes.
  * Nested compile calls re-enter; different agent vaults remain parallel.
  */
 export async function withMemoryWikiVaultMutation<T>(
@@ -71,13 +71,25 @@ export async function withMemoryWikiVaultMutation<T>(
   const lease = { active: true };
   const nextActive = new Map(active ?? []);
   nextActive.set(key, lease);
-  return await vaultMutationQueue.enqueue(key, async () => {
-    try {
-      return await activeVaultMutations.run(nextActive, mutation);
-    } finally {
-      // Detached children inherit this object. Mark it inactive when the
-      // owner exits so later work queues instead of bypassing serialization.
-      lease.active = false;
-    }
-  });
+  return await vaultMutationQueue.enqueue(key, () =>
+    withFileLock(
+      path.join(key, ".openclaw-wiki", "mutation"),
+      {
+        retries: { retries: 600, factor: 1, minTimeout: 500, maxTimeout: 500 },
+        stale: 60_000,
+        // Large vaults can compile for minutes. Only a dead owner permits
+        // recovery; elapsed time must never revoke a running compiler's lock.
+        staleRecovery: "remove-if-definitely-stale",
+      },
+      async () => {
+        try {
+          return await activeVaultMutations.run(nextActive, mutation);
+        } finally {
+          // Detached children inherit this object. End reentrancy before the
+          // asynchronous file-lock release so later work joins the queue.
+          lease.active = false;
+        }
+      },
+    ),
+  );
 }

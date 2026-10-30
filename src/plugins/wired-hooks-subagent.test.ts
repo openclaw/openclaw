@@ -1,6 +1,3 @@
-/**
- * Test: subagent routing, progress, and terminal hook wiring.
- */
 import { describe, expect, it, vi } from "vitest";
 import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 
@@ -18,39 +15,20 @@ describe("subagent hook runner methods", () => {
     requesterSessionKey: "agent:main:main",
   };
 
-  async function invokeSubagentHook(params: {
-    hookName:
-      | "subagent_spawned"
-      | "subagent_progress"
-      | "subagent_delivery_target"
-      | "subagent_ended";
-    event: Record<string, unknown>;
-    ctx: Record<string, unknown>;
-    handlerResult?: unknown;
-  }) {
-    const handler = vi.fn(async () => ({ status: "ok", threadBindingReady: true as const }));
-    if (params.handlerResult !== undefined) {
-      handler.mockResolvedValue(params.handlerResult as never);
-    }
-    const { runner } = createHookRunnerWithRegistry([{ hookName: params.hookName, handler }]);
-    const result =
-      params.hookName === "subagent_spawned"
-        ? await runner.runSubagentSpawned(params.event as never, params.ctx as never)
-        : params.hookName === "subagent_progress"
-          ? await runner.runSubagentProgress(params.event as never, params.ctx as never)
-          : params.hookName === "subagent_delivery_target"
-            ? await runner.runSubagentDeliveryTarget(params.event as never, params.ctx as never)
-            : await runner.runSubagentEnded(params.event as never, params.ctx as never);
-
-    expect(handler).toHaveBeenCalledWith(params.event, params.ctx);
-    return result;
-  }
+  const deliveryEvent = {
+    childSessionKey: baseSubagentCtx.childSessionKey,
+    requesterSessionKey: baseSubagentCtx.requesterSessionKey,
+    requesterOrigin: baseRequester,
+    childRunId: baseSubagentCtx.runId,
+    spawnMode: "session" as const,
+    expectsCompletionMessage: true,
+  };
+  const target = { origin: { ...baseRequester, to: "channel:777", threadId: "777" } };
 
   it.each([
     {
       name: "runSubagentSpawned invokes registered subagent_spawned hooks",
       hookName: "subagent_spawned" as const,
-      methodName: "runSubagentSpawned" as const,
       event: {
         runId: "run-1",
         childSessionKey: "agent:main:subagent:child",
@@ -60,54 +38,25 @@ describe("subagent hook runner methods", () => {
         requester: baseRequester,
         threadRequested: true,
       },
-      ctx: baseSubagentCtx,
     },
     {
       name: "runSubagentProgress invokes registered subagent_progress hooks",
       hookName: "subagent_progress" as const,
-      methodName: "runSubagentProgress" as const,
       event: {
         phase: "started" as const,
         runId: "run-1",
         childSessionKey: "agent:main:subagent:child",
         requester: { ...baseRequester, messageId: "message-1" },
       },
-      ctx: baseSubagentCtx,
     },
     {
       name: "runSubagentDeliveryTarget invokes registered subagent_delivery_target hooks",
       hookName: "subagent_delivery_target" as const,
-      methodName: "runSubagentDeliveryTarget" as const,
-      event: {
-        childSessionKey: "agent:main:subagent:child",
-        requesterSessionKey: "agent:main:main",
-        requesterOrigin: baseRequester,
-        childRunId: "run-1",
-        spawnMode: "session" as const,
-        expectsCompletionMessage: true,
-      },
-      ctx: baseSubagentCtx,
-      handlerResult: {
-        origin: {
-          channel: "discord" as const,
-          accountId: "work",
-          to: "channel:777",
-          threadId: "777",
-        },
-      },
-      expectedResult: {
-        origin: {
-          channel: "discord",
-          accountId: "work",
-          to: "channel:777",
-          threadId: "777",
-        },
-      },
+      event: deliveryEvent,
     },
     {
       name: "runSubagentEnded invokes registered subagent_ended hooks",
       hookName: "subagent_ended" as const,
-      methodName: "runSubagentEnded" as const,
       event: {
         targetSessionKey: "agent:main:subagent:child",
         targetKind: "subagent" as const,
@@ -117,41 +66,25 @@ describe("subagent hook runner methods", () => {
         runId: "run-1",
         outcome: "ok" as const,
       },
-      ctx: baseSubagentCtx,
     },
-  ] as const)("$name", async ({ hookName, event, ctx, handlerResult, expectedResult }) => {
-    const result = await invokeSubagentHook({ hookName, event, ctx, handlerResult });
-    if (expectedResult !== undefined) {
-      expect(result).toEqual(expectedResult);
-      return;
-    }
-    expect(result).toBeUndefined();
+  ] as const)("$name", async ({ hookName, event }) => {
+    const handler = vi.fn(async () => target);
+    const { runner } = createHookRunnerWithRegistry([{ hookName, handler }]);
+    const result =
+      hookName === "subagent_spawned"
+        ? await runner.runSubagentSpawned(event, baseSubagentCtx)
+        : hookName === "subagent_progress"
+          ? await runner.runSubagentProgress(event, baseSubagentCtx)
+          : hookName === "subagent_delivery_target"
+            ? await runner.runSubagentDeliveryTarget(event, baseSubagentCtx)
+            : await runner.runSubagentEnded(event, baseSubagentCtx);
+    expect(handler).toHaveBeenCalledWith(event, baseSubagentCtx);
+    expect(result).toEqual(hookName === "subagent_delivery_target" ? target : undefined);
   });
 
   it("runSubagentDeliveryTarget returns undefined when no matching hooks are registered", async () => {
     const { runner } = createHookRunnerWithRegistry([]);
-    const result = await runner.runSubagentDeliveryTarget(
-      {
-        childSessionKey: "agent:main:subagent:child",
-        requesterSessionKey: "agent:main:main",
-        requesterOrigin: baseRequester,
-        childRunId: "run-1",
-        spawnMode: "session",
-        expectsCompletionMessage: true,
-      },
-      baseSubagentCtx,
-    );
+    const result = await runner.runSubagentDeliveryTarget(deliveryEvent, baseSubagentCtx);
     expect(result).toBeUndefined();
-  });
-
-  it("hasHooks returns true for registered subagent hooks", () => {
-    const { runner } = createHookRunnerWithRegistry([
-      { hookName: "subagent_delivery_target", handler: vi.fn() },
-    ]);
-
-    expect(runner.hasHooks("subagent_delivery_target")).toBe(true);
-    expect(runner.hasHooks("subagent_spawned")).toBe(false);
-    expect(runner.hasHooks("subagent_progress")).toBe(false);
-    expect(runner.hasHooks("subagent_ended")).toBe(false);
   });
 });

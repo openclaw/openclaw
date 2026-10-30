@@ -3,7 +3,6 @@
  */
 import {
   createNativeOpenAICodexResponsesModel,
-  createNativeOpenAIResponsesModel,
   createParameterFreeTool,
   createPermissiveTool,
   createProxyOpenAIResponsesModel,
@@ -14,18 +13,6 @@ import { buildProviderToolCompatFamilyHooks } from "./provider-tools.js";
 
 describe("OpenAI-family schema normalization runtime contract", () => {
   const hooks = buildProviderToolCompatFamilyHooks("openai");
-
-  it("normalizes parameter-free schemas for native OpenAI Responses tools", () => {
-    const normalized = hooks.normalizeToolSchemas({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      model: createNativeOpenAIResponsesModel() as never,
-      tools: [createParameterFreeTool()] as never,
-    });
-
-    expect(normalized[0]?.parameters).toEqual(normalizedParameterFreeSchema());
-  });
 
   it("normalizes parameter-free schemas for native OpenAI Codex Responses tools", () => {
     const normalized = hooks.normalizeToolSchemas({

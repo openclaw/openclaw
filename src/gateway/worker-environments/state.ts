@@ -7,6 +7,12 @@ export type WorkerEnvironmentLeasedState = Exclude<
   WorkerEnvironmentUnleasedState
 >;
 
+export const WORKER_ENVIRONMENT_TERMINAL_STATES = ["destroyed", "failed", "orphaned"] as const;
+
+export function isTerminalWorkerEnvironmentState(state: WorkerEnvironmentState): boolean {
+  return WORKER_ENVIRONMENT_TERMINAL_STATES.some((terminal) => terminal === state);
+}
+
 const TRANSITIONS = {
   requested: ["provisioning", "failed"],
   provisioning: ["bootstrapping", "ready", "draining", "failed"],

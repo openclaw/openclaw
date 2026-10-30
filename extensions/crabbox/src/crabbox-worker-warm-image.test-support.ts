@@ -1,23 +1,24 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { syncBuiltinESMExports } from "node:module";
 import type { WorkerProfile, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, vi } from "vitest";
 import * as managedBinary from "./crabbox-managed-binary.js";
-import { crabboxState } from "./crabbox-state.test-support.js";
+import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
   createNodeBootstrapFixture,
   createWorkerArchiveFixture,
 } from "./crabbox-worker-node-enrollment.test-support.js";
 import { operationLeaseId } from "./crabbox-worker-profile.js";
-import { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
-import type { WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
+import {
+  destroyAndWait,
+  commandResult,
+  createProviderFixtures,
+  nodeEnrollmentFixture,
+  type ProviderFixtureDependencies,
+} from "./crabbox-worker-provider.test-support.js";
 
 export { managedBinary };
 
@@ -30,34 +31,39 @@ export const NODE_RUNTIME_IDENTITY = {
   nodeBootstrapSha256: createNodeBootstrapFixture().sha256,
   executionMode: "worker-turn" as const,
 };
-const WALLPAPER_PATH = fileURLToPath(
-  new URL("../assets/openclaw-worker-wallpaper.png", import.meta.url),
-);
+
+export function unsupportedCaptureReceipt(leaseId: string, provider = "aws") {
+  return {
+    schema: "crabbox.checkpoint.create.failure.v1",
+    outcome: "not_submitted",
+    reason: "native_unsupported",
+    provider,
+    leaseId,
+    localReservation: "none",
+    message:
+      "checkpoint create --mode native is unsupported for provider=aws target=linux through coordinator https://coordinator.example: the provider does not offer native checkpoints for coordinator-brokered leases with this mode and strategy; use --mode archive or a provider configuration that offers native checkpoints",
+  };
+}
+
 export const tempDirs: ReturnType<typeof useAutoCleanupTempDirTracker> =
   useAutoCleanupTempDirTracker(afterEach);
-const providers = new Set<ReturnType<typeof createCrabboxWorkerProvider>>();
+const { providers, createProvider } = createProviderFixtures({ sleep: async () => {} });
 afterEach(async () => {
   await Promise.all([...providers].map((provider) => provider.dispose()));
   providers.clear();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
   await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
 });
 
-type CommandRunner = NonNullable<Parameters<typeof createCrabboxWorkerProvider>[0]["runCommand"]>;
+type CommandRunner = CrabboxCommandRunner;
 export type CommandCall = { argv: string[]; options: Parameters<CommandRunner>[1] };
+type ProvisionOptions = NonNullable<Parameters<WorkerProvider["provision"]>[2]>;
 
-export function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
+export function jsonResult(value: unknown): SpawnResult {
+  return commandResult({ stdout: JSON.stringify(value) });
 }
 
 export function checkpointResult(
@@ -65,40 +71,28 @@ export function checkpointResult(
   leaseId: string,
   nativeState: "available" | "completed",
 ): SpawnResult {
-  return commandResult({
-    stdout: JSON.stringify({
-      id: checkpointId,
-      kind: "aws-ebs-snapshot",
-      leaseId,
-      workdir: "/workspace",
-      native: { imageId: "snap_test", state: nativeState },
-    }),
+  return jsonResult({
+    id: checkpointId,
+    kind: "aws-ebs-snapshot",
+    leaseId,
+    native: { state: nativeState },
   });
 }
 
 export function createWarmProvider(
   command?: (call: CommandCall) => SpawnResult | Promise<SpawnResult | undefined> | undefined,
   stateDir = tempDirs.make("openclaw-crabbox-warm-image-"),
-  dependencies: Pick<
-    Parameters<typeof createCrabboxWorkerProvider>[0],
-    "sleep" | "warmImagePolicy"
-  > = {},
+  dependencies: Pick<ProviderFixtureDependencies, "sleep" | "warmImagePolicy" | "info"> = {},
 ) {
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(async (params) => ({
     binary: params?.binary ?? "crabbox",
-    version: "0.55.0",
+    version: "0.79.2",
   }));
   const calls: CommandCall[] = [];
   const warn = vi.fn();
-  const provider = createCrabboxWorkerProvider({
-    state: crabboxState,
-    openclawRoot: path.resolve(path.sep, "workspace", "openclaw"),
-    pathEnv: "",
-    isExecutable: () => false,
-    wallpaperPath: WALLPAPER_PATH,
+  const provider = createProvider({
     warn,
-    sleep: async () => {},
     ...dependencies,
     runCommand: async (argv, options) => {
       const call = { argv, options };
@@ -108,54 +102,47 @@ export function createWarmProvider(
         return override;
       }
       if (argv[1] === "config") {
-        return commandResult({ stdout: JSON.stringify({ aws: { instanceProfile: "" } }) });
+        return jsonResult({ aws: { instanceProfile: "" } });
       }
+      const lease = () => ({
+        id: argv[argv.indexOf("--id") + 1],
+        state: "running",
+        idleTimeout: "60m",
+        expiresAt: new Date(Date.now() + 4 * 60 * 60_000).toISOString(),
+      });
       if (argv[1] === "inspect" || argv[1] === "status") {
-        return commandResult({
-          stdout: JSON.stringify({
-            id: argv[argv.indexOf("--id") + 1],
-            state: "running",
-            ready: true,
-            providerMetadata: { instanceProfileAttached: false },
-          }),
+        return jsonResult({
+          ...lease(),
+          ready: true,
+          providerMetadata: { instanceProfileAttached: false },
         });
+      }
+      if (argv[1] === "heartbeat") {
+        return jsonResult(lease());
       }
       if (argv[1] === "checkpoint" && argv[2] === "create") {
         return checkpointResult(CHECKPOINT_ID, argv[argv.indexOf("--id") + 1]!, "completed");
       }
       if (argv[1] === "checkpoint" && argv[2] === "inspect") {
-        return commandResult({
-          stdout: JSON.stringify({
-            localState: "metadata_available",
-            providerState: "available",
-            nextAction: "fork_or_delete",
-          }),
+        return jsonResult({
+          localState: "metadata_available",
+          providerState: "available",
+          nextAction: "fork_or_delete",
         });
       }
       if (argv[1] === "checkpoint" && argv[2] === "fork") {
-        return commandResult({
-          stdout: JSON.stringify({
-            checkpointId: argv[3],
-            leaseId: argv[argv.indexOf("--lease-id") + 1],
-            slug: argv[argv.indexOf("--slug") + 1],
-            provider: argv[argv.indexOf("--provider") + 1],
-            workdir: "/workspace",
-          }),
+        return jsonResult({
+          checkpointId: argv[3],
+          leaseId: argv[argv.indexOf("--lease-id") + 1],
+          slug: argv[argv.indexOf("--slug") + 1],
+          provider: argv[argv.indexOf("--provider") + 1],
+          workdir: "/workspace",
         });
       }
       return commandResult();
     },
   });
-  providers.add(provider);
   return { provider, calls, stateDir, warn };
-}
-
-export function openWarmImageStore() {
-  return createPluginStateSyncKeyedStoreForTests<WarmProfileRecord>("crabbox", {
-    namespace: "warm-images",
-    maxEntries: 128,
-    overflowPolicy: "reject-new",
-  });
 }
 
 export async function provisionWarmProfile(
@@ -163,7 +150,7 @@ export async function provisionWarmProfile(
   profile: WorkerProfile = PROFILE,
   operationId = OPERATION_ID,
   machineClass?: string,
-  options?: NonNullable<Parameters<WorkerProvider["provision"]>[2]>,
+  options?: ProvisionOptions,
 ) {
   return provider.provision(profile, operationId, {
     assertCurrent: () => {},
@@ -172,15 +159,7 @@ export async function provisionWarmProfile(
     ...(machineClass ? { machineClass } : {}),
     beginNodeEnrollment:
       options?.beginNodeEnrollment ??
-      (async () => ({
-        mode: "connect",
-        setupCode: "setup-code",
-        setupId: "setup-id",
-        openclawVersion: "2026.8.1",
-        nodeBootstrap: createNodeBootstrapFixture(),
-        displayName: "Warm cloud worker",
-        waitForDeviceId: async () => "device-1",
-      })),
+      (async () => nodeEnrollmentFixture("setup-code", "Warm cloud worker")),
   });
 }
 
@@ -191,12 +170,11 @@ export async function captureWarmImage(
   machineClass?: string,
 ) {
   const lease = await provisionWarmProfile(provider, profile, operationId, machineClass);
-  await provider.destroy({ leaseId: lease.leaseId, profile });
+  await destroyAndWait(provider, { leaseId: lease.leaseId, profile });
 }
 
 export const PROJECT_KEY = "a".repeat(64);
 export const BASE_COMMIT = "b".repeat(40);
-type ProvisionOptions = NonNullable<Parameters<WorkerProvider["provision"]>[2]>;
 
 export function createProjectOptions(
   events: string[],
@@ -204,6 +182,8 @@ export function createProjectOptions(
   preparation?: NonNullable<NonNullable<ProvisionOptions["project"]>["preparation"]>,
 ) {
   let enrollmentStarted = false;
+  const signal = controller.signal;
+  const assertCurrent = () => signal.throwIfAborted();
   const observe = ({ argv }: CommandCall) => {
     if (argv[1] === "run" && argv.includes("CRABBOX_WORKER_BOOTSTRAP_TOKEN")) {
       events.push(enrollmentStarted ? "enrollment-install" : "runtime-install");
@@ -214,20 +194,19 @@ export function createProjectOptions(
     return undefined;
   };
   const options = {
-    assertCurrent: () => controller.signal.throwIfAborted(),
+    assertCurrent,
     nodeRuntimeIdentity: {
-      nodeBootstrapSha256: createNodeBootstrapFixture().sha256,
-      executionMode: "worker-turn" as const,
+      ...NODE_RUNTIME_IDENTITY,
       workerBundleSha256: createWorkerArchiveFixture().sha256,
     },
     project: {
       key: PROJECT_KEY,
       baseCommit: BASE_COMMIT,
       ...(preparation ? { preparation } : {}),
-      signal: controller.signal,
-      assertCurrent: () => controller.signal.throwIfAborted(),
+      signal,
+      assertCurrent,
       prepare: vi.fn<NonNullable<ProvisionOptions["project"]>["prepare"]>(async (transport) => {
-        await transport.runScript("project-checkout", controller.signal);
+        await transport.runScript("project-checkout", signal);
         events.push("project-prepared");
         return { seedKey: PROJECT_KEY, cacheHit: false };
       }),
@@ -237,21 +216,20 @@ export function createProjectOptions(
       return {
         nodeBootstrap: createNodeBootstrapFixture(),
         workerBundle: createWorkerArchiveFixture(),
-        signal: controller.signal,
+        signal,
       };
     }),
     beginNodeEnrollment: vi.fn(async () => {
       events.push("enrollment-begun");
       enrollmentStarted = true;
       return {
-        mode: "connect" as const,
-        setupCode: "synthetic-setup-code",
+        ...nodeEnrollmentFixture(
+          "synthetic-setup-code",
+          "Project worker",
+          async () => "project-node",
+        ),
         setupId: "project-setup",
-        openclawVersion: "2026.8.1",
-        nodeBootstrap: createNodeBootstrapFixture(),
-        displayName: "Project worker",
-        signal: controller.signal,
-        waitForDeviceId: async () => "project-node",
+        signal,
       };
     }),
   } satisfies ProvisionOptions;

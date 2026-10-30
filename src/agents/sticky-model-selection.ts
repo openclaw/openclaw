@@ -30,7 +30,6 @@ export function resolveStickyModelSelectionScope(params: {
 export function resolveStickyModelSelectionPolicy(params: {
   canPersistConfig: boolean;
   cfg: OpenClawConfig;
-  scope?: ModelSelectionScope;
 }): StickyModelSelectionPolicy {
   const scope = resolveStickyModelSelectionScope(params);
   return { scope, target: params.canPersistConfig ? scope : "session" };

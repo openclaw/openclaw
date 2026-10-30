@@ -3,14 +3,16 @@ import path from "node:path";
 
 /** Collect bundled plugin directories excluded from the root package artifact. */
 export function collectRootPackageExcludedExtensionDirs(params = {}) {
-  const packageJsonPath = path.join(params.cwd ?? process.cwd(), "package.json");
   const excluded = new Set();
-  if (!fs.existsSync(packageJsonPath)) {
-    return excluded;
+  let files = params.files;
+  if (!files) {
+    const packageJsonPath = path.join(params.cwd ?? process.cwd(), "package.json");
+    if (!fs.existsSync(packageJsonPath)) {
+      return excluded;
+    }
+    files = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")).files ?? [];
   }
-
-  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-  for (const entry of packageJson.files ?? []) {
+  for (const entry of files) {
     if (typeof entry !== "string") {
       continue;
     }

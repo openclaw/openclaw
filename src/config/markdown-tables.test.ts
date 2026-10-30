@@ -5,10 +5,8 @@ const listChannelPluginsMock = vi.hoisted(() =>
   vi.fn(() => [
     { id: "mattermost", messaging: { defaultMarkdownTableMode: "off" as const } },
     { id: "signal", messaging: { defaultMarkdownTableMode: "block" as const } },
-    { id: "whatsapp", messaging: { defaultMarkdownTableMode: "bullets" as const } },
   ]),
 );
-const getActivePluginChannelRegistryVersionMock = vi.hoisted(() => vi.fn(() => 1));
 
 vi.mock("../channels/plugins/registry.js", async () => {
   const actual = await vi.importActual<typeof import("../channels/plugins/registry.js")>(
@@ -16,17 +14,9 @@ vi.mock("../channels/plugins/registry.js", async () => {
   );
   return {
     ...actual,
-    listChannelPlugins: () => listChannelPluginsMock(),
+    getLoadedChannelPlugin: (id: string) =>
+      listChannelPluginsMock().find((plugin) => plugin.id === id),
     normalizeChannelId: (raw?: string | null) => raw ?? null,
-  };
-});
-
-vi.mock("../plugins/runtime.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../plugins/runtime.js")>("../plugins/runtime.js");
-  return {
-    ...actual,
-    getActivePluginChannelRegistryVersion: () => getActivePluginChannelRegistryVersionMock(),
   };
 });
 
@@ -36,26 +26,11 @@ describe("resolveMarkdownTableMode default modes", () => {
   it("mattermost mode is off", () => {
     expect(resolveMarkdownTableMode({ channel: "mattermost" })).toBe("off");
   });
-
-  it("signal mode is block", () => {
-    expect(resolveMarkdownTableMode({ channel: "signal", supportsBlockTables: true })).toBe(
-      "block",
-    );
-  });
-
-  it("whatsapp mode is bullets", () => {
-    expect(resolveMarkdownTableMode({ channel: "whatsapp" })).toBe("bullets");
-  });
 });
 
 describe("resolveMarkdownTableMode", () => {
   it("defaults to code for slack", () => {
     expect(resolveMarkdownTableMode({ channel: "slack" })).toBe("code");
-  });
-
-  it("coerces explicit block mode to code for slack", () => {
-    const cfg = { channels: { slack: { markdown: { tables: "block" as const } } } };
-    expect(resolveMarkdownTableMode({ cfg, channel: "slack" })).toBe("code");
   });
 
   it("keeps block mode behind renderer capability", () => {

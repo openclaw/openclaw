@@ -2,9 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { callGateway, callGatewayCli } from "./call.js";
 
+type GatewayOptions = Parameters<typeof callGateway>[0];
+
 describe("operator CLI message input", () => {
   const readConfig = vi.fn((): never => {
     throw new Error("configuration resolution reached");
+  });
+  const input = (options: GatewayOptions) => ({
+    ...options,
+    get config() {
+      return readConfig();
+    },
   });
   beforeEach(() => {
     readConfig.mockClear();
@@ -13,81 +21,46 @@ describe("operator CLI message input", () => {
   });
   afterEach(() => vi.unstubAllEnvs());
 
-  it.each(
-    ["sessions.send", "sessions.steer", "chat.send"].flatMap((method) =>
-      [undefined, "exec"].map((shell) => ({ method, shell })),
-    ),
-  )(
-    "preserves the upstream subagent refusal for $method with shell=$shell",
-    async ({ method, shell }) => {
-      vi.stubEnv("OPENCLAW_SHELL", shell);
-      vi.stubEnv("OPENCLAW_SUBAGENT_EXEC", "1");
-      await expect(
-        callGatewayCli({
-          method,
-          scopes: ["operator.admin"],
-          get config() {
-            return readConfig();
-          },
-        }),
-      ).rejects.toThrow("task completion path");
-      expect(readConfig).not.toHaveBeenCalled();
-    },
-  );
-
-  it("does not broaden the upstream subagent-only marker to other methods", async () => {
-    vi.stubEnv("OPENCLAW_SHELL", undefined);
-    vi.stubEnv("OPENCLAW_SUBAGENT_EXEC", "1");
-    await expect(
-      callGatewayCli({
-        method: "agent",
-        get config() {
-          return readConfig();
-        },
-      }),
-    ).rejects.toThrow("configuration resolution reached");
-    expect(readConfig).toHaveBeenCalledOnce();
-  });
-
-  it.each(["sessions.send", "sessions.steer", "chat.send", "agent"])(
-    "refuses direct callGatewayCli %s before reading configuration or credentials",
-    async (method) => {
-      const options = {
-        method,
-        scopes: ["operator.admin" as const],
-        get config() {
-          return readConfig();
-        },
-      };
-      await expect(callGatewayCli(options)).rejects.toThrow(/inter-session attribution/);
-      expect(readConfig).not.toHaveBeenCalled();
-    },
-  );
+  const session: GatewayOptions = { method: "sessions.send", scopes: ["operator.admin"] };
+  const agent: GatewayOptions = { method: "agent", scopes: ["operator.admin"] };
+  const taskCompletion = /task completion path/;
+  const attribution = /inter-session attribution/;
+  const configuration = /configuration resolution reached/;
+  const cliName = {
+    method: "sessions.send",
+    clientName: GATEWAY_CLIENT_NAMES.CLI,
+    mode: GATEWAY_CLIENT_MODES.BACKEND,
+  };
+  const cliMode = {
+    method: "sessions.send",
+    clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+    mode: GATEWAY_CLIENT_MODES.CLI,
+  };
 
   it.each([
-    { clientName: GATEWAY_CLIENT_NAMES.CLI, mode: GATEWAY_CLIENT_MODES.BACKEND },
-    { clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT, mode: GATEWAY_CLIENT_MODES.CLI },
-  ])("keeps mixed CLI identities on the guarded entry: %j", async (identity) => {
-    const options = {
-      method: "sessions.send",
-      ...identity,
-      get config() {
-        return readConfig();
-      },
-    };
-    await expect(callGateway(options)).rejects.toThrow(/inter-session attribution/);
-    expect(readConfig).not.toHaveBeenCalled();
-  });
-
-  it("does not classify omitted backend defaults as operator CLI", async () => {
-    await expect(
-      callGateway({
-        method: "agent",
-        get config() {
-          return readConfig();
-        },
-      }),
-    ).rejects.toThrow("configuration resolution reached");
-    expect(readConfig).toHaveBeenCalledOnce();
-  });
+    ["subagent", callGatewayCli, session, undefined, "1", taskCompletion, 0],
+    ["subagent shell", callGatewayCli, session, "exec", "1", taskCompletion, 0],
+    [
+      "subagent other method",
+      callGatewayCli,
+      { method: "agent" },
+      undefined,
+      "1",
+      configuration,
+      1,
+    ],
+    ["shell session", callGatewayCli, session, "exec", undefined, attribution, 0],
+    ["shell agent", callGatewayCli, agent, "exec", undefined, attribution, 0],
+    ["CLI name", callGateway, cliName, "exec", undefined, attribution, 0],
+    ["CLI mode", callGateway, cliMode, "exec", undefined, attribution, 0],
+    ["backend defaults", callGateway, { method: "agent" }, "exec", undefined, configuration, 1],
+  ] as const)(
+    "guards %s before configuration resolution",
+    async (_label, call, options, shell, subagent, error, configReads) => {
+      vi.stubEnv("OPENCLAW_SHELL", shell);
+      vi.stubEnv("OPENCLAW_SUBAGENT_EXEC", subagent);
+      await expect(call(input(options))).rejects.toThrow(error);
+      expect(readConfig).toHaveBeenCalledTimes(configReads);
+    },
+  );
 });

@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -30,6 +31,7 @@ it.each([false, true])("publishes identity only on outer commit (rollback: %s)",
   const scope = { agentId: "main", sessionKey, storePath: path.join(directory, "agent.sqlite") };
   replaceSessionEntrySync(scope, { sessionId: "original", updatedAt: 1 });
   const database = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
+  const file = statSync(scope.storePath, { bigint: true });
   const observed: Array<{
     mutation: SessionIdentityMutation;
     inTransaction: boolean;
@@ -66,6 +68,7 @@ it.each([false, true])("publishes identity only on outer commit (rollback: %s)",
             {
               mutation: {
                 agentId: scope.agentId,
+                databaseIdentity: `${file.dev}:${file.ino}`,
                 kind: "replace",
                 previous: { sessionId: "original", sessionKeys: [sessionKey] },
                 current: { sessionId: "replacement", sessionKeys: [sessionKey] },

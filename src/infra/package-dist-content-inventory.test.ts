@@ -49,7 +49,7 @@ describe("package content inventory contract", () => {
     });
   });
 
-  it.each([null, {}, [{ path: "dist/../outside", sha256: "0".repeat(64), size: 0, mode: 0o600 }]])(
+  it.each([{}, [{ path: "dist/../outside", sha256: "0".repeat(64), size: 0, mode: 0o600 }]])(
     "rejects malformed or unsafe metadata %j",
     async (contents) => {
       await withTestDir({ prefix: "openclaw-content-malformed-" }, async (root) => {

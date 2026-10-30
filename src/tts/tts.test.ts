@@ -1,5 +1,6 @@
 // TTS integration tests cover host runtime availability behavior.
 import { afterEach, describe, expect, it } from "vitest";
+import { maybeApplyTtsToPayload, textToSpeech } from "../plugin-sdk/tts-runtime.js";
 import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 
 describe("tts runtime facade", () => {
@@ -18,8 +19,6 @@ describe("tts runtime facade", () => {
         reason: "secret reference was not found",
       },
     ]);
-    await import("./tts.js");
-    const { maybeApplyTtsToPayload, textToSpeech } = await import("../plugin-sdk/tts-runtime.js");
     const payload = { text: "Keep this text." };
 
     await expect(textToSpeech({ text: "Speak this.", cfg: {} })).rejects.toMatchObject({

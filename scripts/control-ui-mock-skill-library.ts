@@ -132,14 +132,12 @@ function installSkillLibraryMock(
       return;
     }
     if (method === "skills.library.read") {
-      const selected = params.sessionKey
-        ? pins(params.sessionKey).find(
-            (read) =>
-              read.entry.skillId === params.skillId && read.entry.revision === params.revision,
-          )
-        : undefined;
       const read = params.sessionKey
-        ? selected
+        ? pins(params.sessionKey).find(
+            (candidate) =>
+              candidate.entry.skillId === params.skillId &&
+              candidate.entry.revision === params.revision,
+          )
         : params.skillId && visible().some((entry) => entry.skillId === params.skillId)
           ? params.revision
             ? histories.get(params.skillId)?.get(params.revision)
@@ -182,10 +180,10 @@ function installSkillLibraryMock(
           "Refresh requires current library access. The existing session pin remains unchanged.",
         );
       }
-      let next = selected.filter((read) => read.entry.skillId !== params.skillId);
-      if (params.action === "refresh" && !params.skillId) {
-        next = [];
-      }
+      const next =
+        params.action === "refresh" && !params.skillId
+          ? []
+          : selected.filter((read) => read.entry.skillId !== params.skillId);
       if (params.action !== "detach") {
         for (const id of targets) {
           const read = id

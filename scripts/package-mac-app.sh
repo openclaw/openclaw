@@ -9,6 +9,11 @@ source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
 source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"
 source "$ROOT_DIR/scripts/lib/build-metadata.sh"
 source "$ROOT_DIR/scripts/lib/mac-app-bundle.sh"
+REUSE_SOURCE_BUILD="${OPENCLAW_MAC_REUSE_BUILD:-0}"
+case "$REUSE_SOURCE_BUILD" in
+  0 | 1) ;;
+  *) echo "ERROR: OPENCLAW_MAC_REUSE_BUILD must be 0 or 1." >&2; exit 1 ;;
+esac
 CLOUD_WORKER_HOST="${OPENCLAW_MAC_CLOUD_WORKER_HOST:-0}"
 case "$CLOUD_WORKER_HOST" in
   0 | 1) ;;
@@ -84,7 +89,7 @@ if [[ "$BUILD_CONFIG" == "release" ]]; then
   OPENCLAW_REQUIRE_BUILD_METADATA=1
 fi
 BUILD_GIT_COMMIT="$(openclaw_resolve_git_commit "$ROOT_DIR")"
-if [[ "$BUILD_CONFIG" == "release" ]]; then
+if [[ "$BUILD_CONFIG" == "release" || "$REUSE_SOURCE_BUILD" == "1" ]]; then
   /bin/bash "$ROOT_DIR/scripts/apple-release-source-check.sh" \
     --root "$ROOT_DIR" \
     --expected-commit "$BUILD_GIT_COMMIT"
@@ -283,7 +288,7 @@ PEEKABOO_LOCKED_SOURCE_COMMIT="$PEEKABOO_SOURCE_COMMIT"
 
 require_swift_toolchain
 
-if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
+if [[ "$REUSE_SOURCE_BUILD" != "1" && "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
   echo "📦 Ensuring deps (pnpm install --frozen-lockfile)"
   run_pnpm install --frozen-lockfile --config.node-linker=hoisted
 else
@@ -308,11 +313,23 @@ if [[ "$AUTO_CHECKS" == "true" && ! "$APP_BUILD" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-if [[ "${SKIP_TSC:-0}" == "1" ]]; then
-  echo "📦 SKIP_TSC no longer skips the app's private runtime; using the content-checked build cache"
+if [[ "$REUSE_SOURCE_BUILD" == "1" ]]; then
+  # Preserve the admitted generation's identity; a new timestamp would relabel
+  # the running Gateway and fail the private runtime's exact provenance proof.
+  BUILD_TS="$(node --import "$ROOT_DIR/scripts/tsx.mjs" \
+    "$ROOT_DIR/scripts/verify-mac-source-build.mts" "$ROOT_DIR" "$APP_VERSION" "$BUILD_GIT_COMMIT")"
+  export OPENCLAW_BUILD_TIMESTAMP="$BUILD_TS"
+  echo "📦 Reusing verified source runtime (OPENCLAW_MAC_REUSE_BUILD=1)"
+else
+  if [[ "${SKIP_TSC:-0}" == "1" ]]; then
+    echo "📦 SKIP_TSC no longer skips the app's private runtime; using the content-checked build cache"
+  fi
+  echo "📦 Building JS (pnpm build)"
+  # The private app runtime consumes JavaScript, not the published SDK declarations.
+  # Keep an explicit zero available for developers who also need the typed build.
+  export OPENCLAW_RUN_NODE_SKIP_DTS_BUILD="${OPENCLAW_RUN_NODE_SKIP_DTS_BUILD:-1}"
+  run_pnpm build
 fi
-echo "📦 Building JS (pnpm build)"
-run_pnpm build
 
 node - "$ROOT_DIR/dist/build-info.json" "$APP_VERSION" "$BUILD_GIT_COMMIT" "$BUILD_TS" <<'NODE'
 const fs = require("node:fs");
@@ -375,8 +392,8 @@ plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleShortVersionSt
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleVersion "$APP_BUILD"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawBuildTimestamp "$BUILD_TS"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit "$BUILD_GIT_COMMIT"
-WORKER_BUILD_ID="$(node -e 'console.log(require(process.argv[1]).buildId)' "$ROOT_DIR/dist/build-info.json")"
-plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" OpenClawWorkerBuildID "$WORKER_BUILD_ID"
+RUNTIME_BUILD_ID="$(node -e 'console.log(require(process.argv[1]).buildId)' "$ROOT_DIR/dist/build-info.json")"
+plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" OpenClawRuntimeBuildID "$RUNTIME_BUILD_ID"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" PeekabooSourceCommit "$PEEKABOO_SOURCE_COMMIT"
 if [[ "$BUILD_CONFIG" == "release" ]]; then
   EMBEDDED_GIT_COMMIT="$(plist_print_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit)"
@@ -515,7 +532,8 @@ for arch in "${BUILD_ARCHS[@]}"; do
 done
 
 echo "📦 Copying CLI installer"
-INSTALL_CLI_SRC="$ROOT_DIR/scripts/install-cli.sh"
+node "$ROOT_DIR/scripts/build-installers.mjs" "$APP_STAGE_DIR/installers"
+INSTALL_CLI_SRC="$APP_STAGE_DIR/installers/install-cli.sh"
 if [ ! -f "$INSTALL_CLI_SRC" ]; then
   echo "ERROR: CLI installer missing at $INSTALL_CLI_SRC" >&2
   exit 1
@@ -523,26 +541,12 @@ fi
 cp "$INSTALL_CLI_SRC" "$APP_ROOT/Contents/Resources/install-cli.sh"
 chmod 0644 "$APP_ROOT/Contents/Resources/install-cli.sh"
 
-echo "📦 Provisioning the matching private node worker [${BUILD_ARCHS[*]}]"
-/bin/bash "$ROOT_DIR/scripts/stage-mac-node-worker.sh" "$APP_ROOT/Contents/Resources/node-worker" "${BUILD_ARCHS[@]}"
+echo "📦 Provisioning the matching private Bun runtime [${BUILD_ARCHS[*]}]"
+/bin/bash "$ROOT_DIR/scripts/stage-mac-runtime.sh" "$APP_ROOT/Contents/Resources/runtime" "${BUILD_ARCHS[@]}"
 
 echo "🌐 Copying app localizations"
 node --import tsx "$ROOT_DIR/scripts/apple-app-i18n.ts" compile-macos \
   --output "$APP_ROOT/Contents/Resources"
-
-# The native dashboard loads the Gateway-served HTTP UI. Neither the app bundle
-# nor its private `node worker` runtime serves a second Control UI copy.
-if [[ -e "$APP_ROOT/Contents/Resources/control-ui" || -L "$APP_ROOT/Contents/Resources/control-ui" ]]; then
-  echo "ERROR: Standalone Control UI assets must not be embedded in OpenClaw.app" >&2
-  exit 1
-fi
-for arch in "${BUILD_ARCHS[@]}"; do
-  worker_ui="$APP_ROOT/Contents/Resources/node-worker/$arch/lib/node_modules/openclaw/dist/control-ui"
-  if [[ -e "$worker_ui" || -L "$worker_ui" ]]; then
-    echo "ERROR: Private node worker must not embed Control UI assets: $worker_ui" >&2
-    exit 1
-  fi
-done
 
 echo "📦 Copying SwiftPM resource bundles"
 SWIFTPM_BUILD_PRODUCTS=("$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG")
@@ -643,17 +647,22 @@ fi
 codesign --verify --deep --strict "$APP_ROOT"
 if [[ "${CLOUD_WORKER_HOST:-0}" == "1" ]]; then
   signing_metadata="$(codesign -dv --verbose=4 "$APP_ROOT" 2>&1)"
-  if ! printf '%s\n' "$signing_metadata" | grep -q '^Authority=Developer ID Application:' ||
-     ! printf '%s\n' "$signing_metadata" | grep -Eq '^TeamIdentifier=[A-Z0-9]{10}$'; then
+  if ! grep -q '^Authority=Developer ID Application:' <<<"$signing_metadata" ||
+     ! grep -Eq '^TeamIdentifier=[A-Z0-9]{10}$' <<<"$signing_metadata"; then
     echo "ERROR: Cloud worker app did not receive a Developer ID Application signature." >&2
     exit 1
   fi
 fi
 for arch in "${BUILD_ARCHS[@]}"; do
-  env -i HOME="$APP_STAGE_DIR" PATH="/usr/bin:/bin:/usr/sbin:/sbin" TMPDIR="${TMPDIR:-/tmp}" \
-    "$APP_ROOT/Contents/Resources/node-worker/$arch/bin/node" \
-    "$ROOT_DIR/scripts/verify-mac-node-worker.mjs" \
-    "$APP_ROOT/Contents/Resources/node-worker/$arch" "$ROOT_DIR/dist/build-info.json"
+  if /usr/bin/arch -"$arch" /usr/bin/true 2>/dev/null; then
+    env -i HOME="$APP_STAGE_DIR" PATH="/usr/bin:/bin:/usr/sbin:/sbin" TMPDIR="${TMPDIR:-/tmp}" \
+      OPENCLAW_SQLITE_LIBRARY="$APP_ROOT/Contents/Resources/runtime/lib/libsqlite3.dylib" \
+      /usr/bin/arch -"$arch" "$APP_ROOT/Contents/Resources/runtime/bin/bun" \
+      "$ROOT_DIR/scripts/verify-mac-runtime.mjs" \
+      "$APP_ROOT/Contents/Resources/runtime" "$ROOT_DIR/dist/build-info.json" "$APP_ROOT"
+  else
+    echo "WARN: Signed runtime $arch verification skipped; install Rosetta to verify this architecture" >&2
+  fi
 done
 codesign --verify --deep --strict "$APP_ROOT"
 

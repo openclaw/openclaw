@@ -9,6 +9,8 @@ title: "Reactions"
 The agent adds and removes emoji reactions with the `message` tool's `react`
 action. Behavior varies by channel.
 
+[Control UI reactions](/concepts/multi-user#reactions) on channel-origin prompts mirror the bot's reaction through the same `react` action.
+
 ## How it works
 
 ```json

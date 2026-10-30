@@ -96,8 +96,7 @@ export function resolveWorkspaceQualifiedSlackTarget(
   }
 }
 
-function isUnambiguousSlackUserId(rawId: string): boolean {
-  const id = rawId.trim();
+function isUnambiguousSlackUserId(id: string): boolean {
   return /^[UW][A-Z0-9]+$/.test(id) || /^[uw][0-9][a-z0-9]{7,}$/.test(id);
 }
 
@@ -177,23 +176,12 @@ export function slackTargetsMatch(left: string, right: string): boolean {
 
 export function looksLikeSlackTargetId(raw: string): boolean {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (/^<@([A-Z0-9]+)>$/i.test(trimmed)) {
-    return true;
-  }
-  if (/^(user|channel):/i.test(trimmed)) {
-    return true;
-  }
-  if (/^slack:/i.test(trimmed)) {
-    return true;
-  }
-  if (/^team:/i.test(trimmed)) {
-    return true;
-  }
-  if (/^[@#]/.test(trimmed)) {
-    return true;
-  }
-  return /^[CUWGD][A-Z0-9]{8,}$/i.test(trimmed);
+  return (
+    /^<@([A-Z0-9]+)>$/i.test(trimmed) ||
+    /^(user|channel):/i.test(trimmed) ||
+    /^slack:/i.test(trimmed) ||
+    /^team:/i.test(trimmed) ||
+    /^[@#]/.test(trimmed) ||
+    /^[CUWGD][A-Z0-9]{8,}$/i.test(trimmed)
+  );
 }

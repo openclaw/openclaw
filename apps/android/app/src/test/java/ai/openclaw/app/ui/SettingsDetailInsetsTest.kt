@@ -27,8 +27,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
@@ -237,7 +235,7 @@ class SettingsDetailInsetsTest {
 
         fun awaitReply(index: Int) {
           composeRule.waitUntil(timeoutMillis = 5_000) {
-            val state = runtime.systemAgentChatState.value
+            val state = runtime.systemAgentChatController.state.value
             state.messages.lastOrNull()?.text == replies[index] && !state.sending && state.expectsSensitiveReply == (index == 1)
           }
           composeRule.onNodeWithText(replies[index]).assertIsDisplayed()
@@ -250,7 +248,7 @@ class SettingsDetailInsetsTest {
           sendPrepared(expectedMessage, replyIndex)
           input.assertIsNotEnabled()
           send.assertIsNotEnabled()
-          assertEquals("", runtime.systemAgentChatState.value.input)
+          assertEquals("", runtime.systemAgentChatController.state.value.input)
           composeRule.runOnIdle { editorInfo.set(null) }
           releaseReplies[replyIndex].countDown()
         }
@@ -277,7 +275,7 @@ class SettingsDetailInsetsTest {
         }
 
         awaitReply(0)
-        val sessionId = runtime.systemAgentChatState.value.sessionId
+        val sessionId = runtime.systemAgentChatController.state.value.sessionId
         input.assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.Password))
         input.performClick().performTextReplacement("  ordinary request  ")
         sendAndReleaseReply("ordinary request", 1)
@@ -288,7 +286,7 @@ class SettingsDetailInsetsTest {
         input.performClick()
         composeRule.runOnIdle { clipboard.setPrimaryClip(ClipData.newPlainText("synthetic credential", pasted)) }
         input.performSemanticsAction(SemanticsActions.PasteText) { assertTrue(it()) }
-        composeRule.waitUntil(timeoutMillis = 5_000) { runtime.systemAgentChatState.value.input == pasted }
+        composeRule.waitUntil(timeoutMillis = 5_000) { runtime.systemAgentChatController.state.value.input == pasted }
         assertInputPresentation(pasted, secret = true)
         sendAndReleaseReply(pasted, 2)
 
@@ -428,7 +426,7 @@ class SettingsDetailInsetsTest {
     withSystemAgentConversation(listOf({ systemAgentReply(greeting) }, { systemAgentReply(reply) })) {
       awaitReply(greeting)
       val retainedMessage =
-        runtime.systemAgentChatState.value.messages
+        runtime.systemAgentChatController.state.value.messages
           .single()
       send("Continue", requestIndex = 1)
       keyboard(0)
@@ -455,7 +453,7 @@ class SettingsDetailInsetsTest {
           userBounds.bottom < workingBounds.top && workingBounds.top < viewport.bottom && workingBounds.bottom > viewport.bottom,
       )
       assertEquals("Only one pixel of the working row may extend below the viewport: $geometry", onePixel, (workingBounds.bottom - viewport.bottom).value, onePixel)
-      assertTrue("The actual request must remain held before the witness: $geometry", runtime.systemAgentChatState.value.sending && requests.size == 2)
+      assertTrue("The actual request must remain held before the witness: $geometry", runtime.systemAgentChatController.state.value.sending && requests.size == 2)
       if (jumpToLatest) {
         val clock = composeRule.mainClock
         val previousAutoAdvance = clock.autoAdvance
@@ -499,7 +497,7 @@ class SettingsDetailInsetsTest {
       composeRule.onNodeWithText("OpenClaw is working…").assertDoesNotExist()
       assertEquals(
         retainedMessage,
-        runtime.systemAgentChatState.value.messages
+        runtime.systemAgentChatController.state.value.messages
           .first { it.id == retainedMessage.id },
       )
       // Read the new row's actual layout without scrolling; its height alone must exceed the
@@ -580,21 +578,21 @@ class SettingsDetailInsetsTest {
       ),
     ) {
       awaitReply(greeting)
-      val previousSession = runtime.systemAgentChatState.value.sessionId
+      val previousSession = runtime.systemAgentChatController.state.value.sessionId
       scrollToLatestQuestion()
       send("Exercise restart", requestIndex = 1)
       releaseReplies[1].countDown()
       composeRule.waitUntil(timeoutMillis = 5_000) {
-        runtime.systemAgentChatState.value.errorText != null && !runtime.systemAgentChatState.value.sending
+        runtime.systemAgentChatController.state.value.errorText != null && !runtime.systemAgentChatController.state.value.sending
       }
       history.performTouchInput { swipeDown(durationMillis = 500) }
       composeRule.waitForIdle()
       assertAwayFromLatest()
       composeRule.onNodeWithText("Restart").performClick()
-      composeRule.waitUntil(timeoutMillis = 5_000) { requests.size == 3 && runtime.systemAgentChatState.value.sending }
-      assertNotEquals(previousSession, runtime.systemAgentChatState.value.sessionId)
+      composeRule.waitUntil(timeoutMillis = 5_000) { requests.size == 3 && runtime.systemAgentChatController.state.value.sending }
+      assertNotEquals(previousSession, runtime.systemAgentChatController.state.value.sessionId)
       assertEquals(previousSession, requests[1]["sessionId"]?.jsonPrimitive?.content)
-      assertEquals(runtime.systemAgentChatState.value.sessionId, requests[2]["sessionId"]?.jsonPrimitive?.content)
+      assertEquals(runtime.systemAgentChatController.state.value.sessionId, requests[2]["sessionId"]?.jsonPrimitive?.content)
       assertTrue("Restart must request a new greeting, not resend the old input", "message" !in requests[2])
       composeRule.onNodeWithText("Jump to latest").assertDoesNotExist()
       releaseReplies[2].countDown()
@@ -616,7 +614,13 @@ class SettingsDetailInsetsTest {
 
   @Test
   @Config(qualifiers = "w320dp-h800dp-mdpi")
-  fun appearanceSwatchesKeepAccessibleTouchTargetsInANarrowWindow() {
+  fun appearanceSwatchesKeepAccessibleTouchTargetsInANarrowWindow() = verifyAppearanceSwatches()
+
+  @Test
+  @Config(qualifiers = "w393dp-h800dp-mdpi")
+  fun appearanceSwatchesKeepTheirSizeInAWiderWindow() = verifyAppearanceSwatches()
+
+  private fun verifyAppearanceSwatches() {
     val app = RuntimeEnvironment.getApplication() as NodeApp
     app
       .getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
@@ -645,6 +649,9 @@ class SettingsDetailInsetsTest {
       accents.forEach { accent ->
         val swatch = composeRule.onNodeWithContentDescription(appearanceAccentSwatchDescription(accent))
         swatch.assertIsDisplayed()
+        val bounds = swatch.fetchSemanticsNode().boundsInRoot
+        assertEquals("Accent layout must remain 48dp wide", 48 * density, bounds.width, 1f)
+        assertEquals("Accent layout must remain 48dp high", 48 * density, bounds.height, 1f)
         val touchBounds = swatch.fetchSemanticsNode().touchBoundsInRoot
         assertTrue("Accent target must remain at least 48dp wide: $touchBounds", touchBounds.width >= 48 * density - 1)
         assertTrue("Accent target must remain at least 48dp high: $touchBounds", touchBounds.height >= 48 * density - 1)
@@ -711,13 +718,13 @@ class SettingsDetailInsetsTest {
       }
       awaitReply(current)
       val questionMessage =
-        runtime.systemAgentChatState.value.messages
+        runtime.systemAgentChatController.state.value.messages
           .last()
       assertTrue("The newest assistant reply must have a live question", questionMessage.question != null)
       val readingText = if (readOlderMessage) older else current
       if (readOlderMessage) {
         val olderMessage =
-          runtime.systemAgentChatState.value.messages
+          runtime.systemAgentChatController.state.value.messages
             .single { it.text == older }
         assertTrue("The older control must be a different, immutable message", olderMessage.id != questionMessage.id && olderMessage.question == null)
       }
@@ -791,7 +798,7 @@ class SettingsDetailInsetsTest {
         composeRule.onNodeWithText("NEXT STEP").assertIsNotDisplayed()
       }
       composeRule.onNodeWithText("Skip for now").assertIsNotDisplayed()
-      val prepared = runtime.systemAgentChatState.value
+      val prepared = runtime.systemAgentChatController.state.value
       assertEquals(draft, prepared.input)
       assertTrue(
         "Reading must be established before Send retires the newest question",
@@ -803,7 +810,7 @@ class SettingsDetailInsetsTest {
       val requestIndex = replies.lastIndex
       // Do not use send(): the draft and reading position must already be settled at admission.
       sendPrepared(draft, requestIndex)
-      assertTrue("The real controller must retire the question before the held reply", questionMessage.id in runtime.systemAgentChatState.value.retiredQuestionIds)
+      assertTrue("The real controller must retire the question before the held reply", questionMessage.id in runtime.systemAgentChatController.state.value.retiredQuestionIds)
       composeRule.onNodeWithText("NEXT STEP").assertDoesNotExist()
       assertReadingPreserved(reading, before, "Question retirement and working-row insertion")
 
@@ -916,7 +923,9 @@ class SettingsDetailInsetsTest {
 
     fun awaitReply(text: String) {
       composeRule.waitUntil(timeoutMillis = 5_000) {
-        val completed = runtime.systemAgentChatState.value.let { !it.sending && it.messages.lastOrNull()?.text == text }
+        val completed =
+          runtime.systemAgentChatController.state.value
+            .let { !it.sending && it.messages.lastOrNull()?.text == text }
         // Publication can precede downstream collection; observe the real composer before geometry.
         // Frozen-clock callers deliberately inspect publication before advancing their next frame.
         if (!completed || !composeRule.mainClock.autoAdvance) return@waitUntil completed
@@ -941,7 +950,7 @@ class SettingsDetailInsetsTest {
       requestIndex: Int,
     ) {
       composeRule.onNodeWithText("Send").performClick()
-      composeRule.waitUntil(timeoutMillis = 5_000) { requests.size > requestIndex && runtime.systemAgentChatState.value.sending }
+      composeRule.waitUntil(timeoutMillis = 5_000) { requests.size > requestIndex && runtime.systemAgentChatController.state.value.sending }
       assertEquals(expectedMessage, requests[requestIndex]["message"]?.jsonPrimitive?.content)
     }
 
@@ -1080,7 +1089,7 @@ class SettingsDetailInsetsTest {
                 drawerState = rememberDrawerState(initialValue = DrawerValue.Closed),
                 drawerContent = {},
               ) {
-                SettingsDetailFrame(title = "Gateway", subtitle = "", icon = Icons.Default.Settings, onBack = {}) {
+                SettingsDetailFrame(route = SettingsRoute.Gateway, title = "Gateway", subtitle = "", onBack = {}) {
                   repeat(20) { index -> ClawTextField("Field $index", {}, "") }
                   ClawTextField("Unsubmitted draft", {}, "Password", modifier = Modifier.testTag("last-field"))
                   ClawPrimaryButton(text = "Save", onClick = {})

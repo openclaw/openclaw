@@ -1,27 +1,22 @@
-import type { DatabaseSync } from "node:sqlite";
 import type {
   OpenClawStateDatabaseOptions,
   OpenClawStateSchemaReadAdmission,
 } from "../state/openclaw-state-db-contract.js";
+import { createOpenClawStateCurrentWarmReader } from "../state/openclaw-state-db-current-reader.js";
+import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import {
-  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
-  withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
+  readCurrentOpenClawStateDatabaseContentVersion,
 } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import {
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-  iterateSqliteQuerySync,
-} from "./kysely-sync.js";
-import { inspectUpdateRunAbandonment } from "./update-run-activity.js";
+import type { OpenClawStateReadOptions } from "../state/openclaw-state-read.types.js";
+import { getNodeSqliteKysely, iterateSqliteQuerySync } from "./kysely-sync.js";
+import { withUpdateRunRead } from "./update-run-admission.js";
 import {
   decodeRun,
-  hasStoredUpdateRecovery,
   readActiveUpdateRun,
-  readLatestUpdateRun,
   readUpdateRunRecord,
   readUpdateRuns,
   type UpdateRunListInput,
@@ -31,13 +26,12 @@ import {
   type UpdateFetchFailure,
   type UpdateRunRecord,
 } from "./update-run-record.js";
-import { ABANDONED_UPDATE_RUN_MS } from "./update-run-timeouts.js";
 
 export function getUpdateRun(
   runId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): UpdateRunRecord | undefined {
-  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+  return withUpdateRunRead(
     ({ db }) => (tableExists(db, "update_runs") ? readUpdateRunRecord(db, runId) : undefined),
     options,
   );
@@ -46,10 +40,7 @@ export function getUpdateRun(
 export function findActiveUpdateRun(
   options: OpenClawStateDatabaseOptions = {},
 ): UpdateRunRecord | undefined {
-  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-    ({ db }) => readActiveUpdateRun(db),
-    options,
-  );
+  return withUpdateRunRead(({ db }) => readActiveUpdateRun(db), options);
 }
 
 /** Previews and acknowledged abandonment cannot replace failure or completion evidence. */
@@ -58,7 +49,7 @@ export function readUpdateRunResolutionHistory(options: OpenClawStateDatabaseOpt
   outcome?: UpdateRunRecord;
 } {
   return (
-    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
+    withUpdateRunRead(({ db }) => {
       if (!tableExists(db, "update_runs")) {
         return {};
       }
@@ -86,14 +77,34 @@ export async function getUpdateRunAsync(
   runId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<UpdateRunRecord | undefined> {
-  const reply = await withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(options, { type: "updateRuns.get", runId }),
+  return await withArtifactPreservingStateReads(() =>
+    readUpdateRunAsync(runId, options, { preferIndependentWarmRead: true }),
+  );
+}
+
+/** The active updater already writes this ledger, so SQLite sidecars need no private copy.
+ * Canonical state closure drains the retained worker before database replacement.
+ */
+export function getUpdateRunForProgressAsync(
+  runId: string,
+  options: OpenClawStateDatabaseOptions = {},
+  signal?: AbortSignal,
+): Promise<UpdateRunRecord | undefined> {
+  return readUpdateRunAsync(runId, options, { live: true, signal });
+}
+
+async function readUpdateRunAsync(
+  runId: string,
+  options: OpenClawStateDatabaseOptions,
+  readOptions: OpenClawStateReadOptions,
+): Promise<UpdateRunRecord | undefined> {
+  const reply = await executeExistingOpenClawStateRead(
+    options,
+    { type: "updateRuns.get", runId },
+    readOptions,
   );
   if (!reply) {
     return undefined;
-  }
-  if (!reply.ok || reply.type !== "updateRuns.get") {
-    throw new Error("Unexpected update run lookup result");
   }
   return reply.run;
 }
@@ -104,7 +115,7 @@ export function listUpdateRuns(
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
 ): UpdateRunRecord[] {
   return (
-    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+    withUpdateRunRead(
       ({ db }) => readUpdateRuns(db, input),
       options,
       openStateSchemaReadAdmission,
@@ -112,16 +123,75 @@ export function listUpdateRuns(
   );
 }
 
-/** The fixed two-row status projection reuses the live owner; cold reads prepare one snapshot. */
+/** Read current rows on an independent warm owner; cold reads preserve every source byte.
+ * The caller still evaluates admission on every invocation; no grant is cached.
+ */
+export function createUpdateRunAdmissionReader(
+  input: UpdateRunListInput,
+  options: OpenClawStateDatabaseOptions,
+  openStateSchemaReadAdmission: OpenClawStateSchemaReadAdmission,
+): () => UpdateRunRecord[] {
+  const readWarm = createOpenClawStateCurrentWarmReader(
+    ({ db }) => readUpdateRuns(db, input),
+    options,
+    openStateSchemaReadAdmission,
+  );
+  let previous: { version: string; runs: UpdateRunRecord[] } | undefined;
+  return () => {
+    // PostgreSQL ledger writes do not change the SQLite anchor's content fingerprint.
+    if (isStatePostgres()) {
+      previous = undefined;
+      return listUpdateRuns(input, options, openStateSchemaReadAdmission);
+    }
+    const warm = readWarm();
+    if (warm.available) {
+      previous = undefined;
+      return warm.value;
+    }
+    const version = readCurrentOpenClawStateDatabaseContentVersion(options);
+    if (version !== undefined && previous?.version === version) {
+      return previous.runs;
+    }
+    previous = undefined;
+    const runs = listUpdateRuns(input, options, openStateSchemaReadAdmission);
+    if (
+      version !== undefined &&
+      version === readCurrentOpenClawStateDatabaseContentVersion(options)
+    ) {
+      previous = { version, runs };
+    }
+    return runs;
+  };
+}
+
+/** Keep the fixed status projection in one read-worker snapshot. */
 export async function getUpdateRunStatusAsync(
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<{ activeRun?: UpdateRunRecord; lastRun?: UpdateRunRecord }> {
-  return (
-    (await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
-      ({ db }) => ({ activeRun: readActiveUpdateRun(db), lastRun: readLatestUpdateRun(db) }),
-      options,
-    )) ?? {}
+  return readUpdateRunStatusAsync("updateRuns.status", options);
+}
+
+export async function getUpdateRunHistoryStatusAsync(
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<{
+  activeRun?: UpdateRunRecord;
+  lastRun?: UpdateRunRecord;
+  expiredRun?: UpdateRunRecord;
+}> {
+  return readUpdateRunStatusAsync("updateRuns.historyStatus", options);
+}
+
+async function readUpdateRunStatusAsync(
+  type: "updateRuns.status" | "updateRuns.historyStatus",
+  options: OpenClawStateDatabaseOptions,
+) {
+  const reply = await withArtifactPreservingStateReads(() =>
+    executeExistingOpenClawStateRead(options, { type }, { preferIndependentWarmRead: true }),
   );
+  if (!reply) {
+    return {};
+  }
+  return reply.status;
 }
 
 /** Doctor retains its maintenance owner while the worker reads the private snapshot. */
@@ -130,13 +200,14 @@ export async function listUpdateRunsAsync(
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<UpdateRunRecord[]> {
   const reply = await withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(options, { type: "updateRuns.list", input: { ...input } }),
+    executeExistingOpenClawStateRead(
+      options,
+      { type: "updateRuns.list", input: { ...input } },
+      { preferIndependentWarmRead: true },
+    ),
   );
   if (!reply) {
     return [];
-  }
-  if (!reply.ok || reply.type !== "updateRuns.list") {
-    throw new Error("Unexpected update run list result");
   }
   return reply.runs;
 }
@@ -145,7 +216,7 @@ export async function listUpdateRunsAsync(
 export function getLatestUpdateFetchFailure(
   options: OpenClawStateDatabaseOptions = {},
 ): UpdateFetchFailure | undefined {
-  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
+  return withUpdateRunRead(({ db }) => {
     if (!tableExists(db, "update_runs")) {
       return undefined;
     }
@@ -204,50 +275,4 @@ export function getLatestUpdateFetchFailure(
     }
     return latestFailure;
   }, options);
-}
-
-export type UpdateRunReconciliationInput = {
-  explicit?: boolean;
-  runIds?: readonly string[];
-  requireAllActive?: boolean;
-  legacyOnly?: boolean;
-};
-export type UpdateRunReconciliationCandidate = {
-  record: UpdateRunRecord;
-  rule: string | undefined;
-};
-
-export function inspectUpdateRunReconciliation(
-  db: DatabaseSync,
-  record: UpdateRunRecord,
-  input: UpdateRunReconciliationInput,
-): UpdateRunReconciliationCandidate {
-  return {
-    record,
-    rule: hasStoredUpdateRecovery(db, record.runId)
-      ? undefined
-      : inspectUpdateRunAbandonment(record, input),
-  };
-}
-
-export function readUpdateRunReconciliationCandidates(
-  db: DatabaseSync,
-  input: UpdateRunReconciliationInput,
-): UpdateRunReconciliationCandidate[] {
-  if (!tableExists(db, "update_runs")) {
-    return [];
-  }
-  let query = getNodeSqliteKysely<Pick<DB, "update_runs">>(db)
-    .selectFrom("update_runs")
-    .selectAll()
-    .where("status", "=", "running");
-  if (!input.explicit) {
-    query = query.where("updated_at_ms", "<", Date.now() - ABANDONED_UPDATE_RUN_MS);
-  }
-  if (input.runIds) {
-    query = query.where("run_id", "in", [...input.runIds]);
-  }
-  return executeSqliteQuerySync(db, query.orderBy("run_id")).rows.map((row) =>
-    inspectUpdateRunReconciliation(db, decodeRun(row), input),
-  );
 }

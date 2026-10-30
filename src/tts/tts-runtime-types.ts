@@ -1,16 +1,14 @@
-type TtsAttemptReasonCode =
-  | "success"
-  | "no_provider_registered"
-  | "not_configured"
-  | "unsupported_for_streaming"
-  | "unsupported_for_telephony"
-  | "timeout"
-  | "provider_error";
-
 export type TtsProviderAttempt = {
   provider: string;
   outcome: "success" | "skipped" | "failed";
-  reasonCode: TtsAttemptReasonCode;
+  reasonCode:
+    | "success"
+    | "no_provider_registered"
+    | "not_configured"
+    | "unsupported_for_streaming"
+    | "unsupported_for_telephony"
+    | "timeout"
+    | "provider_error";
   persona?: string;
   personaBinding?: "applied" | "missing" | "none";
   latencyMs?: number;

@@ -19,7 +19,6 @@ describe("Codex transcript projection runtime contract", () => {
     const result = await projectContextEngineAssemblyForCodex({
       prompt,
       currentUserTurnIdempotencyKey: "current:user",
-      originalHistoryMessages: [structuredHistoryMessage()],
       assembledMessages: [
         structuredHistoryMessage(),
         assistantHistoryMessage(),
@@ -36,7 +35,6 @@ describe("Codex transcript projection runtime contract", () => {
   it("keeps media-only user history visible as omitted media instead of dropping the turn", async () => {
     const result = await projectContextEngineAssemblyForCodex({
       prompt: "newest inbound message",
-      originalHistoryMessages: [mediaOnlyHistoryMessage()],
       assembledMessages: [
         mediaOnlyHistoryMessage(),
         currentPromptHistoryMessage("newest inbound message"),

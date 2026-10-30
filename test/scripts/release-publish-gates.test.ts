@@ -1,12 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import {
   evaluateReleaseBootstrapGate,
   evaluateReleasePublishGates,
 } from "../../scripts/lib/release-publish-gates.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { expectGate } from "./release-publish.test-support.js";
 
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 const targetSha = "a".repeat(40);
@@ -20,154 +21,161 @@ const manifest = {
   childRuns: { productPerformance: { conclusion: "success" } },
   validationInputs: { coveragePolicy: "full" },
 };
-
-describe("release publication control admission", () => {
-  it("rejects stable bootstrap approval that cannot cover the candidate package version", () => {
-    const input = {
-      releaseTag: "v2026.9.5",
-      publishTag: "latest",
-      releaseProfile: "stable",
-      packageVersion: "2026.9.4",
-    };
-    expect(evaluateReleaseBootstrapGate(input).status).toBe("FAIL");
+type GateInput = Parameters<typeof evaluateReleasePublishGates>[0];
+type Evidence = Record<string, unknown>;
+function evaluate(changes: Evidence = {}, input: Partial<GateInput> = {}) {
+  return evaluateReleasePublishGates({
+    manifest: { ...manifest, ...changes },
+    releaseTag: "v2026.9.5",
+    npmDistTag: "latest",
+    consumer: "publisher",
+    ...input,
   });
-
-  it.each([
-    { name: "stable evidence", overrides: {}, failures: [] },
-    { name: "unsealed rerun", overrides: { rerunGroup: "performance" }, failures: ["rerun-group"] },
-    { name: "missing soak", overrides: { runReleaseSoak: "false" }, failures: ["soak"] },
-    {
-      name: "advisory performance",
-      overrides: { controls: { performanceBlocking: false } },
-      failures: ["performance"],
-    },
-    {
-      name: "waived advisory and soak",
-      overrides: { controls: { performanceBlocking: false }, runReleaseSoak: "false" },
-      waiver: "Approved after infrastructure failure",
-      failures: [],
-    },
-    {
-      name: "blank waiver",
-      overrides: { runReleaseSoak: "false" },
-      waiver: " \n\t",
-      failures: ["soak"],
-    },
-    {
-      name: "failed waived performance",
-      overrides: {
-        controls: { performanceBlocking: false },
-        childRuns: { productPerformance: { conclusion: "failure" } },
-      },
-      waiver: "Approved",
-      failures: ["performance"],
-    },
-  ])("evaluates every parent and core gate for $name", ({ overrides, waiver, failures }) => {
-    for (const consumer of ["publisher", "core-npm"] as const) {
-      const gates = evaluateReleasePublishGates({
-        manifest: { ...manifest, ...overrides },
-        consumer,
-        releaseTag: "v2026.9.5",
-        npmDistTag: "latest",
-        stableSoakWaiver: waiver,
-        expectedSha: targetSha,
-      });
-      expect(gates.filter((gate) => gate.status === "FAIL").map((gate) => gate.id)).toEqual(
-        failures.map((id) => `${consumer}.${id}`),
-      );
-    }
+}
+const failureIds = (gates: ReturnType<typeof evaluate>) =>
+  gates.filter((gate) => gate.status === "FAIL").map((gate) => gate.id);
+it.each([
+  { releaseTag: "v2026.9.5-alpha.1", npmDistTag: "beta" },
+  { releaseTag: "v2026.9.5", npmDistTag: "alpha" },
+])("rejects retired alpha gate input %j", (input) => {
+  expectGate(evaluate({}, input), {
+    status: "FAIL",
+    message: "Alpha releases are retired; use a beta prerelease instead.",
   });
+});
 
-  it.each([
-    { npmDistTag: "latest", failures: ["core-npm.performance"] },
-    { npmDistTag: "beta", failures: [] },
-  ])("preserves beta-profile parent and $npmDistTag core admission", ({ npmDistTag, failures }) => {
-    const input = {
-      manifest: { ...manifest, releaseProfile: "beta", controls: { performanceBlocking: false } },
-      releaseTag: "v2026.9.5",
-      npmDistTag,
-    };
-    expect(
-      evaluateReleasePublishGates({ ...input, consumer: "publisher" }).some(
-        (gate) => gate.status === "FAIL",
-      ),
-    ).toBe(false);
-    expect(
-      evaluateReleasePublishGates({ ...input, consumer: "core-npm" })
-        .filter((gate) => gate.status === "FAIL")
-        .map((gate) => gate.id),
-    ).toEqual(failures);
-  });
-
-  it.each([
-    { controls: { performanceBlocking: "true" } },
+type HistoricalInput = Partial<GateInput> & {
+  stableSoakWaiver?: string;
+  laneWaiver?: string;
+  publishAcceptedWaivers?: Record<string, string>;
+};
+type Outcome = string[] | "any failure" | "selected-lanes";
+type PolicyRow = [string, Evidence, Outcome, HistoricalInput?];
+const consumers = ["publisher", "core-npm", "stable-closeout"] as const;
+const waiver = "2026.9.5 approved";
+it.each(consumers)("accepts stable evidence for %s", (consumer) => {
+  checkPolicy({}, [], { expectedSha: targetSha, consumer });
+});
+const recordedWaivers = [
+  { validationInputs: { laneWaiver: waiver } },
+  { publishInputs: { stableSoakWaiver: waiver } },
+  { validationInputs: { knownFlakyJobsJson: '["checks-windows-node-test-2"]' } },
+  { advisoryJobs: [{ child: "normalCi", job: "tests", conclusion: "failure" }] },
+];
+const policyCases: PolicyRow[] = [
+  ["missing performance", { controls: {}, childRuns: {} }, ["performance"]],
+  [
+    "historical waivers",
+    { releaseProfile: "beta", runReleaseSoak: "false", controls: { performanceBlocking: false } },
+    ["performance", "stable-profile", "soak"],
+    {
+      stableSoakWaiver: waiver,
+      laneWaiver: waiver,
+      publishAcceptedWaivers: { stableSoakWaiver: waiver, laneWaiver: waiver },
+    },
+  ],
+  ...(["publisher", "core-npm"] as const).map((consumer): PolicyRow => [
+    "deferred beta performance/" + consumer,
+    { releaseProfile: "beta", controls: { performanceBlocking: false }, childRuns: {} },
+    [],
+    { consumer, releaseTag: "v2026.9.5-beta.1", npmDistTag: "beta" },
+  ]),
+  ["boolean soak accepted by publisher", { runReleaseSoak: true }, []],
+  [
+    "boolean soak rejected by strict closeout",
     { runReleaseSoak: true },
-    { childRuns: { productPerformance: { conclusion: "failure" } } },
-  ])("retains stricter stable closeout controls: %j", (overrides) => {
-    const input = {
-      manifest: { ...manifest, ...overrides },
-      releaseTag: "v2026.9.5",
-      npmDistTag: "latest",
-    };
-    expect(
-      evaluateReleasePublishGates({ ...input, consumer: "publisher" }).some(
-        (gate) => gate.status === "FAIL",
-      ),
-    ).toBe(false);
-    expect(
-      evaluateReleasePublishGates({ ...input, consumer: "stable-closeout" }).some(
-        (gate) => gate.status === "FAIL",
-      ),
-    ).toBe(true);
-  });
-
-  it("reports independent identity and policy failures together", () => {
-    const gates = evaluateReleasePublishGates({
-      manifest: {
-        ...manifest,
-        workflowName: "Other",
-        targetSha: "b".repeat(40),
-        rerunGroup: "performance",
-        runReleaseSoak: "false",
+    "any failure",
+    { consumer: "stable-closeout" },
+  ],
+  [
+    "independent identity and policy failures",
+    {
+      workflowName: "Other",
+      targetSha: "b".repeat(40),
+      rerunGroup: "performance",
+      runReleaseSoak: "false",
+    },
+    ["workflow", "target", "profile", "rerun-group", "soak"],
+    { expectedSha: targetSha, expectedReleaseProfile: "full" },
+  ],
+  ...recordedWaivers.map((changes, index): PolicyRow => [
+    `recorded waiver/advisory ${index}`,
+    changes,
+    "selected-lanes",
+  ]),
+  [
+    "failed Windows child without advisory row",
+    {
+      childEvidence: {
+        normalCi: {
+          runId: "42",
+          jobs: [
+            { name: "checks-windows-node-test-2", status: "completed", conclusion: "failure" },
+          ],
+        },
       },
-      consumer: "publisher",
-      releaseTag: "v2026.9.5",
-      npmDistTag: "latest",
-      expectedSha: targetSha,
-      expectedReleaseProfile: "full",
+      advisoryJobs: [],
+    },
+    "selected-lanes",
+  ],
+];
+function checkPolicy(changes: Evidence, expected: Outcome, input?: HistoricalInput) {
+  const gates = evaluate(changes, input);
+  if (typeof expected === "string") {
+    expectGate(gates, {
+      status: "FAIL",
+      ...(expected === "selected-lanes" ? { id: "publisher.selected-lanes" } : {}),
     });
-    expect(gates.filter((gate) => gate.status === "FAIL").map((gate) => gate.id)).toEqual([
-      "publisher.workflow",
-      "publisher.target",
-      "publisher.profile",
-      "publisher.rerun-group",
-      "publisher.soak",
-    ]);
-  });
+  } else {
+    expect(failureIds(gates)).toEqual(
+      expected.map((id) => `${input?.consumer ?? "publisher"}.${id}`),
+    );
+  }
+}
+it.each(policyCases)("%s", (_name, changes, expected, input) =>
+  checkPolicy(changes, expected, input),
+);
 
-  it("runs without installed dependencies and preserves escaped workflow waiver outputs", () => {
+it("rejects bootstrap approval for another package version", () => {
+  const gate = evaluateReleaseBootstrapGate({
+    releaseTag: "v2026.9.5",
+    publishTag: "latest",
+    releaseProfile: "stable",
+    packageVersion: "2026.9.4",
+  });
+  expect(gate.status).toBe("FAIL");
+});
+
+it.each([false, true])(
+  "runs without installed dependencies and never emits waiver authority (waived=%s)",
+  (waived) => {
     const root = tempRoots.make("release-publish-gates-");
     const manifestPath = join(root, "manifest.json");
     const output = join(root, "output");
-    const summary = join(root, "summary");
-    const waiver = 'Infrastructure 100% unavailable\nOperator "approved"';
     writeFileSync(
       manifestPath,
       JSON.stringify({
         ...manifest,
-        runReleaseSoak: "false",
-        controls: { performanceBlocking: false },
+        sourceAdmission: {
+          validationPurpose: "publish",
+          publicationSelection: { npmDistTag: "latest" },
+          projection: { packages: [] },
+        },
+        publishInputs: {
+          version: 1,
+          targetSha,
+          npmDistTag: "latest",
+          pluginSdkApiEvidenceDigest: "a".repeat(64),
+          pluginSdkApiAcknowledgement: "aaaaaaaa",
+          npmDecisions: [],
+          ...(waived ? { stableSoakWaiver: "2026.9.5 approved" } : {}),
+        },
       }),
     );
+    const script = resolve("scripts/lib/release-publish-gates.mts");
     const result = spawnSync(
       process.execPath,
-      [
-        resolve("scripts/lib/release-publish-gates.mts"),
-        "--consumer",
-        "publisher",
-        "--manifest",
-        manifestPath,
-      ],
+      [script, "--consumer", "publisher", "--manifest", manifestPath],
       {
         cwd: root,
         encoding: "utf8",
@@ -177,21 +185,22 @@ describe("release publication control admission", () => {
           RELEASE_NPM_DIST_TAG: "latest",
           EXPECTED_SHA: targetSha,
           EXPECTED_RELEASE_PROFILE: "from-validation",
-          STABLE_SOAK_WAIVER: waiver,
           GITHUB_OUTPUT: output,
-          GITHUB_STEP_SUMMARY: summary,
         },
       },
     );
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain('Infrastructure 100%25 unavailable%0AOperator "approved"');
-    expect(readFileSync(output, "utf8").split("\n")).toEqual([
-      `stable_soak_waiver=${JSON.stringify(waiver)}`,
-      `stable_soak_waiver=${JSON.stringify(waiver)}`,
-      "release_profile=stable",
-      "coverage_policy=full",
-      "",
-    ]);
-    expect(readFileSync(summary, "utf8")).toBe(`- Stable soak waived by operator: ${waiver}\n`);
-  });
-});
+    if (waived) {
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("waivers are no longer supported");
+    } else {
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(output, "utf8").split("\n")).toEqual([
+        "plugin_sdk_api_acknowledgement=aaaaaaaa",
+        "npm_decisions=[]",
+        "release_profile=stable",
+        "coverage_policy=full",
+        "",
+      ]);
+    }
+  },
+);

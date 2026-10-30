@@ -18,24 +18,21 @@ const media = new DiscordAudioWorker(options, (event: DiscordAudioEvent) => {
     port.close();
   }
 });
-port.on("message", (command: DiscordAudioCommand) => {
-  try {
-    media.receive(command);
-  } catch (error) {
-    port.postMessage({
-      type: "error",
-      error: serializeDiscordAudioError(error),
-    } satisfies DiscordAudioEvent);
-    void media.stop();
-  }
-});
-port.on("close", () => {
-  void media.stop();
-});
-void media.connect().catch((error: unknown) => {
+const fail = (error: unknown) => {
   port.postMessage({
     type: "error",
     error: serializeDiscordAudioError(error),
   } satisfies DiscordAudioEvent);
   void media.stop();
+};
+port.on("message", (command: DiscordAudioCommand) => {
+  try {
+    media.receive(command);
+  } catch (error) {
+    fail(error);
+  }
 });
+port.on("close", () => {
+  void media.stop();
+});
+void media.connect().catch(fail);

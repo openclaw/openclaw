@@ -162,17 +162,16 @@ describe("registered plugin RPC authority through the real dispatcher", () => {
     }
   });
 
-  describe.each(["commit", "session"] as const)("%s mutation fence", (fence) => {
-    it.each([
-      { phase: "outer", change: "revoked" },
-      { phase: "authorization", change: "revoked" },
-      { phase: "inner", change: "revoked" },
-      { phase: "outer", change: "rotated" },
-      { phase: "authorization", change: "rotated" },
-      { phase: "inner", change: "rotated" },
-    ] as const)(
-      "rejects $change caller authority during $phase await before I/O",
-      async ({ phase, change }) => {
+  // Before handler entry, both fence variants exercise the same admission guard.
+  describe.each([
+    { phase: "outer", fence: "commit" },
+    { phase: "authorization", fence: "commit" },
+    { phase: "inner", fence: "commit" },
+    { phase: "inner", fence: "session" },
+  ] as const)("$fence mutation fence after $phase await", ({ phase, fence }) => {
+    it.each(["revoked", "rotated"] as const)(
+      "rejects %s caller authority before I/O",
+      async (change) => {
         const f = fixture(phase, undefined, fence);
         const pending = f.dispatch();
         try {
@@ -201,40 +200,37 @@ describe("registered plugin RPC authority through the real dispatcher", () => {
       },
     );
 
-    it.each(["outer", "authorization", "inner"] as const)(
-      "carries request-owned cancellation across the %s await",
-      async (phase) => {
-        const f = fixture(phase, undefined, fence);
-        const controller = new AbortController();
-        const execution = new AsyncWorkScope();
-        const pending = execution.run(() =>
-          dispatchGatewayRequestInProcessRaw(
-            "authorityProof.outer",
-            {},
-            {
-              client: f.client,
-              context: f.context,
-              methodRegistry: f.methods,
-              signal: controller.signal,
-            },
-          ),
-        );
-        // Cancellation returns before the tracked handlers finish. Join them before assertions.
-        const rejected = expect(pending).rejects.toThrow("caller cancelled");
-        try {
-          await waitForPause(f, pending);
-          controller.abort(new Error("caller cancelled"));
-        } finally {
-          f.release.resolve();
-          await rejected;
-          await execution.drain();
-        }
-        expect(f.write).not.toHaveBeenCalled();
-        expect(f.effect).toHaveBeenCalledTimes(phase === "inner" ? 1 : 0);
-        if (phase === "inner") {
-          expect(f.effect.mock.calls[0]?.[0].signal).toBe(controller.signal);
-        }
-      },
-    );
+    it("carries request-owned cancellation across the await", async () => {
+      const f = fixture(phase, undefined, fence);
+      const controller = new AbortController();
+      const execution = new AsyncWorkScope();
+      const pending = execution.run(() =>
+        dispatchGatewayRequestInProcessRaw(
+          "authorityProof.outer",
+          {},
+          {
+            client: f.client,
+            context: f.context,
+            methodRegistry: f.methods,
+            signal: controller.signal,
+          },
+        ),
+      );
+      // Cancellation returns before the tracked handlers finish. Join them before assertions.
+      const rejected = expect(pending).rejects.toThrow("caller cancelled");
+      try {
+        await waitForPause(f, pending);
+        controller.abort(new Error("caller cancelled"));
+      } finally {
+        f.release.resolve();
+        await rejected;
+        await execution.drain();
+      }
+      expect(f.write).not.toHaveBeenCalled();
+      expect(f.effect).toHaveBeenCalledTimes(phase === "inner" ? 1 : 0);
+      if (phase === "inner") {
+        expect(f.effect.mock.calls[0]?.[0].signal).toBe(controller.signal);
+      }
+    });
   });
 });

@@ -1,22 +1,36 @@
 /** Public installed-plugin-index API for load, refresh, policy hash, and invalidation checks. */
+import { getRuntimeConfigCapture } from "../config/runtime-config-capture-state.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { isBundledProviderCompatPlugin } from "./bundled-provider-compat.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
+  resolveEffectiveEnableState,
   resolveEffectivePluginActivationState,
   type PluginActivationConfigSource,
 } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
+import { hasConfigPathActivationMetadataMigration } from "./installed-plugin-index-config-path-scope.js";
+import { getInstalledPluginIndexFacts } from "./installed-plugin-index-facts.js";
+import { hashJson } from "./installed-plugin-index-hash.js";
+import {
+  isInstalledPluginIndexInstallOwnerAmbiguous,
+  resolveInstalledPluginIndexInstallOwner,
+} from "./installed-plugin-index-install-owner.js";
 import { normalizeInstallRecordMap } from "./installed-plugin-index-install-records.js";
 import {
   resolveCompatRegistryVersion,
   resolveInstalledPluginIndexPolicyHash,
 } from "./installed-plugin-index-policy.js";
-import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
+import {
+  buildInstalledPluginIndexRecords,
+  type InstalledPluginIndexInventoryRecord,
+} from "./installed-plugin-index-record-builder.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
 import {
@@ -33,6 +47,8 @@ import {
   loadPluginManifestRegistryCore,
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
+import { getPluginCache } from "./plugin-cache.js";
+import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 
 export {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
@@ -48,7 +64,6 @@ export type {
   RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index-types.js";
 export { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
-export { diffInstalledPluginIndexInvalidationReasons } from "./installed-plugin-index-invalidation.js";
 export { hasMissingConfigPathActivationMetadata } from "./installed-plugin-index-config-path-scope.js";
 export { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 
@@ -84,12 +99,56 @@ function buildInstalledPluginIndex(
           diagnostics: [...baseDiscovery.diagnostics, ...params.diagnostics],
         }
       : baseDiscovery;
+  // Captured configs and discovery belong to one immutable operation generation.
+  // Workspace-local candidates stay in the key; empty workspaces share physical inventory.
+  const config = params.config;
+  const cache =
+    config &&
+    getRuntimeConfigCapture(config) &&
+    !params.candidates &&
+    !params.discovery &&
+    !params.refreshReason
+      ? getPluginCache().metadata.derivedIndexes
+      : undefined;
+  const registryPath = resolveInstalledPluginIndexStorePath({
+    env,
+    stateDir: params.stateDir,
+    filePath: params.pluginIndexFilePath,
+  });
+  const hostContractVersion = resolveCompatibilityHostVersion(env);
+  const compatRegistryVersion = resolveCompatRegistryVersion();
+  const key = cache
+    ? hashJson({
+        discovery,
+        installRecords,
+        registryPath,
+        hostContractVersion,
+        compatRegistryVersion,
+        artifactPreservingReadOnly: params.artifactPreservingReadOnly === true,
+        env: resolvePluginMetadataEnvFingerprint(env),
+        policy: resolveInstalledPluginIndexPolicyHash(config, env, {
+          artifactPreservingReadOnly: params.artifactPreservingReadOnly,
+        }),
+      })
+    : undefined;
+  const cached = config && key ? cache?.get(config)?.get(key) : undefined;
+  if (cached) {
+    const { workspaceDir: _workspaceDir, ...payload } = cached.index;
+    const index = freezeTrustedJsonSnapshot({
+      ...payload,
+      generatedAtMs: (params.now?.() ?? new Date()).getTime(),
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+    });
+    const sourceFacts = getInstalledPluginIndexFacts(cached.index);
+    const facts = getInstalledPluginIndexFacts(index);
+    // Workspace and capture time do not change the inventory fingerprint.
+    if (facts && sourceFacts?.fingerprint) {
+      facts.fingerprint = sourceFacts.fingerprint;
+    }
+    return { index, discovery, manifestRegistry: cached.manifestRegistry };
+  }
   const registry = loadPluginManifestRegistryCore({
-    registryPath: resolveInstalledPluginIndexStorePath({
-      env,
-      stateDir: params.stateDir,
-      filePath: params.pluginIndexFilePath,
-    }),
+    registryPath,
     config: params.config,
     workspaceDir: params.workspaceDir,
     env,
@@ -99,42 +158,81 @@ function buildInstalledPluginIndex(
   });
   const diagnostics = [...(registry.diagnostics ?? [])];
   const generatedAtMs = (params.now?.() ?? new Date()).getTime();
-  const activationConfig = withBundledPluginEnablementCompat({
+  const plugins = projectInstalledPluginIndexPolicy({
+    plugins: buildInstalledPluginIndexRecords({
+      candidates: discovery.candidates,
+      registry,
+      env,
+      diagnostics,
+      installRecords,
+    }),
     config: params.config,
     env,
-    pluginIds: registry.plugins.filter(isBundledProviderCompatPlugin).map((plugin) => plugin.id),
-    activation: "defaults",
     artifactPreservingReadOnly: params.artifactPreservingReadOnly,
   });
-  const plugins = buildInstalledPluginIndexRecords({
-    candidates: discovery.candidates,
-    registry,
-    config: activationConfig,
-    env,
-    diagnostics,
-    installRecords,
-  });
 
+  let index: InstalledPluginIndex = {
+    version: INSTALLED_PLUGIN_INDEX_VERSION,
+    warning: INSTALLED_PLUGIN_INDEX_WARNING,
+    hostContractVersion,
+    compatRegistryVersion,
+    migrationVersion: INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
+    policyHash: resolveInstalledPluginIndexPolicyHash(params.config, env, {
+      artifactPreservingReadOnly: params.artifactPreservingReadOnly,
+    }),
+    generatedAtMs,
+    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+    ...(params.refreshReason ? { refreshReason: params.refreshReason } : {}),
+    installRecords,
+    plugins,
+    diagnostics,
+  };
+  if (cache && key && config) {
+    let entries = cache.get(config);
+    if (!entries) {
+      cache.set(config, (entries = new Map()));
+    }
+    // Parsing retains passthrough install-record values; own them before freezing.
+    index = freezeTrustedJsonSnapshot(structuredClone(index));
+    entries.set(key, { index, manifestRegistry: registry });
+    pruneMapToMaxSize(entries, 64);
+  }
   return {
-    index: {
-      version: INSTALLED_PLUGIN_INDEX_VERSION,
-      warning: INSTALLED_PLUGIN_INDEX_WARNING,
-      hostContractVersion: resolveCompatibilityHostVersion(env),
-      compatRegistryVersion: resolveCompatRegistryVersion(),
-      migrationVersion: INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
-      policyHash: resolveInstalledPluginIndexPolicyHash(params.config, env, {
-        artifactPreservingReadOnly: params.artifactPreservingReadOnly,
-      }),
-      generatedAtMs,
-      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-      ...(params.refreshReason ? { refreshReason: params.refreshReason } : {}),
-      installRecords,
-      plugins,
-      diagnostics,
-    },
+    index,
     discovery: params.candidates ? undefined : discovery,
     manifestRegistry: registry,
   };
+}
+
+/**
+ * Activation is the only config-owned index fact. A policy change re-projects the
+ * same disk inventory in memory; only install, uninstall or source changes rescan.
+ */
+export function projectInstalledPluginIndexPolicy(params: {
+  plugins: readonly InstalledPluginIndexInventoryRecord[];
+  config?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  artifactPreservingReadOnly?: boolean;
+}): InstalledPluginIndexRecord[] {
+  const activationConfig = withBundledPluginEnablementCompat({
+    config: params.config,
+    env: params.env,
+    pluginIds: params.plugins.filter(isInstalledBundledProvider).map((plugin) => plugin.pluginId),
+    activation: "defaults",
+    artifactPreservingReadOnly: params.artifactPreservingReadOnly,
+  });
+  const normalizedConfig = normalizePluginsConfig(activationConfig?.plugins);
+  return params.plugins.map((plugin) => ({
+    ...plugin,
+    enabled: resolveEffectiveEnableState({
+      id: plugin.pluginId,
+      origin: plugin.origin,
+      channelIds: plugin.contributions?.channels,
+      config: normalizedConfig,
+      rootConfig: activationConfig,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
+    }).enabled,
+  }));
 }
 
 export function loadInstalledPluginIndex(
@@ -186,7 +284,7 @@ export function isInstalledPluginEnabled(
   return createInstalledPluginEnabledPredicate([record], config, env)(pluginId);
 }
 
-function isInstalledBundledProvider(record: InstalledPluginIndexRecord): boolean {
+function isInstalledBundledProvider(record: InstalledPluginIndexInventoryRecord): boolean {
   return isBundledProviderCompatPlugin({
     origin: record.origin,
     providers: record.contributions?.providers,
@@ -246,4 +344,83 @@ export function createInstalledPluginEnabledPredicate(
       enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
     }).enabled;
   };
+}
+
+export function diffInstalledPluginIndexInvalidationReasons(
+  previous: InstalledPluginIndex,
+  current: InstalledPluginIndex,
+): readonly InstalledPluginIndexRefreshReason[] {
+  const reasons = new Set<InstalledPluginIndexRefreshReason>();
+  if (previous.version !== current.version) {
+    reasons.add("missing");
+  }
+  if (previous.hostContractVersion !== current.hostContractVersion) {
+    reasons.add("host-contract-changed");
+  }
+  if (previous.compatRegistryVersion !== current.compatRegistryVersion) {
+    reasons.add("compat-registry-changed");
+  }
+  if (previous.migrationVersion !== current.migrationVersion) {
+    reasons.add("migration");
+  }
+  if (previous.policyHash !== current.policyHash) {
+    reasons.add("policy-changed");
+  }
+  if (hashJson(previous.installRecords ?? {}) !== hashJson(current.installRecords ?? {})) {
+    reasons.add("source-changed");
+  }
+
+  const previousByPluginId = new Map(previous.plugins.map((plugin) => [plugin.pluginId, plugin]));
+  const currentByPluginId = new Map(current.plugins.map((plugin) => [plugin.pluginId, plugin]));
+  for (const [pluginId, previousPlugin] of previousByPluginId) {
+    const currentPlugin = currentByPluginId.get(pluginId);
+    if (!currentPlugin) {
+      reasons.add("source-changed");
+      continue;
+    }
+    if (
+      previousPlugin.rootDir !== currentPlugin.rootDir ||
+      previousPlugin.manifestPath !== currentPlugin.manifestPath ||
+      previousPlugin.source !== currentPlugin.source ||
+      previousPlugin.setupSource !== currentPlugin.setupSource ||
+      resolveInstalledPluginIndexInstallOwner(previousPlugin) !==
+        resolveInstalledPluginIndexInstallOwner(currentPlugin) ||
+      isInstalledPluginIndexInstallOwnerAmbiguous(previousPlugin) !==
+        isInstalledPluginIndexInstallOwnerAmbiguous(currentPlugin) ||
+      previousPlugin.installRecordHash !== currentPlugin.installRecordHash
+    ) {
+      reasons.add("source-changed");
+    }
+    if (previousPlugin.enabled !== currentPlugin.enabled) {
+      reasons.add("policy-changed");
+    }
+    if (
+      hasConfigPathActivationMetadataMigration({
+        previous: previousPlugin,
+        current: currentPlugin,
+      })
+    ) {
+      reasons.add("migration");
+    }
+    if (
+      previousPlugin.manifestHash !== currentPlugin.manifestHash ||
+      previousPlugin.doctorContractHash !== currentPlugin.doctorContractHash
+    ) {
+      reasons.add("stale-manifest");
+    }
+    if (
+      previousPlugin.packageVersion !== currentPlugin.packageVersion ||
+      previousPlugin.packageJson?.path !== currentPlugin.packageJson?.path ||
+      previousPlugin.packageJson?.hash !== currentPlugin.packageJson?.hash
+    ) {
+      reasons.add("stale-package");
+    }
+  }
+  for (const [pluginId, plugin] of currentByPluginId) {
+    if (!previousByPluginId.has(pluginId) && plugin.enabled) {
+      reasons.add("source-changed");
+    }
+  }
+
+  return Array.from(reasons).toSorted((left, right) => left.localeCompare(right));
 }

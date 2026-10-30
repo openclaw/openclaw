@@ -57,9 +57,5 @@ export function normalizeAbortTriggerText(text: string): string {
 }
 
 export function isAbortTrigger(text?: string): boolean {
-  if (!text) {
-    return false;
-  }
-  const normalized = normalizeAbortTriggerText(text);
-  return ABORT_TRIGGERS.has(normalized);
+  return text ? ABORT_TRIGGERS.has(normalizeAbortTriggerText(text)) : false;
 }
