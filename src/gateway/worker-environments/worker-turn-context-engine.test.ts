@@ -322,9 +322,8 @@ it("retains plugin tool authority when a worker RPC enters from a separate async
       throw completed;
     },
     runWorkspaceCommand: vi.fn(),
-    quiesceWorkspace: vi.fn(),
     syncWorkspace: vi.fn(),
-    reconcileWorkspace: vi.fn(),
+    reconcileWorkspace: vi.fn(worker.reconcileUnchangedLocalWorkspace),
     stop: vi.fn(),
   });
   const provider = worker.createWorkerSessionTurnPlacementProvider({
