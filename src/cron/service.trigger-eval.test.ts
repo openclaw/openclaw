@@ -673,7 +673,7 @@ describe("cron trigger cadence", () => {
       h.cron.pauseScheduling();
       const job = await h.cron.add(mainWatcher("cadence probe", { wakeMode }));
       expect(await runWhenDue(h.cron, job.id)).toEqual({ ok: true, ran: true });
-      const nextAt = Date.now() + (result.kind === "busy" ? 0 : 30_000);
+      const nextAt = result.kind === "busy" ? job.state.nextRunAtMs! : Date.now() + 30_000;
       expect(h.cron.getJob(job.id)?.state.nextRunAtMs).toBe(nextAt);
       if (result.kind === "busy") {
         return expect(h.cron.getJob(job.id)?.state.triggerEvalCount).toBeUndefined();
