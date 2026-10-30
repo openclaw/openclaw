@@ -10,9 +10,7 @@ import {
 } from "../daemon/service-inspection-error.js";
 import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "./gateway-shutdown-budget.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import type { UpdateRunLedgerOptions } from "./update-run-codec.js";
@@ -97,10 +95,10 @@ async function readDoctorStop(runId: string, ledger: UpdateRunLedgerOptions) {
 /**
  * A legacy updater (through 2026.9.5) that could not inspect the managed
  * service leaves the predecessor Gateway running and then delegates Doctor to
- * this candidate. That supervised owner keeps gateway-lifecycle until its
- * service manager stops it, so Doctor can never enter maintenance. Stop it
- * here with this candidate's adapter and record the stopped service's identity
- * at the mutation boundary; finalization restarts the updated service.
+ * this candidate. Inspect and stop it through the service adapter even when
+ * the predecessor has released its lease: a loaded KeepAlive job can still
+ * respawn while Doctor owns maintenance. Record the stopped service's identity
+ * at the mutation boundary so finalization restores only that service.
  */
 export async function stopSupervisedPredecessorGateway(
   input: { runId: string; repair: boolean },
@@ -112,19 +110,6 @@ export async function stopSupervisedPredecessorGateway(
   },
 ): Promise<boolean> {
   if (!input.repair || process.platform === "win32") {
-    return false;
-  }
-  let owner: ReturnType<typeof readGatewayOwnerLease>;
-  try {
-    owner = readGatewayOwnerLease({
-      env: process.env,
-      current: true,
-      openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
-    });
-  } catch {
-    return false;
-  }
-  if (owner?.state !== "live" || owner.mode !== "supervised") {
     return false;
   }
   params.assertCurrent();

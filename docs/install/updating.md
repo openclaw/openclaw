@@ -71,6 +71,12 @@ uncertain cleanup leaves a warning and retains the stage. Activation recovery
 and backups remain with their existing recovery owners. These changes must be
 present in the installed updater; a newer candidate cannot repair an old launcher.
 
+Candidate Doctor inspects the managed service even after the previous Gateway
+releases its state lease. On macOS, it unloads a loaded, enabled LaunchAgent
+between KeepAlive respawns before entering maintenance and records that stop for
+finalization to restore. Unloaded or disabled services remain stopped. This fix
+must be present in the candidate; the installed updater does not need it.
+
 Managed systemd stops bound the native command by the selected unit's effective
 stop timeout plus five seconds. Unavailable or infinite policy uses the finite
 Gateway stop budget with a warning; a command timeout retains its reason code

@@ -4,7 +4,6 @@ import { expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayServiceStopUnsafeError } from "../../daemon/service-inspection-error.js";
 import { GatewayServiceAuthorityError } from "../../daemon/service-update-authority.js";
-import * as gatewayOwner from "../../infra/gateway-owner-lease.js";
 import type { PackageLauncherFingerprint } from "../../infra/package-update-integrity.js";
 import { stopSupervisedPredecessorGateway } from "../../infra/update-candidate-predecessor-stop.js";
 import * as updateLedger from "../../infra/update-run-ledger.js";
@@ -44,20 +43,6 @@ function serviceFixture(root: string) {
       refreshDefinition: false,
     },
   };
-}
-
-function mockSupervisedOwner() {
-  vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue({
-    owner: "fixture-gateway",
-    pid: 631,
-    host: "fixture-host",
-    startedAt: 1,
-    state: "live",
-    expired: false,
-    mode: "supervised",
-    port: 18789,
-    supervisor: { kind: "systemd", name: "fixture-gateway" },
-  });
 }
 
 function expectNoCalls(...mocks: Mock[]) {
@@ -174,7 +159,6 @@ export function registerBoundaryFinalizationControls({
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, ".openclaw"));
     const env = { ...process.env };
     const run = createUpdateRun({ trigger: "cli" }, { env });
-    mockSupervisedOwner();
     const stopped: PreManagedServiceStop = {
       ...serviceFixture(home),
       stopped: true,
@@ -369,7 +353,6 @@ export function registerBoundaryFinalizationControls({
             serviceUpdateVerdict: { kind: "unavailable", message: "legacy inspection unavailable" },
           }
         : originalService;
-      mockSupervisedOwner();
       const inspect = vi
         .spyOn(serviceMaintenance, "maybeStopManagedServiceBeforeMutableUpdate")
         .mockImplementation(async (params) => {
