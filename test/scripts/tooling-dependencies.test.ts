@@ -243,7 +243,10 @@ it.each(
         ...fixture.manifest,
         dependencies: scenario === "undeclared" ? {} : { "fixture-pkg": "^2.0.0" },
       });
-      expected = `requires ${scenario === "undeclared" ? "undeclared" : "^2.0.0"}`;
+      expected =
+        scenario === "undeclared" && mode === "require"
+          ? "MODULE_NOT_FOUND"
+          : `requires ${scenario === "undeclared" ? "undeclared" : "^2.0.0"}`;
     } else if (scenario === "subpath exports") {
       rewrite(fixture.entry, (source) => source.replace('"fixture-pkg"', '"fixture-pkg/private"'));
       expected = "ERR_PACKAGE_PATH_NOT_EXPORTED";
