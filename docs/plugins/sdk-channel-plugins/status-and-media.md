@@ -21,6 +21,16 @@ removal date; removal waits for external channel-plugin adoption.
 
 ## Typing indicators
 
+For typing during restart recovery, implement `heartbeat.sendTypingGuarded(...)`.
+Core supplies an `AbortSignal` as `signal` and an
+`assertPlatformSendAuthorized` callback alongside the recovery delivery target.
+Honor cancellation through queued sends and call the callback after asynchronous
+preparation and immediately before each platform request. Recovery skips typing
+when the guarded hook is absent; it does not fall back to
+`heartbeat.sendTyping(...)`. See
+[Automatic resume](/gateway/restart-recovery#automatic-resume) for the recovery
+contract.
+
 If your channel supports typing indicators outside inbound replies, expose
 `heartbeat.sendTyping(...)` on the channel plugin. Core calls it with the
 resolved heartbeat delivery target before the heartbeat model run starts and
