@@ -1,6 +1,5 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { formatErrorMessage } from "./errors.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
@@ -18,7 +17,7 @@ import {
   discardPackageLauncherBackup,
   discardPackageUpdateBackup,
   copyPackagePathEntry as copyPathEntry,
-  PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
+  movePackageRoot,
   packagePathEntryExists as pathEntryExists,
   removePackagePath as removePath,
   restorePackageLauncher,
@@ -558,16 +557,14 @@ export async function swapStagedPackageInstall(
       activePackageRoot = null;
       await removePath(targetSwapRoot, assertCurrent);
       if (hadPackage) {
-        await movePathWithCopyFallback({
-          from: backupRoot,
-          sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
-          to: targetSwapRoot,
-          assertBeforeRename: assertCurrent,
-          assertBeforeMutation: assertCurrent,
-          onDestinationPublished: () => {
+        await movePackageRoot(backupRoot, targetSwapRoot, {
+          operation: "restore",
+          assertCaller: assertCurrent,
+          onPublished: () => {
             activePackageRoot = params.installTarget.packageRoot;
             assertCurrent();
           },
+          warnings,
         });
       }
     };
@@ -623,13 +620,11 @@ export async function swapStagedPackageInstall(
       };
       if (hadPackage) {
         if (native) {
-          await movePathWithCopyFallback({
-            from: targetSwapRoot,
-            sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
-            to: backupRoot,
-            assertBeforeRename: assertForwardCurrent,
-            assertBeforeMutation: assertForwardCurrent,
-            onDestinationPublished: () => {
+          await movePackageRoot(targetSwapRoot, backupRoot, {
+            operation: "backup",
+            assertCaller: assertForwardCurrent,
+            warnings,
+            onPublished: () => {
               // A published copy owns compensation even if source cleanup is refused.
               recordPackageBackup();
               rollback.push(restorePackage);

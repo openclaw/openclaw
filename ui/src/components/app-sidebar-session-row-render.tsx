@@ -327,7 +327,12 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           onClick={() => host().toggleSessionChildren(actionSession())}
         >
           <span class="sidebar-child-session-toggle__icon" aria-hidden="true">
-            <Icon name={childrenExpanded() ? "chevronDown" : "chevronRight"} />
+            <Show
+              when={!childrenExpanded() && session().runningChildCount > 0}
+              fallback={<Icon name={childrenExpanded() ? "chevronDown" : "chevronRight"} />}
+            >
+              <span class="session-run-spinner" />
+            </Show>
           </span>
           <span class="sidebar-child-session-toggle__count">
             {session().childSessionKeys.length}

@@ -145,6 +145,7 @@ export function spawnServiceChildRelay(params: {
   env: NodeJS.ProcessEnv;
   detached: boolean;
   nativeProcessOwner?: string;
+  gatewayWorker?: true;
   onSpawnCleanup?: (completion: Promise<void>) => void;
 }): {
   child: ChildProcess;
@@ -163,12 +164,18 @@ export function spawnServiceChildRelay(params: {
       if (params.nativeProcessOwner === params.workerUrl.href) {
         delete env.BUN_BE_BUN;
       }
-      return spawnProcess(executable, resolveRuntimeWorkerArgv(params.workerUrl, executable), {
-        stdio: params.stdio,
-        detached: params.detached,
-        windowsHide: true,
-        env,
-      });
+      return spawnProcess(
+        executable,
+        resolveRuntimeWorkerArgv(params.workerUrl, executable),
+        {
+          stdio: params.stdio,
+          detached: params.detached,
+          windowsHide: true,
+          env,
+        },
+        undefined,
+        params.gatewayWorker,
+      );
     },
     "default",
   );

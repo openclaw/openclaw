@@ -507,7 +507,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       diskSpace: placementComposer.diskSpace,
       workerRuntimeInstall: placementComposer.workerRuntimeInstall,
       runError:
-        catalogKey || providerPaused ? null : (state.chatRunError ?? placementComposer.runError),
+        catalogKey || providerPaused || selectedSessionArchived
+          ? null
+          : (state.chatRunError ?? placementComposer.runError),
       workspaceConflict: visibleWorkspaceConflict,
       onDismissWorkspaceConflict:
         visibleWorkspaceConflict && selectedSession

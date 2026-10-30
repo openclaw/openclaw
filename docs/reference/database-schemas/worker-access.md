@@ -48,6 +48,15 @@ decoded rows even when a caller retains the inactive handle. Predicate compariso
 baselines last only until release; a late acknowledgement cannot restore them.
 Active authorities retain their existing publication and final-effect checks.
 
+Host file writes prepare retained session-generation authority at their final
+effect boundary, after overwrite rollback capture. The existing session worker
+validates physical sources and refreshes facts after committed native mutations;
+the final host assertion checks the retained generation, native handle and revision,
+and live owner. Lifecycle adapters preserve that preparation through indirect
+settings reads. Ordinary synchronous assertions, opaque callback sources, and
+uncommitted native transactions retain their existing checks; an async wrapper
+alone does not move those callbacks off the main thread.
+
 Finished worker admissions release publication observers and request callbacks.
 Committed facts remain available for lost-reply recovery, which runs
 after transport cleanup. Workspace mutations release their payload and previous
@@ -640,7 +649,7 @@ stale transcript facts and facts from a different store.
 Durable actor residency retains only tree links (`type`, `id`, `parentId`,
 `targetId`, `appendParentId`, and `appendMode`) and exact byte accounting.
 Cold hydration projects those fields in SQL; model-context navigation belongs
-to the history reader. Full bodies stay in SQLite and committed append
+to the history reader. Full bodies stay in the database and committed append
 receipts; retries read canonical storage when their payload is no longer in the
 current transaction. Actor append slow-hold warnings include `context.payloadBytes`,
 the UTF-8 size of the primary prepared event or message payload (summed message
@@ -914,9 +923,13 @@ or cold projections remain incomplete and are not marked as successfully backfil
 Usage-cost refresh holds the exclusive refresh lease while reading a stale rollup
 body and its monthly partitions by key, without revalidating their metadata.
 Discovery still reads only metadata, and body reads retain their payload bounds.
-Full refresh transfers stale row snapshots in batches of up to 64 rows or 1 MiB
-of JSON and key data, with oversized rows sent alone. A final prune request uses
-the existing worker transaction and checkpoint and timestamp comparisons.
+Full refresh prunes stale row snapshots in batches of up to 1,024 rows or 1 MiB
+of JSON and key data, with oversized rows sent alone. Each batch waits outside
+the existing writer FIFO until it drains, then commits through its ordinary
+transaction and checkpoint and timestamp comparisons. A row and its partitions
+remain atomic; a later failed batch leaves earlier batches committed. Restart
+or the next refresh rediscovers remaining obsolete rows, making partial cleanup
+safe to retry without retaining the whole inventory on the host.
 Targeted refreshes do not prune other keys. Selected month deletion uses bounded
 key batches within the rollup write transaction. Transcript statistics use
 the existing batched read directly, without registering per-session write scopes
@@ -1381,6 +1394,12 @@ ownership. The quarantine store's schema, version, and installation remain admit
 once per physical database per process. Aliases share the target's physical format,
 schema, and integrity facts; decisions retain their pathname scope. The persisted
 schema is unchanged.
+
+Retained shared-state readers also retain their quarantine admission generation.
+The read worker refreshes the quarantine file identity before admission; removal
+or replacement invalidates the pathname binding. Successful native close releases
+the retained admission; failed close keeps custody for retry. Warm host reads
+consume these facts without rediscovering the quarantine file.
 
 The host owns retained identity descriptors so worker retirement cannot close them
 and release a sibling SQLite connection's POSIX locks. Workers outside OpenClaw's
@@ -3384,6 +3403,16 @@ its prepared selection after another internal rewrite; it changes no bytes.
 
 ## Retained final-authority guards
 
+Native state leases under a live Gateway retain a verified expiry and scoped
+write epoch with the acquisition connection. Unchanged, settled reads check the
+captured owner liveness, source lifetime, epoch, and expiry in memory. The lease
+holds the verification connection against idle retirement until cleanup; explicit
+retirement still revokes access. Lease mutations publish their scope; raw writes
+invalidate conservatively. Pending writes, changed
+epochs, and expired facts require a durable check on the retained connection and
+cannot publish a fact until the epoch is settled. Write admission, active native
+transactions, and offline leases keep their durable ownership checks.
+
 Preparation uses the existing worker owners. Some synchronous guards immediately before
 an effect still read current SQLite rows when released native or Plugin SDK writers
 can revoke authority without a complete owner publication.
@@ -3784,7 +3813,7 @@ are unchanged.
 
 Production acquisition selects the session actor's memory backend for incognito
 session keys and explicit incognito targets. Durable sessions use the same actor
-contract with the canonical SQLite worker backend. Selection happens once;
+contract with the canonical agent database worker backend. Selection happens once;
 incognito commands allocate neither a SQLite database nor a database worker and
 cannot consume durable database-worker capacity. The sentinel path identifies a
 memory namespace; it is never a database to reopen or an artifact to discover.
@@ -6127,10 +6156,10 @@ Its ordered cursor includes the first bounded byte slice of small events and
 identity text. Larger compressed events expand once per event, within the existing
 compressed-payload bound, before streaming 64 KiB frames; oversized identity text
 keeps native slice queries. Large compressed-event frame buffers transfer ownership to the host. The
-cursor and follow-up reads retain one SQLite snapshot across transport
+cursor and follow-up reads retain one database snapshot across transport
 acknowledgments.
 SQLite streams the ordered cursor through a native iterator; PostgreSQL uses
-16-row keyset batches because its bridge buffers results.
+byte-bounded keyset batches because its bridge buffers results.
 Bounded SQLite context hydration also decodes one payload row at a time, so the
 encoded window does not remain resident alongside its decoded result. Its byte
 selection, event order, and snapshot authority are unchanged. Recent active-event

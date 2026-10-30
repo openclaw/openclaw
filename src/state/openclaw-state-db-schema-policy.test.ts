@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { copyFileSync, existsSync, renameSync, symlinkSync } from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { copyFileSync, existsSync, realpathSync, renameSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import { constants, DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -32,6 +33,7 @@ import {
   withOpenClawStateReadOnlyLocation,
 } from "./openclaw-state-db-read-connection.js";
 import {
+  assertExistingOpenClawStateSchemaCacheAdmission,
   getExistingOpenClawStateSchemaPath,
   withExistingOpenClawStateSchema,
 } from "./openclaw-state-db-schema-policy.js";
@@ -143,6 +145,28 @@ function createPreviousState() {
 }
 
 describe("ordinary shared-state reader admission", () => {
+  it("skips handle inventories before restricted admission while honoring expired scopes", async () => {
+    const pathname = path.join(tempDirs.make("openclaw-schema-policy-"), "state.sqlite");
+    const inventory = {
+      cachedDatabases: new Map<string, { db: EngineConnection }>(),
+      retainedDatabaseHandles: new Map<EngineConnection, { db: EngineConnection }>(),
+    };
+    const check = () => assertExistingOpenClawStateSchemaCacheAdmission(pathname, inventory);
+    {
+      using realpath = vi.spyOn(realpathSync, "native");
+      using scans = vi.spyOn(Map.prototype, "values");
+      for (let index = 0; index < 100; index++) {
+        check();
+      }
+      expect(scans.mock.calls.length).toBe(0);
+      expect(realpath).not.toHaveBeenCalled();
+    }
+    const expired = await withExistingOpenClawStateSchema({ path: pathname }, async () =>
+      AsyncLocalStorage.bind(check),
+    );
+    expect(expired).toThrow("Existing shared-state schema admission has ended");
+  });
+
   it("reuses cold schema facts without adding a warm freshness probe", () => {
     const { options } = createExistingState();
     const read = () =>

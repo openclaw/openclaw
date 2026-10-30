@@ -129,10 +129,15 @@ export async function finalizeCompletedCronRunOutcomes(
           !(outcome.status === "ok" && outcome.triggerEval?.fired === false) ||
           outcome.request?.runId
         ) {
+          const eventContext = cronFailureNotificationEventContext(
+            outcome.failureNotificationDetail,
+          );
           emit(
             state,
             cronRunResultEvent(plan.job, outcome),
-            cronFailureNotificationEventContext(outcome.failureNotificationDetail),
+            outcome.executionStarted === false
+              ? { ...eventContext, runNotStarted: true }
+              : eventContext,
           );
           if (outcome.request?.terminalTracker) {
             outcome.request.terminalTracker.emitted = true;

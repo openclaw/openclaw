@@ -340,6 +340,8 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
     it.each(["session-first", "overlay-first"])(
       "keeps canonical and plain row states independent with %s styles",
       async (order) => {
+        // This matrix checks final colors; animation behavior has its own cases.
+        host.style.setProperty("--control-ui-transition-fast", "0s");
         const { page, userEvent } = await import("vitest/browser");
         const style = document.head.appendChild(document.createElement("style"));
         onTestFinished(() => style.remove());

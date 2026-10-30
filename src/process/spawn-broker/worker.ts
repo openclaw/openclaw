@@ -6,6 +6,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
+import { spawnInAgentExecCgroup } from "../linux-exec-cgroup.js";
 import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
 import { waitForBrokerChildCompletion } from "./child-completion.js";
 import {
@@ -306,12 +307,14 @@ async function launch(
       }
       const execa =
         message.type === "spawn-execa"
-          ? await startBrokerExeca(message.argv, message.options, assertActive)
+          ? await startBrokerExeca(message.argv, message.options, assertActive, message.execCgroup)
           : undefined;
       const child =
         execa?.child ??
         (message.type !== "spawn-execa"
-          ? spawnWithInheritedOomScore(message.argv[0]!, message.argv.slice(1), message.options)
+          ? spawnInAgentExecCgroup(message.execCgroup, () =>
+              spawnWithInheritedOomScore(message.argv[0]!, message.argv.slice(1), message.options),
+            )
           : undefined);
       spawnedChild = child;
       if (!child) {

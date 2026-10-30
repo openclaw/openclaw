@@ -256,6 +256,9 @@ it.for([
           raw.exec(
             "PRAGMA foreign_keys=OFF; CREATE TABLE broken_parent(id INTEGER PRIMARY KEY); CREATE TABLE broken_child(parent_id REFERENCES broken_parent(id)); INSERT INTO broken_child VALUES (42)",
           );
+        } else if (outcome === "shutdown-preparation") {
+          // Repair keeps full verification before writes; exact-schema verification is background.
+          raw.exec("DROP INDEX idx_agent_session_nodes_active");
         }
       } finally {
         raw.close();

@@ -51,6 +51,18 @@ minimumReleaseAgeExclude:
   - "@openclaw/fs-safe-linux-x64-musl@0.26.14"
   - "@openclaw/fs-safe-win32-arm64-msvc@0.26.14"
   - "@openclaw/fs-safe-win32-x64-msvc@0.26.14"
+  # Reviewed fs-safe 0.26.15 release and native helpers; remove after 2026-11-06T18:45:32.211Z.
+  - "@openclaw/fs-safe@0.26.15"
+  - "@openclaw/fs-safe-darwin-arm64@0.26.15"
+  - "@openclaw/fs-safe-darwin-x64@0.26.15"
+  - "@openclaw/fs-safe-freebsd-arm64@0.26.15"
+  - "@openclaw/fs-safe-freebsd-x64@0.26.15"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.26.15"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.26.15"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.26.15"
+  - "@openclaw/fs-safe-linux-x64-musl@0.26.15"
+  - "@openclaw/fs-safe-win32-arm64-msvc@0.26.15"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.26.15"
   # Reviewed proc-safe 0.4.2 release and native helpers; remove after 2026-10-26T00:51:31.079Z.
   - "@openclaw/proc-safe@0.4.2"
   - "@openclaw/proc-safe-darwin-arm64@0.4.2"

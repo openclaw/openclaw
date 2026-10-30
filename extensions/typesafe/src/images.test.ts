@@ -1,7 +1,7 @@
 import type { DecisionBatchV2, DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import type { RuntimeConfig } from "./config.js";
 import {
   mixedFixture,
   mockJsonResponse,
@@ -28,7 +28,9 @@ const context = (baseUrl = hostedUrl): DecisionProviderContextV2 => ({
   deadlineMonotonicMs: performance.now() + 2000,
   isAdmissible: () => true,
 });
-function provider(overrides: Partial<NonNullable<RuntimeConfig["providerConfig"]>> = {}) {
+type ModelProviderConfig = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string];
+
+function provider(overrides: Partial<ModelProviderConfig> = {}) {
   const config = {
     models: {
       providers: {
