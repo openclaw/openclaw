@@ -1,5 +1,4 @@
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import type { GitHubCredentialReader } from "../../agents/github-credential-reader.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import type { SecretRef } from "../../config/types.secrets.js";
 import type {
@@ -82,8 +81,6 @@ export type WorkerProviderLifecycleInputOptions = {
     sessionKey: string;
     preparationKey: string;
     cacheKey: string;
-    readNativeCredential?: GitHubCredentialReader;
-    retainCredentialCleanup?: (revoke: () => Promise<void>) => void;
     signal?: AbortSignal;
     assertCurrent: () => void;
   }) => Promise<NodeWorkerPreparedWorkspaceResult>;
