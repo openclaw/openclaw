@@ -7,13 +7,21 @@ import { parseSystemdTimeSpanMs } from "./systemd-time-span.js";
 
 /** Read effective policy without granting permission to change it or stop the unit. */
 export async function readSystemdGatewayStopTimeout(
-  state: Pick<GatewayServiceState, "env">,
+  state: Pick<GatewayServiceState, "env" | "systemdInstallation">,
   target?: Pick<SystemdServiceReadTarget, "scope" | "unitName">,
 ) {
-  const unit = target?.unitName ?? `${resolveSystemdServiceName(state.env)}.service`;
+  const installation = state.systemdInstallation;
+  const selected =
+    target ??
+    (installation?.kind === "system"
+      ? installation.system
+      : installation?.kind === "user" || installation?.kind === "dueling"
+        ? installation.user
+        : undefined);
+  const unit = selected?.unitName ?? `${resolveSystemdServiceName(state.env)}.service`;
   const args = ["show", unit, "--no-page", "--property", "LoadState,TimeoutStopUSec"];
   const result = await withServiceInspectionBudget(() =>
-    target?.scope === "system"
+    selected?.scope === "system"
       ? execSystemctl(args, state.env, 10_000)
       : execSystemctlUser(state.env, args, 10_000),
   );

@@ -5,7 +5,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createQaBusState,
@@ -28,6 +27,7 @@ import {
   type GatewayClientName,
 } from "../../../../src/utils/message-channel.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { withFixturePlugin } from "./fixture-plugin-config.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
 
 const FIXTURE_PLUGIN_ID = "qa-media-talk-runtime";
@@ -187,25 +187,6 @@ module.exports = {
   return { pluginDir, realtimeCallsPath, speechCallsPath };
 }
 
-function withFixturePlugin(config: OpenClawConfig, pluginDir: string): OpenClawConfig {
-  return {
-    ...config,
-    plugins: {
-      ...config.plugins,
-      enabled: true,
-      allow: [...new Set([...(config.plugins?.allow ?? []), FIXTURE_PLUGIN_ID])],
-      load: {
-        ...config.plugins?.load,
-        paths: [...new Set([...(config.plugins?.load?.paths ?? []), pluginDir])],
-      },
-      entries: {
-        ...config.plugins?.entries,
-        [FIXTURE_PLUGIN_ID]: { enabled: true },
-      },
-    },
-  };
-}
-
 async function connectGatewayClient(params: {
   clientName: GatewayClientName;
   mode: GatewayClientMode;
@@ -360,7 +341,7 @@ async function runWebchatAutoTtsProof(options: ProducerOptions): Promise<string>
         OPENCLAW_TTS_PREFS: path.join(fixtureRoot, "tts-prefs.json"),
       },
       mutateConfig: (config) => {
-        const withPlugin = withFixturePlugin(config, fixture.pluginDir);
+        const withPlugin = withFixturePlugin(config, fixture.pluginDir, FIXTURE_PLUGIN_ID);
         return {
           ...withPlugin,
           tts: {
@@ -465,7 +446,7 @@ async function runCodexInboundMessageAutoTtsProof(options: ProducerOptions): Pro
           OPENCLAW_TTS_PREFS: path.join(fixtureRoot, "tts-prefs.json"),
         },
         mutateConfig: (config) => {
-          const withPlugin = withFixturePlugin(config, fixture.pluginDir);
+          const withPlugin = withFixturePlugin(config, fixture.pluginDir, FIXTURE_PLUGIN_ID);
           return {
             ...withPlugin,
             messages: { ...withPlugin.messages, visibleReplies: "message_tool" },
@@ -695,7 +676,7 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
         OPENCLAW_QA_REALTIME_CALLS_PATH: fixture.realtimeCallsPath,
       },
       mutateConfig: (config) => {
-        const withPlugin = withFixturePlugin(config, fixture.pluginDir);
+        const withPlugin = withFixturePlugin(config, fixture.pluginDir, FIXTURE_PLUGIN_ID);
         return {
           ...withPlugin,
           logging: { ...withPlugin.logging, file: logPath, level: "info" },

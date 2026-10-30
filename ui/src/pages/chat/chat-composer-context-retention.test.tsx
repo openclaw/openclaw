@@ -47,13 +47,12 @@ function usageProps(refreshed = false) {
   });
 }
 
-it("keeps the context popover open and its usage link focused during live usage refreshes", async () => {
+it("keeps the context counter exempt and usage-link focus during refreshes", async () => {
   const props = usageProps();
   const container = document.body.appendChild(createComposerContainer());
   renderComposerInto(container, props);
   const query = container.querySelector.bind(container);
   const details = query<HTMLDetailsElement>(".context-usage details")!;
-  expect(details).not.toBeNull();
   expect(details.querySelector(".context-usage__popover")).toBeNull();
   details.querySelector("summary")!.click();
   await waitForSolid(() =>
@@ -62,6 +61,8 @@ it("keeps the context popover open and its usage link focused during live usage 
   const usageLink = query<HTMLAnchorElement>("[data-chat-provider-usage]")!;
   usageLink.focus();
   expect(document.activeElement).toBe(usageLink);
+  expect(query<HTMLElement>(".context-usage__context-value")!.translate).toBe(false);
+  expect(query<HTMLElement>(".context-usage__title")!.translate).toBe(true);
 
   const current = usageProps(true);
   renderComposerInto(container, {
@@ -73,7 +74,6 @@ it("keeps the context popover open and its usage link focused during live usage 
 
   expect(query(".context-usage details")).toBe(details);
   expect(details.open).toBe(true);
-  expect(query("[data-chat-provider-usage]")).toBe(usageLink);
   expect(document.activeElement).toBe(usageLink);
   expect(usageLink.getAttribute("href")).toBe("/updated/usage");
   expect(usageLink.textContent).toContain("Max");

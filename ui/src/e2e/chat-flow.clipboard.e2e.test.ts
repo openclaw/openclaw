@@ -19,7 +19,7 @@ type ClipboardFailureProof = {
 };
 type ClipboardWindow = typeof globalThis & {
   clipboardFailureProof: ClipboardFailureProof;
-  resolveClipboardRetry: (failed: boolean) => void;
+  resolveClipboardRetry: (failed: boolean, attempt?: number) => void;
 };
 
 async function expectClipboard(
@@ -49,18 +49,19 @@ function withClipboardPage(
   options: Parameters<typeof suite.newBrowserContext>[0],
   run: (page: Page) => Promise<void>,
   clock = false,
+  fallbackSucceeds = false,
 ) {
   return suite.withPage(options, async ({ page }) => {
     if (clock) {
       await page.clock.install();
     }
-    await installDeniedClipboard(page);
+    await installDeniedClipboard(page, fallbackSucceeds);
     await run(page);
   });
 }
 
-async function installDeniedClipboard(page: Page): Promise<void> {
-  await page.addInitScript(() => {
+async function installDeniedClipboard(page: Page, fallbackSucceeds = false): Promise<void> {
+  await page.addInitScript((copiedViaFallback) => {
     const proof = { asyncAttempts: 0, legacyAttempts: 0, value: "" };
     Object.defineProperty(globalThis, "clipboardFailureProof", {
       configurable: true,
@@ -80,9 +81,9 @@ async function installDeniedClipboard(page: Page): Promise<void> {
       if (command === "copy") {
         proof.legacyAttempts += 1;
       }
-      return false;
+      return copiedViaFallback;
     }) as typeof document.execCommand;
-  });
+  }, fallbackSucceeds);
 }
 
 async function readClipboardFailureProof(page: Page): Promise<ClipboardFailureProof> {
@@ -91,27 +92,32 @@ async function readClipboardFailureProof(page: Page): Promise<ClipboardFailurePr
 
 async function deferClipboard(page: Page): Promise<void> {
   await page.evaluate(() => {
+    const pending: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
     navigator.clipboard.writeText = (value) => {
       const proof = (globalThis as ClipboardWindow).clipboardFailureProof;
       proof.asyncAttempts += 1;
       proof.value = value;
       return new Promise<void>((resolve, reject) => {
+        pending.push({ resolve, reject });
         Object.defineProperty(globalThis, "resolveClipboardRetry", {
           configurable: true,
-          value: (failed: boolean) =>
+          value: (failed: boolean, attempt = pending.length - 1) =>
             failed
-              ? reject(new DOMException("Clipboard access denied", "NotAllowedError"))
-              : resolve(),
+              ? pending[attempt]!.reject(
+                  new DOMException("Clipboard access denied", "NotAllowedError"),
+                )
+              : pending[attempt]!.resolve(),
         });
       });
     };
   });
 }
 
-async function resolveClipboard(page: Page, failed = false): Promise<void> {
+async function resolveClipboard(page: Page, failed = false, attempt?: number): Promise<void> {
   await page.evaluate(
-    (rejected) => (globalThis as ClipboardWindow).resolveClipboardRetry(rejected),
-    failed,
+    ({ rejected, copyAttempt }) =>
+      (globalThis as ClipboardWindow).resolveClipboardRetry(rejected, copyAttempt),
+    { rejected: failed, copyAttempt: attempt },
   );
 }
 
@@ -134,6 +140,108 @@ async function selectBubbleText(bubble: Locator): Promise<void> {
 }
 
 suite.define(() => {
+  it.each(["older first", "newer first"] as const)(
+    "keeps the latest keyboard copy focused when writes settle %s",
+    async (order) => {
+      await withClipboardPage({ locale: "en-US", serviceWorkers: "block" }, async (page) => {
+        await installMockGateway(page, {
+          historyMessages: [
+            textMessage("assistant", "First copy.", { timestamp: 1_000 }),
+            textMessage("user", "Next question.", { timestamp: 2_000 }),
+            textMessage("assistant", "Second copy.", { timestamp: 3_000 }),
+          ],
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const copies = ["First copy.", "Second copy."].map((text) =>
+          page.locator(".chat-group.assistant").filter({ hasText: text }).locator(".chat-copy-btn"),
+        );
+        await copies[1]!.waitFor({ state: "attached" });
+        await deferClipboard(page);
+        for (const copy of copies) {
+          await copy.focus();
+          await page.keyboard.press("Shift+Tab");
+          await page.keyboard.press("Tab");
+          expect(
+            await copy.evaluate((element) => element.ownerDocument.activeElement === element),
+          ).toBe(true);
+          await page.keyboard.press("Enter");
+          expect(await copy.isDisabled()).toBe(true);
+        }
+        await expectClipboard(page, 2, 0, "Second copy.");
+        const first = order === "older first" ? 0 : 1;
+        await resolveClipboard(page, false, first);
+        await expect.poll(() => copies[first]!.isDisabled()).toBe(false);
+        expect(await copies[1 - first]!.isDisabled()).toBe(true);
+        await resolveClipboard(page, false, 1 - first);
+        await expect.poll(() => copies[1 - first]!.isDisabled()).toBe(false);
+        await expect
+          .poll(() =>
+            copies[1]!.evaluate((element) => element.ownerDocument.activeElement === element),
+          )
+          .toBe(true);
+      });
+    },
+  );
+
+  it.each(["modern", "fallback", "failure"] as const)(
+    "restores keyboard copy focus after %s settlement without stealing newer focus",
+    async (transport) => {
+      await withClipboardPage(
+        { locale: "en-US", serviceWorkers: "block" },
+        async (page) => {
+          const text = "Repeat this keyboard copy.";
+          const gateway = await installMockGateway(page, {
+            historyMessages: [textMessage("assistant", text, { timestamp: 1_000 })],
+          });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          const message = page.locator(".chat-group.assistant").filter({ hasText: text });
+          const copy = message.locator(".chat-copy-btn");
+          await copy.waitFor({ state: "visible" });
+          await deferClipboard(page);
+          await copy.focus();
+          await page.keyboard.press("Shift+Tab");
+          expect(
+            await message
+              .getByRole("button", { name: "Reply to message" })
+              .evaluate((element) => element.ownerDocument.activeElement === element),
+          ).toBe(true);
+          await page.keyboard.press("Tab");
+          expect(
+            await copy.evaluate((element) => element.ownerDocument.activeElement === element),
+          ).toBe(true);
+          await page.keyboard.press("Enter");
+          expect(await copy.isDisabled()).toBe(true);
+          expect(await copy.getAttribute("aria-busy")).toBe("true");
+          await resolveClipboard(page, transport !== "modern");
+          await expect
+            .poll(() => copy.evaluate((element) => element.ownerDocument.activeElement === element))
+            .toBe(true);
+          expect(await copy.isDisabled()).toBe(false);
+          expect(await copy.getAttribute("aria-busy")).toBeNull();
+          expect(await copy.getAttribute("aria-label")).toBe(
+            transport === "failure" ? "Copy failed" : "Copied!",
+          );
+          await expectClipboard(page, 1, transport === "modern" ? 0 : 1, text);
+          await page.keyboard.press("Enter");
+          expect(await copy.isDisabled()).toBe(true);
+          const composer = page.locator(".agent-chat__composer-combobox textarea");
+          await composer.focus();
+          await resolveClipboard(page, transport !== "modern");
+          await expect.poll(() => copy.isDisabled()).toBe(false);
+          await expect
+            .poll(() =>
+              composer.evaluate((element) => element.ownerDocument.activeElement === element),
+            )
+            .toBe(true);
+          await expectClipboard(page, 2, transport === "modern" ? 0 : 2, text);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        },
+        false,
+        transport === "fallback",
+      );
+    },
+  );
+
   it.each([
     ...["Escape", "outside click", "replacement", "navigation", "reconnect"].map((dismissal) => ({
       dismissal,
@@ -234,9 +342,16 @@ suite.define(() => {
     },
   );
 
-  it.each([1280, 390])(
-    "keeps message-copy failure readable after leaving the control at %dpx",
-    async (width) => {
+  it.each([
+    { width: 1280, role: "assistant", index: 0 },
+    { width: 1280, role: "assistant", index: 1 },
+    { width: 390, role: "assistant", index: 0 },
+    { width: 390, role: "assistant", index: 1 },
+    { width: 390, role: "user", index: 0 },
+    { width: 390, role: "user", index: 1 },
+  ] as const)(
+    "keeps failed $role copy $index readable and retryable at $width px",
+    async ({ width, role, index }) => {
       await withClipboardPage(
         {
           locale: "en-US",
@@ -244,31 +359,84 @@ suite.define(() => {
           viewport: { height: 900, width },
         },
         async (page) => {
+          const texts = ["Copy this complete message.", "Keep this other message."] as const;
           await installMockGateway(page, {
-            historyMessages: [textMessage("assistant", "Copy this complete message.")],
+            presenceUsers: [
+              {
+                id: "viewer",
+                name: "Viewer",
+                identity: { type: "profile", id: "viewer" },
+                self: true,
+              },
+              { id: "peer", name: "Riley", identity: { type: "profile", id: "peer" } },
+            ],
+            historyMessages: texts.map((text, position) =>
+              textMessage(role, text, {
+                timestamp: position + 1,
+                __openclaw:
+                  role === "user"
+                    ? {
+                        senderId: "peer",
+                        senderName: "Riley",
+                        senderIdentity: { type: "profile", id: "peer" },
+                      }
+                    : undefined,
+              }),
+            ),
           });
           await page.goto(`${suite.server.baseUrl}chat`);
-          const message = page.locator(".chat-group.assistant").filter({
-            hasText: "Copy this complete message.",
-          });
-          await message.locator(".chat-text").click();
-          await message.hover();
-          const copy = message.getByRole("button", { name: "Copy as markdown", exact: true });
+          const message = page.locator(".chat-group").filter({ hasText: texts[0] });
+          await expect.poll(() => message.locator(".chat-copy-btn").count()).toBe(2);
+          if (role === "user") {
+            expect(await message.getAttribute("class")).toContain("chat-group--peer");
+          }
+          await message.locator(".chat-text").nth(index).click();
+          await message.locator(".chat-bubble").nth(index).hover();
+          const copy = message.locator(".chat-copy-btn").nth(index);
           await copy.click();
           await page.locator(".agent-chat__composer-combobox textarea").focus();
           await page.mouse.move(0, 0);
           const feedback = message.getByRole("status").filter({ hasText: "Copy failed" });
           await feedback.waitFor({ state: "visible" });
+          // Include child controls: their fade can outlive the footer transition.
+          await message.evaluate(async (group) => {
+            await Promise.all(
+              group.getAnimations({ subtree: true }).map((animation) => animation.finished),
+            );
+          });
           expect(
             await feedback.evaluate((element) =>
               element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
             ),
           ).toBe(true);
+          expect(
+            await copy.evaluate((element) => {
+              const rect = element.getBoundingClientRect();
+              return (
+                element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) &&
+                element.contains(
+                  document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2),
+                )
+              );
+            }),
+          ).toBe(true);
+          expect(
+            await message
+              .locator(".chat-copy-btn")
+              .nth(1 - index)
+              .evaluate((element) =>
+                element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
+              ),
+          ).toBe(false);
           const bounds = await feedback.boundingBox();
           expect(bounds).not.toBeNull();
           expect(bounds!.x).toBeGreaterThanOrEqual(0);
           expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
-          await expectClipboard(page, 1, 1, "Copy this complete message.");
+          await expectClipboard(page, 1, 1, texts[index]);
+          await deferClipboard(page);
+          await copy.click();
+          await resolveClipboard(page);
+          await expectClipboard(page, 2, 1, texts[index]);
           await page.clock.fastForward(2_000);
           await feedback.waitFor({ state: "hidden" });
           await expect.poll(() => copy.getAttribute("aria-label")).toBe("Copy as markdown");

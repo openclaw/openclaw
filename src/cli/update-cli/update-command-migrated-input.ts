@@ -45,6 +45,7 @@ const doctorInput = z.object({
   ...base,
   configInputHash: z.string(),
   repair: z.boolean(),
+  retirementOnly: z.literal(true).optional(),
   fullIntegrityCheck: z.boolean().optional(),
   yes: z.boolean().optional(),
   workspaceSuggestions: z.boolean().optional(),

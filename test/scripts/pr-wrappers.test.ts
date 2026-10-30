@@ -451,6 +451,215 @@ describe("scripts/pr wrappers", () => {
     return { ...fixture, reviewPath, source, run };
   }
 
+  function reviewRecoveryFixture() {
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+    // The real salvage owner additionally loads review-artifacts' record helper.
+    const recordHelper = "scripts/lib/record-shared.mjs";
+    cpSync(recordHelper, join(fixture.canonical, recordHelper));
+    const inventory = join(fixture.canonical, "scripts/pr-lib/wrapper-components.txt");
+    writeFileSync(inventory, readScript(inventory) + recordHelper + "\n");
+    const bindingRef = "refs/openclaw/pr-workflow-bindings/123";
+    const origin = join(fixture.root, "origin.git");
+    const currentWrapper = readScript("scripts/pr");
+    // The retained entry uses the real worktree owner, including journal replay.
+    const reviewPath = join(fixture.canonical, "scripts/pr-lib/review.sh");
+    writeFileSync(
+      reviewPath,
+      readScript(reviewPath) +
+        [
+          "",
+          "review_guard() {",
+          '  enter_worktree "$1" false || return 1',
+          "  printf 'admitted workflow %s\\n' \"$PR_WORKFLOW_SOURCE_REVISION\"",
+          "}",
+          "",
+        ].join("\n"),
+    );
+    fixture.write("recovery-tracked.txt", "source bytes\n");
+    // Model an older advertised interface without depending on runner Git history.
+    fixture.write(
+      "scripts/pr",
+      currentWrapper.replaceAll("review-transition-recover", "unavailable-review-recovery"),
+    );
+    fixture.commit(
+      [
+        "scripts/pr",
+        "scripts/pr-lib/review.sh",
+        "scripts/pr-lib/wrapper-components.txt",
+        recordHelper,
+        "recovery-tracked.txt",
+      ],
+      true,
+    );
+    const oldSource = fixture.gitText(["rev-parse", "HEAD"]);
+    fixture.git(fixture.canonical, [
+      "config",
+      "--add",
+      "url." + origin + ".insteadOf",
+      "https://github.com/openclaw/openclaw.git",
+    ]);
+    fixture.git(fixture.canonical, [
+      "remote",
+      "set-url",
+      "origin",
+      "https://github.com/openclaw/openclaw.git",
+    ]);
+    const worktree = join(fixture.canonical, ".worktrees/pr-123");
+    fixture.git(fixture.canonical, ["worktree", "add", "-b", "temp/pr-123", worktree, oldSource]);
+    const run = () => runWrapper(fixture, ["review-guard", "123"], "canonical");
+    const admitted = run();
+    expect(admitted.status, admitted.stdout + admitted.stderr).toBe(0);
+    const binding = fixture.gitText(["rev-parse", bindingRef]);
+    const args = [
+      "review-transition-recover",
+      "123",
+      "recovery-plan.json",
+      "--plan-sha256",
+      "a".repeat(64),
+      "--confirmed-operator-recovery",
+    ];
+    const before = runWrapper(fixture, args, "canonical");
+    expect(before.status, before.stdout + before.stderr).toBe(2);
+    expect(before.stdout + before.stderr).toContain("Usage:");
+    fixture.write("scripts/pr", currentWrapper);
+    fixture.write("recovery-tracked.txt", "target bytes\n");
+    fixture.commit(["scripts/pr", "recovery-tracked.txt"], true);
+    const current = fixture.gitText(["rev-parse", "HEAD"]);
+    const journal = Buffer.from(
+      JSON.stringify({
+        version: 1,
+        pr: 123,
+        source: oldSource,
+        target: current,
+        mode: "detached",
+        branch: null,
+      }),
+    );
+    writeFileSync(join(worktree, ".local/review-transition.json"), journal);
+    writeFileSync(join(worktree, "recovery-tracked.txt"), "");
+    const blocked = run();
+    expect(blocked.status, blocked.stdout + blocked.stderr).toBe(1);
+    expect(blocked.stderr).toContain("neither its journaled source nor target entry");
+    const indexPath = fixture.gitText(
+      ["rev-parse", "--path-format=absolute", "--git-path", "index"],
+      worktree,
+    );
+    const index = readFileSync(indexPath);
+    const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+    const plan = Buffer.from(
+      JSON.stringify({
+        version: 1,
+        pr: 123,
+        binding,
+        head: oldSource,
+        headRef: "refs/heads/temp/pr-123",
+        journalSha256: hash(journal),
+        indexSha256: hash(index),
+        path: "recovery-tracked.txt",
+        workingEntry:
+          "100644 " +
+          fixture.gitText(["hash-object", "--no-filters", "recovery-tracked.txt"], worktree),
+        reason: "Preserve explicitly selected unknown checkout bytes.",
+      }),
+    );
+    writeFileSync(join(fixture.canonical, "recovery-plan.json"), plan);
+    args[4] = hash(plan);
+    const effect = join(worktree, ".local/review-transition-recovery." + args[4]);
+    const recover = () => runWrapper(fixture, args, "canonical");
+    return {
+      ...fixture,
+      origin,
+      args,
+      bindingRef,
+      binding,
+      oldSource,
+      current,
+      run,
+      recover,
+      effect,
+      worktree,
+      journal,
+      indexPath,
+      index,
+    };
+  }
+
+  itPosix("qualifies current recovery once and resumes the unchanged older binding", () => {
+    const fixture = reviewRecoveryFixture();
+    const recovered = fixture.recover();
+    expect(recovered.status, recovered.stdout + recovered.stderr).toBe(0);
+    expect(recovered.stdout).toContain('"transition":"pending"');
+    expect(readFileSync(join(fixture.effect, "worktree.before"))).toEqual(Buffer.alloc(0));
+    expect(JSON.parse(readScript(join(fixture.effect, "provenance.json")))).toMatchObject({
+      workflow: fixture.current,
+      binding: fixture.binding,
+    });
+    expect(readFileSync(fixture.indexPath)).toEqual(fixture.index);
+    expect(readFileSync(join(fixture.worktree, ".local/review-transition.json"))).toEqual(
+      fixture.journal,
+    );
+    expect(fixture.gitText(["rev-parse", "HEAD"], fixture.worktree)).toBe(fixture.oldSource);
+    expect(readScript(join(fixture.worktree, "recovery-tracked.txt"))).toBe("source bytes\n");
+    const resumed = fixture.run();
+    expect(resumed.status, resumed.stdout + resumed.stderr).toBe(0);
+    expect(resumed.stdout).toContain("admitted workflow " + fixture.oldSource);
+    expect(fixture.gitText(["rev-parse", "HEAD"], fixture.worktree)).toBe(fixture.current);
+    expect(readScript(join(fixture.worktree, "recovery-tracked.txt"))).toBe("target bytes\n");
+    expect(existsSync(join(fixture.worktree, ".local/review-transition.json"))).toBe(false);
+    expect(fixture.gitText(["rev-parse", fixture.bindingRef])).toBe(fixture.binding);
+    expect(
+      fixture.gitText([
+        "for-each-ref",
+        "refs/openclaw/pr-operation-locks/123",
+        "refs/openclaw/pr-workflow-qualification/123/",
+      ]),
+    ).toBe("");
+  });
+
+  itPosix.each(["foreign", "unlanded", "stale"])(
+    "refuses %s recovery code before owner dispatch",
+    (fault) => {
+      const fixture = reviewRecoveryFixture();
+      if (fault === "foreign") {
+        fixture.git(fixture.canonical, ["remote", "set-url", "origin", fixture.origin]);
+      } else if (fault === "unlanded") {
+        // Only the old wrapper is published. A clean committed candidate must
+        // not self-admit its new operation from the canonical checkout.
+        fixture.git(fixture.origin, ["update-ref", "refs/heads/main", fixture.oldSource]);
+        fixture.git(fixture.canonical, [
+          "update-ref",
+          "refs/remotes/origin/main",
+          fixture.oldSource,
+        ]);
+      } else {
+        fixture.git(fixture.linked, ["checkout", "--detach", fixture.current]);
+        const path = "scripts/pr-lib/worktree.sh";
+        fixture.write(
+          path,
+          readScript(join(fixture.linked, path)) + "\n# newer official wrapper\n",
+          fixture.linked,
+        );
+        fixture.commit([path], false, fixture.linked);
+        fixture.git(fixture.linked, ["push", "origin", "HEAD:refs/heads/main"]);
+        fixture.git(fixture.canonical, ["update-ref", "refs/remotes/origin/main", fixture.current]);
+      }
+      const result = fixture.recover();
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(existsSync(fixture.effect)).toBe(false);
+      expect(fixture.gitText(["rev-parse", fixture.bindingRef])).toBe(fixture.binding);
+      if (fault === "stale") {
+        expect(result.stderr).toContain("Current main workflow changed");
+        expect(
+          fixture.gitText([
+            "for-each-ref",
+            "--format=%(objectname)",
+            "refs/openclaw/pr-workflow-qualification/123/",
+          ]),
+        ).not.toBe("");
+      }
+    },
+  );
+
   itPosix(
     "preserves a PATH-delegating Git policy through admission, supervision and reentry",
     () => {

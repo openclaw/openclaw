@@ -5,6 +5,7 @@ import type {
   CliBackendExecuteContext,
   CliBackendMessageInjection,
   CliBackendToolPermissionResult,
+  CliBackendTurnStatus,
 } from "openclaw/plugin-sdk/cli-backend";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -120,14 +121,11 @@ async function expectWarmResume(
 ) {
   const handle = context.liveSession?.current();
   expect(handle?.isIdle()).toBe(true);
-  expect(
-    await runDetail(context, { prompt: "next input", useResume: true, ...overrides }),
-  ).toMatchObject({
-    pid: detail.pid,
-    turn: 2,
-    user: "next input",
-  });
+  const next = await runDetail(context, { prompt: "next input", useResume: true, ...overrides });
+  expect(next).toMatchObject({ pid: detail.pid, turn: 2, user: overrides.prompt ?? "next input" });
   expect(context.liveSession?.current()).toBe(handle);
+  expect(handle?.isIdle()).toBe(true);
+  return next;
 }
 
 async function startInjection(scenario: string, overrides: Partial<CliBackendExecuteContext> = {}) {
@@ -241,6 +239,20 @@ describe("Claude native stdio boundary", () => {
       gate.resolve();
     }
   });
+  it.each(["failed", "pending"])("retires %s OpenClaw MCP startup", async (status) => {
+    const context = await createContext();
+    context.env.CLAUDE_FIXTURE_MCP_SERVERS = JSON.stringify([{ name: "openclaw", status }]);
+    await expect(collect(context)).rejects.toThrow(
+      `Claude Code started without the OpenClaw MCP server (status ${status}). The CLI process was retired; retry the request to start a fresh process.`,
+    );
+    const pid = Number(await readFixture(context, "fixture.pid"));
+    expectRetired(context, pid);
+    context.env.CLAUDE_FIXTURE_MCP_SERVERS = '[{"name":"openclaw","status":"connected"}]';
+    const next = await runDetail(context, { useResume: true });
+    expect(next.turn).toBe(1);
+    expect(next.pid).not.toBe(pid);
+    await expectWarmResume(context, next);
+  });
 
   it("rejects startup when the owner refuses capture", async () => {
     const liveSession = createLiveSession();
@@ -263,11 +275,9 @@ describe("Claude native stdio boundary", () => {
     "background-agent-foreground-bash",
     "background-agent-foreground-bash-run-ids",
   ])("preserves parent result ownership and warm reuse for %s", async (scenario) => {
-    const liveSession = createLiveSession();
     const release = createDeferred<CliBackendToolPermissionResult>();
     const decision = { behavior: "deny" as const, message: "Fixture released." };
     const context = await createContext(scenario, {
-      liveSession,
       requestToolPermission: () => release.promise,
     });
     const results: Record<string, unknown>[] = [];
@@ -279,7 +289,7 @@ describe("Claude native stdio boundary", () => {
         results.push(record);
         if (results.length === 1) {
           expect(record).toHaveProperty("openclaw_interim_result", true);
-          expect(liveSession.current()?.isIdle()).toBe(false);
+          expect(context.liveSession.current()?.isIdle()).toBe(false);
           release.resolve(decision);
         }
       }
@@ -438,14 +448,10 @@ describe("Claude native stdio boundary", () => {
     expectFinalResults(records, explicit ? 1 : 2);
     expect(context.liveSession?.current()?.isIdle()).toBe(true);
     if (explicit) {
-      const first = resultDetail(records);
-      const handle = context.liveSession?.current();
-      expect(await runDetail(context, { useResume: true })).toMatchObject({
-        firstSeenBackground: true,
-        turn: 2,
-        pid: first.pid,
-      });
-      expect(context.liveSession?.current()).toBe(handle);
+      expect(await expectWarmResume(context, resultDetail(records))).toHaveProperty(
+        "firstSeenBackground",
+        true,
+      );
     }
   });
 
@@ -453,7 +459,11 @@ describe("Claude native stdio boundary", () => {
     "restarts fresh after pending Bash %s",
     async (termination, { signal }) => {
       const controller = new AbortController();
+      let status: CliBackendTurnStatus | undefined;
       const context = await createContext("background-bash-success", {
+        registerTurnStatus: (value) => {
+          status = value;
+        },
         abortSignal: controller.signal,
       });
       const { liveSession } = context;
@@ -464,12 +474,19 @@ describe("Claude native stdio boundary", () => {
         await fixtureReadyBeforeSettlement(context, "background.ready", running, signal);
         firstPid = Number(await readFixture(context, "fixture.pid"));
         expect(liveSession.current()?.isIdle()).toBe(false);
+        const assessment = status!.capture()!;
         if (termination === "abort") {
           controller.abort(new Error("Synthetic background turn cancelled."));
         } else {
           process.kill(firstPid, "SIGTERM");
         }
         expect(await withinTest(outcome, signal)).toBeInstanceOf(Error);
+        expect(status!.capture() === undefined).toBe(termination === "abort");
+        await expect(assessment.assess({ signal })).resolves.toEqual(
+          termination === "process exit"
+            ? { state: "closed", basis: "transport_closed" }
+            : { state: "unknown", basis: "status_unsupported" },
+        );
       } finally {
         controller.abort();
       }
@@ -558,13 +575,17 @@ describe("Claude native stdio boundary", () => {
     },
   );
 
-  it("isolates arguments, host permissions, and private context across warm turns", async () => {
+  it.each(["connected", undefined])("isolates warm turns with OpenClaw MCP %s", async (status) => {
     const context = await createContext("normal", {
       sessionId: SESSION_ID,
       useResume: true,
       promptContext: { prependContext: "private prefix", appendContext: "private suffix" },
       toolAvailability: { native: ["Read"], discovery: ["ToolSearch"], openClaw: ["message"] },
     });
+    context.env.CLAUDE_FIXTURE_MCP_SERVERS = JSON.stringify([
+      { name: "optional-server", status: "failed" },
+      ...(status ? [{ name: "openclaw", status }] : []),
+    ]);
     const nativeArgs = ["--fork-session", "--plugin-dir", "/tmp/synthetic-skills"];
     context.args = [
       ...context.args,
@@ -609,23 +630,13 @@ describe("Claude native stdio boundary", () => {
       privateContext: "private prefix\n\nprivate suffix",
       permission: { behavior: "deny" },
     });
-    const handle = context.liveSession.current();
     expect(
-      await runDetail(context, {
+      await expectWarmResume(context, detail, {
         prompt: "Which color?",
         promptContext: { prependContext: "second private context" },
         promptOrigin: "host",
-        useResume: true,
       }),
-    ).toMatchObject({
-      turn: 2,
-      user: "Which color?",
-      synthetic: true,
-      privateContext: "second private context",
-      pid: detail.pid,
-    });
-    expect(context.liveSession.current()).toBe(handle);
-    expect(handle?.isIdle()).toBe(true);
+    ).toMatchObject({ synthetic: true, privateContext: "second private context" });
   });
 
   it.each([
@@ -660,7 +671,6 @@ describe("Claude native stdio boundary", () => {
         expect(detail.priorResponses).toMatchObject({
           "prior-pre": { hookSpecificOutput: { permissionDecision: "deny" } },
           "prior-permission": { behavior: "deny" },
-          "prior-context": {},
         });
         expect((detail.priorResponses as Record<string, unknown>)["prior-context"]).toEqual({});
       }
@@ -680,8 +690,18 @@ describe("Claude native stdio boundary", () => {
   ])(
     "isolates steering context ($scenario, same prompt: $samePrompt)",
     async ({ scenario, results, samePrompt }) => {
+      let status: CliBackendTurnStatus | undefined;
       const { context, running, injection } = await startInjection(scenario, {
         promptContext: { prependContext: PRIVATE },
+        registerTurnStatus: (value) => {
+          status = value;
+        },
+      });
+      const captured = status!.capture()!;
+      expect(captured.isCurrent()).toBe(true);
+      await expect(captured.assess({ signal: new AbortController().signal })).resolves.toEqual({
+        state: "unknown",
+        basis: "process_present",
       });
       const notificationReplay = scenario.includes("notification-replay");
       const input = samePrompt
@@ -691,7 +711,14 @@ describe("Claude native stdio boundary", () => {
           : "steering input";
       const hook = scenario.startsWith("steer-hook-");
       const steering = { promptContext: { prependContext: "STEERING_PRIVATE_CONTEXT" } };
-      await injection.queueMessage(input, async (submit) => submit(), hook ? steering : undefined);
+      await injection.queueMessage(
+        input,
+        async (submit) => {
+          submit();
+          expect(captured.isCurrent()).toBe(false);
+        },
+        hook ? steering : undefined,
+      );
       const records = await running;
       const tagged = records.filter((record) => record.user_message_uuid !== undefined);
       expect(tagged.map((record) => record.type)).toEqual(
@@ -701,6 +728,16 @@ describe("Claude native stdio boundary", () => {
       expectFinalResults(records, results);
       const detail = resultDetail(records);
       expect(detail).toMatchObject({ user: input, privateContext: PRIVATE });
+      if (scenario === "steer-merged") {
+        expect(detail.hostFrames).toEqual([
+          "control_request:initialize",
+          "user",
+          "control_response",
+          "user",
+          "control_response",
+        ]);
+      }
+      expect(status!.capture()).toBeUndefined();
       if (notificationReplay) {
         expect(detail.finalBackgroundAnswer).toBe(true);
       }
@@ -905,19 +942,30 @@ describe("Claude native stdio boundary", () => {
     expect(secondPid).not.toBe(firstPid);
     expect(context.liveSession.current()).toBeUndefined();
   });
-  it("withholds private context when its authority is revoked after sending the prompt", async () => {
-    let checks = 0;
-    const context = await createContext("normal", {
+  it("withholds private context when its authority is revoked after sending the prompt", async ({
+    signal,
+  }) => {
+    let active = true;
+    const context = await createContext("revoked-prompt", {
       prompt: "Remember orange.",
       promptContext: { prependContext: "saved private context" },
-      // The first check guards the prompt send; the login changes from there on.
       assertPrivateInputCurrent: () => {
-        if (++checks > 1) {
+        if (!active) {
           throw new Error("Synthetic account reassigned after send.");
         }
       },
     });
-    const detail = await runDetail(context);
+    const running = collect(context);
+    const outcome = running.catch((error: unknown) => error);
+    try {
+      await fixtureReadyBeforeSettlement(context, "prompt.ready", running, signal);
+      expect(await readFixture(context, "user.received")).toBe("Remember orange.");
+      active = false;
+    } finally {
+      await releaseFixture(context, "prompt");
+      await withinTest(outcome, signal);
+    }
+    const detail = resultDetail(await running);
     expect(detail).toMatchObject({ turn: 1, user: "Remember orange." });
     expect(detail.privateContext).toBeUndefined();
   });

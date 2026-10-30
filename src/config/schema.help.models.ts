@@ -21,7 +21,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "models.providers.*.apiKey":
     "Provider credential used for API-key based authentication when the provider requires direct key auth. Use secret/env substitution and avoid storing real keys in committed config files.",
   "models.providers.*.auth":
-    'Selects provider auth style: "api-key" for API key auth, "token" for bearer token auth, "oauth" for OAuth credentials, "aws-sdk" for AWS credential resolution, and "none" for custom openai-completions endpoints that do not enforce auth. Explicit "none" skips credentials and sends no Authorization header; other effective adapters are rejected.',
+    'Selects provider auth style: "api-key" for API key auth, "token" for bearer token auth, "oauth" for OAuth credentials, "aws-sdk" for AWS credential resolution, and "none" for custom openai-completions endpoints that do not enforce auth. Explicit "none" skips credentials and sends no Authorization header; other effective adapters are rejected. "native-command" delegates credentials to an explicitly configured Codex runtime for a custom HTTPS Responses provider; it cannot be combined with API keys, profiles, or request overrides.',
   "models.providers.*.api":
     "Wire protocol adapter, independent of the provider ID. Chat Completions: openai-completions; Responses: openai-responses; Messages: anthropic-messages. Choose other adapters from the allowed values to match your upstream protocol.",
   "models.providers.*.maxTokens":

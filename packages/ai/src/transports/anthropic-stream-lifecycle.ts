@@ -43,6 +43,7 @@ import {
 } from "./anthropic-compaction-replay.js";
 import { buildAnthropicRequest, prepareAnthropicRequest } from "./anthropic-messages.js";
 import { isDirectAnthropicModel, logAnthropicContextEdits } from "./anthropic-payload-policy.js";
+import { serializeAnthropicRequestBody } from "./anthropic-request-body.js";
 import { createAssistantOutput } from "./assistant-output.js";
 import { resolveProviderEndpoint } from "./host-policy.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
@@ -76,6 +77,7 @@ export async function runAnthropicStreamLifecycle(params: {
     request: (
       body: MessageCreateParamsStreaming,
       headers: Record<string, string> | undefined,
+      encodeBody: () => string | Blob,
     ) => Promise<{ response: Response; events: AsyncIterable<object> | Iterable<object> }>;
     checkResponse?: (response: Response) => Promise<void>;
   }>;
@@ -99,13 +101,20 @@ export async function runAnthropicStreamLifecycle(params: {
       prepared.claudeCodeVersion,
     );
     replayedCompaction = built.replayedCompaction;
-    const { params: body, headers } = await prepareAnthropicRequest(
+    const {
+      params: body,
+      headers,
+      messageSources,
+    } = await prepareAnthropicRequest(
       built.params,
       model,
       prepared.options,
       prepared.directApiKeyBetaHeader,
     );
-    const { response, events } = await prepared.request({ ...body, stream: true }, headers);
+    const wireBody = { ...body, stream: true as const };
+    const { response, events } = await prepared.request(wireBody, headers, () =>
+      serializeAnthropicRequestBody(wireBody, messageSources),
+    );
     await notifyProviderHttpResponse({ options: prepared.options, response, model });
     await prepared.checkResponse?.(response);
     await (async () => {

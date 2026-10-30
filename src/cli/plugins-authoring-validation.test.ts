@@ -57,10 +57,11 @@ it.each(
       throw new Error("Malformed package fixture did not produce a native parser error");
     }
     const detail = debug ? ` | ${parserError.message}` : "";
+    const terminalDetail = detail.replaceAll("\n", "\\n");
     await expectFailure(
       { root: rootDir, ...(entry === "explicit" ? { entry: "./unused-entry.js" } : {}) },
       { OPENCLAW_HOME: homeDir, OPENCLAW_DEBUG: debug ? "1" : undefined },
-      `Malformed JSON in ${packagePath}${detail}`,
+      `Malformed JSON in ${packagePath}${terminalDetail}`,
       `Malformed JSON in $OPENCLAW_HOME/plugins/malformed/package.json${detail}`,
     );
     expect(fs.readFileSync(packagePath, "utf8")).toBe(packageBytes);

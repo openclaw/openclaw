@@ -19,6 +19,7 @@ import { expectDefined } from "../../packages/normalization-core/src/expect.ts";
 import type { ContextEngineFactoryResources } from "../../src/context-engine/registry.resources.js";
 import type { ContextEngine } from "../../src/context-engine/types.js";
 import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { summarizeDurationDistribution } from "../lib/perf-duration-distribution.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -185,19 +186,6 @@ function recordGc(entries: PerformanceEntry[]) {
   }
 }
 const observer = new PerformanceObserver((list) => recordGc(list.getEntries()));
-function distribution(samples: number[]) {
-  const sorted = samples.toSorted((a, b) => a - b);
-  const count = sorted.length;
-  const totalMs = sorted.reduce((sum, value) => sum + value, 0);
-  return {
-    count,
-    totalMs,
-    meanMs: count ? totalMs / count : 0,
-    maxMs: sorted.at(-1) ?? 0,
-    p95: { samples: count, ms: sorted[Math.ceil(count * 0.95) - 1] ?? null },
-    p99: { samples: count, ms: sorted[Math.ceil(count * 0.99) - 1] ?? null },
-  };
-}
 async function waitForStart(warming = false) {
   const readyFile = values[warming ? "warm-ready-file" : "ready-file"];
   const startFile = values[warming ? "warm-start-file" : "start-file"];
@@ -407,7 +395,7 @@ try {
     recordGc(observer.takeRecords());
     observer.disconnect();
     const gc = (kind?: number) =>
-      distribution(
+      summarizeDurationDistribution(
         collections
           .filter((entry) => kind === undefined || entry.kind === kind)
           .map((entry) => entry.ms),
@@ -422,7 +410,7 @@ try {
         totalMs: (usedCpu.user + usedCpu.system) / 1000,
         msPerTurn: (usedCpu.user + usedCpu.system) / 1000 / operations,
       },
-      latency: distribution(latencies),
+      latency: summarizeDurationDistribution(latencies),
       gc: {
         total,
         msPerTurn: total.totalMs / operations,

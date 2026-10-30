@@ -6,6 +6,8 @@
  * For post-cleanup memory diagnostics, add --expose-gc to Node and select memory mode.
  * Memory mode disables allocation sampling; forced GC runs outside the measured crossing.
  * Compare summary.json and stderr startup-trace phase timings on base/candidate.
+ * Summaries include native migrate/cleanup time and nested phase spans; do not add
+ * parent and child durations when accounting for the whole crossing.
  * Seed uses the frozen schema-35 fixture and current agent schemas. Each archive is
  * synthetic JSONL; current session rows have one synthetic transcript event each.
  */
@@ -220,18 +222,25 @@ if (mode === "seed") {
   const before = process.cpuUsage();
   const threadBefore = process.threadCpuUsage();
   const loadBefore = os.loadavg();
+  let migrationMs = 0;
+  let cleanupMs = 0;
+  const { consumeGatewayBootstrapSteps } = await import("../../src/cli/startup-trace.js");
   const started = performance.now();
   await withCliProcessScope(() =>
     withCliCommandCleanup(false, async (cleanup) => {
       const pluginResources = cleanup?.pluginResources;
       assert.ok(pluginResources, "Benchmark requires executable CLI cleanup");
+      const migrationStarted = performance.now();
       try {
         await pluginResources.run(() =>
           updateMigrateCommand(path.join(root, "recovery", "native")),
         );
       } finally {
+        migrationMs = performance.now() - migrationStarted;
+        const cleanupStarted = performance.now();
         await closeCliResources(cleanup);
         await pluginResources.release();
+        cleanupMs = performance.now() - cleanupStarted;
       }
     }),
   );
@@ -271,6 +280,9 @@ if (mode === "seed") {
   const summary = {
     mode: forceGc ? "memory" : sampling ? "allocation" : "timing",
     elapsedMs,
+    migrationMs,
+    cleanupMs,
+    phases: consumeGatewayBootstrapSteps(),
     cpu,
     mainThreadCpu,
     allocatedBytes,

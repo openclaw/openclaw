@@ -69,8 +69,6 @@ export type ChatProps = Omit<
   | "commentsDisabled"
   | "onAddToChat"
   | "onCompanionSelection"
-  | "onOpenSession"
-  | "onSend"
   | "onOpenSidebar"
 > &
   Omit<
@@ -234,9 +232,9 @@ export function createChatViewFrame(
   };
   const canCompose = props.canSend;
   const historyState = props.historyState;
-  const dismissPendingInputs =
+  const dismissPendingInput =
     props.connected && props.canDismissPendingInputs && historyState
-      ? (inputIds: readonly string[]) => void dismissChatPendingInputs(historyState, inputIds)
+      ? (inputId: string) => void dismissChatPendingInputs(historyState, [inputId])
       : undefined;
   const questionState = getTranscriptState(props.paneId);
   const openImage = props.onOpenImage
@@ -293,9 +291,7 @@ export function createChatViewFrame(
       : undefined,
     onRetryQueuedMessage: props.connected && canCompose ? props.onQueueRetry : undefined,
     onDiscardQueuedMessage: props.onQueueRemove,
-    onDismissPendingInput: dismissPendingInputs
-      ? (inputId: string) => dismissPendingInputs([inputId])
-      : undefined,
+    onDismissPendingInput: dismissPendingInput,
     onCompanionSelection:
       props.canSend && !props.suggestionComposer && props.onCompanionStageAttachment
         ? (selection, anchorRect) =>
@@ -330,7 +326,6 @@ export function createChatViewFrame(
               focusComposer,
             )
         : undefined,
-    onOpenSession: props.onSessionSelect,
     // Portaled menus can outlive a render; resolve focus from the current session owner.
     onFocusComposer: () => focusComposer(true),
   } satisfies Partial<ChatThreadProps>);
@@ -362,7 +357,6 @@ export function createChatViewFrame(
   return {
     approvalSourceSession,
     pendingInputs,
-    dismissPendingInputs,
     asyncQuestions,
     openImmediateImage,
     attachmentDropHandlers,

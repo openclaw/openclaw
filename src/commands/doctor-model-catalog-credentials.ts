@@ -7,6 +7,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
+import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
+import { resolveSharedAuthStorePath } from "../agents/auth-profiles/path-resolve.js";
 import {
   loadPersistedAuthProfileStore,
   loadPersistedSharedAuthProfileStore,
@@ -30,6 +32,7 @@ import type { HealthFinding } from "../flows/health-checks.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { listAgentModelsJsonPaths } from "../secrets/storage-scan.js";
+import { shellEscape } from "../shared/shell-quote.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -163,6 +166,7 @@ async function persistCredentials(params: {
   credentials: readonly PlaintextCredential[];
   env: NodeJS.ProcessEnv;
   invalidProfiles: ReadonlyArray<[string, AuthProfileCredential]>;
+  skipCatalogCredential: (credential: PlaintextCredential, store: AuthProfileStore) => boolean;
 }): Promise<{ migrated: number; removed: number }> {
   const credentials = uniqueCredentials(params.credentials);
   const { invalidProfiles } = params;
@@ -199,6 +203,13 @@ async function persistCredentials(params: {
         : localStore;
       for (const credential of credentials) {
         if (credential.catalog && hasProviderSecretRef(effectiveStore, credential.provider)) {
+          continue;
+        }
+        if (
+          credential.catalog &&
+          (sharedStore || !params.agentDir) &&
+          params.skipCatalogCredential(credential, sharedStore ?? localStore)
+        ) {
           continue;
         }
         const profileId =
@@ -344,15 +355,64 @@ export async function maybeMigrateModelCatalogCredentials(params: {
     childStores,
     params.cfg,
   );
+  const sharedProfileId = (store: AuthProfileStore, provider: string) =>
+    resolveAuthProfileOrder({ cfg: params.cfg, store, provider, readinessMode: "read-only" }).find(
+      (id) => store.profiles[id] !== undefined,
+    );
   const catalogImports = catalogs.map(({ agentDir, localStore, providers }) => {
     const effectiveStore = mergeAuthProfileStores(mainStore, localStore);
+    if (path.join(agentDir, "openclaw-agent.sqlite") !== resolveSharedAuthStorePath(env)) {
+      for (const [profileId, credential] of Object.entries(localStore.profiles)) {
+        const provider = normalizeProviderId(credential.provider);
+        const inheritedId = sharedProfileId(mainStore, provider);
+        if (
+          !profileId.startsWith(`${provider}:models-json`) ||
+          !/^models-json(?:-\d+)?$/.test(profileId.slice(provider.length + 1)) ||
+          !inheritedId ||
+          isDeepStrictEqual(credential, mainStore.profiles[inheritedId]) ||
+          sharedProfileId(effectiveStore, provider) !== profileId
+        ) {
+          continue;
+        }
+        const agentId =
+          listAgentIds(params.cfg).find(
+            (id) => resolveAgentDir(params.cfg, id, env) === agentDir,
+          ) ?? path.basename(path.dirname(agentDir));
+        const command = `openclaw models auth logout ${shellEscape(profileId)} --agent ${shellEscape(agentId)} --yes`;
+        reportWarning(
+          `Agent-local auth profile "${profileId}" for provider "${provider}" takes precedence over shared profile "${inheritedId}". Its migration origin is unrecorded; credentials were left untouched. After confirming the shared account is intended, remove the local profile with: ${command}`,
+          "catalog-profile-shadows-shared",
+          `Confirm the shared account is intended, then run ${command}.`,
+          agentDir,
+        );
+      }
+    }
+    const skippedProviders = new Set<string>();
+    const skipCatalogCredential = (credential: PlaintextCredential, store: AuthProfileStore) => {
+      const inheritedId = sharedProfileId(store, credential.provider);
+      if (!inheritedId) {
+        return false;
+      }
+      if (!skippedProviders.has(credential.provider)) {
+        skippedProviders.add(credential.provider);
+        reportWarning(
+          `Skipped models.json credential for provider "${credential.provider}" in ${shortenHomePath(agentDir)}: shared auth profile "${inheritedId}" already provides effective credentials. The catalog source was left untouched.`,
+          "catalog-credential-shared-auth",
+          "Keep the shared auth profile and original catalog. Check openclaw models status for the intended account before changing credentials.",
+          agentDir,
+          "recommended",
+        );
+      }
+      return true;
+    };
     return {
       agentDir,
       credentials: uniqueCredentials(
         providers.flatMap((entries) =>
           collectCredentials(entries, effectiveStore, [], params.cfg, true),
         ),
-      ),
+      ).filter((credential) => !skipCatalogCredential(credential, mainStore)),
+      skipCatalogCredential,
       invalidProfiles:
         agentDir === mainAgentDir ? [] : findProviderSecretRefProfiles(localStore, params.cfg),
     };
@@ -414,12 +474,19 @@ export async function maybeMigrateModelCatalogCredentials(params: {
       blockedStores: childStores,
       credentials: configCredentials,
       invalidProfiles: invalidMainProfiles,
+      skipCatalogCredential: () => false,
     };
-    for (const { agentDir, credentials, invalidProfiles } of catalogImports) {
+    for (const {
+      agentDir,
+      credentials,
+      invalidProfiles,
+      skipCatalogCredential,
+    } of catalogImports) {
       yield {
         description: `model credentials for ${shortenHomePath(agentDir)}`,
         credentials,
         invalidProfiles,
+        skipCatalogCredential,
         ...(agentDir === mainAgentDir ? {} : { agentDir }),
       };
     }
@@ -428,7 +495,11 @@ export async function maybeMigrateModelCatalogCredentials(params: {
   let removed = 0;
   for (const { description, ...target } of migrationTargets()) {
     try {
+      const previousWarnings = warnings.length;
       const result = await persistCredentials({ ...target, env });
+      for (const warning of warnings.slice(previousWarnings)) {
+        params.runtime.error(warning);
+      }
       migrated += result.migrated;
       removed += result.removed;
     } catch (error) {

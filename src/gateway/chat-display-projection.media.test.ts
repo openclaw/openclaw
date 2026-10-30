@@ -163,7 +163,7 @@ it("prepares raw prefixes before the display cap and preserves prepared or forwa
   }
 });
 
-describe("commentary group visibility", () => {
+describe.each([undefined, "stop", "length"])("commentary group visibility (%s)", (stopReason) => {
   const progress = "Visible progress";
   const keyed = phased(progress, "commentary", "progress");
   const unkeyed = phased("Hidden thought", "commentary");
@@ -175,6 +175,7 @@ describe("commentary group visibility", () => {
   const facts = [{ url: "/media/proof.png", contentType: "image/png" }];
   type Visibility = [string, unknown[], string[], number, number, string?, typeof facts?];
   it.each<Visibility>([
+    ["keyed text only", [keyed], [progress], 0, 0],
     ["visible siblings", [control, image, tool, final], [controls, "Final reply"], 1, 1],
     ["media facts", [control], [controls], 0, 0, undefined, facts],
     ["unkeyed media", [text("Image caption"), image], ["Image caption"], 1, 0, "commentary"],
@@ -182,6 +183,7 @@ describe("commentary group visibility", () => {
     ["inherited phases", inheritedContent, [progress], 1, 1, "commentary"],
   ])("keeps visibility scoped to %s", (_name, content, texts, images, tools, phase, mediaFacts) => {
     const source = assistant({
+      ...(stopReason ? { stopReason } : {}),
       ...(phase ? { phase } : {}),
       content,
       __openclaw: { id: "row-identity", ...(mediaFacts ? { media: mediaFacts } : {}) },
@@ -203,6 +205,33 @@ describe("commentary group visibility", () => {
     expect(source).toEqual(before);
   });
 });
+
+it.each(["stop", "length"])(
+  "preserves completed commentary visibility authority (%s)",
+  (stopReason) => {
+    const progress = "Visible progress";
+    for (const [final, fields, expected] of [
+      ["", {}, [progress]],
+      ["NO_REPLY", {}, []],
+      ["NO_REPLY", { display: true }, [progress, "NO_REPLY"]],
+      ["Final reply", { display: false }, []],
+    ] as const) {
+      const source = assistant({
+        ...fields,
+        stopReason,
+        content: [phased(progress, "commentary", "progress"), finalText(final)],
+      });
+      const original = structuredClone(source);
+      const projected = project([source], { includeCommentaryFallbacks: true });
+      expect(
+        projected.flatMap((row) => row.content).map((block) => asOptionalRecord(block)?.text),
+      ).toEqual(expected);
+      expect(projected).toHaveLength(expected.length);
+      expect(project(projected, { includeCommentaryFallbacks: true })).toEqual(projected);
+      expect(source).toEqual(original);
+    }
+  },
+);
 
 it("preserves error-turn media after a later reply", () => {
   const question = user("hello");

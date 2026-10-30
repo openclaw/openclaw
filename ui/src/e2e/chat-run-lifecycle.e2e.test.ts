@@ -299,8 +299,7 @@ suite.define(() => {
       .locator(".chat-group.assistant")
       .getByText(reply.content, { exact: true });
     await replyBody.waitFor();
-    const recap = page.locator(".chat-turn-recap");
-    const completedSummary = /^42 output tokens\s*·\s*Done in 13 seconds$/;
+    const operationLabel = page.locator(".chat-work-group .chat-activity-group__label");
     const refreshedSession = await evaluateControlUiContext(
       page,
       async (application, key) => {
@@ -311,8 +310,8 @@ suite.define(() => {
       sessionKey,
     );
     expect(refreshedSession).toMatchObject({ lastRunId: runId, runtimeMs: 13_000 });
-    await recap.waitFor();
-    await expect.poll(() => recap.textContent()).toMatch(completedSummary);
+    await operationLabel.waitFor();
+    await expect.poll(() => operationLabel.textContent()).toBe("Worked for 13 seconds");
     expect(await stopButton(page).count()).toBe(0);
 
     const successorSession = {
@@ -333,21 +332,25 @@ suite.define(() => {
     const screenshot = await takeControlUiScreenshotFrame(
       page,
       page.locator(".chat-thread"),
-      [recap, replyBody],
+      [operationLabel, replyBody],
       { animations: "disabled" },
     );
     await writeFile(join(suite.artifactDir, "worked-duration.png"), screenshot.png);
     console.log("WORKED_DURATION_PROOF", suite.artifactDir);
-    await expect.poll(() => recap.textContent()).toMatch(completedSummary);
+    await expect.poll(() => operationLabel.textContent()).toBe("Worked for 13 seconds");
+    expect(await page.locator(".chat-turn-recap").allTextContents()).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("Done in")]),
+    );
+    expect(await page.locator(".chat-turn-recap").textContent()).toBe("42 output tokens");
     await gateway.setSessionsListResponse({ sessions: [completedSession] });
 
     await page.reload();
     await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
     await replyBody.waitFor();
-    await recap.waitFor();
-    expect(await recap.textContent()).toBe("Done in 13 seconds");
+    await operationLabel.waitFor();
+    expect(await operationLabel.textContent()).toBe("Worked for 13 seconds");
     expect(await page.locator(".chat-group.user").count()).toBe(2);
-    await page.locator(".chat-work-group > button").click();
+    await operationLabel.click();
     await expect
       .poll(() => page.locator(".chat-work-group > button").getAttribute("aria-expanded"))
       .toBe("true");
@@ -668,14 +671,14 @@ suite.define(() => {
   it.each(["final", "error"] as const)(
     "clears shared session activity when chat %s arrives first",
     async (terminalState) => {
-      const { page, gateway, runId, mainSession, mainSessionRunIndicator, activeUpdatedAt } =
+      const { page, gateway, runId, mainSessionRunIndicator, activeUpdatedAt } =
         await startLifecycleRun("finish this run");
       const diagnostic =
         "Provider request failed: session store unavailable. Retry after recovery.";
       if (terminalState === "error") {
         const readMatch = { key: "agent:main:main", unread: false };
         const readsBeforeError = (await gateway.getRequests("sessions.patch", readMatch)).length;
-        // Inspect terminal attention before the visible pane acknowledges it as read.
+        // Inspect the terminal result before the visible pane acknowledges it as read.
         await gateway.deferNext("sessions.patch", readMatch);
         await gateway.emitGatewayEvent("chat", {
           runId,
@@ -689,10 +692,6 @@ suite.define(() => {
             match: readMatch,
           });
           await page.getByRole("alert").filter({ hasText: diagnostic }).waitFor();
-          await mainSession.locator('[data-session-attention="error"]').waitFor();
-          expect(
-            await mainSession.locator("[data-session-attention=error]").getAttribute("aria-label"),
-          ).toContain(diagnostic);
           expect(await stopButton(page).count()).toBe(0);
           await expect.poll(() => mainSessionRunIndicator.count()).toBe(0);
         } finally {

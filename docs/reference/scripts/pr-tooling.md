@@ -177,9 +177,98 @@ and completion-only commands do not provision a worktree for this acquisition.
 `prepare-push --resume-crabbox-run` requires the existing authenticated tracking
 anchor and refuses cold acquisition before any fetch.
 
+Confirmed prior-CI admin first admission may explicitly select current official
+main with `merge-run --current-workflow --admin-evidence <file>
+--confirmed-operator-admin` when no outcome or unresolved capture exists.
+The native selection descriptor and locked source verification preserve the exact
+original binding. Additive `workflowAdmission` provenance retains both sources
+through outcome ancestry, including successors written by older bound tooling.
+This is per-invocation selection, not a permanent rebind; see
+[artifact-build admission](/reference/scripts/prior-ci#artifact-build-failure-with-successful-primary-ci).
+
 Only verified native merge completion retires the exact workflow binding.
 Failures and pending completion preserve it. Repeating completion reconciles
 the merge outcome without repeating publication, comments, or cleanup.
+
+### Salvage an unknown file in an interrupted review checkout
+
+Automatic replay refuses working files that match neither journal endpoint,
+including empty files. Do not infer that an empty file belongs to a failed
+restore. After explicitly selecting and preserving its unknown bytes, an operator
+can repair one regular file through the existing checkout owner:
+
+```bash
+scripts/pr review-transition-recover <PR> <plan.json> \
+  --plan-sha256 <SHA256> --confirmed-operator-recovery
+```
+
+The sealed version-1 plan contains numeric `pr`, the original `binding` OID,
+`head` commit, `headRef` (empty for detached HEAD), `journalSha256`, raw
+`indexSha256`, a repository-relative `path`, its current `workingEntry`
+(Git mode, one space, and the unfiltered blob OID), and a nonempty `reason`.
+Inspect these values from the retained checkout; the hash binds exact plan bytes.
+The path must be a regular file in both endpoints of a detached review journal.
+Preparation/correction journals, symlinks, directories, and arbitrary replacement
+content are not supported. Quiesce other writers to this checkout before repair;
+the PR mutex excludes other native operations, not manual editor writes.
+
+This landing-class command qualifies current official-main wrapper code under the
+original PR lock, without replacing the retained workflow binding. Land and
+independently review any required tooling change before using it. Developer
+wrapper opt-in and an unlanded implementation cannot authorize recovery.
+
+Before replacement, the owner preserves the exact plan, unknown file bytes,
+journal/index preimages, and tooling provenance in the private named backup
+`.local/review-transition-recovery.<plan-SHA256>/`. It atomically restores only
+the selected working file to its journaled source blob. HEAD, the index, journal,
+workflow binding, and all other paths stay unchanged. The result says the file is
+repaired and the transition remains pending; use ordinary bound
+`review-checkout-pr` afterward. Other unknown state still refuses normal replay.
+
+After an interrupted or lost response, inspect the selected path and backup.
+Repeating the exact sealed operation verifies that backup before recognizing an
+already repaired source entry; it never blindly overwrites a newer edit or
+removes the backup. Keep it until the original PR operation completes.
+
+### Continue a correction with repaired workflow code
+
+An unfinished correction can need a landed tooling repair before its retained
+workflow can finish preparation. Use the explicit successor command from the
+current qualified canonical wrapper:
+
+```bash
+scripts/pr prepare-workflow-successor <PR> \
+  --expected-binding <binding-OID> --from-workflow <old-SHA> --to-workflow <current-main-SHA> \
+  --expected-head <local-head> --expected-tree <tree-OID> \
+  --expected-review <correction-review-blob-OID> --expected-hosted-head <hosted-head>
+```
+
+First establish that every tool from an interrupted operation has finished and
+use its reported exact-OID `lock-recover` command. Succession does not recover
+locks or infer quiescence. It requires the existing registered correction
+checkout, unchanged clean source, approved correction review, exact hosted
+publication authority, and no merge outcome, unresolved capture, or pending
+dispatch. The destination must be the authenticated current official main;
+unlanded code, arbitrary revisions, and admin admission flags are not accepted.
+
+The normal supervisor and PR operation lock protect this transition. It retains
+and verifies preparation evidence, preserves `prep.env` and all review/source
+facts, then removes only `gates.env`. A single Git transaction verifies the
+operation owner and advances the exact predecessor binding. The new binding
+retains the old binding, both source identities, local/hosted commits, and the
+review snapshot. Existing version-1 bindings remain valid historical authority.
+
+An interruption before the binding transaction preserves the old binding; one
+after it can leave the new binding even without a successful return. Inspect
+the exact retained binding and evidence before continuing; do not blindly repeat
+the transition or restore an archived gate stamp. Both states require fresh
+ordinary `prepare-gates` before qualified correction publication or merge.
+For an explicitly authorized pending-proof correction, `--for-proof` instead
+validates the typed [proof-publication review](/reference/scripts/pr-preparation#publish-a-candidate-for-required-proof).
+It admits only exact-commit proof publication while NEEDS WORK and unresolved
+findings continue to block ordinary qualification and merge. This command
+does not change the candidate, publish it, waive CI/security/review requirements,
+or authorize a merge.
 
 ## Reconcile a completed CI review
 
@@ -312,11 +401,12 @@ ambiguous directories remain preserved; recovery never deletes their seed branch
 
 ## Captured baseline evidence hashes
 
-Read-only baseline evidence hashes pass the already-captured bytes to the selected
-Git executable through a complete, private temporary file. The writer closes before
-a fresh read-only descriptor is opened at offset zero; on the supported POSIX
-host the pathname and directory are removed before Git starts. Write hashes,
-signatures, authority checks, and operation supervision are unchanged.
+Baseline evidence hashes and reconstructed blobs pass the already-captured bytes
+to the selected Git executable through a complete, private temporary file. The
+writer closes before a fresh read-only descriptor is opened at offset zero; on
+the supported POSIX host the pathname and directory are removed before Git starts.
+Reconstructed blobs still use Git's `-w` object write; signatures, authority checks,
+and operation supervision are unchanged.
 
 Temporary storage must accommodate the largest individual captured file. Ordinary
 write, spawn, and Git failures fail closed and clean up owned resources. Unlinking

@@ -19,6 +19,7 @@ import type { PluginMigrationInspection } from "./doctor/shared/plugin-migration
 import { shouldDeferConfiguredPluginInstallRepair } from "./doctor/shared/update-phase.js";
 
 type StartupPluginConvergenceResult = {
+  changed?: boolean;
   warnings?: string[];
   quarantinedPlugins: DegradedPlugin[];
   deferredPlugins?: DeferredPluginMigration[];
@@ -161,6 +162,7 @@ export async function runDoctorPluginConvergence(params: {
     deferPlugin(plugin.pluginId, plugin.diagnostic.detail);
   }
   return {
+    changed: convergence.changes.length > 0 || convergence.configChanges.length > 0,
     ...(warnings.length > 0 ? { warnings } : {}),
     quarantinedPlugins,
     ...(migrationInspection.requiredPluginIds.length > 0 ||

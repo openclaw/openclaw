@@ -112,16 +112,23 @@ async function describeCn(providers: Providers, workspaceDir?: string) {
 describe("describeImageWithModelCore", () => {
   installImageRuntimeTestHooks({ apiKey: "test-api-key" });
 
-  it("surfaces provider errors from image-model responses", async () => {
-    mockOpenAi();
-    completeMock.mockResolvedValue({
-      ...openAiCompletion(""),
-      stopReason: "error",
-      errorMessage: "boom",
-    });
-    await expect(describeImageWithModelCore(request())).rejects.toThrow(/boom/i);
-    expect(completeMock).toHaveBeenCalledOnce();
-  });
+  it.each([
+    ["error", "boom", /boom/i],
+    ["aborted", undefined, "Image model failed (openai/gpt-5.4-mini)"],
+  ] as const)(
+    "surfaces %s image-model responses without retrying",
+    async (stopReason, errorMessage, expectedError) => {
+      mockOpenAi();
+      completeMock.mockResolvedValue({
+        ...openAiCompletion(""),
+        stopReason,
+        errorMessage,
+        content: [{ type: "thinking", thinking: "", thinkingSignature: "reasoning_content" }],
+      });
+      await expect(describeImageWithModelCore(request())).rejects.toThrow(expectedError);
+      expect(completeMock).toHaveBeenCalledOnce();
+    },
+  );
 
   it("returns trimmed text from image-model responses", async () => {
     const ref = { provider: "anthropic", model: "claude-opus-4-6" };

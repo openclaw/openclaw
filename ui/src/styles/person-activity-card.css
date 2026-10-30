@@ -1,5 +1,3 @@
-@import "./session-progress-hovercard.css";
-
 /* Explicit details remain interactive on touch devices as well as hover pointers. */
 .person-activity-hovercard[data-open="true"] {
   pointer-events: auto;

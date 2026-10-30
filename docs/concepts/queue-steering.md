@@ -122,7 +122,25 @@ When steering is unavailable, the message runs automatically after the announcem
 and its cleanup finish. The input remains queued and can still be canceled while
 it waits.
 
-The same signed-in person can steer after reconnecting without reproducing the original connection’s policy snapshot. Browser connections and display names do not define a new requester. The turn keeps its original authority, tool bindings, capabilities, and approval destination; incoming caller differences do not expand or retarget them. This continuation rule applies only to ordinary human guidance in the same channel, account, conversation, and thread. It does not bypass access revocation or authorize a new execution configuration. Explicit execution-setting changes, including a different workspace, execution policy, or selected model, can require a followup.
+The same signed-in person can steer after reconnecting without reproducing the original connection’s policy snapshot. Browser connections and display names do not define a new requester. The turn keeps its original authority, tool bindings, capabilities, approval destination, and reply routing; incoming caller differences do not expand or retarget them.
+
+A verified personal requester can also guide that exact active session from another transport when an administrator has [linked their channel identity](/concepts/user-model#channel-identity-links). This works even if the arriving channel has fewer permissions or collaborative steering is disabled. Normal channel admission and session access still apply, and the incoming identity link must remain current through admission. Shared token/password ownership, display names, and contributor attribution do not establish that two senders are the same person.
+
+Shared-credential WebUI/WebChat access has a separate owner-authorized continuation rule. In the exact same authorized active session, a channel participant can guide a turn started by Shared Owner, and Shared Owner can guide a channel turn. With collaborative steering enabled, ordinary channel admission suffices. With it disabled, the shared WebUI principal must have current `operator.admin` authority and the channel participant must be a current owner through `commands.ownerAllowFrom` or a linked personal identity with effective `operator.admin` and any required access grant. Pairing or channel allowlisting alone does not grant this exception. Owner or grant revocation before final admission blocks injection.
+
+This does not link identities or identify the human behind a shared credential. Message authors stay distinct, and the active execution keeps its original requester, permissions, personal context, and delegation rules. Two different personal administrators do not gain this exception. Other different-person collaboration remains limited to the same channel, account, conversation, and thread.
+
+Authorized cross-transport continuation also retains the active execution's task-suggestion tools and delivery setting. Channel guidance does not remove a WebUI execution's suggestion tools, and WebUI guidance does not add them to a channel execution. A queued new execution uses its submitting transport's setting.
+
+This continuation rule applies to ordinary human guidance. It does not change questions, approvals, cancellation, or explicit cross-session `sessions_send` authorization. It does not bypass access revocation or authorize a new execution configuration. Explicit execution-setting changes, including a different workspace, execution policy, or selected model, can require a followup.
+
+This also applies when a subagent completion resumes the conversation: compatible guidance from the same person joins that completion without changing its capabilities, rather than waiting for a separate turn.
+
+An authenticated Gateway owner with `operator.admin` can steer an active automation,
+loop, or visible subagent turn in the same authorized session, even when collaborative
+steering is disabled. The incoming message keeps the owner's provenance and live
+authorization; the running turn keeps its existing permissions and tool bindings.
+This guidance does not answer pending questions under the automation's authority.
 
 Configured permissions are resolved when each new execution is admitted and remain stable for that execution. Human messages waiting for admission use current policy. Already admitted native work retains its prepared policy while waiting to run. A new delegation resolves current destination policy for the original requester, or for an explicitly selected authenticated participant on a tool that supports `user`. Native delegation retains the original requester. A delegation may intentionally use a more capable agent; selecting a participant does not establish that person’s intent or approval. Cancellation and current-owner checks still apply, and accepted asynchronous work survives normal source-turn completion.
 

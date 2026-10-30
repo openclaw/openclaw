@@ -11,6 +11,7 @@ import {
   copyFileSync,
   cpSync,
   existsSync,
+  linkSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -26,6 +27,7 @@ import { runInNewContext } from "node:vm";
 import JSZip from "jszip";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { measureInstalledPackageTree } from "../../scripts/check-openclaw-installed-package-budget.mts";
 import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
 import { FULL_RELEASE_WAIT_TIMEOUT_MINUTES } from "../../scripts/full-release-validation-at-sha.mts";
 import { resolveRunnerMatrix } from "../../scripts/lib/cross-os-release-checks/config.ts";
@@ -46,7 +48,11 @@ import {
   releaseWorkflowJobNeeds as jobNeeds,
 } from "../helpers/release-workflow-timeouts.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { evaluateWorkflowExpression, evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
+import {
+  evaluateWorkflowExpression,
+  evaluateWorkflowRunner,
+  testNodeExecPath,
+} from "./ci-workflow.test-support.js";
 
 const PACKAGE_ACCEPTANCE_WORKFLOW = ".github/workflows/package-acceptance.yml";
 const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
@@ -8233,6 +8239,163 @@ test "$package_manager" = "pnpm@12.1.0"
     );
   });
 
+  it("exports the complete npm 12 installed tree without following links or disclosing contents", async () => {
+    const directory = tempDirs.make("npm12-inventory-");
+    const root = join(directory, "package");
+    const outside = join(directory, "outside");
+    const report = join(directory, "inventory.jsonl");
+    const nested = "node_modules/first/node_modules/@scope/second";
+    mkdirSync(join(root, nested), { recursive: true });
+    mkdirSync(outside);
+    const integrity = "sha512-" + Buffer.alloc(64, 1).toString("base64");
+    writeJson(join(root, "package.json"), {
+      name: "openclaw",
+      version: "1.0.0",
+      private: "secret",
+    });
+    writeJson(join(root, "node_modules/first/package.json"), {
+      name: "first",
+      version: "2.0.0",
+      _integrity: integrity,
+      _resolved: "https://private.invalid/token",
+    });
+    writeJson(join(root, nested, "package.json"), {
+      name: "@scope/second",
+      version: "3.0.0",
+      _integrity: "https://private.invalid/token",
+    });
+    writeFileSync(join(root, "node_modules/.package-lock.json"), "secret hidden lock");
+    writeFileSync(join(root, ".private"), "secret file content");
+    linkSync(join(root, ".private"), join(root, "hardlink"));
+    writeFileSync(join(outside, "secret"), "external secret");
+    symlinkSync(outside, join(root, "external"), "junction");
+    const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh");
+    const install = workflowStep(job, "Run install.sh with npm 12");
+    const collector = install.run?.match(/<<'NODE'\n([\s\S]*?)\nNODE/u)?.[1];
+    expect(collector).toBeDefined();
+    const result = spawnSync(testNodeExecPath, ["--input-type=module", "-", root, report], {
+      input: collector,
+      encoding: "utf8",
+      timeout: 10_000,
+      env: {
+        ...process.env,
+        INVENTORY_NPM_VERSION: "12.0.2",
+        EXPECTED_PACKAGE_SHA256: "a".repeat(64),
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const text = readFileSync(report, "utf8");
+    const records: Array<Record<string, unknown>> = text
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const measured = await measureInstalledPackageTree(root);
+    expect(records.at(-1)).toEqual({
+      type: "complete",
+      complete: true,
+      entries: measured.entries,
+      bytes: measured.bytes,
+    });
+    const entries = records.filter((record) => record.type === "entry");
+    expect(entries).toHaveLength(measured.entries);
+    expect(entries.find((record) => record.path === "external")).toMatchObject({ kind: "symlink" });
+    expect(
+      entries.filter((record) => record.path === ".private" || record.path === "hardlink"),
+    ).toHaveLength(2);
+    expect(entries.some((record) => record.path === "node_modules/.package-lock.json")).toBe(true);
+    expect(records.filter((record) => record.type === "package")).toEqual([
+      {
+        type: "package",
+        path: nested,
+        name: "@scope/second",
+        version: "3.0.0",
+        integrity: null,
+        integritySource: "not-retained",
+      },
+      {
+        type: "package",
+        path: "node_modules/first",
+        name: "first",
+        version: "2.0.0",
+        integrity,
+        integritySource: "package.json#_integrity",
+      },
+      {
+        type: "package",
+        path: ".",
+        name: "openclaw",
+        version: "1.0.0",
+        integrity: null,
+        integritySource: "not-retained",
+      },
+    ]);
+    expect(text).not.toContain(directory);
+    expect(text).not.toContain("private.invalid");
+    expect(text).not.toContain("secret");
+    expect(records[0]).toMatchObject({
+      type: "context",
+      packageSha256: "a".repeat(64),
+      runtime: { npm: "12.0.2" },
+    });
+    expect(existsSync(report + ".partial")).toBe(false);
+  });
+
+  it("uploads only a complete npm 12 inventory after an unchanged failing budget gate", () => {
+    const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh");
+    const install = workflowStep(job, "Run install.sh with npm 12");
+    const budget = workflowStep(job, "Check installed package tree budget");
+    const upload = workflowStep(job, "Upload npm 12 installed tree inventory");
+    expect(install.id).toBe("npm12_install");
+    expect(upload.if).toBe("always() && steps.npm12_install.outcome == 'success'");
+    for (const outcome of ["success", "failure"] as const) {
+      expect(
+        evaluateWorkflowExpression("${{ " + upload.if + " }}", {
+          eventName: "workflow_dispatch",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          failed: true,
+          steps: { npm12_install: { outputs: {}, outcome } },
+        }),
+      ).toBe(outcome === "success");
+    }
+    expect(upload.uses).toBe(UPLOAD_ARTIFACT_V7);
+    expect(upload.with).toEqual({
+      name: "npm12-installed-tree-${{ github.run_id }}-${{ github.run_attempt }}",
+      path: "${{ runner.temp }}/npm12-installed-tree.jsonl",
+      "if-no-files-found": "error",
+      "retention-days": 7,
+    });
+    expect(job.steps?.indexOf(upload)).toBe((job.steps?.indexOf(budget) ?? -1) + 1);
+    expect(budget["continue-on-error"]).toBeUndefined();
+    const directory = tempDirs.make("npm12-inventory-incomplete-");
+    const root = join(directory, "package");
+    const report = join(directory, "inventory.jsonl");
+    const nested = join(root, "node_modules", "private-package");
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+    );
+    const sentinel = "sensitive7319";
+    writeFileSync(join(nested, "package.json"), sentinel);
+    const collector = install.run?.match(/<<'NODE'\n([\s\S]*?)\nNODE/u)?.[1];
+    expect(collector).toBeDefined();
+    const result = spawnSync(testNodeExecPath, ["--input-type=module", "-", root, report], {
+      input: collector,
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      'Cannot read package manifest "node_modules/private-package/package.json"',
+    );
+    expect(result.stderr).not.toContain(sentinel);
+    expect(existsSync(report)).toBe(false);
+    const partial = readFileSync(report + ".partial", "utf8");
+    expect(partial).not.toContain('"complete":true');
+    expect(partial).not.toContain(sentinel);
+  });
+
   it("binds npm 12 installation to the supplied prerelease dependency artifact", () => {
     const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh");
     const validate = workflowStep(job, "Validate prerelease plugin registry artifact identity");
@@ -8994,8 +9157,16 @@ test "$package_manager" = "pnpm@12.1.0"
     const decisionDownloads = workflowStep(summary, "Download release decision attempts");
     const drainDownloads = workflowStep(summary, "Download diagnostic drain attempts");
 
-    expect(decision.needs).toEqual(["resolve_target", "release_execution_plan"]);
-    expect(drain.needs).toEqual(["resolve_target", "release_execution_plan"]);
+    const terminalNeeds = [
+      "resolve_target",
+      "prepare_npm_package",
+      "qualify_npm_package",
+      "prepare_plugin_npm",
+      "prepare_docker_release",
+      "release_execution_plan",
+    ];
+    expect(decision.needs).toEqual(terminalNeeds);
+    expect(drain.needs).toEqual(terminalNeeds);
     expect(decision.if).toBe("always()");
     expect(drain.if).toBe("always()");
     expect(decisionStep.run).toBe(drainStep.run);
@@ -9096,7 +9267,9 @@ test "$package_manager" = "pnpm@12.1.0"
     const manifest = workflowStep(summary, "Write release validation manifest");
     const evidenceDispatch = workflowStep(summary, "Request release evidence update");
 
-    expect(manifest.env).not.toHaveProperty("TARGET_SHA");
+    expect(manifest.env).toMatchObject({
+      TARGET_SHA: "${{ needs.resolve_target.outputs.sha }}",
+    });
     expect(manifest.env).not.toHaveProperty("NORMAL_CI_RUN_ID");
     expect(manifest.env).not.toHaveProperty("EVIDENCE_REUSE");
     expect(evidenceDispatch.run).toContain(
@@ -15935,6 +16108,7 @@ esac
 
   it("validates the macOS release handoff before the GitHub release page exists", () => {
     const macosRelease = readWorkflow(".github/workflows/macos-release.yml");
+    const publicReleaseBranch = macosRelease.on?.workflow_dispatch?.inputs?.public_release_branch;
     const validateJob = workflowJob(
       ".github/workflows/macos-release.yml",
       "validate_macos_release_request",
@@ -15945,6 +16119,8 @@ esac
     expect(stepNames).not.toContain("Ensure matching GitHub release exists");
     expect(macosRelease.jobs?.validate_macos_release_request).toBeDefined();
     expect(buildControlUi?.env?.OPENCLAW_CONTROL_UI_RELEASE_BUILD).toBe("1");
+    expect(publicReleaseBranch).toMatchObject({ required: true });
+    expect(publicReleaseBranch).not.toHaveProperty("default");
   });
 
   it("classifies fast pretag Control UI output as a release artifact", () => {

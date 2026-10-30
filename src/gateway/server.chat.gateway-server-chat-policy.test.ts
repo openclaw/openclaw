@@ -6,6 +6,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import * as harnessRegistry from "../agents/harness/registry.js";
 import { loadSessionEntry, updateSessionEntry } from "../config/sessions/session-accessor.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import * as userTurnPersistence from "../sessions/user-turn-transcript.persistence.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { installGatewayServerChatTestSuite } from "./server.chat.gateway-server-chat.test-support.js";
 import { collectHistoryTextValues } from "./session-history-fixtures.test-support.js";
@@ -290,6 +291,18 @@ test("chat.send /reset on an idle session finishes post-commit cleanup and recor
   await useRealReply();
   // Observe the harness reset that initSessionState runs after the reset commits.
   const harnessReset = vi.spyOn(harnessRegistry, "resetRegisteredAgentHarnessSessions");
+  const persistenceFailures: string[] = [];
+  const persistUserTurn = userTurnPersistence.persistUserTurnTranscript;
+  const persistence = vi
+    .spyOn(userTurnPersistence, "persistUserTurnTranscript")
+    .mockImplementation(async (params) => {
+      try {
+        return await persistUserTurn(params);
+      } catch (error) {
+        persistenceFailures.push(String(error));
+        throw error;
+      }
+    });
   try {
     await withMainSessionStore(async () => {
       const runId = "idem-admin-reset-idle";
@@ -302,11 +315,13 @@ test("chat.send /reset on an idle session finishes post-commit cleanup and recor
         expect.objectContaining({ sessionId: "sess-main", sessionKey: "agent:main:main" }),
       );
       const stored = await history(ws);
-      expect(stored?.messages?.filter((message) => message.role === "user")).toMatchObject([
-        { content: "/reset" },
-      ]);
+      expect(
+        stored?.messages?.filter((message) => message.role === "user"),
+        `Reset input persistence failures: ${JSON.stringify(persistenceFailures)}`,
+      ).toMatchObject([{ content: "/reset" }]);
     });
   } finally {
+    persistence.mockRestore();
     harnessReset.mockRestore();
   }
 });

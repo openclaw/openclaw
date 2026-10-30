@@ -49,7 +49,7 @@ export function startSessionCostUsageProjectionLifetime(params: {
       }
       void work
         .track(async () => {
-          const { agents } = await listGatewayAgentsBasic(params.getConfig());
+          const { agents } = await listGatewayAgentsBasic(params.getConfig(), work.signal);
           for (const agent of agents) {
             if (agentId === undefined || agent.id === agentId) {
               refreshAgent(agent.id);
@@ -133,6 +133,7 @@ export function startSessionCostUsageProjectionLifetime(params: {
   // The same queue bounds startup and incremental batches and publishes partial progress.
   refreshAgents();
   return {
+    name: "session-cost-usage",
     async stop() {
       offTranscript();
       offRows();

@@ -215,7 +215,7 @@ it.each<
 });
 
 it.each([false, true])(
-  "refuses an archived native source before /new (send denied=%s)",
+  "restores an authorized archived native source before /new (send denied=%s)",
   async (sendDenied) => {
     if (sendDenied) {
       cfg.session = { sendPolicy: { default: "deny" } };
@@ -228,22 +228,19 @@ it.each([false, true])(
       sessionId: "archived-command-source",
       updatedAt: 1,
       archivedAt: 2,
-      mainRestartRecovery: {
-        cycleId: "cycle-1",
-        revision: 4,
-        chargedAttempts: 3,
-        tombstone: { reason: "automatic recovery exhausted" },
-      },
     });
     await replaceSessionEntry(target, { sessionId: "active-target", updatedAt: Date.now() });
-    const originalSource = loadSessionEntry(source);
-    const originalTarget = loadSessionEntry(target);
-
-    const { texts } = await send("owner", "/new");
-
-    expect(texts).toEqual(sendDenied ? [] : [expect.stringContaining("Use Resume in WebChat")]);
-    expect(loadSessionEntry(source)).toEqual(originalSource);
-    expect(loadSessionEntry(target)).toEqual(originalTarget);
+    const { result, texts } = await send("owner", "/new");
+    const restoredSource = loadSessionEntry(source);
+    const resetTarget = loadSessionEntry(target);
+    expect(restoredSource?.sessionId).toBe("archived-command-source");
+    expect(restoredSource?.archivedAt).toBeUndefined();
+    expect(resetTarget?.sessionId).toBe("active-target");
+    expect(resetTarget?.lifecycleRevision, JSON.stringify({ result, texts })).toEqual(
+      expect.any(String),
+    );
+    expect(texts).toEqual(sendDenied ? [] : [expect.stringMatching(/New session started/u)]);
+    expect(result.sendPolicyDenied).toBe(sendDenied ? true : undefined);
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   },
 );
@@ -265,11 +262,16 @@ it.for(["queue", "reject"] as const)(
       followed.resolve({ params, operation: getSessionControllerOperation(targetKey) });
       return modelReply;
     });
-    const run = holdAgentRun("owner", (_params, operation) => {
+    const run = holdAgentRun("owner", async (params, operation) => {
+      const { provider, model } = params;
+      if (!provider || !model) {
+        throw new Error("Expected the incumbent's concrete provider and model");
+      }
+      const fingerprint = await operation.bindToolAuthorityRouteAsync({ provider, model });
       operation.attachBackend({
         kind: "embedded",
         cancel() {},
-        toolAuthorityFingerprint: operation.toolAuthorityFingerprint,
+        toolAuthorityFingerprint: fingerprint,
         messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage: injected },
       });
       operation.setPhase("running");

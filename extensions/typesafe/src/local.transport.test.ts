@@ -2,16 +2,17 @@ import assert from "node:assert/strict";
 import { lookup } from "node:dns/promises";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
+import type { DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
+import { resolveProviderHttpRequestConfigWithOriginTrust } from "openclaw/plugin-sdk/provider-http";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { evaluate } from "./client.js";
 import { runtimeConfig } from "./config.js";
 import {
   collectRequest,
-  decisionContext,
   mixedFixture,
   mockJsonResponse as mockResponse,
-  registeredDecisionProvider,
+  registeredPreparedDecisionProvider,
   stubAmbientProxies,
 } from "./transport.test-support.js";
 
@@ -26,7 +27,7 @@ vi.mock("node:dns/promises", async (importOriginal) => {
 const baseUrl = "http://127.0.0.1:8009";
 const input = { ...mixedFixture.input, model: "kev-latest" };
 const wireInput = { ...mixedFixture.localInput, model: input.model };
-const decisionBatch = { ...mixedFixture.batch, model: input.model };
+const decisionBatch = mixedFixture.batch;
 const localAnswer = { ...mixedFixture.localResponse, model: input.model };
 const expectedResult = {
   ...mixedFixture.result,
@@ -44,20 +45,31 @@ afterEach(() => {
 });
 
 function registeredProvider(endpoint?: string) {
-  return registeredDecisionProvider(() => ({
+  return registeredPreparedDecisionProvider(() => ({
     plugins: {
       entries: { typesafe: { config: { baseUrl: endpoint, apiKey: "hosted-materialized" } } },
     },
   }));
 }
+const context = (budget = 1000, apiKey = "typesafe-local"): DecisionProviderContextV2 => ({
+  model: { provider: "typesafe", id: input.model, name: input.model },
+  config: {},
+  auth: { mode: "api-key", apiKey },
+  signal: new AbortController().signal,
+  deadlineMonotonicMs: performance.now() + budget,
+  isAdmissible: () => true,
+});
 
 it("refuses hosted dispatch for local Kev", async () => {
   const fetch = vi.fn();
   vi.stubGlobal("fetch", fetch);
   await expect(
     registeredProvider().evaluate(
-      { state: "local-only evidence", questions: { q: { type: "boolean" } } },
-      decisionContext(input.model, 10000),
+      {
+        state: { type: "text", text: "local-only evidence" },
+        questions: { q: { type: "boolean" } },
+      },
+      context(10000, "hosted-secret"),
     ),
   ).resolves.toEqual({ status: "unavailable", reason: "unsupported-input" });
   expect(fetch).not.toHaveBeenCalled();
@@ -128,12 +140,16 @@ it.each(["127.0.0.1", "localhost", "[::1]"])("reuses local %s sockets", async (h
     if (hostname === "localhost") {
       vi.mocked(lookup).mockRejectedValue(new Error("Synthetic untrusted localhost resolver"));
     }
-    const provider = registeredProvider(`http://${hostname}:${address.port}`);
-    expect(provider.isReady?.()).toBe(true);
+    const endpoint = `http://${hostname}:${address.port}`;
+    // Prepare Gateway policy before the per-request deadlines; cold admission has separate tests.
+    resolveProviderHttpRequestConfigWithOriginTrust({
+      provider: "typesafe",
+      baseUrl: `${endpoint}/v1`,
+      defaultBaseUrl: `${endpoint}/v1`,
+    });
+    const provider = registeredProvider(endpoint);
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      await expect(provider.evaluate(decisionBatch, decisionContext(input.model))).resolves.toEqual(
-        expectedResult,
-      );
+      await expect(provider.evaluate(decisionBatch, context())).resolves.toEqual(expectedResult);
     }
     expect(getPreparedPluginSecretInput).not.toHaveBeenCalled();
     expect(received).toHaveLength(5);

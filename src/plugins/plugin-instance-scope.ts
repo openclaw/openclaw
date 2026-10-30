@@ -14,6 +14,7 @@ import type {
   PluginRetentionOwner,
   PluginWorkRelease,
 } from "./plugin-instance.types.js";
+import type { PluginReplacementOperation } from "./plugin-replacement-operation.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 
 /** Runtime consumers retain capabilities, never the concrete loader implementation. */
@@ -39,7 +40,7 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
     options?: { includeConsumers?: boolean; includeCalls?: boolean },
   ): Promise<void>;
   waitForIdle(signal: AbortSignal): Promise<void>;
-  reserveReplacement(): () => void;
+  reserveReplacement(operation?: PluginReplacementOperation): () => void;
   retainConsumer(
     invoke?: <T>(run: () => T) => T,
     registry?: PluginRegistry,
@@ -66,6 +67,7 @@ export type PluginInvocationBinding = {
 
 export type PluginInvocationContext = {
   readonly holdsPendingReplacement?: boolean;
+  readonly pendingReplacementInstances?: readonly PluginInstanceHandle[];
   lookup: (instance: PluginInstanceHandle) => PluginInvocationBinding | undefined;
 };
 
@@ -93,11 +95,25 @@ export const pluginInvocationContext = resolveGlobalSingleton(
 
 /** Compatibility query for callers holding a published plugin invocation context. */
 export function currentPluginWorkHoldsPendingReplacement(): boolean {
-  const call = pluginInstanceInvocation.getStore();
   return (
-    (call?.instance.holdsPendingReplacement(call.token) ?? false) ||
+    currentPluginWorkPendingReplacements().length > 0 ||
     pluginInvocationContext.getStore()?.holdsPendingReplacement === true
   );
+}
+
+/** Enumerate only live invocation/consumer holds, never a plugin-id match. */
+export function currentPluginWorkPendingReplacements(): readonly Pick<
+  PluginInvocationInstance,
+  "pluginId"
+>[] {
+  const call = pluginInstanceInvocation.getStore();
+  const instance = call?.instance;
+  return [
+    ...new Set([
+      ...(instance && call && instance.holdsPendingReplacement(call.token) ? [instance] : []),
+      ...(pluginInvocationContext.getStore()?.pendingReplacementInstances ?? []),
+    ]),
+  ];
 }
 
 export function resolvePluginInstanceOwner(record: PluginRecord, registry: PluginRegistry) {

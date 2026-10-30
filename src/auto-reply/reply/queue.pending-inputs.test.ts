@@ -218,7 +218,7 @@ describe("followup queue durable input consumption", () => {
           "ownership ended",
         );
         const retained = await listSessionPendingInputs(scope());
-        expect(retained).toMatchObject({ total: 1, items: [{ state: "interrupted" }] });
+        expect(retained).toMatchObject({ total: 1, items: [{ state: "cancelled" }] });
         rotateAgentEventLifecycleGeneration();
         await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
@@ -445,6 +445,8 @@ describe("followup queue durable input consumption", () => {
     expect(calls[0]?.prompt).toBe(
       "[Queue overflow] Dropped 2 messages due to cap.\nSummary:\n- second approved",
     );
+    // Context pairs with the shown line; the elided line's source adds no unmatched context.
+    expect(calls[0]?.currentInboundContext).toEqual({ text: "second runtime context" });
     expect(pendingRunIds).toEqual([["third"], []]);
     expect(await loadMessages()).toMatchObject([
       { message: { content: calls[0]?.prompt } },

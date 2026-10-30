@@ -22,6 +22,7 @@ import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { freezeJsonSnapshot } from "../../src/shared/immutable-data.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -240,12 +241,7 @@ for (const [name, capture] of [
   await nextTurn();
   const inspector = new Session();
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 8192,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 8192);
   }
   const collections: Array<{ kind: number; start: number; duration: number }> = [];
   const observer = new PerformanceObserver((list) => {

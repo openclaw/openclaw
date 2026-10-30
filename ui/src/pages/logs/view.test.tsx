@@ -26,7 +26,6 @@ function createProps(overrides: Partial<LogsProps> = {}): LogsProps {
     onToggleAutoFollow: vi.fn(),
     onRefresh: vi.fn(),
     onExport: vi.fn(),
-    onScroll: vi.fn(),
     onStreamRef: (element) => {
       // jsdom has no native scrolling; browser scenarios cover reader positioning.
       element.scrollTo = () => undefined;

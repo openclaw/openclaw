@@ -1137,6 +1137,16 @@ button.sidebar-image-view__image {
   min-width: 0;
 }
 
+.session-diff--wrap .session-diff-split {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.session-diff--wrap .session-diff-split__side,
+.session-diff--wrap .session-diff-split__row--context {
+  min-width: 0;
+  grid-template-columns: 42px 16px minmax(0, 1fr);
+}
+
 .session-diff--wrap .chat-diff__text,
 .session-diff--wrap .session-diff-split__text {
   min-width: 0;
@@ -1178,6 +1188,10 @@ button.sidebar-image-view__image {
 }
 
 .session-diff-split {
+  /* Share content-sized columns across rows so the existing scrollport exposes
+     complete unwrapped lines without moving the divider from row to row. */
+  display: grid;
+  grid-template-columns: repeat(2, minmax(max-content, 1fr));
   overflow: auto;
   border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
   background: color-mix(in srgb, var(--secondary) 45%, transparent);
@@ -1186,10 +1200,13 @@ button.sidebar-image-view__image {
   line-height: 1.45;
 }
 
+.session-diff-split > * {
+  grid-column: 1 / -1;
+}
+
 .session-diff-split__row--pair {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  min-width: 640px;
+  grid-template-columns: subgrid;
 }
 
 .session-diff-split__side,
@@ -1198,6 +1215,10 @@ button.sidebar-image-view__image {
   grid-template-columns: 42px 16px minmax(max-content, 1fr);
   align-items: baseline;
   min-width: 0;
+}
+
+.session-diff-split__side {
+  min-width: 320px;
 }
 
 .session-diff-split__side--left {

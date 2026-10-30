@@ -208,6 +208,11 @@ pnpm ci:full-release \
   -f publication_selection_json="$PUBLICATION_SELECTION"
 ```
 
+For `main`, `--admission-workflow-sha` is the reviewed ancestry anchor; the helper
+may advance it to a verified descendant before dispatch as `main` moves. Add
+`--pin-admission-workflow` only when the exact main SHA must remain unchanged.
+Protected `release-publish/*` admission refs are always pinned.
+
 Choose `npmDistTag=beta` for a beta and `route=prepared` only for an intended
 prepared-button consumer. Source admission verifies committed metadata; fresh
 publish runs also retain separate selected npm and ClawHub registry admission

@@ -6,7 +6,7 @@ import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
-import { registerSerializedJsonArray, serializedJsonArrayBytes } from "./serialized-json.js";
+import { serializedJsonArrayBytes } from "./serialized-json.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
 import type { VisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayClient } from "./server-methods/types.js";
@@ -44,7 +44,10 @@ import {
   type PublicationView,
   type SessionRowView,
 } from "./session-row-publication.js";
-import { serializeSessionRow, sessionRowEncodingBytes } from "./session-row-serialization.js";
+import {
+  registerSerializedSessionRowArray,
+  sessionRowEncodingBytes,
+} from "./session-row-serialization.js";
 import {
   authorizeIncognitoSessionTarget,
   authorizeSessionAgentRun,
@@ -53,7 +56,11 @@ import {
 } from "./session-sharing-policy.js";
 import { prepareProjectedSessionSharing } from "./session-sharing.js";
 import { sessionTitleRequests } from "./session-title-state.js";
-import { matchesSessionArchiveFilter, resolveSessionChildOwners } from "./session-utils-core.js";
+import {
+  matchesSessionArchiveFilter,
+  resolveGatewaySessionBackgroundProcessCount,
+  resolveSessionChildOwners,
+} from "./session-utils-core.js";
 import {
   applyGatewaySessionRowMode,
   projectGatewaySessionActiveRun,
@@ -99,7 +106,7 @@ export function shareSidebarSessionRows(
   let shared = sharedLists.get(rows);
   if (!shared) {
     shared = { ...shareSessionRowFacts(rows), rowsRevision: sessionRowsRevision(rows) };
-    registerSerializedJsonArray(shared.sessions, shared.sessions.map(serializeSessionRow));
+    registerSerializedSessionRowArray(shared.sessions);
     sharedLists.set(rows, shared);
   }
   const baseRevision = ifRowsRevision?.startsWith(SESSION_ROWS_DELTA_PREFIX)
@@ -123,7 +130,7 @@ export function shareSidebarSessionRows(
     );
     if (changed.length < rows.length) {
       const delta = shareSessionRowFacts(changed);
-      registerSerializedJsonArray(delta.sessions, delta.sessions.map(serializeSessionRow));
+      registerSerializedSessionRowArray(delta.sessions);
       return {
         ...delta,
         rowsRevision: shared.rowsRevision,
@@ -418,7 +425,13 @@ export function prepareProjectedSessionPresentation(
       facts[21] = run?.runIds?.length;
       // A changed child fact retires timestamped views even when the aggregate stays equal.
       facts[22] = childActivity.revision;
-      facts.length = 23;
+      facts[23] = resolveGatewaySessionBackgroundProcessCount({
+        cfg,
+        key: record.key,
+        agentId: record.agentId,
+        sessionId: record.entry.sessionId,
+      });
+      facts.length = 24;
       if (run?.runIds) {
         for (const id of run.runIds) {
           facts.push(id);
@@ -607,7 +620,7 @@ export function prepareProjectedSessionPresentation(
           shared.sessions.reduce((bytes, row) => bytes + sessionRowEncodingBytes(row), 0) +
           serializedJsonArrayBytes(shared.sessions);
       } else {
-        registerSerializedJsonArray(current, current.map(serializeSessionRow));
+        registerSerializedSessionRowArray(current);
       }
       publicationState?.lists.setRows(
         view,

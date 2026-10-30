@@ -342,7 +342,7 @@ describe("OpenAI embedding batch output", () => {
       ...singleRequestBatchParams(fetchImpl, scenario.pollIntervalMs, 1_000),
       debug: (message) => {
         if (scenario.advanceClock && message.includes("batch-0 in_progress")) {
-          vi.setSystemTime(500);
+          vi.advanceTimersByTime(500);
         }
         if (message.startsWith("openai batch batch-0 ") && message.includes("; waiting ")) {
           pollTimeoutIndexes.push(setTimeoutSpy.mock.calls.length);
@@ -374,7 +374,7 @@ describe("OpenAI embedding batch output", () => {
       expect(statusCalls).toBe(scenario.expectedStatusTimes.length);
       expect(statusTimes).toEqual(scenario.expectedStatusTimes);
     } finally {
-      vi.setSystemTime(1_000);
+      vi.advanceTimersByTime(Math.max(0, 1_000 - performance.now()));
       try {
         await vi.runOnlyPendingTimersAsync();
       } finally {

@@ -35,6 +35,7 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contra
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { installDatabaseProcessRole } from "./database-engine/admission-scope.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { closePostgresPool, preparePostgresPoolForUpdate } from "./postgres-sync/pool.js";
 import { resolveEnvironmentValue } from "./process-env.js";
@@ -71,6 +72,8 @@ import { isOmittedUpdateTimeout } from "./update-timeout-provenance.js";
 import { closeDefaultRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
 
 async function finalizeMigratedUpdate(): Promise<void> {
+  // This executable bypasses CLI bootstrap but owns the same one-shot database work.
+  installDatabaseProcessRole("cli-oneshot");
   // Validation imports this whole candidate graph before activation. The helper
   // also needs the stable recovery barrel's writer after an actual schema bump.
   if (process.argv[2] === "--check") {
@@ -86,6 +89,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
         mutationProtocol: POST_CORE_MUTATION_PROTOCOL,
         retainedOwnerBinding: true,
         doctorConfigWrites: "pid-start-v1",
+        doctorRetirementOnly: true,
         gatewayRestartCompletion: true,
         state: OPENCLAW_STATE_SCHEMA_VERSION,
         agent: OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -361,6 +365,7 @@ async function runDelegatedDoctor(input: DecodedUpdateDoctorInput): Promise<void
         },
         {
           inputHash: input.configInputHash,
+          retirementOnly: input.retirementOnly,
           assertCurrent,
           commandAuthority,
           originalRecoveryCapture: {

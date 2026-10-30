@@ -49,7 +49,6 @@ import type { ChatTranscript } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import type { TranscriptHeader } from "./chat-transcript-session.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
-import { ChatWelcome } from "./chat-welcome.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -62,6 +61,16 @@ function navigateCronRunLink(event: Event, props: ChatThreadProps): boolean {
   }
   event.preventDefault();
   props.onNavigate("cron", { search: anchor.search });
+  return true;
+}
+
+function openManagedArtifactLink(event: Event, props: ChatThreadProps): boolean {
+  const anchor = anchorFromNavigationEvent(event);
+  // Attachment-card Download keeps its already-authorized native link action.
+  if (!anchor || anchor.hasAttribute("download") || !props.onOpenManagedArtifact?.(anchor.href)) {
+    return false;
+  }
+  event.preventDefault();
   return true;
 }
 
@@ -179,7 +188,7 @@ export function ChatThread(input: {
             )
           ) : undefined}
           {isEmpty() && !showLoadingSkeleton() && !searchOpen() ? (
-            <ChatWelcome {...input.props} onModelSetup={undefined} />
+            <div class="agent-chat__empty">{t("chat.thread.noMessages")}</div>
           ) : undefined}
           {isEmpty() && searchOpen() ? (
             <div class="agent-chat__empty">{t("chat.thread.noMatches")}</div>
@@ -242,6 +251,18 @@ export function ChatThread(input: {
           if (
             !event.defaultPrevented &&
             !event.isComposing &&
+            !event.altKey &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            !event.shiftKey &&
+            (event.key === "Enter" || event.key === " ") &&
+            openManagedArtifactLink(event, input.props)
+          ) {
+            return;
+          }
+          if (
+            !event.defaultPrevented &&
+            !event.isComposing &&
             (event.key === "Enter" || event.key === " ") &&
             navigateCronRunLink(event, input.props)
           ) {
@@ -264,6 +285,9 @@ export function ChatThread(input: {
         onClick={(event) => {
           handleMarkdownCodeBlockClick(event);
           handleMarkdownTableInteraction(event);
+          if (shouldHandleNavigationClick(event) && openManagedArtifactLink(event, input.props)) {
+            return;
+          }
           if (shouldHandleNavigationClick(event) && navigateCronRunLink(event, input.props)) {
             return;
           }

@@ -157,7 +157,7 @@ function makeRefusalMessageChunk(refusal: string): OpenAICompatibleChatCompletio
 }
 
 function makeToolCallChunk(
-  id: string,
+  id: string | undefined,
   name: string,
   args: string,
   finishReason?: string,
@@ -168,7 +168,14 @@ function makeToolCallChunk(
       {
         index: 0,
         delta: {
-          tool_calls: [{ index: 0, id, function: { name, arguments: args }, type: "function" }],
+          tool_calls: [
+            {
+              index: 0,
+              ...(id === undefined ? {} : { id }),
+              function: { name, arguments: args },
+              type: "function",
+            },
+          ],
         },
         finish_reason: finishReason as ChatCompletionChunk.Choice["finish_reason"],
       },
@@ -747,20 +754,7 @@ describe("openai-completions stop-reason tool-call guard", () => {
     // id (next test) keeps the first name.
     mockChunksRef.chunks = [
       makeToolCallChunk("call_A", "first", '{"city":'),
-      {
-        id: "chatcmpl-test",
-        choices: [
-          {
-            index: 0,
-            delta: {
-              tool_calls: [
-                { index: 0, function: { name: "second", arguments: '"Paris"}' }, type: "function" },
-              ],
-            },
-            finish_reason: "tool_calls",
-          },
-        ],
-      },
+      makeToolCallChunk(undefined, "second", '"Paris"}', "tool_calls"),
     ];
 
     const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
@@ -802,20 +796,7 @@ describe("openai-completions stop-reason tool-call guard", () => {
     // "empty-name continuation" assertion requirement.
     mockChunksRef.chunks = [
       makeToolCallChunk("call_name", "get_weather", '{"city":'),
-      {
-        id: "chatcmpl-test",
-        choices: [
-          {
-            index: 0,
-            delta: {
-              tool_calls: [
-                { index: 0, function: { name: "", arguments: '"Paris"}' }, type: "function" },
-              ],
-            },
-            finish_reason: "tool_calls",
-          },
-        ],
-      },
+      makeToolCallChunk(undefined, "", '"Paris"}', "tool_calls"),
     ];
 
     const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });

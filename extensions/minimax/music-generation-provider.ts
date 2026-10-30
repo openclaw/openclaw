@@ -227,28 +227,29 @@ export function buildMinimaxMusicGenerationProvider(
           };
         }
 
-        const payload =
-          lowerContentType.includes("text/event-stream") || lowerContentType.startsWith("audio/")
-            ? null
-            : (JSON.parse(
-                new TextDecoder().decode(
-                  await readResponseBufferWithDeadline(
-                    res.clone(),
-                    resolveStreamEnvelopeMaxBytes(maxGeneratedMusicBytes),
-                  ),
+        const isStreamingResponse =
+          lowerContentType.includes("text/event-stream") || lowerContentType.startsWith("audio/");
+        const payload = isStreamingResponse
+          ? null
+          : (JSON.parse(
+              new TextDecoder().decode(
+                await readResponseBufferWithDeadline(
+                  res,
+                  resolveStreamEnvelopeMaxBytes(maxGeneratedMusicBytes),
                 ),
-              ) as {
-                task_id?: string;
+              ),
+            ) as {
+              task_id?: string;
+              audio?: string;
+              audio_url?: string;
+              lyrics?: string;
+              data?: {
                 audio?: string;
                 audio_url?: string;
                 lyrics?: string;
-                data?: {
-                  audio?: string;
-                  audio_url?: string;
-                  lyrics?: string;
-                };
-                base_resp?: MinimaxBaseResp;
-              });
+              };
+              base_resp?: MinimaxBaseResp;
+            });
         if (payload) {
           assertMinimaxBaseResp(payload.base_resp, "MiniMax music generation failed");
         }
@@ -265,6 +266,14 @@ export function buildMinimaxMusicGenerationProvider(
         const inlineAudio = audioCandidateIsUrl ? undefined : audioCandidate;
         const responseLyrics = decodePossibleText(payload?.lyrics ?? payload?.data?.lyrics ?? "");
         const taskId = normalizeOptionalString(payload?.task_id);
+
+        if (!isStreamingResponse && !audioUrl && !inlineAudio) {
+          resolveProviderOperationTimeoutMs({
+            deadline,
+            defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
+          });
+          throw new Error("MiniMax music generation stream ended without completion");
+        }
 
         const track = audioUrl
           ? await downloadGeneratedMusicAsset({

@@ -1,13 +1,18 @@
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import type { SqliteCleanCloseSealRefusal } from "./sqlite-clean-close-seal.js";
-import { recordSqliteDatabaseIntegrity } from "./sqlite-database-admission.js";
+import { quickIntegrityVerificationKey } from "./sqlite-database-admission-seal.js";
+import {
+  publishSqliteDatabaseAdmission,
+  recordSqliteDatabaseIntegrity,
+} from "./sqlite-database-admission.js";
 import { isSqliteCorruptionError } from "./sqlite-error-diagnostics.js";
 import {
   consumeSqliteMaintenanceIntegrity,
   type SqliteIntegrityCheckOptions,
 } from "./sqlite-maintenance-integrity.js";
 import { readSqliteSchemaObjects } from "./sqlite-schema-admission.js";
+import { readSqlitePageHeader } from "./sqlite-schema-catalog.js";
 import { findSqlClosingParenthesis, normalizeSchemaSql } from "./sqlite-schema-sql.js";
 import { getMaintenanceSqliteTableChecks } from "./sqlite-table-integrity-cache.js";
 
@@ -67,10 +72,18 @@ export function* sqliteIntegrityCheckSteps(
     return;
   }
   const startedAt = performance.now();
-  const check: SqliteIntegrityCheck = { database, databaseLabel, ...options };
+  // WAL owner death alone is not corruption evidence. Explicit maintenance keeps its policy.
+  const processDeathQuick =
+    diagnostics?.integrityGateReason === "process-death" && options.check === undefined;
+  const check: SqliteIntegrityCheck = {
+    database,
+    databaseLabel,
+    ...options,
+    check: options.check ?? (processDeathQuick ? "quick" : "full"),
+  };
   if (diagnostics) {
     check.timing = {};
-    diagnostics.integrityGateMode = options.check ?? "full";
+    diagnostics.integrityGateMode = check.check;
     // A later async driver must not inherit an earlier gate's synchronous measurement.
     delete diagnostics.integrityCheckSyncMs;
     delete diagnostics.integrityOutsideCheckMs;
@@ -79,7 +92,19 @@ export function* sqliteIntegrityCheckSteps(
     delete diagnostics.integrityOutsideWorkerMs;
   }
   try {
-    yield check;
+    try {
+      yield check;
+    } catch (error) {
+      if (!processDeathQuick) {
+        throw error;
+      }
+      check.check = "full";
+      diagnostics.integrityGateMode = "full";
+      yield check;
+    }
+    if (processDeathQuick && check.check === "quick") {
+      publishSqliteDatabaseAdmission(database, quickIntegrityVerificationKey, Date.now());
+    }
     if (diagnostics) {
       diagnostics.integrityGateOutcome = "healthy";
     }
@@ -202,6 +227,24 @@ export function isTerminalSqliteIntegrityError(error: Error): boolean {
   }
   // Only proven corruption latches; transient lock/busy pragma failures must not.
   return isSqliteCorruptionError(error.cause);
+}
+
+/** SQLite recovers committed WAL frames on open; these probes only check header sanity.
+ * They never walk data pages or publish a full-verification receipt or clean-close seal.
+ */
+export function assertSqliteDatabaseHeader(database: DatabaseSync, databaseLabel: string): void {
+  const { pages, free } = readSqlitePageHeader(database);
+  if (
+    typeof pages !== "number" ||
+    !Number.isSafeInteger(pages) ||
+    pages < 1 ||
+    typeof free !== "number" ||
+    !Number.isSafeInteger(free) ||
+    free < 0 ||
+    free >= pages
+  ) {
+    throw new SqliteIntegrityError(`SQLite database header is inconsistent for ${databaseLabel}`);
+  }
 }
 
 /** Check structure and foreign keys, plus all indexes or the migration's selected tables. */

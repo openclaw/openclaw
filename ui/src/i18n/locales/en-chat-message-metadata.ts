@@ -87,7 +87,6 @@ const enChatMessageMetadata = {
       modelChanged: "Model changed from {from} to {to}.",
       event: "{count} system event",
       events: "{count} system events",
-      updatesNotDelivered: "Updates not delivered",
       guardian: {
         approvedSummary: "Guardian approved {action}.",
         deniedLabel: "Guardian denied",
@@ -99,13 +98,6 @@ const enChatMessageMetadata = {
         requestedAction: "Requested action",
         unknownRisk: "unknown",
         noRationale: "No rationale was provided.",
-      },
-      restartRecovery: {
-        label: "System · restart recovery",
-        interrupted:
-          "The Gateway restarted. Automatic recovery was interrupted before the agent could resume. Send a message to continue.",
-        cancelled:
-          "The Gateway restarted. Automatic recovery was cancelled before the agent could resume. Send a message to continue.",
       },
       automationRecovery: {
         label: "System · automation recovery",
@@ -132,7 +124,6 @@ export const registerChatMessageMetadataEnglish = Object.assign(
     Object.assign(en.chat.messages, enChatMessageMetadata.chat.messages);
     const {
       guardian,
-      restartRecovery,
       automationRecovery,
       gatewayRestarted,
       cliHarnessContext,
@@ -142,7 +133,6 @@ export const registerChatMessageMetadataEnglish = Object.assign(
     } = enChatMessageMetadata.chat.systemNotice;
     Object.assign(en.chat.systemNotice, labels);
     Object.assign(en.chat.systemNotice.guardian, guardian);
-    Object.assign(en.chat.systemNotice.restartRecovery, restartRecovery);
     Object.assign(en.chat.systemNotice.automationRecovery, automationRecovery);
     Object.assign(en.chat.systemNotice.gatewayRestarted, gatewayRestarted);
     Object.assign(en.chat.systemNotice.cliHarnessContext, cliHarnessContext);

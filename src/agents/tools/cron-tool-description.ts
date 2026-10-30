@@ -3,16 +3,12 @@ import { buildCronSelfDescription } from "./cron-tool-presentation.js";
 export function buildCronToolDescription(params: {
   triggersEnabled: boolean;
   callerScoped: boolean;
-  readOnly?: boolean;
   selfRemoveOnly?: boolean;
   activeRun?: boolean;
   nextCheckEnabled?: boolean;
   managementOnly?: boolean;
   allowCommandJobs?: boolean;
 }): string {
-  if (params.readOnly) {
-    return `Inspect recorded automation state during recovery. Available actions: ${params.managementOnly ? "list, get" : "list, get, runs"}.${params.selfRemoveOnly ? " Only the current automation is accessible." : " Existing caller visibility restrictions apply."} Use get with a known jobId for saved state and streamStatus; list includes disabled jobs only with includeDisabled:true. A missing list entry does not establish deletion or source termination. If the recorded state cannot establish an interrupted action's outcome, report it as unknown. Mutations are unavailable in this recovery continuation; this does not mean the user needs to change permissions.`;
-  }
   if (params.selfRemoveOnly) {
     return params.managementOnly
       ? "Inspect or remove only the current automation. Actions: list [includeDisabled] (enabled only by default), get jobId (saved state), remove jobId. Use the current job ID; other jobs and management actions are unavailable."

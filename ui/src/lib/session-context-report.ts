@@ -4,7 +4,11 @@ import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
-import { isRetryableGatewayReadError } from "./gateway-errors.ts";
+import {
+  formatMissingOperatorReadScopeMessage,
+  isRetryableGatewayReadError,
+} from "./gateway-errors.ts";
+import { canCallGatewayMethod } from "./gateway-methods.ts";
 import { createGatewayRetryOwner } from "./gateway-retry.ts";
 import { listen } from "./reactive/listener.ts";
 import { areUiSessionKeysEquivalent, scopedSessionArtifactKey } from "./sessions/session-key.ts";
@@ -23,6 +27,7 @@ type SessionContextReportSnapshot = {
   loading: boolean;
   failed: boolean;
   offline: boolean;
+  blockedReason?: string;
 };
 type SessionContextReportOutcome = "ready" | "failed" | "offline" | "retired";
 
@@ -49,14 +54,19 @@ function createSessionContextReports(gateway: ApplicationGateway) {
   const watchers = new Map<object, { key: string; presented: boolean }>();
   const connection = createGatewayConnectionLifecycle(gateway.snapshot);
   let scope = gatewayPresentationScope(gateway).key;
+  const canRead = () => canCallGatewayMethod(gateway.snapshot, "sessions.usage", "operator.read");
+  let readable = canRead();
   let unsubscribe: (() => void) | undefined;
   let stopVisibility: (() => void) | undefined;
   const visible = () => document.visibilityState !== "hidden";
   const empty = (): SessionContextReportSnapshot => ({
     report: null,
-    loading: gateway.snapshot.phase === "connected",
+    loading: canRead(),
     failed: false,
     offline: gateway.snapshot.phase !== "connected",
+    ...(gateway.snapshot.phase === "connected" && !canRead()
+      ? { blockedReason: formatMissingOperatorReadScopeMessage("the context breakdown") }
+      : {}),
   });
   const demanded = (key: string) =>
     [...watchers.values()].some((watcher) => watcher.key === key && watcher.presented);
@@ -71,7 +81,7 @@ function createSessionContextReports(gateway: ApplicationGateway) {
       return entry.request.promise;
     }
     const receipt = connection.capture();
-    if (!receipt || !demanded(key) || !visible()) {
+    if (!receipt || !canRead() || !demanded(key) || !visible()) {
       return Promise.resolve<SessionContextReportOutcome>("retired");
     }
     entry.retry.cancel();
@@ -82,6 +92,7 @@ function createSessionContextReports(gateway: ApplicationGateway) {
       entries.get(key) === entry &&
       demanded(key) &&
       connection.isCurrent(receipt) &&
+      canRead() &&
       gatewayPresentationScope(gateway).key === requestScope;
     const target = entry.target;
     const sessionKey = scopedSessionArtifactKey(target.sessionKey, target.agentId);
@@ -172,9 +183,11 @@ function createSessionContextReports(gateway: ApplicationGateway) {
   function connectionChanged() {
     const nextScope = gatewayPresentationScope(gateway).key;
     const changed = connection.transition(gateway.snapshot);
-    if (!changed && nextScope === scope) {
+    const nextReadable = canRead();
+    if (!changed && nextScope === scope && nextReadable === readable) {
       return;
     }
+    readable = nextReadable;
     scope = nextScope;
     for (const entry of entries.values()) {
       cancel(entry);

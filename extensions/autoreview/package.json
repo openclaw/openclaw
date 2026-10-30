@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/autoreview",
-  "version": "2026.10.8",
+  "version": "2026.10.9",
   "private": true,
   "description": "Sandbox-bound Auto Review tool",
   "type": "module",

@@ -162,6 +162,13 @@ is the generic embedding surface for reusable vector generation. Memory search
 consumes this generic provider surface. The older memory-specific registrar and
 manifest contract were removed after their August 2026 migration window.
 
+Bundled embedding providers can receive an optional host-injected
+`acquireLocalService` hook matching the existing public
+`PluginRuntime["llm"]["acquireLocalService"]` shape. It leases only the configured
+local service. Forward the caller's signal, observe readiness through the optional
+target callback `onReadinessWait`, and release the lease after the provider request
+settles.
+
 Embedding providers can type their asynchronous `batchEmbed(...)` capability with
 `EmbeddingProviderBatchRuntime` from
 `openclaw/plugin-sdk/embedding-provider-runtime-contract`. The public contract

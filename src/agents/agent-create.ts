@@ -20,7 +20,7 @@ import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.j
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { FsSafeError, root } from "../infra/fs-safe.js";
+import { FsSafeError } from "../infra/fs-safe.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { runWithAgentCreationClaim } from "../state/agent-creation-claim.js";
 import {
@@ -35,6 +35,8 @@ import { prepareOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-e
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveUserPath } from "../utils.js";
 import { DuplicateAgentError } from "./agent-create-error.js";
+import { writeIdentityFile } from "./agent-create-identity.js";
+import { assertRetainedPostgresAgentStores } from "./agent-create-retained-postgres.js";
 import { normalizeAgentDirRegistryPath } from "./agent-dir-registry.js";
 import { claimCompletedAgentDeletion } from "./agent-lifecycle-registry.js";
 import { listAgentRoles, loadAgentRole } from "./agent-roles.js";
@@ -47,11 +49,7 @@ import {
   mergeIdentityMarkdownContent,
   sanitizeAgentIdentityLine,
 } from "./identity-file.js";
-import {
-  assertCurrentAgentDeletionRecoveryHolds,
-  createWorkspaceFileMutationGuard,
-} from "./workspace-file-mutation-guard.js";
-import type { WorkspaceStateGuard } from "./workspace-state-store.worker-contract.js";
+import { assertCurrentAgentDeletionRecoveryHolds } from "./workspace-file-mutation-guard.js";
 import {
   DEFAULT_IDENTITY_FILENAME,
   ensureAgentWorkspace,
@@ -272,36 +270,25 @@ async function evaluateMainCreationGate(
 }
 
 /** Read-only early check for guided flows that stage side effects before their final create. */
-export async function checkAgentCreationGate(agentId: string): Promise<CreateError | undefined> {
-  return await withConfigMutationExclusive(
-    async (lockedConfig) => await evaluateMainCreationGate(lockedConfig, normalizeAgentId(agentId)),
-  );
-}
-
-async function writeIdentityFile(params: {
-  workspaceDir: string;
-  identity: NonNullable<ReturnType<typeof createAgentIdentityConfig>>;
-  guard?: WorkspaceStateGuard;
-}): Promise<void> {
-  const beforeFileMutation = createWorkspaceFileMutationGuard(params.guard);
-  const workspaceRoot = await root(params.workspaceDir);
-  let existing: string | undefined;
-  try {
-    const result = await workspaceRoot.read(DEFAULT_IDENTITY_FILENAME, {
-      hardlinks: "reject",
-    });
-    existing = result.buffer.toString("utf-8");
-  } catch (error) {
-    if (!(error instanceof FsSafeError && error.code === "not-found")) {
+export async function checkAgentCreationGate(rawAgentId: string): Promise<CreateError | undefined> {
+  const agentId = normalizeAgentId(rawAgentId);
+  return await withConfigMutationExclusive(async (lockedConfig) => {
+    const gate = await evaluateMainCreationGate(lockedConfig, agentId);
+    if (gate) {
+      return gate;
+    }
+    try {
+      await assertRetainedPostgresAgentStores({
+        config: applyAgentConfig(lockedConfig, { agentId }),
+        agentId,
+      });
+    } catch (error) {
+      if (error instanceof DuplicateAgentError) {
+        return createError("already-exists", error.message, agentId);
+      }
       throw error;
     }
-  }
-  const content = mergeIdentityMarkdownContent(existing, params.identity);
-  beforeFileMutation?.();
-  // Root.write rechecks after its own async preparation and before each mutation.
-  await workspaceRoot.write(DEFAULT_IDENTITY_FILENAME, content, {
-    encoding: "utf8",
-    assertBeforeMutation: beforeFileMutation,
+    return undefined;
   });
 }
 
@@ -560,6 +547,12 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             ? applyAgentBindings(nextConfig, bindingParse.bindings)
             : undefined;
           nextConfig = bindingResult?.config ?? nextConfig;
+
+          await assertRetainedPostgresAgentStores({
+            config: nextConfig,
+            agentId,
+            assertCurrent: beforePersistentApply,
+          });
 
           // The outer lock makes this result-bearing transform single-attempt: setup
           // finishes before the final entry becomes visible to readers or delete flows.
