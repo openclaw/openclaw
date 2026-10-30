@@ -286,7 +286,7 @@ it.skipIf(process.platform === "win32")(
 );
 
 it.skipIf(process.platform === "win32")(
-  "reuses diffs from nested and aliased linked worktrees while an index writer holds its lock",
+  "reuses managed diffs from nested and aliased linked worktrees while an index writer holds its lock",
   () =>
     withCheckout("openclaw-linked-diff-", async ({ root }) => {
       const origin = path.join(root, "origin");
@@ -303,7 +303,8 @@ it.skipIf(process.platform === "win32")(
       const commands = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
       for (const cwd of [path.join(checkout, "nested"), path.join(root, "alias")]) {
         const timing: DiffReadTiming = { durations: {} };
-        const read = () => loadCheckoutDiff({ cwd, sessionKey: "fixture" }, timing);
+        const read = () =>
+          loadCheckoutDiff({ cwd, sessionKey: "fixture", refreshIndex: true }, timing);
         const first = await read();
         expect(first.files[0]?.patch).toContain("+after");
         expect(commands.mock.calls.filter(([argv]) => argv.includes("symbolic-ref"))).toHaveLength(

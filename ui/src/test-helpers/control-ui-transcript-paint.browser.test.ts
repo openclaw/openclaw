@@ -1,17 +1,33 @@
 import { expect, it } from "vitest";
 import { warmReloadProbe } from "../../../scripts/lib/control-ui-warm-reload-probe.ts";
 
+async function runProbe(source: string, setup = "") {
+  const iframe = document.createElement("iframe");
+  document.body.append(iframe);
+  try {
+    const target = iframe.contentWindow;
+    const doc = iframe.contentDocument;
+    if (!target || !doc) {
+      throw new Error("Paint probe realm was not created");
+    }
+    const script = doc.createElement("script");
+    script.textContent = `const __name = fn => fn; ${setup}; (${warmReloadProbe.toString()})(); ${source}`;
+    doc.body.append(script);
+    return await Reflect.get(target, "probeResult");
+  } finally {
+    iframe.remove();
+  }
+}
+
 it.for([
   {
     method: "chat.startup",
-    params: {},
     payload: { messages: [] },
     catchesUp: true,
     kind: "window",
   },
   {
     method: "sessions.messages.subscribe",
-    params: {},
     payload: { key: "agent:main:main" },
     catchesUp: false,
     kind: undefined,
@@ -38,64 +54,68 @@ it.for([
     kind: "reset",
   },
 ])("records catch-up only when $method returns history ($catchesUp)", async (scenario) => {
-  const iframe = document.createElement("iframe");
-  document.body.append(iframe);
-  try {
-    const target = iframe.contentWindow;
-    const doc = iframe.contentDocument;
-    if (!target || !doc) {
-      throw new Error("Paint probe realm was not created");
-    }
-    const script = doc.createElement("script");
-    script.textContent = `
-      const __name = fn => fn;
-      window.WebSocket = class extends EventTarget { send() {} };
-      (${warmReloadProbe.toString()})();
+  const proof = await runProbe(
+    `
       const socket = new WebSocket();
-      socket.send(JSON.stringify({type: 'req', id: 'history', method: ${JSON.stringify(scenario.method)}, params: ${JSON.stringify(scenario.params)}}));
+      socket.send(JSON.stringify({type: 'req', id: 'history', method: ${JSON.stringify(scenario.method)}, params: ${JSON.stringify(scenario.params ?? {})}}));
       socket.dispatchEvent(new MessageEvent('message', {data: JSON.stringify({
         type: 'res', id: 'history', ok: true, payload: ${JSON.stringify(scenario.payload)}
       })}));
-    `;
-    doc.body.append(script);
-    const proof = Reflect.get(target, "__warmReload").read();
-    const milestone = proof.milestones.catchupResponse;
-    expect(typeof milestone === "number").toBe(scenario.catchesUp);
-    expect(proof.historyRequests).toHaveLength(scenario.catchesUp ? 1 : 0);
-    if (scenario.catchesUp) {
-      const response = JSON.stringify({
-        type: "res",
-        id: "history",
-        ok: true,
-        payload: scenario.payload,
-      });
-      expect(proof.historyRequests[0]).toMatchObject({
-        method: scenario.method,
-        cursor: Boolean(scenario.params.initialHistory?.cursor),
-        kind: scenario.kind,
-        responseBytes: new Blob([response]).size,
-      });
-    }
-  } finally {
-    iframe.remove();
+      window.probeResult = window.__warmReload.read();
+    `,
+    "window.WebSocket = class extends EventTarget { send() {} };",
+  );
+  const milestone = proof.milestones.catchupResponse;
+  expect(typeof milestone === "number").toBe(scenario.catchesUp);
+  expect(proof.historyRequests).toHaveLength(scenario.catchesUp ? 1 : 0);
+  if (scenario.catchesUp) {
+    const response = JSON.stringify({
+      type: "res",
+      id: "history",
+      ok: true,
+      payload: scenario.payload,
+    });
+    expect(proof.historyRequests[0]).toMatchObject({
+      method: scenario.method,
+      cursor: Boolean(scenario.params?.initialHistory?.cursor),
+      kind: scenario.kind,
+      responseBytes: new Blob([response]).size,
+    });
   }
 });
 
+it("records live transcript visibility after caught-up rows are revealed", async () => {
+  const proof = await runProbe(`
+      const pane = document.createElement('div');
+      pane.className = 'chat-pane-cache__pane--active';
+      pane.innerHTML = '<div class="chat-thread"><div class="chat-thread-inner"><div class="chat-virtual-row" data-virtual-row-key="fixture-row"><div class="chat-text"><p>Transcript text.</p></div></div></div></div>';
+      document.body.append(pane);
+      const inner = pane.querySelector('.chat-thread-inner');
+      window.probeResult = (async () => {
+        await new Promise(requestAnimationFrame);
+        await new Promise(requestAnimationFrame);
+        const caughtUpAt = performance.now();
+        inner.style.visibility = 'hidden';
+        pane.transcriptReady = true;
+        await new Promise(requestAnimationFrame);
+        await new Promise(requestAnimationFrame);
+        const shownAt = performance.now();
+        inner.style.visibility = 'visible';
+        await new Promise(requestAnimationFrame);
+        await new Promise(requestAnimationFrame);
+        return { caughtUpAt, shownAt, ...window.__warmReload.read() };
+      })();
+  `);
+  expect(proof.milestones.firstTranscript).toBeLessThanOrEqual(proof.caughtUpAt);
+  expect(proof.milestones.catchupApplied).toBeGreaterThanOrEqual(proof.caughtUpAt);
+  expect(proof.milestones.catchupApplied).toBeLessThan(proof.shownAt);
+  expect(proof.milestones.firstLiveTranscript).toBeGreaterThanOrEqual(proof.shownAt);
+});
+
 it("records transcript presentation after opacity reveals nested text, not its earlier DOM mount", async () => {
-  const iframe = document.createElement("iframe");
-  document.body.append(iframe);
-  try {
-    const target = iframe.contentWindow;
-    const doc = iframe.contentDocument;
-    if (!target || !doc) {
-      throw new Error("Paint probe realm was not created");
-    }
-    const script = doc.createElement("script");
-    script.textContent = `
-      const __name = fn => fn;
-      (${warmReloadProbe.toString()})();
+  const proof = await runProbe(`
       document.body.innerHTML += '<div class="chat-pane-cache__pane--active" style="opacity:0"><div class="chat-thread"><div class="chat-thread-inner"><div class="chat-virtual-row" data-virtual-row-key="fixture-row"><div class="chat-text"><p>Cached transcript text.</p></div></div></div></div></div>';
-      window.paintProof = new Promise(resolve => {
+      window.probeResult = new Promise(resolve => {
         requestAnimationFrame(() => requestAnimationFrame(() => {
           const shownAt = performance.now();
           const painted = new PerformanceObserver(list => {
@@ -107,36 +127,20 @@ it("records transcript presentation after opacity reveals nested text, not its e
           document.querySelector('.chat-pane-cache__pane--active').style.opacity = '1';
         }));
       });
-    `;
-    doc.body.append(script);
-    const proof = await Reflect.get(target, "paintProof");
-    expect(proof.transcriptPaints).toContainEqual({
-      element: "p",
-      rowKey: "fixture-row",
-      renderTime: proof.milestones.firstTranscriptPaint,
-    });
-    expect(proof.milestones.firstTranscriptPaint).toBeGreaterThanOrEqual(proof.shownAt);
-    expect(proof.milestones.firstTranscript).toBeLessThanOrEqual(proof.shownAt);
-  } finally {
-    iframe.remove();
-  }
+  `);
+  expect(proof.transcriptPaints).toContainEqual({
+    element: "p",
+    rowKey: "fixture-row",
+    renderTime: proof.milestones.firstTranscriptPaint,
+  });
+  expect(proof.milestones.firstTranscriptPaint).toBeGreaterThanOrEqual(proof.shownAt);
+  expect(proof.milestones.firstTranscript).toBeLessThanOrEqual(proof.shownAt);
 });
 
 it.for(["hidden", "clipped", "animated"] as const)(
   "distinguishes %s transcript paintability from an actual Element Timing entry",
   async (layout) => {
-    const iframe = document.createElement("iframe");
-    document.body.append(iframe);
-    try {
-      const target = iframe.contentWindow;
-      const doc = iframe.contentDocument;
-      if (!target || !doc) {
-        throw new Error("Paint probe realm was not created");
-      }
-      const script = doc.createElement("script");
-      script.textContent = `
-        const __name = fn => fn;
-        (${warmReloadProbe.toString()})();
+    const proof = await runProbe(`
         const layout = ${JSON.stringify(layout)};
         const style = document.createElement('style');
         style.textContent = '.fixture-layout { opacity:1; transition:opacity 60ms linear; @starting-style { opacity:0; } }';
@@ -146,34 +150,29 @@ it.for(["hidden", "clipped", "animated"] as const)(
         if (layout === 'hidden') pane.style.opacity = '0';
         pane.innerHTML = '<div class="chat-thread" style="height:' + (layout === 'clipped' ? '0' : '100') + 'px;overflow:hidden"><div class="chat-thread-inner"><div class="chat-virtual-row" data-virtual-row-key="fixture-row"><div class="chat-text"><p>Cached transcript text.</p></div></div></div></div>';
         document.body.append(pane);
-        window.paintProof = (async () => {
+        window.probeResult = (async () => {
           await new Promise(requestAnimationFrame);
           await Promise.all(pane.getAnimations().map(animation => animation.finished));
           await new Promise(requestAnimationFrame);
           await new Promise(requestAnimationFrame);
           return window.__warmReload.read();
         })();
-      `;
-      doc.body.append(script);
-      const proof = await Reflect.get(target, "paintProof");
-      expect(proof.transcriptPresentation).toMatchObject({
-        paintable: layout === "animated",
-        textRoots: 1,
-        taggedTextOwners: 1,
-      });
-      if (layout === "animated") {
-        expect(["measured", "visible-without-element-timing"]).toContain(
-          proof.transcriptPresentation.status,
-        );
-        expect(typeof proof.milestones.firstTranscriptPaint === "number").toBe(
-          proof.transcriptPresentation.status === "measured",
-        );
-      } else {
-        expect(proof.transcriptPresentation.status).toBe("hidden-or-clipped");
-        expect(proof.milestones.firstTranscriptPaint).toBeUndefined();
-      }
-    } finally {
-      iframe.remove();
+    `);
+    expect(proof.transcriptPresentation).toMatchObject({
+      paintable: layout === "animated",
+      textRoots: 1,
+      taggedTextOwners: 1,
+    });
+    if (layout === "animated") {
+      expect(["measured", "visible-without-element-timing"]).toContain(
+        proof.transcriptPresentation.status,
+      );
+      expect(typeof proof.milestones.firstTranscriptPaint === "number").toBe(
+        proof.transcriptPresentation.status === "measured",
+      );
+    } else {
+      expect(proof.transcriptPresentation.status).toBe("hidden-or-clipped");
+      expect(proof.milestones.firstTranscriptPaint).toBeUndefined();
     }
   },
 );

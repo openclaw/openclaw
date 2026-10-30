@@ -21,6 +21,22 @@ Default: `OPENCLAW_WORKSPACE_DIR` when set, otherwise `<state-dir>/workspace`. T
 
 An explicit `agents.defaults.workspace` value takes precedence over `OPENCLAW_WORKSPACE_DIR`. A sole agent uses this path directly. In a multi-agent fleet, agents without their own `workspace` use an agent-id subdirectory so no implicit owner claims the shared root.
 
+## `agents.defaults.workspaceFileMode`
+
+Optional octal string: `"0600"`, `"0620"`, `"0640"`, or `"0660"`. Per-agent override:
+`agents.entries.<agentId>.workspaceFileMode`.
+
+Controls newly created memory-core `DREAMS.md`, `MEMORY.md`, and
+`memory/dreaming/` reports. Existing file modes are preserved. Unset means exact
+mode `0600`; an explicit value is restricted by the writing host's umask
+(`"0660"` with umask `022` becomes `0640`), including remote execution hosts.
+Daily memory, the `memory/.dreams/` session corpus, credentials, configuration,
+logs, and other state remain private.
+
+Operators must provision directory traversal and default ACLs separately; this
+option does not repair directory access. See [Sharing generated memory
+files](/concepts/agent-workspace#sharing-generated-memory-files).
+
 ## `agents.defaults.cwd`
 
 Optional working directory for agent reply runs. Use it to run coding tools in an
