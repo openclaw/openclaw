@@ -21,8 +21,10 @@ that should not re-upload whole databases on every backup.
 
 PostgreSQL stores in the state, agent, Workboard, Logbook and Team Reports
 families use local SQLite anchors plus PostgreSQL rows. Use `openclaw backup create`
-to capture their matched exports and anchors. Stop the Gateway through its service owner first;
-PostgreSQL backups refuse while it is running and never stop it automatically.
+to capture their matched exports and anchors; it runs while the Gateway serves
+requests and exports each PostgreSQL store from its own repeatable-read snapshot.
+Restore, Git backups, and generic local snapshots that select PostgreSQL still
+require the Gateway stopped through its service owner and never stop it automatically.
 See [Database engines](/reference/database-engines#anchors-and-backups).
 
 When [cold transcript storage](/reference/session-management-compaction/maintenance#cold-transcript-storage)

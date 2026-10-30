@@ -186,6 +186,8 @@ export type DoctorConfigCapture = {
   deferredInspectionCheckIds?: string[];
 };
 export type UpdateDoctorWriteAuthority = {
+  /** An optional work profile; config preparation still proves eligibility. */
+  retirementOnly?: true;
   /** Parent Doctor phase deadline for nested managed-service inspection. */
   serviceInspectionDeadlineAtMs?: number;
   inputHash: string;

@@ -269,7 +269,7 @@ export function createSessionRepositoryWorkspaceStore(
               const reply = await executeExistingOpenClawStateRead(
                 { path: databasePath, env },
                 { type: "sessionRepositoryWorkspaces.find", owners: [read.owner] },
-                { current: true, context: captured },
+                { current: true, context: captured, preferIndependentWarmRead: true },
               );
               return reply?.workspaces.find((workspace) => workspace.workspaceId === workspaceId);
             })

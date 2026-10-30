@@ -228,8 +228,11 @@ export function prepareChatHistoryResponsePage(
         ? pagination.offset + pagination.rawPageMessages
         : Math.max(pagination.offset + 1, pagination.totalMessages - oldestSeq + 1);
   }
-  const hasMore =
-    pagination !== undefined && candidateNextOffset !== undefined
+  const cursors = resolveChatHistoryPageCursors(historyPage.anchor, capped, normalized);
+  // Source cursors account for hidden rows already consumed by this page.
+  const hasMore = historyPage.anchor
+    ? Boolean(cursors.olderCursor)
+    : pagination !== undefined && candidateNextOffset !== undefined
       ? candidateNextOffset < pagination.totalMessages
       : undefined;
   const survivors = new Set(capped);
@@ -253,7 +256,7 @@ export function prepareChatHistoryResponsePage(
         }
       : {}),
     responseHistoryBytes,
-    ...resolveChatHistoryPageCursors(historyPage.anchor, capped, normalized),
+    ...cursors,
     ...(hasMore ? { nextOffset: candidateNextOffset } : {}),
     ...(hasMore !== undefined ? { hasMore } : {}),
     ...(pagination !== undefined ? { totalMessages: pagination.totalMessages } : {}),

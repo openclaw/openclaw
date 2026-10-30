@@ -239,6 +239,12 @@ publication to recover it. Inspecting the remote PR does not settle the
 publication receipt. The Gateway's existing recovery continues the original
 request and reports its result without starting another agent turn.
 
+Local workspace snapshot staging allows up to ten minutes while Git reports
+progress, with a three-minute idle limit. Capture failures identify the staging phase
+and the reason, preserve the source index, and suggest what to inspect before
+retrying. A large file, scan, or buffered Git output can reach the idle limit
+even while Git is working.
+
 After preparation, existing metadata, readiness, fixed re-review and evidence
 actions select the original bound PR, including before any new push and when an
 older publication exists in the conversation. Read it with `edit` first. Its

@@ -108,6 +108,7 @@ async function runDoctorConfigPreflightOperation(
   let heartbeatMigrationDeferred = false;
   let rehearsalCronMigrationDeferred = false;
   let cronStoreSelectionUnresolved = false;
+  let stateMigrationUnsettled = false;
   const preflightWarnings: string[] = [];
   const cronCodexRuntimePolicyTargets: CronCodexRuntimePolicyTarget[] = [];
   const stateMigrationStepReceipts: LegacyStateMigrationStepReceipt[] = [];
@@ -131,6 +132,9 @@ async function runDoctorConfigPreflightOperation(
     getDeferredPluginIds: () => pluginMigrations.deferred().map((pending) => pending.pluginId),
   });
   const noteDoctorStateMigrationResult = (result: MigrationMessages) => {
+    stateMigrationUnsettled ||=
+      result.outcome === "deferred" ||
+      (result.warnings.length > 0 && result.warningDisposition !== "recoverable");
     pluginMigrations.observe(result);
     noteDoctorMigrationResult(result, { prefix: "- " });
   };
@@ -224,7 +228,7 @@ async function runDoctorConfigPreflightOperation(
       ),
     );
   }
-  await migrateLegacyDoctorConfig({
+  let configChanged = await migrateLegacyDoctorConfig({
     enabled: options.migrateLegacyConfig !== false,
     measure: measurePreflightStep,
   });
@@ -237,6 +241,7 @@ async function runDoctorConfigPreflightOperation(
     planRepair: planScopedConfigRepair,
     readSnapshot: () => readConfigSnapshotForPreflight(false),
   });
+  configChanged ||= configSnapshotRead !== recovery.snapshotRead;
   configSnapshotRead = recovery.snapshotRead;
   let snapshot = configSnapshotRead.snapshot;
   const rosterMigrationSource = snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig;
@@ -337,6 +342,7 @@ async function runDoctorConfigPreflightOperation(
       retainedPluginIds: pluginMigrations.retainedPluginIds(),
       measure: options.measure,
     });
+    configChanged ||= convergence.changed === true;
     setActiveDegradedPlugins(convergence.quarantinedPlugins);
     await pluginMigrations.converged(
       convergence.deferredPlugins ?? [],
@@ -477,6 +483,7 @@ async function runDoctorConfigPreflightOperation(
   }
   // Import retired locators before removing them from the authored config.
   if (await pluginMigrations.complete()) {
+    configChanged = true;
     configSnapshotRead = await readConfigSnapshotForPreflight(false);
     snapshot = configSnapshotRead.snapshot;
     baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
@@ -504,12 +511,14 @@ async function runDoctorConfigPreflightOperation(
       ),
     );
     noteDoctorMigrationResult({ changes, warnings: [] });
+    configChanged ||= changes.length > 0;
     configSnapshotRead = await readConfigSnapshotForPreflight(false);
     snapshot = configSnapshotRead.snapshot;
     baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
     automaticConfigRepair = await planAdmittedConfigRepair(snapshot);
   }
   if (automaticConfigRepair && !skipLegacyParentConfigWrite) {
+    configChanged = true;
     modelBillingRouteMigrationSource ??=
       snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig;
     const repair = automaticConfigRepair;
@@ -548,6 +557,8 @@ async function runDoctorConfigPreflightOperation(
   return {
     snapshot,
     baseConfig,
+    configChanged,
+    stateMigrationUnsettled,
     ...(preflightWarnings.length > 0 ? { warnings: preflightWarnings } : {}),
     rosterMigrationSource,
     ...(rosterMigrationOwnerId ? { rosterMigrationOwnerId } : {}),

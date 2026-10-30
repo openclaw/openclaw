@@ -185,6 +185,37 @@ const diagnostics: Diagnostic[] = [
     excludes: [name, "refs/private/tenant"],
     title: `Update failure: ${id} (`,
   })),
+  // Git prints its progress banner first; the closed cause must survive capture and export.
+  ...(
+    [
+      [
+        "fatal: unable to access 'https://private-user:synthetic-private-token@private-host.example/repo.git/': Could not resolve host: private-host.example",
+        "unable to access; Could not resolve host",
+      ],
+      [
+        "private-user@private-host.example: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+        "Permission denied (publickey); Could not read from remote repository",
+      ],
+      [
+        "error: RPC failed; curl 92 HTTP/2 stream 5 was not closed cleanly\nfatal: early EOF",
+        "EOF; RPC failed; early EOF",
+      ],
+      [
+        "private-user@private-host.example: Permission denied (publickey,private-host).\nCONFLICT (/home/private-user/secret): openclaw-staging",
+        "Permission denied",
+      ],
+    ] as const
+  ).map(([stderr, cause]) => ({
+    name: `git clone cause ${cause}`,
+    phase: "git-clone",
+    fact: createUpdateFailureFact({
+      check: "git-clone",
+      code: "command-failed",
+      message: `Cloning into '/home/private-user/openclaw-staging'...\n${stderr}`,
+    }),
+    includes: [`Failing check git-clone (command-failed): ${cause}`],
+    excludes: /private-user|private-host|synthetic-private-token|\/home\/|openclaw-staging/u,
+  })),
 ];
 it.each(diagnostics)("publishes only bounded diagnostic facts: $name", async (entry) => {
   const prepared = await report({

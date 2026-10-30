@@ -14,6 +14,12 @@ export function registerOpenAIFailoverTests() {
         ["CONTENT_FILTER", "format"],
         ["USAGE_LIMIT_REACHED", "rate_limit"],
         ["USAGE_NOT_INCLUDED", "billing"],
+        ["INSUFFICIENT_QUOTA", "billing"],
+        ["SERVER_ERROR", "server_error"],
+        ["CREDIT_BALANCE_EXHAUSTED", "billing"],
+        ["ORGANIZATION_SPEND_LIMIT_EXCEEDED", "billing"],
+        ["ORGANIZATION_USAGE_LIMIT_EXCEEDED", "billing"],
+        ["PROJECT_SPEND_LIMIT_EXCEEDED", "billing"],
       ]) {
         expect(
           provider.classifyFailoverReason?.({
@@ -31,20 +37,6 @@ export function registerOpenAIFailoverTests() {
           "format",
         );
       }
-      expect(
-        provider.classifyFailoverReason?.({
-          provider: providerId,
-          errorMessage: "",
-          code: "SERVER_ERROR",
-        }),
-      ).toBe("server_error");
-      expect(
-        provider.classifyFailoverReason?.({
-          provider: providerId,
-          errorMessage: "",
-          code: "INSUFFICIENT_QUOTA",
-        }),
-      ).toBe("billing");
     }
     // API_ERROR is an Anthropic-native code, not OpenAI's: fall through to generic.
     expect(
