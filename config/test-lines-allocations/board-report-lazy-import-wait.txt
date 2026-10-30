@@ -1,2 +1,2 @@
-2
-# Wait for the cold report chunk before asserting retained report content.
+3
+# Settle lazy imports before checking deferred and retained report content.

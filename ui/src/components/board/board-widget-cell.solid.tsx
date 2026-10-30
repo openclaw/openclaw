@@ -186,10 +186,6 @@ function BoardWidgetCellContent(
     props.widget?.heightMode === "fixed" && contribution()?.kind === "session:report";
   const [reportEntered, setReportEntered] = createSignal(false);
   const reportReady = () => !fixedReport() || reportEntered();
-  // Keep an admitted body across hidden height-mode changes and MCP retirement.
-  const bodyReady = createMemo(
-    (previous = false) => previous || Boolean(props.widget && reportReady()),
-  );
   // Fixed reports already reserve their full height. Build nearby bodies once,
   // then let the existing core-widget latch retain them across tab switches.
   // Observe the card because the display:contents host has no intersection box.
@@ -655,10 +651,8 @@ function BoardWidgetCellContent(
             },
           ]}
         >
-          <Show when={bodyReady()}>
-            <Show when={bodyError()} fallback={<BodyBoundary />}>
-              {(failure) => <BoardWidgetError error={failure().error} />}
-            </Show>
+          <Show when={bodyError()} fallback={<BodyBoundary />}>
+            {(failure) => <BoardWidgetError error={failure().error} />}
           </Show>
           <Show when={actionFailed() && props.widget!.grantState !== "pending"}>
             <div class="board-widget__error-overlay">

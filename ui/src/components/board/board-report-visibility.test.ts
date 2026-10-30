@@ -53,6 +53,7 @@ it("defers fixed reports until nearby, then retains their body and current conte
   };
   const cell = mountCell(widget, { context });
   await cell.updateComplete;
+  await vi.dynamicImportSettled();
   const target = cell.querySelector(".board-widget")!;
   expect(target.getAttribute("style")).toContain("grid-row: 1 / span 4");
   expect(cell.querySelector("openclaw-report-widget")).toBeNull();

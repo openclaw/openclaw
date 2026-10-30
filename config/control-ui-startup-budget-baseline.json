@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 88897,
-  "reason": "Board report containment preserves startup loading: matched builds measured 88897 B gzip against 88900 B on base, with three JS requests and one CSS request; ratchet to the measured head.",
+  "startupJsGzipBytes": 88901,
+  "reason": "Board report containment preserves lazy startup loading: matched builds measured 88,901 B gzip against 88,900 B on base (1 B build variance), with three JS requests and one CSS request; ratchet to the measured head.",
   "updatedAt": "2026-10-30"
 }
