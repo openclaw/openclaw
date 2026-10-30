@@ -45,7 +45,8 @@ holds the same agent database, reuses the Gateway's completed admission. The pee
 must hold a lease on the exact path, have finished admission, still match its
 recorded PID and start time, and carry the same lease provenance (boot, PID
 namespace, build, and file inode), so a file replaced at that path is checked again.
-Aliases, live unfinished admissions, and platforms without lease provenance still
+Outside the bounded Gateway startup policy described below, aliases, live
+unfinished admissions, and platforms without lease provenance still
 run the full check. A dead owner with matching provenance, including an interrupted
 admission without a known FULL requirement, takes a quick check plus foreign-key
 and canonical schema/index checks.
@@ -85,8 +86,9 @@ for example `openclaw.sqlite.seal`. The database admission owner writes this fil
 after the final accepted writer settles, a `TRUNCATE` checkpoint completes, and
 the native database closes successfully. Failed or unfinished cleanup cannot
 publish a seal. The seal contains the admitted schema and integrity facts, a
-schema identity, the time of the last full verification, and the final physical
-file metadata. It is reconstructible verification metadata, not database state
+schema identity, the time and kind of the accepted verification, and the final
+physical file metadata. A recovery-quick receipt remains distinct from a full
+verification. The seal is reconstructible verification metadata, not database state
 or a backup.
 
 Completed memory index schema receipts also survive a clean close. They remain
@@ -104,7 +106,7 @@ checksum matches, and all of the following match the current database: device,
 inode, stable birthtime, byte size, nanosecond modification time, and schema
 identity. Metadata comes from the owner's retained file descriptor through
 `fstat`, not a database query. WAL and rollback-journal files must be absent or
-empty. The last full verification must be no more than seven days old; clean
+empty. The accepted verification must be no more than seven days old; clean
 close and seal reuse do not advance that timestamp. On Linux, where Node can
 substitute change time for unavailable birthtime, the existing physical-file
 identity policy uses a stable unknown birthtime value.
