@@ -116,7 +116,7 @@ suite.define(() => {
       expect(
         await page
           .locator(".sidebar-region")
-          .evaluate((region) => region.style.getPropertyValue("--mobile-sheet-easing")),
+          .evaluate((region) => region.style.getPropertyValue("--motion-sheet")),
       ).toContain("linear(");
       await settle(page);
       const expanded = await shellState(page);
@@ -127,7 +127,7 @@ suite.define(() => {
       expect(
         await page
           .locator(".sidebar-region")
-          .evaluate((region) => region.style.getPropertyValue("--mobile-sheet-easing")),
+          .evaluate((region) => region.style.getPropertyValue("--motion-sheet")),
       ).toBe("");
 
       await flick(page, 150);
@@ -211,7 +211,7 @@ suite.define(() => {
       const thumb = () =>
         page
           .locator(".chat-mobile-host__segments")
-          .evaluate((segments) => getComputedStyle(segments, "::before").translate);
+          .evaluate((segments) => getComputedStyle(segments, "::before").insetInlineStart);
       const panelsThumb = await thumb();
       await page.getByRole("button", { name: "Details", exact: true }).click();
       await expect
@@ -276,15 +276,17 @@ suite.define(() => {
       await openSession(page);
       await openPanels(page);
       const shell = page.locator(".chat-mobile-host");
-      expect(await shell.getAttribute("data-mobile-motion")).toBeNull();
+      const push = () =>
+        shell.evaluate((element) => element.style.getPropertyValue("--mobile-push"));
+      expect(await push()).toBe("");
       await shell.getByRole("button", { name: "Details", exact: true }).click();
       await settle(page);
-      expect(await shell.getAttribute("data-mobile-motion")).toBeNull();
+      expect(await push()).toBe("");
       await shell.getByRole("button", { name: /^Outputs/ }).click();
-      await expect.poll(() => shell.getAttribute("data-mobile-motion")).toBe("forward");
+      await expect.poll(push).toBe("1");
       await settle(page);
       await page.locator(".chat-mobile-host").getByRole("button", { name: "Back" }).first().click();
-      await expect.poll(() => shell.getAttribute("data-mobile-motion")).toBe("back");
+      await expect.poll(push).toBe("-1");
     });
   });
 

@@ -83,13 +83,40 @@ describe("spring", () => {
     expect(Math.sqrt(squared / count)).toBeLessThan(0.02);
   });
 
-  it("emits a monotonic linear() curve from 0 to 1 sampled once per frame", () => {
-    const { easing, durationMs } = springEasing(SHEET_SPRING);
-    const stops = easing.slice("linear(".length, -1).split(", ").map(Number);
-    expect(stops[0]).toBe(0);
-    expect(stops.at(-1)).toBe(1);
-    expect(stops.length).toBe(Math.ceil(durationMs / (1000 / 60)) + 1);
-    expect(stops.every((stop, index) => index === 0 || stop >= stops[index - 1]!)).toBe(true);
+  it("emits a compact monotonic linear() curve that stays within 0.3% of the spring", () => {
+    for (const velocity of [0, 4, 12]) {
+      const { easing, durationMs } = springEasing(SHEET_SPRING, velocity);
+      const stops = easing
+        .slice("linear(".length, -1)
+        .split(", ")
+        .map((stop, index, all) => {
+          const [value, position] = stop.split(" ");
+          const at =
+            index === 0 ? 0 : index === all.length - 1 ? 1 : Number.parseFloat(position!) / 100;
+          return { value: Number(value), at };
+        });
+      expect(stops[0]).toEqual({ value: 0, at: 0 });
+      expect(stops.at(-1)).toEqual({ value: 1, at: 1 });
+      expect(stops.length).toBeLessThan(20);
+      for (let ms = 0; ms <= durationMs; ms += 1) {
+        const at = ms / durationMs;
+        const next = stops.findIndex((stop) => stop.at >= at);
+        const end = stops[next]!;
+        const start = stops[Math.max(0, next - 1)]!;
+        const curve =
+          end.at === start.at
+            ? end.value
+            : start.value + ((end.value - start.value) * (at - start.at)) / (end.at - start.at);
+        const exact = ms === durationMs ? 1 : springValue(SHEET_SPRING, ms / 1000, velocity);
+        // Rounding stops to 0.1% of time and value adds a little to the 0.3% fit.
+        expect(Math.abs(curve - exact)).toBeLessThan(0.006);
+      }
+      if (velocity === 0) {
+        expect(
+          stops.every((stop, index) => index === 0 || stop.value >= stops[index - 1]!.value),
+        ).toBe(true);
+      }
+    }
   });
 
   it("keeps the CSS motion tokens generated from the solver", () => {
@@ -99,7 +126,7 @@ describe("spring", () => {
       "",
     );
     const { easing, durationMs } = springEasing(SHEET_SPRING);
-    expect(css).toContain(`--motion-spring-sheet:${easing.replace(/\s+/g, "")};`);
-    expect(css).toContain(`--motion-spring-sheet-duration:${durationMs}ms;`);
+    expect(css).toContain(`--motion-sheet-duration:${durationMs}ms;`);
+    expect(css).toContain(`--motion-sheet:${durationMs}ms${easing.replace(/\s+/g, "")};`);
   });
 });

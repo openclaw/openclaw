@@ -30,7 +30,7 @@
   border-width: 1px 0 0;
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   background: var(--popover);
-  animation: sidebar-sheet-in var(--motion-spring-sheet-duration) var(--motion-spring-sheet);
+  animation: sidebar-sheet-in var(--motion-sheet);
 }
 
 @media (prefers-reduced-motion: reduce) {

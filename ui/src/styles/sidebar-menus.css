@@ -1616,7 +1616,7 @@
   padding: 0;
   border: 0;
   background: color-mix(in srgb, black 42%, transparent);
-  animation: fade-in var(--motion-spring-sheet-duration) var(--motion-spring-sheet);
+  animation: fade-in var(--motion-sheet);
 }
 
 .shell--mobile-nav :is(.sidebar-issues-panel__grabber, .sidebar-session-filter-panel__grabber) {
@@ -1660,7 +1660,7 @@
   padding-block-end: calc(var(--menu-padding) + var(--shell-safe-area-bottom));
   border-width: 1px 0 0;
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-  animation: sidebar-sheet-in var(--motion-spring-sheet-duration) var(--motion-spring-sheet);
+  animation: sidebar-sheet-in var(--motion-sheet);
 }
 
 .shell--mobile-nav .sidebar-session-filter-panel__grabber {

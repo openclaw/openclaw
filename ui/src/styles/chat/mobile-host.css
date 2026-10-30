@@ -26,8 +26,7 @@
   background: var(--bg);
   grid-template-areas: "main-header" "main" "mobile-host";
   /* The conversation edge rides the same spring as the sheet it reveals. */
-  transition: grid-template-rows var(--mobile-sheet-duration, var(--motion-spring-sheet-duration))
-    var(--mobile-sheet-easing, var(--motion-spring-sheet));
+  transition: grid-template-rows var(--motion-sheet);
 }
 
 .sidebar-region--mobile-host[data-mobile-open]::before {
@@ -63,21 +62,16 @@
   transform: none;
   /* Only a sheet pulled below its minimum translates; none keeps fixed descendants intact. */
   translate: var(--mobile-live-translate, none);
-  /* One spring presents, resizes and dismisses the sheet. A gesture release swaps in
-     --mobile-sheet-easing, a curve that starts at the finger's speed. Hidden sheets
-     stay displayed until they have slid out. */
-  transition-behavior: allow-discrete;
-  transition-delay:
-    0s, 0s, 0s, 0s, 0s, var(--mobile-sheet-duration, var(--motion-spring-sheet-duration));
-  transition-duration:
-    var(--mobile-sheet-duration, var(--motion-spring-sheet-duration)),
-    var(--mobile-sheet-duration, var(--motion-spring-sheet-duration)),
-    var(--mobile-sheet-duration, var(--motion-spring-sheet-duration)),
-    var(--mobile-sheet-duration, var(--motion-spring-sheet-duration)),
-    var(--mobile-sheet-duration, var(--motion-spring-sheet-duration)), 0s;
-  /* A sheet settling into the dock stays above the conversation until it arrives. */
-  transition-property: height, transform, translate, display, border-radius, z-index;
-  transition-timing-function: var(--mobile-sheet-easing, var(--motion-spring-sheet));
+  /* One spring presents, resizes and dismisses the sheet; a gesture release overrides
+     --motion-sheet with a curve that starts at the finger's speed. A hidden sheet stays
+     displayed until it slides out, and above the conversation until it docks. */
+  transition:
+    height var(--motion-sheet),
+    transform var(--motion-sheet),
+    translate var(--motion-sheet),
+    border-radius var(--motion-sheet),
+    display var(--motion-sheet) allow-discrete,
+    z-index 0s var(--motion-sheet-duration);
   @starting-style {
     transform: translateY(100%);
   }
@@ -178,15 +172,11 @@
     width: calc(50% - 3px);
     border-radius: 16px;
     background: var(--bg-hover);
-    transition: translate var(--motion-spring-sheet-duration) var(--motion-spring-sheet);
+    transition: inset-inline-start var(--motion-sheet);
   }
 
-  .chat-mobile-host__segments:has(> button:last-child[aria-pressed="true"])::before {
-    translate: 100% 0;
-  }
-
-  .chat-mobile-host__segments:dir(rtl):has(> button:last-child[aria-pressed="true"])::before {
-    translate: -100% 0;
+  .chat-mobile-host__segments:has(> :last-child[aria-pressed="true"])::before {
+    inset-inline-start: 50%;
   }
 
   .chat-mobile-host__segments button {
@@ -203,12 +193,6 @@
 
   .chat-mobile-host__segments button[aria-pressed="true"] {
     color: var(--text-strong);
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .chat-mobile-host__segments::before {
-      transition: none;
-    }
   }
 
   .chat-mobile-host__title {
@@ -356,10 +340,13 @@
 
 @media (prefers-reduced-motion: reduce) {
   .sidebar-region.sidebar-region--mobile-host,
-  .sidebar-region--mobile-host > .chat-mobile-host {
+  .sidebar-region--mobile-host > .chat-mobile-host,
+  .chat-mobile-host__segments::before,
+  .chat-mobile-host__backdrop {
     transition: none;
     @starting-style {
       transform: none;
+      opacity: 1;
     }
   }
 }
@@ -628,10 +615,10 @@
   translate: 0 0;
   transition:
     opacity 125ms var(--ease-out, ease-out),
-    translate 125ms var(--ease-out, ease-out);
+    translate var(--motion-sheet);
   @starting-style {
     opacity: 0.92;
-    translate: 0 2px;
+    translate: var(--mobile-push-from, 0px) 2px;
   }
   @media (prefers-reduced-motion: reduce) {
     transition: none;
@@ -642,41 +629,14 @@
   }
 }
 
-/* In-sheet navigation pushes the next page in from the trailing edge and pops the
-   previous one back from the leading edge. Only leaf pages move, so nothing compounds. */
-.sidebar-region--mobile-host
-  .chat-mobile-host[data-mobile-motion]
-  :is(.chat-mobile-host__page, .chat-mobile-details-page):not([hidden]) {
-  transition:
-    opacity var(--motion-spring-sheet-duration) var(--motion-spring-sheet),
-    translate var(--motion-spring-sheet-duration) var(--motion-spring-sheet);
-  @starting-style {
-    opacity: 0;
-    translate: var(--mobile-push-from) 0;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    transition: none;
-    @starting-style {
-      opacity: 1;
-      translate: 0 0;
-    }
-  }
+/* In-sheet navigation (--mobile-push: 1 deeper, -1 back) slides the new leaf page in
+   from the trailing or leading edge; containers stay put, so offsets never compound. */
+.chat-mobile-host :is(.chat-mobile-host__page, .chat-mobile-details-page) {
+  --mobile-push-from: calc(var(--mobile-push, 0) * var(--mobile-push-dir, 1) * 40px);
 }
 
-.chat-mobile-host[data-mobile-motion="forward"] {
-  --mobile-push-from: 40px;
-}
-
-.chat-mobile-host[data-mobile-motion="back"] {
-  --mobile-push-from: -40px;
-}
-
-.chat-mobile-host[data-mobile-motion="forward"]:dir(rtl) {
-  --mobile-push-from: -40px;
-}
-
-.chat-mobile-host[data-mobile-motion="back"]:dir(rtl) {
-  --mobile-push-from: 40px;
+.chat-mobile-host:dir(rtl) {
+  --mobile-push-dir: -1;
 }
 
 .sidebar-region--mobile-host > .chat-mobile-host > .chat-mobile-host__grabber::before {
@@ -691,30 +651,18 @@
   z-index: 6;
   background: color-mix(in srgb, var(--overlay-palette-backdrop) 50%, transparent);
   touch-action: none;
-  opacity: 1;
   /* Dimming follows the sheet's spring in both directions. */
-  transition-behavior: allow-discrete;
-  transition-duration: var(--mobile-sheet-duration, var(--motion-spring-sheet-duration));
-  transition-property: opacity, display;
-  transition-timing-function: var(--mobile-sheet-easing, var(--motion-spring-sheet));
+  transition:
+    opacity var(--motion-sheet),
+    display var(--motion-sheet) allow-discrete;
   @starting-style {
     opacity: 0;
   }
 }
 
 .chat-mobile-host__backdrop[hidden] {
-  display: none;
   opacity: 0;
   pointer-events: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .chat-mobile-host__backdrop {
-    transition: none;
-    @starting-style {
-      opacity: 1;
-    }
-  }
 }
 
 .chat-mobile-host__scroll-fades {

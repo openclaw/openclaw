@@ -24,8 +24,9 @@ export const SHEET_SPRING: Spring = { duration: 0.3, bounce: 0 };
 /** Residual displacement (fraction of the distance) treated as settled. */
 const SETTLE_EPSILON = 0.001;
 const MAX_SETTLE_SECONDS = 2;
-/** One `linear()` stop per display frame keeps the sampled curve visually exact. */
-const SAMPLE_SECONDS = 1 / 60;
+/** Largest gap between the spring and its `linear()` approximation, as a fraction of the
+    distance: under 1.5 px on a phone-height sheet, with about a dozen stops. */
+const EASING_TOLERANCE = 0.003;
 
 export function springCoefficients(spring: Spring): { stiffness: number; damping: number } {
   const stiffness = ((2 * Math.PI) / spring.duration) ** 2;
@@ -74,21 +75,38 @@ export function springSettleTime(spring: Spring, velocity = 0): number {
   return settled;
 }
 
-function formatStop(value: number): string {
-  return String(Math.round(value * 10_000) / 10_000);
-}
-
 /**
  * A CSS `linear()` easing plus the transition duration that plays the spring to rest.
  * Distance enters only through the relative `velocity`; callers keep their transitions.
+ * Stops are placed greedily: each segment extends while every millisecond sample stays
+ * within the tolerance of the straight line that replaces it.
  */
 export function springEasing(spring: Spring, velocity = 0): { easing: string; durationMs: number } {
-  const settle = Math.max(SAMPLE_SECONDS, springSettleTime(spring, velocity));
-  const steps = Math.max(2, Math.ceil(settle / SAMPLE_SECONDS));
-  const stops: string[] = [];
-  for (let step = 0; step < steps; step += 1) {
-    stops.push(formatStop(springValue(spring, (settle * step) / steps, velocity)));
+  const durationMs = Math.max(1, Math.round(springSettleTime(spring, velocity) * 1000));
+  const samples = Array.from({ length: durationMs + 1 }, (_, ms) =>
+    ms === durationMs ? 1 : springValue(spring, ms / 1000, velocity),
+  );
+  const fits = (from: number, to: number) => {
+    for (let ms = from + 1; ms < to; ms += 1) {
+      const line = samples[from]! + ((samples[to]! - samples[from]!) * (ms - from)) / (to - from);
+      if (Math.abs(line - samples[ms]!) > EASING_TOLERANCE) {
+        return false;
+      }
+    }
+    return true;
+  };
+  const stops = ["0"];
+  for (let from = 0; from < durationMs;) {
+    let to = from + 1;
+    while (to < durationMs && fits(from, to + 1)) {
+      to += 1;
+    }
+    stops.push(
+      to === durationMs
+        ? "1"
+        : `${Math.round(samples[to]! * 1000) / 1000} ${Math.round((to / durationMs) * 1000) / 10}%`,
+    );
+    from = to;
   }
-  stops.push("1");
-  return { easing: `linear(${stops.join(", ")})`, durationMs: Math.round(settle * 1000) };
+  return { easing: `linear(${stops.join(", ")})`, durationMs };
 }

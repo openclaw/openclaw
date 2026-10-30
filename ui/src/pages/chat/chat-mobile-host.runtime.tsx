@@ -146,8 +146,8 @@ export function MobileHostChrome(
   const settleRelease = () => {
     clearTimeout(releaseTimer);
     releaseTimer = 0;
-    props.readRegion().style.removeProperty("--mobile-sheet-easing");
-    props.readRegion().style.removeProperty("--mobile-sheet-duration");
+    props.readRegion().style.removeProperty("--motion-sheet");
+    props.readRegion().style.removeProperty("--motion-sheet-duration");
   };
   /** Plays the next geometry change as a spring that starts at the finger's speed. */
   const playRelease = (velocity: number) => {
@@ -156,8 +156,9 @@ export function MobileHostChrome(
       SHEET_SPRING,
       Math.max(-20, Math.min(20, velocity)),
     );
-    props.readRegion().style.setProperty("--mobile-sheet-easing", easing);
-    props.readRegion().style.setProperty("--mobile-sheet-duration", `${durationMs}ms`);
+    // Every sheet transition in the region reads these tokens, so one override retimes them.
+    props.readRegion().style.setProperty("--motion-sheet", `${durationMs}ms ${easing}`);
+    props.readRegion().style.setProperty("--motion-sheet-duration", `${durationMs}ms`);
     releaseTimer = window.setTimeout(() => {
       settleRelease();
       // A dismissed sheet keeps its released height until it has left the screen.
