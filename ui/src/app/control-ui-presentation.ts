@@ -90,12 +90,17 @@ export function syncControlUiSystemChrome(paletteChanged = false, chatShell?: bo
   const canvas = resolveThemeColor(computedStyle, "--bg-content");
   const accent = resolveThemeColor(computedStyle, "--accent");
   const mode = root.dataset.themeMode === "light" ? "light" : "dark";
-  const nextParticipantKey = JSON.stringify([canvas, accent, mode]);
+  const viewerTone =
+    mode === "dark" && ["dark", "beacon", "rose", "miami"].includes(root.dataset.theme ?? "")
+      ? { l: 0.34, c: 0.07 }
+      : undefined;
+  const nextParticipantKey = JSON.stringify([canvas, accent, mode, viewerTone]);
   if (/^#[\da-f]{6}$/iu.test(canvas) && /^#[\da-f]{6}$/iu.test(accent)) {
     const participantColors = {
       mode,
       background: hexToOklch(canvas),
       accent: hexToOklch(accent),
+      viewerTone,
     } as const;
     if (nextParticipantKey !== participantPaletteKey) {
       participantPaletteKey = nextParticipantKey;

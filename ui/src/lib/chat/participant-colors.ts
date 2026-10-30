@@ -7,6 +7,7 @@ type ParticipantPalette = {
   mode: "light" | "dark";
   background: Oklch;
   accent: Oklch;
+  viewerTone?: Pick<Oklch, "l" | "c">;
 };
 
 const PARTICIPANT_TONES = {
@@ -91,10 +92,11 @@ export function participantColors(palette: ParticipantPalette, identityHue: numb
   const tones = PARTICIPANT_TONES[palette.mode];
   const viewer = identityHue === null;
   const h = viewer ? palette.accent.h : identityOklchHue(identityHue);
+  const viewerTone = viewer ? palette.viewerTone : undefined;
   return {
     bubble: fitSrgb({
-      l: palette.background.l + (viewer ? tones.viewerOffset : tones.peerOffset),
-      c: PARTICIPANT_TONES.bubbleC,
+      l: viewerTone?.l ?? palette.background.l + (viewer ? tones.viewerOffset : tones.peerOffset),
+      c: viewerTone ? Math.min(palette.accent.c, viewerTone.c) : PARTICIPANT_TONES.bubbleC,
       h,
     }),
     name: fitSrgb({ l: tones.nameL, c: tones.nameC, h }),

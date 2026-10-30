@@ -1491,6 +1491,13 @@ button.chat-reply-attribution__target:disabled {
   border-color: transparent;
 }
 
+:root[data-theme="dark"]
+  .chat-group.user:not(.chat-group--sender-tint)
+  > .chat-group-messages
+  > .chat-bubble {
+  --chat-text: color-mix(in srgb, var(--text) 65%, var(--text-strong));
+}
+
 .chat-group.user .chat-bubble:hover {
   border-color: transparent;
   box-shadow: none;
