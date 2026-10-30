@@ -20,7 +20,6 @@ it("opens meeting transcripts from search without querying agent chat history", 
   });
   expectItem(items, { label: "Meetings", action: "nav:meetings" });
 });
-
 it("exposes app cards and permission-filtered settings sections without RPCs", () => {
   const regular = getStaticCommandPaletteCatalogItems(false);
   const admin = getStaticCommandPaletteCatalogItems(true);
