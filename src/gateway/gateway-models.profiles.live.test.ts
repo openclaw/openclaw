@@ -3781,7 +3781,8 @@ async function verifyGatewayUltraSubagentHandoff(params: {
   const existingRunIds = new Set(
     listSubagentRunsForRequester(params.sessionKey).map((entry) => entry.runId),
   );
-  const nonce = randomBytes(3).toString("hex").toUpperCase();
+  // This proves exact child/parent routing, not long random-token copy fidelity.
+  const nonce = randomBytes(2).toString("hex").toUpperCase();
   const childToken = `ULTRA-CHILD-${nonce}`;
   const parentToken = `ULTRA-PARENT-${nonce}`;
   const message = [
@@ -5566,14 +5567,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           }
         : {}),
     };
-    if (ultraCandidates.length > 0) {
-      await import("../agents/ai-transport-runtime-host.js");
-      ultraWireCapture = startOpenAIUltraWireCapture(
-        ultraCandidates.map((candidate) =>
-          resolveOpenAIUltraUpstreamBaseUrl({ candidate, cfg: sanitizedCfg }),
-        ),
-      );
-    }
+    const ultraWireBaseUrls = ultraCandidates.map((candidate) =>
+      resolveOpenAIUltraUpstreamBaseUrl({ candidate, cfg: sanitizedCfg }),
+    );
     const nextCfg = buildLiveGatewayConfig({
       cfg: sanitizedCfg,
       candidates: params.candidates.map(({ model }) => model),
@@ -5618,7 +5614,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
         }),
         `${params.label}: gateway-connect`,
       );
-      if (ultraWireCapture) {
+      if (ultraWireBaseUrls.length > 0) {
+        // Gateway startup installs the production transport host. Wrap that final
+        // host so the live sweep observes requests instead of a startup replacement.
+        ultraWireCapture = startOpenAIUltraWireCapture(ultraWireBaseUrls);
         openAIUltraRunsByClient.set(client, new Map());
       }
     } catch (error) {
