@@ -471,8 +471,9 @@ async function runInstallationCase(params: {
           },
         );
         const notes = mocks.note.mock.calls.flat().join("\n");
-        expect(notes).toContain(`${oldRoot} (2026.9.4)`);
-        expect(notes).toContain(`${mocks.activeRoot} (2026.9.17)`);
+        expect(notes).toContain(`Gateway service's 2026.9.4 at ${oldRoot}`);
+        expect(notes).toContain(`CLI 2026.9.17 at ${mocks.activeRoot}`);
+        expect(notes.match(/differs from the Gateway service's/g)).toHaveLength(1);
         expect(notes).toContain("openclaw doctor --fix");
         expect(notes).toContain("openclaw gateway install --force");
         if (params.bun) {
@@ -487,11 +488,9 @@ async function runInstallationCase(params: {
           return;
         }
         if (params.consent) {
+          const { interactive, aggressive, mixed } = params.consent;
           expect(mocks.confirm).toHaveBeenCalledTimes(
-            Number(
-              Boolean(params.consent.aggressive || params.consent.mixed) &&
-                params.consent.interactive,
-            ),
+            Number(interactive && Boolean(aggressive || mixed)),
           );
           if (params.consent.aggressive) {
             expect(notes).toContain("Service command does not include the gateway subcommand");
@@ -784,10 +783,10 @@ async function runInstallationCase(params: {
           ]);
           expect(maintenance?.warnings?.[0]).not.toContain("doctor --fix");
           expect(runtime.log).toHaveBeenCalledWith(
-            expect.stringContaining(`${oldRoot} (2026.9.4)`),
+            expect.stringContaining(`Gateway service's 2026.9.4 at ${oldRoot}`),
           );
           expect(runtime.log).toHaveBeenCalledWith(
-            expect.stringContaining(`${mocks.activeRoot} (2026.9.17)`),
+            expect.stringContaining(`CLI 2026.9.17 at ${mocks.activeRoot}`),
           );
           expect(mocks.health).not.toHaveBeenCalled();
           return;

@@ -61,6 +61,8 @@ it("defers fixed reports until nearby, then retains their body and current conte
   expect(cell.querySelector(".board-widget__resize-handle")).toBeNull();
   const observer = observers.find(({ targets }) => targets.has(target));
   observer!.deliver(target);
+  await cell.updateComplete;
+  await vi.dynamicImportSettled();
   await waitForSolid(() => expect(cell.textContent).toContain("Initial report"));
   expect(cell.querySelector(".board-widget__menu-trigger")).not.toBeNull();
   expect(cell.querySelector(".board-widget__resize-handle")).not.toBeNull();

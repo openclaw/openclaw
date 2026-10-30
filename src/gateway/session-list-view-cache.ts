@@ -2,7 +2,11 @@ import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { serializedJsonArrayBytes } from "./serialized-json.js";
 import type { SessionEntrySelection, SessionListFilteredEntries } from "./session-list-filters.js";
 import { captureSessionRowGeneration, type SessionRowGeneration } from "./session-row-identity.js";
-import { sessionRowEncodingBytes } from "./session-row-serialization.js";
+import {
+  registerSerializedSessionRow,
+  serializeSessionRow,
+  sessionRowEncodingBytes,
+} from "./session-row-serialization.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 // Selection and presentation have separate keys: 512 slots cover 256 complete queries.
@@ -283,7 +287,11 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
       facts: Fact[];
       bytes: number;
       rawBytes: number;
-      packed?: { row: GatewaySessionRow; keys: string[] };
+      packed?: {
+        row: GatewaySessionRow;
+        keys: string[];
+        prefix?: { json: string; utf8Bytes: number; retainedBytes: number };
+      };
     }
   >();
   const share = (sessions: T[]) => {
@@ -374,16 +382,33 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
       }
       // The immutable source owns values; only field order and response-local fact indexes
       // can change its packed bytes. Retain one layout, never a cache of list shapes.
+      const sameKeys = previous && previous.keys.length === keyCount;
       if (
-        previous &&
-        previous.keys.length === keyCount &&
+        sameKeys &&
         previous.row.sharedFacts?.length === row.sharedFacts?.length &&
         (row.sharedFacts?.every((ref, position) => ref === previous.row.sharedFacts?.[position]) ??
           true)
       ) {
         rows[index] = previous.row;
       } else {
-        retained.packed = { row, keys: Object.keys(row) };
+        let prefix: NonNullable<typeof previous>["prefix"];
+        if (sameKeys && row.sharedFacts) {
+          // Packing appends numeric fact indexes last. All preceding fields and their
+          // order still belong to the same immutable source; only replace that array.
+          if (previous.prefix === undefined) {
+            const encoded = serializeSessionRow(previous.row);
+            const json = encoded.slice(0, encoded.lastIndexOf("["));
+            previous.prefix = {
+              json,
+              utf8Bytes: Buffer.byteLength(json),
+              retainedBytes: encoded.length * 2,
+            };
+          }
+          prefix = previous.prefix;
+          const suffix = JSON.stringify(row.sharedFacts) + "}";
+          registerSerializedSessionRow(row, prefix.json + suffix, prefix.utf8Bytes + suffix.length);
+        }
+        retained.packed = { row, keys: sameKeys ? previous.keys : Object.keys(row), prefix };
       }
     }
     return { sessions: rows, sharedFacts };
@@ -395,7 +420,10 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
       return retained
         ? retained.bytes +
             Math.max(0, retained.rawBytes - sessionRowEncodingBytes(row)) +
-            (retained.packed ? sessionRowEncodingBytes(retained.packed.row) : 0)
+            (retained.packed
+              ? sessionRowEncodingBytes(retained.packed.row) +
+                (retained.packed.prefix?.retainedBytes ?? 0)
+              : 0)
         : 0;
     },
   };

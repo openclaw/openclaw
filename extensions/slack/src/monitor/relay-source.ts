@@ -56,11 +56,13 @@ export async function monitorSlackRelaySource(params: {
   setIdentity?: (identity: SlackSendIdentity | undefined) => void;
 }): Promise<void> {
   let reconnectAttempts = 0;
+  let disconnectedAt: number | undefined;
   while (!params.abortSignal?.aborted) {
     let connection: WebSocket | undefined;
     try {
       connection = await openRelayWebSocket(params.config, params.abortSignal);
       reconnectAttempts = 0;
+      disconnectedAt = undefined;
       params.setStatus?.({
         connected: true,
         lastConnectedAt: Date.now(),
@@ -84,7 +86,7 @@ export async function monitorSlackRelaySource(params: {
       params.setStatus?.({
         connected: false,
         lifecycle: "recovering",
-        lastDisconnect: { at: Date.now(), error: formatSlackError(err) },
+        lastDisconnect: { at: (disconnectedAt ??= Date.now()), error: formatSlackError(err) },
         lastError: formatSlackError(err),
       });
       params.runtime.log?.(

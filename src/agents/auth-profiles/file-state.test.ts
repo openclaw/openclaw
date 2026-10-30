@@ -212,7 +212,7 @@ function closeFiles(paths: string[], retainedPaths?: string[]) {
   });
 }
 
-it("ignores database content events but observes replacement and nameless invalidation", async () => {
+it("ignores content and sidecar events but observes replacement and nameless invalidation", async () => {
   const { databasePath } = fixture({ existing: true });
   const watcher = Object.assign(new EventEmitter(), { close() {} });
   const watch = vi.spyOn(directoryWatch, "watchDirectory").mockReturnValue(watcher);
@@ -222,7 +222,7 @@ it("ignores database content events but observes replacement and nameless invali
   syncBuiltinESMExports();
   for (let index = 0; index < 100; index++) {
     changed("change", path.basename(databasePath));
-    changed("change", `${path.basename(databasePath)}-wal`);
+    changed("rename", `${path.basename(databasePath)}-wal`);
   }
   await Promise.resolve();
   expect(stat).not.toHaveBeenCalled();
@@ -358,14 +358,19 @@ it("invalidates admitted auth facts after a separate process replaces their file
   const captured = captureAuthProfileFileIdentity(databasePath);
   const before = captured.identity;
   expect(authProfileSourceExists(legacyPath)).toBe(false);
-  const changed = nextChange(directory);
+  const changed = Promise.withResolvers<void>();
+  listen(directory, (change) => {
+    if (change.identityChanged) {
+      changed.resolve();
+    }
+  });
   await promisify(execFile)(process.execPath, [
     "-e",
     'const fs = require("node:fs"); const [db, legacy] = process.argv.slice(1); fs.writeFileSync(db + ".replacement", "replacement synthetic database"); fs.renameSync(db + ".replacement", db); fs.writeFileSync(legacy, "{}");',
     databasePath,
     legacyPath,
   ]);
-  await observe(changed);
+  await observe(changed.promise);
   expect(() => captured.assertCurrent()).toThrow("database file identity changed");
   const stat = vi.spyOn(fs, "statSync");
   const exists = vi.spyOn(fs, "existsSync");

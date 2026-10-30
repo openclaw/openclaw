@@ -298,6 +298,7 @@ describe("widget-card", () => {
       url: "https://youtu.be/AbCdEfGhI_1",
     };
     const host = mountWidget(preview, { sessionKey: "agent:main:video" });
+    await vi.dynamicImportSettled();
     await waitForSolid(() =>
       expect(host.querySelector('button[aria-label="Play Synthetic video"]')).not.toBeNull(),
     );

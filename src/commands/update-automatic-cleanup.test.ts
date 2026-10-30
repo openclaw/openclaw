@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
@@ -175,9 +176,13 @@ async function complete(runId: string, at: number, json = true) {
   return result;
 }
 
-async function migrationOriginal() {
+async function migrationOriginal(deviceChanged = false) {
   await closeOpenClawStateDatabaseAsync();
-  const source = resolveOpenClawStateSqlitePath(env);
+  const shared = resolveOpenClawStateSqlitePath(env);
+  const source = deviceChanged ? path.join(stateDir, "destination.sqlite") : shared;
+  if (deviceChanged) {
+    fs.copyFileSync(shared, source);
+  }
   const backupId = randomUUID();
   const backup = `${source}.pre-startup-migration-${backupId}.bak`;
   await withDoctorSqliteMaintenanceLock({
@@ -191,34 +196,60 @@ async function migrationOriginal() {
       completeDoctorMigrationBackups(env, [source]);
     },
   });
-  return backup;
+  const manifestPath = path.join(
+    resolveSessionSqliteMigrationRunsDir(env),
+    `startup-migration-${backupId}.json`,
+  );
+  if (deviceChanged) {
+    const manifest = readSessionSqliteMigrationManifest(manifestPath)!;
+    const identity = manifest.targets[0]!.databaseIdentity!;
+    identity.dev = String(BigInt(identity.dev) + 1n);
+    writeSessionSqliteMigrationManifest({ manifestPath, manifest });
+  }
+  return { backup, source, manifestPath };
 }
 
-it("retires the previous successful generation and migration originals, but retains current and protected recovery", async () => {
-  const { runId: failed, directory: failedCapture } = failedRun(now - 240_000, [
-    "staging",
-    "validating",
-    "activating",
-  ]);
-  finishUpdateRun(failed, { status: "failed" }, { env });
-  const { runId: first, directory: firstCapture } = capturedRun(now - 120_000);
-  const backup = await migrationOriginal();
-  await complete(first, now + 1_000);
-  expect(fs.existsSync(firstCapture)).toBe(true);
-  expect(fs.existsSync(backup)).toBe(true);
-  const doctors = [5, 4, 3, 2, 1].map((age) => capture(`doctor-${randomUUID()}`, true, age));
-  const orphan = capture("unmanifested");
-  const { runId: second, directory: secondCapture } = capturedRun(now + 60_000);
-  const result = await complete(second, now + 61_000);
-  expect(result.steps.at(-1)?.advisory).toBeUndefined();
-  expect(fs.existsSync(firstCapture)).toBe(false);
-  expect(fs.existsSync(backup)).toBe(false);
-  expect([secondCapture, failedCapture, orphan].map(fs.existsSync)).toEqual([true, true, true]);
-  expect(doctors.map(fs.existsSync)).toEqual([false, false, true, true, true]);
-  expect(
-    result.steps.find((step) => step.name === "recovery-artifact-cleanup")?.advisory,
-  ).toBeUndefined();
-});
+it.each([false, true])(
+  "verifies remounted recovery before retirement (different content: %s)",
+  async (differentContent) => {
+    const { runId: failed, directory: failedCapture } = failedRun(now - 240_000, [
+      "staging",
+      "validating",
+      "activating",
+    ]);
+    finishUpdateRun(failed, { status: "failed" }, { env });
+    const { runId: first, directory: firstCapture } = capturedRun(now - 120_000);
+    const { backup, source, manifestPath } = await migrationOriginal(true);
+    const original = fs.readFileSync(backup);
+    if (differentContent) {
+      using database = new DatabaseSync(source);
+      database.exec(
+        "CREATE TABLE foreign_volume(value TEXT); INSERT INTO foreign_volume VALUES ('other volume')",
+      );
+    }
+    await complete(first, now + 1_000);
+    expect(fs.existsSync(firstCapture)).toBe(true);
+    expect(fs.existsSync(backup)).toBe(true);
+    const doctors = [5, 4, 3, 2, 1].map((age) => capture(`doctor-${randomUUID()}`, true, age));
+    const orphan = capture("unmanifested");
+    const { runId: second, directory: secondCapture } = capturedRun(now + 60_000);
+    const result = await complete(second, now + 61_000);
+    const identity =
+      readSessionSqliteMigrationManifest(manifestPath)!.targets[0]!.databaseIdentity!;
+    expect(identity.ino).toBe(String(fs.statSync(source, { bigint: true }).ino));
+    if (differentContent) {
+      expect(result.steps.at(-1)?.advisory?.message).toContain("destination device changed");
+      expect(fs.readFileSync(backup)).toEqual(original);
+    } else {
+      expect(identity.dev).toBe(String(fs.statSync(source, { bigint: true }).dev));
+      expect(identity.sha256).toBe(createHash("sha256").update(original).digest("hex"));
+    }
+    expect(fs.existsSync(firstCapture)).toBe(false);
+    expect(fs.existsSync(backup)).toBe(differentContent);
+    expect([secondCapture, failedCapture, orphan].map(fs.existsSync)).toEqual([true, true, true]);
+    expect(doctors.map(fs.existsSync)).toEqual([false, false, true, true, true]);
+  },
+);
 
 it.each([true, false])(
   "keeps success and reports an actual retirement failure consistently (JSON: %s)",
@@ -510,7 +541,7 @@ it.each([true, false])(
       manifestPath: fixture.manifestPath,
       manifest: fixture.manifest,
     });
-    const backup = await migrationOriginal();
+    const { backup } = await migrationOriginal();
     const { directory: oldCapture } = capturedRun(now - 120_000, "succeeded");
     const second = start(now + 60_000);
     await complete(second, now + 61_000);

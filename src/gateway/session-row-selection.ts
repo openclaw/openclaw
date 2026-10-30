@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { isConfiguredGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
@@ -17,6 +16,7 @@ import {
   type SelectionChange,
 } from "./session-row-projection-record.js";
 import type { prepareSessionRowScopes } from "./session-row-scope.js";
+import { sameSelectionFacts } from "./session-row-selection-facts.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 
@@ -24,48 +24,6 @@ const sentinel = (key: string) => key === "global" || key === "unknown";
 type SelectionScope = ReturnType<ReturnType<typeof prepareSessionRowScopes>["select"]>;
 const EMPTY_KEYS: ReadonlySet<string> = Object.freeze(new Set<string>());
 type IndexedTarget = { row: SelectionTarget; pair: SessionEntryPair };
-
-// Search and live-run queries bypass retained partitions; display facts publish separately.
-const presentationFields = new Set<string>([
-  "activeWriterRunId",
-  "activitySummary",
-  "sessionDiffBaseline",
-  "sessionDiffBaselineCapture",
-  "pendingFinalDelivery",
-  "contextBudgetStatus",
-  "abortedLastRun",
-  "startedAt",
-  "inputTokens",
-  "outputTokens",
-  "cacheRead",
-  "cacheWrite",
-  "estimatedCostUsd",
-  "contextTokens",
-  "contextTokensSource",
-  "totalTokens",
-  "totalTokensFresh",
-  "totalTokensVersion",
-  "usageReport",
-] satisfies (keyof SelectionTarget["entry"])[]);
-
-function sameSelectionFacts(previous: SelectionTarget, next: SelectionTarget) {
-  if (
-    rowIdentity(previous) !== rowIdentity(next) ||
-    previous.generation !== next.generation ||
-    previous.hasBoard !== next.hasBoard ||
-    previous.entry.updatedAt !== next.entry.updatedAt ||
-    !isDeepStrictEqual(previous.selection, next.selection)
-  ) {
-    return false;
-  }
-  const before = new Map<string, unknown>(
-    Object.entries(previous.entry).filter(([field]) => !presentationFields.has(field)),
-  );
-  const after = new Map<string, unknown>(
-    Object.entries(next.entry).filter(([field]) => !presentationFields.has(field)),
-  );
-  return isDeepStrictEqual(before, after);
-}
 
 export function createSessionRowSelection(
   cfg: OpenClawConfig,
@@ -277,11 +235,15 @@ export function createSessionRowSelection(
     } else {
       duplicates.delete(key);
     }
+    // Raw selections without an owner snapshot still need structural comparison.
     if (
       winner &&
       oldWinner &&
       winner !== oldWinner &&
-      sameSelectionFacts(oldWinner.row, winner.row)
+      (oldWinner.row.selectionFactsRevision && winner.row.selectionFactsRevision
+        ? rowIdentity(oldWinner.row) === rowIdentity(winner.row) &&
+          oldWinner.row.selectionFactsRevision === winner.row.selectionFactsRevision
+        : sameSelectionFacts(oldWinner.row, winner.row))
     ) {
       oldWinner.row = winner.row;
       oldWinner.pair[1] = winner.row.entry;

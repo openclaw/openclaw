@@ -567,7 +567,7 @@ describe("sessions.dispatch", () => {
           devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
         }),
         expect.any(Function),
-        undefined,
+        expect.any(Function),
         undefined,
       );
       expect(changes.mock.calls).toEqual(Array.from({ length: 5 }, () => [{ sessionKey }]));

@@ -1,5 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -10,6 +17,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const mergeScript = join(process.cwd(), "scripts/pr-lib/merge.sh");
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 type BodyScenario = {
+  captureComposeInput?: boolean;
   sourceMessages?: string[];
   sourceCommits?: Array<{
     message: string;
@@ -58,6 +66,7 @@ function prepareBody(scenario: BodyScenario = {}, parentEnv: NodeJS.ProcessEnv =
   const failureTrace = join(root, "injected-failures");
   const trailerMarker = join(root, "trailer-command-called");
   const body = join(root, "body");
+  const composeInput = join(root, "compose-input");
   const override = join(root, "operator body.md");
   if (scenario.overrideBody !== undefined) {
     writeFileSync(override, scenario.overrideBody);
@@ -160,7 +169,7 @@ if (process.env.BODY_AUTHOR_READ_ERROR === "true") {
 }
 const sha = endpoint.searchParams.get("sha");
 const limit = Number(endpoint.searchParams.get("per_page"));
-const commits = JSON.parse(process.env.BODY_COMMITS);
+const commits = JSON.parse(fs.readFileSync(process.env.BODY_COMMITS, "utf8"));
 const git = (args) => execFileSync("git", ["-C", process.env.BODY_SOURCE_REPO, ...args], { encoding: "utf8" }).trim();
 let page = git(["rev-list", "--max-count=" + limit, sha]).split("\\n").map((oid) => commits[oid] ?? {
   sha: oid, commit: { author: { name: "Unselected Author", email: "unselected@example.com" } },
@@ -180,6 +189,11 @@ console.log(JSON.stringify(page));
   const shell = `
 set -euo pipefail
 source "$BODY_MERGE_SCRIPT"
+node() {
+  if [ "\${2:-}" = compose ] && [ -n "$BODY_COMPOSE_INPUT" ]; then
+    command tee "$BODY_COMPOSE_INPUT" | command node "$@"
+  else command node "$@"; fi
+}
 PREP_HEAD_SHA="$BODY_HEAD"
 LOCAL_PREP_HEAD_SHA="$BODY_LOCAL_HEAD"
 MERGE_REPO_NAME=fixture/repo
@@ -200,6 +214,8 @@ snapshot=""
 file=$(prepare_squash_merge_body 123 "$snapshot")
 [ -z "$file" ] || cp "$file" "$BODY_OUTPUT"
 `;
+  const commitsPath = join(root, "commits.json");
+  writeFileSync(commitsPath, JSON.stringify(githubCommits));
   const result = spawnSync("bash", ["-c", shell], {
     cwd: sourceRepo,
     encoding: "utf8",
@@ -230,6 +246,7 @@ file=$(prepare_squash_merge_body 123 "$snapshot")
       BODY_LOCAL_HEAD: localHead,
       BODY_SOURCE_REPO: sourceRepo,
       BODY_OUTPUT: body,
+      BODY_COMPOSE_INPUT: scenario.captureComposeInput ? composeInput : "",
       BODY_OVERRIDE: scenario.overrideBody === undefined ? "" : override,
       BODY_READ_ERROR: String(scenario.sourceReadError ?? false),
       BODY_WRITE_ERROR: String(scenario.bodyWriteError ?? false),
@@ -238,7 +255,7 @@ file=$(prepare_squash_merge_body 123 "$snapshot")
       BODY_AUTHOR_FAULT: scenario.authorReadFault ?? "",
       BODY_AUTHOR_TRACE: authorTrace,
       BODY_FAILURE_TRACE: failureTrace,
-      BODY_COMMITS: JSON.stringify(githubCommits),
+      BODY_COMMITS: commitsPath,
       BODY_PREVIEW: JSON.stringify({
         transport: scenario.restPreview ? "rest" : "graphql",
         payload: {
@@ -265,6 +282,10 @@ file=$(prepare_squash_merge_body 123 "$snapshot")
   return {
     ...result,
     mergeBody: existsSync(body) ? readFileSync(body, "utf8") : null,
+    bodyFiles: readdirSync(join(sourceRepo, ".local")).filter((name) =>
+      name.startsWith("merge-body."),
+    ),
+    composeInput: existsSync(composeInput) ? readFileSync(composeInput, "utf8") : null,
     trailerCommandCalled: existsSync(trailerMarker),
     injectedFailures: readFileSync(failureTrace, "utf8").trim().split("\n").filter(Boolean),
     authorRequests: readFileSync(authorTrace, "utf8")
@@ -279,6 +300,102 @@ const maintainerTrailer = "Co-authored-by: Maintainer <maintainer@example.com>";
 const machineTrailer = "Co-authored-by: Claude <noreply@anthropic.com>";
 
 describePosix("native squash attribution", () => {
+  it("preserves the 118-byte healthy input as the exact 180-byte golden body", () => {
+    const credit = 'Co-authored-by: Élodie "Quoted" <elodie@example.com>';
+    const message =
+      'Repair\n\nRésumé 漢字 "quoted" \\ path; literal $(no-command)\n\n' + credit + "\n";
+    const author = person("Fixture Maintainer", "maintainer@example.com");
+    const result = prepareBody({
+      captureComposeInput: true,
+      restPreview: true,
+      prAuthor: "fixture-human",
+      previewBody: "Preview",
+      squashMessage: "COMMIT_MESSAGES",
+      sourceCommits: [source(message, author)],
+    });
+    expect(Buffer.byteLength(message)).toBe(118);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.composeInput).toBe(
+      JSON.stringify({
+        preview: "Preview",
+        prAuthor: { login: "fixture-human", __typename: "User" },
+        source: credit,
+        authors: [{ ...author, user: { login: "fixture-human", type: "User" }, changesTree: true }],
+        captured: "",
+        queue: false,
+        sourceCredit: true,
+        squashDefault: { title: "PR_TITLE", message: "COMMIT_MESSAGES", commits: [message] },
+      }) + "\n",
+    );
+    const expected =
+      "* " + message + "Co-authored-by: Fixture Maintainer <maintainer@example.com>\n";
+    expect(Buffer.byteLength(expected)).toBe(180);
+    expect(result.mergeBody).toBe(expected);
+  });
+
+  it.each(["source", "authors", "captured", "messages"])(
+    "preserves large %s through the native composition boundary",
+    (field) => {
+      const prose = 'Résumé 漢字 "quoted" \\ path; literal $(no-command)\n'.repeat(24_000);
+      const credit = 'Co-authored-by: Élodie "Quoted" <elodie@example.com>';
+      let scenario: BodyScenario = { restPreview: true, previewBody: "Reviewed repair" };
+      let expected: string;
+      if (field === "source") {
+        const trailers = (credit + "\n").repeat(24_000);
+        expect(Buffer.byteLength(trailers)).toBeGreaterThan(1.1 * 1024 ** 2);
+        scenario.localFixup = { message: "Local fixup\n\n" + trailers, author: contributor };
+        expected = "Reviewed repair\n\n" + credit + "\n" + maintainerTrailer + "\n";
+      } else if (field === "authors") {
+        // Repeated valid identities keep final credit small while the independently
+        // qualified commit-author inventory crosses the exec argument boundary.
+        const author = person('Élodie "Quoted" '.repeat(700).trim(), "elodie@example.com");
+        const commits = Array.from({ length: 128 }, (_, i) => source("Repair " + i, author));
+        expect(Buffer.byteLength(JSON.stringify(commits.map(() => author)))).toBeGreaterThan(
+          1.1 * 1024 ** 2,
+        );
+        scenario.sourceCommits = [
+          ...commits,
+          source("Unlinked", person("Unlinked"), { githubAuthor: null }),
+          source("Empty", person("Empty"), { empty: true }),
+          source("Tail", person("Tail")),
+        ];
+        expected =
+          "Reviewed repair\n\nCo-authored-by: " +
+          author.name +
+          " <elodie@example.com>\nCo-authored-by: Tail <tail@example.com>\n";
+      } else if (field === "captured") {
+        const body = prose + "\r\n\r\n" + maintainerTrailer + "\r\n \t\r\n";
+        expect(Buffer.byteLength(body)).toBeGreaterThan(1.1 * 1024 ** 2);
+        scenario.overrideBody = body;
+        expected = body;
+      } else {
+        const message = "Repair\n\n" + prose + "\n" + credit;
+        expect(Buffer.byteLength(message)).toBeGreaterThan(1.1 * 1024 ** 2);
+        scenario = {
+          ...scenario,
+          squashMessage: "COMMIT_MESSAGES",
+          sourceCommits: [
+            source(message),
+            source("Empty published message", undefined, { empty: true }),
+          ],
+          refreshMergeAuthor: refreshAuthor,
+          refreshMergeMessage: "Published main refresh",
+        };
+        expected =
+          "* " +
+          message +
+          "\n\n* Empty published message\n\n* Published main refresh\n\n" +
+          credit +
+          "\n" +
+          maintainerTrailer +
+          "\n";
+      }
+      const result = prepareBody(scenario);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.mergeBody).toBe(expected);
+    },
+  );
+
   it("composes the real body despite unrelated inherited PR controls and gh selectors", () => {
     const result = prepareBody(
       {},
@@ -657,7 +774,7 @@ describePosix("native squash attribution", () => {
     ],
   ])("%s", (_name, scenario, diagnostic) => {
     const result = prepareBody(scenario);
-    expect(result, result.stderr).toMatchObject({ status: 1, mergeBody: null });
+    expect(result, result.stderr).toMatchObject({ status: 1, mergeBody: null, bodyFiles: [] });
     expect(result.stderr).toContain(diagnostic);
   });
 
@@ -889,7 +1006,7 @@ describePosix("native squash attribution", () => {
       previewBody: `Server description\n\n${machineCredit}`,
       overrideBody,
     });
-    expect(result).toMatchObject({ status: 1, mergeBody: null });
+    expect(result).toMatchObject({ status: 1, mergeBody: null, bodyFiles: [] });
     expect(result.stderr).toContain("--body-file");
   });
 
@@ -1059,7 +1176,7 @@ describePosix("native squash attribution", () => {
         overrideBody,
         ...failure,
       });
-      expect(result, result.stderr).toMatchObject({ status: 1, mergeBody: null });
+      expect(result, result.stderr).toMatchObject({ status: 1, mergeBody: null, bodyFiles: [] });
       const injectedFailure = failure.sourceReadError
         ? "source-read"
         : failure.authorReadError

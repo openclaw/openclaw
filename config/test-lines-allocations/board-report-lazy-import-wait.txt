@@ -1,0 +1,2 @@
+2
+# Wait for the cold report chunk before asserting retained report content.

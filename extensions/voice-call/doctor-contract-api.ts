@@ -74,6 +74,7 @@ const schemaMigrationDescriptions = {
   "local-workspace-manifests-v31": "local workspace baselines -> incremental checkpoint manifests",
   "local-workspace-cas-v35":
     "local workspace baselines -> shared immutable trees and scan fingerprints",
+  "template-names-v36": "starter installs and provenance -> canonical Template storage names",
   "subagent-operator-recovery-v25": "subagent recovery -> original operator authority required",
   "meeting-transcript-start-time": "meeting transcript start times -> persisted chronology",
   "predicate-columns-v21":

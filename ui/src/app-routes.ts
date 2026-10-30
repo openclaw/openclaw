@@ -24,6 +24,7 @@ import {
   type RouteId,
 } from "./app-route-paths.ts";
 import type { SolidRouteProps } from "./app-route-types.tsx";
+import { retireBootComposer } from "./app/boot-composer.ts";
 import type { ApplicationContext } from "./app/context.ts";
 import { gatewayPresentationScope } from "./app/gateway-presentation-scope.ts";
 import { retryControlUiImport } from "./app/stale-chunk-reload.ts";
@@ -36,7 +37,6 @@ import { page as appsPage } from "./pages/apps/route.tsx";
 import { page as channelsPage } from "./pages/channels/route.ts";
 import { pages as chatPages } from "./pages/chat/route.ts";
 import type { ChatRouteData } from "./pages/chat/session-route-data.ts";
-import { page as clawsPage } from "./pages/claws/route.ts";
 import { page as cloudWorkersPage } from "./pages/cloud-workers/route.tsx";
 import { pages as configPages } from "./pages/config/route.ts";
 import { page as connectionPage } from "./pages/connection/route.ts";
@@ -68,6 +68,7 @@ import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 import { pages as skillsPages } from "./pages/skills/route.ts";
 import { page as systemsPage } from "./pages/systems/route.ts";
+import { page as clawsPage } from "./pages/templates/route.ts";
 import { page as terminalPage } from "./pages/terminal/route.tsx";
 import { page as usagePage } from "./pages/usage/route.tsx";
 import { resolveWorkboardRouteLocation } from "./pages/workboard/route-location.ts";
@@ -272,7 +273,11 @@ export async function startApplicationRouter(
   const initialDynamicRoute = dynamicRouteFromPath(location.pathname, basePath);
   const applicationHistory: RouterHistory = {
     location: () => routerHistoryLocation(history.location(), basePath),
-    push: (next) => history.push(next),
+    push: (next) => {
+      // A pushed destination is not the linked session the boot composer was typed for.
+      retireBootComposer();
+      history.push(next);
+    },
     replace: (next) => history.replace(next),
     listen: (listener) => {
       let listening = true;

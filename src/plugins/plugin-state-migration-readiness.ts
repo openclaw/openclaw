@@ -1,7 +1,9 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   readDeferredPluginMigrationReceipt,
   readDeferredPluginMigrations,
   readDeferredPluginMigrationsAsync,
+  recordDeferredPluginMigrations,
   type DeferredPluginMigration,
 } from "../infra/deferred-plugin-migrations.js";
 import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
@@ -29,6 +31,7 @@ function selectReadiness(options: InstalledPluginIndexStoreOptions) {
     ...resolveInstalledPluginIndexStateDatabaseOptions(options),
     path,
     artifactPreservingReadOnly,
+    includeDeferred: true,
   };
   const receipt =
     !artifactPreservingReadOnly && !context.maintenanceScope && !context.existingSchemaPath
@@ -66,4 +69,78 @@ export function readPluginStateMigrationReadiness(
 ): readonly DeferredPluginMigration[] {
   const selected = selectReadiness(options);
   return selected.pending ?? selected.publish(readDeferredPluginMigrations(selected.database));
+}
+
+/** Certify already-finished upgrades without executing the offline repair path. */
+export async function confirmPluginStateMigrationReadiness(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  signal: AbortSignal;
+  warn: (message: string) => void;
+}): Promise<void> {
+  const expectedPending = await readDeferredPluginMigrationsAsync({ env: params.env });
+  const obligations = await readDeferredPluginMigrationsAsync({
+    env: params.env,
+    includeDeferred: true,
+  });
+  if (obligations.length === 0) {
+    return;
+  }
+  const [{ runPostSessionPluginDoctorStateRepairs }, { withPluginLifecycleLeaseAsync }] =
+    await Promise.all([
+      import("../infra/state-migrations.plugin-doctor.js"),
+      import("./plugin-lifecycle-lease.js"),
+    ]);
+  await withPluginLifecycleLeaseAsync(
+    { env: params.env, signal: params.signal, waitMs: 0 },
+    async (lease) => {
+      const inspected = await runPostSessionPluginDoctorStateRepairs({
+        config: params.config,
+        env: params.env,
+        inspectPluginIds: obligations.map(({ pluginId }) => pluginId),
+      });
+      const resolvedPluginIds = obligations
+        .filter(
+          ({ pluginId, requiresStateMigration }) =>
+            inspected.completedPluginIds?.includes(pluginId) ||
+            (!requiresStateMigration && inspected.statelessPluginIds?.includes(pluginId)),
+        )
+        .map(({ pluginId }) => pluginId);
+      if (resolvedPluginIds.length > 0) {
+        const { validateConfigObjectRawWithPlugins } = await import("../config/validation.js");
+        const validation = validateConfigObjectRawWithPlugins(params.config, {
+          env: params.env,
+          deferredPluginMigrations: expectedPending.filter(
+            ({ pluginId }) => !resolvedPluginIds.includes(pluginId),
+          ),
+        });
+        if (!validation.ok) {
+          inspected.warnings.push(
+            `Plugin data/settings upgrade awaits config repair: ${validation.issues.map((issue) => issue.path).join(", ")}. Run openclaw doctor --fix.`,
+          );
+        } else {
+          lease.assertCurrent();
+          await recordDeferredPluginMigrations({
+            env: params.env,
+            expectedPending,
+            pending: [],
+            resolvedPluginIds,
+          });
+        }
+      }
+      for (const pending of obligations) {
+        if (
+          pending.requiresStateMigration &&
+          inspected.statelessPluginIds?.includes(pending.pluginId)
+        ) {
+          inspected.warnings.push(
+            `Plugin "${pending.pluginId}" data/settings upgrade is blocked: its installed contract has no detector for the required state migration. Ask the plugin maintainer for a supported migration; existing data and settings have been kept.`,
+          );
+        }
+      }
+      for (const warning of inspected.warnings) {
+        params.warn(warning);
+      }
+    },
+  );
 }

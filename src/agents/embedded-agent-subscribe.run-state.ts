@@ -162,6 +162,9 @@ export class EmbeddedAgentSubscribeState {
       kind: "raw" | "delivery" | "final";
       projector: ReturnType<typeof createAssistantVisibleStreamText>;
       resolveReply: StreamingReplyResolver;
+      blockProjector?: ReturnType<typeof createAssistantVisibleStreamText>;
+      /** Source length last aligned with the canonical block projection. */
+      blockSourceLength?: number;
     };
   } = undefined;
   lastStreamedReasoning?: string = undefined;

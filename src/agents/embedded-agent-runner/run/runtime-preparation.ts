@@ -9,10 +9,8 @@ import {
   hasPreparedAuthAttemptModelMetadata,
   resolveCredentialScopedAuthAttemptModelDecision,
 } from "../../runtime-plan/credential-scoped-model.js";
-import {
-  canRunPreparedAgentRuntimeAuthAttempt,
-  type PreparedAgentRuntimeAuthAttempt,
-} from "../../runtime-plan/prepare-auth.js";
+import { canRunPreparedAgentRuntimeAuthAttempt } from "../../runtime-plan/prepare-auth.js";
+import type { PreparedAgentRuntimeAuthAttempt } from "../../runtime-plan/types.js";
 import { resolveCandidateThinkingLevel } from "../../thinking-runtime.js";
 import { log } from "../logger.js";
 import {
@@ -200,7 +198,8 @@ export async function prepareEmbeddedRunTransport(input: {
   let { activePreparedAuthPlan } = preparedAuthPlan;
   preparedThinkingCapabilityReady = true;
   applyResolvedRuntimeModel(models.runtime);
-  const genericCompactionRecoveryAllowed = !pluginHarnessOwnsTransport;
+  const genericCompactionRecoveryAllowed =
+    !pluginHarnessOwnsTransport && !params.disableCompactionRecovery;
   const profileCandidates = preparedAuthAttempts.map((attempt) => attempt.profileId);
   const forwardedPluginHarnessProfileId = pluginHarnessOwnsTransport
     ? activePreparedAuthPlan.forwardedAuthProfileId

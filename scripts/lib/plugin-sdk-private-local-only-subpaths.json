@@ -96,6 +96,7 @@
   "memory-core-host-runtime-files",
   "memory-core-host-secret",
   "memory-core-host-status",
+  "memory-core-host-transcript-stats",
   "memory-host-events",
   "memory-host-markdown",
   "memory-host-search",

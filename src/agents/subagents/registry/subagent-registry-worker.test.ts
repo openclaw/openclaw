@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
@@ -15,6 +16,7 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-context-binding.js";
+import * as gatewayAdmission from "../../../process/gateway-work-admission.js";
 import * as sessionStateNotices from "../../../sessions/session-state-notices.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { clearOpenClawDatabaseQuarantine } from "../../../state/openclaw-quarantine-store.js";
@@ -27,8 +29,8 @@ import {
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
-import { bindSubagentRunGatewayOwners } from "./subagent-registry-gateway-owner.js";
-import { getSubagentActivationRuns, subagentRuns } from "./subagent-registry-memory.js";
+import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
   getSubagentRegistryPublicationRevision,
@@ -210,7 +212,7 @@ function interceptWrites(callback: (phase: "before" | "after") => void | Promise
   });
 }
 
-function holdFirstAck(onWrite = () => {}) {
+function holdFirstAck(onWrite = () => {}, waitForRelease = true) {
   const reached = createDeferredCore();
   const release = createDeferredCore();
   let held = false;
@@ -218,7 +220,7 @@ function holdFirstAck(onWrite = () => {}) {
     if (phase === "before") {
       onWrite();
     }
-    if (phase === "after" && !held) {
+    if (phase === "after" && !held && waitForRelease) {
       held = true;
       reached.resolve();
       await release.promise;
@@ -413,42 +415,6 @@ it("publishes overlapping durable and runtime-only mutations in FIFO order", asy
   }
 });
 
-it("rejects a runtime-only mutation when its Gateway recovery owner changes", async () => {
-  await register(
-    entry("recovery-noop", {
-      cleanupHandled: false,
-      execution: { status: "terminal", endedAt: 2 },
-      requesterSettleWake: { status: "pending", attemptCount: 0 },
-    }),
-  );
-  const expected = subagentRuns.get("recovery-noop")!;
-  const previousResolver = () => undefined;
-  bindGatewayContextResolver(expected, previousResolver);
-  const gateway = createGatewayContext();
-  let gatewayCurrent = true;
-  const resolver = () => (gatewayCurrent ? gateway : undefined);
-  const onPublished = vi.fn();
-
-  await expect(
-    mutateSubagentRuns(
-      [expected.runId],
-      (rows) => {
-        gatewayCurrent = false;
-        return postimages([
-          [expected.runId, { ...rows.get(expected.runId)!, cleanupHandled: true }],
-        ]);
-      },
-      {
-        gatewayRecovery: { expected, previousResolver, resolver, gateway },
-        onPublished,
-      },
-    ),
-  ).rejects.toThrow("Subagent Gateway recovery owner changed");
-  expect(subagentRuns.get(expected.runId)).toBe(expected);
-  expect(expected.cleanupHandled).toBe(false);
-  expect(onPublished).not.toHaveBeenCalled();
-});
-
 it("persists prepared-only registration without resurrecting it after a queued deletion", async () => {
   await register(entry("warm-registration"));
   const original = entry("prepared-deletion");
@@ -527,7 +493,7 @@ it("serializes opposite multi-row orders without a lock-order deadlock", async (
   ]);
 });
 
-it("settles a requester cohort while many children finish and one is killed", async () => {
+it("settles a requester cohort and killed-child cleanup after shutdown closes admission", async () => {
   const children = Array.from({ length: 18 }, (_, index) =>
     entry(`child-${index}`, {
       completion: { required: true },
@@ -536,15 +502,20 @@ it("settles a requester cohort while many children finish and one is killed", as
     }),
   );
   const stopped = entry("killed", {
+    attachmentId: "cc30d548-d417-46f1-a15f-f057e136f3ba",
     childSessionIdentity: { sessionId: "killed-session" },
     collect: true,
-    execution: {
-      status: "running" as const,
-      startedAt: 1,
-      suppressSessionEffects: true as const,
-    },
+    execution: { status: "running", startedAt: 1, suppressSessionEffects: true },
   });
   await register(...children, stopped);
+  const attachmentDir = path.join(
+    resolveSubagentSessionAttachmentRootDir({
+      agentId: "main",
+      childSessionKey: stopped.childSessionKey,
+    }),
+    stopped.attachmentId!,
+  );
+  await fs.mkdir(attachmentDir, { recursive: true });
   const manager = createSubagentRunManager(
     createSubagentManagerTestOptions(subagentRuns, async () => {
       throw new Error("Stress fixture unexpectedly called the Gateway");
@@ -562,8 +533,6 @@ it("settles a requester cohort while many children finish and one is killed", as
       entries: [child],
       context,
       assertCurrent: () => {},
-      onCommitted: () => {},
-      onPublished: () => {},
       operation: {
         kind: "transition",
         state: { status: "dispatching", attemptCount: 1, rearmGeneration: 1 },
@@ -572,25 +541,23 @@ it("settles a requester cohort while many children finish and one is killed", as
   );
   const settlement = Promise.all(wakes).then(() =>
     mutateRequesterCompletionBatch({
-      entries: children.map(({ runId }) => {
-        const subagent = subagentRuns.get(runId);
-        if (!subagent) {
-          throw new Error("Requester wake lost its acknowledged child");
-        }
-        return subagent;
-      }),
+      entries: [...subagentRuns.values()].filter(({ runId }) => runId !== stopped.runId),
       context,
       operation: { kind: "settle", outcome: { delivered: true, path: "direct" } },
       assertCurrent: () => {},
     }),
   );
+  gatewayAdmission.markGatewayRestartDraining("stop (SIGTERM)");
   const killed = manager.markSubagentRunTerminated({
     runId: stopped.runId,
     reason: "synthetic kill",
     suppressTaskDelivery: true,
   });
-  const results = await Promise.allSettled([...completions, settlement, killed]);
+  const results = await Promise.allSettled([...completions, settlement, killed]).finally(
+    gatewayAdmission.resetGatewayWorkAdmission,
+  );
   expect(results.filter((result) => result.status === "rejected")).toEqual([]);
+  await expect(fs.stat(attachmentDir)).rejects.toMatchObject({ code: "ENOENT" });
   const saved = loadSubagentRegistryFromSqlite();
   expect(saved.size).toBe(children.length + 1);
   for (const child of children) {
@@ -720,30 +687,21 @@ it.each(["before ACK", "inside failing callback"] as const)(
   "keeps an old-source commit from notifying a replacement database (%s)",
   async (transition) => {
     await register(entry("source"));
-    const reached = createDeferredCore();
-    const release = createDeferredCore();
+    const { reached, release } = holdFirstAck(undefined, transition === "before ACK");
     const observed = vi.fn();
     const stop = subscribeSubagentRunChanges("persistence", observed);
     const revision = getSubagentRegistryPublicationRevision();
     const replaceSource = () => {
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(fixture.state.stateDir, "replacement"));
     };
-    interceptWrites(async (phase) => {
-      if (phase === "after" && transition === "before ACK") {
-        reached.resolve();
-        await release.promise;
-      }
-    });
     const pending = change(
       "source",
       { label: "old database commit" },
       {
         onPublished: () => {
-          if (transition !== "before ACK") {
+          if (transition === "inside failing callback") {
             replaceSource();
-            if (transition === "inside failing callback") {
-              throw new Error("Synthetic custody failure after source replacement");
-            }
+            throw new Error("Synthetic custody failure after source replacement");
           }
         },
       },
@@ -810,28 +768,6 @@ it("retains the execution's Gateway binding through immutable metadata publicati
   expect(isSameSubagentRunOwner(published, alias)).toBe(true);
 
   gatewayOpen = false;
-  const replacementGateway = createGatewayContext();
-  const replacementResolver = () => replacementGateway;
-  await expect(
-    bindSubagentRunGatewayOwners({
-      runs: subagentRuns,
-      entries: [...getSubagentActivationRuns(subagentRuns)],
-      resumedRuns: new Set(),
-      getGatewayContextResolver: () => replacementResolver,
-      onRecovered: () => {},
-    }),
-  ).resolves.toBe(true);
-  const recovered = subagentRuns.get(child.runId)!;
-  expect(isSameSubagentRunOwner(recovered, alias)).toBe(false);
   expect(getGatewayContextResolver(initial)?.()).toBeUndefined();
-  expect(getGatewayContextResolver(recovered)?.()).toBe(replacementGateway);
-  expect(() => subagentRuns.runWithCompletionAuthority(alias, () => "stale")).toThrow(
-    "runtime owner is no longer active",
-  );
-  // Gateway ownership alone cannot authorize a continuation without its operator source.
-  const dispatch = vi.fn();
-  expect(() => subagentRuns.runWithCompletionAuthority(recovered, dispatch)).toThrow(
-    "Subagent completion authority is no longer active",
-  );
-  expect(dispatch).not.toHaveBeenCalled();
+  expect(getGatewayContextResolver(published)?.()).toBeUndefined();
 });

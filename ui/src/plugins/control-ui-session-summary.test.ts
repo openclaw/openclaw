@@ -381,3 +381,53 @@ it("rejects an old session response and reloads after reconnect without a parent
   current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
   await reply(2, "Reconnected session");
 });
+
+it("keeps the saved plan but reports unknown runtime during a failed history refresh", async () => {
+  useClock();
+  const card = {
+    sessionKey: "agent:main:one",
+    revision: 1,
+    updatedAt: 101,
+    steps: [{ step: "Collect findings", status: "in_progress" }],
+  };
+  const sessionInfo = {
+    key: card.sessionKey,
+    sessionId: "one",
+    kind: "direct" as const,
+    startedAt: 100,
+  };
+  const { element, reply, emit, requests } = setup(undefined, async () => ({ card }));
+  await reply(0, "Working reply", {
+    ...history("Working reply"),
+    sessionInfo: {
+      ...sessionInfo,
+      hasActiveRun: true,
+    },
+  });
+  const runtime = () => element.querySelector(".session-progress-card__runtime")?.textContent;
+  await vi.waitFor(() => expect(runtime()).toContain(t("sessionProgressCard.runtime.working")));
+  emit("sessions.changed");
+  await vi.advanceTimersByTimeAsync(5_000);
+  await vi.waitFor(() => expect(requests).toHaveLength(2));
+  expect(runtime()).toContain(t("sessionProgressCard.runtime.unknown"));
+  expect(element.textContent).toContain("Collect findings");
+  requests[1]!.reject(new Error("Status unavailable"));
+  await vi.waitFor(() =>
+    expect(element.querySelector(".plugin-session-summary__history [role=alert]")).not.toBeNull(),
+  );
+  expect(runtime()).toContain(t("sessionProgressCard.runtime.unknown"));
+  expect(element.querySelector(".session-run-spinner")).toBeNull();
+  element.querySelector<HTMLButtonElement>(".plugin-session-summary > button")!.click();
+  await vi.advanceTimersByTimeAsync(0);
+  await reply(2, "Delegated reply", {
+    ...history("Delegated reply"),
+    sessionInfo: {
+      ...sessionInfo,
+      endedAt: 110,
+      status: "done",
+      hasActiveRun: false,
+      hasActiveSubagentRun: true,
+    },
+  });
+  await vi.waitFor(() => expect(runtime()).toContain(t("sessionProgressCard.runtime.delegated")));
+});

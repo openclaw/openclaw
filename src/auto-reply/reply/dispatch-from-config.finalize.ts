@@ -97,7 +97,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       text: "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
       isStatusNotice: true,
     });
-    setReplyPayloadMetadata(queuedRequesterNotice, { queueAdmissionNotice: true });
+    setReplyPayloadMetadata(queuedRequesterNotice, { queueAdmissionNotice: "queued" });
     replies.push(queuedRequesterNotice);
   }
   const pendingFinalDeliveryIdentity = replies
@@ -154,6 +154,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       ) {
         reply.text =
           "Your queued message was dropped because the session queue is full. It hasn’t changed the work already in progress. Please send it again after the current response finishes.";
+        setReplyPayloadMetadata(reply, { queueAdmissionNotice: true });
       } else if (reply === queuedRequesterNotice && !explicitFollowupQueued) {
         // Automatic fallback is an implementation detail. Only explicit commands
         // acknowledge queueing; a real overflow still needs the actionable notice above.

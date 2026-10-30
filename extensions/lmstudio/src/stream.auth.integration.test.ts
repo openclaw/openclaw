@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { streamSimple } from "openclaw/plugin-sdk/llm";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { OpenClawConfig, SecretInput } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -10,7 +11,7 @@ import { withServer, withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import { createModelProviderConfig } from "../../test-support/model-provider-config.test-support.js";
 import plugin from "../index.js";
-import { listedModel, streamModel } from "./stream.test-support.js";
+import { listedModel, messagesTextResponse, streamModel } from "./stream.test-support.js";
 
 afterEach(() => {
   clearRuntimeConfigSnapshot();
@@ -34,16 +35,20 @@ it.each(["store", "runtime", "header"] as const)(
             body += chunk;
           });
           request.once("end", () => {
+            const suppliedAuth = request.headers.authorization ?? request.headers["x-api-key"];
             requests.push([
               request.url,
-              request.headers.authorization,
+              typeof suppliedAuth === "string" ? suppliedAuth : undefined,
               body ? JSON.parse(body) : undefined,
             ]);
             const json = (value: unknown) =>
               response
                 .writeHead(200, { "content-type": "application/json" })
                 .end(JSON.stringify(value));
-            if (request.headers.authorization !== authorization) {
+            if (
+              request.headers.authorization !== authorization &&
+              !(request.url === "/v1/messages" && request.headers["x-api-key"] === expectedKey)
+            ) {
               response.writeHead(401).end();
             } else if (request.url === "/api/v1/models") {
               json(listedModel("qwen3.5-0.8b", 262144));
@@ -52,9 +57,7 @@ it.each(["store", "runtime", "header"] as const)(
             } else {
               response
                 .writeHead(200, { "content-type": "text/event-stream" })
-                .end(
-                  'data: {"choices":[{"index":0,"delta":{"content":"Authenticated."},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
-                );
+                .end(messagesTextResponse("Authenticated."));
             }
           });
         },
@@ -93,6 +96,13 @@ it.each(["store", "runtime", "header"] as const)(
             provider: "lmstudio",
             modelId: model.id,
             config,
+            streamFn:
+              provider.createStreamFn?.({
+                provider: "lmstudio",
+                modelId: model.id,
+                model,
+                config,
+              }) ?? streamSimple,
           });
           assert(wrapped, "LM Studio stream wrapper was not created");
           const events = [];
@@ -111,8 +121,8 @@ it.each(["store", "runtime", "header"] as const)(
               { model: "qwen3.5-0.8b", context_length: 16384 },
             ],
             [
-              "/v1/chat/completions",
-              authorization,
+              "/v1/messages",
+              kind === "header" ? authorization : expectedKey,
               expect.objectContaining({ model: "prepared-large" }),
             ],
           ]);

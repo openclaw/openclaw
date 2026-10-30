@@ -39,6 +39,56 @@ function buildFixture(
 }
 
 describe("Control UI build chunking", () => {
+  it("keeps the creator runtime and its copy outside shared admission and virtualizer chunks", async () => {
+    const owner = modulePath("../pages/templates/creator-owner.ts");
+    const flow = modulePath("../pages/templates/creator-flow.ts");
+    const copy = modulePath("../i18n/locales/en-template-creator.ts");
+    const title = modulePath("../i18n/locales/en-agents-home.ts");
+    const virtualizer = modulePath("../../node_modules/@tanstack/virtual-core/dist/esm/index.js");
+    const entry = "\0creator-owner-fixture";
+    const result = await buildFixture(
+      entry,
+      new Map([
+        [
+          entry,
+          `export { open } from ${JSON.stringify(owner)}; export { measure } from ${JSON.stringify(virtualizer)};`,
+        ],
+        [
+          owner,
+          `import { title } from ${JSON.stringify(title)}; export const open = () => import(${JSON.stringify(flow)}).then(m => m.start(title));`,
+        ],
+        [
+          flow,
+          `import { copy } from ${JSON.stringify(copy)}; export const start = title => title + copy;`,
+        ],
+        [copy, "export const copy = 'Optional creator copy';"],
+        [title, "export const title = 'Create Template';"],
+        [virtualizer, "export const measure = () => 1;"],
+      ]),
+    );
+    if (Array.isArray(result) || !("output" in result)) {
+      throw new Error("Expected one in-memory build");
+    }
+    const chunks = result.output.filter((asset) => asset.type === "chunk");
+    const cold = chunks.find((chunk) => flow in chunk.modules)!;
+    expect(cold.fileName).toContain("template-creator-runtime");
+    expect(copy in cold.modules).toBe(true);
+    const reachable = new Set<string>();
+    const visit = (file: string) => {
+      if (reachable.has(file)) {
+        return;
+      }
+      reachable.add(file);
+      chunks.find((chunk) => chunk.fileName === file)?.imports.forEach(visit);
+    };
+    visit(chunks.find((chunk) => chunk.isEntry)!.fileName);
+    expect(reachable.has(cold.fileName)).toBe(false);
+    expect(
+      chunks
+        .filter((chunk) => reachable.has(chunk.fileName))
+        .some((chunk) => owner in chunk.modules),
+    ).toBe(true);
+  });
   it("keeps optional parsing and device signing outside the eager graph", async () => {
     const zod = modulePath("../../node_modules/zod/index.js");
     const json5 = modulePath("../../node_modules/json5/dist/index.mjs");

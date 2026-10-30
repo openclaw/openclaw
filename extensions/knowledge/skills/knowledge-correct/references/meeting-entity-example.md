@@ -87,14 +87,12 @@ Morgan is holding the release until two failure cases are understood.
 
 Morgan will send a failure report; no deadline set.
 [[meetings/reliability-review|Reliability review · line 5]]
-
-## Timeline
-
-- **2026-09-23** — Reported two failure cases at the reliability review. [[meetings/reliability-review|Reliability review · lines 2–3]]
 ```
 
-The introduction says how Morgan is known, State holds the current situation by
-topic, and the Timeline records what happened.
+The introduction says how Morgan is known and State holds the current situation
+by topic. What happened at the review is the body of Morgan's `attended`
+relationship to the meeting, "Reported two failure cases and committed to a
+failure report.", which becomes the review's row in Morgan's derived Timeline.
 
 ## Updating the same profile after a later review
 
@@ -122,14 +120,11 @@ deployed yet. [[meetings/reliability-follow-up|Reliability follow-up · lines 3�
 
 None; the failure report was sent.
 [[meetings/reliability-follow-up|Reliability follow-up · line 3]]
-
-## Timeline
-
-- **2026-09-25** — Sent the failure report and approved release. [[meetings/reliability-follow-up|Reliability follow-up · lines 2–4]]
-- **2026-09-23** — Reported two failure cases and committed to a failure report. [[meetings/reliability-review|Reliability review · lines 2–5]]
 ```
 
-The introduction need not change. A page rewrite does not change the separate
+The follow-up gets its own `attended` relationship, "Sent the failure report and
+approved the release.", so Morgan's Timeline shows both meetings without a page
+edit. The introduction need not change. A page rewrite does not change the separate
 commitment claim; follow publication guidance for that.
 
 ## Structured records and checks

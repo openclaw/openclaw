@@ -13,6 +13,7 @@ import type { SessionWorkspacePreview, SidebarContent } from "./chat-sidebar-con
 export function resolveSessionWorkspaceDiff(
   state: SessionWorkspaceHost,
   openFile: (path: string) => Promise<SessionWorkspacePreview | undefined> | undefined,
+  canEditFile: (path: string) => Promise<boolean>,
 ): SidebarContent | null {
   const workspace = getSessionWorkspace(state);
   const client = state.client;
@@ -117,6 +118,7 @@ export function resolveSessionWorkspaceDiff(
           }
         }
       : undefined,
+    canEditFile: canLoadFileText ? canEditFile : undefined,
     openFile,
   };
   trackSessionCheckoutSidebar(content);

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 90229,
-  "reason": "Measured current-main Board chrome/body/native gating build: 90229 B gzip, 4 B below the matched base, with paired Board CPU gains and one startup CSS request.",
-  "updatedAt": "2026-10-27"
+  "startupJsGzipBytes": 90819,
+  "reason": "Current-main Board admission candidate measures 90819 B gzip, 19 B below the matched 90838 B base, with unchanged three JS requests and one CSS request.",
+  "updatedAt": "2026-10-30"
 }

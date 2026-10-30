@@ -10,11 +10,18 @@
 - Gateway owns its files (auth profiles, agent/workspace identity, database identity, config): load once, serve from the owner's memory, update write-through on its own writes. Hot request paths never re-read, stat, or realpath them.
 - Rare external writers (CLI processes, Doctor, manual edits): one watcher per owner or the config reload watcher, never per-request checks. List writers that bypass the Gateway before caching.
 - Authority revalidates the owner's in-memory revision, not disk; a swapped/foreign database file must still be detected before the next privileged write.
+- Requests read live databases through their owner. Never enter `withArtifactPreservingStateReads({ agentDatabases: true })`: it copies whole agent databases for offline Doctor inspection, and a multi-GB copy blocks every writer.
 
 ## Best-Effort Callbacks And Telemetry
 
 - Network telemetry/callbacks off turn/token paths. Queue via lifecycle owner with bounds + visible overflow/coalescing.
 - Classify by caller contract, not void returns: authorization, approval, required persistence, user-requested delivery ≠ best-effort; retain ordering/failure semantics. Callback failure must not grant permission/discard required work.
+
+## Usage And Cost
+
+- Keep usage states distinct: measured (zero included), unpriced (missing price shows "Unpriced", never $0), partial (`≥` totals, `—` for ratios of partial counters). A turn is unknown only when it may have billed without a usage report.
+- Price each route from its billing provider's catalog; borrow prices only through manifest `modelPricing.providers.<id>.priceAs`. Subscription usage at API rates is a labeled estimate, not spend.
+- Reports cover every row in range or flag `partial` with the reason; budgets never drop rows silently. Every row names the provider that served it.
 
 ## Write Target And Outcome
 

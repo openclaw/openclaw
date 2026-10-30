@@ -98,7 +98,9 @@ it("preserves prepared quiet activity through older pages and prefetched snapsho
     activity: [{ messageId: "wait-result", items: [] }],
   });
   const expected = [{ ...result, activity: [] }];
-  expect((await loadOlderChatHistoryPage(state, 1))?.messages).toEqual(expected);
+  expect((await loadOlderChatHistoryPage(state, { cursor: "older-1" }))?.messages).toEqual(
+    expected,
+  );
   expect(
     await requestChatSessionSnapshot(state.client!, state.sessionKey, state, () => true),
   ).toMatchObject({ kind: "snapshot", snapshot: { messages: expected } });
@@ -305,6 +307,110 @@ it.each([
     expect(state.chatDisplayedLeafEntryId).toBe(nextLeaf);
   },
 );
+
+describe("full tail after a long live turn", () => {
+  const prompt = message("user", "opening prompt", { id: "prompt", seq: 1 });
+  const call = (seq: number) => message("assistant", `call ${seq}`, { id: `call-${seq}`, seq });
+  const result = (seq: number) => ({
+    role: "toolResult",
+    content: [{ type: "text", text: `result ${seq}` }],
+    __openclaw: { id: `result-${seq}`, seq },
+  });
+  const transcript = [prompt, call(2), result(3), call(4), result(5), call(6), call(7)];
+  const sessionInfo = { key: "main", kind: "direct" as const, updatedAt: 1, sessionId: "session" };
+  const tailFrom = (start: number, totalMessages = transcript.length) => ({
+    messages: transcript.slice(start),
+    hasMore: true,
+    olderCursor: "older:tail",
+    nextOffset: transcript.length - start,
+    totalMessages,
+    sessionInfo: { ...sessionInfo, hasActiveRun: false, status: "killed" as const },
+  });
+
+  async function loadAfterLiveTurn(
+    tail: ChatHistoryResult,
+    older: () => Promise<ChatHistoryResult>,
+    { cursorReset = true } = {},
+  ) {
+    const state = createState(tail);
+    state.currentSessionId = "session";
+    state.chatDisplayedLeafEntryId = undefined;
+    const pages: ChatHistoryResult[] = [
+      {
+        messages: [prompt],
+        totalMessages: 1,
+        deltaCursor: "before-stop",
+        sessionInfo: { ...sessionInfo, hasActiveRun: true },
+      },
+      tail,
+    ];
+    const request = vi
+      .spyOn(state.client!, "request")
+      .mockImplementation(async (_method, params) => {
+        const cursor = (params as { cursor?: string }).cursor;
+        if (cursor === "older:tail") {
+          return older();
+        }
+        // Stop persists an aborted reply, so the delta cursor resets to a bounded tail.
+        return cursor === "before-stop" && cursorReset ? { kind: "reset" } : pages.shift();
+      });
+    await loadChatHistory(state);
+    // Live rows carry assistant turns only; tool results arrive as activity.
+    const scope = { sessionKey: state.sessionKey, sessionId: "session", activeLeafEntryId: null };
+    for (const row of [call(2), call(4), call(6)]) {
+      publishLive(state, row, scope);
+    }
+    await loadChatHistory(state);
+    return { state, request };
+  }
+
+  it.each([
+    ["after a row the pane never held", 2],
+    ["at a row the pane held live", 3],
+  ])("reads the gap when the tail starts %s", async (_case, start) => {
+    const { state, request } = await loadAfterLiveTurn(tailFrom(start), async () => ({
+      messages: transcript.slice(0, start),
+      totalMessages: transcript.length,
+      sessionInfo,
+    }));
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      expect.objectContaining({ cursor: "before-stop" }),
+      expect.anything(),
+    );
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      expect.objectContaining({ cursor: "older:tail" }),
+      expect.anything(),
+    );
+    expect(state.chatMessages).toEqual(transcript);
+    expect(state.chatHistoryPagination).toEqual({ hasMore: false, totalMessages: 7 });
+  });
+
+  it("keeps the retryable boundary when the gap read fails", async () => {
+    const { state } = await loadAfterLiveTurn(tailFrom(2), async () => {
+      throw new Error("offline");
+    });
+    expect(state.chatMessages).not.toContainEqual(prompt);
+    expect(state.chatHistoryPagination).toEqual({
+      hasMore: true,
+      olderCursor: "older:tail",
+      nextOffset: 5,
+      totalMessages: 7,
+    });
+    expect(state.lastError).toBeNull();
+  });
+
+  it.each([
+    ["the full read did not follow a cursor reset", tailFrom(2), { cursorReset: false }],
+    ["the gap exceeds one older page", tailFrom(2, 2000), {}],
+  ])("keeps the lazy boundary when %s", async (_case, tail, options) => {
+    const older = vi.fn(async () => ({ messages: transcript.slice(0, 2), sessionInfo }));
+    const { state } = await loadAfterLiveTurn(tail, older, options);
+    expect(older).not.toHaveBeenCalled();
+    expect(state.chatHistoryPagination).toMatchObject({ hasMore: true, olderCursor: "older:tail" });
+  });
+});
 
 it("clears live projection ownership after history access is denied", async () => {
   const state = createState({ messages: [] });

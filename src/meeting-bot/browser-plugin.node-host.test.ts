@@ -20,7 +20,7 @@ const setup = (params = commands) =>
   plugins.zoomMeetingsPlugin.nodeHandler(JSON.stringify({ action: "setup", ...params }));
 const timeoutMessage = "Zoom meeting audio prerequisite check timed out on the node.";
 function mockClock(values: number[]) {
-  const clock = vi.spyOn(Date, "now");
+  const clock = vi.spyOn(performance, "now");
   values.forEach((value) => clock.mockReturnValueOnce(value));
 }
 beforeAll(async () => {
@@ -81,7 +81,7 @@ it.each(["deadline", "profiler", "command"])(
 
 it.each([false, true])("provisions Linux audio with existing modules=%s", async (loaded) => {
   vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-  vi.spyOn(Date, "now").mockReturnValue(0);
+  vi.spyOn(performance, "now").mockReturnValue(0);
   const run = createPulseCommands(loaded);
   spawnSync.mockImplementation((command, args) => run([command, ...args]));
   const overrides = loaded ? { ...commands, bargeInInputCommand: ["barge-in"] } : undefined;

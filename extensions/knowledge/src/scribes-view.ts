@@ -1,7 +1,13 @@
 /** The Scribes tab: the list of scribes grouped by state, and one scribe's detail and controls. */
 import type { Page } from "./page-context.js";
 import { button, chip, clock, el } from "./page-dom.js";
-import { openConfirmDialog, openStartDialog, scribeTile } from "./scribe-dialog.js";
+import {
+  openConfirmDialog,
+  openStartDialog,
+  pluginButton,
+  pluginStateText,
+  scribeTile,
+} from "./scribe-dialog.js";
 import {
   repairScribe,
   runScribeNow,
@@ -14,6 +20,7 @@ import {
   detectSources,
   loadRuns,
   loadScribes,
+  neededPluginState,
   statusFromText,
   type ScribeDetection,
   type ScribeJob,
@@ -31,7 +38,7 @@ const STATUS: Record<ScribeStatus, [string, string]> = {
   paused: ["Paused", ""],
   failing: ["Failing", "scribe-chip-warn"],
   done: ["Done", "scribe-chip-on"],
-  reauth: ["Needs reauthorization", "scribe-chip-warn"],
+  missing: ["Conversation not found", "scribe-chip-warn"],
 };
 /**
  * Jobs whose first run this page already forced. A job reads as never run until its forced run
@@ -56,6 +63,9 @@ const when = (ms: number) => {
   const at = new Date(ms);
   return `${at.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${clock(at.toISOString())}`;
 };
+// "a, b and c".
+const listText = (items: string[]) =>
+  items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : (items[0] ?? "");
 const plural = (n: number, one: string) => `${n.toLocaleString()} ${one}${n === 1 ? "" : "s"}`;
 
 /** Human schedule for a scribe automation; daily cron expressions read as a time of day. */
@@ -77,6 +87,17 @@ function scheduleText(job: ScribeJob) {
       });
       return `Weekly on ${day}, ${clockText}${tz}`;
     }
+    // Weekdays at one or more hours ("M H1,H2 * * 1-5") read as their times of day.
+    const weekdays = /^(\d{1,2}) (\d{1,2}(?:,\d{1,2})*) \* \* 1-5$/.exec(schedule.expr.trim());
+    if (weekdays) {
+      const times = weekdays[2]!.split(",").map((hour) =>
+        new Date(2000, 0, 1, Number(hour), Number(weekdays[1])).toLocaleTimeString(undefined, {
+          hour: "numeric",
+          minute: "2-digit",
+        }),
+      );
+      return `Weekdays, ${listText(times)}${tz}`;
+    }
     return `${schedule.expr}${tz}`;
   }
   if (schedule.kind === "every" && schedule.everyMs) {
@@ -96,7 +117,7 @@ function activeMeta(snapshot: ScribeSnapshot) {
   const { status, job, result } = snapshot;
   const meta = el("span", undefined, "scribe-meta");
   const dot = el("span", undefined, "scribe-dot");
-  if (status === "failing" || status === "reauth") {
+  if (status === "failing" || status === "missing") {
     dot.classList.add("scribe-dot-warn");
   } else if (status !== "on") {
     dot.classList.add("scribe-dot-idle");
@@ -105,14 +126,18 @@ function activeMeta(snapshot: ScribeSnapshot) {
   const parts: string[] = [];
   if (status === "starting") {
     parts.push("Setting up in its conversation");
-  } else if (status === "reauth") {
-    parts.push("Its conversation is archived or gone. Repair reconnects it.");
+  } else if (status === "missing") {
+    parts.push(
+      snapshot.session?.archived
+        ? "Its conversation is archived. Repair restores it."
+        : "Its conversation was deleted. Repair starts a new one.",
+    );
   } else if (status === "paused") {
     parts.push("Paused");
   } else if (firstRunPending(snapshot)) {
     parts.push("First run in progress");
   }
-  if (job && status !== "reauth") {
+  if (job && status !== "missing") {
     parts.push(scheduleText(job));
     if (job.state.lastRunAtMs) {
       parts.push(`Last run ${when(job.state.lastRunAtMs)}`);
@@ -137,8 +162,11 @@ function detectionMeta(snapshot: ScribeSnapshot, detection: ScribeDetection, age
   const { scribe } = snapshot;
   const meta = el("span", undefined, "scribe-meta");
   const { activeConversations: active, archivedConversations: archived, memoryFile } = detection;
+  const readiness = neededPluginState(scribe, detection);
   if (snapshot.status === "done" && snapshot.result) {
     meta.append(el("span", `Done · ${snapshot.result.summary}`));
+  } else if (scribe.plugin && readiness) {
+    meta.append(el("span", pluginStateText(scribe.plugin, readiness)));
   } else if (scribe.id === "conversations" && (active !== undefined || archived !== undefined)) {
     const counts = [
       active === undefined ? "" : `${active.toLocaleString()} active`,
@@ -167,7 +195,10 @@ export async function scribes(ui: Page, n: number, target: HTMLElement) {
   const selected = scribeById(s.scribe);
   const [snapshots, detection] = await Promise.all([
     loadScribes(host, agentId),
-    selected ? Promise.resolve({}) : detectSources(host, agentId).catch(() => ({})),
+    // A detail only needs detection for its plugin; the list shows every scribe's facts.
+    selected && !selected.plugin
+      ? Promise.resolve({})
+      : detectSources(host, agentId).catch(() => ({})),
   ]);
   if (host.connection.canWrite) {
     await Promise.all(snapshots.map((snapshot) => startFirstRun(ui, snapshot)));
@@ -178,7 +209,10 @@ export async function scribes(ui: Page, n: number, target: HTMLElement) {
     return;
   }
   renderScribesTab(ui.scribesTab, snapshots.filter((entry) => isOn(entry.status)).length);
-  target.replaceChildren(snapshot ? detail(ui, snapshot, runs) : list(ui, snapshots, detection));
+  s.scribesCountAgent = agentId;
+  target.replaceChildren(
+    snapshot ? detail(ui, snapshot, runs, detection) : list(ui, snapshots, detection),
+  );
 }
 
 /**
@@ -209,8 +243,13 @@ const firstRunPending = (snapshot: ScribeSnapshot) =>
     (snapshot.job.state.runningAtMs || firstRuns.has(snapshot.job.id)),
   );
 
+/** Number of the agent's scribes that are on, for the Scribes tab count. */
+export async function countScribesOn(host: Parameters<typeof loadScribes>[0], agentId: string) {
+  return (await loadScribes(host, agentId)).filter((entry) => isOn(entry.status)).length;
+}
+
 /** Tab label with the count of scribes that are on. */
-function renderScribesTab(tab: HTMLButtonElement, on: number) {
+export function renderScribesTab(tab: HTMLButtonElement, on: number) {
   tab.replaceChildren(document.createTextNode("Scribes"));
   if (on) {
     const badge = el("span", String(on), "knowledge-tab-count");
@@ -241,6 +280,7 @@ function start(ui: Page, snapshot: ScribeSnapshot, detection: ScribeDetection) {
     storeName,
     detection,
     canWrite: host.connection.canWrite,
+    basePath: host.basePath,
     start: async (prompt) => {
       await startScribe(host, snapshot, agentId, prompt, attempt);
       ui.announce(`Started ${scribeLabel(snapshot.scribe)}.`);
@@ -337,14 +377,24 @@ function availableRow(
       button("Details", () => openScribe(ui, scribe.id), "knowledge-quiet knowledge-small"),
     );
   }
+  // A needed plugin that is not ready comes first: the scribe can't start until it is.
+  const readiness = neededPluginState(scribe, detection);
+  const blocked = readiness && readiness !== "ready" ? readiness : undefined;
+  if (scribe.plugin && blocked) {
+    actions.append(pluginButton(ui.s.context.host.basePath, scribe.plugin, blocked));
+  }
   const startButton = button(
     scribe.startLabel,
     () => start(ui, snapshot, detection),
-    "knowledge-button knowledge-primary knowledge-small",
+    blocked
+      ? "knowledge-button knowledge-small"
+      : "knowledge-button knowledge-primary knowledge-small",
   );
-  startButton.disabled = !canWrite;
+  startButton.disabled = !canWrite || Boolean(blocked);
   if (!canWrite) {
     startButton.title = "Starting a scribe needs write access to this Gateway.";
+  } else if (scribe.plugin && blocked) {
+    startButton.title = `Connect the ${scribe.plugin.name} plugin first.`;
   }
   actions.append(startButton);
   row.append(scribeTile(scribe), copy, actions);
@@ -381,7 +431,7 @@ function runText(run: ScribeRun) {
   return run.summary ? statusFromText(run.summary)?.summary || run.summary : "Finished";
 }
 
-function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {
+function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection: ScribeDetection) {
   const { scribe, job, session, status } = snapshot;
   const host = ui.s.context.host;
   const { agentId, agentName, storeName } = pageNames(ui);
@@ -430,7 +480,7 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {
     controls.push(node);
     return node;
   };
-  if (job && status !== "reauth") {
+  if (job && status !== "missing") {
     actions.append(
       control("Run now", () => runScribeNow(host, job), `${scribe.title} is running.`),
     );
@@ -445,16 +495,18 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {
     );
   }
   // A scribe with an automation repairs it; one without starts over from the start dialog.
-  if (job && (status === "reauth" || status === "failing")) {
+  if (job && (status === "missing" || status === "failing")) {
     actions.append(
       control(
         "Repair",
         () => repairScribe(host, snapshot, job, agentId),
-        `Asked ${scribeLabel(scribe)} to repair its setup.`,
+        status === "missing" && session?.archived
+          ? `Restored ${scribeLabel(scribe)} and turned it back on.`
+          : `Asked ${scribeLabel(scribe)} to repair its setup.`,
       ),
     );
   }
-  if (job && status !== "reauth") {
+  if (job && status !== "missing") {
     const paused = !job.enabled;
     actions.append(
       control(
@@ -486,7 +538,7 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {
   if (!job && status !== "starting") {
     const again = button(
       status === "failing" ? "Start again…" : scribe.startLabel,
-      () => start(ui, snapshot, {}),
+      () => start(ui, snapshot, detection),
       "knowledge-button knowledge-primary knowledge-small",
     );
     again.disabled = !canWrite;
@@ -540,12 +592,23 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {
       "Conversation",
       session
         ? `${scribeLabel(scribe)}${session.createdAt ? ` · started ${when(session.createdAt)}` : ""}${session.archived ? " · archived" : ""}`
-        : "Gone",
+        : "Not found",
     ],
     ["Model", lastRun?.model ?? `${agentName}’s default`],
     ["Store", storeName],
   );
   facts.push(["Follows", `${scribe.skill} skill · ships with Knowledge`]);
+  const readiness = neededPluginState(scribe, detection);
+  if (scribe.plugin && readiness) {
+    const value = el("span", undefined, "scribe-status");
+    value.append(el("span", pluginStateText(scribe.plugin, readiness)));
+    if (readiness !== "ready") {
+      value.append(
+        pluginButton(host.basePath, scribe.plugin, readiness, "knowledge-quiet knowledge-small"),
+      );
+    }
+    facts.push(["Source", value]);
+  }
   if (job) {
     facts.push([
       "If it fails",

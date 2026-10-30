@@ -1,15 +1,25 @@
-import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
+import {
+  getSqliteDatabaseAdmissionIdentityForPath,
+  readSqliteDatabaseWriteTokenForPath,
+} from "../../infra/sqlite-database-admission.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
+import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
 import {
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
   readOpenClawAgentDatabaseRegistryToken,
 } from "../../state/openclaw-agent-db-registry-listing.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent-owner.js";
+import type { SessionStoreWorkerReadScope } from "./session-entry-read-runtime.types.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import type { SessionStoreRegistryRead } from "./session-sqlite-target.js";
 import { isPerAgentSessionStoreConfig } from "./session-store-config.js";
-import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import {
+  assertSessionStoreReadCandidate,
+  captureSessionStoreReadCandidate,
+} from "./session-store-read-candidates.js";
+import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import type {
   SessionStoreTargetInventoryRequest,
   SessionStoreTargetInventoryResult,
@@ -18,6 +28,7 @@ import type {
 } from "./session-store-target-inventory.js";
 import {
   targetDiscoveryLane,
+  prepareSessionStoreCandidatesInWorker,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
 import { listConfiguredSessionStoreAgentIds } from "./targets-configured-agents.js";
@@ -41,7 +52,8 @@ const targetSelections: SelectionMemo<PreparedStoreTarget> = new Map();
 const targetInventories: SelectionMemo<PreparedInventory> = new Map();
 const MAX_SELECTIONS = 128;
 
-/** Registry receipts and physical replacement invalidate locator facts, never caller authority. */
+/** Memo keys track supplied physical identities; in-process registry publications retire entries.
+ * Family markers alone do not witness external changes. Neither memo grants caller authority. */
 function captureSelectionMemo<Value>(
   selections: SelectionMemo<Value>,
   request: Pick<SessionStoreTargetReadRequest, "env" | "candidates">,
@@ -56,12 +68,18 @@ function captureSelectionMemo<Value>(
       captured = JSON.stringify([
         selection,
         request.candidates.map((candidate) => {
-          const identity = readDatabasePathIdentitySync(candidate.path);
+          if (candidate.scope && isArtifactPreservingStateRead("agent")) {
+            return [candidate];
+          }
+          const identity = candidate.identity ?? readDatabasePathIdentitySync(candidate.path);
           return [
             candidate,
             identity.key,
             identity.birthtime,
-            includeRows ? readSqliteDatabaseWriteTokenForPath(candidate.path) : undefined,
+            includeRows &&
+            (!candidate.identity || getSqliteDatabaseAdmissionIdentityForPath(candidate.path))
+              ? readSqliteDatabaseWriteTokenForPath(candidate.path)
+              : undefined,
           ];
         }),
       ]);
@@ -96,6 +114,7 @@ export function prepareSessionStoreTargetInventoryRead(
 ) {
   const { candidates, ...prepared } = request;
   const selection = [
+    request.preserveSourceArtifacts,
     request.selection,
     request.recoveryExclusions,
     request.agentIds,
@@ -179,7 +198,10 @@ export async function withSessionStoreTarget<T>(
   onReadError?: (error: unknown, assertCurrent: () => void) => Promise<T>,
 ): Promise<T> {
   assertCallerCurrent?.();
-  const { candidates, ...targetRequest } = request;
+  const { candidates, ...targetRequest } = {
+    ...request,
+    ...(isArtifactPreservingStateRead("agent") ? { preserveSourceArtifacts: true as const } : {}),
+  };
   const registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env: request.env });
   return withSessionHistoryWorkerReadCandidates(
     candidates,
@@ -190,6 +212,7 @@ export async function withSessionStoreTarget<T>(
         discovery.assertCurrent();
       };
       const memo = captureSelectionMemo(targetSelections, request, [
+        targetRequest.preserveSourceArtifacts,
         request.agentId,
         request.defaultAgentId,
         request.storePath,
@@ -241,4 +264,46 @@ export async function withSessionStoreTarget<T>(
     },
     targetDiscoveryLane,
   );
+}
+
+/** A live prepared source already owns physical qualification; cold locators use discovery. */
+export async function prepareSessionStoreReaderCandidates(
+  storePath: string,
+  options: {
+    inspection: boolean;
+    allowDirect: boolean;
+    preparedSource?: SessionStoreWorkerReadScope["preparedSource"];
+  },
+) {
+  const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
+  const source = options.preparedSource;
+  if (options.inspection && source) {
+    source.assertCurrent();
+    return {
+      target,
+      direct: undefined,
+      candidates: [
+        {
+          path: source.path,
+          physicalPath: source.path,
+          identity: {
+            key: "file:" + source.databaseIdentity,
+            canonicalPath: source.path,
+            birthtime: source.databaseBirthtime,
+          },
+        },
+      ],
+    };
+  }
+  const captured =
+    !options.inspection && options.allowDirect && target.agentId
+      ? captureSessionStoreReadCandidate(target.path)
+      : undefined;
+  const direct = captured && captured.path === captured.physicalPath ? captured : undefined;
+  const candidates = options.inspection
+    ? (await prepareSessionStoreCandidatesInWorker({ storePath })).candidates
+    : direct
+      ? [direct]
+      : captureSessionStoreReadCandidates(storePath);
+  return { target, direct, candidates };
 }

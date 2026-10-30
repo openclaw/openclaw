@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import * as toolCallRepair from "../../../packages/tool-call-repair/src/payload.js";
+import { userFacingTextFilters } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   createAssistantVisibleStreamText,
   sanitizeAssistantVisibleStreamText,
@@ -27,9 +28,7 @@ it.each([
   const project = vi.mocked(toolCallRepair.projectPlainTextToolCallBlocks);
   project.mockClear();
   const stream = createAssistantVisibleStreamText("final_answer");
-  for (let offset = 0; offset < source.length; offset += 4) {
-    stream.append(source.slice(offset, offset + 4));
-  }
+  streamChunks(source, 4, stream);
   expect(stream.text).toBe(source.trimEnd());
   expect(project.mock.calls.length).toBe(0);
 });
@@ -37,9 +36,7 @@ it.each([
 it("keeps a split tool header across an unbounded whitespace gap", () => {
   const chunks = ["Before\n[too", "l:write]", "\r\n" + " ".repeat(5000), '{"content":"ok"}\nDone.'];
   const stream = createAssistantVisibleStreamText("final_answer");
-  for (const chunk of chunks) {
-    stream.append(chunk);
-  }
+  chunks.forEach((chunk) => stream.append(chunk));
   expect(stream.text).toBe("Before\nDone.");
 });
 
@@ -49,12 +46,13 @@ vi.mock("./code-regions.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./code-regions.js")>();
   return {
     ...actual,
-    findCodeOwnership(
-      text: Parameters<typeof actual.findCodeOwnership>[0],
-      options?: Parameters<typeof actual.findCodeOwnership>[1],
-    ) {
+    findCodeRegions(text: string) {
       markdownOwnershipWork.scannedCharacters += text.length;
-      return actual.findCodeOwnership(text, options);
+      return actual.findCodeRegions(text);
+    },
+    findCodeOwnership(...args: Parameters<typeof actual.findCodeOwnership>) {
+      markdownOwnershipWork.scannedCharacters += args[0].length;
+      return actual.findCodeOwnership(...args);
     },
   };
 });
@@ -80,9 +78,7 @@ vi.mock("../../../packages/markdown-core/src/markdown-code-regions.js", async (i
 
 function projectFinal(chunks: readonly string[]) {
   const stream = createAssistantVisibleStreamText("final_answer");
-  for (const chunk of chunks) {
-    stream.append(chunk);
-  }
+  chunks.forEach((chunk) => stream.append(chunk));
   expect(stream.text).toBe(sanitizeAssistantVisibleStreamText(chunks.join(""), "final_answer"));
   return stream.text;
 }
@@ -150,13 +146,27 @@ it.each(["mixed", "leading", "repeated literal", "repeated hidden"])(
   },
 );
 
+it("bounds Markdown scan work after an early duplicate paragraph", () => {
+  const paragraphs = Array.from(
+    { length: 128 },
+    (_, index) => `Paragraph ${index}: an ordinary explanatory sentence without code.`,
+  );
+  const source = ["Ready.", "Ready.", ...paragraphs].join("\n\n");
+  const stream = createAssistantVisibleStreamText("final_answer");
+  markdownOwnershipWork.scannedCharacters = 0;
+  const result = streamChunks(source, 4, stream);
+  expect(result.text).toBe(["Ready.", ...paragraphs].join("\n\n"));
+  expect(result.delivered).toBe(result.text);
+  expect(markdownOwnershipWork.scannedCharacters).toBeLessThan(source.length * 16);
+});
+
 it("restores provisional reasoning text and resets its state on replacement", () => {
   const stream = createAssistantVisibleStreamText("final_answer");
   const fenced =
     "<final>" +
     "```text\n<think>literal code</think>\n```\nOrdinary prose follows.\n\n".repeat(4) +
     "</final>";
-  const scenarios = [
+  for (const chunks of [
     ["<final\nx='a'>Answer\n", "next\n"],
     ["<final\nx='a", "'>Answer\n", "next\n"],
     ["<think\n/>Answer\n", "next\n"],
@@ -169,8 +179,7 @@ it("restores provisional reasoning text and resets its state on replacement", ()
     Array.from({ length: Math.ceil(fenced.length / 98) }, (_, index) =>
       fenced.slice(index * 98, (index + 1) * 98),
     ),
-  ];
-  for (const chunks of scenarios) {
+  ]) {
     stream.replace("");
     let source = "";
     let delivered = "";
@@ -200,10 +209,7 @@ it("bounds prefix comparisons after a stripped trace line", () => {
   let comparedCharacters = 0;
   let delivered = "";
   try {
-    for (let offset = 0; offset < source.length; offset += 4) {
-      const result = stream.append(source.slice(offset, offset + 4));
-      delivered = result.delta === null ? result.text : delivered + result.delta;
-    }
+    delivered = streamChunks(source, 4, stream).delivered;
     comparedCharacters = probe.mock.calls.reduce((sum, [search]) => sum + search.length, 0);
   } finally {
     probe.mockRestore();
@@ -218,10 +224,8 @@ it("keeps a trailing high surrogate pending until its visibility is known", () =
   const stream = createTextProjection(assistantVisibleTextFilters("delivery", true));
   expect(stream.append("\uDB40")).toEqual({ text: "", delta: "" });
   expect(stream.append("\uDC67")).toEqual({ text: "", delta: "" });
-  expect(stream.append("Answer")).toEqual({
-    text: "\uDB40\uDC67Answer",
-    delta: "\uDB40\uDC67Answer",
-  });
+  const visible = "\uDB40\uDC67Answer";
+  expect(stream.append("Answer")).toEqual({ text: visible, delta: visible });
   expect(stream.replace("\uDB40")).toEqual({ text: "", delta: null });
   expect(stream.append("x").text).toBe("\uDB40x");
   expect(stream.replace("\uD83D").text).toBe("");
@@ -263,28 +267,9 @@ it.each([
 });
 
 it.each([
-  [
-    "an open image description when its inline destination closes",
-    "![example `x\n[tool:read] {}\nx` label",
-    "](/url)\n",
-  ],
-  [
-    "a multiline reference title when its closing quote arrives",
-    '[id]: /url\n"title\n`x\n[tool:read] {}\nx` trailing\n',
-    '"',
-  ],
-  [
-    "a reference image when its next-line destination arrives",
-    "![example `x\n[tool:read] {}\nx`][id]\n\n[id]:\n",
-    "/url\n",
-  ],
-])("recomputes final-answer ownership after %s", (_name, prefix, suffix) => {
-  expect(expectOwnershipCorrection([prefix, suffix], { replaces: true })).not.toContain(
-    "[tool:read]",
-  );
-});
-
-it.each([
+  ["![example `x\n[tool:read] {}\nx` label", "](/url)\n"],
+  ['[id]: /url\n"title\n`x\n[tool:read] {}\nx` trailing\n', '"'],
+  ["![example `x\n[tool:read] {}\nx`][id]\n\n[id]:\n", "/url\n"],
   ["[label](/url (title\n`x\n[tool:read] {}\nx` trailing\n", "))\n"],
   ["[label](/url (title\n`x\n[tool:read] {}\nx` trailing\n)", ")\n"],
   ["![example `x\n[tool:read] {}\nx`][id]\n\n> [id]:\n", "> /url\n"],
@@ -292,12 +277,9 @@ it.each([
   ['[label](/url "title\n`x\n[tool:read] {}\nx` trailing\n', '")\n'],
   ['[label](/u(x) "title\n`x\n[tool:read] {}\nx` trailing\n', '")\n'],
   ['[label](/u(x)\n"title\n`x\n[tool:read] {}\nx` trailing\n', '")\n'],
-])(
-  "refreshes ownership when streamed link and container syntax changes Markdown ownership",
-  (...chunks: string[]) => {
-    expectOwnershipCorrection(chunks, { replaces: true });
-  },
-);
+])("replaces provisional code when image, link or reference ownership closes: %j", (...chunks) => {
+  expect(expectOwnershipCorrection(chunks, { replaces: true })).not.toContain("[tool:read]");
+});
 
 it.each([
   "![example `x\n[tool:read] {}\nx`][id]\n\nA | B\n--- | ---\n\n[id]: /url\n",
@@ -330,24 +312,14 @@ it.each([
   expectOwnershipCorrection(chunks);
 });
 
-it("refreshes ownership when a GFM table delimiter becomes invalid", () => {
-  const suffix = "x\n";
-  const prefixes = [
-    ...["---:", "-:", "--:", ":-", ":--"].map(
-      (delimiter) => `Intro \`x\n[tool:read] {}\nx\` |\n${delimiter}`,
-    ),
-    "Intro `x\n[tool:read] {}\nx`\n---:",
-  ];
-
-  for (const prefix of prefixes) {
-    expectOwnershipCorrection([prefix, suffix], { visibleBefore: false });
-  }
-});
-
-it("invalidates table ownership for a blockquoted delimiter row", () => {
-  const prefix = "> Intro `x\n[tool:read] {}\n> x` |\n> ---:";
-  const suffix = "x\n";
-  expectOwnershipCorrection([prefix, suffix], { visibleBefore: false });
+it.each([
+  ...["---:", "-:", "--:", ":-", ":--"].map(
+    (delimiter) => `Intro \`x\n[tool:read] {}\nx\` |\n${delimiter}`,
+  ),
+  "Intro `x\n[tool:read] {}\nx`\n---:",
+  "> Intro `x\n[tool:read] {}\n> x` |\n> ---:",
+])("invalidates GFM table ownership when a delimiter gains text: %j", (prefix) => {
+  expectOwnershipCorrection([prefix, "x\n"], { visibleBefore: false });
 });
 
 it.each(["> ", ">    > ", "> ".repeat(40), "- item\n\n    > "])(
@@ -375,19 +347,11 @@ it("checks repeated blockquote prefixes without exponential backtracking", () =>
 it.each([
   ['[id]: /url\n"title\n`x\n[tool:read] {}\nx` trailing\\', 'a"'],
   ['[id]: /url\n    "title\n`x\n[tool:read] {}\nx` trailing\n', '"'],
-])("keeps an unfinished reference title pending after a trailing escape", (...chunks: string[]) => {
-  expectOwnershipCorrection(chunks);
-});
-
-it.each([
   ['- item\n\n    > [id]: /url\n    > "title\n`x\n[tool:read] {}\nx` trailing\n    > ', '"\n'],
   ['- item\n\n\t> [id]: /url\n\t> "title\n`x\n[tool:read] {}\nx` trailing\n    > ', '"\n'],
-])(
-  "keeps a list-owned blockquote reference title pending until its quote closes",
-  (...chunks: string[]) => {
-    expectOwnershipCorrection(chunks);
-  },
-);
+])("keeps escaped, indented and list-owned reference titles pending: %j", (...chunks) => {
+  expectOwnershipCorrection(chunks);
+});
 
 it("rechecks ownership when an indentation-only line gains content", () => {
   const chunks = ["[tool:read] {}\n\n    ", "[tool:write] {}\n"] as const;
@@ -402,14 +366,12 @@ it("refreshes image-alt ownership when a long reference destination closes", () 
     "",
     "                [id]: <./url",
   ].join("\n");
-  const scenarios = [
+  for (const chunks of [
     ["![example `x\n[tool:read] {}\nx`][id]\n\n[id]: <", "x".repeat(2_100), ">\n"],
     ["![example `x\n[tool:read] {}\nx`][a b c]\n\n[a\nb\nc]: <", `./${"x".repeat(2_100)}`, ">\n"],
     ["![example `x\n[tool:read] {}\nx`][id]\n\n- item\n\n    [id]: <./url", ">\n"],
     [nestedListContinuationReferencePrefix, ">\n"],
-  ];
-
-  for (const chunks of scenarios) {
+  ]) {
     expect(projectFinal(chunks)).not.toContain("[tool:read] {}");
   }
 });
@@ -419,4 +381,89 @@ it("does not extend a list fence across an unindented continuation", () => {
   const text = projectFinal(chunks);
   expect(text).toContain("[tool:read] {}");
   expect(text).not.toContain("[tool:write] {}");
+});
+
+const create = () => createAssistantVisibleStreamText("final_answer");
+const batch = (source: string) =>
+  sanitizeAssistantVisibleStreamText(source, "final_answer").trimEnd();
+
+it.each([
+  "$ build\n(no output)\n\nDone",
+  "$ build\n   (no output)   \n\nDone",
+  "Step\n[tool calls omitted]\n\nDone",
+  "```text\n$ build\n(no output)\n```\n\nDone",
+  "Example:\n\n    (no output)\n    step\n\nDone",
+  "$ build\r\n(no output)\r\n\r\nDone",
+  "- Step\n- (no output)\n\nDone",
+  "The command produced (no output) and exited.",
+  "(no output)\n(no output)\n\n[tool calls omitted]\n(no output)",
+  "> $ build\n> (no output)\n> Explanation\n",
+  "> $ build\n(no output)\n> Explanation\n",
+  "Earlier\r\n[tool calls omitted]\r\n\r\nDone",
+  ...[
+    "\n\nDone",
+    "\n>\n    (no output)",
+    "\n```\n(no output)\n```",
+    "\n# Heading",
+    "\n- Item",
+    "\n===",
+    "\n![label `code\n(no output)\ncode`][id]\n\n[id]: /url",
+  ].map((tail) => "> $ build\n(no output)\n[tool calls omitted]\n" + tail),
+  "> `open\n(no output)\nclose`",
+  "> ![open\n(no output)\n`code`][id]\n\n[id]: /url",
+  ...['"', "'"].flatMap((quote) => [
+    `> [label](/url ${quote}\n(no output)\n\`code\n(no output)\ncode\`\n${quote})\n`,
+    `> ![label](/url ${quote}\n(no output)\n\`code\n(no output)\ncode\`\n${quote})\n`,
+  ]),
+  ...['"', "'", "("].map(
+    (quote) =>
+      `(no output)\n\n> [id]: /url ${quote}title\n> continued\n> \`x\n> ${quote === "(" ? ")" : quote}\n(no output)\nx\``,
+  ),
+])("preserves batch output through every split: %j", (source) => {
+  expectPrefixParity(source, create, batch);
+});
+
+it.each(["fenced", "indented", "lazy", "prefixed", "inline", "paragraph"])(
+  "bounds %s transcript work",
+  (shape) => {
+    const prefix = shape === "indented" ? "    " : shape === "prefixed" ? "> " : "";
+    const opening = shape === "fenced" ? "```text\n" : shape === "lazy" ? "> $ build\n" : "";
+    const newline = shape === "paragraph" ? "" : "\n";
+    const line =
+      shape === "inline" || shape === "paragraph"
+        ? `The command produced (no output).${newline}${newline}`
+        : `${prefix}(no output)\n`;
+    const tail = `${prefix}Unique log record.${newline}`.repeat(256);
+    const source = (opening + line + tail).slice(0, 4096);
+    for (const size of [1, 4]) {
+      let previous = Infinity;
+      for (const text of [source.slice(0, 2048), source]) {
+        const stream = create();
+        let delivered = "";
+        const scanned = regexWork(() => {
+          delivered = streamChunks(text, size, stream).delivered;
+        });
+        expect([stream.text, delivered]).toEqual([batch(text), batch(text)]);
+        // This counts whole-path regexp work, not only placeholder-stage characters.
+        expect(scanned).toBeLessThan(text.length * 192);
+        expect(scanned).toBeLessThanOrEqual(previous * 2.25);
+        previous = scanned;
+      }
+    }
+  },
+);
+
+it("preserves replacement, split CRLF and late activation boundaries", () => {
+  for (const replacement of ["Intro.\n\n$ build\n(no output)\n\nTail", "Intro.\n\n(no out"]) {
+    const stream = create();
+    stream.append("Intro without a placeholder.");
+    stream.replace(replacement);
+    stream.append("put)\n\nDone.");
+    expect(stream.text, replacement).toBe(batch(replacement + "put)\n\nDone."));
+  }
+  const source = "Earlier step.\n\n".repeat(512) + "```\n(no output)\n```\n\nDone.";
+  expect(streamChunks(source, 4, create()).text).toBe(batch(source));
+  const direct = createTextProjection(userFacingTextFilters(false, true));
+  expect(direct.append("[tool calls omitted]\r").text).toBe("[tool calls omitted]\r");
+  expect(direct.append("\nDone").text).toBe("Done");
 });

@@ -78,6 +78,7 @@ export type CodexAppServerLiveThreadOwnership = {
 
 export type ThreadOwnershipState = {
   closed: boolean;
+  threadOwnershipListeners?: Set<() => void>;
   retainedThreads: Map<string, RetainedLiveThread>;
   claimedThreads: Map<string, ThreadOwnerToken>;
   releasingThreads: Map<string, ThreadReleaseTransition>;
@@ -109,10 +110,21 @@ export function createThreadOwnerToken(
   return owner;
 }
 
+/** Idle subscriptions, claims, releases, and protected work pin their physical client. */
 export function hasThreadOwnership(
   runtime: ThreadOwnershipState | undefined,
-  threadId: string,
+  threadId?: string,
 ): boolean {
+  if (threadId === undefined) {
+    return Boolean(
+      runtime &&
+      !runtime.closed &&
+      (runtime.retainedThreads.size > 0 ||
+        runtime.claimedThreads.size > 0 ||
+        runtime.releasingThreads.size > 0 ||
+        runtime.protectedThreads.size > 0),
+    );
+  }
   return (
     runtime !== undefined &&
     !runtime.closed &&
@@ -188,9 +200,12 @@ export function forgetThreadOwnership(
 
 /** Compaction discards client-authored instruction refreshes, not creation policy. */
 export function revertRetainedThreadInstructions(
-  runtime: ThreadOwnershipState,
+  runtime: ThreadOwnershipState | undefined,
   threadId: string,
 ): void {
+  if (!runtime || runtime.closed) {
+    return;
+  }
   const retained = runtime.retainedThreads.get(threadId);
   if (retained?.ephemeralPolicy) {
     retained.ephemeralPolicy = {
@@ -250,4 +265,41 @@ export function releaseThreadProtection(runtime: ThreadOwnershipState, threadId:
     });
   }
   return true;
+}
+
+/** Observe cleanup without releasing another owner's protection or admitting a new turn. */
+export async function waitForThreadBackgroundCleanup(
+  runtime: ThreadOwnershipState | undefined,
+  threadId: string,
+  signal: AbortSignal,
+): Promise<void> {
+  signal.throwIfAborted();
+  if (!runtime || runtime.closed || !isThreadBackgroundOnly(runtime, threadId)) {
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const listeners = (runtime.threadOwnershipListeners ??= new Set());
+    const cleanup = () => {
+      listeners.delete(check);
+      signal.removeEventListener("abort", abort);
+    };
+    const check = () => {
+      // A new foreground claim must return to the caller's admission guard too.
+      if (runtime.closed || !isThreadBackgroundOnly(runtime, threadId)) {
+        cleanup();
+        resolve();
+      }
+    };
+    const abort = () => {
+      cleanup();
+      reject(
+        signal.reason instanceof Error
+          ? signal.reason
+          : new Error("Codex background cleanup wait aborted"),
+      );
+    };
+    listeners.add(check);
+    signal.addEventListener("abort", abort, { once: true });
+    check();
+  });
 }

@@ -35,6 +35,10 @@ import {
   writeArchive,
   type FixtureEvent,
 } from "./state-migrations.media-persistence.test-support.js";
+import {
+  createLegacyStateMigrationStepReceipt,
+  DoctorStateMigrationRefusalError,
+} from "./state-migrations.messages.js";
 import { createUpdateFailureFact } from "./update-failure-facts.js";
 
 const tempDirs: string[] = [];
@@ -236,6 +240,24 @@ it("repairs the next agent after another agent loses maintenance ownership", asy
   expect(result.warnings[0]).toContain("Skipped agent database migration");
   expect(result.warnings[0]).toContain(`Database: ${first}`);
   expect(result.warnings[0]).toContain("lease");
+  const receipt = createLegacyStateMigrationStepReceipt(
+    {
+      id: "media-persistence",
+      phase: "shared",
+      source: [],
+      target: [],
+      requiredness: "required",
+      reversibility: "checkpoint-required",
+    },
+    result,
+  );
+  expect(new DoctorStateMigrationRefusalError([receipt]).failureFacts).toContainEqual(
+    expect.objectContaining({
+      check: "media-persistence",
+      code: "step-refused",
+      leaseLoss: { reason: "missing" },
+    }),
+  );
   expect(preparedPaths).toEqual([second]);
   expect(readDatabaseSnapshot(first)).toEqual(before);
   expect(result.changes).toContainEqual(

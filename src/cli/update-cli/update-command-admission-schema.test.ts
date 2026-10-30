@@ -79,7 +79,7 @@ it.each([true, false])("admits old state (dryRun/existing ledger: %s)", async (d
     expect(f.snapshot()).toEqual(before);
   };
   assertMigrationBlocked();
-  const run = await admitUpdateCommandRun({ opts: { dryRun }, root: f.root });
+  const run = await admitUpdateCommandRun({ opts: { dryRun }, root: f.root, env: f.env });
   ledger.recordUpdateRunPhase(run.runId, "validating", {}, { env: run.env });
   expect(ledger.getUpdateRun(run.runId, { env: run.env })).toMatchObject({
     status: "running",

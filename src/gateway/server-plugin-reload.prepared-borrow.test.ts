@@ -563,15 +563,10 @@ it.for(["cold start", "hot enable"] as const)(
       // then deliver gateway_start before admitting the first owner turn.
       await fixture.publish();
       await fixture.startServices();
-      const settled = Promise.resolve();
       await runGatewayStartupObservers({
         registry: initial.pluginRegistry,
         resolveGatewayContext: () => undefined,
-        loadSubagentRegistryActivation: () => () => ({
-          initial: settled,
-          pending: new Map(),
-          settled,
-        }),
+        loadSubagentRegistryActivation: () => async () => {},
         createHookRunner: async (...args) =>
           (await import("../plugins/hooks.js")).createHookRunner(...args),
         refreshLatestUpdateRestartSentinel: async () => null,

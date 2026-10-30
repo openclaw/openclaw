@@ -46,7 +46,7 @@ import {
 } from "./session-binding.js";
 import { createCodexRuntimeTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
-import { createRequestClientHarness } from "./test-support.js";
+import { createRequestClientHarness, isCodexTurnContextHandoff } from "./test-support.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 
 setupRunAttemptTestHooks();
@@ -303,7 +303,12 @@ it("attributes completed models and refreshes their selection on warm reuse", as
     });
     expect(requests.filter(({ method }) => method === "thread/resume")).toHaveLength(1);
     expect(requests.filter(({ method }) => method === "thread/unsubscribe")).toHaveLength(0);
-    expect(requests.filter(({ method }) => method === "thread/inject_items")).toHaveLength(1);
+    expect(
+      requests.filter(
+        ({ method, params: requestParams }) =>
+          method === "thread/inject_items" && !isCodexTurnContextHandoff(requestParams),
+      ),
+    ).toHaveLength(1);
   } finally {
     abort.abort("test cleanup");
     try {

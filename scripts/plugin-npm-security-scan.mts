@@ -62,6 +62,7 @@ const REVIEWED_CRITICAL_FINDING_LIMITS = new Map<string, number>([
   ["dist:@openclaw/mxc-sandbox:dangerous-exec:dist/index.js", 2],
   ["source:@openclaw/mxc-sandbox:dangerous-exec:src/readiness.ts", 2],
   ["setup:@openclaw/onnx:dangerous-exec:dist/.setup/worker-client-<hash>.mjs", 1],
+  ["setup:@openclaw/openshell-sandbox:dangerous-exec:dist/.setup/worker-cli-<hash>.mjs", 1],
   ["source:@openclaw/onnx:dangerous-exec:src/worker-client.ts", 1],
   ["dist:@openclaw/raft:dangerous-exec:dist/channel-plugin-api.js", 1],
   ["source:@openclaw/raft:dangerous-exec:src/gateway.ts", 1],
@@ -77,6 +78,10 @@ const REVIEWED_CRITICAL_FINDING_CONTENT_SHA256 = new Map<string, string>([
   [
     "setup:@openclaw/imessage:dangerous-exec:dist/.setup/sanitize-outbound-<hash>.mjs",
     "34833261f1e012015e6e28f35903d78f77efcfdac68f924310b8a3761264878b",
+  ],
+  [
+    "setup:@openclaw/openshell-sandbox:dangerous-exec:dist/.setup/worker-cli-<hash>.mjs",
+    "799a34cf8a82fed6725a5ac5322242becb394804b1ba6ea62d189aa8a1fa5f02",
   ],
 ]);
 
@@ -107,7 +112,8 @@ const REVIEWED_DEPENDENCY_FINDING_LIMITS = new Map<string, number>([
   ["dangerous-exec:node_modules/node-addon-api/tools/check-napi.js", 1],
   ["dangerous-exec:node_modules/node-addon-api/tools/clang-format.js", 1],
   ["dangerous-exec:node_modules/node-addon-api/tools/eslint-format.js", 3],
-  ["dangerous-exec:node_modules/playwright-core/lib/coreBundle.js", 3],
+  ["dangerous-exec:node_modules/openai/helpers/audio.mjs", 2],
+  ["dangerous-exec:node_modules/playwright-core/lib/coreBundle.js", 4],
   ["dangerous-exec:node_modules/playwright-core/lib/utilsBundle.js", 10],
   ["dangerous-exec:node_modules/prism-media/src/core/FFmpeg.js", 2],
   ["dangerous-exec:node_modules/tokenjuice/dist/core/cli-client.js", 1],
@@ -116,6 +122,8 @@ const REVIEWED_DEPENDENCY_FINDING_LIMITS = new Map<string, number>([
   ["dangerous-exec:node_modules/tokenjuice/dist/hosts/localcode/index.js", 2],
   ["dynamic-code-execution:node_modules/@napi-rs/wasm-runtime/dist/fs.js", 1],
   ["dynamic-code-execution:node_modules/@noble/curves/abstract/fft.js", 2],
+  ["dynamic-code-execution:node_modules/apache-arrow/Arrow.es2015.min.js", 1],
+  ["dynamic-code-execution:node_modules/apache-arrow/Arrow.esnext.min.js", 1],
   ["dynamic-code-execution:node_modules/ajv/dist/compile/index.js", 1],
   ["dynamic-code-execution:node_modules/ajv/dist/compile/jtd/parse.js", 1],
   ["dynamic-code-execution:node_modules/ajv/dist/compile/jtd/serialize.js", 1],
@@ -132,6 +140,7 @@ const REVIEWED_DEPENDENCY_FINDING_LIMITS = new Map<string, number>([
   ["dynamic-code-execution:node_modules/setimmediate/setImmediate.js", 1],
   ["env-harvesting:node_modules/@tybys/wasm-util/dist/wasm-util.esm.min.js", 1],
   ["env-harvesting:node_modules/@tybys/wasm-util/dist/wasm-util.min.js", 1],
+  ["env-harvesting:node_modules/playwright-core/lib/bootstrap.js", 1],
 ]);
 
 type CriticalFinding = Pick<SkillScanFinding, "line" | "ruleId"> & {
@@ -157,6 +166,7 @@ function normalizeFindingPath(file: string): string {
     "session-catalog",
     "transport-stdio",
     "worker-client",
+    "worker-cli",
   ]) {
     const match = new RegExp(`^${prefix}-[A-Za-z0-9_-]{8}\\.(m?js)$`, "u").exec(name);
     if (match?.[1]) {

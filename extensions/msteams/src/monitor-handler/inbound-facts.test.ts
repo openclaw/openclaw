@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { assembleMSTeamsInboundFacts, prepareMSTeamsDebounceEntry } from "./inbound-facts.js";
 
+const botIdentity = {
+  recipient: { id: "bot-id" },
+  entities: [{ type: "mention", text: "<at>Bot</at>", mentioned: { id: "bot-id" } }],
+};
+
 function prepare(activity: Omit<MSTeamsTurnContext["activity"], "type">) {
   return prepareMSTeamsDebounceEntry({
     accountId: "default",
@@ -10,21 +15,23 @@ function prepare(activity: Omit<MSTeamsTurnContext["activity"], "type">) {
 }
 
 describe("msteams inbound facts", () => {
-  it("prefers activity text, then HTML, then adaptive-card values", async () => {
-    const textEntry = await prepare({
-      text: "  <at>Bot</at> hello &lt;tag&gt;  ",
-      attachments: [{ contentType: "text/html", content: "<p>ignored</p>" }],
-      value: { action: "ignored" },
-    });
-    const htmlEntry = await prepare({
-      attachments: [{ contentType: "text/html", content: "<p>hello &amp; goodbye</p>" }],
-    });
-    const valueEntry = await prepare({ value: { action: "approve", id: 7 } });
-
-    expect(textEntry.text).toBe("hello &lt;tag&gt;");
-    expect(htmlEntry.text).toBe("hello & goodbye");
-    expect(valueEntry.text).toContain("approve");
-    expect(valueEntry.text).toContain("7");
+  it.each([
+    [
+      {
+        ...botIdentity,
+        text: "  <at>Bot</at> hello &lt;tag&gt;  ",
+        attachments: [{ contentType: "text/html", content: "<p>ignored</p>" }],
+        value: { action: "ignored" },
+      },
+      "hello &lt;tag&gt;",
+    ],
+    [
+      { attachments: [{ contentType: "text/html", content: "<p>hello &amp; goodbye</p>" }] },
+      "hello & goodbye",
+    ],
+    [{ value: { action: "approve", id: 7 } }, expect.stringMatching(/approve.*7/s)],
+  ])("prefers activity text, then HTML, then adaptive-card values", async (activity, expected) => {
+    expect((await prepare(activity)).text).toEqual(expected);
   });
 
   it.each([
@@ -33,12 +40,14 @@ describe("msteams inbound facts", () => {
     ["<p>literal &amp;lt;tag&amp;gt;</p>", "literal &lt;tag&gt;"],
     ["<p>literal &lt;at&gt;Alice&lt;/at&gt;</p>", "literal <at>Alice</at>"],
     ["<p>one<br>two</p><p>three&nbsp;four</p>", "one two three four"],
+    ['<img src="https://statics.teams.cdn.office.net/emoji/smile.png" alt="🙂">', "🙂"],
     [
       '<at>Bot</at><p>See <a href="https://example.test/?a=1&amp;b=2">report</a></p>',
       "See report https://example.test/?a=1&b=2",
     ],
   ])("preserves HTML text in the inbound body: %s", async (html, expected) => {
     const entry = await prepare({
+      ...botIdentity,
       attachments: [{ contentType: "text/html", content: html }],
       value: { action: "ignored" },
     });
@@ -48,6 +57,7 @@ describe("msteams inbound facts", () => {
 
   it("strips native mentions from card text when HTML has no visible text", async () => {
     const entry = await prepare({
+      ...botIdentity,
       attachments: [{ contentType: "text/html", content: "<at>Bot</at>" }],
       value: "<at>Bot</at> answer &lt;tag&gt;",
     });

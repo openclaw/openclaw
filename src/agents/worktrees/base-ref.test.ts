@@ -222,6 +222,8 @@ describe("worktree default-base preparation", () => {
     { mode: "aborted", outcome: "cancelled-result", command: "update-head" },
     { mode: "aborted", outcome: "cancelled-result", command: "verify" },
     { mode: "aborted", outcome: "uncertain-result", command: "remote" },
+    { mode: "aborted", outcome: "cancelled-result", command: "config" },
+    { mode: "aborted", outcome: "uncertain-result", command: "config" },
     { mode: "aborted", outcome: "uncertain-result", command: "verify" },
     { mode: "aborted", outcome: "exit-failure", command: "remote" },
     { mode: "aborted", outcome: "output-limit", command: "remote" },
@@ -262,7 +264,7 @@ describe("worktree default-base preparation", () => {
       let fetches = 0;
       let gated = false;
       const failedCounts = {
-        discoveries: ["remote", "symbolic-ref"].includes(command) ? 0 : 1,
+        discoveries: ["remote", "config", "symbolic-ref"].includes(command) ? 0 : 1,
         fetches: ["fetch", "update-head", "verify"].includes(command) ? 1 : 0,
       };
       vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
@@ -633,10 +635,17 @@ describe("managed worktree creation groups", () => {
     });
   });
 
-  it.each(["branch", "detached"])(
+  it.each(["branch", "detached", "inherited origin options"])(
     "creates from local HEAD without origin on a %s checkout",
     async (checkout) => {
+      const originalHead = await head(repo);
       await git(repo, "remote", "remove", "origin");
+      if (checkout === "inherited origin options") {
+        await fs.writeFile(
+          path.join(root, "global.gitconfig"),
+          '[remote "origin"]\n\tprune = true\n',
+        );
+      }
       await git(repo, "switch", "-c", "local-work");
       await fs.writeFile(path.join(repo, "README.md"), "local commit\n");
       await git(repo, "add", "README.md");
@@ -645,11 +654,21 @@ describe("managed worktree creation groups", () => {
       if (checkout === "detached") {
         await git(repo, "checkout", "--detach", expectedHead);
       }
+      if (checkout === "inherited origin options") {
+        await fs.writeFile(path.join(repo, "staged.txt"), "staged work\n");
+        await git(repo, "add", "staged.txt");
+        await fs.writeFile(path.join(repo, "README.md"), "unsaved work\n");
+        await fs.writeFile(path.join(repo, "untracked.txt"), "untracked work\n");
+      }
+      const status = await git(repo, "status", "--porcelain");
       joinAllocations(2);
       const execute = gitExec.executeGitCommand;
       const remoteCommands: string[] = [];
       vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
-        if (["remote", "ls-remote", "fetch", "merge"].includes(args[0]!)) {
+        if (
+          ["remote", "ls-remote", "fetch", "merge"].includes(args[0]!) &&
+          args[1] !== "--get-url"
+        ) {
           remoteCommands.push(args[0]!);
         }
         return await execute(cwd, args, options);
@@ -665,7 +684,48 @@ describe("managed worktree creation groups", () => {
         );
       }
       expect(await head(repo)).toBe(expectedHead);
+      expect(await git(repo, "status", "--porcelain")).toBe(status);
+      if (checkout === "inherited origin options") {
+        expect(await fs.readFile(path.join(repo, "README.md"), "utf8")).toBe("unsaved work\n");
+        expect(await fs.readFile(path.join(repo, "staged.txt"), "utf8")).toBe("staged work\n");
+        expect(await fs.readFile(path.join(repo, "untracked.txt"), "utf8")).toBe(
+          "untracked work\n",
+        );
+        const explicit = await service.create({
+          repoRoot: repo,
+          name: "explicit",
+          baseRef: "main",
+        });
+        expect(await head(explicit.path)).toBe(originalHead);
+      }
       expect(remoteCommands).toEqual(["remote"]);
+    },
+  );
+
+  it.each(["inherited URL", "relative URL", "legacy", "implicit path", "implicit rewrite"])(
+    "retains Git's origin destination from %s",
+    async (destination) => {
+      const expectedHead = await advanceRemote();
+      await git(repo, "remote", "remove", "origin");
+      await fs.writeFile(path.join(root, "global.gitconfig"), '[remote "origin"]\nprune = true\n');
+      if (destination === "inherited URL") {
+        await git(repo, "config", "--global", "remote.origin.url", "../remote.git");
+      } else if (destination === "relative URL" || destination === "implicit path") {
+        await fs.rename(path.join(root, "remote.git"), path.join(repo, "origin"));
+        if (destination === "relative URL") {
+          await git(repo, "config", "remote.origin.url", "origin");
+        }
+      } else if (destination === "implicit rewrite") {
+        await git(repo, "config", "url.../remote.git.insteadOf", "origin");
+      } else {
+        await fs.mkdir(path.join(repo, ".git", "remotes"));
+        await fs.writeFile(path.join(repo, ".git", "remotes", "origin"), "URL: ../remote.git\n");
+      }
+
+      const created = await create("git-origin");
+
+      expect(created.baseRef).toBe("origin/main");
+      expect(await head(created.path)).toBe(expectedHead);
     },
   );
 

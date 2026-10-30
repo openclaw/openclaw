@@ -29,9 +29,9 @@ import {
   readSessionActorProjectionReceipt,
 } from "./session-actor-replica.js";
 import { withSessionActorTransactionState as withActorTransaction } from "./session-actor-transaction.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { readSessionTranscriptAccountingFromProjection } from "./session-transcript-accounting.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import {
   markSessionTranscriptIndexDirtyInTransaction as markIndexDirty,
   reconcileSessionTranscriptIndexInTransaction as reconcileIndex,

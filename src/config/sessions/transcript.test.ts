@@ -12,7 +12,7 @@ import {
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   isTranscriptOnlyOpenClawAssistantMessage,
 } from "../../shared/transcript-only-openclaw-assistant.js";
-import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
@@ -125,10 +125,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     return persistSessionTranscriptTurn(transcriptScope(), { updateMode: "none", messages });
   }
   function recentText(
-    params: Omit<
-      Parameters<typeof readRecentUserAssistantTextForSession>[0],
-      "agentId" | "sessionKey" | "storePath"
-    > = {},
+    params: Partial<Parameters<typeof readRecentUserAssistantTextForSession>[0]> = {},
   ) {
     return readRecentUserAssistantTextForSession({
       agentId: "main",
@@ -271,10 +268,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     await writeTranscriptStore();
     assertOk(await recordCommand({ ...testCase, commandId: "secret-command", replyId: "reply" }));
     const events = await loadFixtureMessages();
-    expect(events.at(-1)?.message).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: testCase.expected }],
-    });
+    expect(events.at(-1)?.message).toEqual(textMessage("assistant", testCase.expected));
     expect(JSON.stringify(events)).not.toContain(testCase.replyText);
   });
 
@@ -310,10 +304,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     });
     assertOk(result);
     const events = await loadFixtureMessages();
-    expect(events.at(-2)?.message).toMatchObject({
-      role: "user",
-      content: [{ type: "text", text: expected }],
-    });
+    expect(events.at(-2)?.message).toEqual(textMessage("user", expected));
     expect(JSON.stringify(events)).not.toContain("synthetic-private-token");
     expect(JSON.stringify(events)).not.toContain("q7m2n9v4p6r8x5");
   });
@@ -335,7 +326,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
   it("uses the session key agent for configured session.store templates", async () => {
     const tempDir = sessionDirs.make();
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const environment = captureEnv(["OPENCLAW_STATE_DIR"]);
     const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
     try {
       setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempDir, "default-state"));
@@ -384,11 +375,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       });
     } finally {
       emitSpy.mockRestore();
-      if (previousStateDir === undefined) {
-        deleteTestEnvValue("OPENCLAW_STATE_DIR");
-      } else {
-        setTestEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
-      }
+      environment.restore();
     }
   });
 
@@ -579,21 +566,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       idempotencyKey: "channel-delivery",
       deliveryMirror: { kind: "channel-final" },
     });
-    const params = {
-      agentId: "main",
-      sessionKey,
-      storePath: fixture.storePath(),
-      limit: 10,
-    };
-    await expect(readRecentUserAssistantTextForSession(params)).resolves.toEqual([
+    await expect(recentText({ limit: 10 })).resolves.toEqual([
       expect.objectContaining({ role: "user", text: "ordinary user" }),
       expect.objectContaining({ role: "assistant", text: "ordinary assistant" }),
     ]);
     await expect(
-      readRecentUserAssistantTextForSession({
-        ...params,
-        includeCronDirectDeliveryContext: true,
-      }),
+      recentText({ limit: 10, includeCronDirectDeliveryContext: true }),
     ).resolves.toEqual([
       expect.objectContaining({ role: "user", text: "ordinary user" }),
       expect.objectContaining({ role: "assistant", text: "ordinary assistant" }),
@@ -610,13 +588,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   });
 
   it("rejects a session key scoped to a different agent", async () => {
-    await expect(
-      readRecentUserAssistantTextForSession({
-        agentId: "main",
-        sessionKey: "agent:worker:main",
-        storePath: fixture.storePath(),
-      }),
-    ).rejects.toMatchObject({
+    await expect(recentText({ sessionKey: "agent:worker:main" })).rejects.toMatchObject({
       code: "SESSION_TRANSCRIPT_AGENT_SCOPE_MISMATCH",
       name: "SessionTranscriptAgentScopeMismatchError",
     });
@@ -635,14 +607,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         messages: [{ message: { role: "user", content: "from main alias", timestamp: 4_000 } }],
       },
     );
-    await expect(
-      readRecentUserAssistantTextForSession({
-        agentId: "main",
-        sessionKey: "main",
-        storePath: fixture.storePath(),
-        beforeTimestampMs: 5_000,
-      }),
-    ).resolves.toEqual([
+    await expect(recentText({ sessionKey: "main", beforeTimestampMs: 5_000 })).resolves.toEqual([
       {
         id: expect.any(String),
         role: "user",
@@ -661,11 +626,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       transcriptPath: sessionFile,
       message: { role: "user", content: "stale jsonl context", timestamp: 1_000 },
     });
-    await expect(
-      recentText({
-        beforeTimestampMs: 5_000,
-      }),
-    ).resolves.toEqual([]);
+    await expect(recentText({ beforeTimestampMs: 5_000 })).resolves.toEqual([]);
   });
 
   it("ignores stored session files outside the sessions directory for recent context", async () => {
@@ -686,14 +647,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         { message: { role: "user", content: "sqlite text", timestamp: 2_500 } },
       ]);
 
-      await expect(
-        readRecentUserAssistantTextForSession({
-          agentId: "main",
-          sessionKey,
-          storePath: fixture.storePath(),
-          beforeTimestampMs: 3_000,
-        }),
-      ).resolves.toEqual([
+      await expect(recentText({ beforeTimestampMs: 3_000 })).resolves.toEqual([
         {
           id: expect.any(String),
           role: "user",
@@ -772,45 +726,29 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   it("does not reuse an older matching assistant message across turns", async () => {
     await writeTranscriptStore();
 
-    const olderResult = await appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath: fixture.storePath(),
-      message: createExactAssistantMessage({ text: "Repeated answer" }),
-    });
+    const olderResult = await appendText("Repeated answer");
+    const latestResult = await appendText("Different latest answer");
+    const mirrorResult = await appendMirror("Repeated answer");
 
-    const latestResult = await appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath: fixture.storePath(),
-      message: createExactAssistantMessage({ text: "Different latest answer" }),
-    });
+    assertOk(olderResult);
+    assertOk(latestResult);
+    assertOk(mirrorResult);
+    expect(mirrorResult.messageId).not.toBe(olderResult.messageId);
+    expect(mirrorResult.messageId).not.toBe(latestResult.messageId);
 
-    const mirrorResult = await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "Repeated answer",
-      storePath: fixture.storePath(),
-    });
-
-    expect(olderResult.ok).toBe(true);
-    expect(latestResult.ok).toBe(true);
-    expect(mirrorResult.ok).toBe(true);
-    if (olderResult.ok && latestResult.ok && mirrorResult.ok) {
-      expect(mirrorResult.messageId).not.toBe(olderResult.messageId);
-      expect(mirrorResult.messageId).not.toBe(latestResult.messageId);
-
-      const messages = (await loadFixtureMessages()).flatMap((entry) =>
-        entry.message ? [entry.message] : [],
-      ) as Array<{
-        api?: string;
-        provider?: string;
-        model?: string;
-        content?: Array<{ text?: string }>;
-      }>;
-      expect(messages).toHaveLength(3);
-      expect(messages[2]?.api).toBe(OPENCLAW_TRANSCRIPT_ARTIFACT_API);
-      expect(messages[2]?.provider).toBe("openclaw");
-      expect(messages[2]?.model).toBe("delivery-mirror");
-      expect(messages[2]?.content?.[0]?.text).toBe("Repeated answer");
-    }
+    const messages = (await loadFixtureMessages()).flatMap((entry) =>
+      entry.message ? [entry.message] : [],
+    ) as Array<{
+      api?: string;
+      provider?: string;
+      model?: string;
+      content?: Array<{ text?: string }>;
+    }>;
+    expect(messages).toHaveLength(3);
+    expect(messages[2]?.api).toBe(OPENCLAW_TRANSCRIPT_ARTIFACT_API);
+    expect(messages[2]?.provider).toBe("openclaw");
+    expect(messages[2]?.model).toBe("delivery-mirror");
+    expect(messages[2]?.content?.[0]?.text).toBe("Repeated answer");
   });
 
   it("keeps delivery mirrors in transcripts while repair preserves real tool results", async () => {
@@ -937,16 +875,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
   it("reports assistant messages blocked by before_message_write", async () => {
     await writeTranscriptStore();
-    const result = await appendExact({
+    const result = await appendText("secret output", {
       agentId: "main",
       idempotencyKey: "cli-assistant:blocked",
       beforeMessageWrite: vi.fn(() => null),
-      message: createExactAssistantMessage({ text: "secret output" }),
     });
-    expect(result).toMatchObject({
-      ok: false,
-      code: "blocked",
-    });
+    expect(result).toMatchObject({ ok: false, code: "blocked" });
   });
 
   it.each(["session", "lifecycle", "writer"] as const)(
@@ -1002,7 +936,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       throw new Error("expected session entry");
     }
     let revisionMaterialized = false;
-    const result = await appendExact({
+    const result = await appendText("late output", {
       expectedLifecycleRevision: null,
       expectedSessionId: sessionId,
       beforeMessageWrite: ({ message }) => {
@@ -1014,7 +948,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         revisionMaterialized = true;
         return message;
       },
-      message: createExactAssistantMessage({ text: "late output" }),
     });
     expect(revisionMaterialized).toBe(true);
     expect(result).toMatchObject({ ok: false, code: "session-rebound" });
@@ -1076,4 +1009,3 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     emitSpy.mockRestore();
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

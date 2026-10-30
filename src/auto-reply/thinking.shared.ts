@@ -51,6 +51,11 @@ export type ThinkingCatalogEntry = {
     supportsReasoningEffort?: boolean;
     supportedReasoningEfforts?: readonly string[] | null;
     reasoningEffortMap?: Record<string, string>;
+    defaultThinkingLevel?: string;
+    thinkingLevels?: readonly string[];
+    adaptiveThinking?: boolean;
+    thinkingRequired?: boolean;
+    thinkingLevelLabels?: Record<string, string>;
   } | null;
 };
 
