@@ -337,35 +337,47 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const appServerHomeScope = resolveCodexAppServerHomeScope({
     appServer: pluginConfig.appServer,
   });
+  const nativeCommandAuth = params.runtimePlan?.auth.selectedAuthMode === "native-command";
+  if (
+    nativeCommandAuth &&
+    (params.authProfileId || params.runtimePlan?.auth.forwardedAuthProfileId)
+  ) {
+    throw new Error("Native command auth cannot be combined with an auth profile binding.");
+  }
+  if (nativeCommandAuth && usesSupervisionConnection) {
+    throw new Error("Native command auth requires an OpenClaw-owned Codex session.");
+  }
   const preparedAuthRoute = usesSupervisionConnection
     ? undefined
     : params.runtimePlan?.auth.modelRoute;
-  const startupAuthProfileCandidate = usesSupervisionConnection
-    ? undefined
-    : preparedAuthRoute
-      ? params.runtimePlan?.auth.forwardedAuthProfileId
-      : (params.runtimePlan?.auth.forwardedAuthProfileId ??
-        params.authProfileId ??
-        startupBinding?.authProfileId);
-  const resolvedStartupAuthProfileId = usesSupervisionConnection
-    ? undefined
-    : preparedAuthRoute
-      ? startupAuthProfileCandidate
-      : params.authProfileStore
-        ? resolveCodexAppServerAuthProfileId({
-            authProfileId: startupAuthProfileCandidate,
-            store: params.authProfileStore,
-            config: params.config,
-          })
-        : await resolveCodexAppServerAuthProfileIdForAgent({
-            authProfileId: startupAuthProfileCandidate,
-            agentDir,
-            config: params.config,
-          });
+  const startupAuthProfileCandidate =
+    usesSupervisionConnection || nativeCommandAuth
+      ? undefined
+      : preparedAuthRoute
+        ? params.runtimePlan?.auth.forwardedAuthProfileId
+        : (params.runtimePlan?.auth.forwardedAuthProfileId ??
+          params.authProfileId ??
+          startupBinding?.authProfileId);
+  const resolvedStartupAuthProfileId =
+    usesSupervisionConnection || nativeCommandAuth
+      ? undefined
+      : preparedAuthRoute
+        ? startupAuthProfileCandidate
+        : params.authProfileStore
+          ? resolveCodexAppServerAuthProfileId({
+              authProfileId: startupAuthProfileCandidate,
+              store: params.authProfileStore,
+              config: params.config,
+            })
+          : await resolveCodexAppServerAuthProfileIdForAgent({
+              authProfileId: startupAuthProfileCandidate,
+              agentDir,
+              config: params.config,
+            });
   const authHandoff = usesSupervisionConnection
     ? { authProfileId: undefined, nativeAuthProfile: true, preparedAuth: undefined }
     : await resolveCodexAppServerPreparedAuthHandoff({
-        authRequirement: preparedAuthRoute?.authRequirement,
+        authRequirement: nativeCommandAuth ? "native-command" : preparedAuthRoute?.authRequirement,
         resolvedApiKey: params.resolvedApiKey,
         authProfileId: resolvedStartupAuthProfileId,
         authProfileStore: params.authProfileStore,
@@ -384,6 +396,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   } = authHandoff;
   const startupClientAuthProfileId =
     usesSupervisionConnection ||
+    nativeCommandAuth ||
     appServerHomeScope === "user" ||
     startupPreparedAuth?.kind === "api-key"
       ? null
@@ -669,7 +682,10 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       isInactiveThreadBootstrapBinding,
       usesSupervisionConnection,
       startupAuthProfileId,
-      startupAuthRequirement: preparedAuthRoute?.authRequirement,
+      startupAuthRequirement: nativeCommandAuth
+        ? ("native-command" as const)
+        : preparedAuthRoute?.authRequirement,
+      nativeCommandAuth,
       startupPreparedAuth,
       startupClientAuthProfileId,
       effectiveWorkspace,

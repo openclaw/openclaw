@@ -1,6 +1,7 @@
 import type {
   CanvasDocumentViewResult,
   SessionsFilesAssetsResult,
+  SessionsFilesPreviewResult,
 } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
@@ -19,6 +20,7 @@ const metadata: CanvasDocumentViewResult = {
   sandboxUrl: "/mcp-app-sandbox?frames=none",
   sandboxPort: 8444,
 };
+const previewSandboxPath = "/__openclaw__/file-preview/connection/grant-1/report/preview.html";
 
 function mount(request = vi.fn().mockResolvedValue(metadata), html = source) {
   const listeners = new Set<() => void>();
@@ -337,6 +339,233 @@ describe("ordinary HTML preview transport", () => {
     expect(oldPost).not.toHaveBeenCalled();
     expect(assetStatus(view)).toBeNull();
   });
+
+  it.each(["close", "mode", "source", "client", "retry"])(
+    "releases a CSP preview grant through its original owner on %s",
+    async (change) => {
+      const html =
+        '<meta http-equiv="Content-Security-Policy" content="script-src \'self\'"><script defer src="app.js"></script>';
+      let issued = 0;
+      const request = vi.fn(async (method: string) => {
+        if (method === "canvas.document.preview") {
+          return { ...metadata, html };
+        }
+        if (method === "sessions.files.preview") {
+          const previewId = `grant-${++issued}`;
+          return {
+            status: "ready",
+            html,
+            omitted: 0,
+            previewId,
+            sandboxPath: previewSandboxPath.replace("grant-1", previewId),
+          };
+        }
+        if (method === "sessions.files.preview.release") {
+          return { released: true };
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      });
+      const { view, context, notify } = mount(request, html);
+      const fileSource = {
+        sessionKey: "agent:old:main",
+        path: "/report/index.html",
+        messageEntryId: "entry",
+      };
+      view.sessionFileSource = fileSource;
+      const frame = await frameFor(view);
+      expect(frame.src).toBe(`http://gateway.example:8444${previewSandboxPath}`);
+      const [transfer] = await transferFrom(frame);
+      expect(transfer.params.html).toBe(html);
+      expect(view.html).toBe(html);
+      expect(request).toHaveBeenCalledWith("sessions.files.preview", {
+        ...fileSource,
+        html,
+        allowScripts: true,
+      });
+      if (change === "close") {
+        view.remove();
+      }
+      if (change === "mode") {
+        view.embedSandboxMode = "strict";
+      }
+      if (change === "source") {
+        view.sessionFileSource = { ...fileSource, sessionKey: "agent:new:main" };
+      }
+      if (change === "client") {
+        context.gateway.snapshot.client = {
+          request: vi.fn(async (method: string) =>
+            method === "canvas.document.preview"
+              ? { ...metadata, html }
+              : { status: "unsupported", html, omitted: 0 },
+          ),
+        };
+        notify();
+      }
+      if (change === "retry") {
+        frame.dispatchEvent(new Event("error"));
+        await view.updateComplete;
+        view.querySelector("button")!.click();
+      }
+      await waitForSolid(() =>
+        expect(request).toHaveBeenCalledWith("sessions.files.preview.release", {
+          ...fileSource,
+          previewId: "grant-1",
+        }),
+      );
+      expect(
+        request.mock.calls.filter(([method]) => method === "sessions.files.preview.release"),
+      ).toHaveLength(1);
+      if (change === "mode") {
+        await waitForSolid(() => expect(view.querySelector("iframe")?.src).toContain("grant-2"));
+        const [strictTransfer] = await transferFrom(view.querySelector("iframe")!);
+        expect(strictTransfer.params).toMatchObject({ html, allowScripts: false });
+      }
+    },
+  );
+
+  it.each(["client", "mode", "close"])(
+    "releases a late grant after %s replacement before creating its frame",
+    async (change) => {
+      const html =
+        '<meta http-equiv="Content-Security-Policy" content="script-src \'self\'"><script src="app.js"></script>';
+      const pending = Promise.withResolvers<SessionsFilesPreviewResult>();
+      let requested = false;
+      const request = vi.fn((method: string) => {
+        if (method === "canvas.document.preview") {
+          return Promise.resolve({ ...metadata, html });
+        }
+        if (method === "sessions.files.preview") {
+          if (requested) {
+            return Promise.resolve({ status: "unsupported", html, omitted: 0 });
+          }
+          requested = true;
+          return pending.promise;
+        }
+        return Promise.resolve({ released: true });
+      });
+      const { view, context, notify } = mount(request, html);
+      const fileSource = { sessionKey: "agent:old:main", path: "/report/index.html" };
+      view.sessionFileSource = fileSource;
+      await waitForSolid(() =>
+        expect(request).toHaveBeenCalledWith("sessions.files.preview", {
+          ...fileSource,
+          html,
+          allowScripts: true,
+        }),
+      );
+      expect(view.querySelector("iframe")).toBeNull();
+      const replacementRequest = vi.fn(async (method: string) =>
+        method === "canvas.document.preview"
+          ? { ...metadata, html }
+          : { status: "unsupported", html, omitted: 0 },
+      );
+      if (change === "client") {
+        context.gateway.snapshot.client = { request: replacementRequest };
+        notify();
+      } else if (change === "mode") {
+        view.embedSandboxMode = "strict";
+      } else {
+        view.remove();
+      }
+      pending.resolve({
+        status: "ready",
+        html: "<p>Retired</p>",
+        omitted: 0,
+        previewId: "late",
+        sandboxPath: previewSandboxPath,
+      });
+      await waitForSolid(() =>
+        expect(request).toHaveBeenCalledWith("sessions.files.preview.release", {
+          ...fileSource,
+          previewId: "late",
+        }),
+      );
+      if (change !== "close") {
+        const frame = await frameFor(view);
+        expect(frame.src).toBe("http://gateway.example:8444/mcp-app-sandbox?frames=none");
+        const [transfer] = await transferFrom(frame);
+        expect(transfer.params.html).toBe(html);
+      } else {
+        expect(view.querySelector("iframe")).toBeNull();
+      }
+      expect(
+        replacementRequest.mock.calls.some(
+          ([method]) => method === "sessions.files.preview.release",
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it("releases the grant when its sandbox URL fails isolation validation", async () => {
+    const html = '<meta http-equiv="Content-Security-Policy" content="default-src none">';
+    const request = vi.fn(async (method: string) => {
+      if (method === "canvas.document.preview") {
+        return { ...metadata, html };
+      }
+      if (method === "sessions.files.preview") {
+        return {
+          status: "ready",
+          html,
+          omitted: 0,
+          previewId: "invalid",
+          sandboxPath: "https://other.example/preview.html",
+        };
+      }
+      return { released: true };
+    });
+    const { view } = mount(request, html);
+    const fileSource = { sessionKey: "agent:main:main", path: "/report/index.html" };
+    view.sessionFileSource = fileSource;
+    await waitForSolid(() => {
+      expect(view.querySelector('[role="alert"]')?.textContent).toContain(
+        "Sandbox host URL is invalid",
+      );
+      expect(request).toHaveBeenCalledWith("sessions.files.preview.release", {
+        ...fileSource,
+        previewId: "invalid",
+      });
+    });
+    expect(view.querySelector("iframe")).toBeNull();
+  });
+
+  it("shows unsupported CSP as unchanged HTML with Source/Download recovery", async () => {
+    const html =
+      '<meta http-equiv="Content-Security-Policy" content="script-src https://example.test"><script src="app.js"></script><a href="#details">Details</a>';
+    const request = vi.fn(async (method: string) =>
+      method === "canvas.document.preview"
+        ? { ...metadata, html }
+        : { status: "unsupported", html, omitted: 0 },
+    );
+    const { view } = mount(request, html);
+    view.sessionFileSource = { sessionKey: "agent:main:main", path: "/report/index.html" };
+    const [transfer] = await transferFrom(await frameFor(view));
+    expect(transfer.params.html).toBe(html);
+    await waitForSolid(() =>
+      expect(assetStatus(view)?.textContent).toContain("Use Source or Download"),
+    );
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "canvas.document.preview",
+      "sessions.files.preview",
+    ]);
+  });
+
+  it.each([false, true])(
+    "limits CSP attachments only when they need relative assets (%s)",
+    async (relative) => {
+      const html =
+        '<meta http-equiv="Content-Security-Policy" content="default-src none">' +
+        (relative ? '<img src="image.png">' : "<p>Self-contained</p>");
+      const { view, request } = mount(vi.fn().mockResolvedValue({ ...metadata, html }), html);
+      const [transfer] = await transferFrom(await frameFor(view));
+      expect(transfer.params.html).toBe(html);
+      if (relative) {
+        expect(assetStatus(view)?.textContent).toContain("Use Source or Download");
+      } else {
+        expect(assetStatus(view)).toBeNull();
+      }
+      expect(request.mock.calls.map(([method]) => method)).toEqual(["canvas.document.preview"]);
+    },
+  );
 
   it("closes unsupported ports without lending prompt, wake, tools, board or theme APIs", async () => {
     const { view, request } = mount();

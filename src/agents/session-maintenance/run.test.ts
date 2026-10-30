@@ -2,6 +2,7 @@ import { setImmediate as drainContinuations } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import { buildEmbeddedRunExecutionParams } from "../../auto-reply/reply/agent-runner-utils.js";
 import { createTestFollowupRun } from "../../auto-reply/reply/agent-runner.test-fixtures.js";
+import { resolveVisibleActiveSessionRunState } from "../../gateway/server-methods/session-active-runs.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
@@ -52,6 +53,30 @@ it("preserves prepared model facts and restrictive policy without foreground aut
   expect(embedded.runtimePluginToolGrant).toBeUndefined();
   expect(maintenance.userTurnTranscriptRecorder).toBeUndefined();
 });
+
+it("keeps optional maintenance out of the finished session's active run state", () =>
+  withOpenClawTestState({ label: "maintenance-hidden" }, async ({ env }) => {
+    const { scope, schedule } = await setup(env, "maintenance-hidden");
+    const flush = blockFlush();
+    try {
+      schedule();
+      await flush.started;
+      // Control UI shows a running turn and Stop for any active state on this session.
+      expect(
+        resolveVisibleActiveSessionRunState({
+          requestedKey: scope.sessionKey,
+          canonicalKey: scope.sessionKey,
+          sessionId: scope.sessionId,
+          agentId: scope.agentId,
+          storePath: scope.storePath,
+        }).active,
+      ).toBe(false);
+    } finally {
+      flush.release();
+      await waitForSessionMaintenance(scope.sessionKey);
+    }
+    expectEffects(1);
+  }));
 
 it.each([false, true])(
   "reads before maintenance and drains cleanup (wait for owner: %s)",

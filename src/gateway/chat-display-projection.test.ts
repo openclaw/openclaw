@@ -560,6 +560,21 @@ const terminal = (runId = "run-a") => ({
 const projectedIds = (messages: unknown[]) =>
   projectChatDisplayMessages(messages).map((message) => message["__openclaw"]);
 
+it("drops invisible assistant attempts without pending recovery", () => {
+  const emptyAttempt = (id: string, stopReason: "length" | "stop") =>
+    assistant([text(""), { type: "thinking", thinking: "" }], {
+      stopReason,
+      __openclaw: { id, runId: "run-empty" },
+    });
+  expect(
+    projectStable([
+      user,
+      emptyAttempt("empty-primary", "length"),
+      emptyAttempt("empty-fallback", "stop"),
+    ]),
+  ).toEqual([user]);
+});
+
 const legacyGuidance = "The provider stopped this request as a safety precaution (misalignment).";
 it.each([
   [{ errorCode: "misalignment_policy_violation" }, legacyGuidance],

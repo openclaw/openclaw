@@ -450,6 +450,9 @@ Results are session-scoped. Changing agent, channel, thread, sender
 authorization, or model can change the output. For profile and override editing,
 use the Control UI Tools panel or config surfaces.
 
+Managed sessions on supported runtimes include brokered GitHub tools when tool
+policy allows them. Listing a tool does not grant permission to run its actions.
+
 ## `/loop`: recurring conversation work
 
 `/loop` is owner-only because it uses the cron control-plane tool. `/loop 5m check deploy status` asks the agent to create a fixed-cadence cron job in the current conversation. Without an interval, `/loop watch for new issues` creates a self-paced loop that checks more often while active and backs off toward 1 hour while quiet. `/loop status` lists the conversation's loop jobs. `/loop stop [name]` removes them.

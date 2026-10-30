@@ -9,10 +9,11 @@
  * keeps only the final generation. This does not measure Gateway latency.
  */
 import assert from "node:assert/strict";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { setImmediate } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 
 const { values } = parseArgs({
@@ -44,9 +45,6 @@ async function collect() {
   gc!();
   gc!();
 }
-function bytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + bytes(child), 0);
-}
 acquire();
 await collect();
 const heapBefore = process.memoryUsage().heapUsed;
@@ -69,7 +67,7 @@ for (let iteration = 0; iteration < iterations; iteration++) {
 const wallMs = performance.now() - started;
 const used = process.threadCpuUsage(cpu);
 const allocatedBytes = values.allocations
-  ? bytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+  ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
   : undefined;
 inspector.disconnect();
 await collect();

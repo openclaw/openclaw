@@ -75,7 +75,8 @@ var isModelsConfig = (() => {
               (typeof unique_1.auth == "string" && unique_1.auth === "aws-sdk") ||
               (typeof unique_1.auth == "string" && unique_1.auth === "oauth") ||
               (typeof unique_1.auth == "string" && unique_1.auth === "token") ||
-              (typeof unique_1.auth == "string" && unique_1.auth === "none")) &&
+              (typeof unique_1.auth == "string" && unique_1.auth === "none") ||
+              (typeof unique_1.auth == "string" && unique_1.auth === "native-command")) &&
             (unique_1.api === void 0 ||
               !("api" in unique_1) ||
               (typeof unique_1.api == "string" &&

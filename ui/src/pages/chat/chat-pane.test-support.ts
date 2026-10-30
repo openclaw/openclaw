@@ -100,6 +100,9 @@ export type TestChatPane = HTMLElement &
       "attach" | "composerDraft" | "composerPersistence" | "createRenderLifecycle"
     >;
     state: ChatPageHost;
+    restorePaneSidebarLayout: (
+      layout: ChatPageHost["sidebarLayout"],
+    ) => ChatPageHost["sidebarLayout"];
     connectedClient: GatewayBrowserClient | null;
     applyGatewaySnapshot: (snapshot: ApplicationContext["gateway"]["snapshot"]) => void;
     catalogLoadGeneration: number;
