@@ -39,6 +39,7 @@
             "id": "deepseek-v4-flash",
             "name": "DeepSeek V4 Flash",
             "reasoning": true,
+            "thinkingLevelMap": { "xhigh": "max", "max": "max" },
             "input": ["text"],
             "contextWindow": 1000000,
             "maxTokens": 384000,
@@ -52,13 +53,15 @@
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
               "maxTokensField": "max_tokens",
-              "codeMode": "preferred"
+              "codeMode": "preferred",
+              "defaultThinkingLevel": "high"
             }
           },
           {
             "id": "deepseek-v4-pro",
             "name": "DeepSeek V4 Pro",
             "reasoning": true,
+            "thinkingLevelMap": { "xhigh": "max", "max": "max" },
             "input": ["text"],
             "contextWindow": 1000000,
             "maxTokens": 384000,
@@ -72,13 +75,15 @@
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
               "maxTokensField": "max_tokens",
-              "codeMode": "preferred"
+              "codeMode": "preferred",
+              "defaultThinkingLevel": "high"
             }
           },
           {
             "id": "deepseek-v4-flash-vision-exp",
             "name": "DeepSeek V4 Flash Vision (Experimental)",
             "reasoning": true,
+            "thinkingLevelMap": { "xhigh": "max", "max": "max" },
             "input": ["text", "image"],
             "contextWindow": 1000000,
             "maxTokens": 384000,
@@ -92,13 +97,15 @@
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
               "maxTokensField": "max_tokens",
-              "codeMode": "preferred"
+              "codeMode": "preferred",
+              "defaultThinkingLevel": "high"
             }
           },
           {
             "id": "deepseek-flash",
             "name": "DeepSeek V4.1 Flash",
             "reasoning": true,
+            "thinkingLevelMap": { "xhigh": "max", "max": "max" },
             "input": ["text", "image"],
             "contextWindow": 1000000,
             "maxTokens": 384000,
@@ -112,7 +119,8 @@
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
               "maxTokensField": "max_tokens",
-              "codeMode": "preferred"
+              "codeMode": "preferred",
+              "defaultThinkingLevel": "high"
             }
           }
         ]
