@@ -81,6 +81,50 @@ it.for([
   }
 });
 
+it("records live transcript visibility after caught-up rows are revealed", async () => {
+  const iframe = document.createElement("iframe");
+  document.body.append(iframe);
+  try {
+    const target = iframe.contentWindow;
+    const doc = iframe.contentDocument;
+    if (!target || !doc) {
+      throw new Error("Paint probe realm was not created");
+    }
+    const script = doc.createElement("script");
+    script.textContent = `
+      const __name = fn => fn;
+      (${warmReloadProbe.toString()})();
+      const pane = document.createElement('div');
+      pane.className = 'chat-pane-cache__pane--active';
+      pane.innerHTML = '<div class="chat-thread"><div class="chat-thread-inner"><div class="chat-virtual-row" data-virtual-row-key="fixture-row"><div class="chat-text"><p>Transcript text.</p></div></div></div></div>';
+      document.body.append(pane);
+      const inner = pane.querySelector('.chat-thread-inner');
+      window.liveProof = (async () => {
+        await new Promise(requestAnimationFrame);
+        await new Promise(requestAnimationFrame);
+        const caughtUpAt = performance.now();
+        inner.style.visibility = 'hidden';
+        pane.transcriptReady = true;
+        await new Promise(requestAnimationFrame);
+        await new Promise(requestAnimationFrame);
+        const shownAt = performance.now();
+        inner.style.visibility = 'visible';
+        await new Promise(requestAnimationFrame);
+        await new Promise(requestAnimationFrame);
+        return { caughtUpAt, shownAt, ...window.__warmReload.read() };
+      })();
+    `;
+    doc.body.append(script);
+    const proof = await Reflect.get(target, "liveProof");
+    expect(proof.milestones.firstTranscript).toBeLessThanOrEqual(proof.caughtUpAt);
+    expect(proof.milestones.catchupApplied).toBeGreaterThanOrEqual(proof.caughtUpAt);
+    expect(proof.milestones.catchupApplied).toBeLessThan(proof.shownAt);
+    expect(proof.milestones.firstLiveTranscript).toBeGreaterThanOrEqual(proof.shownAt);
+  } finally {
+    iframe.remove();
+  }
+});
+
 it("records transcript presentation after opacity reveals nested text, not its earlier DOM mount", async () => {
   const iframe = document.createElement("iframe");
   document.body.append(iframe);
