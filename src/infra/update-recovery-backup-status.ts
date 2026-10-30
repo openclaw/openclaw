@@ -97,12 +97,12 @@ export async function inspectUpdateRecoveryBackups(readRun = getUpdateRunAsync) 
   // Completed captures cannot compete with a failed capture for recovery. Count
   // only after all outcomes are known; unreadable and manual evidence stays conservative.
   const competing = classified.filter((entry) =>
-    "unchanged" in entry
+    entry.unchanged !== undefined
       ? !entry.terminalOutcome && !entry.unchanged
       : entry.status !== "forward-resolved",
   );
   const inspected = classified.map((entry) => {
-    if (!("unchanged" in entry)) {
+    if (entry.unchanged === undefined) {
       return entry;
     }
     const { ref, manifest, outcome, terminalOutcome, unchanged } = entry;
