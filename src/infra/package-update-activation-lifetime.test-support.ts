@@ -44,9 +44,20 @@ export function snapshotActivationFiles(directory: string) {
     });
 }
 
+/** Journals record the built sealed helper; source tests seal inert bytes written under root. */
+export function mockInertSealedHelper(root: string) {
+  const resolveRuntimeWorkerUrl = runtimeWorker.resolveRuntimeWorkerUrl;
+  const helper = path.join(root, "sealed.mjs");
+  fs.writeFileSync(helper, "// inert sealed helper bytes\n");
+  vi.spyOn(runtimeWorker, "resolveRuntimeWorkerUrl").mockImplementation((entry) =>
+    entry.sourceWorkerName === "package-update-activation-sealed"
+      ? pathToFileURL(helper)
+      : resolveRuntimeWorkerUrl(entry),
+  );
+}
+
 export function createPackageActivationLifetimeFixture() {
   const lifetime = createFixtureLifetime();
-  const resolveRuntimeWorkerUrl = runtimeWorker.resolveRuntimeWorkerUrl;
   let root: string;
   let childGuardEnv: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
 
@@ -66,13 +77,7 @@ export function createPackageActivationLifetimeFixture() {
       fs.mkdirSync(tmp, { mode: 0o700 });
       const { databasePath, assertDatabasePath } = installPrivateUpdateHandoffStore(tmp);
       childGuardEnv = writePrivateUpdateHandoffChildGuard(databasePath, tmp);
-      const helper = path.join(root, "sealed.mjs");
-      fs.writeFileSync(helper, "// inert sealed helper bytes\n");
-      vi.spyOn(runtimeWorker, "resolveRuntimeWorkerUrl").mockImplementation((entry) =>
-        entry.sourceWorkerName === "package-update-activation-sealed"
-          ? pathToFileURL(helper)
-          : resolveRuntimeWorkerUrl(entry),
-      );
+      mockInertSealedHelper(root);
       return { root, assertDatabasePath, childGuardEnv };
     },
 
@@ -114,7 +119,7 @@ export function createPackageActivationLifetimeFixture() {
     },
 
     spawnChild(this: void, args: string[]) {
-      const worker = resolveRuntimeWorkerUrl({
+      const worker = runtimeWorker.resolveRuntimeWorkerUrl({
         ...packageActivationRuntimeEntrypoint,
         sourceWorkerName: "package-update-activation.process.test-support",
         distWorkerPath: "infra/package-update-activation.process.test-support.js",

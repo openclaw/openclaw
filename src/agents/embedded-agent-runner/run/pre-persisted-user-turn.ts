@@ -1,7 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../../../../packages/agent-core/src/types.js";
-import { prepareForeignLiveSessionPendingInputEntries } from "../../../config/sessions/session-accessor.pending-inputs.js";
+import {
+  prepareForeignLiveSessionPendingInputEntries,
+  readSessionSubmittedInput,
+} from "../../../config/sessions/session-accessor.pending-inputs.js";
 import type { SessionTranscriptWriteScope } from "../../../config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.types.js";
 import { runWithSessionActorStorage } from "../../../config/sessions/session-actor-storage-binding.js";
@@ -10,6 +13,7 @@ import { SessionTranscriptReadFenceError } from "../../../config/sessions/sessio
 import { resolveSessionTranscriptReadFence } from "../../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "../../../config/sessions/session-transcript-read-source.js";
 import type { TranscriptEntryAnchor } from "../../../config/sessions/transcript-entry-anchor.js";
+import { messagesMatchForIdempotentReplay } from "../../../config/sessions/transcript-message-equality.js";
 import { sameSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import {
   captureOwnedTranscriptWriteAssertion,
@@ -221,7 +225,7 @@ export async function preparePersistedCurrentUserTurn(params: {
   runId: string;
   signal?: AbortSignal;
   initial?: InitialPersistedUserTurn;
-}): Promise<InitialUserTurnReplayPreparation | undefined> {
+}): Promise<InitialUserTurnReplayPreparation | "already-delivered" | undefined> {
   const { sessionManager, message, recorder, runId } = params;
   const sessionTarget = sessionManager.getSessionTarget();
   if (!sessionTarget || !message?.idempotencyKey || !recorder) {
@@ -398,7 +402,46 @@ export async function preparePersistedCurrentUserTurn(params: {
         })
       )?.anchor;
   if (!initial) {
-    return undefined;
+    const currentId = sessionManager.resolveCurrentTurnEntryId((entry) =>
+      isInterruptedTurnEntry(entry, runId),
+    );
+    const current = currentId ? sessionManager.getEntry(currentId) : undefined;
+    // A retry can retain the keyed current user with a newer prompt projection.
+    // A same-run failed attempt remains recovery-owned; retryability is not completion.
+    if (
+      current?.type === "message" &&
+      ((current.message.role === "user" &&
+        Reflect.get(current.message, "idempotencyKey") === message.idempotencyKey) ||
+        (current.message.role === "assistant" &&
+          Reflect.get(current.message, "__openclaw")?.runId === runId &&
+          current.message.stopReason === "error"))
+    ) {
+      return undefined;
+    }
+    // Fresh staged input has no prior commit to acknowledge.
+    if (
+      recorder.getPendingInputMessage?.() &&
+      !recorder.validateCommittedReplay &&
+      !recorder.hasPersisted()
+    ) {
+      return undefined;
+    }
+    await recorder.validateCommittedReplay?.();
+    const submitted = await withSource(params.signal, async (target, assertSource) => {
+      const result = await readSessionSubmittedInput(target, message.idempotencyKey!, {
+        includeSource: true,
+      });
+      assertSource();
+      assertCurrent();
+      return result;
+    });
+    params.signal?.throwIfAborted();
+    // Active-path sequence excludes reset/replaced branches. Matching all persisted
+    // input fields preserves content and requester identity, not merely the key.
+    return submitted?.messageSeq !== undefined &&
+      messagesMatchForIdempotentReplay(submitted.message, message)
+      ? "already-delivered"
+      : undefined;
   }
   // Hooks and compaction can intervene before the core consumes this turn once.
   let pending = true;

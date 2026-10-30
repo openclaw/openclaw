@@ -110,7 +110,7 @@ Baseten can add, remove, or change Model APIs independently of OpenClaw releases
 
 ## Decision models
 
-The plugin also supports Base Labs' **elephant-1 (9B)** and **mammoth-1 (27B)**
+The plugin also supports Base Labs' **joey-1 (2B)**, **elephant-1 (9B)**, and **mammoth-1 (27B)**
 through Baseten's native [System One API](https://docs.baseten.co/reference/inference-api/system-one).
 These are decision-only models, not chat completions. Select them in the
 **Decision** picker or set the separate model role:
@@ -119,7 +119,7 @@ These are decision-only models, not chat completions. Select them in the
 {
   agents: {
     defaults: {
-      decisionModel: "baseten/decision-models/baseten-elephant-9b-latest",
+      decisionModel: "baseten/decision-models/baseten-joey-2b-latest",
     },
   },
 }
@@ -127,6 +127,7 @@ These are decision-only models, not chat completions. Select them in the
 
 | Model           | Decision model reference                             |
 | --------------- | ---------------------------------------------------- |
+| joey-1 (2B)     | `baseten/decision-models/baseten-joey-2b-latest`     |
 | elephant-1 (9B) | `baseten/decision-models/baseten-elephant-9b-latest` |
 | mammoth-1 (27B) | `baseten/decision-models/baseten-mammoth-27b-latest` |
 
@@ -143,13 +144,19 @@ output token per question. Its confidence field measures distribution concentrat
 not the probability that an answer is correct; use the selected option's
 probability when applying a probability threshold.
 
-As checked on October 21, 2026, Baseten's launch offer is free for one week,
-ending October 27, 2026 at 11:59 PM Pacific. This is not permanent free pricing.
-The public System One reference does not specify hosted token limits or
-post-promotion prices, so OpenClaw does not invent a context limit or a zero-cost
-billing estimate for these aliases. Check [current pricing](https://www.baseten.co/pricing)
-and the [provider documentation](https://docs.baseten.co/inference/model-apis/decision-models)
-before use. The aliases can move without an OpenClaw release.
+Baseten's [hosted Decision models](https://docs.baseten.co/inference/model-apis/decision-models)
+have a **16,384-token context limit per question**, including shared state,
+instructions, criteria, and prompt formatting. Oversized requests are rejected,
+not truncated. Dedicated deployments can have different limits; this catalog
+describes Model APIs.
+
+As checked on October 30, 2026, the [joey-1 model card](https://huggingface.co/baselabs/joey-1)
+lists Model API pricing at **$0.01 per million input tokens**. The earlier
+launch promotion has ended. OpenClaw preserves reported usage rather than
+assuming these aliases are free or manufacturing a billing estimate. Check
+[current pricing](https://www.baseten.co/pricing) before use; prices and the
+`latest` aliases can change independently of OpenClaw. Probabilities and confidence
+are model estimates, not safety guarantees or permission to take an action.
 
 Selecting a decision model authorizes supported evaluation consumers to send their
 supplied evidence to Baseten; it does not start background work. This integration

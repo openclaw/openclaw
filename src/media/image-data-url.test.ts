@@ -1,6 +1,6 @@
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
-import { describe, expect, it } from "vitest";
-import { decodeDataUrl } from "./image-tool.helpers.js";
+import { describe, expect, it, vi } from "vitest";
+import { decodeDataUrl } from "./image-data-url.js";
 
 describe("decodeDataUrl", () => {
   it("preserves line-wrapped base64 and normalizes MIME casing", () => {
@@ -25,5 +25,19 @@ describe("decodeDataUrl", () => {
     } else {
       expect(decodeDataUrl(input, { maxBytes: MAX_IMAGE_BYTES }).buffer.byteLength).toBe(bytes);
     }
+  });
+
+  it.each([
+    {
+      dataUrl: "data:text/plain;base64,SGVsbG8=",
+      maxBytes: undefined,
+      error: /Unsupported data URL type/i,
+    },
+    { dataUrl: `data:image/png;base64,${"A".repeat(16)}`, maxBytes: 4, error: /size limit/i },
+  ])("rejects invalid data URLs before decoding: $error", ({ dataUrl, maxBytes, error }) => {
+    using bufferFromSpy = vi.spyOn(Buffer, "from");
+
+    expect(() => decodeDataUrl(dataUrl, { maxBytes })).toThrow(error);
+    expect(bufferFromSpy).not.toHaveBeenCalledWith(dataUrl.split(",")[1], "base64");
   });
 });

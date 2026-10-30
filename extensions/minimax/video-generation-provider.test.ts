@@ -288,8 +288,8 @@ function expectDownloadFetchTimeout(url: string, totalTimeoutMs: number): void {
 
 describe("minimax music generation provider", () => {
   it("streams generated music chunks from MiniMax", async () => {
-    using clock = vi.spyOn(Date, "now");
-    clock.mockReturnValue(1_700_000_000_000);
+    using clock = vi.spyOn(performance, "now");
+    clock.mockReturnValue(0);
     const chunkA = Buffer.from("ID3\x04\x00mp3-a");
     const chunkB = Buffer.from("mp3-b");
     mockResponse(
@@ -349,14 +349,48 @@ describe("minimax music generation provider", () => {
     [
       streamFrame({ status: 1, audio: "ZE==" }),
       "MiniMax music generation returned malformed hex audio",
+      "text/event-stream",
     ],
     [
       streamFrame({}) + streamFrame({}, 2013, "render rejected"),
       "MiniMax music generation failed (2013): render rejected",
+      "text/event-stream",
     ],
-  ])("rejects invalid music stream %s", async (body, message) => {
-    mockResponse(body);
+    ...["{}", "null", "false"].map((body) => [
+      body,
+      "MiniMax music generation stream ended without completion",
+      "application/json",
+    ]),
+  ])("rejects invalid music response %s", async (body, message, contentType) => {
+    const release = vi.fn(async () => {});
+    post.mockResolvedValueOnce({
+      response: new Response(body, { headers: { "content-type": contentType } }),
+      release,
+    });
     await expect(generateMusic()).rejects.toThrow(message);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the deadline error when JSON without audio finishes after its budget", async () => {
+    using clock = vi.spyOn(performance, "now").mockReturnValue(0);
+    mockResponse(
+      new ReadableStream<Uint8Array>(
+        {
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("{}"));
+          },
+          pull(controller) {
+            clock.mockReturnValue(50);
+            controller.close();
+          },
+        },
+        { highWaterMark: 0 },
+      ),
+      "application/json",
+    );
+    await expect(generateMusic({ timeoutMs: 50 })).rejects.toThrow(
+      "MiniMax music generation timed out after 50ms",
+    );
   });
 
   it("rejects inline generated music that exceeds the configured media cap before decoding", async () => {

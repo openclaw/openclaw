@@ -3,6 +3,7 @@ import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hasGatewayContextOwner } from "../plugins/runtime/gateway-request-scope.js";
+import { getProcessCleanupBudget } from "../process/supervisor/cleanup-budget.js";
 import { captureGatewaySessionWorkAdmissionInterruption } from "../sessions/session-controller.lifecycle-work.js";
 import { sessionControllerMailboxes } from "../sessions/session-controller.mailbox.js";
 import { listRpcSourceEntries } from "../sessions/session-controller.rpc-sources.js";
@@ -46,13 +47,18 @@ export async function prepareGatewayRunShutdown(
   });
   const effects = captureGatewaySessionWorkAdmissionInterruption(params.resolveGatewayContext);
   const persistence = new AbortController();
+  // Marker writes share the lifecycle owner's deadline, including worker/writer queueing.
+  const budget = getProcessCleanupBudget();
+  const persistenceMs = budget ? Math.max(0, budget.deadline - performance.now()) : 1_000;
   let failure: { error: unknown } | undefined;
   try {
     await raceWithTimeout(
       async () => params.persistRunningSessionsForRestart?.(persistence.signal),
-      1_000,
+      persistenceMs,
       () => {
-        const error = new Error("Shutdown session persistence did not settle within 1000ms");
+        const error = new Error(
+          `Shutdown session persistence did not settle within ${persistenceMs}ms`,
+        );
         persistence.abort(error);
         throw error;
       },
@@ -60,6 +66,7 @@ export async function prepareGatewayRunShutdown(
     );
   } catch (error) {
     persistence.abort(error);
+    shutdownLog.warn(`Restart marker persistence failed: ${String(error)}`);
     failure = { error };
   }
   try {

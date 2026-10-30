@@ -7,6 +7,8 @@ import {
 import { addSession } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
+import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -42,7 +44,6 @@ it("marks completed reply settlement only when accepted inputs remain queued", (
       agentId: "main",
       sessionKey: "agent:main:completed-before-restart",
       sessionId: "completed-before-restart",
-      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
     };
     replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
     const runId = "completed-worker-reply";
@@ -82,11 +83,12 @@ it("marks completed reply settlement only when accepted inputs remain queued", (
     }
   }));
 
-it("leaves running cron and external-harness sessions with their execution owner", () =>
+it("marks ordinary conversations without inheriting cron or external execution ownership", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
-    const cases: Array<{ sessionKey: string; entry?: Partial<SessionEntry> }> = [
-      { sessionKey: "agent:main:ordinary-running" },
+    const cases: Array<{ sessionKey: string; resumable?: true; entry?: Partial<SessionEntry> }> = [
+      { sessionKey: "agent:other:main", resumable: true },
+      { sessionKey: "agent:other:main:thread:123.456", resumable: true },
       { sessionKey: "agent:main:cron:scheduled:run:occurrence" },
       { sessionKey: "agent:main:acp:external" },
       {
@@ -105,28 +107,46 @@ it("leaves running cron and external-harness sessions with their execution owner
       { sessionKey: "agent:main:external-harness", entry: { modelSelectionLocked: true } },
     ];
     try {
-      for (const { sessionKey, entry } of cases) {
+      for (const { sessionKey, entry, resumable } of cases) {
+        const agentId = resumable ? "other" : "main";
         replaceSessionEntrySync(
-          { agentId: "main", sessionKey },
+          { agentId, sessionKey },
           { sessionId: sessionKey, updatedAt: 1, ...entry },
         );
+        if (resumable) {
+          subagentRuns.set(
+            sessionKey,
+            createSubagentRunRecord({
+              runId: sessionKey,
+              childSessionKey: sessionKey,
+              childAgentId: agentId,
+              requesterSessionKey: "agent:main:cron:scheduled:run:occurrence",
+              endedAt: sessionKey.endsWith(":main") ? 1 : undefined,
+            }),
+          );
+        }
         const process = createProcessSessionFixture({ id: sessionKey, backgrounded: true });
-        process.agentId = "main";
+        process.agentId = agentId;
         process.sessionKey = sessionKey;
-        process.scopeKey = sessionKey;
         addSession(process);
       }
       await persistRunningSessionsForRestart({ cfg: {} });
-      for (const { sessionKey } of cases) {
-        const entry = loadExactSessionEntry({ agentId: "main", sessionKey })?.entry;
+      for (const { sessionKey, resumable } of cases) {
+        const entry = loadExactSessionEntry({
+          agentId: resumable ? "other" : "main",
+          sessionKey,
+        })?.entry;
         expect(entry).toBeDefined();
         expect(entry?.resumeAfterRestart, sessionKey).toEqual(
-          sessionKey === "agent:main:ordinary-running"
-            ? { queuedInputIds: [], hadBackgroundExec: true }
-            : undefined,
+          resumable ? { queuedInputIds: [], hadBackgroundExec: true } : undefined,
         );
       }
     } finally {
+      for (const { sessionKey, resumable } of cases) {
+        if (resumable) {
+          subagentRuns.delete(sessionKey);
+        }
+      }
       resetProcessRegistryForTests();
     }
   }));

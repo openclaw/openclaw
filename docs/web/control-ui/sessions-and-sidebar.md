@@ -128,6 +128,14 @@ same column so titles stay aligned when status changes or hover and keyboard
 focus reveal row actions. Shared-owner activity traces around the avatar pair;
 team mode keeps its compact status layout.
 
+A quieter ring around a session's leading icon means a background process is
+still running after its turn has finished. These sessions stay visible like active
+runs, and the ring clears when the last process exits or stops. An active turn
+uses the normal ring, and hidden subagents retain the parent's **Subagents working**
+ring. The quieter background ring appears only when neither is active. Collapsed
+sections and child toggles summarize hidden persistent rows on the right; a
+persistent child's background work does not put a ring on its idle parent.
+
 The owner filter is the only control for this selection. Its saved value belongs
 to the current Gateway and your profile in this browser. A signed-in profile
 without a saved choice starts with **My sessions**, except guests: a role that can

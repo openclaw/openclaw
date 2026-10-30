@@ -1402,6 +1402,11 @@ CREATE INDEX IF NOT EXISTS idx_sandbox_registry_last_used
   ON sandbox_registry_entries(registry_kind, last_used_at_ms DESC, container_name)
   WHERE last_used_at_ms IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS durable_background_processes (
+  id TEXT NOT NULL PRIMARY KEY,
+  record_json TEXT NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS sandbox_persistent_execs (
   owner_key TEXT NOT NULL PRIMARY KEY,
   source_identity TEXT NOT NULL,

@@ -1,5 +1,6 @@
 // Memory Core owns Gateway indexes for both local and host-provided files.
 import { getAgentWorkspaceAccess } from "openclaw/plugin-sdk/agent-workspace-runtime";
+import type { AcquireConfiguredProviderLocalService } from "openclaw/plugin-sdk/embedding-providers";
 import { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
@@ -9,7 +10,6 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemorySearchManager } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
 
 const loadManagerRuntime = createLazyRuntimeModule(() => import("../../manager-runtime.js"));
@@ -20,7 +20,7 @@ type MemorySearchManagerParams = {
   agentId: string;
   purpose?: MemorySearchManagerPurpose;
   inspectSources?: boolean;
-  acquireLocalService?: MemoryCoreAcquireLocalService;
+  acquireLocalService?: AcquireConfiguredProviderLocalService;
   runInBackgroundContext?: MemoryCoreRuntimeHost["runInBackgroundContext"];
 };
 

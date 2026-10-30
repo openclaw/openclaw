@@ -3,6 +3,8 @@ import { routeLogsToStderr } from "../logging/console.js";
 
 routeLogsToStderr();
 
+export { parseLaunchctlJob } from "../daemon/launchctl-job.js";
+
 export { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 export { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownership.js";
 export { resolveImmutableSqliteFileUri } from "./node-sqlite.js";

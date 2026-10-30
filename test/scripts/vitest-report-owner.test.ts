@@ -269,12 +269,21 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         expect(text(root, "reports/merge-after-joins")).toBe("joined");
         expect(captures.map((capture) => isPidDefinitelyDead(capture.pid))).toEqual([true, true]);
       }
+      if (
+        ["config-load-once", "serial", "grouped", "nested-shared-leaf", "empty-group"].includes(
+          mode,
+        )
+      ) {
+        expect(text(root, "node_modules/.vitest-cache/canary")).toBe("another cache owner");
+        expect(text(root, "node_modules/.vitest-cache/_metadata.json")).toBe(
+          '{"lockfileHash":"unrelated-owner"}',
+        );
+        expect(text(root, "node_modules/.vite/canary")).toBe("another result-cache owner");
+        expect(fs.readdirSync(path.join(root, "node_modules/.vite"))).toEqual(["canary"]);
+      }
       if (mode === "config-load-once") {
         expect(lines(root, "reports/config-loads.txt")).toEqual(["alpha", "beta"]);
         const replay = aggregateOf(result);
-        const defaultCache = path.join(root, "node_modules/.vitest-cache");
-        expect(text(defaultCache, "canary")).toBe("another cache owner");
-        expect(text(defaultCache, "_metadata.json")).toBe('{"lockfileHash":"unrelated-owner"}');
         for (const name of ["alpha", "beta"]) {
           expect(json(root, `fs-cache-${name}/_metadata.json`).lockfileHash).toBeTypeOf("string");
         }
@@ -724,6 +733,23 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         }
         if (kind === "native-error") {
           expect(result.stderr).toMatch(/No test tags found|standalone mode requires --watch/u);
+        }
+        if (kind === "idle") {
+          for (const name of ["alpha", "beta"]) {
+            expect(result.stdout).toContain(
+              `cleared fs module cache at ${path.join(reports.root, "fs-cache-" + name)}`,
+            );
+          }
+          expect(text(reports.root, "node_modules/.vitest-cache/canary")).toBe(
+            "another cache owner",
+          );
+          expect(text(reports.root, "node_modules/.vitest-cache/_metadata.json")).toBe(
+            '{"lockfileHash":"unrelated-owner"}',
+          );
+          expect(text(reports.root, "node_modules/.vite/canary")).toBe(
+            "another result-cache owner",
+          );
+          expect(fs.readdirSync(path.join(reports.root, "node_modules/.vite"))).toEqual(["canary"]);
         }
       }
       if (entry === "batch-cli") {

@@ -20,7 +20,7 @@ vi.mock("../cli/run-main-service-installation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof serviceInstallation>()),
   readOwnGatewayServiceCommand: vi.fn(),
 }));
-const itLinux = it.runIf(process.platform === "linux");
+const test = it.runIf(process.platform === "linux");
 
 afterEach(async () => {
   await cleanupSessionStateForTest();
@@ -93,53 +93,50 @@ async function bootstrap() {
   );
 }
 
-itLinux(
-  "backs up and migrates a managed activation, preserving data and skipping repair on healthy restart",
-  async () => {
-    await fixture(async (pathname) => {
-      const migrate = schemaMigrations.prepareDoctorDatabaseMigrations;
-      vi.spyOn(schemaMigrations, "prepareDoctorDatabaseMigrations").mockImplementationOnce(
-        async (params) => {
-          const result = await migrate(params);
-          return {
-            ...result,
-            warnings: [...result.warnings, "synthetic completion receipt warning"],
-          };
-        },
-      );
-      await bootstrap();
-      expect(runtime.error).toHaveBeenCalledWith("synthetic completion receipt warning");
-      {
-        using db = new DatabaseSync(pathname, { readOnly: true });
-        expect(db.prepare("PRAGMA user_version").get()).toEqual({
-          user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-        });
-        expect(
-          db.prepare("SELECT value_json FROM cache_entries WHERE scope='activation'").get(),
-        ).toEqual({ value_json: '"retained"' });
-      }
-      const before = await fs.readdir(path.dirname(pathname));
-      const backup = before.find((file) => file.endsWith(".bak"));
-      expect(backup).toBeDefined();
-      {
-        using db = new DatabaseSync(path.join(path.dirname(pathname), backup!), { readOnly: true });
-        expect(
-          db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key='primary'").get(),
-        ).toEqual({ schema_version: 24 });
-      }
-      const repairs = runtime.log.mock.calls.filter(([line]) =>
-        String(line).startsWith("Systemd activation:"),
-      );
-      expect(repairs).toHaveLength(1);
-      await cleanupSessionStateForTest();
-      await bootstrap();
-      expect(await fs.readdir(path.dirname(pathname))).toEqual(before);
+test("backs up and migrates a managed activation, preserving data and skipping repair on healthy restart", async () => {
+  await fixture(async (pathname) => {
+    const migrate = schemaMigrations.prepareDoctorDatabaseMigrations;
+    vi.spyOn(schemaMigrations, "prepareDoctorDatabaseMigrations").mockImplementationOnce(
+      async (params) => {
+        const result = await migrate(params);
+        return {
+          ...result,
+          warnings: [...result.warnings, "synthetic completion receipt warning"],
+        };
+      },
+    );
+    await bootstrap();
+    expect(runtime.error).toHaveBeenCalledWith("synthetic completion receipt warning");
+    {
+      using db = new DatabaseSync(pathname, { readOnly: true });
+      expect(db.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
       expect(
-        runtime.log.mock.calls.filter(([line]) => String(line).startsWith("Systemd activation:")),
-      ).toHaveLength(1);
-    });
-  },
-);
+        db.prepare("SELECT value_json FROM cache_entries WHERE scope='activation'").get(),
+      ).toEqual({ value_json: '"retained"' });
+    }
+    const before = await fs.readdir(path.dirname(pathname));
+    const backup = before.find((file) => file.endsWith(".bak"));
+    expect(backup).toBeDefined();
+    {
+      using db = new DatabaseSync(path.join(path.dirname(pathname), backup!), { readOnly: true });
+      expect(
+        db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key='primary'").get(),
+      ).toEqual({ schema_version: 24 });
+    }
+    const repairs = runtime.log.mock.calls.filter(([line]) =>
+      String(line).startsWith("Systemd activation:"),
+    );
+    expect(repairs).toHaveLength(1);
+    await cleanupSessionStateForTest();
+    await bootstrap();
+    expect(await fs.readdir(path.dirname(pathname))).toEqual(before);
+    expect(
+      runtime.log.mock.calls.filter(([line]) => String(line).startsWith("Systemd activation:")),
+    ).toHaveLength(1);
+  });
+});
 
 it.each(["ordinary", "child", "newer", "corrupt", "foreign"])(
   "preserves %s state without activation repair",
@@ -169,7 +166,7 @@ it.each(["ordinary", "child", "newer", "corrupt", "foreign"])(
   },
 );
 
-itLinux("parks failed activation repair without migrating unbacked state", async () => {
+test("parks failed activation repair without migrating unbacked state", async () => {
   await fixture(async (pathname) => {
     const before = await fs.readFile(pathname);
     vi.spyOn(schemaMigrations, "prepareDoctorDatabaseMigrations").mockRejectedValueOnce(

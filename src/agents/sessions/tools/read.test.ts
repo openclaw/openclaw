@@ -417,6 +417,31 @@ console.log("headless-read-ok");`,
     expect(textContent(second)).toContain("offset=3");
   });
 
+  it("caps a non-EOF selection ending on a blank line and continues from that line", async () => {
+    const prefix = "é🦞\n".repeat(1999);
+    const { tool } = await fileFixture("selected-blank.txt", `${prefix}\n\nfiné`);
+    const first = await executeRead(tool, { path: "selected-blank.txt", limit: 2001 });
+    expect(first.details).toMatchObject({
+      kind: "truncated",
+      content: prefix,
+      continuation: { kind: "line", offset: 2001, limit: 1 },
+      truncation: {
+        truncatedBy: "lines",
+        outputLines: 2000,
+        outputBytes: Buffer.byteLength(prefix),
+        maxLines: 2000,
+      },
+    });
+    const next = await executeRead(tool, { path: "selected-blank.txt", offset: 2001, limit: 1 });
+    expect(next.details).toMatchObject({
+      kind: "truncated",
+      content: "",
+      continuation: { kind: "line", offset: 2002, limit: 1 },
+    });
+    const last = await executeRead(tool, { path: "selected-blank.txt", offset: 2002, limit: 1 });
+    expect(last.details).toEqual({ kind: "text", content: "finé" });
+  });
+
   it("clamps non-positive line limits before slicing file content", async () => {
     const tool = memoryRead("alpha\nbeta\ngamma", async () => null);
     const result = await executeRead(tool, { path: "notes.txt", limit: -1 });

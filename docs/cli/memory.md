@@ -244,9 +244,10 @@ every configured agent, falling back to the default agent when no list is
 configured. The command asks for confirmation. `--yes` skips the prompt and is
 required in a non-interactive terminal.
 
-Reset atomically drops and recreates only memory-owned derived tables in
-`agents/<agentId>/agent/openclaw-agent.sqlite`, clearing indexed content and
-cached embeddings while retaining required revision bookkeeping. Non-memory
+Reset atomically clears memory-owned derived content and cached embeddings in
+the selected agent database (SQLite or PostgreSQL), retaining required revision
+bookkeeping. SQLite recreates the derived tables; PostgreSQL retains their
+definitions and deletes the derived rows. Non-memory
 database tables and memory source files remain untouched. An agent with no index
 is a successful no-op. Reset coordinates with existing memory maintenance and
 does not restart the Gateway; a running Gateway can reindex retained sources
@@ -441,7 +442,7 @@ new entries later, but regeneration is not guaranteed.
 ### Readmission and retained data
 
 A real purge records the selected session IDs as forgotten in the agent's
-SQLite database before removing artifacts. Automatic dreaming ingestion,
+selected database before removing artifacts. Automatic dreaming ingestion,
 `memory session-backfill`, and transcript indexing, including
 `memory index --force`, check those records. Automatic ingestion records the
 reason `forgotten`. Repeating the purge does not remove the exclusion, and

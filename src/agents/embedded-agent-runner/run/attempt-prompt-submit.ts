@@ -73,6 +73,8 @@ export async function submitEmbeddedAttemptPrompt(input: {
     | "skipPreparedUserTurnMessage"
     | "suppressNextUserMessagePersistence"
     | "userTurnTranscriptRecorder"
+    | "inputAlreadyDelivered"
+    | "abortSignal"
   >;
   registration?: ActiveEmbeddedRunAttachment;
   activeSession: PromptSubmissionSession;
@@ -108,6 +110,11 @@ export async function submitEmbeddedAttemptPrompt(input: {
   transcriptPrompt: string;
 }): Promise<void> {
   const { activeSession, attempt } = input;
+  if (attempt.inputAlreadyDelivered) {
+    attempt.abortSignal?.throwIfAborted();
+    input.assertHostActive?.();
+    return;
+  }
   const userTurnRecorder = attempt.userTurnTranscriptRecorder;
   const projectionRecorder =
     attempt.skipPreparedUserTurnMessage || input.runtimeOnly || userTurnRecorder?.isBlocked()
