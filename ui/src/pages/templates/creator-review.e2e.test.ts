@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser, type Page } from "playwright";
@@ -6,10 +6,8 @@ import { expect, inject, it } from "vitest";
 import type { OpenClawTestInstance } from "../../../../test/helpers/openclaw-test-instance.ts";
 import { createDarkDesktopControlUiContextOptions } from "../../e2e/control-ui-browser-options.test-support.ts";
 import { seedSidebarSettings } from "../../e2e/sidebar-contract.test-support.ts";
-import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { getControlUiContextHandle } from "../../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
   reconnectMockGateway,
@@ -22,7 +20,6 @@ const {
   available: chromiumAvailable,
   wsEndpoint: chromiumWsEndpoint,
 } = inject("controlUiE2eChromium");
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 function connectCreatorBrowser() {
   return chromiumWsEndpoint
@@ -312,16 +309,6 @@ it.skipIf(!chromiumAvailable)(
       await page.goto(`${server.baseUrl}templates?draft=${draftId}&agent=main`);
       const dialog = page.getByRole("dialog", { name: "Review your Template" });
       await dialog.waitFor();
-      if (captureUiProof) {
-        const proofDir = createControlUiE2eArtifactDir("templates-rename-creator-after");
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          dialog,
-          [dialog.getByRole("button", { name: "Publish to ClawHub" })],
-          { animations: "disabled" },
-        );
-        await writeFile(`${proofDir}/after-creator.png`, frame.png);
-      }
       expect(await dialog.getByText("View", { exact: true }).count()).toBe(1);
       expect(await dialog.getByLabel("Description").inputValue()).toBe("Summarizes releases");
       await setReview("d");

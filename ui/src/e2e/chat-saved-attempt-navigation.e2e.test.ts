@@ -1,7 +1,5 @@
-import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
 import {
-  takeControlUiScreenshotFrame,
   waitForControlUiFrameLayout,
   waitForControlUiProofSurface,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -10,7 +8,6 @@ import { requireRecord } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Saved-attempt history navigation" });
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
   it.each([1280, 390])(
@@ -65,12 +62,6 @@ suite.define(() => {
         const footer = page.locator(".chat-footer");
         await waitForControlUiProofSurface(footer, [tail]);
         await waitForControlUiFrameLayout([footer, tail]);
-        if (captureUiProof) {
-          const frame = await takeControlUiScreenshotFrame(page, footer, [tail], {
-            animations: "disabled",
-          });
-          await writeFile(suite.artifactDir + `/latest-${width}.png`, frame.png);
-        }
         const earlier = page.getByRole("button", {
           name: "Show earlier unsent messages",
           exact: true,
@@ -102,19 +93,6 @@ suite.define(() => {
         await navigation.scrollIntoViewIfNeeded();
         await waitForControlUiProofSurface(navigation, [earlier, backToLatest]);
         await waitForControlUiFrameLayout([navigation, earlier, backToLatest]);
-        if (captureUiProof) {
-          const historyFrame = await takeControlUiScreenshotFrame(
-            page,
-            navigation,
-            [earlier, backToLatest],
-            {
-              animations: "disabled",
-              elements: [navigation],
-              scrollTo: navigation,
-            },
-          );
-          await writeFile(suite.artifactDir + `/history-${width}.png`, historyFrame.png);
-        }
         expect(
           await navigation.evaluate((element) => {
             const bounds = element.getBoundingClientRect();
