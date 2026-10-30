@@ -76,7 +76,6 @@ export function createRunTurnLookup(items: ChatItem[]) {
   const inputs = new Map<string, TurnInsertionBounds>();
   const pagedInputCeilings = new Map<string, TurnInsertionBounds>();
   let messages: unknown[] | undefined;
-  // Forwarded activity divides presentation, not the parent execution.
   const startsExecutionTurn = (item: ChatItem) =>
     chatItemStartsUserTurn(item) &&
     !(
@@ -92,6 +91,8 @@ export function createRunTurnLookup(items: ChatItem[]) {
       // Accepted steers divide the transcript, not the run they continue.
       // Keep that run open, but cap unrelated runs at every user boundary.
       for (const item of items) {
+        // Forwarded activity divides presentation, not the parent execution.
+        // Its projected assistant role must not cap that run's live output.
         if (!startsExecutionTurn(item)) {
           continue;
         }
@@ -131,14 +132,11 @@ export function createRunTurnLookup(items: ChatItem[]) {
     if (retainedInputBounds) {
       return retainedInputBounds;
     }
-    // Missing-input recovery uses the same owner as saved-stream materialization;
-    // unanchored projections retain the renderer's existing fallback below.
     messages ??= items.map((item) => (item.kind === "message" ? item.message : null));
     const interval = knownStreamCausalInterval(messages, { runId }, afterUserSendId);
     if (!interval) {
       return null;
     }
-    // Projected turn notices and independent assistant turns also cap live recovery.
     const ceiling = items.find(
       (item, index) => index >= interval.start && index < interval.end && startsExecutionTurn(item),
     );
