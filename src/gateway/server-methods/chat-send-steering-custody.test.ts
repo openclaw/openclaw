@@ -159,6 +159,7 @@ describe("steering input custody", () => {
     async ({ scenario, allowCollaborativeSteering }, { signal }) => {
       const startOwnerTurn = scenario === "same permissions across profiles";
       const background = scenario.includes(" into ");
+      const subagent = scenario === "owner into subagent";
       const nonowner = scenario === "nonowner into loop";
       const continuation = scenario.startsWith("same requester ") || background;
       const sandboxedSessionWriter = scenario.includes("sandboxed");
@@ -177,7 +178,9 @@ describe("steering input custody", () => {
         sessionKey:
           scenario === "owner into cron"
             ? "agent:main:cron:steering-automation"
-            : "agent:main:dashboard:steering-collaboration",
+            : subagent
+              ? "agent:main:subagent:steering-child"
+              : "agent:main:dashboard:steering-collaboration",
         preserveContent: true,
         active: !startOwnerTurn,
         // Both callers may write here; their caps still differ for other sessions.
@@ -394,14 +397,15 @@ describe("steering input custody", () => {
           run.operatorAuthority = undefined;
           run.originatingChannel = undefined;
           run.run.messageProvider = "internal";
-          run.run.inputProvenance =
-            scenario === "owner into subagent"
-              ? { kind: "inter_session", sourceTool: "sessions_spawn", sourceRole: "subagent" }
-              : {
-                  kind: "internal_system",
-                  sourceTool: scenario === "owner into cron" ? "cron" : "cron_execution",
-                };
-          if (scenario !== "owner into subagent") {
+          // Child launches carry their session lineage, not inter-session report provenance.
+          run.run.spawnedBy = subagent ? "agent:main:dashboard:steering-parent" : undefined;
+          run.run.inputProvenance = subagent
+            ? undefined
+            : {
+                kind: "internal_system",
+                sourceTool: scenario === "owner into cron" ? "cron" : "cron_execution",
+              };
+          if (scenario === "owner into cron") {
             run.run.scheduledToolPolicy = { version: 1, mode: "trusted" };
           }
         }
