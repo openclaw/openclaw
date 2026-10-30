@@ -8,8 +8,8 @@
   },
   "type": "module",
   "dependencies": {
-    "@clawdbot/lobster": "2026.9.16",
-    "typebox": "1.4.2"
+    "@clawdbot/lobster": "2026.10.1",
+    "typebox": "1.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

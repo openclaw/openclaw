@@ -3,8 +3,8 @@
   "private": true,
   "version": "1.0.0",
   "dependencies": {
-    "sandbox": "4.9.0",
-    "vercel": "64.4.0"
+    "sandbox": "4.10.0",
+    "vercel": "64.7.0"
   },
   "overrides": {
     "@bytecodealliance/preview2-shim@0.17.6": "0.30.0",

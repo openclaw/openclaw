@@ -181,5 +181,9 @@ sticker database or cache is created.
 - ✅ Thread replies
 - ✅ Media replies stay thread-aware when replying to a thread message
 
+Reply anchors use native Feishu `om_...` message IDs. Background-task completion
+IDs are not reply anchors; completions retain the existing topic root when one
+is available.
+
 Topic-group session routing is covered under
 [Group session scope and topic threads](/channels/feishu/advanced-configuration#group-session-scope-and-topic-threads).
