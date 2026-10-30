@@ -49,6 +49,7 @@
     "markdown-it-emoji": "3.1.0",
     "mediabunny": "1.61.6",
     "parse5": "8.0.1",
+    "qrcode": "1.5.4",
     "remend": "1.4.0",
     "solid-js": "2.0.0-rc.18",
     "zod": "4.6.7"
