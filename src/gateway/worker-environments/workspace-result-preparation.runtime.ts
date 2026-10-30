@@ -13,6 +13,8 @@ import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
   MAX_RECONCILIATION_TOTAL_BYTES,
+  UnsafeWorkspaceManifestPathError,
+  type WorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
 import { readWorkspaceTreeFile } from "./workspace-reconcile-fs.js";
@@ -20,6 +22,7 @@ import type { WorkerWorkspaceGitHistory } from "./workspace-result-inventory.js"
 import {
   requireWorkerResultStorageRef,
   STAGED_RESULT_MESSAGE,
+  WorkspaceStageCurrentPathError,
 } from "./workspace-result-inventory.js";
 
 const bufferView = (bytes: Uint8Array) =>
@@ -142,18 +145,27 @@ export async function buildWorkspaceStageInput(
               });
             }),
         };
-  const compared = parseChangedWorkspaceResult(
-    parseWorkerWorkspaceManifest(
-      bufferView(source.baseManifestRaw).toString("utf8"),
-      source.baseManifestRef,
-      params.buildCacheInputs,
-    ),
-    parseWorkerWorkspaceManifest(
+  // A rejected baseline is not recoverable guest output. Only the current path
+  // rejection below can cross the existing worker error-code boundary as such.
+  const base = parseWorkerWorkspaceManifest(
+    bufferView(source.baseManifestRaw).toString("utf8"),
+    source.baseManifestRef,
+    params.buildCacheInputs,
+  );
+  let current: WorkerWorkspaceManifest;
+  try {
+    current = parseWorkerWorkspaceManifest(
       bufferView(source.currentManifestRaw).toString("utf8"),
       source.currentManifestRef,
       params.buildCacheInputs,
-    ),
-  );
+    );
+  } catch (error) {
+    if (error instanceof UnsafeWorkspaceManifestPathError) {
+      throw new WorkspaceStageCurrentPathError(error.message, { cause: error });
+    }
+    throw error;
+  }
+  const compared = parseChangedWorkspaceResult(base, current);
   // Deletions are represented by the authenticated manifests and need no blob.
   await writeWorkspaceGitInput({
     assertBeforeMutation,

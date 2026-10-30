@@ -338,6 +338,7 @@ describe("dreaming service reconciliation", () => {
 
   it("starts before reconciliation settles and drains it on stop without arming runtime recovery", async () => {
     vi.useFakeTimers();
+    const entered = Promise.withResolvers<void>();
     let rejectStartupList: (reason?: unknown) => void = () => undefined;
     const startupListPromise = new Promise<never>((_resolve, reject) => {
       rejectStartupList = reject;
@@ -348,6 +349,7 @@ describe("dreaming service reconciliation", () => {
       async list() {
         listCalls += 1;
         if (listCalls === 1) {
+          entered.resolve();
           return startupListPromise;
         }
         return [];
@@ -375,6 +377,7 @@ describe("dreaming service reconciliation", () => {
         getCron: () => cron,
       });
 
+      await entered.promise;
       let stopped = false;
       const stopping = triggerDreamingServiceStop(api).then(() => {
         stopped = true;
@@ -392,6 +395,54 @@ describe("dreaming service reconciliation", () => {
       rejectStartupList(new Error("test cleanup"));
       await triggerDreamingServiceStop(api).catch(() => undefined);
       vi.useRealTimers();
+    }
+  });
+
+  it("does not rearm reconciliation after host scheduler closure before the service stop hook", async () => {
+    vi.useFakeTimers();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const { api, logger } = createDreamingTestContext();
+    const list = vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
+      throw new Error("startup list failed");
+    });
+    const add = vi.fn(async () => ({}));
+    const removeStaleJobFamily = vi.fn(async () => 0);
+    const cron = {
+      list,
+      add,
+      async update() {
+        return {};
+      },
+      async remove() {
+        return { removed: false };
+      },
+      removeStaleJobFamily,
+    } satisfies NonNullable<ReturnType<NonNullable<OpenClawPluginServiceContext["getCron"]>>>;
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await getDreamingService(api).start({
+        config: api.config,
+        stateDir: ".",
+        logger,
+        scheduler: api.scheduler,
+        getCron: () => cron,
+      });
+      await entered.promise;
+      // The host closes every scheduler before invoking service stop hooks in reverse order.
+      api.scheduler.beginClose();
+      release.resolve();
+      await expect(Promise.all(api.backgroundTasks)).resolves.toEqual([undefined]);
+      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
+      expect(list).toHaveBeenCalledOnce();
+      expect(add).not.toHaveBeenCalled();
+      expect(removeStaleJobFamily).not.toHaveBeenCalled();
+      expectLogContains(logger.error, "dreaming startup reconciliation failed");
+    } finally {
+      release.resolve();
+      await triggerDreamingServiceStop(api);
     }
   });
 

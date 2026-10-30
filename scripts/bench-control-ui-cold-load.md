@@ -1,5 +1,22 @@
 # Team-scale Control UI cold-load benchmark
 
+## Low-memory mobile profile
+
+Both `bench-control-ui-cold-load.ts` and `bench-control-ui-interactions.ts` accept
+`--low-memory`. This starts Chromium in low-end-device mode with a 128 MiB V8
+old-generation limit and records the profile in the report. It does not impose
+an Android OS/process RSS limit or emulate a physical Android WebView. Pair it
+with `--viewport mobile --cpu-throttle 6`; keep the memory profile identical in
+the unthrottled control. For slow-4G boot delivery, use
+`--network-latency-ms 150 --download-kbps 1600` in the cold-load runner. Static
+HTTP delivery and synthetic Gateway RPC delays remain separate measurements.
+
+Use untraced runs for ranking and interleaved base/control/head comparisons,
+then a separate `--trace` interaction run to attribute an expensive cell. On a
+busy host, repeat with `--thread-cpu-time` to distinguish renderer CPU from
+descheduling. Multi-action scenarios report aggregate task time, not per-event
+input latency.
+
 ## Cold route CSS coverage and rendering cost
 
 `bench-control-ui-css.ts` serves already-built base and head bundles through the

@@ -159,6 +159,7 @@ const repositoryScriptEntries = [
   "scripts/bench-standalone-wasm.mjs!",
   "scripts/generate-social-preview.mts!",
   "scripts/perf/plugin-invocation-scope-measure.ts!",
+  "scripts/perf/prepared-plugin-lease-measure.mjs!",
   "scripts/perf/plugin-state-polling.mts!",
   "scripts/bench-codex-validators.mts!",
   "scripts/bench-control-ui-navigation.ts!",

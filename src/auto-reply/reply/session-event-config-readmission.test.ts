@@ -32,6 +32,8 @@ import { captureCronInferenceBinding } from "../../cron/inference-binding.runtim
 import { TEST_SCHEDULED_TURN } from "../../cron/scheduled-occurrence.test-support.js";
 import { runCronSessionTurn } from "../../cron/session-run.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
+import { createOwnedTestInstance } from "../../plugins/plugin-instance.test-support.js";
+import { PluginInvocationScope } from "../../plugins/plugin-invocation-scope.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -86,6 +88,70 @@ async function attemptRealWrite(
     close();
   }
 }
+
+it("executes a recovery event after its producer's plugin scope closes", async ({ signal }) => {
+  await withOpenClawTestState(
+    { label: "session-event-plugin-readmission", env: { OPENCLAW_TEST_FAST: "0" } },
+    async (state) => {
+      const config = completionConfig(state.workspaceDir);
+      setRuntimeConfigSnapshot(config);
+      await state.writeConfig(config);
+      openOpenClawStateDatabase();
+      const target = { agentId: "main", sessionKey: "agent:main:plugin-readmission" };
+      await replaceSessionEntry(target, {
+        sessionId: "plugin-readmission",
+        lifecycleRevision: "original",
+        permissionMode: "full",
+        updatedAt: Date.now(),
+      });
+      const plugin = createOwnedTestInstance("event-source");
+      const invocations = new PluginInvocationScope(plugin.owner!.registry!, [plugin], {
+        retained: true,
+      });
+      const assertSourceCurrent = plugin.wrap(() => signal.throwIfAborted());
+      const oldCallback = invocations.wrap(assertSourceCurrent);
+      const filePath = path.join(state.workspaceDir, "recovery-event.txt");
+      runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
+        await attemptRealWrite(params, filePath);
+        return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+      });
+      let receipt: ReturnType<typeof enqueueSessionEventForHost> | undefined;
+      try {
+        const expectedTarget = await captureSessionEventTargetForHost(
+          target.agentId,
+          target.sessionKey,
+        );
+        receipt = invocations.run(() =>
+          enqueueSessionEventForHost("Resume required work", {
+            ...target,
+            source: "restart",
+            expectedTarget,
+            assertCurrent: assertSourceCurrent,
+            abortSignal: signal,
+            deliver: false,
+          }),
+        );
+        invocations.release();
+        expect(() => oldCallback()).toThrow("Plugin event-source consumer is closed");
+        // Publication before admission forces the rejection handler to re-admit the occurrence.
+        setRuntimeConfigSnapshot({ ...config, tools: { deny: ["exec"] } });
+        const outcome = await withinTest(receipt.settled, signal);
+        expect(outcome, outcome.error).toMatchObject({
+          status: "completed",
+          executionStarted: true,
+        });
+        expect(await fs.readFile(filePath, "utf8")).toBe("written\n");
+        expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+        expect(runEmbeddedAgentMock.mock.calls[0]?.[0].config?.tools?.deny).toEqual(["exec"]);
+      } finally {
+        invocations.release();
+        await Promise.allSettled([receipt?.settled]);
+        await drainGlobalSingletonLifecycleState("restart");
+        resetSystemEventsForTest();
+      }
+    },
+  );
+});
 
 it.for([
   "published-deny",

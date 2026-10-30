@@ -186,12 +186,12 @@ const intentArgs = (action: string, id: string) => ({
 const promptHook = (runner: NonNullable<ReturnType<typeof getGlobalHookRunner>>) =>
   runner.runBeforePromptBuild({ prompt: "launch", messages: [] }, { ...context, trigger: "user" });
 
-function maintenance() {
+function maintenance(start = startStandingIntentMaintenance, agentIds = ["main"]) {
   const clock = createGatewaySchedulerClock(1_000);
   const gateway = createTestGatewayScheduler(clock.clock);
   const scheduler = createTestPluginServiceScheduler(gateway);
   const warn = vi.fn();
-  const stop = startStandingIntentMaintenance({ agentIds: ["main"], scheduler, warn });
+  const stop = start({ agentIds, scheduler, warn });
   releases.push(stop);
   writerDrains.push(async () => {
     await scheduler.stop();
@@ -274,6 +274,51 @@ async function registeredIntentTool(assertInvocationCurrent?: () => void) {
 }
 
 describe("standing-intent admitted operations", () => {
+  it.each(["predecessor", "successor"] as const)(
+    "keeps maintenance live when the overlapping %s stops",
+    async (retiring) => {
+      const predecessor = maintenance();
+      await predecessor.clock.wake();
+      vi.resetModules();
+      const replacement = await import("./standing-intents.js");
+      expect(replacement.startStandingIntentMaintenance).not.toBe(startStandingIntentMaintenance);
+      const successor = maintenance(replacement.startStandingIntentMaintenance);
+      await successor.clock.wake();
+      const remaining = retiring === "predecessor" ? successor : predecessor;
+      (retiring === "predecessor" ? predecessor : successor).stop();
+      const intent = await seed({ nowMs: 1_000, expiresAt: 5_000 });
+      await remaining.clock.wake();
+      expect(remaining.gateway.nextWakeAtMs).toBe(5_000);
+      await remaining.clock.advanceTo(5_000);
+      expect(readStored(intent.id)?.status).toBe("expired");
+      expect(remaining.warn).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reconciles the restored owner's targets after candidate rollback", async () => {
+    const predecessor = maintenance(startStandingIntentMaintenance, ["main", "other"]);
+    await predecessor.clock.wake();
+    expect(predecessor.gateway.nextWakeAtMs).toBeNull();
+    const successor = maintenance();
+    await successor.clock.wake();
+    const main = await seed({ nowMs: 1_000, expiresAt: 5_000 });
+    const other = await seed({ agentId: "other", nowMs: 1_000, expiresAt: 6_000 });
+    await successor.clock.wake();
+    expect(successor.gateway.nextWakeAtMs).toBe(5_000);
+    successor.stop();
+    await predecessor.clock.wake();
+    expect(predecessor.gateway.nextWakeAtMs).toBe(5_000);
+    await predecessor.clock.advanceTo(5_000);
+    expect(readStored(main.id)?.status).toBe("expired");
+    expect(predecessor.gateway.nextWakeAtMs).toBe(6_000);
+    await predecessor.clock.advanceTo(6_000);
+    expect(storedStatus(openOpenClawAgentDatabase({ agentId: "other" }).db, other.id)).toBe(
+      "expired",
+    );
+    expect(predecessor.gateway.nextWakeAtMs).toBeNull();
+    expect(predecessor.warn).not.toHaveBeenCalled();
+  });
+
   it("reuses service-owned absence without hiding a queued creation or another agent", async () => {
     const { clock, stop } = maintenance();
     await clock.wake();
