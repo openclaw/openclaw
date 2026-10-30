@@ -117,8 +117,8 @@ prefer snapshots or continuous replication below.
 
 On ephemeral container hosts, keep the archive outside the container and use
 `openclaw backup restore` as the disaster-recovery primitive for rebuilding a
-fresh persistent state tree. Restore stages files only; activation remains an
-explicit offline deployment step.
+fresh persistent state tree. Restore stages files and imports PostgreSQL stores
+into fresh namespaces; activation remains an explicit offline deployment step.
 
 ## Per-database snapshots
 
@@ -369,7 +369,7 @@ For SQLite, Git-backed backups dump each selected database into consistently ord
 `manifest.json`, and per-table JSONL files, then create one commit for the
 whole run. Unchanged database content produces no commit, so Git stores and
 pushes only content changes by construction. OpenClaw stages only the
-backup-owned `global` and `agents` paths, not unrelated files elsewhere in the
+backup-owned `global`, `agents`, and `stores` paths, not unrelated files elsewhere in the
 repository.
 
 ```bash

@@ -217,7 +217,7 @@ The per-agent `session_transcript_cold_archives` table records cold transcript
 locations alongside `session_windows` and `transcript_events`. Each row belongs
 to a retained session window and identifies its generation, archive name, hash,
 counts, and sizes. The payload lives in an immutable compressed JSONL file, or
-in the row's blob when embedded by a supported backup. Schema 36 adds
+in the row's blob when embedded by a supported backup. Schema 37 adds
 `session_transcript_cold_archive_chunks`, keyed by session and ordered chunk index,
 with a cascading foreign key to the parent. Chunked parents retain window totals
 and the ordered manifest hash; each child records its sequence range, counts,
@@ -231,7 +231,7 @@ The default archive directory is
 These files contain authoritative history. See
 [cold transcript storage](/reference/session-management-compaction/maintenance#cold-transcript-storage)
 for retention and restoration, and
-[agent schema 36](/reference/database-schemas/agent-schema-history#agent-schema-36)
+[agent schema 37](/reference/database-schemas/agent-schema-history#agent-schema-37)
 for the schema and update contract.
 
 ### Plugin state listing index
