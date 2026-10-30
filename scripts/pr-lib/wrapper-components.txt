@@ -689,6 +689,7 @@ src/config/redact-sentinel.ts
 src/config/redact-snapshot.raw.ts
 src/config/redact-snapshot.secret-ref.ts
 src/config/redact-snapshot.ts
+src/config/repository-branch-prefix.ts
 src/config/resolution-facts.ts
 src/config/runtime-config-capture-state.ts
 src/config/runtime-config-publication.ts
