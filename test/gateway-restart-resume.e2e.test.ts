@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
@@ -155,9 +156,7 @@ async function providerFixture(signal: AbortSignal) {
             child && input.includes("You are running as a subagent")
               ? "child"
               : CASES.find((candidate) => candidate === match?.[2]);
-          if (!name) {
-            throw new Error(`Unexpected synthetic model input: ${current}`);
-          }
+          assert(name, `Unexpected synthetic model input: ${current}`);
           const cycle = Number(name === "child" ? child?.[1] : match?.[1]);
           calls.push({
             cycle,
@@ -299,9 +298,7 @@ async function providerFixture(signal: AbortSignal) {
     },
     release: (cycle: number) => {
       const held = heldResumes.get(cycle);
-      if (!held) {
-        throw new Error("The resumed stream was never admitted");
-      }
+      assert(held, "The resumed stream was never admitted");
       writeOpenAiResponsesText(held.response, {
         text: `RESUMED_${cycle}_stream`,
         messageId: `msg_${held.ordinal}`,
@@ -342,9 +339,10 @@ it.skipIf(process.platform === "win32").for([true, false])(
     // Two logical agents share one physical store; resume must retain the session's agent.
     const sharedStore = suspended ? undefined : path.join(instance.stateDir, "shared.sqlite");
     const config = asRecord(JSON.parse(await readFile(instance.configPath, "utf8")));
+    const logPath = instance.state.path("gateway.log");
+    config.logging = { level: "info", file: logPath };
     await instance.state.writeConfig({ ...config, ...restartResumeConfig(model, sharedStore) });
     let client: GatewayClient | undefined;
-    const connectClient = () => connectRestartClient(instance, {}, signal);
     const race = <T>(promise: Promise<T>) =>
       withinTest(Promise.race([promise, provider.failed]), signal);
     const history = (sessionKey: string) =>
@@ -383,7 +381,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
     await runQaGatewayFixture(
       async () => {
         await instance.startGateway();
-        client = await connectClient();
+        client = await connectRestartClient(instance, {}, signal);
         const { profile } = await client.request<{ profile: { id: string } }>("users.self", {});
         for (const [cycle, mode] of (suspended
           ? ["suspend-reopened"]
@@ -463,10 +461,9 @@ it.skipIf(process.platform === "win32").for([true, false])(
             ),
           );
           const child = instance.child;
-          if (!child?.pid) {
-            throw new Error("Owned Gateway process unavailable");
-          }
+          assert(child?.pid, "Owned Gateway process unavailable");
           const closed = once(child, "close");
+          const shutdownLogStart = (await readFile(logPath, "utf8")).length;
           provider.restart();
           const started = Date.now();
           if (mode === "managed") {
@@ -475,8 +472,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
               {},
             );
             expect(target.pid).toBe(child.pid);
-            let suspensionId: string | undefined;
-            await race(
+            const { suspensionId } = await race(
               vi.waitFor(
                 async () => {
                   const prepared = await client!.request<{
@@ -488,7 +484,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
                     terminalPolicy: "terminate",
                   });
                   expect(prepared.status).toBe("ready");
-                  suspensionId = prepared.suspensionId;
+                  return prepared;
                 },
                 { timeout: 2_000 },
               ),
@@ -546,9 +542,14 @@ it.skipIf(process.platform === "win32").for([true, false])(
           }
           const exit = await race(closed);
           const shutdownMs = Date.now() - started;
-          const markerAndAbortMs = [
-            ...instance.logs().matchAll(/restart trace: restart.close.session-abort ([\d.]+)ms/g),
-          ].at(-1)?.[1];
+          const shutdownLogs = (await readFile(logPath, "utf8")).slice(shutdownLogStart);
+          const markerSummary = shutdownLogs.indexOf("shutdown restart resume:");
+          const cleanClose = shutdownLogs.indexOf("agent database clean-close receipt:");
+          expect(markerSummary, shutdownLogs).toBeGreaterThan(-1);
+          expect(cleanClose, shutdownLogs).toBeGreaterThan(markerSummary);
+          const markerAndAbortMs = shutdownLogs.match(
+            /restart trace: restart.close.session-abort ([\d.]+)ms/,
+          )?.[1];
           process.stdout.write(
             `[restart-resume-proof] ${mode} markerAndAbortMs=${markerAndAbortMs ?? "unavailable"} shutdownMs=${shutdownMs}\n`,
           );
@@ -573,7 +574,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
             });
           }
           await instance.startGateway();
-          client = await connectClient();
+          client = await connectRestartClient(instance, {}, signal);
           await provider.wait(`resume:${cycle}:stream`);
           const resumeRequest = provider.calls.findLast(
             (call) => call.cycle === cycle && call.name === "stream",
@@ -607,11 +608,8 @@ it.skipIf(process.platform === "win32").for([true, false])(
           );
           for (const [index, completion] of completedReplies.entries()) {
             expect
-              .soft(
-                completion.status,
-                `${expectedReplies[index]?.text}${completion.status === "rejected" ? `\n${String(completion.reason)}` : ""}`,
-              )
-              .toBe("fulfilled");
+              .soft(completion, expectedReplies[index]?.text)
+              .toMatchObject({ status: "fulfilled" });
           }
           const streamInputs = provider.calls
             .filter((call) => call.cycle === cycle && call.name === "stream")
@@ -688,7 +686,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
         client = undefined;
         provider.restart();
         await instance.startGateway();
-        client = await connectClient();
+        client = await connectRestartClient(instance, {}, signal);
         await send(crashKey, AFTER_CRASH);
         await waitFinal(crashKey, `HANDLED_${AFTER_CRASH}`);
         expect(
@@ -702,9 +700,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
         await send(crashKey, queued(2, 1), "followup");
         provider.restart();
         const child = instance.child;
-        if (!child?.pid) {
-          throw new Error("Owned Gateway process unavailable after crash");
-        }
+        assert(child?.pid, "Owned Gateway process unavailable after crash");
         const closed = once(child, "close");
         const started = Date.now();
         expect(child.kill("SIGTERM")).toBe(true);
@@ -717,7 +713,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
         await client.stopAndWait();
         client = undefined;
         await instance.startGateway();
-        client = await connectClient();
+        client = await connectRestartClient(instance, {}, signal);
         await provider.wait("resume:2:stream");
         provider.release(2);
         await waitFinal(crashKey, `HANDLED_${queued(2, 1)}`);
