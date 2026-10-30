@@ -137,4 +137,31 @@ describe("msteams directory live", () => {
 
     expect(listTeamsByNameMock).toHaveBeenCalledWith("graph-token", "plat");
   });
+
+  it.each(["NFD", "NFC"] as const)(
+    "matches channel names in the canonically equivalent form (%s)",
+    async (form) => {
+      const name = "Café Delivery".normalize(form);
+      listTeamsByNameMock.mockResolvedValue({ items: teams, truncated: false });
+      listChannelsForTeamMock
+        .mockResolvedValueOnce({
+          items: [{ id: "chan-cafe", displayName: name }],
+          truncated: false,
+        })
+        .mockResolvedValueOnce({ items: [], truncated: false });
+      const query = "CAFÉ".normalize(form === "NFD" ? "NFC" : "NFD");
+
+      await expect(
+        listMSTeamsDirectoryGroupsLive({
+          cfg: {},
+          query: `platform / ${query}`,
+        }),
+      ).resolves.toEqual([
+        entry("group", "conversation:chan-cafe", `Platform/${name}`, `#${name}`, {
+          id: "chan-cafe",
+          displayName: name,
+        }),
+      ]);
+    },
+  );
 });
